@@ -8,6 +8,26 @@ on:
   pull_request:
 
 jobs:
+  test:
+    name: test ${{ matrix.py }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        py:
+          - "3.11"
+          - "3.10"
+          - "3.9"
+          - "3.8"
+          - "3.7"
+    steps:
+      - name: Setup python ${{ matrix.py }}
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.py }}
+      - uses: actions/checkout@v2
+      - run: pip install -e .[dev]
+      - run: pytest
   linux:
     runs-on: ubuntu-latest
     steps:
