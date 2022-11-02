@@ -1,0 +1,2 @@
+# `egg-smol` Python bindings
+
