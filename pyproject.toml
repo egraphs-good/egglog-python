@@ -12,18 +12,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pre-commit",
-    "black",
-    "mypy",
-    "flake8",
-    "isort",
-]
+dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
 
-test = [
-    "pytest"
-]
-
+test = ["pytest"]
 
 
 [tool.isort]
@@ -43,8 +34,6 @@ enable_recursive_aliases = true
 python-source = "python"
 
 [tool.pytest.ini_options]
-addopts = [
-    "--import-mode=importlib",
-]
+addopts = ["--import-mode=importlib"]
 testpaths = ["python"]
 python_files = ["test_*.py", "test.py"]
