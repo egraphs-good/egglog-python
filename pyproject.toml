@@ -11,6 +11,33 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pre-commit",
+    "black",
+    "mypy",
+    "flake8",
+    "isort",
+]
+
+test = [
+    "pytest"
+]
+
+
+
+[tool.isort]
+profile = "black"
+skip_gitignore = true
+
+
+[tool.mypy]
+ignore_missing_imports = false
+warn_redundant_casts = true
+check_untyped_defs = true
+strict_equality = true
+warn_unused_configs = true
+enable_recursive_aliases = true
 
 [tool.maturin]
 python-source = "python"
