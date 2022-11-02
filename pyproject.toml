@@ -14,3 +14,10 @@ classifiers = [
 
 [tool.maturin]
 python-source = "python"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
+testpaths = ["python"]
+python_files = ["test_*.py", "test.py"]

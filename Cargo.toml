@@ -1,5 +1,5 @@
 [package]
-name = "egg-smol"
+name = "egg-smol-python"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,3 +10,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.17.1", features = ["extension-module"] }
+
+[package.metadata.maturin]
+name = "egg_smol.bindings"
