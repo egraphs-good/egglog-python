@@ -26,7 +26,7 @@ html_theme_options = {
     ],
 }
 
-## myst_nb default settings
+# myst_nb default settings
 
 # Custom formats for reading notebook; suffix -> reader
 # nb_custom_formats = {}
