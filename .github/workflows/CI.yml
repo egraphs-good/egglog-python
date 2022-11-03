@@ -47,6 +47,7 @@ jobs:
           manylinux: auto
           command: build
           args: --release --sdist -o dist --find-interpreter
+          rust-toolchain: "1.64.0"
       - name: Upload wheels
         uses: actions/upload-artifact@v2
         with:
