@@ -33,7 +33,7 @@ jobs:
     steps:
       - uses: actions/setup-python@v2
         with:
-          python-version: 3.10
+          python-version: "3.10"
       - uses: actions/checkout@v2
       - run: pip install -e .[docs]
       - run: sphinx-build -nW -b html docs docs/_build/html
