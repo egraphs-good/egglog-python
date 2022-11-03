@@ -25,6 +25,24 @@ impl EggSmolError {
     }
 }
 
+// Convert a Python Variant object into a rust variable, by getting the attributes
+fn get_variant(obj: &PyAny) -> PyResult<egg_smol::ast::Variant> {
+    // TODO: Is there a way to do this more automatically?
+    Ok(egg_smol::ast::Variant {
+        name: obj
+            .getattr(pyo3::intern!(obj.py(), "name"))?
+            .extract::<String>()?
+            .into(),
+        cost: obj.getattr(pyo3::intern!(obj.py(), "cost"))?.extract()?,
+        types: obj
+            .getattr(pyo3::intern!(obj.py(), "types"))?
+            .extract::<Vec<String>>()?
+            .into_iter()
+            .map(|x| x.into())
+            .collect(),
+    })
+}
+
 #[pymethods]
 impl EGraph {
     #[new]
@@ -32,6 +50,28 @@ impl EGraph {
         Self {
             egraph: egg_smol::EGraph::default(),
         }
+    }
+
+    /// declare_sort($self, name)
+    /// --
+    ///
+    /// Declare a new sort with the given name.
+    fn declare_sort(&mut self, name: &str) -> PyResult<()> {
+        // TODO: Should the name be a symbol? If so, how should we expose that
+        // to Python?
+        self.egraph
+            .declare_sort(name)
+            .map_err(|e| PyErr::new::<EggSmolError, _>(e.to_string()))
+    }
+
+    fn declare_constructor(
+        &mut self,
+        #[pyo3(from_py_with = "get_variant")] variant: egg_smol::ast::Variant,
+        sort: &str,
+    ) -> PyResult<()> {
+        self.egraph
+            .declare_constructor(variant, sort)
+            .map_err(|e| PyErr::new::<EggSmolError, _>(e.to_string()))
     }
 
     /// parse_and_run_program($self, input)
