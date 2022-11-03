@@ -16,6 +16,8 @@ dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
 
 test = ["pytest"]
 
+docs = ["pydata-sphinx-theme", "myst-nb"]
+
 
 [tool.isort]
 profile = "black"
