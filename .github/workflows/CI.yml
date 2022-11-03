@@ -42,11 +42,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: PyO3/maturin-action@v1.30.2
+      - uses: PyO3/maturin-action@v1.31.0
         with:
           manylinux: auto
           command: build
           args: --release --sdist -o dist --find-interpreter
+          # Pin rust toolchain, so it won't install 1.65.0, otherwise get this error:
+          # Attempting to include the sdist output tarball dist/egg_smol-0.1.0.tar.gz into itself! Check 'cargo package --list' output.
+          # https://github.com/metadsl/egg-smol-python/actions/runs/3388178229/jobs/5629843303
           rust-toolchain: "1.64.0"
       - name: Upload wheels
         uses: actions/upload-artifact@v2
@@ -59,7 +62,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: PyO3/maturin-action@v1.30.2
+      - uses: PyO3/maturin-action@v1.31.0
         with:
           command: build
           args: --release -o dist --find-interpreter
@@ -74,7 +77,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: PyO3/maturin-action@v1.30.2
+      - uses: PyO3/maturin-action@v1.31.0
         with:
           command: build
           args: --release -o dist --universal2 --find-interpreter
@@ -94,7 +97,7 @@ jobs:
         with:
           name: wheels
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1.30.2
+        uses: PyO3/maturin-action@v1.31.0
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         with:
