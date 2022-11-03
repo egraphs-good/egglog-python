@@ -14,6 +14,19 @@ nitpicky = True
 
 html_theme = "pydata_sphinx_theme"
 
+# https://pydata-sphinx-theme.readthedocs.io/en/latest/user_guide/header-links.html#fontawesome-icons
+html_theme_options = {
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/metadsl/egg-smol-python",
+            "icon": "fa-brands fa-square-github",
+            "type": "fontawesome",
+        },
+
+    ],
+}
+
 ## myst_nb default settings
 
 # Custom formats for reading notebook; suffix -> reader
