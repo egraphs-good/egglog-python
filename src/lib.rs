@@ -1,3 +1,5 @@
+mod error;
+use error::*;
 use pyo3::prelude::*;
 
 /// EGraph()
@@ -7,22 +9,6 @@ use pyo3::prelude::*;
 #[pyclass(unsendable)]
 struct EGraph {
     egraph: egg_smol::EGraph,
-}
-
-// Create exceptions with class instead of create_exception! macro
-// https://github.com/PyO3/pyo3/issues/295#issuecomment-852358088
-#[pyclass(extends=pyo3::exceptions::PyException)]
-pub struct EggSmolError {
-    #[pyo3(get)]
-    context: String,
-}
-
-#[pymethods]
-impl EggSmolError {
-    #[new]
-    fn new(context: String) -> Self {
-        EggSmolError { context }
-    }
 }
 
 // Convert a Python Variant object into a rust variable, by getting the attributes
@@ -56,22 +42,24 @@ impl EGraph {
     /// --
     ///
     /// Declare a new sort with the given name.
-    fn declare_sort(&mut self, name: &str) -> PyResult<()> {
+    fn declare_sort(&mut self, name: &str) -> EggResult<()> {
         // TODO: Should the name be a symbol? If so, how should we expose that
         // to Python?
-        self.egraph
-            .declare_sort(name)
-            .map_err(|e| PyErr::new::<EggSmolError, _>(e.to_string()))
+        self.egraph.declare_sort(name)?;
+        Ok({})
     }
 
+    /// declare_constructor($self, variant, sort)
+    /// --
+    ///
+    /// Declare a new datatype constructor.
     fn declare_constructor(
         &mut self,
         #[pyo3(from_py_with = "get_variant")] variant: egg_smol::ast::Variant,
         sort: &str,
-    ) -> PyResult<()> {
-        self.egraph
-            .declare_constructor(variant, sort)
-            .map_err(|e| PyErr::new::<EggSmolError, _>(e.to_string()))
+    ) -> EggResult<()> {
+        self.egraph.declare_constructor(variant, sort)?;
+        Ok({})
     }
 
     /// parse_and_run_program($self, input)
@@ -80,10 +68,9 @@ impl EGraph {
     /// Parse the input string as a program and run it on the EGraph.
     /// Returns a list of strings representing the output.
     /// An EggSmolError is raised if there is problem parsing or executing.
-    fn parse_and_run_program(&mut self, input: &str) -> PyResult<Vec<String>> {
-        self.egraph
-            .parse_and_run_program(input)
-            .map_err(|e| PyErr::new::<EggSmolError, _>(e.to_string()))
+    fn parse_and_run_program(&mut self, input: &str) -> EggResult<Vec<String>> {
+        let res = self.egraph.parse_and_run_program(input)?;
+        Ok(res)
     }
 }
 

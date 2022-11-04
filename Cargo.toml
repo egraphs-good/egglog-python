@@ -14,3 +14,7 @@ egg-smol = { git = "https://github.com/mwillsey/egg-smol", rev = "94c173b9d6152c
 
 [package.metadata.maturin]
 name = "egg_smol.bindings"
+
+# Patch egg-smol to use local version
+[patch.crates-io]
+egg-smol = { path = "../egg-smol" }
