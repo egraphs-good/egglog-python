@@ -1,4 +1,6 @@
+mod conversions;
 mod error;
+use conversions::*;
 use error::*;
 use pyo3::prelude::*;
 
@@ -9,24 +11,6 @@ use pyo3::prelude::*;
 #[pyclass(unsendable)]
 struct EGraph {
     egraph: egg_smol::EGraph,
-}
-
-// Convert a Python Variant object into a rust variable, by getting the attributes
-fn get_variant(obj: &PyAny) -> PyResult<egg_smol::ast::Variant> {
-    // TODO: Is there a way to do this more automatically?
-    Ok(egg_smol::ast::Variant {
-        name: obj
-            .getattr(pyo3::intern!(obj.py(), "name"))?
-            .extract::<String>()?
-            .into(),
-        cost: obj.getattr(pyo3::intern!(obj.py(), "cost"))?.extract()?,
-        types: obj
-            .getattr(pyo3::intern!(obj.py(), "types"))?
-            .extract::<Vec<String>>()?
-            .into_iter()
-            .map(|x| x.into())
-            .collect(),
-    })
 }
 
 #[pymethods]
@@ -53,12 +37,8 @@ impl EGraph {
     /// --
     ///
     /// Declare a new datatype constructor.
-    fn declare_constructor(
-        &mut self,
-        #[pyo3(from_py_with = "get_variant")] variant: egg_smol::ast::Variant,
-        sort: &str,
-    ) -> EggResult<()> {
-        self.egraph.declare_constructor(variant, sort)?;
+    fn declare_constructor(&mut self, variant: WrappedVariant, sort: &str) -> EggResult<()> {
+        self.egraph.declare_constructor(variant.into(), sort)?;
         Ok({})
     }
 
