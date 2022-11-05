@@ -1,6 +1,6 @@
 import pytest
 from egg_smol.bindings import EggSmolError, EGraph
-from egg_smol.bindings_py import Variant
+from egg_smol.bindings_py import *
 
 
 class TestEGraph:
@@ -27,3 +27,44 @@ class TestEGraph:
         egraph.declare_constructor(Variant("Var", ["String"]), "Math")
         egraph.declare_constructor(Variant("Add", ["Math", "Math"]), "Math")
         egraph.declare_constructor(Variant("Mul", ["Math", "Math"]), "Math")
+
+    def test_define(self):
+        egraph = EGraph()
+        egraph.declare_sort("Math")
+        egraph.declare_constructor(Variant("Num", ["i64"]), "Math")
+        egraph.declare_constructor(Variant("Var", ["String"]), "Math")
+        egraph.declare_constructor(Variant("Add", ["Math", "Math"]), "Math")
+        egraph.declare_constructor(Variant("Mul", ["Math", "Math"]), "Math")
+
+        # (define expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))
+        egraph.define(
+            "expr1",
+            Call(
+                "Mul",
+                [
+                    Call(
+                        "Num",
+                        [
+                            Lit(Int(2)),
+                        ],
+                    ),
+                    Call(
+                        "Add",
+                        [
+                            Call(
+                                "Var",
+                                [
+                                    Lit(String("x")),
+                                ],
+                            ),
+                            Call(
+                                "Num",
+                                [
+                                    Lit(Int(3)),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        )

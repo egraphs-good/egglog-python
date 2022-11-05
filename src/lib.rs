@@ -22,13 +22,30 @@ impl EGraph {
         }
     }
 
+    /// define($self, expr, name, cost)
+    /// --
+    ///
+    /// Define a new named value.
+    #[args(cost = "None")]
+    fn define(&mut self, name: String, expr: WrappedExpr, cost: Option<usize>) -> EggResult<()> {
+        self.egraph.define(name.into(), expr.into(), cost)?;
+        Ok(())
+    }
+
+    /// declare_function($self, decl)
+    /// --
+    ///
+    /// Declare a new function definition.
+    fn declare_function(&mut self, decl: WrappedFunctionDecl) -> EggResult<()> {
+        self.egraph.declare_function(&decl.into())?;
+        Ok(())
+    }
+
     /// declare_sort($self, name)
     /// --
     ///
     /// Declare a new sort with the given name.
     fn declare_sort(&mut self, name: &str) -> EggResult<()> {
-        // TODO: Should the name be a symbol? If so, how should we expose that
-        // to Python?
         self.egraph.declare_sort(name)?;
         Ok({})
     }
