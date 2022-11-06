@@ -22,49 +22,41 @@ impl EGraph {
         }
     }
 
-    /// define($self, expr, name, cost)
-    /// --
-    ///
     /// Define a new named value.
-    #[args(cost = "None")]
+    #[pyo3(
+        text_signature = "($self, name, expr, cost=None)",
+        signature = "(name, expr, cost=None)"
+    )]
     fn define(&mut self, name: String, expr: WrappedExpr, cost: Option<usize>) -> EggResult<()> {
         self.egraph.define(name.into(), expr.into(), cost)?;
         Ok(())
     }
 
-    /// declare_function($self, decl)
-    /// --
-    ///
     /// Declare a new function definition.
+    #[pyo3(text_signature = "($self, decl)")]
     fn declare_function(&mut self, decl: WrappedFunctionDecl) -> EggResult<()> {
         self.egraph.declare_function(&decl.into())?;
         Ok(())
     }
 
-    /// declare_sort($self, name)
-    /// --
-    ///
     /// Declare a new sort with the given name.
+    #[pyo3(text_signature = "($self, name)")]
     fn declare_sort(&mut self, name: &str) -> EggResult<()> {
         self.egraph.declare_sort(name)?;
         Ok({})
     }
 
-    /// declare_constructor($self, variant, sort)
-    /// --
-    ///
     /// Declare a new datatype constructor.
+    #[pyo3(text_signature = "($self, variant, sort)")]
     fn declare_constructor(&mut self, variant: WrappedVariant, sort: &str) -> EggResult<()> {
         self.egraph.declare_constructor(variant.into(), sort)?;
         Ok({})
     }
 
-    /// parse_and_run_program($self, input)
-    /// --
-    ///
     /// Parse the input string as a program and run it on the EGraph.
     /// Returns a list of strings representing the output.
     /// An EggSmolError is raised if there is problem parsing or executing.
+    #[pyo3(text_signature = "($self, input)")]
     fn parse_and_run_program(&mut self, input: &str) -> EggResult<Vec<String>> {
         let res = self.egraph.parse_and_run_program(input)?;
         Ok(res)
