@@ -2,7 +2,7 @@ from typing import Optional
 
 from typing_extensions import final
 
-from .bindings_py import Expr, FunctionDecl, Variant
+from .bindings_py import Expr, FunctionDecl, Rewrite, Variant
 
 @final
 class EGraph:
@@ -11,6 +11,7 @@ class EGraph:
     def declare_sort(self, name: str) -> None: ...
     def declare_function(self, decl: FunctionDecl) -> None: ...
     def define(self, name: str, expr: Expr, cost: Optional[int] = None) -> None: ...
+    def add_rewrite(self, rewrite: Rewrite) -> str: ...
 
 @final
 class EggSmolError(Exception):

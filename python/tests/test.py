@@ -68,3 +68,27 @@ class TestEGraph:
                 ],
             ),
         )
+
+    def test_rewrite(self):
+        egraph = EGraph()
+        egraph.declare_sort("Math")
+        egraph.declare_constructor(Variant("Add", ["Math", "Math"]), "Math")
+        name = egraph.add_rewrite(
+            Rewrite(
+                Call(
+                    "Add",
+                    [
+                        Var("a"),
+                        Var("b"),
+                    ],
+                ),
+                Call(
+                    "Add",
+                    [
+                        Var("b"),
+                        Var("a"),
+                    ],
+                ),
+            )
+        )
+        assert isinstance(name, str)

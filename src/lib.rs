@@ -22,6 +22,13 @@ impl EGraph {
         }
     }
 
+    /// Define a rewrite rule, returning the name of the rule
+    #[pyo3(text_signature = "($self, rewrite)")]
+    fn add_rewrite(&mut self, rewrite: WrappedRewrite) -> EggResult<String> {
+        let res = self.egraph.add_rewrite(rewrite.into())?;
+        Ok(res.to_string())
+    }
+
     /// Define a new named value.
     #[pyo3(
         text_signature = "($self, name, expr, cost=None)",

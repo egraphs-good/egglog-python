@@ -1,7 +1,7 @@
 # TODO: Figure out what these modules should be called
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Union
 
 
@@ -62,3 +62,23 @@ class Unit:
 
 
 Literal = Union[Int, String, Unit]
+
+
+@dataclass(frozen=True)
+class Rewrite:
+    lhs: Expr
+    rhs: Expr
+    conditions: list[Fact_] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class Fact:
+    expr: Expr
+
+
+@dataclass
+class Eq:
+    exprs: list[Expr]
+
+
+Fact_ = Union[Fact, Eq]

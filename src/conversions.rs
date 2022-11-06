@@ -3,6 +3,7 @@
 //
 // Converts from Python classes we define in pure python so we can use dataclasses
 // to represent the input types
+// TODO: Copy strings of these from egg-smol... Maybe actually wrap those isntead.
 use pyo3::prelude::*;
 
 // Execute the block and wrap the error in a type error
@@ -172,6 +173,67 @@ fn extract_literal_unit(obj: &PyAny) -> PyResult<egg_smol::ast::Literal> {
 
 impl From<WrappedLiteral> for egg_smol::ast::Literal {
     fn from(other: WrappedLiteral) -> Self {
+        other.0
+    }
+}
+
+// Wrapped version of Rewrite
+pub struct WrappedRewrite(egg_smol::ast::Rewrite);
+
+impl FromPyObject<'_> for WrappedRewrite {
+    fn extract(obj: &'_ PyAny) -> PyResult<Self> {
+        wrap_error("Rewrite", obj, || {
+            Ok(WrappedRewrite(egg_smol::ast::Rewrite {
+                lhs: obj.getattr("lhs")?.extract::<WrappedExpr>()?.into(),
+                rhs: obj.getattr("rhs")?.extract::<WrappedExpr>()?.into(),
+                conditions: obj
+                    .getattr("conditions")?
+                    .extract::<Vec<WrappedFact>>()?
+                    .into_iter()
+                    .map(|x| x.into())
+                    .collect(),
+            }))
+        })
+    }
+}
+
+impl From<WrappedRewrite> for egg_smol::ast::Rewrite {
+    fn from(other: WrappedRewrite) -> Self {
+        other.0
+    }
+}
+
+// Wrapped version of Fact
+pub struct WrappedFact(egg_smol::ast::Fact);
+
+impl FromPyObject<'_> for WrappedFact {
+    fn extract(obj: &'_ PyAny) -> PyResult<Self> {
+        wrap_error("Fact", obj, || {
+            extract_fact_eq(obj)
+                .or_else(|_| extract_fact_fact(obj))
+                .map(WrappedFact)
+        })
+    }
+}
+
+fn extract_fact_eq(obj: &PyAny) -> PyResult<egg_smol::ast::Fact> {
+    Ok(egg_smol::ast::Fact::Eq(
+        obj.getattr("exprs")?
+            .extract::<Vec<WrappedExpr>>()?
+            .into_iter()
+            .map(|x| x.into())
+            .collect(),
+    ))
+}
+
+fn extract_fact_fact(obj: &PyAny) -> PyResult<egg_smol::ast::Fact> {
+    Ok(egg_smol::ast::Fact::Fact(
+        obj.getattr("expr")?.extract::<WrappedExpr>()?.into(),
+    ))
+}
+
+impl From<WrappedFact> for egg_smol::ast::Fact {
+    fn from(other: WrappedFact) -> Self {
         other.0
     }
 }
