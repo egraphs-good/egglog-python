@@ -1,10 +1,12 @@
+use std::time::Duration;
+
 // Create wrappers around input types so that convert from pyobjects to them
 // and then from them to the egg_smol types
 //
 // Converts from Python classes we define in pure python so we can use dataclasses
 // to represent the input types
 // TODO: Copy strings of these from egg-smol... Maybe actually wrap those isntead.
-use pyo3::prelude::*;
+use pyo3::{ffi::PyDateTime_Delta, prelude::*, types::PyDelta};
 
 // Execute the block and wrap the error in a type error
 fn wrap_error<T>(tp: &str, obj: &'_ PyAny, block: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
@@ -235,5 +237,32 @@ fn extract_fact_fact(obj: &PyAny) -> PyResult<egg_smol::ast::Fact> {
 impl From<WrappedFact> for egg_smol::ast::Fact {
     fn from(other: WrappedFact) -> Self {
         other.0
+    }
+}
+
+// Wrapped version of Duration
+// Converts from a rust duration to a python timedelta
+pub struct WrappedDuration(Duration);
+
+impl From<Duration> for WrappedDuration {
+    fn from(other: Duration) -> Self {
+        WrappedDuration(other)
+    }
+}
+
+impl IntoPy<PyObject> for WrappedDuration {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        let d = self.0;
+        PyDelta::new(
+            py,
+            0,
+            0,
+            d.as_millis()
+                .try_into()
+                .expect("Failed to convert miliseconds to int32 when converting duration"),
+            true,
+        )
+        .expect("Failed to contruct timedelta")
+        .into()
     }
 }

@@ -1,5 +1,7 @@
 mod conversions;
 mod error;
+use std::time::Duration;
+
 use conversions::*;
 use error::*;
 use pyo3::prelude::*;
@@ -20,6 +22,19 @@ impl EGraph {
         Self {
             egraph: egg_smol::EGraph::default(),
         }
+    }
+
+    /// Run the rules on the egraph until it reaches a fixpoint, specifying the max number of iterations.
+    /// Returns a tuple of the total time spen searching, applying, and rebuilding.
+    #[pyo3(text_signature = "($self, limit)")]
+    fn run_rules(
+        &mut self,
+        limit: usize,
+    ) -> EggResult<(WrappedDuration, WrappedDuration, WrappedDuration)> {
+        let [search, apply, rebuild] = self.egraph.run_rules(limit);
+        // Print all the timings
+        println!("Timings: {:?}, {:?}, {:?}", search, apply, rebuild);
+        Ok((search.into(), apply.into(), rebuild.into()))
     }
 
     /// Define a rewrite rule, returning the name of the rule

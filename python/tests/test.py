@@ -1,3 +1,5 @@
+import datetime
+
 import pytest
 from egg_smol.bindings import EggSmolError, EGraph
 from egg_smol.bindings_py import *
@@ -92,3 +94,35 @@ class TestEGraph:
             )
         )
         assert isinstance(name, str)
+
+    def test_run_rules(self):
+        egraph = EGraph()
+        egraph.declare_sort("Math")
+        egraph.declare_constructor(Variant("Add", ["Math", "Math"]), "Math")
+        egraph.add_rewrite(
+            Rewrite(
+                Call(
+                    "Add",
+                    [
+                        Var("a"),
+                        Var("b"),
+                    ],
+                ),
+                Call(
+                    "Add",
+                    [
+                        Var("b"),
+                        Var("a"),
+                    ],
+                ),
+            )
+        )
+        start_time = datetime.datetime.now()
+        searching, applying, rebuilding = egraph.run_rules(10)
+        end_time = datetime.datetime.now()
+        assert isinstance(searching, datetime.timedelta)
+        assert isinstance(applying, datetime.timedelta)
+        assert isinstance(rebuilding, datetime.timedelta)
+        total_measured_time = searching + applying + rebuilding
+        # Verify  less than the total time (which includes time spent in Python).
+        assert total_measured_time < (end_time - start_time)
