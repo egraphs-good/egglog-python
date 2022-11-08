@@ -1,5 +1,9 @@
 # Explanation
 
+```{toctree}
+explanation/compared_to_rust
+```
+
 ## Status of this project
 
 This package is in development and is not ready for production use. `egg-smol` itself
