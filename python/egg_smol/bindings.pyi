@@ -3,7 +3,7 @@ from typing import Optional
 
 from typing_extensions import final
 
-from .bindings_py import Expr, FunctionDecl, Rewrite, Variant
+from .bindings_py import Expr, Fact_, FunctionDecl, Rewrite, Variant
 
 @final
 class EGraph:
@@ -14,6 +14,7 @@ class EGraph:
     def define(self, name: str, expr: Expr, cost: Optional[int] = None) -> None: ...
     def add_rewrite(self, rewrite: Rewrite) -> str: ...
     def run_rules(self, limit: int) -> tuple[timedelta, timedelta, timedelta]: ...
+    def check_fact(self, fact: Fact_) -> None: ...
 
 @final
 class EggSmolError(Exception):
