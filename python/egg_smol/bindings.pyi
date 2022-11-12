@@ -3,7 +3,16 @@ from typing import Optional
 
 from typing_extensions import final
 
-from .bindings_py import Expr, Fact_, FunctionDecl, Rewrite, Variant
+from .bindings_py import Expr, Fact_, FunctionDecl, Rewrite
+
+@final
+class Variant:
+    def __init__(
+        self, name: str, types: list[str], cost: Optional[int] = None
+    ) -> None: ...
+    name: str
+    types: list[str]
+    cost: Optional[int]
 
 @final
 class EGraph:

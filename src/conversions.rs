@@ -6,7 +6,7 @@ use std::time::Duration;
 // Converts from Python classes we define in pure python so we can use dataclasses
 // to represent the input types
 // TODO: Copy strings of these from egg-smol... Maybe actually wrap those isntead.
-use pyo3::{ffi::PyDateTime_Delta, prelude::*, types::PyDelta};
+use pyo3::prelude::*;
 
 // Execute the block and wrap the error in a type error
 fn wrap_error<T>(tp: &str, obj: &'_ PyAny, block: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
@@ -18,29 +18,66 @@ fn wrap_error<T>(tp: &str, obj: &'_ PyAny, block: impl FnOnce() -> PyResult<T>) 
     })
 }
 
-// Wrapped version of Variant
-pub struct WrappedVariant(egg_smol::ast::Variant);
+// A variant of a constructor
 
-impl FromPyObject<'_> for WrappedVariant {
-    fn extract(obj: &'_ PyAny) -> PyResult<Self> {
-        wrap_error("Variant", obj, || {
-            Ok(WrappedVariant(egg_smol::ast::Variant {
-                name: obj.getattr("name")?.extract::<String>()?.into(),
-                cost: obj.getattr("cost")?.extract()?,
-                types: obj
-                    .getattr("types")?
-                    .extract::<Vec<String>>()?
-                    .into_iter()
-                    .map(|x| x.into())
-                    .collect(),
-            }))
+#[pyclass(name = "Variant")]
+#[derive(Clone)]
+pub(crate) struct WrappedVariant(egg_smol::ast::Variant);
+
+#[pymethods]
+impl WrappedVariant {
+    #[new]
+    fn new(name: String, types: Vec<String>, cost: Option<usize>) -> Self {
+        Self(egg_smol::ast::Variant {
+            name: name.into(),
+            types: types.into_iter().map(|x| x.into()).collect(),
+            cost,
         })
+    }
+    #[getter]
+    fn name(&self) -> &str {
+        self.0.name.into()
+    }
+    #[getter]
+    fn types(&self) -> Vec<String> {
+        self.0.types.iter().map(|x| x.to_string()).collect()
+    }
+    #[getter]
+    fn cost(&self) -> Option<usize> {
+        self.0.cost
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Variant(name={}, types=[{}], cost={})",
+            self.0.name.to_string(),
+            self.0
+                .types
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            match self.0.cost {
+                Some(x) => x.to_string(),
+                None => "None".to_string(),
+            }
+        )
+    }
+
+    fn __str__(&self) -> String {
+        format!("{:#?}", self.0)
     }
 }
 
 impl From<WrappedVariant> for egg_smol::ast::Variant {
     fn from(other: WrappedVariant) -> Self {
         other.0
+    }
+}
+
+impl From<egg_smol::ast::Variant> for WrappedVariant {
+    fn from(other: egg_smol::ast::Variant) -> Self {
+        WrappedVariant(other)
     }
 }
 
@@ -137,6 +174,12 @@ fn extract_expr_call(obj: &PyAny) -> PyResult<egg_smol::ast::Expr> {
 impl From<WrappedExpr> for egg_smol::ast::Expr {
     fn from(other: WrappedExpr) -> Self {
         other.0
+    }
+}
+
+impl From<egg_smol::ast::Expr> for WrappedExpr {
+    fn from(other: egg_smol::ast::Expr) -> Self {
+        WrappedExpr(other)
     }
 }
 
@@ -253,7 +296,7 @@ impl From<Duration> for WrappedDuration {
 impl IntoPy<PyObject> for WrappedDuration {
     fn into_py(self, py: Python<'_>) -> PyObject {
         let d = self.0;
-        PyDelta::new(
+        pyo3::types::PyDelta::new(
             py,
             0,
             0,

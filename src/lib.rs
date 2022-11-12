@@ -23,6 +23,26 @@ impl EGraph {
         }
     }
 
+    // fn __repr__(&mut self) -> PyResult<String> {
+    //     Ok(format!("{:#?}", self.egraph))
+    // }
+
+    /// Extract the best expression of a given value. Will also return
+    // variants number of additional options.
+    // #[pyo3(text_signature = "($self, value, variants=0)")]
+    // fn extract_expr(
+    //     &mut self,
+    //     value: WrappedExpr,
+    //     variants: usize,
+    // ) -> EggResult<(usize, WrappedExpr, Vec<WrappedExpr>)> {
+    //     let (cost, expr, exprs) = self.egraph.extract_expr(value.into(), variants)?;
+    //     Ok((
+    //         cost,
+    //         expr.into(),
+    //         exprs.into_iter().map(|x| x.into()).collect(),
+    //     ))
+    // }
+
     /// Check that a fact is true in the egraph.
     #[pyo3(text_signature = "($self, fact)")]
     fn check_fact(&mut self, fact: WrappedFact) -> EggResult<()> {
@@ -94,5 +114,6 @@ impl EGraph {
 fn bindings(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<EGraph>()?;
     m.add_class::<EggSmolError>()?;
+    m.add_class::<WrappedVariant>()?;
     Ok(())
 }

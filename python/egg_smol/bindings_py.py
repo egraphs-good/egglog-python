@@ -6,13 +6,6 @@ from typing import Optional, Union
 
 
 @dataclass(frozen=True)
-class Variant:
-    name: str
-    types: list[str]
-    cost: Optional[int] = None
-
-
-@dataclass(frozen=True)
 class FunctionDecl:
     name: str
     schema: Schema
