@@ -52,6 +52,9 @@ One way to run this in Python is to parse the text and run it similar to how the
 egg CLI works:
 
 ```{code-cell} python
+from egg_smol.bindings import *
+from egg_smol.bindings_py import *
+
 eqsat_basic = """(datatype Math
   (Num i64)
   (Var String)
@@ -78,8 +81,6 @@ eqsat_basic = """(datatype Math
 (run 10)
 (check (= expr1 expr2))"""
 
-from egg_smol.bindings import EGraph
-
 egraph = EGraph()
 egraph.parse_and_run_program(eqsat_basic)
 ```
@@ -90,8 +91,6 @@ However, this isn't the most friendly for Python users. Instead, we can use the
 low level APIs that mirror the rust APIs to build the same egraph:
 
 ```{code-cell} python
-from egg_smol.bindings_py import *
-
 egraph = EGraph()
 egraph.declare_sort("Math")
 egraph.declare_constructor(Variant("Num", ["i64"]), "Math")
