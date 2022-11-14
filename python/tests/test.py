@@ -346,3 +346,17 @@ class TestEGraph:
 
     #     assert egraph.extract("x") == Call("Num", [Lit(Int(1))])
     #     assert egraph.extract("y") == Var("y")
+
+
+class TestVariant:
+    def test_repr(self):
+        assert repr(Variant("name", [])) == "Variant('name', [], None)"
+
+    def test_name(self):
+        assert Variant("name", []).name == "name"
+
+    def test_types(self):
+        assert Variant("name", ["a", "b"]).types == ["a", "b"]
+
+    def test_cost(self):
+        assert Variant("name", [], cost=1).cost == 1

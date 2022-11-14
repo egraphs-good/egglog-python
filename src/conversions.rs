@@ -18,7 +18,26 @@ fn wrap_error<T>(tp: &str, obj: &'_ PyAny, block: impl FnOnce() -> PyResult<T>) 
     })
 }
 
-// A variant of a constructor
+// Take the repr of a Python object
+fn repr(py: Python, obj: PyObject) -> PyResult<String> {
+    obj.call_method(py, "__repr__", (), None)?.extract(py)
+}
+
+trait SizedIntoPy: IntoPy<PyObject> + Sized {}
+
+// Create a dataclass-like repr, of the name of the class of the object
+// called with the repr of the fields
+fn data_repr(py: Python, obj: PyObject, field_names: Vec<&str>) -> PyResult<String> {
+    let class_name: String = obj
+        .getattr(py, "__class__")?
+        .getattr(py, "__name__")?
+        .extract(py)?;
+    let field_strings: PyResult<Vec<String>> = field_names
+        .iter()
+        .map(|name| obj.getattr(py, *name).and_then(|x| repr(py, x)))
+        .collect();
+    Ok(format!("{}({})", class_name, field_strings?.join(", ")))
+}
 
 #[pyclass(name = "Variant")]
 #[derive(Clone)]
@@ -47,21 +66,8 @@ impl WrappedVariant {
         self.0.cost
     }
 
-    fn __repr__(&self) -> String {
-        format!(
-            "Variant(name={}, types=[{}], cost={})",
-            self.0.name.to_string(),
-            self.0
-                .types
-                .iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            match self.0.cost {
-                Some(x) => x.to_string(),
-                None => "None".to_string(),
-            }
-        )
+    fn __repr__(slf: PyRef<'_, Self>, py: Python) -> PyResult<String> {
+        data_repr(py, slf.into_py(py), vec!["name", "types", "cost"])
     }
 
     fn __str__(&self) -> String {
