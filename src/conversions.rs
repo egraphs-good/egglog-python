@@ -23,8 +23,6 @@ fn repr(py: Python, obj: PyObject) -> PyResult<String> {
     obj.call_method(py, "__repr__", (), None)?.extract(py)
 }
 
-trait SizedIntoPy: IntoPy<PyObject> + Sized {}
-
 // Create a dataclass-like repr, of the name of the class of the object
 // called with the repr of the fields
 fn data_repr(py: Python, obj: PyObject, field_names: Vec<&str>) -> PyResult<String> {
@@ -39,12 +37,12 @@ fn data_repr(py: Python, obj: PyObject, field_names: Vec<&str>) -> PyResult<Stri
     Ok(format!("{}({})", class_name, field_strings?.join(", ")))
 }
 
-#[pyclass(name = "Variant")]
+#[pyclass]
 #[derive(Clone)]
-pub(crate) struct WrappedVariant(egg_smol::ast::Variant);
+pub struct Variant(pub egg_smol::ast::Variant);
 
 #[pymethods]
-impl WrappedVariant {
+impl Variant {
     #[new]
     fn new(name: String, types: Vec<String>, cost: Option<usize>) -> Self {
         Self(egg_smol::ast::Variant {
@@ -72,18 +70,6 @@ impl WrappedVariant {
 
     fn __str__(&self) -> String {
         format!("{:#?}", self.0)
-    }
-}
-
-impl From<WrappedVariant> for egg_smol::ast::Variant {
-    fn from(other: WrappedVariant) -> Self {
-        other.0
-    }
-}
-
-impl From<egg_smol::ast::Variant> for WrappedVariant {
-    fn from(other: egg_smol::ast::Variant) -> Self {
-        WrappedVariant(other)
     }
 }
 

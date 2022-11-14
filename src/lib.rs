@@ -94,8 +94,8 @@ impl EGraph {
 
     /// Declare a new datatype constructor.
     #[pyo3(text_signature = "($self, variant, sort)")]
-    fn declare_constructor(&mut self, variant: WrappedVariant, sort: &str) -> EggResult<()> {
-        self.egraph.declare_constructor(variant.into(), sort)?;
+    fn declare_constructor(&mut self, variant: Variant, sort: &str) -> EggResult<()> {
+        self.egraph.declare_constructor(variant.0, sort)?;
         Ok({})
     }
 
@@ -114,6 +114,6 @@ impl EGraph {
 fn bindings(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<EGraph>()?;
     m.add_class::<EggSmolError>()?;
-    m.add_class::<WrappedVariant>()?;
+    m.add_class::<Variant>()?;
     Ok(())
 }
