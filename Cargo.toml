@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.17.1", features = ["extension-module"] }
-egg-smol = { git = "https://github.com/saulshanabrook/egg-smol", branch = "public-api" }
+egg-smol = { git = "https://github.com/mwillsey/egg-smol", ref = "9a45bdee9b5395ab821318a033c6ac7fa91f91b9" }
 
 [package.metadata.maturin]
 name = "egg_smol.bindings"
