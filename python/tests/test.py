@@ -2,7 +2,6 @@ import datetime
 
 import pytest
 from egg_smol.bindings import *
-from egg_smol.bindings_py import *
 
 
 class TestEGraph:
