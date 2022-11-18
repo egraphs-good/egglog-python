@@ -1,0 +1,221 @@
+use pyo3::prelude::*;
+
+pub fn display<T, V>(t: &T) -> String
+where
+    T: Clone,
+    V: std::fmt::Display + core::convert::From<T>,
+{
+    format!("{:}", V::from(t.clone()))
+}
+
+// Create a dataclass-like repr, of the name of the class of the object
+// called with the repr of the fields
+pub fn data_repr<T: pyo3::PyClass>(
+    py: Python,
+    slf: PyRef<T>,
+    field_names: Vec<&str>,
+) -> PyResult<String> {
+    let obj = slf.into_py(py);
+    let class_name: String = obj
+        .getattr(py, "__class__")?
+        .getattr(py, "__name__")?
+        .extract(py)?;
+    let field_strings: PyResult<Vec<String>> = field_names
+        .iter()
+        .map(|name| {
+            obj.getattr(py, *name)
+                .and_then(|x| x.call_method(py, "__repr__", (), None)?.extract(py))
+        })
+        .collect();
+    Ok(format!("{}({})", class_name, field_strings?.join(", ")))
+}
+
+// Macro to create a wrapper around rust enums.
+// We create Python classes for each variant of the enum
+// and create a wrapper enum around all variants to enable conversion to/from Python
+// and to/from egg_smol
+#[macro_export]
+macro_rules! convert_enums {
+    ($(
+        $from_type:ty => $to_type:ident {
+            $(
+                $variant:ident$([name=$py_name:literal])?($($field:ident: $field_type:ty),*)
+                $from_ident:ident -> $from:expr,
+                $to_pat:pat => $to:expr
+            );*
+        }
+    );*) => {
+        $($(
+            #[pyclass(frozen, module="egg_smol.bindings"$(, name=$py_name)?)]
+            #[derive(Clone)]
+            pub struct $variant {
+                $(
+                    #[pyo3(get)]
+                    $field: $field_type,
+                )*
+            }
+
+            #[pymethods]
+            impl $variant {
+                #[new]
+                fn new($($field: $field_type),*) -> Self {
+                    Self {
+                        $($field),*
+                    }
+                }
+
+                fn __repr__(slf: PyRef<'_, Self>, py: Python) -> PyResult<String> {
+                    data_repr(py, slf, vec![$(stringify!($field)),*])
+                }
+
+                fn __str__(&self) -> String {
+                    display::<_, $from_type>(self)
+                }
+            }
+
+            impl From<$variant> for $from_type {
+                fn from($from_ident: $variant) -> $from_type {
+                    $from
+                }
+            }
+            impl From<&$variant> for $from_type {
+                fn from($from_ident: &$variant) -> $from_type {
+                    $from
+                }
+            }
+        )*
+
+        #[derive(FromPyObject, Clone)]
+        pub enum $to_type {
+            $(
+                $variant($variant),
+            )*
+        }
+        impl IntoPy<PyObject> for $to_type {
+            fn into_py(self, py: Python<'_>) -> PyObject {
+                match self {
+                    $(
+                        $to_type::$variant(v) => v.into_py(py),
+                    )*
+                }
+            }
+        }
+        impl From<$to_type> for $from_type {
+            fn from(other: $to_type) -> Self {
+                match other {
+                    $(
+                        $to_type::$variant(v) => v.into(),
+                    )*
+                }
+            }
+        }
+
+        impl From<$from_type> for $to_type {
+            fn from(other: $from_type) -> Self {
+                match other {
+                    $(
+                        $to_pat => $to_type::$variant($to),
+                    )*
+                }
+            }
+        }
+
+        impl From<&$to_type> for $from_type {
+            fn from(other: &$to_type) -> Self {
+                match other {
+                    $(
+                        $to_type::$variant(v) => v.into(),
+                    )*
+                }
+            }
+        }
+
+        impl From<&$from_type> for $to_type {
+            fn from(other: &$from_type) -> Self {
+                match other {
+                    $(
+                        $to_pat => $to_type::$variant($to),
+                    )*
+                }
+            }
+        }
+    )*
+    pub fn add_enums_to_module(module: &PyModule) -> PyResult<()> {
+        $(
+            $(
+                module.add_class::<$variant>()?;
+            )*
+        )*
+        Ok(())
+    }
+    };
+}
+
+#[macro_export]
+macro_rules! convert_struct {
+    ($(
+        $from_type:ty$([$str_fn:ident])? => $to_type:ident($($field:ident: $field_type:ty$( = $default:literal)?),*)
+            $from_ident:ident -> $from:expr,
+            $to_ident:ident -> $to:expr
+    );*) => {
+        $(
+            #[pyclass(frozen, module="egg_smol.bindings")]
+            #[derive(Clone)]
+            pub struct $to_type {
+                $(
+                    #[pyo3(get)]
+                    $field: $field_type,
+                )*
+            }
+
+            #[pymethods]
+            impl $to_type {
+                #[new]
+                #[args($($($field = $default)?)*)]
+                fn new($($field: $field_type),*) -> Self {
+                    Self {
+                        $($field),*
+                    }
+                }
+
+                fn __repr__(slf: PyRef<'_, Self>, py: Python) -> PyResult<String> {
+                    data_repr(py, slf, vec![$(stringify!($field)),*])
+                }
+                $(
+                    fn __str__(&self) -> String {
+                        $str_fn::<_, $from_type>(self)
+                    }
+                )?
+            }
+
+            impl From<&$to_type> for $from_type {
+                fn from($from_ident: &$to_type) -> $from_type {
+                    $from
+                }
+            }
+            impl From<&$from_type> for $to_type {
+                fn from($to_ident: &$from_type) -> Self {
+                    $to
+                }
+            }
+            impl From<$to_type> for $from_type {
+                fn from($from_ident: $to_type) -> $from_type {
+                    $from
+                }
+            }
+            impl From<$from_type> for $to_type {
+                fn from($to_ident: $from_type) -> Self {
+                    $to
+                }
+            }
+        )*
+        pub fn add_structs_to_module(module: &PyModule) -> PyResult<()> {
+            $(
+                module.add_class::<$to_type>()?;
+            )*
+            Ok(())
+        }
+    };
+}
+pub use convert_enums;
+pub use convert_struct;

@@ -38,7 +38,7 @@ jobs:
           python-version: "3.10"
       - uses: actions/checkout@v2
       - run: pip install -e . mypy
-      - run: python -m mypy.stubtest egg_smol.bindings
+      - run: python -m mypy.stubtest egg_smol.bindings  --allowlist stubtest_allow
   docs:
     runs-on: ubuntu-latest
     steps:

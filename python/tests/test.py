@@ -1,8 +1,7 @@
 import datetime
 
 import pytest
-from egg_smol.bindings import EggSmolError, EGraph
-from egg_smol.bindings_py import *
+from egg_smol.bindings import *
 
 
 class TestEGraph:
@@ -334,3 +333,29 @@ class TestEGraph:
                 ]
             )
         )
+
+    # def test_extract(self):
+    #     # Example from extraction-cost
+    #     egraph = EGraph()
+    #     egraph.declare_sort("Expr")
+    #     egraph.declare_constructor(Variant("Num", ["i64"], cost=5), "Expr")
+
+    #     egraph.define("x", Call("Num", [Lit(Int(1))]), cost=10)
+    #     egraph.define("y", Call("Num", [Lit(Int(2))]), cost=1)
+
+    #     assert egraph.extract("x") == Call("Num", [Lit(Int(1))])
+    #     assert egraph.extract("y") == Var("y")
+
+
+class TestVariant:
+    def test_repr(self):
+        assert repr(Variant("name", [])) == "Variant('name', [], None)"
+
+    def test_name(self):
+        assert Variant("name", []).name == "name"
+
+    def test_types(self):
+        assert Variant("name", ["a", "b"]).types == ["a", "b"]
+
+    def test_cost(self):
+        assert Variant("name", [], cost=1).cost == 1
