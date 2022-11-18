@@ -346,6 +346,95 @@ class TestEGraph:
         assert egraph.extract_expr(Var("x")) == (6, Call("Num", [Lit(Int(1))]), [])
         assert egraph.extract_expr(Var("y")) == (1, Call("y", []), [])
 
+    def test_rule(self):
+        # Example from fibonacci
+        egraph = EGraph()
+        egraph.declare_function(FunctionDecl("fib", Schema(["i64"], "i64")))
+        egraph.eval_actions(Set("fib", [Lit(Int(0))], Lit(Int(0))))
+        egraph.eval_actions(Set("fib", [Lit(Int(1))], Lit(Int(1))))
+        egraph.add_rule(
+            Rule(
+                body=[
+                    Eq([Var("f0"), Call("fib", [Var("x")])]),
+                    Eq([Var("f1"), Call("fib", [Call("+", [Var("x"), Lit(Int(1))])])]),
+                ],
+                head=[
+                    Set(
+                        "fib",
+                        [Call("+", [Var("x"), Lit(Int(2))])],
+                        Call("+", [Var("f0"), Var("f1")]),
+                    ),
+                ],
+            )
+        )
+        egraph.run_rules(7)
+        egraph.check_fact(Eq([Call("fib", [Lit(Int(7))]), Lit(Int(13))]))
+
+    def test_push_pop(self):
+        egraph = EGraph()
+        egraph.declare_function(
+            FunctionDecl(
+                "foo", Schema([], "i64"), merge=Call("max", [Var("old"), Var("new")])
+            ),
+        )
+        egraph.eval_actions(Set("foo", [], Lit(Int(1))))
+        egraph.check_fact(Eq([Call("foo", []), Lit(Int(1))]))
+
+        egraph.push()
+        egraph.eval_actions(Set("foo", [], Lit(Int(2))))
+        egraph.check_fact(Eq([Call("foo", []), Lit(Int(2))]))
+        egraph.pop()
+
+        egraph.check_fact(Eq([Call("foo", []), Lit(Int(1))]))
+
+    def test_clear(self):
+        egraph = EGraph()
+        egraph.define("x", Lit(Int(1)))
+        egraph.check_fact(Eq([Call("x", []), Lit(Int(1))]))
+
+        egraph.clear()
+        with pytest.raises(EggSmolError):
+            egraph.check_fact(Eq([Call("x", []), Lit(Int(1))]))
+
+    def test_clear_rules(self):
+        egraph = EGraph()
+        egraph.declare_function(FunctionDecl("fib", Schema(["i64"], "i64")))
+        egraph.eval_actions(Set("fib", [Lit(Int(0))], Lit(Int(0))))
+        egraph.eval_actions(Set("fib", [Lit(Int(1))], Lit(Int(1))))
+        egraph.add_rule(
+            Rule(
+                body=[
+                    Eq([Var("f0"), Call("fib", [Var("x")])]),
+                    Eq([Var("f1"), Call("fib", [Call("+", [Var("x"), Lit(Int(1))])])]),
+                ],
+                head=[
+                    Set(
+                        "fib",
+                        [Call("+", [Var("x"), Lit(Int(2))])],
+                        Call("+", [Var("f0"), Var("f1")]),
+                    ),
+                ],
+            )
+        )
+        egraph.clear_rules()
+        egraph.run_rules(7)
+        with pytest.raises(EggSmolError):
+            egraph.check_fact(Eq([Call("fib", [Lit(Int(7))]), Lit(Int(13))]))
+
+    def test_print_size(self):
+        egraph = EGraph()
+        egraph.declare_function(FunctionDecl("fib", Schema(["i64"], "i64")))
+        egraph.eval_actions(Set("fib", [Lit(Int(0))], Lit(Int(0))))
+        egraph.eval_actions(Set("fib", [Lit(Int(1))], Lit(Int(1))))
+        assert egraph.print_size("fib") == "Function fib has size 2"
+
+    def test_print_function(self):
+        egraph = EGraph()
+        egraph.declare_function(FunctionDecl("fib", Schema(["i64"], "i64")))
+        egraph.eval_actions(Set("fib", [Lit(Int(0))], Lit(Int(0))))
+        egraph.eval_actions(Set("fib", [Lit(Int(1))], Lit(Int(1))))
+        assert egraph.print_function("fib", 2) == "(fib 0) -> 0\n(fib 1) -> 1\n"
+
 
 class TestVariant:
     def test_repr(self):

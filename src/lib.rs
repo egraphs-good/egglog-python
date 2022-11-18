@@ -24,6 +24,43 @@ impl EGraph {
         }
     }
 
+    /// Push a level onto the EGraph's stack.
+    #[pyo3(text_signature = "($self)")]
+    fn push(&mut self) {
+        self.egraph.push();
+    }
+
+    /// pop a level off the EGraph's stack.
+    #[pyo3(text_signature = "($self)")]
+    fn pop(&mut self) -> EggResult<()> {
+        self.egraph.pop()?;
+        Ok({})
+    }
+
+    /// Return a string representation of a function, up to n size
+    #[pyo3(text_signature = "($self, name, n)")]
+    fn print_function(&mut self, name: &str, n: usize) -> EggResult<String> {
+        Ok(self.egraph.print_function(name.into(), n)?)
+    }
+
+    /// Return a string representation of a function's size
+    #[pyo3(text_signature = "($self, name)")]
+    fn print_size(&self, name: &str) -> EggResult<String> {
+        Ok(self.egraph.print_size(name.into())?)
+    }
+
+    /// Clear all the nodes
+    #[pyo3(text_signature = "($self)")]
+    fn clear(&mut self) {
+        self.egraph.clear();
+    }
+
+    /// Clear all the rules
+    #[pyo3(text_signature = "($self)")]
+    fn clear_rules(&mut self) {
+        self.egraph.clear_rules();
+    }
+
     /// Extract the best expression of a given value. Will also return
     /// variants number of additional options.
     #[pyo3(signature = (expr, variants=0), text_signature = "($self, expr, variants=0)")]
@@ -58,6 +95,21 @@ impl EGraph {
     #[pyo3(text_signature = "($self, rewrite)")]
     fn add_rewrite(&mut self, rewrite: Rewrite) -> EggResult<String> {
         let res = self.egraph.add_rewrite(rewrite.into())?;
+        Ok(res.to_string())
+    }
+
+    /// Run a number of actions on the egraph.
+    #[pyo3(signature=(*actions), text_signature = "($self, *actions)")]
+    fn eval_actions(&mut self, actions: Vec<Action>) -> EggResult<()> {
+        let converted: Vec<egg_smol::ast::Action> = actions.into_iter().map(|x| x.into()).collect();
+        self.egraph.eval_actions(&converted)?;
+        Ok({})
+    }
+
+    /// Define a rule, returning the name of it.
+    #[pyo3(text_signature = "($self, rule)")]
+    fn add_rule(&mut self, rule: Rule) -> EggResult<String> {
+        let res = self.egraph.add_rule(rule.into())?;
         Ok(res.to_string())
     }
 
