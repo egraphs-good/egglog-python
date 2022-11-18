@@ -346,6 +346,30 @@ class TestEGraph:
         assert egraph.extract_expr(Var("x")) == (6, Call("Num", [Lit(Int(1))]), [])
         assert egraph.extract_expr(Var("y")) == (1, Call("y", []), [])
 
+    def test_rule(self):
+        # Example from fibonacci
+        egraph = EGraph()
+        egraph.declare_function(FunctionDecl("fib", Schema(["i64"], "i64"), None, None))
+        egraph.eval_actions(Set("fib", [Lit(Int(0))], Lit(Int(0))))
+        egraph.eval_actions(Set("fib", [Lit(Int(1))], Lit(Int(1))))
+        egraph.add_rule(
+            Rule(
+                body=[
+                    Eq([Var("f0"), Call("fib", [Var("x")])]),
+                    Eq([Var("f1"), Call("fib", [Call("+", [Var("x"), Lit(Int(1))])])]),
+                ],
+                head=[
+                    Set(
+                        "fib",
+                        [Call("+", [Var("x"), Lit(Int(2))])],
+                        Call("+", [Var("f0"), Var("f1")]),
+                    ),
+                ],
+            )
+        )
+        egraph.run_rules(7)
+        egraph.check_fact(Eq([Call("fib", [Lit(Int(7))]), Lit(Int(13))]))
+
 
 class TestVariant:
     def test_repr(self):

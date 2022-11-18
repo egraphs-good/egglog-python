@@ -61,6 +61,21 @@ impl EGraph {
         Ok(res.to_string())
     }
 
+    /// Run a number of actions on the egraph.
+    #[pyo3(signature=(*actions), text_signature = "($self, *actions)")]
+    fn eval_actions(&mut self, actions: Vec<Action>) -> EggResult<()> {
+        let converted: Vec<egg_smol::ast::Action> = actions.into_iter().map(|x| x.into()).collect();
+        self.egraph.eval_actions(&converted)?;
+        Ok({})
+    }
+
+    /// Define a rule, returning the name of it.
+    #[pyo3(text_signature = "($self, rule)")]
+    fn add_rule(&mut self, rule: Rule) -> EggResult<String> {
+        let res = self.egraph.add_rule(rule.into())?;
+        Ok(res.to_string())
+    }
+
     /// Define a new named value.
     #[pyo3(
         text_signature = "($self, name, expr, cost=None)",
