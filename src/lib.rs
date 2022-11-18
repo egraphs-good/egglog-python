@@ -24,6 +24,43 @@ impl EGraph {
         }
     }
 
+    /// Push a level onto the EGraph's stack.
+    #[pyo3(text_signature = "($self)")]
+    fn push(&mut self) {
+        self.egraph.push();
+    }
+
+    /// pop a level off the EGraph's stack.
+    #[pyo3(text_signature = "($self)")]
+    fn pop(&mut self) -> EggResult<()> {
+        self.egraph.pop()?;
+        Ok({})
+    }
+
+    /// Return a string representation of a function, up to n size
+    #[pyo3(text_signature = "($self, name, n)")]
+    fn print_function(&mut self, name: &str, n: usize) -> EggResult<String> {
+        Ok(self.egraph.print_function(name.into(), n)?)
+    }
+
+    /// Return a string representation of a function's size
+    #[pyo3(text_signature = "($self, name)")]
+    fn print_size(&self, name: &str) -> EggResult<String> {
+        Ok(self.egraph.print_size(name.into())?)
+    }
+
+    /// Clear all the nodes
+    #[pyo3(text_signature = "($self)")]
+    fn clear(&mut self) {
+        self.egraph.clear();
+    }
+
+    /// Clear all the rules
+    #[pyo3(text_signature = "($self)")]
+    fn clear_rules(&mut self) {
+        self.egraph.clear_rules();
+    }
+
     /// Extract the best expression of a given value. Will also return
     /// variants number of additional options.
     #[pyo3(signature = (expr, variants=0), text_signature = "($self, expr, variants=0)")]

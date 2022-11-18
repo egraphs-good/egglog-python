@@ -70,8 +70,8 @@ convert_struct!(
     egg_smol::ast::FunctionDecl => FunctionDecl(
         name: String,
         schema: Schema,
-        default: Option<Expr>,
-        merge: Option<Expr>,
+        default: Option<Expr> = None,
+        merge: Option<Expr> = None,
         cost: Option<usize> = None
     )
         f -> egg_smol::ast::FunctionDecl {
