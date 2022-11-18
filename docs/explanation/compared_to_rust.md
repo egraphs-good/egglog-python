@@ -53,7 +53,6 @@ egg CLI works:
 
 ```{code-cell} python
 from egg_smol.bindings import *
-from egg_smol.bindings_py import *
 
 eqsat_basic = """(datatype Math
   (Num i64)
