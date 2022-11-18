@@ -72,3 +72,5 @@ docs/_build/
 .python-version
 
 TODO
+*.code-workspace
+.dmypy.json

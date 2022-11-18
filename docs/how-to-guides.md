@@ -23,5 +23,3 @@ To get started developing on this package:
 2. Install this package in editable mode: `pip install -e .[dev,test]`
 3. Run the tests: `pytest`
 4. Run the pre-commit hooks: `pre-commit run --all-files`
-5. Build the docs: `sphinx-build -nW -b html docs docs/_build/html`
-6. Check the stubts: `python -m mypy.stubtest egg_smol.bindings`

@@ -72,7 +72,7 @@ convert_struct!(
         schema: Schema,
         default: Option<Expr>,
         merge: Option<Expr>,
-        cost: Option<usize> = "None"
+        cost: Option<usize> = None
     )
         f -> egg_smol::ast::FunctionDecl {
             name: (&f.name).into(),
@@ -91,7 +91,7 @@ convert_struct!(
     egg_smol::ast::Variant => Variant(
         name: String,
         types: Vec<String>,
-        cost: Option<usize> = "None"
+        cost: Option<usize> = None
     )
         v -> egg_smol::ast::Variant {name: (&v.name).into(), types: (&v.types).into_iter().map(|v| v.into()).collect(), cost: v.cost},
         v -> Variant {name: v.name.to_string(), types: v.types.iter().map(|v| v.to_string()).collect(), cost: v.cost};
@@ -110,7 +110,7 @@ convert_struct!(
     egg_smol::ast::Rewrite => Rewrite(
         lhs: Expr,
         rhs: Expr,
-        conditions: Vec<Fact_> = "Vec::new()"
+        conditions: Vec<Fact_> = Vec::new()
     )
         r -> egg_smol::ast::Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: (&r.conditions).into_iter().map(|v| v.into()).collect()},
         r -> Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()}

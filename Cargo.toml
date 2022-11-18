@@ -9,8 +9,11 @@ name = "egg_smol_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.17.1", features = ["extension-module"] }
-egg-smol = { git = "https://github.com/mwillsey/egg-smol", ref = "9a45bdee9b5395ab821318a033c6ac7fa91f91b9" }
+# Use unreleased version to depend on signature improvements https://github.com/PyO3/pyo3/pull/2702
+pyo3 = { git = "https://github.com/PyO3/pyo3/", rev = "249c0209fd41336b9e68bae14290e598fcad34ea", features = [
+    "extension-module",
+] }
+egg-smol = { git = "https://github.com/saulshanabrook/egg-smol", branch = "public-api" }
 
 [package.metadata.maturin]
 name = "egg_smol.bindings"

@@ -47,7 +47,7 @@ macro_rules! convert_enums {
     );*) => {
         $($(
             #[pyclass(frozen, module="egg_smol.bindings"$(, name=$py_name)?)]
-            #[derive(Clone)]
+            #[derive(Clone, PartialEq, Eq)]
             pub struct $variant {
                 $(
                     #[pyo3(get)]
@@ -58,6 +58,7 @@ macro_rules! convert_enums {
             #[pymethods]
             impl $variant {
                 #[new]
+                #[pyo3(signature=($($field),*))]
                 fn new($($field: $field_type),*) -> Self {
                     Self {
                         $($field),*
@@ -70,6 +71,13 @@ macro_rules! convert_enums {
 
                 fn __str__(&self) -> String {
                     display::<_, $from_type>(self)
+                }
+                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyObject {
+                    match op {
+                        pyo3::basic::CompareOp::Eq => (self == other).into_py(py),
+                        pyo3::basic::CompareOp::Ne => (self != other).into_py(py),
+                        _ => py.NotImplemented(),
+                    }
                 }
             }
 
@@ -85,7 +93,7 @@ macro_rules! convert_enums {
             }
         )*
 
-        #[derive(FromPyObject, Clone)]
+        #[derive(FromPyObject, Clone, PartialEq, Eq)]
         pub enum $to_type {
             $(
                 $variant($variant),
@@ -154,13 +162,13 @@ macro_rules! convert_enums {
 #[macro_export]
 macro_rules! convert_struct {
     ($(
-        $from_type:ty$([$str_fn:ident])? => $to_type:ident($($field:ident: $field_type:ty$( = $default:literal)?),*)
+        $from_type:ty$([$str_fn:ident])? => $to_type:ident($($field:ident: $field_type:ty$( = $default:expr)?),*)
             $from_ident:ident -> $from:expr,
             $to_ident:ident -> $to:expr
     );*) => {
         $(
             #[pyclass(frozen, module="egg_smol.bindings")]
-            #[derive(Clone)]
+            #[derive(Clone, PartialEq, Eq)]
             pub struct $to_type {
                 $(
                     #[pyo3(get)]
@@ -171,7 +179,7 @@ macro_rules! convert_struct {
             #[pymethods]
             impl $to_type {
                 #[new]
-                #[args($($($field = $default)?)*)]
+                #[pyo3(signature=($($field $(= $default)?),*))]
                 fn new($($field: $field_type),*) -> Self {
                     Self {
                         $($field),*
@@ -186,6 +194,13 @@ macro_rules! convert_struct {
                         $str_fn::<_, $from_type>(self)
                     }
                 )?
+                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyObject {
+                    match op {
+                        pyo3::basic::CompareOp::Eq => (self == other).into_py(py),
+                        pyo3::basic::CompareOp::Ne => (self != other).into_py(py),
+                        _ => py.NotImplemented(),
+                    }
+                }
             }
 
             impl From<&$to_type> for $from_type {
