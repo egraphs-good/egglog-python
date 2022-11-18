@@ -73,3 +73,4 @@ docs/_build/
 
 TODO
 *.code-workspace
+.dmypy.json

@@ -10,11 +10,31 @@ repos:
     rev: 22.10.0
     hooks:
       - id: black
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v0.982
-    hooks:
-      - id: mypy
   - repo: https://github.com/pycqa/flake8
     rev: 5.0.4
     hooks:
       - id: flake8
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: dmypy run -- python/
+        language: system
+        require_serial: true
+        pass_filenames: false
+  - repo: local
+    hooks:
+      - id: stubtest
+        name: stubtest
+        entry: python -m mypy.stubtest egg_smol.bindings  --allowlist stubtest_allow
+        language: system
+        pass_filenames: false
+        require_serial: true
+  - repo: local
+    hooks:
+      - id: docs
+        name: docs
+        entry: sphinx-build -nW -b html docs docs/_build/html
+        language: system
+        pass_filenames: false
+        require_serial: true
