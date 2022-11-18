@@ -57,7 +57,7 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - run: pip install -e . mypy pre-commit
+      - run: pip install -e .[test] mypy pre-commit
       - run: pre-commit run --all-files mypy
       - run: pre-commit run --all-files stubtest
   docs:
