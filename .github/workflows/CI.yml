@@ -28,6 +28,16 @@ jobs:
         with:
           python-version: ${{ matrix.py }}
       - uses: actions/checkout@v2
+      - name: Cache cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: pip install -e .[test]
       - run: pytest
   mypy:
@@ -37,8 +47,19 @@ jobs:
         with:
           python-version: "3.10"
       - uses: actions/checkout@v2
+      - name: Cache cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: pip install -e . mypy pre-commit
-      - run: pre-commit run --all-files mypy stubtest
+      - run: pre-commit run --all-files mypy
+      - run: pre-commit run --all-files stubtest
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -46,6 +67,16 @@ jobs:
         with:
           python-version: "3.10"
       - uses: actions/checkout@v2
+      - name: Cache cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: pip install -e .[docs] pre-commit
       - run: pre-commit run --all-files docs
   linux:
