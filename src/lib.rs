@@ -26,13 +26,9 @@ impl EGraph {
 
     /// Extract the best expression of a given value. Will also return
     /// variants number of additional options.
-    #[pyo3(signature = (value, variants=0), text_signature = "($self, name, variants=0)")]
-    fn extract_expr(
-        &mut self,
-        value: Expr,
-        variants: usize,
-    ) -> EggResult<(usize, Expr, Vec<Expr>)> {
-        let (cost, expr, exprs) = self.egraph.extract_expr(value.into(), variants)?;
+    #[pyo3(signature = (expr, variants=0), text_signature = "($self, expr, variants=0)")]
+    fn extract_expr(&mut self, expr: Expr, variants: usize) -> EggResult<(usize, Expr, Vec<Expr>)> {
+        let (cost, expr, exprs) = self.egraph.extract_expr(expr.into(), variants)?;
         Ok((
             cost,
             expr.into(),
