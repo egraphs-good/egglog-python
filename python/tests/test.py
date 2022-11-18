@@ -344,7 +344,7 @@ class TestEGraph:
         egraph.define("y", Call("Num", [Lit(Int(2))]), cost=1)
 
         assert egraph.extract_expr(Var("x")) == (6, Call("Num", [Lit(Int(1))]), [])
-        assert egraph.extract_expr(Var("y")) == (1, Var("y"), [])
+        assert egraph.extract_expr(Var("y")) == (1, Call("y", []), [])
 
 
 class TestVariant:
@@ -359,3 +359,8 @@ class TestVariant:
 
     def test_cost(self):
         assert Variant("name", [], cost=1).cost == 1
+
+    def test_compare(self):
+        assert Variant("name", []) == Variant("name", [])
+        assert Variant("name", []) != Variant("name", ["a"])
+        assert Variant("name", []) != 10  # type: ignore

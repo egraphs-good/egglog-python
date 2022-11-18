@@ -47,7 +47,7 @@ macro_rules! convert_enums {
     );*) => {
         $($(
             #[pyclass(frozen, module="egg_smol.bindings"$(, name=$py_name)?)]
-            #[derive(Clone)]
+            #[derive(Clone, PartialEq, Eq)]
             pub struct $variant {
                 $(
                     #[pyo3(get)]
@@ -72,6 +72,13 @@ macro_rules! convert_enums {
                 fn __str__(&self) -> String {
                     display::<_, $from_type>(self)
                 }
+                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyObject {
+                    match op {
+                        pyo3::basic::CompareOp::Eq => (self == other).into_py(py),
+                        pyo3::basic::CompareOp::Ne => (self != other).into_py(py),
+                        _ => py.NotImplemented(),
+                    }
+                }
             }
 
             impl From<$variant> for $from_type {
@@ -86,7 +93,7 @@ macro_rules! convert_enums {
             }
         )*
 
-        #[derive(FromPyObject, Clone)]
+        #[derive(FromPyObject, Clone, PartialEq, Eq)]
         pub enum $to_type {
             $(
                 $variant($variant),
@@ -161,7 +168,7 @@ macro_rules! convert_struct {
     );*) => {
         $(
             #[pyclass(frozen, module="egg_smol.bindings")]
-            #[derive(Clone)]
+            #[derive(Clone, PartialEq, Eq)]
             pub struct $to_type {
                 $(
                     #[pyo3(get)]
@@ -187,6 +194,13 @@ macro_rules! convert_struct {
                         $str_fn::<_, $from_type>(self)
                     }
                 )?
+                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyObject {
+                    match op {
+                        pyo3::basic::CompareOp::Eq => (self == other).into_py(py),
+                        pyo3::basic::CompareOp::Ne => (self != other).into_py(py),
+                        _ => py.NotImplemented(),
+                    }
+                }
             }
 
             impl From<&$to_type> for $from_type {
