@@ -58,6 +58,7 @@ macro_rules! convert_enums {
             #[pymethods]
             impl $variant {
                 #[new]
+                #[pyo3(signature=($($field),*))]
                 fn new($($field: $field_type),*) -> Self {
                     Self {
                         $($field),*
@@ -154,7 +155,7 @@ macro_rules! convert_enums {
 #[macro_export]
 macro_rules! convert_struct {
     ($(
-        $from_type:ty$([$str_fn:ident])? => $to_type:ident($($field:ident: $field_type:ty$( = $default:literal)?),*)
+        $from_type:ty$([$str_fn:ident])? => $to_type:ident($($field:ident: $field_type:ty$( = $default:expr)?),*)
             $from_ident:ident -> $from:expr,
             $to_ident:ident -> $to:expr
     );*) => {
@@ -171,7 +172,7 @@ macro_rules! convert_struct {
             #[pymethods]
             impl $to_type {
                 #[new]
-                #[args($($($field = $default)?)*)]
+                #[pyo3(signature=($($field $(= $default)?),*))]
                 fn new($($field: $field_type),*) -> Self {
                     Self {
                         $($field),*
