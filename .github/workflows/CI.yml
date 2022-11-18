@@ -38,7 +38,7 @@ jobs:
           python-version: "3.10"
       - uses: actions/checkout@v2
       - run: pip install -e . mypy
-      - run: python -m mypy.stubtest egg_smol.bindings  --allowlist stubtest_allow
+      - run: pre-commit run --all-files mypy stubtest
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -46,8 +46,8 @@ jobs:
         with:
           python-version: "3.10"
       - uses: actions/checkout@v2
-      - run: pip install -e .[docs]
-      - run: sphinx-build -nW -b html docs docs/_build/html
+      - run: pip install -e .[docs] pre-commit
+      - run: pre-commit run --all-files docs
   linux:
     name: build linux
     runs-on: ubuntu-latest

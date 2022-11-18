@@ -1,5 +1,7 @@
 default_language_version:
   python: python3.10
+ci:
+  skip: [mypy, docs, stubtest]
 repos:
   - repo: https://github.com/pycqa/isort
     rev: 5.10.1
