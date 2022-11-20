@@ -435,6 +435,36 @@ class TestEGraph:
         egraph.eval_actions(Set("fib", [Lit(Int(1))], Lit(Int(1))))
         assert egraph.print_function("fib", 2) == "(fib 0) -> 0\n(fib 1) -> 1\n"
 
+    def test_sort_alias(self):
+        # From map example
+        egraph = EGraph()
+        egraph.declare_sort_alias(
+            "MyMap",
+            "Map",
+            [Var("i64"), Var("String")],
+        )
+        egraph.define(
+            "my_map1",
+            Call("insert", [Call("empty", []), Lit(Int(1)), Lit(String("one"))]),
+        )
+        egraph.define(
+            "my_map2",
+            Call("insert", [Var("my_map1"), Lit(Int(2)), Lit(String("two"))]),
+        )
+
+        egraph.check_fact(
+            Eq([Lit(String("one")), Call("get", [Var("my_map1"), Lit(Int(1))])])
+        )
+        _, expr, _ = egraph.extract_expr(Var("my_map2"))
+        assert expr == Call(
+            "insert",
+            [
+                Call("insert", [Call("empty", []), Lit(Int(2)), Lit(String("two"))]),
+                Lit(Int(1)),
+                Lit(String("one")),
+            ],
+        )
+
 
 class TestVariant:
     def test_repr(self):

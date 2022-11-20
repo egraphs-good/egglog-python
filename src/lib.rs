@@ -23,6 +23,19 @@ impl EGraph {
             egraph: egg_smol::EGraph::default(),
         }
     }
+    /// Declare an alias to a sort.
+    #[pyo3(text_signature = "($self, name, presort, args)")]
+    fn declare_sort_alias(
+        &mut self,
+        name: String,
+        presort: String,
+        args: Vec<Expr>,
+    ) -> EggResult<()> {
+        let args_into: Vec<egg_smol::ast::Expr> = args.into_iter().map(|e| e.into()).collect();
+        self.egraph
+            .declare_sort_alias(name.into(), presort.into(), &args_into)?;
+        Ok({})
+    }
 
     /// Push a level onto the EGraph's stack.
     #[pyo3(text_signature = "($self)")]
@@ -93,6 +106,7 @@ impl EGraph {
 
     /// Define a rewrite rule, returning the name of the rule
     #[pyo3(text_signature = "($self, rewrite)")]
+    // Can be replaced with add_rule
     fn add_rewrite(&mut self, rewrite: Rewrite) -> EggResult<String> {
         let res = self.egraph.add_rewrite(rewrite.into())?;
         Ok(res.to_string())
@@ -138,6 +152,7 @@ impl EGraph {
     }
 
     /// Declare a new datatype constructor.
+    /// Can be replaced with declare_function
     #[pyo3(text_signature = "($self, variant, sort)")]
     fn declare_constructor(&mut self, variant: Variant, sort: &str) -> EggResult<()> {
         self.egraph.declare_constructor(variant.into(), sort)?;
