@@ -2,6 +2,7 @@
 
 ```{toctree}
 explanation/compared_to_rust
+explanation/optional_values
 ```
 
 ## Status of this project
