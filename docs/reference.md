@@ -7,4 +7,5 @@ This modules contains bindings for the rust `egg-smol` library which are meant t
 ```{eval-rst}
 .. automodule:: egg_smol.bindings
    :members:
+   :undoc-members:
 ```
