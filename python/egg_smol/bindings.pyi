@@ -1,5 +1,4 @@
 from datetime import timedelta
-from typing import Optional
 
 from typing_extensions import final
 
@@ -9,7 +8,7 @@ class EGraph:
     def declare_constructor(self, variant: Variant, sort: str) -> None: ...
     def declare_sort(self, name: str) -> None: ...
     def declare_function(self, decl: FunctionDecl) -> None: ...
-    def define(self, name: str, expr: _Expr, cost: Optional[int] = None) -> None: ...
+    def define(self, name: str, expr: _Expr, cost: int | None = None) -> None: ...
     def add_rewrite(self, rewrite: Rewrite) -> str: ...
     def run_rules(self, limit: int) -> tuple[timedelta, timedelta, timedelta]: ...
     def check_fact(self, fact: _Fact) -> None: ...
@@ -119,26 +118,26 @@ _Action = Define | Set | Delete | Union | Panic | Expr_
 class FunctionDecl:
     name: str
     schema: Schema
-    default: Optional[_Expr]
-    merge: Optional[_Expr]
-    cost: Optional[int]
+    default: _Expr | None
+    merge: _Expr | None
+    cost: int | None
     def __init__(
         self,
         name: str,
         schema: Schema,
-        default: Optional[_Expr] = None,
-        merge: Optional[_Expr] = None,
-        cost: Optional[int] = None,
+        default: _Expr | None = None,
+        merge: _Expr | None = None,
+        cost: int | None = None,
     ) -> None: ...
 
 @final
 class Variant:
     def __init__(
-        self, name: str, types: list[str], cost: Optional[int] = None
+        self, name: str, types: list[str], cost: int | None = None
     ) -> None: ...
     name: str
     types: list[str]
-    cost: Optional[int]
+    cost: int | None
 
 @final
 class Schema:
