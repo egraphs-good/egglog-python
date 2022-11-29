@@ -13,7 +13,7 @@ Let's look at how check will be implemented in egg-smol:
 
 1. The rule for parsing `check` in `parse.lalrpop` is:
 
-   ```lalrpop
+   ```
    "(" "check" <Fact> ")" => Command::Check(<>)
    ```
 
@@ -36,7 +36,7 @@ egraph.check_fact(Fact(
 
 We get:
 
-```python
+```
 PanicException: prim was partial... do we allow this?
 ```
 
