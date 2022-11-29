@@ -23,19 +23,6 @@ impl EGraph {
             egraph: egg_smol::EGraph::default(),
         }
     }
-    /// Declare an alias to a sort.
-    #[pyo3(text_signature = "($self, name, presort, args)")]
-    fn declare_sort_alias(
-        &mut self,
-        name: String,
-        presort: String,
-        args: Vec<Expr>,
-    ) -> EggResult<()> {
-        let args_into: Vec<egg_smol::ast::Expr> = args.into_iter().map(|e| e.into()).collect();
-        self.egraph
-            .declare_sort_alias(name.into(), presort.into(), &args_into)?;
-        Ok({})
-    }
 
     /// Push a level onto the EGraph's stack.
     #[pyo3(text_signature = "($self)")]
@@ -145,9 +132,28 @@ impl EGraph {
     }
 
     /// Declare a new sort with the given name.
-    #[pyo3(text_signature = "($self, name)")]
-    fn declare_sort(&mut self, name: &str) -> EggResult<()> {
-        self.egraph.declare_sort(name)?;
+    #[pyo3(
+        text_signature = "($self, name, presort_and_args=None)",
+        signature = (name, presort_and_args=None),
+    )]
+    fn declare_sort(
+        &mut self,
+        name: &str,
+        presort_and_args: Option<(String, Vec<Expr>)>,
+    ) -> EggResult<()> {
+        // TODO: It would be cleaner to do this with a map function and call declare_sort
+        // only once.
+        // I had to move the function call inside the match, so that the lifetime
+        // of the args slice lasts for as long as it is called in the declare_sort
+        match presort_and_args {
+            Some((presort, args)) => {
+                let args_converted: Vec<egg_smol::ast::Expr> =
+                    args.into_iter().map(|x| x.into()).collect();
+                self.egraph
+                    .declare_sort(name, Some((presort.into(), &args_converted[..])))?
+            }
+            None => self.egraph.declare_sort(name, None)?,
+        };
         Ok({})
     }
 

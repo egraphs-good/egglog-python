@@ -438,10 +438,9 @@ class TestEGraph:
     def test_sort_alias(self):
         # From map example
         egraph = EGraph()
-        egraph.declare_sort_alias(
+        egraph.declare_sort(
             "MyMap",
-            "Map",
-            [Var("i64"), Var("String")],
+            ("Map", [Var("i64"), Var("String")]),
         )
         egraph.define(
             "my_map1",

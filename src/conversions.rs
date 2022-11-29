@@ -38,9 +38,9 @@ convert_enums!(
             egg_smol::ast::Fact::Fact(e) => Fact { expr: e.into() }
     };
     egg_smol::ast::Action => Action {
-        Define(lhs: String, rhs: Expr)
-            d -> egg_smol::ast::Action::Define((&d.lhs).into(), (&d.rhs).into()),
-            egg_smol::ast::Action::Define(n, e) => Define { lhs: n.to_string(), rhs: e.into() };
+        Let(lhs: String, rhs: Expr)
+            d -> egg_smol::ast::Action::Let((&d.lhs).into(), (&d.rhs).into()),
+            egg_smol::ast::Action::Let(n, e) => Let { lhs: n.to_string(), rhs: e.into() };
         Set(lhs: String, args: Vec<Expr>, rhs: Expr)
             s -> egg_smol::ast::Action::Set((&s.lhs).into(), (&s.args).into_iter().map(|e| e.into()).collect(), (&s.rhs).into()),
             egg_smol::ast::Action::Set(n, a, e) => Set {
