@@ -259,7 +259,7 @@ def test_classmethod_call():
 _Nothing = NewType("_Nothing", object)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Expr:
     type: Type
     value: ExprValue
@@ -357,7 +357,7 @@ class Var:
         return str(self)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Call:
     fn: Function
     args: tuple[Expr, ...] = ()
@@ -378,7 +378,7 @@ class Call:
         return (self.fn, [a._parts for a in self.args])
 
 
-@dataclass
+@dataclass(frozen=True)
 class Int:
     value: int
 
@@ -389,7 +389,7 @@ class Int:
         return str(self)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Unit:
     def __str__(self) -> str:
         return "Unit()"
@@ -398,7 +398,7 @@ class Unit:
         return str(self)
 
 
-@dataclass
+@dataclass(frozen=True)
 class String:
     value: str
 
@@ -411,117 +411,3 @@ class String:
 
 Literal = Int | Unit | String
 ExprValue = Var | Call | Literal
-# @dataclass
-# class Definitions:
-
-
-# @dataclass
-# class Expr:
-#     expr: py._Expr
-#     python_tp: PythonTypeID
-
-
-# @dataclass
-# class Function:
-#     analysis: Analysis
-#     name: str
-
-#     def __call__(self, *args: Expr):
-#         egg_name, return_tp = self.analysis.analyze_call(
-#             self.name, [arg.python_tp for arg in args]
-#         )
-#         return Expr(py.Call(egg_name, [arg.expr for arg in args]), return_tp)
-
-
-# @dataclass
-# class BoundMethod:
-#     analysis: Analysis
-#     name: str
-#     owner: Expr
-
-#     def __call__(self, *args: Expr):
-#         egg_name, return_tp = self.analysis.analyze_call(
-#             (self.owner.python_tp, False, self.name),
-#             [self.owner.python_tp] + [arg.python_tp for arg in args],
-#         )
-#         return Expr(
-#             py.Call(egg_name, [self.owner.expr] + [arg.expr for arg in args]), return_tp
-#         )
-
-
-# @dataclass
-# class BoundClassMethod:
-#     analysis: Analysis
-#     egg_name: str
-#     owner: PythonTypeID
-
-#     def __call__(self, *args: Expr) -> Expr:
-#         egg_name, return_tp = self.analysis.analyze_call(
-#             self.egg_name, [self.owner] + [arg.python_tp for arg in args]
-#         )
-#         return Expr(py.Call(egg_name, [arg.expr for arg in args]), return_tp)
-
-
-# @dataclass
-# @dataclass
-# class Analysis:
-#     # Mapping so that we can understand the corresponding egg names and types
-#     # for the python types.
-#     _python_callables: dict[PythonCallableID, PythonCallableValue] = field(
-#         default_factory=dict
-#     )
-#     # Mapping of python type id and whether is_classmethod to a list of method names
-#     _tp_to_methods: dict[tuple[str, bool], list[str]] = field(
-#         default_factory=lambda: defaultdict(list)
-#     )
-
-#     def analyze_call(
-#         self, callable_id: PythonCallableID, arg_type_ids: list[PythonTypeID]
-#     ) -> tuple[str, PythonTypeID]:
-#         """
-#         Given some Python function and its argument types, returns the return type of the function
-#         as well as the egg function name.
-
-#         Raises NotImplementedError if the function is not supported.
-#         """
-#         if callable_id not in self._python_callables:
-#             raise NotImplementedError
-
-#         egg_name, generate_tp = self._python_callables[callable_id]
-#         return egg_name, generate_tp(arg_type_ids)
-
-#     def dir(self, tp_name: str, is_classmethod: bool) -> list[str]:
-#         """
-#         Return a list of method names for a given type.
-#         """
-#         return self._tp_to_methods[tp_name, is_classmethod]
-
-#     def register_callable(
-#         self, id: PythonCallableID, egg_name: str, generate_tp: GenerateReturnTp
-#     ) -> None:
-#         """
-#         Register a Python function. Pass in it's egg name and a function which takes a list of
-#         Python type ids and returns a Python type id.
-#         """
-#         self._python_callables[id] = egg_name, generate_tp
-#         if isinstance(id, tuple):
-#             tp_name, is_classmethod, method_name = id
-#             self._tp_to_methods[tp_name, is_classmethod].append(method_name)
-
-
-# # A python type is identified by either its name or a tuple of its name and any argument
-# # types, for generic types.
-# PythonTypeID: TypeAlias = Union[str, tuple[str, tuple["PythonTypeID", ...]]]
-
-# # A Python callable is either a function, with a name, or a method of a class,
-# # either a classmethod or a regular method.
-# # These are described by either a str of the fn name or a tuple of the class name, whether
-# # its a classmethod, and the fn name.
-# PythonMethodID = tuple[str, bool, str]
-# PythonCallableID: TypeAlias = Union[str, PythonMethodID]
-
-# # A callable which given a list of Python type ids returns a Python type id of the result.
-# GenerateReturnTp = Callable[[list[PythonTypeID]], PythonTypeID]
-
-# # A tuple of the egg function name and a callable which computes the return type
-# PythonCallableValue: TypeAlias = tuple[str, GenerateReturnTp]
