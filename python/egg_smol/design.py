@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from abc import ABC
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import (
     TYPE_CHECKING,
     Any,
+    Arg,
     Callable,
     Generic,
     Iterable,
     NewType,
     ParamSpec,
+    Protocol,
     TypeVar,
     Union,
     overload,
-    Arg
 )
 
 import egg_smol.bindings as py
@@ -29,96 +31,38 @@ S2 = TypeVar("S2", bound="Sort")
 ST = TypeVar("ST", bound=type["Sort"])
 FN = TypeVar("FN", bound=Callable[..., "Sort" | None])
 
-# How do we want to organize this data at runtime in Python?
-# Do we want to end up wrapping builtin Python types eventually?
-# We could either have the values be actual runtime values of the type (how we do it in Metadsl)
-# Or make them all just instance of one type that acts like whatever type it needs to be.
-# The latter is nicer in that we can keep seperate the runtime values their python types
-# (which are really just needed for Mypy to look at)
-# Let's try the latter "for fun"
-
-
-
 
 @dataclass
-class _PrettyPrinter:
-    # Mapping of egg function name to a function which mapps the string args to the result
-    functions: dict[str, Callable[[Iterable[str]], str]]
-    sorts: dict[str, str]
+class EGraph:
+    _egraph: py.EGraph = field(default_factory=py.EGraph)
 
-    def __call__(self, expr: py._Expr) -> str:
+    def __init__(self) -> None:
+        self.egraph = py.EGraph()
+
+    def check(self, fact: Fact) -> None:
+        ...
+
+    def run(self, limit: int) -> tuple[timedelta, timedelta, timedelta]:
+        ...
+
+    def extract(self, expr: S) -> S:
+        ...
+
+    def extract_variants(self, expr: S, variants: int) -> Iterable[S]:
+        ...
+
+    def __enter__(self) -> EGraph:
         """
-        Pretty print an expression.
-
-        >>> pp = _PrettyPrinter()
-        >>> pp.pretty_print_expr(py.Lit(py.Int(1)))
-        'i64(1)'
-        >>> pp.pretty_print_expr(py.Lit(py.
-
+        Push an egraph during the contet manager.
         """
-        if isinstance(expr, py.Lit):
-            return self._pretty_print_literal(expr.value)
-        elif isinstance(expr, py.Var):
-            return expr.name
-        elif isinstance(expr, py.Call):
-            return self._pretty_print_call(expr.name, expr.args)
-        else:
-            raise NotImplementedError
+        self.egraph.push()
+        return self
 
-    def _pretty_print_literal(self, literal: _Literal) -> str:
-        if isinstance(literal, py.Int):
-            return f"i64({literal.value})"
-        elif isinstance(literal, py.String):
-            return f'String("{literal.value}")'
-        elif isinstance(literal, py.Unit):
-            return "Unit()"
-        else:
-            raise NotImplementedError
-    
-    def _pretty_print_call(self, name: str, args: list[py._Expr]) -> str:
-        if name in self.functions:
-            return self.functions[name]([self(arg) for arg in args])
-        else:
-            raise NotImplementedError
-
-
-def test_pretty_print_lit():
-    pp = _PrettyPrinter()
-    assert pp(py.Lit(py.Int(1))) == "i64(1)"
-    assert pp(py.Lit(py.Unit())) == "Unit()"
-    assert pp(py.Lit(py.String("hello"))) == 'String("hello")'
-
-def test_pretty_print_var():
-    pp = _PrettyPrinter()
-    assert pp(py.Var("x")) == "x"
-
-
-def test_pretty_print_function():
-    pp = _PrettyPrinter()
-    pp.function['add'] = lambda args: f"({args[0]} + {args[1]})"
-    assert pp(py.Call("add", [py.Lit(py.Int(1)), py.Lit(py.Int(2))])) == "i64(1) + i64(2)"
-
-
-@dataclass
-class E
-
-@dataclass
-class _Function:
-    # Name of Python function
-    name: str
-    decl: py.FunctionDecl
-
-    def __call__(self, *args):
-
-
-# How would I teach a course that could train people to help me with all of this?
-
-class Module:
-    def __init__(self, name: str):
-        self.name = name
-        self.on_register: list[Callable[[py.EGraph], None]] = []
-        # Mapping of sort name to the sort Python type
-        self.sort_to_str: dict[str, str] = {}
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """
+        Pop the egraph after the context manager.
+        """
+        self.egraph.pop()
 
     @overload
     def sort(self, name: str) -> Callable[[ST], ST]:
@@ -169,7 +113,7 @@ builtins = Module("builtins")
 _Nothing = NewType("_Nothing", object)
 
 
-class Sort:
+class Sort(Protocol):
     @builtins.function("!=")
     def __ne__(self: T, __o: T) -> Unit:  # type: ignore
         ...
@@ -187,39 +131,6 @@ class Rule:
         ...
 
 
-class EGraph(Module):
-    def __init__(self, *modules: Module) -> None:
-        self.egraph = py.EGraph()
-
-    def register(self, module: Module):
-        ...
-
-    def check(self, fact: Fact) -> None:
-        ...
-
-    def run(self, limit: int) -> tuple[timedelta, timedelta, timedelta]:
-        ...
-
-    def extract(self, expr: S) -> S:
-        ...
-
-    def extract_variants(self, expr: S, variants: int) -> Iterable[S]:
-        ...
-
-    def __enter__(self) -> EGraph:
-        """
-        Push an egraph during the contet manager.
-        """
-        self.egraph.push()
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        """
-        Pop the egraph after the context manager.
-        """
-        self.egraph.pop()
-
-
 class Eq:
     pass
 
@@ -231,25 +142,25 @@ class Action:
 Definition = Union[Action, Rule, Rewrite]
 
 
-class E(Generic[S1]):
-    def __init__(self, expr: S1) -> None:
+@dataclass(frozen=True)
+class E(Generic[S]):
+    expr: S
+
+    def set(self, replacement: S) -> Action:
         ...
 
-    def set(self, replacement: S1) -> Action:
+    def __eq__(self, other: S) -> Eq:  # type: ignore
         ...
 
-    def __eq__(self, other: S1) -> Eq:  # type: ignore
-        ...
-
-    def rewrite(self, rhs: S1, conditions: list[Fact] = []) -> Rewrite:
+    def rewrite(self, rhs: S, conditions: list[Fact] = []) -> Rewrite:
         ...
 
 
-def vars_(names: str, sort: type[S1]) -> list[S1]:
+def vars_(names: str, sort: type[S]) -> list[S]:
     ...
 
 
-def var(name: str, sort: type[S1]) -> S1:
+def var(name: str, sort: type[S]) -> S:
     ...
 
 
@@ -257,6 +168,8 @@ def literal(lit: type[_Literal]) -> Callable[[T], T]:
     ...
 
 
+# Need to enherit from protocol so that mypy doesn't complain about empty bodies
+# https://github.com/python/mypy/pull/13729
 @builtins.sort("unit")
 class Unit(Sort):
     # ???
@@ -269,7 +182,7 @@ Fact = Union[Eq, Unit]
 
 
 @builtins.sort
-class i64(Sort):
+class i64(Sort, Protocol):
     @literal(py.Int)
     def __init__(self, value: int):
         ...
