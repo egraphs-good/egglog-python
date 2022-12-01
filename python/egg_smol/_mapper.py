@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Hashable
 from dataclasses import dataclass, field
-
-import egg_smol.bindings as py
+from typing import NewType, cast
 
 
 @dataclass(frozen=True)
@@ -13,6 +12,13 @@ class Kind:
     typevariables: tuple[TypeVariable, ...] = ()
     classmethods: dict[str, Function] = field(default_factory=dict)
     methods: dict[str, Function] = field(default_factory=dict)
+    # Init function. If defined, return value should be of this Kind
+    init: Function | None = None
+
+    def __call__(self, *args: Expr) -> Expr:
+        if self.init is None:
+            raise TypeError(f"{self} has no __init__ defined")
+        return BoundClassMethod(self, (), self.init)(*args)
 
     def __getitem__(self, args: tuple[Type_, ...]) -> Type:
         if len(args) != len(self.typevariables):
@@ -53,17 +59,22 @@ class Type:
 
     def __getattr__(self, name: str) -> BoundClassMethod:
         if name in self.kind.classmethods:
-            tp_args: list[Type] = []
-            for a in self.args:
-                if not isinstance(a, Type):
-                    raise TypeError(
-                        f"Cannot get method from class with unbound type {a}"
-                    )
-                tp_args.append(a)
-            return BoundClassMethod(
-                self.kind, tuple(tp_args), self.kind.classmethods[name]
-            )
+            return self._bind_classmethod(self.kind.classmethods[name])
         raise AttributeError(f"{self.kind} has no classmethod {name}")
+
+    def __call__(self, *args: Expr) -> Expr:
+        if self.kind.init is None:
+            raise TypeError(f"{self} has no __init__ defined")
+        return self._bind_classmethod(self.kind.init)(*args)
+
+    def _bind_classmethod(self, fn: Function) -> BoundClassMethod:
+        # Bind the classmethod, verifying that all types are not typevars
+        tp_args: list[Type] = []
+        for a in self.args:
+            if not isinstance(a, Type):
+                raise TypeError(f"Cannot get method from class with unbound type {a}")
+            tp_args.append(a)
+        return BoundClassMethod(self.kind, tuple(tp_args), fn)
 
 
 @dataclass(frozen=True)
@@ -87,6 +98,49 @@ def test_type_str():
     assert str(i64) == "i64"
     assert str(K) == "K"
     assert str(Map[i64, i64]) == "Map[i64, i64]"
+
+
+@dataclass(frozen=True)
+class BoundClassMethod:
+    kind: Kind
+    # Any args provided, if it was bound
+    tp_args: tuple[Type, ...] | None
+    fn: Function
+
+    def __call__(self, *args: Expr) -> Expr:
+        # If this class was not bound, then no additional types were inferred
+        if not self.tp_args:
+            return self.fn(*args)
+        # Otherwise, this class was bound, before before we accessed the method,
+        # so we should replace the type variables with the inferred types
+        ti = TypeInference(dict(zip(self.kind.typevariables, self.tp_args)))
+        return self.fn(*args, _ti=ti)
+
+    def __str__(self) -> str:
+        tp_str = (
+            f"{self.kind}[{', '.join(map(str, self.tp_args))}]"
+            if self.tp_args
+            else str(self.kind)
+        )
+        return f"{tp_str}.{self.fn}"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+@dataclass(frozen=True)
+class BoundMethod:
+    slf: Expr
+    fn: Function
+
+    def __call__(self, *args: Expr) -> Expr:
+        return self.fn(self.slf, *args)
+
+    def __str__(self) -> str:
+        return f"{self.slf}.{self.fn}"
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
 @dataclass(frozen=True)
@@ -155,34 +209,6 @@ def test_type_inference():
 
 
 @dataclass(frozen=True)
-class BoundClassMethod:
-    kind: Kind
-    # Any args provided, if it was bound
-    tp_args: tuple[Type, ...] | None
-    fn: Function
-
-    def __call__(self, *args: Expr) -> Expr:
-        # If this class was not bound, then no additional types were inferred
-        if not self.tp_args:
-            return self.fn(*args)
-        # Otherwise, this class was bound, before before we accessed the method,
-        # so we should replace the type variables with the inferred types
-        ti = TypeInference(dict(zip(self.kind.typevariables, self.tp_args)))
-        return self.fn(*args, _ti=ti)
-
-    def __str__(self) -> str:
-        tp_str = (
-            f"{self.kind}[{', '.join(map(str, self.tp_args))}]"
-            if self.tp_args
-            else str(self.kind)
-        )
-        return f"{tp_str}.{self.fn}"
-
-    def __repr__(self) -> str:
-        return str(self)
-
-
-@dataclass(frozen=True)
 class Function:
     python_name: str
     egg_name: str
@@ -194,32 +220,19 @@ class Function:
         bound_return_type = ti.infer_return_type(
             self.arg_types, self.return_type, [arg.type for arg in args]
         )
-        return Expr(
-            bound_return_type,
-            py.Call(
-                self.egg_name,
-                [arg.value for arg in args],
-            ),
-        )
+        return Expr(bound_return_type, Call(self, args))
 
     def __str__(self) -> str:
-        return f"{self.python_name}({', '.join(map(str, self.arg_types))}) -> {self.return_type}"
+        return self.python_name
 
     def __repr__(self) -> str:
         return str(self)
 
 
-def test_function_str():
-    i64 = Kind("i64", "i64")[()]
-    unit = Kind("Unit", "Unit")[()]
-    f = Function("f", "f", [i64], unit)
-    assert str(f) == "f(i64) -> Unit"
-
-
 def test_function_call():
     i64 = Kind("i64", "i64")[()]
     one = Function("one", "one", [], i64)
-    assert one() == Expr(i64, py.Call("one", []))
+    assert one()._parts == (i64, Call(one))
 
 
 def test_classmethod_call():
@@ -227,16 +240,14 @@ def test_classmethod_call():
 
     K, V = TypeVariable("K"), TypeVariable("V")
     Map = Kind("Map", "Map", (K, V))
-    Map.classmethods["create"] = Function("create", "create", [], Map[K, V])
+    create_fn = Function("create", "create", [], Map[K, V])
+    Map.classmethods["create"] = create_fn
     with raises(TypeError):
         Map.create()
 
     i64 = Kind("i64", "i64")[()]
     unit = Kind("Unit", "Unit")[()]
-    assert Map[i64, unit].create() == Expr(
-        Map[i64, unit],
-        py.Call("create", []),
-    )
+    assert Map[i64, unit].create()._parts == (Map[i64, unit], Call(create_fn))
 
 
 # Ex:
@@ -244,12 +255,162 @@ def test_classmethod_call():
 # get = Function("get", "get", [Map[K, V], K], V)
 
 
+# Nothing should ever be this value, as a way of disallowing methods
+_Nothing = NewType("_Nothing", object)
+
+
 @dataclass
 class Expr:
     type: Type
-    value: py._Expr
+    value: ExprValue
+
+    def __getattr__(self, name: str) -> BoundMethod:
+        return self._get_method(name)
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    def _get_method(self, name: str) -> BoundMethod:
+        methods = self.type.kind.methods
+        if name not in methods:
+            raise AttributeError(f"{self.type.kind} has no method {name}")
+        return BoundMethod(self, methods[name])
+
+    # Use _Nothing so that == is not allowed on Expr objects according to MyPy
+    # so that __eq__ is reserved for any custom equality checks
+    def __eq__(self, other: _Nothing) -> Expr:  # type: ignore
+        return self._get_method("__eq__")(cast(Expr, other))
+
+    def _eq(self, other: Expr) -> bool:
+        return self._parts == other._parts
+
+    @property
+    def _parts(self) -> tuple[Type, ExprValue]:
+        return (self.type, self.value)
 
 
+# Special methods which we might want to use as functions
+# These should all be functional
+# https://docs.python.org/3/reference/datamodel.html
+SPECIAL_METHODS = [
+    # Comparison
+    "lt",
+    "le",
+    "eq",
+    "ne",
+    "gt",
+    "ge",
+    # Container
+    "getitem",
+    # Numeric binary
+    "add",
+    "sub",
+    "mul",
+    "matmul",
+    "truediv",
+    "floordiv",
+    "mod",
+    "divmod",
+    "pow",
+    "lshift",
+    "rshift",
+    "and",
+    "xor",
+    "or",
+    # Numeric unary
+    "neg",
+    "pos",
+    "abs",
+    "invert",
+]
+for special_method in SPECIAL_METHODS:
+    name = f"__{special_method}__"
+    del special_method
+    setattr(
+        Expr,
+        name,
+        lambda self, *args, name=name: self._get_method(name)(*args),
+    )
+
+
+def test_expr_special():
+    i64Kind = Kind("i64", "i64")
+    i64 = i64Kind[()]
+    add = Function("__add__", "add", [i64, i64], i64)
+    i64Kind.methods["__add__"] = add
+    one = Expr(i64, Int(1))
+    res = one + one  # type: ignore
+    assert res._parts == (i64, Call(add, (one, one)))
+
+
+@dataclass(frozen=True)
+class Var:
+    name: str
+
+    def __str__(self):
+        return self.name
+
+    def __repr__(self):
+        return str(self)
+
+
+@dataclass
+class Call:
+    fn: Function
+    args: tuple[Expr, ...] = ()
+
+    def __str__(self) -> str:
+        return f"{self.fn}({', '.join(str(arg) for arg in self.args)})"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    def __eq__(self, __o: object) -> bool:
+        if not isinstance(__o, Call):
+            return NotImplemented
+        return self._parts == __o._parts
+
+    @property
+    def _parts(self):
+        return (self.fn, [a._parts for a in self.args])
+
+
+@dataclass
+class Int:
+    value: int
+
+    def __str__(self) -> str:
+        return f"i64({self.value})"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+@dataclass
+class Unit:
+    def __str__(self) -> str:
+        return "Unit()"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+@dataclass
+class String:
+    value: str
+
+    def __str__(self) -> str:
+        return f"String({self.value})"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+Literal = Int | Unit | String
+ExprValue = Var | Call | Literal
 # @dataclass
 # class Definitions:
 
