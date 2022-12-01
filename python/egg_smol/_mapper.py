@@ -17,19 +17,53 @@ class Kind:
             raise TypeError(f"Expected {self.n_args} arguments, got {len(args)}")
         return Type(self, args)
 
+    def __str__(self) -> str:
+        return self.python_name
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+def test_kind_str():
+    assert str(Kind("i64", "i64")) == "i64"
+
 
 @dataclass(frozen=True)
 class Type:
     kind: Kind
     args: tuple[Type_, ...]
 
+    def __str__(self) -> str:
+        if self.args:
+            return f"{self.kind}[{', '.join(map(str, self.args))}]"
+        else:
+            return str(self.kind)
+
+    def __repr__(self) -> str:
+        return str(self)
+
 
 @dataclass(frozen=True)
 class TypeVariable:
     identifier: Hashable
 
+    def __str__(self) -> str:
+        return str(self.identifier)
+
+    def __repr__(self) -> str:
+        return str(self)
+
 
 Type_ = TypeVariable | Type
+
+
+def test_type_str():
+    i64 = Kind("i64", "i64")[()]
+    Map = Kind("Map", "Map", 2)
+    K, V = TypeVariable("K"), TypeVariable("V")
+    assert str(i64) == "i64"
+    assert str(K) == "K"
+    assert str(Map[K, V]) == "Map[K, V]"
 
 
 @dataclass
@@ -114,6 +148,19 @@ class Function:
                 [arg.value for arg in args],
             ),
         )
+
+    def __str__(self) -> str:
+        return f"{self.python_name}({', '.join(map(str, self.arg_types))}) -> {self.return_type}"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+def test_function_str():
+    i64 = Kind("i64", "i64")[()]
+    unit = Kind("Unit", "Unit")[()]
+    f = Function("f", "f", [i64], unit)
+    assert str(f) == "f(i64) -> Unit"
 
 
 # Ex:
