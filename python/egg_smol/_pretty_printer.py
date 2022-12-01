@@ -24,8 +24,14 @@ class _PrettyPrinter:
         # and wrap it if it is too long
         return blacken_python_expression(self._expr(expr))
 
-    def add_function(self, name: str, func: Callable[[list[str]], str]) -> None:
-        self._functions[name] = func
+    def register_function(
+        self, egg_name: str, str_fn: Callable[[list[str]], str]
+    ) -> None:
+        """
+        Register a function. Pass in it's egg name and a function which takes a list of strings
+        of its args and returns a string representing the result.
+        """
+        self._functions[egg_name] = str_fn
 
     def _expr(self, expr: py._Expr) -> str:
         if isinstance(expr, py.Lit):
@@ -75,7 +81,7 @@ def test_pretty_print_var():
 
 def test_pretty_print_function():
     pp = _PrettyPrinter()
-    pp.add_function("add", lambda args: f"({args[0]} + {args[1]})")
+    pp.register_function("add", lambda args: f"({args[0]} + {args[1]})")
     assert (
         pp(py.Call("add", [py.Lit(py.Int(1)), py.Lit(py.Int(2))])) == "i64(1) + i64(2)"
     )
