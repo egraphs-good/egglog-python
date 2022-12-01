@@ -10,12 +10,21 @@ import egg_smol.bindings as py
 class Kind:
     python_name: str
     egg_name: str
-    n_args: int = 0
+    typevariables: tuple[TypeVariable, ...] = ()
+    classmethods: dict[str, Function] = field(default_factory=dict)
+    methods: dict[str, Function] = field(default_factory=dict)
 
     def __getitem__(self, args: tuple[Type_, ...]) -> Type:
-        if len(args) != self.n_args:
-            raise TypeError(f"Expected {self.n_args} arguments, got {len(args)}")
+        if len(args) != len(self.typevariables):
+            raise TypeError(
+                f"Expected {len(self.typevariables)} type variables, got {len(args)}"
+            )
         return Type(self, args)
+
+    def __getattr__(self, name: str) -> BoundClassMethod:
+        if name in self.classmethods:
+            return BoundClassMethod(self, (), self.classmethods[name])
+        raise AttributeError(f"{self.kind} has no classmethod {name}")
 
     def __str__(self) -> str:
         return self.python_name
@@ -42,6 +51,20 @@ class Type:
     def __repr__(self) -> str:
         return str(self)
 
+    def __getattr__(self, name: str) -> BoundClassMethod:
+        if name in self.kind.classmethods:
+            tp_args: list[Type] = []
+            for a in self.args:
+                if not isinstance(a, Type):
+                    raise TypeError(
+                        f"Cannot get method from class with unbound type {a}"
+                    )
+                tp_args.append(a)
+            return BoundClassMethod(
+                self.kind, tuple(tp_args), self.kind.classmethods[name]
+            )
+        raise AttributeError(f"{self.kind} has no classmethod {name}")
+
 
 @dataclass(frozen=True)
 class TypeVariable:
@@ -59,14 +82,14 @@ Type_ = TypeVariable | Type
 
 def test_type_str():
     i64 = Kind("i64", "i64")[()]
-    Map = Kind("Map", "Map", 2)
     K, V = TypeVariable("K"), TypeVariable("V")
+    Map = Kind("Map", "Map", (K, V))
     assert str(i64) == "i64"
     assert str(K) == "K"
-    assert str(Map[K, V]) == "Map[K, V]"
+    assert str(Map[i64, i64]) == "Map[i64, i64]"
 
 
-@dataclass
+@dataclass(frozen=True)
 class TypeInference:
     _typevar_to_value: dict[TypeVariable, Type] = field(default_factory=dict)
 
@@ -103,6 +126,8 @@ class TypeInference:
 
     def _subtitute_typevars(self, type_: Type_) -> Type:
         if isinstance(type_, TypeVariable):
+            if type_ not in self._typevar_to_value:
+                raise TypeError(f"Typevar {type_} not bound")
             return self._typevar_to_value[type_]
         return Type(
             type_.kind, tuple(self._subtitute_typevars(arg) for arg in type_.args)
@@ -114,8 +139,8 @@ def test_type_inference():
 
     i64 = Kind("i64", "i64")[()]
     unit = Kind("Unit", "Unit")[()]
-    Map = Kind("Map", "Map", 2)
     K, V = TypeVariable("K"), TypeVariable("V")
+    Map = Kind("Map", "Map", (K, V))
     ti = TypeInference()
     assert ti.infer_return_type([i64], i64, [i64]) == i64
     with pytest.raises(TypeError):
@@ -129,15 +154,43 @@ def test_type_inference():
         ti.infer_return_type([Map[K, V], K], V, [Map[i64, unit], unit])
 
 
-@dataclass
+@dataclass(frozen=True)
+class BoundClassMethod:
+    kind: Kind
+    # Any args provided, if it was bound
+    tp_args: tuple[Type, ...] | None
+    fn: Function
+
+    def __call__(self, *args: Expr) -> Expr:
+        # If this class was not bound, then no additional types were inferred
+        if not self.tp_args:
+            return self.fn(*args)
+        # Otherwise, this class was bound, before before we accessed the method,
+        # so we should replace the type variables with the inferred types
+        ti = TypeInference(dict(zip(self.kind.typevariables, self.tp_args)))
+        return self.fn(*args, _ti=ti)
+
+    def __str__(self) -> str:
+        tp_str = (
+            f"{self.kind}[{', '.join(map(str, self.tp_args))}]"
+            if self.tp_args
+            else str(self.kind)
+        )
+        return f"{tp_str}.{self.fn}"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+@dataclass(frozen=True)
 class Function:
     python_name: str
     egg_name: str
     arg_types: list[Type_]
     return_type: Type_
 
-    def __call__(self, *args: Expr) -> Expr:
-        ti = TypeInference()
+    def __call__(self, *args: Expr, _ti: TypeInference | None = None) -> Expr:
+        ti = _ti or TypeInference()
         bound_return_type = ti.infer_return_type(
             self.arg_types, self.return_type, [arg.type for arg in args]
         )
@@ -163,6 +216,29 @@ def test_function_str():
     assert str(f) == "f(i64) -> Unit"
 
 
+def test_function_call():
+    i64 = Kind("i64", "i64")[()]
+    one = Function("one", "one", [], i64)
+    assert one() == Expr(i64, py.Call("one", []))
+
+
+def test_classmethod_call():
+    from pytest import raises
+
+    K, V = TypeVariable("K"), TypeVariable("V")
+    Map = Kind("Map", "Map", (K, V))
+    Map.classmethods["create"] = Function("create", "create", [], Map[K, V])
+    with raises(TypeError):
+        Map.create()
+
+    i64 = Kind("i64", "i64")[()]
+    unit = Kind("Unit", "Unit")[()]
+    assert Map[i64, unit].create() == Expr(
+        Map[i64, unit],
+        py.Call("create", []),
+    )
+
+
 # Ex:
 # K, V = TypeVar(0), TypeVar(1)
 # get = Function("get", "get", [Map[K, V], K], V)
@@ -172,14 +248,6 @@ def test_function_str():
 class Expr:
     type: Type
     value: py._Expr
-
-
-@dataclass
-class Method:
-    python_name: str
-    egg_name: str
-    arg_types: list[Type]
-    return_type: Type
 
 
 # @dataclass
