@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Hashable
-from dataclasses import dataclass, field
-from typing import NewType, Union, cast
+from dataclasses import dataclass, field, replace
+from typing import NewType, Optional, cast
 
 import black
 import egg_smol.bindings as py
@@ -21,7 +21,7 @@ class Kind:
     def __call__(self, *args: Expr) -> Expr:
         if self.init is None:
             raise TypeError(f"{self} has no __init__ defined")
-        return BoundClassMethod(self, (), self.init)(*args)
+        return self.init(*args)
 
     def __getitem__(self, args: tuple[Type_, ...]) -> Type:
         if len(args) != len(self.typevariables):
@@ -30,9 +30,9 @@ class Kind:
             )
         return Type(self, args)
 
-    def __getattr__(self, name: str) -> BoundClassMethod:
+    def __getattr__(self, name: str) -> Function:
         if name in self.classmethods:
-            return BoundClassMethod(self, (), self.classmethods[name])
+            return self.classmethods[name]
         raise AttributeError(f"{self.kind} has no classmethod {name}")
 
     def __str__(self) -> str:
@@ -60,24 +60,24 @@ class Type:
     def __repr__(self) -> str:
         return str(self)
 
-    def __getattr__(self, name: str) -> BoundClassMethod:
+    def __getattr__(self, name: str) -> Function:
         if name in self.kind.classmethods:
-            return self._bind_classmethod(self.kind.classmethods[name])
+            return self._bind_types(self.kind.classmethods[name])
         raise AttributeError(f"{self.kind} has no classmethod {name}")
 
     def __call__(self, *args: Expr) -> Expr:
         if self.kind.init is None:
             raise TypeError(f"{self} has no __init__ defined")
-        return self._bind_classmethod(self.kind.init)(*args)
+        return self._bind_types(self.kind.init)(*args)
 
-    def _bind_classmethod(self, fn: Function) -> BoundClassMethod:
+    def _bind_types(self, fn: Function) -> Function:
         # Bind the classmethod, verifying that all types are not typevars
-        tp_args: list[Type] = []
-        for a in self.args:
+        bound_tps: dict[TypeVariable, Type] = {}
+        for tpvar, a in zip(self.kind.typevariables, self.args):
             if not isinstance(a, Type):
                 raise TypeError(f"Cannot get method from class with unbound type {a}")
-            tp_args.append(a)
-        return BoundClassMethod(self.kind, tuple(tp_args), fn)
+            bound_tps[tpvar] = a
+        return replace(fn, bound_types=bound_tps)
 
 
 @dataclass(frozen=True)
@@ -101,49 +101,6 @@ def test_type_str():
     assert str(i64) == "i64"
     assert str(K) == "K"
     assert str(Map[i64, i64]) == "Map[i64, i64]"
-
-
-@dataclass(frozen=True)
-class BoundClassMethod:
-    kind: Kind
-    # Any args provided, if it was bound
-    tp_args: tuple[Type, ...] | None
-    fn: Function
-
-    def __call__(self, *args: Expr) -> Expr:
-        # If this class was not bound, then no additional types were inferred
-        if not self.tp_args:
-            return self.fn(*args)
-        # Otherwise, this class was bound, before before we accessed the method,
-        # so we should replace the type variables with the inferred types
-        ti = TypeInference(dict(zip(self.kind.typevariables, self.tp_args)))
-        return self.fn(*args, _ti=ti)
-
-    def __str__(self) -> str:
-        tp_str = (
-            f"{self.kind}[{', '.join(map(str, self.tp_args))}]"
-            if self.tp_args
-            else str(self.kind)
-        )
-        return f"{tp_str}.{self.fn}"
-
-    def __repr__(self) -> str:
-        return str(self)
-
-
-@dataclass(frozen=True)
-class BoundMethod:
-    slf: Expr
-    fn: Function
-
-    def __call__(self, *args: Expr) -> Expr:
-        return self.fn(self.slf, *args)
-
-    def __str__(self) -> str:
-        return f"{self.slf}.{self.fn}"
-
-    def __repr__(self) -> str:
-        return str(self)
 
 
 @dataclass(frozen=True)
@@ -219,9 +176,13 @@ class Function:
     return_type: Type_
     cost: int = 0
     merge: Expr | None = None
+    bound_types: dict[TypeVariable, Type] = field(default_factory=dict)
+    bound_self: Optional[Expr] = None
 
-    def __call__(self, *args: Expr, _ti: TypeInference | None = None) -> Expr:
-        ti = _ti or TypeInference()
+    def __call__(self, *args: Expr) -> Expr:
+        ti = TypeInference(dict(self.bound_types))
+        if self.bound_self is not None:
+            args = (self.bound_self, *args)
         bound_return_type = ti.infer_return_type(
             self.arg_types, self.return_type, [arg.type for arg in args]
         )
@@ -270,7 +231,7 @@ class Expr:
     value: py._Expr
     inventory: Inventory = field(default_factory=lambda: Inventory())
 
-    def __getattr__(self, name: str) -> BoundMethod:
+    def __getattr__(self, name: str) -> Function:
         return self._get_method(name)
 
     def __str__(self) -> str:
@@ -279,11 +240,11 @@ class Expr:
     def __repr__(self) -> str:
         return str(self)
 
-    def _get_method(self, name: str) -> BoundMethod:
+    def _get_method(self, name: str) -> Function:
         methods = self.type.kind.methods
         if name not in methods:
             raise AttributeError(f"{self.type.kind} has no method {name}")
-        return BoundMethod(self, methods[name])
+        return replace(methods[name], bound_self=self)
 
     # Use _Nothing so that == is not allowed on Expr objects according to MyPy
     # (so that in tests we don't try to use this method by accident)
