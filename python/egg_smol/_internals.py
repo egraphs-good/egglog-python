@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Collection, Hashable
 from dataclasses import dataclass, field
-from typing import NewType, cast
+from typing import NewType, Union, cast
 
+import black
 import egg_smol.bindings as py
 
 
@@ -267,12 +268,13 @@ _Nothing = NewType("_Nothing", object)
 class Expr:
     type: Type
     value: py._Expr
+    inventory: Inventory = field(default_factory=lambda: Inventory())
 
     def __getattr__(self, name: str) -> BoundMethod:
         return self._get_method(name)
 
     def __str__(self) -> str:
-        return str(self.value)
+        return self.inventory.prett_print_expr(self.value)
 
     def __repr__(self) -> str:
         return str(self)
@@ -284,6 +286,7 @@ class Expr:
         return BoundMethod(self, methods[name])
 
     # Use _Nothing so that == is not allowed on Expr objects according to MyPy
+    # (so that in tests we don't try to use this method by accident)
     # so that __eq__ is reserved for any custom equality checks
     def __eq__(self, other: _Nothing) -> Expr:  # type: ignore
         return self._get_method("__eq__")(cast(Expr, other))
@@ -297,42 +300,39 @@ class Expr:
 
 
 # Special methods which we might want to use as functions
-# These should all be functional
+# Mapping to the operator they represent for pretty printing them
 # https://docs.python.org/3/reference/datamodel.html
-SPECIAL_METHODS = [
-    # Comparison
-    "lt",
-    "le",
-    "eq",
-    "ne",
-    "gt",
-    "ge",
-    # Container
-    "getitem",
-    # Numeric binary
-    "add",
-    "sub",
-    "mul",
-    "matmul",
-    "truediv",
-    "floordiv",
-    "mod",
-    "divmod",
-    "pow",
-    "lshift",
-    "rshift",
-    "and",
-    "xor",
-    "or",
-    # Numeric unary
-    "neg",
-    "pos",
-    "abs",
-    "invert",
-]
-for special_method in SPECIAL_METHODS:
-    name = f"__{special_method}__"
-    del special_method
+BINARY_METHODS = {
+    "__lt__": "<",
+    "__le__": "<=",
+    "__eq__": "==",
+    "__ne__": "!=",
+    "__gt__": ">",
+    "__ge__": ">=",
+    # Numeric
+    "__add__": "+",
+    "__sub__": "-",
+    "__mul__": "*",
+    "__matmul__": "@",
+    "__truediv__": "/",
+    "__floordiv__": "//",
+    "__mod__": "%",
+    "__divmod__": "divmod",
+    "__pow__": "**",
+    "__lshift__": "<<",
+    "__rshift__": ">>",
+    "__and__": "&",
+    "__xor__": "^",
+    "__or__": "|",
+}
+UNARY_METHODS = {
+    "__pos__": "+",
+    "__neg__": "-",
+    "__invert__": "~",
+}
+
+SPECIAL_METHODS = list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__"]
+for name in SPECIAL_METHODS:
     setattr(
         Expr,
         name,
@@ -348,7 +348,7 @@ def test_expr_special():
     one_egg = py.Lit(py.Int(1))
     one = Expr(i64, one_egg)
     res = one + one  # type: ignore
-    assert res._parts == (i64, py.Call("add", (one_egg, one_egg)))
+    assert res._parts == (i64, py.Call("add", [one_egg, one_egg]))
 
 
 @dataclass
@@ -356,3 +356,124 @@ class Inventory:
     """
     Collection of all the types and functions in the program.
     """
+
+    # Mapping of egg literal to name which constructs it.
+    lit_constructors: dict[type[py._Literal], str] = field(default_factory=dict)
+    # Mapping of egg name to function pointer
+    fn_ptrs: dict[str, FunctionPointer] = field(default_factory=dict)
+
+    def prett_print_expr(self, expr: py._Expr) -> str:
+        return blacken_python_expression(self._print_expr(expr))
+
+    def _print_expr(self, expr: py._Expr) -> str:
+        """
+        Prints an expression, converting all of the function calls to their Python counterpoints
+        """
+        if isinstance(expr, py.Var):
+            return expr.name
+        elif isinstance(expr, py.Lit):
+            val = expr.value
+            constructor_name = self.lit_constructors[type(val)]
+            args = [] if isinstance(val, py.Unit) else [str(val.value)]
+            return f"{constructor_name}({', '.join(args)})"
+        elif isinstance(expr, py.Call):
+            return self._print_function_call(self.fn_ptrs[expr.name], expr.args)
+
+    def _print_function_call(self, ptr: FunctionPointer, args: list[py._Expr]) -> str:
+        if isinstance(ptr, TopLevelFunctionPointer):
+            fn_str = ptr.name
+        elif ptr.is_classmethod:
+            fn_str = f"{ptr.kind_name}.{ptr.name}"
+        else:
+            name = ptr.name
+            slf, *args = args
+            slf_str = self._print_expr(slf)
+            if name in UNARY_METHODS:
+                return f"{UNARY_METHODS[name]}{slf_str}"
+            elif name in BINARY_METHODS:
+                rhs_str = self._print_expr(args[0])
+                return f"({slf_str} {BINARY_METHODS[name]} {rhs_str})"
+            elif name == "__getitem__":
+                rhs_str = self._print_expr(args[0])
+                return f"{slf_str}[{rhs_str}]"
+            fn_str = f"{slf_str}.{ptr.name}"
+        return f"{fn_str}({', '.join(self._print_expr(a) for a in args)})"
+
+
+def test_print_literal():
+    inventory = Inventory()
+    inventory.lit_constructors[py.Int] = "i64"
+    assert inventory.prett_print_expr(py.Lit(py.Int(1))) == "i64(1)"
+
+
+def test_print_function_call():
+    inventory = Inventory()
+    inventory.lit_constructors[py.Int] = "i64"
+    inventory.fn_ptrs["add"] = TopLevelFunctionPointer("add")
+    assert (
+        inventory.prett_print_expr(
+            py.Call("add", [py.Lit(py.Int(1)), py.Lit(py.Int(2))])
+        )
+        == "add(i64(1), i64(2))"
+    )
+
+
+def test_print_classmethod_call():
+    inventory = Inventory()
+    inventory.lit_constructors[py.Int] = "i64"
+    inventory.fn_ptrs["add"] = MethodPointer("i64", "add", True)
+    assert (
+        inventory.prett_print_expr(
+            py.Call("add", [py.Lit(py.Int(1)), py.Lit(py.Int(2))])
+        )
+        == "i64.add(i64(1), i64(2))"
+    )
+
+
+def test_print_method_call():
+    inventory = Inventory()
+    inventory.lit_constructors[py.Int] = "i64"
+    inventory.fn_ptrs["add"] = MethodPointer("i64", "add", False)
+    assert (
+        inventory.prett_print_expr(
+            py.Call("add", [py.Lit(py.Int(1)), py.Lit(py.Int(2))])
+        )
+        == "i64(1).add(i64(2))"
+    )
+
+
+def test_print_special_method_call():
+    inventory = Inventory()
+    inventory.lit_constructors[py.Int] = "i64"
+    inventory.fn_ptrs["__add__"] = MethodPointer("i64", "__add__", False)
+    assert (
+        inventory.prett_print_expr(
+            py.Call("__add__", [py.Lit(py.Int(1)), py.Lit(py.Int(2))])
+        )
+        == "i64(1) + i64(2)"
+    )
+
+
+BLACK_MODE = black.Mode(line_length=120)
+
+
+def blacken_python_expression(expr: str) -> str:
+    """
+    Runs black on a Python expression, to remove excess paranthesis and wrap it.
+    """
+    return black.format_str("x = " + expr, mode=BLACK_MODE)[4:-1]
+
+
+@dataclass
+class TopLevelFunctionPointer:
+    name: str
+
+
+@dataclass
+class MethodPointer:
+    kind_name: str
+    name: str
+    is_classmethod: bool
+
+
+FunctionPointer = TopLevelFunctionPointer | MethodPointer
