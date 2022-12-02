@@ -224,7 +224,7 @@ class Function:
         bound_return_type = ti.infer_return_type(
             self.arg_types, self.return_type, [arg.type for arg in args]
         )
-        return Expr(bound_return_type, Call(self, args))
+        return Expr(bound_return_type, py.Call(self.egg_name, [a.value for a in args]))
 
     def __str__(self) -> str:
         return self.python_name
@@ -236,7 +236,7 @@ class Function:
 def test_function_call():
     i64 = Kind("i64", "i64")[()]
     one = Function("one", "one", [], i64)
-    assert one()._parts == (i64, Call(one))
+    assert one()._parts == (i64, py.Call("one", []))
 
 
 def test_classmethod_call():
@@ -251,7 +251,7 @@ def test_classmethod_call():
 
     i64 = Kind("i64", "i64")[()]
     unit = Kind("Unit", "Unit")[()]
-    assert Map[i64, unit].create()._parts == (Map[i64, unit], Call(create_fn))
+    assert Map[i64, unit].create()._parts == (Map[i64, unit], py.Call("create", []))
 
 
 # Ex:
@@ -266,8 +266,7 @@ _Nothing = NewType("_Nothing", object)
 @dataclass(frozen=True)
 class Expr:
     type: Type
-    # TODO: Switch to regular _Expr, because we can't convert recursively without type inference.
-    value: ExprValue
+    value: py._Expr
 
     def __getattr__(self, name: str) -> BoundMethod:
         return self._get_method(name)
@@ -293,11 +292,8 @@ class Expr:
         return self._parts == other._parts
 
     @property
-    def _parts(self) -> tuple[Type, ExprValue]:
+    def _parts(self) -> tuple[Type, py._Expr]:
         return (self.type, self.value)
-
-    def _to_egg(self) -> py._Expr:
-        return self.value.to_egg(self.type)
 
 
 # Special methods which we might want to use as functions
@@ -349,91 +345,10 @@ def test_expr_special():
     i64 = i64Kind[()]
     add = Function("__add__", "add", [i64, i64], i64)
     i64Kind.methods["__add__"] = add
-    one = Expr(i64, Int(1))
+    one_egg = py.Lit(py.Int(1))
+    one = Expr(i64, one_egg)
     res = one + one  # type: ignore
-    assert res._parts == (i64, Call(add, (one, one)))
-
-
-@dataclass(frozen=True)
-class Var:
-    name: str
-
-    def __str__(self):
-        return self.name
-
-    def __repr__(self):
-        return str(self)
-
-    def to_egg(self, type: Type) -> py._Expr:
-        return py.Var(self.name)
-
-
-@dataclass(frozen=True)
-class Call:
-    fn: Function
-    args: tuple[Expr, ...] = ()
-
-    def __str__(self) -> str:
-        return f"{self.fn}({', '.join(str(arg) for arg in self.args)})"
-
-    def __repr__(self) -> str:
-        return str(self)
-
-    def __eq__(self, __o: object) -> bool:
-        if not isinstance(__o, Call):
-            return NotImplemented
-        return self._parts == __o._parts
-
-    @property
-    def _parts(self):
-        return (self.fn, [a._parts for a in self.args])
-
-    def to_egg(self, type: Type) -> py._Expr:
-        return py.Call(self.fn.egg_name, [a._to_egg() for a in self.args])
-
-
-@dataclass(frozen=True)
-class Int:
-    value: int
-
-    def __str__(self) -> str:
-        return f"i64({self.value})"
-
-    def __repr__(self) -> str:
-        return str(self)
-
-    def to_egg(self, type: Type) -> py._Expr:
-        return py.Lit(py.Int(self.value))
-
-
-@dataclass(frozen=True)
-class Unit:
-    def __str__(self) -> str:
-        return "Unit()"
-
-    def __repr__(self) -> str:
-        return str(self)
-
-    def to_egg(self, type: Type) -> py._Expr:
-        return py.Lit(py.Unit())
-
-
-@dataclass(frozen=True)
-class String:
-    value: str
-
-    def __str__(self) -> str:
-        return f"String({self.value})"
-
-    def __repr__(self) -> str:
-        return str(self)
-
-    def to_egg(self, type: Type) -> py._Expr:
-        return py.Lit(py.String(self.value))
-
-
-Literal = Int | Unit | String
-ExprValue = Var | Call | Literal
+    assert res._parts == (i64, py.Call("add", (one_egg, one_egg)))
 
 
 @dataclass
@@ -441,35 +356,3 @@ class Inventory:
     """
     Collection of all the types and functions in the program.
     """
-
-    lit_to_type: dict[type[py._Literal], Type] = field(default_factory=dict)
-
-    def register_literal_type(self, lit: type[py._Literal], type: Type) -> None:
-        self.lit_to_type[lit] = type
-
-    def from_egg_expr(self, expr: py._Expr) -> Expr:
-        if isinstance(expr, py.Var):
-            raise NotImplementedError(
-                "Cannot convert Var to Python expression because we don't know its type"
-            )
-        elif isinstance(expr, py.Call):
-            return self.from_egg_call(expr.name, expr.args)
-        elif isinstance(expr, py.Lit):
-            value = expr.value
-            tp = self.lit_to_type[type(value)]
-            val: Literal
-            if isinstance(value, py.Int):
-                val = Int(value.value)
-            elif isinstance(value, py.Unit):
-                val = Unit()
-            elif isinstance(value, py.String):
-                val = String(value.value)
-            else:
-                raise NotImplementedError(f"Unknown literal {value}")
-            return Expr(tp, val)
-        raise NotImplementedError(f"Unknown egg expr {expr}")
-
-    def from_egg_call(self, egg_fn: str, args: list[py._Expr]) -> Expr:
-        fn = self.get_function(egg_fn)
-        args = tuple(self.from_egg_expr(arg) for arg in args)
-        return Expr(fn.return_type, Call(fn, args))
