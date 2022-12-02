@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from abc import ABC
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import (
@@ -84,8 +83,8 @@ class EGraph:
     @overload
     def function(
         self,
-        name: str = None,
-        cost: int = None,
+        name: str | None = None,
+        cost: int | None = None,
         merge: Callable[[Any, Any], Any] | None = None,
     ) -> Callable[[FN], FN]:
         ...

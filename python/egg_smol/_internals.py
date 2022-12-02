@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Hashable
 from dataclasses import dataclass, field, replace
-from typing import NewType, Optional, cast
+from typing import NewType, cast
 
 import black
 import egg_smol.bindings as py
@@ -60,7 +60,7 @@ class Type:
     def __repr__(self) -> str:
         return str(self)
 
-    def __getattr__(self, name: str) -> Function:
+    def __getattr__(self, name: str) -> BoundClassMethod:
         if name in self.kind.classmethods:
             return self._bind_types(self.kind.classmethods[name])
         raise AttributeError(f"{self.kind} has no classmethod {name}")
@@ -70,14 +70,14 @@ class Type:
             raise TypeError(f"{self} has no __init__ defined")
         return self._bind_types(self.kind.init)(*args)
 
-    def _bind_types(self, fn: Function) -> Function:
+    def _bind_types(self, fn: Function) -> BoundClassMethod:
         # Bind the classmethod, verifying that all types are not typevars
         bound_tps: dict[TypeVariable, Type] = {}
         for tpvar, a in zip(self.kind.typevariables, self.args):
             if not isinstance(a, Type):
                 raise TypeError(f"Cannot get method from class with unbound type {a}")
             bound_tps[tpvar] = a
-        return replace(fn, bound_types=bound_tps)
+        return BoundClassMethod(fn, bound_tps)
 
 
 @dataclass(frozen=True)
@@ -176,13 +176,11 @@ class Function:
     return_type: Type_
     cost: int = 0
     merge: Expr | None = None
-    bound_types: dict[TypeVariable, Type] = field(default_factory=dict)
-    bound_self: Optional[Expr] = None
 
-    def __call__(self, *args: Expr) -> Expr:
-        ti = TypeInference(dict(self.bound_types))
-        if self.bound_self is not None:
-            args = (self.bound_self, *args)
+    def __call__(
+        self, *args: Expr, _bound_types: dict[TypeVariable, Type] = {}
+    ) -> Expr:
+        ti = TypeInference(dict(_bound_types))
         bound_return_type = ti.infer_return_type(
             self.arg_types, self.return_type, [arg.type for arg in args]
         )
@@ -193,6 +191,24 @@ class Function:
 
     def __repr__(self) -> str:
         return str(self)
+
+
+@dataclass(frozen=True)
+class BoundMethod:
+    function: Function
+    self: Expr
+
+    def __call__(self, *args: Expr) -> Expr:
+        return self.function(self.self, *args)
+
+
+@dataclass
+class BoundClassMethod:
+    function: Function
+    bound_types: dict[TypeVariable, Type]
+
+    def __call__(self, *args: Expr) -> Expr:
+        return self.function(*args, _bound_types=self.bound_types)
 
 
 def test_function_call():
@@ -231,7 +247,7 @@ class Expr:
     value: py._Expr
     inventory: Inventory = field(default_factory=lambda: Inventory())
 
-    def __getattr__(self, name: str) -> Function:
+    def __getattr__(self, name: str) -> BoundMethod:
         return self._get_method(name)
 
     def __str__(self) -> str:
@@ -240,11 +256,11 @@ class Expr:
     def __repr__(self) -> str:
         return str(self)
 
-    def _get_method(self, name: str) -> Function:
+    def _get_method(self, name: str) -> BoundMethod:
         methods = self.type.kind.methods
         if name not in methods:
             raise AttributeError(f"{self.type.kind} has no method {name}")
-        return replace(methods[name], bound_self=self)
+        return BoundMethod(methods[name], self)
 
     # Use _Nothing so that == is not allowed on Expr objects according to MyPy
     # (so that in tests we don't try to use this method by accident)
@@ -438,3 +454,7 @@ class MethodPointer:
 
 
 FunctionPointer = TopLevelFunctionPointer | MethodPointer
+
+# TODO: Now introduce registering functions or should we move all state to inventory?
+# Should everything just hold the egg name and then we can look up details in the inventory?
+# And use the inventory to register things?
