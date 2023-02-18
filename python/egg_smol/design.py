@@ -112,7 +112,7 @@ builtins = Module("builtins")
 _Nothing = NewType("_Nothing", object)
 
 
-class Sort(Protocol):
+class NotEqual:
     @builtins.function("!=")
     def __ne__(self: T, __o: T) -> Unit:  # type: ignore
         ...
@@ -255,7 +255,10 @@ class String(Sort):
 
 
 @builtins.sort
-class Map(Sort, Generic[S1, S2]):
+class Map(Sort, Protocol[S1, S2]):
+    _x: S1
+    _y: S2
+
     @builtins.function("empty")
     @classmethod
     def empty(cls) -> Map[S1, S2]:
@@ -295,14 +298,14 @@ class Map(Sort, Generic[S1, S2]):
 
 
 @builtins.sort
-class Rational(Sort):
+class Rational(Sort, Protocol):
     @builtins.function("rational")
     def __init__(self, num: i64, den: i64):
         ...
 
     @builtins.function("+")
     def __add__(self, other: Rational) -> Rational:
-        ...
+        return function("+")
 
     @builtins.function("-")
     def __sub__(self, other: Rational) -> Rational:
@@ -381,16 +384,21 @@ def test_fib():
     egraph.check(E(fib(i64(7))) == i64(21))
 
 
+# Use this as the return value for functions that return no value
+no_default: Any = object()
+
+
 def test_fib_demand():
     mod = Module("fib_demand")
 
     @mod.sort
     class Expr(Sort):
-        ...
+        def __add__(self, other: Expr) -> Expr:
+            ...
 
     @mod.function
     def num(x: i64) -> Expr:
-        ...
+        return no_default
 
     @mod.function
     def add(x: Expr, y: Expr) -> Expr:

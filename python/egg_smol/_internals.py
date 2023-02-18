@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Hashable
-from dataclasses import dataclass, field, replace
-from typing import NewType, cast
+from dataclasses import dataclass, field
+from typing import Callable, NewType, cast
 
 import black
 import egg_smol.bindings as py
@@ -10,7 +10,22 @@ import egg_smol.bindings as py
 
 @dataclass(frozen=True)
 class Kind:
+    """
+    A kind represents the type of a type.
+
+    In Python, this is similar to a generic type and in egg, this is like a presort or a sort.
+
+    However, instead of only being for types with parameters, it is for all types, most just
+    have no parameters.
+
+    Currently, the only kind with paramaters is a "Map", which is a builtin presort in egg-smol.
+
+    If/when custom generic types/presorts are supported in egg-smol, this will be expanded to
+    support them.
+    """
+    # The name of the python class, for use when printing
     python_name: str
+    # The name in egg, when creating egg types.
     egg_name: str
     typevariables: tuple[TypeVariable, ...] = ()
     classmethods: dict[str, Function] = field(default_factory=dict)
@@ -328,6 +343,8 @@ def test_expr_special():
     assert res._parts == (i64, py.Call("add", [one_egg, one_egg]))
 
 
+
+
 @dataclass
 class Inventory:
     """
@@ -454,6 +471,15 @@ class MethodPointer:
 
 
 FunctionPointer = TopLevelFunctionPointer | MethodPointer
+
+
+
+FN = TypeVariable("FN", bound=Callable)
+
+BUILTIN_INVENTORY = Inventory()
+
+class i64
+
 
 # TODO: Now introduce registering functions or should we move all state to inventory?
 # Should everything just hold the egg name and then we can look up details in the inventory?
