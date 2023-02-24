@@ -20,6 +20,6 @@ def new_find_test_files(*args, **kwargs):
 helpers.find_test_files = new_find_test_files
 
 # Import TypeCheckSuite so it is picked up by pytest.
-from mypy.test.testcheck import TypeCheckSuite
+from mypy.test.testcheck import TypeCheckSuite  # noqa: E402
 
 __all__ = ["TypeCheckSuite"]
