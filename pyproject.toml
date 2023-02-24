@@ -30,7 +30,7 @@ classifiers = [
 [project.optional-dependencies]
 dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
 
-test = ["pytest"]
+test = ["pytest", "mypy"]
 
 docs = ["pydata-sphinx-theme", "myst-nb"]
 
