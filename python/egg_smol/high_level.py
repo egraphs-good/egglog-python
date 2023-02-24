@@ -6,8 +6,53 @@ from typing import Iterable, NoReturn, Union, cast
 
 import black
 
+# TODO: Add support for __dir__ and costring to aid in runtime completion
+# TODO: Implement string with pretty printing?
 
-@dataclass(frozen=True)
+
+@dataclass
+class Namespace:
+    """
+    Represents a mapping of names to kinds and functions.
+
+    This is used so we can map back from egg to python values.
+    """
+
+    values: dict[str, Union[Kind, Function]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Verify that all values have the same name as their key
+        for name, value in self.values.items():
+            if value.name != name:
+                raise ValueError(f"Name mismatch: {name} != {value.name}")
+
+    def add_kind(self, kind: Kind):
+        if kind.name in self.values:
+            raise ValueError(f"Kind {kind.name} already exists")
+        self.values[kind.name] = kind
+
+    def add_function(self, fn: Function):
+        if fn.name in self.values:
+            raise ValueError(f"Function {fn.name} already exists")
+        self.values[fn.name] = fn
+
+    def get_kind(self, name: str) -> Kind:
+        if name not in self.values:
+            raise ValueError(f"Kind {name} does not exist")
+        val = self.values[name]
+        if not isinstance(val, Kind):
+            raise TypeError(f"Value {name} is not a kind")
+        return val
+
+    def get_function(self, name: str) -> Function:
+        if name not in self.values:
+            raise ValueError(f"Function {name} does not exist")
+        val = self.values[name]
+        if not isinstance(val, Function):
+            raise TypeError(f"Value {name} is not a function")
+        return val
+
+@dataclass
 class Kind:
     """
     A kind represents the type of a type.
@@ -82,12 +127,7 @@ class Kind:
         return str(self)
 
 
-def test_kind_str():
-    assert str(Kind("i64")) == "i64"
-    assert str(Kind("Map", (TypeVariable("K"), TypeVariable("V")))) == "Map"
-
-
-@dataclass(frozen=True)
+@dataclass
 class Type:
     """
     A type is a bound kind, with all type variables replaced with concrete types.
@@ -142,7 +182,7 @@ def test_type_str():
     assert str(Map[i64, i64]) == "Map[i64, i64]"
 
 
-@dataclass(frozen=True)
+@dataclass
 class Function:
     # The name of the function
     name: str
@@ -306,7 +346,7 @@ def test_classmethod_call():
     )
 
 
-@dataclass(frozen=True)
+@dataclass
 class TypeInference:
     _typevar_to_value: dict[TypeVariable, Type] = field(default_factory=dict)
 
@@ -458,6 +498,7 @@ class Call:
         return str(self)
 
 
+# An untyped expression
 Expr_ = Union[Lit, Var, Call]
 
 
@@ -468,7 +509,7 @@ def test_expr_str():
     assert str(add_call) == "add(i64(1), x)"
 
 
-@dataclass(frozen=True)
+@dataclass
 class Expr:
     """
     Create an expr object that behaves like a python object of the `type`, by overloading all of the dunder functions.

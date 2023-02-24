@@ -112,15 +112,6 @@ builtins = Module("builtins")
 _Nothing = NewType("_Nothing", object)
 
 
-class NotEqual:
-    @builtins.function("!=")
-    def __ne__(self: T, __o: T) -> Unit:  # type: ignore
-        ...
-
-    def __eq__(self, other: _Nothing) -> _Nothing:  # type: ignore
-        raise NotImplementedError()
-
-
 class Rewrite:
     ...
 
@@ -411,6 +402,8 @@ def test_fib_demand():
     a, b = vars_("a, b", i64)
     f, x = var("f", Expr), var("x", i64)
     mod(
+        # Why not rewrite? ah bc then typing fails...
+        # Could do Rewrite(x).to(y) and Set(y).to(z)
         E(add(num(a), num(b))).rewrite(num(a + b)),
         Rule(
             (E(f) == fib(x), x > i64(1)),

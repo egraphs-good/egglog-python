@@ -62,6 +62,7 @@ class Call:
     name: str
     args: list[_Expr]
 
+# This must be private becuase it is not actually exposed by the runtime library.
 _Expr = Lit | Var | Call
 
 @final
