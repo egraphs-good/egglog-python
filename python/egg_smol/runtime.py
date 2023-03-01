@@ -85,6 +85,7 @@ class RuntimeClassMethod:
 @dataclass
 class RuntimeExpr:
     decls: Declarations
+    tp: TypeRef
     expr: ExprDecl
 
 

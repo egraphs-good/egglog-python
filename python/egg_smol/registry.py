@@ -48,7 +48,7 @@ T = TypeVar("T")
 P = ParamSpec("P")
 TYPE = TypeVar("TYPE", bound=type)
 CALLABLE = TypeVar("CALLABLE", bound=Callable)
-EXPR = TypeVar("EXPR", bound="Expr")
+EXPR = TypeVar("EXPR", bound="BaseExpr")
 
 
 @dataclass
@@ -60,7 +60,7 @@ class Registry:
 
     _declarations: Declarations = field(default_factory=Declarations)
 
-    def _on_register_sort(self, ref: TypeRef) -> None:
+    def _on_register_sort(self, name: str) -> None:
         """
         Called whenever a sort is registered.
         """

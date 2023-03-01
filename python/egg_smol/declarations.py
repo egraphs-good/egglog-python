@@ -64,11 +64,31 @@ class Declarations:
         """
         raise NotImplementedError()
 
+    def register_new_sort(self, ref: TypeRef) -> str:
+        """
+        Returns a new sort and returns the egg name of the sort.
+        """
+        assert ref not in self.type_ref_to_egg_sort
+        egg_sort = ref._to_egg_sort_name()
+        assert egg_sort not in self.egg_sort_to_type_ref
+        self.type_ref_to_egg_sort[ref] = egg_sort
+        self.egg_sort_to_type_ref[egg_sort] = ref
+        return egg_sort
+
 
 @dataclass(frozen=True)
 class TypeRef:
     name: str
-    args: tuple[TypeRef, ...] = ()
+    args: tuple[TypeOrVarRef, ...] = ()
+
+    def _to_egg_sort_name(self) -> str:
+        """
+        Generates an egg sort name for this type reference by linearizing the type.
+        """
+        if not self.args:
+            return self.name
+        args = "_".join(arg._to_egg_sort_name() for arg in self.args)
+        return f"{self.name}__{args}"
 
 
 @dataclass(frozen=True)
@@ -80,6 +100,8 @@ class ClassTypeVar:
 
     index: int
 
+    def _to_egg_sort_name(self) -> str:
+        raise NotImplementedError("egg-smol does not support defining typevars yet.")
 
 TypeOrVarRef = Union[TypeRef, ClassTypeVar]
 
