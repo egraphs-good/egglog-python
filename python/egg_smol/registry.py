@@ -136,11 +136,13 @@ class Registry:
 
         # Then register each of its methods
         for method_name, method in cls_dict.items():
+            is_init = method_name == "__init__"
             if isinstance(method, _WrappedMethod):
                 fn_decl, is_classmethod = self._generate_method_function_decl(
                     method.fn,
                     slf_type_ref,
                     parameters,
+                    is_init,
                     method.cost,
                     method.default,
                     method.merge,
@@ -148,7 +150,7 @@ class Registry:
                 egg_fn = method.egg_fn
             else:
                 fn_decl, is_classmethod = self._generate_method_function_decl(
-                    method, slf_type_ref, parameters
+                    method, slf_type_ref, parameters, is_init
                 )
                 egg_fn = None
 
@@ -167,6 +169,7 @@ class Registry:
         fn: Callable,
         slf_type_ref: TypeRef,
         cls_typevars: list[TypeVar],
+        is_init: bool,
         cost: Optional[int] = None,
         default: Optional[RuntimeExpr] = None,
         merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]] = None,
@@ -182,7 +185,7 @@ class Registry:
 
         first_arg = "cls" if is_classmethod else slf_type_ref
         fn_decl = self._generate_function_decl(
-            fn, default, cost, merge, first_arg, cls_typevars
+            fn, default, cost, merge, first_arg, cls_typevars, is_init=is_init
         )
         return fn_decl, is_classmethod
 
@@ -284,6 +287,7 @@ class Registry:
         # The first arg is either cls, for a classmethod, a self type, or none for a function
         first_arg: Literal["cls"] | TypeRef | None,
         cls_typevars: list[TypeVar],
+        is_init: bool = False,
     ) -> FunctionDecl:
         if not isinstance(fn, FunctionType):
             raise NotImplementedError(
@@ -292,7 +296,16 @@ class Registry:
 
         # TODO: Verify that the signature is correct, that we have all the types we need
         sig = signature(fn, eval_str=True)
-        return_type = self._resolve_type_annotation(sig.return_annotation, cls_typevars)
+
+        # If this is an init fn use the first arg as the return type
+        if is_init:
+            if not isinstance(first_arg, TypeRef):
+                raise ValueError("Init function must have a self type")
+            return_type = first_arg
+        else:
+            return_type = self._resolve_type_annotation(
+                sig.return_annotation, cls_typevars
+            )
 
         param_types = list(sig.parameters.values())
 
@@ -303,8 +316,8 @@ class Registry:
             self._resolve_type_annotation(t.annotation, cls_typevars)
             for t in param_types
         )
-        # If the first arg is a self, add this as a typeref
-        if isinstance(first_arg, TypeRef):
+        # If the first arg is a self, and this not an __init__ fn, add this as a typeref
+        if isinstance(first_arg, TypeRef) and not is_init:
             arg_types = (first_arg,) + arg_types
 
         default_decl = None if default is None else default.expr
