@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TypeVar
+from typing import TypeVar, cast
 
 from . import bindings
 from .declarations import *
@@ -29,16 +29,16 @@ class EGraph(Registry):
         Check if a fact is true in the egraph.
         """
         fact_decl = fact_to_decl(fact)
-        fact_egg = fact_decl_to_egg(self._declarations, fact_decl)
+        fact_egg = fact_decl_to_egg(self._decls, fact_decl)
         return self._egraph.check_fact(fact_egg)
 
     def extract(self, expr: EXPR) -> EXPR:
         """
         Extract the lowest cost expression from the egraph.
         """
-        egg_expr = expr_to_decl(expr).to_egg(self._declarations)
+        egg_expr = expr_to_decl(expr).to_egg(self._decls)
         _cost, new_egg_expr, _variants = self._egraph.extract_expr(egg_expr)
-        new_expr_decl = expr_decl_from_egg(self._declarations, new_egg_expr)
+        new_expr_decl = expr_decl_from_egg(self._decls, new_egg_expr)
         return decl_to_expr(new_expr_decl, expr)
 
     def define(self, name: str, expr: EXPR) -> EXPR:
@@ -46,23 +46,24 @@ class EGraph(Registry):
         Define a new expression in the egraph and return a reference to it.
         """
         expr_decl = expr_to_decl(expr)
-        egg_expr = expr_decl.to_egg(self._declarations)
+        egg_expr = expr_decl.to_egg(self._decls)
         self._egraph.define(name, egg_expr)
 
         # Return a var that points to the new expression
         assert isinstance(expr, RuntimeExpr)
-        return RuntimeExpr(self._declarations, expr.tp, VarDecl(name))
+        return cast(EXPR, self._create_var(expr.tp, name))
 
     def _on_register_function(self, ref: CallableRef, decl: FunctionDecl) -> None:
-        self._egraph.declare_function(
-            decl.to_egg(self._declarations, self._egraph, ref)
-        )
+        self._egraph.declare_function(decl.to_egg(self._decls, self._egraph, ref))
 
     def _on_register_sort(self, name: str) -> None:
         self._egraph.declare_sort(name, None)
 
     def _on_register_rewrite(self, rewrite: RewriteDecl) -> None:
-        self._egraph.add_rewrite(rewrite.to_egg(self._declarations))
+        self._egraph.add_rewrite(rewrite.to_egg(self._decls))
 
     def _on_register_rule(self, rule: RuleDecl) -> None:
-        self._egraph.add_rule(rule.to_egg(self._declarations))
+        self._egraph.add_rule(rule.to_egg(self._decls))
+
+    def _on_register_action(self, decl: ActionDecl) -> None:
+        self._egraph.eval_actions(action_decl_to_egg(self._decls, decl))

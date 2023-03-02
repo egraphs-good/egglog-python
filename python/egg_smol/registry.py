@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from inspect import signature
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -11,11 +12,13 @@ from typing import (
     ParamSpec,
     TypeVar,
     Union,
+    cast,
     overload,
 )
 
 from .declarations import *
 from .runtime import *
+
 
 if TYPE_CHECKING:
     from .builtins import BaseExpr, Unit
@@ -50,7 +53,7 @@ class Registry:
     to and from egg names to python names.
     """
 
-    _declarations: Declarations = field(default_factory=Declarations)
+    _decls: Declarations = field(default_factory=Declarations)
 
     def _on_register_sort(self, name: str) -> None:
         """
@@ -74,6 +77,9 @@ class Registry:
         """
         Called whenever a rule is registered.
         """
+        pass
+
+    def _on_register_action(self, decl: ActionDecl) -> None:
         pass
 
     @overload
@@ -109,9 +115,9 @@ class Registry:
         *,
         egg_fn: Optional[str] = None,
         cost: Optional[int] = None,
-        default: Optional[T] = None,
-        merge: Optional[Callable[[T, T], T]] = None,
-    ) -> Callable[[Callable[P, T]], Callable[P, T]]:
+        default: Optional[EXPR] = None,
+        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
+    ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
         ...
 
     def method(self, *, egg_fn=None, default=None, cost=None, merge=None) -> Any:
@@ -123,7 +129,7 @@ class Registry:
 
     @overload
     def function(
-        self, *, egg_fn: Optional[str] = None, cost: int = 0
+        self, *, egg_fn: Optional[str] = None, cost: Optional[int] = None
     ) -> Callable[[CALLABLE], CALLABLE]:
         ...
 
@@ -132,23 +138,107 @@ class Registry:
         self,
         *,
         egg_fn: Optional[str] = None,
-        cost: int = 0,
-        default: Optional[T] = None,
-        merge: Optional[Callable[[T, T], T]] = None,
-    ) -> Callable[[Callable[P, T]], Callable[P, T]]:
+        cost: Optional[int] = None,
+        default: Optional[EXPR] = None,
+        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
+    ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
         ...
 
     def function(self, *args, **kwargs) -> Any:
         """
         Registers a function.
         """
-        ...
+        # If we have any positional args, then we are calling it directly on a function
+        if args:
+            assert len(args) == 1
+            return self._function(args[0])
+        # otherwise, we are passing some keyword args, so save those, and then return a partial
+        return lambda fn: self._function(fn, **kwargs)
+
+    def _function(
+        self,
+        fn: Callable[P, EXPR],
+        egg_fn: Optional[str] = None,
+        cost: Optional[int] = None,
+        default: Optional[EXPR] = None,
+        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
+    ) -> Callable[P, EXPR]:
+        """
+        Uncurried version of function decorator
+        """
+        name = fn.__name__
+        # TODO: Verify that the signature is correct, that we have all the types we need
+        sig = signature(fn, eval_str=True)
+        return_type = self._resolve_type_annotation(sig.return_annotation)
+        arg_types = tuple(
+            self._resolve_type_annotation(t.annotation) for t in sig.parameters.values()
+        )
+        default_decl = None if default is None else expr_to_decl(default)
+        merge_decl = (
+            None
+            if merge is None
+            else expr_to_decl(
+                merge(
+                    cast(EXPR, self._create_var(return_type, "old")),
+                    cast(EXPR, self._create_var(return_type, "new")),
+                )
+            )
+        )
+        decl = FunctionDecl(
+            return_type=return_type,
+            arg_types=arg_types,
+            cost=cost,
+            default=default_decl,
+            merge=merge_decl,
+        )
+
+        if name in self._decls.functions:
+            raise ValueError(f"Function {name} already registered")
+        self._decls.functions[name] = decl
+        egg_fn = egg_fn or name
+        if egg_fn in self._decls.egg_fn_to_callable_ref:
+            raise ValueError(f"Egg function {egg_fn} already registered")
+        ref: FunctionRef = FunctionRef(name)
+        self._decls.callable_ref_to_egg_fn[ref] = egg_fn or name
+        self._decls.egg_fn_to_callable_ref[egg_fn] = ref
+        return cast(Callable[P, EXPR], RuntimeFunction(self._decls, name))
+
+    def _resolve_type_annotation(self, tp: object) -> TypeRef:
+        if isinstance(tp, RuntimeClass):
+            return TypeRef(tp.name)
+        if isinstance(tp, RuntimeParamaterizedClass):
+            return tp.ref
+        if isinstance(tp, TypeVar):
+            # TODO: Probably do a lookup in the class to map typevars to indices for the class
+            raise TypeError("TypeVars are not supported")
+        if tp in LIT_UNIONS_TO_LIT:
 
     def register(self, *values: Rewrite | Rule | Action) -> None:
         """
         Registers any number of rewrites or rules.
         """
-        ...
+        for value in values:
+            self._register_single(value)
+
+    def _register_single(self, value: Rewrite | Rule | Action) -> None:
+        if isinstance(value, Rewrite):
+            decl = value._to_decl()
+            self._decls.rewrites.append(decl)
+            self._on_register_rewrite(decl)
+        elif isinstance(value, Rule):
+            decl = value._to_decl()
+            self._decls.rules.append(decl)
+            self._on_register_rule(decl)
+        elif isinstance(value, Action):
+            decl = action_to_decl(value)
+            self._decls.actions.append(decl)
+            self._on_register_action(decl)
+        else:
+            raise TypeError(f"Unexpected type {type(value)}")
+
+    def _create_var(self, tp: TypeRef, name: str) -> BaseExpr:
+        expr = RuntimeExpr(self._decls, tp, VarDecl(name))
+        return cast(BaseExpr, expr)
 
 
 # We use these builders so that when creating these structures we can type check
@@ -270,7 +360,7 @@ class Rewrite:
         args_str = ", ".join(map(str, [self.rhs, *self.conditions]))
         return f"rewrite({self.lhs}).to({args_str})"
 
-    def to_decl(self) -> RewriteDecl:
+    def _to_decl(self) -> RewriteDecl:
         return RewriteDecl(
             expr_to_decl(self.lhs),
             expr_to_decl(self.rhs),
@@ -287,7 +377,7 @@ class Eq:
         args_str = ", ".join(map(str, rest))
         return f"eq({first}).to({args_str})"
 
-    def to_decl(self) -> EqDecl:
+    def _to_decl(self) -> EqDecl:
         return EqDecl(tuple(expr_to_decl(expr) for expr in self.exprs))
 
 
@@ -296,7 +386,7 @@ Fact = Union["Unit", Eq]
 
 def fact_to_decl(fact: Fact) -> FactDecl:
     if isinstance(fact, Eq):
-        return fact.to_decl()
+        return fact._to_decl()
     return expr_to_decl(fact)
 
 

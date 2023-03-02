@@ -59,6 +59,7 @@ class Declarations:
 
     rewrites: list[RewriteDecl] = field(default_factory=list)
     rules: list[RuleDecl] = field(default_factory=list)
+    actions: list[ActionDecl] = field(default_factory=list)
 
     # includes: Optional[Declarations] = None
 
