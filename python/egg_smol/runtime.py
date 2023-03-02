@@ -9,7 +9,7 @@ But at runtime they will be exposed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Union
+from typing import Any, Union
 
 from .declarations import *
 
@@ -76,6 +76,17 @@ class RuntimeParamaterizedClass:
             return f"{name}[{', '.join(arg_strs)}]"
         return name
 
+def class_to_ref(cls: Any) -> TypeRef:
+    if isinstance(cls, RuntimeClass):
+        return TypeRef(cls.name, ())
+    if isinstance(cls, RuntimeParamaterizedClass):
+        return cls.ref
+    raise TypeError(f"Expected RuntimeClass or RuntimeParamaterizedClass, got {type(cls)}")
+
+def class_decls(cls: Any) -> Declarations:
+    if isinstance(cls, RuntimeClass | RuntimeParamaterizedClass):
+        return cls.decls
+    raise TypeError(f"Expected RuntimeClass or RuntimeParamaterizedClass, got {type(cls)}")
 
 @dataclass
 class RuntimeClassMethod:

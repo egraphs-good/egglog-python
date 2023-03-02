@@ -77,7 +77,7 @@ class TypeRef:
     name: str
     args: tuple[TypeOrVarRef, ...] = ()
 
-    def generate_egg_sort_name(self) -> str:
+    def generate_egg_name(self) -> str:
         """
         Generates an egg sort name for this type reference by linearizing the type.
         """
@@ -92,7 +92,7 @@ class TypeRef:
         elif not self.args:
             raise ValueError(f"Type {self.name} is not registered.")
         # If this is a type with arguments and it is not registered, then we need to register i
-        new_name = self.generate_egg_sort_name()
+        new_name = self.generate_egg_name()
         assert new_name not in decls.egg_sort_to_type_ref
         decls.egg_sort_to_type_ref[new_name] = self
         decls.type_ref_to_egg_sort[self] = new_name
@@ -138,6 +138,9 @@ class FunctionRef:
     def to_egg(self, decls: Declarations) -> str:
         return decls.callable_ref_to_egg_fn[self]
 
+    def generate_egg_name(self) -> str:
+        return self.name
+
 
 @dataclass(frozen=True)
 class MethodRef:
@@ -146,6 +149,9 @@ class MethodRef:
 
     def to_egg(self, decls: Declarations) -> str:
         return decls.callable_ref_to_egg_fn[self]
+
+    def generate_egg_name(self) -> str:
+        return f"{self.class_name}__{self.method_name}"
 
 
 @dataclass(frozen=True)
@@ -156,12 +162,16 @@ class ClassMethodRef:
     def to_egg(self, decls: Declarations) -> str:
         return decls.callable_ref_to_egg_fn[self]
 
+    def generate_egg_name(self) -> str:
+        return f"{self.class_name}__{self.method_name}"
+
 
 CallableRef = Union[FunctionRef, MethodRef, ClassMethodRef]
 
 
 @dataclass(frozen=True)
 class FunctionDecl:
+    # TODO: Add arg name to arg so can call with keyword arg
     arg_types: tuple[TypeOrVarRef, ...]
     return_type: TypeOrVarRef
     cost: Optional[int] = None

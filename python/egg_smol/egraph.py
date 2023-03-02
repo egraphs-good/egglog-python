@@ -4,9 +4,10 @@ from dataclasses import dataclass, field
 from typing import TypeVar, cast
 
 from . import bindings
+from .builtins import BaseExpr
 from .declarations import *
 from .registry import *
-from .registry import decl_to_expr, expr_to_decl, fact_to_decl
+from .registry import _expr_to_decl, _fact_to_decl, decl_to_expr
 from .runtime import *
 
 __all__ = ["EGraph"]
@@ -28,7 +29,7 @@ class EGraph(Registry):
         """
         Check if a fact is true in the egraph.
         """
-        fact_decl = fact_to_decl(fact)
+        fact_decl = _fact_to_decl(fact)
         fact_egg = fact_decl_to_egg(self._decls, fact_decl)
         return self._egraph.check_fact(fact_egg)
 
@@ -36,7 +37,7 @@ class EGraph(Registry):
         """
         Extract the lowest cost expression from the egraph.
         """
-        egg_expr = expr_to_decl(expr).to_egg(self._decls)
+        egg_expr = _expr_to_decl(expr).to_egg(self._decls)
         _cost, new_egg_expr, _variants = self._egraph.extract_expr(egg_expr)
         new_expr_decl = expr_decl_from_egg(self._decls, new_egg_expr)
         return decl_to_expr(new_expr_decl, expr)
@@ -45,7 +46,7 @@ class EGraph(Registry):
         """
         Define a new expression in the egraph and return a reference to it.
         """
-        expr_decl = expr_to_decl(expr)
+        expr_decl = _expr_to_decl(expr)
         egg_expr = expr_decl.to_egg(self._decls)
         self._egraph.define(name, egg_expr)
 

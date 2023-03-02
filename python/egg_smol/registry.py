@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from inspect import signature
-from types import UnionType
+from types import FunctionType, UnionType
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     Generic,
     Iterable,
+    Literal,
     Optional,
     ParamSpec,
     TypeVar,
@@ -20,6 +21,7 @@ from typing import (
 
 from .declarations import *
 from .runtime import *
+from .runtime import class_decls, class_to_ref
 
 if TYPE_CHECKING:
     from .builtins import BaseExpr, Unit
@@ -37,7 +39,6 @@ __all__ = [
     "var",
     "vars",
     "Fact",
-    "BaseExpr",
 ]
 
 T = TypeVar("T")
@@ -96,7 +97,94 @@ class Registry:
         """
         Registers a class.
         """
-        ...
+
+        if kwargs:
+            assert set(kwargs.keys()) == {"egg_sort"}
+            return lambda cls: self._class(cls, kwargs["egg_sort"])
+        assert len(args) == 1
+        return self._class(args[0])
+
+    def _class(
+        self, cls: type[BaseExpr], egg_sort: Optional[str] = None
+    ) -> RuntimeClass:
+        """
+        Registers a class.
+        """
+        cls_name = cls.__name__
+        # Get all the methods from the class
+        cls_dict: dict[str, Any] = dict(cls.__dict__)
+        del cls_dict["__module__"]
+        del cls_dict["__doc__"]
+        parameters: list[TypeVar]
+        if "__orig_bases__" in cls_dict:
+            del cls_dict["__orig_bases__"]
+            parameters = cls_dict["__parameters__"]
+        else:
+            parameters = []
+
+        # Register class first
+        if cls_name in self._decls.classes:
+            raise ValueError(f"Class {cls_name} already registered")
+        n_type_vars = len(parameters)
+        cls_decl = ClassDecl(n_type_vars=n_type_vars)
+        self._decls.classes[cls_name] = cls_decl
+
+        # The type ref of self is paramterized by the type vars
+        slf_type_ref = TypeRef(
+            cls_name, tuple(ClassTypeVar(i) for i in range(n_type_vars))
+        )
+
+        # Then register each of its methods
+        for method_name, method in cls_dict.items():
+            if isinstance(method, _WrappedMethod):
+                fn_decl, is_classmethod = self._generate_method_function_decl(
+                    method.fn,
+                    slf_type_ref,
+                    parameters,
+                    method.cost,
+                    method.default,
+                    method.merge,
+                )
+                egg_fn = method.egg_fn
+            else:
+                fn_decl, is_classmethod = self._generate_method_function_decl(
+                    method, slf_type_ref, parameters
+                )
+                egg_fn = None
+
+            if is_classmethod:
+                cls_decl.class_methods[method_name] = fn_decl
+                ref = ClassMethodRef(cls_name, method_name)
+            else:
+                cls_decl.methods[method_name] = fn_decl
+                ref = MethodRef(cls_name, method_name)
+            self._register_callable_ref(egg_fn, ref)
+
+        return RuntimeClass(self._decls, cls_name)
+
+    def _generate_method_function_decl(
+        self,
+        fn: Callable,
+        slf_type_ref: TypeRef,
+        cls_typevars: list[TypeVar],
+        cost: Optional[int] = None,
+        default: Optional[RuntimeExpr] = None,
+        merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]] = None,
+    ) -> tuple[FunctionDecl, bool]:
+        """
+        Processes a method and returns the function decleration and whether its a classmethod
+        """
+        if isinstance(fn, classmethod):
+            fn = fn.__func__
+            is_classmethod = True
+        else:
+            is_classmethod = False
+
+        first_arg = "cls" if is_classmethod else slf_type_ref
+        fn_decl = self._generate_function_decl(
+            fn, default, cost, merge, first_arg, cls_typevars
+        )
+        return fn_decl, is_classmethod
 
     # We seperate the function and method overloads to make it simpler to know if we are modifying a function or method,
     # So that we can add the functions eagerly to the registry and wait on the methods till we process the class.
@@ -121,8 +209,15 @@ class Registry:
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
         ...
 
-    def method(self, *, egg_fn=None, default=None, cost=None, merge=None) -> Any:
-        ...
+    def method(
+        self,
+        *,
+        egg_fn: Optional[str] = None,
+        cost: Optional[int] = None,
+        default: Optional[EXPR] = None,
+        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
+    ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
+        return lambda fn: _WrappedMethod(egg_fn, cost, default, merge, fn)
 
     @overload
     def function(self, fn: CALLABLE, /) -> CALLABLE:
@@ -158,32 +253,68 @@ class Registry:
 
     def _function(
         self,
-        fn: Callable[P, EXPR],
+        fn: Callable[..., RuntimeExpr],
         egg_fn: Optional[str] = None,
         cost: Optional[int] = None,
-        default: Optional[EXPR] = None,
-        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
-    ) -> Callable[P, EXPR]:
+        default: Optional[RuntimeExpr] = None,
+        merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]] = None,
+    ) -> RuntimeFunction:
         """
         Uncurried version of function decorator
         """
         name = fn.__name__
+        if name in self._decls.functions:
+            raise ValueError(f"Function {name} already registered")
+
+        # Save function decleartion
+        self._decls.functions[name] = self._generate_function_decl(
+            fn, default, cost, merge, None, []
+        )
+        # Register it with the egg name
+        self._register_callable_ref(egg_fn, FunctionRef(name))
+        # Return a runtime function whcich will act like the decleration
+        return RuntimeFunction(self._decls, name)
+
+    def _generate_function_decl(
+        self,
+        fn: Any,
+        default: Optional[RuntimeExpr],
+        cost: Optional[int],
+        merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]],
+        # The first arg is either cls, for a classmethod, a self type, or none for a function
+        first_arg: Literal["cls"] | TypeRef | None,
+        cls_typevars: list[TypeVar],
+    ) -> FunctionDecl:
+        if not isinstance(fn, FunctionType):
+            raise NotImplementedError(
+                f"Can only generate function decls for functions not {type(fn)}"
+            )
+
         # TODO: Verify that the signature is correct, that we have all the types we need
         sig = signature(fn, eval_str=True)
-        return_type = self._resolve_type_annotation(sig.return_annotation)
+        return_type = self._resolve_type_annotation(sig.return_annotation, cls_typevars)
+
+        param_types = list(sig.parameters.values())
+
+        # Remove first arg if this is a classmethod or a method, since it won't have an annotation
+        if first_arg is not None:
+            param_types = param_types[1:]
         arg_types = tuple(
-            self._resolve_type_annotation(t.annotation) for t in sig.parameters.values()
+            self._resolve_type_annotation(t.annotation, cls_typevars)
+            for t in param_types
         )
-        default_decl = None if default is None else expr_to_decl(default)
+        # If the first arg is a self, add this as a typeref
+        if isinstance(first_arg, TypeRef):
+            arg_types = (first_arg,) + arg_types
+
+        default_decl = None if default is None else default.expr
         merge_decl = (
             None
             if merge is None
-            else expr_to_decl(
-                merge(
-                    cast(EXPR, self._create_var(return_type, "old")),
-                    cast(EXPR, self._create_var(return_type, "new")),
-                )
-            )
+            else merge(
+                self._create_var(return_type, "old"),
+                self._create_var(return_type, "new"),
+            ).expr
         )
         decl = FunctionDecl(
             return_type=return_type,
@@ -192,26 +323,20 @@ class Registry:
             default=default_decl,
             merge=merge_decl,
         )
+        return decl
 
-        if name in self._decls.functions:
-            raise ValueError(f"Function {name} already registered")
-        self._decls.functions[name] = decl
-        egg_fn = egg_fn or name
+    def _register_callable_ref(self, egg_fn: Optional[str], ref: CallableRef) -> None:
+        egg_fn = egg_fn or ref.generate_egg_name()
         if egg_fn in self._decls.egg_fn_to_callable_ref:
             raise ValueError(f"Egg function {egg_fn} already registered")
-        ref: FunctionRef = FunctionRef(name)
-        self._decls.callable_ref_to_egg_fn[ref] = egg_fn or name
+        self._decls.callable_ref_to_egg_fn[ref] = egg_fn
         self._decls.egg_fn_to_callable_ref[egg_fn] = ref
-        return cast(Callable[P, EXPR], RuntimeFunction(self._decls, name))
 
-    def _resolve_type_annotation(self, tp: object) -> TypeRef:
-        if isinstance(tp, RuntimeClass):
-            return TypeRef(tp.name)
-        if isinstance(tp, RuntimeParamaterizedClass):
-            return tp.ref
+    def _resolve_type_annotation(
+        self, tp: object, cls_typevars: list[TypeVar]
+    ) -> TypeOrVarRef:
         if isinstance(tp, TypeVar):
-            # TODO: Probably do a lookup in the class to map typevars to indices for the class
-            raise TypeError("TypeVars are not supported")
+            return ClassTypeVar(cls_typevars.index(tp))
         # If there is a union, it should be of a literal and another type to allow type promotion
         if isinstance(tp, UnionType):
             args = get_args(tp)
@@ -219,11 +344,11 @@ class Registry:
                 raise TypeError("Union types are only supported for type promotion")
             fst, snd = args
             if fst in {int, str}:
-                return self._resolve_type_annotation(snd)
+                return self._resolve_type_annotation(snd, cls_typevars)
             if snd in {int, str}:
-                return self._resolve_type_annotation(fst)
+                return self._resolve_type_annotation(fst, cls_typevars)
             raise TypeError("Union types are only supported for type promotion")
-        raise TypeError(f"Unexpected type annotation {tp}")
+        return class_to_ref(tp)
 
     def register(self, *values: Rewrite | Rule | Action) -> None:
         """
@@ -242,15 +367,34 @@ class Registry:
             self._decls.rules.append(decl)
             self._on_register_rule(decl)
         elif isinstance(value, Action):
-            decl = action_to_decl(value)
+            decl = _action_to_decl(value)
             self._decls.actions.append(decl)
             self._on_register_action(decl)
         else:
             raise TypeError(f"Unexpected type {type(value)}")
 
-    def _create_var(self, tp: TypeRef, name: str) -> BaseExpr:
-        expr = RuntimeExpr(self._decls, tp, VarDecl(name))
-        return cast(BaseExpr, expr)
+    def _create_var(self, tp: TypeOrVarRef, name: str) -> RuntimeExpr:
+        if isinstance(tp, ClassTypeVar):
+            raise ValueError("Cannot create a variable of a class typevar")
+        return RuntimeExpr(self._decls, tp, VarDecl(name))
+
+
+@dataclass(frozen=True)
+class _WrappedMethod(Generic[P, EXPR]):
+    """
+    Used to wrap a method and store some extra options on it before processing it.
+    """
+
+    egg_fn: Optional[str]
+    cost: Optional[int]
+    default: Optional[EXPR]
+    merge: Optional[Callable[[EXPR, EXPR], EXPR]]
+    fn: Callable[P, EXPR]
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> EXPR:
+        raise NotImplementedError(
+            "We should never call a wrapped method. Did you forget to wrap the class?"
+        )
 
 
 # We use these builders so that when creating these structures we can type check
@@ -290,11 +434,14 @@ def if_(*facts: Fact) -> _RuleBuilder:
 
 
 def var(name: str, bound: type[EXPR]) -> EXPR:
-    ...
+    return cast(
+        EXPR, RuntimeExpr(class_decls(bound), class_to_ref(bound), VarDecl(name))
+    )
 
 
-def vars(name: str, bound: type[EXPR]) -> Iterable[EXPR]:
-    ...
+def vars(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
+    for name in names.split(" "):
+        yield var(name, bound)
 
 
 @dataclass
@@ -349,12 +496,9 @@ class _RuleBuilder:
         return Rule(actions, self.facts)
 
 
-def expr_to_decl(expr: BaseExpr) -> ExprDecl:
+def _expr_to_decl(expr: BaseExpr) -> ExprDecl:
     assert isinstance(expr, RuntimeExpr)
     return expr.expr
-
-
-EXPR = TypeVar("EXPR", bound="BaseExpr")
 
 
 def decl_to_expr(expr: ExprDecl, source_expr: EXPR) -> EXPR:
@@ -374,9 +518,9 @@ class Rewrite:
 
     def _to_decl(self) -> RewriteDecl:
         return RewriteDecl(
-            expr_to_decl(self.lhs),
-            expr_to_decl(self.rhs),
-            tuple(fact_to_decl(fact) for fact in self.conditions),
+            _expr_to_decl(self.lhs),
+            _expr_to_decl(self.rhs),
+            tuple(_fact_to_decl(fact) for fact in self.conditions),
         )
 
 
@@ -390,16 +534,16 @@ class Eq:
         return f"eq({first}).to({args_str})"
 
     def _to_decl(self) -> EqDecl:
-        return EqDecl(tuple(expr_to_decl(expr) for expr in self.exprs))
+        return EqDecl(tuple(_expr_to_decl(expr) for expr in self.exprs))
 
 
 Fact = Union["Unit", Eq]
 
 
-def fact_to_decl(fact: Fact) -> FactDecl:
+def _fact_to_decl(fact: Fact) -> FactDecl:
     if isinstance(fact, Eq):
         return fact._to_decl()
-    return expr_to_decl(fact)
+    return _expr_to_decl(fact)
 
 
 @dataclass
@@ -410,7 +554,7 @@ class Delete:
         return f"delete({self.expr})"
 
     def _to_decl(self) -> DeleteDecl:
-        decl = expr_to_decl(self.expr)
+        decl = _expr_to_decl(self.expr)
         if not isinstance(decl, CallDecl):
             raise ValueError(f"Can only delete calls not {decl}")
         return DeleteDecl(decl)
@@ -436,7 +580,7 @@ class Union_(Generic[EXPR]):
         return f"union({self.lhs}).with_({self.rhs})"
 
     def _to_decl(self) -> UnionDecl:
-        return UnionDecl(expr_to_decl(self.lhs), expr_to_decl(self.rhs))
+        return UnionDecl(_expr_to_decl(self.lhs), _expr_to_decl(self.rhs))
 
 
 @dataclass
@@ -448,12 +592,12 @@ class Set:
         return f"set_({self.lhs}).to({self.rhs})"
 
     def _to_decl(self) -> SetDecl:
-        lhs = expr_to_decl(self.lhs)
+        lhs = _expr_to_decl(self.lhs)
         if not isinstance(lhs, CallDecl):
             raise ValueError(
                 f"Can only create a call with a call for the lhs, got {lhs}"
             )
-        return SetDecl(lhs, expr_to_decl(self.rhs))
+        return SetDecl(lhs, _expr_to_decl(self.rhs))
 
 
 @dataclass
@@ -465,15 +609,15 @@ class Let:
         return f"let({self.name}, {self.value})"
 
     def _to_decl(self) -> LetDecl:
-        return LetDecl(self.name, expr_to_decl(self.value))
+        return LetDecl(self.name, _expr_to_decl(self.value))
 
 
 Action = Union[Let, Set, Delete, Union_, Panic, "BaseExpr"]
 
 
-def action_to_decl(action: Action) -> ActionDecl:
+def _action_to_decl(action: Action) -> ActionDecl:
     if isinstance(action, BaseExpr):
-        return expr_to_decl(action)
+        return _expr_to_decl(action)
     return action._to_decl()
 
 
@@ -484,6 +628,6 @@ class Rule:
 
     def _to_decl(self) -> RuleDecl:
         return RuleDecl(
-            tuple(action_to_decl(action) for action in self.header),
-            tuple(fact_to_decl(fact) for fact in self.body),
+            tuple(_action_to_decl(action) for action in self.header),
+            tuple(_fact_to_decl(fact) for fact in self.body),
         )
