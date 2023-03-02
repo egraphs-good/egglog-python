@@ -22,6 +22,7 @@ __all__ = [
     "RuntimeParamaterizedClass",
     "RuntimeClassMethod",
     "RuntimeExpr",
+    "RuntimeFunction",
     "ArgType",
 ]
 
@@ -76,7 +77,6 @@ class RuntimeParamaterizedClass:
         return name
 
 
-
 @dataclass
 class RuntimeClassMethod:
     pass
@@ -92,6 +92,14 @@ class RuntimeExpr:
 # Args can either be expressions or literals which are automatically promoted
 ArgType = Union[RuntimeExpr, LitType]
 
+
+@dataclass
+class RuntimeFunction:
+    decls: Declarations
+    name: str
+
+    def __call__(self, *args: ArgType) -> RuntimeExpr:
+        return RuntimeExpr(...)
 
 
 # @dataclass

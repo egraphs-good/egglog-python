@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from inspect import signature
+from types import UnionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -13,12 +14,12 @@ from typing import (
     TypeVar,
     Union,
     cast,
+    get_args,
     overload,
 )
 
 from .declarations import *
 from .runtime import *
-
 
 if TYPE_CHECKING:
     from .builtins import BaseExpr, Unit
@@ -211,7 +212,18 @@ class Registry:
         if isinstance(tp, TypeVar):
             # TODO: Probably do a lookup in the class to map typevars to indices for the class
             raise TypeError("TypeVars are not supported")
-        if tp in LIT_UNIONS_TO_LIT:
+        # If there is a union, it should be of a literal and another type to allow type promotion
+        if isinstance(tp, UnionType):
+            args = get_args(tp)
+            if len(args) != 2:
+                raise TypeError("Union types are only supported for type promotion")
+            fst, snd = args
+            if fst in {int, str}:
+                return self._resolve_type_annotation(snd)
+            if snd in {int, str}:
+                return self._resolve_type_annotation(fst)
+            raise TypeError("Union types are only supported for type promotion")
+        raise TypeError(f"Unexpected type annotation {tp}")
 
     def register(self, *values: Rewrite | Rule | Action) -> None:
         """
