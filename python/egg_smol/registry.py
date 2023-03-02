@@ -131,8 +131,8 @@ class Registry:
         self._decls.classes[cls_name] = cls_decl
 
         # The type ref of self is paramterized by the type vars
-        slf_type_ref = TypeRef(
-            cls_name, tuple(ClassTypeVar(i) for i in range(n_type_vars))
+        slf_type_ref = TypeRefWithVars(
+            cls_name, tuple(ClassTypeVarRef(i) for i in range(n_type_vars))
         )
 
         # Then register each of its methods
@@ -274,7 +274,7 @@ class Registry:
         cost: Optional[int],
         merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]],
         # The first arg is either cls, for a classmethod, a self type, or none for a function
-        first_arg: Literal["cls"] | TypeRef | None = None,
+        first_arg: Literal["cls"] | TypeOrVarRef | None = None,
         cls_typevars: list[TypeVar] = [],
         is_init: bool = False,
         cls_type_and_name: Optional[tuple[type, str]] = None,
@@ -292,7 +292,7 @@ class Registry:
 
         # If this is an init fn use the first arg as the return type
         if is_init:
-            if not isinstance(first_arg, TypeRef):
+            if not isinstance(first_arg, TypeOrVarRef):
                 raise ValueError("Init function must have a self type")
             return_type = first_arg
         else:
@@ -320,7 +320,7 @@ class Registry:
             for t in param_types
         )
         # If the first arg is a self, and this not an __init__ fn, add this as a typeref
-        if isinstance(first_arg, TypeRef) and not is_init:
+        if isinstance(first_arg, TypeOrVarRef) and not is_init:
             arg_types = (first_arg,) + arg_types
 
         default_decl = None if default is None else default.expr
@@ -355,7 +355,7 @@ class Registry:
         cls_type_and_name: Optional[tuple[type, str]],
     ) -> TypeOrVarRef:
         if isinstance(tp, TypeVar):
-            return ClassTypeVar(cls_typevars.index(tp))
+            return ClassTypeVarRef(cls_typevars.index(tp))
         # If there is a union, it should be of a literal and another type to allow type promotion
         if isinstance(tp, UnionType):
             args = get_args(tp)
@@ -370,7 +370,7 @@ class Registry:
 
         # If this is the type for the class, use the class name
         if cls_type_and_name and tp == cls_type_and_name[0]:
-            return TypeRef(cls_type_and_name[1])
+            return TypeRefWithVars(cls_type_and_name[1])
 
         # If this is the class for this method and we have a paramaterized class, recurse
         if (
@@ -378,7 +378,7 @@ class Registry:
             and isinstance(tp, _GenericAlias)
             and tp.__origin__ == cls_type_and_name[0]  # type: ignore
         ):
-            return TypeRef(
+            return TypeRefWithVars(
                 cls_type_and_name[1],
                 tuple(
                     self._resolve_type_annotation(a, cls_typevars, cls_type_and_name)
@@ -387,7 +387,7 @@ class Registry:
             )
 
         if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
-            return class_to_ref(tp)
+            return class_to_ref(tp).to_var()
         raise TypeError(f"Unexpected type annotation {tp}")
 
     def register(self, *values: Rewrite | Rule | Action) -> None:
@@ -414,9 +414,7 @@ class Registry:
             raise TypeError(f"Unexpected type {type(value)}")
 
     def _create_var(self, tp: TypeOrVarRef, name: str) -> RuntimeExpr:
-        if isinstance(tp, ClassTypeVar):
-            raise ValueError("Cannot create a variable of a class typevar")
-        return RuntimeExpr(self._decls, tp, VarDecl(name))
+        return RuntimeExpr(self._decls, tp.to_just(), VarDecl(name))
 
 
 @dataclass(frozen=True)

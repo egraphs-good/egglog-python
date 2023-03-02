@@ -13,10 +13,10 @@ from . import bindings
 
 __all__ = [
     "Declarations",
-    "TypeRef",
-    "ClassTypeVar",
+    "JustTypeRef",
+    "ClassTypeVarRef",
+    "TypeRefWithVars",
     "TypeOrVarRef",
-    "type_ref_to_egg",
     "FunctionRef",
     "MethodRef",
     "ClassMethodRef",
@@ -54,8 +54,8 @@ class Declarations:
     callable_ref_to_egg_fn: dict[CallableRef, str] = field(default_factory=dict)
 
     # Bidirectional mapping between egg sort names and python type references.
-    egg_sort_to_type_ref: dict[str, TypeRef] = field(default_factory=dict)
-    type_ref_to_egg_sort: dict[TypeRef, str] = field(default_factory=dict)
+    egg_sort_to_type_ref: dict[str, JustTypeRef] = field(default_factory=dict)
+    type_ref_to_egg_sort: dict[JustTypeRef, str] = field(default_factory=dict)
 
     rewrites: list[RewriteDecl] = field(default_factory=list)
     rules: list[RuleDecl] = field(default_factory=list)
@@ -72,10 +72,13 @@ class Declarations:
         raise NotImplementedError()
 
 
+# Have two different types of type refs, one that can include vars recursively and one that cannot.
+# We only use the one with vars for classmethods and methods, and the other one for egg references as
+# well as runtime values.
 @dataclass(frozen=True)
-class TypeRef:
+class JustTypeRef:
     name: str
-    args: tuple[TypeOrVarRef, ...] = ()
+    args: tuple[JustTypeRef, ...] = ()
 
     def generate_egg_name(self) -> str:
         """
@@ -83,7 +86,7 @@ class TypeRef:
         """
         if not self.args:
             return self.name
-        args = "_".join(arg.generate_egg_sort_name() for arg in self.args)
+        args = "_".join(a.generate_egg_name() for a in self.args)
         return f"{self.name}__{args}"
 
     def to_egg(self, decls: Declarations, egraph: bindings.EGraph) -> str:
@@ -96,13 +99,18 @@ class TypeRef:
         assert new_name not in decls.egg_sort_to_type_ref
         decls.egg_sort_to_type_ref[new_name] = self
         decls.type_ref_to_egg_sort[self] = new_name
-        arg_sorts = [cast(bindings._Expr, bindings.Var(a.to_egg())) for a in self.args]
+        arg_sorts = [
+            cast(bindings._Expr, bindings.Var(a.to_egg(decls, egraph)))
+            for a in self.args
+        ]
         egraph.declare_sort(new_name, (self.name, arg_sorts))
         return new_name
 
+    def to_var(self) -> TypeRefWithVars:
+        return TypeRefWithVars(self.name, tuple(a.to_var() for a in self.args))
 
 @dataclass(frozen=True)
-class ClassTypeVar:
+class ClassTypeVarRef:
     """
     A class type variable represents one of the types of the class, if it is a generic
     class.
@@ -110,25 +118,20 @@ class ClassTypeVar:
 
     index: int
 
-    def generate_egg_sort_name(self) -> str:
-        raise NotImplementedError("egg-smol does not support defining typevars yet.")
-
-    def to_egg(self, decls: Declarations, egraph: bindings.EGraph) -> str:
-        raise NotImplementedError("egg-smol does not support defining typevars yet.")
+    def to_just(self) -> JustTypeRef:
+        raise NotImplementedError("egg-smol does not support generic classes yet.")
 
 
-TypeOrVarRef = Union[TypeRef, ClassTypeVar]
+@dataclass(frozen=True)
+class TypeRefWithVars:
+    name: str
+    args: tuple[TypeOrVarRef, ...] = ()
+
+    def to_just(self) -> JustTypeRef:
+        return JustTypeRef(self.name, tuple(a.to_just() for a in self.args))
 
 
-def type_ref_to_egg(
-    decls: Declarations, egraph: bindings.EGraph, ref: TypeOrVarRef
-) -> str:
-    if isinstance(ref, TypeRef):
-        return ref.to_egg(decls, egraph)
-    elif isinstance(ref, ClassTypeVar):
-        return ref.to_egg(decls, egraph)
-    else:
-        raise ValueError(f"Invalid type reference {ref}")
+TypeOrVarRef = Union[ClassTypeVarRef, TypeRefWithVars]
 
 
 @dataclass(frozen=True)
@@ -183,9 +186,11 @@ class FunctionDecl:
     ) -> bindings.FunctionDecl:
         return bindings.FunctionDecl(
             decls.callable_ref_to_egg_fn[ref],
+            # Remove all vars from the type refs, raising an errory if we find one,
+            # since we cannot create egg functions with vars
             bindings.Schema(
-                [a.to_egg(decls, egraph) for a in self.arg_types],
-                self.return_type.to_egg(decls, egraph),
+                [a.to_just().to_egg(decls, egraph) for a in self.arg_types],
+                self.return_type.to_just().to_egg(decls, egraph),
             ),
             self.default.to_egg(decls) if self.default else None,
             self.merge.to_egg(decls) if self.merge else None,

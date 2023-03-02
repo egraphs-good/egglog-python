@@ -9,7 +9,7 @@ But at runtime they will be exposed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, TypeVar, Union
+from typing import Any, Union
 
 from .declarations import *
 
@@ -43,18 +43,19 @@ class RuntimeClass:
         if self.name in UNARY_LIT_CLASS_NAMES:
             assert len(args) == 1
             assert isinstance(args[0], (int, str))
-            return RuntimeExpr(self.decls, TypeRef(self.name), LitDecl(args[0]))
+            return RuntimeExpr(self.decls, JustTypeRef(self.name), LitDecl(args[0]))
         if self.name == UNIT_CLASS_NAME:
             assert len(args) == 0
-            return RuntimeExpr(self.decls, TypeRef(self.name), LitDecl(None))
+            return RuntimeExpr(self.decls, JustTypeRef(self.name), LitDecl(None))
 
-        return RuntimeClassMethod(...)(*args)
+        return RuntimeClassMethod(self.decls, class_to_ref(self), "__init__")(*args)
 
-    def __getitem__(self, *args: TypeArgType) -> RuntimeParamaterizedClass:
-        return RuntimeParamaterizedClass(self, args)
+    def __getitem__(self, *args: RuntimeTypeArgType) -> RuntimeParamaterizedClass:
+        ref = JustTypeRef(self.name, tuple(class_to_ref(arg) for arg in args))
+        return RuntimeParamaterizedClass(self.decls, ref)
 
     def __getattr__(self, name: str) -> RuntimeClassMethod:
-        return RuntimeClassMethod(...)
+        return RuntimeClassMethod(self.decls, class_to_ref(self), name)
 
     def __str__(self) -> str:
         return self.name
@@ -63,14 +64,16 @@ class RuntimeClass:
 @dataclass
 class RuntimeParamaterizedClass:
     decls: Declarations
-    ref: TypeRef
+    # Note that this will never be a typevar because we don't use RuntimeParamaterizedClass for maps on their own methods
+    # which is the only time we define function which take typevars
+    ref: JustTypeRef
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
 
         return RuntimeClassMethod(...)(*args)
 
     def __getattr__(self, name: str) -> RuntimeClassMethod:
-        return RuntimeClassMethod(...)
+        return RuntimeClassMethod(self.decls, class_to_ref(self), name)
 
     def __str__(self) -> str:
         args, name = self.ref.args, self.ref.name
@@ -80,29 +83,31 @@ class RuntimeParamaterizedClass:
         return name
 
 # Type args can either be typevars or classes
-TypeArgType = Union[RuntimeClass, RuntimeParamaterizedClass, TypeVar]
+RuntimeTypeArgType = Union[RuntimeClass, RuntimeParamaterizedClass]
 
-def class_to_ref(cls: RuntimeClass | RuntimeParamaterizedClass) -> TypeRef:
+def class_to_ref(cls: RuntimeTypeArgType) -> JustTypeRef:
     if isinstance(cls, RuntimeClass):
-        return TypeRef(cls.name, ())
+        return JustTypeRef(cls.name)
     if isinstance(cls, RuntimeParamaterizedClass):
         return cls.ref
     raise TypeError(f"Expected RuntimeClass or RuntimeParamaterizedClass, got {type(cls)}")
 
 def class_decls(cls: Any) -> Declarations:
-    if isinstance(cls, RuntimeClass | RuntimeParamaterizedClass):
+    if isinstance(cls, RuntimeTypeArgType):
         return cls.decls
     raise TypeError(f"Expected RuntimeClass or RuntimeParamaterizedClass, got {type(cls)}")
 
 @dataclass
 class RuntimeClassMethod:
-    pass
+    decls: Declarations
+    tp: JustTypeRef
+    name: str
 
 
 @dataclass
 class RuntimeExpr:
     decls: Declarations
-    tp: TypeRef
+    tp: JustTypeRef
     expr: ExprDecl
 
 
