@@ -141,21 +141,24 @@ class Registry:
             if is_init and cls_name in LIT_CLASS_NAMES:
                 continue
             if isinstance(method, _WrappedMethod):
-                fn_decl, is_classmethod = self._generate_method_function_decl(
-                    method.fn,
-                    slf_type_ref,
-                    parameters,
-                    is_init,
-                    method.cost,
-                    method.default,
-                    method.merge,
-                )
+                fn = method.fn
                 egg_fn = method.egg_fn
+                cost = method.cost
+                default = method.default
+                merge = method.merge
             else:
-                fn_decl, is_classmethod = self._generate_method_function_decl(
-                    method, slf_type_ref, parameters, is_init
-                )
-                egg_fn = None
+                fn = method
+                egg_fn, cost, default, merge = None, None, None, None
+            if isinstance(fn, classmethod):
+                fn = fn.__func__
+                is_classmethod = True
+            else:
+                is_classmethod = False
+
+            first_arg = "cls" if is_classmethod else slf_type_ref
+            fn_decl = self._generate_function_decl(
+                fn, default, cost, merge, first_arg, parameters, is_init=is_init
+            )
 
             if is_classmethod:
                 cls_decl.class_methods[method_name] = fn_decl
@@ -166,31 +169,6 @@ class Registry:
             self._register_callable_ref(egg_fn, ref)
 
         return RuntimeClass(self._decls, cls_name)
-
-    def _generate_method_function_decl(
-        self,
-        fn: Callable,
-        slf_type_ref: TypeRef,
-        cls_typevars: list[TypeVar],
-        is_init: bool,
-        cost: Optional[int] = None,
-        default: Optional[RuntimeExpr] = None,
-        merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]] = None,
-    ) -> tuple[FunctionDecl, bool]:
-        """
-        Processes a method and returns the function decleration and whether its a classmethod
-        """
-        if isinstance(fn, classmethod):
-            fn = fn.__func__
-            is_classmethod = True
-        else:
-            is_classmethod = False
-
-        first_arg = "cls" if is_classmethod else slf_type_ref
-        fn_decl = self._generate_function_decl(
-            fn, default, cost, merge, first_arg, cls_typevars, is_init=is_init
-        )
-        return fn_decl, is_classmethod
 
     # We seperate the function and method overloads to make it simpler to know if we are modifying a function or method,
     # So that we can add the functions eagerly to the registry and wait on the methods till we process the class.
@@ -274,7 +252,7 @@ class Registry:
 
         # Save function decleartion
         self._decls.functions[name] = self._generate_function_decl(
-            fn, default, cost, merge, None, []
+            fn, default, cost, merge
         )
         # Register it with the egg name
         self._register_callable_ref(egg_fn, FunctionRef(name))
@@ -288,8 +266,8 @@ class Registry:
         cost: Optional[int],
         merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]],
         # The first arg is either cls, for a classmethod, a self type, or none for a function
-        first_arg: Literal["cls"] | TypeRef | None,
-        cls_typevars: list[TypeVar],
+        first_arg: Literal["cls"] | TypeRef | None = None,
+        cls_typevars: list[TypeVar] = [],
         is_init: bool = False,
     ) -> FunctionDecl:
         if not isinstance(fn, FunctionType):

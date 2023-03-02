@@ -9,7 +9,7 @@ But at runtime they will be exposed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Union
+from typing import Any, TypeVar, Union
 
 from .declarations import *
 
@@ -24,9 +24,9 @@ __all__ = [
 ]
 
 
-LIT_CLASS_NAMES = {"i64", "string"}
 UNIT_CLASS_NAME = "unit"
-LIT_CLASS_NAMES = LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
+UNARY_LIT_CLASS_NAMES = {"i64", "string"}
+LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
 
 
 
@@ -40,17 +40,17 @@ class RuntimeClass:
         Create an instance of this kind by calling the __init__ classmethod
         """
         # If this is a literal type, initializing it with a literal should return a literal
-        if self.name in LIT_CLASS_NAMES:
+        if self.name in UNARY_LIT_CLASS_NAMES:
             assert len(args) == 1
             assert isinstance(args[0], (int, str))
-            return RuntimeExpr(self.decls, LitDecl(args[0]))
+            return RuntimeExpr(self.decls, TypeRef(self.name), LitDecl(args[0]))
         if self.name == UNIT_CLASS_NAME:
             assert len(args) == 0
-            return RuntimeExpr(self.decls, LitDecl(None))
+            return RuntimeExpr(self.decls, TypeRef(self.name), LitDecl(None))
 
         return RuntimeClassMethod(...)(*args)
 
-    def __getitem__(self, args: tuple[Type_, ...]) -> Type:
+    def __getitem__(self, *args: TypeArgType) -> RuntimeParamaterizedClass:
         return RuntimeParamaterizedClass(self, args)
 
     def __getattr__(self, name: str) -> RuntimeClassMethod:
@@ -78,6 +78,9 @@ class RuntimeParamaterizedClass:
             arg_strs = [str(RuntimeParamaterizedClass(self.decls, arg)) for arg in args]
             return f"{name}[{', '.join(arg_strs)}]"
         return name
+
+# Type args can either be typevars or classes
+TypeArgType = Union[RuntimeClass, RuntimeParamaterizedClass, TypeVar]
 
 def class_to_ref(cls: Any) -> TypeRef:
     if isinstance(cls, RuntimeClass):
