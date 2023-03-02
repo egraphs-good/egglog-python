@@ -13,11 +13,8 @@ from typing import Any, Union
 
 from .declarations import *
 
-LIT_CLASS_NAMES = {"i64", "string"}
-
-UNIT_CLASS_NAME = "unit"
-
 __all__ = [
+    "LIT_CLASS_NAMES",
     "RuntimeClass",
     "RuntimeParamaterizedClass",
     "RuntimeClassMethod",
@@ -25,6 +22,12 @@ __all__ = [
     "RuntimeFunction",
     "ArgType",
 ]
+
+
+LIT_CLASS_NAMES = {"i64", "string"}
+UNIT_CLASS_NAME = "unit"
+LIT_CLASS_NAMES = LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
+
 
 
 @dataclass

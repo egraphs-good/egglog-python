@@ -137,6 +137,9 @@ class Registry:
         # Then register each of its methods
         for method_name, method in cls_dict.items():
             is_init = method_name == "__init__"
+            # Don't register the init methods for literals, since those don't use the type checking mechanisms
+            if is_init and cls_name in LIT_CLASS_NAMES:
+                continue
             if isinstance(method, _WrappedMethod):
                 fn_decl, is_classmethod = self._generate_method_function_decl(
                     method.fn,
