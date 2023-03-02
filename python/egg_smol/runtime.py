@@ -82,7 +82,7 @@ class RuntimeParamaterizedClass:
 # Type args can either be typevars or classes
 TypeArgType = Union[RuntimeClass, RuntimeParamaterizedClass, TypeVar]
 
-def class_to_ref(cls: Any) -> TypeRef:
+def class_to_ref(cls: RuntimeClass | RuntimeParamaterizedClass) -> TypeRef:
     if isinstance(cls, RuntimeClass):
         return TypeRef(cls.name, ())
     if isinstance(cls, RuntimeParamaterizedClass):

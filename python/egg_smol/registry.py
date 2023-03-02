@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from inspect import signature
+from inspect import Parameter, signature
 from types import FunctionType, UnionType
+from typing import _GenericAlias  # type: ignore[attr-defined]
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -157,7 +158,14 @@ class Registry:
 
             first_arg = "cls" if is_classmethod else slf_type_ref
             fn_decl = self._generate_function_decl(
-                fn, default, cost, merge, first_arg, parameters, is_init=is_init
+                fn,
+                default,
+                cost,
+                merge,
+                first_arg,
+                parameters,
+                is_init,
+                (cls, cls_name),
             )
 
             if is_classmethod:
@@ -269,14 +277,18 @@ class Registry:
         first_arg: Literal["cls"] | TypeRef | None = None,
         cls_typevars: list[TypeVar] = [],
         is_init: bool = False,
+        cls_type_and_name: Optional[tuple[type, str]] = None,
     ) -> FunctionDecl:
         if not isinstance(fn, FunctionType):
             raise NotImplementedError(
                 f"Can only generate function decls for functions not {type(fn)}"
             )
 
-        # TODO: Verify that the signature is correct, that we have all the types we need
-        sig = signature(fn, eval_str=True)
+        sig_globals = fn.__globals__
+        if cls_type_and_name:
+            sig_globals = sig_globals.copy()
+            sig_globals[cls_type_and_name[1]] = cls_type_and_name[0]
+        sig = signature(fn, eval_str=True, globals=sig_globals)
 
         # If this is an init fn use the first arg as the return type
         if is_init:
@@ -285,16 +297,26 @@ class Registry:
             return_type = first_arg
         else:
             return_type = self._resolve_type_annotation(
-                sig.return_annotation, cls_typevars
+                sig.return_annotation, cls_typevars, cls_type_and_name
             )
 
         param_types = list(sig.parameters.values())
-
         # Remove first arg if this is a classmethod or a method, since it won't have an annotation
         if first_arg is not None:
-            param_types = param_types[1:]
+            first, *param_types = param_types
+            if first.annotation != Parameter.empty:
+                raise ValueError(
+                    f"First arg of a method must not have an annotation, not {first.annotation}"
+                )
+
+        for param in param_types:
+            if param.kind != Parameter.POSITIONAL_OR_KEYWORD:
+                raise ValueError(
+                    f"Can only register functions with positional or keyword args, not {param.kind}"
+                )
+
         arg_types = tuple(
-            self._resolve_type_annotation(t.annotation, cls_typevars)
+            self._resolve_type_annotation(t.annotation, cls_typevars, cls_type_and_name)
             for t in param_types
         )
         # If the first arg is a self, and this not an __init__ fn, add this as a typeref
@@ -327,7 +349,10 @@ class Registry:
         self._decls.egg_fn_to_callable_ref[egg_fn] = ref
 
     def _resolve_type_annotation(
-        self, tp: object, cls_typevars: list[TypeVar]
+        self,
+        tp: object,
+        cls_typevars: list[TypeVar],
+        cls_type_and_name: Optional[tuple[type, str]],
     ) -> TypeOrVarRef:
         if isinstance(tp, TypeVar):
             return ClassTypeVar(cls_typevars.index(tp))
@@ -338,11 +363,32 @@ class Registry:
                 raise TypeError("Union types are only supported for type promotion")
             fst, snd = args
             if fst in {int, str}:
-                return self._resolve_type_annotation(snd, cls_typevars)
+                return self._resolve_type_annotation(snd, [], None)
             if snd in {int, str}:
-                return self._resolve_type_annotation(fst, cls_typevars)
+                return self._resolve_type_annotation(fst, [], None)
             raise TypeError("Union types are only supported for type promotion")
-        return class_to_ref(tp)
+
+        # If this is the type for the class, use the class name
+        if cls_type_and_name and tp == cls_type_and_name[0]:
+            return TypeRef(cls_type_and_name[1])
+
+        # If this is the class for this method and we have a paramaterized class, recurse
+        if (
+            cls_type_and_name
+            and isinstance(tp, _GenericAlias)
+            and tp.__origin__ == cls_type_and_name[0]  # type: ignore
+        ):
+            return TypeRef(
+                cls_type_and_name[1],
+                tuple(
+                    self._resolve_type_annotation(a, cls_typevars, cls_type_and_name)
+                    for a in tp.__args__  # type: ignore
+                ),
+            )
+
+        if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
+            return class_to_ref(tp)
+        raise TypeError(f"Unexpected type annotation {tp}")
 
     def register(self, *values: Rewrite | Rule | Action) -> None:
         """
@@ -429,7 +475,8 @@ def if_(*facts: Fact) -> _RuleBuilder:
 
 def var(name: str, bound: type[EXPR]) -> EXPR:
     return cast(
-        EXPR, RuntimeExpr(class_decls(bound), class_to_ref(bound), VarDecl(name))
+        EXPR,
+        RuntimeExpr(class_decls(bound), class_to_ref(cast(Any, bound)), VarDecl(name)),
     )
 
 
