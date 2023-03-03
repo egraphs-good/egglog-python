@@ -3,10 +3,6 @@ from __future__ import annotations
 from egg_smol import *
 
 
-def assert_expr_eq(a: BaseExpr, b: BaseExpr) -> None:
-    raise NotImplementedError()
-
-
 def test_eqsat_basic():
     egraph = EGraph()
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from inspect import Parameter, signature
+from inspect import Parameter, currentframe, signature
 from types import FunctionType
 from typing import _GenericAlias  # type: ignore[attr-defined]
 from typing import (
@@ -100,15 +100,19 @@ class Registry:
         """
         Registers a class.
         """
+        hint_locals = currentframe().f_back.f_locals  # type: ignore
 
         if kwargs:
             assert set(kwargs.keys()) == {"egg_sort"}
-            return lambda cls: self._class(cls, kwargs["egg_sort"])
+            return lambda cls: self._class(cls, hint_locals, kwargs["egg_sort"])
         assert len(args) == 1
-        return self._class(args[0])
+        return self._class(args[0], hint_locals)
 
     def _class(
-        self, cls: type[BaseExpr], egg_sort: Optional[str] = None
+        self,
+        cls: type[BaseExpr],
+        hint_locals: dict[str, Any],
+        egg_sort: Optional[str] = None,
     ) -> RuntimeClass:
         """
         Registers a class.
@@ -163,6 +167,7 @@ class Registry:
 
             fn_decl = self._generate_function_decl(
                 fn,
+                hint_locals,
                 default,
                 cost,
                 merge,
@@ -246,16 +251,19 @@ class Registry:
         """
         Registers a function.
         """
+        fn_locals = currentframe().f_back.f_locals  # type: ignore
+
         # If we have any positional args, then we are calling it directly on a function
         if args:
             assert len(args) == 1
-            return self._function(args[0])
+            return self._function(args[0], fn_locals)
         # otherwise, we are passing some keyword args, so save those, and then return a partial
-        return lambda fn: self._function(fn, **kwargs)
+        return lambda fn: self._function(fn, fn_locals, **kwargs)
 
     def _function(
         self,
         fn: Callable[..., RuntimeExpr],
+        hint_locals: dict[str, Any],
         egg_fn: Optional[str] = None,
         cost: Optional[int] = None,
         default: Optional[RuntimeExpr] = None,
@@ -269,7 +277,7 @@ class Registry:
             raise ValueError(f"Function {name} already registered")
 
         # Save function decleartion
-        fn_decl = self._generate_function_decl(fn, default, cost, merge)
+        fn_decl = self._generate_function_decl(fn, hint_locals, default, cost, merge)
         self._decls.functions[name] = fn_decl
         # Register it with the egg name
         self._register_callable_ref(egg_fn, FunctionRef(name), fn_decl)
@@ -279,6 +287,9 @@ class Registry:
     def _generate_function_decl(
         self,
         fn: Any,
+        # Pass in the locals, retrieved from the frame when wrapping,
+        # so that we support classes and function defined inside of other functions (which won't show up in the globals)
+        hint_locals: dict[str, Any],
         default: Optional[RuntimeExpr],
         cost: Optional[int],
         merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]],
@@ -293,11 +304,11 @@ class Registry:
                 f"Can only generate function decls for functions not {type(fn)}"
             )
 
-        hints_globals = fn.__globals__.copy()
+        hint_globals = fn.__globals__.copy()
 
         if cls_type_and_name:
-            hints_globals[cls_type_and_name[1]] = cls_type_and_name[0]
-        hints = get_type_hints(fn, hints_globals)
+            hint_globals[cls_type_and_name[1]] = cls_type_and_name[0]
+        hints = get_type_hints(fn, hint_globals, hint_locals)
         # If this is an init fn use the first arg as the return type
         if is_init:
             if not isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)):
