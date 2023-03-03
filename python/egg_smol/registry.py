@@ -328,8 +328,8 @@ class Registry:
             None
             if merge is None
             else merge(
-                self._create_var(return_type, "old"),
-                self._create_var(return_type, "new"),
+                RuntimeExpr(self._decls, return_type.to_just(), VarDecl("old")),
+                RuntimeExpr(self._decls, return_type.to_just(), VarDecl("new")),
             ).__egg_expr__
         )
         decl = FunctionDecl(
@@ -410,9 +410,6 @@ class Registry:
             action_decl = _action_to_decl(value)
             self._decls.actions.append(action_decl)
             self._on_register_action(action_decl)
-
-    def _create_var(self, tp: TypeOrVarRef, name: str) -> RuntimeExpr:
-        return RuntimeExpr(self._decls, tp.to_just(), VarDecl(name))
 
 
 @dataclass(frozen=True)
