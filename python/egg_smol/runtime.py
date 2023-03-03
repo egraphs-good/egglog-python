@@ -85,6 +85,9 @@ class RuntimeClass:
     def __str__(self) -> str:
         return self.__egg_name__
 
+    # Make hashable so can go in Union
+    def __hash__(self) -> int:
+        return hash((id(self.__egg_decls__), self.__egg_name__))
 
 @dataclass
 class RuntimeParamaterizedClass:
