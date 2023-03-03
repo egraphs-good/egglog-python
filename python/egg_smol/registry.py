@@ -156,14 +156,15 @@ class Registry:
                 fn = fn.__func__
                 is_classmethod = True
             else:
-                is_classmethod = False
+                # We count __init__ as a classmethod since it is called on the class
+                is_classmethod = is_init
 
             fn_decl = self._generate_function_decl(
                 fn,
                 default,
                 cost,
                 merge,
-                "cls" if is_classmethod else slf_type_ref,
+                "cls" if is_classmethod and not is_init else slf_type_ref,
                 parameters,
                 is_init,
                 # If this is an i64, use the runtime class for the alias so that i64Like is resolved properly
@@ -292,14 +293,6 @@ class Registry:
             )
 
         hints_globals = fn.__globals__.copy()
-
-        # Before getting type hints, reset i64Like type annotation to remove the __forward_value from
-        # the ForwardRef('i64') and also cleanup all the caching, so that the new union won't used the old
-        # ForwardRef
-        # This is because the first forward ref
-        # for c in _cleanups:
-        #     c()
-        # hints_globals['i64Like'] = Union['i64', int]
 
         if cls_type_and_name:
             hints_globals[cls_type_and_name[1]] = cls_type_and_name[0]

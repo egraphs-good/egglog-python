@@ -183,7 +183,7 @@ class RuntimeClassMethod:
     def __post_init__(self):
         if (
             self.__egg_method_name__
-            not in self.__egg_decls__.classes[self.class_name].methods
+            not in self.__egg_decls__.classes[self.class_name].class_methods
         ):
             raise ValueError(
                 f"Class {self.class_name} does not have method {self.__egg_method_name__}"
