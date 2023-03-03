@@ -166,7 +166,10 @@ class Registry:
                 "cls" if is_classmethod else slf_type_ref,
                 parameters,
                 is_init,
-                (cls, cls_name),
+                # If this is an i64, use the runtime class for the alias so that i64Like is resolved properly
+                # Otherwise, this might be a Map in which case pass in the original cls so that we
+                # can do Map[T, V] on it, which is not allowed on the runtime class
+                (RuntimeClass(self._decls, 'i64') if cls_name == 'i64' else cls, cls_name),
             )
             ref: MethodRef | ClassMethodRef
             if is_classmethod:
@@ -278,16 +281,24 @@ class Registry:
         first_arg: Literal["cls"] | TypeOrVarRef | None = None,
         cls_typevars: list[TypeVar] = [],
         is_init: bool = False,
-        cls_type_and_name: Optional[tuple[type, str]] = None,
+        cls_type_and_name: Optional[tuple[type | RuntimeClass, str]] = None,
     ) -> FunctionDecl:
         if not isinstance(fn, FunctionType):
             raise NotImplementedError(
                 f"Can only generate function decls for functions not {type(fn)}"
             )
 
-        hints_globals = fn.__globals__
+        hints_globals = fn.__globals__.copy()
+
+        # Before getting type hints, reset i64Like type annotation to remove the __forward_value from
+        # the ForwardRef('i64') and also cleanup all the caching, so that the new union won't used the old
+        # ForwardRef
+        # This is because the first forward ref
+        # for c in _cleanups:
+        #     c()
+        # hints_globals['i64Like'] = Union['i64', int]
+
         if cls_type_and_name:
-            hints_globals = hints_globals.copy()
             hints_globals[cls_type_and_name[1]] = cls_type_and_name[0]
         hints = get_type_hints(fn, hints_globals)
         # If this is an init fn use the first arg as the return type
@@ -352,7 +363,7 @@ class Registry:
         self,
         tp: object,
         cls_typevars: list[TypeVar],
-        cls_type_and_name: Optional[tuple[type, str]],
+        cls_type_and_name: Optional[tuple[type | RuntimeClass, str]],
     ) -> TypeOrVarRef:
         if isinstance(tp, TypeVar):
             return ClassTypeVarRef(cls_typevars.index(tp))
