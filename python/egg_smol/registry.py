@@ -363,9 +363,9 @@ class Registry:
                 raise TypeError("Union types are only supported for type promotion")
             fst, snd = args
             if fst in {int, str}:
-                return self._resolve_type_annotation(snd, [], None)
+                return self._resolve_type_annotation(snd, cls_typevars, cls_type_and_name)
             if snd in {int, str}:
-                return self._resolve_type_annotation(fst, [], None)
+                return self._resolve_type_annotation(fst, cls_typevars, cls_type_and_name)
             raise TypeError("Union types are only supported for type promotion")
 
         # If this is the type for the class, use the class name
