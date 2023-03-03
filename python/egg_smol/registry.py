@@ -121,7 +121,7 @@ class Registry:
         parameters: list[TypeVar]
         if "__orig_bases__" in cls_dict:
             del cls_dict["__orig_bases__"]
-            parameters = cls_dict["__parameters__"]
+            parameters = cls_dict.pop("__parameters__")
         else:
             parameters = []
 
