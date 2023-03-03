@@ -57,9 +57,8 @@ class EGraph(Registry):
         tp, decl = expr_parts(expr)
         self._egraph.define(name, decl.to_egg(self._decls), cost)
         self._decls.constants[name] = ConstantDecl(tp, decl, cost)
-        ref = ConstantRef(name)
-        self._register_callable_ref(name, ref)
-        return cast(EXPR, RuntimeExpr(self._decls, tp, CallDecl(ref)))
+        self._register_callable_ref(name, ConstantRef(name))
+        return cast(EXPR, RuntimeExpr(self._decls, tp, VarDecl(name)))
 
     def _on_register_function(self, ref: CallableRef, decl: FunctionDecl) -> None:
         # Don't need to registry constants, since they are already registered
