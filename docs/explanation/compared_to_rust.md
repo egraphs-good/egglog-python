@@ -314,13 +314,13 @@ from egg_smol import *
 
 egraph = EGraph()
 
-@egraph.register
-class Math(Expr):
+@egraph.class_
+class Math(BaseExpr):
     def __init__(self, value: i64Like) -> None:
         ...
 
     @classmethod
-    def var(cls, v: str) -> Math:
+    def var(cls, v: StringLike) -> Math:
         ...
 
     def __add__(self, other: Math) -> Math:
@@ -329,16 +329,14 @@ class Math(Expr):
     def __mul__(self, other: Math) -> Math:
         ...
 
-
 # expr1 = 2 * (x + 3)
-expr1 = Math(2) * (Math.var("x") + Math(3))
+expr1 = egraph.define("expr1", Math(2) * (Math.var("x") + Math(3)))
 
 # expr2 = 6 + 2 * x
-expr2 = Math(6) + Math(2) * Math.var("x")
+expr2 = egraph.define("expr2", Math(6) + Math(2) * Math.var("x"))
 
-a, b, c = var[Math].a, var[Math].b, var[Math].c
-
-x, y = var[i64].i, var[i64].j
+a, b, c = vars("a b c", Math)
+x, y = vars("x y", i64)
 
 egraph.register(
     rewrite(a + b).to(b + a),
