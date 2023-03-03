@@ -671,6 +671,8 @@ Action = Union[Let, Set, Delete, Union_, Panic, "BaseExpr"]
 
 
 def _action_to_decl(action: Action) -> ActionDecl:
+    from .builtins import BaseExpr
+
     if isinstance(action, BaseExpr):
         return _expr_to_decl(action)
     return action._to_decl()
