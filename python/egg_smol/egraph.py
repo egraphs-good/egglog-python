@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import TypeVar, cast
+from typing import Optional, TypeVar, cast
 
 from . import bindings
 from .builtins import BUILTINS, BaseExpr
 from .declarations import *
 from .registry import *
-from .registry import _expr_to_decl, _fact_to_decl, decl_to_expr
+from .registry import _expr_to_decl, _expr_to_type, _fact_to_decl, decl_to_expr
 from .runtime import *
 
 __all__ = ["EGraph"]
@@ -44,22 +44,27 @@ class EGraph(Registry):
         """
         egg_expr = _expr_to_decl(expr).to_egg(self._decls)
         _cost, new_egg_expr, _variants = self._egraph.extract_expr(egg_expr)
-        new_expr_decl = expr_decl_from_egg(self._decls, new_egg_expr)
+        tp, new_expr_decl = tp_and_expr_decl_from_egg(self._decls, new_egg_expr)
+        if tp != _expr_to_type(expr):
+            raise RuntimeError(f"Type mismatch: {tp} != {_expr_to_type(expr)}")
         return decl_to_expr(new_expr_decl, expr)
 
-    def define(self, name: str, expr: EXPR) -> EXPR:
+    def define(self, name: str, expr: EXPR, cost: Optional[int] = None) -> EXPR:
         """
         Define a new expression in the egraph and return a reference to it.
         """
         expr_decl = _expr_to_decl(expr)
-        egg_expr = expr_decl.to_egg(self._decls)
-        self._egraph.define(name, egg_expr)
-
-        # Return a var that points to the new expression
-        assert isinstance(expr, RuntimeExpr)
-        return cast(EXPR, RuntimeExpr(self._decls, expr.__egg_tp__, VarDecl(name)))
+        tp = _expr_to_type(expr)
+        self._egraph.define(name, expr_decl.to_egg(self._decls), cost)
+        self._decls.constants[name] = ConstantDecl(tp, expr_decl, cost)
+        ref = ConstantRef(name)
+        self._register_callable_ref(name, ref)
+        return cast(EXPR, RuntimeExpr(self._decls, tp, CallDecl(ref)))
 
     def _on_register_function(self, ref: CallableRef, decl: FunctionDecl) -> None:
+        # Don't need to registry constants, since they are already registered
+        if isinstance(ref, ConstantRef):
+            raise RuntimeError("Constants should not be registered as functions")
         egg_decl = decl.to_egg(self._decls, self._egraph, ref)
         self._egraph.declare_function(egg_decl)
 

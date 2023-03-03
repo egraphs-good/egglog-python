@@ -24,13 +24,15 @@ __all__ = [
     "MethodRef",
     "ClassMethodRef",
     "CallableRef",
+    "ConstantRef",
+    "ConstantDecl",
     "FunctionDecl",
     "VarDecl",
     "LitType",
     "LitDecl",
     "CallDecl",
     "ExprDecl",
-    "expr_decl_from_egg",
+    "tp_and_expr_decl_from_egg",
     "ClassDecl",
     "RewriteDecl",
     "EqDecl",
@@ -82,6 +84,7 @@ UNARY_METHODS = {
 class Declarations:
     functions: dict[str, FunctionDecl] = field(default_factory=dict)
     classes: dict[str, ClassDecl] = field(default_factory=dict)
+    constants: dict[str, ConstantDecl] = field(default_factory=dict)
 
     # Bidirectional mapping between egg function names and python callable references.
     # Note that there are possibly mutliple callable references for a single egg function name, like `+`
@@ -99,8 +102,6 @@ class Declarations:
     rules: list[RuleDecl] = field(default_factory=list)
     actions: list[ActionDecl] = field(default_factory=list)
 
-    # includes: Optional[Declarations] = None
-
     def integrity_check(self) -> None:
         """
         Checks that:
@@ -116,6 +117,8 @@ class Declarations:
             return self.classes[ref.class_name].methods[ref.method_name]
         elif isinstance(ref, ClassMethodRef):
             return self.classes[ref.class_name].class_methods[ref.method_name]
+        elif isinstance(ref, ConstantRef):
+            return self.constants[ref.name].to_function_decl()
         raise assert_never(ref)
 
     def register_sort(
@@ -230,7 +233,29 @@ class ClassMethodRef:
         return f"{self.class_name}__{self.method_name}"
 
 
-CallableRef = Union[FunctionRef, MethodRef, ClassMethodRef]
+@dataclass(frozen=True)
+class ConstantRef:
+    name: str
+
+    def to_egg(self, decls: Declarations) -> str:
+        return decls.callable_ref_to_egg_fn[self]
+
+    def generate_egg_name(self) -> str:
+        return self.name
+
+
+CallableRef = Union[FunctionRef, MethodRef, ClassMethodRef, ConstantRef]
+
+
+@dataclass(frozen=True)
+class ConstantDecl:
+    tp: JustTypeRef
+    expr: ExprDecl
+    cost: Optional[int] = None
+
+    # A constant is compiled to a function that takes no arguments and returns the constant value
+    def to_function_decl(self) -> FunctionDecl:
+        return FunctionDecl((), self.tp.to_var(), self.cost)
 
 
 @dataclass(frozen=True)
@@ -331,7 +356,7 @@ class CallDecl:
     ) -> tuple[JustTypeRef, CallDecl]:
         from .type_constraint_solver import TypeConstraintSolver
 
-        results = (expr_decl_from_egg(decls, a) for a in call.args)
+        results = (tp_and_expr_decl_from_egg(decls, a) for a in call.args)
         arg_types = tuple(r[0] for r in results)
         arg_decls = tuple(r[1] for r in results)
 
@@ -373,6 +398,8 @@ class CallDecl:
             elif name == "__call__":
                 return f"{slf.pretty()}({', '.join(a.pretty() for a in args)})"
             fn_str = f"{slf.pretty()}.{name}"
+        elif isinstance(ref, ConstantRef):
+            return ref.name
         else:
             assert_never(ref)
         return f"{fn_str}({', '.join(a.pretty() for a in args)})"
@@ -425,7 +452,7 @@ def test_expr_pretty():
 ExprDecl = Union[VarDecl, LitDecl, CallDecl]
 
 
-def expr_decl_from_egg(
+def tp_and_expr_decl_from_egg(
     decls: Declarations, expr: bindings._Expr
 ) -> tuple[JustTypeRef, ExprDecl]:
     if isinstance(expr, bindings.Var):
