@@ -310,6 +310,8 @@ So would it be possible to make an API that:
 3. Feels "pythonic"
 
 ```{code-cell} python
+from __future__ import annotations
+
 from egg_smol import *
 
 egraph = EGraph()
