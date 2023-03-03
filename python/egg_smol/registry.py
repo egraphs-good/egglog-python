@@ -267,9 +267,7 @@ class Registry:
             raise ValueError(f"Function {name} already registered")
 
         # Save function decleartion
-        fn_decl = self._generate_function_decl(
-            fn, default, cost, merge
-        )
+        fn_decl = self._generate_function_decl(fn, default, cost, merge)
         self._decls.functions[name] = fn_decl
         # Register it with the egg name
         self._register_callable_ref(egg_fn, FunctionRef(name), fn_decl)
