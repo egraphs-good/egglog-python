@@ -89,6 +89,7 @@ class RuntimeClass:
     def __hash__(self) -> int:
         return hash((id(self.__egg_decls__), self.__egg_name__))
 
+
 @dataclass
 class RuntimeParamaterizedClass:
     __egg_decls__: Declarations
