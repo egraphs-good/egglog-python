@@ -6,6 +6,7 @@ Status: Done
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Iterable, Optional, Union, cast
 
@@ -83,7 +84,11 @@ class Declarations:
     classes: dict[str, ClassDecl] = field(default_factory=dict)
 
     # Bidirectional mapping between egg function names and python callable references.
-    egg_fn_to_callable_ref: dict[str, CallableRef] = field(default_factory=dict)
+    # Note that there are possibly mutliple callable references for a single egg function name, like `+`
+    # for both int and rational classes.
+    egg_fn_to_callable_refs: defaultdict[str, set[CallableRef]] = field(
+        default_factory=lambda: defaultdict(set)
+    )
     callable_ref_to_egg_fn: dict[CallableRef, str] = field(default_factory=dict)
 
     # Bidirectional mapping between egg sort names and python type references.
@@ -103,6 +108,15 @@ class Declarations:
             2. Each mapping is bidrectional
         """
         raise NotImplementedError()
+
+    def get_function_decl(self, ref: CallableRef) -> FunctionDecl:
+        if isinstance(ref, FunctionRef):
+            return self.functions[ref.name]
+        elif isinstance(ref, MethodRef):
+            return self.classes[ref.class_name].methods[ref.method_name]
+        elif isinstance(ref, ClassMethodRef):
+            return self.classes[ref.class_name].class_methods[ref.method_name]
+        raise assert_never(ref)
 
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.
@@ -243,8 +257,10 @@ class VarDecl:
     name: str
 
     @classmethod
-    def from_egg(cls, var: bindings.Var) -> VarDecl:
-        return cls(var.name)
+    def from_egg(cls, var: bindings.Var) -> tuple[JustTypeRef, LitDecl]:
+        raise NotImplementedError(
+            "Cannot turn var into egg type because typing unknown."
+        )
 
     def to_egg(self, _decls: Declarations) -> bindings.Var:
         return bindings.Var(self.name)
@@ -261,11 +277,13 @@ class LitDecl:
     value: LitType
 
     @classmethod
-    def from_egg(cls, lit: bindings.Lit) -> LitDecl:
-        if isinstance(lit.value, (bindings.Int, bindings.String)):
-            return cls(lit.value.value)
+    def from_egg(cls, lit: bindings.Lit) -> tuple[JustTypeRef, LitDecl]:
+        if isinstance(lit.value, bindings.Int):
+            return JustTypeRef("i64"), cls(lit.value.value)
+        if isinstance(lit.value, bindings.String):
+            return JustTypeRef("string"), cls(lit.value.value)
         elif isinstance(lit.value, bindings.Unit):
-            return cls(None)
+            return JustTypeRef("unit"), cls(None)
         assert_never(lit.value)
 
     def to_egg(self, _decls: Declarations) -> bindings.Lit:
@@ -301,11 +319,24 @@ class CallDecl:
             )
 
     @classmethod
-    def from_egg(cls, decls: Declarations, call: bindings.Call) -> CallDecl:
-        callable_ref = decls.egg_fn_to_callable_ref[call.name]
-        return cls(
-            callable_ref, tuple(expr_decl_from_egg(decls, a) for a in call.args), None
-        )
+    def from_egg(
+        cls, decls: Declarations, call: bindings.Call
+    ) -> tuple[JustTypeRef, CallDecl]:
+        from .type_constraint_solver import TypeConstraintSolver
+
+        results = (expr_decl_from_egg(decls, a) for a in call.args)
+        arg_types = tuple(r[0] for r in results)
+        arg_decls = tuple(r[1] for r in results)
+
+        # Find the first callable ref that matches the call
+        for callable_ref in decls.egg_fn_to_callable_refs[call.name]:
+            tcs = TypeConstraintSolver()
+            fn_decl = decls.get_function_decl(callable_ref)
+            return_tp = tcs.infer_return_type(
+                fn_decl.arg_types, fn_decl.return_type, arg_types
+            )
+            return return_tp, cls(callable_ref, arg_decls)
+        raise ValueError(f"Could not find callable ref for call {call}")
 
     def to_egg(self, decls: Declarations) -> bindings.Call:
         egg_fn = decls.callable_ref_to_egg_fn[self.callable]
@@ -387,7 +418,9 @@ def test_expr_pretty():
 ExprDecl = Union[VarDecl, LitDecl, CallDecl]
 
 
-def expr_decl_from_egg(decls: Declarations, expr: bindings._Expr) -> ExprDecl:
+def expr_decl_from_egg(
+    decls: Declarations, expr: bindings._Expr
+) -> tuple[JustTypeRef, ExprDecl]:
     if isinstance(expr, bindings.Var):
         return VarDecl.from_egg(expr)
     if isinstance(expr, bindings.Lit):

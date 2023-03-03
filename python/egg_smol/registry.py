@@ -169,7 +169,10 @@ class Registry:
                 # If this is an i64, use the runtime class for the alias so that i64Like is resolved properly
                 # Otherwise, this might be a Map in which case pass in the original cls so that we
                 # can do Map[T, V] on it, which is not allowed on the runtime class
-                (RuntimeClass(self._decls, 'i64') if cls_name == 'i64' else cls, cls_name),
+                (
+                    RuntimeClass(self._decls, "i64") if cls_name == "i64" else cls,
+                    cls_name,
+                ),
             )
             ref: MethodRef | ClassMethodRef
             if is_classmethod:
@@ -308,7 +311,7 @@ class Registry:
             return_type = first_arg
         else:
             return_type = self._resolve_type_annotation(
-                hints['return'], cls_typevars, cls_type_and_name
+                hints["return"], cls_typevars, cls_type_and_name
             )
 
         params = list(signature(fn).parameters.values())
@@ -327,7 +330,9 @@ class Registry:
                 )
 
         arg_types = tuple(
-            self._resolve_type_annotation(hints[t.name], cls_typevars, cls_type_and_name)
+            self._resolve_type_annotation(
+                hints[t.name], cls_typevars, cls_type_and_name
+            )
             for t in params
         )
         # If the first arg is a self, and this not an __init__ fn, add this as a typeref
@@ -354,10 +359,10 @@ class Registry:
 
     def _register_callable_ref(self, egg_fn: Optional[str], ref: CallableRef) -> None:
         egg_fn = egg_fn or ref.generate_egg_name()
-        if egg_fn in self._decls.egg_fn_to_callable_ref:
-            raise ValueError(f"Egg function {egg_fn} already registered")
+        if ref in self._decls.callable_ref_to_egg_fn:
+            raise ValueError(f"Callable ref {ref} already registered")
         self._decls.callable_ref_to_egg_fn[ref] = egg_fn
-        self._decls.egg_fn_to_callable_ref[egg_fn] = ref
+        self._decls.egg_fn_to_callable_refs[egg_fn].add(ref)
 
     def _resolve_type_annotation(
         self,
@@ -374,9 +379,13 @@ class Registry:
                 raise TypeError("Union types are only supported for type promotion")
             fst, snd = args
             if fst in {int, str}:
-                return self._resolve_type_annotation(snd, cls_typevars, cls_type_and_name)
+                return self._resolve_type_annotation(
+                    snd, cls_typevars, cls_type_and_name
+                )
             if snd in {int, str}:
-                return self._resolve_type_annotation(fst, cls_typevars, cls_type_and_name)
+                return self._resolve_type_annotation(
+                    fst, cls_typevars, cls_type_and_name
+                )
             raise TypeError("Union types are only supported for type promotion")
 
         # If this is the type for the class, use the class name
