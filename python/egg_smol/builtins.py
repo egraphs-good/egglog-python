@@ -47,6 +47,10 @@ class Unit(BaseExpr):
         ...
 
 
+# The types which can be converted into an i64
+i64Like = Union[int, "i64"]
+
+
 @BUILTINS.class_(egg_sort="i64")
 class i64(BaseExpr):
     def __init__(self, value: int):
@@ -111,10 +115,6 @@ class i64(BaseExpr):
     @BUILTINS.method(egg_fn="max")
     def max(self, other: i64Like) -> i64:  # type: ignore[empty-body]
         ...
-
-
-# The types which can be converted into an i64
-i64Like = Union[int, i64]
 
 
 @BUILTINS.class_
