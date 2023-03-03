@@ -4,6 +4,7 @@ mod utils;
 
 use conversions::*;
 use error::*;
+use log::info;
 use pyo3::prelude::*;
 
 /// EGraph()
@@ -27,12 +28,14 @@ impl EGraph {
     /// Push a level onto the EGraph's stack.
     #[pyo3(text_signature = "($self)")]
     fn push(&mut self) {
+        info!("Pushing egraph");
         self.egraph.push();
     }
 
     /// pop a level off the EGraph's stack.
     #[pyo3(text_signature = "($self)")]
     fn pop(&mut self) -> EggResult<()> {
+        info!("Popping egraph");
         self.egraph.pop()?;
         Ok({})
     }
@@ -40,24 +43,28 @@ impl EGraph {
     /// Return a string representation of a function, up to n size
     #[pyo3(text_signature = "($self, name, n)")]
     fn print_function(&mut self, name: &str, n: usize) -> EggResult<String> {
+        info!("Printing function {} up to size {}", name, n);
         Ok(self.egraph.print_function(name.into(), n)?)
     }
 
     /// Return a string representation of a function's size
     #[pyo3(text_signature = "($self, name)")]
     fn print_size(&self, name: &str) -> EggResult<String> {
+        info!("Printing size of {}", name);
         Ok(self.egraph.print_size(name.into())?)
     }
 
     /// Clear all the nodes
     #[pyo3(text_signature = "($self)")]
     fn clear(&mut self) {
+        info!("Clearing egraph");
         self.egraph.clear();
     }
 
     /// Clear all the rules
     #[pyo3(text_signature = "($self)")]
     fn clear_rules(&mut self) {
+        info!("Clearing rules");
         self.egraph.clear_rules();
     }
 
@@ -65,7 +72,9 @@ impl EGraph {
     /// variants number of additional options.
     #[pyo3(signature = (expr, variants=0), text_signature = "($self, expr, variants=0)")]
     fn extract_expr(&mut self, expr: Expr, variants: usize) -> EggResult<(usize, Expr, Vec<Expr>)> {
-        let (cost, expr, exprs) = self.egraph.extract_expr(expr.into(), variants)?;
+        let expr_ast: egg_smol::ast::Expr = expr.into();
+        info!("Extracting {:?}", expr_ast);
+        let (cost, expr, exprs) = self.egraph.extract_expr(expr_ast, variants)?;
         Ok((
             cost,
             expr.into(),
@@ -76,6 +85,8 @@ impl EGraph {
     /// Check that a fact is true in the egraph.
     #[pyo3(text_signature = "($self, fact)")]
     fn check_fact(&mut self, fact: Fact_) -> EggResult<()> {
+        let fact: egg_smol::ast::Fact = fact.into();
+        info!("Checking {:?}", fact);
         self.egraph.check_fact(&fact.into())?;
         Ok({})
     }
@@ -87,6 +98,7 @@ impl EGraph {
         &mut self,
         limit: usize,
     ) -> EggResult<(WrappedDuration, WrappedDuration, WrappedDuration)> {
+        info!("Running rules with limit {}", limit);
         let [search, apply, rebuild] = self.egraph.run_rules(limit);
         Ok((search.into(), apply.into(), rebuild.into()))
     }
@@ -95,7 +107,9 @@ impl EGraph {
     #[pyo3(text_signature = "($self, rewrite)")]
     // Can be replaced with add_rule
     fn add_rewrite(&mut self, rewrite: Rewrite) -> EggResult<String> {
-        let res = self.egraph.add_rewrite(rewrite.into())?;
+        let ast_rewrite: egg_smol::ast::Rewrite = rewrite.into();
+        info!("Adding {:?}", ast_rewrite);
+        let res = self.egraph.add_rewrite(ast_rewrite)?;
         Ok(res.to_string())
     }
 
@@ -103,6 +117,7 @@ impl EGraph {
     #[pyo3(signature=(*actions), text_signature = "($self, *actions)")]
     fn eval_actions(&mut self, actions: Vec<Action>) -> EggResult<()> {
         let converted: Vec<egg_smol::ast::Action> = actions.into_iter().map(|x| x.into()).collect();
+        info!("Evaling {:?}", converted);
         self.egraph.eval_actions(&converted)?;
         Ok({})
     }
@@ -110,7 +125,9 @@ impl EGraph {
     /// Define a rule, returning the name of it.
     #[pyo3(text_signature = "($self, rule)")]
     fn add_rule(&mut self, rule: Rule) -> EggResult<String> {
-        let res = self.egraph.add_rule(rule.into())?;
+        let rule_ast: egg_smol::ast::Rule = rule.into();
+        info!("Adding {:?}", rule_ast);
+        let res = self.egraph.add_rule(rule_ast)?;
         Ok(res.to_string())
     }
 
@@ -120,14 +137,18 @@ impl EGraph {
         signature = (name, expr, cost=None)
     )]
     fn define(&mut self, name: String, expr: Expr, cost: Option<usize>) -> EggResult<()> {
-        self.egraph.define(name.into(), expr.into(), cost)?;
+        let expr_ast: egg_smol::ast::Expr = expr.into();
+        info!("Defining {} as {:?}", name, expr_ast);
+        self.egraph.define(name.into(), expr_ast, cost)?;
         Ok(())
     }
 
     /// Declare a new function definition.
     #[pyo3(text_signature = "($self, decl)")]
     fn declare_function(&mut self, decl: FunctionDecl) -> EggResult<()> {
-        self.egraph.declare_function(&decl.into())?;
+        let decl: egg_smol::ast::FunctionDecl = decl.into();
+        info!("Declaring {:?}", decl);
+        self.egraph.declare_function(&decl)?;
         Ok(())
     }
 
@@ -141,6 +162,7 @@ impl EGraph {
         name: &str,
         presort_and_args: Option<(String, Vec<Expr>)>,
     ) -> EggResult<()> {
+        info!("Declaring sort {}", name);
         // TODO: It would be cleaner to do this with a map function and call declare_sort
         // only once.
         // I had to move the function call inside the match, so that the lifetime
@@ -161,7 +183,8 @@ impl EGraph {
     /// Can be replaced with declare_function
     #[pyo3(text_signature = "($self, variant, sort)")]
     fn declare_constructor(&mut self, variant: Variant, sort: &str) -> EggResult<()> {
-        self.egraph.declare_constructor(variant.into(), sort)?;
+        let variant_ast: egg_smol::ast::Variant = variant.into();
+        self.egraph.declare_constructor(variant_ast, sort)?;
         Ok({})
     }
 
@@ -170,6 +193,7 @@ impl EGraph {
     /// An EggSmolError is raised if there is problem parsing or executing.
     #[pyo3(text_signature = "($self, input)")]
     fn parse_and_run_program(&mut self, input: &str) -> EggResult<Vec<String>> {
+        info!("Running {}", input);
         let res = self.egraph.parse_and_run_program(input)?;
         Ok(res)
     }
@@ -178,6 +202,8 @@ impl EGraph {
 /// Bindings for egg-smol rust library
 #[pymodule]
 fn bindings(_py: Python, m: &PyModule) -> PyResult<()> {
+    pyo3_log::init();
+
     m.add_class::<EGraph>()?;
     m.add_class::<EggSmolError>()?;
 

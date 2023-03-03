@@ -10,10 +10,10 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Use unreleased version to depend on signature improvements https://github.com/PyO3/pyo3/pull/2702
-pyo3 = { git = "https://github.com/PyO3/pyo3/", rev = "249c0209fd41336b9e68bae14290e598fcad34ea", features = [
-    "extension-module",
-] }
-egg-smol = { git = "https://github.com/mwillsey/egg-smol", branch = "main" }
+pyo3 = { version = "0.18.1", features = ["extension-module"] }
+egg-smol = { git = "https://github.com/mwillsey/egg-smol", rev = "08a6e8fecdb77e6ba72a1b1d9ff4aff33229912c" }
+pyo3-log = "0.8.1"
+log = "0.4.17"
 
 [package.metadata.maturin]
 name = "egg_smol.bindings"
