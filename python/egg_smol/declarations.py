@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Optional, Union, cast
 
+from typing_extensions import assert_never
+
 from . import bindings
 
 __all__ = [
@@ -42,6 +44,37 @@ __all__ = [
     "ActionDecl",
     "action_decl_to_egg",
 ]
+# Special methods which we might want to use as functions
+# Mapping to the operator they represent for pretty printing them
+# https://docs.python.org/3/reference/datamodel.html
+BINARY_METHODS = {
+    "__lt__": "<",
+    "__le__": "<=",
+    "__eq__": "==",
+    "__ne__": "!=",
+    "__gt__": ">",
+    "__ge__": ">=",
+    # Numeric
+    "__add__": "+",
+    "__sub__": "-",
+    "__mul__": "*",
+    "__matmul__": "@",
+    "__truediv__": "/",
+    "__floordiv__": "//",
+    "__mod__": "%",
+    "__divmod__": "divmod",
+    "__pow__": "**",
+    "__lshift__": "<<",
+    "__rshift__": ">>",
+    "__and__": "&",
+    "__xor__": "^",
+    "__or__": "|",
+}
+UNARY_METHODS = {
+    "__pos__": "+",
+    "__neg__": "-",
+    "__invert__": "~",
+}
 
 
 @dataclass
@@ -108,6 +141,13 @@ class JustTypeRef:
 
     def to_var(self) -> TypeRefWithVars:
         return TypeRefWithVars(self.name, tuple(a.to_var() for a in self.args))
+
+    def pretty(self) -> str:
+        if not self.args:
+            return self.name
+        args = ", ".join(a.pretty() for a in self.args)
+        return f"{self.name}[{args}]"
+
 
 @dataclass(frozen=True)
 class ClassTypeVarRef:
@@ -209,6 +249,9 @@ class VarDecl:
     def to_egg(self, _decls: Declarations) -> bindings.Var:
         return bindings.Var(self.name)
 
+    def pretty(self) -> str:
+        return self.name
+
 
 LitType = Union[int, str, None]
 
@@ -223,7 +266,7 @@ class LitDecl:
             return cls(lit.value.value)
         elif isinstance(lit.value, bindings.Unit):
             return cls(None)
-        raise NotImplementedError(f"Unsupported literal type: {type(lit.value)}")
+        assert_never(lit.value)
 
     def to_egg(self, _decls: Declarations) -> bindings.Lit:
         if self.value is None:
@@ -232,22 +275,113 @@ class LitDecl:
             return bindings.Lit(bindings.Int(self.value))
         if isinstance(self.value, str):
             return bindings.Lit(bindings.String(self.value))
-        raise NotImplementedError(f"Unsupported literal type: {type(self.value)}")
+        assert_never(self.value)
+
+    def pretty(self) -> str:
+        if self.value is None:
+            return "unit()"
+        if isinstance(self.value, int):
+            return f"i64({self.value})"
+        if isinstance(self.value, str):
+            return f"string({self.value})"
+        assert_never(self.value)
 
 
 @dataclass(frozen=True)
 class CallDecl:
     callable: CallableRef
-    args: tuple[ExprDecl, ...]
+    args: tuple[ExprDecl, ...] = ()
+    # type parameters that were bound to the callable, if it is a classmethod
+    bound_tp_params: Optional[tuple[JustTypeRef, ...]] = None
+
+    def __post_init__(self):
+        if self.bound_tp_params and not isinstance(self.callable, ClassMethodRef):
+            raise ValueError(
+                "Cannot bind type parameters to a non-class method callable."
+            )
 
     @classmethod
     def from_egg(cls, decls: Declarations, call: bindings.Call) -> CallDecl:
         callable_ref = decls.egg_fn_to_callable_ref[call.name]
-        return cls(callable_ref, tuple(expr_decl_from_egg(decls, a) for a in call.args))
+        return cls(
+            callable_ref, tuple(expr_decl_from_egg(decls, a) for a in call.args), None
+        )
 
     def to_egg(self, decls: Declarations) -> bindings.Call:
         egg_fn = decls.callable_ref_to_egg_fn[self.callable]
         return bindings.Call(egg_fn, tuple(a.to_egg(decls) for a in self.args))
+
+    def pretty(self):
+        ref, args = self.callable, self.args
+        if isinstance(ref, FunctionRef):
+            fn_str = ref.name
+        elif isinstance(ref, ClassMethodRef):
+            tp_ref = JustTypeRef(ref.class_name, self.bound_tp_params or ())
+            if ref.method_name == "__init__":
+                fn_str = tp_ref.pretty()
+            else:
+                fn_str = f"{tp_ref.pretty()}.{ref.method_name}"
+        elif isinstance(ref, MethodRef):
+            name = ref.method_name
+            slf, *args = args
+            if name in UNARY_METHODS:
+                return f"{UNARY_METHODS[name]}{slf.pretty()}"
+            elif name in BINARY_METHODS:
+                assert len(args) == 1
+                return f"({slf.pretty()} {BINARY_METHODS[name]} {args[0].pretty()})"
+            elif name == "__getitem__":
+                assert len(args) == 1
+                return f"{slf.pretty()}[{args[0].pretty()}]"
+            elif name == "__call__":
+                return f"{slf.pretty()}({', '.join(a.pretty() for a in args)})"
+            fn_str = f"{slf.pretty()}.{name}"
+        else:
+            assert_never(ref)
+        return f"{fn_str}({', '.join(a.pretty() for a in args)})"
+
+
+def test_expr_pretty():
+    assert VarDecl("x").pretty() == "x"
+    assert LitDecl(42).pretty() == "i64(42)"
+    assert LitDecl("foo").pretty() == 'string("foo")'
+    assert LitDecl(None).pretty() == "unit()"
+    assert CallDecl(FunctionRef("foo"), (VarDecl("x"),)).pretty() == "foo(x)"
+    assert (
+        CallDecl(
+            FunctionRef("foo"), (VarDecl("x"), VarDecl("y"), VarDecl("z"))
+        ).pretty()
+        == "foo(x, y, z)"
+    )
+    assert (
+        CallDecl(MethodRef("foo", "__add__"), (VarDecl("x"), VarDecl("y"))).pretty()
+        == "x + y"
+    )
+    assert (
+        CallDecl(MethodRef("foo", "__getitem__"), (VarDecl("x"), VarDecl("y"))).pretty()
+        == "x[y]"
+    )
+    assert (
+        CallDecl(
+            ClassMethodRef("foo", "__init__"), (VarDecl("x"), VarDecl("y"))
+        ).pretty()
+        == "foo(x, y)"
+    )
+    assert (
+        CallDecl(ClassMethodRef("foo", "bar"), (VarDecl("x"), VarDecl("y"))).pretty()
+        == "foo.bar(x, y)"
+    )
+    assert (
+        CallDecl(MethodRef("foo", "__call__"), (VarDecl("x"), VarDecl("y"))).pretty()
+        == "x(y)"
+    )
+    assert (
+        CallDecl(
+            ClassMethodRef("Map", "__init__"),
+            (),
+            (JustTypeRef("i64"), JustTypeRef("unit")),
+        ).pretty()
+        == "Map[i64, unit]()"
+    )
 
 
 ExprDecl = Union[VarDecl, LitDecl, CallDecl]
@@ -260,7 +394,7 @@ def expr_decl_from_egg(decls: Declarations, expr: bindings._Expr) -> ExprDecl:
         return LitDecl.from_egg(expr)
     if isinstance(expr, bindings.Call):
         return CallDecl.from_egg(decls, expr)
-    raise NotImplementedError(f"Unsupported expression type: {type(expr)}")
+    assert_never(expr)
 
 
 @dataclass
@@ -306,7 +440,7 @@ def fact_decl_to_egg(decls: Declarations, fact: FactDecl) -> bindings._Fact:
         return bindings.Fact(fact.to_egg(decls))
     if isinstance(fact, EqDecl):
         return fact.to_egg(decls)
-    raise NotImplementedError(f"Unsupported fact type: {type(fact)}")
+    assert_never(fact)
 
 
 @dataclass(frozen=True)

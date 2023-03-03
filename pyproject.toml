@@ -26,6 +26,7 @@ classifiers = [
     "Topic :: Software Development :: Interpreters",
     "Typing :: Typed",
 ]
+dependencies = ["typing-extensions", "black"]
 
 [project.optional-dependencies]
 dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
