@@ -8,7 +8,7 @@ from . import bindings
 from .builtins import BUILTINS, BaseExpr
 from .declarations import *
 from .registry import *
-from .registry import _expr_to_decl, _expr_to_type, _fact_to_decl, decl_to_expr
+from .registry import _fact_to_decl
 from .runtime import *
 
 __all__ = ["EGraph"]
@@ -42,21 +42,21 @@ class EGraph(Registry):
         """
         Extract the lowest cost expression from the egraph.
         """
-        egg_expr = _expr_to_decl(expr).to_egg(self._decls)
+        tp, decl = expr_parts(expr)
+        egg_expr = decl.to_egg(self._decls)
         _cost, new_egg_expr, _variants = self._egraph.extract_expr(egg_expr)
-        tp, new_expr_decl = tp_and_expr_decl_from_egg(self._decls, new_egg_expr)
-        if tp != _expr_to_type(expr):
-            raise RuntimeError(f"Type mismatch: {tp} != {_expr_to_type(expr)}")
-        return decl_to_expr(new_expr_decl, expr)
+        new_tp, new_decl = tp_and_expr_decl_from_egg(self._decls, new_egg_expr)
+        if new_tp != tp:
+            raise RuntimeError(f"Type mismatch: {tp} != {new_tp}")
+        return cast(EXPR, RuntimeExpr(self._decls, tp, new_decl))
 
     def define(self, name: str, expr: EXPR, cost: Optional[int] = None) -> EXPR:
         """
         Define a new expression in the egraph and return a reference to it.
         """
-        expr_decl = _expr_to_decl(expr)
-        tp = _expr_to_type(expr)
-        self._egraph.define(name, expr_decl.to_egg(self._decls), cost)
-        self._decls.constants[name] = ConstantDecl(tp, expr_decl, cost)
+        tp, decl = expr_parts(expr)
+        self._egraph.define(name, decl.to_egg(self._decls), cost)
+        self._decls.constants[name] = ConstantDecl(tp, decl, cost)
         ref = ConstantRef(name)
         self._register_callable_ref(name, ref)
         return cast(EXPR, RuntimeExpr(self._decls, tp, CallDecl(ref)))

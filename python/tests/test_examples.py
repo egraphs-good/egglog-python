@@ -92,5 +92,5 @@ def test_fib_demand():
     f7 = egraph.define("f7", fib(7))
     egraph.run(14)
     res = egraph.extract(f7)
-    assert_expr_eq(res, Num(13))
     egraph.check(eq(f7).to(Num(13)))
+    assert expr_parts(res) == expr_parts(Num(13))

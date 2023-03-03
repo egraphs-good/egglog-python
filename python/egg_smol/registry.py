@@ -42,6 +42,7 @@ __all__ = [
     "var",
     "vars",
     "Fact",
+    "expr_parts",
 ]
 
 T = TypeVar("T")
@@ -561,19 +562,12 @@ class _RuleBuilder:
         return Rule(actions, self.facts)
 
 
-def _expr_to_decl(expr: BaseExpr) -> ExprDecl:
+def expr_parts(expr: BaseExpr) -> tuple[JustTypeRef, ExprDecl]:
+    """
+    Returns the underlying type and decleration of the expression. Useful for testing structural equality or debuggin.
+    """
     assert isinstance(expr, RuntimeExpr)
-    return expr.__egg_expr__
-
-
-def _expr_to_type(expr: BaseExpr) -> JustTypeRef:
-    assert isinstance(expr, RuntimeExpr)
-    return expr.__egg_tp__
-
-
-def decl_to_expr(expr: ExprDecl, source_expr: EXPR) -> EXPR:
-    assert isinstance(source_expr, RuntimeExpr)
-    return RuntimeExpr(source_expr.__egg_decls__, source_expr.__egg_tp__, expr)
+    return expr.__egg_parts__
 
 
 @dataclass
@@ -588,8 +582,8 @@ class Rewrite:
 
     def _to_decl(self) -> RewriteDecl:
         return RewriteDecl(
-            _expr_to_decl(self.lhs),
-            _expr_to_decl(self.rhs),
+            expr_parts(self.lhs)[1],
+            expr_parts(self.rhs)[1],
             tuple(_fact_to_decl(fact) for fact in self.conditions),
         )
 
@@ -604,7 +598,7 @@ class Eq:
         return f"eq({first}).to({args_str})"
 
     def _to_decl(self) -> EqDecl:
-        return EqDecl(tuple(_expr_to_decl(expr) for expr in self.exprs))
+        return EqDecl(tuple(expr_parts(expr)[1] for expr in self.exprs))
 
 
 Fact = Union["Unit", Eq]
@@ -613,7 +607,7 @@ Fact = Union["Unit", Eq]
 def _fact_to_decl(fact: Fact) -> FactDecl:
     if isinstance(fact, Eq):
         return fact._to_decl()
-    return _expr_to_decl(fact)
+    return expr_parts(fact)[1]
 
 
 @dataclass
@@ -624,7 +618,7 @@ class Delete:
         return f"delete({self.expr})"
 
     def _to_decl(self) -> DeleteDecl:
-        decl = _expr_to_decl(self.expr)
+        decl = expr_parts(self.expr)[1]
         if not isinstance(decl, CallDecl):
             raise ValueError(f"Can only delete calls not {decl}")
         return DeleteDecl(decl)
@@ -650,7 +644,7 @@ class Union_(Generic[EXPR]):
         return f"union({self.lhs}).with_({self.rhs})"
 
     def _to_decl(self) -> UnionDecl:
-        return UnionDecl(_expr_to_decl(self.lhs), _expr_to_decl(self.rhs))
+        return UnionDecl(expr_parts(self.lhs)[1], expr_parts(self.rhs)[1])
 
 
 @dataclass
@@ -662,12 +656,12 @@ class Set:
         return f"set_({self.lhs}).to({self.rhs})"
 
     def _to_decl(self) -> SetDecl:
-        lhs = _expr_to_decl(self.lhs)
+        lhs = expr_parts(self.lhs)[1]
         if not isinstance(lhs, CallDecl):
             raise ValueError(
                 f"Can only create a call with a call for the lhs, got {lhs}"
             )
-        return SetDecl(lhs, _expr_to_decl(self.rhs))
+        return SetDecl(lhs, expr_parts(self.rhs)[1])
 
 
 @dataclass
@@ -679,7 +673,7 @@ class Let:
         return f"let({self.name}, {self.value})"
 
     def _to_decl(self) -> LetDecl:
-        return LetDecl(self.name, _expr_to_decl(self.value))
+        return LetDecl(self.name, expr_parts(self.value)[1])
 
 
 Action = Union[Let, Set, Delete, Union_, Panic, "BaseExpr"]
@@ -689,7 +683,7 @@ def _action_to_decl(action: Action) -> ActionDecl:
     from .builtins import BaseExpr
 
     if isinstance(action, BaseExpr):
-        return _expr_to_decl(action)
+        return expr_parts(action)[1]
     return action._to_decl()
 
 
