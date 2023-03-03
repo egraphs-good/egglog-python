@@ -16,6 +16,7 @@ from typing import (
     TypeVar,
     Union,
     cast,
+    get_type_hints,
     overload,
 )
 
@@ -284,12 +285,11 @@ class Registry:
                 f"Can only generate function decls for functions not {type(fn)}"
             )
 
-        sig_globals = fn.__globals__
+        hints_globals = fn.__globals__
         if cls_type_and_name:
-            sig_globals = sig_globals.copy()
-            sig_globals[cls_type_and_name[1]] = cls_type_and_name[0]
-        sig = signature(fn, eval_str=True, globals=sig_globals)
-
+            hints_globals = hints_globals.copy()
+            hints_globals[cls_type_and_name[1]] = cls_type_and_name[0]
+        hints = get_type_hints(fn, hints_globals)
         # If this is an init fn use the first arg as the return type
         if is_init:
             if not isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)):
@@ -297,27 +297,27 @@ class Registry:
             return_type = first_arg
         else:
             return_type = self._resolve_type_annotation(
-                sig.return_annotation, cls_typevars, cls_type_and_name
+                hints['return'], cls_typevars, cls_type_and_name
             )
 
-        param_types = list(sig.parameters.values())
+        params = list(signature(fn).parameters.values())
         # Remove first arg if this is a classmethod or a method, since it won't have an annotation
         if first_arg is not None:
-            first, *param_types = param_types
+            first, *params = params
             if first.annotation != Parameter.empty:
                 raise ValueError(
                     f"First arg of a method must not have an annotation, not {first.annotation}"
                 )
 
-        for param in param_types:
+        for param in params:
             if param.kind != Parameter.POSITIONAL_OR_KEYWORD:
                 raise ValueError(
                     f"Can only register functions with positional or keyword args, not {param.kind}"
                 )
 
         arg_types = tuple(
-            self._resolve_type_annotation(t.annotation, cls_typevars, cls_type_and_name)
-            for t in param_types
+            self._resolve_type_annotation(hints[t.name], cls_typevars, cls_type_and_name)
+            for t in params
         )
         # If the first arg is a self, and this not an __init__ fn, add this as a typeref
         if isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)) and not is_init:
