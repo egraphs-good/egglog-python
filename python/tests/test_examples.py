@@ -26,10 +26,10 @@ def test_eqsat_basic():
             ...
 
     # expr1 = 2 * (x + 3)
-    expr1 = Math(2) * (Math.var("x") + Math(3))
+    expr1 = egraph.define("expr1", Math(2) * (Math.var("x") + Math(3)))
 
     # expr2 = 6 + 2 * x
-    expr2 = Math(6) + Math(2) * Math.var("x")
+    expr2 = egraph.define("expr2", Math(6) + Math(2) * Math.var("x"))
 
     a, b, c = vars("a b c", Math)
     x, y = vars("x y", i64)
