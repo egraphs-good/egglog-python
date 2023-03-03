@@ -52,7 +52,7 @@ class EGraph(Registry):
 
         # Return a var that points to the new expression
         assert isinstance(expr, RuntimeExpr)
-        return cast(EXPR, self._create_var(expr.tp, name))
+        return cast(EXPR, self._create_var(expr.__egg_tp__, name))
 
     def _on_register_function(self, ref: CallableRef, decl: FunctionDecl) -> None:
         self._egraph.declare_function(decl.to_egg(self._decls, self._egraph, ref))

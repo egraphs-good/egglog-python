@@ -56,7 +56,7 @@ class TypeConstraintSolver:
             if fn_arg.name != arg.name:
                 raise TypeConstraintError(f"Expected {fn_arg.name}, got {arg.name}")
             self._infer_typevars_zip(fn_arg.args, arg.args)
-        elif fn_arg not in self._cls_typevar_index_to_type:
+        elif fn_arg.index not in self._cls_typevar_index_to_type:
             self._cls_typevar_index_to_type[fn_arg.index] = arg
         elif self._cls_typevar_index_to_type[fn_arg.index] != arg:
             raise TypeConstraintError(f"Expected {fn_arg}, got {arg}")

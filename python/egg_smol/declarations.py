@@ -309,10 +309,10 @@ class CallDecl:
 
     def to_egg(self, decls: Declarations) -> bindings.Call:
         egg_fn = decls.callable_ref_to_egg_fn[self.callable]
-        return bindings.Call(egg_fn, tuple(a.to_egg(decls) for a in self.args))
+        return bindings.Call(egg_fn, [a.to_egg(decls) for a in self.args])
 
     def pretty(self):
-        ref, args = self.callable, self.args
+        ref, args = self.callable, list(self.args)
         if isinstance(ref, FunctionRef):
             fn_str = ref.name
         elif isinstance(ref, ClassMethodRef):
@@ -436,11 +436,9 @@ FactDecl = Union[ExprDecl, EqDecl]
 
 
 def fact_decl_to_egg(decls: Declarations, fact: FactDecl) -> bindings._Fact:
-    if isinstance(fact, ExprDecl):
-        return bindings.Fact(fact.to_egg(decls))
     if isinstance(fact, EqDecl):
         return fact.to_egg(decls)
-    assert_never(fact)
+    return bindings.Fact(fact.to_egg(decls))
 
 
 @dataclass(frozen=True)
@@ -508,6 +506,6 @@ ActionDecl = Union[LetDecl, SetDecl, DeleteDecl, UnionDecl, PanicDecl, ExprDecl]
 
 
 def action_decl_to_egg(decls: Declarations, action: ActionDecl) -> bindings._Action:
-    if isinstance(action, ExprDecl):
+    if isinstance(action, (CallDecl, LitDecl, VarDecl)):
         return bindings.Expr_(action.to_egg(decls))
     return action.to_egg(decls)

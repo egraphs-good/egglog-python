@@ -156,18 +156,17 @@ class Registry:
             else:
                 is_classmethod = False
 
-            first_arg = "cls" if is_classmethod else slf_type_ref
             fn_decl = self._generate_function_decl(
                 fn,
                 default,
                 cost,
                 merge,
-                first_arg,
+                "cls" if is_classmethod else slf_type_ref,
                 parameters,
                 is_init,
                 (cls, cls_name),
             )
-
+            ref: MethodRef | ClassMethodRef
             if is_classmethod:
                 cls_decl.class_methods[method_name] = fn_decl
                 ref = ClassMethodRef(cls_name, method_name)
@@ -216,7 +215,7 @@ class Registry:
         ...
 
     @overload
-    def function(
+    def function(  # type: ignore
         self, *, egg_fn: Optional[str] = None, cost: Optional[int] = None
     ) -> Callable[[CALLABLE], CALLABLE]:
         ...
@@ -292,7 +291,7 @@ class Registry:
 
         # If this is an init fn use the first arg as the return type
         if is_init:
-            if not isinstance(first_arg, TypeOrVarRef):
+            if not isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)):
                 raise ValueError("Init function must have a self type")
             return_type = first_arg
         else:
@@ -320,17 +319,17 @@ class Registry:
             for t in param_types
         )
         # If the first arg is a self, and this not an __init__ fn, add this as a typeref
-        if isinstance(first_arg, TypeOrVarRef) and not is_init:
+        if isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)) and not is_init:
             arg_types = (first_arg,) + arg_types
 
-        default_decl = None if default is None else default.expr
+        default_decl = None if default is None else default.__egg_expr__
         merge_decl = (
             None
             if merge is None
             else merge(
                 self._create_var(return_type, "old"),
                 self._create_var(return_type, "new"),
-            ).expr
+            ).__egg_expr__
         )
         decl = FunctionDecl(
             return_type=return_type,
@@ -399,19 +398,17 @@ class Registry:
 
     def _register_single(self, value: Rewrite | Rule | Action) -> None:
         if isinstance(value, Rewrite):
-            decl = value._to_decl()
-            self._decls.rewrites.append(decl)
-            self._on_register_rewrite(decl)
+            rewrite_decl = value._to_decl()
+            self._decls.rewrites.append(rewrite_decl)
+            self._on_register_rewrite(rewrite_decl)
         elif isinstance(value, Rule):
-            decl = value._to_decl()
-            self._decls.rules.append(decl)
-            self._on_register_rule(decl)
-        elif isinstance(value, Action):
-            decl = _action_to_decl(value)
-            self._decls.actions.append(decl)
-            self._on_register_action(decl)
+            rule_decl = value._to_decl()
+            self._decls.rules.append(rule_decl)
+            self._on_register_rule(rule_decl)
         else:
-            raise TypeError(f"Unexpected type {type(value)}")
+            action_decl = _action_to_decl(value)
+            self._decls.actions.append(action_decl)
+            self._on_register_action(action_decl)
 
     def _create_var(self, tp: TypeOrVarRef, name: str) -> RuntimeExpr:
         return RuntimeExpr(self._decls, tp.to_just(), VarDecl(name))
@@ -478,7 +475,7 @@ def var(name: str, bound: type[EXPR]) -> EXPR:
 def _var(name, bound: Any) -> RuntimeExpr:
     if not isinstance(bound, (RuntimeClass, RuntimeParamaterizedClass)):
         raise TypeError(f"Unexpected type {type(bound)}")
-    return RuntimeExpr(bound.decls, class_to_ref(bound), VarDecl(name))
+    return RuntimeExpr(bound.__egg_decls__, class_to_ref(bound), VarDecl(name))
 
 
 def vars(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
@@ -540,12 +537,12 @@ class _RuleBuilder:
 
 def _expr_to_decl(expr: BaseExpr) -> ExprDecl:
     assert isinstance(expr, RuntimeExpr)
-    return expr.expr
+    return expr.__egg_expr__
 
 
 def decl_to_expr(expr: ExprDecl, source_expr: EXPR) -> EXPR:
     assert isinstance(source_expr, RuntimeExpr)
-    return RuntimeExpr(source_expr.decls, source_expr.tp, expr)
+    return RuntimeExpr(source_expr.__egg_decls__, source_expr.__egg_tp__, expr)
 
 
 @dataclass
