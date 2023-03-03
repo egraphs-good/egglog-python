@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from inspect import Parameter, signature
-from types import FunctionType, UnionType
+from types import FunctionType
 from typing import _GenericAlias  # type: ignore[attr-defined]
 from typing import (
     TYPE_CHECKING,
@@ -16,9 +16,10 @@ from typing import (
     TypeVar,
     Union,
     cast,
-    get_args,
     overload,
 )
+
+from typing_extensions import get_args, get_origin
 
 from .declarations import *
 from .runtime import *
@@ -356,7 +357,7 @@ class Registry:
         if isinstance(tp, TypeVar):
             return ClassTypeVarRef(cls_typevars.index(tp))
         # If there is a union, it should be of a literal and another type to allow type promotion
-        if isinstance(tp, UnionType):
+        if get_origin(tp) == Union:
             args = get_args(tp)
             if len(args) != 2:
                 raise TypeError("Union types are only supported for type promotion")
