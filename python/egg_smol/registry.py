@@ -182,7 +182,7 @@ class Registry:
             else:
                 cls_decl.methods[method_name] = fn_decl
                 ref = MethodRef(cls_name, method_name)
-            self._register_callable_ref(egg_fn, ref)
+            self._register_callable_ref(egg_fn, ref, fn_decl)
 
         return RuntimeClass(self._decls, cls_name)
 
@@ -267,11 +267,12 @@ class Registry:
             raise ValueError(f"Function {name} already registered")
 
         # Save function decleartion
-        self._decls.functions[name] = self._generate_function_decl(
+        fn_decl = self._generate_function_decl(
             fn, default, cost, merge
         )
+        self._decls.functions[name] = fn_decl
         # Register it with the egg name
-        self._register_callable_ref(egg_fn, FunctionRef(name))
+        self._register_callable_ref(egg_fn, FunctionRef(name), fn_decl)
         # Return a runtime function whcich will act like the decleration
         return RuntimeFunction(self._decls, name)
 
@@ -350,12 +351,16 @@ class Registry:
         )
         return decl
 
-    def _register_callable_ref(self, egg_fn: Optional[str], ref: CallableRef) -> None:
+    def _register_callable_ref(
+        self, egg_fn: Optional[str], ref: CallableRef, fn_decl: FunctionDecl
+    ) -> None:
         egg_fn = egg_fn or ref.generate_egg_name()
         if ref in self._decls.callable_ref_to_egg_fn:
             raise ValueError(f"Callable ref {ref} already registered")
         self._decls.callable_ref_to_egg_fn[ref] = egg_fn
         self._decls.egg_fn_to_callable_refs[egg_fn].add(ref)
+
+        self._on_register_function(ref, fn_decl)
 
     def _resolve_type_annotation(
         self,

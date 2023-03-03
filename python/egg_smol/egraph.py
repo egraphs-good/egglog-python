@@ -55,7 +55,8 @@ class EGraph(Registry):
         return cast(EXPR, RuntimeExpr(self._decls, expr.__egg_tp__, VarDecl(name)))
 
     def _on_register_function(self, ref: CallableRef, decl: FunctionDecl) -> None:
-        self._egraph.declare_function(decl.to_egg(self._decls, self._egraph, ref))
+        egg_decl = decl.to_egg(self._decls, self._egraph, ref)
+        self._egraph.declare_function(egg_decl)
 
     def _on_register_sort(self, name: str) -> None:
         self._egraph.declare_sort(name, None)
