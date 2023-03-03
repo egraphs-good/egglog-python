@@ -480,10 +480,10 @@ def if_(*facts: Fact) -> _RuleBuilder:
 
 
 def var(name: str, bound: type[EXPR]) -> EXPR:
-    return cast(EXPR, _var(str, bound))
+    return cast(EXPR, _var(name, bound))
 
 
-def _var(name, bound: Any) -> RuntimeExpr:
+def _var(name: str, bound: Any) -> RuntimeExpr:
     if not isinstance(bound, (RuntimeClass, RuntimeParamaterizedClass)):
         raise TypeError(f"Unexpected type {type(bound)}")
     return RuntimeExpr(bound.__egg_decls__, class_to_ref(bound), VarDecl(name))
