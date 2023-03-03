@@ -118,6 +118,16 @@ class Declarations:
             return self.classes[ref.class_name].class_methods[ref.method_name]
         raise assert_never(ref)
 
+    def register_sort(
+        self, type_ref: JustTypeRef, egg_name: Optional[str] = None
+    ) -> str:
+        egg_name = egg_name or type_ref.generate_egg_name()
+        if egg_name in self.egg_sort_to_type_ref:
+            raise ValueError(f"Sort {egg_name} is already registered.")
+        self.egg_sort_to_type_ref[egg_name] = type_ref
+        self.type_ref_to_egg_sort[type_ref] = egg_name
+        return egg_name
+
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.
 # We only use the one with vars for classmethods and methods, and the other one for egg references as
@@ -141,17 +151,14 @@ class JustTypeRef:
             return decls.type_ref_to_egg_sort[self]
         elif not self.args:
             raise ValueError(f"Type {self.name} is not registered.")
-        # If this is a type with arguments and it is not registered, then we need to register i
-        new_name = self.generate_egg_name()
-        assert new_name not in decls.egg_sort_to_type_ref
-        decls.egg_sort_to_type_ref[new_name] = self
-        decls.type_ref_to_egg_sort[self] = new_name
+        # If this is a type with arguments and it is not registered, then we need to register it
+        egg_name = decls.register_sort(self)
         arg_sorts = [
             cast(bindings._Expr, bindings.Var(a.to_egg(decls, egraph)))
             for a in self.args
         ]
-        egraph.declare_sort(new_name, (self.name, arg_sorts))
-        return new_name
+        egraph.declare_sort(egg_name, (self.name, arg_sorts))
+        return egg_name
 
     def to_var(self) -> TypeRefWithVars:
         return TypeRefWithVars(self.name, tuple(a.to_var() for a in self.args))

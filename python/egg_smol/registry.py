@@ -131,6 +131,8 @@ class Registry:
         n_type_vars = len(parameters)
         cls_decl = ClassDecl(n_type_vars=n_type_vars)
         self._decls.classes[cls_name] = cls_decl
+        self._decls.register_sort(JustTypeRef(cls_name), egg_sort)
+        self._on_register_sort(cls_name)
 
         # The type ref of self is paramterized by the type vars
         slf_type_ref = TypeRefWithVars(

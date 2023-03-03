@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import TypeVar, cast
 
 from . import bindings
-from .builtins import BaseExpr
+from .builtins import BUILTINS, BaseExpr
 from .declarations import *
 from .registry import *
 from .registry import _expr_to_decl, _fact_to_decl, decl_to_expr
@@ -18,6 +19,10 @@ EXPR = TypeVar("EXPR", bound=BaseExpr)
 @dataclass
 class EGraph(Registry):
     _egraph: bindings.EGraph = field(default_factory=bindings.EGraph)
+
+    def __post_init__(self) -> None:
+        # Copy the builtin declarations
+        self._decls = deepcopy(BUILTINS._decls)
 
     def run(self, iterations: int) -> None:
         """
