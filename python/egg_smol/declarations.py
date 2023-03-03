@@ -356,7 +356,7 @@ class CallDecl:
     ) -> tuple[JustTypeRef, CallDecl]:
         from .type_constraint_solver import TypeConstraintSolver
 
-        results = (tp_and_expr_decl_from_egg(decls, a) for a in call.args)
+        results = [tp_and_expr_decl_from_egg(decls, a) for a in call.args]
         arg_types = tuple(r[0] for r in results)
         arg_decls = tuple(r[1] for r in results)
 

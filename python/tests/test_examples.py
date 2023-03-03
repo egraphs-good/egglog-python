@@ -82,11 +82,11 @@ def test_fib_demand():
     egraph.register(
         rewrite(Num(a) + Num(b)).to(Num(a + b)),
         if_(eq(f).to(fib(x)), x > 1).then(set_(fib(x)).to(fib(x - 1) + fib(x - 2))),
-        set_(fib(0)).to(Num(1)),
+        set_(fib(0)).to(Num(0)),
         set_(fib(1)).to(Num(1)),
     )
-    f7 = egraph.define("f7", fib(7))
+    f7 = egraph.define("f7", fib(7), cost=2)
     egraph.run(14)
-    res = egraph.extract(f7)
     egraph.check(eq(f7).to(Num(13)))
+    res = egraph.extract(f7)
     assert expr_parts(res) == expr_parts(Num(13))
