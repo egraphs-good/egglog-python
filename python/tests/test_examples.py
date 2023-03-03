@@ -81,11 +81,7 @@ def test_fib_demand():
     f = var("f", Num)
     egraph.register(
         rewrite(Num(a) + Num(b)).to(Num(a + b)),
-        if_(eq(f).to(fib(x)), x > 1,).then(
-            set_(
-                fib(x),
-            ).to((fib(x - 1) + fib(x - 2)))
-        ),
+        if_(eq(f).to(fib(x)), x > 1).then(set_(fib(x)).to(fib(x - 1) + fib(x - 2))),
         set_(fib(0)).to(Num(1)),
         set_(fib(1)).to(Num(1)),
     )
