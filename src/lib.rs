@@ -184,6 +184,7 @@ impl EGraph {
     #[pyo3(text_signature = "($self, variant, sort)")]
     fn declare_constructor(&mut self, variant: Variant, sort: &str) -> EggResult<()> {
         let variant_ast: egg_smol::ast::Variant = variant.into();
+        info!("Declaring constructor {} {:?}", sort, variant_ast);
         self.egraph.declare_constructor(variant_ast, sort)?;
         Ok({})
     }
