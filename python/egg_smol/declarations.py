@@ -288,7 +288,7 @@ class LitDecl:
         if isinstance(lit.value, bindings.Int):
             return JustTypeRef("i64"), cls(lit.value.value)
         if isinstance(lit.value, bindings.String):
-            return JustTypeRef("string"), cls(lit.value.value)
+            return JustTypeRef("String"), cls(lit.value.value)
         elif isinstance(lit.value, bindings.Unit):
             return JustTypeRef("unit"), cls(None)
         assert_never(lit.value)
@@ -308,7 +308,7 @@ class LitDecl:
         if isinstance(self.value, int):
             return f"i64({self.value})"
         if isinstance(self.value, str):
-            return f"string({self.value})"
+            return f"String({self.value})"
         assert_never(self.value)
 
 
@@ -381,7 +381,7 @@ class CallDecl:
 def test_expr_pretty():
     assert VarDecl("x").pretty() == "x"
     assert LitDecl(42).pretty() == "i64(42)"
-    assert LitDecl("foo").pretty() == 'string("foo")'
+    assert LitDecl("foo").pretty() == 'String("foo")'
     assert LitDecl(None).pretty() == "unit()"
     assert CallDecl(FunctionRef("foo"), (VarDecl("x"),)).pretty() == "foo(x)"
     assert (

@@ -34,7 +34,7 @@ __all__ = [
 BLACK_MODE = black.Mode(line_length=120)  # type: ignore
 
 UNIT_CLASS_NAME = "unit"
-UNARY_LIT_CLASS_NAMES = {"i64", "string"}
+UNARY_LIT_CLASS_NAMES = {"i64", "String"}
 LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
 
 
@@ -300,7 +300,7 @@ ArgType = Union[RuntimeExpr, int, str]
 
 tp_to_lit: dict[type, str] = {
     int: "i64",
-    str: "string",
+    str: "String",
 }
 
 
@@ -308,7 +308,7 @@ def _resolve_literal(decls: Declarations, arg: ArgType) -> RuntimeExpr:
     if isinstance(arg, int):
         return RuntimeExpr(decls, JustTypeRef("i64"), LitDecl(arg))
     elif isinstance(arg, str):
-        return RuntimeExpr(decls, JustTypeRef("string"), LitDecl(arg))
+        return RuntimeExpr(decls, JustTypeRef("String"), LitDecl(arg))
     return arg
 
 

@@ -15,8 +15,8 @@ __all__ = [
     "Unit",
     "i64",
     "i64Like",
-    "string",
-    "stringLike",
+    "String",
+    "StringLike",
     "Map",
     "Rational",
 ]
@@ -118,12 +118,12 @@ class i64(BaseExpr):
 
 
 @BUILTINS.class_
-class string(BaseExpr):
+class String(BaseExpr):
     def __init__(self, value: str):
         ...
 
 
-stringLike = Union[str, string]
+StringLike = Union[str, String]
 
 T = TypeVar("T", bound=BaseExpr)
 V = TypeVar("V", bound=BaseExpr)

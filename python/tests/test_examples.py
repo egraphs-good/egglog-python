@@ -16,7 +16,7 @@ def test_eqsat_basic():
             ...
 
         @classmethod
-        def var(cls, v: stringLike) -> Math:  # type: ignore[empty-body]
+        def var(cls, v: StringLike) -> Math:  # type: ignore[empty-body]
             ...
 
         def __add__(self, other: Math) -> Math:  # type: ignore[empty-body]
