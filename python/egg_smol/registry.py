@@ -12,7 +12,6 @@ from typing import (
     Iterable,
     Literal,
     Optional,
-    ParamSpec,
     TypeVar,
     Union,
     cast,
@@ -20,14 +19,17 @@ from typing import (
     overload,
 )
 
-from typing_extensions import get_args, get_origin
+from typing_extensions import ParamSpec, get_args, get_origin
 
 from .declarations import *
+from .monkeypatch import monkeypatch
 from .runtime import *
 from .runtime import class_to_ref
 
 if TYPE_CHECKING:
     from .builtins import BaseExpr, Unit
+
+monkeypatch()
 
 __all__ = [
     "Registry",
@@ -90,7 +92,6 @@ class Registry:
 
     @overload
     def class_(self, *, egg_sort: str) -> Callable[[TYPE], TYPE]:
-
         ...
 
     @overload
@@ -415,7 +416,7 @@ class Registry:
                 ),
             )
 
-        if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
+        if isinstance(tp, (RuntimeClass, RuntimeParamaterizedClass)):
             return class_to_ref(tp).to_var()
         raise TypeError(f"Unexpected type annotation {tp}")
 
