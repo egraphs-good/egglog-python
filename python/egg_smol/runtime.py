@@ -185,7 +185,7 @@ class RuntimeClassMethod:
             self.__egg_method_name__
             not in self.__egg_decls__.classes[self.class_name].class_methods
         ):
-            raise ValueError(
+            raise AttributeError(
                 f"Class {self.class_name} does not have method {self.__egg_method_name__}"
             )
 
@@ -226,7 +226,7 @@ class RuntimeMethod:
             self.__egg_method_name__
             not in self.__egg_decls__.classes[self.class_name].methods
         ):
-            raise ValueError(
+            raise AttributeError(
                 f"Class {self.class_name} does not have method {self.__egg_method_name__}"
             )
 
