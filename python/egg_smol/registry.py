@@ -40,7 +40,7 @@ __all__ = [
     "delete",
     "union",
     "set_",
-    "if_",
+    "rule",
     "var",
     "vars",
     "Fact",
@@ -494,7 +494,7 @@ def set_(lhs: EXPR) -> _SetBuilder[EXPR]:
     return _SetBuilder(lhs=lhs)
 
 
-def if_(*facts: Fact) -> _RuleBuilder:
+def rule(*facts: Fact) -> _RuleBuilder:
     return _RuleBuilder(facts=facts)
 
 

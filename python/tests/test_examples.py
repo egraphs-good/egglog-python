@@ -54,7 +54,7 @@ def test_fib():
     egraph.register(
         set_(fib(0)).to(i64(1)),
         set_(fib(1)).to(i64(1)),
-        if_(
+        rule(
             eq(f0).to(fib(x)),
             eq(f1).to(fib(x + 1)),
         ).then(set_(fib(x + 2)).to(f0 + f1)),
@@ -82,7 +82,7 @@ def test_fib_demand():
     f = var("f", Num)
     egraph.register(
         rewrite(Num(a) + Num(b)).to(Num(a + b)),
-        if_(eq(f).to(fib(x)), x > 1).then(set_(fib(x)).to(fib(x - 1) + fib(x - 2))),
+        rule(eq(f).to(fib(x)), x > 1).then(set_(fib(x)).to(fib(x - 1) + fib(x - 2))),
         set_(fib(0)).to(Num(0)),
         set_(fib(1)).to(Num(1)),
     )
@@ -122,8 +122,8 @@ def test_resolution():
         set_(~F).to(T),
         set_(~T).to(F),
         # "Solving" negation equations
-        if_(eq(~p).to(T)).then(union(~p).with_(F)),
-        if_(eq(~p).to(F)).then(union(~p).with_(T)),
+        rule(eq(~p).to(T)).then(union(~p).with_(F)),
+        rule(eq(~p).to(F)).then(union(~p).with_(T)),
         # canonicalize associtivity. "append" for clauses terminate with false
         rewrite((a | b) | c).to(a | (b | c)),
         # commutativity
@@ -139,10 +139,10 @@ def test_resolution():
         # unit propagation
         # This is kind of interesting actually.
         # Looks a bit like equation solving
-        if_(eq(T).to(p | F)).then(union(p).with_(T)),
+        rule(eq(T).to(p | F)).then(union(p).with_(T)),
         # resolution
         # This counts on commutativity to bubble everything possible up to the front of the clause.
-        if_(
+        rule(
             eq(T).to(a | as_),
             eq(T).to(~a | bs),
         ).then(
