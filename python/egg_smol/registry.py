@@ -194,6 +194,8 @@ class Registry:
             self._register_callable_ref(egg_fn, ref)
             self._on_register_function(ref, fn_decl)
 
+        # Register != as a method so we can print it as a string
+        self._register_callable_ref("!=", MethodRef(cls_name, "__ne__"))
         return RuntimeClass(self._decls, cls_name)
 
     # We seperate the function and method overloads to make it simpler to know if we are modifying a function or method,

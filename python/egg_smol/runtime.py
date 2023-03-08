@@ -105,7 +105,6 @@ class RuntimeParamaterizedClass:
             )
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
-
         return RuntimeClassMethod(self.__egg_decls__, class_to_ref(self), "__init__")(
             *args
         )
@@ -153,7 +152,8 @@ class RuntimeFunction:
 def _call(
     decls: Declarations,
     callable_ref: CallableRef,
-    fn_decl: FunctionDecl,
+    # Not included if this is the != method
+    fn_decl: Optional[FunctionDecl],
     args: Collection[ArgType],
     bound_params: Optional[tuple[JustTypeRef, ...]] = None,
 ) -> RuntimeExpr:
@@ -166,7 +166,10 @@ def _call(
     else:
         tcs = TypeConstraintSolver()
 
-    return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, arg_types)
+    if fn_decl is not None:
+        return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, arg_types)
+    else:
+        return_tp = JustTypeRef("unit")
 
     arg_decls = tuple(arg.__egg_expr__ for arg in upcasted_args)
     expr_decl = CallDecl(callable_ref, arg_decls, bound_params)
@@ -225,15 +228,19 @@ class RuntimeMethod:
         if (
             self.__egg_method_name__
             not in self.__egg_decls__.classes[self.class_name].methods
+            # Special case for __ne__ which does not have a normal function defintion since
+            # it relies of type parameters
+            and self.__egg_method_name__ != "__ne__"
         ):
             raise AttributeError(
                 f"Class {self.class_name} does not have method {self.__egg_method_name__}"
             )
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
+
         fn_decl = self.__egg_decls__.classes[self.class_name].methods[
             self.__egg_method_name__
-        ]
+        ] if self.__egg_method_name__ != "__ne__" else None
 
         first_arg = RuntimeExpr(
             self.__egg_decls__, JustTypeRef(self.class_name), self.__egg_slf_arg__
