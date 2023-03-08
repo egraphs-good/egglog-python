@@ -93,7 +93,6 @@ def test_fib_demand():
     assert expr_parts(res) == expr_parts(Num(13))
 
 
-@pytest.xfail(reason="Some failure in the != line, need to debug further")
 def test_resolution():
     egraph = EGraph()
 
@@ -163,6 +162,7 @@ def test_resolution():
         set_(~p0 | (~p1 | (p2 | F))).to(T),
     )
     egraph.run(10)
+    pytest.xfail(reason="Some failure in the != line, need to debug further")
     egraph.check(T != F)
     egraph.check(eq(p0).to(F))
     egraph.check(eq(p2).to(F))
