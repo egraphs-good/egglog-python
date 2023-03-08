@@ -167,7 +167,9 @@ def _call(
         tcs = TypeConstraintSolver()
 
     if fn_decl is not None:
-        return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, arg_types)
+        return_tp = tcs.infer_return_type(
+            fn_decl.arg_types, fn_decl.return_type, arg_types
+        )
     else:
         return_tp = JustTypeRef("unit")
 
@@ -238,9 +240,13 @@ class RuntimeMethod:
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
 
-        fn_decl = self.__egg_decls__.classes[self.class_name].methods[
-            self.__egg_method_name__
-        ] if self.__egg_method_name__ != "__ne__" else None
+        fn_decl = (
+            self.__egg_decls__.classes[self.class_name].methods[
+                self.__egg_method_name__
+            ]
+            if self.__egg_method_name__ != "__ne__"
+            else None
+        )
 
         first_arg = RuntimeExpr(
             self.__egg_decls__, JustTypeRef(self.class_name), self.__egg_slf_arg__

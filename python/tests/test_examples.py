@@ -142,10 +142,7 @@ def test_resolution():
         rule(eq(T).to(p | F)).then(union(p).with_(T)),
         # resolution
         # This counts on commutativity to bubble everything possible up to the front of the clause.
-        rule(
-            eq(T).to(a | as_),
-            eq(T).to(~a | bs),
-        ).then(
+        rule(eq(T).to(a | as_), eq(T).to(~a | bs),).then(
             set_(as_ | bs).to(T),
         ),
     )
