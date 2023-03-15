@@ -346,6 +346,11 @@ class TestEGraph:
         assert egraph.extract_expr(Var("x")) == (6, Call("Num", [Lit(Int(1))]), [])
         assert egraph.extract_expr(Var("y")) == (1, Call("y", []), [])
 
+    def test_extract_string(self):
+        egraph = EGraph()
+        egraph.define("x", Lit(String("hello")))
+        assert egraph.extract_expr(Var("x")) == (0, Lit(String("hello")), [])
+
     def test_rule(self):
         # Example from fibonacci
         egraph = EGraph()
@@ -537,3 +542,47 @@ class TestVariant:
         assert Variant("name", []) == Variant("name", [])
         assert Variant("name", []) != Variant("name", ["a"])
         assert Variant("name", []) != 10  # type: ignore
+
+
+class TestParse:
+    # TODO: Test all examples
+    def test_parse_simple(self):
+        res = parse(
+            """(datatype Math
+          (Num i64)
+          (Var String)
+          (Add Math Math)
+          (Mul Math Math))
+
+        ;; expr1 = 2 * (x + 3)
+        (define expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))"""
+        )
+
+        assert res == [
+            Datatype(
+                "Math",
+                [
+                    Variant("Num", ["i64"]),
+                    Variant("Var", ["String"]),
+                    Variant("Add", ["Math", "Math"]),
+                    Variant("Mul", ["Math", "Math"]),
+                ],
+            ),
+            Define(
+                "expr1",
+                Call(
+                    "Mul",
+                    [
+                        Call("Num", [Lit(Int(2))]),
+                        Call(
+                            "Add",
+                            [
+                                Call("Var", [Lit(String('"x"'))]),
+                                Call("Num", [Lit(Int(3))]),
+                            ],
+                        ),
+                    ],
+                ),
+                None,
+            ),
+        ]

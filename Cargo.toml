@@ -14,6 +14,7 @@ pyo3 = { version = "0.18.1", features = ["extension-module"] }
 egg-smol = { git = "https://github.com/mwillsey/egg-smol", rev = "08a6e8fecdb77e6ba72a1b1d9ff4aff33229912c" }
 pyo3-log = "0.8.1"
 log = "0.4.17"
+lalrpop-util = { version = "0.19.8", features = ["lexer"] }
 
 [package.metadata.maturin]
 name = "egg_smol.bindings"

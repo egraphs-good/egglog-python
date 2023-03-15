@@ -16,23 +16,38 @@ impl EggSmolError {
     }
 }
 
+type ParseError<'a> = lalrpop_util::ParseError<usize, lalrpop_util::lexer::Token<'a>, String>;
+
 // Wrap the egg_smol::Error so we can automatically convert from it to the PyErr
 // and so return it from each function automatically
 // https://pyo3.rs/latest/function/error_handling.html#foreign-rust-error-types
 // TODO: Create classes for each of these errors
-pub struct WrappedError(egg_smol::Error);
+pub enum WrappedError {
+    EggSmol(egg_smol::Error),
+    Parse(String),
+}
 
 // Convert from the WrappedError to the PyErr by creating a new Python error
 impl From<WrappedError> for PyErr {
     fn from(error: WrappedError) -> Self {
-        PyErr::new::<EggSmolError, _>(error.0.to_string())
+        match error {
+            WrappedError::EggSmol(e) => PyErr::new::<EggSmolError, _>(e.to_string()),
+            WrappedError::Parse(e) => PyErr::new::<EggSmolError, _>(e),
+        }
     }
 }
 
 // Convert from an egg_smol::Error to a WrappedError
 impl From<egg_smol::Error> for WrappedError {
     fn from(other: egg_smol::Error) -> Self {
-        Self(other)
+        Self::EggSmol(other)
+    }
+}
+
+// Convert from a parse error to a WrappedError
+impl From<ParseError<'_>> for WrappedError {
+    fn from(other: ParseError<'_>) -> Self {
+        Self::Parse(other.to_string())
     }
 }
 
