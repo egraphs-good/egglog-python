@@ -206,7 +206,11 @@ class Registry:
     # It will break the typing.
     @overload
     def method(  # type: ignore
-        self, *, egg_fn: Optional[str] = None, cost: Optional[int] = None
+        self,
+        *,
+        egg_fn: Optional[str] = None,
+        cost: Optional[int] = None,
+        merge: Optional[Callable[[Any, Any], Any]] = None,
     ) -> Callable[[CALLABLE], CALLABLE]:
         ...
 
@@ -237,7 +241,11 @@ class Registry:
 
     @overload
     def function(  # type: ignore
-        self, *, egg_fn: Optional[str] = None, cost: Optional[int] = None
+        self,
+        *,
+        egg_fn: Optional[str] = None,
+        cost: Optional[int] = None,
+        merge: Optional[Callable[[Any, Any], Any]] = None,
     ) -> Callable[[CALLABLE], CALLABLE]:
         ...
 
