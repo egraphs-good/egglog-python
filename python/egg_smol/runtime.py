@@ -239,7 +239,6 @@ class RuntimeMethod:
             )
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
-
         fn_decl = (
             self.__egg_decls__.classes[self.class_name].methods[
                 self.__egg_method_name__
