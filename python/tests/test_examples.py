@@ -168,7 +168,23 @@ def test_resolution():
         set_(~p0 | (~p1 | (p2 | F))).to(T),
     )
     egraph.run(10)
-    # pytest.xfail(reason="Some failure in the != line, need to debug further")
     egraph.check(T != F)
     egraph.check(eq(p0).to(F))
     egraph.check(eq(p2).to(F))
+
+
+def test_push_pop():
+    egraph = EGraph()
+
+    @egraph.function(merge=lambda old, new: old.max(new))
+    def foo() -> i64:  # type: ignore[empty-body]
+        ...
+
+    egraph.register(set_(foo()).to(i64(1)))
+    egraph.check(eq(foo()).to(i64(1)))
+
+    with egraph:
+        egraph.register(set_(foo()).to(i64(2)))
+        egraph.check(eq(foo()).to(i64(2)))
+
+    egraph.check(eq(foo()).to(i64(1)))

@@ -20,8 +20,11 @@ EXPR = TypeVar("EXPR", bound=BaseExpr)
 class EGraph(Registry):
     _egraph: bindings.EGraph = field(default_factory=bindings.EGraph)
 
+    # The current declarations which have been pushed to the stack
+    _decl_stack: list[Declarations] = field(default_factory=list)
+
     def __post_init__(self) -> None:
-        # Copy the builtin declarations
+        # Copy the builtin declarations, so we can add to it
         self._decls = deepcopy(BUILTINS._decls)
 
     def run(self, iterations: int) -> None:
@@ -59,6 +62,30 @@ class EGraph(Registry):
         self._decls.constants[name] = ConstantDecl(tp, decl, cost)
         self._register_callable_ref(name, ConstantRef(name))
         return cast(EXPR, RuntimeExpr(self._decls, tp, VarDecl(name)))
+
+    def push(self) -> None:
+        """
+        Push the current state of the egraph, so that it can be popped later and reverted back.
+        """
+        self._egraph.push()
+        self._decl_stack.append(self._decls)
+        self._decls = deepcopy(self._decls)
+
+    def pop(self) -> None:
+        """
+        Pop the current state of the egraph, reverting back to the previous state.
+        """
+        self._egraph.pop()
+        self._decls = self._decl_stack.pop()
+
+    def __enter__(self):
+        """
+        Copy the egraph state, so that it can be reverted back to the original state at the end.
+        """
+        self.push()
+
+    def __exit__(self, exc_type, exc, exc_tb):
+        self.pop()
 
     def _on_register_function(self, ref: CallableRef, decl: FunctionDecl) -> None:
         # Don't need to registry constants, since they are already registered
