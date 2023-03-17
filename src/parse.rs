@@ -5,7 +5,6 @@ use crate::error::*;
 
 #[pyfunction]
 pub fn parse(input: &str) -> EggResult<Vec<Command>> {
-    log::info!("Parsing {:?}", input);
     let parser = egg_smol::ast::parse::ProgramParser::new();
     let res = parser.parse(input)?;
     log::info!("Parsed {:?}", res);

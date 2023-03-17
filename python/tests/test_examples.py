@@ -98,17 +98,21 @@ def test_resolution():
 
     @egraph.class_
     class Bool(BaseExpr):
+        @egraph.method(egg_fn="True")
         @classmethod
         def true(cls) -> Bool:  # type: ignore[empty-body]
             ...
 
+        @egraph.method(egg_fn="False")
         @classmethod
         def false(cls) -> Bool:  # type: ignore[empty-body]
             ...
 
+        @egraph.method(egg_fn="or")
         def __or__(self, other: Bool) -> Bool:  # type: ignore[empty-body]
             ...
 
+        @egraph.method(egg_fn="neg")
         def __invert__(self) -> Bool:  # type: ignore[empty-body]
             ...
 
@@ -121,8 +125,8 @@ def test_resolution():
         set_(~F).to(T),
         set_(~T).to(F),
         # "Solving" negation equations
-        rule(eq(~p).to(T)).then(union(~p).with_(F)),
-        rule(eq(~p).to(F)).then(union(~p).with_(T)),
+        rule(eq(~p).to(T)).then(union(p).with_(F)),
+        rule(eq(~p).to(F)).then(union(p).with_(T)),
         # canonicalize associtivity. "append" for clauses terminate with false
         rewrite((a | b) | c).to(a | (b | c)),
         # commutativity
@@ -141,7 +145,10 @@ def test_resolution():
         rule(eq(T).to(p | F)).then(union(p).with_(T)),
         # resolution
         # This counts on commutativity to bubble everything possible up to the front of the clause.
-        rule(eq(T).to(a | as_), eq(T).to(~a | bs),).then(
+        rule(
+            eq(T).to(a | as_),
+            eq(T).to(~a | bs),
+        ).then(
             set_(as_ | bs).to(T),
         ),
     )
@@ -162,7 +169,7 @@ def test_resolution():
         set_(~p0 | (~p1 | (p2 | F))).to(T),
     )
     egraph.run(10)
-    pytest.xfail(reason="Some failure in the != line, need to debug further")
+    # pytest.xfail(reason="Some failure in the != line, need to debug further")
     egraph.check(T != F)
     egraph.check(eq(p0).to(F))
     egraph.check(eq(p2).to(F))
