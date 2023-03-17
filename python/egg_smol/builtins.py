@@ -5,7 +5,7 @@ Builtin sorts and function to egg.
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar, Union
+from typing import Generic, NoReturn, TypeVar, Union
 
 from .registry import Registry
 
