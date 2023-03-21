@@ -2,7 +2,15 @@
 # build with: sphinx-build -nW --keep-going -b html . ./_build/html
 
 # load extensions
-extensions = ["myst_nb", "sphinx.ext.autodoc"]
+extensions = ["myst_nb", "sphinx.ext.autodoc", "sphinx_autodoc_typehints"]
+
+##
+# https://github.com/tox-dev/sphinx-autodoc-typehints#options
+##
+always_document_param_types = True
+# typehints_defaults = "braces"
+# typehints_use_signature = True
+# typehints_use_signature_return = True
 
 # specify project details
 master_doc = "index"

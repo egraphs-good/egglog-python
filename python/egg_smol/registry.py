@@ -5,12 +5,12 @@ from inspect import Parameter, currentframe, signature
 from types import FunctionType
 from typing import _GenericAlias  # type: ignore[attr-defined]
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     Generic,
     Iterable,
     Literal,
+    NoReturn,
     Optional,
     TypeVar,
     Union,
@@ -22,17 +22,17 @@ from typing import (
 from typing_extensions import ParamSpec, get_args, get_origin
 
 from .declarations import *
-from .monkeypatch import monkeypatch
+from .monkeypatch import monkeypatch_forward_ref
 from .runtime import *
 from .runtime import class_to_ref
 
-if TYPE_CHECKING:
-    from .builtins import BaseExpr, Unit
-
-monkeypatch()
+monkeypatch_forward_ref()
 
 __all__ = [
     "Registry",
+    "BUILTINS",
+    "BaseExpr",
+    "Unit",
     "rewrite",
     "eq",
     "panic",
@@ -470,6 +470,42 @@ class _WrappedMethod(Generic[P, EXPR]):
         )
 
 
+class BaseExpr:
+    """
+    Expression base class, which adds suport for != to all expression types.
+    """
+
+    def __ne__(self: EXPR, other_expr: EXPR) -> Unit:  # type: ignore[override, empty-body]
+        """
+        Compare whether to expressions are not equal.
+
+        :param self: The expression to compare.
+        :param other_expr: The other expression to compare to, which must be of the same type.
+        :meta public:
+        """
+        ...
+
+    def __eq__(self, other: NoReturn) -> NoReturn:  # type: ignore[override, empty-body]
+        """
+        Equality is currently not supported. We only add this method so that
+        if you try to use it MyPy will warn you.
+        """
+        ...
+
+
+BUILTINS = Registry()
+
+
+@BUILTINS.class_(egg_sort="unit")
+class Unit(BaseExpr):
+    """
+    The unit type. This is also used to reprsent if a value exists, if it is resolved or not.
+    """
+
+    def __init__(self) -> None:
+        ...
+
+
 # We use these builders so that when creating these structures we can type check
 # if the arguments are the same type of expression
 
@@ -575,7 +611,9 @@ class _RuleBuilder:
 
 def expr_parts(expr: BaseExpr) -> tuple[JustTypeRef, ExprDecl]:
     """
-    Returns the underlying type and decleration of the expression. Useful for testing structural equality or debuggin.
+    Returns the underlying type and decleration of the expression. Useful for testing structural equality or debugging.
+
+    :rtype: tuple[object, object]
     """
     assert isinstance(expr, RuntimeExpr)
     return expr.__egg_parts__
@@ -612,7 +650,7 @@ class Eq:
         return EqDecl(tuple(expr_parts(expr)[1] for expr in self.exprs))
 
 
-Fact = Union["Unit", Eq]
+Fact = Union[Unit, Eq]
 
 
 def _fact_to_decl(fact: Fact) -> FactDecl:
@@ -691,8 +729,6 @@ Action = Union[Let, Set, Delete, Union_, Panic, "BaseExpr"]
 
 
 def _action_to_decl(action: Action) -> ActionDecl:
-    from .builtins import BaseExpr
-
     if isinstance(action, BaseExpr):
         return expr_parts(action)[1]
     return action._to_decl()

@@ -33,7 +33,7 @@ dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
 
 test = ["pytest", "mypy"]
 
-docs = ["pydata-sphinx-theme", "myst-nb"]
+docs = ["pydata-sphinx-theme", "myst-nb", "sphinx-autodoc-typehints"]
 
 
 [tool.isort]

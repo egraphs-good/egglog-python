@@ -5,14 +5,12 @@ Builtin sorts and function to egg.
 
 from __future__ import annotations
 
-from typing import Generic, NoReturn, TypeVar, Union
+from typing import Generic, TypeVar, Union
 
-from .registry import Registry
+from .registry import BUILTINS, BaseExpr, Unit
 
 __all__ = [
-    "BaseExpr",
     "BUILTINS",
-    "Unit",
     "i64",
     "i64Like",
     "String",
@@ -20,31 +18,6 @@ __all__ = [
     "Map",
     "Rational",
 ]
-
-
-class BaseExpr:
-    """
-    Expression base class, which adds suport for != to all expression types.
-    """
-
-    def __ne__(self: EXPR, __o: EXPR) -> Unit:  # type: ignore
-        ...
-
-    def __eq__(self, other: NoReturn) -> NoReturn:  # type: ignore
-        """
-        Equality is currently not supported. We only add this method so that
-        if you try to use it MyPy will warn you.
-        """
-        raise NotImplementedError()
-
-
-BUILTINS = Registry()
-
-
-@BUILTINS.class_(egg_sort="unit")
-class Unit(BaseExpr):
-    def __init__(self) -> None:
-        ...
 
 
 # The types which can be converted into an i64

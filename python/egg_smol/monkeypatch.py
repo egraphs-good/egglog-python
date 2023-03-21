@@ -1,8 +1,9 @@
 import sys
 import typing
 
+__all__ = ["monkeypatch_forward_ref"]
 
-def monkeypatch():
+def monkeypatch_forward_ref():
     """
     Monkeypatch to backport https://github.com/python/cpython/pull/21553.
     Removed recursive gaurd for simplicity

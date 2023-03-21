@@ -1,7 +1,5 @@
 """
 Data only descriptions of the components of an egraph and the expressions.
-
-Status: Done
 """
 
 from __future__ import annotations
@@ -119,7 +117,7 @@ class Declarations:
             return self.classes[ref.class_name].class_methods[ref.method_name]
         elif isinstance(ref, ConstantRef):
             return self.constants[ref.name].to_function_decl()
-        raise assert_never(ref)
+        assert_never(ref)
 
     def register_sort(
         self, type_ref: JustTypeRef, egg_name: Optional[str] = None
