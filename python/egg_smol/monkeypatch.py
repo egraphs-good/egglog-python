@@ -3,6 +3,7 @@ import typing
 
 __all__ = ["monkeypatch_forward_ref"]
 
+
 def monkeypatch_forward_ref():
     """
     Monkeypatch to backport https://github.com/python/cpython/pull/21553.
