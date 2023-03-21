@@ -346,6 +346,11 @@ class TestEGraph:
         assert egraph.extract_expr(Var("x")) == (6, Call("Num", [Lit(Int(1))]), [])
         assert egraph.extract_expr(Var("y")) == (1, Call("y", []), [])
 
+    def test_extract_string(self):
+        egraph = EGraph()
+        egraph.define("x", Lit(String("hello")))
+        assert egraph.extract_expr(Var("x")) == (0, Lit(String("hello")), [])
+
     def test_rule(self):
         # Example from fibonacci
         egraph = EGraph()
@@ -465,6 +470,61 @@ class TestEGraph:
         )
 
 
+def test_fib_demand():
+    egraph = EGraph()
+    # (datatype Expr
+    #   (Num i64)
+    #   (Add Expr Expr))
+    egraph.declare_sort("Expr")
+    egraph.declare_constructor(Variant("Num", ["i64"]), "Expr")
+    egraph.declare_constructor(Variant("Add", ["Expr", "Expr"]), "Expr")
+    # (function Fib (i64) Expr)
+    egraph.declare_function(FunctionDecl("Fib", Schema(["i64"], "Expr")))
+    # (rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+    egraph.add_rewrite(
+        Rewrite(
+            Call("Add", [Call("Num", [Var("a")]), Call("Num", [Var("b")])]),
+            Call("Num", [Call("+", [Var("a"), Var("b")])]),
+        )
+    )
+    # (rule ((= f (Fib x))
+    #     (> x 1))
+    #     ((set (Fib x) (Add (Fib (- x 1)) (Fib (- x 2))))))
+    egraph.add_rule(
+        Rule(
+            [
+                Set(
+                    "Fib",
+                    [Var("x")],
+                    Call(
+                        "Add",
+                        [
+                            Call("Fib", [Call("-", [Var("x"), Lit(Int(1))])]),
+                            Call("Fib", [Call("-", [Var("x"), Lit(Int(2))])]),
+                        ],
+                    ),
+                )
+            ],
+            [
+                Eq([Var("f"), Call("Fib", [Var("x")])]),
+                Fact(Call(">", [Var("x"), Lit(Int(1))])),
+            ],
+        )
+    )
+    # (set (Fib 0) (Num 0))
+    egraph.eval_actions(Set("Fib", [Lit(Int(0))], Call("Num", [Lit(Int(0))])))
+    # (set (Fib 1) (Num 1))
+    egraph.eval_actions(Set("Fib", [Lit(Int(1))], Call("Num", [Lit(Int(1))])))
+    # (define f7 (Fib 7))
+    egraph.define("f7", Call("Fib", [Lit(Int(7))]))
+    # (run 14)
+    egraph.run_rules(14)
+    # (extract f7)
+    egraph.extract_expr(Var("f7"))
+    # (check (= f7 (Num 13)))
+    egraph.check_fact(Eq([Var("f7"), Call("Num", [Lit(Int(13))])]))
+
+
 class TestVariant:
     def test_repr(self):
         assert repr(Variant("name", [])) == "Variant('name', [], None)"
@@ -482,3 +542,47 @@ class TestVariant:
         assert Variant("name", []) == Variant("name", [])
         assert Variant("name", []) != Variant("name", ["a"])
         assert Variant("name", []) != 10  # type: ignore
+
+
+class TestParse:
+    # TODO: Test all examples
+    def test_parse_simple(self):
+        res = parse(
+            """(datatype Math
+          (Num i64)
+          (Var String)
+          (Add Math Math)
+          (Mul Math Math))
+
+        ;; expr1 = 2 * (x + 3)
+        (define expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))"""
+        )
+
+        assert res == [
+            Datatype(
+                "Math",
+                [
+                    Variant("Num", ["i64"]),
+                    Variant("Var", ["String"]),
+                    Variant("Add", ["Math", "Math"]),
+                    Variant("Mul", ["Math", "Math"]),
+                ],
+            ),
+            Define(
+                "expr1",
+                Call(
+                    "Mul",
+                    [
+                        Call("Num", [Lit(Int(2))]),
+                        Call(
+                            "Add",
+                            [
+                                Call("Var", [Lit(String('"x"'))]),
+                                Call("Num", [Lit(Int(3))]),
+                            ],
+                        ),
+                    ],
+                ),
+                None,
+            ),
+        ]

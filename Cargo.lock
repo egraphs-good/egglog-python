@@ -34,6 +34,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bddcadddf5e9015d310179a59bb28c4d4b9920ad0f11e8e14dbadf654890c9a6"
+
+[[package]]
 name = "ascii-canvas"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -165,7 +171,7 @@ dependencies = [
 [[package]]
 name = "egg-smol"
 version = "0.1.0"
-source = "git+https://github.com/mwillsey/egg-smol?branch=main#08a6e8fecdb77e6ba72a1b1d9ff4aff33229912c"
+source = "git+https://github.com/mwillsey/egg-smol?rev=08a6e8fecdb77e6ba72a1b1d9ff4aff33229912c#08a6e8fecdb77e6ba72a1b1d9ff4aff33229912c"
 dependencies = [
  "clap",
  "env_logger",
@@ -190,7 +196,10 @@ name = "egg-smol-python"
 version = "0.1.1"
 dependencies = [
  "egg-smol",
+ "lalrpop-util",
+ "log",
  "pyo3",
+ "pyo3-log",
 ]
 
 [[package]]
@@ -434,9 +443,9 @@ checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
 name = "memoffset"
-version = "0.6.5"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
+checksum = "d61c719bcfbcf5d62b3a09efa6088de8c54bc0bfcd3ea7ae39fcc186108b8de1"
 dependencies = [
  "autocfg",
 ]
@@ -503,12 +512,37 @@ checksum = "9b7820b9daea5457c9f21c69448905d723fbd21136ccf521748f23fd49e723ee"
 
 [[package]]
 name = "parking_lot"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
+dependencies = [
+ "instant",
+ "lock_api",
+ "parking_lot_core 0.8.6",
+]
+
+[[package]]
+name = "parking_lot"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3742b2c103b9f06bc9fff0a37ff4912935851bee6d36f3c02bcc755bcfec228f"
 dependencies = [
  "lock_api",
- "parking_lot_core",
+ "parking_lot_core 0.9.5",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60a2cfe6f0ad2bfc16aefa463b497d5c7a5ecd44a23efa72aa342d90177356dc"
+dependencies = [
+ "cfg-if",
+ "instant",
+ "libc",
+ "redox_syscall",
+ "smallvec",
+ "winapi",
 ]
 
 [[package]]
@@ -590,14 +624,15 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.17.3"
-source = "git+https://github.com/PyO3/pyo3/?rev=249c0209fd41336b9e68bae14290e598fcad34ea#249c0209fd41336b9e68bae14290e598fcad34ea"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06a3d8e8a46ab2738109347433cb7b96dffda2e4a218b03ef27090238886b147"
 dependencies = [
  "cfg-if",
  "indoc",
  "libc",
  "memoffset",
- "parking_lot",
+ "parking_lot 0.11.2",
  "pyo3-build-config",
  "pyo3-ffi",
  "pyo3-macros",
@@ -606,8 +641,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.17.3"
-source = "git+https://github.com/PyO3/pyo3/?rev=249c0209fd41336b9e68bae14290e598fcad34ea#249c0209fd41336b9e68bae14290e598fcad34ea"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75439f995d07ddfad42b192dfcf3bc66a7ecfd8b4a1f5f6f046aa5c2c5d7677d"
 dependencies = [
  "once_cell",
  "target-lexicon",
@@ -615,17 +651,30 @@ dependencies = [
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.17.3"
-source = "git+https://github.com/PyO3/pyo3/?rev=249c0209fd41336b9e68bae14290e598fcad34ea#249c0209fd41336b9e68bae14290e598fcad34ea"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "839526a5c07a17ff44823679b68add4a58004de00512a95b6c1c98a6dcac0ee5"
 dependencies = [
  "libc",
  "pyo3-build-config",
 ]
 
 [[package]]
+name = "pyo3-log"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9c8b57fe71fb5dcf38970ebedc2b1531cf1c14b1b9b4c560a182a57e115575c"
+dependencies = [
+ "arc-swap",
+ "log",
+ "pyo3",
+]
+
+[[package]]
 name = "pyo3-macros"
-version = "0.17.3"
-source = "git+https://github.com/PyO3/pyo3/?rev=249c0209fd41336b9e68bae14290e598fcad34ea#249c0209fd41336b9e68bae14290e598fcad34ea"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd44cf207476c6a9760c4653559be4f206efafb924d3e4cbf2721475fc0d6cc5"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
@@ -635,8 +684,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.17.3"
-source = "git+https://github.com/PyO3/pyo3/?rev=249c0209fd41336b9e68bae14290e598fcad34ea#249c0209fd41336b9e68bae14290e598fcad34ea"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc1f43d8e30460f36350d18631ccf85ded64c059829208fe680904c65bcd0a4c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -741,7 +791,7 @@ checksum = "213494b7a2b503146286049378ce02b482200519accc31872ee8be91fa820a08"
 dependencies = [
  "new_debug_unreachable",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.1",
  "phf_shared",
  "precomputed-hash",
 ]

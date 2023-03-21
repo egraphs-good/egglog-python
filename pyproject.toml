@@ -15,10 +15,10 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Natural Language :: English",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
@@ -26,13 +26,14 @@ classifiers = [
     "Topic :: Software Development :: Interpreters",
     "Typing :: Typed",
 ]
+dependencies = ["typing-extensions", "black"]
 
 [project.optional-dependencies]
 dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
 
 test = ["pytest", "mypy"]
 
-docs = ["pydata-sphinx-theme", "myst-nb"]
+docs = ["pydata-sphinx-theme", "myst-nb", "sphinx-autodoc-typehints"]
 
 
 [tool.isort]
@@ -46,6 +47,7 @@ warn_redundant_casts = true
 check_untyped_defs = true
 strict_equality = true
 warn_unused_configs = true
+allow_redefinition = true
 
 [tool.maturin]
 python-source = "python"

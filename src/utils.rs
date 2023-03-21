@@ -1,13 +1,5 @@
 use pyo3::prelude::*;
 
-pub fn display<T, V>(t: &T) -> String
-where
-    T: Clone,
-    V: std::fmt::Display + core::convert::From<T>,
-{
-    format!("{:}", V::from(t.clone()))
-}
-
 // Create a dataclass-like repr, of the name of the class of the object
 // called with the repr of the fields
 pub fn data_repr<T: pyo3::PyClass>(
@@ -37,7 +29,7 @@ pub fn data_repr<T: pyo3::PyClass>(
 #[macro_export]
 macro_rules! convert_enums {
     ($(
-        $from_type:ty => $to_type:ident {
+        $from_type:ty: $str:literal => $to_type:ident {
             $(
                 $variant:ident$([name=$py_name:literal])?($($field:ident: $field_type:ty),*)
                 $from_ident:ident -> $from:expr,
@@ -70,7 +62,7 @@ macro_rules! convert_enums {
                 }
 
                 fn __str__(&self) -> String {
-                    display::<_, $from_type>(self)
+                    format!($str, <$from_type>::from(self.clone()))
                 }
                 fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyObject {
                     match op {
@@ -120,7 +112,7 @@ macro_rules! convert_enums {
 
         impl From<$from_type> for $to_type {
             fn from(other: $from_type) -> Self {
-                match other {
+                match &other {
                     $(
                         $to_pat => $to_type::$variant($to),
                     )*
@@ -162,7 +154,7 @@ macro_rules! convert_enums {
 #[macro_export]
 macro_rules! convert_struct {
     ($(
-        $from_type:ty$([$str_fn:ident])? => $to_type:ident($($field:ident: $field_type:ty$( = $default:expr)?),*)
+        $from_type:ty: $str:literal => $to_type:ident($($field:ident: $field_type:ty$( = $default:expr)?),*)
             $from_ident:ident -> $from:expr,
             $to_ident:ident -> $to:expr
     );*) => {
@@ -189,11 +181,9 @@ macro_rules! convert_struct {
                 fn __repr__(slf: PyRef<'_, Self>, py: Python) -> PyResult<String> {
                     data_repr(py, slf, vec![$(stringify!($field)),*])
                 }
-                $(
-                    fn __str__(&self) -> String {
-                        $str_fn::<_, $from_type>(self)
-                    }
-                )?
+                fn __str__(&self) -> String {
+                    format!($str, <$from_type>::from(self.clone()))
+                }
                 fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyObject {
                     match op {
                         pyo3::basic::CompareOp::Eq => (self == other).into_py(py),

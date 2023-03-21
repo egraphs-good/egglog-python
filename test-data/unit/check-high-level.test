@@ -1,0 +1,15 @@
+[case eqNotAllowed]
+from egg_smol import *
+_ = i64(0) == i64(0)  # E: Unsupported operand types for == ("i64" and "i64")
+
+[case notEqAllowed]
+from egg_smol import *
+_ = i64(0) != i64(0)  # type: Unit
+
+[case eqToAllowed]
+from egg_smol import *
+_ = eq(i64(0)).to(i64(0))
+
+[case eqToNotAllowed]
+from egg_smol import *
+_ = eq(i64(0)).to(Unit()) # E: Argument 1 to "to" of "_EqBuilder" has incompatible type "Unit"; expected "i64"

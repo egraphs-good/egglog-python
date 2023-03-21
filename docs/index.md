@@ -10,6 +10,6 @@ pip install egg-smol
 ```{toctree}
 tutorials
 how-to-guides
-reference
 explanation
+reference
 ```

@@ -1,8 +1,23 @@
-# Monkeypatch find_test_files so that we can "remove" any files that don't really exist.
+from __future__ import annotations
+
+import sys
+
+from mypy.test import helpers
+
+# Monkeypatch testfile_pyversion so that we can test against the current python version, instead of the default (3.7)
+
+
+def monkeypatched_testfile_pyversion(path: str) -> tuple[int, int]:
+    return sys.version_info[:2]
+
+
+helpers.testfile_pyversion = monkeypatched_testfile_pyversion
+
 
 # This is required using the `TypeCheckSuite`, because it calls remove on a number of builtin files.
 # we can either make empty versions of them or just monkypatch the function so that it works.
-from mypy.test import helpers
+
+# Monkeypatch find_test_files so that we can "remove" any files that don't really exist.
 
 original_find_test_files = helpers.find_test_files
 

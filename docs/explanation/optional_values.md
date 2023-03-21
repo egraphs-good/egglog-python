@@ -61,3 +61,9 @@ Type mismatch: expr = (+ 2 1), expected = Unit, actual = i64, reason: mismatch
 ```
 
 So there is not Bool type, there is only `Option<Unit>`. 🤷‍♀️
+
+## `!=` operator
+
+What about the `!=` operator defined by the unit type?
+
+It works on any two values which have the same sort, and returns a boolean.

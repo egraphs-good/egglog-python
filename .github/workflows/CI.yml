@@ -9,6 +9,11 @@ on:
       - "*"
   pull_request:
 
+# Allow one concurrent deployment
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: test ${{ matrix.py }}
@@ -21,7 +26,6 @@ jobs:
           - "3.10"
           - "3.9"
           - "3.8"
-          - "3.7"
     steps:
       - name: Setup python ${{ matrix.py }}
         uses: actions/setup-python@v2

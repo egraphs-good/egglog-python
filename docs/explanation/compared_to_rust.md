@@ -309,4 +309,45 @@ So would it be possible to make an API that:
 2. Is concise to write
 3. Feels "pythonic"
 
-TODO: Finish this section
+```{code-cell} python
+from __future__ import annotations
+
+from egg_smol import *
+
+egraph = EGraph()
+
+@egraph.class_
+class Math(BaseExpr):
+    def __init__(self, value: i64Like) -> None:
+        ...
+
+    @classmethod
+    def var(cls, v: StringLike) -> Math:
+        ...
+
+    def __add__(self, other: Math) -> Math:
+        ...
+
+    def __mul__(self, other: Math) -> Math:
+        ...
+
+# expr1 = 2 * (x + 3)
+expr1 = egraph.define("expr1", Math(2) * (Math.var("x") + Math(3)))
+
+# expr2 = 6 + 2 * x
+expr2 = egraph.define("expr2", Math(6) + Math(2) * Math.var("x"))
+
+a, b, c = vars("a b c", Math)
+x, y = vars("x y", i64)
+
+egraph.register(
+    rewrite(a + b).to(b + a),
+    rewrite(a * (b + c)).to((a * b) + (a * c)),
+    rewrite(Math(x) + Math(y)).to(Math(x + y)),
+    rewrite(Math(x) * Math(y)).to(Math(x * y)),
+)
+
+egraph.run(10)
+
+egraph.check(eq(expr1).to(expr2))
+```

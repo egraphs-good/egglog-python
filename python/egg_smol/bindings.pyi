@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from typing_extensions import final
 
+def parse(input: str) -> list[_Command]: ...
 @final
 class EGraph:
     def parse_and_run_program(self, input: str) -> list[str]: ...
@@ -62,6 +63,7 @@ class Call:
     name: str
     args: list[_Expr]
 
+# This must be private becuase it is not actually exposed by the runtime library.
 _Expr = Lit | Var | Call
 
 @final
@@ -159,3 +161,120 @@ class Rewrite:
     def __init__(
         self, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []
     ) -> None: ...
+
+@final
+class Datatype:
+    name: str
+    variants: list[Variant]
+    def __init__(self, name: str, variants: list[Variant]) -> None: ...
+
+@final
+class Sort:
+    name: str
+    presort: str
+    args: list[_Expr]
+    def __init__(self, name: str, presort: str, args: list[_Expr]) -> None: ...
+
+@final
+class Function:
+    decl: FunctionDecl
+    def __init__(self, decl: FunctionDecl) -> None: ...
+
+@final
+class Define:
+    name: str
+    expr: _Expr
+    cost: int | None
+    def __init__(self, name: str, expr: _Expr, cost: int | None = None) -> None: ...
+
+@final
+class RuleCommand:
+    rule: Rule
+    def __init__(self, rule: Rule) -> None: ...
+
+@final
+class RewriteCommand:
+    rewrite: Rewrite
+    def __init__(self, rewrite: Rewrite) -> None: ...
+
+@final
+class ActionCommand:
+    action: _Action
+    def __init__(self, action: _Action) -> None: ...
+
+@final
+class Run:
+    length: int
+    def __init__(self, length: int) -> None: ...
+
+@final
+class Extract:
+    variants: int
+    expr: _Expr
+    def __init__(self, variants: int, expr: _Expr) -> None: ...
+
+@final
+class Check:
+    fact: _Fact
+    def __init__(self, fact: _Fact) -> None: ...
+
+@final
+class ClearRules:
+    def __init__(self) -> None: ...
+
+@final
+class Clear:
+    def __init__(self) -> None: ...
+
+@final
+class Print:
+    name: str
+    length: int
+    def __init__(self, name: str, length: int) -> None: ...
+
+@final
+class PrintSize:
+    name: str
+    def __init__(self, name: str) -> None: ...
+
+@final
+class Input:
+    name: str
+    file: str
+    def __init__(self, name: str, file: str) -> None: ...
+
+@final
+class Query:
+    facts: list[_Fact]
+    def __init__(self, facts: list[_Fact]) -> None: ...
+
+@final
+class Push:
+    length: int
+    def __init__(self, length: int) -> None: ...
+
+@final
+class Pop:
+    length: int
+    def __init__(self, length: int) -> None: ...
+
+_Command = (
+    Datatype
+    | Sort
+    | Function
+    | Define
+    | RuleCommand
+    | RewriteCommand
+    | ActionCommand
+    | Run
+    | Extract
+    | Check
+    | ClearRules
+    | Clear
+    | Print
+    | PrintSize
+    | Input
+    | Query
+    | Push
+    | Pop
+)
