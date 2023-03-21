@@ -53,6 +53,17 @@ TYPE = TypeVar("TYPE", bound=type)
 CALLABLE = TypeVar("CALLABLE", bound=Callable)
 EXPR = TypeVar("EXPR", bound="BaseExpr")
 
+# Attributes which are sometimes added to classes by the interpreter or the dataclass decorator, or by ipython.
+# We ignore these when inspecting the class.
+
+IGNORED_ATTRIBUTES = {
+    "__module__",
+    "__doc__",
+    "__dict__",
+    "__weakref__",
+    "__orig_bases__",
+}
+
 
 @dataclass
 class Registry:
@@ -121,15 +132,10 @@ class Registry:
         """
         cls_name = cls.__name__
         # Get all the methods from the class
-        cls_dict: dict[str, Any] = dict(cls.__dict__)
-        del cls_dict["__module__"]
-        del cls_dict["__doc__"]
-        parameters: list[TypeVar]
-        if "__orig_bases__" in cls_dict:
-            del cls_dict["__orig_bases__"]
-            parameters = cls_dict.pop("__parameters__")
-        else:
-            parameters = []
+        cls_dict: dict[str, Any] = {
+            k: v for k, v in cls.__dict__.items() if k not in IGNORED_ATTRIBUTES
+        }
+        parameters: list[TypeVar] = cls_dict.pop("__parameters__", [])
 
         # Register class first
         if cls_name in self._decls.classes:
@@ -316,7 +322,7 @@ class Registry:
     ) -> FunctionDecl:
         if not isinstance(fn, FunctionType):
             raise NotImplementedError(
-                f"Can only generate function decls for functions not {type(fn)}"
+                f"Can only generate function decls for functions not {fn}  {type(fn)}"
             )
 
         hint_globals = fn.__globals__.copy()
