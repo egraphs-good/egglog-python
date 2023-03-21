@@ -331,7 +331,7 @@ class LitDecl:
         if isinstance(self.value, int):
             return f"i64({self.value})"
         if isinstance(self.value, str):
-            return f"String({self.value})"
+            return f"String({repr(self.value)})"
         assert_never(self.value)
 
 
