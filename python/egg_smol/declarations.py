@@ -295,7 +295,7 @@ class VarDecl:
     def to_egg(self, _decls: Declarations) -> bindings.Var:
         return bindings.Var(self.name)
 
-    def pretty(self) -> str:
+    def pretty(self, **kwargs) -> str:
         return self.name
 
 
@@ -325,13 +325,18 @@ class LitDecl:
             return bindings.Lit(bindings.String(self.value))
         assert_never(self.value)
 
-    def pretty(self) -> str:
+    def pretty(self, wrap_lit=True, **kwargs) -> str:
+        """
+        Returns a string representation of the literal.
+
+        :param wrap_lit: If True, wraps the literal in a call to the literal constructor.
+        """
         if self.value is None:
             return "unit()"
         if isinstance(self.value, int):
-            return f"i64({self.value})"
+            return f"i64({self.value})" if wrap_lit else str(self.value)
         if isinstance(self.value, str):
-            return f"String({repr(self.value)})"
+            return f"String({repr(self.value)})" if wrap_lit else repr(self.value)
         assert_never(self.value)
 
 
@@ -372,7 +377,12 @@ class CallDecl:
         egg_fn = decls.callable_ref_to_egg_fn[self.callable]
         return bindings.Call(egg_fn, [a.to_egg(decls) for a in self.args])
 
-    def pretty(self):
+    def pretty(self, parens=True, **kwargs) -> str:
+        """
+        Pretty print the call.
+
+        :param parens: If true, wrap the call in parens if it is a binary or unary method call.
+        """
         ref, args = self.callable, list(self.args)
         if isinstance(ref, FunctionRef):
             fn_str = ref.name
@@ -389,18 +399,19 @@ class CallDecl:
                 return f"{UNARY_METHODS[name]}{slf.pretty()}"
             elif name in BINARY_METHODS:
                 assert len(args) == 1
-                return f"({slf.pretty()} {BINARY_METHODS[name]} {args[0].pretty()})"
+                expr = f"{slf.pretty()} {BINARY_METHODS[name]} {args[0].pretty(wrap_lit=False)}"
+                return expr if not parens else f"({expr})"
             elif name == "__getitem__":
                 assert len(args) == 1
-                return f"{slf.pretty()}[{args[0].pretty()}]"
+                return f"{slf.pretty()}[{args[0].pretty(wrap_lit=False)}]"
             elif name == "__call__":
-                return f"{slf.pretty()}({', '.join(a.pretty() for a in args)})"
+                return f"{slf.pretty()}({', '.join(a.pretty(wrap_lit=False) for a in args)})"
             fn_str = f"{slf.pretty()}.{name}"
         elif isinstance(ref, ConstantRef):
             return ref.name
         else:
             assert_never(ref)
-        return f"{fn_str}({', '.join(a.pretty() for a in args)})"
+        return f"{fn_str}({', '.join(a.pretty(wrap_lit=False) for a in args)})"
 
 
 def test_expr_pretty():

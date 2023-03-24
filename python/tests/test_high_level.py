@@ -3,6 +3,12 @@ from __future__ import annotations
 from egg_smol import *
 
 
+class TestExprStr:
+    def test_unwrap_lit(self):
+        assert str(i64(1) + 1) == "i64(1) + 1"
+        assert str(i64(1).max(2)) == "i64(1).max(2)"
+
+
 def test_eqsat_basic():
     egraph = EGraph()
 
