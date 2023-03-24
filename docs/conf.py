@@ -49,7 +49,7 @@ html_theme_options = {
 # nb_kernel_rgx_aliases = {}
 
 # Execution mode for notebooks
-# nb_execution_mode = 'auto'
+nb_execution_mode = "force"
 
 # Path to folder for caching notebooks (default: <outdir>)
 # nb_execution_cache_path = ''

@@ -16,6 +16,7 @@ from typing import Collection, Iterable, Optional, Union
 import black
 from typing_extensions import assert_never
 
+from . import config
 from .declarations import *
 from .declarations import BINARY_METHODS, UNARY_METHODS
 from .type_constraint_solver import *
@@ -279,9 +280,19 @@ class RuntimeExpr:
             self.__egg_decls__, self.__egg_tp__, name, self.__egg_expr__
         )
 
+    def __repr__(self) -> str:
+        """
+        The repr of the expr is the pretty printed version of the expr.
+        """
+        return str(self)
+
     def __str__(self) -> str:
-        s = f"_: {self.__egg_tp__.pretty()} = {self.__egg_expr__.pretty()}"
-        return black.format_str(s[:-1], mode=black.FileMode())
+        pretty_expr = self.__egg_expr__.pretty(parens=False)
+        if config.SHOW_TYPES:
+            s = f"_: {self.__egg_tp__.pretty()} = {pretty_expr}"
+            return black.format_str(s, mode=black.FileMode()).strip()
+        else:
+            return black.format_str(pretty_expr, mode=black.FileMode()).strip()
 
     def __dir__(self) -> Iterable[str]:
         return list(self.__egg_decls__.classes[self.__egg_tp__.name].methods)

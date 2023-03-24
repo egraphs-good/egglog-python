@@ -3,6 +3,12 @@ from __future__ import annotations
 from egg_smol import *
 
 
+class TestExprStr:
+    def test_unwrap_lit(self):
+        assert str(i64(1) + 1) == "i64(1) + 1"
+        assert str(i64(1).max(2)) == "i64(1).max(2)"
+
+
 def test_eqsat_basic():
     egraph = EGraph()
 
@@ -27,8 +33,8 @@ def test_eqsat_basic():
     # expr2 = 6 + 2 * x
     expr2 = egraph.define("expr2", Math(6) + Math(2) * Math.var("x"))
 
-    a, b, c = vars("a b c", Math)
-    x, y = vars("x y", i64)
+    a, b, c = vars_("a b c", Math)
+    x, y = vars_("x y", i64)
 
     egraph.register(
         rewrite(a + b).to(b + a),
@@ -49,7 +55,7 @@ def test_fib():
     def fib(x: i64Like) -> i64:  # type: ignore[empty-body]
         ...
 
-    f0, f1, x = vars("f0 f1 x", i64)
+    f0, f1, x = vars_("f0 f1 x", i64)
     egraph.register(
         set_(fib(0)).to(i64(1)),
         set_(fib(1)).to(i64(1)),
@@ -77,7 +83,7 @@ def test_fib_demand():
     def fib(x: i64Like) -> Num:  # type: ignore[empty-body]
         ...
 
-    a, b, x = vars("a b x", i64)
+    a, b, x = vars_("a b x", i64)
     f = var("f", Num)
     egraph.register(
         rewrite(Num(a) + Num(b)).to(Num(a + b)),
@@ -118,7 +124,7 @@ def test_resolution():
     T = Bool.true()
     F = Bool.false()
 
-    p, a, b, c, as_, bs = vars("p a b c as bs", Bool)
+    p, a, b, c, as_, bs = vars_("p a b c as bs", Bool)
     egraph.register(
         # clauses are assumed in the normal form (or a (or b (or c False)))
         set_(~F).to(T),
