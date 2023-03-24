@@ -517,48 +517,59 @@ class Unit(BaseExpr):
 
 
 def rewrite(lhs: EXPR) -> _RewriteBuilder[EXPR]:
+    """Rewrite the given expression to a new expression."""
     return _RewriteBuilder(lhs=lhs)
 
 
 def eq(expr: EXPR) -> _EqBuilder[EXPR]:
+    """Check if the given expression is equal to the given value."""
     return _EqBuilder(expr)
 
 
 def panic(message: str) -> Panic:
+    """Raise an error with the given message."""
     return Panic(message)
 
 
 def let(name: str, expr: BaseExpr) -> Let:
+    """Create a let binding."""
     return Let(name, expr)
 
 
 def delete(expr: BaseExpr) -> Delete:
+    """Create a delete expression."""
     return Delete(expr)
 
 
 def union(lhs: EXPR) -> _UnionBuilder[EXPR]:
+    """Create a union of the given expression."""
     return _UnionBuilder(lhs=lhs)
 
 
 def set_(lhs: EXPR) -> _SetBuilder[EXPR]:
+    """Create a set of the given expression."""
     return _SetBuilder(lhs=lhs)
 
 
 def rule(*facts: Fact) -> _RuleBuilder:
+    """Create a rule with the given facts."""
     return _RuleBuilder(facts=facts)
 
 
 def var(name: str, bound: type[EXPR]) -> EXPR:
+    """Create a new variable with the given name and type."""
     return cast(EXPR, _var(name, bound))
 
 
 def _var(name: str, bound: Any) -> RuntimeExpr:
+    """Create a new variable with the given name and type."""
     if not isinstance(bound, (RuntimeClass, RuntimeParamaterizedClass)):
         raise TypeError(f"Unexpected type {type(bound)}")
     return RuntimeExpr(bound.__egg_decls__, class_to_ref(bound), VarDecl(name))
 
 
 def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
+    """Create variables with the given names and type."""
     for name in names.split(" "):
         yield var(name, bound)
 

@@ -40,7 +40,9 @@ class TypeConstraintSolver:
         fn_return: TypeOrVarRef,
         args: Collection[JustTypeRef],
     ) -> JustTypeRef:
+        # Infer the type of each type variable based on the actual types of the arguments
         self._infer_typevars_zip(fn_args, args)
+        # Substitute the type variables with their inferred types
         return self._subtitute_typevars(fn_return)
 
     def _infer_typevars_zip(

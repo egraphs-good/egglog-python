@@ -337,8 +337,8 @@ expr1 = egraph.define("expr1", Math(2) * (Math.var("x") + Math(3)))
 # expr2 = 6 + 2 * x
 expr2 = egraph.define("expr2", Math(6) + Math(2) * Math.var("x"))
 
-a, b, c = vars("a b c", Math)
-x, y = vars("x y", i64)
+a, b, c = vars_("a b c", Math)
+x, y = vars_("x y", i64)
 
 egraph.register(
     rewrite(a + b).to(b + a),

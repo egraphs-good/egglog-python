@@ -374,6 +374,7 @@ class CallDecl:
         raise ValueError(f"Could not find callable ref for call {call}")
 
     def to_egg(self, decls: Declarations) -> bindings.Call:
+        """Convert a Call to an egg Call."""
         egg_fn = decls.callable_ref_to_egg_fn[self.callable]
         return bindings.Call(egg_fn, [a.to_egg(decls) for a in self.args])
 
