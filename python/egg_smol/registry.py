@@ -42,7 +42,7 @@ __all__ = [
     "set_",
     "rule",
     "var",
-    "vars",
+    "vars_",
     "Fact",
     "expr_parts",
 ]
@@ -558,7 +558,7 @@ def _var(name: str, bound: Any) -> RuntimeExpr:
     return RuntimeExpr(bound.__egg_decls__, class_to_ref(bound), VarDecl(name))
 
 
-def vars(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
+def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
     for name in names.split(" "):
         yield var(name, bound)
 
