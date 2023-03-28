@@ -292,7 +292,9 @@ class RuntimeExpr:
             s = f"_: {self.__egg_tp__.pretty()} = {pretty_expr}"
             return black.format_str(s, mode=black.FileMode()).strip()
         else:
-            return black.format_str(pretty_expr, mode=black.FileMode()).strip()
+            return black.format_str(
+                pretty_expr, mode=black.FileMode(line_length=180)
+            ).strip()
 
     def __dir__(self) -> Iterable[str]:
         return list(self.__egg_decls__.classes[self.__egg_tp__.name].methods)
