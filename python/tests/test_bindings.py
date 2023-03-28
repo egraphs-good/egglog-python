@@ -1,7 +1,37 @@
 import datetime
+import json
+import pathlib
+import subprocess
+from typing import Iterable
 
 import pytest
 from egg_smol.bindings import *
+from egg_smol.commands import parse_and_run
+
+
+def get_examples_files() -> Iterable[pathlib.Path]:
+    """
+    Return a list of egg examples files
+    """
+    metadata_process = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "-q"],
+        capture_output=True,
+        check=True,
+    )
+    metadata = json.loads(metadata_process.stdout)
+    (egg_smol_package,) = [
+        package for package in metadata["packages"] if package["name"] == "egg-smol"
+    ]
+    egg_smol_folder = pathlib.Path(egg_smol_package["manifest_path"]).parent
+    return (egg_smol_folder / "tests").glob("*.egg")
+
+
+@pytest.mark.parametrize(
+    "example_file", [pytest.param(path, id=path.stem) for path in get_examples_files()]
+)
+def test_example(example_file: pathlib.Path):
+    s = example_file.read_text()
+    parse_and_run(s)
 
 
 class TestEGraph:

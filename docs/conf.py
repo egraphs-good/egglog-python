@@ -2,7 +2,27 @@
 # build with: sphinx-build -nW --keep-going -b html . ./_build/html
 
 # load extensions
-extensions = ["myst_nb", "sphinx.ext.autodoc", "sphinx_autodoc_typehints"]
+extensions = [
+    "myst_nb",
+    "sphinx.ext.autodoc",
+    "sphinx_autodoc_typehints",
+    "sphinx_gallery.gen_gallery",
+]
+
+
+##
+# Sphinx Gallery
+# https://sphinx-gallery.github.io/stable/configuration.html#build-pattern
+##
+
+sphinx_gallery_conf = {
+    # Run all scripts
+    "filename_pattern": r".*",
+    "examples_dirs": "../python/egg_smol/examples",
+    "gallery_dirs": "auto_examples",
+    "abort_on_example_error": True,
+    "run_stale_examples": True,
+}
 
 ##
 # https://github.com/tox-dev/sphinx-autodoc-typehints#options
@@ -16,8 +36,16 @@ always_document_param_types = True
 master_doc = "index"
 project = "egg-smol Python"
 
+
 # basic build settings
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "**.ipynb_checkpoints",
+    "auto_examples/*.ipynb",
+    # "auto_examples/*.md5",
+]
 nitpicky = True
 
 html_theme = "pydata_sphinx_theme"
