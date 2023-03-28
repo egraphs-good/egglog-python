@@ -19,8 +19,6 @@ def test_example(name):
     importlib.import_module(f"egg_smol.examples.{name}")
 
 
-
-
 class TestExprStr:
     def test_unwrap_lit(self):
         assert str(i64(1) + 1) == "i64(1) + 1"
