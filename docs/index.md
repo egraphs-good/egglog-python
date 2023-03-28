@@ -8,6 +8,7 @@ pip install egg-smol
 ```
 
 ```{toctree}
+auto_examples/index
 tutorials
 how-to-guides
 explanation
