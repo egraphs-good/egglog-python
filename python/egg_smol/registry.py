@@ -132,9 +132,7 @@ class Registry:
         """
         cls_name = cls.__name__
         # Get all the methods from the class
-        cls_dict: dict[str, Any] = {
-            k: v for k, v in cls.__dict__.items() if k not in IGNORED_ATTRIBUTES
-        }
+        cls_dict: dict[str, Any] = {k: v for k, v in cls.__dict__.items() if k not in IGNORED_ATTRIBUTES}
         parameters: list[TypeVar] = cls_dict.pop("__parameters__", [])
 
         # Register class first
@@ -147,9 +145,7 @@ class Registry:
         self._on_register_sort(egg_sort or cls_name)
 
         # The type ref of self is paramterized by the type vars
-        slf_type_ref = TypeRefWithVars(
-            cls_name, tuple(ClassTypeVarRef(i) for i in range(n_type_vars))
-        )
+        slf_type_ref = TypeRefWithVars(cls_name, tuple(ClassTypeVarRef(i) for i in range(n_type_vars)))
 
         # Then register each of its methods
         for method_name, method in cls_dict.items():
@@ -321,9 +317,7 @@ class Registry:
         cls_type_and_name: Optional[tuple[type | RuntimeClass, str]] = None,
     ) -> FunctionDecl:
         if not isinstance(fn, FunctionType):
-            raise NotImplementedError(
-                f"Can only generate function decls for functions not {fn}  {type(fn)}"
-            )
+            raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
 
         hint_globals = fn.__globals__.copy()
 
@@ -336,31 +330,20 @@ class Registry:
                 raise ValueError("Init function must have a self type")
             return_type = first_arg
         else:
-            return_type = self._resolve_type_annotation(
-                hints["return"], cls_typevars, cls_type_and_name
-            )
+            return_type = self._resolve_type_annotation(hints["return"], cls_typevars, cls_type_and_name)
 
         params = list(signature(fn).parameters.values())
         # Remove first arg if this is a classmethod or a method, since it won't have an annotation
         if first_arg is not None:
             first, *params = params
             if first.annotation != Parameter.empty:
-                raise ValueError(
-                    f"First arg of a method must not have an annotation, not {first.annotation}"
-                )
+                raise ValueError(f"First arg of a method must not have an annotation, not {first.annotation}")
 
         for param in params:
             if param.kind != Parameter.POSITIONAL_OR_KEYWORD:
-                raise ValueError(
-                    f"Can only register functions with positional or keyword args, not {param.kind}"
-                )
+                raise ValueError(f"Can only register functions with positional or keyword args, not {param.kind}")
 
-        arg_types = tuple(
-            self._resolve_type_annotation(
-                hints[t.name], cls_typevars, cls_type_and_name
-            )
-            for t in params
-        )
+        arg_types = tuple(self._resolve_type_annotation(hints[t.name], cls_typevars, cls_type_and_name) for t in params)
         # If the first arg is a self, and this not an __init__ fn, add this as a typeref
         if isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)) and not is_init:
             arg_types = (first_arg,) + arg_types
@@ -405,13 +388,9 @@ class Registry:
                 raise TypeError("Union types are only supported for type promotion")
             fst, snd = args
             if fst in {int, str}:
-                return self._resolve_type_annotation(
-                    snd, cls_typevars, cls_type_and_name
-                )
+                return self._resolve_type_annotation(snd, cls_typevars, cls_type_and_name)
             if snd in {int, str}:
-                return self._resolve_type_annotation(
-                    fst, cls_typevars, cls_type_and_name
-                )
+                return self._resolve_type_annotation(fst, cls_typevars, cls_type_and_name)
             raise TypeError("Union types are only supported for type promotion")
 
         # If this is the type for the class, use the class name
@@ -471,9 +450,7 @@ class _WrappedMethod(Generic[P, EXPR]):
     fn: Callable[P, EXPR]
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> EXPR:
-        raise NotImplementedError(
-            "We should never call a wrapped method. Did you forget to wrap the class?"
-        )
+        raise NotImplementedError("We should never call a wrapped method. Did you forget to wrap the class?")
 
 
 class BaseExpr:
@@ -724,9 +701,7 @@ class Set:
     def _to_decl(self) -> SetDecl:
         lhs = expr_parts(self.lhs)[1]
         if not isinstance(lhs, CallDecl):
-            raise ValueError(
-                f"Can only create a call with a call for the lhs, got {lhs}"
-            )
+            raise ValueError(f"Can only create a call with a call for the lhs, got {lhs}")
         return SetDecl(lhs, expr_parts(self.rhs)[1])
 
 

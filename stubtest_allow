@@ -1,4 +1,2 @@
 # Add allows for all no arg classes because they somehow take all args at runtime
 .*egg_smol.bindings.Unit.__init__.*
-.*egg_smol.bindings.Clear.__init__.*
-.*egg_smol.bindings.ClearRules.__init__.*
