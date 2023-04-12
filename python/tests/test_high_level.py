@@ -6,15 +6,11 @@ import pathlib
 import pytest
 from egg_smol import *
 
-EXAMPLE_FILES = list(
-    (pathlib.Path(__file__).parent / "../egg_smol/examples").glob("*.py")
-)
+EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egg_smol/examples").glob("*.py"))
 
 
 # Test all files in the `examples` directory by importing them in this parametrized test
-@pytest.mark.parametrize(
-    "name", [f.stem for f in EXAMPLE_FILES if f.stem != "__init__"]
-)
+@pytest.mark.parametrize("name", [f.stem for f in EXAMPLE_FILES if f.stem != "__init__"])
 def test_example(name):
     importlib.import_module(f"egg_smol.examples.{name}")
 

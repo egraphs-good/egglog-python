@@ -59,16 +59,9 @@ class EGraph(Registry):
         """
         tp, decl = expr_parts(expr)
         egg_expr = decl.to_egg(self._decls)
-        _cost, new_egg_expr, variants = self._egraph.extract_expr(
-            egg_expr, variants=n + 1
-        )
-        new_decls = [
-            tp_and_expr_decl_from_egg(self._decls, egg_expr)[1]
-            for egg_expr in variants[::-1]
-        ]
-        return [
-            cast(EXPR, RuntimeExpr(self._decls, tp, new_decl)) for new_decl in new_decls
-        ]
+        _cost, new_egg_expr, variants = self._egraph.extract_expr(egg_expr, variants=n + 1)
+        new_decls = [tp_and_expr_decl_from_egg(self._decls, egg_expr)[1] for egg_expr in variants[::-1]]
+        return [cast(EXPR, RuntimeExpr(self._decls, tp, new_decl)) for new_decl in new_decls]
 
     def define(self, name: str, expr: EXPR, cost: Optional[int] = None) -> EXPR:
         """

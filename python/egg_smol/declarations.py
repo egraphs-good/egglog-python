@@ -87,9 +87,7 @@ class Declarations:
     # Bidirectional mapping between egg function names and python callable references.
     # Note that there are possibly mutliple callable references for a single egg function name, like `+`
     # for both int and rational classes.
-    egg_fn_to_callable_refs: defaultdict[str, set[CallableRef]] = field(
-        default_factory=lambda: defaultdict(set)
-    )
+    egg_fn_to_callable_refs: defaultdict[str, set[CallableRef]] = field(default_factory=lambda: defaultdict(set))
     callable_ref_to_egg_fn: dict[CallableRef, str] = field(default_factory=dict)
 
     # Bidirectional mapping between egg sort names and python type references.
@@ -119,9 +117,7 @@ class Declarations:
             return self.constants[ref.name].to_function_decl()
         assert_never(ref)
 
-    def register_sort(
-        self, type_ref: JustTypeRef, egg_name: Optional[str] = None
-    ) -> str:
+    def register_sort(self, type_ref: JustTypeRef, egg_name: Optional[str] = None) -> str:
         egg_name = egg_name or type_ref.generate_egg_name()
         if egg_name in self.egg_sort_to_type_ref:
             raise ValueError(f"Sort {egg_name} is already registered.")
@@ -154,10 +150,7 @@ class JustTypeRef:
             raise ValueError(f"Type {self.name} is not registered.")
         # If this is a type with arguments and it is not registered, then we need to register it
         egg_name = decls.register_sort(self)
-        arg_sorts = [
-            cast(bindings._Expr, bindings.Var(a.to_egg(decls, egraph)))
-            for a in self.args
-        ]
+        arg_sorts = [cast(bindings._Expr, bindings.Var(a.to_egg(decls, egraph))) for a in self.args]
         egraph.declare_sort(egg_name, (self.name, arg_sorts))
         return egg_name
 
@@ -265,9 +258,7 @@ class FunctionDecl:
     default: Optional[ExprDecl] = None
     merge: Optional[ExprDecl] = None
 
-    def to_egg(
-        self, decls: Declarations, egraph: bindings.EGraph, ref: CallableRef
-    ) -> bindings.FunctionDecl:
+    def to_egg(self, decls: Declarations, egraph: bindings.EGraph, ref: CallableRef) -> bindings.FunctionDecl:
         return bindings.FunctionDecl(
             decls.callable_ref_to_egg_fn[ref],
             # Remove all vars from the type refs, raising an errory if we find one,
@@ -288,9 +279,7 @@ class VarDecl:
 
     @classmethod
     def from_egg(cls, var: bindings.Var) -> tuple[JustTypeRef, LitDecl]:
-        raise NotImplementedError(
-            "Cannot turn var into egg type because typing unknown."
-        )
+        raise NotImplementedError("Cannot turn var into egg type because typing unknown.")
 
     def to_egg(self, _decls: Declarations) -> bindings.Var:
         return bindings.Var(self.name)
@@ -349,14 +338,10 @@ class CallDecl:
 
     def __post_init__(self):
         if self.bound_tp_params and not isinstance(self.callable, ClassMethodRef):
-            raise ValueError(
-                "Cannot bind type parameters to a non-class method callable."
-            )
+            raise ValueError("Cannot bind type parameters to a non-class method callable.")
 
     @classmethod
-    def from_egg(
-        cls, decls: Declarations, call: bindings.Call
-    ) -> tuple[JustTypeRef, CallDecl]:
+    def from_egg(cls, decls: Declarations, call: bindings.Call) -> tuple[JustTypeRef, CallDecl]:
         from .type_constraint_solver import TypeConstraintSolver
 
         results = [tp_and_expr_decl_from_egg(decls, a) for a in call.args]
@@ -367,9 +352,7 @@ class CallDecl:
         for callable_ref in decls.egg_fn_to_callable_refs[call.name]:
             tcs = TypeConstraintSolver()
             fn_decl = decls.get_function_decl(callable_ref)
-            return_tp = tcs.infer_return_type(
-                fn_decl.arg_types, fn_decl.return_type, arg_types
-            )
+            return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, arg_types)
             return return_tp, cls(callable_ref, arg_decls)
         raise ValueError(f"Could not find callable ref for call {call}")
 
@@ -421,34 +404,12 @@ def test_expr_pretty():
     assert LitDecl("foo").pretty() == 'String("foo")'
     assert LitDecl(None).pretty() == "unit()"
     assert CallDecl(FunctionRef("foo"), (VarDecl("x"),)).pretty() == "foo(x)"
-    assert (
-        CallDecl(
-            FunctionRef("foo"), (VarDecl("x"), VarDecl("y"), VarDecl("z"))
-        ).pretty()
-        == "foo(x, y, z)"
-    )
-    assert (
-        CallDecl(MethodRef("foo", "__add__"), (VarDecl("x"), VarDecl("y"))).pretty()
-        == "x + y"
-    )
-    assert (
-        CallDecl(MethodRef("foo", "__getitem__"), (VarDecl("x"), VarDecl("y"))).pretty()
-        == "x[y]"
-    )
-    assert (
-        CallDecl(
-            ClassMethodRef("foo", "__init__"), (VarDecl("x"), VarDecl("y"))
-        ).pretty()
-        == "foo(x, y)"
-    )
-    assert (
-        CallDecl(ClassMethodRef("foo", "bar"), (VarDecl("x"), VarDecl("y"))).pretty()
-        == "foo.bar(x, y)"
-    )
-    assert (
-        CallDecl(MethodRef("foo", "__call__"), (VarDecl("x"), VarDecl("y"))).pretty()
-        == "x(y)"
-    )
+    assert CallDecl(FunctionRef("foo"), (VarDecl("x"), VarDecl("y"), VarDecl("z"))).pretty() == "foo(x, y, z)"
+    assert CallDecl(MethodRef("foo", "__add__"), (VarDecl("x"), VarDecl("y"))).pretty() == "x + y"
+    assert CallDecl(MethodRef("foo", "__getitem__"), (VarDecl("x"), VarDecl("y"))).pretty() == "x[y]"
+    assert CallDecl(ClassMethodRef("foo", "__init__"), (VarDecl("x"), VarDecl("y"))).pretty() == "foo(x, y)"
+    assert CallDecl(ClassMethodRef("foo", "bar"), (VarDecl("x"), VarDecl("y"))).pretty() == "foo.bar(x, y)"
+    assert CallDecl(MethodRef("foo", "__call__"), (VarDecl("x"), VarDecl("y"))).pretty() == "x(y)"
     assert (
         CallDecl(
             ClassMethodRef("Map", "__init__"),
@@ -462,9 +423,7 @@ def test_expr_pretty():
 ExprDecl = Union[VarDecl, LitDecl, CallDecl]
 
 
-def tp_and_expr_decl_from_egg(
-    decls: Declarations, expr: bindings._Expr
-) -> tuple[JustTypeRef, ExprDecl]:
+def tp_and_expr_decl_from_egg(decls: Declarations, expr: bindings._Expr) -> tuple[JustTypeRef, ExprDecl]:
     if isinstance(expr, bindings.Var):
         return VarDecl.from_egg(expr)
     if isinstance(expr, bindings.Lit):
@@ -557,9 +516,7 @@ class DeleteDecl:
     call: CallDecl
 
     def to_egg(self, decls: Declarations) -> bindings.Delete:
-        return bindings.Delete(
-            self.call.callable.to_egg(decls), [a.to_egg(decls) for a in self.call.args]
-        )
+        return bindings.Delete(self.call.callable.to_egg(decls), [a.to_egg(decls) for a in self.call.args])
 
 
 @dataclass(frozen=True)

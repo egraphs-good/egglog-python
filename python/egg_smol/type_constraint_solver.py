@@ -45,9 +45,7 @@ class TypeConstraintSolver:
         # Substitute the type variables with their inferred types
         return self._subtitute_typevars(fn_return)
 
-    def _infer_typevars_zip(
-        self, fn_args: Collection[TypeOrVarRef], args: Collection[JustTypeRef]
-    ) -> None:
+    def _infer_typevars_zip(self, fn_args: Collection[TypeOrVarRef], args: Collection[JustTypeRef]) -> None:
         if len(fn_args) != len(args):
             raise TypeConstraintError(f"Expected {len(fn_args)} args, got {len(args)}")
         for fn_arg, arg in zip(fn_args, args):
@@ -89,17 +87,12 @@ def test_type_inference() -> None:
     with pytest.raises(TypeError):
         cs.infer_return_type([], i64, [unit.to_just()])
 
-    assert (
-        cs.infer_return_type([map, K], V, [map_i64_unit.to_just(), i64.to_just()])
-        == unit.to_just()
-    )
+    assert cs.infer_return_type([map, K], V, [map_i64_unit.to_just(), i64.to_just()]) == unit.to_just()
 
     with pytest.raises(TypeError):
         cs.infer_return_type([map, K], V, [map_i64_unit.to_just(), unit.to_just()])
 
-    bound_cs = TypeConstraintSolver.from_type_parameters(
-        [i64.to_just(), unit.to_just()]
-    )
+    bound_cs = TypeConstraintSolver.from_type_parameters([i64.to_just(), unit.to_just()])
     assert bound_cs.infer_return_type([K], V, [i64.to_just()]) == unit.to_just()
 
     with pytest.raises(TypeError):

@@ -52,31 +52,21 @@ class RuntimeClass:
         if self.__egg_name__ in UNARY_LIT_CLASS_NAMES:
             assert len(args) == 1
             assert isinstance(args[0], (int, str))
-            return RuntimeExpr(
-                self.__egg_decls__, JustTypeRef(self.__egg_name__), LitDecl(args[0])
-            )
+            return RuntimeExpr(self.__egg_decls__, JustTypeRef(self.__egg_name__), LitDecl(args[0]))
         if self.__egg_name__ == UNIT_CLASS_NAME:
             assert len(args) == 0
-            return RuntimeExpr(
-                self.__egg_decls__, JustTypeRef(self.__egg_name__), LitDecl(None)
-            )
+            return RuntimeExpr(self.__egg_decls__, JustTypeRef(self.__egg_name__), LitDecl(None))
 
-        return RuntimeClassMethod(self.__egg_decls__, self.__egg_name__, "__init__")(
-            *args
-        )
+        return RuntimeClassMethod(self.__egg_decls__, self.__egg_name__, "__init__")(*args)
 
     def __dir__(self) -> list[str]:
-        possible_methods = list(
-            self.__egg_decls__.classes[self.__egg_name__].class_methods
-        )
+        possible_methods = list(self.__egg_decls__.classes[self.__egg_name__].class_methods)
         if "__init__" in possible_methods:
             possible_methods.remove("__init__")
             possible_methods.append("__call__")
         return possible_methods
 
-    def __getitem__(
-        self, args: tuple[RuntimeTypeArgType, ...]
-    ) -> RuntimeParamaterizedClass:
+    def __getitem__(self, args: tuple[RuntimeTypeArgType, ...]) -> RuntimeParamaterizedClass:
         tp = JustTypeRef(self.__egg_name__, tuple(class_to_ref(arg) for arg in args))
         return RuntimeParamaterizedClass(self.__egg_decls__, tp)
 
@@ -101,14 +91,10 @@ class RuntimeParamaterizedClass:
     def __post_init__(self):
         desired_args = self.__egg_decls__.classes[self.__egg_tp__.name].n_type_vars
         if len(self.__egg_tp__.args) != desired_args:
-            raise ValueError(
-                f"Expected {desired_args} type args, got {len(self.__egg_tp__.args)}"
-            )
+            raise ValueError(f"Expected {desired_args} type args, got {len(self.__egg_tp__.args)}")
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
-        return RuntimeClassMethod(self.__egg_decls__, class_to_ref(self), "__init__")(
-            *args
-        )
+        return RuntimeClassMethod(self.__egg_decls__, class_to_ref(self), "__init__")(*args)
 
     def __getattr__(self, name: str) -> RuntimeClassMethod:
         return RuntimeClassMethod(self.__egg_decls__, class_to_ref(self), name)
@@ -168,9 +154,7 @@ def _call(
         tcs = TypeConstraintSolver()
 
     if fn_decl is not None:
-        return_tp = tcs.infer_return_type(
-            fn_decl.arg_types, fn_decl.return_type, arg_types
-        )
+        return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, arg_types)
     else:
         return_tp = JustTypeRef("unit")
 
@@ -187,21 +171,12 @@ class RuntimeClassMethod:
     __egg_method_name__: str
 
     def __post_init__(self):
-        if (
-            self.__egg_method_name__
-            not in self.__egg_decls__.classes[self.class_name].class_methods
-        ):
-            raise AttributeError(
-                f"Class {self.class_name} does not have method {self.__egg_method_name__}"
-            )
+        if self.__egg_method_name__ not in self.__egg_decls__.classes[self.class_name].class_methods:
+            raise AttributeError(f"Class {self.class_name} does not have method {self.__egg_method_name__}")
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
-        fn_decl = self.__egg_decls__.classes[self.class_name].class_methods[
-            self.__egg_method_name__
-        ]
-        bound_params = (
-            self.__egg_tp__.args if isinstance(self.__egg_tp__, JustTypeRef) else None
-        )
+        fn_decl = self.__egg_decls__.classes[self.class_name].class_methods[self.__egg_method_name__]
+        bound_params = self.__egg_tp__.args if isinstance(self.__egg_tp__, JustTypeRef) else None
         return _call(
             self.__egg_decls__,
             ClassMethodRef(self.class_name, self.__egg_method_name__),
@@ -229,28 +204,21 @@ class RuntimeMethod:
 
     def __post_init__(self):
         if (
-            self.__egg_method_name__
-            not in self.__egg_decls__.classes[self.class_name].methods
+            self.__egg_method_name__ not in self.__egg_decls__.classes[self.class_name].methods
             # Special case for __ne__ which does not have a normal function defintion since
             # it relies of type parameters
             and self.__egg_method_name__ != "__ne__"
         ):
-            raise AttributeError(
-                f"Class {self.class_name} does not have method {self.__egg_method_name__}"
-            )
+            raise AttributeError(f"Class {self.class_name} does not have method {self.__egg_method_name__}")
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
         fn_decl = (
-            self.__egg_decls__.classes[self.class_name].methods[
-                self.__egg_method_name__
-            ]
+            self.__egg_decls__.classes[self.class_name].methods[self.__egg_method_name__]
             if self.__egg_method_name__ != "__ne__"
             else None
         )
 
-        first_arg = RuntimeExpr(
-            self.__egg_decls__, JustTypeRef(self.class_name), self.__egg_slf_arg__
-        )
+        first_arg = RuntimeExpr(self.__egg_decls__, JustTypeRef(self.class_name), self.__egg_slf_arg__)
         args = (first_arg, *args)
 
         return _call(
@@ -276,9 +244,7 @@ class RuntimeExpr:
         return self.__egg_tp__, self.__egg_expr__
 
     def __getattr__(self, name: str) -> RuntimeMethod:
-        return RuntimeMethod(
-            self.__egg_decls__, self.__egg_tp__, name, self.__egg_expr__
-        )
+        return RuntimeMethod(self.__egg_decls__, self.__egg_tp__, name, self.__egg_expr__)
 
     def __repr__(self) -> str:
         """
@@ -292,9 +258,7 @@ class RuntimeExpr:
             s = f"_: {self.__egg_tp__.pretty()} = {pretty_expr}"
             return black.format_str(s, mode=black.FileMode()).strip()
         else:
-            return black.format_str(
-                pretty_expr, mode=black.FileMode(line_length=180)
-            ).strip()
+            return black.format_str(pretty_expr, mode=black.FileMode(line_length=180)).strip()
 
     def __dir__(self) -> Iterable[str]:
         return list(self.__egg_decls__.classes[self.__egg_tp__.name].methods)
@@ -310,12 +274,8 @@ class RuntimeExpr:
 # Define each of the special methods, since we have already declared them for pretty printing
 for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call__"]:
 
-    def _special_method(
-        self: RuntimeExpr, *args: ArgType, __name: str = name
-    ) -> RuntimeExpr:
-        return RuntimeMethod(
-            self.__egg_decls__, self.__egg_tp__, __name, self.__egg_expr__
-        )(*args)
+    def _special_method(self: RuntimeExpr, *args: ArgType, __name: str = name) -> RuntimeExpr:
+        return RuntimeMethod(self.__egg_decls__, self.__egg_tp__, __name, self.__egg_expr__)(*args)
 
     setattr(RuntimeExpr, name, _special_method)
 
@@ -363,12 +323,7 @@ def test_function_call():
         },
     )
     one = RuntimeFunction(decls, "one")
-    assert (
-        one().__egg_parts__
-        == RuntimeExpr(
-            decls, JustTypeRef("i64"), CallDecl(FunctionRef("one"))
-        ).__egg_parts__
-    )
+    assert one().__egg_parts__ == RuntimeExpr(decls, JustTypeRef("i64"), CallDecl(FunctionRef("one"))).__egg_parts__
 
 
 def test_classmethod_call():

@@ -19,16 +19,12 @@ def get_examples_files() -> Iterable[pathlib.Path]:
         check=True,
     )
     metadata = json.loads(metadata_process.stdout)
-    (egg_smol_package,) = [
-        package for package in metadata["packages"] if package["name"] == "egg-smol"
-    ]
+    (egg_smol_package,) = [package for package in metadata["packages"] if package["name"] == "egg-smol"]
     egg_smol_folder = pathlib.Path(egg_smol_package["manifest_path"]).parent
     return (egg_smol_folder / "tests").glob("*.egg")
 
 
-@pytest.mark.parametrize(
-    "example_file", [pytest.param(path, id=path.stem) for path in get_examples_files()]
-)
+@pytest.mark.parametrize("example_file", [pytest.param(path, id=path.stem) for path in get_examples_files()])
 def test_example(example_file: pathlib.Path):
     s = example_file.read_text()
     parse_and_run(s)
@@ -408,9 +404,7 @@ class TestEGraph:
     def test_push_pop(self):
         egraph = EGraph()
         egraph.declare_function(
-            FunctionDecl(
-                "foo", Schema([], "i64"), merge=Call("max", [Var("old"), Var("new")])
-            ),
+            FunctionDecl("foo", Schema([], "i64"), merge=Call("max", [Var("old"), Var("new")])),
         )
         egraph.eval_actions(Set("foo", [], Lit(Int(1))))
         egraph.check_fact(Eq([Call("foo", []), Lit(Int(1))]))
@@ -486,9 +480,7 @@ class TestEGraph:
             Call("insert", [Var("my_map1"), Lit(Int(2)), Lit(String("two"))]),
         )
 
-        egraph.check_fact(
-            Eq([Lit(String("one")), Call("get", [Var("my_map1"), Lit(Int(1))])])
-        )
+        egraph.check_fact(Eq([Lit(String("one")), Call("get", [Var("my_map1"), Lit(Int(1))])]))
         _, expr, _ = egraph.extract_expr(Var("my_map2"))
         assert expr == Call(
             "insert",

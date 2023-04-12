@@ -28,8 +28,6 @@ def _evaluate_monkeypatch(self, globalns, localns):
             "Forward references must evaluate to types.",
             is_argument=self.__forward_is_argument__,
         )
-        self.__forward_value__ = typing._eval_type(  # type: ignore
-            type_, globalns, localns
-        )
+        self.__forward_value__ = typing._eval_type(type_, globalns, localns)  # type: ignore
         self.__forward_evaluated__ = True
     return self.__forward_value__
