@@ -37,8 +37,6 @@ SLOW_TESTS = ["repro-unsound"]
 def test_example(example_file: pathlib.Path):
     egraph = EGraph(fact_directory=EGG_SMOL_FOLDER)
     commands = egraph.parse_program(example_file.read_text())
-    # if commands[0] == SetOption("enable_proofs", Lit(Int(1))):
-    #     pytest.xfail(reason="enable_proofs not supported")
     # TODO: Include currently relyies on the CWD instead of the fact directory. We should fix this upstream
     # and then remove this workaround.
     os.chdir(EGG_SMOL_FOLDER)
