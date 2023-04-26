@@ -63,6 +63,6 @@ impl EGraph {
     #[pyo3(signature = ())]
     fn take_run_report(&mut self) -> Option<RunReport> {
         info!("Taking last run report");
-        self.egraph.takes_run_report().map(|r| r.into())
+        self.egraph.take_run_report().map(|r| r.into())
     }
 }
