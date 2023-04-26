@@ -727,6 +727,7 @@ class Ruleset:
         """
         return self._egraph._simplify(expr, limit, self, until)
 
+
 # We use these builders so that when creating these structures we can type check
 # if the arguments are the same type of expression
 
