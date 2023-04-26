@@ -7,7 +7,7 @@ from egg_smol.type_constraint_solver import *
 
 def test_type_str():
     decls = Declarations(
-        classes={
+        _classes={
             "i64": ClassDecl(),
             "Map": ClassDecl(n_type_vars=2),
         }
@@ -20,10 +20,10 @@ def test_type_str():
 
 def test_function_call():
     decls = Declarations(
-        classes={
+        _classes={
             "i64": ClassDecl(),
         },
-        functions={
+        _functions={
             "one": FunctionDecl(
                 (),
                 TypeRefWithVars("i64"),
@@ -39,21 +39,23 @@ def test_classmethod_call():
 
     K, V = ClassTypeVarRef(0), ClassTypeVarRef(1)
     decls = Declarations(
-        classes={
+        _classes={
             "i64": ClassDecl(),
             "unit": ClassDecl(),
-            "Map": ClassDecl(n_type_vars=2),
-        },
-        functions={
-            "create": FunctionDecl(
-                (),
-                TypeRefWithVars("Map", (K, V)),
-            )
-        },
+            "Map": ClassDecl(
+                n_type_vars=2,
+                class_methods={
+                    "create": FunctionDecl(
+                        (),
+                        TypeRefWithVars("Map", (K, V)),
+                    )
+                },
+            ),
+        }
     )
     Map = RuntimeClass(decls, "Map")
     with raises(TypeConstraintError):
-        Map.create()
+        Map.create()  # type: ignore
     i64 = RuntimeClass(decls, "i64")
     unit = RuntimeClass(decls, "unit")
     assert (
@@ -72,7 +74,7 @@ def test_classmethod_call():
 
 def test_expr_special():
     decls = Declarations(
-        classes={
+        _classes={
             "i64": ClassDecl(
                 methods={
                     "__add__": FunctionDecl(
@@ -97,4 +99,19 @@ def test_expr_special():
         JustTypeRef("i64"),
         CallDecl(MethodRef("i64", "__add__"), (LitDecl(1), LitDecl(1))),
     )
-    assert res.parts == expected_res.__egg_parts__
+    assert res.__egg_parts__ == expected_res.__egg_parts__
+
+
+def test_class_variable():
+    decls = Declarations(
+        _classes={
+            "i64": ClassDecl(class_variables={"one": FunctionDecl((), TypeRefWithVars("i64"))}),
+        },
+    )
+    i64 = RuntimeClass(decls, "i64")
+    one = i64.one
+    assert isinstance(one, RuntimeExpr)
+    assert (
+        one.__egg_parts__
+        == RuntimeExpr(decls, JustTypeRef("i64"), CallDecl(ClassVariableRef("i64", "one"))).__egg_parts__
+    )

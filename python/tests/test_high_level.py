@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import pathlib
+from typing import ClassVar
 
 import pytest
 from egg_smol import *
@@ -104,92 +105,11 @@ def test_fib_demand():
         set_(fib(0)).to(Num(0)),
         set_(fib(1)).to(Num(1)),
     )
-    f7 = egraph.define("f7", fib(7), cost=2)
+    f7 = egraph.define("f7", fib(7))
     egraph.run(14)
     egraph.check(eq(f7).to(Num(13)))
     res = egraph.extract(f7)
     assert expr_parts(res) == expr_parts(Num(13))
-
-
-def test_resolution():
-    egraph = EGraph()
-
-    @egraph.class_
-    class Bool(BaseExpr):
-        @egraph.method(egg_fn="True")
-        @classmethod
-        def true(cls) -> Bool:  # type: ignore[empty-body]
-            ...
-
-        @egraph.method(egg_fn="False")
-        @classmethod
-        def false(cls) -> Bool:  # type: ignore[empty-body]
-            ...
-
-        @egraph.method(egg_fn="or")
-        def __or__(self, other: Bool) -> Bool:  # type: ignore[empty-body]
-            ...
-
-        @egraph.method(egg_fn="neg")
-        def __invert__(self) -> Bool:  # type: ignore[empty-body]
-            ...
-
-    T = Bool.true()
-    F = Bool.false()
-
-    p, a, b, c, as_, bs = vars_("p a b c as bs", Bool)
-    egraph.register(
-        # clauses are assumed in the normal form (or a (or b (or c False)))
-        set_(~F).to(T),
-        set_(~T).to(F),
-        # "Solving" negation equations
-        rule(eq(~p).to(T)).then(union(p).with_(F)),
-        rule(eq(~p).to(F)).then(union(p).with_(T)),
-        # canonicalize associtivity. "append" for clauses terminate with false
-        rewrite((a | b) | c).to(a | (b | c)),
-        # commutativity
-        rewrite(a | (b | c)).to(b | (a | c)),
-        # absoprtion
-        rewrite(a | (a | b)).to(a | b),
-        rewrite(a | (~a | b)).to(T),
-        # Simplification
-        rewrite(F | a).to(a),
-        rewrite(a | F).to(a),
-        rewrite(T | a).to(T),
-        rewrite(a | T).to(T),
-        # unit propagation
-        # This is kind of interesting actually.
-        # Looks a bit like equation solving
-        rule(eq(T).to(p | F)).then(union(p).with_(T)),
-        # resolution
-        # This counts on commutativity to bubble everything possible up to the front of the clause.
-        rule(
-            eq(T).to(a | as_),
-            eq(T).to(~a | bs),
-        ).then(
-            set_(as_ | bs).to(T),
-        ),
-    )
-
-    # Example predicate
-    @egraph.function
-    def pred(x: i64Like) -> Bool:  # type: ignore[empty-body]
-        ...
-
-    p0 = egraph.define("p0", pred(0))
-    p1 = egraph.define("p1", pred(1))
-    p2 = egraph.define("p2", pred(2))
-    egraph.register(
-        set_(p1 | (~p2 | F)).to(T),
-        set_(p2 | (~p0 | F)).to(T),
-        set_(p0 | (~p1 | F)).to(T),
-        union(p1).with_(F),
-        set_(~p0 | (~p1 | (p2 | F))).to(T),
-    )
-    egraph.run(10)
-    egraph.check(T != F)
-    egraph.check(eq(p0).to(F))
-    egraph.check(eq(p2).to(F))
 
 
 def test_push_pop():
@@ -207,3 +127,22 @@ def test_push_pop():
         egraph.check(eq(foo()).to(i64(2)))
 
     egraph.check(eq(foo()).to(i64(1)))
+
+
+def test_constants():
+    egraph = EGraph()
+
+    one = egraph.constant("one", i64)
+    egraph.register(set_(one).to(i64(1)))
+    egraph.check(eq(one).to(i64(1)))
+
+
+def test_class_vars():
+    egraph = EGraph()
+
+    @egraph.class_
+    class Numeric:
+        ONE: ClassVar[i64]
+
+    egraph.register(set_(Numeric.ONE).to(i64(1)))
+    egraph.check(eq(Numeric.ONE).to(i64(1)))

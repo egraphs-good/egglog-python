@@ -35,7 +35,7 @@ __all__ = [
 BLACK_MODE = black.Mode(line_length=120)  # type: ignore
 
 UNIT_CLASS_NAME = "unit"
-UNARY_LIT_CLASS_NAMES = {"i64", "String"}
+UNARY_LIT_CLASS_NAMES = {"i64", "f64", "String"}
 LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
 
 
@@ -51,7 +51,7 @@ class RuntimeClass:
         # If this is a literal type, initializing it with a literal should return a literal
         if self.__egg_name__ in UNARY_LIT_CLASS_NAMES:
             assert len(args) == 1
-            assert isinstance(args[0], (int, str))
+            assert isinstance(args[0], (int, float, str))
             return RuntimeExpr(self.__egg_decls__, JustTypeRef(self.__egg_name__), LitDecl(args[0]))
         if self.__egg_name__ == UNIT_CLASS_NAME:
             assert len(args) == 0
@@ -60,7 +60,8 @@ class RuntimeClass:
         return RuntimeClassMethod(self.__egg_decls__, self.__egg_name__, "__init__")(*args)
 
     def __dir__(self) -> list[str]:
-        possible_methods = list(self.__egg_decls__.classes[self.__egg_name__].class_methods)
+        cls_decl = self.__egg_decls__._classes[self.__egg_name__]
+        possible_methods = list(cls_decl.class_methods) + list(cls_decl.class_variables)
         if "__init__" in possible_methods:
             possible_methods.remove("__init__")
             possible_methods.append("__call__")
@@ -70,7 +71,12 @@ class RuntimeClass:
         tp = JustTypeRef(self.__egg_name__, tuple(class_to_ref(arg) for arg in args))
         return RuntimeParamaterizedClass(self.__egg_decls__, tp)
 
-    def __getattr__(self, name: str) -> RuntimeClassMethod:
+    def __getattr__(self, name: str) -> RuntimeClassMethod | RuntimeExpr:
+        cls_decl = self.__egg_decls__._classes[self.__egg_name__]
+        # if this is a class variable, return an expr for it, otherwise, assume it's a method
+        if name in cls_decl.class_variables:
+            return_tp = cls_decl.class_variables[name].return_type.to_just()
+            return RuntimeExpr(self.__egg_decls__, return_tp, CallDecl(ClassVariableRef(self.__egg_name__, name)))
         return RuntimeClassMethod(self.__egg_decls__, self.__egg_name__, name)
 
     def __str__(self) -> str:
@@ -89,7 +95,7 @@ class RuntimeParamaterizedClass:
     __egg_tp__: JustTypeRef
 
     def __post_init__(self):
-        desired_args = self.__egg_decls__.classes[self.__egg_tp__.name].n_type_vars
+        desired_args = self.__egg_decls__._classes[self.__egg_tp__.name].n_type_vars
         if len(self.__egg_tp__.args) != desired_args:
             raise ValueError(f"Expected {desired_args} type args, got {len(self.__egg_tp__.args)}")
 
@@ -121,14 +127,14 @@ class RuntimeFunction:
     __egg_name__: str
 
     def __post_init__(self):
-        if self.__egg_name__ not in self.__egg_decls__.functions:
+        if self.__egg_name__ not in self.__egg_decls__._functions:
             raise ValueError(f"Function {self.__egg_name__} does not exist")
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
         return _call(
             self.__egg_decls__,
             FunctionRef(self.__egg_name__),
-            self.__egg_decls__.functions[self.__egg_name__],
+            self.__egg_decls__._functions[self.__egg_name__],
             args,
         )
 
@@ -171,11 +177,11 @@ class RuntimeClassMethod:
     __egg_method_name__: str
 
     def __post_init__(self):
-        if self.__egg_method_name__ not in self.__egg_decls__.classes[self.class_name].class_methods:
+        if self.__egg_method_name__ not in self.__egg_decls__._classes[self.class_name].class_methods:
             raise AttributeError(f"Class {self.class_name} does not have method {self.__egg_method_name__}")
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
-        fn_decl = self.__egg_decls__.classes[self.class_name].class_methods[self.__egg_method_name__]
+        fn_decl = self.__egg_decls__._classes[self.class_name].class_methods[self.__egg_method_name__]
         bound_params = self.__egg_tp__.args if isinstance(self.__egg_tp__, JustTypeRef) else None
         return _call(
             self.__egg_decls__,
@@ -204,7 +210,7 @@ class RuntimeMethod:
 
     def __post_init__(self):
         if (
-            self.__egg_method_name__ not in self.__egg_decls__.classes[self.class_name].methods
+            self.__egg_method_name__ not in self.__egg_decls__._classes[self.class_name].methods
             # Special case for __ne__ which does not have a normal function defintion since
             # it relies of type parameters
             and self.__egg_method_name__ != "__ne__"
@@ -213,7 +219,7 @@ class RuntimeMethod:
 
     def __call__(self, *args: ArgType) -> RuntimeExpr:
         fn_decl = (
-            self.__egg_decls__.classes[self.class_name].methods[self.__egg_method_name__]
+            self.__egg_decls__._classes[self.class_name].methods[self.__egg_method_name__]
             if self.__egg_method_name__ != "__ne__"
             else None
         )
@@ -261,7 +267,7 @@ class RuntimeExpr:
             return black.format_str(pretty_expr, mode=black.FileMode(line_length=180)).strip()
 
     def __dir__(self) -> Iterable[str]:
-        return list(self.__egg_decls__.classes[self.__egg_tp__.name].methods)
+        return list(self.__egg_decls__._classes[self.__egg_tp__.name].methods)
 
     # Have __eq__ take no NoReturn (aka Never https://docs.python.org/3/library/typing.html#typing.Never) because
     # we don't wany any type that MyPy thinks is an expr to be used with __eq__.
@@ -281,24 +287,29 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
 
 
 # Args can either be expressions or literals which are automatically promoted
-ArgType = Union[RuntimeExpr, int, str]
-
-tp_to_lit: dict[type, str] = {
-    int: "i64",
-    str: "String",
-}
+ArgType = Union[RuntimeExpr, int, str, float]
 
 
 def _resolve_literal(decls: Declarations, arg: ArgType) -> RuntimeExpr:
     if isinstance(arg, int):
         return RuntimeExpr(decls, JustTypeRef("i64"), LitDecl(arg))
+    elif isinstance(arg, float):
+        return RuntimeExpr(decls, JustTypeRef("f64"), LitDecl(arg))
     elif isinstance(arg, str):
         return RuntimeExpr(decls, JustTypeRef("String"), LitDecl(arg))
     return arg
 
 
-# def blacken_python_expression(expr: str) -> str:
-#     """
-#     Runs black on a Python expression, to remove excess paranthesis and wrap it.
-#     """
-#     return black.format_str("x = " + expr, mode=BLACK_MODE)[4:-1]
+def _resolve_callable(callable: object) -> CallableRef:
+    """
+    Resolves a runtime callable into a ref
+    """
+    if isinstance(callable, RuntimeFunction):
+        return FunctionRef(callable.__egg_name__)
+    if isinstance(callable, RuntimeClassMethod):
+        return ClassMethodRef(callable.class_name, callable.__egg_method_name__)
+    if isinstance(callable, RuntimeMethod):
+        return MethodRef(callable.__egg_tp__.name, callable.__egg_method_name__)
+    if isinstance(callable, RuntimeClass):
+        return ClassMethodRef(callable.__egg_name__, "__init__")
+    raise NotImplementedError(f"Cannot turn {callable} into a callable ref")

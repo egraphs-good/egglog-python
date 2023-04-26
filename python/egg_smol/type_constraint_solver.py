@@ -63,7 +63,10 @@ class TypeConstraintSolver:
 
     def _subtitute_typevars(self, tp: TypeOrVarRef) -> JustTypeRef:
         if isinstance(tp, ClassTypeVarRef):
-            return self._cls_typevar_index_to_type[tp.index]
+            try:
+                return self._cls_typevar_index_to_type[tp.index]
+            except KeyError:
+                raise TypeConstraintError(f"Not enough bound typevars for {tp}")
         elif isinstance(tp, TypeRefWithVars):
             return JustTypeRef(
                 tp.name,

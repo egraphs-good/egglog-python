@@ -4,10 +4,12 @@ from typing import Optional
 
 from typing_extensions import final
 
+HIGH_COST: int
+
 @final
 class EGraph:
     def __init__(self, fact_directory: str | Path | None = None, seminaive=True) -> None: ...
-    def parse_program(self, input: str) -> list[_Command]: ...
+    def parse_program(self, __input: str, /) -> list[_Command]: ...
     def run_program(self, *commands: _Command) -> list[str]: ...
     def take_extract_report(self) -> Optional[ExtractReport]: ...
     def take_run_report(self) -> Optional[RunReport]: ...
@@ -282,12 +284,14 @@ class RuleCommand:
 
 @final
 class RewriteCommand:
+    # TODO: Rename to ruleset
     name: str
     rewrite: Rewrite
     def __init__(self, name: str, rewrite: Rewrite) -> None: ...
 
 @final
 class BiRewriteCommand:
+    # TODO: Rename to ruleset
     name: str
     rewrite: Rewrite
     def __init__(self, name: str, rewrite: Rewrite) -> None: ...
@@ -380,6 +384,7 @@ _Command = (
     | Sort
     | Function
     | Define
+    | AddRuleset
     | RuleCommand
     | RewriteCommand
     | BiRewriteCommand
