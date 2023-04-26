@@ -116,6 +116,22 @@ class EGraph:
             raise RuntimeError("Cannot get the e-graph")
         return self._egraph
 
+    def simplify(self, expr: EXPR, limit: int, *until: Fact) -> EXPR:
+        """
+        Simplifies the given expression.
+        """
+        return self._simplify(expr, limit, None, until)
+
+    def _simplify(self, expr: EXPR, limit: int, ruleset: Optional[Ruleset], until: tuple[Fact, ...]) -> EXPR:
+        tp, decl = expr_parts(expr)
+        egg_expr = decl.to_egg(self._decls)
+        self._run_program([bindings.Simplify(egg_expr, Config(limit, ruleset, until)._to_egg_config(self._decls))])
+        extract_report = self._get_egraph().take_extract_report()
+        if not extract_report:
+            raise ValueError("No extract report saved")
+        new_tp, new_decl = tp_and_expr_decl_from_egg(self._decls, extract_report.expr)
+        return cast(EXPR, RuntimeExpr(self._decls, new_tp, new_decl))
+
     def relation(self, name: str, *tps: Unpack[TS], egg_fn: Optional[str] = None) -> Callable[[Unpack[TS]], Unit]:
         """
         Defines a relation, which is the same as a function which returns unit.
@@ -705,6 +721,11 @@ class Ruleset:
         """
         return self._egraph._run_schedule(config(limit, self, *until))
 
+    def simplify(self, expr: EXPR, limit: int, *until: Fact) -> EXPR:
+        """
+        Simplify the given expression with this ruleset.
+        """
+        return self._egraph._simplify(expr, limit, self, until)
 
 # We use these builders so that when creating these structures we can type check
 # if the arguments are the same type of expression
@@ -1037,13 +1058,14 @@ class Config(_BaseSchedule):
         args_str = ", ".join(map(str, [self.limit, self.ruleset, *self.until]))
         return f"config({args_str})"
 
-    def _to_egg(self, declerations: Declarations) -> bindings._Schedule:
-        return bindings.Run(
-            bindings.RunConfig(
-                self.ruleset.name if self.ruleset else "",
-                self.limit,
-                [fact_decl_to_egg(declerations, _fact_to_decl(fact)) for fact in self.until] if self.until else None,
-            )
+    def _to_egg(self, decls: Declarations) -> bindings._Schedule:
+        return bindings.Run(self._to_egg_config(decls))
+
+    def _to_egg_config(self, decls: Declarations) -> bindings.RunConfig:
+        return bindings.RunConfig(
+            self.ruleset.name if self.ruleset else "",
+            self.limit,
+            [fact_decl_to_egg(decls, _fact_to_decl(fact)) for fact in self.until] if self.until else None,
         )
 
 

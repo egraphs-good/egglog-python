@@ -6,13 +6,18 @@ file_format: mystnb
 
 ## Parsing and running program strings
 
-You can provide your program in a special DSL language and run it with {meth}`egg_smol.bindings.EGraph.parse_and_run_program`:
+You can provide your program in a special DSL language. You can parse this with {meth}`egg_smol.bindings.EGraph.parse_program` and then run the result with You can parse this with {meth}`egg_smol.bindings.EGraph.run_program`::
 
 ```{code-cell}
 from egg_smol.bindings import EGraph
 
 egraph = EGraph()
-egraph.parse_and_run_program("(check (= (+ 1 2) 3))")
+commands = egraph.parse_program("(check (= (+ 1 2) 3))")
+commands
+```
+
+```{code-cell}
+egraph.run_program(*commands)
 ```
 
 ## Developing this package
