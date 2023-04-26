@@ -111,7 +111,7 @@ class TestEGraph:
         )
         end_time = datetime.datetime.now()
 
-        run_report = egraph.take_run_report()
+        run_report = egraph.run_report()
         assert isinstance(run_report, RunReport)
         total_time = run_report.search_time + run_report.apply_time + run_report.rebuild_time
         # Verify  less than the total time (which includes time spent in Python).
@@ -126,15 +126,15 @@ class TestEGraph:
             Define("y", Call("Num", [Lit(Int(2))]), 1),
             Extract(0, Var("x")),
         )
-        assert egraph.take_extract_report() == ExtractReport(6, Call("Num", [Lit(Int(1))]), [])
+        assert egraph.extract_report() == ExtractReport(6, Call("Num", [Lit(Int(1))]), [])
         egraph.run_program(Extract(0, Var("y")))
         pytest.xfail(reason="https://github.com/mwillsey/egg-smol/issues/128")
-        assert egraph.take_extract_report() == ExtractReport(1, Call("y", []), [])
+        assert egraph.extract_report() == ExtractReport(1, Call("y", []), [])
 
     def test_extract_string(self):
         egraph = EGraph()
         egraph.run_program(Define("x", Lit(String("hello")), None), Extract(0, Var("x")))
-        assert egraph.take_extract_report() == ExtractReport(0, Lit(String("hello")), [])
+        assert egraph.extract_report() == ExtractReport(0, Lit(String("hello")), [])
 
     def test_sort_alias(self):
         # From map example
@@ -149,7 +149,7 @@ class TestEGraph:
             Check([Eq([Lit(String("one")), Call("get", [Var("my_map1"), Lit(Int(1))])])]),
             Extract(0, Var("my_map2")),
         )
-        assert egraph.take_extract_report() == ExtractReport(
+        assert egraph.extract_report() == ExtractReport(
             0,
             Call(
                 "insert",

@@ -126,7 +126,7 @@ class EGraph:
         tp, decl = expr_parts(expr)
         egg_expr = decl.to_egg(self._decls)
         self._run_program([bindings.Simplify(egg_expr, Config(limit, ruleset, until)._to_egg_config(self._decls))])
-        extract_report = self._get_egraph().take_extract_report()
+        extract_report = self._get_egraph().extract_report()
         if not extract_report:
             raise ValueError("No extract report saved")
         new_tp, new_decl = tp_and_expr_decl_from_egg(self._decls, extract_report.expr)
@@ -181,7 +181,7 @@ class EGraph:
 
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
         self._run_program([bindings.RunScheduleCommand(schedule._to_egg(self._decls))])
-        run_report = self._get_egraph().take_run_report()
+        run_report = self._get_egraph().run_report()
         if not run_report:
             raise ValueError("No run report saved")
         return run_report
@@ -226,7 +226,7 @@ class EGraph:
 
     def _run_extract(self, expr: bindings._Expr, n: int) -> bindings.ExtractReport:
         self._run_program([bindings.Extract(n, expr)])
-        extract_report = self._get_egraph().take_extract_report()
+        extract_report = self._get_egraph().extract_report()
         if not extract_report:
             raise ValueError("No extract report saved")
         return extract_report

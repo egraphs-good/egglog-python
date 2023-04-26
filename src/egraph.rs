@@ -50,19 +50,25 @@ impl EGraph {
         Ok(res)
     }
 
-    /// Takes the last expressions extracted from the EGraph, if the last command
+    /// Gets the last expressions extracted from the EGraph, if the last command
     /// was a Simplify or Extract command.
     #[pyo3(signature = ())]
-    fn take_extract_report(&mut self) -> Option<ExtractReport> {
-        info!("Taking last extract report");
-        self.egraph.take_extract_report().map(|r| r.into())
+    fn extract_report(&mut self) -> Option<ExtractReport> {
+        info!("Getting last extract report");
+        match self.egraph.get_extract_report() {
+            Some(report) => Some(report.into()),
+            None => None,
+        }
     }
 
-    /// Takes the last run report from the EGraph, if the last command
+    /// Gets the last run report from the EGraph, if the last command
     /// was a run or simplify command.
     #[pyo3(signature = ())]
-    fn take_run_report(&mut self) -> Option<RunReport> {
-        info!("Taking last run report");
-        self.egraph.take_run_report().map(|r| r.into())
+    fn run_report(&mut self) -> Option<RunReport> {
+        info!("Getting last run report");
+        match self.egraph.get_run_report() {
+            Some(report) => Some(report.into()),
+            None => None,
+        }
     }
 }
