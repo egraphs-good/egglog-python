@@ -11,8 +11,8 @@ crate-type = ["cdylib"]
 [dependencies]
 # Use unreleased version to depend on signature improvements https://github.com/PyO3/pyo3/pull/2702
 pyo3 = { version = "0.18.1", features = ["extension-module"] }
-# egg-smol = { git = "https://github.com/mwillsey/egg-smol", rev = "6f2633a5fa379487fb389b80fc1225866f8b8c1a" }
-egg-smol = { path = "../egg-smol" }
+egg-smol = { git = "https://github.com/saulshanabrook/egg-smol", rev = "a9a388e0f7c05dfb11943692e9c3e3407089493e" }
+# egg-smol = { path = "../egg-smol" }
 pyo3-log = "0.8.1"
 log = "0.4.17"
 lalrpop-util = { version = "0.19.8", features = ["lexer"] }
