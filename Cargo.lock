@@ -171,7 +171,7 @@ dependencies = [
 [[package]]
 name = "egg-smol"
 version = "0.1.0"
-source = "git+https://github.com/saulshanabrook/egg-smol?rev=bc4dae5ff5c9052a7f751bb79e3ebf76178dcc9b#bc4dae5ff5c9052a7f751bb79e3ebf76178dcc9b"
+source = "git+https://github.com/mwillsey/egg-smol?rev=30feaaab88452ec4b6c5f7a199345298bac2dd0f#30feaaab88452ec4b6c5f7a199345298bac2dd0f"
 dependencies = [
  "clap",
  "env_logger",
