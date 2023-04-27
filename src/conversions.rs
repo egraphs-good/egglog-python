@@ -1,14 +1,17 @@
 // Create wrappers around input types so that convert from pyobjects to them
 // and then from them to the egg_smol types
 use crate::utils::*;
+use ordered_float::OrderedFloat;
 use pyo3::prelude::*;
-
-// TODO: Resolve display issue
+use pyo3::types::PyDeltaAccess;
 convert_enums!(
     egg_smol::ast::Literal: "{:}" => Literal {
         Int(value: i64)
             i -> egg_smol::ast::Literal::Int(i.value),
             egg_smol::ast::Literal::Int(i) => Int { value: i.clone() };
+        F64(value: WrappedOrderedF64)
+            f -> egg_smol::ast::Literal::F64(f.value.0),
+            egg_smol::ast::Literal::F64(f) => F64 { value: WrappedOrderedF64(*f) };
         String_[name="String"](value: String)
             s -> egg_smol::ast::Literal::String((&s.value).into()),
             egg_smol::ast::Literal::String(s) => String_ { value: s.to_string() };
@@ -65,7 +68,30 @@ convert_enums!(
             e -> egg_smol::ast::Action::Expr((&e.expr).into()),
             egg_smol::ast::Action::Expr(e) => Expr_ { expr: e.into() }
     };
+    egg_smol::ast::Schedule: "{:}" => Schedule {
+        Saturate(schedule: Box<Schedule>)
+            s -> (&s.schedule).into(),
+            egg_smol::ast::Schedule::Saturate(s) => Saturate { schedule: Box::new((s).into()) };
+        Repeat(length: usize, schedule: Box<Schedule>)
+            r -> egg_smol::ast::Schedule::Repeat(r.length, Box::new((&r.schedule).into())),
+            egg_smol::ast::Schedule::Repeat(l, s) => Repeat { length: *l, schedule: Box::new((s).into()) };
+        Run(config: RunConfig)
+            r -> egg_smol::ast::Schedule::Run((&r.config).into()),
+            egg_smol::ast::Schedule::Run(c) => Run { config: c.into() };
+        Sequence(schedules: Vec<Schedule>)
+            s -> egg_smol::ast::Schedule::Sequence((&s.schedules).into_iter().map(|s| s.into()).collect()),
+            egg_smol::ast::Schedule::Sequence(s) => Sequence { schedules: s.into_iter().map(|s| s.into()).collect() }
+    };
     egg_smol::ast::Command: "{:?}" => Command {
+        SetOption(name: String, value: Expr)
+            s -> egg_smol::ast::Command::SetOption{
+                name: (&s.name).into(),
+                value: (&s.value).into()
+            },
+            egg_smol::ast::Command::SetOption {name, value} => SetOption {
+                name: name.to_string(),
+                value: value.into()
+            };
         Datatype(name: String, variants: Vec<Variant>)
             d -> egg_smol::ast::Command::Datatype {
                 name: (&d.name).into(),
@@ -75,16 +101,23 @@ convert_enums!(
                 name: name.to_string(),
                 variants: variants.into_iter().map(|v| v.into()).collect()
             };
-        Sort(name: String, presort: String, args: Vec<Expr>)
+        Declare(name: String, sort: String)
+            d -> egg_smol::ast::Command::Declare {
+                name: (&d.name).into(),
+                sort: (&d.sort).into()
+            },
+            egg_smol::ast::Command::Declare {name, sort} => Declare {
+                name: name.to_string(),
+                sort: sort.to_string()
+            };
+        Sort(name: String, presort_and_args: Option<(String, Vec<Expr>)>)
             s -> egg_smol::ast::Command::Sort(
                 (&s.name).into(),
-                (&s.presort).into(),
-                (&s.args).into_iter().map(|e| e.into()).collect()
+                (&s.presort_and_args).as_ref().map(|(p, a)| (p.into(), a.into_iter().map(|e| e.into()).collect()))
             ),
-            egg_smol::ast::Command::Sort(n, p, a) => Sort {
+            egg_smol::ast::Command::Sort(n, presort_and_args) => Sort {
                 name: n.to_string(),
-                presort: p.to_string(),
-                args: a.into_iter().map(|e| e.into()).collect()
+                presort_and_args: presort_and_args.as_ref().map(|(p, a)| (p.to_string(), a.into_iter().map(|e| e.into()).collect()))
             };
         Function(decl: FunctionDecl)
             f -> egg_smol::ast::Command::Function((&f.decl).into()),
@@ -100,18 +133,59 @@ convert_enums!(
                 expr: expr.into(),
                 cost: *cost
             };
-        RuleCommand(rule: Rule)
-            r -> egg_smol::ast::Command::Rule((&r.rule).into()),
-            egg_smol::ast::Command::Rule(r) => RuleCommand { rule: r.into() };
-        RewriteCommand(rewrite: Rewrite)
-            r -> egg_smol::ast::Command::Rewrite((&r.rewrite).into()),
-            egg_smol::ast::Command::Rewrite(r) => RewriteCommand { rewrite: r.into() };
+        AddRuleset(name: String)
+            a -> egg_smol::ast::Command::AddRuleset((&a.name).into()),
+            egg_smol::ast::Command::AddRuleset(n) => AddRuleset { name: n.to_string() };
+        RuleCommand(name: String, ruleset: String, rule: Rule)
+            r -> egg_smol::ast::Command::Rule {
+                name: (&r.name).into(),
+                ruleset: (&r.ruleset).into(),
+                rule: (&r.rule).into()
+            },
+            egg_smol::ast::Command::Rule {name, ruleset, rule} => RuleCommand {
+                name: name.to_string(),
+                ruleset: ruleset.to_string(),
+                rule: rule.into()
+            };
+        RewriteCommand(name: String, rewrite: Rewrite)
+            r -> egg_smol::ast::Command::Rewrite((&r.name).into(), (&r.rewrite).into()),
+            egg_smol::ast::Command::Rewrite(name, r) => RewriteCommand {
+                name: name.to_string(),
+                rewrite: r.into()
+            };
+        BiRewriteCommand(name: String, rewrite: Rewrite)
+            r -> egg_smol::ast::Command::BiRewrite((&r.name).into(), (&r.rewrite).into()),
+            egg_smol::ast::Command::BiRewrite(name, r) => BiRewriteCommand {
+                name: name.to_string(),
+                rewrite: r.into()
+            };
         ActionCommand(action: Action)
             a -> egg_smol::ast::Command::Action((&a.action).into()),
             egg_smol::ast::Command::Action(a) => ActionCommand { action: a.into() };
-        Run(length: usize)
-            r -> egg_smol::ast::Command::Run(r.length),
-            egg_smol::ast::Command::Run(l) => Run { length: *l };
+        RunCommand(config: RunConfig)
+            r -> egg_smol::ast::Command::Run((&r.config).into()),
+            egg_smol::ast::Command::Run(config) => RunCommand { config: config.into() };
+        RunScheduleCommand(schedule: Schedule)
+            r -> egg_smol::ast::Command::RunSchedule((&r.schedule).into()),
+            egg_smol::ast::Command::RunSchedule(s) => RunScheduleCommand { schedule: s.into() };
+        Simplify(expr: Expr, config: RunConfig)
+            s -> egg_smol::ast::Command::Simplify {
+                expr: (&s.expr).into(),
+                config: (&s.config).into()
+            },
+            egg_smol::ast::Command::Simplify {expr, config} => Simplify {
+                expr: expr.into(),
+                config: config.into()
+            };
+        Calc(identifiers: Vec<IdentSort>, exprs: Vec<Expr>)
+            c -> egg_smol::ast::Command::Calc(
+                (&c.identifiers).into_iter().map(|i| i.into()).collect(),
+                (&c.exprs).into_iter().map(|e| e.into()).collect()
+            ),
+            egg_smol::ast::Command::Calc(identifiers, exprs) => Calc {
+                identifiers: identifiers.into_iter().map(|i| i.into()).collect(),
+                exprs: exprs.into_iter().map(|e| e.into()).collect()
+            };
         Extract(variants: usize, expr: Expr)
             e -> egg_smol::ast::Command::Extract {
                 variants: e.variants,
@@ -121,15 +195,9 @@ convert_enums!(
                 variants: *variants,
                 expr: e.into()
             };
-        Check(fact: Fact_)
-            c -> egg_smol::ast::Command::Check((&c.fact).into()),
-            egg_smol::ast::Command::Check(f) => Check { fact: f.into() };
-        ClearRules()
-            c -> egg_smol::ast::Command::ClearRules,
-            egg_smol::ast::Command::ClearRules => ClearRules {};
-        Clear()
-            c -> egg_smol::ast::Command::Clear,
-            egg_smol::ast::Command::Clear => Clear {};
+        Check(facts: Vec<Fact_>)
+            c -> egg_smol::ast::Command::Check((&c.facts).into_iter().map(|f| f.into()).collect()),
+            egg_smol::ast::Command::Check(facts) => Check { facts: facts.into_iter().map(|f| f.into()).collect() };
         Print(name: String, length: usize)
             p -> egg_smol::ast::Command::Print((&p.name).into(), p.length),
             egg_smol::ast::Command::Print(n, l) => Print {
@@ -139,6 +207,15 @@ convert_enums!(
         PrintSize(name: String)
             p -> egg_smol::ast::Command::PrintSize((&p.name).into()),
             egg_smol::ast::Command::PrintSize(n) => PrintSize { name: n.to_string() };
+        Output(file: String, exprs: Vec<Expr>)
+            o -> egg_smol::ast::Command::Output {
+                file: (&o.file).into(),
+                exprs: (&o.exprs).into_iter().map(|e| e.into()).collect()
+            },
+            egg_smol::ast::Command::Output {file, exprs} => Output {
+                file: file.to_string(),
+                exprs: exprs.into_iter().map(|e| e.into()).collect()
+            };
         Input(name: String, file: String)
             i -> egg_smol::ast::Command::Input {
                 name: (&i.name).into(),
@@ -148,17 +225,18 @@ convert_enums!(
                 name: name.to_string(),
                 file: file.to_string()
             };
-        Query(facts: Vec<Fact_>)
-            q -> egg_smol::ast::Command::Query((&q.facts).into_iter().map(|f| f.into()).collect()),
-            egg_smol::ast::Command::Query(f) => Query {
-                facts: f.into_iter().map(|f| f.into()).collect()
-            };
         Push(length: usize)
             p -> egg_smol::ast::Command::Push(p.length),
             egg_smol::ast::Command::Push(l) => Push { length: *l };
         Pop(length: usize)
             p -> egg_smol::ast::Command::Pop(p.length),
-            egg_smol::ast::Command::Pop(l) => Pop { length: *l }
+            egg_smol::ast::Command::Pop(l) => Pop { length: *l };
+        Fail(command: Box<Command>)
+            f -> egg_smol::ast::Command::Fail(Box::new((&f.command).into())),
+            egg_smol::ast::Command::Fail(c) => Fail { command: Box::new((c).into()) };
+        Include(path: String)
+            i -> egg_smol::ast::Command::Include((&i.path).into()),
+            egg_smol::ast::Command::Include(p) => Include { path: p.to_string() }
 
     }
 );
@@ -169,6 +247,7 @@ convert_struct!(
         schema: Schema,
         default: Option<Expr> = None,
         merge: Option<Expr> = None,
+        merge_action: Vec<Action> = Vec::new(),
         cost: Option<usize> = None
     )
         f -> egg_smol::ast::FunctionDecl {
@@ -176,6 +255,7 @@ convert_struct!(
             schema: (&f.schema).into(),
             default: f.default.as_ref().map(|e| e.into()),
             merge: f.merge.as_ref().map(|e| e.into()),
+            merge_action: f.merge_action.iter().map(|a| a.into()).collect(),
             cost: f.cost
         },
         f -> FunctionDecl {
@@ -183,6 +263,7 @@ convert_struct!(
             schema: (&f.schema).into(),
             default: f.default.as_ref().map(|e| e.into()),
             merge: f.merge.as_ref().map(|e| e.into()),
+            merge_action: f.merge_action.iter().map(|a| a.into()).collect(),
             cost: f.cost
         };
     egg_smol::ast::Variant: "{:?}" => Variant(
@@ -210,35 +291,104 @@ convert_struct!(
         conditions: Vec<Fact_> = Vec::new()
     )
         r -> egg_smol::ast::Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: (&r.conditions).into_iter().map(|v| v.into()).collect()},
-        r -> Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()}
+        r -> Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()};
+    egg_smol::ast::RunConfig: "{:?}" => RunConfig(
+        ruleset: String,
+        limit: usize,
+        until: Option<Vec<Fact_>>
+    )
+        r -> egg_smol::ast::RunConfig {ruleset: (&r.ruleset).into(), limit: r.limit, until: r.until.as_ref().map(|v| v.into_iter().map(|v| v.into()).collect())},
+        r -> RunConfig {ruleset: r.ruleset.to_string(), limit: r.limit, until: r.until.as_ref().map(|v| v.into_iter().map(|v| v.into()).collect())};
+    egg_smol::ast::IdentSort: "{:?}" => IdentSort(
+        ident: String,
+        sort: String
+    )
+        i -> egg_smol::ast::IdentSort {ident: (&i.ident).into(), sort: (&i.sort).into()},
+        i -> IdentSort {ident: i.ident.to_string(), sort: i.sort.to_string()};
+    egg_smol::RunReport: "{:?}" => RunReport(
+        updated: bool,
+        search_time: WrappedDuration,
+        apply_time: WrappedDuration,
+        rebuild_time: WrappedDuration
+    )
+        r -> egg_smol::RunReport {updated: r.updated, search_time: r.search_time.0, apply_time: r.apply_time.0, rebuild_time: r.rebuild_time.0},
+        r -> RunReport {updated: r.updated, search_time: r.search_time.into(), apply_time: r.apply_time.into(), rebuild_time: r.rebuild_time.into()};
+    egg_smol::ExtractReport: "{:?}" => ExtractReport(
+        cost: usize,
+        expr: Expr,
+        variants: Vec<Expr>
+    )
+        r -> egg_smol::ExtractReport {cost: r.cost, expr: (&r.expr).into(), variants: r.variants.iter().map(|v| v.into()).collect()},
+        r -> ExtractReport {cost: r.cost, expr: (&r.expr).into(), variants: r.variants.iter().map(|v| v.into()).collect()}
 );
 
-// // Wrapped version of command, which ends up being a union of many types
-// pub struct Command(egg_smol::ast::Command);
+impl FromPyObject<'_> for Box<Schedule> {
+    fn extract(ob: &'_ PyAny) -> PyResult<Self> {
+        ob.extract::<Schedule>().map(|f| Box::new(f))
+    }
+}
 
-// impl From<egg_smol::ast::Command> for Command {
-//     fn from(other: egg_smol::ast::Command) -> Self {
-//         Self { command: other }
-//     }
-// }
+impl IntoPy<PyObject> for Box<Schedule> {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        (*self).into_py(py)
+    }
+}
 
-// impl IntoPy<PyObject> for Command {
-//     fn into_py(self, py: Python<'_>) -> PyObject {
-//         match self.command {
-//             egg_smol::ast::Command::Function(decl) => {
-//                 return FunctionDecl::from(decl).into_py(py);
-//             }
-//         }
-//     }
-// }
+impl FromPyObject<'_> for Box<Command> {
+    fn extract(ob: &'_ PyAny) -> PyResult<Self> {
+        ob.extract::<Command>().map(|f| Box::new(f))
+    }
+}
+
+impl IntoPy<PyObject> for Box<Command> {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        (*self).into_py(py)
+    }
+}
+
+// Wrapped version of ordered float
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct WrappedOrderedF64(ordered_float::OrderedFloat<f64>);
+
+impl From<ordered_float::OrderedFloat<f64>> for WrappedOrderedF64 {
+    fn from(other: ordered_float::OrderedFloat<f64>) -> Self {
+        WrappedOrderedF64(other)
+    }
+}
+
+impl FromPyObject<'_> for WrappedOrderedF64 {
+    fn extract(ob: &'_ PyAny) -> PyResult<Self> {
+        ob.extract::<f64>()
+            .map(|f| WrappedOrderedF64(OrderedFloat(f)))
+    }
+}
+
+impl IntoPy<PyObject> for WrappedOrderedF64 {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        self.0.into_inner().into_py(py)
+    }
+}
 
 // Wrapped version of Duration
 // Converts from a rust duration to a python timedelta
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct WrappedDuration(std::time::Duration);
 
 impl From<std::time::Duration> for WrappedDuration {
     fn from(other: std::time::Duration) -> Self {
         WrappedDuration(other)
+    }
+}
+
+impl FromPyObject<'_> for WrappedDuration {
+    fn extract(ob: &'_ PyAny) -> PyResult<Self> {
+        let py_delta = <pyo3::types::PyDelta as PyTryFrom>::try_from(ob)?;
+
+        Ok(WrappedDuration(std::time::Duration::new(
+            py_delta.get_days() as u64 * 24 * 60 * 60 + py_delta.get_seconds() as u64,
+            py_delta.get_microseconds() as u32 * 1000,
+        ))
+        .into())
     }
 }
 

@@ -57,6 +57,7 @@ check_untyped_defs = true
 strict_equality = true
 warn_unused_configs = true
 allow_redefinition = true
+enable_incomplete_feature = ["Unpack", "TypeVarTuple"]
 
 [tool.maturin]
 python-source = "python"
@@ -65,3 +66,4 @@ python-source = "python"
 addopts = ["--import-mode=importlib"]
 testpaths = ["python"]
 python_files = ["test_*.py", "test.py"]
+markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]

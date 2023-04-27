@@ -171,23 +171,27 @@ dependencies = [
 [[package]]
 name = "egg-smol"
 version = "0.1.0"
-source = "git+https://github.com/mwillsey/egg-smol?rev=08a6e8fecdb77e6ba72a1b1d9ff4aff33229912c#08a6e8fecdb77e6ba72a1b1d9ff4aff33229912c"
+source = "git+https://github.com/mwillsey/egg-smol?rev=30feaaab88452ec4b6c5f7a199345298bac2dd0f#30feaaab88452ec4b6c5f7a199345298bac2dd0f"
 dependencies = [
  "clap",
  "env_logger",
+ "glob",
  "hashbrown 0.13.1",
  "indexmap",
  "instant",
  "lalrpop",
  "lalrpop-util",
+ "lazy_static",
  "log",
  "num-integer",
  "num-rational",
  "num-traits",
+ "ordered-float",
  "regex",
  "rustc-hash",
  "smallvec",
  "symbol_table",
+ "symbolic_expressions",
  "thiserror",
 ]
 
@@ -198,6 +202,7 @@ dependencies = [
  "egg-smol",
  "lalrpop-util",
  "log",
+ "ordered-float",
  "pyo3",
  "pyo3-log",
 ]
@@ -267,6 +272,12 @@ dependencies = [
  "libc",
  "wasi",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
 
 [[package]]
 name = "hashbrown"
@@ -405,6 +416,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
+
+[[package]]
 name = "libc"
 version = "0.2.137"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -503,6 +520,15 @@ name = "once_cell"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86f0b0d4bf799edbc74508c1e8bf170ff5f41238e5f8225603ca7caaae2b7860"
+
+[[package]]
+name = "ordered-float"
+version = "3.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13a384337e997e6860ffbaa83708b2ef329fd8c54cb67a5f64d421e0f943254f"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "os_str_bytes"
@@ -810,6 +836,11 @@ dependencies = [
  "ahash 0.7.6",
  "hashbrown 0.12.3",
 ]
+
+[[package]]
+name = "symbolic_expressions"
+version = "5.0.3"
+source = "git+https://github.com/oflatt/symbolic-expressions?rev=4c0ea5ca008f972450b2af72387e64d2c1c6a791#4c0ea5ca008f972450b2af72387e64d2c1c6a791"
 
 [[package]]
 name = "syn"

@@ -38,7 +38,7 @@ macro_rules! convert_enums {
         }
     );*) => {
         $($(
-            #[pyclass(frozen, module="egg_smol.bindings"$(, name=$py_name)?)]
+            #[pyclass(unsendable, frozen, module="egg_smol.bindings"$(, name=$py_name)?)]
             #[derive(Clone, PartialEq, Eq)]
             pub struct $variant {
                 $(
@@ -133,6 +133,25 @@ macro_rules! convert_enums {
         impl From<&$from_type> for $to_type {
             fn from(other: &$from_type) -> Self {
                 match other {
+                    $(
+                        $to_pat => $to_type::$variant($to),
+                    )*
+                }
+            }
+        }
+
+        impl From<&Box<$to_type>> for $from_type {
+            fn from(other: &Box<$to_type>) -> Self {
+                match &**other {
+                    $(
+                        $to_type::$variant(v) => v.into(),
+                    )*
+                }
+            }
+        }
+        impl From<&Box<$from_type>> for $to_type {
+            fn from(other: &Box<$from_type>) -> Self {
+                match &**other {
                     $(
                         $to_pat => $to_type::$variant($to),
                     )*

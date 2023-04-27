@@ -63,37 +63,12 @@ class TypeConstraintSolver:
 
     def _subtitute_typevars(self, tp: TypeOrVarRef) -> JustTypeRef:
         if isinstance(tp, ClassTypeVarRef):
-            return self._cls_typevar_index_to_type[tp.index]
+            try:
+                return self._cls_typevar_index_to_type[tp.index]
+            except KeyError:
+                raise TypeConstraintError(f"Not enough bound typevars for {tp}")
         elif isinstance(tp, TypeRefWithVars):
             return JustTypeRef(
                 tp.name,
                 tuple(self._subtitute_typevars(arg) for arg in tp.args),
             )
-
-
-def test_type_inference() -> None:
-    import pytest
-
-    i64 = TypeRefWithVars("i64")
-    unit = TypeRefWithVars("Unit")
-    K, V = ClassTypeVarRef(0), ClassTypeVarRef(1)
-    map = TypeRefWithVars("Map", (K, V))
-    map_i64_unit = TypeRefWithVars("Map", (i64, unit))
-
-    cs = TypeConstraintSolver()
-    assert cs.infer_return_type([i64], i64, [i64.to_just()]) == i64.to_just()
-    with pytest.raises(TypeError):
-        cs.infer_return_type([i64], i64, [unit.to_just()])
-    with pytest.raises(TypeError):
-        cs.infer_return_type([], i64, [unit.to_just()])
-
-    assert cs.infer_return_type([map, K], V, [map_i64_unit.to_just(), i64.to_just()]) == unit.to_just()
-
-    with pytest.raises(TypeError):
-        cs.infer_return_type([map, K], V, [map_i64_unit.to_just(), unit.to_just()])
-
-    bound_cs = TypeConstraintSolver.from_type_parameters([i64.to_just(), unit.to_just()])
-    assert bound_cs.infer_return_type([K], V, [i64.to_just()]) == unit.to_just()
-
-    with pytest.raises(TypeError):
-        bound_cs.infer_return_type([K], V, [unit.to_just()])

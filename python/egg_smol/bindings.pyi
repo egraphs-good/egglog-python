@@ -1,36 +1,36 @@
 from datetime import timedelta
+from pathlib import Path
+from typing import Optional
 
 from typing_extensions import final
 
-def parse(input: str) -> list[_Command]: ...
+HIGH_COST: int
+
 @final
 class EGraph:
-    def parse_and_run_program(self, input: str) -> list[str]: ...
-    def declare_constructor(self, variant: Variant, sort: str) -> None: ...
-    def declare_sort(self, name: str, presort_and_args: tuple[str, list[_Expr]] | None = None) -> None: ...
-    def declare_function(self, decl: FunctionDecl) -> None: ...
-    def define(self, name: str, expr: _Expr, cost: int | None = None) -> None: ...
-    def add_rewrite(self, rewrite: Rewrite) -> str: ...
-    def run_rules(self, limit: int) -> tuple[timedelta, timedelta, timedelta]: ...
-    def check_fact(self, fact: _Fact) -> None: ...
-    def extract_expr(self, expr: _Expr, variants: int = 0) -> tuple[int, _Expr, list[_Expr]]: ...
-    def add_rule(self, rule: Rule) -> str: ...
-    def eval_actions(self, *actions: _Action) -> None: ...
-    def push(self) -> None: ...
-    def pop(self) -> None: ...
-    def clear(self) -> None: ...
-    def clear_rules(self) -> None: ...
-    def print_size(self, name: str) -> str: ...
-    def print_function(self, name: str, n: int) -> str: ...
+    def __init__(self, fact_directory: str | Path | None = None, seminaive=True) -> None: ...
+    def parse_program(self, __input: str, /) -> list[_Command]: ...
+    def run_program(self, *commands: _Command) -> list[str]: ...
+    def extract_report(self) -> Optional[ExtractReport]: ...
+    def run_report(self) -> Optional[RunReport]: ...
 
 @final
 class EggSmolError(Exception):
     context: str
 
+##
+# Literals
+##
+
 @final
 class Int:
     def __init__(self, value: int) -> None: ...
     value: int
+
+@final
+class F64:
+    value: float
+    def __init__(self, value: float) -> None: ...
 
 @final
 class String:
@@ -41,7 +41,7 @@ class String:
 class Unit:
     def __init__(self) -> None: ...
 
-_Literal = Int | String | Unit
+_Literal = Int | F64 | String | Unit
 
 @final
 class Lit:
@@ -59,8 +59,12 @@ class Call:
     name: str
     args: list[_Expr]
 
-# This must be private becuase it is not actually exposed by the runtime library.
+# Unions must be private becuase it is not actually exposed by the runtime library.
 _Expr = Lit | Var | Call
+
+##
+# Facts
+##
 
 @final
 class Eq:
@@ -73,6 +77,10 @@ class Fact:
     expr: _Expr
 
 _Fact = Fact | Eq
+
+##
+# Actions
+##
 
 @final
 class Let:
@@ -111,12 +119,17 @@ class Expr_:
 
 _Action = Let | Set | Delete | Union | Panic | Expr_
 
+##
+# Other Structs
+##
+
 @final
 class FunctionDecl:
     name: str
     schema: Schema
     default: _Expr | None
     merge: _Expr | None
+    merge_action: list[_Action]
     cost: int | None
     def __init__(
         self,
@@ -124,6 +137,7 @@ class FunctionDecl:
         schema: Schema,
         default: _Expr | None = None,
         merge: _Expr | None = None,
+        merge_action: list[_Action] = [],
         cost: int | None = None,
     ) -> None: ...
 
@@ -155,17 +169,94 @@ class Rewrite:
     def __init__(self, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []) -> None: ...
 
 @final
+class RunConfig:
+    ruleset: str
+    limit: int
+    until: Optional[list[_Fact]]
+    def __init__(self, ruleset: str, limit: int, until: Optional[list[_Fact]] = None) -> None: ...
+
+@final
+class IdentSort:
+    ident: str
+    sort: str
+    def __init__(self, ident: str, sort: str) -> None: ...
+
+@final
+class RunReport:
+    updated: bool
+    search_time: timedelta
+    apply_time: timedelta
+    rebuild_time: timedelta
+
+    def __init__(
+        self,
+        updated: bool,
+        search_time: timedelta,
+        apply_time: timedelta,
+        rebuild_time: timedelta,
+    ) -> None: ...
+
+@final
+class ExtractReport:
+    cost: int
+    expr: _Expr
+    variants: list[_Expr]
+
+    def __init__(self, cost: int, expr: _Expr, variants: list[_Expr]) -> None: ...
+
+##
+# Schedules
+##
+@final
+class Saturate:
+    schedule: _Schedule
+    def __init__(self, schedule: _Schedule) -> None: ...
+
+@final
+class Repeat:
+    length: int
+    schedule: _Schedule
+    def __init__(self, length: int, schedule: _Schedule) -> None: ...
+
+@final
+class Run:
+    config: RunConfig
+    def __init__(self, config: RunConfig) -> None: ...
+
+@final
+class Sequence:
+    schedules: list[_Schedule]
+    def __init__(self, schedules: list[_Schedule]) -> None: ...
+
+_Schedule = Saturate | Repeat | Run | Sequence
+
+##
+# Commands
+##
+
+@final
+class SetOption:
+    name: str
+    value: _Expr
+    def __init__(self, name: str, value: _Expr) -> None: ...
+
+@final
 class Datatype:
     name: str
     variants: list[Variant]
     def __init__(self, name: str, variants: list[Variant]) -> None: ...
 
 @final
+class Declare:
+    name: str
+    sort: str
+    def __init__(self, name: str, sort: str) -> None: ...
+
+@final
 class Sort:
     name: str
-    presort: str
-    args: list[_Expr]
-    def __init__(self, name: str, presort: str, args: list[_Expr]) -> None: ...
+    presort_and_args: Optional[tuple[str, list[_Expr]]]
+    def __init__(self, name: str, presort_and_args: Optional[tuple[str, list[_Expr]]] = None) -> None: ...
 
 @final
 class Function:
@@ -177,17 +268,33 @@ class Define:
     name: str
     expr: _Expr
     cost: int | None
-    def __init__(self, name: str, expr: _Expr, cost: int | None = None) -> None: ...
+    def __init__(self, name: str, expr: _Expr, cost: int | None) -> None: ...
+
+@final
+class AddRuleset:
+    name: str
+    def __init__(self, name: str) -> None: ...
 
 @final
 class RuleCommand:
+    name: str
+    ruleset: str
     rule: Rule
-    def __init__(self, rule: Rule) -> None: ...
+    def __init__(self, name: str, ruleset: str, rule: Rule) -> None: ...
 
 @final
 class RewriteCommand:
+    # TODO: Rename to ruleset
+    name: str
     rewrite: Rewrite
-    def __init__(self, rewrite: Rewrite) -> None: ...
+    def __init__(self, name: str, rewrite: Rewrite) -> None: ...
+
+@final
+class BiRewriteCommand:
+    # TODO: Rename to ruleset
+    name: str
+    rewrite: Rewrite
+    def __init__(self, name: str, rewrite: Rewrite) -> None: ...
 
 @final
 class ActionCommand:
@@ -195,9 +302,26 @@ class ActionCommand:
     def __init__(self, action: _Action) -> None: ...
 
 @final
-class Run:
-    length: int
-    def __init__(self, length: int) -> None: ...
+class RunCommand:
+    config: RunConfig
+    def __init__(self, config: RunConfig) -> None: ...
+
+@final
+class RunScheduleCommand:
+    schedule: _Schedule
+    def __init__(self, schedule: _Schedule) -> None: ...
+
+@final
+class Simplify:
+    expr: _Expr
+    config: RunConfig
+    def __init__(self, expr: _Expr, config: RunConfig) -> None: ...
+
+@final
+class Calc:
+    identifiers: list[IdentSort]
+    exprs: list[_Expr]
+    def __init__(self, identifiers: list[IdentSort], exprs: list[_Expr]) -> None: ...
 
 @final
 class Extract:
@@ -207,16 +331,8 @@ class Extract:
 
 @final
 class Check:
-    fact: _Fact
-    def __init__(self, fact: _Fact) -> None: ...
-
-@final
-class ClearRules:
-    def __init__(self) -> None: ...
-
-@final
-class Clear:
-    def __init__(self) -> None: ...
+    facts: list[_Fact]
+    def __init__(self, facts: list[_Fact]) -> None: ...
 
 @final
 class Print:
@@ -230,15 +346,16 @@ class PrintSize:
     def __init__(self, name: str) -> None: ...
 
 @final
+class Output:
+    file: str
+    exprs: list[_Expr]
+    def __init__(self, file: str, exprs: list[_Expr]) -> None: ...
+
+@final
 class Input:
     name: str
     file: str
     def __init__(self, name: str, file: str) -> None: ...
-
-@final
-class Query:
-    facts: list[_Fact]
-    def __init__(self, facts: list[_Fact]) -> None: ...
 
 @final
 class Push:
@@ -250,23 +367,40 @@ class Pop:
     length: int
     def __init__(self, length: int) -> None: ...
 
+@final
+class Fail:
+    command: _Command
+    def __init__(self, command: _Command) -> None: ...
+
+@final
+class Include:
+    path: str
+    def __init__(self, path: str) -> None: ...
+
 _Command = (
-    Datatype
+    SetOption
+    | Datatype
+    | Declare
     | Sort
     | Function
     | Define
+    | AddRuleset
     | RuleCommand
     | RewriteCommand
+    | BiRewriteCommand
     | ActionCommand
-    | Run
+    | RunCommand
+    | RunScheduleCommand
+    | Calc
+    | Simplify
     | Extract
     | Check
-    | ClearRules
-    | Clear
     | Print
     | PrintSize
+    | Output
     | Input
-    | Query
     | Push
     | Pop
+    | Fail
+    | Include
 )

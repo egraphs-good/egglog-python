@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from typing import Generic, TypeVar, Union
 
-from .registry import BUILTINS, BaseExpr, Unit
+from .egraph import BUILTINS, BaseExpr, Unit
 
 __all__ = [
     "BUILTINS",
     "i64",
     "i64Like",
+    "f64",
+    "f64Like",
     "String",
     "StringLike",
     "Map",
@@ -87,6 +89,59 @@ class i64(BaseExpr):
 
     @BUILTINS.method(egg_fn="max")
     def max(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+
+f64Like = Union[float, "f64"]
+
+
+@BUILTINS.class_(egg_sort="f64")
+class f64(BaseExpr):
+    def __init__(self, value: float):
+        ...
+
+    @BUILTINS.method(egg_fn="+")
+    def __add__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="-")
+    def __sub__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="*")
+    def __mul__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="/")
+    def __truediv__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="%")
+    def __mod__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="<")
+    def __lt__(self, other: f64Like) -> Unit:  # type: ignore[empty-body,has-type]
+        ...
+
+    @BUILTINS.method(egg_fn=">")
+    def __gt__(self, other: f64Like) -> Unit:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="<=")
+    def __le__(self, other: f64Like) -> Unit:  # type: ignore[empty-body,has-type]
+        ...
+
+    @BUILTINS.method(egg_fn=">=")
+    def __ge__(self, other: f64Like) -> Unit:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="min")
+    def min(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="max")
+    def max(self, other: f64Like) -> f64:  # type: ignore[empty-body]
         ...
 
 
