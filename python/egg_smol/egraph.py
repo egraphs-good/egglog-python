@@ -74,7 +74,15 @@ EXPR = TypeVar("EXPR", bound="BaseExpr")
 # Attributes which are sometimes added to classes by the interpreter or the dataclass decorator, or by ipython.
 # We ignore these when inspecting the class.
 
-IGNORED_ATTRIBUTES = {"__module__", "__doc__", "__dict__", "__weakref__", "__orig_bases__", "__annotations__"}
+IGNORED_ATTRIBUTES = {
+    "__module__",
+    "__doc__",
+    "__dict__",
+    "__weakref__",
+    "__orig_bases__",
+    "__annotations__",
+    "__hash__",
+}
 
 
 @dataclass
