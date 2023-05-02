@@ -145,7 +145,7 @@ class EGraph:
         Defines a relation, which is the same as a function which returns unit.
         """
         arg_types = tuple(self._resolve_type_annotation(cast(object, tp), [], None) for tp in tps)
-        fn_decl = FunctionDecl(arg_types, TypeRefWithVars("Unit"))
+        fn_decl = FunctionDecl(arg_types, TypeRefWithVars("unit"))
         commands = self._decls.register_callable(FunctionRef(name), fn_decl, egg_fn)
         self._run_program(commands)
         return cast(Callable[[Unpack[TS]], Unit], RuntimeFunction(self._decls, name))
@@ -702,7 +702,7 @@ class BaseExpr(metaclass=_BaseExprMetaclass):
 BUILTINS = EGraph(_for_builtins=True)
 
 
-@BUILTINS.class_(egg_sort="unit")
+@BUILTINS.class_(egg_sort="Unit")
 class Unit(BaseExpr):
     """
     The unit type. This is also used to reprsent if a value exists, if it is resolved or not.
