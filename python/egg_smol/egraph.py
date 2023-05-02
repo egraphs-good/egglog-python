@@ -67,7 +67,7 @@ __all__ = [
 T = TypeVar("T")
 TS = TypeVarTuple("TS")
 P = ParamSpec("P")
-TYPE = TypeVar("TYPE", bound=type)
+TYPE = TypeVar("TYPE", bound=type["BaseExpr"])
 CALLABLE = TypeVar("CALLABLE", bound=Callable)
 EXPR = TypeVar("EXPR", bound="BaseExpr")
 
