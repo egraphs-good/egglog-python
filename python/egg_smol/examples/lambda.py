@@ -194,7 +194,11 @@ assert_simplifies(
 # lambda if elim
 a = Term.var(Var("a"))
 b = Term.var(Var("b"))
-assert_simplifies(if_(a == b, a + a, a + b), b + a)
+with egraph:
+    e1 = egraph.define("e1", if_(a == b, a + a, a + b))
+    egraph.run(10)
+    egraph.check(eq(e1).to(a + b))
+
 # lambda let simple
 x = Var("x")
 y = Var("y")
