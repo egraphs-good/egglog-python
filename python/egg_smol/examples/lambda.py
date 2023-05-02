@@ -177,7 +177,7 @@ assert_simplifies((Term.val(Val(1)) + Term.val(Val(2))).eval(), Val(3))
 result = egraph.relation("result")
 
 
-def l(fn: Callable[[Term], Term]) -> Term: # noqa
+def l(fn: Callable[[Term], Term]) -> Term:  # noqa
     """
     Create a lambda term from a function
     """
