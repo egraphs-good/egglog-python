@@ -161,13 +161,13 @@ egraph.register(
 )
 
 
-def assert_simplifies(l: BaseExpr, r: BaseExpr) -> None:
+def assert_simplifies(left: BaseExpr, right: BaseExpr) -> None:
     """
     Simplify and print
     """
-    res = egraph.simplify(l, 30)
-    print(f"{l} ➡  {res}")
-    assert expr_parts(res) == expr_parts(r), f"{res} != {r}"
+    res = egraph.simplify(left, 30)
+    print(f"{left} ➡  {res}")
+    assert expr_parts(res) == expr_parts(right), f"{res} != {right}"
 
 
 assert_simplifies((Term.val(Val(1))).eval(), Val(1))
@@ -177,7 +177,7 @@ assert_simplifies((Term.val(Val(1)) + Term.val(Val(2))).eval(), Val(3))
 result = egraph.relation("result")
 
 
-def l(fn: Callable[[Term], Term]) -> Term:
+def l(fn: Callable[[Term], Term]) -> Term: # noqa
     """
     Create a lambda term from a function
     """
