@@ -160,20 +160,6 @@ egraph.register(
     ),
 )
 
-
-def assert_simplifies(left: BaseExpr, right: BaseExpr) -> None:
-    """
-    Simplify and print
-    """
-    res = egraph.simplify(left, 30)
-    print(f"{left} ➡  {res}")
-    assert expr_parts(res) == expr_parts(right), f"{res} != {right}"
-
-
-assert_simplifies((Term.val(Val(1))).eval(), Val(1))
-assert_simplifies((Term.val(Val(1)) + Term.val(Val(2))).eval(), Val(3))
-
-
 result = egraph.relation("result")
 
 
@@ -184,6 +170,20 @@ def l(fn: Callable[[Term], Term]) -> Term:  # noqa
     # Use first var name from fn
     x = fn.__code__.co_varnames[0]
     return lam(Var(x), fn(Term.var(Var(x))))
+
+
+def assert_simplifies(left: BaseExpr, right: BaseExpr) -> None:
+    """
+    Simplify and print
+    """
+    with egraph:
+        res = egraph.simplify(left, 30)
+    print(f"{left} ➡  {res}")
+    assert expr_parts(res) == expr_parts(right), f"{res} != {right}"
+
+
+assert_simplifies((Term.val(Val(1))).eval(), Val(1))
+assert_simplifies((Term.val(Val(1)) + Term.val(Val(2))).eval(), Val(3))
 
 
 # lambda under
@@ -270,7 +270,7 @@ with egraph:
 assert_simplifies(if_(Term.val(Val(1)) == Term.val(Val(1)), Term.val(Val(7)), Term.val(Val(9))), Term.val(Val(7)))
 
 
-# lambda_compose_many
+# # lambda_compose_many
 assert_simplifies(
     let_(
         compose,
@@ -298,7 +298,7 @@ assert_simplifies(
     let_(
         zeroone,
         l(lambda x: if_(x == Term.val(Val(0)), Term.val(Val(0)), Term.val(Val(1)))),
-        Term.val(Val(0)) + Term.var(zeroone)(Term.val(Val(0))) + Term.var(zeroone)(Term.val(Val(10))),
+        Term.var(zeroone)(Term.val(Val(0))) + Term.var(zeroone)(Term.val(Val(10))),
     ),
     Term.val(Val(1)),
 )
