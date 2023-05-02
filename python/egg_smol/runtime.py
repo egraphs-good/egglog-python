@@ -16,7 +16,7 @@ from typing import Collection, Iterable, Optional, Union
 import black
 from typing_extensions import assert_never
 
-from . import config
+from . import config as configuration  # noqa: F401
 from .declarations import *
 from .declarations import BINARY_METHODS, UNARY_METHODS
 from .type_constraint_solver import *
@@ -224,7 +224,7 @@ class RuntimeMethod:
             else None
         )
 
-        first_arg = RuntimeExpr(self.__egg_decls__, JustTypeRef(self.class_name), self.__egg_slf_arg__)
+        first_arg = RuntimeExpr(self.__egg_decls__, self.__egg_tp__, self.__egg_slf_arg__)
         args = (first_arg, *args)
 
         return _call(
@@ -260,7 +260,7 @@ class RuntimeExpr:
 
     def __str__(self) -> str:
         pretty_expr = self.__egg_expr__.pretty(parens=False)
-        if config.SHOW_TYPES:
+        if configuration.SHOW_TYPES:
             s = f"_: {self.__egg_tp__.pretty()} = {pretty_expr}"
             return black.format_str(s, mode=black.FileMode()).strip()
         else:

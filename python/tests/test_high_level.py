@@ -141,8 +141,37 @@ def test_class_vars():
     egraph = EGraph()
 
     @egraph.class_
-    class Numeric:
+    class Numeric(BaseExpr):
         ONE: ClassVar[i64]
 
     egraph.register(set_(Numeric.ONE).to(i64(1)))
     egraph.check(eq(Numeric.ONE).to(i64(1)))
+
+
+def test_simplify_constant():
+    egraph = EGraph()
+
+    @egraph.class_
+    class Numeric(BaseExpr):
+        ONE: ClassVar[Numeric]
+
+        def __init__(self, v: i64) -> None:
+            pass
+
+    assert expr_parts(egraph.simplify(Numeric.ONE, 10)) == expr_parts(Numeric.ONE)
+
+    egraph.register(union(Numeric.ONE).with_(Numeric(i64(1))))
+
+    assert expr_parts(egraph.simplify(Numeric.ONE, 10)) == expr_parts(Numeric(i64(1)))
+
+
+def test_extract_constant_twice():
+    # Sometimes extrcting a constant twice will give an error
+    egraph = EGraph()
+
+    @egraph.class_
+    class Numeric(BaseExpr):
+        ONE: ClassVar[Numeric]
+
+    egraph.extract(Numeric.ONE)
+    egraph.extract(Numeric.ONE)

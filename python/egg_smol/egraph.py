@@ -67,14 +67,22 @@ __all__ = [
 T = TypeVar("T")
 TS = TypeVarTuple("TS")
 P = ParamSpec("P")
-TYPE = TypeVar("TYPE", bound=type)
+TYPE = TypeVar("TYPE", bound="type[BaseExpr]")
 CALLABLE = TypeVar("CALLABLE", bound=Callable)
 EXPR = TypeVar("EXPR", bound="BaseExpr")
 
 # Attributes which are sometimes added to classes by the interpreter or the dataclass decorator, or by ipython.
 # We ignore these when inspecting the class.
 
-IGNORED_ATTRIBUTES = {"__module__", "__doc__", "__dict__", "__weakref__", "__orig_bases__", "__annotations__"}
+IGNORED_ATTRIBUTES = {
+    "__module__",
+    "__doc__",
+    "__dict__",
+    "__weakref__",
+    "__orig_bases__",
+    "__annotations__",
+    "__hash__",
+}
 
 
 @dataclass
@@ -137,7 +145,7 @@ class EGraph:
         Defines a relation, which is the same as a function which returns unit.
         """
         arg_types = tuple(self._resolve_type_annotation(cast(object, tp), [], None) for tp in tps)
-        fn_decl = FunctionDecl(arg_types, TypeRefWithVars("Unit"))
+        fn_decl = FunctionDecl(arg_types, TypeRefWithVars("unit"))
         commands = self._decls.register_callable(FunctionRef(name), fn_decl, egg_fn)
         self._run_program(commands)
         return cast(Callable[[Unpack[TS]], Unit], RuntimeFunction(self._decls, name))
@@ -694,7 +702,7 @@ class BaseExpr(metaclass=_BaseExprMetaclass):
 BUILTINS = EGraph(_for_builtins=True)
 
 
-@BUILTINS.class_(egg_sort="unit")
+@BUILTINS.class_(egg_sort="Unit")
 class Unit(BaseExpr):
     """
     The unit type. This is also used to reprsent if a value exists, if it is resolved or not.

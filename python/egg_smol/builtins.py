@@ -193,7 +193,7 @@ class Map(BaseExpr, Generic[T, V]):
         ...
 
     @BUILTINS.method(egg_fn="map-remove")
-    def map_remove(self, key: T) -> Map[T, V]:  # type: ignore[empty-body]
+    def remove(self, key: T) -> Map[T, V]:  # type: ignore[empty-body]
         ...
 
 
