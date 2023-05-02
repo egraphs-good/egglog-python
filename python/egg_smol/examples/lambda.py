@@ -165,7 +165,7 @@ def assert_simplifies(l: BaseExpr, r: BaseExpr) -> None:
     """
     Simplify and print
     """
-    res = egraph.simplify(l, 20)
+    res = egraph.simplify(l, 30)
     print(f"{l} ➡  {res}")
     assert expr_parts(res) == expr_parts(r), f"{res} != {r}"
 
@@ -190,4 +190,115 @@ def l(fn: Callable[[Term], Term]) -> Term:
 assert_simplifies(
     l(lambda x: Term.val(Val(4)) + l(lambda y: y)(Term.val(Val(4)))),
     l(lambda x: Term.val(Val(8))),
+)
+# lambda if elim
+a = Term.var(Var("a"))
+b = Term.var(Var("b"))
+assert_simplifies(if_(a == b, a + a, a + b), b + a)
+# lambda let simple
+x = Var("x")
+y = Var("y")
+assert_simplifies(
+    let_(x, Term.val(Val(0)), let_(y, Term.val(Val(1)), Term.var(x) + Term.var(y))),
+    Term.val(Val(1)),
+)
+# lambda capture
+assert_simplifies(
+    let_(x, Term.val(Val(1)), l(lambda x: x)),
+    l(lambda x: x),
+)
+# lambda capture free
+with egraph:
+    e5 = egraph.define("e5", let_(y, Term.var(x) + Term.var(x), l(lambda x: Term.var(y))))
+    egraph.run(10)
+    egraph.check(freer(l(lambda x: Term.var(y))).contains(y))
+    egraph.check_fail(eq(e5).to(l(lambda x: x + x)))
+
+# lambda_closure_not_seven
+with egraph:
+    e6 = egraph.define(
+        "e6",
+        let_(
+            Var("five"),
+            Term.val(Val(5)),
+            let_(
+                Var("add-five"),
+                l(lambda x: x + Term.var(Var("five"))),
+                let_(Var("five"), Term.val(Val(6)), Term.var(Var("add-five"))(Term.val(Val(1)))),
+            ),
+        ),
+    )
+    egraph.run(10)
+    egraph.check_fail(eq(e6).to(Term.val(Val(7))))
+    egraph.check(eq(e6).to(Term.val(Val(6))))
+
+
+# lambda_compose
+with egraph:
+    compose = Var("compose")
+    add1 = Var("add1")
+    e7 = egraph.define(
+        "e7",
+        let_(
+            compose,
+            l(
+                lambda f: l(
+                    lambda g: l(
+                        lambda x: f(g(x)),
+                    ),
+                ),
+            ),
+            let_(
+                add1,
+                l(lambda y: y + Term.val(Val(1))),
+                Term.var(compose)(Term.var(add1))(Term.var(add1)),
+            ),
+        ),
+    )
+    egraph.run(20)
+    egraph.register(
+        rule(
+            eq(t1).to(l(lambda x: Term.val(Val(1)) + l(lambda y: Term.val(Val(1)) + y)(x))),
+            eq(t2).to(l(lambda x: x + Term.val(Val(2)))),
+        ).then(result())
+    )
+    egraph.run(1)
+    egraph.check(result())
+
+
+# lambda_if_simple
+assert_simplifies(if_(Term.val(Val(1)) == Term.val(Val(1)), Term.val(Val(7)), Term.val(Val(9))), Term.val(Val(7)))
+
+
+# lambda_compose_many
+assert_simplifies(
+    let_(
+        compose,
+        l(lambda f: l(lambda g: l(lambda x: f(g(x))))),
+        let_(
+            add1,
+            l(lambda y: y + Term.val(Val(1))),
+            Term.var(compose)(Term.var(add1))(
+                Term.var(compose)(Term.var(add1))(
+                    Term.var(compose)(Term.var(add1))(
+                        Term.var(compose)(Term.var(add1))(
+                            Term.var(compose)(Term.var(add1))(Term.var(compose)(Term.var(add1))(Term.var(add1)))
+                        )
+                    )
+                )
+            ),
+        ),
+    ),
+    l(lambda x: x + Term.val(Val(7))),
+)
+
+# lambda_if
+zeroone = Var("zeroone")
+assert_simplifies(
+    let_(
+        zeroone,
+        l(lambda x: if_(x == Term.val(Val(0)), Term.val(Val(0)), Term.val(Val(1)))),
+        Term.val(Val(0)) + Term.var(zeroone)(Term.val(Val(0))) + Term.var(zeroone)(Term.val(Val(10))),
+    ),
+    Term.val(Val(1)),
 )
