@@ -219,7 +219,7 @@ class JustTypeRef:
         egg_name = decls._type_ref_to_egg_sort[self]
         for arg in self.args:
             yield from decls._register_sort(arg)
-        arg_sorts = [cast(bindings._Expr, bindings.Var(decls._type_ref_to_egg_sort[a])) for a in self.args]
+        arg_sorts = [cast("bindings._Expr", bindings.Var(decls._type_ref_to_egg_sort[a])) for a in self.args]
         yield bindings.Sort(egg_name, (self.name, arg_sorts) if arg_sorts else None)
 
     def to_var(self) -> TypeRefWithVars:
