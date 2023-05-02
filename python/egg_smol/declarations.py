@@ -191,7 +191,8 @@ def constant_function_decl(type_ref: JustTypeRef) -> FunctionDecl:
     Create a function decleartion for a constant function. This is similar to how egg-smol compiles
     the `constant` command.
     """
-    return FunctionDecl(arg_types=(), return_type=type_ref.to_var(), cost=bindings.HIGH_COST)
+    # Divide high cost by 10 to not overflow the cost field.
+    return FunctionDecl(arg_types=(), return_type=type_ref.to_var(), cost=int(bindings.HIGH_COST / 10))
 
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.
