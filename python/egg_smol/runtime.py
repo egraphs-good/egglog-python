@@ -224,7 +224,7 @@ class RuntimeMethod:
             else None
         )
 
-        first_arg = RuntimeExpr(self.__egg_decls__, JustTypeRef(self.class_name), self.__egg_slf_arg__)
+        first_arg = RuntimeExpr(self.__egg_decls__, self.__egg_tp__, self.__egg_slf_arg__)
         args = (first_arg, *args)
 
         return _call(
