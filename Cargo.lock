@@ -169,7 +169,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "egglog"
+name = "egg-smol"
 version = "0.1.0"
 source = "git+https://github.com/egraphs-good/egglog?rev=30feaaab88452ec4b6c5f7a199345298bac2dd0f#30feaaab88452ec4b6c5f7a199345298bac2dd0f"
 dependencies = [
@@ -199,7 +199,7 @@ dependencies = [
 name = "egglog-python"
 version = "0.3.1"
 dependencies = [
- "egglog",
+ "egg-smol",
  "lalrpop-util",
  "log",
  "ordered-float",
@@ -831,7 +831,7 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 [[package]]
 name = "symbol_table"
 version = "0.2.0"
-source = "git+https://github.com/egraphs-good/symbol_table?rev=acddcf8938d1b4ed2fce048c9d83c30203d404b9#acddcf8938d1b4ed2fce048c9d83c30203d404b9"
+source = "git+https://github.com/mwillsey/symbol_table?rev=acddcf8938d1b4ed2fce048c9d83c30203d404b9#acddcf8938d1b4ed2fce048c9d83c30203d404b9"
 dependencies = [
  "ahash 0.7.6",
  "hashbrown 0.12.3",
