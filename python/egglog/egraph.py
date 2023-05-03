@@ -166,7 +166,7 @@ class EGraph:
         self._run_program([bindings.Input(fn_name, path)])
 
     def output(self) -> None:
-        raise NotImplementedError("Not imeplemented yet, because there are no examples in the egg-smol repo")
+        raise NotImplementedError("Not imeplemented yet, because there are no examples in the egglog repo")
 
     def calc(self) -> None:
         raise NotImplementedError("Not implemented yet")
@@ -269,7 +269,7 @@ class EGraph:
         Define a new expression in the egraph and return a reference to it.
         """
         # Don't support cost and maybe will be removed in favor of let
-        # https://github.com/mwillsey/egg-smol/issues/128#issuecomment-1523760578
+        # https://github.com/egraphs-good/egglog/issues/128#issuecomment-1523760578
         tp, decl = expr_parts(expr)
         self._run_program([bindings.Define(name, decl.to_egg(self._decls), None)])
         return cast(EXPR, RuntimeExpr(self._decls, tp, VarDecl(name)))

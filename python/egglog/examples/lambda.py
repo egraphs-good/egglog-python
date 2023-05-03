@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Callable, ClassVar
 
-from egg_smol import *
+from egglog import *
 
 egraph = EGraph()
 

@@ -5,7 +5,7 @@ mod utils;
 
 use pyo3::prelude::*;
 
-/// Bindings for egg-smol rust library
+/// Bindings for egg_smol rust library
 #[pymodule]
 fn bindings(_py: Python, m: &PyModule) -> PyResult<()> {
     pyo3_log::init();

@@ -28,7 +28,7 @@ repos:
     hooks:
       - id: stubtest
         name: stubtest
-        entry: python -m mypy.stubtest egg_smol.bindings  --allowlist stubtest_allow
+        entry: python -m mypy.stubtest egglog.bindings  --allowlist stubtest_allow
         language: system
         pass_filenames: false
         require_serial: true

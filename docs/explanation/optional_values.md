@@ -1,4 +1,4 @@
-# How does egg-smol handle boolean values?
+# How does egglog handle boolean values?
 
 Some functions, like `<<` return an optional int.
 Others, like `<` return an optional unit.
@@ -9,7 +9,7 @@ Are optional values automatically unwrapped?
 
 It looks like we can use them as conditionals as well, like this `(check (< 1 2))`.
 
-Let's look at how check will be implemented in egg-smol:
+Let's look at how check will be implemented in egglog:
 
 1. The rule for parsing `check` in `parse.lalrpop` is:
 
@@ -23,7 +23,7 @@ Let's look at how check will be implemented in egg-smol:
 Let's see what happens if we call check on something that is not true:
 
 ```python
-from egg_smol.bindings import *
+from egglog.bindings import *
 egraph = EGraph()
 egraph.check_fact(Fact(
     Call(
@@ -43,7 +43,7 @@ PanicException: prim was partial... do we allow this?
 And what if we call check with a non-unit value?
 
 ```python
-from egg_smol.bindings import *
+from egglog.bindings import *
 egraph = EGraph()
 egraph.check_fact(Fact(
     Call(

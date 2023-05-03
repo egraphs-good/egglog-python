@@ -5,12 +5,12 @@ import pathlib
 import subprocess
 
 import pytest
-from egg_smol.bindings import *
+from egglog.bindings import *
 
 
-def get_egg_smol_folder() -> pathlib.Path:
+def get_egglog_folder() -> pathlib.Path:
     """
-    Return the egg-smol source folder
+    Return the egglog source folder
     """
     metadata_process = subprocess.run(
         ["cargo", "metadata", "--format-version", "1", "-q"],
@@ -18,11 +18,11 @@ def get_egg_smol_folder() -> pathlib.Path:
         check=True,
     )
     metadata = json.loads(metadata_process.stdout)
-    (egg_smol_package,) = [package for package in metadata["packages"] if package["name"] == "egg-smol"]
-    return pathlib.Path(egg_smol_package["manifest_path"]).parent
+    (egglog_package,) = [package for package in metadata["packages"] if package["name"] == "egg-smol"]
+    return pathlib.Path(egglog_package["manifest_path"]).parent
 
 
-EGG_SMOL_FOLDER = get_egg_smol_folder()
+EGG_SMOL_FOLDER = get_egglog_folder()
 
 SLOW_TESTS = ["repro-unsound"]
 
@@ -128,7 +128,7 @@ class TestEGraph:
         )
         assert egraph.extract_report() == ExtractReport(6, Call("Num", [Lit(Int(1))]), [])
         egraph.run_program(Extract(0, Var("y")))
-        pytest.xfail(reason="https://github.com/mwillsey/egg-smol/issues/128")
+        pytest.xfail(reason="https://github.com/egraphs-good/egglog/issues/128")
         assert egraph.extract_report() == ExtractReport(1, Call("y", []), [])
 
     def test_extract_string(self):

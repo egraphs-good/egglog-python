@@ -95,8 +95,8 @@ jobs:
           command: build
           args: --release --sdist -o dist --find-interpreter
           # Pin rust toolchain, so it won't install 1.65.0, otherwise get this error:
-          # Attempting to include the sdist output tarball dist/egg_smol-0.1.0.tar.gz into itself! Check 'cargo package --list' output.
-          # https://github.com/metadsl/egg-smol-python/actions/runs/3388178229/jobs/5629843303
+          # Attempting to include the sdist output tarball dist/egglog-0.1.0.tar.gz into itself! Check 'cargo package --list' output.
+          # https://github.com/metadsl/egglog-python/actions/runs/3388178229/jobs/5629843303
           rust-toolchain: "1.64.0"
       - name: Upload wheels
         uses: actions/upload-artifact@v2

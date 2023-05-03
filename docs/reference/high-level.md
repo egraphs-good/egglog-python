@@ -1,4 +1,4 @@
-# `egg_smol`
+# `egglog`
 
 The top level module contains the high level API for using e-graphs in Python.
 
@@ -6,7 +6,7 @@ The high level API is not documented yet, becuase adding supporting for our cust
 
 <!--
 ```{eval-rst}
-.. automodule:: egg_smol
+.. automodule:: egglog
    :members:
    :imported-members:
    :special-members: __ne__

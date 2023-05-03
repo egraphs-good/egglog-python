@@ -1,5 +1,5 @@
 """
-Global configuration for egg_smol.
+Global configuration for egglog.
 """
 
 from __future__ import annotations

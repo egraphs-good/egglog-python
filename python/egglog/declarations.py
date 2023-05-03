@@ -188,7 +188,7 @@ class Declarations:
 
 def constant_function_decl(type_ref: JustTypeRef) -> FunctionDecl:
     """
-    Create a function decleartion for a constant function. This is similar to how egg-smol compiles
+    Create a function decleartion for a constant function. This is similar to how egglog compiles
     the `constant` command.
     """
     # Divide high cost by 10 to not overflow the cost field.
@@ -242,7 +242,7 @@ class ClassTypeVarRef:
     index: int
 
     def to_just(self) -> JustTypeRef:
-        raise NotImplementedError("egg-smol does not support generic classes yet.")
+        raise NotImplementedError("egglog does not support generic classes yet.")
 
 
 @dataclass(frozen=True)

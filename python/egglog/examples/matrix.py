@@ -4,7 +4,7 @@ Matrix multiplication and Kronecker product.
 """
 from __future__ import annotations
 
-from egg_smol import *
+from egglog import *
 
 egraph = EGraph()
 

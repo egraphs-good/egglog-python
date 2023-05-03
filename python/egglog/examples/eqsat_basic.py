@@ -4,7 +4,7 @@ Basic equality saturation example.
 """
 from __future__ import annotations
 
-from egg_smol import *
+from egglog import *
 
 egraph = EGraph()
 

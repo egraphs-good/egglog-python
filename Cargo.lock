@@ -171,7 +171,7 @@ dependencies = [
 [[package]]
 name = "egg-smol"
 version = "0.1.0"
-source = "git+https://github.com/mwillsey/egg-smol?rev=30feaaab88452ec4b6c5f7a199345298bac2dd0f#30feaaab88452ec4b6c5f7a199345298bac2dd0f"
+source = "git+https://github.com/egraphs-good/egglog?rev=30feaaab88452ec4b6c5f7a199345298bac2dd0f#30feaaab88452ec4b6c5f7a199345298bac2dd0f"
 dependencies = [
  "clap",
  "env_logger",
@@ -196,7 +196,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "egg-smol-python"
+name = "egglog-python"
 version = "0.3.1"
 dependencies = [
  "egg-smol",
