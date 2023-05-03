@@ -1,22 +1,22 @@
 [package]
-name = "egg-smol-python"
+name = "egglog-python"
 version = "0.3.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
-name = "egg_smol_python"
+name = "egglog_python"
 crate-type = ["cdylib"]
 
 [dependencies]
 # Use unreleased version to depend on signature improvements https://github.com/PyO3/pyo3/pull/2702
 pyo3 = { version = "0.18.1", features = ["extension-module"] }
-egg-smol = { git = "https://github.com/mwillsey/egg-smol", rev = "30feaaab88452ec4b6c5f7a199345298bac2dd0f" }
-# egg-smol = { path = "../egg-smol" }
+egglog = { git = "https://github.com/egraphs-good/egglog", rev = "30feaaab88452ec4b6c5f7a199345298bac2dd0f" }
+# egglog = { path = "../egglog" }
 pyo3-log = "0.8.1"
 log = "0.4.17"
 lalrpop-util = { version = "0.19.8", features = ["lexer"] }
 ordered-float = "3.4"
 
 [package.metadata.maturin]
-name = "egg_smol.bindings"
+name = "egglog.bindings"

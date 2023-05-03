@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pytest
-from egg_smol.declarations import *
-from egg_smol.type_constraint_solver import *
+from egglog.declarations import *
+from egglog.type_constraint_solver import *
 
 
 def test_type_inference() -> None:

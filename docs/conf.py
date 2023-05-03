@@ -18,7 +18,7 @@ extensions = [
 sphinx_gallery_conf = {
     # Run all scripts
     "filename_pattern": r".*",
-    "examples_dirs": "../python/egg_smol/examples",
+    "examples_dirs": "../python/egglog/examples",
     "gallery_dirs": "auto_examples",
     "abort_on_example_error": True,
     "run_stale_examples": True,
@@ -34,7 +34,7 @@ always_document_param_types = True
 
 # specify project details
 master_doc = "index"
-project = "egg-smol Python"
+project = "egglog Python"
 
 
 # basic build settings
@@ -55,7 +55,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/metadsl/egg-smol-python",
+            "url": "https://github.com/metadsl/egglog-python",
             "icon": "fa-brands fa-square-github",
             "type": "fontawesome",
         },
