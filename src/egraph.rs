@@ -16,7 +16,7 @@ use pyo3::prelude::*;
     text_signature = "(*, fact_directory=None, seminaive=True)"
 )]
 pub struct EGraph {
-    egraph: egglog::EGraph,
+    egraph: egg_smol::EGraph,
 }
 
 #[pymethods]
@@ -24,7 +24,7 @@ impl EGraph {
     #[new]
     #[pyo3(signature = (*, fact_directory=None, seminaive=true))]
     fn new(fact_directory: Option<PathBuf>, seminaive: bool) -> Self {
-        let mut egraph = egglog::EGraph::default();
+        let mut egraph = egg_smol::EGraph::default();
         egraph.fact_directory = fact_directory.clone();
         egraph.seminaive = seminaive;
         Self { egraph }
@@ -43,7 +43,8 @@ impl EGraph {
     /// An EggSmolError is raised if there is problem parsing or executing.
     #[pyo3(signature=(*commands))]
     fn run_program(&mut self, commands: Vec<Command>) -> EggResult<Vec<String>> {
-        let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
+        let commands: Vec<egg_smol::ast::Command> =
+            commands.into_iter().map(|x| x.into()).collect();
         info!("Running commands {:?}", commands);
         let res = self.egraph.run_program(commands)?;
         Ok(res)
