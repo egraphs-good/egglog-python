@@ -18,7 +18,7 @@ def get_egglog_folder() -> pathlib.Path:
         check=True,
     )
     metadata = json.loads(metadata_process.stdout)
-    (egglog_package,) = [package for package in metadata["packages"] if package["name"] == "egglog"]
+    (egglog_package,) = [package for package in metadata["packages"] if package["name"] == "egg-smol"]
     return pathlib.Path(egglog_package["manifest_path"]).parent
 
 
