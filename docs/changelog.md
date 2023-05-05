@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Renamed `config()` to `run()` to better match `egglog` command
+- Fixed `relation` type signature
+- Added default limit of 1 to `run()` to match `egglog` command and moved to second arg
+
 ## 0.4.0 (2023-05-03)
 
 - Change name to `egglog` from `egg-smol`, to mirror [upstream change](https://github.com/egraphs-good/egglog/commit/9484242f025f6c2adb6f29d75a45dd77b0eaad57). Note that all previous versions are published under the `egg-smol` PyPi package while this and later are under `egglog`.
