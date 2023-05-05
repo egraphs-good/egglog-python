@@ -175,3 +175,10 @@ def test_extract_constant_twice():
 
     egraph.extract(Numeric.ONE)
     egraph.extract(Numeric.ONE)
+
+
+def test_relation():
+    egraph = EGraph()
+
+    test_relation = egraph.relation("test_relation", i64, i64)
+    egraph.register(test_relation(i64(1), i64(1)))
