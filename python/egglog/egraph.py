@@ -22,14 +22,7 @@ from typing import (
     overload,
 )
 
-from typing_extensions import (
-    ParamSpec,
-    TypeVarTuple,
-    Unpack,
-    assert_never,
-    get_args,
-    get_origin,
-)
+from typing_extensions import ParamSpec, assert_never, get_args, get_origin
 
 from . import bindings
 from .declarations import *
@@ -60,17 +53,19 @@ __all__ = [
     "Fact",
     "expr_parts",
     "Schedule",
-    "config",
-    "sequence",
+    "run",
+    "seq",
 ]
 
 T = TypeVar("T")
-TS = TypeVarTuple("TS")
 P = ParamSpec("P")
 TYPE = TypeVar("TYPE", bound="type[BaseExpr]")
 CALLABLE = TypeVar("CALLABLE", bound=Callable)
 EXPR = TypeVar("EXPR", bound="BaseExpr")
-
+E1 = TypeVar("E1", bound="BaseExpr")
+E2 = TypeVar("E2", bound="BaseExpr")
+E3 = TypeVar("E3", bound="BaseExpr")
+E4 = TypeVar("E4", bound="BaseExpr")
 # Attributes which are sometimes added to classes by the interpreter or the dataclass decorator, or by ipython.
 # We ignore these when inspecting the class.
 
@@ -133,14 +128,37 @@ class EGraph:
     def _simplify(self, expr: EXPR, limit: int, ruleset: Optional[Ruleset], until: tuple[Fact, ...]) -> EXPR:
         tp, decl = expr_parts(expr)
         egg_expr = decl.to_egg(self._decls)
-        self._run_program([bindings.Simplify(egg_expr, Config(limit, ruleset, until)._to_egg_config(self._decls))])
+        self._run_program([bindings.Simplify(egg_expr, Run(limit, ruleset, until)._to_egg_config(self._decls))])
         extract_report = self._get_egraph().extract_report()
         if not extract_report:
             raise ValueError("No extract report saved")
         new_tp, new_decl = tp_and_expr_decl_from_egg(self._decls, extract_report.expr)
         return cast(EXPR, RuntimeExpr(self._decls, new_tp, new_decl))
 
-    def relation(self, name: str, *tps: Unpack[TS], egg_fn: Optional[str] = None) -> Callable[[Unpack[TS]], Unit]:
+    # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
+    @overload
+    def relation(
+        self, name: str, tp1: type[E1], tp2: type[E2], tp3: type[E3], tp4: type[E4], /
+    ) -> Callable[[E1, E2, E3, E4], Unit]:
+        ...
+
+    @overload
+    def relation(self, name: str, tp1: type[E1], tp2: type[E2], tp3: type[E3], /) -> Callable[[E1, E2, E3], Unit]:
+        ...
+
+    @overload
+    def relation(self, name: str, tp1: type[E1], tp2: type[E2], /) -> Callable[[E1, E2], Unit]:
+        ...
+
+    @overload
+    def relation(self, name: str, tp1: type[T], /, *, egg_fn: Optional[str] = None) -> Callable[[T], Unit]:
+        ...
+
+    @overload
+    def relation(self, name: str, /, *, egg_fn: Optional[str] = None) -> Callable[[], Unit]:
+        ...
+
+    def relation(self, name: str, /, *tps: type, egg_fn: Optional[str] = None) -> Callable[..., Unit]:
         """
         Defines a relation, which is the same as a function which returns unit.
         """
@@ -148,7 +166,7 @@ class EGraph:
         fn_decl = FunctionDecl(arg_types, TypeRefWithVars("unit"))
         commands = self._decls.register_callable(FunctionRef(name), fn_decl, egg_fn)
         self._run_program(commands)
-        return cast(Callable[[Unpack[TS]], Unit], RuntimeFunction(self._decls, name))
+        return cast(Callable[..., Unit], RuntimeFunction(self._decls, name))
 
     def include(self, path: str) -> None:
         """
@@ -184,7 +202,7 @@ class EGraph:
         Run the egraph until the given limit or until the given facts are true.
         """
         if isinstance(limit_or_schedule, int):
-            limit_or_schedule = config(limit_or_schedule, None, *until)
+            limit_or_schedule = run(None, limit_or_schedule, *until)
         return self._run_schedule(limit_or_schedule)
 
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
@@ -228,7 +246,7 @@ class EGraph:
         """
         tp, decl = expr_parts(expr)
         egg_expr = decl.to_egg(self._decls)
-        extract_report = self._run_extract(egg_expr, n + 1)
+        extract_report = self._run_extract(egg_expr, n)
         new_decls = [tp_and_expr_decl_from_egg(self._decls, egg_expr)[1] for egg_expr in extract_report.variants]
         return [cast(EXPR, RuntimeExpr(self._decls, tp, new_decl)) for new_decl in new_decls]
 
@@ -727,7 +745,7 @@ class Ruleset:
         """
         Run the e-graph with this ruleset.
         """
-        return self._egraph._run_schedule(config(limit, self, *until))
+        return self._egraph._run_schedule(run(self, limit, *until))
 
     def simplify(self, expr: EXPR, limit: int, *until: Fact) -> EXPR:
         """
@@ -1023,14 +1041,14 @@ class Rule:
         )
 
 
-def config(limit: int, ruleset: Optional[Ruleset] = None, *until: Fact) -> Config:
+def run(ruleset: Optional[Ruleset] = None, limit: int = 1, *until: Fact) -> Run:
     """
     Create a run configuration.
     """
-    return Config(limit, ruleset, tuple(until))
+    return Run(limit, ruleset, tuple(until))
 
 
-def sequence(*schedules: Schedule) -> Schedule:
+def seq(*schedules: Schedule) -> Schedule:
     """
     Run a sequence of schedules.
     """
@@ -1042,7 +1060,7 @@ class _BaseSchedule:
         """
         Repeat the schedule a number of times.
         """
-        if not isinstance(self, (Config, Repeat, Saturate, Sequence)):
+        if not isinstance(self, (Run, Repeat, Saturate, Sequence)):
             raise TypeError(f"Cannot multiply {type(self)}")
         return Repeat(length, self)
 
@@ -1050,13 +1068,13 @@ class _BaseSchedule:
         """
         Run the schedule until the e-graph is saturated.
         """
-        if not isinstance(self, (Config, Repeat, Saturate, Sequence)):
+        if not isinstance(self, (Run, Repeat, Saturate, Sequence)):
             raise TypeError(f"Cannot saturate {type(self)}")
         return Saturate(self)
 
 
 @dataclass
-class Config(_BaseSchedule):
+class Run(_BaseSchedule):
     """Configuration of a run"""
 
     limit: int
@@ -1064,8 +1082,8 @@ class Config(_BaseSchedule):
     until: tuple[Fact, ...] = field(default_factory=tuple)
 
     def __str__(self) -> str:
-        args_str = ", ".join(map(str, [self.limit, self.ruleset, *self.until]))
-        return f"config({args_str})"
+        args_str = ", ".join(map(str, [self.ruleset, self.limit, *self.until]))
+        return f"run({args_str})"
 
     def _to_egg(self, decls: Declarations) -> bindings._Schedule:
         return bindings.Run(self._to_egg_config(decls))
@@ -1114,4 +1132,4 @@ class Sequence(_BaseSchedule):
 
 # Define Schedule union instead of using BaseSchedule b/c Python doesn't suppot
 # closed types
-Schedule = Union[Config, Repeat, Saturate, Sequence]
+Schedule = Union[Run, Repeat, Saturate, Sequence]

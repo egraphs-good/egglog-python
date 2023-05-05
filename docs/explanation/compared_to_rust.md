@@ -141,21 +141,3 @@ egraph.run(10)
 
 egraph.check(eq(expr1).to(expr2))
 ```
-
-### Mapping of low level to high level
-
-Here are a number of the low level commands, with how they map to the high levle API:
-
-- `(datatype Math ...)` -> `@egraph.class_` on a Python class. Internally, each method and classmethod are registered as functions, not as `Variant`s of the datatype, but the end result is the same.
-- `(set-option enable_proofs 1)` -> Not supported
-- `(declare True Bool)` -> As a class variable `True: Bool` or as a constant `True_ = egraph.constant("True", Bool)`. Internally, we don't actually use the `Constant` command but instead map constants to nullary functions which are immediately evaluated. This is how the `Constant` command is desugared in egglog anyways.
-- `(define expr1 ...)` -> `expr1 = egraph.define("expr1", ...)` or just `expr1 = ...` if it doesn't need to be added to the e-graph.
-- `(sort MyMap (Map i64 String))` -> `MyMap = Map[i64, String]`. We can use the normal Python generic typing syntax. Internally, when this is used in a type definition, we would create a new sort with the name `Map__i64__String`.
-- `(function f ...)` -> `@egraph.function` on a Python function with no body.
-- `(ruleset x)` -> `x = egraph.ruleset("x")`
-- `(rule (f1 f2) (a1 a2))` -> `egraph.register(rule(f1, f2).then(a1, a2))`
-- `(run 10 :until f :rulset x)` -> `egraph.run(10, until=f, ruleset=x)`
-
-Facts
-
-Actions
