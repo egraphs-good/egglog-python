@@ -5,4 +5,4 @@
 `egglog` is a Python package that provides bindings to the Rust library [`egglog`](https://github.com/egraphs-good/egglog/),
 allowing you to use e-graphs in Python for optimization, symbolic computation, and analysis.
 
-Please see the [documentation](https://egglog-python.readthedocs.io/en/latest/) for more information.
+Please see the [documentation](https://egg-smol-python.readthedocs.io/en/latest/?badge=latest) for more information.
