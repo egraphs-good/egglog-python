@@ -209,8 +209,8 @@ class JustTypeRef:
         """
         if not self.args:
             return self.name
-        args = "_".join(a.generate_egg_name() for a in self.args)
-        return f"{self.name}__{args}"
+        args = ", ".join(a.generate_egg_name() for a in self.args)
+        return f"{self.name}[{args}]"
 
     def to_commands(self, decls: Declarations) -> Iterable[bindings._Command]:
         """
@@ -271,7 +271,7 @@ class MethodRef:
     method_name: str
 
     def generate_egg_name(self) -> str:
-        return f"{self.class_name}__{self.method_name}"
+        return f"{self.class_name}.{self.method_name}"
 
 
 @dataclass(frozen=True)
@@ -283,7 +283,7 @@ class ClassMethodRef:
         return decls._callable_ref_to_egg_fn[self]
 
     def generate_egg_name(self) -> str:
-        return f"{self.class_name}__{self.method_name}"
+        return f"{self.class_name}.{self.method_name}"
 
 
 @dataclass(frozen=True)
@@ -300,7 +300,7 @@ class ClassVariableRef:
     variable_name: str
 
     def generate_egg_name(self) -> str:
-        return f"{self.class_name}__{self.variable_name}"
+        return f"{self.class_name}.{self.variable_name}"
 
 
 CallableRef = Union[FunctionRef, MethodRef, ClassMethodRef, ConstantRef, ClassVariableRef]
