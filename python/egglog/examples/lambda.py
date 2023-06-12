@@ -177,10 +177,11 @@ def assert_simplifies(left: BaseExpr, right: BaseExpr) -> None:
     Simplify and print
     """
     with egraph:
-        res = egraph.simplify(left, 30)
-    print(f"{left} ➡  {res}")
-    assert expr_parts(res) == expr_parts(right), f"{res} != {right}"
-
+        egraph.register(left)
+        egraph.run(30)
+        res = egraph.extract(left)
+        print(f"{left} ➡  {res}")
+        egraph.check(eq(right).to(right))
 
 assert_simplifies((Term.val(Val(1))).eval(), Val(1))
 assert_simplifies((Term.val(Val(1)) + Term.val(Val(2))).eval(), Val(3))
