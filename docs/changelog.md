@@ -9,6 +9,7 @@
   - Added `Set` sort and removed set method from `Map`
   - Added `Vec` sort
   - Added support for variable args for builtin functions, to use in creation of `Vec` and `Set` sorts.
+- Switch generated egg names to use `.` as seperate (i.e. `Math.__add__`) instead of `_` (i.e. `Math___add__`)
 
 ## 0.4.0 (2023-05-03)
 
