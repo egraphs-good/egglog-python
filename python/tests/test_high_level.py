@@ -182,3 +182,17 @@ def test_relation():
 
     test_relation = egraph.relation("test_relation", i64, i64)
     egraph.register(test_relation(i64(1), i64(1)))
+
+
+def test_variable_args():
+    egraph = EGraph()
+    # Create dummy function with type so its registered
+    egraph.relation("_", Set[i64])
+
+    egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
+
+
+@pytest.mark.xfail(reason="We have to manually register sorts before using them")
+def test_generic_sort():
+    egraph = EGraph()
+    egraph.check(Set(i64(1), i64(2)).contains(i64(1)))

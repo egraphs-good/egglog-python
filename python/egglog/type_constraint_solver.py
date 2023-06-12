@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Collection
+from itertools import chain, repeat
+from typing import Collection, Optional
 
 from .declarations import *
 
@@ -38,24 +39,28 @@ class TypeConstraintSolver:
         self,
         fn_args: Collection[TypeOrVarRef],
         fn_return: TypeOrVarRef,
+        fn_var_args: Optional[TypeOrVarRef],
         args: Collection[JustTypeRef],
     ) -> JustTypeRef:
         # Infer the type of each type variable based on the actual types of the arguments
-        self._infer_typevars_zip(fn_args, args)
+        self._infer_typevars_zip(fn_args, fn_var_args, args)
         # Substitute the type variables with their inferred types
         return self._subtitute_typevars(fn_return)
 
-    def _infer_typevars_zip(self, fn_args: Collection[TypeOrVarRef], args: Collection[JustTypeRef]) -> None:
-        if len(fn_args) != len(args):
+    def _infer_typevars_zip(
+        self, fn_args: Collection[TypeOrVarRef], fn_var_args: Optional[TypeOrVarRef], args: Collection[JustTypeRef]
+    ) -> None:
+        if len(fn_args) != len(args) if fn_var_args is None else len(fn_args) > len(args):
             raise TypeConstraintError(f"Expected {len(fn_args)} args, got {len(args)}")
-        for fn_arg, arg in zip(fn_args, args):
+        all_fn_args = fn_args if fn_var_args is None else chain(fn_args, repeat(fn_var_args))
+        for fn_arg, arg in zip(all_fn_args, args):
             self._infer_typevars(fn_arg, arg)
 
     def _infer_typevars(self, fn_arg: TypeOrVarRef, arg: JustTypeRef) -> None:
         if isinstance(fn_arg, TypeRefWithVars):
             if fn_arg.name != arg.name:
                 raise TypeConstraintError(f"Expected {fn_arg.name}, got {arg.name}")
-            self._infer_typevars_zip(fn_arg.args, arg.args)
+            self._infer_typevars_zip(fn_arg.args, None, arg.args)
         elif fn_arg.index not in self._cls_typevar_index_to_type:
             self._cls_typevar_index_to_type[fn_arg.index] = arg
         elif self._cls_typevar_index_to_type[fn_arg.index] != arg:

@@ -67,7 +67,9 @@ class RuntimeClass:
             possible_methods.append("__call__")
         return possible_methods
 
-    def __getitem__(self, args: tuple[RuntimeTypeArgType, ...]) -> RuntimeParamaterizedClass:
+    def __getitem__(self, args: tuple[RuntimeTypeArgType, ...] | RuntimeTypeArgType) -> RuntimeParamaterizedClass:
+        if not isinstance(args, tuple):
+            args = (args,)
         tp = JustTypeRef(self.__egg_name__, tuple(class_to_ref(arg) for arg in args))
         return RuntimeParamaterizedClass(self.__egg_decls__, tp)
 
@@ -160,7 +162,7 @@ def _call(
         tcs = TypeConstraintSolver()
 
     if fn_decl is not None:
-        return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, arg_types)
+        return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, fn_decl.var_arg_type, arg_types)
     else:
         return_tp = JustTypeRef("unit")
 

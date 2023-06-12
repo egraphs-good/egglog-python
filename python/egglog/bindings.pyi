@@ -96,6 +96,13 @@ class Set:
     rhs: _Expr
 
 @final
+class SetNoTrack:
+    def __init__(self, lhs: str, args: list[_Expr], rhs: _Expr) -> None: ...
+    lhs: str
+    args: list[_Expr]
+    rhs: _Expr
+
+@final
 class Delete:
     sym: str
     args: list[_Expr]
@@ -117,7 +124,7 @@ class Expr_:
     def __init__(self, expr: _Expr) -> None: ...
     expr: _Expr
 
-_Action = Let | Set | Delete | Union | Panic | Expr_
+_Action = Let | Set | SetNoTrack | Delete | Union | Panic | Expr_
 
 ##
 # Other Structs

@@ -19,6 +19,8 @@ __all__ = [
     "StringLike",
     "Map",
     "Rational",
+    "Set",
+    "Vec",
 ]
 
 
@@ -159,37 +161,25 @@ V = TypeVar("V", bound=BaseExpr)
 
 @BUILTINS.class_(egg_sort="Map")
 class Map(BaseExpr, Generic[T, V]):
-    @BUILTINS.method(egg_fn="empty")
+    @BUILTINS.method(egg_fn="map-empty")
     @classmethod
     def empty(cls) -> Map[T, V]:  # type: ignore[empty-body]
         ...
 
-    @BUILTINS.method(egg_fn="insert")
+    @BUILTINS.method(egg_fn="map-insert")
     def insert(self, key: T, value: V) -> Map[T, V]:  # type: ignore[empty-body]
         ...
 
-    @BUILTINS.method(egg_fn="get")
+    @BUILTINS.method(egg_fn="map-get")
     def __getitem__(self, key: T) -> V:  # type: ignore[empty-body]
         ...
 
-    @BUILTINS.method(egg_fn="not-contains")
+    @BUILTINS.method(egg_fn="map-not-contains")
     def not_contains(self, key: T) -> Unit:  # type: ignore[empty-body]
         ...
 
-    @BUILTINS.method(egg_fn="contains")
+    @BUILTINS.method(egg_fn="map-contains")
     def contains(self, key: T) -> Unit:  # type: ignore[empty-body]
-        ...
-
-    @BUILTINS.method(egg_fn="set-union")
-    def __or__(self, __t: Map[T, V]) -> Map[T, V]:  # type: ignore[empty-body]
-        ...
-
-    @BUILTINS.method(egg_fn="set-diff")
-    def __sub__(self, __t: Map[T, V]) -> Map[T, V]:  # type: ignore[empty-body]
-        ...
-
-    @BUILTINS.method(egg_fn="set-intersect")
-    def __and__(self, __t: Map[T, V]) -> Map[T, V]:  # type: ignore[empty-body]
         ...
 
     @BUILTINS.method(egg_fn="map-remove")
@@ -197,10 +187,54 @@ class Map(BaseExpr, Generic[T, V]):
         ...
 
 
+@BUILTINS.class_(egg_sort="Set")
+class Set(BaseExpr, Generic[T]):
+    @BUILTINS.method(egg_fn="set-of")
+    def __init__(self, *args: T) -> None:
+        ...
+
+    @BUILTINS.method(egg_fn="set-empty")
+    @classmethod
+    def empty(cls) -> Set[T]:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="set-insert")
+    def insert(self, value: T) -> Set[T]:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="set-not-contains")
+    def not_contains(self, value: T) -> Unit:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="set-contains")
+    def contains(self, value: T) -> Unit:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="set-remove")
+    def remove(self, value: T) -> Set[T]:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="set-union")
+    def __or__(self, other: Set[T]) -> Set[T]:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="set-diff")
+    def __sub__(self, other: Set[T]) -> Set[T]:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="set-intersect")
+    def __and__(self, other: Set[T]) -> Set[T]:  # type: ignore[empty-body]
+        ...
+
+
 @BUILTINS.class_(egg_sort="Rational")
 class Rational(BaseExpr):
     @BUILTINS.method(egg_fn="rational")
     def __init__(self, num: i64Like, den: i64Like):
+        ...
+
+    @BUILTINS.method(egg_fn="to-f64")
+    def to_f64(self) -> f64:  # type: ignore[empty-body]
         ...
 
     @BUILTINS.method(egg_fn="+")
@@ -261,4 +295,36 @@ class Rational(BaseExpr):
 
     @BUILTINS.method(egg_fn="cbrt")
     def cbrt(self) -> Rational:  # type: ignore[empty-body]
+        ...
+
+
+@BUILTINS.class_(egg_sort="Vec")
+class Vec(BaseExpr, Generic[T]):
+    @BUILTINS.method(egg_fn="vec-of")
+    def __init__(self, *args: T) -> None:
+        ...
+
+    @BUILTINS.method(egg_fn="vec-empty")
+    @classmethod
+    def empty(cls) -> Vec[T]:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="vec-append")
+    def append(self, *others: Vec[T]) -> Vec[T]:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="vec-push")
+    def push(self, value: T) -> Vec[T]:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="vec-pop")
+    def pop(self) -> Vec[T]:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="vec-not-contains")
+    def not_contains(self, value: T) -> Unit:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="vec-contains")
+    def contains(self, value: T) -> Unit:  # type: ignore[empty-body]
         ...
