@@ -2,13 +2,15 @@ from .bindings import EGraph
 
 EGRAPH_VAR = "_MAGIC_EGRAPH"
 
+try:
+    get_ipython()  # type: ignore[name-defined]
+    in_ipython = True
+except NameError:
+    in_ipython = False
 
-def load_ipython_extension():
+if in_ipython:
     import graphviz
     from IPython.core.magic import needs_local_scope, register_cell_magic
-
-    if not hasattr(__builtins__, "__IPYTHON__"):
-        return
 
     @needs_local_scope
     @register_cell_magic
