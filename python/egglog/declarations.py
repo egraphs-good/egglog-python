@@ -311,12 +311,15 @@ class FunctionDecl:
     # TODO: Add arg name to arg so can call with keyword arg
     arg_types: tuple[TypeOrVarRef, ...]
     return_type: TypeOrVarRef
+    var_arg_type: Optional[TypeOrVarRef] = None
     cost: Optional[int] = None
     default: Optional[ExprDecl] = None
     merge: Optional[ExprDecl] = None
     merge_action: tuple[ActionDecl, ...] = ()
 
     def to_commands(self, decls: Declarations, egg_name: str) -> Iterable[bindings._Command]:
+        if self.var_arg_type is not None:
+            raise NotImplementedError("egglog does not support variable arguments yet.")
         just_arg_types = [a.to_just() for a in self.arg_types]
         for a in just_arg_types:
             yield from decls._register_sort(a)
@@ -406,6 +409,7 @@ class CallDecl:
     callable: CallableRef
     args: tuple[ExprDecl, ...] = ()
     # type parameters that were bound to the callable, if it is a classmethod
+    # Used for pretty printing classmethod calls with type parameters
     bound_tp_params: Optional[tuple[JustTypeRef, ...]] = None
 
     def __post_init__(self):
@@ -424,7 +428,7 @@ class CallDecl:
         for callable_ref in decls._egg_fn_to_callable_refs[call.name]:
             tcs = TypeConstraintSolver()
             fn_decl = decls._get_function_decl(callable_ref)
-            return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, arg_types)
+            return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, fn_decl.var_arg_type, arg_types)
             return return_tp, cls(callable_ref, arg_decls)
         raise ValueError(f"Could not find callable ref for call {call}")
 

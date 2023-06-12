@@ -182,3 +182,14 @@ def test_relation():
 
     test_relation = egraph.relation("test_relation", i64, i64)
     egraph.register(test_relation(i64(1), i64(1)))
+
+
+def test_set_variable_args():
+    egraph = EGraph()
+    egraph.check(Set[i64](i64(1), i64(2)).contains(i64(1)))
+
+
+@pytest.mark.xfail
+def test_create_sort_based_on_arg():
+    egraph = EGraph()
+    egraph.register(Set(i64(1)))

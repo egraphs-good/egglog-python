@@ -561,10 +561,22 @@ class EGraph:
             if first.annotation != Parameter.empty:
                 raise ValueError(f"First arg of a method must not have an annotation, not {first.annotation}")
 
+        # Check that all the params are positional or keyword, and that there is only one var arg at the end
+        found_var_arg = False
         for param in params:
-            if param.kind != Parameter.POSITIONAL_OR_KEYWORD:
+            if found_var_arg:
+                raise ValueError("Can only have a single var arg at the end")
+            kind = param.kind
+            if kind == Parameter.VAR_POSITIONAL:
+                found_var_arg = True
+            elif kind != Parameter.POSITIONAL_OR_KEYWORD:
                 raise ValueError(f"Can only register functions with positional or keyword args, not {param.kind}")
 
+        if found_var_arg:
+            var_arg_param, *params = params
+            var_arg_type = self._resolve_type_annotation(hints[var_arg_param.name], cls_typevars, cls_type_and_name)
+        else:
+            var_arg_type = None
         arg_types = tuple(self._resolve_type_annotation(hints[t.name], cls_typevars, cls_type_and_name) for t in params)
         # If the first arg is a self, and this not an __init__ fn, add this as a typeref
         if isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)) and not is_init:
@@ -594,6 +606,7 @@ class EGraph:
         )
         decl = FunctionDecl(
             return_type=return_type,
+            var_arg_type=var_arg_type,
             arg_types=arg_types,
             cost=cost,
             default=default_decl,

@@ -79,7 +79,7 @@ def if_(c: Term, t: Term, f: Term) -> Term:
     ...
 
 
-StringSet = Map[Var, i64]
+StringSet = Set[Var]
 
 
 @egraph.function(merge=lambda old, new: old & new)
@@ -95,7 +95,7 @@ i1, i2 = vars_("i1 i2", i64)
 egraph.register(
     # freer
     rule(eq(t).to(Term.val(v))).then(set_(freer(t)).to(StringSet.empty())),
-    rule(eq(t).to(Term.var(x))).then(set_(freer(t)).to(StringSet.empty().insert(x, i64(1)))),
+    rule(eq(t).to(Term.var(x))).then(set_(freer(t)).to(StringSet.empty().insert(x))),
     rule(eq(t).to(t1 + t2), eq(freer(t1)).to(fv1), eq(freer(t2)).to(fv2)).then(set_(freer(t)).to(fv1 | fv2)),
     rule(eq(t).to(t1 == t2), eq(freer(t1)).to(fv1), eq(freer(t2)).to(fv2)).then(set_(freer(t)).to(fv1 | fv2)),
     rule(eq(t).to(t1(t2)), eq(freer(t1)).to(fv1), eq(freer(t2)).to(fv2)).then(set_(freer(t)).to(fv1 | fv2)),

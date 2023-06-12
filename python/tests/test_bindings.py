@@ -18,7 +18,7 @@ def get_egglog_folder() -> pathlib.Path:
         check=True,
     )
     metadata = json.loads(metadata_process.stdout)
-    (egglog_package,) = [package for package in metadata["packages"] if package["name"] == "egg-smol"]
+    (egglog_package,) = [package for package in metadata["packages"] if package["name"] == "egglog"]
     return pathlib.Path(egglog_package["manifest_path"]).parent
 
 
@@ -144,17 +144,17 @@ class TestEGraph:
                 "MyMap",
                 ("Map", [Var("i64"), Var("String")]),
             ),
-            Define("my_map1", Call("insert", [Call("empty", []), Lit(Int(1)), Lit(String("one"))]), None),
-            Define("my_map2", Call("insert", [Var("my_map1"), Lit(Int(2)), Lit(String("two"))]), None),
-            Check([Eq([Lit(String("one")), Call("get", [Var("my_map1"), Lit(Int(1))])])]),
+            Define("my_map1", Call("map-insert", [Call("map-empty", []), Lit(Int(1)), Lit(String("one"))]), None),
+            Define("my_map2", Call("map-insert", [Var("my_map1"), Lit(Int(2)), Lit(String("two"))]), None),
+            Check([Eq([Lit(String("one")), Call("map-get", [Var("my_map1"), Lit(Int(1))])])]),
             Extract(0, Var("my_map2")),
         )
         assert egraph.extract_report() == ExtractReport(
             0,
             Call(
-                "insert",
+                "map-insert",
                 [
-                    Call("insert", [Call("empty", []), Lit(Int(2)), Lit(String("two"))]),
+                    Call("map-insert", [Call("map-empty", []), Lit(Int(2)), Lit(String("two"))]),
                     Lit(Int(1)),
                     Lit(String("one")),
                 ],
