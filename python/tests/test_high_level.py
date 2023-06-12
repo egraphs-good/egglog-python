@@ -81,7 +81,6 @@ def test_fib():
     egraph.check(eq(fib(i64(7))).to(i64(21)))
 
 
-@pytest.mark.xfail
 def test_fib_demand():
     egraph = EGraph()
 
@@ -184,12 +183,15 @@ def test_relation():
     egraph.register(test_relation(i64(1), i64(1)))
 
 
-def test_set_variable_args():
+def test_variable_args():
     egraph = EGraph()
-    egraph.check(Set[i64](i64(1), i64(2)).contains(i64(1)))
+    # Create dummy function with type so its registered
+    egraph.relation("_", Set[i64])
+
+    egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
 
 
-@pytest.mark.xfail
-def test_create_sort_based_on_arg():
+@pytest.mark.xfail(reason="We have to manually register sorts before using them")
+def test_generic_sort():
     egraph = EGraph()
-    egraph.register(Set(i64(1)))
+    egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
