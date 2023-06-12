@@ -1,5 +1,7 @@
 # Changelog
 
+_This project uses semantic versioning. Before 1.0.0, this means that every breaking changes will result in a minor version bump. After 1.0.0, this means that every breaking change will result in a major version bump. We will move to 1.0.0, once we have any repository that depends on this project._
+
 ## Unreleased
 
 - Renamed `config()` to `run()` to better match `egglog` command
