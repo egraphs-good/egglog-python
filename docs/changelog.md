@@ -5,6 +5,10 @@
 - Renamed `config()` to `run()` to better match `egglog` command
 - Fixed `relation` type signature
 - Added default limit of 1 to `run()` to match `egglog` command and moved to second arg
+- Upgraded `egglog` dependency ([changes](https://github.com/egraphs-good/egglog/compare/30feaaab88452ec4b6c5f7a199345298bac2dd0f...39b199d9bfce9cc47d0c54977279c5b04231e717))
+  - Added `Set` sort and removed set method from `Map`
+  - Added `Vec` sort
+  - Added support for variable args for builtin functions, to use in creation of `Vec` and `Set` sorts.
 
 ## 0.4.0 (2023-05-03)
 
