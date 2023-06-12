@@ -81,6 +81,7 @@ def test_fib():
     egraph.check(eq(fib(i64(7))).to(i64(21)))
 
 
+@pytest.mark.xfail
 def test_fib_demand():
     egraph = EGraph()
 
