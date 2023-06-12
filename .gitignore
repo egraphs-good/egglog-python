@@ -76,3 +76,5 @@ TODO
 .dmypy.json
 *tmp*
 .envs
+
+.ipynb_checkpoints

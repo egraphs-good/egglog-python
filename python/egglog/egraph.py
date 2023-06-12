@@ -92,6 +92,23 @@ class EGraph:
     _decl_stack: list[Declarations] = field(default_factory=list, repr=False)
     _BUILTIN_DECLS: ClassVar[Declarations | None] = None
 
+    def _repr_mimebundle_(self, *args, **kwargs):
+        """
+        Returns the graphviz representation of the e-graph.
+        """
+        import graphviz
+
+        if self._egraph:
+            return graphviz.Source(self._egraph.to_graphviz_string())._repr_mimebundle_(*args, **kwargs)
+
+    def display(self):
+        """
+        Displays the e-graph in the notebook.
+        """
+        from IPython.display import display
+
+        display(self)
+
     def __init__(self, *, _for_builtins: bool = False):
         """
         Creates a new e-graph.

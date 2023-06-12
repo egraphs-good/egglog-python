@@ -1,11 +1,11 @@
 // Wrapper around EGraph type
 
-use std::path::PathBuf;
-
 use crate::conversions::*;
 use crate::error::EggResult;
+
 use log::info;
 use pyo3::prelude::*;
+use std::path::PathBuf;
 
 /// EGraph()
 /// --
@@ -69,5 +69,12 @@ impl EGraph {
             Some(report) => Some(report.into()),
             None => None,
         }
+    }
+
+    /// Returns the EGraph as graphviz string.
+    #[pyo3(signature = ())]
+    fn to_graphviz_string(&self) -> String {
+        info!("Getting graphviz");
+        self.egraph.to_graphviz_string()
     }
 }
