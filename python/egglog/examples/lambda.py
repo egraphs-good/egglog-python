@@ -183,6 +183,7 @@ def assert_simplifies(left: BaseExpr, right: BaseExpr) -> None:
         print(f"{left} ➡  {res}")
         egraph.check(eq(right).to(right))
 
+
 assert_simplifies((Term.val(Val(1))).eval(), Val(1))
 assert_simplifies((Term.val(Val(1)) + Term.val(Val(2))).eval(), Val(3))
 
