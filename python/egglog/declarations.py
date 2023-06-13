@@ -185,6 +185,9 @@ class Declarations:
     def get_egg_fn(self, ref: CallableRef) -> str:
         return self._callable_ref_to_egg_fn[ref]
 
+    def get_egg_sort(self, ref: JustTypeRef) -> str:
+        return self._type_ref_to_egg_sort[ref]
+
 
 def constant_function_decl(type_ref: JustTypeRef) -> FunctionDecl:
     """
@@ -216,10 +219,10 @@ class JustTypeRef:
         """
         Register this type with the egg solver.
         """
-        egg_name = decls._type_ref_to_egg_sort[self]
+        egg_name = decls.get_egg_sort(self)
         for arg in self.args:
             yield from decls._register_sort(arg)
-        arg_sorts = [cast("bindings._Expr", bindings.Var(decls._type_ref_to_egg_sort[a])) for a in self.args]
+        arg_sorts = [cast("bindings._Expr", bindings.Var(decls.get_egg_sort(a))) for a in self.args]
         yield bindings.Sort(egg_name, (self.name, arg_sorts) if arg_sorts else None)
 
     def to_var(self) -> TypeRefWithVars:
@@ -280,7 +283,7 @@ class ClassMethodRef:
     method_name: str
 
     def to_egg(self, decls: Declarations) -> str:
-        return decls._callable_ref_to_egg_fn[self]
+        return decls.get_egg_fn(self)
 
     def generate_egg_name(self) -> str:
         return f"{self.class_name}.{self.method_name}"
@@ -331,8 +334,8 @@ class FunctionDecl:
             # Remove all vars from the type refs, raising an errory if we find one,
             # since we cannot create egg functions with vars
             bindings.Schema(
-                [decls._type_ref_to_egg_sort[a] for a in just_arg_types],
-                decls._type_ref_to_egg_sort[just_return_type],
+                [decls.get_egg_sort(a) for a in just_arg_types],
+                decls.get_egg_sort(just_return_type),
             ),
             self.default.to_egg(decls) if self.default else None,
             self.merge.to_egg(decls) if self.merge else None,
@@ -434,7 +437,7 @@ class CallDecl:
 
     def to_egg(self, decls: Declarations) -> bindings.Call:
         """Convert a Call to an egg Call."""
-        egg_fn = decls._callable_ref_to_egg_fn[self.callable]
+        egg_fn = decls.get_egg_fn(self.callable)
         return bindings.Call(egg_fn, [a.to_egg(decls) for a in self.args])
 
     def pretty(self, parens=True, **kwargs) -> str:
@@ -578,7 +581,7 @@ class SetDecl:
 
     def to_egg(self, decls: Declarations) -> bindings.Set:
         return bindings.Set(
-            decls._callable_ref_to_egg_fn[self.call.callable],
+            decls.get_egg_fn(self.call.callable),
             [a.to_egg(decls) for a in self.call.args],
             self.rhs.to_egg(decls),
         )
@@ -589,9 +592,7 @@ class DeleteDecl:
     call: CallDecl
 
     def to_egg(self, decls: Declarations) -> bindings.Delete:
-        return bindings.Delete(
-            decls._callable_ref_to_egg_fn[self.call.callable], [a.to_egg(decls) for a in self.call.args]
-        )
+        return bindings.Delete(decls.get_egg_fn(self.call.callable), [a.to_egg(decls) for a in self.call.args])
 
 
 @dataclass(frozen=True)
