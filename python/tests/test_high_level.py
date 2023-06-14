@@ -196,3 +196,27 @@ def test_variable_args():
 def test_generic_sort():
     egraph = EGraph()
     egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
+
+
+def test_modules() -> None:
+    m = Module()
+
+    @m.class_
+    class Numeric(BaseExpr):
+        ONE: ClassVar[Numeric]
+
+    m2 = Module()
+
+    @m2.class_
+    class OtherNumeric(BaseExpr):
+        def __init__(self, v: i64Like) -> None:
+            ...
+
+    egraph = EGraph(deps=[m, m2])
+
+    @egraph.function(cost=0)
+    def from_numeric(n: Numeric) -> OtherNumeric:  # type: ignore[empty-body]
+        ...
+
+    egraph.register(rewrite(OtherNumeric(1)).to(from_numeric(Numeric.ONE)))
+    assert expr_parts(egraph.simplify(OtherNumeric(i64(1)), 10)) == expr_parts(from_numeric(Numeric.ONE))
