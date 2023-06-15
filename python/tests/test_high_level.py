@@ -161,8 +161,8 @@ def test_simplify_constant():
     assert expr_parts(egraph.simplify(Numeric.ONE, 10)) == expr_parts(Numeric.ONE)
 
     egraph.register(union(Numeric.ONE).with_(Numeric(i64(1))))
-
-    assert expr_parts(egraph.simplify(Numeric.ONE, 10)) == expr_parts(Numeric(i64(1)))
+    egraph.run(10)
+    egraph.check(eq(Numeric.ONE).to(Numeric(i64(1))))
 
 
 def test_extract_constant_twice():
@@ -196,3 +196,28 @@ def test_variable_args():
 def test_generic_sort():
     egraph = EGraph()
     egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
+
+
+def test_modules() -> None:
+    m = Module()
+
+    @m.class_
+    class Numeric(BaseExpr):
+        ONE: ClassVar[Numeric]
+
+    m2 = Module()
+
+    @m2.class_
+    class OtherNumeric(BaseExpr):
+        @m2.method(cost=10)
+        def __init__(self, v: i64Like) -> None:
+            ...
+
+    egraph = EGraph(deps=[m, m2])
+
+    @egraph.function
+    def from_numeric(n: Numeric) -> OtherNumeric:  # type: ignore[empty-body]
+        ...
+
+    egraph.register(rewrite(OtherNumeric(1)).to(from_numeric(Numeric.ONE)))
+    assert expr_parts(egraph.simplify(OtherNumeric(i64(1)), 10)) == expr_parts(from_numeric(Numeric.ONE))
