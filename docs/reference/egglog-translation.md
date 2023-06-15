@@ -311,7 +311,8 @@ path_ruleset = egraph.ruleset("path")
 # (rule ((edge x y))
 #       ((path x y)) :ruleset path)
 x, y = vars_("x y", i64)
-path_ruleset.register(rule(edge(x, y)).then(path(x, y)))
+x, y = vars_("x y", i64)
+egraph.register(rule(edge(x, y), ruleset=path_ruleset).then(path(x, y)))
 ```
 
 ### Rewrites
@@ -348,8 +349,7 @@ Rulsets can be run as well, by calling the `run` method on them:
 
 ```{code-cell} python
 # egg: (run 10 :ruleset path)
-run_report = path_ruleset.run(10)
-run_report
+egraph.run(10, ruleset=path_ruleset)
 ```
 
 After a run, you get a run report, with some timing information as well as whether things were updated.
@@ -406,19 +406,18 @@ step_egraph.register(left(i64(0)), right(i64(0)))
 x, y = vars_("x y", i64)
 
 step_left = step_egraph.ruleset("step-left")
-step_left.register(
+step_right = step_egraph.ruleset("step-right")
+step_egraph.register(
     rule(
         left(x),
         right(x),
-    ).then(left(x + 1))
-)
-
-step_right = step_egraph.ruleset("step-right")
-step_right.register(
+        ruleset=step_left
+    ).then(left(x + 1)),
     rule(
         left(x),
         right(y),
         eq(x).to(y + 1),
+        ruleset=step_right
     ).then(right(x))
 )
 

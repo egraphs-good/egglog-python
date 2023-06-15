@@ -610,7 +610,7 @@ class EGraph(_BaseModule):
         raise NotImplementedError("Not imeplemented yet, because there are no examples in the egglog repo")
 
     @overload
-    def run(self, limit: int, ruleset: Optional[Ruleset] = None, /, *until: Fact) -> bindings.RunReport:
+    def run(self, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> bindings.RunReport:
         ...
 
     @overload
@@ -618,7 +618,7 @@ class EGraph(_BaseModule):
         ...
 
     def run(
-        self, limit_or_schedule: int | Schedule, ruleset: Optional[Ruleset] = None, /, *until: Fact
+        self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Optional[Ruleset] = None
     ) -> bindings.RunReport:
         """
         Run the egraph until the given limit or until the given facts are true.
