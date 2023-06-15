@@ -28,7 +28,6 @@ __all__ = [
     "FunctionCallableRef",
     "CallableRef",
     "ConstantRef",
-    # "constant_function_decl",
     "FunctionDecl",
     "VarDecl",
     "LitType",
@@ -45,7 +44,6 @@ __all__ = [
     "BiRewrite",
     "Eq",
     "ExprFact",
-    # "fact_decl_to_egg",
     "Rule",
     "Let",
     "Set",
@@ -56,7 +54,6 @@ __all__ = [
     "Schedule",
     "Sequence",
     "Run",
-    # "action_decl_to_egg",
 ]
 # Special methods which we might want to use as functions
 # Mapping to the operator they represent for pretty printing them
@@ -240,9 +237,12 @@ class ModuleDeclarations:
             raise ValueError(f"Class {name} already registered")
         decl = ClassDecl(n_type_vars=n_type_vars)
         self._decl._classes[name] = decl
-        return self.register_sort(JustTypeRef(name), egg_sort)
+        _egg_sort, cmds = self.register_sort(JustTypeRef(name), egg_sort)
+        return cmds
 
-    def register_sort(self, ref: JustTypeRef, egg_name: Optional[str] = None) -> Iterable[bindings._Command]:
+    def register_sort(
+        self, ref: JustTypeRef, egg_name: Optional[str] = None
+    ) -> tuple[str, Iterable[bindings._Command]]:
         """
         Register a sort with the given name. If no name is given, one is generated.
 
@@ -250,17 +250,17 @@ class ModuleDeclarations:
         """
         # If the sort is already registered, do nothing
         try:
-            self.get_egg_sort(ref)
+            egg_sort = self.get_egg_sort(ref)
         except KeyError:
             pass
         else:
-            return []
+            return (egg_sort, [])
         egg_name = egg_name or ref.generate_egg_name()
         if egg_name in self._decl._egg_sort_to_type_ref:
             raise ValueError(f"Sort {egg_name} is already registered.")
         self._decl._egg_sort_to_type_ref[egg_name] = ref
         self._decl._type_ref_to_egg_sort[ref] = egg_name
-        return ref.to_commands(self)
+        return egg_name, ref.to_commands(self)
 
     def register_function_callable(
         self,
@@ -284,20 +284,12 @@ class ModuleDeclarations:
     def register_constant_callable(
         self, ref: ConstantCallableRef, type_ref: JustTypeRef, egg_name: Optional[str]
     ) -> Iterable[bindings._Command]:
-        egg_name = egg_name or ref.generate_egg_name()
-        self._decl.register_callable_ref(ref, ref.generate_egg_name())
+        egg_function = ref.generate_egg_name()
+        self._decl.register_callable_ref(ref, egg_function)
         self._decl.set_constant_type(ref, type_ref)
-        yield from type_ref.to_commands(self)
-        yield bindings.Declare(egg_name, egg_name)
-
-
-# def constant_function_decl(type_ref: JustTypeRef) -> FunctionDecl:
-#     """
-#     Create a function decleartion for a constant function. This is similar to how egglog compiles
-#     the `constant` command.
-#     """
-#     # Divide high cost by 10 to not overflow the cost field.
-#     return FunctionDecl(arg_types=(), return_type=type_ref.to_var(), cost=int(bindings.HIGH_COST / 10))
+        # Create a function decleartion for a constant function. This is similar to how egglog compiles
+        # the `declare` command.
+        return FunctionDecl((), type_ref.to_var()).to_commands(self, egg_name or ref.generate_egg_name())
 
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.
@@ -322,9 +314,11 @@ class JustTypeRef:
         Returns commands to register this as a sort, as well as for any of its arguments.
         """
         egg_name = mod_decls.get_egg_sort(self)
+        arg_sorts: list[bindings._Expr] = []
         for arg in self.args:
-            yield from mod_decls.register_sort(arg)
-        arg_sorts: list[bindings._Expr] = [bindings.Var(mod_decls.get_egg_sort(a)) for a in self.args]
+            egg_sort, cmds = mod_decls.register_sort(arg)
+            arg_sorts.append(bindings.Var(egg_sort))
+            yield from cmds
         yield bindings.Sort(egg_name, (self.name, arg_sorts) if arg_sorts else None)
 
     def to_var(self) -> TypeRefWithVars:
@@ -426,36 +420,31 @@ class FunctionDecl:
     arg_types: tuple[TypeOrVarRef, ...]
     return_type: TypeOrVarRef
     var_arg_type: Optional[TypeOrVarRef] = None
-    # cost: Optional[int] = None
-    # default: Optional[ExprDecl] = None
-    # merge: Optional[ExprDecl] = None
-    # merge_action: tuple[ActionDecl, ...] = ()
 
     def to_commands(
         self,
         mod_decls: ModuleDeclarations,
         egg_name: str,
-        cost: Optional[int],
-        default: Optional[ExprDecl],
-        merge: Optional[ExprDecl],
-        merge_action: Iterable[Action],
+        cost: Optional[int] = None,
+        default: Optional[ExprDecl] = None,
+        merge: Optional[ExprDecl] = None,
+        merge_action: Iterable[Action] = (),
     ) -> Iterable[bindings._Command]:
         if self.var_arg_type is not None:
             raise NotImplementedError("egglog does not support variable arguments yet.")
-        just_arg_types = [a.to_just() for a in self.arg_types]
-        for a in just_arg_types:
-            yield from mod_decls.register_sort(a)
-        just_return_type = self.return_type.to_just()
-        yield from mod_decls.register_sort(just_return_type)
+        arg_sorts: list[str] = []
+        for a in self.arg_types:
+            # Remove all vars from the type refs, raising an errory if we find one,
+            # since we cannot create egg functions with vars
+            arg_sort, cmds = mod_decls.register_sort(a.to_just())
+            yield from cmds
+            arg_sorts.append(arg_sort)
+        return_sort, cmds = mod_decls.register_sort(self.return_type.to_just())
+        yield from cmds
 
         egg_fn_decl = bindings.FunctionDecl(
             egg_name,
-            # Remove all vars from the type refs, raising an errory if we find one,
-            # since we cannot create egg functions with vars
-            bindings.Schema(
-                [mod_decls.get_egg_sort(a) for a in just_arg_types],
-                mod_decls.get_egg_sort(just_return_type),
-            ),
+            bindings.Schema(arg_sorts, return_sort),
             default.to_egg(mod_decls) if default else None,
             merge.to_egg(mod_decls) if merge else None,
             [a._to_egg_action(mod_decls) for a in merge_action],

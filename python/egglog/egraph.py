@@ -523,7 +523,6 @@ class _BaseModule(ABC):
         Register a constant, returning its typeref().
         """
         type_ref = self._resolve_type_annotation(tp, [], cls_type_and_name).to_just()
-        # fn_decl = constant_function_decl(type_ref)
         self._process_commands(self._mod_decls.register_constant_callable(ref, type_ref, egg_name))
         return type_ref
 
