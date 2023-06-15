@@ -311,7 +311,6 @@ path_ruleset = egraph.ruleset("path")
 # (rule ((edge x y))
 #       ((path x y)) :ruleset path)
 x, y = vars_("x y", i64)
-x, y = vars_("x y", i64)
 egraph.register(rule(edge(x, y), ruleset=path_ruleset).then(path(x, y)))
 ```
 
@@ -499,4 +498,49 @@ with egraph:
     egraph.register(union(Math(0)).with_(Math(1)))
     egraph.check(eq(Math(0)).to(Math(1)))
 egraph.check_fail(eq(Math(0)).to(Math(1)))
+```
+
+## Include
+
+The `(include <path>)` command is used to add modularity, by allowing you to pull in the source from another egglog file into the current file.
+
+In Python, we support the same use case with the ability to define a `Module` which is then depended on in `EGraph`. All commands registered on a `Module` won't be run immediately on an `EGraph`, but instead stored so that when they are included, they will be run:
+
+```{code-cell} python
+# egg file: path.egg
+# (relation path (i64 i64))
+# (relation edge (i64 i64))
+#
+# (rule ((edge x y))
+#       ((path x y)))
+#
+# (rule ((path x y) (edge y z))
+#       ((path x z)))
+#
+# egg:
+# (include "path.egg")
+# (edge 1 2)
+# (edge 2 3)
+# (edge 3 4)
+# (run 3)
+# (check (path 1 3))
+
+path_mod = Module()
+path = path_mod.relation("path", i64, i64)
+edge = path_mod.relation("edge", i64, i64)
+
+x, y, z = vars_("x y z", i64)
+path_mod.register(
+    rule(edge(x, y)).then(path(x, y)),
+    rule(path(x, y), edge(y, z)).then(path(x, z)),
+)
+
+egraph = EGraph([path_mod])
+egraph.register(
+    edge(1, 2),
+    edge(2, 3),
+    edge(3, 4)
+)
+egraph.run(3)
+egraph.check(path(1, 3))
 ```
