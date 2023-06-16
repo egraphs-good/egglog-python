@@ -215,6 +215,7 @@ class ExtractReport:
 ##
 # Schedules
 ##
+
 @final
 class Saturate:
     schedule: _Schedule

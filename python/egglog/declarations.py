@@ -4,9 +4,11 @@ Data only descriptions of the components of an egraph and the expressions.
 
 from __future__ import annotations
 
+import itertools
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Iterable, Optional, Union, cast
+from typing import ClassVar, Iterable, Optional, Union
 
 from typing_extensions import assert_never
 
@@ -14,6 +16,7 @@ from . import bindings
 
 __all__ = [
     "Declarations",
+    "ModuleDeclarations",
     "JustTypeRef",
     "ClassTypeVarRef",
     "TypeRefWithVars",
@@ -22,29 +25,35 @@ __all__ = [
     "MethodRef",
     "ClassMethodRef",
     "ClassVariableRef",
+    "FunctionCallableRef",
     "CallableRef",
     "ConstantRef",
-    "constant_function_decl",
     "FunctionDecl",
     "VarDecl",
     "LitType",
     "LitDecl",
     "CallDecl",
     "ExprDecl",
-    "tp_and_expr_decl_from_egg",
+    "TypedExprDecl",
     "ClassDecl",
-    "RewriteDecl",
-    "EqDecl",
-    "FactDecl",
-    "fact_decl_to_egg",
-    "RuleDecl",
-    "LetDecl",
-    "SetDecl",
-    "DeleteDecl",
-    "UnionDecl",
-    "PanicDecl",
-    "ActionDecl",
-    "action_decl_to_egg",
+    "Command",
+    "Action",
+    "ExprAction",
+    "Fact",
+    "Rewrite",
+    "BiRewrite",
+    "Eq",
+    "ExprFact",
+    "Rule",
+    "Let",
+    "Set",
+    "Delete",
+    "Union_",
+    "Panic",
+    "Action",
+    "Schedule",
+    "Sequence",
+    "Run",
 ]
 # Special methods which we might want to use as functions
 # Mapping to the operator they represent for pretty printing them
@@ -83,7 +92,7 @@ UNARY_METHODS = {
 class Declarations:
     _functions: dict[str, FunctionDecl] = field(default_factory=dict)
     _classes: dict[str, ClassDecl] = field(default_factory=dict)
-    _constants: dict[str, FunctionDecl] = field(default_factory=dict)
+    _constants: dict[str, JustTypeRef] = field(default_factory=dict)
 
     # Bidirectional mapping between egg function names and python callable references.
     # Note that there are possibly mutliple callable references for a single egg function name, like `+`
@@ -95,20 +104,7 @@ class Declarations:
     _egg_sort_to_type_ref: dict[str, JustTypeRef] = field(default_factory=dict)
     _type_ref_to_egg_sort: dict[JustTypeRef, str] = field(default_factory=dict)
 
-    def _get_function_decl(self, ref: CallableRef) -> FunctionDecl:
-        if isinstance(ref, FunctionRef):
-            return self._functions[ref.name]
-        elif isinstance(ref, MethodRef):
-            return self._classes[ref.class_name].methods[ref.method_name]
-        elif isinstance(ref, ClassMethodRef):
-            return self._classes[ref.class_name].class_methods[ref.method_name]
-        elif isinstance(ref, ConstantRef):
-            return self._constants[ref.name]
-        elif isinstance(ref, ClassVariableRef):
-            return self._classes[ref.class_name].class_variables[ref.variable_name]
-        assert_never(ref)
-
-    def _set_function_decl(self, ref: CallableRef, decl: FunctionDecl) -> None:
+    def set_function_decl(self, ref: FunctionCallableRef, decl: FunctionDecl) -> None:
         """
         Sets a function declaration for the given callable reference.
         """
@@ -124,53 +120,20 @@ class Declarations:
             if ref.method_name in self._classes[ref.class_name].class_methods:
                 raise ValueError(f"Class method {ref.class_name}.{ref.method_name} already registered")
             self._classes[ref.class_name].class_methods[ref.method_name] = decl
-        elif isinstance(ref, ConstantRef):
-            if ref.name in self._constants:
-                raise ValueError(f"Constant {ref.name} already registered")
-            self._constants[ref.name] = decl
-        elif isinstance(ref, ClassVariableRef):
-            if ref.variable_name in self._classes[ref.class_name].class_variables:
-                raise ValueError(f"Class variable {ref.class_name}.{ref.variable_name} already registered")
-            self._classes[ref.class_name].class_variables[ref.variable_name] = decl
         else:
             assert_never(ref)
 
-    def register_class(self, name: str, n_type_vars: int, egg_sort: Optional[str]) -> Iterable[bindings._Command]:
-        # Register class first
-        if name in self._classes:
-            raise ValueError(f"Class {name} already registered")
-        decl = ClassDecl(n_type_vars=n_type_vars)
-        self._classes[name] = decl
-        return self._register_sort(JustTypeRef(name), egg_sort)
-
-    def _register_sort(self, ref: JustTypeRef, egg_name: Optional[str] = None) -> Iterable[bindings._Command]:
-        """
-        Register a sort with the given name. If no name is given, one is generated.
-
-        If this is a type called with generic args, register the generic args as well.
-        """
-        if ref in self._type_ref_to_egg_sort:
-            if egg_name and self._type_ref_to_egg_sort[ref] != egg_name:
-                raise ValueError(f"Type {ref} is already registered with egg name {self._type_ref_to_egg_sort[ref]}")
-            return []
-        egg_name = egg_name or ref.generate_egg_name()
-        if egg_name in self._egg_sort_to_type_ref:
-            raise ValueError(f"Sort {egg_name} is already registered.")
-        self._egg_sort_to_type_ref[egg_name] = ref
-        self._type_ref_to_egg_sort[ref] = egg_name
-        return ref.to_commands(self)
-
-    def register_callable(
-        self, ref: CallableRef, fn_decl: FunctionDecl, egg_name: Optional[str], generate_commands: bool = True
-    ) -> Iterable[bindings._Command]:
-        """
-        Registers a callable with the given egg name. The callable's function needs to be registered
-        first.
-        """
-        egg_name = egg_name or ref.generate_egg_name()
-        self.register_callable_ref(ref, egg_name)
-        self._set_function_decl(ref, fn_decl)
-        return fn_decl.to_commands(self, egg_name) if generate_commands else []
+    def set_constant_type(self, ref: ConstantCallableRef, tp: JustTypeRef) -> None:
+        if isinstance(ref, ConstantRef):
+            if ref.name in self._constants:
+                raise ValueError(f"Constant {ref.name} already registered")
+            self._constants[ref.name] = tp
+        elif isinstance(ref, ClassVariableRef):
+            if ref.variable_name in self._classes[ref.class_name].class_variables:
+                raise ValueError(f"Class variable {ref.class_name}.{ref.variable_name} already registered")
+            self._classes[ref.class_name].class_variables[ref.variable_name] = tp
+        else:
+            assert_never(ref)
 
     def register_callable_ref(self, ref: CallableRef, egg_name: str) -> None:
         """
@@ -182,17 +145,151 @@ class Declarations:
         self._callable_ref_to_egg_fn[ref] = egg_name
         self._egg_fn_to_callable_refs[egg_name].add(ref)
 
+    def get_function_decl(self, ref: FunctionCallableRef) -> FunctionDecl:
+        if isinstance(ref, FunctionRef):
+            return self._functions[ref.name]
+        elif isinstance(ref, MethodRef):
+            return self._classes[ref.class_name].methods[ref.method_name]
+        elif isinstance(ref, ClassMethodRef):
+            return self._classes[ref.class_name].class_methods[ref.method_name]
+        assert_never(ref)
+
+    def get_constant_type(self, ref: ConstantCallableRef) -> JustTypeRef:
+        if isinstance(ref, ConstantRef):
+            return self._constants[ref.name]
+        elif isinstance(ref, ClassVariableRef):
+            return self._classes[ref.class_name].class_variables[ref.variable_name]
+        assert_never(ref)
+
+    def get_callable_refs(self, egg_name: str) -> Iterable[CallableRef]:
+        return self._egg_fn_to_callable_refs[egg_name]
+
     def get_egg_fn(self, ref: CallableRef) -> str:
         return self._callable_ref_to_egg_fn[ref]
 
+    def get_egg_sort(self, ref: JustTypeRef) -> str:
+        return self._type_ref_to_egg_sort[ref]
 
-def constant_function_decl(type_ref: JustTypeRef) -> FunctionDecl:
+
+@dataclass
+class ModuleDeclarations:
     """
-    Create a function decleartion for a constant function. This is similar to how egglog compiles
-    the `constant` command.
+    A set of working declerations for a module.
     """
-    # Divide high cost by 10 to not overflow the cost field.
-    return FunctionDecl(arg_types=(), return_type=type_ref.to_var(), cost=int(bindings.HIGH_COST / 10))
+
+    # The modules declarations we have, which we can edit
+    _decl: Declarations
+    # A list of other declarations we can use, but not edit
+    _included_decls: list[Declarations] = field(default_factory=list, repr=False)
+
+    @property
+    def all_decls(self) -> Iterable[Declarations]:
+        return itertools.chain([self._decl], self._included_decls)
+
+    def get_function_decl(self, ref: CallableRef) -> FunctionDecl:
+        if isinstance(ref, (ClassVariableRef, ConstantRef)):
+            for decls in self.all_decls:
+                try:
+                    return decls.get_constant_type(ref).to_constant_function_decl()
+                except KeyError:
+                    pass
+            raise KeyError(f"Constant {ref} not found")
+        elif isinstance(ref, (FunctionRef, MethodRef, ClassMethodRef)):
+            for decls in self.all_decls:
+                try:
+                    return decls.get_function_decl(ref)
+                except KeyError:
+                    pass
+            raise KeyError(f"Function {ref} not found")
+        else:
+            assert_never(ref)
+
+    def get_callable_refs(self, egg_name: str) -> Iterable[CallableRef]:
+        return itertools.chain.from_iterable(decls.get_callable_refs(egg_name) for decls in self.all_decls)
+
+    def get_egg_fn(self, ref: CallableRef) -> str:
+        for decls in self.all_decls:
+            try:
+                return decls.get_egg_fn(ref)
+            except KeyError:
+                pass
+        raise KeyError(f"Callable ref {ref} not found")
+
+    def get_egg_sort(self, ref: JustTypeRef) -> str:
+        for decls in self.all_decls:
+            try:
+                return decls.get_egg_sort(ref)
+            except KeyError:
+                pass
+        raise KeyError(f"Type {ref} not found")
+
+    def get_class_decl(self, name: str) -> ClassDecl:
+        for decls in self.all_decls:
+            try:
+                return decls._classes[name]
+            except KeyError:
+                pass
+        raise KeyError(f"Class {name} not found")
+
+    def register_class(self, name: str, n_type_vars: int, egg_sort: Optional[str]) -> Iterable[bindings._Command]:
+        # Register class first
+        if name in self._decl._classes:
+            raise ValueError(f"Class {name} already registered")
+        decl = ClassDecl(n_type_vars=n_type_vars)
+        self._decl._classes[name] = decl
+        _egg_sort, cmds = self.register_sort(JustTypeRef(name), egg_sort)
+        return cmds
+
+    def register_sort(
+        self, ref: JustTypeRef, egg_name: Optional[str] = None
+    ) -> tuple[str, Iterable[bindings._Command]]:
+        """
+        Register a sort with the given name. If no name is given, one is generated.
+
+        If this is a type called with generic args, register the generic args as well.
+        """
+        # If the sort is already registered, do nothing
+        try:
+            egg_sort = self.get_egg_sort(ref)
+        except KeyError:
+            pass
+        else:
+            return (egg_sort, [])
+        egg_name = egg_name or ref.generate_egg_name()
+        if egg_name in self._decl._egg_sort_to_type_ref:
+            raise ValueError(f"Sort {egg_name} is already registered.")
+        self._decl._egg_sort_to_type_ref[egg_name] = ref
+        self._decl._type_ref_to_egg_sort[ref] = egg_name
+        return egg_name, ref.to_commands(self)
+
+    def register_function_callable(
+        self,
+        ref: FunctionCallableRef,
+        fn_decl: FunctionDecl,
+        egg_name: Optional[str],
+        cost: Optional[int],
+        default: Optional[ExprDecl],
+        merge: Optional[ExprDecl],
+        merge_action: Iterable[Action],
+    ) -> Iterable[bindings._Command]:
+        """
+        Registers a callable with the given egg name. The callable's function needs to be registered
+        first.
+        """
+        egg_name = egg_name or ref.generate_egg_name()
+        self._decl.register_callable_ref(ref, egg_name)
+        self._decl.set_function_decl(ref, fn_decl)
+        return fn_decl.to_commands(self, egg_name, cost, default, merge, merge_action)
+
+    def register_constant_callable(
+        self, ref: ConstantCallableRef, type_ref: JustTypeRef, egg_name: Optional[str]
+    ) -> Iterable[bindings._Command]:
+        egg_function = ref.generate_egg_name()
+        self._decl.register_callable_ref(ref, egg_function)
+        self._decl.set_constant_type(ref, type_ref)
+        # Create a function decleartion for a constant function. This is similar to how egglog compiles
+        # the `declare` command.
+        return FunctionDecl((), type_ref.to_var()).to_commands(self, egg_name or ref.generate_egg_name())
 
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.
@@ -212,14 +309,16 @@ class JustTypeRef:
         args = ", ".join(a.generate_egg_name() for a in self.args)
         return f"{self.name}[{args}]"
 
-    def to_commands(self, decls: Declarations) -> Iterable[bindings._Command]:
+    def to_commands(self, mod_decls: ModuleDeclarations) -> Iterable[bindings._Command]:
         """
-        Register this type with the egg solver.
+        Returns commands to register this as a sort, as well as for any of its arguments.
         """
-        egg_name = decls._type_ref_to_egg_sort[self]
+        egg_name = mod_decls.get_egg_sort(self)
+        arg_sorts: list[bindings._Expr] = []
         for arg in self.args:
-            yield from decls._register_sort(arg)
-        arg_sorts = [cast("bindings._Expr", bindings.Var(decls._type_ref_to_egg_sort[a])) for a in self.args]
+            egg_sort, cmds = mod_decls.register_sort(arg)
+            arg_sorts.append(bindings.Var(egg_sort))
+            yield from cmds
         yield bindings.Sort(egg_name, (self.name, arg_sorts) if arg_sorts else None)
 
     def to_var(self) -> TypeRefWithVars:
@@ -230,6 +329,13 @@ class JustTypeRef:
             return self.name
         args = ", ".join(a.pretty() for a in self.args)
         return f"{self.name}[{args}]"
+
+    def to_constant_function_decl(self) -> FunctionDecl:
+        """
+        Create a function declaration for a constant function. This is similar to how egglog compiles
+        the `constant` command.
+        """
+        return FunctionDecl(arg_types=(), return_type=self.to_var(), var_arg_type=None)
 
 
 @dataclass(frozen=True)
@@ -280,7 +386,7 @@ class ClassMethodRef:
     method_name: str
 
     def to_egg(self, decls: Declarations) -> str:
-        return decls._callable_ref_to_egg_fn[self]
+        return decls.get_egg_fn(self)
 
     def generate_egg_name(self) -> str:
         return f"{self.class_name}.{self.method_name}"
@@ -303,7 +409,9 @@ class ClassVariableRef:
         return f"{self.class_name}.{self.variable_name}"
 
 
-CallableRef = Union[FunctionRef, MethodRef, ClassMethodRef, ConstantRef, ClassVariableRef]
+ConstantCallableRef = Union[ConstantRef, ClassVariableRef]
+FunctionCallableRef = Union[FunctionRef, MethodRef, ClassMethodRef]
+CallableRef = Union[ConstantCallableRef, FunctionCallableRef]
 
 
 @dataclass(frozen=True)
@@ -312,32 +420,35 @@ class FunctionDecl:
     arg_types: tuple[TypeOrVarRef, ...]
     return_type: TypeOrVarRef
     var_arg_type: Optional[TypeOrVarRef] = None
-    cost: Optional[int] = None
-    default: Optional[ExprDecl] = None
-    merge: Optional[ExprDecl] = None
-    merge_action: tuple[ActionDecl, ...] = ()
 
-    def to_commands(self, decls: Declarations, egg_name: str) -> Iterable[bindings._Command]:
+    def to_commands(
+        self,
+        mod_decls: ModuleDeclarations,
+        egg_name: str,
+        cost: Optional[int] = None,
+        default: Optional[ExprDecl] = None,
+        merge: Optional[ExprDecl] = None,
+        merge_action: Iterable[Action] = (),
+    ) -> Iterable[bindings._Command]:
         if self.var_arg_type is not None:
             raise NotImplementedError("egglog does not support variable arguments yet.")
-        just_arg_types = [a.to_just() for a in self.arg_types]
-        for a in just_arg_types:
-            yield from decls._register_sort(a)
-        just_return_type = self.return_type.to_just()
-        yield from decls._register_sort(just_return_type)
+        arg_sorts: list[str] = []
+        for a in self.arg_types:
+            # Remove all vars from the type refs, raising an errory if we find one,
+            # since we cannot create egg functions with vars
+            arg_sort, cmds = mod_decls.register_sort(a.to_just())
+            yield from cmds
+            arg_sorts.append(arg_sort)
+        return_sort, cmds = mod_decls.register_sort(self.return_type.to_just())
+        yield from cmds
 
         egg_fn_decl = bindings.FunctionDecl(
             egg_name,
-            # Remove all vars from the type refs, raising an errory if we find one,
-            # since we cannot create egg functions with vars
-            bindings.Schema(
-                [decls._type_ref_to_egg_sort[a] for a in just_arg_types],
-                decls._type_ref_to_egg_sort[just_return_type],
-            ),
-            self.default.to_egg(decls) if self.default else None,
-            self.merge.to_egg(decls) if self.merge else None,
-            [action_decl_to_egg(decls, a) for a in self.merge_action],
-            self.cost,
+            bindings.Schema(arg_sorts, return_sort),
+            default.to_egg(mod_decls) if default else None,
+            merge.to_egg(mod_decls) if merge else None,
+            [a._to_egg_action(mod_decls) for a in merge_action],
+            cost,
         )
         yield bindings.Function(egg_fn_decl)
 
@@ -347,10 +458,10 @@ class VarDecl:
     name: str
 
     @classmethod
-    def from_egg(cls, var: bindings.Var) -> tuple[JustTypeRef, LitDecl]:
+    def from_egg(cls, var: bindings.Var) -> TypedExprDecl:
         raise NotImplementedError("Cannot turn var into egg type because typing unknown.")
 
-    def to_egg(self, _decls: Declarations) -> bindings.Var:
+    def to_egg(self, _decls: ModuleDeclarations) -> bindings.Var:
         return bindings.Var(self.name)
 
     def pretty(self, **kwargs) -> str:
@@ -365,18 +476,18 @@ class LitDecl:
     value: LitType
 
     @classmethod
-    def from_egg(cls, lit: bindings.Lit) -> tuple[JustTypeRef, LitDecl]:
+    def from_egg(cls, lit: bindings.Lit) -> TypedExprDecl:
         if isinstance(lit.value, bindings.Int):
-            return JustTypeRef("i64"), cls(lit.value.value)
+            return TypedExprDecl(JustTypeRef("i64"), cls(lit.value.value))
         if isinstance(lit.value, bindings.String):
-            return JustTypeRef("String"), cls(lit.value.value)
+            return TypedExprDecl(JustTypeRef("String"), cls(lit.value.value))
         if isinstance(lit.value, bindings.F64):
-            return JustTypeRef("f64"), cls(lit.value.value)
+            return TypedExprDecl(JustTypeRef("f64"), cls(lit.value.value))
         elif isinstance(lit.value, bindings.Unit):
-            return JustTypeRef("unit"), cls(None)
+            return TypedExprDecl(JustTypeRef("Unit"), cls(None))
         assert_never(lit.value)
 
-    def to_egg(self, _decls: Declarations) -> bindings.Lit:
+    def to_egg(self, _decls: ModuleDeclarations) -> bindings.Lit:
         if self.value is None:
             return bindings.Lit(bindings.Unit())
         if isinstance(self.value, int):
@@ -394,7 +505,7 @@ class LitDecl:
         :param wrap_lit: If True, wraps the literal in a call to the literal constructor.
         """
         if self.value is None:
-            return "unit()"
+            return "Unit()"
         if isinstance(self.value, int):
             return f"i64({self.value})" if wrap_lit else str(self.value)
         if isinstance(self.value, float):
@@ -407,7 +518,7 @@ class LitDecl:
 @dataclass(frozen=True)
 class CallDecl:
     callable: CallableRef
-    args: tuple[ExprDecl, ...] = ()
+    args: tuple[TypedExprDecl, ...] = ()
     # type parameters that were bound to the callable, if it is a classmethod
     # Used for pretty printing classmethod calls with type parameters
     bound_tp_params: Optional[tuple[JustTypeRef, ...]] = None
@@ -417,25 +528,24 @@ class CallDecl:
             raise ValueError("Cannot bind type parameters to a non-class method callable.")
 
     @classmethod
-    def from_egg(cls, decls: Declarations, call: bindings.Call) -> tuple[JustTypeRef, CallDecl]:
+    def from_egg(cls, mod_decls: ModuleDeclarations, call: bindings.Call) -> TypedExprDecl:
         from .type_constraint_solver import TypeConstraintSolver
 
-        results = [tp_and_expr_decl_from_egg(decls, a) for a in call.args]
-        arg_types = tuple(r[0] for r in results)
-        arg_decls = tuple(r[1] for r in results)
+        results = tuple(TypedExprDecl.from_egg(mod_decls, a) for a in call.args)
+        arg_types = tuple(r.tp for r in results)
 
         # Find the first callable ref that matches the call
-        for callable_ref in decls._egg_fn_to_callable_refs[call.name]:
+        for callable_ref in mod_decls.get_callable_refs(call.name):
             tcs = TypeConstraintSolver()
-            fn_decl = decls._get_function_decl(callable_ref)
+            fn_decl = mod_decls.get_function_decl(callable_ref)
             return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, fn_decl.var_arg_type, arg_types)
-            return return_tp, cls(callable_ref, arg_decls)
+            return TypedExprDecl(return_tp, cls(callable_ref, tuple(results)))
         raise ValueError(f"Could not find callable ref for call {call}")
 
-    def to_egg(self, decls: Declarations) -> bindings.Call:
+    def to_egg(self, mod_decls: ModuleDeclarations) -> bindings.Call:
         """Convert a Call to an egg Call."""
-        egg_fn = decls._callable_ref_to_egg_fn[self.callable]
-        return bindings.Call(egg_fn, [a.to_egg(decls) for a in self.args])
+        egg_fn = mod_decls.get_egg_fn(self.callable)
+        return bindings.Call(egg_fn, [a.to_egg(mod_decls) for a in self.args])
 
     def pretty(self, parens=True, **kwargs) -> str:
         """
@@ -443,7 +553,7 @@ class CallDecl:
 
         :param parens: If true, wrap the call in parens if it is a binary or unary method call.
         """
-        ref, args = self.callable, list(self.args)
+        ref, args = self.callable, [a.expr for a in self.args]
         if isinstance(ref, FunctionRef):
             fn_str = ref.name
         elif isinstance(ref, ClassMethodRef):
@@ -481,140 +591,327 @@ def test_expr_pretty():
     assert LitDecl(42).pretty() == "i64(42)"
     assert LitDecl("foo").pretty() == 'String("foo")'
     assert LitDecl(None).pretty() == "unit()"
-    assert CallDecl(FunctionRef("foo"), (VarDecl("x"),)).pretty() == "foo(x)"
-    assert CallDecl(FunctionRef("foo"), (VarDecl("x"), VarDecl("y"), VarDecl("z"))).pretty() == "foo(x, y, z)"
-    assert CallDecl(MethodRef("foo", "__add__"), (VarDecl("x"), VarDecl("y"))).pretty() == "x + y"
-    assert CallDecl(MethodRef("foo", "__getitem__"), (VarDecl("x"), VarDecl("y"))).pretty() == "x[y]"
-    assert CallDecl(ClassMethodRef("foo", "__init__"), (VarDecl("x"), VarDecl("y"))).pretty() == "foo(x, y)"
-    assert CallDecl(ClassMethodRef("foo", "bar"), (VarDecl("x"), VarDecl("y"))).pretty() == "foo.bar(x, y)"
-    assert CallDecl(MethodRef("foo", "__call__"), (VarDecl("x"), VarDecl("y"))).pretty() == "x(y)"
+
+    def v(x: str) -> TypedExprDecl:
+        return TypedExprDecl(JustTypeRef(""), VarDecl(x))
+
+    assert CallDecl(FunctionRef("foo"), (v("x"),)).pretty() == "foo(x)"
+    assert CallDecl(FunctionRef("foo"), (v("x"), v("y"), v("z"))).pretty() == "foo(x, y, z)"
+    assert CallDecl(MethodRef("foo", "__add__"), (v("x"), v("y"))).pretty() == "x + y"
+    assert CallDecl(MethodRef("foo", "__getitem__"), (v("x"), v("y"))).pretty() == "x[y]"
+    assert CallDecl(ClassMethodRef("foo", "__init__"), (v("x"), v("y"))).pretty() == "foo(x, y)"
+    assert CallDecl(ClassMethodRef("foo", "bar"), (v("x"), v("y"))).pretty() == "foo.bar(x, y)"
+    assert CallDecl(MethodRef("foo", "__call__"), (v("x"), v("y"))).pretty() == "x(y)"
     assert (
         CallDecl(
             ClassMethodRef("Map", "__init__"),
             (),
-            (JustTypeRef("i64"), JustTypeRef("unit")),
+            (JustTypeRef("i64"), JustTypeRef("Unit")),
         ).pretty()
-        == "Map[i64, unit]()"
+        == "Map[i64, Unit]()"
     )
 
 
 ExprDecl = Union[VarDecl, LitDecl, CallDecl]
 
 
-def tp_and_expr_decl_from_egg(decls: Declarations, expr: bindings._Expr) -> tuple[JustTypeRef, ExprDecl]:
-    if isinstance(expr, bindings.Var):
-        return VarDecl.from_egg(expr)
-    if isinstance(expr, bindings.Lit):
-        return LitDecl.from_egg(expr)
-    if isinstance(expr, bindings.Call):
-        return CallDecl.from_egg(decls, expr)
-    assert_never(expr)
+@dataclass(frozen=True)
+class TypedExprDecl:
+    tp: JustTypeRef
+    expr: ExprDecl
+
+    @classmethod
+    def from_egg(cls, mod_decls: ModuleDeclarations, expr: bindings._Expr) -> TypedExprDecl:
+        if isinstance(expr, bindings.Var):
+            return VarDecl.from_egg(expr)
+        if isinstance(expr, bindings.Lit):
+            return LitDecl.from_egg(expr)
+        if isinstance(expr, bindings.Call):
+            return CallDecl.from_egg(mod_decls, expr)
+        assert_never(expr)
+
+    def to_egg(self, decls: ModuleDeclarations) -> bindings._Expr:
+        return self.expr.to_egg(decls)
 
 
 @dataclass
 class ClassDecl:
     methods: dict[str, FunctionDecl] = field(default_factory=dict)
     class_methods: dict[str, FunctionDecl] = field(default_factory=dict)
-    class_variables: dict[str, FunctionDecl] = field(default_factory=dict)
+    class_variables: dict[str, JustTypeRef] = field(default_factory=dict)
     n_type_vars: int = 0
 
 
-@dataclass(frozen=True)
-class RewriteDecl:
-    lhs: ExprDecl
-    rhs: ExprDecl
-    conditions: tuple[FactDecl, ...]
+class Command(ABC):
+    """
+    A command that can be executed in the egg interpreter.
 
-    def to_egg(self, decls: Declarations) -> bindings.Rewrite:
+    We only use this for commands which return no result and don't create new Python objects.
+
+    Anything that can be passed to the `register` function in a Module is a Command.
+    """
+
+    @abstractmethod
+    def _to_egg_command(self, mod_decls: ModuleDeclarations) -> bindings._Command:
+        raise NotImplementedError
+
+    @abstractmethod
+    def __str__(self) -> str:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class Rewrite(Command):
+    _ruleset: str
+    _lhs: ExprDecl
+    _rhs: ExprDecl
+    _conditions: tuple[Fact, ...]
+    _fn_name: ClassVar[str] = "rewrite"
+
+    def __str__(self) -> str:
+        args_str = ", ".join(map(str, [self._rhs.pretty(), *self._conditions]))
+        return f"{self._fn_name}({self._lhs.pretty()}).to({args_str})"
+
+    def _to_egg_command(self, mod_decls: ModuleDeclarations) -> bindings._Command:
+        return bindings.RewriteCommand(self._ruleset, self._to_egg_rewrite(mod_decls))
+
+    def _to_egg_rewrite(self, mod_decls: ModuleDeclarations) -> bindings.Rewrite:
         return bindings.Rewrite(
-            self.lhs.to_egg(decls),
-            self.rhs.to_egg(decls),
-            [fact_decl_to_egg(decls, c) for c in self.conditions],
+            self._lhs.to_egg(mod_decls),
+            self._rhs.to_egg(mod_decls),
+            [c._to_egg_fact(mod_decls) for c in self._conditions],
         )
 
 
 @dataclass(frozen=True)
-class EqDecl:
-    exprs: tuple[ExprDecl, ...]
+class BiRewrite(Rewrite):
+    _fn_name: ClassVar[str] = "birewrite"
 
-    def to_egg(self, decls: Declarations) -> bindings.Eq:
-        return bindings.Eq([e.to_egg(decls) for e in self.exprs])
-
-
-FactDecl = Union[ExprDecl, EqDecl]
+    def _to_egg_command(self, mod_decls: ModuleDeclarations) -> bindings._Command:
+        return bindings.BiRewriteCommand(self._ruleset, self._to_egg_rewrite(mod_decls))
 
 
-def fact_decl_to_egg(decls: Declarations, fact: FactDecl) -> bindings._Fact:
-    if isinstance(fact, EqDecl):
-        return fact.to_egg(decls)
-    return bindings.Fact(fact.to_egg(decls))
+class Fact(ABC):
+    """
+    An e-graph fact, either an equality or a unit expression.
+    """
 
-
-@dataclass(frozen=True)
-class RuleDecl:
-    head: tuple[ActionDecl, ...]
-    body: tuple[FactDecl, ...]
-
-    def to_egg(self, decls: Declarations) -> bindings.Rule:
-        return bindings.Rule(
-            [action_decl_to_egg(decls, a) for a in self.head],
-            [fact_decl_to_egg(decls, f) for f in self.body],
-        )
+    @abstractmethod
+    def _to_egg_fact(self, mod_decls: ModuleDeclarations) -> bindings._Fact:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
-class LetDecl:
+class Eq(Fact):
+    _exprs: tuple[ExprDecl, ...]
+
+    def __str__(self) -> str:
+        first, *rest = (e.pretty() for e in self._exprs)
+        args_str = ", ".join(rest)
+        return f"eq({first}).to({args_str})"
+
+    def _to_egg_fact(self, mod_decls: ModuleDeclarations) -> bindings.Eq:
+        return bindings.Eq([e.to_egg(mod_decls) for e in self._exprs])
+
+
+@dataclass(frozen=True)
+class ExprFact(Fact):
+    _expr: ExprDecl
+
+    def __str__(self) -> str:
+        return self._expr.pretty()
+
+    def _to_egg_fact(self, mod_decls: ModuleDeclarations) -> bindings.Fact:
+        return bindings.Fact(self._expr.to_egg(mod_decls))
+
+
+@dataclass(frozen=True)
+class Rule(Command):
+    head: tuple[Action, ...]
+    body: tuple[Fact, ...]
     name: str
-    value: ExprDecl
+    ruleset: str
 
-    def to_egg(self, decls: Declarations) -> bindings.Let:
-        return bindings.Let(self.name, self.value.to_egg(decls))
+    def __str__(self) -> str:
+        head_str = ", ".join(map(str, self.head))
+        body_str = ", ".join(map(str, self.body))
+        return f"rule({head_str}).then({body_str})"
+
+    def _to_egg_command(self, mod_decls: ModuleDeclarations) -> bindings.RuleCommand:
+        return bindings.RuleCommand(
+            self.name,
+            self.ruleset,
+            bindings.Rule(
+                [a._to_egg_action(mod_decls) for a in self.head],
+                [f._to_egg_fact(mod_decls) for f in self.body],
+            ),
+        )
+
+
+class Action(Command, ABC):
+    @abstractmethod
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings._Action:
+        raise NotImplementedError
+
+    def _to_egg_command(self, mod_decls: ModuleDeclarations) -> bindings._Command:
+        return bindings.ActionCommand(self._to_egg_action(mod_decls))
 
 
 @dataclass(frozen=True)
-class SetDecl:
-    call: CallDecl
-    rhs: ExprDecl
+class Let(Action):
+    _name: str
+    _value: ExprDecl
 
-    def to_egg(self, decls: Declarations) -> bindings.Set:
+    def __str__(self) -> str:
+        return f"let({self._name}, {self._value.pretty()})"
+
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Let:
+        return bindings.Let(self._name, self._value.to_egg(mod_decls))
+
+
+@dataclass(frozen=True)
+class Set(Action):
+    _call: CallDecl
+    _rhs: ExprDecl
+
+    def __str__(self) -> str:
+        return f"set({self._call.pretty()}).to({self._rhs.pretty()})"
+
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Set:
         return bindings.Set(
-            decls._callable_ref_to_egg_fn[self.call.callable],
-            [a.to_egg(decls) for a in self.call.args],
-            self.rhs.to_egg(decls),
+            mod_decls.get_egg_fn(self._call.callable),
+            [a.to_egg(mod_decls) for a in self._call.args],
+            self._rhs.to_egg(mod_decls),
         )
 
 
 @dataclass(frozen=True)
-class DeleteDecl:
-    call: CallDecl
+class ExprAction(Action):
+    _expr: ExprDecl
 
-    def to_egg(self, decls: Declarations) -> bindings.Delete:
+    def __str__(self) -> str:
+        return self._expr.pretty()
+
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Expr_:
+        return bindings.Expr_(self._expr.to_egg(mod_decls))
+
+
+@dataclass(frozen=True)
+class Delete(Action):
+    _call: CallDecl
+
+    def __str__(self) -> str:
+        return f"delete({self._call.pretty()})"
+
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Delete:
         return bindings.Delete(
-            decls._callable_ref_to_egg_fn[self.call.callable], [a.to_egg(decls) for a in self.call.args]
+            mod_decls.get_egg_fn(self._call.callable), [a.to_egg(mod_decls) for a in self._call.args]
         )
 
 
 @dataclass(frozen=True)
-class UnionDecl:
-    lhs: ExprDecl
-    rhs: ExprDecl
+class Union_(Action):
+    _lhs: ExprDecl
+    _rhs: ExprDecl
 
-    def to_egg(self, decls: Declarations) -> bindings.Union:
-        return bindings.Union(self.lhs.to_egg(decls), self.rhs.to_egg(decls))
+    def __str__(self) -> str:
+        return f"union({self._lhs.pretty()}).with_({self._rhs.pretty()})"
+
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Union:
+        return bindings.Union(self._lhs.to_egg(mod_decls), self._rhs.to_egg(mod_decls))
 
 
 @dataclass(frozen=True)
-class PanicDecl:
+class Panic(Action):
     message: str
 
-    def to_egg(self, _decls: Declarations) -> bindings.Panic:
+    def __str__(self) -> str:
+        return f"panic({self.message})"
+
+    def _to_egg_action(self, _decls: ModuleDeclarations) -> bindings.Panic:
         return bindings.Panic(self.message)
 
 
-ActionDecl = Union[LetDecl, SetDecl, DeleteDecl, UnionDecl, PanicDecl, ExprDecl]
+# def action_decl_to_egg(decls: Declarations, action: ActionDecl) -> bindings._Action:
+#     if isinstance(action, (CallDecl, LitDecl, VarDecl)):
+#         return bindings.Expr_(action.to_egg(decls))
+#     return action.to_egg(decls)
 
 
-def action_decl_to_egg(decls: Declarations, action: ActionDecl) -> bindings._Action:
-    if isinstance(action, (CallDecl, LitDecl, VarDecl)):
-        return bindings.Expr_(action.to_egg(decls))
-    return action.to_egg(decls)
+class Schedule(ABC):
+    def __mul__(self, length: int) -> Schedule:
+        """
+        Repeat the schedule a number of times.
+        """
+        return Repeat(length, self)
+
+    def saturate(self) -> Schedule:
+        """
+        Run the schedule until the e-graph is saturated.
+        """
+        return Saturate(self)
+
+    @abstractmethod
+    def __str__(self) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _to_egg_schedule(self, mod_decls: ModuleDeclarations) -> bindings._Schedule:
+        raise NotImplementedError
+
+
+@dataclass
+class Run(Schedule):
+    """Configuration of a run"""
+
+    limit: int
+    ruleset: str
+    until: tuple[Fact, ...]
+
+    def __str__(self) -> str:
+        args_str = ", ".join(map(str, [self.ruleset, self.limit, *self.until]))
+        return f"run({args_str})"
+
+    def _to_egg_schedule(self, mod_decls: ModuleDeclarations) -> bindings._Schedule:
+        return bindings.Run(self._to_egg_config(mod_decls))
+
+    def _to_egg_config(self, mod_decls: ModuleDeclarations) -> bindings.RunConfig:
+        return bindings.RunConfig(
+            self.ruleset,
+            self.limit,
+            [fact._to_egg_fact(mod_decls) for fact in self.until] if self.until else None,
+        )
+
+
+@dataclass
+class Saturate(Schedule):
+    schedule: Schedule
+
+    def __str__(self) -> str:
+        return f"{self.schedule}.saturate()"
+
+    def _to_egg_schedule(self, mod_decls: ModuleDeclarations) -> bindings._Schedule:
+        return bindings.Saturate(self.schedule._to_egg_schedule(mod_decls))
+
+
+@dataclass
+class Repeat(Schedule):
+    length: int
+    schedule: Schedule
+
+    def __str__(self) -> str:
+        return f"{self.schedule} * {self.length}"
+
+    def _to_egg_schedule(self, mod_decls: ModuleDeclarations) -> bindings._Schedule:
+        return bindings.Repeat(self.length, self.schedule._to_egg_schedule(mod_decls))
+
+
+@dataclass
+class Sequence(Schedule):
+    schedules: tuple[Schedule, ...]
+
+    def __str__(self) -> str:
+        return f"sequence({', '.join(map(str, self.schedules))})"
+
+    def _to_egg_schedule(self, mod_decls: ModuleDeclarations) -> bindings._Schedule:
+        return bindings.Sequence([schedule._to_egg_schedule(mod_decls) for schedule in self.schedules])
