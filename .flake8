@@ -1,4 +1,4 @@
 ; https://black.readthedocs.io/en/stable/guides/using_black_with_other_tools.html#flake8
 [flake8]
 max-line-length = 88
-extend-ignore = E203,E501,F405,F403,E302,E305,F821,E301,F405
+extend-ignore = E203,E501,F405,F403,E302,E305,F821,E301,E741
