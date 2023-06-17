@@ -328,6 +328,21 @@ Since it uses a fluent API, static type checkers can verify that the type of the
 
 The `(birewrite ...)` command in egglog is syntactic sugar for creating two rewrites, one in each direction. In Python, we can use the `birewrite(expr).to(expr, *when)` function to create two rules that rewrite in each direction.
 
+### Using funcitons to define vars
+
+Instead of defining variables with `vars_`, we can also use functions to define variables. This can be more succinct
+and also will make sure the variables won't be used outside of the scope of the function.
+
+```{code-cell} python
+# egg: (rewrite (Mul a b) (Mul b a))
+# egg: (rewrite (Add a b) (Add b a))
+
+@egraph.register
+def _math(a: Math, b: Math)
+    yield rewrite(a * b).to(b * a)
+    yield rewrite(a + b).to(b + a)
+```
+
 ## Running
 
 To run the egraph, we can use the `egraph.run()` function. This will run until a fixed point is reached, or until a timeout is reached.

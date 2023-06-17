@@ -19,7 +19,7 @@ convert_enums!(
             _x -> egglog::ast::Literal::Unit,
             egglog::ast::Literal::Unit => Unit {}
     };
-    egglog::ast::Expr: "{:}" => Expr {
+    egglog::ast::Expr: "{}" => Expr {
         Lit(value: Literal)
             l -> egglog::ast::Expr::Lit((&l.value).into()),
             egglog::ast::Expr::Lit(l) => Lit { value: l.into() };
@@ -33,7 +33,7 @@ convert_enums!(
                 args: a.into_iter().map(|e| e.into()).collect()
             }
     };
-    egglog::ast::Fact: "{:}" => Fact_ {
+    egglog::ast::Fact: "{}" => Fact_ {
         Eq(exprs: Vec<Expr>)
            eq -> egglog::ast::Fact::Eq((&eq.exprs).into_iter().map(|e| e.into()).collect()),
            egglog::ast::Fact::Eq(e) => Eq { exprs: e.into_iter().map(|e| e.into()).collect() };
@@ -41,7 +41,7 @@ convert_enums!(
             f -> egglog::ast::Fact::Fact((&f.expr).into()),
             egglog::ast::Fact::Fact(e) => Fact { expr: e.into() }
     };
-    egglog::ast::Action: "{:}" => Action {
+    egglog::ast::Action: "{}" => Action {
         Let(lhs: String, rhs: Expr)
             d -> egglog::ast::Action::Let((&d.lhs).into(), (&d.rhs).into()),
             egglog::ast::Action::Let(n, e) => Let { lhs: n.to_string(), rhs: e.into() };
@@ -75,7 +75,7 @@ convert_enums!(
             e -> egglog::ast::Action::Expr((&e.expr).into()),
             egglog::ast::Action::Expr(e) => Expr_ { expr: e.into() }
     };
-    egglog::ast::Schedule: "{:}" => Schedule {
+    egglog::ast::Schedule: "{}" => Schedule {
         Saturate(schedule: Box<Schedule>)
             s -> (&s.schedule).into(),
             egglog::ast::Schedule::Saturate(s) => Saturate { schedule: Box::new((s).into()) };
@@ -89,7 +89,7 @@ convert_enums!(
             s -> egglog::ast::Schedule::Sequence((&s.schedules).into_iter().map(|s| s.into()).collect()),
             egglog::ast::Schedule::Sequence(s) => Sequence { schedules: s.into_iter().map(|s| s.into()).collect() }
     };
-    egglog::ast::Command: "{:?}" => Command {
+    egglog::ast::Command: "{}" => Command {
         SetOption(name: String, value: Expr)
             s -> egglog::ast::Command::SetOption{
                 name: (&s.name).into(),

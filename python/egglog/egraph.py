@@ -23,6 +23,7 @@ from typing import (
     overload,
 )
 
+import graphviz
 from egglog.declarations import Declarations
 from typing_extensions import ParamSpec, get_args, get_origin
 
@@ -214,7 +215,10 @@ class _BaseModule(ABC):
                 # If this is an i64, use the runtime class for the alias so that i64Like is resolved properly
                 # Otherwise, this might be a Map in which case pass in the original cls so that we
                 # can do Map[T, V] on it, which is not allowed on the runtime class
-                cls_type_and_name=(RuntimeClass(self._mod_decls, "i64") if cls_name == "i64" else cls, cls_name),
+                cls_type_and_name=(
+                    RuntimeClass(self._mod_decls, cls_name) if cls_name in {"i64", "String"} else cls,
+                    cls_name,
+                ),
             )
 
         # Register != as a method so we can print it as a string
@@ -450,10 +454,15 @@ class _BaseModule(ABC):
             return class_to_ref(tp).to_var()
         raise TypeError(f"Unexpected type annotation {tp}")
 
-    def register(self, *commands: CommandLike) -> None:
+    def register(self, command_or_generator: CommandLike | CommandGenerator, *commands: CommandLike) -> None:
         """
         Registers any number of rewrites or rules.
         """
+        if isinstance(command_or_generator, FunctionType):
+            assert not commands
+            commands = tuple(_command_generator(command_or_generator))
+        else:
+            commands = (cast(CommandLike, command_or_generator), *commands)
         self._process_commands(_command_like(command)._to_egg_command(self._mod_decls) for command in commands)
 
     def ruleset(self, name: str) -> Ruleset:
@@ -587,9 +596,12 @@ class EGraph(_BaseModule):
         """
         Returns the graphviz representation of the e-graph.
         """
-        import graphviz
 
-        return graphviz.Source(self._egraph.to_graphviz_string())._repr_mimebundle_(*args, **kwargs)
+        return self.graphviz._repr_mimebundle_(*args, **kwargs)
+
+    @property
+    def graphviz(self) -> graphviz.Source:
+        return graphviz.Source(self._egraph.to_graphviz_string())
 
     def display(self):
         """
@@ -980,6 +992,18 @@ def _command_like(command_like: CommandLike) -> Command:
     if isinstance(command_like, BaseExpr):
         return expr_action(command_like)
     return command_like
+
+
+CommandGenerator = Callable[..., Iterable[Command]]
+
+
+def _command_generator(gen: CommandGenerator) -> Iterable[Command]:
+    """
+    Calls the function with variables of the type and name of the arguments.
+    """
+    hints = get_type_hints(gen)
+    args = (_var(p.name, hints[p.name]) for p in signature(gen).parameters.values())
+    return gen(*args)
 
 
 ActionLike = Union[Action, BaseExpr]

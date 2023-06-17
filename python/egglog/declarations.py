@@ -536,7 +536,18 @@ class CallDecl:
 
         # Find the first callable ref that matches the call
         for callable_ref in mod_decls.get_callable_refs(call.name):
-            tcs = TypeConstraintSolver()
+            # If this is a classmethod, we might need the type params that were bound for this type
+            # egglog currently only allows one instantiated type of any generic sort to be used in any program
+            # So we just lookup what args were registered for thsi sort
+            if isinstance(callable_ref, ClassMethodRef):
+                for registered_tp in mod_decls._decl._type_ref_to_egg_sort.keys():
+                    if registered_tp.name == callable_ref.class_name:
+                        tcs = TypeConstraintSolver.from_type_parameters(registered_tp.args)
+                        break
+                else:
+                    raise ValueError(f"Could not find type parameters for class {callable_ref.class_name}")
+            else:
+                tcs = TypeConstraintSolver()
             fn_decl = mod_decls.get_function_decl(callable_ref)
             return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, fn_decl.var_arg_type, arg_types)
             return TypedExprDecl(return_tp, cls(callable_ref, tuple(results)))
