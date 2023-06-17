@@ -32,7 +32,7 @@ def test_tree_modules():
     assert D._flatted_deps == [A, B]
 
     egraph = EGraph([D, B])
-    assert egraph._flatted_deps == [D, A, B]
+    assert egraph._flatted_deps == [A, B, D]
     egraph.check(a(), b(), d())
     with pytest.raises(Exception):
         egraph.check(c())
