@@ -108,7 +108,7 @@ class _BaseModule(ABC):
         included_decls = [_BUILTIN_DECLS] if _BUILTIN_DECLS else []
         # Traverse all the included modules to flatten all their dependencies and add to the included declerations
         for mod in modules:
-            for child_mod in [mod, *mod._flatted_deps]:
+            for child_mod in [*mod._flatted_deps, mod]:
                 if child_mod not in self._flatted_deps:
                     self._flatted_deps.append(child_mod)
                     included_decls.append(child_mod._mod_decls._decl)
