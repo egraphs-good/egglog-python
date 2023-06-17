@@ -1,26 +1,13 @@
 """
 N-Dimensional Arrays
 ====================
+
+Example of building NDarray in the vein of Mathemetics of Arrays.
 """
 # mypy: disable-error-code=empty-body
 from __future__ import annotations
 
 from egglog import *
-
-# Story
-# Start with eager arrays
-# Then move onto lazy arrays.
-
-# Then show how the point is we can do this with different packages...
-
-# 1. Wonderful ndarray library with execution on my cpu
-# 2. Come along with that allows generation of code for another platform, thats batched
-# 3. Add cross product, works on both platforms
-# 4. Add specialisation for lazy platform.
-
-# 1. Different people to do different parts, without explicit coordination... No need to ask for permission.
-# 2. Can
-
 
 egraph = EGraph()
 
