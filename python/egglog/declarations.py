@@ -231,6 +231,16 @@ class ModuleDeclarations:
                 pass
         raise KeyError(f"Class {name} not found")
 
+    def get_registered_class_args(self, cls_name: str) -> tuple[JustTypeRef, ...]:
+        """
+        Given a class name, returns the first typevar regsisted with args of that class.
+        """
+        for decl in self.all_decls:
+            for tp in decl._type_ref_to_egg_sort.keys():
+                if tp.name == cls_name and tp.args:
+                    return tp.args
+        return ()
+
     def register_class(self, name: str, n_type_vars: int, egg_sort: Optional[str]) -> Iterable[bindings._Command]:
         # Register class first
         if name in self._decl._classes:
@@ -538,14 +548,10 @@ class CallDecl:
         for callable_ref in mod_decls.get_callable_refs(call.name):
             # If this is a classmethod, we might need the type params that were bound for this type
             # egglog currently only allows one instantiated type of any generic sort to be used in any program
-            # So we just lookup what args were registered for thsi sort
+            # So we just lookup what args were registered for this sort
             if isinstance(callable_ref, ClassMethodRef):
-                for registered_tp in mod_decls._decl._type_ref_to_egg_sort.keys():
-                    if registered_tp.name == callable_ref.class_name:
-                        tcs = TypeConstraintSolver.from_type_parameters(registered_tp.args)
-                        break
-                else:
-                    raise ValueError(f"Could not find type parameters for class {callable_ref.class_name}")
+                cls_args = mod_decls.get_registered_class_args(callable_ref.class_name)
+                tcs = TypeConstraintSolver.from_type_parameters(cls_args)
             else:
                 tcs = TypeConstraintSolver()
             fn_decl = mod_decls.get_function_decl(callable_ref)
