@@ -39,6 +39,7 @@ docs = [
     "sphinx-autodoc-typehints",
     "sphinx-gallery",
     "matplotlib",
+    "nbconvert",
 ]
 
 
