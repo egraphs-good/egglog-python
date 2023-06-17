@@ -19,6 +19,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 - Added support for alternative way of creating variables using functions
 - Add NDarray example
 - Render EGraphs with `graphviz` in the notebook
+  - Add images to doc examples
 - Add `%%egglog` magic to the notebook
 
 ## 0.4.0 (2023-05-03)

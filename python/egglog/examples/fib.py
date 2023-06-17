@@ -25,3 +25,4 @@ egraph.register(
 )
 egraph.run(7)
 egraph.check(eq(fib(i64(7))).to(i64(21)))
+egraph

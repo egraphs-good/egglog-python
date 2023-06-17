@@ -603,6 +603,15 @@ class EGraph(_BaseModule):
     def graphviz(self) -> graphviz.Source:
         return graphviz.Source(self._egraph.to_graphviz_string())
 
+    def _repr_html_(self) -> str:
+        """
+        Add a _repr_html_ to be an SVG to work with sphinx gallery
+        ala https://github.com/xflr6/graphviz/pull/121
+        until this PR is merged and released
+        https://github.com/sphinx-gallery/sphinx-gallery/pull/1138
+        """
+        return self.graphviz.pipe(format="svg").decode()
+
     def display(self):
         """
         Displays the e-graph in the notebook.
