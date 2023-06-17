@@ -338,7 +338,7 @@ and also will make sure the variables won't be used outside of the scope of the 
 # egg: (rewrite (Add a b) (Add b a))
 
 @egraph.register
-def _math(a: Math, b: Math)
+def _math(a: Math, b: Math):
     yield rewrite(a * b).to(b * a)
     yield rewrite(a + b).to(b + a)
 ```
