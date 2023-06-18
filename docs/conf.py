@@ -18,6 +18,8 @@ subprocess.run(
         "slides",
         "--output-dir",
         str(output_dir),
+        "--TagRemovePreprocessor.remove_input_tags",
+        "remove-input",
     ],
     check=True,
 )
