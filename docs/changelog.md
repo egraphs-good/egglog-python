@@ -4,6 +4,8 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
 ## Unreleased
 
+## 0.5.0 (2023-05-03)
+
 - Renamed `config()` to `run()` to better match `egglog` command
 - Fixed `relation` type signature
 - Added default limit of 1 to `run()` to match `egglog` command and moved to second arg
@@ -18,7 +20,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 - Fixed extracting classmethods which required generic args to cls
 - Added support for alternative way of creating variables using functions
 - Add NDarray example
-- Render EGraphs with `graphviz` in the notebook
+- Render EGraphs with `graphviz` in the notebook (used in progress egglog PR).
   - Add images to doc examples
 - Add `%%egglog` magic to the notebook
 
