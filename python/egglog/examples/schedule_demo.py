@@ -30,3 +30,4 @@ egraph.run(
 )
 egraph.check(left(i64(10)), right(i64(9)))
 egraph.check_fail(left(i64(11)), right(i64(10)))
+egraph

@@ -40,3 +40,4 @@ egraph.register(
 )
 egraph.run(10)
 egraph.check(eq(expr1).to(expr2))
+egraph

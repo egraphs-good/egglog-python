@@ -23,6 +23,7 @@ from typing import (
     overload,
 )
 
+import graphviz
 from egglog.declarations import Declarations
 from typing_extensions import ParamSpec, get_args, get_origin
 
@@ -107,7 +108,7 @@ class _BaseModule(ABC):
         included_decls = [_BUILTIN_DECLS] if _BUILTIN_DECLS else []
         # Traverse all the included modules to flatten all their dependencies and add to the included declerations
         for mod in modules:
-            for child_mod in [mod, *mod._flatted_deps]:
+            for child_mod in [*mod._flatted_deps, mod]:
                 if child_mod not in self._flatted_deps:
                     self._flatted_deps.append(child_mod)
                     included_decls.append(child_mod._mod_decls._decl)
@@ -214,7 +215,10 @@ class _BaseModule(ABC):
                 # If this is an i64, use the runtime class for the alias so that i64Like is resolved properly
                 # Otherwise, this might be a Map in which case pass in the original cls so that we
                 # can do Map[T, V] on it, which is not allowed on the runtime class
-                cls_type_and_name=(RuntimeClass(self._mod_decls, "i64") if cls_name == "i64" else cls, cls_name),
+                cls_type_and_name=(
+                    RuntimeClass(self._mod_decls, cls_name) if cls_name in {"i64", "String"} else cls,
+                    cls_name,
+                ),
             )
 
         # Register != as a method so we can print it as a string
@@ -450,10 +454,15 @@ class _BaseModule(ABC):
             return class_to_ref(tp).to_var()
         raise TypeError(f"Unexpected type annotation {tp}")
 
-    def register(self, *commands: CommandLike) -> None:
+    def register(self, command_or_generator: CommandLike | CommandGenerator, *commands: CommandLike) -> None:
         """
         Registers any number of rewrites or rules.
         """
+        if isinstance(command_or_generator, FunctionType):
+            assert not commands
+            commands = tuple(_command_generator(command_or_generator))
+        else:
+            commands = (cast(CommandLike, command_or_generator), *commands)
         self._process_commands(_command_like(command)._to_egg_command(self._mod_decls) for command in commands)
 
     def ruleset(self, name: str) -> Ruleset:
@@ -582,6 +591,34 @@ class EGraph(_BaseModule):
 
     def _process_commands(self, commands: Iterable[bindings._Command]) -> None:
         self._egraph.run_program(*commands)
+
+    def _repr_mimebundle_(self, *args, **kwargs):
+        """
+        Returns the graphviz representation of the e-graph.
+        """
+
+        return self.graphviz._repr_mimebundle_(*args, **kwargs)
+
+    @property
+    def graphviz(self) -> graphviz.Source:
+        return graphviz.Source(self._egraph.to_graphviz_string())
+
+    def _repr_html_(self) -> str:
+        """
+        Add a _repr_html_ to be an SVG to work with sphinx gallery
+        ala https://github.com/xflr6/graphviz/pull/121
+        until this PR is merged and released
+        https://github.com/sphinx-gallery/sphinx-gallery/pull/1138
+        """
+        return self.graphviz.pipe(format="svg").decode()
+
+    def display(self):
+        """
+        Displays the e-graph in the notebook.
+        """
+        from IPython.display import display
+
+        display(self)
 
     def simplify(self, expr: EXPR, limit: int, *until: Fact, ruleset: Optional[Ruleset] = None) -> EXPR:
         """
@@ -964,6 +1001,18 @@ def _command_like(command_like: CommandLike) -> Command:
     if isinstance(command_like, BaseExpr):
         return expr_action(command_like)
     return command_like
+
+
+CommandGenerator = Callable[..., Iterable[Command]]
+
+
+def _command_generator(gen: CommandGenerator) -> Iterable[Command]:
+    """
+    Calls the function with variables of the type and name of the arguments.
+    """
+    hints = get_type_hints(gen)
+    args = (_var(p.name, hints[p.name]) for p in signature(gen).parameters.values())
+    return gen(*args)
 
 
 ActionLike = Union[Action, BaseExpr]

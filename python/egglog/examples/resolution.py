@@ -81,3 +81,4 @@ egraph.run(10)
 egraph.check(T != F)
 egraph.check(eq(p0).to(F))
 egraph.check(eq(p2).to(F))
+egraph

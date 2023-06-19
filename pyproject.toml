@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Software Development :: Interpreters",
     "Typing :: Typed",
 ]
-dependencies = ["typing-extensions", "black"]
+dependencies = ["typing-extensions", "black", "graphviz"]
 
 [project.optional-dependencies]
 dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
@@ -39,6 +39,7 @@ docs = [
     "sphinx-autodoc-typehints",
     "sphinx-gallery",
     "matplotlib",
+    "nbconvert",
 ]
 
 
@@ -51,7 +52,7 @@ skip_gitignore = true
 
 
 [tool.mypy]
-ignore_missing_imports = false
+ignore_missing_imports = true
 warn_redundant_casts = true
 check_untyped_defs = true
 strict_equality = true

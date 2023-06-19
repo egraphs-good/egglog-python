@@ -1,5 +1,30 @@
-# outline for a myst_nb project with sphinx
-# build with: sphinx-build -nW --keep-going -b html . ./_build/html
+import pathlib
+import subprocess
+
+##
+# Built presentation in sphinx
+##
+
+cwd = pathlib.Path(__file__).parent
+presentation_file = cwd / "explanation" / "pldi_2023_presentation.ipynb"
+output_dir = cwd / "presentations"
+
+subprocess.run(
+    [
+        "jupyter",
+        "nbconvert",
+        str(presentation_file),
+        "--to",
+        "slides",
+        "--output-dir",
+        str(output_dir),
+        "--TagRemovePreprocessor.remove_input_tags",
+        "remove-input",
+    ],
+    check=True,
+)
+
+html_extra_path = ["presentations/pldi_2023_presentation.slides.html"]
 
 # load extensions
 extensions = [

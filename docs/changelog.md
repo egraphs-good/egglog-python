@@ -11,9 +11,16 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
   - Added `Set` sort and removed set method from `Map`
   - Added `Vec` sort
   - Added support for variable args for builtin functions, to use in creation of `Vec` and `Set` sorts.
+  - Added suport for joining `String`s
 - Switch generated egg names to use `.` as seperate (i.e. `Math.__add__`) instead of `_` (i.e. `Math___add__`)
 - Adds support for modules to define functions/sorts/rules without executing them, for reuse in other modules
   - Moved simplifying and running rulesets to the `run` and `simplify` methods on the `EGraph` from those methods on the `Ruleset` since we can now create `Rulset`s for modules which don't have an EGraph attached and can't be run
+- Fixed extracting classmethods which required generic args to cls
+- Added support for alternative way of creating variables using functions
+- Add NDarray example
+- Render EGraphs with `graphviz` in the notebook
+  - Add images to doc examples
+- Add `%%egglog` magic to the notebook
 
 ## 0.4.0 (2023-05-03)
 

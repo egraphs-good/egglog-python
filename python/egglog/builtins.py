@@ -21,6 +21,7 @@ __all__ = [
     "Rational",
     "Set",
     "Vec",
+    "join",
 ]
 
 
@@ -147,13 +148,19 @@ class f64(BaseExpr):
         ...
 
 
+StringLike = Union[str, "String"]
+
+
 @BUILTINS.class_
 class String(BaseExpr):
     def __init__(self, value: str):
         ...
 
 
-StringLike = Union[str, String]
+@BUILTINS.function(egg_fn="+")
+def join(*strings: StringLike) -> String:  # type: ignore[empty-body]
+    ...
+
 
 T = TypeVar("T", bound=BaseExpr)
 V = TypeVar("V", bound=BaseExpr)
@@ -327,4 +334,12 @@ class Vec(BaseExpr, Generic[T]):
 
     @BUILTINS.method(egg_fn="vec-contains")
     def contains(self, value: T) -> Unit:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="vec-length")
+    def length(self) -> i64:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="vec-get")
+    def __getitem__(self, index: i64Like) -> T:  # type: ignore[empty-body]
         ...

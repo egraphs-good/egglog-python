@@ -181,3 +181,4 @@ ex2 = egraph.define("ex2", kron(Matrix.identity(p), C) @ kron(A, Matrix.identity
 egraph.run(10)
 # Verify it is not simplified
 egraph.check_fail(eq(ex2).to(kron(A, C)))
+egraph
