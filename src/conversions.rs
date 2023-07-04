@@ -8,7 +8,7 @@ convert_enums!(
     egglog::ast::Literal: "{:}" => Literal {
         Int(value: i64)
             i -> egglog::ast::Literal::Int(i.value),
-            egglog::ast::Literal::Int(i) => Int { value: i.clone() };
+            egglog::ast::Literal::Int(i) => Int { value: *i };
         F64(value: WrappedOrderedF64)
             f -> egglog::ast::Literal::F64(f.value.0),
             egglog::ast::Literal::F64(f) => F64 { value: WrappedOrderedF64(*f) };
@@ -27,16 +27,16 @@ convert_enums!(
             v -> egglog::ast::Expr::Var((&v.name).into()),
             egglog::ast::Expr::Var(v) => Var { name: v.to_string() };
         Call(name: String, args: Vec<Expr>)
-            c -> egglog::ast::Expr::Call((&c.name).into(), (&c.args).into_iter().map(|e| e.into()).collect()),
+            c -> egglog::ast::Expr::Call((&c.name).into(), c.args.iter().map(|e| e.into()).collect()),
             egglog::ast::Expr::Call(c, a) => Call {
                 name: c.to_string(),
-                args: a.into_iter().map(|e| e.into()).collect()
+                args: a.iter().map(|e| e.into()).collect()
             }
     };
     egglog::ast::Fact: "{}" => Fact_ {
         Eq(exprs: Vec<Expr>)
-           eq -> egglog::ast::Fact::Eq((&eq.exprs).into_iter().map(|e| e.into()).collect()),
-           egglog::ast::Fact::Eq(e) => Eq { exprs: e.into_iter().map(|e| e.into()).collect() };
+           eq -> egglog::ast::Fact::Eq(eq.exprs.iter().map(|e| e.into()).collect()),
+           egglog::ast::Fact::Eq(e) => Eq { exprs: e.iter().map(|e| e.into()).collect() };
         Fact(expr: Expr)
             f -> egglog::ast::Fact::Fact((&f.expr).into()),
             egglog::ast::Fact::Fact(e) => Fact { expr: e.into() }
@@ -46,24 +46,24 @@ convert_enums!(
             d -> egglog::ast::Action::Let((&d.lhs).into(), (&d.rhs).into()),
             egglog::ast::Action::Let(n, e) => Let { lhs: n.to_string(), rhs: e.into() };
         Set(lhs: String, args: Vec<Expr>, rhs: Expr)
-            s -> egglog::ast::Action::Set((&s.lhs).into(), (&s.args).into_iter().map(|e| e.into()).collect(), (&s.rhs).into()),
+            s -> egglog::ast::Action::Set((&s.lhs).into(), s.args.iter().map(|e| e.into()).collect(), (&s.rhs).into()),
             egglog::ast::Action::Set(n, a, e) => Set {
                 lhs: n.to_string(),
-                args: a.into_iter().map(|e| e.into()).collect(),
+                args: a.iter().map(|e| e.into()).collect(),
                 rhs: e.into()
             };
         SetNoTrack(lhs: String, args: Vec<Expr>, rhs: Expr)
-            s -> egglog::ast::Action::SetNoTrack((&s.lhs).into(), (&s.args).into_iter().map(|e| e.into()).collect(), (&s.rhs).into()),
+            s -> egglog::ast::Action::SetNoTrack((&s.lhs).into(), s.args.iter().map(|e| e.into()).collect(), (&s.rhs).into()),
             egglog::ast::Action::SetNoTrack(n, a, e) => SetNoTrack {
                 lhs: n.to_string(),
-                args: a.into_iter().map(|e| e.into()).collect(),
+                args: a.iter().map(|e| e.into()).collect(),
                 rhs: e.into()
             };
         Delete(sym: String, args: Vec<Expr>)
-            d -> egglog::ast::Action::Delete((&d.sym).into(), (&d.args).into_iter().map(|e| e.into()).collect()),
+            d -> egglog::ast::Action::Delete((&d.sym).into(), d.args.iter().map(|e| e.into()).collect()),
             egglog::ast::Action::Delete(n, a) => Delete {
                 sym: n.to_string(),
-                args: a.into_iter().map(|e| e.into()).collect()
+                args: a.iter().map(|e| e.into()).collect()
             };
         Union(lhs: Expr, rhs: Expr)
             u -> egglog::ast::Action::Union((&u.lhs).into(), (&u.rhs).into()),
@@ -86,8 +86,8 @@ convert_enums!(
             r -> egglog::ast::Schedule::Run((&r.config).into()),
             egglog::ast::Schedule::Run(c) => Run { config: c.into() };
         Sequence(schedules: Vec<Schedule>)
-            s -> egglog::ast::Schedule::Sequence((&s.schedules).into_iter().map(|s| s.into()).collect()),
-            egglog::ast::Schedule::Sequence(s) => Sequence { schedules: s.into_iter().map(|s| s.into()).collect() }
+            s -> egglog::ast::Schedule::Sequence(s.schedules.iter().map(|s| s.into()).collect()),
+            egglog::ast::Schedule::Sequence(s) => Sequence { schedules: s.iter().map(|s| s.into()).collect() }
     };
     egglog::ast::Command: "{}" => Command {
         SetOption(name: String, value: Expr)
@@ -102,11 +102,11 @@ convert_enums!(
         Datatype(name: String, variants: Vec<Variant>)
             d -> egglog::ast::Command::Datatype {
                 name: (&d.name).into(),
-                variants: (&d.variants).into_iter().map(|v| v.into()).collect()
+                variants: d.variants.iter().map(|v| v.into()).collect()
             },
             egglog::ast::Command::Datatype {name, variants} => Datatype {
                 name: name.to_string(),
-                variants: variants.into_iter().map(|v| v.into()).collect()
+                variants: variants.iter().map(|v| v.into()).collect()
             };
         Declare(name: String, sort: String)
             d -> egglog::ast::Command::Declare {
@@ -120,11 +120,11 @@ convert_enums!(
         Sort(name: String, presort_and_args: Option<(String, Vec<Expr>)>)
             s -> egglog::ast::Command::Sort(
                 (&s.name).into(),
-                (&s.presort_and_args).as_ref().map(|(p, a)| (p.into(), a.into_iter().map(|e| e.into()).collect()))
+                s.presort_and_args.as_ref().map(|(p, a)| (p.into(), a.iter().map(|e| e.into()).collect()))
             ),
             egglog::ast::Command::Sort(n, presort_and_args) => Sort {
                 name: n.to_string(),
-                presort_and_args: presort_and_args.as_ref().map(|(p, a)| (p.to_string(), a.into_iter().map(|e| e.into()).collect()))
+                presort_and_args: presort_and_args.as_ref().map(|(p, a)| (p.to_string(), a.iter().map(|e| e.into()).collect()))
             };
         Function(decl: FunctionDecl)
             f -> egglog::ast::Command::Function((&f.decl).into()),
@@ -186,12 +186,12 @@ convert_enums!(
             };
         Calc(identifiers: Vec<IdentSort>, exprs: Vec<Expr>)
             c -> egglog::ast::Command::Calc(
-                (&c.identifiers).into_iter().map(|i| i.into()).collect(),
-                (&c.exprs).into_iter().map(|e| e.into()).collect()
+                c.identifiers.iter().map(|i| i.into()).collect(),
+                c.exprs.iter().map(|e| e.into()).collect()
             ),
             egglog::ast::Command::Calc(identifiers, exprs) => Calc {
-                identifiers: identifiers.into_iter().map(|i| i.into()).collect(),
-                exprs: exprs.into_iter().map(|e| e.into()).collect()
+                identifiers: identifiers.iter().map(|i| i.into()).collect(),
+                exprs: exprs.iter().map(|e| e.into()).collect()
             };
         Extract(variants: usize, expr: Expr)
             e -> egglog::ast::Command::Extract {
@@ -203,8 +203,8 @@ convert_enums!(
                 expr: e.into()
             };
         Check(facts: Vec<Fact_>)
-            c -> egglog::ast::Command::Check((&c.facts).into_iter().map(|f| f.into()).collect()),
-            egglog::ast::Command::Check(facts) => Check { facts: facts.into_iter().map(|f| f.into()).collect() };
+            c -> egglog::ast::Command::Check(c.facts.iter().map(|f| f.into()).collect()),
+            egglog::ast::Command::Check(facts) => Check { facts: facts.iter().map(|f| f.into()).collect() };
         Print(name: String, length: usize)
             p -> egglog::ast::Command::Print((&p.name).into(), p.length),
             egglog::ast::Command::Print(n, l) => Print {
@@ -217,11 +217,11 @@ convert_enums!(
         Output(file: String, exprs: Vec<Expr>)
             o -> egglog::ast::Command::Output {
                 file: (&o.file).into(),
-                exprs: (&o.exprs).into_iter().map(|e| e.into()).collect()
+                exprs: o.exprs.iter().map(|e| e.into()).collect()
             },
             egglog::ast::Command::Output {file, exprs} => Output {
                 file: file.to_string(),
-                exprs: exprs.into_iter().map(|e| e.into()).collect()
+                exprs: exprs.iter().map(|e| e.into()).collect()
             };
         Input(name: String, file: String)
             i -> egglog::ast::Command::Input {
@@ -278,34 +278,34 @@ convert_struct!(
         types: Vec<String>,
         cost: Option<usize> = None
     )
-        v -> egglog::ast::Variant {name: (&v.name).into(), types: (&v.types).into_iter().map(|v| v.into()).collect(), cost: v.cost},
+        v -> egglog::ast::Variant {name: (&v.name).into(), types: v.types.iter().map(|v| v.into()).collect(), cost: v.cost},
         v -> Variant {name: v.name.to_string(), types: v.types.iter().map(|v| v.to_string()).collect(), cost: v.cost};
     egglog::ast::Schema: "{:?}" => Schema(
         input: Vec<String>,
         output: String
     )
-        s -> egglog::ast::Schema {input: (&s.input).into_iter().map(|v| v.into()).collect(), output: (&s.output).into()},
+        s -> egglog::ast::Schema {input: s.input.iter().map(|v| v.into()).collect(), output: (&s.output).into()},
         s -> Schema {input: s.input.iter().map(|v| v.to_string()).collect(), output: s.output.to_string()};
     egglog::ast::Rule: "{}" => Rule(
         head: Vec<Action>,
         body: Vec<Fact_>
     )
-        r -> egglog::ast::Rule {head: (&r.head).into_iter().map(|v| v.into()).collect(), body: (&r.body).into_iter().map(|v| v.into()).collect()},
+        r -> egglog::ast::Rule {head: r.head.iter().map(|v| v.into()).collect(), body: r.body.iter().map(|v| v.into()).collect()},
         r -> Rule {head: r.head.iter().map(|v| v.into()).collect(), body: r.body.iter().map(|v| v.into()).collect()};
     egglog::ast::Rewrite: "{:?}" => Rewrite(
         lhs: Expr,
         rhs: Expr,
         conditions: Vec<Fact_> = Vec::new()
     )
-        r -> egglog::ast::Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: (&r.conditions).into_iter().map(|v| v.into()).collect()},
+        r -> egglog::ast::Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()},
         r -> Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()};
     egglog::ast::RunConfig: "{:?}" => RunConfig(
         ruleset: String,
         limit: usize,
         until: Option<Vec<Fact_>>
     )
-        r -> egglog::ast::RunConfig {ruleset: (&r.ruleset).into(), limit: r.limit, until: r.until.as_ref().map(|v| v.into_iter().map(|v| v.into()).collect())},
-        r -> RunConfig {ruleset: r.ruleset.to_string(), limit: r.limit, until: r.until.as_ref().map(|v| v.into_iter().map(|v| v.into()).collect())};
+        r -> egglog::ast::RunConfig {ruleset: (&r.ruleset).into(), limit: r.limit, until: r.until.as_ref().map(|v| v.iter().map(|v| v.into()).collect())},
+        r -> RunConfig {ruleset: r.ruleset.to_string(), limit: r.limit, until: r.until.as_ref().map(|v| v.iter().map(|v| v.into()).collect())};
     egglog::ast::IdentSort: "{:?}" => IdentSort(
         ident: String,
         sort: String
@@ -331,7 +331,7 @@ convert_struct!(
 
 impl FromPyObject<'_> for Box<Schedule> {
     fn extract(ob: &'_ PyAny) -> PyResult<Self> {
-        ob.extract::<Schedule>().map(|f| Box::new(f))
+        ob.extract::<Schedule>().map(Box::new)
     }
 }
 
@@ -343,7 +343,7 @@ impl IntoPy<PyObject> for Box<Schedule> {
 
 impl FromPyObject<'_> for Box<Command> {
     fn extract(ob: &'_ PyAny) -> PyResult<Self> {
-        ob.extract::<Command>().map(|f| Box::new(f))
+        ob.extract::<Command>().map(Box::new)
     }
 }
 
@@ -394,8 +394,7 @@ impl FromPyObject<'_> for WrappedDuration {
         Ok(WrappedDuration(std::time::Duration::new(
             py_delta.get_days() as u64 * 24 * 60 * 60 + py_delta.get_seconds() as u64,
             py_delta.get_microseconds() as u32 * 1000,
-        ))
-        .into())
+        )))
     }
 }
 

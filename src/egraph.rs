@@ -25,7 +25,7 @@ impl EGraph {
     #[pyo3(signature = (*, fact_directory=None, seminaive=true))]
     fn new(fact_directory: Option<PathBuf>, seminaive: bool) -> Self {
         let mut egraph = egglog::EGraph::default();
-        egraph.fact_directory = fact_directory.clone();
+        egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
         Self { egraph }
     }
@@ -54,10 +54,10 @@ impl EGraph {
     #[pyo3(signature = ())]
     fn extract_report(&mut self) -> Option<ExtractReport> {
         info!("Getting last extract report");
-        match self.egraph.get_extract_report() {
-            Some(report) => Some(report.into()),
-            None => None,
-        }
+        self.egraph
+            .get_extract_report()
+            .as_ref()
+            .map(|report| report.into())
     }
 
     /// Gets the last run report from the EGraph, if the last command
@@ -65,10 +65,10 @@ impl EGraph {
     #[pyo3(signature = ())]
     fn run_report(&mut self) -> Option<RunReport> {
         info!("Getting last run report");
-        match self.egraph.get_run_report() {
-            Some(report) => Some(report.into()),
-            None => None,
-        }
+        self.egraph
+            .get_run_report()
+            .as_ref()
+            .map(|report| report.into())
     }
 
     /// Returns the EGraph as graphviz string.
