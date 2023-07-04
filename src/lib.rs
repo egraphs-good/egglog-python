@@ -1,6 +1,7 @@
 mod conversions;
 mod egraph;
 mod error;
+mod py_object_sort;
 mod utils;
 
 use pyo3::prelude::*;

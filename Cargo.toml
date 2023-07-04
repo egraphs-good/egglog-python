@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 # Use unreleased version to depend on signature improvements https://github.com/PyO3/pyo3/pull/2702
 pyo3 = { version = "0.18.1", features = ["extension-module"] }
 # egglog = { git = "https://github.com/egraphs-good/egglog", rev = "39b199d9bfce9cc47d0c54977279c5b04231e717" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "4b7ec0a640b430bc86ec1d9f79e38a06e62c0cb7" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "7b726665db0d7e8a1ce23b946e8e0acf6838e43a" }
 
 # egglog = { path = "../egg-smol" }
 pyo3-log = "0.8.1"

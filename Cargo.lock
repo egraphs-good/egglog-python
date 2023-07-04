@@ -290,7 +290,7 @@ checksum = "545da7d6df7f8fd0de7106669a7d0bfa3dbcfa24d81da46906ad658188b2ff7c"
 [[package]]
 name = "egglog"
 version = "0.1.0"
-source = "git+https://github.com/saulshanabrook/egg-smol?rev=4b7ec0a640b430bc86ec1d9f79e38a06e62c0cb7#4b7ec0a640b430bc86ec1d9f79e38a06e62c0cb7"
+source = "git+https://github.com/saulshanabrook/egg-smol?rev=7b726665db0d7e8a1ce23b946e8e0acf6838e43a#7b726665db0d7e8a1ce23b946e8e0acf6838e43a"
 dependencies = [
  "clap",
  "env_logger",
