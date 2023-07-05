@@ -3,14 +3,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use egglog::sort::FromSort;
+use egglog::sort::{FromSort, StringSort};
 use egglog::{
     ast::{Expr, Literal, Symbol},
     sort::{I64Sort, Sort},
     util::IndexMap,
     ArcSort, EGraph, PrimitiveLike, TypeInfo, Value,
 };
-use pyo3::{AsPyPointer, PyObject, Python};
+use pyo3::{types::PyDict, AsPyPointer, PyObject, Python};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum PyObjectIdent {
@@ -52,12 +52,13 @@ impl PyObjectSort {
             }
         });
         let mut objects = self.objects.lock().unwrap();
-        let (i, _) = objects.insert_full(ident, obj.clone());
+        let (i, _) = objects.insert_full(ident, obj);
         Value {
             tag: self.name,
             bits: i as u64,
         }
     }
+
     fn get_value(&self, key: &PyObjectIdent) -> Value {
         let objects = self.objects.lock().unwrap();
         let i = objects.get_index_of(key).unwrap();
@@ -79,42 +80,47 @@ impl Sort for PyObjectSort {
 
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-        typeinfo.add_primitive(CtorID {
-            name: "py-object-id".into(),
+        typeinfo.add_primitive(Ctor {
+            name: "py-object".into(),
             py_object: self.clone(),
             i64:typeinfo.get_sort(),
         });
-        typeinfo.add_primitive(CtorHash {
-            name: "py-object-hash".into(),
+        typeinfo.add_primitive(Eval {
+            name: "py-eval".into(),
+            py_object: self.clone(),
+            string: typeinfo.get_sort(),
+        });
+        typeinfo.add_primitive(DictUpdate {
+            name: "py-dict-update".into(),
             py_object: self,
-            i64:typeinfo.get_sort(),
+            string: typeinfo.get_sort(),
         });
     }
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {
         assert!(value.tag == self.name());
         let (ident, _) = self.load(&value);
-        match ident {
+        let children = match ident {
             PyObjectIdent::Unhashable(id) => {
-                Expr::call("py-object-id", vec![Expr::Lit(Literal::Int(id as i64))])
+                vec![Expr::Lit(Literal::Int(id as i64))]
             }
-            PyObjectIdent::Hashable(type_hash, hash) => Expr::call(
-                "py-object-hash",
+            PyObjectIdent::Hashable(type_hash, hash) => {
                 vec![
                     Expr::Lit(Literal::Int(type_hash as i64)),
                     Expr::Lit(Literal::Int(hash as i64)),
-                ],
-            ),
-        }
+                ]
+            }
+        };
+        Expr::call("py-object", children)
     }
 }
 
-struct CtorID {
+struct Ctor {
     name: Symbol,
     py_object: Arc<PyObjectSort>,
     i64: Arc<I64Sort>,
 }
 
-impl PrimitiveLike for CtorID {
+impl PrimitiveLike for Ctor {
     fn name(&self) -> Symbol {
         self.name
     }
@@ -122,31 +128,6 @@ impl PrimitiveLike for CtorID {
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
             [id] if id.name() == self.i64.name() => Some(self.py_object.clone()),
-            _ => None,
-        }
-    }
-
-    fn apply(&self, values: &[Value]) -> Option<Value> {
-        let i = i64::load(self.i64.as_ref(), &values[0]);
-        self.py_object
-            .get_value(&PyObjectIdent::Unhashable(i as usize))
-            .into()
-    }
-}
-
-struct CtorHash {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    i64: Arc<I64Sort>,
-}
-
-impl PrimitiveLike for CtorHash {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
             [type_hash, hash]
                 if type_hash.name() == self.i64.name() && hash.name() == self.i64.name() =>
             {
@@ -157,10 +138,105 @@ impl PrimitiveLike for CtorHash {
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
-        let type_hash = i64::load(self.i64.as_ref(), &values[0]);
-        let hash = i64::load(self.i64.as_ref(), &values[1]);
-        self.py_object
-            .get_value(&PyObjectIdent::Hashable(type_hash as isize, hash as isize))
-            .into()
+        let ident = match values {
+            [id] => PyObjectIdent::Unhashable(i64::load(self.i64.as_ref(), id) as usize),
+            [type_hash, hash] => PyObjectIdent::Hashable(
+                i64::load(self.i64.as_ref(), type_hash) as isize,
+                i64::load(self.i64.as_ref(), hash) as isize,
+            ),
+            _ => unreachable!(),
+        };
+        self.py_object.get_value(&ident).into()
+    }
+}
+
+/// Supports calling (py-eval <str-obj> <globals-obj> <locals-obj>)
+struct Eval {
+    name: Symbol,
+    py_object: Arc<PyObjectSort>,
+    string: Arc<StringSort>,
+}
+
+impl PrimitiveLike for Eval {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [str, locals, globals]
+                if str.name() == self.string.name()
+                    && locals.name() == self.py_object.name()
+                    && globals.name() == self.py_object.name() =>
+            {
+                Some(self.py_object.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
+        let res_obj: PyObject = Python::with_gil(|py| {
+            let (_, globals) = self.py_object.load(&values[1]);
+            let globals = Some(globals.downcast::<PyDict>(py).unwrap());
+            let (_, locals) = self.py_object.load(&values[2]);
+            let locals = Some(locals.downcast::<PyDict>(py).unwrap());
+            py.eval(code.into(), globals, locals).unwrap().into()
+        });
+        Some(self.py_object.store(res_obj))
+    }
+}
+
+/// Supports calling (py-dict-update <dict-obj> [<key-string> <value-obj>]*)
+struct DictUpdate {
+    name: Symbol,
+    py_object: Arc<PyObjectSort>,
+    string: Arc<StringSort>,
+}
+
+impl PrimitiveLike for DictUpdate {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        // Should have an odd number of args, with all the pairs plus the first arg
+        if types.len() % 2 == 0 {
+            return None;
+        }
+        for (i, tp) in types.iter().enumerate() {
+            // First tp should be dict
+            if i == 0 {
+                if tp.name() != self.py_object.name() {
+                    return None;
+                }
+            }
+            // All other tps should be pairs of string and object
+            else if i % 2 == 1 {
+                if tp.name() != self.string.name() {
+                    return None;
+                }
+            } else if tp.name() != self.py_object.name() {
+                return None;
+            }
+        }
+        Some(self.py_object.clone())
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let dict: PyObject = Python::with_gil(|py| {
+            // Copy the dict so we can mutate it and return it
+            let (_, dict) = self.py_object.load(&values[0]);
+            let dict = dict.downcast::<PyDict>(py).unwrap().copy().unwrap();
+            // Update the dict with the key-value pairs
+            for i in values[1..].chunks_exact(2) {
+                let key = Symbol::load(self.string.as_ref(), &i[0]).to_string();
+                let value = self.py_object.load(&i[1]).1;
+                dict.set_item(key, value).unwrap();
+            }
+            dict.into()
+        });
+        Some(self.py_object.store(dict))
     }
 }
