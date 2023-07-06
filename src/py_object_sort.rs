@@ -3,14 +3,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use egglog::sort::{FromSort, StringSort};
+use egglog::sort::{FromSort, IntoSort, StringSort};
 use egglog::{
     ast::{Expr, Literal, Symbol},
     sort::{I64Sort, Sort},
     util::IndexMap,
     ArcSort, EGraph, PrimitiveLike, TypeInfo, Value,
 };
-use pyo3::{types::PyDict, AsPyPointer, PyObject, Python};
+use pyo3::{types::PyDict, AsPyPointer, IntoPy, PyObject, Python};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum PyObjectIdent {
@@ -92,6 +92,16 @@ impl Sort for PyObjectSort {
         });
         typeinfo.add_primitive(DictUpdate {
             name: "py-dict-update".into(),
+            py_object: self.clone(),
+            string: typeinfo.get_sort(),
+        });
+        typeinfo.add_primitive(ToString {
+            name: "py-to-string".into(),
+            py_object: self.clone(),
+            string: typeinfo.get_sort(),
+        });
+        typeinfo.add_primitive(FromString {
+            name: "py-from-string".into(),
             py_object: self,
             string: typeinfo.get_sort(),
         });
@@ -238,5 +248,60 @@ impl PrimitiveLike for DictUpdate {
             dict.into()
         });
         Some(self.py_object.store(dict))
+    }
+}
+
+/// (py-to-string <obj>)
+struct ToString {
+    name: Symbol,
+    py_object: Arc<PyObjectSort>,
+    string: Arc<StringSort>,
+}
+
+impl PrimitiveLike for ToString {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [obj] if obj.name() == self.py_object.name() => Some(self.string.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let obj: String = Python::with_gil(|py| {
+            let (_, obj) = self.py_object.load(&values[0]);
+            obj.extract(py).unwrap()
+        });
+        let symbol: Symbol = obj.into();
+        symbol.store(self.string.as_ref())
+    }
+}
+
+/// (py-from-string <str>)
+struct FromString {
+    name: Symbol,
+    py_object: Arc<PyObjectSort>,
+    string: Arc<StringSort>,
+}
+
+impl PrimitiveLike for FromString {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [str] if str.name() == self.string.name() => Some(self.py_object.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let str = Symbol::load(self.string.as_ref(), &values[0]).to_string();
+        let obj: PyObject = Python::with_gil(|py| str.into_py(py));
+        Some(self.py_object.store(obj))
     }
 }

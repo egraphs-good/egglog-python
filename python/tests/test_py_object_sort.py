@@ -103,3 +103,35 @@ class TestEval:
         assert extract_report
         res = egraph.load_object(extract_report.expr)
         assert res == 3
+
+
+class TestConversion:
+    def test_to_string(self):
+        """
+        Verify (py-to-string "hi")
+        """
+        egraph = EGraph()
+        hi = egraph.save_object("hi")
+
+        egraph.run_program(
+            Define("res", Call("py-to-string", [hi]), None),
+            Extract(1, Var("res")),
+        )
+        extract_report = egraph.extract_report()
+        assert extract_report
+        assert extract_report.expr == Lit(String("hi"))
+
+    def test_from_string(self):
+        """
+        Verify (py-from-string "hi")
+        """
+        egraph = EGraph()
+
+        egraph.run_program(
+            Define("res", Call("py-from-string", [Lit(String("hi"))]), None),
+            Extract(1, Var("res")),
+        )
+        extract_report = egraph.extract_report()
+        assert extract_report
+        res = egraph.load_object(extract_report.expr)
+        assert res == "hi"
