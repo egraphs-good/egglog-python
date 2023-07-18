@@ -2,7 +2,6 @@
 Builtin sorts and function to egg.
 """
 
-
 from __future__ import annotations
 
 from typing import Generic, TypeVar, Union
@@ -23,7 +22,6 @@ __all__ = [
     "Vec",
     "join",
 ]
-
 
 # The types which can be converted into an i64
 i64Like = Union[int, "i64"]
@@ -101,6 +99,10 @@ f64Like = Union[float, "f64"]
 @BUILTINS.class_(egg_sort="f64")
 class f64(BaseExpr):
     def __init__(self, value: float):
+        ...
+
+    @BUILTINS.method(egg_fn="neg")
+    def __neg__(self) -> f64:  # type: ignore[empty-body]
         ...
 
     @BUILTINS.method(egg_fn="+")
