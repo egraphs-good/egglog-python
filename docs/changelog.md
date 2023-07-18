@@ -4,6 +4,11 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
 ## Unreleased
 
+## 0.6.0 (2023-07-18)
+
+- Added support for negation on `f64` sort
+- Upgraded `egg-smol` dependency ([changes](https://github.com/saulshanabrook/egg-smol/compare/4b7ec0a640b430bc86ec1d9f79e38a06e62c0cb7...353c4387640019bd2066991ee0488dc6d5c54168))
+
 ## 0.5.0 (2023-05-03)
 
 - Renamed `config()` to `run()` to better match `egglog` command
