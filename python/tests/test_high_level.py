@@ -221,3 +221,17 @@ def test_modules() -> None:
 
     egraph.register(rewrite(OtherNumeric(1)).to(from_numeric(Numeric.ONE)))
     assert expr_parts(egraph.simplify(OtherNumeric(i64(1)), 10)) == expr_parts(from_numeric(Numeric.ONE))
+
+
+def test_f64_negation() -> None:
+    egraph = EGraph()
+    # expr1 = -2.0
+    expr1 = egraph.define("expr1", -f64(2.0))
+
+    # expr2 = 2.0
+    expr2 = egraph.define("expr2", f64(2.0))
+
+    # expr3 = -(-2.0)
+    expr3 = egraph.define("expr3", -(-f64(2.0)))
+    egraph.check(eq(expr1).to(-expr2))
+    egraph.check(eq(expr3).to(expr2))
