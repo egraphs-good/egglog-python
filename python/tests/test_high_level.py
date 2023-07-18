@@ -233,12 +233,5 @@ def test_f64_negation() -> None:
 
     # expr3 = -(-2.0)
     expr3 = egraph.define("expr3", -(-f64(2.0)))
-
-    x, y = vars_("x y", f64)
-
-    egraph.register(rewrite(-(-x)).to(x))
-
-    egraph.run(10)
-
     egraph.check(eq(expr1).to(-expr2))
     egraph.check(eq(expr3).to(expr2))
