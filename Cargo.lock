@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "egglog-python"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "egglog",
  "lalrpop-util 0.19.12",
