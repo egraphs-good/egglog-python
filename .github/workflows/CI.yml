@@ -86,18 +86,13 @@ jobs:
   linux:
     name: build linux
     runs-on: ubuntu-latest
-    if: "startsWith(github.ref, 'refs/tags/')"
     steps:
       - uses: actions/checkout@v3
-      - uses: PyO3/maturin-action@v1.31.0
+      - uses: PyO3/maturin-action@v1.40.1
         with:
           manylinux: auto
           command: build
           args: --release --sdist -o dist --find-interpreter
-          # Pin rust toolchain, so it won't install 1.65.0, otherwise get this error:
-          # Attempting to include the sdist output tarball dist/egglog-0.1.0.tar.gz into itself! Check 'cargo package --list' output.
-          # https://github.com/metadsl/egglog-python/actions/runs/3388178229/jobs/5629843303
-          rust-toolchain: "1.64.0"
       - name: Upload wheels
         uses: actions/upload-artifact@v2
         with:
@@ -107,10 +102,9 @@ jobs:
   windows:
     name: build windows
     runs-on: windows-latest
-    if: "startsWith(github.ref, 'refs/tags/')"
     steps:
       - uses: actions/checkout@v3
-      - uses: PyO3/maturin-action@v1.31.0
+      - uses: PyO3/maturin-action@v1.40.1
         with:
           command: build
           args: --release -o dist --find-interpreter
@@ -123,10 +117,9 @@ jobs:
   macos:
     name: build macos
     runs-on: macos-latest
-    if: "startsWith(github.ref, 'refs/tags/')"
     steps:
       - uses: actions/checkout@v3
-      - uses: PyO3/maturin-action@v1.31.0
+      - uses: PyO3/maturin-action@v1.40.1
         with:
           command: build
           args: --release -o dist --universal2 --find-interpreter
@@ -139,14 +132,14 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    if: "startsWith(github.ref, 'refs/tags/')"
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [macos, windows, linux]
     steps:
       - uses: actions/download-artifact@v2
         with:
           name: wheels
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1.31.0
+        uses: PyO3/maturin-action@v1.40.1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         with:
