@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Generic, TypeVar, Union
 
 from .egraph import BUILTINS, BaseExpr, Unit
-from .runtime import convert
+from .runtime import converter
 
 __all__ = [
     "BUILTINS",
@@ -28,7 +28,7 @@ __all__ = [
 ]
 
 
-# The types which can be converted into an i64
+# The types which can be convertered into an i64
 i64Like = Union[int, "i64"]
 
 
@@ -98,7 +98,7 @@ class i64(BaseExpr):
         ...
 
 
-convert(int, i64, i64)
+converter(int, i64, i64)
 
 
 f64Like = Union[float, "f64"]
@@ -154,7 +154,7 @@ class f64(BaseExpr):
         ...
 
 
-convert(float, f64, f64)
+converter(float, f64, f64)
 
 
 StringLike = Union[str, "String"]
@@ -171,7 +171,7 @@ def join(*strings: StringLike) -> String:  # type: ignore[empty-body]
     ...
 
 
-convert(str, String, String)
+converter(str, String, String)
 
 T = TypeVar("T", bound=BaseExpr)
 V = TypeVar("V", bound=BaseExpr)

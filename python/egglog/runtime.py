@@ -44,6 +44,7 @@ __all__ = [
     "RuntimeExpr",
     "RuntimeFunction",
     "convert",
+    "converter",
 ]
 
 
@@ -61,11 +62,16 @@ T = TypeVar("T")
 V = TypeVar("V", bound="BaseExpr")
 
 
-def convert(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V]) -> None:
+def converter(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V]) -> None:
     to_type_name = process_tp(to_type)
     if not isinstance(to_type_name, JustTypeRef):
         raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
     CONVERSIONS[(process_tp(from_type), to_type_name)] = fn
+
+
+def convert(source: object, target: type[V]) -> V:
+    target_ref = class_to_ref(target)  # type: ignore
+    return cast(V, _resolve_literal(target_ref.to_var(), source))
 
 
 def process_tp(tp: type | RuntimeTypeArgType) -> JustTypeRef | type:
@@ -178,8 +184,8 @@ class RuntimeFunction:
         self.__egg_fn_ref__ = FunctionRef(self.__egg_name__)
         self.__egg_fn_decl__ = self.__egg_decls__.get_function_decl(self.__egg_fn_ref__)
 
-    def __call__(self, *args: object) -> RuntimeExpr:
-        return _call(self.__egg_decls__, self.__egg_fn_ref__, self.__egg_fn_decl__, args)
+    def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr:
+        return _call(self.__egg_decls__, self.__egg_fn_ref__, self.__egg_fn_decl__, args, kwargs)
 
     def __str__(self) -> str:
         return self.__egg_name__
@@ -191,8 +197,17 @@ def _call(
     # Not included if this is the != method
     fn_decl: Optional[FunctionDecl],
     args: Collection[object],
+    kwargs: dict[str, object],
     bound_params: Optional[tuple[JustTypeRef, ...]] = None,
 ) -> RuntimeExpr:
+    # Turn all keyword args into positional args
+
+    if fn_decl:
+        bound = fn_decl.to_signature().bind(*args, **kwargs)
+        assert not bound.kwargs
+        args = bound.args
+    else:
+        assert not kwargs
     upcasted_args: list[RuntimeExpr]
     if fn_decl is not None:
         upcasted_args = [
@@ -235,9 +250,9 @@ class RuntimeClassMethod:
         except KeyError:
             raise AttributeError(f"Class {self.class_name} does not have method {self.__egg_method_name__}")
 
-    def __call__(self, *args: object) -> RuntimeExpr:
+    def __call__(self, *args: object, **kwargs) -> RuntimeExpr:
         bound_params = self.__egg_tp__.args if isinstance(self.__egg_tp__, JustTypeRef) else None
-        return _call(self.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, bound_params)
+        return _call(self.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, kwargs, bound_params)
 
     def __str__(self) -> str:
         return f"{self.class_name}.{self.__egg_method_name__}"
@@ -269,10 +284,10 @@ class RuntimeMethod:
             except KeyError:
                 raise AttributeError(f"Class {self.class_name} does not have method {self.__egg_method_name__}")
 
-    def __call__(self, *args: object) -> RuntimeExpr:
+    def __call__(self, *args: object, **kwargs) -> RuntimeExpr:
         first_arg = RuntimeExpr(self.__egg_decls__, self.__egg_typed_expr__)
         args = (first_arg, *args)
-        return _call(self.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args)
+        return _call(self.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, kwargs)
 
     @property
     def class_name(self) -> str:
@@ -340,8 +355,10 @@ def _resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
         return arg  # type: ignore
     if arg_type == tp_just:
         return arg  # type: ignore
-
-    fn = CONVERSIONS[(arg_type, tp_just)]
+    try:
+        fn = CONVERSIONS[(arg_type, tp_just)]
+    except KeyError:
+        raise TypeError(f"Cannot convert {arg} to {tp}")
     return fn(arg)
 
 

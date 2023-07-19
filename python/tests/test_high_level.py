@@ -198,6 +198,18 @@ def test_generic_sort():
     egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
 
 
+def test_keyword_args():
+    egraph = EGraph()
+
+    @egraph.function
+    def foo(x: i64Like, y: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    pos = expr_parts(foo(i64(1), i64(2)))
+    assert expr_parts(foo(i64(1), y=i64(2))) == pos
+    assert expr_parts(foo(y=i64(2), x=i64(1))) == pos
+
+
 def test_modules() -> None:
     m = Module()
 
@@ -265,13 +277,3 @@ class TestPyObject:
 
 def my_add(a, b):
     return a + b
-
-
-# def test_eval():
-#     egraph = EGraph()
-
-#     x = egraph.define("x", 1)
-#     y = egraph.define("y", 2)
-
-#     res = egraph.define("res", lambda: my_add(x, y))
-#     assert egraph.extract(res) == 3

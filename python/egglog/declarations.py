@@ -8,7 +8,8 @@ import itertools
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Callable, ClassVar, Iterable, Optional, Union
+from inspect import Parameter, Signature
+from typing import Callable, ClassVar, Collection, Iterable, Optional, Union
 
 from typing_extensions import assert_never
 
@@ -299,7 +300,7 @@ class ModuleDeclarations:
         self._decl.set_constant_type(ref, type_ref)
         # Create a function decleartion for a constant function. This is similar to how egglog compiles
         # the `declare` command.
-        return FunctionDecl((), type_ref.to_var()).to_commands(self, egg_name or ref.generate_egg_name())
+        return FunctionDecl((), (), type_ref.to_var()).to_commands(self, egg_name or ref.generate_egg_name())
 
     def register_preserved_method(self, class_: str, method: str, fn: Callable) -> None:
         self._decl._classes[class_].preserved_methods[method] = fn
@@ -348,7 +349,7 @@ class JustTypeRef:
         Create a function declaration for a constant function. This is similar to how egglog compiles
         the `constant` command.
         """
-        return FunctionDecl(arg_types=(), return_type=self.to_var(), var_arg_type=None)
+        return FunctionDecl(arg_types=(), arg_names=(), return_type=self.to_var(), var_arg_type=None)
 
 
 @dataclass(frozen=True)
@@ -429,10 +430,18 @@ CallableRef = Union[ConstantCallableRef, FunctionCallableRef]
 
 @dataclass(frozen=True)
 class FunctionDecl:
-    # TODO: Add arg name to arg so can call with keyword arg
     arg_types: tuple[TypeOrVarRef, ...]
+    # Is None for relation which doesn't have named args
+    arg_names: Optional[tuple[str, ...]]
     return_type: TypeOrVarRef
     var_arg_type: Optional[TypeOrVarRef] = None
+
+    def to_signature(self) -> Signature:
+        arg_names = self.arg_names or tuple(f"__{i}" for i in range(len(self.arg_types)))
+        parameters = [Parameter(a, Parameter.POSITIONAL_OR_KEYWORD) for a in arg_names]
+        if self.var_arg_type is not None:
+            parameters.append(Parameter("__rest", Parameter.VAR_POSITIONAL))
+        return Signature(parameters)
 
     def to_commands(
         self,
