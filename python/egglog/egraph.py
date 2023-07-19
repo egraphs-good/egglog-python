@@ -200,8 +200,19 @@ class _BaseModule(ABC):
                 # We count __init__ as a classmethod since it is called on the class
                 is_classmethod = is_init
 
-            ref: ClassMethodRef | MethodRef = (
-                ClassMethodRef(cls_name, method_name) if is_classmethod else MethodRef(cls_name, method_name)
+            if isinstance(fn, property):
+                fn = fn.fget
+                is_property = True
+                if is_classmethod:
+                    raise NotImplementedError("Can't have a classmethod property")
+            else:
+                is_property = False
+            ref: FunctionCallableRef = (
+                ClassMethodRef(cls_name, method_name)
+                if is_classmethod
+                else PropertyRef(cls_name, method_name)
+                if is_property
+                else MethodRef(cls_name, method_name)
             )
             self._register_function(
                 ref,

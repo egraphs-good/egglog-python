@@ -63,6 +63,9 @@ V = TypeVar("V", bound="BaseExpr")
 
 
 def converter(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V]) -> None:
+    """
+    Register a converter from some type to an egglog type.
+    """
     to_type_name = process_tp(to_type)
     if not isinstance(to_type_name, JustTypeRef):
         raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
@@ -70,6 +73,9 @@ def converter(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V]) -> Non
 
 
 def convert(source: object, target: type[V]) -> V:
+    """
+    Convert a source object to a target type.
+    """
     target_ref = class_to_ref(target)  # type: ignore
     return cast(V, _resolve_literal(target_ref.to_var(), source))
 
@@ -299,10 +305,22 @@ class RuntimeExpr:
     __egg_decls__: ModuleDeclarations
     __egg_typed_expr__: TypedExprDecl
 
-    def __getattr__(self, name: str) -> RuntimeMethod:
-        preserved_methods = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods
+    def __getattr__(self, name: str) -> RuntimeMethod | RuntimeExpr | Callable:
+        class_decl = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name)
+
+        preserved_methods = class_decl.preserved_methods
         if name in preserved_methods:
             return preserved_methods[name].__get__(self)
+
+        properties = class_decl.properties
+        if name in properties:
+            return RuntimeExpr(
+                self.__egg_decls__,
+                TypedExprDecl(
+                    properties[name],
+                    CallDecl(PropertyRef(self.__egg_typed_expr__.tp.name, name), (self.__egg_typed_expr__,)),
+                ),
+            )
 
         return RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, name)
 

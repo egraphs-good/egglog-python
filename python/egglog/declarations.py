@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
 from inspect import Parameter, Signature
-from typing import Callable, ClassVar, Collection, Iterable, Optional, Union
+from typing import Callable, ClassVar, Iterable, Optional, Union
 
 from typing_extensions import assert_never
 
@@ -27,6 +27,7 @@ __all__ = [
     "ClassMethodRef",
     "ClassVariableRef",
     "FunctionCallableRef",
+    "PropertyRef",
     "CallableRef",
     "ConstantRef",
     "FunctionDecl",
@@ -121,6 +122,10 @@ class Declarations:
             if ref.method_name in self._classes[ref.class_name].class_methods:
                 raise ValueError(f"Class method {ref.class_name}.{ref.method_name} already registered")
             self._classes[ref.class_name].class_methods[ref.method_name] = decl
+        elif isinstance(ref, PropertyRef):
+            if ref.property_name in self._classes[ref.class_name].properties:
+                raise ValueError(f"Property {ref.class_name}.{ref.property_name} already registered")
+            self._classes[ref.class_name].properties[ref.property_name] = decl.return_type.to_just()
         else:
             assert_never(ref)
 
@@ -153,6 +158,9 @@ class Declarations:
             return self._classes[ref.class_name].methods[ref.method_name]
         elif isinstance(ref, ClassMethodRef):
             return self._classes[ref.class_name].class_methods[ref.method_name]
+        elif isinstance(ref, PropertyRef):
+            tp = self._classes[ref.class_name].properties[ref.property_name]
+            return FunctionDecl((), (), tp.to_var(), None)
         assert_never(ref)
 
     def get_constant_type(self, ref: ConstantCallableRef) -> JustTypeRef:
@@ -160,6 +168,8 @@ class Declarations:
             return self._constants[ref.name]
         elif isinstance(ref, ClassVariableRef):
             return self._classes[ref.class_name].class_variables[ref.variable_name]
+        elif isinstance(ref, PropertyRef):
+            return self._classes[ref.class_name].properties[ref.property_name]
         assert_never(ref)
 
     def get_callable_refs(self, egg_name: str) -> Iterable[CallableRef]:
@@ -195,7 +205,7 @@ class ModuleDeclarations:
                 except KeyError:
                     pass
             raise KeyError(f"Constant {ref} not found")
-        elif isinstance(ref, (FunctionRef, MethodRef, ClassMethodRef)):
+        elif isinstance(ref, (FunctionRef, MethodRef, ClassMethodRef, PropertyRef)):
             for decls in self.all_decls:
                 try:
                     return decls.get_function_decl(ref)
@@ -423,8 +433,17 @@ class ClassVariableRef:
         return f"{self.class_name}.{self.variable_name}"
 
 
+@dataclass(frozen=True)
+class PropertyRef:
+    class_name: str
+    property_name: str
+
+    def generate_egg_name(self) -> str:
+        return f"{self.class_name}.{self.property_name}"
+
+
 ConstantCallableRef = Union[ConstantRef, ClassVariableRef]
-FunctionCallableRef = Union[FunctionRef, MethodRef, ClassMethodRef]
+FunctionCallableRef = Union[FunctionRef, MethodRef, ClassMethodRef, PropertyRef]
 CallableRef = Union[ConstantCallableRef, FunctionCallableRef]
 
 
@@ -610,6 +629,8 @@ class CallDecl:
             return ref.name
         elif isinstance(ref, ClassVariableRef):
             return f"{ref.class_name}.{ref.variable_name}"
+        elif isinstance(ref, PropertyRef):
+            return f"{args[0].pretty()}.{ref.property_name}"
         else:
             assert_never(ref)
         return f"{fn_str}({', '.join(a.pretty(wrap_lit=False) for a in args)})"
@@ -668,6 +689,7 @@ class ClassDecl:
     methods: dict[str, FunctionDecl] = field(default_factory=dict)
     class_methods: dict[str, FunctionDecl] = field(default_factory=dict)
     class_variables: dict[str, JustTypeRef] = field(default_factory=dict)
+    properties: dict[str, JustTypeRef] = field(default_factory=dict)
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
     n_type_vars: int = 0
 

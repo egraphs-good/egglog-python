@@ -235,6 +235,22 @@ def test_modules() -> None:
     assert expr_parts(egraph.simplify(OtherNumeric(i64(1)), 10)) == expr_parts(from_numeric(Numeric.ONE))
 
 
+def test_property():
+    egraph = EGraph()
+
+    @egraph.class_
+    class Foo(BaseExpr):
+        def __init__(self) -> None:
+            ...
+
+        @property
+        def bar(self) -> i64:  # type: ignore[empty-body]
+            ...
+
+    egraph.register(set_(Foo().bar).to(i64(1)))
+    egraph.check(eq(Foo().bar).to(i64(1)))
+
+
 class TestPyObject:
     def test_from_string(self):
         egraph = EGraph()
