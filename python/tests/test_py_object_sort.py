@@ -55,10 +55,12 @@ class TestDictUpdate:
         initial_dict = {"a": 1}
         dict_expr = egraph.save_object(initial_dict)
         new_value_expr = egraph.save_object(2)
+        a_expr = egraph.save_object("a")
+        b_expr = egraph.save_object("b")
         egraph.run_program(
             Define(
                 "new_dict",
-                Call("py-dict-update", [dict_expr, Lit(String("a")), new_value_expr, Lit(String("b")), new_value_expr]),
+                Call("py-dict-update", [dict_expr, a_expr, new_value_expr, b_expr, new_value_expr]),
                 None,
             ),
             Extract(1, Var("new_dict")),
@@ -84,6 +86,8 @@ class TestEval:
         two = egraph.save_object(2)
         globals_ = egraph.save_object(globals())
         locals_ = egraph.save_object(locals())
+        x_expr = egraph.save_object("x")
+        y_expr = egraph.save_object("y")
         egraph.run_program(
             Define(
                 "res",
@@ -92,7 +96,7 @@ class TestEval:
                     [
                         Lit(String("my_add(x, y)")),
                         globals_,
-                        Call("py-dict-update", [locals_, Lit(String("x")), one, Lit(String("y")), two]),
+                        Call("py-dict-update", [locals_, x_expr, one, y_expr, two]),
                     ],
                 ),
                 None,
