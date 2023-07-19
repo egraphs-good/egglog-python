@@ -26,6 +26,7 @@ from typing import (
 )
 
 import black
+import black.parsing
 from typing_extensions import assert_never
 
 from . import config  # noqa: F401
@@ -209,7 +210,8 @@ def _call(
     # Turn all keyword args into positional args
 
     if fn_decl:
-        bound = fn_decl.to_signature().bind(*args, **kwargs)
+        bound = fn_decl.to_signature(lambda expr: RuntimeExpr(decls, expr)).bind(*args, **kwargs)
+        bound.apply_defaults()
         assert not bound.kwargs
         args = bound.args
     else:
@@ -222,8 +224,9 @@ def _call(
         ]
     else:
         upcasted_args = cast(list[RuntimeExpr], args)
+    arg_decls = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
 
-    arg_types = [arg.__egg_typed_expr__.tp for arg in upcasted_args]
+    arg_types = [decl.tp for decl in arg_decls]
 
     if bound_params is not None:
         tcs = TypeConstraintSolver.from_type_parameters(bound_params)
@@ -235,7 +238,6 @@ def _call(
     else:
         return_tp = JustTypeRef("Unit")
 
-    arg_decls = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
     expr_decl = CallDecl(callable_ref, arg_decls, bound_params)
     return RuntimeExpr(decls, TypedExprDecl(return_tp, expr_decl))
 

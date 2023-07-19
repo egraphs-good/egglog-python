@@ -384,9 +384,11 @@ class _BaseModule(ABC):
 
         params = list(signature(fn).parameters.values())
         arg_names = tuple(t.name for t in params)
+        arg_defaults = tuple(expr_parts(p.default).expr if p.default is not Parameter.empty else None for p in params)
         # If this is an init function, or a classmethod, remove the first arg name
         if is_init or first_arg == "cls":
             arg_names = arg_names[1:]
+            arg_defaults = arg_defaults[1:]
         # Remove first arg if this is a classmethod or a method, since it won't have an annotation
         if first_arg is not None:
             first, *params = params
@@ -408,6 +410,7 @@ class _BaseModule(ABC):
             *params, var_arg_param = params
             # For now, we don't use the variable arg name
             arg_names = arg_names[:-1]
+            arg_defaults = arg_defaults[:-1]
             var_arg_type = self._resolve_type_annotation(hints[var_arg_param.name], cls_typevars, cls_type_and_name)
         else:
             var_arg_type = None
@@ -436,7 +439,11 @@ class _BaseModule(ABC):
             )
         )
         fn_decl = FunctionDecl(
-            return_type=return_type, var_arg_type=var_arg_type, arg_types=arg_types, arg_names=arg_names
+            return_type=return_type,
+            var_arg_type=var_arg_type,
+            arg_types=arg_types,
+            arg_names=arg_names,
+            arg_defaults=arg_defaults,
         )
         self._process_commands(
             self._mod_decls.register_function_callable(
@@ -529,7 +536,7 @@ class _BaseModule(ABC):
         Defines a relation, which is the same as a function which returns unit.
         """
         arg_types = tuple(self._resolve_type_annotation(cast(object, tp), [], None) for tp in tps)
-        fn_decl = FunctionDecl(arg_types, None, TypeRefWithVars("Unit"))
+        fn_decl = FunctionDecl(arg_types, None, tuple(None for _ in tps), TypeRefWithVars("Unit"))
         commands = self._mod_decls.register_function_callable(
             FunctionRef(name), fn_decl, egg_fn, cost=None, default=None, merge=None, merge_action=[]
         )
@@ -1025,7 +1032,8 @@ def expr_parts(expr: BaseExpr) -> TypedExprDecl:
     """
     Returns the underlying type and decleration of the expression. Useful for testing structural equality or debugging.
     """
-    assert isinstance(expr, RuntimeExpr)
+    if not isinstance(expr, RuntimeExpr):
+        raise TypeError(f"Expected a RuntimeExpr not {expr}")
     return expr.__egg_typed_expr__
 
 

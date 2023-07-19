@@ -307,7 +307,7 @@ class ModuleDeclarations:
         self._decl.set_constant_type(ref, type_ref)
         # Create a function decleartion for a constant function. This is similar to how egglog compiles
         # the `declare` command.
-        return FunctionDecl((), (), type_ref.to_var()).to_commands(self, egg_name or ref.generate_egg_name())
+        return FunctionDecl((), (), (), type_ref.to_var()).to_commands(self, egg_name or ref.generate_egg_name())
 
     def register_preserved_method(self, class_: str, method: str, fn: Callable) -> None:
         self._decl._classes[class_].preserved_methods[method] = fn
@@ -356,7 +356,7 @@ class JustTypeRef:
         Create a function declaration for a constant function. This is similar to how egglog compiles
         the `constant` command.
         """
-        return FunctionDecl(arg_types=(), arg_names=(), return_type=self.to_var(), var_arg_type=None)
+        return FunctionDecl(arg_types=(), arg_names=(), arg_defaults=(), return_type=self.to_var(), var_arg_type=None)
 
 
 @dataclass(frozen=True)
@@ -449,12 +449,20 @@ class FunctionDecl:
     arg_types: tuple[TypeOrVarRef, ...]
     # Is None for relation which doesn't have named args
     arg_names: Optional[tuple[str, ...]]
+    arg_defaults: tuple[Optional[ExprDecl], ...]
     return_type: TypeOrVarRef
     var_arg_type: Optional[TypeOrVarRef] = None
 
-    def to_signature(self) -> Signature:
+    def to_signature(self, transform_default: Callable[[TypedExprDecl], object]) -> Signature:
         arg_names = self.arg_names or tuple(f"__{i}" for i in range(len(self.arg_types)))
-        parameters = [Parameter(a, Parameter.POSITIONAL_OR_KEYWORD) for a in arg_names]
+        parameters = [
+            Parameter(
+                n,
+                Parameter.POSITIONAL_OR_KEYWORD,
+                default=transform_default(TypedExprDecl(t.to_just(), d)) if d else Parameter.empty,
+            )
+            for n, d, t in zip(arg_names, self.arg_defaults, self.arg_types)
+        ]
         if self.var_arg_type is not None:
             parameters.append(Parameter("__rest", Parameter.VAR_POSITIONAL))
         return Signature(parameters)

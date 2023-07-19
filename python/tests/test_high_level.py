@@ -251,6 +251,16 @@ def test_property():
     egraph.check(eq(Foo().bar).to(i64(1)))
 
 
+def test_default_args():
+    egraph = EGraph()
+
+    @egraph.function
+    def foo(x: i64Like, y: i64Like = i64(1)) -> i64:  # type: ignore[empty-body]
+        ...
+
+    assert expr_parts(foo(i64(1))) == expr_parts(foo(i64(1), i64(1)))
+
+
 class TestPyObject:
     def test_from_string(self):
         egraph = EGraph()
