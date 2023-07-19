@@ -275,11 +275,14 @@ class RuntimeMethod:
     __egg_decls__: ModuleDeclarations
     __egg_typed_expr__: TypedExprDecl
     __egg_method_name__: str
-    __egg_callable_ref__: MethodRef = field(init=False)
+    __egg_callable_ref__: MethodRef | PropertyRef = field(init=False)
     __egg_fn_decl__: Optional[FunctionDecl] = field(init=False)
 
     def __post_init__(self):
-        self.__egg_callable_ref__ = MethodRef(self.class_name, self.__egg_method_name__)
+        if self.__egg_method_name__ in self.__egg_decls__.get_class_decl(self.class_name).properties:
+            self.__egg_callable_ref__ = PropertyRef(self.class_name, self.__egg_method_name__)
+        else:
+            self.__egg_callable_ref__ = MethodRef(self.class_name, self.__egg_method_name__)
         # Special case for __ne__ which does not have a normal function defintion since
         # it relies of type parameters
         if self.__egg_method_name__ == "__ne__":
@@ -312,17 +315,10 @@ class RuntimeExpr:
         if name in preserved_methods:
             return preserved_methods[name].__get__(self)
 
-        properties = class_decl.properties
-        if name in properties:
-            return RuntimeExpr(
-                self.__egg_decls__,
-                TypedExprDecl(
-                    properties[name],
-                    CallDecl(PropertyRef(self.__egg_typed_expr__.tp.name, name), (self.__egg_typed_expr__,)),
-                ),
-            )
-
-        return RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, name)
+        method = RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, name)
+        if isinstance(method.__egg_callable_ref__, PropertyRef):
+            return method()
+        return method
 
     def __repr__(self) -> str:
         """

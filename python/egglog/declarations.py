@@ -125,7 +125,7 @@ class Declarations:
         elif isinstance(ref, PropertyRef):
             if ref.property_name in self._classes[ref.class_name].properties:
                 raise ValueError(f"Property {ref.class_name}.{ref.property_name} already registered")
-            self._classes[ref.class_name].properties[ref.property_name] = decl.return_type.to_just()
+            self._classes[ref.class_name].properties[ref.property_name] = decl
         else:
             assert_never(ref)
 
@@ -159,8 +159,7 @@ class Declarations:
         elif isinstance(ref, ClassMethodRef):
             return self._classes[ref.class_name].class_methods[ref.method_name]
         elif isinstance(ref, PropertyRef):
-            tp = self._classes[ref.class_name].properties[ref.property_name]
-            return FunctionDecl((), (), tp.to_var(), None)
+            return self._classes[ref.class_name].properties[ref.property_name]
         assert_never(ref)
 
     def get_constant_type(self, ref: ConstantCallableRef) -> JustTypeRef:
@@ -168,8 +167,6 @@ class Declarations:
             return self._constants[ref.name]
         elif isinstance(ref, ClassVariableRef):
             return self._classes[ref.class_name].class_variables[ref.variable_name]
-        elif isinstance(ref, PropertyRef):
-            return self._classes[ref.class_name].properties[ref.property_name]
         assert_never(ref)
 
     def get_callable_refs(self, egg_name: str) -> Iterable[CallableRef]:
@@ -689,7 +686,7 @@ class ClassDecl:
     methods: dict[str, FunctionDecl] = field(default_factory=dict)
     class_methods: dict[str, FunctionDecl] = field(default_factory=dict)
     class_variables: dict[str, JustTypeRef] = field(default_factory=dict)
-    properties: dict[str, JustTypeRef] = field(default_factory=dict)
+    properties: dict[str, FunctionDecl] = field(default_factory=dict)
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
     n_type_vars: int = 0
 
@@ -902,6 +899,12 @@ class Schedule(ABC):
         Run the schedule until the e-graph is saturated.
         """
         return Saturate(self)
+
+    def __add__(self, other: Schedule) -> Schedule:
+        """
+        Run two schedules in sequence.
+        """
+        return Sequence((self, other))
 
     @abstractmethod
     def __str__(self) -> str:

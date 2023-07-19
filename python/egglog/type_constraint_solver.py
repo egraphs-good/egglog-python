@@ -51,7 +51,7 @@ class TypeConstraintSolver:
         self, fn_args: Collection[TypeOrVarRef], fn_var_args: Optional[TypeOrVarRef], args: Collection[JustTypeRef]
     ) -> None:
         if len(fn_args) != len(args) if fn_var_args is None else len(fn_args) > len(args):
-            raise TypeConstraintError(f"Expected {len(fn_args)} args, got {len(args)}")
+            raise TypeConstraintError(f"Mismatch of args {fn_args} and {args}")
         all_fn_args = fn_args if fn_var_args is None else chain(fn_args, repeat(fn_var_args))
         for fn_arg, arg in zip(all_fn_args, args):
             self._infer_typevars(fn_arg, arg)
