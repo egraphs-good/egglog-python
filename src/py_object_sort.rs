@@ -93,7 +93,6 @@ impl Sort for PyObjectSort {
         typeinfo.add_primitive(DictUpdate {
             name: "py-dict-update".into(),
             py_object: self.clone(),
-            string: typeinfo.get_sort(),
         });
         typeinfo.add_primitive(ToString {
             name: "py-to-string".into(),
@@ -198,11 +197,10 @@ impl PrimitiveLike for Eval {
     }
 }
 
-/// Supports calling (py-dict-update <dict-obj> [<key-string> <value-obj>]*)
+/// Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
 struct DictUpdate {
     name: Symbol,
     py_object: Arc<PyObjectSort>,
-    string: Arc<StringSort>,
 }
 
 impl PrimitiveLike for DictUpdate {
@@ -222,12 +220,8 @@ impl PrimitiveLike for DictUpdate {
                     return None;
                 }
             }
-            // All other tps should be pairs of string and object
-            else if i % 2 == 1 {
-                if tp.name() != self.string.name() {
-                    return None;
-                }
-            } else if tp.name() != self.py_object.name() {
+            // All other tps should be object
+            else if tp.name() != self.py_object.name() {
                 return None;
             }
         }
@@ -241,7 +235,7 @@ impl PrimitiveLike for DictUpdate {
             let dict = dict.downcast::<PyDict>(py).unwrap().copy().unwrap();
             // Update the dict with the key-value pairs
             for i in values[1..].chunks_exact(2) {
-                let key = Symbol::load(self.string.as_ref(), &i[0]).to_string();
+                let key = self.py_object.load(&i[0]).1;
                 let value = self.py_object.load(&i[1]).1;
                 dict.set_item(key, value).unwrap();
             }

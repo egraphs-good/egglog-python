@@ -22,6 +22,8 @@ __all__ = [
     "Set",
     "Vec",
     "join",
+    "PyObject",
+    "py_eval",
 ]
 
 
@@ -343,3 +345,29 @@ class Vec(BaseExpr, Generic[T]):
     @BUILTINS.method(egg_fn="vec-get")
     def __getitem__(self, index: i64Like) -> T:  # type: ignore[empty-body]
         ...
+
+
+@BUILTINS.class_(egg_sort="PyObject")
+class PyObject(BaseExpr):
+    @BUILTINS.method(egg_fn="py-object")
+    def __init__(self, *hashes: i64) -> None:
+        ...
+
+    @BUILTINS.method(egg_fn="py-from-string")
+    @classmethod
+    def from_string(cls, s: StringLike) -> PyObject:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="py-to-string")
+    def to_string(self) -> String:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="py-dict-update")
+    def dict_update(dict, *keys_and_values: PyObject) -> PyObject:  # type: ignore[empty-body]
+        ...
+
+
+# TODO: Maybe move to static method if we implement those?
+@BUILTINS.function(egg_fn="py-eval")
+def py_eval(code: StringLike, locals: PyObject, globals: PyObject) -> PyObject:  # type: ignore[empty-body]
+    ...

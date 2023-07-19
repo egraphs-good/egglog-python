@@ -34,7 +34,7 @@ from .runtime import *
 from .runtime import _resolve_callable, class_to_ref
 
 if TYPE_CHECKING:
-    from .builtins import String
+    from .builtins import PyObject, String
 
 monkeypatch_forward_ref()
 
@@ -740,6 +740,21 @@ class EGraph(_BaseModule):
     def __exit__(self, exc_type, exc, exc_tb):
         self.pop()
 
+    def save_object(self, obj: object) -> PyObject:
+        """
+        Save an object to the egraph.
+        """
+        expr = self._egraph.save_object(obj)
+        typed_expr_decl = TypedExprDecl.from_egg(self._mod_decls, expr)
+        return cast("PyObject", RuntimeExpr(self._mod_decls, typed_expr_decl))
+
+    def load_object(self, obj: PyObject) -> object:
+        """
+        Load an object from the egraph.
+        """
+        typed_expr_decl = expr_parts(obj)
+        expr = typed_expr_decl.to_egg(self._mod_decls)
+        return self._egraph.load_object(expr)
 
 @dataclass(frozen=True)
 class _WrappedMethod(Generic[P, EXPR]):

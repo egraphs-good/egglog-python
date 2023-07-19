@@ -221,3 +221,57 @@ def test_modules() -> None:
 
     egraph.register(rewrite(OtherNumeric(1)).to(from_numeric(Numeric.ONE)))
     assert expr_parts(egraph.simplify(OtherNumeric(i64(1)), 10)) == expr_parts(from_numeric(Numeric.ONE))
+
+
+class TestPyObject:
+    def test_from_string(self):
+        egraph = EGraph()
+        res = egraph.simplify(PyObject.from_string("foo"), 1)
+        assert egraph.load_object(res) == "foo"
+
+    def test_to_string(self):
+        egraph = EGraph()
+        s = egraph.save_object("foo")
+        res = egraph.simplify(s.to_string(), 1)
+        assert expr_parts(res) == expr_parts(String("foo"))
+
+    def test_dict_update(self):
+        egraphs = EGraph()
+        original_d = {"foo": "bar"}
+        obj = egraphs.save_object(original_d)
+        res = obj.dict_update(PyObject.from_string("foo"), PyObject.from_string("baz"))
+        simplified = egraphs.simplify(res, 1)
+        assert egraphs.load_object(simplified) == {"foo": "baz"}
+        assert original_d == {"foo": "bar"}
+
+    def test_eval(self):
+        egraph = EGraph()
+        x, y = 10, 20
+        res = py_eval("x + y", egraph.save_object({"x": x, "y": y}), egraph.save_object({}))
+        res_simpl = egraph.simplify(res, 1)
+        assert egraph.load_object(res_simpl) == 30
+
+    def test_eval_local(self):
+        egraph = EGraph()
+        x = "hi"
+        res = py_eval(
+            "my_add(x, y)",
+            egraph.save_object(locals()).dict_update(PyObject.from_string("y"), PyObject.from_string("there")),
+            egraph.save_object(globals()),
+        )
+        res_simpl = egraph.simplify(res, 1)
+        assert egraph.load_object(res_simpl) == "hithere"
+
+
+def my_add(a, b):
+    return a + b
+
+
+# def test_eval():
+#     egraph = EGraph()
+
+#     x = egraph.define("x", 1)
+#     y = egraph.define("y", 2)
+
+#     res = egraph.define("res", lambda: my_add(x, y))
+#     assert egraph.extract(res) == 3
