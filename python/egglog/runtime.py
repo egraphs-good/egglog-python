@@ -328,11 +328,14 @@ class RuntimeExpr:
 
     def __str__(self) -> str:
         pretty_expr = self.__egg_typed_expr__.expr.pretty(parens=False)
-        if config.SHOW_TYPES:
-            s = f"_: {self.__egg_typed_expr__.tp.pretty()} = {pretty_expr}"
-            return black.format_str(s, mode=black.FileMode()).strip()
-        else:
-            return black.format_str(pretty_expr, mode=black.FileMode(line_length=180)).strip()
+        try:
+            if config.SHOW_TYPES:
+                s = f"_: {self.__egg_typed_expr__.tp.pretty()} = {pretty_expr}"
+                return black.format_str(s, mode=black.FileMode()).strip()
+            else:
+                return black.format_str(pretty_expr, mode=black.FileMode(line_length=180)).strip()
+        except black.parsing.InvalidInput:
+            return pretty_expr
 
     def __dir__(self) -> Iterable[str]:
         return list(self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).methods)
