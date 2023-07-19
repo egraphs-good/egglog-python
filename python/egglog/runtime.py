@@ -12,7 +12,7 @@ so they are not mangled by Python and can be accessed by the user.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Collection, Iterable, Optional, Union
+from typing import Callable, Collection, Iterable, Optional, Union
 
 import black
 from typing_extensions import assert_never
@@ -62,7 +62,9 @@ class RuntimeClass:
 
     def __dir__(self) -> list[str]:
         cls_decl = self.__egg_decls__.get_class_decl(self.__egg_name__)
-        possible_methods = list(cls_decl.class_methods) + list(cls_decl.class_variables)
+        possible_methods = (
+            list(cls_decl.class_methods) + list(cls_decl.class_variables) + list(cls_decl.preserved_methods)
+        )
         if "__init__" in possible_methods:
             possible_methods.remove("__init__")
             possible_methods.append("__call__")
@@ -74,8 +76,13 @@ class RuntimeClass:
         tp = JustTypeRef(self.__egg_name__, tuple(class_to_ref(arg) for arg in args))
         return RuntimeParamaterizedClass(self.__egg_decls__, tp)
 
-    def __getattr__(self, name: str) -> RuntimeClassMethod | RuntimeExpr:
+    def __getattr__(self, name: str) -> RuntimeClassMethod | RuntimeExpr | Callable:
         cls_decl = self.__egg_decls__.get_class_decl(self.__egg_name__)
+
+        preserved_methods = cls_decl.preserved_methods
+        if name in preserved_methods:
+            return preserved_methods[name].__get__(self)
+
         # if this is a class variable, return an expr for it, otherwise, assume it's a method
         if name in cls_decl.class_variables:
             return_tp = cls_decl.class_variables[name]
@@ -237,6 +244,10 @@ class RuntimeExpr:
     __egg_typed_expr__: TypedExprDecl
 
     def __getattr__(self, name: str) -> RuntimeMethod:
+        preserved_methods = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods
+        if name in preserved_methods:
+            return preserved_methods[name].__get__(self)
+
         return RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, name)
 
     def __repr__(self) -> str:
@@ -264,6 +275,9 @@ class RuntimeExpr:
         raise NotImplementedError(
             "Do not use == on RuntimeExpr. Compare the __egg_typed_expr__ attribute instead for structural equality."
         )
+
+    def __bool__(self) -> bool:
+        return self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods["__bool__"](self)
 
 
 # Define each of the special methods, since we have already declared them for pretty printing

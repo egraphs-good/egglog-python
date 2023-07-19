@@ -187,6 +187,9 @@ class _BaseModule(ABC):
                 default = method.default
                 merge = method.merge
                 on_merge = method.on_merge
+                if method.preserve:
+                    self._mod_decls.register_preserved_method(cls_name, method_name, fn)
+                    continue
             else:
                 fn = method
                 egg_fn, cost, default, merge, on_merge = None, None, None, None, None
@@ -228,9 +231,18 @@ class _BaseModule(ABC):
     # We seperate the function and method overloads to make it simpler to know if we are modifying a function or method,
     # So that we can add the functions eagerly to the registry and wait on the methods till we process the class.
 
+    @overload
+    def method(
+        self,
+        *,
+        preserve: Literal[True],
+    ) -> Callable[[CALLABLE], CALLABLE]:
+        ...
+
     # We have to seperate method/function overloads for those that use the T params and those that don't
     # Otherwise, if you say just pass in `cost` then the T param is inferred as `Nothing` and
     # It will break the typing.
+
     @overload
     def method(  # type: ignore
         self,
@@ -262,8 +274,9 @@ class _BaseModule(ABC):
         default: Optional[EXPR] = None,
         merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
         on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
+        preserve: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
-        return lambda fn: _WrappedMethod(egg_fn, cost, default, merge, on_merge, fn)
+        return lambda fn: _WrappedMethod(egg_fn, cost, default, merge, on_merge, fn, preserve)
 
     @overload
     def function(self, fn: CALLABLE, /) -> CALLABLE:
@@ -756,6 +769,7 @@ class EGraph(_BaseModule):
         expr = typed_expr_decl.to_egg(self._mod_decls)
         return self._egraph.load_object(expr)
 
+
 @dataclass(frozen=True)
 class _WrappedMethod(Generic[P, EXPR]):
     """
@@ -768,6 +782,7 @@ class _WrappedMethod(Generic[P, EXPR]):
     merge: Optional[Callable[[EXPR, EXPR], EXPR]]
     on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]]
     fn: Callable[P, EXPR]
+    preserve: bool
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> EXPR:
         raise NotImplementedError("We should never call a wrapped method. Did you forget to wrap the class?")

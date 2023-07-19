@@ -8,7 +8,7 @@ import itertools
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import ClassVar, Iterable, Optional, Union
+from typing import Callable, ClassVar, Iterable, Optional, Union
 
 from typing_extensions import assert_never
 
@@ -300,6 +300,9 @@ class ModuleDeclarations:
         # Create a function decleartion for a constant function. This is similar to how egglog compiles
         # the `declare` command.
         return FunctionDecl((), type_ref.to_var()).to_commands(self, egg_name or ref.generate_egg_name())
+
+    def register_preserved_method(self, class_: str, method: str, fn: Callable) -> None:
+        self._decl._classes[class_].preserved_methods[method] = fn
 
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.
@@ -656,6 +659,7 @@ class ClassDecl:
     methods: dict[str, FunctionDecl] = field(default_factory=dict)
     class_methods: dict[str, FunctionDecl] = field(default_factory=dict)
     class_variables: dict[str, JustTypeRef] = field(default_factory=dict)
+    preserved_methods: dict[str, Callable] = field(default_factory=dict)
     n_type_vars: int = 0
 
 
