@@ -378,9 +378,6 @@ class RuntimeExpr:
             "Do not use == on RuntimeExpr. Compare the __egg_typed_expr__ attribute instead for structural equality."
         )
 
-    def __bool__(self) -> bool:
-        return self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods["__bool__"](self)
-
 
 # Define each of the special methods, since we have already declared them for pretty printing
 for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call__"]:
@@ -389,6 +386,17 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
         return RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, __name)(*args)
 
     setattr(RuntimeExpr, name, _special_method)
+
+for name in ["__bool__", "__len__"]:
+
+    def _preserved_method(self: RuntimeExpr, __name: str = name):
+        try:
+            method = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods[__name]
+        except KeyError:
+            raise TypeError(f"{self.__egg_typed_expr__.tp.name} has no method {__name}")
+        return method(self)
+
+    setattr(RuntimeExpr, name, _preserved_method)
 
 
 def _resolve_callable(callable: object) -> CallableRef:
