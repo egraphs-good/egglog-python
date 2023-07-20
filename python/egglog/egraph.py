@@ -447,7 +447,7 @@ class _BaseModule(ABC):
         )
         self._process_commands(
             self._mod_decls.register_function_callable(
-                ref, fn_decl, egg_name, cost, default_decl, merge_decl, merge_action
+                ref, fn_decl, egg_name, cost, default_decl, merge_decl, [a._to_egg_action() for a in merge_action]
             )
         )
 
@@ -502,7 +502,7 @@ class _BaseModule(ABC):
             commands = tuple(_command_generator(command_or_generator))
         else:
             commands = (cast(CommandLike, command_or_generator), *commands)
-        self._process_commands(_command_like(command)._to_egg_command(self._mod_decls) for command in commands)
+        self._process_commands(_command_like(command)._to_egg_command() for command in commands)
 
     def ruleset(self, name: str) -> Ruleset:
         self._process_commands([bindings.AddRuleset(name)])
@@ -666,7 +666,7 @@ class EGraph(_BaseModule):
         typed_expr = expr_parts(expr)
         egg_expr = typed_expr.to_egg(self._mod_decls)
         self._process_commands(
-            [bindings.Simplify(egg_expr, Run(limit, _ruleset_name(ruleset), until)._to_egg_config(self._mod_decls))]
+            [bindings.Simplify(egg_expr, Run(limit, _ruleset_name(ruleset), until)._to_egg_config())]
         )
         extract_report = self._egraph.extract_report()
         if not extract_report:
@@ -704,7 +704,7 @@ class EGraph(_BaseModule):
         return self._run_schedule(limit_or_schedule)
 
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
-        self._process_commands([bindings.RunScheduleCommand(schedule._to_egg_schedule(self._mod_decls))])
+        self._process_commands([bindings.RunScheduleCommand(schedule._to_egg_schedule())])
         run_report = self._egraph.run_report()
         if not run_report:
             raise ValueError("No run report saved")
@@ -723,7 +723,7 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.Fail(self._facts_to_check(facts))])
 
     def _facts_to_check(self, facts: Iterable[FactLike]) -> bindings.Check:
-        egg_facts = [f._to_egg_fact(self._mod_decls) for f in _fact_likes(facts)]
+        egg_facts = [f._to_egg_fact() for f in _fact_likes(facts)]
         return bindings.Check(egg_facts)
 
     def extract(self, expr: EXPR) -> EXPR:
@@ -869,6 +869,286 @@ def _ruleset_name(ruleset: Optional[Ruleset]) -> str:
     return ruleset.name if ruleset else ""
 
 
+class Command(ABC):
+    """
+    A command that can be executed in the egg interpreter.
+
+    We only use this for commands which return no result and don't create new Python objects.
+
+    Anything that can be passed to the `register` function in a Module is a Command.
+    """
+
+    @abstractmethod
+    def _to_egg_command(self) -> bindings._Command:
+        raise NotImplementedError
+
+    @abstractmethod
+    def __str__(self) -> str:
+        raise NotImplementedError
+
+
+@dataclass
+class Rewrite(Command):
+    _ruleset: str
+    _lhs: RuntimeExpr
+    _rhs: RuntimeExpr
+    _conditions: tuple[Fact, ...]
+    _fn_name: ClassVar[str] = "rewrite"
+
+    def __str__(self) -> str:
+        args_str = ", ".join(map(str, [self._rhs, *self._conditions]))
+        return f"{self._fn_name}({self._lhs}).to({args_str})"
+
+    def _to_egg_command(self) -> bindings._Command:
+        return bindings.RewriteCommand(self._ruleset, self._to_egg_rewrite())
+
+    def _to_egg_rewrite(self) -> bindings.Rewrite:
+        return bindings.Rewrite(
+            self._lhs.__to_egg__(),
+            self._rhs.__to_egg__(),
+            [c._to_egg_fact() for c in self._conditions],
+        )
+
+
+@dataclass
+class BiRewrite(Rewrite):
+    _fn_name: ClassVar[str] = "birewrite"
+
+    def _to_egg_command(self) -> bindings._Command:
+        return bindings.BiRewriteCommand(self._ruleset, self._to_egg_rewrite())
+
+
+@dataclass
+class Fact(ABC):
+    """
+    An e-graph fact, either an equality or a unit expression.
+    """
+
+    @abstractmethod
+    def _to_egg_fact(self) -> bindings._Fact:
+        raise NotImplementedError
+
+
+@dataclass
+class Eq(Fact):
+    _exprs: list[RuntimeExpr]
+
+    def __str__(self) -> str:
+        first, *rest = self._exprs
+        args_str = ", ".join(map(str, rest))
+        return f"eq({first}).to({args_str})"
+
+    def _to_egg_fact(self) -> bindings.Eq:
+        return bindings.Eq([e.__to_egg__() for e in self._exprs])
+
+
+@dataclass
+class ExprFact(Fact):
+    _expr: RuntimeExpr
+
+    def __str__(self) -> str:
+        return str(self._expr)
+
+    def _to_egg_fact(self) -> bindings.Fact:
+        return bindings.Fact(self._expr.__to_egg__())
+
+
+@dataclass
+class Rule(Command):
+    head: tuple[Action, ...]
+    body: tuple[Fact, ...]
+    name: str
+    ruleset: str
+
+    def __str__(self) -> str:
+        head_str = ", ".join(map(str, self.head))
+        body_str = ", ".join(map(str, self.body))
+        return f"rule({head_str}).then({body_str})"
+
+    def _to_egg_command(self) -> bindings.RuleCommand:
+        return bindings.RuleCommand(
+            self.name,
+            self.ruleset,
+            bindings.Rule(
+                [a._to_egg_action() for a in self.head],
+                [f._to_egg_fact() for f in self.body],
+            ),
+        )
+
+
+class Action(Command, ABC):
+    @abstractmethod
+    def _to_egg_action(self) -> bindings._Action:
+        raise NotImplementedError
+
+    def _to_egg_command(self) -> bindings._Command:
+        return bindings.ActionCommand(self._to_egg_action())
+
+
+@dataclass
+class Let(Action):
+    _name: str
+    _value: RuntimeExpr
+
+    def __str__(self) -> str:
+        return f"let({self._name}, {self._value})"
+
+    def _to_egg_action(self) -> bindings.Let:
+        return bindings.Let(self._name, self._value.__to_egg__())
+
+
+@dataclass
+class Set(Action):
+    _call: RuntimeExpr
+    _rhs: RuntimeExpr
+
+    def __str__(self) -> str:
+        return f"set({self._call}).to({self._rhs})"
+
+    def _to_egg_action(self) -> bindings.Set:
+        egg_call = self._call.__to_egg__()
+        if not isinstance(egg_call, bindings.Call):
+            raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")
+        return bindings.Set(
+            egg_call.name,
+            egg_call.args,
+            self._rhs.__to_egg__(),
+        )
+
+
+@dataclass
+class ExprAction(Action):
+    _expr: RuntimeExpr
+
+    def __str__(self) -> str:
+        return str(self._expr)
+
+    def _to_egg_action(self) -> bindings.Expr_:
+        return bindings.Expr_(self._expr.__to_egg__())
+
+
+@dataclass
+class Delete(Action):
+    _call: RuntimeExpr
+
+    def __str__(self) -> str:
+        return f"delete({self._call})"
+
+    def _to_egg_action(self) -> bindings.Delete:
+        egg_call = self._call.__to_egg__()
+        if not isinstance(egg_call, bindings.Call):
+            raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")
+        return bindings.Delete(egg_call.name, egg_call.args)
+
+
+@dataclass
+class Union_(Action):
+    _lhs: RuntimeExpr
+    _rhs: RuntimeExpr
+
+    def __str__(self) -> str:
+        return f"union({self._lhs}).with_({self._rhs})"
+
+    def _to_egg_action(self) -> bindings.Union:
+        return bindings.Union(self._lhs.__to_egg__(), self._rhs.__to_egg__())
+
+
+@dataclass
+class Panic(Action):
+    message: str
+
+    def __str__(self) -> str:
+        return f"panic({self.message})"
+
+    def _to_egg_action(self) -> bindings.Panic:
+        return bindings.Panic(self.message)
+
+
+class Schedule(ABC):
+    def __mul__(self, length: int) -> Schedule:
+        """
+        Repeat the schedule a number of times.
+        """
+        return Repeat(length, self)
+
+    def saturate(self) -> Schedule:
+        """
+        Run the schedule until the e-graph is saturated.
+        """
+        return Saturate(self)
+
+    def __add__(self, other: Schedule) -> Schedule:
+        """
+        Run two schedules in sequence.
+        """
+        return Sequence((self, other))
+
+    @abstractmethod
+    def __str__(self) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _to_egg_schedule(self) -> bindings._Schedule:
+        raise NotImplementedError
+
+
+@dataclass
+class Run(Schedule):
+    """Configuration of a run"""
+
+    limit: int
+    ruleset: str
+    until: tuple[Fact, ...]
+
+    def __str__(self) -> str:
+        args_str = ", ".join(map(str, [self.ruleset, self.limit, *self.until]))
+        return f"run({args_str})"
+
+    def _to_egg_schedule(self) -> bindings._Schedule:
+        return bindings.Run(self._to_egg_config())
+
+    def _to_egg_config(self) -> bindings.RunConfig:
+        return bindings.RunConfig(
+            self.ruleset,
+            self.limit,
+            [fact._to_egg_fact() for fact in self.until] if self.until else None,
+        )
+
+
+@dataclass
+class Saturate(Schedule):
+    schedule: Schedule
+
+    def __str__(self) -> str:
+        return f"{self.schedule}.saturate()"
+
+    def _to_egg_schedule(self) -> bindings._Schedule:
+        return bindings.Saturate(self.schedule._to_egg_schedule())
+
+
+@dataclass
+class Repeat(Schedule):
+    length: int
+    schedule: Schedule
+
+    def __str__(self) -> str:
+        return f"{self.schedule} * {self.length}"
+
+    def _to_egg_schedule(self) -> bindings._Schedule:
+        return bindings.Repeat(self.length, self.schedule._to_egg_schedule())
+
+
+@dataclass
+class Sequence(Schedule):
+    schedules: tuple[Schedule, ...]
+
+    def __str__(self) -> str:
+        return f"sequence({', '.join(map(str, self.schedules))})"
+
+    def _to_egg_schedule(self) -> bindings._Schedule:
+        return bindings.Sequence([schedule._to_egg_schedule() for schedule in self.schedules])
+
+
 # We use these builders so that when creating these structures we can type check
 # if the arguments are the same type of expression
 
@@ -895,24 +1175,20 @@ def panic(message: str) -> Action:
 
 def let(name: str, expr: BaseExpr) -> Action:
     """Create a let binding."""
-    return Let(name, expr_parts(expr).expr)
+    return Let(name, to_runtime_expr(expr))
 
 
 def expr_action(expr: BaseExpr) -> Action:
-    typed_expr = expr_parts(expr)
-    return ExprAction(typed_expr.expr)
+    return ExprAction(to_runtime_expr(expr))
 
 
 def delete(expr: BaseExpr) -> Action:
     """Create a delete expression."""
-    decl = expr_parts(expr).expr
-    if not isinstance(decl, CallDecl):
-        raise ValueError(f"Can only delete calls not {decl}")
-    return Delete(decl)
+    return Delete(to_runtime_expr(expr))
 
 
 def expr_fact(expr: BaseExpr) -> Fact:
-    return ExprFact(expr_parts(expr).expr)
+    return ExprFact(to_runtime_expr(expr))
 
 
 def union(lhs: EXPR) -> _UnionBuilder[EXPR]:
@@ -956,8 +1232,8 @@ class _RewriteBuilder(Generic[EXPR]):
     def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
         return Rewrite(
             _ruleset_name(self.ruleset),
-            expr_parts(self.lhs).expr,
-            expr_parts(rhs).expr,
+            to_runtime_expr(self.lhs),
+            to_runtime_expr(rhs),
             _fact_likes(conditions),
         )
 
@@ -973,8 +1249,8 @@ class _BirewriteBuilder(Generic[EXPR]):
     def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
         return BiRewrite(
             _ruleset_name(self.ruleset),
-            expr_parts(self.lhs).expr,
-            expr_parts(rhs).expr,
+            to_runtime_expr(self.lhs),
+            to_runtime_expr(rhs),
             _fact_likes(conditions),
         )
 
@@ -987,7 +1263,7 @@ class _EqBuilder(Generic[EXPR]):
     expr: EXPR
 
     def to(self, *exprs: EXPR) -> Fact:
-        return Eq(tuple(expr_parts(e).expr for e in (self.expr, *exprs)))
+        return Eq([to_runtime_expr(e) for e in (self.expr, *exprs)])
 
     def __str__(self) -> str:
         return f"eq({self.expr})"
@@ -998,10 +1274,7 @@ class _SetBuilder(Generic[EXPR]):
     lhs: BaseExpr
 
     def to(self, rhs: EXPR) -> Action:
-        lhs = expr_parts(self.lhs).expr
-        if not isinstance(lhs, CallDecl):
-            raise ValueError(f"Can only create a call with a call for the lhs, got {lhs}")
-        return Set(lhs, expr_parts(rhs).expr)
+        return Set(to_runtime_expr(self.lhs), to_runtime_expr(rhs))
 
     def __str__(self) -> str:
         return f"set_({self.lhs})"
@@ -1012,7 +1285,7 @@ class _UnionBuilder(Generic[EXPR]):
     lhs: BaseExpr
 
     def with_(self, rhs: EXPR) -> Action:
-        return Union_(expr_parts(self.lhs).expr, expr_parts(rhs).expr)
+        return Union_(to_runtime_expr(self.lhs), to_runtime_expr(rhs))
 
     def __str__(self) -> str:
         return f"union({self.lhs})"
@@ -1035,6 +1308,12 @@ def expr_parts(expr: BaseExpr) -> TypedExprDecl:
     if not isinstance(expr, RuntimeExpr):
         raise TypeError(f"Expected a RuntimeExpr not {expr}")
     return expr.__egg_typed_expr__
+
+
+def to_runtime_expr(expr: BaseExpr) -> RuntimeExpr:
+    if not isinstance(expr, RuntimeExpr):
+        raise TypeError(f"Expected a RuntimeExpr not {expr}")
+    return expr
 
 
 def run(ruleset: Optional[Ruleset] = None, limit: int = 1, *until: Fact) -> Run:

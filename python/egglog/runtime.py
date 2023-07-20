@@ -29,7 +29,7 @@ import black
 import black.parsing
 from typing_extensions import assert_never
 
-from . import config  # noqa: F401
+from . import bindings, config  # noqa: F401
 from .declarations import *
 from .declarations import BINARY_METHODS, UNARY_METHODS
 from .type_constraint_solver import *
@@ -85,6 +85,30 @@ def process_tp(tp: type | RuntimeTypeArgType) -> JustTypeRef | type:
     if isinstance(tp, (RuntimeClass, RuntimeParamaterizedClass)):
         return class_to_ref(tp)
     return tp
+
+
+def _resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
+    arg_type: JustTypeRef | type
+    if isinstance(arg, RuntimeExpr):
+        arg_type = arg.__egg_typed_expr__.tp
+    else:
+        arg_type = type(arg)
+        # If this value has a custom metaclass, let's use that as our index instead of the type
+        if type(arg_type) != type:
+            arg_type = type(arg_type)
+
+    # If we have any type variables, dont bother trying to resolve the literal, just return the arg
+    try:
+        tp_just = tp.to_just()
+    except Exception:
+        return arg  # type: ignore
+    if arg_type == tp_just:
+        return arg  # type: ignore
+    try:
+        fn = CONVERSIONS[(arg_type, tp_just)]
+    except KeyError:
+        raise TypeError(f"Cannot convert {arg} ({repr(arg_type)}) to {tp}")
+    return fn(arg)
 
 
 @dataclass
@@ -329,7 +353,7 @@ class RuntimeExpr:
         return str(self)
 
     def __str__(self) -> str:
-        pretty_expr = self.__egg_typed_expr__.expr.pretty(parens=False)
+        pretty_expr = self.__egg_typed_expr__.expr.pretty(self.__egg_decls__, parens=False)
         try:
             if config.SHOW_TYPES:
                 s = f"_: {self.__egg_typed_expr__.tp.pretty()} = {pretty_expr}"
@@ -341,6 +365,9 @@ class RuntimeExpr:
 
     def __dir__(self) -> Iterable[str]:
         return list(self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).methods)
+
+    def __to_egg__(self) -> bindings._Expr:
+        return self.__egg_typed_expr__.expr.to_egg(self.__egg_decls__)
 
     # Have __eq__ take no NoReturn (aka Never https://docs.python.org/3/library/typing.html#typing.Never) because
     # we don't wany any type that MyPy thinks is an expr to be used with __eq__.
@@ -362,23 +389,6 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
         return RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, __name)(*args)
 
     setattr(RuntimeExpr, name, _special_method)
-
-
-def _resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
-    arg_type: JustTypeRef | type = arg.__egg_typed_expr__.tp if isinstance(arg, RuntimeExpr) else type(arg)
-
-    # If we have any type variables, dont bother trying to resolve the literal, just return the arg
-    try:
-        tp_just = tp.to_just()
-    except Exception:
-        return arg  # type: ignore
-    if arg_type == tp_just:
-        return arg  # type: ignore
-    try:
-        fn = CONVERSIONS[(arg_type, tp_just)]
-    except KeyError:
-        raise TypeError(f"Cannot convert {arg} to {tp}")
-    return fn(arg)
 
 
 def _resolve_callable(callable: object) -> CallableRef:

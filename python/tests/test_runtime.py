@@ -96,7 +96,7 @@ def test_expr_special():
                         "__add__": FunctionDecl(
                             (TypeRefWithVars("i64"), TypeRefWithVars("i64")),
                             (),
-                            (),
+                            (None, None),
                             TypeRefWithVars("i64"),
                         )
                     },
@@ -104,7 +104,7 @@ def test_expr_special():
                         "__init__": FunctionDecl(
                             (TypeRefWithVars("i64"),),
                             (),
-                            (),
+                            (None,),
                             TypeRefWithVars("i64"),
                         )
                     },

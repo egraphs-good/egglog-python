@@ -260,6 +260,9 @@ def test_default_args():
 
     assert expr_parts(foo(i64(1))) == expr_parts(foo(i64(1), i64(1)))
 
+    assert str(foo(i64(1), i64(2))) == "foo(1, 2)"
+    assert str(foo(i64(1), i64(1))) == "foo(1)"
+
 
 class TestPyObject:
     def test_from_string(self):
