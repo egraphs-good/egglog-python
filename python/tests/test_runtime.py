@@ -30,6 +30,7 @@ def test_function_call():
                 "one": FunctionDecl(
                     (),
                     (),
+                    (),
                     TypeRefWithVars("i64"),
                 ),
             },
@@ -55,6 +56,7 @@ def test_classmethod_call():
                     n_type_vars=2,
                     class_methods={
                         "create": FunctionDecl(
+                            (),
                             (),
                             (),
                             TypeRefWithVars("Map", (K, V)),
@@ -94,12 +96,14 @@ def test_expr_special():
                         "__add__": FunctionDecl(
                             (TypeRefWithVars("i64"), TypeRefWithVars("i64")),
                             (),
+                            (),
                             TypeRefWithVars("i64"),
                         )
                     },
                     class_methods={
                         "__init__": FunctionDecl(
                             (TypeRefWithVars("i64"),),
+                            (),
                             (),
                             TypeRefWithVars("i64"),
                         )
