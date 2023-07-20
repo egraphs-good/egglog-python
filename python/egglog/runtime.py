@@ -383,11 +383,17 @@ class RuntimeExpr:
 for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call__"]:
 
     def _special_method(self: RuntimeExpr, *args: object, __name: str = name) -> RuntimeExpr:
-        return RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, __name)(*args)
+        # First, try to resolve as preserved method
+        try:
+            method = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods[__name]
+        except KeyError:
+            return RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, __name)(*args)
+        else:
+            return method(self, *args)
 
     setattr(RuntimeExpr, name, _special_method)
 
-for name in ["__bool__", "__len__"]:
+for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__hash__", "__iter__"]:
 
     def _preserved_method(self: RuntimeExpr, __name: str = name):
         try:
