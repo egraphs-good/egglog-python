@@ -156,7 +156,9 @@ class _BaseModule(ABC):
         """
         cls_name = cls.__name__
         # Get all the methods from the class
-        cls_dict: dict[str, Any] = {k: v for k, v in cls.__dict__.items() if k not in IGNORED_ATTRIBUTES}
+        cls_dict: dict[str, Any] = {
+            k: v for k, v in cls.__dict__.items() if k not in IGNORED_ATTRIBUTES or isinstance(v, _WrappedMethod)
+        }
         parameters: list[TypeVar] = cls_dict.pop("__parameters__", [])
 
         n_type_vars = len(parameters)

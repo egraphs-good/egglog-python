@@ -101,8 +101,13 @@ impl Sort for PyObjectSort {
         });
         typeinfo.add_primitive(FromString {
             name: "py-from-string".into(),
-            py_object: self,
+            py_object: self.clone(),
             string: typeinfo.get_sort(),
+        });
+        typeinfo.add_primitive(FromInt {
+            name: "py-from-int".into(),
+            py_object: self,
+            int: typeinfo.get_sort(),
         });
     }
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {
@@ -296,6 +301,32 @@ impl PrimitiveLike for FromString {
     fn apply(&self, values: &[Value]) -> Option<Value> {
         let str = Symbol::load(self.string.as_ref(), &values[0]).to_string();
         let obj: PyObject = Python::with_gil(|py| str.into_py(py));
+        Some(self.py_object.store(obj))
+    }
+}
+
+// (py-from-int <int>)
+struct FromInt {
+    name: Symbol,
+    py_object: Arc<PyObjectSort>,
+    int: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for FromInt {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [int] if int.name() == self.int.name() => Some(self.py_object.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let int = i64::load(self.int.as_ref(), &values[0]);
+        let obj: PyObject = Python::with_gil(|py| int.into_py(py));
         Some(self.py_object.store(obj))
     }
 }

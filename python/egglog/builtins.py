@@ -375,6 +375,10 @@ class PyObject(BaseExpr):
     def dict_update(dict, *keys_and_values: PyObject) -> PyObject:  # type: ignore[empty-body]
         ...
 
+    @BUILTINS.method(egg_fn="py-from-int")
+    @classmethod
+    def from_int(cls, i: i64Like) -> PyObject:  # type: ignore[empty-body]
+        ...
 
 # TODO: Maybe move to static method if we implement those?
 @BUILTINS.function(egg_fn="py-eval")
