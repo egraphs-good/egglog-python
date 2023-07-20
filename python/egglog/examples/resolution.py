@@ -12,7 +12,7 @@ egraph = EGraph()
 
 
 @egraph.class_
-class Bool(BaseExpr):
+class Bool(Expr):
     FALSE: ClassVar[Bool]
 
     def __or__(self, other: Bool) -> Bool:  # type: ignore[empty-body]

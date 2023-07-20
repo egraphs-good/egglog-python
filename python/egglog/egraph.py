@@ -42,7 +42,7 @@ __all__ = [
     "EGraph",
     "Module",
     "BUILTINS",
-    "BaseExpr",
+    "Expr",
     "Unit",
     "rewrite",
     "eq",
@@ -63,13 +63,13 @@ __all__ = [
 
 T = TypeVar("T")
 P = ParamSpec("P")
-TYPE = TypeVar("TYPE", bound="type[BaseExpr]")
+TYPE = TypeVar("TYPE", bound="type[Expr]")
 CALLABLE = TypeVar("CALLABLE", bound=Callable)
-EXPR = TypeVar("EXPR", bound="BaseExpr")
-E1 = TypeVar("E1", bound="BaseExpr")
-E2 = TypeVar("E2", bound="BaseExpr")
-E3 = TypeVar("E3", bound="BaseExpr")
-E4 = TypeVar("E4", bound="BaseExpr")
+EXPR = TypeVar("EXPR", bound="Expr")
+E1 = TypeVar("E1", bound="Expr")
+E2 = TypeVar("E2", bound="Expr")
+E3 = TypeVar("E3", bound="Expr")
+E4 = TypeVar("E4", bound="Expr")
 # Attributes which are sometimes added to classes by the interpreter or the dataclass decorator, or by ipython.
 # We ignore these when inspecting the class.
 
@@ -146,7 +146,7 @@ class _BaseModule(ABC):
 
     def _class(
         self,
-        cls: type[BaseExpr],
+        cls: type[Expr],
         hint_locals: dict[str, Any],
         hint_globals: dict[str, Any],
         egg_sort: Optional[str] = None,
@@ -816,17 +816,17 @@ class _WrappedMethod(Generic[P, EXPR]):
         raise NotImplementedError("We should never call a wrapped method. Did you forget to wrap the class?")
 
 
-class _BaseExprMetaclass(type):
+class _ExprMetaclass(type):
     """
-    Metaclass of BaseExpr, used to override isistance checks, so that runtime expressions are instances
-    of BaseExpr at runtime.
+    Metaclass of Expr, used to override isistance checks, so that runtime expressions are instances
+    of Expr at runtime.
     """
 
     def __instancecheck__(self, instance: object) -> bool:
         return isinstance(instance, RuntimeExpr)
 
 
-class BaseExpr(metaclass=_BaseExprMetaclass):
+class Expr(metaclass=_ExprMetaclass):
     """
     Expression base class, which adds suport for != to all expression types.
     """
@@ -853,7 +853,7 @@ BUILTINS = _Builtins()
 
 
 @BUILTINS.class_(egg_sort="Unit")
-class Unit(BaseExpr):
+class Unit(Expr):
     """
     The unit type. This is also used to reprsent if a value exists, if it is resolved or not.
     """
@@ -1175,21 +1175,21 @@ def panic(message: str) -> Action:
     return Panic(message)
 
 
-def let(name: str, expr: BaseExpr) -> Action:
+def let(name: str, expr: Expr) -> Action:
     """Create a let binding."""
     return Let(name, to_runtime_expr(expr))
 
 
-def expr_action(expr: BaseExpr) -> Action:
+def expr_action(expr: Expr) -> Action:
     return ExprAction(to_runtime_expr(expr))
 
 
-def delete(expr: BaseExpr) -> Action:
+def delete(expr: Expr) -> Action:
     """Create a delete expression."""
     return Delete(to_runtime_expr(expr))
 
 
-def expr_fact(expr: BaseExpr) -> Fact:
+def expr_fact(expr: Expr) -> Fact:
     return ExprFact(to_runtime_expr(expr))
 
 
@@ -1273,7 +1273,7 @@ class _EqBuilder(Generic[EXPR]):
 
 @dataclass
 class _SetBuilder(Generic[EXPR]):
-    lhs: BaseExpr
+    lhs: Expr
 
     def to(self, rhs: EXPR) -> Action:
         return Set(to_runtime_expr(self.lhs), to_runtime_expr(rhs))
@@ -1284,7 +1284,7 @@ class _SetBuilder(Generic[EXPR]):
 
 @dataclass
 class _UnionBuilder(Generic[EXPR]):
-    lhs: BaseExpr
+    lhs: Expr
 
     def with_(self, rhs: EXPR) -> Action:
         return Union_(to_runtime_expr(self.lhs), to_runtime_expr(rhs))
@@ -1303,7 +1303,7 @@ class _RuleBuilder:
         return Rule(_action_likes(actions), self.facts, self.name or "", _ruleset_name(self.ruleset))
 
 
-def expr_parts(expr: BaseExpr) -> TypedExprDecl:
+def expr_parts(expr: Expr) -> TypedExprDecl:
     """
     Returns the underlying type and decleration of the expression. Useful for testing structural equality or debugging.
     """
@@ -1312,7 +1312,7 @@ def expr_parts(expr: BaseExpr) -> TypedExprDecl:
     return expr.__egg_typed_expr__
 
 
-def to_runtime_expr(expr: BaseExpr) -> RuntimeExpr:
+def to_runtime_expr(expr: Expr) -> RuntimeExpr:
     if not isinstance(expr, RuntimeExpr):
         raise TypeError(f"Expected a RuntimeExpr not {expr}")
     return expr
@@ -1332,11 +1332,11 @@ def seq(*schedules: Schedule) -> Schedule:
     return Sequence(tuple(schedules))
 
 
-CommandLike = Union[Command, BaseExpr]
+CommandLike = Union[Command, Expr]
 
 
 def _command_like(command_like: CommandLike) -> Command:
-    if isinstance(command_like, BaseExpr):
+    if isinstance(command_like, Expr):
         return expr_action(command_like)
     return command_like
 
@@ -1353,7 +1353,7 @@ def _command_generator(gen: CommandGenerator) -> Iterable[Command]:
     return gen(*args)
 
 
-ActionLike = Union[Action, BaseExpr]
+ActionLike = Union[Action, Expr]
 
 
 def _action_likes(action_likes: Iterable[ActionLike]) -> tuple[Action, ...]:
@@ -1361,7 +1361,7 @@ def _action_likes(action_likes: Iterable[ActionLike]) -> tuple[Action, ...]:
 
 
 def _action_like(action_like: ActionLike) -> Action:
-    if isinstance(action_like, BaseExpr):
+    if isinstance(action_like, Expr):
         return expr_action(action_like)
     return action_like
 
@@ -1374,6 +1374,6 @@ def _fact_likes(fact_likes: Iterable[FactLike]) -> tuple[Fact, ...]:
 
 
 def _fact_like(fact_like: FactLike) -> Fact:
-    if isinstance(fact_like, BaseExpr):
+    if isinstance(fact_like, Expr):
         return expr_fact(fact_like)
     return fact_like

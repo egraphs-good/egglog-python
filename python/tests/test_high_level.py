@@ -26,7 +26,7 @@ def test_eqsat_basic():
     egraph = EGraph()
 
     @egraph.class_
-    class Math(BaseExpr):
+    class Math(Expr):
         def __init__(self, value: i64Like) -> None:
             ...
 
@@ -86,7 +86,7 @@ def test_fib_demand():
     egraph = EGraph()
 
     @egraph.class_
-    class Num(BaseExpr):
+    class Num(Expr):
         def __init__(self, i: i64Like) -> None:
             ...
 
@@ -141,7 +141,7 @@ def test_class_vars():
     egraph = EGraph()
 
     @egraph.class_
-    class Numeric(BaseExpr):
+    class Numeric(Expr):
         ONE: ClassVar[i64]
 
     egraph.register(set_(Numeric.ONE).to(i64(1)))
@@ -152,7 +152,7 @@ def test_simplify_constant():
     egraph = EGraph()
 
     @egraph.class_
-    class Numeric(BaseExpr):
+    class Numeric(Expr):
         ONE: ClassVar[Numeric]
 
         def __init__(self, v: i64) -> None:
@@ -170,7 +170,7 @@ def test_extract_constant_twice():
     egraph = EGraph()
 
     @egraph.class_
-    class Numeric(BaseExpr):
+    class Numeric(Expr):
         ONE: ClassVar[Numeric]
 
     egraph.extract(Numeric.ONE)
@@ -214,13 +214,13 @@ def test_modules() -> None:
     m = Module()
 
     @m.class_
-    class Numeric(BaseExpr):
+    class Numeric(Expr):
         ONE: ClassVar[Numeric]
 
     m2 = Module()
 
     @m2.class_
-    class OtherNumeric(BaseExpr):
+    class OtherNumeric(Expr):
         @m2.method(cost=10)
         def __init__(self, v: i64Like) -> None:
             ...
@@ -239,7 +239,7 @@ def test_property():
     egraph = EGraph()
 
     @egraph.class_
-    class Foo(BaseExpr):
+    class Foo(Expr):
         def __init__(self) -> None:
             ...
 

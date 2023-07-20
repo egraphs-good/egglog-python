@@ -10,7 +10,7 @@ egraph = EGraph()
 
 
 @egraph.class_
-class Num(BaseExpr):
+class Num(Expr):
     def __init__(self, value: i64Like) -> None:
         ...
 

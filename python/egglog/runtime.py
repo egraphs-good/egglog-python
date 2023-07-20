@@ -35,7 +35,7 @@ from .declarations import BINARY_METHODS, UNARY_METHODS
 from .type_constraint_solver import *
 
 if TYPE_CHECKING:
-    from .egraph import BaseExpr
+    from .egraph import Expr
 
 __all__ = [
     "LIT_CLASS_NAMES",
@@ -60,7 +60,7 @@ LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
 CONVERSIONS: dict[tuple[Type | JustTypeRef, JustTypeRef], Callable] = {}
 
 T = TypeVar("T")
-V = TypeVar("V", bound="BaseExpr")
+V = TypeVar("V", bound="Expr")
 
 
 def converter(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V]) -> None:

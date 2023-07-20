@@ -58,18 +58,18 @@ The `!=` function in egglog works on any two types with the same sort. In Python
 i64(10) != i64(2)
 ```
 
-This is checked statically, based on the `__ne__` definition in `BaseExpr`, so that only sorts that have the same sort can be compared.
+This is checked statically, based on the `__ne__` definition in `Expr`, so that only sorts that have the same sort can be compared.
 
 ## Declaring Sorts
 
-Users can declare their own sorts in Python by subclassing the `BaseExpr` class and decorating with `@egraph.class_` to register it with the e-graph:
+Users can declare their own sorts in Python by subclassing the `Expr` class and decorating with `@egraph.class_` to register it with the e-graph:
 
 ```{code-cell} python
 egraph = EGraph()
 
 # egg: (datatype Math)
 @egraph.class_
-class Math(BaseExpr):
+class Math(Expr):
     pass
 ```
 
@@ -80,7 +80,7 @@ egraph = EGraph()
 
 # egg: (datatype Math2)
 @egraph.class_(egg_sort="Math2")
-class Math(BaseExpr):
+class Math(Expr):
     pass
 ```
 
@@ -148,7 +148,7 @@ Note that by default, the egg name for any method is the Python class name combi
 #   (Mul Math Math))
 
 @egraph.class_
-class Math(BaseExpr):
+class Math(Expr):
     @egraph.method(egg_fn="Num")
     def __init__(self, v: i64Like):
         ...

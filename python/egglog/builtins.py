@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Generic, TypeVar, Union
 
-from .egraph import BUILTINS, BaseExpr, Unit
+from .egraph import BUILTINS, Expr, Unit
 from .runtime import converter
 
 __all__ = [
@@ -33,7 +33,7 @@ i64Like = Union[int, "i64"]
 
 
 @BUILTINS.class_(egg_sort="i64")
-class i64(BaseExpr):
+class i64(Expr):
     def __init__(self, value: int):
         ...
 
@@ -105,7 +105,7 @@ f64Like = Union[float, "f64"]
 
 
 @BUILTINS.class_(egg_sort="f64")
-class f64(BaseExpr):
+class f64(Expr):
     def __init__(self, value: float):
         ...
 
@@ -161,7 +161,7 @@ StringLike = Union[str, "String"]
 
 
 @BUILTINS.class_
-class String(BaseExpr):
+class String(Expr):
     def __init__(self, value: str):
         ...
 
@@ -173,12 +173,12 @@ def join(*strings: StringLike) -> String:  # type: ignore[empty-body]
 
 converter(str, String, String)
 
-T = TypeVar("T", bound=BaseExpr)
-V = TypeVar("V", bound=BaseExpr)
+T = TypeVar("T", bound=Expr)
+V = TypeVar("V", bound=Expr)
 
 
 @BUILTINS.class_(egg_sort="Map")
-class Map(BaseExpr, Generic[T, V]):
+class Map(Expr, Generic[T, V]):
     @BUILTINS.method(egg_fn="map-empty")
     @classmethod
     def empty(cls) -> Map[T, V]:  # type: ignore[empty-body]
@@ -206,7 +206,7 @@ class Map(BaseExpr, Generic[T, V]):
 
 
 @BUILTINS.class_(egg_sort="Set")
-class Set(BaseExpr, Generic[T]):
+class Set(Expr, Generic[T]):
     @BUILTINS.method(egg_fn="set-of")
     def __init__(self, *args: T) -> None:
         ...
@@ -246,7 +246,7 @@ class Set(BaseExpr, Generic[T]):
 
 
 @BUILTINS.class_(egg_sort="Rational")
-class Rational(BaseExpr):
+class Rational(Expr):
     @BUILTINS.method(egg_fn="rational")
     def __init__(self, num: i64Like, den: i64Like):
         ...
@@ -317,7 +317,7 @@ class Rational(BaseExpr):
 
 
 @BUILTINS.class_(egg_sort="Vec")
-class Vec(BaseExpr, Generic[T]):
+class Vec(Expr, Generic[T]):
     @BUILTINS.method(egg_fn="vec-of")
     def __init__(self, *args: T) -> None:
         ...
@@ -357,7 +357,7 @@ class Vec(BaseExpr, Generic[T]):
 
 
 @BUILTINS.class_(egg_sort="PyObject")
-class PyObject(BaseExpr):
+class PyObject(Expr):
     @BUILTINS.method(egg_fn="py-object")
     def __init__(self, *hashes: i64) -> None:
         ...
@@ -379,6 +379,7 @@ class PyObject(BaseExpr):
     @classmethod
     def from_int(cls, i: i64Like) -> PyObject:  # type: ignore[empty-body]
         ...
+
 
 # TODO: Maybe move to static method if we implement those?
 @BUILTINS.function(egg_fn="py-eval")

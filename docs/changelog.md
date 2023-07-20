@@ -32,7 +32,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
 - Fix bug calling methods on paramterized types (e.g. `Map[i64, i64].empty().insert(i64(0), i64(1))`)
 - Fix bug for Unit type (egg name is `Unit` not `unit`)
-- Use `@class_` decorator to force subclassing `BaseExpr`
+- Use `@class_` decorator to force subclassing `Expr`
 - Workaround extracting definitions until [upstream is fixed](https://github.com/egraphs-good/egglog/pull/140)
 - Rename `Map.map_remove` to `Map.remove`.
 - Add lambda calculus example
