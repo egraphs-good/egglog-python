@@ -49,7 +49,7 @@ __all__ = [
 ]
 
 
-BLACK_MODE = black.Mode(line_length=120)  # type: ignore
+BLACK_MODE = black.Mode()  # type: ignore
 
 UNIT_CLASS_NAME = "Unit"
 UNARY_LIT_CLASS_NAMES = {"i64", "f64", "String"}
