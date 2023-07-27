@@ -638,7 +638,7 @@ class EGraph(_BaseModule):
         Returns the graphviz representation of the e-graph.
         """
 
-        return self.graphviz._repr_mimebundle_(*args, **kwargs)
+        return {"image/svg+xml": self.graphviz.pipe(format="svg", quiet=True, encoding="utf-8")}
 
     @property
     def graphviz(self) -> graphviz.Source:
@@ -651,7 +651,7 @@ class EGraph(_BaseModule):
         until this PR is merged and released
         https://github.com/sphinx-gallery/sphinx-gallery/pull/1138
         """
-        return self.graphviz.pipe(format="svg").decode()
+        return self.graphviz.pipe(format="svg", quiet=True).decode()
 
     def display(self):
         """
