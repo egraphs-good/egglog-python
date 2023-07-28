@@ -306,3 +306,9 @@ class TestPyObject:
 
 def my_add(a, b):
     return a + b
+
+
+def test_convert_int_float():
+    egraph = EGraph()
+    egraph.check(eq(i64(1)).to(f64(1.0).to_i64()))
+    egraph.check(eq(f64(1.0)).to(f64.from_i64(i64(1))))

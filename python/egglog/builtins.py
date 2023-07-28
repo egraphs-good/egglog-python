@@ -153,6 +153,15 @@ class f64(Expr):
     def max(self, other: f64Like) -> f64:  # type: ignore[empty-body]
         ...
 
+    @BUILTINS.method(egg_fn="to-i64")
+    def to_i64(self) -> i64:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="to-f64")
+    @classmethod
+    def from_i64(cls, i: i64) -> f64:  # type: ignore[empty-body]
+        ...
+
 
 converter(float, f64, f64)
 
