@@ -469,6 +469,17 @@ egraph.extract(fib(1))
 Multiple items can also be extracted, returning a list of the lowest cost expressions, with `egraph.extract_multiple`:
 
 ```{code-cell} python
+a, b, c = vars_("a b c", Math)
+i, j = vars_("i j", i64)
+egraph.register(
+    rewrite(a * b).to(b * a),
+    rewrite(a + b).to(b + a),
+    rewrite(a * (b * c)).to((a * b) * c),
+    rewrite(a * (b + c)).to((a * b) + (a * c)),
+    rewrite(Math(i) + Math(j)).to(Math(i + j)),
+    rewrite(Math(i) * Math(j)).to(Math(i * j)),
+)
+
 # egg:
 # (define y (Add (Num 6) (Mul (Num 2) (Var "x")))
 # (run 10)
@@ -483,16 +494,6 @@ egraph.extract_multiple(y, 2)
 The `(simplify ...)` command in egglog translates to the `egraph.simplify` method, which combines running a schedule and extracting:
 
 ```{code-cell}
-a, b, c = vars_("a b c", Math)
-i, j = vars_("i j", i64)
-egraph.register(
-    rewrite(a * b).to(b * a),
-    rewrite(a + b).to(b + a),
-    rewrite(a * (b * c)).to((a * b) * c),
-    rewrite(a * (b + c)).to((a * b) + (a * c)),
-    rewrite(Math(i) + Math(j)).to(Math(i + j)),
-    rewrite(Math(i) * Math(j)).to(Math(i * j)),
-)
 # egg: (simplify (Mul (Num 6) (Add (Num 2) (Mul (Var "x") (Num 2)))) 20)
 egraph.simplify(Math(6) * (Math(2) + Math.var("x") * Math(2)), 20)
 ```

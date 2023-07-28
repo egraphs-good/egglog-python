@@ -588,6 +588,9 @@ class CallDecl:
         :param parens: If true, wrap the call in parens if it is a binary or unary method call.
         """
         ref, args = self.callable, [a.expr for a in self.args]
+        # Special case != since it doesn't have a decl
+        if isinstance(ref, MethodRef) and ref.method_name == "__ne__":
+            return f"{args[0].pretty(mod_decls, wrap_lit=True)} != {args[1].pretty(mod_decls, wrap_lit=True)}"
         defaults = mod_decls.get_function_decl(ref).arg_defaults
         if isinstance(ref, FunctionRef):
             fn_str = ref.name

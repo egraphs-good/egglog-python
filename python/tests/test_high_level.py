@@ -326,3 +326,8 @@ def test_f64_negation() -> None:
     expr3 = egraph.define("expr3", -(-f64(2.0)))
     egraph.check(eq(expr1).to(-expr2))
     egraph.check(eq(expr3).to(expr2))
+
+
+def test_not_equals():
+    egraph = EGraph()
+    egraph.check(i64(10) != i64(2))
