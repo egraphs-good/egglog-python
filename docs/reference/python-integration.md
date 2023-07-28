@@ -15,7 +15,9 @@ We define a custom "primitive sort" (i.e. a builtin type) for `PyObject`s. This 
 To create an expression of type `PyObject`, we have to use the `egraph.save_object` method. This method takes a Python object and returns an expression of type `PyObject`.
 
 ```{code-cell} python
+from __future__ import annotations
 from egglog import *
+
 egraph = EGraph()
 one = egraph.save_object(1)
 one
@@ -90,3 +92,52 @@ assert egraph.load_object(egraph.extract(evalled)) == 3
 ```
 
 This is a bit subtle at the moment, and we plan on adding an easier wrapper to eval arbitrary Python code in the future.
+
+## "Preserved" methods
+
+You can use the the `@egraph.method(preserve=True)` decorator to mark a method as "preserved", meaning that calling it will actually execute the body of the function and a coresponding egglog function will not be created,
+
+Normally, all methods defined on a egglog `Expr` will ignore their bodies and simply build an expression object based on the arguments.
+
+However, there are times in Python when you need the return type of a method to be an instance of a particular Python type, and some similar acting expression won't cut it.
+
+For example, let's say you are implementing a `Bool` expression, but you want to be able to use it in `if` statements in Python. That means it needs to define a `__bool__` methods which returns a Python `bool`, based on evaluating the expression.
+
+```{code-cell} python
+@egraph.class_
+class Bool(Expr):
+    @egraph.method(preserve=True)
+    def __bool__(self) -> bool:
+        # Add this expression converted to a Python object to the e-graph
+        egraph.register(self)
+        # Run until the e-graph saturates
+        egraph.run(run().saturate())
+        # Extract the Python object from the e-graph
+        return egraph.load_object(egraph.extract(self.to_py()))
+
+    def to_py(self) -> PyObject:
+        ...
+
+    def __or__(self, other: Bool) -> Bool:
+        ...
+
+TRUE = egraph.constant("TRUE", Bool)
+FALSE = egraph.constant("FALSE", Bool)
+
+
+@egraph.register
+def _bool(x: Bool):
+    return [
+        set_(TRUE.to_py()).to(egraph.save_object(True)),
+        set_(FALSE.to_py()).to(egraph.save_object(False)),
+        rewrite(TRUE | x).to(TRUE),
+        rewrite(FALSE | x).to(x),
+    ]
+```
+
+Now whenever the `__bool__` method is called, it will actually execute the body of the function, and return a Python `bool` based on the result.
+
+```{code-cell} python
+if TRUE | FALSE:
+    print("True!")
+```
