@@ -26,7 +26,7 @@ def test_eqsat_basic():
     egraph = EGraph()
 
     @egraph.class_
-    class Math(BaseExpr):
+    class Math(Expr):
         def __init__(self, value: i64Like) -> None:
             ...
 
@@ -86,7 +86,7 @@ def test_fib_demand():
     egraph = EGraph()
 
     @egraph.class_
-    class Num(BaseExpr):
+    class Num(Expr):
         def __init__(self, i: i64Like) -> None:
             ...
 
@@ -141,7 +141,7 @@ def test_class_vars():
     egraph = EGraph()
 
     @egraph.class_
-    class Numeric(BaseExpr):
+    class Numeric(Expr):
         ONE: ClassVar[i64]
 
     egraph.register(set_(Numeric.ONE).to(i64(1)))
@@ -152,7 +152,7 @@ def test_simplify_constant():
     egraph = EGraph()
 
     @egraph.class_
-    class Numeric(BaseExpr):
+    class Numeric(Expr):
         ONE: ClassVar[Numeric]
 
         def __init__(self, v: i64) -> None:
@@ -170,7 +170,7 @@ def test_extract_constant_twice():
     egraph = EGraph()
 
     @egraph.class_
-    class Numeric(BaseExpr):
+    class Numeric(Expr):
         ONE: ClassVar[Numeric]
 
     egraph.extract(Numeric.ONE)
@@ -198,17 +198,29 @@ def test_generic_sort():
     egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
 
 
+def test_keyword_args():
+    egraph = EGraph()
+
+    @egraph.function
+    def foo(x: i64Like, y: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    pos = expr_parts(foo(i64(1), i64(2)))
+    assert expr_parts(foo(i64(1), y=i64(2))) == pos
+    assert expr_parts(foo(y=i64(2), x=i64(1))) == pos
+
+
 def test_modules() -> None:
     m = Module()
 
     @m.class_
-    class Numeric(BaseExpr):
+    class Numeric(Expr):
         ONE: ClassVar[Numeric]
 
     m2 = Module()
 
     @m2.class_
-    class OtherNumeric(BaseExpr):
+    class OtherNumeric(Expr):
         @m2.method(cost=10)
         def __init__(self, v: i64Like) -> None:
             ...
@@ -223,6 +235,85 @@ def test_modules() -> None:
     assert expr_parts(egraph.simplify(OtherNumeric(i64(1)), 10)) == expr_parts(from_numeric(Numeric.ONE))
 
 
+def test_property():
+    egraph = EGraph()
+
+    @egraph.class_
+    class Foo(Expr):
+        def __init__(self) -> None:
+            ...
+
+        @property
+        def bar(self) -> i64:  # type: ignore[empty-body]
+            ...
+
+    egraph.register(set_(Foo().bar).to(i64(1)))
+    egraph.check(eq(Foo().bar).to(i64(1)))
+
+
+def test_default_args():
+    egraph = EGraph()
+
+    @egraph.function
+    def foo(x: i64Like, y: i64Like = i64(1)) -> i64:  # type: ignore[empty-body]
+        ...
+
+    assert expr_parts(foo(i64(1))) == expr_parts(foo(i64(1), i64(1)))
+
+    assert str(foo(i64(1), i64(2))) == "foo(1, 2)"
+    assert str(foo(i64(1), i64(1))) == "foo(1)"
+
+
+class TestPyObject:
+    def test_from_string(self):
+        egraph = EGraph()
+        res = egraph.simplify(PyObject.from_string("foo"), 1)
+        assert egraph.load_object(res) == "foo"
+
+    def test_to_string(self):
+        egraph = EGraph()
+        s = egraph.save_object("foo")
+        res = egraph.simplify(s.to_string(), 1)
+        assert expr_parts(res) == expr_parts(String("foo"))
+
+    def test_dict_update(self):
+        egraphs = EGraph()
+        original_d = {"foo": "bar"}
+        obj = egraphs.save_object(original_d)
+        res = obj.dict_update(PyObject.from_string("foo"), PyObject.from_string("baz"))
+        simplified = egraphs.simplify(res, 1)
+        assert egraphs.load_object(simplified) == {"foo": "baz"}
+        assert original_d == {"foo": "bar"}
+
+    def test_eval(self):
+        egraph = EGraph()
+        x, y = 10, 20
+        res = py_eval("x + y", egraph.save_object({"x": x, "y": y}), egraph.save_object({}))
+        res_simpl = egraph.simplify(res, 1)
+        assert egraph.load_object(res_simpl) == 30
+
+    def test_eval_local(self):
+        egraph = EGraph()
+        x = "hi"
+        res = py_eval(
+            "my_add(x, y)",
+            egraph.save_object(locals()).dict_update(PyObject.from_string("y"), PyObject.from_string("there")),
+            egraph.save_object(globals()),
+        )
+        res_simpl = egraph.simplify(res, 1)
+        assert egraph.load_object(res_simpl) == "hithere"
+
+
+def my_add(a, b):
+    return a + b
+
+
+def test_convert_int_float():
+    egraph = EGraph()
+    egraph.check(eq(i64(1)).to(f64(1.0).to_i64()))
+    egraph.check(eq(f64(1.0)).to(f64.from_i64(i64(1))))
+
+
 def test_f64_negation() -> None:
     egraph = EGraph()
     # expr1 = -2.0
@@ -235,3 +326,8 @@ def test_f64_negation() -> None:
     expr3 = egraph.define("expr3", -(-f64(2.0)))
     egraph.check(eq(expr1).to(-expr2))
     egraph.check(eq(expr3).to(expr2))
+
+
+def test_not_equals():
+    egraph = EGraph()
+    egraph.check(i64(10) != i64(2))

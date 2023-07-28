@@ -12,7 +12,6 @@ The currently unsupported features are:
 
 - Proof mode: Not currently tested, but could add support if needed.
 - Naive mode: Not currently exposed, but could add support
-- `(include ...)`: This command includes another `.egg` file, so not sure how this would translate to Python.
 - `(output ...)`: No examples in the tests, so not sure how this works.
 - `(calc ...)`: Could be implemented, but haven't yet.
 
@@ -58,18 +57,18 @@ The `!=` function in egglog works on any two types with the same sort. In Python
 i64(10) != i64(2)
 ```
 
-This is checked statically, based on the `__ne__` definition in `BaseExpr`, so that only sorts that have the same sort can be compared.
+This is checked statically, based on the `__ne__` definition in `Expr`, so that only sorts that have the same sort can be compared.
 
 ## Declaring Sorts
 
-Users can declare their own sorts in Python by subclassing the `BaseExpr` class and decorating with `@egraph.class_` to register it with the e-graph:
+Users can declare their own sorts in Python by subclassing the `Expr` class and decorating with `@egraph.class_` to register it with the e-graph:
 
 ```{code-cell} python
 egraph = EGraph()
 
 # egg: (datatype Math)
 @egraph.class_
-class Math(BaseExpr):
+class Math(Expr):
     pass
 ```
 
@@ -80,7 +79,7 @@ egraph = EGraph()
 
 # egg: (datatype Math2)
 @egraph.class_(egg_sort="Math2")
-class Math(BaseExpr):
+class Math(Expr):
     pass
 ```
 
@@ -132,6 +131,35 @@ def my_foo() -> i64:
 
 The static types on the decorator preserve the type of the underlying function, so that they can all be checked statically.
 
+### Keyword arguments
+
+All arguments for egg functions must be declared positional or keyword (the default argument type) currently. You can pass arguments variably or also as keyword arguments:
+
+```{code-cell} python
+# egg: (function bar (i64 i64) i64)
+@egraph.function
+def bar(a: i64Like, b: i64Like) -> i64:
+    pass
+
+# egg: (bar 1 2)
+bar(1, 2)
+bar(b=2, a=1)
+```
+
+### Default arguments
+
+Default argument values are also supported. They are not translated to egglog definition, which has no notion of optional values. Instead, they are added to the args when the functions is called.
+
+```{code-cell} python
+# egg: (function bar (i64 i64) i64)
+@egraph.function
+def baz(a: i64Like, b: i64Like=i64(0)) -> i64:
+    pass
+
+# egg: (baz 1 0)
+baz(1)
+```
+
 ### Datatype functions
 
 In egglog, the `(datatype ...)` command can also be used to declare functions. All of the functions declared in this block return the type of the declared datatype. Similarily, in Python, we can use the `@egraph.class_` decorator on a class to define a number of functions associated with that class. These
@@ -145,14 +173,14 @@ Note that by default, the egg name for any method is the Python class name combi
 #   (Num i64)
 #   (Var String)
 #   (Add Math Math)
-#   (Mul Math Math))
+#   (Mul Math Math)
+#   (Neg Math))
 
 @egraph.class_
-class Math(BaseExpr):
+class Math(Expr):
     @egraph.method(egg_fn="Num")
     def __init__(self, v: i64Like):
         ...
-
     @egraph.method(egg_fn="Var")
     @classmethod
     def var(cls, v: StringLike) -> Math:
@@ -166,8 +194,28 @@ class Math(BaseExpr):
     def __mul__(self, other: Math) -> Math:
         ...
 
-# egg:  (Mul (Num 2) (Add (Var "x") (Num 3))))
-Math(2) * (Math.var("x") + Math(3))
+    @egraph.method(egg_fn="Neg")
+    @property
+    def neg(self) -> Math:
+        ...
+
+# egg: (Neg (Mul (Num 2) (Add (Var "x") (Num 3)))))
+(Math(2) * (Math.var("x") + Math(3))).neg
+```
+
+As shown above, we can also use the `@classmethod` and `@property` decorators to define class methods and properties.
+
+#### Custom Type Promotion
+
+Similar to how an `int` can be automatically upcasted to an `i64`, we also support registering conversion to your custom types. For example:
+
+```{code-cell} python
+converter(int, Math, Math)
+converter(str, Math, Math.var)
+
+Math(2) + 30 + "x"
+# equal to
+Math(2) + Math(i64(30)) + Math.var(String("x"))
 ```
 
 ### Declarations
@@ -328,7 +376,7 @@ Since it uses a fluent API, static type checkers can verify that the type of the
 
 The `(birewrite ...)` command in egglog is syntactic sugar for creating two rewrites, one in each direction. In Python, we can use the `birewrite(expr).to(expr, *when)` function to create two rules that rewrite in each direction.
 
-### Using funcitons to define vars
+### Using functions to define vars
 
 Instead of defining variables with `vars_`, we can also use functions to define variables. This can be more succinct
 and also will make sure the variables won't be used outside of the scope of the function.
@@ -469,6 +517,17 @@ egraph.extract(fib(1))
 Multiple items can also be extracted, returning a list of the lowest cost expressions, with `egraph.extract_multiple`:
 
 ```{code-cell} python
+a, b, c = vars_("a b c", Math)
+i, j = vars_("i j", i64)
+egraph.register(
+    rewrite(a * b).to(b * a),
+    rewrite(a + b).to(b + a),
+    rewrite(a * (b * c)).to((a * b) * c),
+    rewrite(a * (b + c)).to((a * b) + (a * c)),
+    rewrite(Math(i) + Math(j)).to(Math(i + j)),
+    rewrite(Math(i) * Math(j)).to(Math(i * j)),
+)
+
 # egg:
 # (define y (Add (Num 6) (Mul (Num 2) (Var "x")))
 # (run 10)
@@ -483,16 +542,6 @@ egraph.extract_multiple(y, 2)
 The `(simplify ...)` command in egglog translates to the `egraph.simplify` method, which combines running a schedule and extracting:
 
 ```{code-cell}
-a, b, c = vars_("a b c", Math)
-i, j = vars_("i j", i64)
-egraph.register(
-    rewrite(a * b).to(b * a),
-    rewrite(a + b).to(b + a),
-    rewrite(a * (b * c)).to((a * b) * c),
-    rewrite(a * (b + c)).to((a * b) + (a * c)),
-    rewrite(Math(i) + Math(j)).to(Math(i + j)),
-    rewrite(Math(i) * Math(j)).to(Math(i * j)),
-)
 # egg: (simplify (Mul (Num 6) (Add (Num 2) (Mul (Var "x") (Num 2)))) 20)
 egraph.simplify(Math(6) * (Math(2) + Math.var("x") * Math(2)), 20)
 ```

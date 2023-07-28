@@ -15,7 +15,7 @@ egraph = EGraph()
 
 
 @egraph.class_
-class Val(BaseExpr):
+class Val(Expr):
     """
     A value is a number or a boolean.
     """
@@ -28,13 +28,13 @@ class Val(BaseExpr):
 
 
 @egraph.class_
-class Var(BaseExpr):
+class Var(Expr):
     def __init__(self, v: StringLike) -> None:
         ...
 
 
 @egraph.class_
-class Term(BaseExpr):
+class Term(Expr):
     @classmethod
     def val(cls, v: Val) -> Term:
         ...
@@ -172,7 +172,7 @@ def l(fn: Callable[[Term], Term]) -> Term:  # noqa
     return lam(Var(x), fn(Term.var(Var(x))))
 
 
-def assert_simplifies(left: BaseExpr, right: BaseExpr) -> None:
+def assert_simplifies(left: Expr, right: Expr) -> None:
     """
     Simplify and print
     """

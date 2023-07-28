@@ -13,7 +13,7 @@ egraph = EGraph()
 
 
 @egraph.class_
-class Value(BaseExpr):
+class Value(Expr):
     def __init__(self, v: i64Like) -> None:
         ...
 
@@ -32,7 +32,7 @@ egraph.register(
 
 
 @egraph.class_
-class Values(BaseExpr):
+class Values(Expr):
     def __init__(self, v: Vec[Value]) -> None:
         ...
 
@@ -56,7 +56,7 @@ def _values(vs: Vec[Value], other: Vec[Value]):
 
 
 @egraph.class_
-class NDArray(BaseExpr):
+class NDArray(Expr):
     """
     An n-dimensional array.
     """
@@ -79,7 +79,7 @@ def _ndarray_arange(n: Value, idx: Values):
     yield rewrite(arange(n)[idx]).to(idx[Value(0)])
 
 
-def assert_simplifies(left: BaseExpr, right: BaseExpr) -> None:
+def assert_simplifies(left: Expr, right: Expr) -> None:
     """
     Simplify and print
     """

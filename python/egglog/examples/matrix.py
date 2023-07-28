@@ -10,7 +10,7 @@ egraph = EGraph()
 
 
 @egraph.class_
-class Dim(BaseExpr):
+class Dim(Expr):
     """
     A dimension of a matix.
 
@@ -43,7 +43,7 @@ egraph.register(
 
 
 @egraph.class_(egg_sort="MExpr")
-class Matrix(BaseExpr):
+class Matrix(Expr):
     @egraph.method(egg_fn="Id")
     @classmethod
     def identity(cls, dim: Dim) -> Matrix:  # type: ignore[empty-body]

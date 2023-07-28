@@ -12,15 +12,30 @@ so they are not mangled by Python and can be accessed by the user.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Collection, Iterable, Optional, Union
+from itertools import zip_longest
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Collection,
+    Iterable,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import black
+import black.parsing
 from typing_extensions import assert_never
 
-from . import config  # noqa: F401
+from . import bindings, config  # noqa: F401
 from .declarations import *
 from .declarations import BINARY_METHODS, UNARY_METHODS
 from .type_constraint_solver import *
+
+if TYPE_CHECKING:
+    from .egraph import Expr
 
 __all__ = [
     "LIT_CLASS_NAMES",
@@ -29,15 +44,71 @@ __all__ = [
     "RuntimeClassMethod",
     "RuntimeExpr",
     "RuntimeFunction",
-    "ArgType",
+    "convert",
+    "converter",
 ]
 
 
-BLACK_MODE = black.Mode(line_length=120)  # type: ignore
+BLACK_MODE = black.Mode()  # type: ignore
 
 UNIT_CLASS_NAME = "Unit"
 UNARY_LIT_CLASS_NAMES = {"i64", "f64", "String"}
 LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
+
+
+# Mapping of types, from Python or egglog types to egglog types
+CONVERSIONS: dict[tuple[Type | JustTypeRef, JustTypeRef], Callable] = {}
+
+T = TypeVar("T")
+V = TypeVar("V", bound="Expr")
+
+
+def converter(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V]) -> None:
+    """
+    Register a converter from some type to an egglog type.
+    """
+    to_type_name = process_tp(to_type)
+    if not isinstance(to_type_name, JustTypeRef):
+        raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
+    CONVERSIONS[(process_tp(from_type), to_type_name)] = fn
+
+
+def convert(source: object, target: type[V]) -> V:
+    """
+    Convert a source object to a target type.
+    """
+    target_ref = class_to_ref(target)  # type: ignore
+    return cast(V, _resolve_literal(target_ref.to_var(), source))
+
+
+def process_tp(tp: type | RuntimeTypeArgType) -> JustTypeRef | type:
+    if isinstance(tp, (RuntimeClass, RuntimeParamaterizedClass)):
+        return class_to_ref(tp)
+    return tp
+
+
+def _resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
+    arg_type: JustTypeRef | type
+    if isinstance(arg, RuntimeExpr):
+        arg_type = arg.__egg_typed_expr__.tp
+    else:
+        arg_type = type(arg)
+        # If this value has a custom metaclass, let's use that as our index instead of the type
+        if type(arg_type) != type:
+            arg_type = type(arg_type)
+
+    # If we have any type variables, dont bother trying to resolve the literal, just return the arg
+    try:
+        tp_just = tp.to_just()
+    except Exception:
+        return arg  # type: ignore
+    if arg_type == tp_just:
+        return arg  # type: ignore
+    try:
+        fn = CONVERSIONS[(arg_type, tp_just)]
+    except KeyError:
+        raise TypeError(f"Cannot convert {arg} ({repr(arg_type)}) to {tp}")
+    return fn(arg)
 
 
 @dataclass
@@ -45,7 +116,7 @@ class RuntimeClass:
     __egg_decls__: ModuleDeclarations
     __egg_name__: str
 
-    def __call__(self, *args: ArgType) -> RuntimeExpr:
+    def __call__(self, *args: object) -> RuntimeExpr:
         """
         Create an instance of this kind by calling the __init__ classmethod
         """
@@ -62,7 +133,9 @@ class RuntimeClass:
 
     def __dir__(self) -> list[str]:
         cls_decl = self.__egg_decls__.get_class_decl(self.__egg_name__)
-        possible_methods = list(cls_decl.class_methods) + list(cls_decl.class_variables)
+        possible_methods = (
+            list(cls_decl.class_methods) + list(cls_decl.class_variables) + list(cls_decl.preserved_methods)
+        )
         if "__init__" in possible_methods:
             possible_methods.remove("__init__")
             possible_methods.append("__call__")
@@ -74,8 +147,13 @@ class RuntimeClass:
         tp = JustTypeRef(self.__egg_name__, tuple(class_to_ref(arg) for arg in args))
         return RuntimeParamaterizedClass(self.__egg_decls__, tp)
 
-    def __getattr__(self, name: str) -> RuntimeClassMethod | RuntimeExpr:
+    def __getattr__(self, name: str) -> RuntimeClassMethod | RuntimeExpr | Callable:
         cls_decl = self.__egg_decls__.get_class_decl(self.__egg_name__)
+
+        preserved_methods = cls_decl.preserved_methods
+        if name in preserved_methods:
+            return preserved_methods[name].__get__(self)
+
         # if this is a class variable, return an expr for it, otherwise, assume it's a method
         if name in cls_decl.class_variables:
             return_tp = cls_decl.class_variables[name]
@@ -104,7 +182,7 @@ class RuntimeParamaterizedClass:
         if len(self.__egg_tp__.args) != desired_args:
             raise ValueError(f"Expected {desired_args} type args, got {len(self.__egg_tp__.args)}")
 
-    def __call__(self, *args: ArgType) -> RuntimeExpr:
+    def __call__(self, *args: object) -> RuntimeExpr:
         return RuntimeClassMethod(self.__egg_decls__, class_to_ref(self), "__init__")(*args)
 
     def __getattr__(self, name: str) -> RuntimeClassMethod:
@@ -137,8 +215,8 @@ class RuntimeFunction:
         self.__egg_fn_ref__ = FunctionRef(self.__egg_name__)
         self.__egg_fn_decl__ = self.__egg_decls__.get_function_decl(self.__egg_fn_ref__)
 
-    def __call__(self, *args: ArgType) -> RuntimeExpr:
-        return _call(self.__egg_decls__, self.__egg_fn_ref__, self.__egg_fn_decl__, args)
+    def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr:
+        return _call(self.__egg_decls__, self.__egg_fn_ref__, self.__egg_fn_decl__, args, kwargs)
 
     def __str__(self) -> str:
         return self.__egg_name__
@@ -149,12 +227,30 @@ def _call(
     callable_ref: CallableRef,
     # Not included if this is the != method
     fn_decl: Optional[FunctionDecl],
-    args: Collection[ArgType],
+    args: Collection[object],
+    kwargs: dict[str, object],
     bound_params: Optional[tuple[JustTypeRef, ...]] = None,
 ) -> RuntimeExpr:
-    upcasted_args = [_resolve_literal(decls, arg) for arg in args]
+    # Turn all keyword args into positional args
 
-    arg_types = [arg.__egg_typed_expr__.tp for arg in upcasted_args]
+    if fn_decl:
+        bound = fn_decl.to_signature(lambda expr: RuntimeExpr(decls, expr)).bind(*args, **kwargs)
+        bound.apply_defaults()
+        assert not bound.kwargs
+        args = bound.args
+    else:
+        assert not kwargs
+    upcasted_args: list[RuntimeExpr]
+    if fn_decl is not None:
+        upcasted_args = [
+            _resolve_literal(tp, arg)  # type: ignore
+            for arg, tp in zip_longest(args, fn_decl.arg_types, fillvalue=fn_decl.var_arg_type)
+        ]
+    else:
+        upcasted_args = cast("list[RuntimeExpr]", args)
+    arg_decls = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
+
+    arg_types = [decl.tp for decl in arg_decls]
 
     if bound_params is not None:
         tcs = TypeConstraintSolver.from_type_parameters(bound_params)
@@ -166,7 +262,6 @@ def _call(
     else:
         return_tp = JustTypeRef("Unit")
 
-    arg_decls = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
     expr_decl = CallDecl(callable_ref, arg_decls, bound_params)
     return RuntimeExpr(decls, TypedExprDecl(return_tp, expr_decl))
 
@@ -187,9 +282,9 @@ class RuntimeClassMethod:
         except KeyError:
             raise AttributeError(f"Class {self.class_name} does not have method {self.__egg_method_name__}")
 
-    def __call__(self, *args: ArgType) -> RuntimeExpr:
+    def __call__(self, *args: object, **kwargs) -> RuntimeExpr:
         bound_params = self.__egg_tp__.args if isinstance(self.__egg_tp__, JustTypeRef) else None
-        return _call(self.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, bound_params)
+        return _call(self.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, kwargs, bound_params)
 
     def __str__(self) -> str:
         return f"{self.class_name}.{self.__egg_method_name__}"
@@ -206,11 +301,14 @@ class RuntimeMethod:
     __egg_decls__: ModuleDeclarations
     __egg_typed_expr__: TypedExprDecl
     __egg_method_name__: str
-    __egg_callable_ref__: MethodRef = field(init=False)
+    __egg_callable_ref__: MethodRef | PropertyRef = field(init=False)
     __egg_fn_decl__: Optional[FunctionDecl] = field(init=False)
 
     def __post_init__(self):
-        self.__egg_callable_ref__ = MethodRef(self.class_name, self.__egg_method_name__)
+        if self.__egg_method_name__ in self.__egg_decls__.get_class_decl(self.class_name).properties:
+            self.__egg_callable_ref__ = PropertyRef(self.class_name, self.__egg_method_name__)
+        else:
+            self.__egg_callable_ref__ = MethodRef(self.class_name, self.__egg_method_name__)
         # Special case for __ne__ which does not have a normal function defintion since
         # it relies of type parameters
         if self.__egg_method_name__ == "__ne__":
@@ -221,10 +319,10 @@ class RuntimeMethod:
             except KeyError:
                 raise AttributeError(f"Class {self.class_name} does not have method {self.__egg_method_name__}")
 
-    def __call__(self, *args: ArgType) -> RuntimeExpr:
+    def __call__(self, *args: object, **kwargs) -> RuntimeExpr:
         first_arg = RuntimeExpr(self.__egg_decls__, self.__egg_typed_expr__)
         args = (first_arg, *args)
-        return _call(self.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args)
+        return _call(self.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, kwargs)
 
     @property
     def class_name(self) -> str:
@@ -236,8 +334,17 @@ class RuntimeExpr:
     __egg_decls__: ModuleDeclarations
     __egg_typed_expr__: TypedExprDecl
 
-    def __getattr__(self, name: str) -> RuntimeMethod:
-        return RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, name)
+    def __getattr__(self, name: str) -> RuntimeMethod | RuntimeExpr | Callable:
+        class_decl = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name)
+
+        preserved_methods = class_decl.preserved_methods
+        if name in preserved_methods:
+            return preserved_methods[name].__get__(self)
+
+        method = RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, name)
+        if isinstance(method.__egg_callable_ref__, PropertyRef):
+            return method()
+        return method
 
     def __repr__(self) -> str:
         """
@@ -246,15 +353,21 @@ class RuntimeExpr:
         return str(self)
 
     def __str__(self) -> str:
-        pretty_expr = self.__egg_typed_expr__.expr.pretty(parens=False)
-        if config.SHOW_TYPES:
-            s = f"_: {self.__egg_typed_expr__.tp.pretty()} = {pretty_expr}"
-            return black.format_str(s, mode=black.FileMode()).strip()
-        else:
-            return black.format_str(pretty_expr, mode=black.FileMode(line_length=180)).strip()
+        pretty_expr = self.__egg_typed_expr__.expr.pretty(self.__egg_decls__, parens=False)
+        try:
+            if config.SHOW_TYPES:
+                s = f"_: {self.__egg_typed_expr__.tp.pretty()} = {pretty_expr}"
+                return black.format_str(s, mode=black.FileMode()).strip()
+            else:
+                return black.format_str(pretty_expr, mode=black.FileMode(line_length=180)).strip()
+        except black.parsing.InvalidInput:
+            return pretty_expr
 
     def __dir__(self) -> Iterable[str]:
         return list(self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).methods)
+
+    def __to_egg__(self) -> bindings._Expr:
+        return self.__egg_typed_expr__.expr.to_egg(self.__egg_decls__)
 
     # Have __eq__ take no NoReturn (aka Never https://docs.python.org/3/library/typing.html#typing.Never) because
     # we don't wany any type that MyPy thinks is an expr to be used with __eq__.
@@ -269,24 +382,27 @@ class RuntimeExpr:
 # Define each of the special methods, since we have already declared them for pretty printing
 for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call__"]:
 
-    def _special_method(self: RuntimeExpr, *args: ArgType, __name: str = name) -> RuntimeExpr:
-        return RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, __name)(*args)
+    def _special_method(self: RuntimeExpr, *args: object, __name: str = name) -> RuntimeExpr:
+        # First, try to resolve as preserved method
+        try:
+            method = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods[__name]
+        except KeyError:
+            return RuntimeMethod(self.__egg_decls__, self.__egg_typed_expr__, __name)(*args)
+        else:
+            return method(self, *args)
 
     setattr(RuntimeExpr, name, _special_method)
 
+for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__hash__", "__iter__"]:
 
-# Args can either be expressions or literals which are automatically promoted
-ArgType = Union[RuntimeExpr, int, str, float]
+    def _preserved_method(self: RuntimeExpr, __name: str = name):
+        try:
+            method = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods[__name]
+        except KeyError:
+            raise TypeError(f"{self.__egg_typed_expr__.tp.name} has no method {__name}")
+        return method(self)
 
-
-def _resolve_literal(decls: ModuleDeclarations, arg: ArgType) -> RuntimeExpr:
-    if isinstance(arg, int):
-        return RuntimeExpr(decls, TypedExprDecl(JustTypeRef("i64"), LitDecl(arg)))
-    elif isinstance(arg, float):
-        return RuntimeExpr(decls, TypedExprDecl(JustTypeRef("f64"), LitDecl(arg)))
-    elif isinstance(arg, str):
-        return RuntimeExpr(decls, TypedExprDecl(JustTypeRef("String"), LitDecl(arg)))
-    return arg
+    setattr(RuntimeExpr, name, _preserved_method)
 
 
 def _resolve_callable(callable: object) -> CallableRef:
