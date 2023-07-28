@@ -4,6 +4,22 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
 ## Unreleased
 
+- Added initial supported for Python objects [#31](https://github.com/metadsl/egglog-python/pull/31)
+
+  - Renamed `BaseExpr` to `Expr` for succinctness
+  - Add [slides for zoom presentation with Open Teams](explanation/2023_07_presentation)
+  - Started adding [tutorial for using with array API and sklearn](tutorials/array-api), using this to drive
+    the support for more Python integration
+  - Added a PyObject sort with the `save_object` and `load_object` egraphs methods and the `exec`
+  - Added more general mechanism to upcast Python arguments into egglog expressions, by registering `converter`s
+  - Added support for default arguments (this required refactoring declerations so that pretty printing can lookup expressions)
+  - Added support for properties
+  - Added support for passing args as keywords
+  - Add support for pure Python methods, using the `preserve` kwarg to implement functions like `__bool__` on expressions.
+  - Fix `__str__` method when pretty printing breaks.
+  - Added to/from i64 to i64 methods.
+  - Upgraded `egg-smol` dependency ([changes](https://github.com/saulshanabrook/egg-smol/compare/353c4387640019bd2066991ee0488dc6d5c54168...2ac80cb1162c61baef295d8e6d00351bfe84883f))
+
 ## 0.5.1 (2023-07-18)
 
 - Added support for negation on `f64` sort
