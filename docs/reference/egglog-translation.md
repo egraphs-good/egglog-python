@@ -131,6 +131,35 @@ def my_foo() -> i64:
 
 The static types on the decorator preserve the type of the underlying function, so that they can all be checked statically.
 
+### Keyword arguments
+
+All arguments for egg functions must be declared positional or keyword (the default argument type) currently. You can pass arguments variably or also as keyword arguments:
+
+```{code-cell} python
+# egg: (function bar (i64 i64) i64)
+@egraph.function
+def bar(a: i64Like, b: i64Like) -> i64:
+    pass
+
+# egg: (bar 1 2)
+bar(1, 2)
+bar(b=2, a=1)
+```
+
+### Default arguments
+
+Default argument values are also supported. They are not translated to egglog definition, which has no notion of optional values. Instead, they are added to the args when the functions is called.
+
+```{code-cell} python
+# egg: (function bar (i64 i64) i64)
+@egraph.function
+def baz(a: i64Like, b: i64Like=i64(0)) -> i64:
+    pass
+
+# egg: (baz 1 0)
+baz(1)
+```
+
 ### Datatype functions
 
 In egglog, the `(datatype ...)` command can also be used to declare functions. All of the functions declared in this block return the type of the declared datatype. Similarily, in Python, we can use the `@egraph.class_` decorator on a class to define a number of functions associated with that class. These
