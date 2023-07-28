@@ -247,7 +247,7 @@ def _call(
             for arg, tp in zip_longest(args, fn_decl.arg_types, fillvalue=fn_decl.var_arg_type)
         ]
     else:
-        upcasted_args = cast(list[RuntimeExpr], args)
+        upcasted_args = cast("list[RuntimeExpr]", args)
     arg_decls = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
 
     arg_types = [decl.tp for decl in arg_decls]
