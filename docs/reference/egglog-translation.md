@@ -12,7 +12,6 @@ The currently unsupported features are:
 
 - Proof mode: Not currently tested, but could add support if needed.
 - Naive mode: Not currently exposed, but could add support
-- `(include ...)`: This command includes another `.egg` file, so not sure how this would translate to Python.
 - `(output ...)`: No examples in the tests, so not sure how this works.
 - `(calc ...)`: Could be implemented, but haven't yet.
 
@@ -145,14 +144,14 @@ Note that by default, the egg name for any method is the Python class name combi
 #   (Num i64)
 #   (Var String)
 #   (Add Math Math)
-#   (Mul Math Math))
+#   (Mul Math Math)
+#   (Neg Math))
 
 @egraph.class_
 class Math(Expr):
     @egraph.method(egg_fn="Num")
     def __init__(self, v: i64Like):
         ...
-
     @egraph.method(egg_fn="Var")
     @classmethod
     def var(cls, v: StringLike) -> Math:
@@ -166,8 +165,28 @@ class Math(Expr):
     def __mul__(self, other: Math) -> Math:
         ...
 
-# egg:  (Mul (Num 2) (Add (Var "x") (Num 3))))
-Math(2) * (Math.var("x") + Math(3))
+    @egraph.method(egg_fn="Neg")
+    @property
+    def neg(self) -> Math:
+        ...
+
+# egg: (Neg (Mul (Num 2) (Add (Var "x") (Num 3)))))
+(Math(2) * (Math.var("x") + Math(3))).neg
+```
+
+As shown above, we can also use the `@classmethod` and `@property` decorators to define class methods and properties.
+
+#### Custom Type Promotion
+
+Similar to how an `int` can be automatically upcasted to an `i64`, we also support registering conversion to your custom types. For example:
+
+```{code-cell} python
+converter(int, Math, Math)
+converter(str, Math, Math.var)
+
+Math(2) + 30 + "x"
+# equal to
+Math(2) + Math(i64(30)) + Math.var(String("x"))
 ```
 
 ### Declarations
@@ -328,7 +347,7 @@ Since it uses a fluent API, static type checkers can verify that the type of the
 
 The `(birewrite ...)` command in egglog is syntactic sugar for creating two rewrites, one in each direction. In Python, we can use the `birewrite(expr).to(expr, *when)` function to create two rules that rewrite in each direction.
 
-### Using funcitons to define vars
+### Using functions to define vars
 
 Instead of defining variables with `vars_`, we can also use functions to define variables. This can be more succinct
 and also will make sure the variables won't be used outside of the scope of the function.
