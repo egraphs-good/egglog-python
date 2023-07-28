@@ -393,7 +393,7 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
 
     setattr(RuntimeExpr, name, _special_method)
 
-for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__hash__", "__iter__"]:
+for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__hash__", "__iter__", "__index__"]:
 
     def _preserved_method(self: RuntimeExpr, __name: str = name):
         try:
