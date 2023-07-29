@@ -32,6 +32,7 @@ def test_function_call():
                     (),
                     (),
                     TypeRefWithVars("i64"),
+                    False,
                 ),
             },
         )
@@ -60,6 +61,7 @@ def test_classmethod_call():
                             (),
                             (),
                             TypeRefWithVars("Map", (K, V)),
+                            False,
                         )
                     },
                 ),
@@ -98,6 +100,7 @@ def test_expr_special():
                             (),
                             (None, None),
                             TypeRefWithVars("i64"),
+                            False,
                         )
                     },
                     class_methods={
@@ -106,6 +109,7 @@ def test_expr_special():
                             (),
                             (None,),
                             TypeRefWithVars("i64"),
+                            False,
                         )
                     },
                 ),

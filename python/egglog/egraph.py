@@ -86,6 +86,8 @@ IGNORED_ATTRIBUTES = {
 
 _BUILTIN_DECLS: Declarations | None = None
 
+ALWAYS_MUTATES_SELF = {"__setitem__", "__delitem__"}
+
 
 @dataclass
 class _BaseModule(ABC):
@@ -189,12 +191,14 @@ class _BaseModule(ABC):
                 default = method.default
                 merge = method.merge
                 on_merge = method.on_merge
+                mutates_first_arg = method.mutates_self
                 if method.preserve:
                     self._mod_decls.register_preserved_method(cls_name, method_name, fn)
                     continue
             else:
                 fn = method
                 egg_fn, cost, default, merge, on_merge = None, None, None, None, None
+                mutates_first_arg = False
             if isinstance(fn, classmethod):
                 fn = fn.__func__
                 is_classmethod = True
@@ -225,6 +229,7 @@ class _BaseModule(ABC):
                 cost,
                 merge,
                 on_merge,
+                mutates_first_arg or method_name in ALWAYS_MUTATES_SELF,
                 "cls" if is_classmethod and not is_init else slf_type_ref,
                 parameters,
                 is_init,
@@ -264,6 +269,7 @@ class _BaseModule(ABC):
         cost: Optional[int] = None,
         merge: Optional[Callable[[Any, Any], Any]] = None,
         on_merge: Optional[Callable[[Any, Any], Iterable[ActionLike]]] = None,
+        mutates_self: bool = False,
     ) -> Callable[[CALLABLE], CALLABLE]:
         ...
 
@@ -276,6 +282,7 @@ class _BaseModule(ABC):
         default: Optional[EXPR] = None,
         merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
         on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
+        mutates_self: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
         ...
 
@@ -288,8 +295,9 @@ class _BaseModule(ABC):
         merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
         on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
         preserve: bool = False,
+        mutates_self: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
-        return lambda fn: _WrappedMethod(egg_fn, cost, default, merge, on_merge, fn, preserve)
+        return lambda fn: _WrappedMethod(egg_fn, cost, default, merge, on_merge, fn, preserve, mutates_self)
 
     @overload
     def function(self, fn: CALLABLE, /) -> CALLABLE:
@@ -303,6 +311,7 @@ class _BaseModule(ABC):
         cost: Optional[int] = None,
         merge: Optional[Callable[[Any, Any], Any]] = None,
         on_merge: Optional[Callable[[Any, Any], Iterable[ActionLike]]] = None,
+        mutates_first_arg: bool = False,
     ) -> Callable[[CALLABLE], CALLABLE]:
         ...
 
@@ -315,6 +324,7 @@ class _BaseModule(ABC):
         default: Optional[EXPR] = None,
         merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
         on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
+        mutates_first_arg: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
         ...
 
@@ -335,6 +345,7 @@ class _BaseModule(ABC):
         self,
         fn: Callable[..., RuntimeExpr],
         hint_locals: dict[str, Any],
+        mutates_first_arg: bool = False,
         egg_fn: Optional[str] = None,
         cost: Optional[int] = None,
         default: Optional[RuntimeExpr] = None,
@@ -346,7 +357,9 @@ class _BaseModule(ABC):
         """
         name = fn.__name__
         # Save function decleartion
-        self._register_function(FunctionRef(name), egg_fn, fn, hint_locals, default, cost, merge, on_merge)
+        self._register_function(
+            FunctionRef(name), egg_fn, fn, hint_locals, default, cost, merge, on_merge, mutates_first_arg
+        )
         # Return a runtime function which will act like the decleration
         return RuntimeFunction(self._mod_decls, name)
 
@@ -362,6 +375,7 @@ class _BaseModule(ABC):
         cost: Optional[int],
         merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]],
         on_merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]]],
+        mutates_first_arg: bool,
         # The first arg is either cls, for a classmethod, a self type, or none for a function
         first_arg: Literal["cls"] | TypeOrVarRef | None = None,
         cls_typevars: list[TypeVar] = [],
@@ -376,13 +390,6 @@ class _BaseModule(ABC):
         if cls_type_and_name:
             hint_globals[cls_type_and_name[1]] = cls_type_and_name[0]
         hints = get_type_hints(fn, hint_globals, hint_locals)
-        # If this is an init fn use the first arg as the return type
-        if is_init:
-            if not isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)):
-                raise ValueError("Init function must have a self type")
-            return_type = first_arg
-        else:
-            return_type = self._resolve_type_annotation(hints["return"], cls_typevars, cls_type_and_name)
 
         params = list(signature(fn).parameters.values())
         arg_names = tuple(t.name for t in params)
@@ -421,6 +428,17 @@ class _BaseModule(ABC):
         if isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)) and not is_init:
             arg_types = (first_arg,) + arg_types
 
+        # If this is an init fn use the first arg as the return type
+        if is_init:
+            assert not mutates_first_arg
+            if not isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)):
+                raise ValueError("Init function must have a self type")
+            return_type = first_arg
+        elif mutates_first_arg:
+            return_type = arg_types[0]
+        else:
+            return_type = self._resolve_type_annotation(hints["return"], cls_typevars, cls_type_and_name)
+
         default_decl = None if default is None else default.__egg_typed_expr__.expr
         merge_decl = (
             None
@@ -446,6 +464,7 @@ class _BaseModule(ABC):
             arg_types=arg_types,
             arg_names=arg_names,
             arg_defaults=arg_defaults,
+            mutates_first_arg=mutates_first_arg,
         )
         self._process_commands(
             self._mod_decls.register_function_callable(
@@ -538,7 +557,9 @@ class _BaseModule(ABC):
         Defines a relation, which is the same as a function which returns unit.
         """
         arg_types = tuple(self._resolve_type_annotation(cast(object, tp), [], None) for tp in tps)
-        fn_decl = FunctionDecl(arg_types, None, tuple(None for _ in tps), TypeRefWithVars("Unit"))
+        fn_decl = FunctionDecl(
+            arg_types, None, tuple(None for _ in tps), TypeRefWithVars("Unit"), mutates_first_arg=False
+        )
         commands = self._mod_decls.register_function_callable(
             FunctionRef(name), fn_decl, egg_fn, cost=None, default=None, merge=None, merge_action=[]
         )
@@ -811,6 +832,7 @@ class _WrappedMethod(Generic[P, EXPR]):
     on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]]
     fn: Callable[P, EXPR]
     preserve: bool
+    mutates_self: bool
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> EXPR:
         raise NotImplementedError("We should never call a wrapped method. Did you forget to wrap the class?")
@@ -965,7 +987,7 @@ class Rule(Command):
     def __str__(self) -> str:
         head_str = ", ".join(map(str, self.head))
         body_str = ", ".join(map(str, self.body))
-        return f"rule({head_str}).then({body_str})"
+        return f"rule({body_str}).then({head_str})"
 
     def _to_egg_command(self) -> bindings.RuleCommand:
         return bindings.RuleCommand(
