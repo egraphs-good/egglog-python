@@ -160,6 +160,43 @@ def baz(a: i64Like, b: i64Like=i64(0)) -> i64:
 baz(1)
 ```
 
+### Mutating arguments
+
+In order to support Python functions and methods which mutate their arguments, you can pass in the `mutate_first_arg` keyword argument to the `@egraph.function` decorator and the `mutates_self` argument to the `@egraph.method` decorator. This will cause the first argument to be mutated in place, instead of being copied.
+
+```{code-cell} python
+from copy import copy
+mutate_egraph = EGraph()
+
+@mutate_egraph.class_
+class Int(Expr):
+    def __init__(self, i: i64Like) -> None:
+        ...
+
+    def __add__(self, other: Int) -> Int:  # type: ignore[empty-body]
+        ...
+
+@mutate_egraph.function(mutates_first_arg=True)
+def incr(x: Int) -> None:
+    ...
+
+i = var("i", Int)
+incr_i = copy(i)
+incr(incr_i)
+
+x = Int(10)
+incr(x)
+mutate_egraph.register(rewrite(incr_i).to(i + Int(1)), x)
+mutate_egraph.run(10)
+mutate_egraph.check(eq(x).to(Int(10) + Int(1)))
+mutate_egraph
+```
+
+Any function which mutates its first argument must return `None`. In egglog, this is translated into a function which
+returns the type of its first argument.
+
+Note that dunder methods such as `__setitem__` will automatically be marked as mutating their first argument.
+
 ### Datatype functions
 
 In egglog, the `(datatype ...)` command can also be used to declare functions. All of the functions declared in this block return the type of the declared datatype. Similarily, in Python, we can use the `@egraph.class_` decorator on a class to define a number of functions associated with that class. These
@@ -534,7 +571,9 @@ egraph.register(
 # (extract y :variants 2)
 y = egraph.define("y", Math(6) + Math(2) * Math.var("x"))
 egraph.run(10)
-egraph.extract_multiple(y, 2)
+# TODO: For some reason this is extracting temp vars
+# egraph.extract_multiple(y, 2)
+egraph
 ```
 
 ### Simplify

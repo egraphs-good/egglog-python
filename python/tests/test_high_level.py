@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import importlib
 import pathlib
+from copy import copy
 from typing import ClassVar
 
 import pytest
 from egglog import *
+from egglog.declarations import (
+    CallDecl,
+    FunctionRef,
+    JustTypeRef,
+    MethodRef,
+    TypedExprDecl,
+)
 
 EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))
 
@@ -331,3 +339,57 @@ def test_f64_negation() -> None:
 def test_not_equals():
     egraph = EGraph()
     egraph.check(i64(10) != i64(2))
+
+
+class TestMutate:
+    def test_setitem_defaults(self):
+        egraph = EGraph()
+
+        @egraph.class_
+        class Foo(Expr):
+            def __init__(self) -> None:
+                ...
+
+            def __setitem__(self, key: i64Like, value: i64Like) -> None:
+                ...
+
+        foo = Foo()
+        foo[10] = 20
+        assert str(foo) == "_Foo_1 = copy(Foo())\n_Foo_1[10] = 20\n_Foo_1"
+        assert expr_parts(foo) == TypedExprDecl(
+            JustTypeRef("Foo"),
+            CallDecl(MethodRef("Foo", "__setitem__"), (expr_parts(Foo()), expr_parts(i64(10)), expr_parts(i64(20)))),
+        )
+
+    def test_function(self):
+        egraph = EGraph()
+
+        @egraph.class_
+        class Math(Expr):
+            def __init__(self, i: i64Like) -> None:
+                ...
+
+            def __add__(self, other: Math) -> Math:  # type: ignore[empty-body]
+                ...
+
+        @egraph.function(mutates_first_arg=True)
+        def incr(x: Math) -> None:
+            ...
+
+        x = Math(i64(10))
+        x_copied = copy(x)
+        incr(x)
+        assert expr_parts(x_copied) == expr_parts(Math(i64(10)))
+        assert expr_parts(x) == TypedExprDecl(
+            JustTypeRef("Math"),
+            CallDecl(FunctionRef("incr"), (expr_parts(x_copied),)),
+        )
+        assert str(x) == "_Math_1 = copy(Math(10))\nincr(_Math_1)\n_Math_1"
+        assert str(x + Math(10)) == "_Math_1 = copy(Math(10))\nincr(_Math_1)\n_Math_1 + Math(10)"
+
+        i, j = vars_("i j", Math)
+        incr_i = copy(i)
+        incr(incr_i)
+        egraph.register(rewrite(incr_i).to(i + Math(1)), x)
+        egraph.run(10)
+        egraph.check(eq(x).to(Math(10) + Math(1)))
