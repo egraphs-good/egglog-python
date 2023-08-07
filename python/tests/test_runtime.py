@@ -39,7 +39,7 @@ def test_function_call():
     )
     one = RuntimeFunction(decls, "one")
     assert (
-        one().__egg_typed_expr__
+        one().__egg_typed_expr__  # type: ignore
         == RuntimeExpr(decls, TypedExprDecl(JustTypeRef("i64"), CallDecl(FunctionRef("one")))).__egg_typed_expr__
     )
 
@@ -74,7 +74,7 @@ def test_classmethod_call():
     i64 = RuntimeClass(decls, "i64")
     unit = RuntimeClass(decls, "unit")
     assert (
-        Map[i64, unit].create().__egg_typed_expr__
+        Map[i64, unit].create().__egg_typed_expr__  # type: ignore
         == RuntimeExpr(
             decls,
             TypedExprDecl(
