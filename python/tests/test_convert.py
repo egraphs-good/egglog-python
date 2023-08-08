@@ -1,6 +1,4 @@
-import numpy as np
 from egglog import *
-from egglog.runtime import CONVERSIONS
 
 
 def test_conversion_custom_metaclass():
@@ -18,7 +16,6 @@ def test_conversion_custom_metaclass():
             ...
 
     converter(MyMeta, MyTypeExpr, lambda x: MyTypeExpr())
-    print(CONVERSIONS)
     assert expr_parts(convert(MyType(), MyTypeExpr)) == expr_parts(MyTypeExpr())
 
 
