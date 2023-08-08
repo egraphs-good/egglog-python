@@ -94,7 +94,7 @@ def _resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
     else:
         arg_type = type(arg)
         # If this value has a custom metaclass, let's use that as our index instead of the type
-        if type(arg_type) != type:
+        if type(arg_type) != type:  # noqa: E721
             arg_type = type(arg_type)
 
     # If we have any type variables, dont bother trying to resolve the literal, just return the arg
