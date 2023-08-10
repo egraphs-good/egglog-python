@@ -393,3 +393,22 @@ class TestMutate:
         egraph.register(rewrite(incr_i).to(i + Math(1)), x)
         egraph.run(10)
         egraph.check(eq(x).to(Math(10) + Math(1)))
+
+
+def test_reflected_binary_method():
+    egraph = EGraph()
+
+    @egraph.class_
+    class Math(Expr):
+        def __init__(self) -> None:
+            ...
+
+        def __radd__(self, other: i64Like) -> Math:  # type: ignore[empty-body]
+            ...
+
+    expr = 10 + Math()
+    assert str(expr) == "10 + Math()"
+    assert expr_parts(expr) == TypedExprDecl(
+        JustTypeRef("Math"),
+        CallDecl(MethodRef("Math", "__radd__"), (expr_parts(Math()), expr_parts(i64(10)))),
+    )

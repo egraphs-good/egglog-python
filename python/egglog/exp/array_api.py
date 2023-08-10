@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import numbers
 import sys
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, Iterator, TypeVar
 
 import numpy as np
 from egglog import *
@@ -21,6 +21,10 @@ egraph = EGraph()
 T = TypeVar("T", bound=Expr)
 
 runtime_ruleset = egraph.ruleset("runtime")
+
+
+# For now, have this global e-graph for this module, a bit hacky, but works as a proof of concept.
+# We need a global e-graph so that we have the preserved methods reference it to extract when they are called.
 
 
 def extract_py(e: Expr) -> Any:
@@ -193,6 +197,9 @@ class Int(Expr):
     def __sub__(self, other: Int) -> Int:
         ...
 
+    def __rtruediv__(self, other: Int) -> Int:
+        ...
+
     @egraph.method(preserve=True)
     def __int__(self) -> int:
         return extract_py(self)
@@ -237,6 +244,7 @@ def _int(i: i64, j: i64, r: Bool, o: Int):
 
 
 converter(int, Int, lambda x: Int(x))
+converter(float, Int, lambda x: Int(int(x)))
 
 assert expr_parts(egraph.simplify(Int(1) == Int(1), 10)) == expr_parts(TRUE)
 assert expr_parts(egraph.simplify(Int(1) == Int(2), 10)) == expr_parts(FALSE)
@@ -440,6 +448,11 @@ class NDArray(Expr):
     def __len__(self) -> int:
         return int(self.size)
 
+    @egraph.method(preserve=True)
+    def __iter__(self) -> Iterator[NDArray]:
+        for i in range(len(self)):
+            yield self[IndexKey.int(Int(i))]
+
     def __getitem__(self, key: IndexKey) -> NDArray:
         ...
 
@@ -447,6 +460,9 @@ class NDArray(Expr):
         ...
 
     def __truediv__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __matmul__(self, other: NDArray) -> NDArray:
         ...
 
     def __sub__(self, other: NDArray) -> NDArray:
@@ -669,7 +685,7 @@ def _unique_values(x: NDArray):
 
 
 @egraph.function
-def concat(arrays: TupleNDArray) -> NDArray:
+def concat(arrays: TupleNDArray, axis: OptionalInt = OptionalInt.none) -> NDArray:
     ...
 
 
@@ -706,6 +722,11 @@ def _astype(x: NDArray, dtype: DType, i: i64):
         rewrite(sum(astype(x, dtype))).to(astype(sum(x), dtype)),
         rewrite(astype(NDArray.scalar_int(Int(i)), float64)).to(NDArray.scalar_float(Float(f64.from_i64(i)))),
     ]
+
+
+@egraph.function
+def std(x: NDArray, axis: OptionalTupleInt = OptionalTupleInt.none) -> NDArray:
+    ...
 
 
 @egraph.function

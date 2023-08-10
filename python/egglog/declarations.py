@@ -57,13 +57,30 @@ BINARY_METHODS = {
     "__truediv__": "/",
     "__floordiv__": "//",
     "__mod__": "%",
-    "__divmod__": "divmod",
+    # TODO: Support divmod, with tuple return value
+    # "__divmod__": "divmod",
+    # TODO: Three arg power
     "__pow__": "**",
     "__lshift__": "<<",
     "__rshift__": ">>",
     "__and__": "&",
     "__xor__": "^",
     "__or__": "|",
+}
+REFECLTED_BINARY_METHODS = {
+    "__radd__": "+",
+    "__rsub__": "-",
+    "__rmul__": "*",
+    "__rmatmul__": "@",
+    "__rtruediv__": "/",
+    "__rfloordiv__": "//",
+    "__rmod__": "%",
+    "__rpow__": "**",
+    "__rlshift__": "<<",
+    "__rrshift__": ">>",
+    "__rand__": "&",
+    "__rxor__": "^",
+    "__ror__": "|",
 }
 UNARY_METHODS = {
     "__pos__": "+",
@@ -628,6 +645,12 @@ class CallDecl:
             elif name in BINARY_METHODS:
                 assert len(args) == 1
                 expr = f"{slf.pretty(context )} {BINARY_METHODS[name]} {args[0].pretty(context, wrap_lit=False)}"
+                return expr if not parens else f"({expr})"
+            elif name in REFECLTED_BINARY_METHODS:
+                assert len(args) == 1
+                expr = (
+                    f"{args[0].pretty(context, wrap_lit=False)} {REFECLTED_BINARY_METHODS[name]} {slf.pretty(context)}"
+                )
                 return expr if not parens else f"({expr})"
             elif name == "__getitem__":
                 assert len(args) == 1
