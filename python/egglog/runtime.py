@@ -70,7 +70,41 @@ def converter(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V]) -> Non
     to_type_name = process_tp(to_type)
     if not isinstance(to_type_name, JustTypeRef):
         raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
-    CONVERSIONS[(process_tp(from_type), to_type_name)] = fn
+    _register_converter(process_tp(from_type), to_type_name, fn)
+
+
+def _register_converter(a: Type | JustTypeRef, b: JustTypeRef, a_b: Callable) -> None:
+    """
+    Registers a converter from some type to an egglog type, if not already registered.
+
+    Also adds transitive converters, i.e. if registering A->B and there is already B->C, then A->C will be registered.
+    Also, if registering A->B and there is already D->A, then D->B will be registered.
+    """
+    if a == b or (a, b) in CONVERSIONS:
+        return
+    CONVERSIONS[(a, b)] = a_b
+    for (c, d), c_d in list(CONVERSIONS.items()):
+        if b == c:
+            _register_converter(a, d, _ComposedConverter(a_b, c_d))
+        if a == d:
+            _register_converter(c, b, _ComposedConverter(c_d, a_b))
+
+
+@dataclass
+class _ComposedConverter:
+    """
+    A converter which is composed of multiple converters.
+
+    _ComposeConverter(a_b, b_c) is equivalent to lambda x: b_c(a_b(x))
+
+    We use the dataclass instead of the lambda to make it easier to debug.
+    """
+
+    a_b: Callable
+    b_c: Callable
+
+    def __call__(self, x: object) -> object:
+        return self.b_c(self.a_b(x))
 
 
 def convert(source: object, target: type[V]) -> V:
