@@ -82,7 +82,7 @@ IGNORED_ATTRIBUTES = {
     "__annotations__",
     "__hash__",
     # Ignore all reflected binary method
-    *REFLECTED_BINARY_METHODS.keys()
+    *REFLECTED_BINARY_METHODS.keys(),
 }
 
 
