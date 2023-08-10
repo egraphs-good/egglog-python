@@ -648,7 +648,9 @@ class CallDecl:
                 return expr if not parens else f"({expr})"
             elif name in REFECLTED_BINARY_METHODS:
                 assert len(args) == 1
-                expr = f"{args[0].pretty(context, wrap_lit=False)} {REFECLTED_BINARY_METHODS[name]} {slf.pretty(context)}"
+                expr = (
+                    f"{args[0].pretty(context, wrap_lit=False)} {REFECLTED_BINARY_METHODS[name]} {slf.pretty(context)}"
+                )
                 return expr if not parens else f"({expr})"
             elif name == "__getitem__":
                 assert len(args) == 1
