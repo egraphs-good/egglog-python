@@ -33,11 +33,31 @@ def extract_py(e: Expr) -> Any:
     egraph.run(run(limit=10).saturate())
     final_object = egraph.extract(e)
     print(f"  -> {final_object}")
-    with egraph:
-        egraph.run((run(runtime_ruleset, limit=10) + run(limit=10)).saturate())
-        print(f"     -> {egraph.extract(final_object)}")
-        res = egraph.load_object(egraph.extract(final_object.to_py()))  # type: ignore[attr-defined]
-        return res
+    # with egraph:
+    egraph.run((run(runtime_ruleset, limit=10) + run(limit=10)).saturate())
+    # Run saturation again b/c sometimes it doesn't work the first time.
+    # final_object = egraph.extract(egraph.extract(final_object))
+    # egraph.run(run(limit=10).saturate())
+    # final_object: Expr = egraph.extract(final_object)
+    # egraph.register(final_object.to_py())
+    # egraph.run(run(limit=10).saturate())
+
+    # try:
+    #     x = str((Int(1) * Int(3)) == Int(2))
+    # except Exception:
+    #     pass
+    # else:
+    #     if str(egraph.extract(final_object)) == x:
+    #         final_object = (Int(1) * Int(3)) == Int(2)
+    # pass
+    # raise Exception("Failed to extract")
+
+    # final_object = egraph.extract(egraph.extract(final_object))
+    # egraph.run(run(limit=10).saturate())
+
+    print(f"     -> {egraph.extract(final_object)}\n")
+    res = egraph.load_object(egraph.extract(final_object.to_py()))  # type: ignore[attr-defined]
+    return res
 
 
 @egraph.class_
@@ -73,6 +93,7 @@ class DType(Expr):
     float64: ClassVar[DType]
     float32: ClassVar[DType]
     int64: ClassVar[DType]
+    int32: ClassVar[DType]
     object: ClassVar[DType]
 
     def __eq__(self, other: DType) -> Bool:  # type: ignore[override]
@@ -81,14 +102,17 @@ class DType(Expr):
 
 float64 = DType.float64
 float32 = DType.float32
+int32 = DType.int32
 int64 = DType.int64
+
+_DTYPES = [float64, float32, int32, int64, DType.object]
 
 converter(type, DType, lambda x: convert(np.dtype(x), DType))
 converter(type(np.dtype), DType, lambda x: getattr(DType, x.name))  # type: ignore[call-overload]
 egraph.register(
     *(
         rewrite(l == r).to(TRUE if expr_parts(l) == expr_parts(r) else FALSE)
-        for l, r in itertools.product([DType.float64, DType.float32, DType.object, DType.int64], repeat=2)
+        for l, r in itertools.product(_DTYPES, repeat=2)
     )
 )
 
@@ -130,14 +154,17 @@ def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
         rewrite(isdtype(DType.float64, IsDtypeKind.string("integral"))).to(FALSE),
         rewrite(isdtype(DType.object, IsDtypeKind.string("integral"))).to(FALSE),
         rewrite(isdtype(DType.int64, IsDtypeKind.string("integral"))).to(TRUE),
+        rewrite(isdtype(DType.int32, IsDtypeKind.string("integral"))).to(TRUE),
         rewrite(isdtype(DType.float32, IsDtypeKind.string("real floating"))).to(TRUE),
         rewrite(isdtype(DType.float64, IsDtypeKind.string("real floating"))).to(TRUE),
         rewrite(isdtype(DType.object, IsDtypeKind.string("real floating"))).to(FALSE),
         rewrite(isdtype(DType.int64, IsDtypeKind.string("real floating"))).to(FALSE),
+        rewrite(isdtype(DType.int32, IsDtypeKind.string("real floating"))).to(FALSE),
         rewrite(isdtype(DType.float32, IsDtypeKind.string("complex floating"))).to(FALSE),
         rewrite(isdtype(DType.float64, IsDtypeKind.string("complex floating"))).to(FALSE),
         rewrite(isdtype(DType.object, IsDtypeKind.string("complex floating"))).to(FALSE),
         rewrite(isdtype(DType.int64, IsDtypeKind.string("complex floating"))).to(FALSE),
+        rewrite(isdtype(DType.int32, IsDtypeKind.string("complex floating"))).to(FALSE),
         rewrite(isdtype(d, IsDtypeKind.NULL)).to(FALSE),
         rewrite(isdtype(d, IsDtypeKind.dtype(d))).to(TRUE),
         rewrite(isdtype(d, k1 | k2)).to(isdtype(d, k1) | isdtype(d, k2)),
@@ -173,22 +200,28 @@ class Int(Expr):
     def __init__(self, value: i64Like) -> None:
         ...
 
+    def __invert__(self) -> Int:
+        ...
+
+    def __lt__(self, other: Int) -> Bool:
+        ...
+
+    def __le__(self, other: Int) -> Bool:
+        ...
+
+    def __eq__(self, other: Int) -> Bool:  # type: ignore[override]
+        ...
+
     # Make != always return a Bool, so that numpy.unique works on a tuple of ints
     # In _unique1d
     @egraph.method(preserve=True)
     def __ne__(self, other: Int) -> bool:  # type: ignore[override]
         return not extract_py(self == other)
 
-    def __eq__(self, other: Int) -> Bool:  # type: ignore[override]
+    def __gt__(self, other: Int) -> Bool:
         ...
 
     def __ge__(self, other: Int) -> Bool:
-        ...
-
-    def __lt__(self, other: Int) -> Bool:
-        ...
-
-    def __gt__(self, other: Int) -> Bool:
         ...
 
     def __add__(self, other: Int) -> Int:
@@ -197,7 +230,79 @@ class Int(Expr):
     def __sub__(self, other: Int) -> Int:
         ...
 
+    def __mul__(self, other: Int) -> Int:
+        ...
+
+    def __matmul__(self, other: Int) -> Int:
+        ...
+
+    def __truediv__(self, other: Int) -> Int:
+        ...
+
+    def __floordiv__(self, other: Int) -> Int:
+        ...
+
+    def __mod__(self, other: Int) -> Int:
+        ...
+
+    def __divmod__(self, other: Int) -> Int:
+        ...
+
+    def __pow__(self, other: Int) -> Int:
+        ...
+
+    def __lshift__(self, other: Int) -> Int:
+        ...
+
+    def __rshift__(self, other: Int) -> Int:
+        ...
+
+    def __and__(self, other: Int) -> Int:
+        ...
+
+    def __xor__(self, other: Int) -> Int:
+        ...
+
+    def __or__(self, other: Int) -> Int:
+        ...
+
+    def __radd__(self, other: Int) -> Int:
+        ...
+
+    def __rsub__(self, other: Int) -> Int:
+        ...
+
+    def __rmul__(self, other: Int) -> Int:
+        ...
+
+    def __rmatmul__(self, other: Int) -> Int:
+        ...
+
     def __rtruediv__(self, other: Int) -> Int:
+        ...
+
+    def __rfloordiv__(self, other: Int) -> Int:
+        ...
+
+    def __rmod__(self, other: Int) -> Int:
+        ...
+
+    def __rpow__(self, other: Int) -> Int:
+        ...
+
+    def __rlshift__(self, other: Int) -> Int:
+        ...
+
+    def __rrshift__(self, other: Int) -> Int:
+        ...
+
+    def __rand__(self, other: Int) -> Int:
+        ...
+
+    def __rxor__(self, other: Int) -> Int:
+        ...
+
+    def __ror__(self, other: Int) -> Int:
         ...
 
     @egraph.method(preserve=True)
@@ -241,6 +346,15 @@ def _int(i: i64, j: i64, r: Bool, o: Int):
 
     yield rewrite(Int(i) + Int(j)).to(Int(i + j))
     yield rewrite(Int(i) - Int(j)).to(Int(i - j))
+    yield rewrite(Int(i) * Int(j)).to(Int(i * j))
+    yield rewrite(Int(i) / Int(j)).to(Int(i / j))
+    yield rewrite(Int(i) % Int(j)).to(Int(i % j))
+    yield rewrite(Int(i) & Int(j)).to(Int(i & j))
+    yield rewrite(Int(i) | Int(j)).to(Int(i | j))
+    yield rewrite(Int(i) ^ Int(j)).to(Int(i ^ j))
+    yield rewrite(Int(i) << Int(j)).to(Int(i << j))
+    yield rewrite(Int(i) >> Int(j)).to(Int(i >> j))
+    yield rewrite(~Int(i)).to(Int(~i))
 
 
 converter(int, Int, lambda x: Int(x))
@@ -459,25 +573,104 @@ class NDArray(Expr):
     def __setitem__(self, key: IndexKey, value: NDArray) -> None:
         ...
 
-    def __truediv__(self, other: NDArray) -> NDArray:
+    def __lt__(self, other: NDArray) -> NDArray:
         ...
 
-    def __matmul__(self, other: NDArray) -> NDArray:
+    def __le__(self, other: NDArray) -> NDArray:
         ...
 
-    def __sub__(self, other: NDArray) -> NDArray:
+    def __eq__(self, other: NDArray) -> NDArray:  # type: ignore[override]
+        ...
+
+    # TODO: Add support for overloaded __ne__
+    # def __ne__(self, other: NDArray) -> NDArray:  # type: ignore[override]
+    #     ...
+
+    def __gt__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __ge__(self, other: NDArray) -> NDArray:
         ...
 
     def __add__(self, other: NDArray) -> NDArray:
         ...
 
-    def __lt__(self, other: NDArray) -> NDArray:
+    def __sub__(self, other: NDArray) -> NDArray:
         ...
 
-    def __gt__(self, other: NDArray) -> NDArray:
+    def __mul__(self, other: NDArray) -> NDArray:
         ...
 
-    def __eq__(self, other: NDArray) -> NDArray:  # type: ignore[override]
+    def __matmul__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __truediv__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __floordiv__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __mod__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __divmod__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __pow__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __lshift__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rshift__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __and__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __xor__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __or__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __radd__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rsub__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rmul__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rmatmul__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rtruediv__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rfloordiv__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rmod__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rpow__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rlshift__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rrshift__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rand__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __rxor__(self, other: NDArray) -> NDArray:
+        ...
+
+    def __ror__(self, other: NDArray) -> NDArray:
         ...
 
     @classmethod
@@ -492,6 +685,16 @@ class NDArray(Expr):
     def scalar_bool(cls, other: Bool) -> NDArray:
         ...
 
+    def to_int(self) -> Int:
+        ...
+
+    @property
+    def T(self) -> NDArray:
+        """
+        https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.array.T.html#array_api.array.T
+        """
+        ...
+
 
 @egraph.function
 def ndarray_index(x: NDArray) -> IndexKey:
@@ -503,6 +706,7 @@ converter(NDArray, IndexKey, ndarray_index)
 
 converter(Float, NDArray, NDArray.scalar_float)
 converter(Int, NDArray, NDArray.scalar_int)
+converter(NDArray, Int, lambda n: n.to_int())
 
 
 @egraph.register
@@ -618,8 +822,24 @@ class OptionalTupleInt(Expr):
 
 converter(type(None), OptionalTupleInt, lambda x: OptionalTupleInt.none)
 converter(TupleInt, OptionalTupleInt, lambda x: OptionalTupleInt.some(x))
-# TODO: Don't allow ints to be converted to OptionalTupleInt, and have another type that also unions ints
-converter(int, OptionalTupleInt, lambda x: OptionalTupleInt.some(TupleInt(Int(x))))
+
+
+@egraph.class_
+class OptionalIntOrTuple(Expr):
+    none: ClassVar[OptionalIntOrTuple]
+
+    @classmethod
+    def int(cls, value: Int) -> OptionalIntOrTuple:
+        ...
+
+    @classmethod
+    def tuple(cls, value: TupleInt) -> OptionalIntOrTuple:
+        ...
+
+
+converter(type(None), OptionalIntOrTuple, lambda x: OptionalIntOrTuple.none)
+converter(Int, OptionalIntOrTuple, OptionalIntOrTuple.int)
+converter(TupleInt, OptionalIntOrTuple, OptionalIntOrTuple.tuple)
 
 
 @egraph.function
@@ -639,7 +859,10 @@ def isfinite(x: NDArray) -> NDArray:
 
 
 @egraph.function
-def sum(x: NDArray) -> NDArray:
+def sum(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
+    """
+    https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.sum.html?highlight=sum
+    """
     ...
 
 
@@ -725,7 +948,7 @@ def _astype(x: NDArray, dtype: DType, i: i64):
 
 
 @egraph.function
-def std(x: NDArray, axis: OptionalTupleInt = OptionalTupleInt.none) -> NDArray:
+def std(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
     ...
 
 
@@ -736,6 +959,11 @@ def any(x: NDArray) -> NDArray:
 
 @egraph.function(egg_fn="ndarray-abs")
 def abs(x: NDArray) -> NDArray:
+    ...
+
+
+@egraph.function(egg_fn="ndarray-log")
+def log(x: NDArray) -> NDArray:
     ...
 
 
@@ -768,7 +996,13 @@ def zeros(
 
 
 @egraph.function
-def mean(x: NDArray, axis: OptionalTupleInt = OptionalTupleInt.none) -> NDArray:
+def mean(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
+    ...
+
+
+# TODO: Possibly change names to include modules.
+@egraph.function(egg_fn="ndarray-sqrt")
+def sqrt(x: NDArray) -> NDArray:
     ...
 
 
@@ -776,14 +1010,17 @@ linalg = sys.modules[__name__]
 
 
 @egraph.function
-def svd(x: NDArray) -> TupleNDArray:
+def svd(x: NDArray, full_matrices: Bool = TRUE) -> TupleNDArray:
+    """
+    https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.svd.html
+    """
     ...
 
 
 @egraph.register
-def _linalg(x: NDArray):
+def _linalg(x: NDArray, full_matrices: Bool):
     return [
-        rewrite(svd(x).length()).to(Int(3)),
+        rewrite(svd(x, full_matrices).length()).to(Int(3)),
     ]
 
 

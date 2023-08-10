@@ -242,6 +242,9 @@ class Math(Expr):
 
 As shown above, we can also use the `@classmethod` and `@property` decorators to define class methods and properties.
 
+Note that reflected methods (i.e. `__radd__`) are handled as a special case. If defined, they won't create their own egglog functions.
+Instead, whenever a reflected method is called, we will try to find the corresponding non-reflected method and call that instead.
+
 #### Custom Type Promotion
 
 Similar to how an `int` can be automatically upcasted to an `i64`, we also support registering conversion to your custom types. For example:

@@ -67,20 +67,20 @@ BINARY_METHODS = {
     "__xor__": "^",
     "__or__": "|",
 }
-REFECLTED_BINARY_METHODS = {
-    "__radd__": "+",
-    "__rsub__": "-",
-    "__rmul__": "*",
-    "__rmatmul__": "@",
-    "__rtruediv__": "/",
-    "__rfloordiv__": "//",
-    "__rmod__": "%",
-    "__rpow__": "**",
-    "__rlshift__": "<<",
-    "__rrshift__": ">>",
-    "__rand__": "&",
-    "__rxor__": "^",
-    "__ror__": "|",
+REFLECTED_BINARY_METHODS = {
+    "__radd__": "__add__",
+    "__rsub__": "__sub__",
+    "__rmul__": "__mul__",
+    "__rmatmul__": "__matmul__",
+    "__rtruediv__": "__truediv__",
+    "__rfloordiv__": "__floordiv__",
+    "__rmod__": "__mod__",
+    "__rpow__": "__pow__",
+    "__rlshift__": "__lshift__",
+    "__rrshift__": "__rshift__",
+    "__rand__": "__and__",
+    "__rxor__": "__xor__",
+    "__ror__": "__or__",
 }
 UNARY_METHODS = {
     "__pos__": "+",
@@ -645,12 +645,6 @@ class CallDecl:
             elif name in BINARY_METHODS:
                 assert len(args) == 1
                 expr = f"{slf.pretty(context )} {BINARY_METHODS[name]} {args[0].pretty(context, wrap_lit=False)}"
-                return expr if not parens else f"({expr})"
-            elif name in REFECLTED_BINARY_METHODS:
-                assert len(args) == 1
-                expr = (
-                    f"{args[0].pretty(context, wrap_lit=False)} {REFECLTED_BINARY_METHODS[name]} {slf.pretty(context)}"
-                )
                 return expr if not parens else f"({expr})"
             elif name == "__getitem__":
                 assert len(args) == 1
