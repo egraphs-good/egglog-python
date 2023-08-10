@@ -255,6 +255,8 @@ Math(2) + 30 + "x"
 Math(2) + Math(i64(30)) + Math.var(String("x"))
 ```
 
+Regstering a conversion from A to B will also register all transitively reachable conversions from A to B.
+
 ### Declarations
 
 In egglog, the `(declare ...)` command is syntactic sugar for a nullary function. In Python, these can be declare either as class variables or with the toplevel `egraph.constant` function:

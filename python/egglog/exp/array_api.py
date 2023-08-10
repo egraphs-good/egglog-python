@@ -1,5 +1,3 @@
-# mypy: disable-error-code=empty-body
-
 from __future__ import annotations
 
 import itertools
@@ -12,6 +10,9 @@ from egglog import *
 
 # Pretend that exprs are numbers b/c scikit learn does isinstance checks
 from egglog.runtime import RuntimeExpr
+
+# mypy: disable-error-code=empty-body
+
 
 numbers.Integral.register(RuntimeExpr)
 
@@ -111,7 +112,6 @@ def isdtype(dtype: DType, kind: IsDtypeKind) -> Bool:
     ...
 
 
-converter(np.dtype, IsDtypeKind, lambda x: IsDtypeKind.dtype(convert(x, DType)))
 converter(DType, IsDtypeKind, lambda x: IsDtypeKind.dtype(x))
 converter(str, IsDtypeKind, lambda x: IsDtypeKind.string(x))
 converter(
@@ -286,23 +286,108 @@ def _tuple_int(ti: TupleInt, ti2: TupleInt, i: Int, i2: Int, k: i64):
     ]
 
 
-# HANDLED_FUNCTIONS = {}
+@egraph.class_
+class OptionalInt(Expr):
+    none: ClassVar[OptionalInt]
+
+    @classmethod
+    def some(cls, value: Int) -> OptionalInt:
+        ...
+
+
+converter(type(None), OptionalInt, lambda x: OptionalInt.none)
+converter(Int, OptionalInt, OptionalInt.some)
+
+
+@egraph.class_
+class Slice(Expr):
+    def __init__(self, start: OptionalInt, stop: OptionalInt, step: OptionalInt) -> None:
+        ...
+
+
+converter(
+    slice,
+    Slice,
+    lambda x: Slice(convert(x.start, OptionalInt), convert(x.stop, OptionalInt), convert(x.step, OptionalInt)),
+)
+
+
+@egraph.class_
+class MultiAxisIndexKeyItem(Expr):
+    ELLIPSIS: ClassVar[MultiAxisIndexKeyItem]
+    NONE: ClassVar[MultiAxisIndexKeyItem]
+
+    @classmethod
+    def int(cls, i: Int) -> MultiAxisIndexKeyItem:
+        ...
+
+    @classmethod
+    def slice(cls, slice: Slice) -> MultiAxisIndexKeyItem:
+        ...
+
+
+converter(type(...), MultiAxisIndexKeyItem, lambda x: MultiAxisIndexKeyItem.ELLIPSIS)
+converter(type(None), MultiAxisIndexKeyItem, lambda x: MultiAxisIndexKeyItem.NONE)
+converter(Int, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.int)
+converter(Slice, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.slice)
+
+
+@egraph.class_
+class MultiAxisIndexKey(Expr):
+    def __init__(self, item: MultiAxisIndexKeyItem) -> None:
+        ...
+
+    EMPTY: ClassVar[MultiAxisIndexKey]
+
+    def __add__(self, other: MultiAxisIndexKey) -> MultiAxisIndexKey:
+        ...
+
+
+converter(
+    tuple,
+    MultiAxisIndexKey,
+    lambda x: MultiAxisIndexKey(convert(x[0], MultiAxisIndexKeyItem)) + convert(x[1:], MultiAxisIndexKey)
+    if x
+    else MultiAxisIndexKey.EMPTY,
+)
 
 
 @egraph.class_
 class IndexKey(Expr):
-    @classmethod
-    def tuple_int(cls, ti: TupleInt) -> IndexKey:
-        ...
+    """
+    A key for indexing into an array
+
+    https://data-apis.org/array-api/2022.12/API_specification/indexing.html
+
+    It is equivalent to the following type signature:
+
+    Union[int, slice, ellipsis, Tuple[Union[int, slice, ellipsis, None], ...], array]
+    """
+
+    ELLIPSIS: ClassVar[IndexKey]
 
     @classmethod
     def int(cls, i: Int) -> IndexKey:
         ...
 
+    @classmethod
+    def slice(cls, slice: Slice) -> IndexKey:
+        ...
 
-converter(tuple, IndexKey, lambda x: IndexKey.tuple_int(convert(x, TupleInt)))
-converter(int, IndexKey, lambda x: IndexKey.int(Int(x)))
-converter(Int, IndexKey, lambda x: IndexKey.int(x))
+    # Disabled until we support late binding
+    # @classmethod
+    # def boolean_array(cls, b: NDArray) -> IndexKey:
+    #     ...
+
+    @classmethod
+    def multi_axis(cls, key: MultiAxisIndexKey) -> IndexKey:
+        ...
+
+
+converter(type(...), IndexKey, lambda x: IndexKey.ELLIPSIS)
+converter(Int, IndexKey, IndexKey.int)
+converter(Slice, IndexKey, IndexKey.slice)
+converter(MultiAxisIndexKey, IndexKey, IndexKey.multi_axis)
 
 
 @egraph.class_
@@ -400,8 +485,8 @@ def ndarray_index(x: NDArray) -> IndexKey:
 converter(NDArray, IndexKey, ndarray_index)
 
 
-converter(float, NDArray, lambda x: NDArray.scalar_float(Float(x)))
-converter(int, NDArray, lambda x: NDArray.scalar_int(Int(x)))
+converter(Float, NDArray, NDArray.scalar_float)
+converter(Int, NDArray, NDArray.scalar_int)
 
 
 @egraph.register
@@ -478,7 +563,6 @@ class OptionalBool(Expr):
 
 converter(type(None), OptionalBool, lambda x: OptionalBool.none)
 converter(Bool, OptionalBool, lambda x: OptionalBool.some(x))
-converter(bool, OptionalBool, lambda x: OptionalBool.some(convert(x, Bool)))
 
 
 @egraph.class_
@@ -518,6 +602,7 @@ class OptionalTupleInt(Expr):
 
 converter(type(None), OptionalTupleInt, lambda x: OptionalTupleInt.none)
 converter(TupleInt, OptionalTupleInt, lambda x: OptionalTupleInt.some(x))
+# TODO: Don't allow ints to be converted to OptionalTupleInt, and have another type that also unions ints
 converter(int, OptionalTupleInt, lambda x: OptionalTupleInt.some(TupleInt(Int(x))))
 
 

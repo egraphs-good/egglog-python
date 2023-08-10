@@ -21,6 +21,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
   - Upgraded `egg-smol` dependency ([changes](https://github.com/saulshanabrook/egg-smol/compare/353c4387640019bd2066991ee0488dc6d5c54168...2ac80cb1162c61baef295d8e6d00351bfe84883f))
 
 - Add support for functions which mutates their args, like `__setitem__` [#35](https://github.com/metadsl/egglog-python/pull/35)
+- Makes conversions transitive
 
 ## 0.5.1 (2023-07-18)
 
