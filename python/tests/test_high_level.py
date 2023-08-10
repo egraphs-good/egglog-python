@@ -395,20 +395,30 @@ class TestMutate:
         egraph.check(eq(x).to(Math(10) + Math(1)))
 
 
+def test_builtin_reflected():
+    assert expr_parts(5 + i64(10)) == expr_parts(i64(5) + i64(10))
+
+
 def test_reflected_binary_method():
+    # If we have a reflected binary method, it should be converted into the non-reflected version
     egraph = EGraph()
 
     @egraph.class_
     class Math(Expr):
-        def __init__(self) -> None:
+        def __init__(self, value: i64Like) -> None:
             ...
 
-        def __radd__(self, other: i64Like) -> Math:  # type: ignore[empty-body]
+        def __add__(self, other: Math) -> Math:  # type: ignore[empty-body]
             ...
 
-    expr = 10 + Math()
-    assert str(expr) == "10 + Math()"
+        def __radd__(self, other: Math) -> Math:  # type: ignore[empty-body]
+            ...
+
+    converter(i64, Math, Math)
+
+    expr = 10 + Math(5)  # type: ignore[operator]
+    assert str(expr) == "Math(10) + Math(5)"
     assert expr_parts(expr) == TypedExprDecl(
         JustTypeRef("Math"),
-        CallDecl(MethodRef("Math", "__radd__"), (expr_parts(Math()), expr_parts(i64(10)))),
+        CallDecl(MethodRef("Math", "__add__"), (expr_parts(Math(i64(10))), expr_parts(Math(i64(5))))),
     )

@@ -31,7 +31,7 @@ from typing_extensions import assert_never
 
 from . import bindings, config  # noqa: F401
 from .declarations import *
-from .declarations import BINARY_METHODS, REFECLTED_BINARY_METHODS, UNARY_METHODS
+from .declarations import BINARY_METHODS, REFLECTED_BINARY_METHODS, UNARY_METHODS
 from .type_constraint_solver import *
 
 if TYPE_CHECKING:
@@ -432,12 +432,7 @@ class RuntimeExpr:
 
 
 # Define each of the special methods, since we have already declared them for pretty printing
-for name in (
-    list(BINARY_METHODS)
-    + list(REFECLTED_BINARY_METHODS)
-    + list(UNARY_METHODS)
-    + ["__getitem__", "__call__", "__setitem__", "__delitem__"]
-):
+for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call__", "__setitem__", "__delitem__"]:
 
     def _special_method(self: RuntimeExpr, *args: object, __name: str = name) -> Optional[RuntimeExpr]:
         # First, try to resolve as preserved method
@@ -449,6 +444,16 @@ for name in (
             return method(self, *args)
 
     setattr(RuntimeExpr, name, _special_method)
+
+# For each of the reflected binary methods, translate to the corresponding non-reflected method
+for name, normal in REFLECTED_BINARY_METHODS.items():
+
+    def _reflected_method(self: RuntimeExpr, other: object, __normal: str = normal) -> Optional[RuntimeExpr]:
+        egg_tp = self.__egg_typed_expr__.tp.to_var()
+        converted_other = _resolve_literal(egg_tp, other)
+        return RuntimeMethod(converted_other, __normal)(self)
+
+    setattr(RuntimeExpr, name, _reflected_method)
 
 for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__hash__", "__iter__", "__index__"]:
 

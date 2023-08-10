@@ -23,6 +23,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 - Add support for functions which mutates their args, like `__setitem__` [#35](https://github.com/metadsl/egglog-python/pull/35)
 - Makes conversions transitive [#38](https://github.com/metadsl/egglog-python/pull/38)
 - Add support for reflective operators [#39](https://github.com/metadsl/egglog-python/pull/39)
+  - Make reflective operators map directly to non-reflective [#40](https://github.com/metadsl/egglog-python/pull/40)
 
 ## 0.5.1 (2023-07-18)
 

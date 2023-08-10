@@ -24,7 +24,7 @@ from typing import (
 )
 
 import graphviz
-from egglog.declarations import Declarations
+from egglog.declarations import REFLECTED_BINARY_METHODS, Declarations
 from typing_extensions import ParamSpec, get_args, get_origin
 
 from . import bindings
@@ -81,6 +81,8 @@ IGNORED_ATTRIBUTES = {
     "__orig_bases__",
     "__annotations__",
     "__hash__",
+    # Ignore all reflected binary method
+    *REFLECTED_BINARY_METHODS.keys(),
 }
 
 

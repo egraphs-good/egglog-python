@@ -75,7 +75,37 @@ class i64(Expr):
     def __rshift__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
         ...
 
-    @BUILTINS.method(egg_fn="not-64")
+    def __radd__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    def __rsub__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    def __rmul__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    def __rtruediv__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    def __rmod__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    def __rand__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    def __ror__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    def __rxor__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    def __rlshift__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    def __rrshift__(self, other: i64Like) -> i64:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="not-i64")
     def __invert__(self) -> i64:  # type: ignore[empty-body]
         ...
 
@@ -129,6 +159,21 @@ class f64(Expr):
 
     @BUILTINS.method(egg_fn="%")
     def __mod__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    def __radd__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    def __rsub__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    def __rmul__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    def __rtruediv__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
+        ...
+
+    def __rmod__(self, other: f64Like) -> f64:  # type: ignore[empty-body]
         ...
 
     @BUILTINS.method(egg_fn="<")
