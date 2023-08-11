@@ -38,6 +38,7 @@ __all__ = [
     "TypedExprDecl",
     "ClassDecl",
     "PrettyContext",
+    "register_down_converter",
 ]
 # Special methods which we might want to use as functions
 # Mapping to the operator they represent for pretty printing them
@@ -556,7 +557,7 @@ class LitDecl:
             return bindings.Lit(bindings.String(self.value))
         assert_never(self.value)
 
-    def pretty(self, context: PrettyContext, wrap_lit=True, **kwargs) -> str:
+    def pretty(self, context: PrettyContext, down_convert=True, **kwargs) -> str:
         """
         Returns a string representation of the literal.
 
@@ -565,12 +566,29 @@ class LitDecl:
         if self.value is None:
             return "Unit()"
         if isinstance(self.value, int):
-            return f"i64({self.value})" if wrap_lit else str(self.value)
+            return f"i64({self.value})" if not down_convert else str(self.value)
         if isinstance(self.value, float):
-            return f"f64({self.value})" if wrap_lit else str(self.value)
+            return f"f64({self.value})" if not down_convert else str(self.value)
         if isinstance(self.value, str):
-            return f"String({repr(self.value)})" if wrap_lit else repr(self.value)
+            return f"String({repr(self.value)})" if not down_convert else repr(self.value)
         assert_never(self.value)
+
+
+# Partial mapping of callable refs to functions which down convert them based on their args
+# The args to the down converter
+# TODO: Do we extend lit with other types to represent them?
+# TODO: Do we allow vars?
+# Can we convert args first? Have to turn them back into Runtime objects?
+# Oh gosh but with context... it doesn't work if its say in a tuple. We need that context to be a global.
+# b/c you could have a python tuple with expressions in it, no?
+
+DOWN_CONVERTERS: dict[CallableRef, Callable[..., object]] = {}
+
+
+def register_down_converter(ref: CallableRef, down_convert: Callable[..., object]) -> None:
+    if ref in DOWN_CONVERTERS:
+        raise ValueError("{} already has a down converter", ref)
+    DOWN_CONVERTERS[ref] = down_convert
 
 
 @dataclass(frozen=True)
@@ -612,16 +630,20 @@ class CallDecl:
         egg_fn = mod_decls.get_egg_fn(self.callable)
         return bindings.Call(egg_fn, [a.to_egg(mod_decls) for a in self.args])
 
-    def pretty(self, context: PrettyContext, parens=True, **kwargs) -> str:
+    def pretty(self, context: PrettyContext, parens=True, down_convert=False) -> str:
         """
         Pretty print the call.
 
-        :param parens: If true, wrap the call in parens if it is a binary or unary method call.
+        :param parens: If true, wrap the call in parens if it is a binary method call.
+        :param down_convert: If True, try to down convert the call to a simpler value that could be converted back to the call.
         """
+        #
+        # if down_convert:
+        # TODO: Why aren't default args ignored here for slice?
         ref, args = self.callable, [a.expr for a in self.args]
         # Special case != since it doesn't have a decl
         if isinstance(ref, MethodRef) and ref.method_name == "__ne__":
-            return f"{args[0].pretty(context, wrap_lit=True)} != {args[1].pretty(context, wrap_lit=True)}"
+            return f"{args[0].pretty(context)} != {args[1].pretty(context)}"
         function_decl = context.mod_decls.get_function_decl(ref)
         defaults = function_decl.arg_defaults
         if function_decl.mutates_first_arg:
@@ -644,25 +666,25 @@ class CallDecl:
                 return f"{UNARY_METHODS[name]}{slf.pretty(context)}"
             elif name in BINARY_METHODS:
                 assert len(args) == 1
-                expr = f"{slf.pretty(context )} {BINARY_METHODS[name]} {args[0].pretty(context, wrap_lit=False)}"
+                expr = f"{slf.pretty(context)} {BINARY_METHODS[name]} {args[0].pretty(context, down_convert=True)}"
                 return expr if not parens else f"({expr})"
             elif name == "__getitem__":
                 assert len(args) == 1
-                return f"{slf.pretty(context)}[{args[0].pretty(context, wrap_lit=False)}]"
+                return f"{slf.pretty(context)}[{args[0].pretty(context, down_convert=True, parens=False)}]"
             elif name == "__call__":
-                return f"{slf.pretty(context)}({', '.join(a.pretty(context, wrap_lit=False) for a in args)})"
+                return f"{slf.pretty(context)}({', '.join(a.pretty(context, down_convert=True, parens=False) for a in args)})"
             elif name == "__delitem__":
                 assert len(args) == 1
                 assert mutated_arg_type
                 name = context.name_expr(mutated_arg_type, slf)
-                context.statements.append(f"del {name}[{args[0].pretty(context, parens=False, wrap_lit=False)}]")
+                context.statements.append(f"del {name}[{args[0].pretty(context, parens=False, down_convert=True)}]")
                 return name
             elif name == "__setitem__":
                 assert len(args) == 2
                 assert mutated_arg_type
                 name = context.name_expr(mutated_arg_type, slf)
                 context.statements.append(
-                    f"{name}[{args[0].pretty(context, parens=False, wrap_lit=False)}] = {args[1].pretty(context, parens=False, wrap_lit=False)}"
+                    f"{name}[{args[0].pretty(context, parens=False, down_convert=True)}] = {args[1].pretty(context, parens=False, down_convert=True)}"
                 )
                 return name
             fn_str = f"{slf.pretty(context)}.{name}"
@@ -685,10 +707,10 @@ class CallDecl:
         if mutated_arg_type:
             name = context.name_expr(mutated_arg_type, args[0])
             context.statements.append(
-                f"{fn_str}({', '.join({name}, *(a.pretty(context, wrap_lit=False) for a in args[1:]))})"
+                f"{fn_str}({', '.join({name}, *(a.pretty(context, down_convert=True, parens=False) for a in args[1:]))})"
             )
             return name
-        return f"{fn_str}({', '.join(a.pretty(context, wrap_lit=False) for a in args)})"
+        return f"{fn_str}({', '.join(a.pretty(context, down_convert=True, parens=False) for a in args)})"
 
 
 @dataclass
@@ -791,3 +813,10 @@ class ClassDecl:
     properties: dict[str, FunctionDecl] = field(default_factory=dict)
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
     n_type_vars: int = 0
+
+
+# def down_converter(x: Callable[..., Iterable[tuple["Expr", object]]]) -> None:
+#     """
+#     Register a number of down converters, which turn expressions into
+#     """
+#     pass

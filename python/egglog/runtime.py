@@ -55,6 +55,9 @@ UNIT_CLASS_NAME = "Unit"
 UNARY_LIT_CLASS_NAMES = {"i64", "f64", "String"}
 LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
 
+##
+# Converters
+##
 
 # Mapping of types, from Python or egglog types to egglog types
 CONVERSIONS: dict[tuple[Type | JustTypeRef, JustTypeRef], Callable] = {}
@@ -143,6 +146,30 @@ def _resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
     except KeyError:
         raise TypeError(f"Cannot convert {arg} ({repr(arg_type)}) to {tp}")
     return fn(arg)
+
+
+##
+# Down Converters
+##
+
+
+def down_converter(x: Callable[..., Iterable[tuple["Expr", object]]]):
+    """
+    Register a number of down conversion functions, which are used for pretty printing expressions.
+
+    They should be the inverse of any registered conversion function for the expression type, to present
+    a  more succient representation.
+
+    This decorator should wrap a function that takes in a number of wildcard variables, and yield
+    a sequence of (pattern, replacement) pairs, where pattern is a single call with some variables
+    and replacement is either a thunk or a value for the replacement.
+    """
+    pass
+
+
+##
+# Runtime objects
+##
 
 
 @dataclass
