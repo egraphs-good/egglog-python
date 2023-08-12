@@ -78,12 +78,6 @@ FALSE = egraph.constant("FALSE", Bool)
 converter(bool, Bool, lambda x: TRUE if x else FALSE)
 
 
-@down_converter
-def _bool_dc():
-    yield TRUE, True
-    yield FALSE, False
-
-
 @egraph.register
 def _bool(x: Bool):
     return [
@@ -153,36 +147,6 @@ converter(
 )
 
 
-@down_converter
-def _is_dtype_kind_dc(x: IsDtypeKind, y: IsDtypeKind, s: String, d: DType):
-    """
-    IsDTypeKind should down convert to a tuple (or single) set of strings/dtypes
-    """
-    yield IsDtypeKind.NULL, ()
-    yield IsDtypeKind.string(s), s
-    yield IsDtypeKind.dtype(d), d
-    yield x | y, lambda: combine_maybe_tuples(x, y)
-
-
-def combine_maybe_tuples(x: object, y: object) -> object:
-    """
-    Combines two maybe tuples into a maybe tuple.
-    """
-    return tuple_to_single(single_to_tuple(x) + single_to_tuple(y))
-
-
-def single_to_tuple(x: object) -> tuple[object, ...]:
-    if isinstance(x, tuple):
-        return x
-    return (x,)
-
-
-def tuple_to_single(x: tuple[object, ...]) -> tuple[object, ...] | object:
-    if len(x) == 1:
-        return x[0]
-    return x
-
-
 @egraph.register
 def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
     return [
@@ -221,11 +185,6 @@ class Float(Expr):
 
 
 converter(float, Float, lambda x: Float(x))
-
-
-@down_converter
-def _float_dc(f: f64):
-    yield Float(f), f
 
 
 @egraph.register
@@ -402,11 +361,6 @@ converter(int, Int, lambda x: Int(x))
 converter(float, Int, lambda x: Int(int(x)))
 
 
-@down_converter
-def _int_dc(x: i64):
-    yield Int(x), x
-
-
 assert expr_parts(egraph.simplify(Int(1) == Int(1), 10)) == expr_parts(TRUE)
 assert expr_parts(egraph.simplify(Int(1) == Int(2), 10)) == expr_parts(FALSE)
 assert expr_parts(egraph.simplify(Int(1) >= Int(2), 10)) == expr_parts(FALSE)
@@ -450,13 +404,6 @@ converter(
 )
 
 
-@down_converter
-def _tuple_int_dc(x: Int, y: TupleInt, z: TupleInt):
-    yield TupleInt.EMPTY, ()
-    yield TupleInt(x), lambda: (x,)
-    yield y + z, lambda: y + z
-
-
 @egraph.register
 def _tuple_int(ti: TupleInt, ti2: TupleInt, i: Int, i2: Int, k: i64):
     return [
@@ -483,12 +430,6 @@ converter(type(None), OptionalInt, lambda x: OptionalInt.none)
 converter(Int, OptionalInt, OptionalInt.some)
 
 
-@down_converter
-def _optional_int_dc(i: Int):
-    yield OptionalInt.none, None
-    yield OptionalInt.some(i), i
-
-
 @egraph.class_
 class Slice(Expr):
     def __init__(
@@ -505,11 +446,6 @@ converter(
     Slice,
     lambda x: Slice(convert(x.start, OptionalInt), convert(x.stop, OptionalInt), convert(x.step, OptionalInt)),
 )
-
-
-@down_converter
-def _slice_dc(x: OptionalInt, y: OptionalInt, z: OptionalInt):
-    yield Slice(x, y, z), lambda: slice(x, y, z)
 
 
 @egraph.class_
@@ -532,14 +468,6 @@ converter(Int, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.int)
 converter(Slice, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.slice)
 
 
-@down_converter
-def _multi_axis_index_key_item_dc(i: Int, s: Slice):
-    yield MultiAxisIndexKeyItem.ELLIPSIS, ...
-    yield MultiAxisIndexKeyItem.NONE, None
-    yield MultiAxisIndexKeyItem.int(i), i
-    yield MultiAxisIndexKeyItem.slice(s), s
-
-
 @egraph.class_
 class MultiAxisIndexKey(Expr):
     def __init__(self, item: MultiAxisIndexKeyItem) -> None:
@@ -560,13 +488,6 @@ converter(
     if x
     else MultiAxisIndexKey.EMPTY,
 )
-
-
-@down_converter
-def _multi_axis_index_key_dc(item: MultiAxisIndexKeyItem, x: MultiAxisIndexKey, y: MultiAxisIndexKey):
-    yield MultiAxisIndexKey.EMPTY, ()
-    yield MultiAxisIndexKey(item), lambda: (item,)
-    yield x + y, lambda: x + y
 
 
 @egraph.class_
@@ -799,25 +720,9 @@ def ndarray_index(x: NDArray) -> IndexKey:
 converter(NDArray, IndexKey, ndarray_index)
 
 
-@down_converter
-def _index_key_dc(i: Int, s: Slice, ma: MultiAxisIndexKey, x: NDArray):
-    yield IndexKey.ELLIPSIS, ...
-    yield IndexKey.int(i), i
-    yield IndexKey.slice(s), s
-    yield IndexKey.multi_axis(ma), ma
-    yield ndarray_index(x), x
-
-
 converter(Float, NDArray, NDArray.scalar_float)
 converter(Int, NDArray, NDArray.scalar_int)
 converter(NDArray, Int, lambda n: n.to_int())
-
-
-@down_converter
-def _ndarray_dc(f: Float, i: Int, n: NDArray):
-    yield NDArray.scalar_float(f), f
-    yield NDArray.scalar_int(i), i
-    yield n.to_int(), n
 
 
 @egraph.register
@@ -874,13 +779,6 @@ converter(
 converter(list, TupleNDArray, lambda x: convert(tuple(x), TupleNDArray))
 
 
-@down_converter
-def _tuple_ndarray_dc(x: NDArray, y: TupleNDArray, z: TupleNDArray):
-    yield TupleNDArray.EMPTY, ()
-    yield TupleNDArray(x), lambda: (x,)
-    yield y + z, lambda: y + z
-
-
 @egraph.register
 def _tuple_ndarray(ti: TupleNDArray, ti2: TupleNDArray, n: NDArray, i: Int, i2: Int, k: i64):
     return [
@@ -907,12 +805,6 @@ converter(type(None), OptionalBool, lambda x: OptionalBool.none)
 converter(Bool, OptionalBool, lambda x: OptionalBool.some(x))
 
 
-@down_converter
-def _optional_bool_dc(b: Bool):
-    yield OptionalBool.none, None
-    yield OptionalBool.some(b), b
-
-
 @egraph.class_
 class OptionalDType(Expr):
     none: ClassVar[OptionalDType]
@@ -924,12 +816,6 @@ class OptionalDType(Expr):
 
 converter(type(None), OptionalDType, lambda x: OptionalDType.none)
 converter(DType, OptionalDType, lambda x: OptionalDType.some(x))
-
-
-@down_converter
-def _optional_dtype(b: DType):
-    yield OptionalDType.none, None
-    yield OptionalDType.some(b), b
 
 
 @egraph.class_
@@ -945,12 +831,6 @@ converter(type(None), OptionalDevice, lambda x: OptionalDevice.none)
 converter(Device, OptionalDevice, lambda x: OptionalDevice.some(x))
 
 
-@down_converter
-def _optional_device(b: Device):
-    yield OptionalDevice.none, None
-    yield OptionalDevice.some(b), b
-
-
 @egraph.class_
 class OptionalTupleInt(Expr):
     none: ClassVar[OptionalTupleInt]
@@ -962,12 +842,6 @@ class OptionalTupleInt(Expr):
 
 converter(type(None), OptionalTupleInt, lambda x: OptionalTupleInt.none)
 converter(TupleInt, OptionalTupleInt, lambda x: OptionalTupleInt.some(x))
-
-
-@down_converter
-def _optional_tuple_int(b: TupleInt):
-    yield OptionalTupleInt.none, None
-    yield OptionalTupleInt.some(b), b
 
 
 @egraph.class_
@@ -986,13 +860,6 @@ class OptionalIntOrTuple(Expr):
 converter(type(None), OptionalIntOrTuple, lambda x: OptionalIntOrTuple.none)
 converter(Int, OptionalIntOrTuple, OptionalIntOrTuple.int)
 converter(TupleInt, OptionalIntOrTuple, OptionalIntOrTuple.tuple)
-
-
-@down_converter
-def _optional_int_or_tuple(i: Int, t: TupleInt):
-    yield OptionalIntOrTuple.none, None
-    yield OptionalIntOrTuple.int(i), i
-    yield OptionalIntOrTuple.tuple(t), t
 
 
 @egraph.function
