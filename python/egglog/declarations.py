@@ -704,8 +704,13 @@ class PrettyContext:
         return f"_{typ}_{self._gen_name_types[typ]}"
 
     def name_expr(self, expr_type: str, expr: ExprDecl) -> str:
-        name = self.generate_name(expr_type)
-        self.statements.append(f"{name} = copy({expr.pretty(self, parens=False)})")
+        orig_statement = expr.pretty(self, parens=False)
+        # If the thing we are naming is already a variable, we don't need to name it
+        if orig_statement.isidentifier():
+            name = orig_statement
+        else:
+            name = self.generate_name(expr_type)
+            self.statements.append(f"{name} = {orig_statement}")
         return name
 
     def render(self, expr: str) -> str:
