@@ -634,8 +634,11 @@ class CallDecl:
         if n_defaults:
             args = args[:-n_defaults]
         if function_decl.mutates_first_arg:
-            mutated_arg_type = function_decl.arg_types[0].to_just().name
-            expr_name = context.name_expr(mutated_arg_type, args[0], is_mutating=True)
+            first_arg = args[0]
+            expr_str = first_arg.pretty(context, parens=False)
+            # copy an identifer expression iff it has multiple parents (b/c then we can't mutate it directly)
+            has_multiple_parents = len(context.parents[first_arg]) > 1
+            expr_name = context.name_expr(function_decl.arg_types[0], expr_str, copy_identifier=has_multiple_parents)
             # Set the first arg to be the name of the mutated arg and return the name
             args[0] = VarDecl(expr_name)
         else:
@@ -686,6 +689,18 @@ class CallDecl:
             context.statements.append(expr)
             context.names[self] = expr_name
             return expr_name
+
+        # We use a heuristic to decide whether to name this sub-expression as a variable
+        # The rough goal is to reduce the number of newlines, given our line length of ~180
+        # We determine it's worth making a new line for this expression if the total characters
+        # it would take up is > than some constant ~ line length.
+        n_parents = len(context.parents[self])
+        # amount saved per usage of expression
+        length_difference = len(expr) - 12
+        if n_parents * length_difference > 180:
+            expr_name = context.name_expr(function_decl.return_type, expr, copy_identifier=False)
+            context.names[self] = expr_name
+            return expr_name
         return expr
 
 
@@ -709,20 +724,18 @@ class PrettyContext:
         self._gen_name_types[typ] += 1
         return f"_{typ}_{self._gen_name_types[typ]}"
 
-    def name_expr(self, expr_type: str, expr: ExprDecl, is_mutating: bool) -> str:
-        orig_statement = expr.pretty(self, parens=False)
-        has_multiple_parents = len(self.parents[expr]) > 1
+    def name_expr(self, expr_type: TypeOrVarRef, expr_str: str, copy_identifier: bool) -> str:
+        tp_name = expr_type.to_just().name
         # If the thing we are naming is already a variable, we don't need to name it
-        if orig_statement.isidentifier():
-            # If there are multiple parents, we need to copy the variable for a mutation
-            if has_multiple_parents and is_mutating:
-                name = self.generate_name(expr_type)
-                self.statements.append(f"{name} = copy({orig_statement})")
+        if expr_str.isidentifier():
+            if copy_identifier:
+                name = self.generate_name(tp_name)
+                self.statements.append(f"{name} = copy({expr_str})")
             else:
-                name = orig_statement
+                name = expr_str
         else:
-            name = self.generate_name(expr_type)
-            self.statements.append(f"{name} = {orig_statement}")
+            name = self.generate_name(tp_name)
+            self.statements.append(f"{name} = {expr_str}")
         return name
 
     def render(self, expr: str) -> str:
