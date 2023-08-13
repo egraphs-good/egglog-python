@@ -556,7 +556,7 @@ class LitDecl:
             return bindings.Lit(bindings.String(self.value))
         assert_never(self.value)
 
-    def pretty(self, context: PrettyContext, literal_lit=True, **kwargs) -> str:
+    def pretty(self, context: PrettyContext, unwrap_lit=True, **kwargs) -> str:
         """
         Returns a string representation of the literal.
 
@@ -565,11 +565,11 @@ class LitDecl:
         if self.value is None:
             return "Unit()"
         if isinstance(self.value, int):
-            return f"i64({self.value})" if not literal_lit else str(self.value)
+            return f"i64({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, float):
-            return f"f64({self.value})" if not literal_lit else str(self.value)
+            return f"f64({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, str):
-            return f"String({repr(self.value)})" if not literal_lit else repr(self.value)
+            return f"String({repr(self.value)})" if not unwrap_lit else repr(self.value)
         assert_never(self.value)
 
 
@@ -618,77 +618,79 @@ class CallDecl:
 
         :param parens: If true, wrap the call in parens if it is a binary method call.
         """
+        if self in context.names:
+            return context.names[self]
         ref, args = self.callable, [a.expr for a in self.args]
         # Special case != since it doesn't have a decl
         if isinstance(ref, MethodRef) and ref.method_name == "__ne__":
             return f"{args[0].pretty(context)} != {args[1].pretty(context)}"
         function_decl = context.mod_decls.get_function_decl(ref)
-        defaults = function_decl.arg_defaults
+        # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
+        n_defaults = 0
+        for arg, default in zip(reversed(args), reversed(function_decl.arg_defaults)):
+            if arg != default:
+                break
+            n_defaults += 1
+        if n_defaults:
+            args = args[:-n_defaults]
         if function_decl.mutates_first_arg:
             mutated_arg_type = function_decl.arg_types[0].to_just().name
+            expr_name = context.name_expr(mutated_arg_type, args[0], is_mutating=True)
+            # Set the first arg to be the name of the mutated arg and return the name
+            args[0] = VarDecl(expr_name)
         else:
-            mutated_arg_type = None
+            expr_name = None
         if isinstance(ref, FunctionRef):
-            fn_str = ref.name
+            expr = _pretty_call(context, ref.name, args)
         elif isinstance(ref, ClassMethodRef):
             tp_ref = JustTypeRef(ref.class_name, self.bound_tp_params or ())
             if ref.method_name == "__init__":
                 fn_str = tp_ref.pretty()
             else:
                 fn_str = f"{tp_ref.pretty( )}.{ref.method_name}"
+            expr = _pretty_call(context, fn_str, args)
         elif isinstance(ref, MethodRef):
             name = ref.method_name
             slf, *args = args
-            defaults = defaults[1:]
+            slf = slf.pretty(context, unwrap_lit=False)
             if name in UNARY_METHODS:
-                return f"{UNARY_METHODS[name]}{slf.pretty(context)}"
+                expr = f"{UNARY_METHODS[name]}{slf}"
             elif name in BINARY_METHODS:
                 assert len(args) == 1
-                expr = f"{slf.pretty(context)} {BINARY_METHODS[name]} {args[0].pretty(context, literal_lit=True)}"
-                return expr if not parens else f"({expr})"
+                expr = f"{slf} {BINARY_METHODS[name]} {args[0].pretty(context)}"
+                if parens:
+                    expr = f"({expr})"
             elif name == "__getitem__":
                 assert len(args) == 1
-                return f"{slf.pretty(context)}[{args[0].pretty(context, literal_lit=True, parens=False)}]"
+                expr = f"{slf}[{args[0].pretty(context, parens=False)}]"
             elif name == "__call__":
-                return f"{slf.pretty(context)}({', '.join(a.pretty(context, literal_lit=True, parens=False) for a in args)})"
+                expr = _pretty_call(context, slf, args)
             elif name == "__delitem__":
                 assert len(args) == 1
-                assert mutated_arg_type
-                name = context.name_expr(mutated_arg_type, slf)
-                context.statements.append(f"del {name}[{args[0].pretty(context, parens=False, literal_lit=True)}]")
-                return name
+                expr = f"del {slf}[{args[0].pretty(context, parens=False)}]"
             elif name == "__setitem__":
                 assert len(args) == 2
-                assert mutated_arg_type
-                name = context.name_expr(mutated_arg_type, slf)
-                context.statements.append(
-                    f"{name}[{args[0].pretty(context, parens=False, literal_lit=True)}] = {args[1].pretty(context, parens=False, literal_lit=True)}"
-                )
-                return name
-            fn_str = f"{slf.pretty(context)}.{name}"
+                expr = f"{slf}[{args[0].pretty(context, parens=False)}] = {args[1].pretty(context, parens=False)}"
+            else:
+                expr = _pretty_call(context, f"{slf}.{name}", args)
         elif isinstance(ref, ConstantRef):
-            return ref.name
+            expr = ref.name
         elif isinstance(ref, ClassVariableRef):
-            return f"{ref.class_name}.{ref.variable_name}"
+            expr = f"{ref.class_name}.{ref.variable_name}"
         elif isinstance(ref, PropertyRef):
-            return f"{args[0].pretty(context)}.{ref.property_name}"
+            expr = f"{args[0].pretty(context)}.{ref.property_name}"
         else:
             assert_never(ref)
-        # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
-        n_defaults = 0
-        for arg, default in zip(reversed(args), reversed(defaults)):
-            if arg != default:
-                break
-            n_defaults += 1
-        if n_defaults:
-            args = args[:-n_defaults]
-        if mutated_arg_type:
-            name = context.name_expr(mutated_arg_type, args[0])
-            context.statements.append(
-                f"{fn_str}({', '.join({name}, *(a.pretty(context, literal_lit=True, parens=False) for a in args[1:]))})"
-            )
-            return name
-        return f"{fn_str}({', '.join(a.pretty(context, literal_lit=True, parens=False) for a in args)})"
+        # If we have a name, then we mutated
+        if expr_name:
+            context.statements.append(expr)
+            context.names[self] = expr_name
+            return expr_name
+        return expr
+
+
+def _pretty_call(context: PrettyContext, fn: str, args: Iterable[ExprDecl]) -> str:
+    return f"{fn}({', '.join(a.pretty(context, parens=False) for a in args)})"
 
 
 @dataclass
@@ -697,17 +699,27 @@ class PrettyContext:
     # List of statements of "context" setting variable for the expr
     statements: list[str] = field(default_factory=list)
 
+    names: dict[ExprDecl, str] = field(default_factory=dict)
+    parents: dict[ExprDecl, set[ExprDecl]] = field(default_factory=lambda: defaultdict(set))
+
+    # Mapping of type to the number of times we have generated a name for that type, used to generate unique names
     _gen_name_types: dict[str, int] = field(default_factory=lambda: defaultdict(lambda: 0))
 
     def generate_name(self, typ: str) -> str:
         self._gen_name_types[typ] += 1
         return f"_{typ}_{self._gen_name_types[typ]}"
 
-    def name_expr(self, expr_type: str, expr: ExprDecl) -> str:
+    def name_expr(self, expr_type: str, expr: ExprDecl, is_mutating: bool) -> str:
         orig_statement = expr.pretty(self, parens=False)
+        has_multiple_parents = len(self.parents[expr]) > 1
         # If the thing we are naming is already a variable, we don't need to name it
         if orig_statement.isidentifier():
-            name = orig_statement
+            # If there are multiple parents, we need to copy the variable for a mutation
+            if has_multiple_parents and is_mutating:
+                name = self.generate_name(expr_type)
+                self.statements.append(f"{name} = copy({orig_statement})")
+            else:
+                name = orig_statement
         else:
             name = self.generate_name(expr_type)
             self.statements.append(f"{name} = {orig_statement}")
@@ -715,6 +727,12 @@ class PrettyContext:
 
     def render(self, expr: str) -> str:
         return "\n".join(self.statements + [expr])
+
+    def traverse_for_parents(self, expr: ExprDecl) -> None:
+        if isinstance(expr, CallDecl):
+            for arg in set(expr.args):
+                self.parents[arg.expr].add(expr)
+                self.traverse_for_parents(arg.expr)
 
 
 def test_expr_pretty():

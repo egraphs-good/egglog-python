@@ -402,15 +402,15 @@ class RuntimeExpr:
 
     def __str__(self) -> str:
         context = PrettyContext(self.__egg_decls__)
+        context.traverse_for_parents(self.__egg_typed_expr__.expr)
         pretty_expr = self.__egg_typed_expr__.expr.pretty(context, parens=False)
         try:
             if config.SHOW_TYPES:
                 raise NotImplementedError()
                 # s = f"_: {self.__egg_typed_expr__.tp.pretty()} = {pretty_expr}"
                 # return black.format_str(s, mode=black.FileMode()).strip()
-            else:
-                pretty_statements = context.render(pretty_expr)
-                return black.format_str(pretty_statements, mode=BLACK_MODE).strip()
+            pretty_statements = context.render(pretty_expr)
+            return black.format_str(pretty_statements, mode=BLACK_MODE).strip()
         except black.parsing.InvalidInput:
             return pretty_expr
 

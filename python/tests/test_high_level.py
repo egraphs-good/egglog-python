@@ -355,7 +355,7 @@ class TestMutate:
 
         foo = Foo()
         foo[10] = 20
-        assert str(foo) == "_Foo_1 = copy(Foo())\n_Foo_1[10] = 20\n_Foo_1"
+        assert str(foo) == "_Foo_1 = Foo()\n_Foo_1[10] = 20\n_Foo_1"
         assert expr_parts(foo) == TypedExprDecl(
             JustTypeRef("Foo"),
             CallDecl(MethodRef("Foo", "__setitem__"), (expr_parts(Foo()), expr_parts(i64(10)), expr_parts(i64(20)))),
@@ -384,8 +384,8 @@ class TestMutate:
             JustTypeRef("Math"),
             CallDecl(FunctionRef("incr"), (expr_parts(x_copied),)),
         )
-        assert str(x) == "_Math_1 = copy(Math(10))\nincr(_Math_1)\n_Math_1"
-        assert str(x + Math(10)) == "_Math_1 = copy(Math(10))\nincr(_Math_1)\n_Math_1 + Math(10)"
+        assert str(x) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1"
+        assert str(x + Math(10)) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1 + Math(10)"
 
         i, j = vars_("i j", Math)
         incr_i = copy(i)
@@ -393,6 +393,13 @@ class TestMutate:
         egraph.register(rewrite(incr_i).to(i + Math(1)), x)
         egraph.run(10)
         egraph.check(eq(x).to(Math(10) + Math(1)))
+
+        x_incr_copy = copy(x)
+        incr(x)
+        assert (
+            str(x_incr_copy + x)
+            == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_2 = copy(_Math_1)\nincr(_Math_2)\n_Math_1 + _Math_2"
+        ), "only copy when re-used later"
 
 
 def test_builtin_reflected():
