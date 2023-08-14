@@ -697,7 +697,7 @@ class CallDecl:
         n_parents = len(context.parents[self])
         # amount saved per usage of expression
         length_difference = len(expr) - 12
-        if n_parents * length_difference > 180:
+        if n_parents * length_difference > 160:
             expr_name = context.name_expr(function_decl.return_type, expr, copy_identifier=False)
             context.names[self] = expr_name
             return expr_name
