@@ -9,12 +9,11 @@ name = "egglog_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Use unreleased version to depend on signature improvements https://github.com/PyO3/pyo3/pull/2702
 pyo3 = { version = "0.18.1", features = ["extension-module"] }
 egglog = { git = "https://github.com/egraphs-good/egglog", rev = "3f7c3fed7dde072dfc8c97b6c2dfba257a4deb7c" }
 # egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "f9d4afb912f5a3a096ee49aab139288ee8c23eb4" }
-
 # egglog = { path = "../egg-smol" }
+
 pyo3-log = "0.8.1"
 log = "0.4.17"
 lalrpop-util = { version = "0.19.8", features = ["lexer"] }

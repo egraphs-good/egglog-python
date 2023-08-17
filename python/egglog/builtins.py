@@ -26,6 +26,23 @@ __all__ = [
     "py_eval",
 ]
 
+
+StringLike = Union[str, "String"]
+
+
+@BUILTINS.class_
+class String(Expr):
+    def __init__(self, value: str):
+        ...
+
+
+@BUILTINS.function(egg_fn="+")
+def join(*strings: StringLike) -> String:  # type: ignore[empty-body]
+    ...
+
+
+converter(str, String, String)
+
 # The types which can be convertered into an i64
 i64Like = Union[int, "i64"]
 
@@ -125,6 +142,10 @@ class i64(Expr):
     def max(self, other: i64Like) -> i64:  # type: ignore[empty-body]
         ...
 
+    @BUILTINS.method(egg_fn="to-string")
+    def to_string(self) -> String:  # type: ignore[empty-body]
+        ...
+
 
 converter(int, i64, i64)
 
@@ -209,25 +230,13 @@ class f64(Expr):
     def from_i64(cls, i: i64) -> f64:  # type: ignore[empty-body]
         ...
 
-
-converter(float, f64, f64)
-
-
-StringLike = Union[str, "String"]
-
-
-@BUILTINS.class_
-class String(Expr):
-    def __init__(self, value: str):
+    @BUILTINS.method(egg_fn="to-string")
+    def to_string(self) -> String:  # type: ignore[empty-body]
         ...
 
 
-@BUILTINS.function(egg_fn="+")
-def join(*strings: StringLike) -> String:  # type: ignore[empty-body]
-    ...
+converter(float, f64, f64)
 
-
-converter(str, String, String)
 
 T = TypeVar("T", bound=Expr)
 V = TypeVar("V", bound=Expr)
