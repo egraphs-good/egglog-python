@@ -360,6 +360,7 @@ def _int(i: i64, j: i64, r: Bool, o: Int):
 converter(int, Int, lambda x: Int(x))
 converter(float, Int, lambda x: Int(int(x)))
 
+
 assert expr_parts(egraph.simplify(Int(1) == Int(1), 10)) == expr_parts(TRUE)
 assert expr_parts(egraph.simplify(Int(1) == Int(2), 10)) == expr_parts(FALSE)
 assert expr_parts(egraph.simplify(Int(1) >= Int(2), 10)) == expr_parts(FALSE)
@@ -392,7 +393,15 @@ class TupleInt(Expr):
         ...
 
 
-converter(tuple, TupleInt, lambda x: TupleInt(convert(x[0], Int)) + convert(x[1:], TupleInt) if x else TupleInt.EMPTY)
+converter(
+    tuple,
+    TupleInt,
+    lambda x: TupleInt(convert(x[0], Int)) + convert(x[1:], TupleInt)
+    if len(x) > 1
+    else TupleInt(convert(x[0], Int))
+    if x
+    else TupleInt.EMPTY,
+)
 
 
 @egraph.register
@@ -423,7 +432,12 @@ converter(Int, OptionalInt, OptionalInt.some)
 
 @egraph.class_
 class Slice(Expr):
-    def __init__(self, start: OptionalInt, stop: OptionalInt, step: OptionalInt) -> None:
+    def __init__(
+        self,
+        start: OptionalInt = OptionalInt.none,
+        stop: OptionalInt = OptionalInt.none,
+        step: OptionalInt = OptionalInt.none,
+    ) -> None:
         ...
 
 
@@ -469,6 +483,8 @@ converter(
     tuple,
     MultiAxisIndexKey,
     lambda x: MultiAxisIndexKey(convert(x[0], MultiAxisIndexKeyItem)) + convert(x[1:], MultiAxisIndexKey)
+    if len(x) > 1
+    else MultiAxisIndexKey(convert(x[0], MultiAxisIndexKeyItem))
     if x
     else MultiAxisIndexKey.EMPTY,
 )
@@ -754,7 +770,11 @@ class TupleNDArray(Expr):
 converter(
     tuple,
     TupleNDArray,
-    lambda x: TupleNDArray(convert(x[0], NDArray)) + convert(x[1:], TupleNDArray) if x else TupleNDArray.EMPTY,
+    lambda x: TupleNDArray(convert(x[0], NDArray)) + convert(x[1:], TupleNDArray)
+    if len(x) > 1
+    else TupleNDArray(convert(x[0], NDArray))
+    if x
+    else TupleNDArray.EMPTY,
 )
 converter(list, TupleNDArray, lambda x: convert(tuple(x), TupleNDArray))
 

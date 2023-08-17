@@ -55,6 +55,9 @@ UNIT_CLASS_NAME = "Unit"
 UNARY_LIT_CLASS_NAMES = {"i64", "f64", "String"}
 LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
 
+##
+# Converters
+##
 
 # Mapping of types, from Python or egglog types to egglog types
 CONVERSIONS: dict[tuple[Type | JustTypeRef, JustTypeRef], Callable] = {}
@@ -143,6 +146,11 @@ def _resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
     except KeyError:
         raise TypeError(f"Cannot convert {arg} ({repr(arg_type)}) to {tp}")
     return fn(arg)
+
+
+##
+# Runtime objects
+##
 
 
 @dataclass
@@ -394,15 +402,15 @@ class RuntimeExpr:
 
     def __str__(self) -> str:
         context = PrettyContext(self.__egg_decls__)
+        context.traverse_for_parents(self.__egg_typed_expr__.expr)
         pretty_expr = self.__egg_typed_expr__.expr.pretty(context, parens=False)
         try:
             if config.SHOW_TYPES:
                 raise NotImplementedError()
                 # s = f"_: {self.__egg_typed_expr__.tp.pretty()} = {pretty_expr}"
                 # return black.format_str(s, mode=black.FileMode()).strip()
-            else:
-                pretty_statements = context.render(pretty_expr)
-                return black.format_str(pretty_statements, mode=BLACK_MODE).strip()
+            pretty_statements = context.render(pretty_expr)
+            return black.format_str(pretty_statements, mode=BLACK_MODE).strip()
         except black.parsing.InvalidInput:
             return pretty_expr
 

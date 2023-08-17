@@ -556,7 +556,7 @@ class LitDecl:
             return bindings.Lit(bindings.String(self.value))
         assert_never(self.value)
 
-    def pretty(self, context: PrettyContext, wrap_lit=True, **kwargs) -> str:
+    def pretty(self, context: PrettyContext, unwrap_lit=True, **kwargs) -> str:
         """
         Returns a string representation of the literal.
 
@@ -565,11 +565,11 @@ class LitDecl:
         if self.value is None:
             return "Unit()"
         if isinstance(self.value, int):
-            return f"i64({self.value})" if wrap_lit else str(self.value)
+            return f"i64({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, float):
-            return f"f64({self.value})" if wrap_lit else str(self.value)
+            return f"f64({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, str):
-            return f"String({repr(self.value)})" if wrap_lit else repr(self.value)
+            return f"String({repr(self.value)})" if not unwrap_lit else repr(self.value)
         assert_never(self.value)
 
 
@@ -580,10 +580,25 @@ class CallDecl:
     # type parameters that were bound to the callable, if it is a classmethod
     # Used for pretty printing classmethod calls with type parameters
     bound_tp_params: Optional[tuple[JustTypeRef, ...]] = None
+    _cached_hash: Optional[int] = None
 
     def __post_init__(self):
         if self.bound_tp_params and not isinstance(self.callable, ClassMethodRef):
             raise ValueError("Cannot bind type parameters to a non-class method callable.")
+
+    def __hash__(self) -> int:
+        # Modified hash which will cache result for performance
+        if self._cached_hash is None:
+            res = hash((self.callable, self.args, self.bound_tp_params))
+            object.__setattr__(self, "_cached_hash", res)
+            return res
+        return self._cached_hash
+
+    def __eq__(self, other: object) -> bool:
+        # Override eq to use cached hash for perf
+        if not isinstance(other, CallDecl):
+            return False
+        return hash(self) == hash(other)
 
     @classmethod
     def from_egg(cls, mod_decls: ModuleDeclarations, call: bindings.Call) -> TypedExprDecl:
@@ -616,79 +631,120 @@ class CallDecl:
         """
         Pretty print the call.
 
-        :param parens: If true, wrap the call in parens if it is a binary or unary method call.
+        :param parens: If true, wrap the call in parens if it is a binary method call.
         """
+        if self in context.names:
+            return context.names[self]
         ref, args = self.callable, [a.expr for a in self.args]
         # Special case != since it doesn't have a decl
         if isinstance(ref, MethodRef) and ref.method_name == "__ne__":
-            return f"{args[0].pretty(context, wrap_lit=True)} != {args[1].pretty(context, wrap_lit=True)}"
+            return f"{args[0].pretty(context)} != {args[1].pretty(context)}"
         function_decl = context.mod_decls.get_function_decl(ref)
-        defaults = function_decl.arg_defaults
+        # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
+        n_defaults = 0
+        for arg, default in zip(reversed(args), reversed(function_decl.arg_defaults)):
+            if arg != default:
+                break
+            n_defaults += 1
+        if n_defaults:
+            args = args[:-n_defaults]
         if function_decl.mutates_first_arg:
-            mutated_arg_type = function_decl.arg_types[0].to_just().name
+            first_arg = args[0]
+            expr_str = first_arg.pretty(context, parens=False)
+            # copy an identifer expression iff it has multiple parents (b/c then we can't mutate it directly)
+            has_multiple_parents = context.parents[first_arg] > 1
+            expr_name = context.name_expr(function_decl.arg_types[0], expr_str, copy_identifier=has_multiple_parents)
+            # Set the first arg to be the name of the mutated arg and return the name
+            args[0] = VarDecl(expr_name)
         else:
-            mutated_arg_type = None
+            expr_name = None
         if isinstance(ref, FunctionRef):
-            fn_str = ref.name
+            expr = _pretty_call(context, ref.name, args)
         elif isinstance(ref, ClassMethodRef):
             tp_ref = JustTypeRef(ref.class_name, self.bound_tp_params or ())
             if ref.method_name == "__init__":
                 fn_str = tp_ref.pretty()
             else:
                 fn_str = f"{tp_ref.pretty( )}.{ref.method_name}"
+            expr = _pretty_call(context, fn_str, args)
         elif isinstance(ref, MethodRef):
             name = ref.method_name
             slf, *args = args
-            defaults = defaults[1:]
+            slf = slf.pretty(context, unwrap_lit=False)
             if name in UNARY_METHODS:
-                return f"{UNARY_METHODS[name]}{slf.pretty(context)}"
+                expr = f"{UNARY_METHODS[name]}{slf}"
             elif name in BINARY_METHODS:
                 assert len(args) == 1
-                expr = f"{slf.pretty(context )} {BINARY_METHODS[name]} {args[0].pretty(context, wrap_lit=False)}"
-                return expr if not parens else f"({expr})"
+                expr = f"{slf} {BINARY_METHODS[name]} {args[0].pretty(context)}"
+                if parens:
+                    expr = f"({expr})"
             elif name == "__getitem__":
                 assert len(args) == 1
-                return f"{slf.pretty(context)}[{args[0].pretty(context, wrap_lit=False)}]"
+                expr = f"{slf}[{args[0].pretty(context, parens=False)}]"
             elif name == "__call__":
-                return f"{slf.pretty(context)}({', '.join(a.pretty(context, wrap_lit=False) for a in args)})"
+                expr = _pretty_call(context, slf, args)
             elif name == "__delitem__":
                 assert len(args) == 1
-                assert mutated_arg_type
-                name = context.name_expr(mutated_arg_type, slf)
-                context.statements.append(f"del {name}[{args[0].pretty(context, parens=False, wrap_lit=False)}]")
-                return name
+                expr = f"del {slf}[{args[0].pretty(context, parens=False)}]"
             elif name == "__setitem__":
                 assert len(args) == 2
-                assert mutated_arg_type
-                name = context.name_expr(mutated_arg_type, slf)
-                context.statements.append(
-                    f"{name}[{args[0].pretty(context, parens=False, wrap_lit=False)}] = {args[1].pretty(context, parens=False, wrap_lit=False)}"
-                )
-                return name
-            fn_str = f"{slf.pretty(context)}.{name}"
+                expr = f"{slf}[{args[0].pretty(context, parens=False)}] = {args[1].pretty(context, parens=False)}"
+            else:
+                expr = _pretty_call(context, f"{slf}.{name}", args)
         elif isinstance(ref, ConstantRef):
-            return ref.name
+            expr = ref.name
         elif isinstance(ref, ClassVariableRef):
-            return f"{ref.class_name}.{ref.variable_name}"
+            expr = f"{ref.class_name}.{ref.variable_name}"
         elif isinstance(ref, PropertyRef):
-            return f"{args[0].pretty(context)}.{ref.property_name}"
+            expr = f"{args[0].pretty(context)}.{ref.property_name}"
         else:
             assert_never(ref)
-        # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
-        n_defaults = 0
-        for arg, default in zip(reversed(args), reversed(defaults)):
-            if arg != default:
-                break
-            n_defaults += 1
-        if n_defaults:
-            args = args[:-n_defaults]
-        if mutated_arg_type:
-            name = context.name_expr(mutated_arg_type, args[0])
-            context.statements.append(
-                f"{fn_str}({', '.join({name}, *(a.pretty(context, wrap_lit=False) for a in args[1:]))})"
-            )
-            return name
-        return f"{fn_str}({', '.join(a.pretty(context, wrap_lit=False) for a in args)})"
+        # If we have a name, then we mutated
+        if expr_name:
+            context.statements.append(expr)
+            context.names[self] = expr_name
+            return expr_name
+
+        # We use a heuristic to decide whether to name this sub-expression as a variable
+        # The rough goal is to reduce the number of newlines, given our line length of ~180
+        # We determine it's worth making a new line for this expression if the total characters
+        # it would take up is > than some constant (~ line length).
+        n_parents = context.parents[self]
+        line_diff: int = len(expr) - LINE_DIFFERENCE
+        if n_parents > 1 and n_parents * line_diff > MAX_LINE_LENGTH:
+            expr_name = context.name_expr(function_decl.return_type, expr, copy_identifier=False)
+            context.names[self] = expr_name
+            return expr_name
+        return expr
+
+
+MAX_LINE_LENGTH = 110
+LINE_DIFFERENCE = 10
+
+
+def _plot_line_length(expr):
+    """
+    Plots the number of line lengths based on different max lengths
+    """
+    global MAX_LINE_LENGTH, LINE_DIFFERENCE
+    import altair as alt
+    import pandas as pd
+
+    sizes = []
+    for line_length in range(40, 180, 10):
+        MAX_LINE_LENGTH = line_length
+        for diff in range(0, 40, 5):
+            LINE_DIFFERENCE = diff
+            new_l = len(str(expr).split())
+            sizes.append((line_length, diff, new_l))
+
+    df = pd.DataFrame(sizes, columns=["MAX_LINE_LENGTH", "LENGTH_DIFFERENCE", "n"])
+
+    return alt.Chart(df).mark_rect().encode(x="MAX_LINE_LENGTH:O", y="LENGTH_DIFFERENCE:O", color="n:Q")
+
+
+def _pretty_call(context: PrettyContext, fn: str, args: Iterable[ExprDecl]) -> str:
+    return f"{fn}({', '.join(a.pretty(context, parens=False) for a in args)})"
 
 
 @dataclass
@@ -697,19 +753,42 @@ class PrettyContext:
     # List of statements of "context" setting variable for the expr
     statements: list[str] = field(default_factory=list)
 
+    names: dict[ExprDecl, str] = field(default_factory=dict)
+    parents: dict[ExprDecl, int] = field(default_factory=lambda: defaultdict(lambda: 0))
+    _traversed_exprs: set[ExprDecl] = field(default_factory=set)
+
+    # Mapping of type to the number of times we have generated a name for that type, used to generate unique names
     _gen_name_types: dict[str, int] = field(default_factory=lambda: defaultdict(lambda: 0))
 
     def generate_name(self, typ: str) -> str:
         self._gen_name_types[typ] += 1
         return f"_{typ}_{self._gen_name_types[typ]}"
 
-    def name_expr(self, expr_type: str, expr: ExprDecl) -> str:
-        name = self.generate_name(expr_type)
-        self.statements.append(f"{name} = copy({expr.pretty(self, parens=False)})")
+    def name_expr(self, expr_type: TypeOrVarRef, expr_str: str, copy_identifier: bool) -> str:
+        tp_name = expr_type.to_just().name
+        # If the thing we are naming is already a variable, we don't need to name it
+        if expr_str.isidentifier():
+            if copy_identifier:
+                name = self.generate_name(tp_name)
+                self.statements.append(f"{name} = copy({expr_str})")
+            else:
+                name = expr_str
+        else:
+            name = self.generate_name(tp_name)
+            self.statements.append(f"{name} = {expr_str}")
         return name
 
     def render(self, expr: str) -> str:
         return "\n".join(self.statements + [expr])
+
+    def traverse_for_parents(self, expr: ExprDecl) -> None:
+        if expr in self._traversed_exprs:
+            return
+        self._traversed_exprs.add(expr)
+        if isinstance(expr, CallDecl):
+            for arg in set(expr.args):
+                self.parents[arg.expr] += 1
+                self.traverse_for_parents(arg.expr)
 
 
 def test_expr_pretty():
