@@ -580,10 +580,25 @@ class CallDecl:
     # type parameters that were bound to the callable, if it is a classmethod
     # Used for pretty printing classmethod calls with type parameters
     bound_tp_params: Optional[tuple[JustTypeRef, ...]] = None
+    _cached_hash: Optional[int] = None
 
     def __post_init__(self):
         if self.bound_tp_params and not isinstance(self.callable, ClassMethodRef):
             raise ValueError("Cannot bind type parameters to a non-class method callable.")
+
+    def __hash__(self) -> int:
+        # Modified hash which will cache result for performance
+        if self._cached_hash is None:
+            res = hash((self.callable, self.args, self.bound_tp_params))
+            object.__setattr__(self, "_cached_hash", res)
+            return res
+        return self._cached_hash
+
+    def __eq__(self, other: object) -> bool:
+        # Override eq to use cached hash for perf
+        if not isinstance(other, CallDecl):
+            return False
+        return hash(self) == hash(other)
 
     @classmethod
     def from_egg(cls, mod_decls: ModuleDeclarations, call: bindings.Call) -> TypedExprDecl:
@@ -637,7 +652,7 @@ class CallDecl:
             first_arg = args[0]
             expr_str = first_arg.pretty(context, parens=False)
             # copy an identifer expression iff it has multiple parents (b/c then we can't mutate it directly)
-            has_multiple_parents = len(context.parents[first_arg]) > 1
+            has_multiple_parents = context.parents[first_arg] > 1
             expr_name = context.name_expr(function_decl.arg_types[0], expr_str, copy_identifier=has_multiple_parents)
             # Set the first arg to be the name of the mutated arg and return the name
             args[0] = VarDecl(expr_name)
@@ -693,15 +708,39 @@ class CallDecl:
         # We use a heuristic to decide whether to name this sub-expression as a variable
         # The rough goal is to reduce the number of newlines, given our line length of ~180
         # We determine it's worth making a new line for this expression if the total characters
-        # it would take up is > than some constant ~ line length.
-        n_parents = len(context.parents[self])
-        # amount saved per usage of expression
-        length_difference = len(expr) - 12
-        if n_parents * length_difference > 160:
+        # it would take up is > than some constant (~ line length).
+        n_parents = context.parents[self]
+        line_diff: int = len(expr) - LINE_DIFFERENCE
+        if n_parents > 1 and n_parents * line_diff > MAX_LINE_LENGTH:
             expr_name = context.name_expr(function_decl.return_type, expr, copy_identifier=False)
             context.names[self] = expr_name
             return expr_name
         return expr
+
+
+MAX_LINE_LENGTH = 110
+LINE_DIFFERENCE = 10
+
+
+def _plot_line_length(expr):
+    """
+    Plots the number of line lengths based on different max lengths
+    """
+    global MAX_LINE_LENGTH, LINE_DIFFERENCE
+    import altair as alt
+    import pandas as pd
+
+    sizes = []
+    for line_length in range(40, 180, 10):
+        MAX_LINE_LENGTH = line_length
+        for diff in range(0, 40, 5):
+            LINE_DIFFERENCE = diff
+            new_l = len(str(expr).split())
+            sizes.append((line_length, diff, new_l))
+
+    df = pd.DataFrame(sizes, columns=["MAX_LINE_LENGTH", "LENGTH_DIFFERENCE", "n"])
+
+    return alt.Chart(df).mark_rect().encode(x="MAX_LINE_LENGTH:O", y="LENGTH_DIFFERENCE:O", color="n:Q")
 
 
 def _pretty_call(context: PrettyContext, fn: str, args: Iterable[ExprDecl]) -> str:
@@ -715,7 +754,8 @@ class PrettyContext:
     statements: list[str] = field(default_factory=list)
 
     names: dict[ExprDecl, str] = field(default_factory=dict)
-    parents: dict[ExprDecl, set[ExprDecl]] = field(default_factory=lambda: defaultdict(set))
+    parents: dict[ExprDecl, int] = field(default_factory=lambda: defaultdict(lambda: 0))
+    _traversed_exprs: set[ExprDecl] = field(default_factory=set)
 
     # Mapping of type to the number of times we have generated a name for that type, used to generate unique names
     _gen_name_types: dict[str, int] = field(default_factory=lambda: defaultdict(lambda: 0))
@@ -742,9 +782,12 @@ class PrettyContext:
         return "\n".join(self.statements + [expr])
 
     def traverse_for_parents(self, expr: ExprDecl) -> None:
+        if expr in self._traversed_exprs:
+            return
+        self._traversed_exprs.add(expr)
         if isinstance(expr, CallDecl):
             for arg in set(expr.args):
-                self.parents[arg.expr].add(expr)
+                self.parents[arg.expr] += 1
                 self.traverse_for_parents(arg.expr)
 
 
