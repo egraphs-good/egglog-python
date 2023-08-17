@@ -59,9 +59,9 @@ eqsat_basic = """(datatype Math
   (Mul Math Math))
 
 ;; expr1 = 2 * (x + 3)
-(define expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))
+(let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))
 ;; expr2 = 6 + 2 * x
-(define expr2 (Add (Num 6) (Mul (Num 2) (Var "x"))))
+(let expr2 (Add (Num 6) (Mul (Num 2) (Var "x"))))
 
 
 (rewrite (Add a b)
