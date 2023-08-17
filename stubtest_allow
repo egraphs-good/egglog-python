@@ -1,2 +1,3 @@
 # Add allows for all no arg classes because they somehow take all args at runtime
 .*egglog.bindings.Unit.__init__.*
+.*egglog.bindings.CheckProof.__init__.*

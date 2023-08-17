@@ -7,17 +7,17 @@ use pyo3::types::PyDeltaAccess;
 use std::collections::HashMap;
 
 convert_enums!(
-    egglog::ast::Literal: "{:}" => Literal {
-        Int(value: i64)
+    egglog::ast::Literal: "{:}" Hash => Literal {
+        Int[trait=Hash](value: i64)
             i -> egglog::ast::Literal::Int(i.value),
             egglog::ast::Literal::Int(i) => Int { value: *i };
-        F64(value: WrappedOrderedF64)
+        F64[trait=Hash](value: WrappedOrderedF64)
             f -> egglog::ast::Literal::F64(f.value.0),
             egglog::ast::Literal::F64(f) => F64 { value: WrappedOrderedF64(*f) };
-        String_[name="String"](value: String)
+        String_[name="String"][trait=Hash](value: String)
             s -> egglog::ast::Literal::String((&s.value).into()),
             egglog::ast::Literal::String(s) => String_ { value: s.to_string() };
-        Unit()
+        Unit[trait=Hash]()
             _x -> egglog::ast::Literal::Unit,
             egglog::ast::Literal::Unit => Unit {}
     };
@@ -90,18 +90,18 @@ convert_enums!(
             s -> egglog::ast::Schedule::Sequence(s.schedules.iter().map(|s| s.into()).collect()),
             egglog::ast::Schedule::Sequence(s) => Sequence { schedules: s.iter().map(|s| s.into()).collect() }
     };
-    egglog::Term: "{}" => Term {
-        Lit(value: Literal)
+    egglog::Term: "{:?}" Hash => Term {
+        TermLit[trait=Hash](value: Literal)
             l -> egglog::Term::Lit((&l.value).into()),
-            egglog::Term::Lit(l) => Lit { value: l.into() };
-        Var(name: String)
+            egglog::Term::Lit(l) => TermLit { value: l.into() };
+        TermVar[trait=Hash](name: String)
             v -> egglog::Term::Var((&v.name).into()),
-            egglog::Term::Var(v) => Var { name: v.to_string() };
-        App(name: String, args: Vec<usize>)
-            a -> egglog::Term::App(a.sym, a.args.iter().map(|a| *a).collect()),
-            egglog::Term::App(s, a) => App {
+            egglog::Term::Var(v) => TermVar { name: v.to_string() };
+        TermApp[trait=Hash](name: String, args: Vec<usize>)
+            a -> egglog::Term::App(a.name.clone().into(), a.args.to_vec()),
+            egglog::Term::App(s, a) => TermApp {
                 name: s.to_string(),
-                args: a.iter().map(|a| *a).collect()
+                args: a.to_vec()
             }
     };
     egglog::ast::Command: "{}" => Command {
@@ -246,7 +246,7 @@ convert_enums!(
             i -> egglog::ast::Command::Include((&i.path).into()),
             egglog::ast::Command::Include(p) => Include { path: p.to_string() };
         CheckProof()
-            c -> egglog::ast::Command::CheckProof,
+            _c -> egglog::ast::Command::CheckProof,
             egglog::ast::Command::CheckProof => CheckProof {}
     }
 );
@@ -333,12 +333,12 @@ convert_struct!(
         r -> RunReport {updated: r.updated, search_time: r.search_time.into(), apply_time: r.apply_time.into(), rebuild_time: r.rebuild_time.into()};
     egglog::ExtractReport: "{:?}" => ExtractReport(
         cost: usize,
-        expr: Expr,
-        variants: Vec<Expr>,
+        expr: Term,
+        variants: Vec<Term>,
         termdag: TermDag
     )
-        r -> egglog::ExtractReport {cost: r.cost, expr: (&r.expr).into(), variants: r.variants.iter().map(|v| v.into()).collect(), termdag: (&r.termdag).into()},
-        r -> ExtractReport {cost: r.cost, expr: (&r.expr).into(), variants: r.variants.iter().map(|v| v.into()).collect(), termdag: (&r.termdag).into()}
+        e -> egglog::ExtractReport {cost: e.cost, expr: (&e.expr).into(), variants: e.variants.iter().map(|v| v.into()).collect(), termdag: (&e.termdag).into()},
+        e -> ExtractReport {cost: e.cost, expr: (&e.expr).into(), variants: e.variants.iter().map(|v| v.into()).collect(), termdag: (&e.termdag).into()}
 );
 
 impl FromPyObject<'_> for Box<Schedule> {
@@ -366,7 +366,7 @@ impl IntoPy<PyObject> for Box<Command> {
 }
 
 // Wrapped version of ordered float
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Hash)]
 pub struct WrappedOrderedF64(ordered_float::OrderedFloat<f64>);
 
 impl From<ordered_float::OrderedFloat<f64>> for WrappedOrderedF64 {

@@ -46,6 +46,10 @@ class Unit:
 
 _Literal = Int | F64 | String | Unit
 
+##
+# Expressions
+##
+
 @final
 class Lit:
     def __init__(self, value: _Literal) -> None: ...
@@ -64,6 +68,33 @@ class Call:
 
 # Unions must be private becuase it is not actually exposed by the runtime library.
 _Expr = Lit | Var | Call
+
+##
+# Terms
+##
+
+@final
+class TermLit:
+    def __init__(self, value: _Literal) -> None: ...
+    value: _Literal
+
+@final
+class TermVar:
+    def __init__(self, name: str) -> None: ...
+    name: str
+
+@final
+class TermApp:
+    def __init__(self, name: str, args: list[int]) -> None: ...
+    name: str
+    args: list[int]
+
+_Term = TermLit | TermVar | TermApp
+
+@final
+class TermDag:
+    nodes: list[_Term]
+    hashcons: dict[_Term, int]
 
 ##
 # Facts
@@ -99,13 +130,6 @@ class Set:
     rhs: _Expr
 
 @final
-class SetNoTrack:
-    def __init__(self, lhs: str, args: list[_Expr], rhs: _Expr) -> None: ...
-    lhs: str
-    args: list[_Expr]
-    rhs: _Expr
-
-@final
 class Delete:
     sym: str
     args: list[_Expr]
@@ -127,7 +151,13 @@ class Expr_:
     def __init__(self, expr: _Expr) -> None: ...
     expr: _Expr
 
-_Action = Let | Set | SetNoTrack | Delete | Union | Panic | Expr_
+@final
+class Extract:
+    def __init__(self, expr: _Expr, variants: _Expr) -> None: ...
+    expr: _Expr
+    variants: _Expr
+
+_Action = Let | Set | Delete | Union | Panic | Expr_ | Extract
 
 ##
 # Other Structs
@@ -141,6 +171,8 @@ class FunctionDecl:
     merge: _Expr | None
     merge_action: list[_Action]
     cost: int | None
+    unextractable: bool
+
     def __init__(
         self,
         name: str,
@@ -149,6 +181,7 @@ class FunctionDecl:
         merge: _Expr | None = None,
         merge_action: list[_Action] = [],
         cost: int | None = None,
+        unextractable: bool = False,
     ) -> None: ...
 
 @final
@@ -209,10 +242,10 @@ class RunReport:
 @final
 class ExtractReport:
     cost: int
-    expr: _Expr
-    variants: list[_Expr]
-
-    def __init__(self, cost: int, expr: _Expr, variants: list[_Expr]) -> None: ...
+    expr: _Term
+    variants: list[_Term]
+    termdag: TermDag
+    def __init__(self, cost: int, expr: _Term, variants: list[_Term], termdag: TermDag) -> None: ...
 
 ##
 # Schedules
@@ -275,13 +308,6 @@ class Function:
     def __init__(self, decl: FunctionDecl) -> None: ...
 
 @final
-class Define:
-    name: str
-    expr: _Expr
-    cost: int | None
-    def __init__(self, name: str, expr: _Expr, cost: int | None) -> None: ...
-
-@final
 class AddRuleset:
     name: str
     def __init__(self, name: str) -> None: ...
@@ -313,11 +339,6 @@ class ActionCommand:
     def __init__(self, action: _Action) -> None: ...
 
 @final
-class RunCommand:
-    config: RunConfig
-    def __init__(self, config: RunConfig) -> None: ...
-
-@final
 class RunScheduleCommand:
     schedule: _Schedule
     def __init__(self, schedule: _Schedule) -> None: ...
@@ -325,8 +346,8 @@ class RunScheduleCommand:
 @final
 class Simplify:
     expr: _Expr
-    config: RunConfig
-    def __init__(self, expr: _Expr, config: RunConfig) -> None: ...
+    schedule: _Schedule
+    def __init__(self, expr: _Expr, schedule: _Schedule) -> None: ...
 
 @final
 class Calc:
@@ -335,10 +356,10 @@ class Calc:
     def __init__(self, identifiers: list[IdentSort], exprs: list[_Expr]) -> None: ...
 
 @final
-class Extract:
+class QueryExtract:
     variants: int
-    expr: _Expr
-    def __init__(self, variants: int, expr: _Expr) -> None: ...
+    fact: _Fact
+    def __init__(self, variants: int, fact: _Fact) -> None: ...
 
 @final
 class Check:
@@ -346,7 +367,7 @@ class Check:
     def __init__(self, facts: list[_Fact]) -> None: ...
 
 @final
-class Print:
+class PrintTable:
     name: str
     length: int
     def __init__(self, name: str, length: int) -> None: ...
@@ -388,25 +409,27 @@ class Include:
     path: str
     def __init__(self, path: str) -> None: ...
 
+@final
+class CheckProof:
+    def __init__(self) -> None: ...
+
 _Command = (
     SetOption
     | Datatype
     | Declare
     | Sort
     | Function
-    | Define
     | AddRuleset
     | RuleCommand
     | RewriteCommand
     | BiRewriteCommand
     | ActionCommand
-    | RunCommand
     | RunScheduleCommand
     | Calc
     | Simplify
-    | Extract
+    | QueryExtract
     | Check
-    | Print
+    | PrintTable
     | PrintSize
     | Output
     | Input
@@ -414,4 +437,5 @@ _Command = (
     | Pop
     | Fail
     | Include
+    | CheckProof
 )

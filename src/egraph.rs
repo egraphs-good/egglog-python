@@ -84,7 +84,8 @@ impl EGraph {
     #[pyo3(signature = ())]
     fn to_graphviz_string(&self) -> String {
         info!("Getting graphviz");
-        self.egraph.to_graphviz_string()
+        // TODO: Expose full serialized e-graph in the future
+        self.egraph.serialize_for_graphviz().to_dot()
     }
 
     /// Register a Python object with the EGraph and return the Expr which represents it.

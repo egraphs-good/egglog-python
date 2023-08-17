@@ -29,9 +29,9 @@ pub fn data_repr<T: pyo3::PyClass>(
 #[macro_export]
 macro_rules! convert_enums {
     ($(
-        $from_type:ty: $str:literal => $to_type:ident {
+        $from_type:ty: $str:literal $($trait_outer:ty)? => $to_type:ident {
             $(
-                $variant:ident$([name=$py_name:literal])?($($field:ident: $field_type:ty),*)
+                $variant:ident$([name=$py_name:literal])?$([trait=$trait_inner:ty])?($($field:ident: $field_type:ty),*)
                 $from_ident:ident -> $from:expr,
                 $to_pat:pat => $to:expr
             );*
@@ -39,7 +39,7 @@ macro_rules! convert_enums {
     );*) => {
         $($(
             #[pyclass(unsendable, frozen, module="egg_smol.bindings"$(, name=$py_name)?)]
-            #[derive(Clone, PartialEq, Eq)]
+            #[derive(Clone, PartialEq, Eq$(, $trait_inner)?)]
             pub struct $variant {
                 $(
                     #[pyo3(get)]
@@ -85,7 +85,7 @@ macro_rules! convert_enums {
             }
         )*
 
-        #[derive(FromPyObject, Clone, PartialEq, Eq)]
+        #[derive(FromPyObject, Clone, PartialEq, Eq$(, $trait_outer)?)]
         pub enum $to_type {
             $(
                 $variant($variant),
