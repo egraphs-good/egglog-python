@@ -173,9 +173,9 @@ convert_enums!(
         ActionCommand(action: Action)
             a -> egglog::ast::Command::Action((&a.action).into()),
             egglog::ast::Command::Action(a) => ActionCommand { action: a.into() };
-        RunScheduleCommand(schedule: Schedule)
+        RunSchedule(schedule: Schedule)
             r -> egglog::ast::Command::RunSchedule((&r.schedule).into()),
-            egglog::ast::Command::RunSchedule(s) => RunScheduleCommand { schedule: s.into() };
+            egglog::ast::Command::RunSchedule(s) => RunSchedule { schedule: s.into() };
         Simplify(expr: Expr, schedule: Schedule)
             s -> egglog::ast::Command::Simplify {
                 expr: (&s.expr).into(),
@@ -248,6 +248,28 @@ convert_enums!(
         CheckProof()
             _c -> egglog::ast::Command::CheckProof,
             egglog::ast::Command::CheckProof => CheckProof {}
+    };
+    egglog::ExtractReport: "{:?}" => ExtractReport {
+        Best(termdag: TermDag, cost: usize, expr: Term)
+            b -> egglog::ExtractReport::Best {
+                termdag: (&b.termdag).into(),
+                cost: b.cost,
+                expr: (&b.expr).into()
+            },
+            egglog::ExtractReport::Best {termdag, cost, expr} => Best {
+                termdag: termdag.into(),
+                cost: *cost,
+                expr: expr.into()
+            };
+        Variants(termdag: TermDag, variants: Vec<Term>)
+            v -> egglog::ExtractReport::Variants {
+                termdag: (&v.termdag).into(),
+                variants: v.variants.iter().map(|v| v.into()).collect()
+            },
+            egglog::ExtractReport::Variants {termdag, variants} => Variants {
+                termdag: termdag.into(),
+                variants: variants.iter().map(|v| v.into()).collect()
+            }
     }
 );
 
@@ -313,7 +335,7 @@ convert_struct!(
         r -> Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()};
     egglog::ast::RunConfig: "{:?}" => RunConfig(
         ruleset: String,
-        until: Option<Vec<Fact_>>
+        until: Option<Vec<Fact_>> = None
     )
         r -> egglog::ast::RunConfig {ruleset: (&r.ruleset).into(), until: r.until.as_ref().map(|v| v.iter().map(|v| v.into()).collect())},
         r -> RunConfig {ruleset: r.ruleset.to_string(), until: r.until.as_ref().map(|v| v.iter().map(|v| v.into()).collect())};
@@ -330,15 +352,7 @@ convert_struct!(
         rebuild_time: WrappedDuration
     )
         r -> egglog::RunReport {updated: r.updated, search_time: r.search_time.0, apply_time: r.apply_time.0, rebuild_time: r.rebuild_time.0},
-        r -> RunReport {updated: r.updated, search_time: r.search_time.into(), apply_time: r.apply_time.into(), rebuild_time: r.rebuild_time.into()};
-    egglog::ExtractReport: "{:?}" => ExtractReport(
-        cost: usize,
-        expr: Term,
-        variants: Vec<Term>,
-        termdag: TermDag
-    )
-        e -> egglog::ExtractReport {cost: e.cost, expr: (&e.expr).into(), variants: e.variants.iter().map(|v| v.into()).collect(), termdag: (&e.termdag).into()},
-        e -> ExtractReport {cost: e.cost, expr: (&e.expr).into(), variants: e.variants.iter().map(|v| v.into()).collect(), termdag: (&e.termdag).into()}
+        r -> RunReport {updated: r.updated, search_time: r.search_time.into(), apply_time: r.apply_time.into(), rebuild_time: r.rebuild_time.into()}
 );
 
 impl FromPyObject<'_> for Box<Schedule> {

@@ -574,7 +574,7 @@ egraph.register(
 # (define y (Add (Num 6) (Mul (Num 2) (Var "x")))
 # (run 10)
 # (extract y :variants 2)
-y = egraph.define("y", Math(6) + Math(2) * Math.var("x"))
+y = egraph.let("y", Math(6) + Math(2) * Math.var("x"))
 egraph.run(10)
 # TODO: For some reason this is extracting temp vars
 # egraph.extract_multiple(y, 2)

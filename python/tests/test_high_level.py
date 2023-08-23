@@ -49,10 +49,10 @@ def test_eqsat_basic():
             ...
 
     # expr1 = 2 * (x + 3)
-    expr1 = egraph.define("expr1", Math(2) * (Math.var("x") + Math(3)))
+    expr1 = egraph.let("expr1", Math(2) * (Math.var("x") + Math(3)))
 
     # expr2 = 6 + 2 * x
-    expr2 = egraph.define("expr2", Math(6) + Math(2) * Math.var("x"))
+    expr2 = egraph.let("expr2", Math(6) + Math(2) * Math.var("x"))
 
     a, b, c = vars_("a b c", Math)
     x, y = vars_("x y", i64)
@@ -113,7 +113,7 @@ def test_fib_demand():
         set_(fib(0)).to(Num(0)),
         set_(fib(1)).to(Num(1)),
     )
-    f7 = egraph.define("f7", fib(7))
+    f7 = egraph.let("f7", fib(7))
     egraph.run(14)
     egraph.check(eq(f7).to(Num(13)))
     res = egraph.extract(f7)
@@ -325,13 +325,13 @@ def test_convert_int_float():
 def test_f64_negation() -> None:
     egraph = EGraph()
     # expr1 = -2.0
-    expr1 = egraph.define("expr1", -f64(2.0))
+    expr1 = egraph.let("expr1", -f64(2.0))
 
     # expr2 = 2.0
-    expr2 = egraph.define("expr2", f64(2.0))
+    expr2 = egraph.let("expr2", f64(2.0))
 
     # expr3 = -(-2.0)
-    expr3 = egraph.define("expr3", -(-f64(2.0)))
+    expr3 = egraph.let("expr3", -(-f64(2.0)))
     egraph.check(eq(expr1).to(-expr2))
     egraph.check(eq(expr3).to(expr2))
 

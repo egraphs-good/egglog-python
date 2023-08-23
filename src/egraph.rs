@@ -93,7 +93,7 @@ impl EGraph {
     fn save_object(&mut self, obj: PyObject) -> EggResult<Expr> {
         info!("Adding Python object {:?}", obj);
         let value = self.py_object_arcsort.store(obj);
-        let expr = self.py_object_arcsort.make_expr(&self.egraph, value);
+        let expr = self.py_object_arcsort.make_expr(&self.egraph, value).1;
         Ok(expr.into())
     }
 

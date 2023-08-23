@@ -599,14 +599,12 @@ class _BaseModule(ABC):
         self._process_commands(self._mod_decls.register_constant_callable(ref, type_ref, egg_name))
         return type_ref
 
-    def define(self, name: str, expr: EXPR) -> EXPR:
+    def let(self, name: str, expr: EXPR) -> EXPR:
         """
         Define a new expression in the egraph and return a reference to it.
         """
-        # Don't support cost and maybe will be removed in favor of let
-        # https://github.com/egraphs-good/egglog/issues/128#issuecomment-1523760578
         typed_expr = expr_parts(expr)
-        self._process_commands([bindings.Define(name, typed_expr.to_egg(self._mod_decls), None)])
+        self._process_commands([bindings.ActionCommand(bindings.Let(name, typed_expr.to_egg(self._mod_decls)))])
         return cast(EXPR, RuntimeExpr(self._mod_decls, TypedExprDecl(typed_expr.tp, VarDecl(name))))
 
 
@@ -684,19 +682,31 @@ class EGraph(_BaseModule):
 
         display(self)
 
-    def simplify(self, expr: EXPR, limit: int, *until: Fact, ruleset: Optional[Ruleset] = None) -> EXPR:
+    @overload
+    def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> EXPR:
+        ...
+
+    @overload
+    def simplify(self, expr: EXPR, schedule: Schedule, /) -> EXPR:
+        ...
+
+    def simplify(
+        self, expr: EXPR, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Optional[Ruleset] = None
+    ) -> EXPR:
         """
         Simplifies the given expression.
         """
+        if isinstance(limit_or_schedule, int):
+            limit_or_schedule = run(ruleset, *until) * limit_or_schedule
         typed_expr = expr_parts(expr)
         egg_expr = typed_expr.to_egg(self._mod_decls)
-        self._process_commands(
-            [bindings.Simplify(egg_expr, Run(limit, _ruleset_name(ruleset), until)._to_egg_config())]
-        )
+        self._process_commands([bindings.Simplify(egg_expr, limit_or_schedule._to_egg_schedule())])
         extract_report = self._egraph.extract_report()
-        if not extract_report:
+        if not isinstance(extract_report, bindings.Best):
             raise ValueError("No extract report saved")
-        new_typed_expr = TypedExprDecl.from_egg(self._mod_decls, extract_report.expr)
+        new_typed_expr = TypedExprDecl.from_egg(
+            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.expr)
+        )
         return cast(EXPR, RuntimeExpr(self._mod_decls, new_typed_expr))
 
     def include(self, path: str) -> None:
@@ -725,11 +735,11 @@ class EGraph(_BaseModule):
         Run the egraph until the given limit or until the given facts are true.
         """
         if isinstance(limit_or_schedule, int):
-            limit_or_schedule = run(ruleset, limit_or_schedule, *until)
+            limit_or_schedule = run(ruleset, *until) * limit_or_schedule
         return self._run_schedule(limit_or_schedule)
 
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
-        self._process_commands([bindings.RunScheduleCommand(schedule._to_egg_schedule())])
+        self._process_commands([bindings.RunSchedule(schedule._to_egg_schedule())])
         run_report = self._egraph.run_report()
         if not run_report:
             raise ValueError("No run report saved")
@@ -758,7 +768,11 @@ class EGraph(_BaseModule):
         typed_expr = expr_parts(expr)
         egg_expr = typed_expr.to_egg(self._mod_decls)
         extract_report = self._run_extract(egg_expr, 0)
-        new_typed_expr = TypedExprDecl.from_egg(self._mod_decls, extract_report.expr)
+        if not isinstance(extract_report, bindings.Best):
+            raise ValueError("No extract report saved")
+        new_typed_expr = TypedExprDecl.from_egg(
+            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.expr)
+        )
         if new_typed_expr.tp != typed_expr.tp:
             raise RuntimeError(f"Type mismatch: {new_typed_expr.tp} != {typed_expr.tp}")
         return cast(EXPR, RuntimeExpr(self._mod_decls, new_typed_expr))
@@ -770,11 +784,16 @@ class EGraph(_BaseModule):
         typed_expr = expr_parts(expr)
         egg_expr = typed_expr.to_egg(self._mod_decls)
         extract_report = self._run_extract(egg_expr, n)
-        new_exprs = [TypedExprDecl.from_egg(self._mod_decls, egg_expr) for egg_expr in extract_report.variants]
+        if not isinstance(extract_report, bindings.Variants):
+            raise ValueError("Wrong extract report type")
+        new_exprs = [
+            TypedExprDecl.from_egg(self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, term))
+            for term in extract_report.variants
+        ]
         return [cast(EXPR, RuntimeExpr(self._mod_decls, expr)) for expr in new_exprs]
 
-    def _run_extract(self, expr: bindings._Expr, n: int) -> bindings.ExtractReport:
-        self._process_commands([bindings.Extract(n, expr)])
+    def _run_extract(self, expr: bindings._Expr, n: int) -> bindings._ExtractReport:
+        self._process_commands([bindings.QueryExtract(n, bindings.Fact(expr=expr))])
         extract_report = self._egraph.extract_report()
         if not extract_report:
             raise ValueError("No extract report saved")
@@ -1122,12 +1141,11 @@ class Schedule(ABC):
 class Run(Schedule):
     """Configuration of a run"""
 
-    limit: int
     ruleset: str
     until: tuple[Fact, ...]
 
     def __str__(self) -> str:
-        args_str = ", ".join(map(str, [self.ruleset, self.limit, *self.until]))
+        args_str = ", ".join(map(str, [self.ruleset, *self.until]))
         return f"run({args_str})"
 
     def _to_egg_schedule(self) -> bindings._Schedule:
@@ -1136,7 +1154,6 @@ class Run(Schedule):
     def _to_egg_config(self) -> bindings.RunConfig:
         return bindings.RunConfig(
             self.ruleset,
-            self.limit,
             [fact._to_egg_fact() for fact in self.until] if self.until else None,
         )
 
@@ -1342,11 +1359,11 @@ def to_runtime_expr(expr: Expr) -> RuntimeExpr:
     return expr
 
 
-def run(ruleset: Optional[Ruleset] = None, limit: int = 1, *until: Fact) -> Run:
+def run(ruleset: Optional[Ruleset] = None, *until: Fact) -> Run:
     """
     Create a run configuration.
     """
-    return Run(limit, _ruleset_name(ruleset), tuple(until))
+    return Run(_ruleset_name(ruleset), tuple(until))
 
 
 def seq(*schedules: Schedule) -> Schedule:

@@ -143,14 +143,14 @@ egraph.register(
 
 
 # Define a number of dimensions
-n = egraph.define("n", Dim.named("n"))
-m = egraph.define("m", Dim.named("m"))
-p = egraph.define("p", Dim.named("p"))
+n = egraph.let("n", Dim.named("n"))
+m = egraph.let("m", Dim.named("m"))
+p = egraph.let("p", Dim.named("p"))
 
 # Define a number of matrices
-A = egraph.define("A", Matrix.named("A"))
-B = egraph.define("B", Matrix.named("B"))
-C = egraph.define("C", Matrix.named("C"))
+A = egraph.let("A", Matrix.named("A"))
+B = egraph.let("B", Matrix.named("B"))
+C = egraph.let("C", Matrix.named("C"))
 
 # Set each to be a square matrix of the given dimension
 egraph.register(
@@ -162,9 +162,9 @@ egraph.register(
     set_(C.ncols()).to(p),
 )
 # Create an example which should equal the kronecker product of A and B
-ex1 = egraph.define("ex1", kron(Matrix.identity(n), B) @ kron(A, Matrix.identity(m)))
-rows = egraph.define("rows", ex1.nrows())
-cols = egraph.define("cols", ex1.ncols())
+ex1 = egraph.let("ex1", kron(Matrix.identity(n), B) @ kron(A, Matrix.identity(m)))
+rows = egraph.let("rows", ex1.nrows())
+cols = egraph.let("cols", ex1.ncols())
 
 egraph.run(20)
 
@@ -173,10 +173,10 @@ egraph.check(eq(kron(Matrix.identity(n), B).nrows()).to(n * m))
 
 # Verify it matches the expected result
 # TODO
-simple_ex1 = egraph.define("simple_ex1", kron(A, B))
+simple_ex1 = egraph.let("simple_ex1", kron(A, B))
 egraph.check(eq(ex1).to(simple_ex1))
 
-ex2 = egraph.define("ex2", kron(Matrix.identity(p), C) @ kron(A, Matrix.identity(m)))
+ex2 = egraph.let("ex2", kron(Matrix.identity(p), C) @ kron(A, Matrix.identity(m)))
 
 egraph.run(10)
 # Verify it is not simplified

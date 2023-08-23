@@ -11,7 +11,7 @@ class EGraph:
     def __init__(self, fact_directory: str | Path | None = None, seminaive=True) -> None: ...
     def parse_program(self, __input: str, /) -> list[_Command]: ...
     def run_program(self, *commands: _Command) -> list[str]: ...
-    def extract_report(self) -> Optional[ExtractReport]: ...
+    def extract_report(self) -> Optional[_ExtractReport]: ...
     def run_report(self) -> Optional[RunReport]: ...
     def to_graphviz_string(self) -> str: ...
     def save_object(self, __o: object, /) -> _Expr: ...
@@ -214,9 +214,8 @@ class Rewrite:
 @final
 class RunConfig:
     ruleset: str
-    limit: int
     until: Optional[list[_Fact]]
-    def __init__(self, ruleset: str, limit: int, until: Optional[list[_Fact]] = None) -> None: ...
+    def __init__(self, ruleset: str, until: Optional[list[_Fact]] = None) -> None: ...
 
 @final
 class IdentSort:
@@ -240,12 +239,19 @@ class RunReport:
     ) -> None: ...
 
 @final
-class ExtractReport:
+class Variants:
+    termdag: TermDag
+    variants: list[_Term]
+    def __init__(self, termdag: TermDag, variants: list[_Term]) -> None: ...
+
+@final
+class Best:
+    termdag: TermDag
     cost: int
     expr: _Term
-    variants: list[_Term]
-    termdag: TermDag
-    def __init__(self, cost: int, expr: _Term, variants: list[_Term], termdag: TermDag) -> None: ...
+    def __init__(self, termdag: TermDag, cost: int, expr: _Term) -> None: ...
+
+_ExtractReport = Variants | Best
 
 ##
 # Schedules
@@ -339,7 +345,7 @@ class ActionCommand:
     def __init__(self, action: _Action) -> None: ...
 
 @final
-class RunScheduleCommand:
+class RunSchedule:
     schedule: _Schedule
     def __init__(self, schedule: _Schedule) -> None: ...
 
@@ -424,7 +430,7 @@ _Command = (
     | RewriteCommand
     | BiRewriteCommand
     | ActionCommand
-    | RunScheduleCommand
+    | RunSchedule
     | Calc
     | Simplify
     | QueryExtract
@@ -439,3 +445,5 @@ _Command = (
     | Include
     | CheckProof
 )
+
+def termdag_term_to_expr(termdag: TermDag, term: _Term) -> _Expr: ...

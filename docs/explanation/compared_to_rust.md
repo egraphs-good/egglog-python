@@ -122,10 +122,10 @@ class Math(Expr):
         ...
 
 # expr1 = 2 * (x + 3)
-expr1 = egraph.define("expr1", Math(2) * (Math.var("x") + Math(3)))
+expr1 = egraph.let("expr1", Math(2) * (Math.var("x") + Math(3)))
 
 # expr2 = 6 + 2 * x
-expr2 = egraph.define("expr2", Math(6) + Math(2) * Math.var("x"))
+expr2 = egraph.let("expr2", Math(6) + Math(2) * Math.var("x"))
 
 a, b, c = vars_("a b c", Math)
 x, y = vars_("x y", i64)

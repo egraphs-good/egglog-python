@@ -53,7 +53,7 @@ class TestEGraph:
           (Mul Math Math))
 
         ;; expr1 = 2 * (x + 3)
-        (define expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))"""
+        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))"""
         )
 
         assert res == [
@@ -66,22 +66,23 @@ class TestEGraph:
                     Variant("Mul", ["Math", "Math"]),
                 ],
             ),
-            Define(
-                "expr1",
-                Call(
-                    "Mul",
-                    [
-                        Call("Num", [Lit(Int(2))]),
-                        Call(
-                            "Add",
-                            [
-                                Call("Var", [Lit(String("x"))]),
-                                Call("Num", [Lit(Int(3))]),
-                            ],
-                        ),
-                    ],
-                ),
-                None,
+            ActionCommand(
+                Let(
+                    "expr1",
+                    Call(
+                        "Mul",
+                        [
+                            Call("Num", [Lit(Int(2))]),
+                            Call(
+                                "Add",
+                                [
+                                    Call("Var", [Lit(String("x"))]),
+                                    Call("Num", [Lit(Int(3))]),
+                                ],
+                            ),
+                        ],
+                    ),
+                )
             ),
         ]
 
@@ -89,7 +90,7 @@ class TestEGraph:
         program = "(check (= (+ 2 2) 4))"
         egraph = EGraph()
 
-        assert egraph.run_program(*egraph.parse_program(program)) == ["Checked."]
+        assert egraph.run_program(*egraph.parse_program(program)) == []
 
     def test_parse_and_run_program_exception(self):
         program = "(check (= 1 1.0))"
@@ -107,7 +108,7 @@ class TestEGraph:
         egraph.run_program(
             Datatype("Math", [Variant("Add", ["Math", "Math"])]),
             RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")]))),
-            RunCommand(RunConfig("", 10, None)),
+            RunSchedule(Repeat(10, Run(RunConfig("")))),
         )
         end_time = datetime.datetime.now()
 
@@ -122,19 +123,27 @@ class TestEGraph:
         egraph = EGraph()
         egraph.run_program(
             Datatype("Expr", [Variant("Num", ["i64"], cost=5)]),
-            Define("x", Call("Num", [Lit(Int(1))]), 10),
-            Define("y", Call("Num", [Lit(Int(2))]), 1),
-            Extract(0, Var("x")),
+            ActionCommand(Let("x", Call("Num", [Lit(Int(1))]))),
+            QueryExtract(0, Fact(Var("x"))),
         )
-        assert egraph.extract_report() == ExtractReport(6, Call("Num", [Lit(Int(1))]), [])
-        egraph.run_program(Extract(0, Var("y")))
-        pytest.xfail(reason="https://github.com/egraphs-good/egglog/issues/128")
-        assert egraph.extract_report() == ExtractReport(1, Call("y", []), [])
 
-    def test_extract_string(self):
+        extract_report = egraph.extract_report()
+        assert isinstance(extract_report, Best)
+        assert extract_report.cost == 6
+        assert termdag_term_to_expr(extract_report.termdag, extract_report.expr) == Call("Num", [Lit(Int(1))])
+
+    def test_simplify(self):
         egraph = EGraph()
-        egraph.run_program(Define("x", Lit(String("hello")), None), Extract(0, Var("x")))
-        assert egraph.extract_report() == ExtractReport(0, Lit(String("hello")), [])
+        egraph.run_program(
+            Datatype("Expr", [Variant("Num", ["i64"], cost=5)]),
+            ActionCommand(Let("x", Call("Num", [Lit(Int(1))]))),
+            Simplify(Var("x"), Run(RunConfig(""))),
+        )
+
+        extract_report = egraph.extract_report()
+        assert isinstance(extract_report, Best)
+        assert extract_report.cost == 6
+        assert termdag_term_to_expr(extract_report.termdag, extract_report.expr) == Call("Num", [Lit(Int(1))])
 
     def test_sort_alias(self):
         # From map example
@@ -144,23 +153,23 @@ class TestEGraph:
                 "MyMap",
                 ("Map", [Var("i64"), Var("String")]),
             ),
-            Define("my_map1", Call("map-insert", [Call("map-empty", []), Lit(Int(1)), Lit(String("one"))]), None),
-            Define("my_map2", Call("map-insert", [Var("my_map1"), Lit(Int(2)), Lit(String("two"))]), None),
+            ActionCommand(Let("my_map1", Call("map-insert", [Call("map-empty", []), Lit(Int(1)), Lit(String("one"))]))),
+            ActionCommand(Let("my_map2", Call("map-insert", [Var("my_map1"), Lit(Int(2)), Lit(String("two"))]))),
             Check([Eq([Lit(String("one")), Call("map-get", [Var("my_map1"), Lit(Int(1))])])]),
-            Extract(0, Var("my_map2")),
+            ActionCommand(Extract(Var("my_map2"), Lit(Int(0)))),
         )
-        assert egraph.extract_report() == ExtractReport(
-            0,
-            Call(
-                "map-insert",
-                [
-                    Call("map-insert", [Call("map-empty", []), Lit(Int(2)), Lit(String("two"))]),
-                    Lit(Int(1)),
-                    Lit(String("one")),
-                ],
-            ),
-            [],
+
+        extract_report = egraph.extract_report()
+        assert isinstance(extract_report, Best)
+        assert termdag_term_to_expr(extract_report.termdag, extract_report.expr) == Call(
+            "map-insert",
+            [
+                Call("map-insert", [Call("map-empty", []), Lit(Int(2)), Lit(String("two"))]),
+                Lit(Int(1)),
+                Lit(String("one")),
+            ],
         )
+        assert extract_report.cost == 4
 
 
 class TestVariant:
