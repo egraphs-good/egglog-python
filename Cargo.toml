@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.18.1", features = ["extension-module"] }
 # egglog = { git = "https://github.com/egraphs-good/egglog", rev = "0f777d6700d860e21137ef2cfbdbe5f7ae31b701" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "a3cc0c43b1e40b7a2f0af286bb131a33530dd7e4" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "47dba2bba6a426d0a554ce956eab238b2ff8d7bc" }
 # egglog = { path = "../egg-smol" }
 
 pyo3-log = "0.8.1"
