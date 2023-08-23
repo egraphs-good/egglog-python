@@ -97,11 +97,11 @@ convert_enums!(
         TermVar[trait=Hash](name: String)
             v -> egglog::Term::Var((&v.name).into()),
             egglog::Term::Var(v) => TermVar { name: v.to_string() };
-        TermApp[trait=Hash](name: String, args: Vec<usize>)
-            a -> egglog::Term::App(a.name.clone().into(), a.args.to_vec()),
+        TermApp[trait=Hash](name: String, args: Vec<TermId>)
+            a -> egglog::Term::App(a.name.clone().into(), a.args.iter().map(|a| a.clone().into()).collect()),
             egglog::Term::App(s, a) => TermApp {
                 name: s.to_string(),
-                args: a.to_vec()
+                args: a.iter().map(|a| (*a).into()).collect()
             }
     };
     egglog::ast::Command: "{}" => Command {
@@ -274,12 +274,17 @@ convert_enums!(
 );
 
 convert_struct!(
+    egglog::TermId: "{:?}" Hash => TermId(
+        id: usize
+    )
+        t -> egglog::TermId(t.id),
+        t -> TermId {id: t.0};
     egglog::TermDag: "{:?}" => TermDag(
         nodes: Vec<Term>,
-        hashcons: HashMap<Term, usize>
+        hashcons: HashMap<Term, TermId>
     )
-        t -> egglog::TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), *v)).collect()},
-        t -> TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), *v)).collect()};
+        t -> egglog::TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), v.clone().into())).collect()},
+        t -> TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), v.into())).collect()};
     egglog::ast::FunctionDecl: "{:?}" => FunctionDecl(
         name: String,
         schema: Schema,

@@ -173,13 +173,13 @@ macro_rules! convert_enums {
 #[macro_export]
 macro_rules! convert_struct {
     ($(
-        $from_type:ty: $str:literal => $to_type:ident($($field:ident: $field_type:ty$( = $default:expr)?),*)
+        $from_type:ty: $str:literal $($struct_trait:ty)? => $to_type:ident($($field:ident: $field_type:ty$( = $default:expr)?),*)
             $from_ident:ident -> $from:expr,
             $to_ident:ident -> $to:expr
     );*) => {
         $(
             #[pyclass(frozen, module="egg_smol.bindings")]
-            #[derive(Clone, PartialEq, Eq)]
+            #[derive(Clone, PartialEq, Eq$(, $struct_trait)?)]
             pub struct $to_type {
                 $(
                     #[pyo3(get)]

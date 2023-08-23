@@ -174,7 +174,7 @@ def test_simplify_constant():
 
 
 def test_extract_constant_twice():
-    # Sometimes extrcting a constant twice will give an error
+    # Sometimes extracting a constant twice will give an error
     egraph = EGraph()
 
     @egraph.class_

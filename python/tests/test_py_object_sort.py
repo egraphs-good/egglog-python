@@ -64,7 +64,7 @@ class TestDictUpdate:
                     Call("py-dict-update", [dict_expr, a_expr, new_value_expr, b_expr, new_value_expr]),
                 )
             ),
-            ActionCommand(Extract(Var("new_dict"), Lit(Int(1)))),
+            ActionCommand(Extract(Var("new_dict"), Lit(Int(0)))),
         )
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
@@ -103,7 +103,7 @@ class TestEval:
                     ),
                 )
             ),
-            ActionCommand(Extract(Var("res"), Lit(Int(1)))),
+            ActionCommand(Extract(Var("res"), Lit(Int(0)))),
         )
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
@@ -121,7 +121,7 @@ class TestConversion:
 
         egraph.run_program(
             ActionCommand(Let("res", Call("py-to-string", [hi]))),
-            ActionCommand(Extract(Var("res"), Lit(Int(1)))),
+            ActionCommand(Extract(Var("res"), Lit(Int(0)))),
         )
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
@@ -135,7 +135,7 @@ class TestConversion:
 
         egraph.run_program(
             ActionCommand(Let("res", Call("py-from-string", [Lit(String("hi"))]))),
-            ActionCommand(Extract(Var("res"), Lit(Int(1)))),
+            ActionCommand(Extract(Var("res"), Lit(Int(0)))),
         )
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)

@@ -793,7 +793,9 @@ class EGraph(_BaseModule):
         return [cast(EXPR, RuntimeExpr(self._mod_decls, expr)) for expr in new_exprs]
 
     def _run_extract(self, expr: bindings._Expr, n: int) -> bindings._ExtractReport:
-        self._process_commands([bindings.QueryExtract(n, bindings.Fact(expr=expr))])
+        self._process_commands(
+            [bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n))))]
+        )
         extract_report = self._egraph.extract_report()
         if not extract_report:
             raise ValueError("No extract report saved")
