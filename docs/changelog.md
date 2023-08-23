@@ -28,6 +28,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
   - Switches to termdag introduced in [egglog #176](https://github.com/egraphs-good/egglog/pull/176)
   - Removes custom fork of egglog now that visualizations are in core
   - Adds int and float to string functions
+  - Switches `define` to `let`
 
 ## 0.5.1 (2023-07-18)
 
