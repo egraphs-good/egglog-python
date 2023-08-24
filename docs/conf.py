@@ -120,7 +120,7 @@ nb_execution_mode = "force"
 # nb_execution_allow_errors = False
 
 # Raise an exception on failed execution, rather than emitting a warning
-nb_execution_raise_on_error = Trje
+nb_execution_raise_on_error = True
 
 # Print traceback to stderr on execution error
 nb_execution_show_tb = True
