@@ -7,7 +7,7 @@ The top level `define` method declares a function that takes no args with the na
 Whereas the other define, inserts into the locals table the expression.
 
 ```python
-In [22]: egraph.define("z", Lit(Int(1)))
+In [22]: egraph.let("z", Lit(Int(1)))
 
 In [23]: egraph.extract_expr(Var("z"))
 Out[23]: (0, Lit(Int(1)), [])
@@ -15,7 +15,7 @@ Out[23]: (0, Lit(Int(1)), [])
 In [24]: egraph.print_function("z", 10)
 Out[24]: '(z) -> 1\n'
 
-In [25]: egraph.eval_actions(Define("a", Lit(Int(1))))
+In [25]: egraph.eval_actions(Let("a", Lit(Int(1))))
 
 In [26]: egraph.print_function("a", 10)
 ---------------------------------------------------------------------------

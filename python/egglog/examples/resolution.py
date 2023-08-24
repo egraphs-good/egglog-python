@@ -67,9 +67,9 @@ def pred(x: i64Like) -> Bool:  # type: ignore[empty-body]
     ...
 
 
-p0 = egraph.define("p0", pred(0))
-p1 = egraph.define("p1", pred(1))
-p2 = egraph.define("p2", pred(2))
+p0 = egraph.let("p0", pred(0))
+p1 = egraph.let("p1", pred(1))
+p2 = egraph.let("p2", pred(2))
 egraph.register(
     set_(p1 | (~p2 | F)).to(T),
     set_(p2 | (~p0 | F)).to(T),

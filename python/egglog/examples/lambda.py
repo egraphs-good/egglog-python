@@ -197,7 +197,7 @@ assert_simplifies(
 a = Term.var(Var("a"))
 b = Term.var(Var("b"))
 with egraph:
-    e1 = egraph.define("e1", if_(a == b, a + a, a + b))
+    e1 = egraph.let("e1", if_(a == b, a + a, a + b))
     egraph.run(10)
     egraph.check(eq(e1).to(a + b))
 
@@ -215,14 +215,14 @@ assert_simplifies(
 )
 # lambda capture free
 with egraph:
-    e5 = egraph.define("e5", let_(y, Term.var(x) + Term.var(x), l(lambda x: Term.var(y))))
+    e5 = egraph.let("e5", let_(y, Term.var(x) + Term.var(x), l(lambda x: Term.var(y))))
     egraph.run(10)
     egraph.check(freer(l(lambda x: Term.var(y))).contains(y))
     egraph.check_fail(eq(e5).to(l(lambda x: x + x)))
 
 # lambda_closure_not_seven
 with egraph:
-    e6 = egraph.define(
+    e6 = egraph.let(
         "e6",
         let_(
             Var("five"),
@@ -243,7 +243,7 @@ with egraph:
 with egraph:
     compose = Var("compose")
     add1 = Var("add1")
-    e7 = egraph.define(
+    e7 = egraph.let(
         "e7",
         let_(
             compose,

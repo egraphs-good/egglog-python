@@ -26,9 +26,9 @@ class Num(Expr):
 
 
 # expr1 = 2 * (x + 3)
-expr1 = egraph.define("expr1", Num(2) * (Num.var("x") + Num(3)))
+expr1 = egraph.let("expr1", Num(2) * (Num.var("x") + Num(3)))
 # expr2 = 6 + 2 * x
-expr2 = egraph.define("expr2", Num(6) + Num(2) * Num.var("x"))
+expr2 = egraph.let("expr2", Num(6) + Num(2) * Num.var("x"))
 
 a, b, c = vars_("a b c", Num)
 i, j = vars_("i j", i64)

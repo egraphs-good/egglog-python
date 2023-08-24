@@ -30,11 +30,11 @@ runtime_ruleset = egraph.ruleset("runtime")
 def extract_py(e: Expr) -> Any:
     print(e)
     egraph.register(e)
-    egraph.run(run(limit=10).saturate())
+    egraph.run((run() * 10).saturate())
     final_object = egraph.extract(e)
     print(f"  -> {final_object}")
     # with egraph:
-    egraph.run((run(runtime_ruleset, limit=10) + run(limit=10)).saturate())
+    egraph.run((run(runtime_ruleset) * 10 + run() * 10).saturate())
     # Run saturation again b/c sometimes it doesn't work the first time.
     # final_object = egraph.extract(egraph.extract(final_object))
     # egraph.run(run(limit=10).saturate())

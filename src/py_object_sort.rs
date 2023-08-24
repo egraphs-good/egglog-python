@@ -110,7 +110,7 @@ impl Sort for PyObjectSort {
             int: typeinfo.get_sort(),
         });
     }
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (usize, Expr) {
         assert!(value.tag == self.name());
         let (ident, _) = self.load(&value);
         let children = match ident {
@@ -124,7 +124,7 @@ impl Sort for PyObjectSort {
                 ]
             }
         };
-        Expr::call("py-object", children)
+        (1, Expr::call("py-object", children))
     }
 }
 

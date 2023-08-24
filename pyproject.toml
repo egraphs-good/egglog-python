@@ -39,7 +39,9 @@ docs = [
     "sphinx-autodoc-typehints",
     "sphinx-gallery",
     "matplotlib",
+    "scikit-learn",
     "nbconvert",
+    "array_api_compat",
 ]
 
 

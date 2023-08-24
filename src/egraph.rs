@@ -84,7 +84,8 @@ impl EGraph {
     #[pyo3(signature = ())]
     fn to_graphviz_string(&self) -> String {
         info!("Getting graphviz");
-        self.egraph.to_graphviz_string()
+        // TODO: Expose full serialized e-graph in the future
+        self.egraph.serialize_for_graphviz().to_dot()
     }
 
     /// Register a Python object with the EGraph and return the Expr which represents it.
@@ -92,7 +93,7 @@ impl EGraph {
     fn save_object(&mut self, obj: PyObject) -> EggResult<Expr> {
         info!("Adding Python object {:?}", obj);
         let value = self.py_object_arcsort.store(obj);
-        let expr = self.py_object_arcsort.make_expr(&self.egraph, value);
+        let expr = self.py_object_arcsort.make_expr(&self.egraph, value).1;
         Ok(expr.into())
     }
 

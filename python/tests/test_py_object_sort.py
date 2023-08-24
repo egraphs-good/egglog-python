@@ -58,16 +58,17 @@ class TestDictUpdate:
         a_expr = egraph.save_object("a")
         b_expr = egraph.save_object("b")
         egraph.run_program(
-            Define(
-                "new_dict",
-                Call("py-dict-update", [dict_expr, a_expr, new_value_expr, b_expr, new_value_expr]),
-                None,
+            ActionCommand(
+                Let(
+                    "new_dict",
+                    Call("py-dict-update", [dict_expr, a_expr, new_value_expr, b_expr, new_value_expr]),
+                )
             ),
-            Extract(1, Var("new_dict")),
+            ActionCommand(Extract(Var("new_dict"), Lit(Int(0)))),
         )
         extract_report = egraph.extract_report()
-        assert extract_report
-        res = egraph.load_object(extract_report.expr)
+        assert isinstance(extract_report, Best)
+        res = egraph.load_object(termdag_term_to_expr(extract_report.termdag, extract_report.expr))
         assert res == {"a": 2, "b": 2}
 
         # Verify that the original dict is unchanged
@@ -89,23 +90,24 @@ class TestEval:
         x_expr = egraph.save_object("x")
         y_expr = egraph.save_object("y")
         egraph.run_program(
-            Define(
-                "res",
-                Call(
-                    "py-eval",
-                    [
-                        Lit(String("my_add(x, y)")),
-                        globals_,
-                        Call("py-dict-update", [locals_, x_expr, one, y_expr, two]),
-                    ],
-                ),
-                None,
+            ActionCommand(
+                Let(
+                    "res",
+                    Call(
+                        "py-eval",
+                        [
+                            Lit(String("my_add(x, y)")),
+                            globals_,
+                            Call("py-dict-update", [locals_, x_expr, one, y_expr, two]),
+                        ],
+                    ),
+                )
             ),
-            Extract(1, Var("res")),
+            ActionCommand(Extract(Var("res"), Lit(Int(0)))),
         )
         extract_report = egraph.extract_report()
-        assert extract_report
-        res = egraph.load_object(extract_report.expr)
+        assert isinstance(extract_report, Best)
+        res = egraph.load_object(termdag_term_to_expr(extract_report.termdag, extract_report.expr))
         assert res == 3
 
 
@@ -118,12 +120,12 @@ class TestConversion:
         hi = egraph.save_object("hi")
 
         egraph.run_program(
-            Define("res", Call("py-to-string", [hi]), None),
-            Extract(1, Var("res")),
+            ActionCommand(Let("res", Call("py-to-string", [hi]))),
+            ActionCommand(Extract(Var("res"), Lit(Int(0)))),
         )
         extract_report = egraph.extract_report()
-        assert extract_report
-        assert extract_report.expr == Lit(String("hi"))
+        assert isinstance(extract_report, Best)
+        assert termdag_term_to_expr(extract_report.termdag, extract_report.expr) == Lit(String("hi"))
 
     def test_from_string(self):
         """
@@ -132,10 +134,10 @@ class TestConversion:
         egraph = EGraph()
 
         egraph.run_program(
-            Define("res", Call("py-from-string", [Lit(String("hi"))]), None),
-            Extract(1, Var("res")),
+            ActionCommand(Let("res", Call("py-from-string", [Lit(String("hi"))]))),
+            ActionCommand(Extract(Var("res"), Lit(Int(0)))),
         )
         extract_report = egraph.extract_report()
-        assert extract_report
-        res = egraph.load_object(extract_report.expr)
+        assert isinstance(extract_report, Best)
+        res = egraph.load_object(termdag_term_to_expr(extract_report.termdag, extract_report.expr))
         assert res == "hi"

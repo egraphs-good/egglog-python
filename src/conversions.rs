@@ -4,18 +4,20 @@ use crate::utils::*;
 use ordered_float::OrderedFloat;
 use pyo3::prelude::*;
 use pyo3::types::PyDeltaAccess;
+use std::collections::HashMap;
+
 convert_enums!(
-    egglog::ast::Literal: "{:}" => Literal {
-        Int(value: i64)
+    egglog::ast::Literal: "{:}" Hash => Literal {
+        Int[trait=Hash](value: i64)
             i -> egglog::ast::Literal::Int(i.value),
             egglog::ast::Literal::Int(i) => Int { value: *i };
-        F64(value: WrappedOrderedF64)
+        F64[trait=Hash](value: WrappedOrderedF64)
             f -> egglog::ast::Literal::F64(f.value.0),
             egglog::ast::Literal::F64(f) => F64 { value: WrappedOrderedF64(*f) };
-        String_[name="String"](value: String)
+        String_[name="String"][trait=Hash](value: String)
             s -> egglog::ast::Literal::String((&s.value).into()),
             egglog::ast::Literal::String(s) => String_ { value: s.to_string() };
-        Unit()
+        Unit[trait=Hash]()
             _x -> egglog::ast::Literal::Unit,
             egglog::ast::Literal::Unit => Unit {}
     };
@@ -52,13 +54,6 @@ convert_enums!(
                 args: a.iter().map(|e| e.into()).collect(),
                 rhs: e.into()
             };
-        SetNoTrack(lhs: String, args: Vec<Expr>, rhs: Expr)
-            s -> egglog::ast::Action::SetNoTrack((&s.lhs).into(), s.args.iter().map(|e| e.into()).collect(), (&s.rhs).into()),
-            egglog::ast::Action::SetNoTrack(n, a, e) => SetNoTrack {
-                lhs: n.to_string(),
-                args: a.iter().map(|e| e.into()).collect(),
-                rhs: e.into()
-            };
         Delete(sym: String, args: Vec<Expr>)
             d -> egglog::ast::Action::Delete((&d.sym).into(), d.args.iter().map(|e| e.into()).collect()),
             egglog::ast::Action::Delete(n, a) => Delete {
@@ -73,7 +68,13 @@ convert_enums!(
             egglog::ast::Action::Panic(msg) => Panic { msg: msg.to_string()  };
         Expr_(expr: Expr)
             e -> egglog::ast::Action::Expr((&e.expr).into()),
-            egglog::ast::Action::Expr(e) => Expr_ { expr: e.into() }
+            egglog::ast::Action::Expr(e) => Expr_ { expr: e.into() };
+        Extract(expr: Expr, variants: Expr)
+            e -> egglog::ast::Action::Extract((&e.expr).into(), (&e.variants).into()),
+            egglog::ast::Action::Extract(e, v) => Extract {
+                expr: e.into(),
+                variants: v.into()
+            }
     };
     egglog::ast::Schedule: "{}" => Schedule {
         Saturate(schedule: Box<Schedule>)
@@ -88,6 +89,20 @@ convert_enums!(
         Sequence(schedules: Vec<Schedule>)
             s -> egglog::ast::Schedule::Sequence(s.schedules.iter().map(|s| s.into()).collect()),
             egglog::ast::Schedule::Sequence(s) => Sequence { schedules: s.iter().map(|s| s.into()).collect() }
+    };
+    egglog::Term: "{:?}" Hash => Term {
+        TermLit[trait=Hash](value: Literal)
+            l -> egglog::Term::Lit((&l.value).into()),
+            egglog::Term::Lit(l) => TermLit { value: l.into() };
+        TermVar[trait=Hash](name: String)
+            v -> egglog::Term::Var((&v.name).into()),
+            egglog::Term::Var(v) => TermVar { name: v.to_string() };
+        TermApp[trait=Hash](name: String, args: Vec<usize>)
+            a -> egglog::Term::App(a.name.clone().into(), a.args.to_vec()),
+            egglog::Term::App(s, a) => TermApp {
+                name: s.to_string(),
+                args: a.to_vec()
+            }
     };
     egglog::ast::Command: "{}" => Command {
         SetOption(name: String, value: Expr)
@@ -129,17 +144,6 @@ convert_enums!(
         Function(decl: FunctionDecl)
             f -> egglog::ast::Command::Function((&f.decl).into()),
             egglog::ast::Command::Function(f) => Function { decl: f.into() };
-        Define(name: String, expr: Expr, cost: Option<usize>)
-            d -> egglog::ast::Command::Define {
-                name: (&d.name).into(),
-                expr: (&d.expr).into(),
-                cost: d.cost
-            },
-            egglog::ast::Command::Define {name, expr, cost} => Define {
-                name: name.to_string(),
-                expr: expr.into(),
-                cost: *cost
-            };
         AddRuleset(name: String)
             a -> egglog::ast::Command::AddRuleset((&a.name).into()),
             egglog::ast::Command::AddRuleset(n) => AddRuleset { name: n.to_string() };
@@ -169,20 +173,17 @@ convert_enums!(
         ActionCommand(action: Action)
             a -> egglog::ast::Command::Action((&a.action).into()),
             egglog::ast::Command::Action(a) => ActionCommand { action: a.into() };
-        RunCommand(config: RunConfig)
-            r -> egglog::ast::Command::Run((&r.config).into()),
-            egglog::ast::Command::Run(config) => RunCommand { config: config.into() };
-        RunScheduleCommand(schedule: Schedule)
+        RunSchedule(schedule: Schedule)
             r -> egglog::ast::Command::RunSchedule((&r.schedule).into()),
-            egglog::ast::Command::RunSchedule(s) => RunScheduleCommand { schedule: s.into() };
-        Simplify(expr: Expr, config: RunConfig)
+            egglog::ast::Command::RunSchedule(s) => RunSchedule { schedule: s.into() };
+        Simplify(expr: Expr, schedule: Schedule)
             s -> egglog::ast::Command::Simplify {
                 expr: (&s.expr).into(),
-                config: (&s.config).into()
+                schedule: (&s.schedule).into()
             },
-            egglog::ast::Command::Simplify {expr, config} => Simplify {
+            egglog::ast::Command::Simplify {expr, schedule} => Simplify {
                 expr: expr.into(),
-                config: config.into()
+                schedule: schedule.into()
             };
         Calc(identifiers: Vec<IdentSort>, exprs: Vec<Expr>)
             c -> egglog::ast::Command::Calc(
@@ -193,21 +194,21 @@ convert_enums!(
                 identifiers: identifiers.iter().map(|i| i.into()).collect(),
                 exprs: exprs.iter().map(|e| e.into()).collect()
             };
-        Extract(variants: usize, expr: Expr)
+        QueryExtract(variants: usize, fact: Fact_)
             e -> egglog::ast::Command::Extract {
                 variants: e.variants,
-                e: (&e.expr).into()
+                fact: (&e.fact).into()
             },
-            egglog::ast::Command::Extract {variants, e} => Extract {
+            egglog::ast::Command::Extract {variants, fact} => QueryExtract {
                 variants: *variants,
-                expr: e.into()
+                fact: fact.into()
             };
         Check(facts: Vec<Fact_>)
             c -> egglog::ast::Command::Check(c.facts.iter().map(|f| f.into()).collect()),
             egglog::ast::Command::Check(facts) => Check { facts: facts.iter().map(|f| f.into()).collect() };
-        Print(name: String, length: usize)
-            p -> egglog::ast::Command::Print((&p.name).into(), p.length),
-            egglog::ast::Command::Print(n, l) => Print {
+            PrintTable(name: String, length: usize)
+            p -> egglog::ast::Command::PrintTable((&p.name).into(), p.length),
+            egglog::ast::Command::PrintTable(n, l) => PrintTable {
                 name: n.to_string(),
                 length: *l
             };
@@ -243,19 +244,50 @@ convert_enums!(
             egglog::ast::Command::Fail(c) => Fail { command: Box::new((c).into()) };
         Include(path: String)
             i -> egglog::ast::Command::Include((&i.path).into()),
-            egglog::ast::Command::Include(p) => Include { path: p.to_string() }
-
+            egglog::ast::Command::Include(p) => Include { path: p.to_string() };
+        CheckProof()
+            _c -> egglog::ast::Command::CheckProof,
+            egglog::ast::Command::CheckProof => CheckProof {}
+    };
+    egglog::ExtractReport: "{:?}" => ExtractReport {
+        Best(termdag: TermDag, cost: usize, expr: Term)
+            b -> egglog::ExtractReport::Best {
+                termdag: (&b.termdag).into(),
+                cost: b.cost,
+                expr: (&b.expr).into()
+            },
+            egglog::ExtractReport::Best {termdag, cost, expr} => Best {
+                termdag: termdag.into(),
+                cost: *cost,
+                expr: expr.into()
+            };
+        Variants(termdag: TermDag, variants: Vec<Term>)
+            v -> egglog::ExtractReport::Variants {
+                termdag: (&v.termdag).into(),
+                variants: v.variants.iter().map(|v| v.into()).collect()
+            },
+            egglog::ExtractReport::Variants {termdag, variants} => Variants {
+                termdag: termdag.into(),
+                variants: variants.iter().map(|v| v.into()).collect()
+            }
     }
 );
 
 convert_struct!(
+    egglog::TermDag: "{:?}" => TermDag(
+        nodes: Vec<Term>,
+        hashcons: HashMap<Term, usize>
+    )
+        t -> egglog::TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), v.clone().into())).collect()},
+        t -> TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), *v)).collect()};
     egglog::ast::FunctionDecl: "{:?}" => FunctionDecl(
         name: String,
         schema: Schema,
         default: Option<Expr> = None,
         merge: Option<Expr> = None,
         merge_action: Vec<Action> = Vec::new(),
-        cost: Option<usize> = None
+        cost: Option<usize> = None,
+        unextractable: bool = false
     )
         f -> egglog::ast::FunctionDecl {
             name: (&f.name).into(),
@@ -263,7 +295,8 @@ convert_struct!(
             default: f.default.as_ref().map(|e| e.into()),
             merge: f.merge.as_ref().map(|e| e.into()),
             merge_action: f.merge_action.iter().map(|a| a.into()).collect(),
-            cost: f.cost
+            cost: f.cost,
+            unextractable: f.unextractable
         },
         f -> FunctionDecl {
             name: f.name.to_string(),
@@ -271,7 +304,8 @@ convert_struct!(
             default: f.default.as_ref().map(|e| e.into()),
             merge: f.merge.as_ref().map(|e| e.into()),
             merge_action: f.merge_action.iter().map(|a| a.into()).collect(),
-            cost: f.cost
+            cost: f.cost,
+            unextractable: f.unextractable
         };
     egglog::ast::Variant: "{:?}" => Variant(
         name: String,
@@ -301,11 +335,10 @@ convert_struct!(
         r -> Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()};
     egglog::ast::RunConfig: "{:?}" => RunConfig(
         ruleset: String,
-        limit: usize,
-        until: Option<Vec<Fact_>>
+        until: Option<Vec<Fact_>> = None
     )
-        r -> egglog::ast::RunConfig {ruleset: (&r.ruleset).into(), limit: r.limit, until: r.until.as_ref().map(|v| v.iter().map(|v| v.into()).collect())},
-        r -> RunConfig {ruleset: r.ruleset.to_string(), limit: r.limit, until: r.until.as_ref().map(|v| v.iter().map(|v| v.into()).collect())};
+        r -> egglog::ast::RunConfig {ruleset: (&r.ruleset).into(), until: r.until.as_ref().map(|v| v.iter().map(|v| v.into()).collect())},
+        r -> RunConfig {ruleset: r.ruleset.to_string(), until: r.until.as_ref().map(|v| v.iter().map(|v| v.into()).collect())};
     egglog::ast::IdentSort: "{:?}" => IdentSort(
         ident: String,
         sort: String
@@ -319,14 +352,7 @@ convert_struct!(
         rebuild_time: WrappedDuration
     )
         r -> egglog::RunReport {updated: r.updated, search_time: r.search_time.0, apply_time: r.apply_time.0, rebuild_time: r.rebuild_time.0},
-        r -> RunReport {updated: r.updated, search_time: r.search_time.into(), apply_time: r.apply_time.into(), rebuild_time: r.rebuild_time.into()};
-    egglog::ExtractReport: "{:?}" => ExtractReport(
-        cost: usize,
-        expr: Expr,
-        variants: Vec<Expr>
-    )
-        r -> egglog::ExtractReport {cost: r.cost, expr: (&r.expr).into(), variants: r.variants.iter().map(|v| v.into()).collect()},
-        r -> ExtractReport {cost: r.cost, expr: (&r.expr).into(), variants: r.variants.iter().map(|v| v.into()).collect()}
+        r -> RunReport {updated: r.updated, search_time: r.search_time.into(), apply_time: r.apply_time.into(), rebuild_time: r.rebuild_time.into()}
 );
 
 impl FromPyObject<'_> for Box<Schedule> {
@@ -354,7 +380,7 @@ impl IntoPy<PyObject> for Box<Command> {
 }
 
 // Wrapped version of ordered float
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Hash)]
 pub struct WrappedOrderedF64(ordered_float::OrderedFloat<f64>);
 
 impl From<ordered_float::OrderedFloat<f64>> for WrappedOrderedF64 {
