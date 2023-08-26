@@ -15,6 +15,7 @@ class EGraph:
     def run_report(self) -> Optional[RunReport]: ...
     def to_graphviz_string(
         self,
+        *,
         max_functions: Optional[int] = None,
         max_calls_per_function: Optional[int] = None,
     ) -> str: ...
