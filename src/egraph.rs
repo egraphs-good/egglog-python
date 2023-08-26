@@ -5,6 +5,7 @@ use crate::error::EggResult;
 use crate::py_object_sort::PyObjectSort;
 
 use egglog::sort::Sort;
+use egglog::SerializeConfig;
 use log::info;
 use pyo3::{prelude::*, PyTraverseError, PyVisit};
 use std::path::PathBuf;
@@ -81,11 +82,21 @@ impl EGraph {
     }
 
     /// Returns the EGraph as graphviz string.
-    #[pyo3(signature = ())]
-    fn to_graphviz_string(&self) -> String {
+    #[pyo3(signature = (*, max_functions=None, max_calls_per_function=None))]
+    fn to_graphviz_string(
+        &self,
+        max_functions: Option<usize>,
+        max_calls_per_function: Option<usize>,
+    ) -> String {
         info!("Getting graphviz");
         // TODO: Expose full serialized e-graph in the future
-        self.egraph.serialize_for_graphviz().to_dot()
+        let mut serialized = self.egraph.serialize(SerializeConfig {
+            max_functions,
+            max_calls_per_function,
+            include_temporary_functions: false,
+        });
+        serialized.inline_leaves();
+        serialized.to_dot()
     }
 
     /// Register a Python object with the EGraph and return the Expr which represents it.

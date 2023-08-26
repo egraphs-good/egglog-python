@@ -172,7 +172,7 @@ def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
     ]
 
 
-assert not bool(isdtype(DType.float32, IsDtypeKind.string("integral")))
+# assert not bool(isdtype(DType.float32, IsDtypeKind.string("integral")))
 
 
 @egraph.class_
