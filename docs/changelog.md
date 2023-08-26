@@ -29,6 +29,9 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
   - Removes custom fork of egglog now that visualizations are in core
   - Adds int and float to string functions
   - Switches `define` to `let`
+- Tidy up notebook appearence [#43](https://github.com/metadsl/egglog-python/pull/43)
+  - Display expressions as code in Jupyter notebook
+  - Display all expressions when graphing
 
 ## 0.5.1 (2023-07-18)
 

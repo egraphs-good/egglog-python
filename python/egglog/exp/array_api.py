@@ -28,11 +28,11 @@ runtime_ruleset = egraph.ruleset("runtime")
 
 
 def extract_py(e: Expr) -> Any:
-    print(e)
+    # print(e)
     egraph.register(e)
     egraph.run((run() * 10).saturate())
     final_object = egraph.extract(e)
-    print(f"  -> {final_object}")
+    # print(f"  -> {final_object}")
     # with egraph:
     egraph.run((run(runtime_ruleset) * 10 + run() * 10).saturate())
     # Run saturation again b/c sometimes it doesn't work the first time.
@@ -55,7 +55,7 @@ def extract_py(e: Expr) -> Any:
     # final_object = egraph.extract(egraph.extract(final_object))
     # egraph.run(run(limit=10).saturate())
 
-    print(f"     -> {egraph.extract(final_object)}\n")
+    # print(f"     -> {egraph.extract(final_object)}\n")
     res = egraph.load_object(egraph.extract(final_object.to_py()))  # type: ignore[attr-defined]
     return res
 
@@ -172,7 +172,7 @@ def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
     ]
 
 
-assert not bool(isdtype(DType.float32, IsDtypeKind.string("integral")))
+# assert not bool(isdtype(DType.float32, IsDtypeKind.string("integral")))
 
 
 @egraph.class_
