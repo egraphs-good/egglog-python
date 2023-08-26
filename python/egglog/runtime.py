@@ -414,6 +414,11 @@ class RuntimeExpr:
         except black.parsing.InvalidInput:
             return pretty_expr
 
+    def _ipython_display_(self) -> None:
+        from IPython.display import Code, display
+
+        display(Code(str(self), language="python"))
+
     def __dir__(self) -> Iterable[str]:
         return list(self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).methods)
 
