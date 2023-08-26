@@ -82,7 +82,10 @@ impl EGraph {
     }
 
     /// Returns the EGraph as graphviz string.
-    #[pyo3(signature = (*, max_functions=None, max_calls_per_function=None))]
+    #[pyo3(
+        signature = (*, max_functions=None, max_calls_per_function=None),
+        text_signature = "(self, *, max_functions=None, max_calls_per_function=None)"
+    )]
     fn to_graphviz_string(
         &self,
         max_functions: Option<usize>,
