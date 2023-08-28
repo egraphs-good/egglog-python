@@ -109,6 +109,9 @@ class _ComposedConverter:
     def __call__(self, x: object) -> object:
         return self.b_c(self.a_b(x))
 
+    def __str__(self) -> str:
+        return f"{self.b_c} ∘ {self.a_b}"
+
 
 def convert(source: object, target: type[V]) -> V:
     """
