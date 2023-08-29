@@ -425,9 +425,6 @@ class RuntimeExpr:
     def __dir__(self) -> Iterable[str]:
         return list(self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).methods)
 
-    def __to_egg__(self) -> bindings._Expr:
-        return self.__egg_typed_expr__.expr.to_egg(self.__egg_decls__)
-
     # Have __eq__ take no NoReturn (aka Never https://docs.python.org/3/library/typing.html#typing.Never) because
     # we don't wany any type that MyPy thinks is an expr to be used with __eq__.
     # That's because we want to reserve __eq__ for domain specific equality checks, overloading this method.
