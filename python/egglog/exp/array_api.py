@@ -1377,23 +1377,8 @@ def ndarray_expr(x: NDArray) -> String:
     ...
 
 
-# @egraph.function
-# def if_empty(cond: StringLike, value: StringLike) -> String:
-#     """
-#     Returns `value` if `cond` is empty, otherwise return an empty string.
-#     """
-#     ...
-
-
 @egraph.register
 def _py_expr(x: NDArray, y: NDArray, z: NDArray, s: String, y_str: String, z_str: String):
-    # yield rule(eq(s).to(if_empty("", z_str))).then(
-    #     set_(if_empty("", z_str)).to(z_str),
-    # )
-    # yield rule(eq(s).to(if_empty(z_str, y_str)), z_str != String("")).then(
-    #     set_(if_empty("", z_str)).to(String("")),
-    # )
-
     yield rule(
         eq(x).to(NDArray.var(s)),
     ).then(
