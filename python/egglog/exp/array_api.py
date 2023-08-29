@@ -1,3 +1,4 @@
+# mypy: disable-error-code=empty-body
 from __future__ import annotations
 
 import itertools
@@ -5,18 +6,17 @@ import math
 import numbers
 import sys
 from copy import copy
-from typing import Any, ClassVar, Iterator, TypeVar
+from dataclasses import field
+from re import L
+from typing import Any, Callable, ClassVar, Iterator, TypeVar
 
 import numpy as np
+from attr import dataclass
 from egglog import *
 from egglog.bindings import EggSmolError
-
-# Pretend that exprs are numbers b/c scikit learn does isinstance checks
 from egglog.runtime import RuntimeExpr
 
-# mypy: disable-error-code=empty-body
-
-
+# Pretend that exprs are numbers b/c scikit learn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
 
 egraph = EGraph()
@@ -1341,9 +1341,129 @@ def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f
 @egraph.register
 def _unique(xs: TupleValue, a: NDArray):
     # unique_values should use value_one_of
-    yield rewrite(unique_values(a)).to(NDArray.vector(possible_values(array_value(a, ALL_INDICES))))
+    yield rewrite(unique_values(x=a)).to(NDArray.vector(possible_values(array_value(a, ALL_INDICES))))
 
 
 @egraph.register
 def _size(x: NDArray):
     yield rewrite(x.size).to(x.shape.product())
+
+
+##
+# Functionality to compile expression to strings of NumPy code.
+# Depends on `np` as a global variable.
+##
+
+
+@egraph.function(merge=lambda old, new: new, default=i64(0))
+def gensym() -> i64:
+    ...
+
+
+gensym_var = join("_", gensym().to_string())
+
+
+def line(*v: StringLike) -> String:
+    return join("    ", *v, "\n")
+
+
+@egraph.function(merge=lambda old, new: join(old, new))
+def statements() -> String:
+    ...
+
+
+@egraph.function(default=String(""))
+def ndarray_expr(x: NDArray) -> String:
+    ...
+
+
+# @egraph.function
+# def if_empty(cond: StringLike, value: StringLike) -> String:
+#     """
+#     Returns `value` if `cond` is empty, otherwise return an empty string.
+#     """
+#     ...
+
+
+@egraph.register
+def _py_expr(x: NDArray, y: NDArray, z: NDArray, s: String, y_str: String, z_str: String):
+    # yield rule(eq(s).to(if_empty("", z_str))).then(
+    #     set_(if_empty("", z_str)).to(z_str),
+    # )
+    # yield rule(eq(s).to(if_empty(z_str, y_str)), z_str != String("")).then(
+    #     set_(if_empty("", z_str)).to(String("")),
+    # )
+
+    yield rule(
+        eq(x).to(NDArray.var(s)),
+    ).then(
+        set_(lhs=ndarray_expr(x)).to(s),
+    )
+
+    yield rule(
+        eq(x).to(y + z),
+        eq(y_str).to(ndarray_expr(y)),
+        eq(z_str).to(ndarray_expr(z)),
+    ).then(
+        set_(ndarray_expr(x)).to(gensym_var),
+        set_(statements()).to(line(gensym_var, " = ", y_str, " + ", z_str)),
+        set_(gensym()).to(gensym() + 1),
+    )
+
+    yield rule(
+        eq(x).to(y / z),
+        eq(y_str).to(ndarray_expr(y)),
+        eq(z_str).to(ndarray_expr(z)),
+    ).then(
+        set_(ndarray_expr(x)).to(gensym_var),
+        set_(statements()).to(line(gensym_var, " = ", y_str, " / ", z_str)),
+        set_(gensym()).to(gensym() + 1),
+    )
+
+
+@egraph.class_
+class FunctionExprTwo(Expr):
+    """
+    Python expression that takes two NDArrays as arguments and returns an NDArray.
+    """
+
+    def __init__(self, name: StringLike, res: NDArray, arg_1: NDArray, arg_2: NDArray) -> None:
+        ...
+
+    @property
+    def source(self) -> String:
+        ...
+
+
+fn_ruleset = egraph.ruleset("fn")
+
+
+@egraph.register
+def _function_expr(name: String, res: NDArray, arg1: String, arg2: String, f: FunctionExprTwo, s: String):
+    yield rule(eq(f).to(FunctionExprTwo(name, res, NDArray.var(arg1), NDArray.var(arg2))), ruleset=fn_ruleset).then(
+        set_(f.source).to(
+            join("def ", name, "(", arg1, ", ", arg2, "):\n", statements(), "    return ", ndarray_expr(res), "\n")
+        ),
+    )
+
+
+X = NDArray.var("X")
+Y = NDArray.var("Y")
+res = (X + X) / (Y + (X + X))
+res += res
+fn = FunctionExprTwo("my_fn", res, X, Y)
+egraph.register(fn)
+
+egraph.run((run() * 10).saturate() + (run(fn_ruleset) * 10).saturate())
+egraph.graphviz.render(view=True)
+
+fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.source)))
+print(fn_source)
+
+locals = {}
+globals = {"np": np}
+exec(fn_source, globals, locals)
+fn = locals["my_fn"]
+
+
+print(fn(10, 2))
