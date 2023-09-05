@@ -83,13 +83,14 @@ impl EGraph {
 
     /// Returns the EGraph as graphviz string.
     #[pyo3(
-        signature = (*, max_functions=None, max_calls_per_function=None),
-        text_signature = "(self, *, max_functions=None, max_calls_per_function=None)"
+        signature = (*, max_functions=None, max_calls_per_function=None, inline_leaves=false),
+        text_signature = "(self, *, max_functions=None, max_calls_per_function=None, inline_leaves=False)"
     )]
     fn to_graphviz_string(
         &self,
         max_functions: Option<usize>,
         max_calls_per_function: Option<usize>,
+        inline_leaves: bool,
     ) -> String {
         info!("Getting graphviz");
         // TODO: Expose full serialized e-graph in the future
@@ -98,7 +99,9 @@ impl EGraph {
             max_calls_per_function,
             include_temporary_functions: false,
         });
-        serialized.inline_leaves();
+        if inline_leaves {
+            serialized.inline_leaves();
+        }
         info!("Serialized egraph: {:?}", serialized);
         serialized.to_dot()
     }

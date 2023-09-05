@@ -35,7 +35,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 - Start adding to string support [#45](https://github.com/metadsl/egglog-python/pull/45)
   - Fix adding rules for sorts defined in other modules
   - Split out array API into multiple module
-  - Start adding
+  - tidy up docs homepage
 
 ## 0.5.1 (2023-07-18)
 

@@ -26,7 +26,7 @@ def test_to_source():
     egraph.run((run() * 20).saturate())
     # while egraph.run((run())).updated:
     #     print(egraph.load_object(egraph.extract(PyObject.from_string(statements()))))
-    # egraph.graphviz.render(view=True)
+    # egraph.graphviz().render(view=True)
 
     egraph.run(run(fn_ruleset))
 

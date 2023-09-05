@@ -683,11 +683,10 @@ class EGraph(_BaseModule):
         Returns the graphviz representation of the e-graph.
         """
 
-        return {"image/svg+xml": self.graphviz.pipe(format="svg", quiet=True, encoding="utf-8")}
+        return {"image/svg+xml": self.graphviz().pipe(format="svg", quiet=True, encoding="utf-8")}
 
-    @property
-    def graphviz(self) -> graphviz.Source:
-        return graphviz.Source(self._egraph.to_graphviz_string())
+    def graphviz(self, **kwargs) -> graphviz.Source:
+        return graphviz.Source(self._egraph.to_graphviz_string(**kwargs))
 
     def _repr_html_(self) -> str:
         """
@@ -696,15 +695,15 @@ class EGraph(_BaseModule):
         until this PR is merged and released
         https://github.com/sphinx-gallery/sphinx-gallery/pull/1138
         """
-        return self.graphviz.pipe(format="svg", quiet=True).decode()
+        return self.graphviz().pipe(format="svg", quiet=True).decode()
 
-    def display(self):
+    def display(self, **kwargs):
         """
         Displays the e-graph in the notebook.
         """
-        from IPython.display import display
+        from IPython.display import SVG, display
 
-        display(self)
+        display(SVG(self.graphviz(**kwargs).pipe(format="svg", quiet=True, encoding="utf-8")))
 
     @overload
     def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> EXPR:
