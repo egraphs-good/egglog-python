@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextvars import ContextVar, Token
 from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from inspect import Parameter, currentframe, signature
@@ -637,9 +638,23 @@ class _Builtins(_BaseModule):
 @dataclass
 class Module(_BaseModule):
     _cmds: list[bindings._Command] = field(default_factory=list, repr=False)
+    _py_objects: list[object] = field(default_factory=list, repr=False)
 
     def _process_commands(self, cmds: Iterable[bindings._Command]) -> None:
         self._cmds.extend(cmds)
+
+    def save_object(self, obj: object) -> PyObject:
+        """
+        Save an object to the egraph.
+
+        In a module, creates a temp egraph to save the object and get the value, then saves it to add later
+        once we have a real egraph.
+        """
+        egraph = bindings.EGraph()
+        expr = egraph.save_object(obj)
+        self._py_objects.append(obj)
+        typed_expr_decl = TypedExprDecl.from_egg(self._mod_decls, expr)
+        return cast("PyObject", RuntimeExpr(self._mod_decls, typed_expr_decl))
 
 
 @dataclass
@@ -651,10 +666,13 @@ class EGraph(_BaseModule):
     _egraph: bindings.EGraph = field(repr=False, default_factory=bindings.EGraph)
     # The current declarations which have been pushed to the stack
     _decl_stack: list[Declarations] = field(default_factory=list, repr=False)
+    _token: Optional[Token[EGraph]] = None
 
     def __post_init__(self, modules: list[Module] = []) -> None:
         super().__post_init__(modules)
         for m in self._flatted_deps:
+            for o in m._py_objects:
+                self._egraph.save_object(o)
             self._process_commands(m._cmds)
 
     def _process_commands(self, commands: Iterable[bindings._Command]) -> None:
@@ -820,13 +838,18 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.Pop(1)])
         self._mod_decls._decl = self._decl_stack.pop()
 
-    def __enter__(self):
+    def __enter__(self) -> EGraph:
         """
         Copy the egraph state, so that it can be reverted back to the original state at the end.
+
+        Also sets the current egraph to this one.
         """
+        self._token = CURRENT_EGRAPH.set(self)
         self.push()
+        return self
 
     def __exit__(self, exc_type, exc, exc_tb):
+        CURRENT_EGRAPH.reset(self._token)
         self.pop()
 
     def save_object(self, obj: object) -> PyObject:
@@ -844,6 +867,16 @@ class EGraph(_BaseModule):
         typed_expr_decl = expr_parts(obj)
         expr = typed_expr_decl.to_egg(self._mod_decls)
         return self._egraph.load_object(expr)
+
+    @classmethod
+    def current(cls) -> EGraph:
+        """
+        Returns the current egraph, which is the one in the context.
+        """
+        return CURRENT_EGRAPH.get()
+
+
+CURRENT_EGRAPH = ContextVar[EGraph]("CURRENT_EGRAPH")
 
 
 @dataclass(frozen=True)

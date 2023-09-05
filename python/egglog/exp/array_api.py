@@ -6,39 +6,33 @@ import math
 import numbers
 import sys
 from copy import copy
-from dataclasses import field
-from re import L
-from typing import Any, Callable, ClassVar, Iterator, TypeVar
+from typing import Any, ClassVar, Iterator, TypeVar
 
 import numpy as np
-from attr import dataclass
 from egglog import *
 from egglog.bindings import EggSmolError
 from egglog.egraph import Action
 from egglog.runtime import RuntimeExpr
 
-# Pretend that exprs are numbers b/c scikit learn does isinstance checks
+# Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
 
-egraph = EGraph()
 
 T = TypeVar("T", bound=Expr)
-
-runtime_ruleset = egraph.ruleset("runtime")
-
 
 # For now, have this global e-graph for this module, a bit hacky, but works as a proof of concept.
 # We need a global e-graph so that we have the preserved methods reference it to extract when they are called.
 
 
 def extract_py(e: Expr) -> Any:
+    egraph = EGraph.current()
     # print(e)
     egraph.register(e)
     egraph.run((run() * 10).saturate())
     final_object = egraph.extract(e)
     # print(f"  -> {final_object}")
     # with egraph:
-    egraph.run((run(runtime_ruleset) * 10 + run() * 10).saturate())
+    egraph.run((run() * 10).saturate())
     # Run saturation again b/c sometimes it doesn't work the first time.
     # final_object = egraph.extract(egraph.extract(final_object))
     # egraph.run(run(limit=10).saturate())
@@ -62,16 +56,20 @@ def extract_py(e: Expr) -> Any:
     # print(f"     -> {egraph.extract(final_object)}\n")
     try:
         res = egraph.load_object(egraph.extract(final_object.to_py()))  # type: ignore[attr-defined]
-    except EggSmolError as error:
-        res = egraph.extract(final_object)
-        raise Exception(f"Failed to extract {res} to py") from error
+    except EggSmolError:
+        other_versions = egraph.extract_multiple(final_object, 10)
+        other_verions_str = "\n\n".join(map(str, other_versions))
+        raise Exception(f"Failed to extract:\n{other_verions_str}")
     # print(res)
     return res
 
 
-@egraph.class_
+array_api_module = Module()
+
+
+@array_api_module.class_
 class Bool(Expr):
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __bool__(self) -> bool:
         return extract_py(self)
 
@@ -85,16 +83,16 @@ class Bool(Expr):
         ...
 
 
-TRUE = egraph.constant("TRUE", Bool)
-FALSE = egraph.constant("FALSE", Bool)
+TRUE = array_api_module.constant("TRUE", Bool)
+FALSE = array_api_module.constant("FALSE", Bool)
 converter(bool, Bool, lambda x: TRUE if x else FALSE)
 
 
-@egraph.register
+@array_api_module.register
 def _bool(x: Bool):
     return [
-        set_(TRUE.to_py()).to(egraph.save_object(True)),
-        set_(FALSE.to_py()).to(egraph.save_object(False)),
+        set_(TRUE.to_py()).to(array_api_module.save_object(True)),
+        set_(FALSE.to_py()).to(array_api_module.save_object(False)),
         rewrite(TRUE | x).to(TRUE),
         rewrite(FALSE | x).to(x),
         rewrite(TRUE & x).to(x),
@@ -102,7 +100,7 @@ def _bool(x: Bool):
     ]
 
 
-@egraph.class_
+@array_api_module.class_
 class DType(Expr):
     float64: ClassVar[DType]
     float32: ClassVar[DType]
@@ -124,7 +122,7 @@ _DTYPES = [float64, float32, int32, int64, DType.object]
 
 converter(type, DType, lambda x: convert(np.dtype(x), DType))
 converter(type(np.dtype), DType, lambda x: getattr(DType, x.name))  # type: ignore[call-overload]
-egraph.register(
+array_api_module.register(
     *(
         rewrite(l == r).to(TRUE if expr_parts(l) == expr_parts(r) else FALSE)
         for l, r in itertools.product(_DTYPES, repeat=2)
@@ -132,7 +130,7 @@ egraph.register(
 )
 
 
-@egraph.class_
+@array_api_module.class_
 class IsDtypeKind(Expr):
     NULL: ClassVar[IsDtypeKind]
 
@@ -144,13 +142,13 @@ class IsDtypeKind(Expr):
     def dtype(cls, d: DType) -> IsDtypeKind:
         ...
 
-    @egraph.method(cost=10)
+    @array_api_module.method(cost=10)
     def __or__(self, other: IsDtypeKind) -> IsDtypeKind:
         ...
 
 
 # TODO: Make kind more generic to support tuples.
-@egraph.function
+@array_api_module.function
 def isdtype(dtype: DType, kind: IsDtypeKind) -> Bool:
     ...
 
@@ -162,7 +160,7 @@ converter(
 )
 
 
-@egraph.register
+@array_api_module.register
 def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
     return [
         rewrite(isdtype(DType.float32, IsDtypeKind.string("integral"))).to(FALSE),
@@ -190,7 +188,7 @@ def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
 # assert not bool(isdtype(DType.float32, IsDtypeKind.string("integral")))
 
 
-@egraph.class_
+@array_api_module.class_
 class Float(Expr):
     def __init__(self, value: f64Like) -> None:
         ...
@@ -202,7 +200,7 @@ class Float(Expr):
 converter(float, Float, lambda x: Float(x))
 
 
-@egraph.register
+@array_api_module.register
 def _float(f: f64, f2: f64, r: Bool, o: Float):
     return [
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
@@ -210,7 +208,7 @@ def _float(f: f64, f2: f64, r: Bool, o: Float):
     ]
 
 
-@egraph.class_
+@array_api_module.class_
 class Int(Expr):
     def __init__(self, value: i64Like) -> None:
         ...
@@ -229,7 +227,7 @@ class Int(Expr):
 
     # Make != always return a Bool, so that numpy.unique works on a tuple of ints
     # In _unique1d
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __ne__(self, other: Int) -> bool:  # type: ignore[override]
         return not extract_py(self == other)
 
@@ -320,27 +318,27 @@ class Int(Expr):
     def __ror__(self, other: Int) -> Int:
         ...
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __int__(self) -> int:
         return extract_py(self)
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __index__(self) -> int:
         return extract_py(self)
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __float__(self) -> float:
         return float(int(self))
 
     def to_py(self) -> PyObject:
         ...
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __bool__(self) -> bool:
         return self != Int(0)
 
 
-@egraph.register
+@array_api_module.register
 def _int(i: i64, j: i64, r: Bool, o: Int):
     yield rewrite(Int(i) == Int(i)).to(TRUE)
     yield rule(eq(r).to(Int(i) == Int(j)), i != j).then(union(r).with_(FALSE))
@@ -376,14 +374,7 @@ converter(int, Int, lambda x: Int(x))
 # converter(float, Int, lambda x: Int(int(x)))
 
 
-assert expr_parts(egraph.simplify(Int(1) == Int(1), 10)) == expr_parts(TRUE)
-assert expr_parts(egraph.simplify(Int(1) == Int(2), 10)) == expr_parts(FALSE)
-assert expr_parts(egraph.simplify(Int(1) >= Int(2), 10)) == expr_parts(FALSE)
-assert expr_parts(egraph.simplify(Int(1) >= Int(1), 10)) == expr_parts(TRUE)
-assert expr_parts(egraph.simplify(Int(2) >= Int(1), 10)) == expr_parts(TRUE)
-
-
-@egraph.class_
+@array_api_module.class_
 class TupleInt(Expr):
     EMPTY: ClassVar[TupleInt]
 
@@ -396,11 +387,11 @@ class TupleInt(Expr):
     def length(self) -> Int:
         ...
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __len__(self) -> int:
         return int(self.length())
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __iter__(self):
         return iter(self[Int(i)] for i in range(len(self)))
 
@@ -422,7 +413,7 @@ converter(
 )
 
 
-@egraph.register
+@array_api_module.register
 def _tuple_int(ti: TupleInt, ti2: TupleInt, i: Int, i2: Int, k: i64):
     return [
         rewrite(ti + TupleInt.EMPTY).to(ti),
@@ -439,7 +430,7 @@ def _tuple_int(ti: TupleInt, ti2: TupleInt, i: Int, i2: Int, k: i64):
     ]
 
 
-@egraph.class_
+@array_api_module.class_
 class OptionalInt(Expr):
     none: ClassVar[OptionalInt]
 
@@ -452,7 +443,7 @@ converter(type(None), OptionalInt, lambda x: OptionalInt.none)
 converter(Int, OptionalInt, OptionalInt.some)
 
 
-@egraph.class_
+@array_api_module.class_
 class Slice(Expr):
     def __init__(
         self,
@@ -470,7 +461,7 @@ converter(
 )
 
 
-@egraph.class_
+@array_api_module.class_
 class MultiAxisIndexKeyItem(Expr):
     ELLIPSIS: ClassVar[MultiAxisIndexKeyItem]
     NONE: ClassVar[MultiAxisIndexKeyItem]
@@ -490,7 +481,7 @@ converter(Int, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.int)
 converter(Slice, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.slice)
 
 
-@egraph.class_
+@array_api_module.class_
 class MultiAxisIndexKey(Expr):
     def __init__(self, item: MultiAxisIndexKeyItem) -> None:
         ...
@@ -512,7 +503,7 @@ converter(
 )
 
 
-@egraph.class_
+@array_api_module.class_
 class IndexKey(Expr):
     """
     A key for indexing into an array
@@ -550,14 +541,14 @@ converter(Slice, IndexKey, IndexKey.slice)
 converter(MultiAxisIndexKey, IndexKey, IndexKey.multi_axis)
 
 
-@egraph.class_
+@array_api_module.class_
 class Device(Expr):
     ...
 
 
 # TODO: Add pushdown for math on scalars to values
 # and add replacements
-@egraph.class_
+@array_api_module.class_
 class Value(Expr):
     @classmethod
     def var(cls, name: StringLike) -> Value:
@@ -593,7 +584,7 @@ converter(Float, Value, Value.float)
 converter(Bool, Value, Value.bool)
 
 
-@egraph.register
+@array_api_module.register
 def _value(i: Int, f: Float, b: Bool):
     # Default dtypes
     # https://data-apis.org/array-api/latest/API_specification/data_types.html?highlight=dtype#default-data-types
@@ -602,7 +593,7 @@ def _value(i: Int, f: Float, b: Bool):
     yield rewrite(Value.bool(b).dtype).to(DType.bool)
 
 
-@egraph.class_
+@array_api_module.class_
 class TupleValue(Expr):
     EMPTY: ClassVar[TupleValue]
 
@@ -630,7 +621,7 @@ converter(
 )
 
 
-@egraph.register
+@array_api_module.register
 def _tuple_value(ti: TupleValue, ti2: TupleValue, v: Value, i: Int, v2: Value, k: i64):
     return [
         rewrite(ti + TupleValue.EMPTY).to(ti),
@@ -644,17 +635,17 @@ def _tuple_value(ti: TupleValue, ti2: TupleValue, v: Value, i: Int, v2: Value, k
     ]
 
 
-@egraph.class_
+@array_api_module.class_
 class NDArray(Expr):
     def __init__(self, py_array: PyObject) -> None:
         ...
 
-    @egraph.method(cost=100)
+    @array_api_module.method(cost=100)
     @classmethod
     def var(cls, name: StringLike) -> NDArray:
         ...
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __array_namespace__(self, api_version=None):
         return sys.modules[__name__]
 
@@ -677,7 +668,7 @@ class NDArray(Expr):
     def to_bool(self) -> Bool:
         ...
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __bool__(self) -> bool:
         return bool(self.to_bool())
 
@@ -685,11 +676,11 @@ class NDArray(Expr):
     def size(self) -> Int:
         ...
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __len__(self) -> int:
         return int(self.size)
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __iter__(self) -> Iterator[NDArray]:
         for i in range(len(self)):
             yield self[IndexKey.int(Int(i))]
@@ -819,7 +810,7 @@ class NDArray(Expr):
         ...
 
 
-@egraph.function
+@array_api_module.function
 def ndarray_index(x: NDArray) -> IndexKey:
     ...
 
@@ -830,7 +821,7 @@ converter(NDArray, Int, lambda n: n.to_int())
 converter(TupleValue, NDArray, NDArray.vector)
 
 
-@egraph.register
+@array_api_module.register
 def _ndarray(x: NDArray, b: Bool, f: Float, fi1: f64, fi2: f64):
     return [
         rewrite(x.ndim).to(x.shape.length()),
@@ -851,7 +842,7 @@ def _ndarray(x: NDArray, b: Bool, f: Float, fi1: f64, fi2: f64):
     ]
 
 
-@egraph.class_
+@array_api_module.class_
 class TupleNDArray(Expr):
     EMPTY: ClassVar[TupleNDArray]
 
@@ -864,11 +855,11 @@ class TupleNDArray(Expr):
     def length(self) -> Int:
         ...
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __len__(self) -> int:
         return int(self.length())
 
-    @egraph.method(preserve=True)
+    @array_api_module.method(preserve=True)
     def __iter__(self):
         return iter(self[Int(i)] for i in range(len(self)))
 
@@ -888,7 +879,7 @@ converter(
 converter(list, TupleNDArray, lambda x: convert(tuple(x), TupleNDArray))
 
 
-@egraph.register
+@array_api_module.register
 def _tuple_ndarray(ti: TupleNDArray, ti2: TupleNDArray, n: NDArray, i: Int, i2: Int, k: i64):
     return [
         rewrite(ti + TupleNDArray.EMPTY).to(ti),
@@ -901,7 +892,7 @@ def _tuple_ndarray(ti: TupleNDArray, ti2: TupleNDArray, n: NDArray, i: Int, i2: 
     ]
 
 
-@egraph.class_
+@array_api_module.class_
 class OptionalBool(Expr):
     none: ClassVar[OptionalBool]
 
@@ -914,7 +905,7 @@ converter(type(None), OptionalBool, lambda x: OptionalBool.none)
 converter(Bool, OptionalBool, lambda x: OptionalBool.some(x))
 
 
-@egraph.class_
+@array_api_module.class_
 class OptionalDType(Expr):
     none: ClassVar[OptionalDType]
 
@@ -927,7 +918,7 @@ converter(type(None), OptionalDType, lambda x: OptionalDType.none)
 converter(DType, OptionalDType, lambda x: OptionalDType.some(x))
 
 
-@egraph.class_
+@array_api_module.class_
 class OptionalDevice(Expr):
     none: ClassVar[OptionalDevice]
 
@@ -940,7 +931,7 @@ converter(type(None), OptionalDevice, lambda x: OptionalDevice.none)
 converter(Device, OptionalDevice, lambda x: OptionalDevice.some(x))
 
 
-@egraph.class_
+@array_api_module.class_
 class OptionalTupleInt(Expr):
     none: ClassVar[OptionalTupleInt]
 
@@ -953,7 +944,7 @@ converter(type(None), OptionalTupleInt, lambda x: OptionalTupleInt.none)
 converter(TupleInt, OptionalTupleInt, lambda x: OptionalTupleInt.some(x))
 
 
-@egraph.class_
+@array_api_module.class_
 class OptionalIntOrTuple(Expr):
     none: ClassVar[OptionalIntOrTuple]
 
@@ -971,23 +962,23 @@ converter(Int, OptionalIntOrTuple, OptionalIntOrTuple.int)
 converter(TupleInt, OptionalIntOrTuple, OptionalIntOrTuple.tuple)
 
 
-@egraph.function
+@array_api_module.function
 def asarray(a: NDArray, dtype: OptionalDType = OptionalDType.none, copy: OptionalBool = OptionalBool.none) -> NDArray:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _assarray(a: NDArray, d: OptionalDType, ob: OptionalBool):
     yield rewrite(asarray(a, d, ob).ndim).to(a.ndim)  # asarray doesn't change ndim
     yield rewrite(asarray(a)).to(a)  # asarray doesn't change to_py
 
 
-@egraph.function
+@array_api_module.function
 def isfinite(x: NDArray) -> NDArray:
     ...
 
 
-@egraph.function
+@array_api_module.function
 def sum(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
     """
     https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.sum.html?highlight=sum
@@ -995,19 +986,19 @@ def sum(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArr
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _sum(x: NDArray, y: NDArray, v: Value, dtype: DType):
     return [
         rewrite(sum(x / NDArray.scalar(v))).to(sum(x) / NDArray.scalar(v)),
     ]
 
 
-@egraph.function
+@array_api_module.function
 def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none) -> NDArray:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _reshape(x: NDArray, y: NDArray, shape: TupleInt, copy: OptionalBool, i: Int, s: String):
     return [
         # dtype of result is same as input
@@ -1024,36 +1015,36 @@ def _reshape(x: NDArray, y: NDArray, shape: TupleInt, copy: OptionalBool, i: Int
     ]
 
 
-@egraph.function
+@array_api_module.function
 def unique_values(x: NDArray) -> NDArray:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _unique_values(x: NDArray):
     return [
         rewrite(unique_values(unique_values(x))).to(unique_values(x)),
     ]
 
 
-@egraph.function
+@array_api_module.function
 def concat(arrays: TupleNDArray, axis: OptionalInt = OptionalInt.none) -> NDArray:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _concat(x: NDArray):
     return [
         rewrite(concat(TupleNDArray(x))).to(x),
     ]
 
 
-@egraph.function
+@array_api_module.function
 def unique_counts(x: NDArray) -> TupleNDArray:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _unique_counts(x: NDArray):
     return [
         rewrite(unique_counts(x).length()).to(Int(2)),
@@ -1062,12 +1053,12 @@ def _unique_counts(x: NDArray):
     ]
 
 
-@egraph.function
+@array_api_module.function
 def astype(x: NDArray, dtype: DType) -> NDArray:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _astype(x: NDArray, dtype: DType, i: i64):
     return [
         rewrite(astype(x, dtype).dtype).to(dtype),
@@ -1078,39 +1069,39 @@ def _astype(x: NDArray, dtype: DType, i: i64):
     ]
 
 
-@egraph.function
+@array_api_module.function
 def std(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
     ...
 
 
-@egraph.function
+@array_api_module.function
 def any(x: NDArray) -> NDArray:
     ...
 
 
-@egraph.function(egg_fn="ndarray-abs")
+@array_api_module.function(egg_fn="ndarray-abs")
 def abs(x: NDArray) -> NDArray:
     ...
 
 
-@egraph.function(egg_fn="ndarray-log")
+@array_api_module.function(egg_fn="ndarray-log")
 def log(x: NDArray) -> NDArray:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _abs(f: Float):
     return [
         rewrite(abs(NDArray.scalar(Value.float(f)))).to(NDArray.scalar(Value.float(f.abs()))),
     ]
 
 
-@egraph.function
+@array_api_module.function
 def unique_inverse(x: NDArray) -> TupleNDArray:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _unique_inverse(x: NDArray):
     return [
         rewrite(unique_inverse(x).length()).to(Int(2)),
@@ -1119,20 +1110,20 @@ def _unique_inverse(x: NDArray):
     ]
 
 
-@egraph.function
+@array_api_module.function
 def zeros(
     shape: TupleInt, dtype: OptionalDType = OptionalDType.none, device: OptionalDevice = OptionalDevice.none
 ) -> NDArray:
     ...
 
 
-@egraph.function
+@array_api_module.function
 def mean(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
     ...
 
 
 # TODO: Possibly change names to include modules.
-@egraph.function(egg_fn="ndarray-sqrt")
+@array_api_module.function(egg_fn="ndarray-sqrt")
 def sqrt(x: NDArray) -> NDArray:
     ...
 
@@ -1140,7 +1131,7 @@ def sqrt(x: NDArray) -> NDArray:
 linalg = sys.modules[__name__]
 
 
-@egraph.function
+@array_api_module.function
 def svd(x: NDArray, full_matrices: Bool = TRUE) -> TupleNDArray:
     """
     https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.svd.html
@@ -1148,7 +1139,7 @@ def svd(x: NDArray, full_matrices: Bool = TRUE) -> TupleNDArray:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _linalg(x: NDArray, full_matrices: Bool):
     return [
         rewrite(svd(x, full_matrices).length()).to(Int(3)),
@@ -1162,17 +1153,17 @@ def _linalg(x: NDArray, full_matrices: Bool):
 ##
 
 
-@egraph.function
+@array_api_module.function
 def ndarray_all_greater_0(x: NDArray) -> Unit:
     ...
 
 
-@egraph.function
+@array_api_module.function
 def ndarray_all_false(x: NDArray) -> Unit:
     ...
 
 
-@egraph.function
+@array_api_module.function
 def ndarray_all_true(x: NDArray) -> Unit:
     ...
 
@@ -1182,7 +1173,7 @@ def ndarray_all_true(x: NDArray) -> Unit:
 # sum(astype(unique_counts(_NDArray_1)[Int(1)], DType.float64) / NDArray.scalar(Value.int(Int(150))))
 
 
-@egraph.register
+@array_api_module.register
 def _interval_analaysis(x: NDArray, y: NDArray, z: NDArray, dtype: DType, f: f64, i: i64, b: Bool):
     return [
         rule(eq(y).to(x < NDArray.scalar(Value.int(Int(0)))), ndarray_all_greater_0(x)).then(ndarray_all_false(y)),
@@ -1212,7 +1203,7 @@ def _interval_analaysis(x: NDArray, y: NDArray, z: NDArray, dtype: DType, f: f64
 ##
 
 
-@egraph.function
+@array_api_module.function
 def array_value(x: NDArray, idx: TupleInt) -> Value:
     """
     Indices into an ndarray to get a value.
@@ -1220,7 +1211,7 @@ def array_value(x: NDArray, idx: TupleInt) -> Value:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _array_math(v: Value, vs: TupleValue, i: Int):
     # Scalar values
     yield rewrite(NDArray.scalar(v).shape).to(TupleInt.EMPTY)
@@ -1233,7 +1224,7 @@ def _array_math(v: Value, vs: TupleValue, i: Int):
     yield rewrite(array_value(NDArray.vector(vs), TupleInt(i))).to(vs[i])
 
 
-@egraph.function(mutates_first_arg=True)
+@array_api_module.function(mutates_first_arg=True)
 def assume_dtype(x: NDArray, dtype: DType) -> None:
     """
     Asserts that the dtype of x is dtype.
@@ -1241,7 +1232,7 @@ def assume_dtype(x: NDArray, dtype: DType) -> None:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _assume_dtype(x: NDArray, dtype: DType, idx: TupleInt):
     orig_x = copy(x)
     assume_dtype(x, dtype)
@@ -1250,7 +1241,7 @@ def _assume_dtype(x: NDArray, dtype: DType, idx: TupleInt):
     yield rewrite(array_value(x, idx)).to(array_value(orig_x, idx))
 
 
-@egraph.function(mutates_first_arg=True)
+@array_api_module.function(mutates_first_arg=True)
 def assume_shape(x: NDArray, shape: TupleInt) -> None:
     """
     Asserts that the shape of x is shape.
@@ -1258,7 +1249,7 @@ def assume_shape(x: NDArray, shape: TupleInt) -> None:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _assume_shape(x: NDArray, shape: TupleInt, idx: TupleInt):
     orig_x = copy(x)
     assume_shape(x, shape)
@@ -1267,7 +1258,7 @@ def _assume_shape(x: NDArray, shape: TupleInt, idx: TupleInt):
     yield rewrite(array_value(x, idx)).to(array_value(orig_x, idx))
 
 
-@egraph.function(mutates_first_arg=True)
+@array_api_module.function(mutates_first_arg=True)
 def assume_value(x: NDArray, value: Value) -> None:
     """
     Asserts that all values (scalars) in x are equal to value.
@@ -1277,16 +1268,16 @@ def assume_value(x: NDArray, value: Value) -> None:
     ...
 
 
-@egraph.register
+@array_api_module.register
 def _assume_value(x: NDArray, value: Value, idx: TupleInt):
-    orig_x = copy(x)
+    orig_x: NDArray = copy(x)
     assume_value(x, value)
     yield rewrite(array_value(x, idx)).to(value)
     yield rewrite(x.shape).to(orig_x.shape)
     yield rewrite(x.dtype).to(orig_x.dtype)
 
 
-@egraph.function(mutates_first_arg=True)
+@array_api_module.function(mutates_first_arg=True)
 def assume_isfinite(x: NDArray) -> None:
     """
     Asserts that the scalar ndarray is non null and not infinite.
@@ -1294,15 +1285,20 @@ def assume_isfinite(x: NDArray) -> None:
     ...
 
 
-# @egraph.register
-# def _isfinite(x: NDArray):
-#     # orig_x = copy(x)
-#     assume_isfinite(x)
-#     isfinite(x)
-# yield rewrite(x.isfinite()).to(TRUE)
+@array_api_module.register
+def _isfinite(x: NDArray, ti: TupleInt):
+    orig_x = copy(x)
+    assume_isfinite(x)
+
+    # pass through getitem, shape, index
+    yield rewrite(x.shape).to(orig_x.shape)
+    yield rewrite(x.dtype).to(orig_x.dtype)
+    yield rewrite(array_value(x, ti)).to(array_value(orig_x, ti))
+    # But say that any indixed value is finite
+    yield rewrite(array_value(x, ti).isfinite()).to(TRUE)
 
 
-@egraph.function(mutates_first_arg=True)
+@array_api_module.function(mutates_first_arg=True)
 def assume_value_one_of(x: NDArray, values: TupleValue) -> None:
     """
     A value that is one of the values in the tuple.
@@ -1310,23 +1306,42 @@ def assume_value_one_of(x: NDArray, values: TupleValue) -> None:
     ...
 
 
-# @egraph.function
-# def possible_values(v: Value) -> TupleValue:
-#     """
-#     Possible values of a value.
-#     """
-#     ...
+@array_api_module.function
+def value_one_of(values: TupleValue) -> Value:
+    """
+    A value that is one of the values in the tuple.
+    """
+    ...
 
 
-# @egraph.register
-# def _possible_values(v: Value, vs: TupleValue):
-#     yield rewrite(possible_values(value_one_of(vs))).to(vs)
+@array_api_module.function
+def possible_values(values: Value) -> TupleValue:
+    """
+    A value that is one of the values in the tuple.
+    """
+    ...
 
 
-ALL_INDICES: TupleInt = egraph.constant("ALL_INDICES", TupleInt)
+@array_api_module.register
+def _possible_values(tv: TupleValue, v: Value):
+    yield rewrite(possible_values(value_one_of(tv))).to(tv)
 
 
-@egraph.register
+@array_api_module.register
+def _assume_value_one_of(x: NDArray, v: Value, vs: TupleValue, idx: TupleInt):
+    # Pass through dtype and shape, but say that any value is also equal one of the values
+    x_orig = copy(x)
+    assume_value_one_of(x, vs)
+    yield rewrite(x.shape).to(x_orig.shape)
+    yield rewrite(x.dtype).to(x_orig.dtype)
+    yield rewrite(array_value(x, idx)).to(array_value(x_orig, idx))
+    yield rewrite(array_value(x, idx)).to(value_one_of(vs))
+
+
+ALL_INDICES: TupleInt = array_api_module.constant("ALL_INDICES", TupleInt)
+
+
+@array_api_module.register
 def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f64, b: Bool):
     # yield rewrite(value_one_of(TupleValue(x) + xs).isfinite()).to(x.isfinite() & value_one_of(xs).isfinite())
     # yield rewrite(value_one_of(TupleValue(x))).to(x)
@@ -1340,13 +1355,12 @@ def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f
     yield rewrite(isfinite(sum(arr))).to(NDArray.scalar(Value.bool(array_value(arr, ALL_INDICES).isfinite())))
 
 
-# @egraph.register
-# def _unique(xs: TupleValue, a: NDArray):
-# unique_values should use value_one_of
-# yield rewrite(unique_values(x=a)).to(NDArray.vector(possible_values(array_value(a, ALL_INDICES))))
+@array_api_module.register
+def _unique(xs: TupleValue, a: NDArray):
+    yield rewrite(unique_values(x=a)).to(NDArray.vector(possible_values(array_value(a, ALL_INDICES))))
 
 
-@egraph.register
+@array_api_module.register
 def _size(x: NDArray):
     yield rewrite(x.size).to(x.shape.product())
 
@@ -1356,8 +1370,10 @@ def _size(x: NDArray):
 # Depends on `np` as a global variable.
 ##
 
+array_api_module_string = Module([array_api_module])
 
-@egraph.function(merge=lambda old, new: new, default=i64(0))
+
+@array_api_module_string.function(merge=lambda old, new: new, default=i64(0))
 def gensym() -> i64:
     ...
 
@@ -1372,90 +1388,69 @@ def add_line(*v: StringLike) -> Action:
 incr_gensym = set_(gensym()).to(gensym() + 1)
 
 
-@egraph.function(merge=lambda old, new: join(old, new), default=String(""))
+@array_api_module_string.function(merge=lambda old, new: join(old, new), default=String(""))
 def statements() -> String:
     ...
 
 
-@egraph.function()
+@array_api_module_string.function()
 def ndarray_expr(x: NDArray) -> String:
     ...
 
 
-@egraph.function()
+@array_api_module_string.function()
 def dtype_expr(x: DType) -> String:
     ...
 
 
-@egraph.function()
+@array_api_module_string.function()
 def tuple_int_expr(x: TupleInt) -> String:
     ...
 
 
-@egraph.function()
+@array_api_module_string.function()
 def int_expr(x: Int) -> String:
     ...
 
 
-@egraph.function()
+@array_api_module_string.function()
 def tuple_value_expr(x: TupleValue) -> String:
     ...
 
 
-@egraph.function()
+@array_api_module_string.function()
 def value_expr(x: Value) -> String:
     ...
 
 
-egraph.register(
+array_api_module_string.register(
     set_(dtype_expr(DType.float64)).to(String("np.float64")),
     set_(dtype_expr(DType.int64)).to(String("np.int64")),
 )
 
 
-@egraph.function
+@array_api_module_string.function
 def bool_expr(x: Bool) -> String:
     ...
 
 
-egraph.register(
+array_api_module_string.register(
     set_(bool_expr(TRUE)).to(String("True")),
     set_(bool_expr(FALSE)).to(String("False")),
 )
 
 
-@egraph.function
+@array_api_module_string.function
 def float_expr(x: Float) -> String:
     ...
 
 
-@egraph.function(merge=lambda old, new: old | new)
-def traversed() -> Set[NDArray]:
-    """
-    Global set of all traversed arrays.
-    """
-    ...
-
-
-def traverse(x: NDArray) -> Action:
-    return set_(traversed()).to(Set(x))
-
-
-def not_traversed(x: NDArray) -> Unit:
-    return traversed().not_contains(x)
-
-
-egraph.register(
-    set_(traversed()).to(Set[NDArray].empty()),
-)
-
-
-@egraph.function
+@array_api_module_string.function
 def tuple_ndarray_expr(x: TupleNDArray) -> String:
     ...
 
 
-@egraph.register
+@array_api_module_string.register
 def _py_expr(
     x: NDArray,
     y: NDArray,
@@ -1558,15 +1553,15 @@ def _py_expr(
     assume_value_one_of(z_assumed_value_one_of, tv)
     yield rule(
         eq(x).to(z_assumed_value_one_of),
-        not_traversed(x),
+        # not_traversed(x),
         eq(z_str).to(ndarray_expr(z)),
         eq(tv_str).to(tuple_value_expr(tv)),
     ).then(
         set_(ndarray_expr(x)).to(z_str),
-        traverse(x),
+        # traverse(x),
         add_line("assert set(", z_str, ".flatten()) == set(", tv_str, ")"),
     )
-    # print(r._to_egg_command(egraph._mod_decls))
+    # print(r._to_egg_command(array_api_module_string._mod_decls))
     # yield r
     # tuple values
     yield rule(
@@ -1684,7 +1679,7 @@ def _py_expr(
     )
 
 
-@egraph.class_
+@array_api_module_string.class_
 class FunctionExprTwo(Expr):
     """
     Python expression that takes two NDArrays as arguments and returns an NDArray.
@@ -1698,10 +1693,10 @@ class FunctionExprTwo(Expr):
         ...
 
 
-fn_ruleset = egraph.ruleset("fn")
+fn_ruleset = array_api_module_string.ruleset("fn")
 
 
-@egraph.register
+@array_api_module_string.register
 def _function_expr(name: String, res: NDArray, arg1: String, arg2: String, f: FunctionExprTwo, s: String):
     yield rule(
         eq(f).to(FunctionExprTwo(name, res, NDArray.var(arg1), NDArray.var(arg2))),
@@ -1711,42 +1706,3 @@ def _function_expr(name: String, res: NDArray, arg1: String, arg2: String, f: Fu
             join("def ", name, "(", arg1, ", ", arg2, "):\n", statements(), "    return ", ndarray_expr(res), "\n")
         ),
     )
-
-
-def test_ndarray_string():
-    _NDArray_1 = NDArray.var("X")
-    X_orig = copy(_NDArray_1)
-    assume_dtype(_NDArray_1, DType.float64)
-    assume_shape(_NDArray_1, TupleInt(Int(150)) + TupleInt(Int(4)))
-
-    _NDArray_2 = NDArray.var("y")
-    Y_orig = copy(_NDArray_2)
-
-    assume_dtype(_NDArray_2, int64)
-    assume_shape(_NDArray_2, TupleInt(150))  # type: ignore
-    assume_value_one_of(_NDArray_2, (0, 1, 2))  # type: ignore
-
-    _NDArray_3 = reshape(_NDArray_2, TupleInt(Int(-1)))
-    _NDArray_4 = astype(unique_counts(_NDArray_3)[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float(150.0)))
-
-    res = _NDArray_4 + _NDArray_1
-    fn = FunctionExprTwo("my_fn", res, X_orig, Y_orig)
-    egraph.register(fn)
-
-    egraph.run((run() * 20).saturate())
-    # while egraph.run((run())).updated:
-    #     print(egraph.load_object(egraph.extract(PyObject.from_string(statements()))))
-    egraph.graphviz.render(view=True)
-
-    egraph.run(run(fn_ruleset))
-
-    fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.source)))
-
-    locals = {}
-    globals = {"np": np}
-    exec(fn_source, globals, locals) # type: ignore
-    fn = locals["my_fn"]
-    return fn_source
-
-
-# print(fn(np.arange(10), np.arange(10)))
