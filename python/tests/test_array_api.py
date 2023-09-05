@@ -31,7 +31,7 @@ def test_to_source():
     egraph.run(run(fn_ruleset))
 
     fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.source)))
-
-    exec(fn_source, {"np": np})  # type: ignore
-    fn = locals["my_fn"]
     print(fn_source)
+    locals_: dict[str, object] = {}
+    exec(fn_source, {"np": np}, locals_)  # type: ignore
+    fn: object = locals_["my_fn"]
