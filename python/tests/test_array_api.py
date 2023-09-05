@@ -1,7 +1,4 @@
-import pytest
 from egglog.exp.array_api import *
-from sklearn import config_context, datasets
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 
 def test_to_source():
