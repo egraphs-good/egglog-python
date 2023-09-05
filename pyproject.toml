@@ -29,7 +29,15 @@ classifiers = [
 dependencies = ["typing-extensions", "black", "graphviz"]
 
 [project.optional-dependencies]
-dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
+dev = [
+    "pre-commit",
+    "black",
+    "mypy",
+    "flake8",
+    "isort",
+    "scikit-learn",
+    "array_api_compat",
+]
 
 test = ["pytest", "mypy"]
 
@@ -38,10 +46,10 @@ docs = [
     "myst-nb",
     "sphinx-autodoc-typehints",
     "sphinx-gallery",
-    "matplotlib",
-    "scikit-learn",
     "nbconvert",
+    "scikit-learn",
     "array_api_compat",
+
 ]
 
 
