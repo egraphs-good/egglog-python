@@ -28,7 +28,7 @@ assume_isfinite(X_arr)
 
 y_arr = NDArray.var("y")
 assume_dtype(y_arr, int64)
-assume_shape(y_arr, TupleInt(150))
+assume_shape(y_arr, TupleInt(150))  # type: ignore
 assume_value_one_of(y_arr, (0, 1, 2))  # type: ignore
 
 with EGraph([array_api_module]):

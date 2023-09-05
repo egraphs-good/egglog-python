@@ -8,7 +8,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
   - Renamed `BaseExpr` to `Expr` for succinctness
   - Add [slides for zoom presentation with Open Teams](explanation/2023_07_presentation)
-  - Started adding [tutorial for using with array API and sklearn](tutorials/array-api), using this to drive
+  - Started adding tutorial for using with array API and sklearn], using this to drive
     the support for more Python integration
   - Added a PyObject sort with the `save_object` and `load_object` egraphs methods and the `exec`
   - Added more general mechanism to upcast Python arguments into egglog expressions, by registering `converter`s
@@ -34,6 +34,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
   - Display all expressions when graphing
 - ...
   - Fix adding rules for sorts defined in other modules
+  - Split out array API into multiple modules
 
 ## 0.5.1 (2023-07-18)
 

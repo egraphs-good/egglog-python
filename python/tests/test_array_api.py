@@ -35,8 +35,6 @@ def test_to_source():
 
     fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.source)))
 
-    locals = {}
-    globals = {"np": np}
-    exec(fn_source, globals, locals)  # type: ignore
+    exec(fn_source, {"np": np})  # type: ignore
     fn = locals["my_fn"]
     print(fn_source)

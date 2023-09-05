@@ -849,6 +849,7 @@ class EGraph(_BaseModule):
         return self
 
     def __exit__(self, exc_type, exc, exc_tb):
+        assert self._token
         CURRENT_EGRAPH.reset(self._token)
         self.pop()
 
