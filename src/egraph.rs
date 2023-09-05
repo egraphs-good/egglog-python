@@ -99,6 +99,7 @@ impl EGraph {
             include_temporary_functions: false,
         });
         serialized.inline_leaves();
+        info!("Serialized egraph: {:?}", serialized);
         serialized.to_dot()
     }
 

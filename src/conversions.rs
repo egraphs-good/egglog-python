@@ -250,25 +250,25 @@ convert_enums!(
             egglog::ast::Command::CheckProof => CheckProof {}
     };
     egglog::ExtractReport: "{:?}" => ExtractReport {
-        Best(termdag: TermDag, cost: usize, expr: Term)
+        Best(termdag: TermDag, cost: usize, term: Term)
             b -> egglog::ExtractReport::Best {
                 termdag: (&b.termdag).into(),
                 cost: b.cost,
-                expr: (&b.expr).into()
+                term: (&b.term).into()
             },
-            egglog::ExtractReport::Best {termdag, cost, expr} => Best {
+            egglog::ExtractReport::Best {termdag, cost, term} => Best {
                 termdag: termdag.into(),
                 cost: *cost,
-                expr: expr.into()
+                term: term.into()
             };
-        Variants(termdag: TermDag, variants: Vec<Term>)
+        Variants(termdag: TermDag, terms: Vec<Term>)
             v -> egglog::ExtractReport::Variants {
                 termdag: (&v.termdag).into(),
-                variants: v.variants.iter().map(|v| v.into()).collect()
+                terms: v.terms.iter().map(|v| v.into()).collect()
             },
-            egglog::ExtractReport::Variants {termdag, variants} => Variants {
+            egglog::ExtractReport::Variants {termdag, terms} => Variants {
                 termdag: termdag.into(),
-                variants: variants.iter().map(|v| v.into()).collect()
+                terms: terms.iter().map(|v| v.into()).collect()
             }
     }
 );

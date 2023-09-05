@@ -10,9 +10,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.18.1", features = ["extension-module"] }
-# egglog = { git = "https://github.com/egraphs-good/egglog", rev = "0f777d6700d860e21137ef2cfbdbe5f7ae31b701" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "c01695618ed4de2fbfa8116476e208bc1ca86612" }
-# egglog = { path = "../egg-smol" }
+egglog = { git = "https://github.com/egraphs-good/egglog", rev = "c83fc750878755eb610a314da90f9273b3bfe25d" }
+# egglog = { git = "https://github.com/oflatt/egg-smol", rev = "f6df3ff831b65405665e1751b0ef71c61b025432" }
+# egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "c01695618ed4de2fbfa8116476e208bc1ca86612" }
 
 pyo3-log = "0.8.1"
 log = "0.4.17"
@@ -21,3 +21,7 @@ ordered-float = "*"
 
 [package.metadata.maturin]
 name = "egglog.bindings"
+
+[patch.'https://github.com/egraphs-good/egraph-serialize']
+
+egraph-serialize = { git = "https://github.com/saulshanabrook/egraph-serialize", rev = "8dc11836fdade20bf2b20c5f1e2d75bcd005767d" }

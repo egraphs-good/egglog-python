@@ -284,7 +284,7 @@ checksum = "675e35c02a51bb4d4618cb4885b3839ce6d1787c97b664474d9208d074742e20"
 [[package]]
 name = "egglog"
 version = "0.1.0"
-source = "git+https://github.com/saulshanabrook/egg-smol?rev=c01695618ed4de2fbfa8116476e208bc1ca86612#c01695618ed4de2fbfa8116476e208bc1ca86612"
+source = "git+https://github.com/egraphs-good/egglog?rev=c83fc750878755eb610a314da90f9273b3bfe25d#c83fc750878755eb610a314da90f9273b3bfe25d"
 dependencies = [
  "clap",
  "egraph-serialize",
@@ -324,7 +324,7 @@ dependencies = [
 [[package]]
 name = "egraph-serialize"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egraph-serialize?rev=e406ffcec8c6e841089fd3e4f9b76c35ce448950#e406ffcec8c6e841089fd3e4f9b76c35ce448950"
+source = "git+https://github.com/saulshanabrook/egraph-serialize?rev=8dc11836fdade20bf2b20c5f1e2d75bcd005767d#8dc11836fdade20bf2b20c5f1e2d75bcd005767d"
 dependencies = [
  "graphviz-rust",
  "indexmap 2.0.0",

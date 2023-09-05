@@ -243,15 +243,15 @@ class RunReport:
 @final
 class Variants:
     termdag: TermDag
-    variants: list[_Term]
-    def __init__(self, termdag: TermDag, variants: list[_Term]) -> None: ...
+    terms: list[_Term]
+    def __init__(self, termdag: TermDag, terms: list[_Term]) -> None: ...
 
 @final
 class Best:
     termdag: TermDag
     cost: int
-    expr: _Term
-    def __init__(self, termdag: TermDag, cost: int, expr: _Term) -> None: ...
+    term: _Term
+    def __init__(self, termdag: TermDag, cost: int, term: _Term) -> None: ...
 
 _ExtractReport = Variants | Best
 

@@ -711,7 +711,7 @@ class EGraph(_BaseModule):
         if not isinstance(extract_report, bindings.Best):
             raise ValueError("No extract report saved")
         new_typed_expr = TypedExprDecl.from_egg(
-            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.expr)
+            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
         return cast(EXPR, RuntimeExpr(self._mod_decls, new_typed_expr))
 
@@ -777,7 +777,7 @@ class EGraph(_BaseModule):
         if not isinstance(extract_report, bindings.Best):
             raise ValueError("No extract report saved")
         new_typed_expr = TypedExprDecl.from_egg(
-            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.expr)
+            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
         if new_typed_expr.tp != typed_expr.tp:
             raise RuntimeError(f"Type mismatch: {new_typed_expr.tp} != {typed_expr.tp}")
@@ -794,7 +794,7 @@ class EGraph(_BaseModule):
             raise ValueError("Wrong extract report type")
         new_exprs = [
             TypedExprDecl.from_egg(self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, term))
-            for term in extract_report.variants
+            for term in extract_report.terms
         ]
         return [cast(EXPR, RuntimeExpr(self._mod_decls, expr)) for expr in new_exprs]
 

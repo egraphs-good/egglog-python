@@ -14,6 +14,7 @@ import numpy as np
 from attr import dataclass
 from egglog import *
 from egglog.bindings import EggSmolError
+from egglog.egraph import Action
 from egglog.runtime import RuntimeExpr
 
 # Pretend that exprs are numbers b/c scikit learn does isinstance checks
@@ -1286,39 +1287,40 @@ def _assume_value(x: NDArray, value: Value, idx: TupleInt):
 
 
 @egraph.function(mutates_first_arg=True)
-def assume_isfinite(x: Value) -> None:
+def assume_isfinite(x: NDArray) -> None:
     """
     Asserts that the scalar ndarray is non null and not infinite.
     """
     ...
 
 
-@egraph.register
-def _isfinite(x: Value):
-    # orig_x = copy(x)
-    assume_isfinite(x)
-    yield rewrite(x.isfinite()).to(TRUE)
+# @egraph.register
+# def _isfinite(x: NDArray):
+#     # orig_x = copy(x)
+#     assume_isfinite(x)
+#     isfinite(x)
+# yield rewrite(x.isfinite()).to(TRUE)
 
 
-@egraph.function
-def value_one_of(values: TupleValue) -> Value:
+@egraph.function(mutates_first_arg=True)
+def assume_value_one_of(x: NDArray, values: TupleValue) -> None:
     """
     A value that is one of the values in the tuple.
     """
     ...
 
 
-@egraph.function
-def possible_values(v: Value) -> TupleValue:
-    """
-    Possible values of a value.
-    """
-    ...
+# @egraph.function
+# def possible_values(v: Value) -> TupleValue:
+#     """
+#     Possible values of a value.
+#     """
+#     ...
 
 
-@egraph.register
-def _possible_values(v: Value, vs: TupleValue):
-    yield rewrite(possible_values(value_one_of(vs))).to(vs)
+# @egraph.register
+# def _possible_values(v: Value, vs: TupleValue):
+#     yield rewrite(possible_values(value_one_of(vs))).to(vs)
 
 
 ALL_INDICES: TupleInt = egraph.constant("ALL_INDICES", TupleInt)
@@ -1326,9 +1328,9 @@ ALL_INDICES: TupleInt = egraph.constant("ALL_INDICES", TupleInt)
 
 @egraph.register
 def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f64, b: Bool):
-    yield rewrite(value_one_of(TupleValue(x) + xs).isfinite()).to(x.isfinite() & value_one_of(xs).isfinite())
-    yield rewrite(value_one_of(TupleValue(x))).to(x)
-    yield rewrite(value_one_of(TupleValue.EMPTY).isfinite()).to(TRUE)
+    # yield rewrite(value_one_of(TupleValue(x) + xs).isfinite()).to(x.isfinite() & value_one_of(xs).isfinite())
+    # yield rewrite(value_one_of(TupleValue(x))).to(x)
+    # yield rewrite(value_one_of(TupleValue.EMPTY).isfinite()).to(TRUE)
 
     yield rewrite(Value.int(i).isfinite()).to(TRUE)
     yield rewrite(Value.bool(b).isfinite()).to(TRUE)
@@ -1338,10 +1340,10 @@ def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f
     yield rewrite(isfinite(sum(arr))).to(NDArray.scalar(Value.bool(array_value(arr, ALL_INDICES).isfinite())))
 
 
-@egraph.register
-def _unique(xs: TupleValue, a: NDArray):
-    # unique_values should use value_one_of
-    yield rewrite(unique_values(x=a)).to(NDArray.vector(possible_values(array_value(a, ALL_INDICES))))
+# @egraph.register
+# def _unique(xs: TupleValue, a: NDArray):
+# unique_values should use value_one_of
+# yield rewrite(unique_values(x=a)).to(NDArray.vector(possible_values(array_value(a, ALL_INDICES))))
 
 
 @egraph.register
@@ -1363,27 +1365,303 @@ def gensym() -> i64:
 gensym_var = join("_", gensym().to_string())
 
 
-def line(*v: StringLike) -> String:
-    return join("    ", *v, "\n")
+def add_line(*v: StringLike) -> Action:
+    return set_(statements()).to(join("    ", *v, "\n"))
 
 
-@egraph.function(merge=lambda old, new: join(old, new))
+incr_gensym = set_(gensym()).to(gensym() + 1)
+
+
+@egraph.function(merge=lambda old, new: join(old, new), default=String(""))
 def statements() -> String:
     ...
 
 
-@egraph.function(default=String(""))
+@egraph.function()
 def ndarray_expr(x: NDArray) -> String:
     ...
 
 
+@egraph.function()
+def dtype_expr(x: DType) -> String:
+    ...
+
+
+@egraph.function()
+def tuple_int_expr(x: TupleInt) -> String:
+    ...
+
+
+@egraph.function()
+def int_expr(x: Int) -> String:
+    ...
+
+
+@egraph.function()
+def tuple_value_expr(x: TupleValue) -> String:
+    ...
+
+
+@egraph.function()
+def value_expr(x: Value) -> String:
+    ...
+
+
+egraph.register(
+    set_(dtype_expr(DType.float64)).to(String("np.float64")),
+    set_(dtype_expr(DType.int64)).to(String("np.int64")),
+)
+
+
+@egraph.function
+def bool_expr(x: Bool) -> String:
+    ...
+
+
+egraph.register(
+    set_(bool_expr(TRUE)).to(String("True")),
+    set_(bool_expr(FALSE)).to(String("False")),
+)
+
+
+@egraph.function
+def float_expr(x: Float) -> String:
+    ...
+
+
+@egraph.function(merge=lambda old, new: old | new)
+def traversed() -> Set[NDArray]:
+    """
+    Global set of all traversed arrays.
+    """
+    ...
+
+
+def traverse(x: NDArray) -> Action:
+    return set_(traversed()).to(Set(x))
+
+
+def not_traversed(x: NDArray) -> Unit:
+    return traversed().not_contains(x)
+
+
+egraph.register(
+    set_(traversed()).to(Set[NDArray].empty()),
+)
+
+
+@egraph.function
+def tuple_ndarray_expr(x: TupleNDArray) -> String:
+    ...
+
+
 @egraph.register
-def _py_expr(x: NDArray, y: NDArray, z: NDArray, s: String, y_str: String, z_str: String):
+def _py_expr(
+    x: NDArray,
+    y: NDArray,
+    z: NDArray,
+    s: String,
+    y_str: String,
+    z_str: String,
+    dtype_str: String,
+    dtype: DType,
+    ti: TupleInt,
+    ti1: TupleInt,
+    ti2: TupleInt,
+    ti_str: String,
+    ti_str1: String,
+    ti_str2: String,
+    tv_str: String,
+    tv1_str: String,
+    tv2_str: String,
+    i: Int,
+    i_str: String,
+    i64_: i64,
+    tv: TupleValue,
+    tv1: TupleValue,
+    tv2: TupleValue,
+    v: Value,
+    v_str: String,
+    b: Bool,
+    f: Float,
+    f_str: String,
+    b_str: String,
+    f64_: f64,
+    ob: OptionalBool,
+    tnd: TupleNDArray,
+    tnd_str: String,
+):
+    # Var
     yield rule(
         eq(x).to(NDArray.var(s)),
     ).then(
         set_(lhs=ndarray_expr(x)).to(s),
     )
+
+    # Asssume dtype
+    z_assumed_dtype = copy(z)
+    assume_dtype(z_assumed_dtype, dtype=dtype)
+    yield rule(
+        eq(x).to(z_assumed_dtype),
+        eq(z_str).to(ndarray_expr(z)),
+        eq(dtype_str).to(dtype_expr(dtype)),
+    ).then(
+        set_(ndarray_expr(x)).to(z_str),
+        add_line("assert ", z_str, ".dtype == ", dtype_str),
+    )
+
+    # assume shape
+    z_assumed_shape = copy(z)
+    assume_shape(z_assumed_shape, ti)
+    yield rule(
+        eq(x).to(z_assumed_shape),
+        eq(z_str).to(ndarray_expr(z)),
+        eq(ti_str).to(tuple_int_expr(ti)),
+    ).then(
+        set_(ndarray_expr(x)).to(z_str),
+        add_line("assert ", z_str, ".shape == ", ti_str),
+    )
+    # tuple int
+    yield rule(
+        eq(ti).to(ti1 + ti2),
+        eq(ti_str1).to(tuple_int_expr(ti1)),
+        eq(ti_str2).to(tuple_int_expr(ti2)),
+    ).then(
+        set_(tuple_int_expr(ti)).to(join(ti_str1, " + ", ti_str2)),
+    )
+    yield rule(
+        eq(ti).to(TupleInt(i)),
+        eq(i_str).to(int_expr(i)),
+    ).then(
+        set_(tuple_int_expr(ti)).to(join("(", i_str, ",)")),
+    )
+    # Int
+    yield rule(
+        eq(i).to(Int(i64_)),
+    ).then(
+        set_(int_expr(i)).to(i64_.to_string()),
+    )
+
+    # assume isfinite
+    z_assumed_isfinite = copy(z)
+    assume_isfinite(z_assumed_isfinite)
+    yield rule(
+        eq(x).to(z_assumed_isfinite),
+        eq(z_str).to(ndarray_expr(z)),
+    ).then(
+        set_(ndarray_expr(x)).to(z_str),
+        add_line("assert np.all(np.isfinite(", z_str, "))"),
+    )
+
+    # Assume value_one_of
+    z_assumed_value_one_of = copy(z)
+    assume_value_one_of(z_assumed_value_one_of, tv)
+    yield rule(
+        eq(x).to(z_assumed_value_one_of),
+        not_traversed(x),
+        eq(z_str).to(ndarray_expr(z)),
+        eq(tv_str).to(tuple_value_expr(tv)),
+    ).then(
+        set_(ndarray_expr(x)).to(z_str),
+        traverse(x),
+        add_line("assert set(", z_str, ".flatten()) == set(", tv_str, ")"),
+    )
+    # print(r._to_egg_command(egraph._mod_decls))
+    # yield r
+    # tuple values
+    yield rule(
+        eq(tv).to(tv1 + tv2),
+        eq(tv1_str).to(tuple_value_expr(tv1)),
+        eq(tv2_str).to(tuple_value_expr(tv2)),
+    ).then(
+        set_(tuple_value_expr(tv)).to(join(tv1_str, " + ", tv2_str)),
+    )
+    yield rule(
+        eq(tv).to(TupleValue(v)),
+        eq(v_str).to(value_expr(v)),
+    ).then(
+        set_(tuple_value_expr(tv)).to(join("(", v_str, ",)")),
+    )
+
+    # Value
+    yield rule(
+        eq(v).to(Value.int(i)),
+        eq(i_str).to(int_expr(i)),
+    ).then(
+        set_(value_expr(v)).to(i_str),
+    )
+    yield rule(
+        eq(v).to(Value.bool(b)),
+        eq(b_str).to(bool_expr(b)),
+    ).then(
+        set_(value_expr(v)).to(b_str),
+    )
+    yield rule(
+        eq(v).to(Value.float(f)),
+        eq(f_str).to(float_expr(f)),
+    ).then(
+        set_(value_expr(v)).to(f_str),
+    )
+
+    # Float
+    yield rule(
+        eq(f).to(Float(f64_)),
+    ).then(
+        set_(float_expr(f)).to(f64_.to_string()),
+    )
+
+    # reshape (don't include copy, since not present in numpy)
+    yield rule(
+        eq(x).to(reshape(y, ti, ob)),
+        eq(y_str).to(ndarray_expr(y)),
+        eq(ti_str).to(tuple_int_expr(ti)),
+    ).then(
+        set_(ndarray_expr(x)).to(gensym_var),
+        add_line(gensym_var, " = ", y_str, ".reshape(", ti_str, ")"),
+        incr_gensym,
+    )
+
+    # astype
+    yield rule(
+        eq(x).to(astype(y, dtype)),
+        eq(y_str).to(ndarray_expr(y)),
+        eq(dtype_str).to(dtype_expr(dtype)),
+    ).then(
+        set_(ndarray_expr(x)).to(gensym_var),
+        add_line(gensym_var, " = ", y_str, ".astype(", dtype_str, ")"),
+        incr_gensym,
+    )
+
+    # unique_counts(x) => unique(x, return_counts=True)
+    yield rule(
+        eq(tnd).to(unique_counts(y)),
+        eq(y_str).to(ndarray_expr(y)),
+    ).then(
+        set_(tuple_ndarray_expr(tnd)).to(gensym_var),
+        add_line(gensym_var, " = np.unique(", y_str, ", return_counts=True)"),
+        incr_gensym,
+    )
+    # Tuple ndarray indexing
+    yield rule(
+        eq(x).to(tnd[i]),
+        eq(tnd_str).to(tuple_ndarray_expr(tnd)),
+        eq(i_str).to(int_expr(i)),
+    ).then(
+        set_(ndarray_expr(x)).to(join(tnd_str, "[", i_str, "]")),
+    )
+
+    # ndarray scalar
+    # TODO: Use dtype and shape and indexing instead?
+    yield rule(
+        eq(x).to(NDArray.scalar(v)),
+        eq(v_str).to(value_expr(v)),
+    ).then(
+        set_(ndarray_expr(x)).to(gensym_var),
+        add_line(gensym_var, " = np.array(", v_str, ")"),
+        incr_gensym,
+    )
+
+    # NDARRAy ops
 
     yield rule(
         eq(x).to(y + z),
@@ -1391,8 +1669,8 @@ def _py_expr(x: NDArray, y: NDArray, z: NDArray, s: String, y_str: String, z_str
         eq(z_str).to(ndarray_expr(z)),
     ).then(
         set_(ndarray_expr(x)).to(gensym_var),
-        set_(statements()).to(line(gensym_var, " = ", y_str, " + ", z_str)),
-        set_(gensym()).to(gensym() + 1),
+        add_line(gensym_var, " = ", y_str, " + ", z_str),
+        incr_gensym,
     )
 
     yield rule(
@@ -1401,8 +1679,8 @@ def _py_expr(x: NDArray, y: NDArray, z: NDArray, s: String, y_str: String, z_str
         eq(z_str).to(ndarray_expr(z)),
     ).then(
         set_(ndarray_expr(x)).to(gensym_var),
-        set_(statements()).to(line(gensym_var, " = ", y_str, " / ", z_str)),
-        set_(gensym()).to(gensym() + 1),
+        add_line(gensym_var, " = ", y_str, " / ", z_str),
+        incr_gensym,
     )
 
 
@@ -1425,30 +1703,50 @@ fn_ruleset = egraph.ruleset("fn")
 
 @egraph.register
 def _function_expr(name: String, res: NDArray, arg1: String, arg2: String, f: FunctionExprTwo, s: String):
-    yield rule(eq(f).to(FunctionExprTwo(name, res, NDArray.var(arg1), NDArray.var(arg2))), ruleset=fn_ruleset).then(
+    yield rule(
+        eq(f).to(FunctionExprTwo(name, res, NDArray.var(arg1), NDArray.var(arg2))),
+        ruleset=fn_ruleset,
+    ).then(
         set_(f.source).to(
             join("def ", name, "(", arg1, ", ", arg2, "):\n", statements(), "    return ", ndarray_expr(res), "\n")
         ),
     )
 
 
-X = NDArray.var("X")
-Y = NDArray.var("Y")
-res = (X + X) / (Y + (X + X))
-res += res
-fn = FunctionExprTwo("my_fn", res, X, Y)
-egraph.register(fn)
+def test_ndarray_string():
+    _NDArray_1 = NDArray.var("X")
+    X_orig = copy(_NDArray_1)
+    assume_dtype(_NDArray_1, DType.float64)
+    assume_shape(_NDArray_1, TupleInt(Int(150)) + TupleInt(Int(4)))
 
-egraph.run((run() * 10).saturate() + (run(fn_ruleset) * 10).saturate())
-egraph.graphviz.render(view=True)
+    _NDArray_2 = NDArray.var("y")
+    Y_orig = copy(_NDArray_2)
 
-fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.source)))
-print(fn_source)
+    assume_dtype(_NDArray_2, int64)
+    assume_shape(_NDArray_2, TupleInt(150))  # type: ignore
+    assume_value_one_of(_NDArray_2, (0, 1, 2))  # type: ignore
 
-locals = {}
-globals = {"np": np}
-exec(fn_source, globals, locals)
-fn = locals["my_fn"]
+    _NDArray_3 = reshape(_NDArray_2, TupleInt(Int(-1)))
+    _NDArray_4 = astype(unique_counts(_NDArray_3)[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float(150.0)))
+
+    res = _NDArray_4 + _NDArray_1
+    fn = FunctionExprTwo("my_fn", res, X_orig, Y_orig)
+    egraph.register(fn)
+
+    egraph.run((run() * 20).saturate())
+    # while egraph.run((run())).updated:
+    #     print(egraph.load_object(egraph.extract(PyObject.from_string(statements()))))
+    egraph.graphviz.render(view=True)
+
+    egraph.run(run(fn_ruleset))
+
+    fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.source)))
+
+    locals = {}
+    globals = {"np": np}
+    exec(fn_source, globals, locals) # type: ignore
+    fn = locals["my_fn"]
+    return fn_source
 
 
-print(fn(10, 2))
+# print(fn(np.arange(10), np.arange(10)))
