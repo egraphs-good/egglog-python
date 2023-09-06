@@ -18,6 +18,7 @@ class EGraph:
         *,
         max_functions: Optional[int] = None,
         max_calls_per_function: Optional[int] = None,
+        inline_leaves: bool = False,
     ) -> str: ...
     def save_object(self, __o: object, /) -> _Expr: ...
     def load_object(self, __e: _Expr, /) -> object: ...
@@ -246,15 +247,15 @@ class RunReport:
 @final
 class Variants:
     termdag: TermDag
-    variants: list[_Term]
-    def __init__(self, termdag: TermDag, variants: list[_Term]) -> None: ...
+    terms: list[_Term]
+    def __init__(self, termdag: TermDag, terms: list[_Term]) -> None: ...
 
 @final
 class Best:
     termdag: TermDag
     cost: int
-    expr: _Term
-    def __init__(self, termdag: TermDag, cost: int, expr: _Term) -> None: ...
+    term: _Term
+    def __init__(self, termdag: TermDag, cost: int, term: _Term) -> None: ...
 
 _ExtractReport = Variants | Best
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextvars import ContextVar, Token
 from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from inspect import Parameter, currentframe, signature
@@ -470,7 +471,13 @@ class _BaseModule(ABC):
         )
         self._process_commands(
             self._mod_decls.register_function_callable(
-                ref, fn_decl, egg_name, cost, default_decl, merge_decl, [a._to_egg_action() for a in merge_action]
+                ref,
+                fn_decl,
+                egg_name,
+                cost,
+                default_decl,
+                merge_decl,
+                [a._to_egg_action(self._mod_decls) for a in merge_action],
             )
         )
 
@@ -525,7 +532,7 @@ class _BaseModule(ABC):
             commands = tuple(_command_generator(command_or_generator))
         else:
             commands = (cast(CommandLike, command_or_generator), *commands)
-        self._process_commands(_command_like(command)._to_egg_command() for command in commands)
+        self._process_commands(_command_like(command)._to_egg_command(self._mod_decls) for command in commands)
 
     def ruleset(self, name: str) -> Ruleset:
         self._process_commands([bindings.AddRuleset(name)])
@@ -631,9 +638,23 @@ class _Builtins(_BaseModule):
 @dataclass
 class Module(_BaseModule):
     _cmds: list[bindings._Command] = field(default_factory=list, repr=False)
+    _py_objects: list[object] = field(default_factory=list, repr=False)
 
     def _process_commands(self, cmds: Iterable[bindings._Command]) -> None:
         self._cmds.extend(cmds)
+
+    def save_object(self, obj: object) -> PyObject:
+        """
+        Save an object to the egraph.
+
+        In a module, creates a temp egraph to save the object and get the value, then saves it to add later
+        once we have a real egraph.
+        """
+        egraph = bindings.EGraph()
+        expr = egraph.save_object(obj)
+        self._py_objects.append(obj)
+        typed_expr_decl = TypedExprDecl.from_egg(self._mod_decls, expr)
+        return cast("PyObject", RuntimeExpr(self._mod_decls, typed_expr_decl))
 
 
 @dataclass
@@ -645,10 +666,13 @@ class EGraph(_BaseModule):
     _egraph: bindings.EGraph = field(repr=False, default_factory=bindings.EGraph)
     # The current declarations which have been pushed to the stack
     _decl_stack: list[Declarations] = field(default_factory=list, repr=False)
+    _token: Optional[Token[EGraph]] = None
 
     def __post_init__(self, modules: list[Module] = []) -> None:
         super().__post_init__(modules)
         for m in self._flatted_deps:
+            for o in m._py_objects:
+                self._egraph.save_object(o)
             self._process_commands(m._cmds)
 
     def _process_commands(self, commands: Iterable[bindings._Command]) -> None:
@@ -659,11 +683,10 @@ class EGraph(_BaseModule):
         Returns the graphviz representation of the e-graph.
         """
 
-        return {"image/svg+xml": self.graphviz.pipe(format="svg", quiet=True, encoding="utf-8")}
+        return {"image/svg+xml": self.graphviz().pipe(format="svg", quiet=True, encoding="utf-8")}
 
-    @property
-    def graphviz(self) -> graphviz.Source:
-        return graphviz.Source(self._egraph.to_graphviz_string())
+    def graphviz(self, **kwargs) -> graphviz.Source:
+        return graphviz.Source(self._egraph.to_graphviz_string(**kwargs))
 
     def _repr_html_(self) -> str:
         """
@@ -672,15 +695,15 @@ class EGraph(_BaseModule):
         until this PR is merged and released
         https://github.com/sphinx-gallery/sphinx-gallery/pull/1138
         """
-        return self.graphviz.pipe(format="svg", quiet=True).decode()
+        return self.graphviz().pipe(format="svg", quiet=True).decode()
 
-    def display(self):
+    def display(self, **kwargs):
         """
         Displays the e-graph in the notebook.
         """
-        from IPython.display import display
+        from IPython.display import SVG, display
 
-        display(self)
+        display(SVG(self.graphviz(**kwargs).pipe(format="svg", quiet=True, encoding="utf-8")))
 
     @overload
     def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> EXPR:
@@ -700,12 +723,12 @@ class EGraph(_BaseModule):
             limit_or_schedule = run(ruleset, *until) * limit_or_schedule
         typed_expr = expr_parts(expr)
         egg_expr = typed_expr.to_egg(self._mod_decls)
-        self._process_commands([bindings.Simplify(egg_expr, limit_or_schedule._to_egg_schedule())])
+        self._process_commands([bindings.Simplify(egg_expr, limit_or_schedule._to_egg_schedule(self._mod_decls))])
         extract_report = self._egraph.extract_report()
         if not isinstance(extract_report, bindings.Best):
             raise ValueError("No extract report saved")
         new_typed_expr = TypedExprDecl.from_egg(
-            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.expr)
+            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
         return cast(EXPR, RuntimeExpr(self._mod_decls, new_typed_expr))
 
@@ -739,7 +762,7 @@ class EGraph(_BaseModule):
         return self._run_schedule(limit_or_schedule)
 
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
-        self._process_commands([bindings.RunSchedule(schedule._to_egg_schedule())])
+        self._process_commands([bindings.RunSchedule(schedule._to_egg_schedule(self._mod_decls))])
         run_report = self._egraph.run_report()
         if not run_report:
             raise ValueError("No run report saved")
@@ -758,7 +781,7 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.Fail(self._facts_to_check(facts))])
 
     def _facts_to_check(self, facts: Iterable[FactLike]) -> bindings.Check:
-        egg_facts = [f._to_egg_fact() for f in _fact_likes(facts)]
+        egg_facts = [f._to_egg_fact(self._mod_decls) for f in _fact_likes(facts)]
         return bindings.Check(egg_facts)
 
     def extract(self, expr: EXPR) -> EXPR:
@@ -771,7 +794,7 @@ class EGraph(_BaseModule):
         if not isinstance(extract_report, bindings.Best):
             raise ValueError("No extract report saved")
         new_typed_expr = TypedExprDecl.from_egg(
-            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.expr)
+            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
         if new_typed_expr.tp != typed_expr.tp:
             raise RuntimeError(f"Type mismatch: {new_typed_expr.tp} != {typed_expr.tp}")
@@ -788,7 +811,7 @@ class EGraph(_BaseModule):
             raise ValueError("Wrong extract report type")
         new_exprs = [
             TypedExprDecl.from_egg(self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, term))
-            for term in extract_report.variants
+            for term in extract_report.terms
         ]
         return [cast(EXPR, RuntimeExpr(self._mod_decls, expr)) for expr in new_exprs]
 
@@ -814,13 +837,19 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.Pop(1)])
         self._mod_decls._decl = self._decl_stack.pop()
 
-    def __enter__(self):
+    def __enter__(self) -> EGraph:
         """
         Copy the egraph state, so that it can be reverted back to the original state at the end.
+
+        Also sets the current egraph to this one.
         """
+        self._token = CURRENT_EGRAPH.set(self)
         self.push()
+        return self
 
     def __exit__(self, exc_type, exc, exc_tb):
+        assert self._token
+        CURRENT_EGRAPH.reset(self._token)
         self.pop()
 
     def save_object(self, obj: object) -> PyObject:
@@ -838,6 +867,16 @@ class EGraph(_BaseModule):
         typed_expr_decl = expr_parts(obj)
         expr = typed_expr_decl.to_egg(self._mod_decls)
         return self._egraph.load_object(expr)
+
+    @classmethod
+    def current(cls) -> EGraph:
+        """
+        Returns the current egraph, which is the one in the context.
+        """
+        return CURRENT_EGRAPH.get()
+
+
+CURRENT_EGRAPH = ContextVar[EGraph]("CURRENT_EGRAPH")
 
 
 @dataclass(frozen=True)
@@ -924,7 +963,7 @@ class Command(ABC):
     """
 
     @abstractmethod
-    def _to_egg_command(self) -> bindings._Command:
+    def _to_egg_command(self, mod_decls: ModuleDeclarations) -> bindings._Command:
         raise NotImplementedError
 
     @abstractmethod
@@ -944,14 +983,14 @@ class Rewrite(Command):
         args_str = ", ".join(map(str, [self._rhs, *self._conditions]))
         return f"{self._fn_name}({self._lhs}).to({args_str})"
 
-    def _to_egg_command(self) -> bindings._Command:
-        return bindings.RewriteCommand(self._ruleset, self._to_egg_rewrite())
+    def _to_egg_command(self, mod_decls: ModuleDeclarations) -> bindings._Command:
+        return bindings.RewriteCommand(self._ruleset, self._to_egg_rewrite(mod_decls))
 
-    def _to_egg_rewrite(self) -> bindings.Rewrite:
+    def _to_egg_rewrite(self, mod_decls: ModuleDeclarations) -> bindings.Rewrite:
         return bindings.Rewrite(
-            self._lhs.__to_egg__(),
-            self._rhs.__to_egg__(),
-            [c._to_egg_fact() for c in self._conditions],
+            self._lhs.__egg_typed_expr__.expr.to_egg(mod_decls),
+            self._rhs.__egg_typed_expr__.expr.to_egg(mod_decls),
+            [c._to_egg_fact(mod_decls) for c in self._conditions],
         )
 
 
@@ -959,8 +998,8 @@ class Rewrite(Command):
 class BiRewrite(Rewrite):
     _fn_name: ClassVar[str] = "birewrite"
 
-    def _to_egg_command(self) -> bindings._Command:
-        return bindings.BiRewriteCommand(self._ruleset, self._to_egg_rewrite())
+    def _to_egg_command(self, mod_decls: ModuleDeclarations) -> bindings._Command:
+        return bindings.BiRewriteCommand(self._ruleset, self._to_egg_rewrite(mod_decls))
 
 
 @dataclass
@@ -970,7 +1009,7 @@ class Fact(ABC):
     """
 
     @abstractmethod
-    def _to_egg_fact(self) -> bindings._Fact:
+    def _to_egg_fact(self, mod_decls: ModuleDeclarations) -> bindings._Fact:
         raise NotImplementedError
 
 
@@ -983,8 +1022,8 @@ class Eq(Fact):
         args_str = ", ".join(map(str, rest))
         return f"eq({first}).to({args_str})"
 
-    def _to_egg_fact(self) -> bindings.Eq:
-        return bindings.Eq([e.__to_egg__() for e in self._exprs])
+    def _to_egg_fact(self, mod_decls: ModuleDeclarations) -> bindings.Eq:
+        return bindings.Eq([e.__egg_typed_expr__.expr.to_egg(mod_decls) for e in self._exprs])
 
 
 @dataclass
@@ -994,8 +1033,8 @@ class ExprFact(Fact):
     def __str__(self) -> str:
         return str(self._expr)
 
-    def _to_egg_fact(self) -> bindings.Fact:
-        return bindings.Fact(self._expr.__to_egg__())
+    def _to_egg_fact(self, mod_decls: ModuleDeclarations) -> bindings.Fact:
+        return bindings.Fact(self._expr.__egg_typed_expr__.expr.to_egg(mod_decls))
 
 
 @dataclass
@@ -1010,24 +1049,24 @@ class Rule(Command):
         body_str = ", ".join(map(str, self.body))
         return f"rule({body_str}).then({head_str})"
 
-    def _to_egg_command(self) -> bindings.RuleCommand:
+    def _to_egg_command(self, mod_decls: ModuleDeclarations) -> bindings.RuleCommand:
         return bindings.RuleCommand(
             self.name,
             self.ruleset,
             bindings.Rule(
-                [a._to_egg_action() for a in self.head],
-                [f._to_egg_fact() for f in self.body],
+                [a._to_egg_action(mod_decls) for a in self.head],
+                [f._to_egg_fact(mod_decls) for f in self.body],
             ),
         )
 
 
 class Action(Command, ABC):
     @abstractmethod
-    def _to_egg_action(self) -> bindings._Action:
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings._Action:
         raise NotImplementedError
 
-    def _to_egg_command(self) -> bindings._Command:
-        return bindings.ActionCommand(self._to_egg_action())
+    def _to_egg_command(self, mod_decls: ModuleDeclarations) -> bindings._Command:
+        return bindings.ActionCommand(self._to_egg_action(mod_decls))
 
 
 @dataclass
@@ -1038,8 +1077,8 @@ class Let(Action):
     def __str__(self) -> str:
         return f"let({self._name}, {self._value})"
 
-    def _to_egg_action(self) -> bindings.Let:
-        return bindings.Let(self._name, self._value.__to_egg__())
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Let:
+        return bindings.Let(self._name, self._value.__egg_typed_expr__.expr.to_egg(mod_decls))
 
 
 @dataclass
@@ -1050,14 +1089,14 @@ class Set(Action):
     def __str__(self) -> str:
         return f"set({self._call}).to({self._rhs})"
 
-    def _to_egg_action(self) -> bindings.Set:
-        egg_call = self._call.__to_egg__()
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Set:
+        egg_call = self._call.__egg_typed_expr__.expr.to_egg(mod_decls)
         if not isinstance(egg_call, bindings.Call):
             raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")
         return bindings.Set(
             egg_call.name,
             egg_call.args,
-            self._rhs.__to_egg__(),
+            self._rhs.__egg_typed_expr__.expr.to_egg(mod_decls),
         )
 
 
@@ -1068,8 +1107,8 @@ class ExprAction(Action):
     def __str__(self) -> str:
         return str(self._expr)
 
-    def _to_egg_action(self) -> bindings.Expr_:
-        return bindings.Expr_(self._expr.__to_egg__())
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Expr_:
+        return bindings.Expr_(self._expr.__egg_typed_expr__.expr.to_egg(mod_decls))
 
 
 @dataclass
@@ -1079,8 +1118,8 @@ class Delete(Action):
     def __str__(self) -> str:
         return f"delete({self._call})"
 
-    def _to_egg_action(self) -> bindings.Delete:
-        egg_call = self._call.__to_egg__()
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Delete:
+        egg_call = self._call.__egg_typed_expr__.expr.to_egg(mod_decls)
         if not isinstance(egg_call, bindings.Call):
             raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")
         return bindings.Delete(egg_call.name, egg_call.args)
@@ -1094,8 +1133,10 @@ class Union_(Action):
     def __str__(self) -> str:
         return f"union({self._lhs}).with_({self._rhs})"
 
-    def _to_egg_action(self) -> bindings.Union:
-        return bindings.Union(self._lhs.__to_egg__(), self._rhs.__to_egg__())
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Union:
+        return bindings.Union(
+            self._lhs.__egg_typed_expr__.expr.to_egg(mod_decls), self._rhs.__egg_typed_expr__.expr.to_egg(mod_decls)
+        )
 
 
 @dataclass
@@ -1105,7 +1146,7 @@ class Panic(Action):
     def __str__(self) -> str:
         return f"panic({self.message})"
 
-    def _to_egg_action(self) -> bindings.Panic:
+    def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Panic:
         return bindings.Panic(self.message)
 
 
@@ -1133,7 +1174,7 @@ class Schedule(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _to_egg_schedule(self) -> bindings._Schedule:
+    def _to_egg_schedule(self, mod_decls: ModuleDeclarations) -> bindings._Schedule:
         raise NotImplementedError
 
 
@@ -1148,13 +1189,13 @@ class Run(Schedule):
         args_str = ", ".join(map(str, [self.ruleset, *self.until]))
         return f"run({args_str})"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Run(self._to_egg_config())
+    def _to_egg_schedule(self, mod_decls: ModuleDeclarations) -> bindings._Schedule:
+        return bindings.Run(self._to_egg_config(mod_decls))
 
-    def _to_egg_config(self) -> bindings.RunConfig:
+    def _to_egg_config(self, mod_decls: ModuleDeclarations) -> bindings.RunConfig:
         return bindings.RunConfig(
             self.ruleset,
-            [fact._to_egg_fact() for fact in self.until] if self.until else None,
+            [fact._to_egg_fact(mod_decls) for fact in self.until] if self.until else None,
         )
 
 
@@ -1165,8 +1206,8 @@ class Saturate(Schedule):
     def __str__(self) -> str:
         return f"{self.schedule}.saturate()"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Saturate(self.schedule._to_egg_schedule())
+    def _to_egg_schedule(self, mod_decls: ModuleDeclarations) -> bindings._Schedule:
+        return bindings.Saturate(self.schedule._to_egg_schedule(mod_decls))
 
 
 @dataclass
@@ -1177,8 +1218,8 @@ class Repeat(Schedule):
     def __str__(self) -> str:
         return f"{self.schedule} * {self.length}"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Repeat(self.length, self.schedule._to_egg_schedule())
+    def _to_egg_schedule(self, mod_decls: ModuleDeclarations) -> bindings._Schedule:
+        return bindings.Repeat(self.length, self.schedule._to_egg_schedule(mod_decls))
 
 
 @dataclass
@@ -1188,8 +1229,8 @@ class Sequence(Schedule):
     def __str__(self) -> str:
         return f"sequence({', '.join(map(str, self.schedules))})"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Sequence([schedule._to_egg_schedule() for schedule in self.schedules])
+    def _to_egg_schedule(self, mod_decls: ModuleDeclarations) -> bindings._Schedule:
+        return bindings.Sequence([schedule._to_egg_schedule(mod_decls) for schedule in self.schedules])
 
 
 # We use these builders so that when creating these structures we can type check

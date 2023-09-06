@@ -68,7 +68,7 @@ class TestDictUpdate:
         )
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
-        res = egraph.load_object(termdag_term_to_expr(extract_report.termdag, extract_report.expr))
+        res = egraph.load_object(termdag_term_to_expr(extract_report.termdag, extract_report.term))
         assert res == {"a": 2, "b": 2}
 
         # Verify that the original dict is unchanged
@@ -107,7 +107,7 @@ class TestEval:
         )
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
-        res = egraph.load_object(termdag_term_to_expr(extract_report.termdag, extract_report.expr))
+        res = egraph.load_object(termdag_term_to_expr(extract_report.termdag, extract_report.term))
         assert res == 3
 
 
@@ -125,7 +125,7 @@ class TestConversion:
         )
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
-        assert termdag_term_to_expr(extract_report.termdag, extract_report.expr) == Lit(String("hi"))
+        assert termdag_term_to_expr(extract_report.termdag, extract_report.term) == Lit(String("hi"))
 
     def test_from_string(self):
         """
@@ -139,5 +139,5 @@ class TestConversion:
         )
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
-        res = egraph.load_object(termdag_term_to_expr(extract_report.termdag, extract_report.expr))
+        res = egraph.load_object(termdag_term_to_expr(extract_report.termdag, extract_report.term))
         assert res == "hi"

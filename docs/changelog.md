@@ -8,7 +8,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
   - Renamed `BaseExpr` to `Expr` for succinctness
   - Add [slides for zoom presentation with Open Teams](explanation/2023_07_presentation)
-  - Started adding [tutorial for using with array API and sklearn](tutorials/array-api), using this to drive
+  - Started adding tutorial for using with array API and sklearn], using this to drive
     the support for more Python integration
   - Added a PyObject sort with the `save_object` and `load_object` egraphs methods and the `exec`
   - Added more general mechanism to upcast Python arguments into egglog expressions, by registering `converter`s
@@ -32,6 +32,10 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 - Tidy up notebook appearence [#43](https://github.com/metadsl/egglog-python/pull/43)
   - Display expressions as code in Jupyter notebook
   - Display all expressions when graphing
+- Start adding to string support [#45](https://github.com/metadsl/egglog-python/pull/45)
+  - Fix adding rules for sorts defined in other modules
+  - Split out array API into multiple module
+  - tidy up docs homepage
 
 ## 0.5.1 (2023-07-18)
 

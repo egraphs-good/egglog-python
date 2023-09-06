@@ -31,17 +31,17 @@ dependencies = ["typing-extensions", "black", "graphviz"]
 [project.optional-dependencies]
 dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
 
-test = ["pytest", "mypy"]
+test = ["pytest", "mypy", "scikit-learn", "array_api_compat"]
 
 docs = [
     "pydata-sphinx-theme",
     "myst-nb",
     "sphinx-autodoc-typehints",
     "sphinx-gallery",
-    "matplotlib",
-    "scikit-learn",
     "nbconvert",
+    "scikit-learn",
     "array_api_compat",
+    "matplotlib",
 ]
 
 

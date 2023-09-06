@@ -130,7 +130,7 @@ class TestEGraph:
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
         assert extract_report.cost == 6
-        assert termdag_term_to_expr(extract_report.termdag, extract_report.expr) == Call("Num", [Lit(Int(1))])
+        assert termdag_term_to_expr(extract_report.termdag, extract_report.term) == Call("Num", [Lit(Int(1))])
 
     def test_simplify(self):
         egraph = EGraph()
@@ -143,7 +143,7 @@ class TestEGraph:
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
         assert extract_report.cost == 6
-        assert termdag_term_to_expr(extract_report.termdag, extract_report.expr) == Call("Num", [Lit(Int(1))])
+        assert termdag_term_to_expr(extract_report.termdag, extract_report.term) == Call("Num", [Lit(Int(1))])
 
     def test_sort_alias(self):
         # From map example
@@ -161,7 +161,7 @@ class TestEGraph:
 
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
-        assert termdag_term_to_expr(extract_report.termdag, extract_report.expr) == Call(
+        assert termdag_term_to_expr(extract_report.termdag, extract_report.term) == Call(
             "map-insert",
             [
                 Call("map-insert", [Call("map-empty", []), Lit(Int(2)), Lit(String("two"))]),
