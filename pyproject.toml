@@ -41,7 +41,7 @@ docs = [
     "nbconvert",
     "scikit-learn",
     "array_api_compat",
-
+    "matplotlib",
 ]
 
 
