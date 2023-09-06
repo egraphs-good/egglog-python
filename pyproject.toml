@@ -29,17 +29,9 @@ classifiers = [
 dependencies = ["typing-extensions", "black", "graphviz"]
 
 [project.optional-dependencies]
-dev = [
-    "pre-commit",
-    "black",
-    "mypy",
-    "flake8",
-    "isort",
-    "scikit-learn",
-    "array_api_compat",
-]
+dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
 
-test = ["pytest", "mypy"]
+test = ["pytest", "mypy", "scikit-learn", "array_api_compat"]
 
 docs = [
     "pydata-sphinx-theme",
