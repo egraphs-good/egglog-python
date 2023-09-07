@@ -425,6 +425,13 @@ class Include:
 class CheckProof:
     def __init__(self) -> None: ...
 
+@final
+class Relation:
+    constructor: str
+    inputs: list[str]
+
+    def __init__(self, constructor: str, inputs: list[str]) -> None: ...
+
 _Command = (
     SetOption
     | Datatype
@@ -450,6 +457,7 @@ _Command = (
     | Fail
     | Include
     | CheckProof
+    | Relation
 )
 
 def termdag_term_to_expr(termdag: TermDag, term: _Term) -> _Expr: ...

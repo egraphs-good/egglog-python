@@ -570,7 +570,14 @@ class _BaseModule(ABC):
             arg_types, None, tuple(None for _ in tps), TypeRefWithVars("Unit"), mutates_first_arg=False
         )
         commands = self._mod_decls.register_function_callable(
-            FunctionRef(name), fn_decl, egg_fn, cost=None, default=None, merge=None, merge_action=[]
+            FunctionRef(name),
+            fn_decl,
+            egg_fn,
+            cost=None,
+            default=None,
+            merge=None,
+            merge_action=[],
+            is_relation=True,
         )
         self._process_commands(commands)
         return cast(Callable[..., Unit], RuntimeFunction(self._mod_decls, name))

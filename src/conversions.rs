@@ -247,7 +247,16 @@ convert_enums!(
             egglog::ast::Command::Include(p) => Include { path: p.to_string() };
         CheckProof()
             _c -> egglog::ast::Command::CheckProof,
-            egglog::ast::Command::CheckProof => CheckProof {}
+            egglog::ast::Command::CheckProof => CheckProof {};
+        Relation(constructor: String, inputs: Vec<String>)
+            r -> egglog::ast::Command::Relation {
+                constructor: (&r.constructor).into(),
+                inputs: r.inputs.iter().map(|i| i.into()).collect()
+            },
+            egglog::ast::Command::Relation {constructor, inputs} => Relation {
+                constructor: constructor.to_string(),
+                inputs: inputs.iter().map(|i| i.to_string()).collect()
+            }
     };
     egglog::ExtractReport: "{:?}" => ExtractReport {
         Best(termdag: TermDag, cost: usize, term: Term)
