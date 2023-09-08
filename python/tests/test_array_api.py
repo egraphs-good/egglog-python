@@ -45,13 +45,13 @@ def test_to_source():
     assume_value_one_of(_NDArray_2, (0, 1, 2))  # type: ignore
 
     _NDArray_3 = reshape(_NDArray_2, TupleInt(Int(-1)))
-    # _NDArray_4 = astype(unique_counts(_NDArray_3)[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float(150.0)))
+    _NDArray_4 = astype(unique_counts(_NDArray_3)[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float(150.0)))
     _NDArray_5 = zeros(
         unique_values(_NDArray_3).shape + TupleInt(Int(4)),
         OptionalDType.some(DType.float64),
         OptionalDevice.some(_NDArray_1.device),
     )
-    res = _NDArray_1 + _NDArray_5
+    res = _NDArray_4 + _NDArray_1 + _NDArray_5
     fn = FunctionExprTwo("my_fn", res, X_orig, Y_orig)
 
     egraph = EGraph([array_api_module_string])
