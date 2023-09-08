@@ -28,11 +28,12 @@ def extract_py(e: Expr) -> Any:
     egraph = EGraph.current()
     # print(e)
     egraph.register(e)
-    egraph.run((run() * 10).saturate())
+    egraph.run((run() * 30).saturate())
     final_object = egraph.extract(e)
-    # print(f"  -> {final_object}")
     # with egraph:
-    egraph.run((run() * 10).saturate())
+    # egraph.run((run() * 10).saturate())
+    # print(egraph.extract(final_object))
+
     # Run saturation again b/c sometimes it doesn't work the first time.
     # final_object = egraph.extract(egraph.extract(final_object))
     # egraph.run(run(limit=10).saturate())
@@ -546,6 +547,9 @@ class Device(Expr):
     ...
 
 
+ALL_INDICES: TupleInt = array_api_module.constant("ALL_INDICES", TupleInt)
+
+
 # TODO: Add pushdown for math on scalars to values
 # and add replacements
 @array_api_module.class_
@@ -569,12 +573,34 @@ class Value(Expr):
     def isfinite(self) -> Bool:
         ...
 
+    def __lt__(self, other: Value) -> Value:
+        ...
+
+    def __truediv__(self, other: Value) -> Value:
+        ...
+
+    def astype(self, dtype: DType) -> Value:
+        ...
+
     # TODO: Add all operations
 
     @property
     def dtype(self) -> DType:
         """
         Default dtype for this scalar value
+        """
+        ...
+
+    @property
+    def to_bool(self) -> Bool:
+        ...
+
+    @property
+    def to_truthy_value(self) -> Value:
+        """
+        Converts the value to a bool, based on if its truthy.
+
+        https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.any.html
         """
         ...
 
@@ -591,6 +617,11 @@ def _value(i: Int, f: Float, b: Bool):
     yield rewrite(Value.int(i).dtype).to(DType.int64)
     yield rewrite(Value.float(f).dtype).to(DType.float64)
     yield rewrite(Value.bool(b).dtype).to(DType.bool)
+
+    yield rewrite(Value.bool(b).to_bool).to(b)
+
+    yield rewrite(Value.bool(b).to_truthy_value).to(Value.bool(b))
+    # TODO: Add more rules for to_bool_value
 
 
 @array_api_module.class_
@@ -609,6 +640,9 @@ class TupleValue(Expr):
     def __getitem__(self, i: Int) -> Value:
         ...
 
+    def includes(self, value: Value) -> Bool:
+        ...
+
 
 converter(
     tuple,
@@ -622,7 +656,14 @@ converter(
 
 
 @array_api_module.register
-def _tuple_value(ti: TupleValue, ti2: TupleValue, v: Value, i: Int, v2: Value, k: i64):
+def _tuple_value(
+    ti: TupleValue,
+    ti2: TupleValue,
+    v: Value,
+    i: Int,
+    v2: Value,
+    k: i64,
+):
     return [
         rewrite(ti + TupleValue.EMPTY).to(ti),
         rewrite(TupleValue.EMPTY.length()).to(Int(0)),
@@ -632,7 +673,20 @@ def _tuple_value(ti: TupleValue, ti2: TupleValue, v: Value, i: Int, v2: Value, k
         rewrite((TupleValue(v) + ti)[Int(0)]).to(v),
         # Rule for indexing > 0
         rule(eq(v).to((TupleValue(v2) + ti)[Int(k)]), k > 0).then(union(v).with_(ti[Int(k - 1)])),
+        # Includes
+        rewrite(TupleValue.EMPTY.includes(v)).to(FALSE),
+        rewrite(TupleValue(v).includes(v)).to(TRUE),
+        rewrite(TupleValue(v).includes(v2)).to(FALSE, v != v2),
+        rewrite((ti + ti2).includes(v)).to(ti.includes(v) | ti2.includes(v)),
     ]
+
+
+@array_api_module.function
+def possible_values(values: Value) -> TupleValue:
+    """
+    A value that is one of the values in the tuple.
+    """
+    ...
 
 
 @array_api_module.class_
@@ -809,6 +863,12 @@ class NDArray(Expr):
     def vector(cls, values: TupleValue) -> NDArray:
         ...
 
+    def index(self, indices: TupleInt) -> Value:
+        """
+        Return the value at the given indices.
+        """
+        ...
+
 
 @array_api_module.function
 def ndarray_index(x: NDArray) -> IndexKey:
@@ -825,7 +885,9 @@ converter(TupleValue, NDArray, NDArray.vector)
 def _ndarray(x: NDArray, b: Bool, f: Float, fi1: f64, fi2: f64):
     return [
         rewrite(x.ndim).to(x.shape.length()),
-        rewrite(NDArray.scalar(Value.bool(b)).to_bool()).to(b),
+        # rewrite(NDArray.scalar(Value.bool(b)).to_bool()).to(b),
+        # Converting to a bool requires a scalar bool value
+        rewrite(x.to_bool()).to(x.index(TupleInt.EMPTY).to_bool),
         # TODO: Push these down to float
         rewrite(NDArray.scalar(Value.float(f)) / NDArray.scalar(Value.float(f))).to(
             NDArray.scalar(Value.float(Float(1.0)))
@@ -998,21 +1060,43 @@ def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none)
     ...
 
 
+@array_api_module.function
+def reshape_transform_index(original_shape: TupleInt, shape: TupleInt, index: TupleInt) -> TupleInt:
+    """
+    Transforms an indexing operation on a reshaped array to an indexing operation on the original array.
+    """
+    ...
+
+
+@array_api_module.function
+def reshape_transform_shape(original_shape: TupleInt, shape: TupleInt) -> TupleInt:
+    """
+    Transforms the shape of an array to one that is reshaped, by replacing -1 with the correct value.
+    """
+    ...
+
+
 @array_api_module.register
-def _reshape(x: NDArray, y: NDArray, shape: TupleInt, copy: OptionalBool, i: Int, s: String):
+def _reshape(
+    x: NDArray,
+    y: NDArray,
+    shape: TupleInt,
+    copy: OptionalBool,
+    i: Int,
+    s: String,
+    ix: TupleInt,
+):
     return [
         # dtype of result is same as input
         rewrite(reshape(x, shape, copy).dtype).to(x.dtype),
-        # dimensions of output are the same as length of shape
-        rewrite(reshape(x, shape, copy).shape.length()).to(shape.length()),
-        # Shape of single dimensions reshape is the total number of elements
-        rewrite(reshape(x, TupleInt(Int(-1)), copy).shape).to(TupleInt(x.size)),
-        # Reshaping something with just one dimensions doesn't change the shape
-        rule(
-            eq(y).to(reshape(x, TupleInt(Int(-1)), copy)),
-            eq(x.shape).to(TupleInt(i)),
-        ).then(union(x).with_(y)),
-    ]
+        # Indexing into a reshaped array is the same as indexing into the original array with a transformed index
+        rewrite(reshape(x, shape, copy).index(ix)).to(x.index(reshape_transform_index(x.shape, shape, ix))),
+        rewrite(reshape(x, shape, copy).shape).to(reshape_transform_shape(x.shape, shape)),
+
+        # reshape_transform_shape recursively
+        # TODO: handle all cases
+        rewrite(reshape_transform_shape(TupleInt(i), TupleInt(Int(-1)))).to(TupleInt(i)),
+        ]
 
 
 @array_api_module.function
@@ -1154,42 +1238,123 @@ def _linalg(x: NDArray, full_matrices: Bool):
 
 
 @array_api_module.function
-def ndarray_all_greater_0(x: NDArray) -> Unit:
+def greater_zero(value: Value) -> Unit:
     ...
 
 
-@array_api_module.function
-def ndarray_all_false(x: NDArray) -> Unit:
-    ...
+# @array_api_module.function
+# def ndarray_all_greater_0(x: NDArray) -> Unit:
+#     ...
 
 
-@array_api_module.function
-def ndarray_all_true(x: NDArray) -> Unit:
-    ...
+# @array_api_module.function
+# def ndarray_all_false(x: NDArray) -> Unit:
+#     ...
 
 
-# TODO: Redo as rewrites with assumptions?
+# @array_api_module.function
+# def ndarray_all_true(x: NDArray) -> Unit:
+#     ...
+
+
+# any((astype(unique_counts(_NDArray_1)[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float(150.0)))) < NDArray.scalar(Value.int(Int(0)))).to_bool()
 
 # sum(astype(unique_counts(_NDArray_1)[Int(1)], DType.float64) / NDArray.scalar(Value.int(Int(150))))
+# And also
+
+# def
+
+
+@array_api_module.function
+def broadcast_index(from_shape: TupleInt, to_shape: TupleInt, index: TupleInt) -> TupleInt:
+    """
+    Returns the index in the original array of the given index in the broadcasted array.
+    """
+    ...
+
+
+@array_api_module.function
+def broadcast_shapes(shape1: TupleInt, shape2: TupleInt) -> TupleInt:
+    """
+    Returns the shape of the broadcasted array.
+    """
+    ...
 
 
 @array_api_module.register
-def _interval_analaysis(x: NDArray, y: NDArray, z: NDArray, dtype: DType, f: f64, i: i64, b: Bool):
+def _interval_analaysis(
+    x: NDArray,
+    y: NDArray,
+    z: NDArray,
+    dtype: DType,
+    f: f64,
+    i: i64,
+    b: Bool,
+    idx: TupleInt,
+    v: Value,
+    v1: Value,
+    v2: Value,
+    float_: Float,
+    int_: Int,
+):
+    res_shape = broadcast_shapes(x.shape, y.shape)
+    x_value = x.index(broadcast_index(x.shape, res_shape, idx))
+    y_value = y.index(broadcast_index(y.shape, res_shape, idx))
     return [
-        rule(eq(y).to(x < NDArray.scalar(Value.int(Int(0)))), ndarray_all_greater_0(x)).then(ndarray_all_false(y)),
-        rule(eq(y).to(any(x)), ndarray_all_false(x)).then(union(y).with_(NDArray.scalar(Value.bool(FALSE)))),
+        # Calling any on an array gives back a sclar, which is true if any of the values are truthy
+        rewrite(any(x)).to(
+            NDArray.scalar(Value.bool(possible_values(x.index(ALL_INDICES).to_truthy_value).includes(Value.bool(TRUE))))
+        ),
+        # Indexing x < y is the same as broadcasting the index and then indexing both and then comparing
+        rewrite((x < y).index(idx)).to(x_value < y_value),
+        # Same for x / y
+        rewrite((x / y).index(idx)).to(x_value / y_value),
+        # Indexing a scalar is the same as the scalar
+        rewrite(NDArray.scalar(v).index(idx)).to(v),
+        # Indexing of astype is same as astype of indexing
+        rewrite(astype(x, dtype).index(idx)).to(x.index(idx).astype(dtype)),
+        # rule(eq(y).to(x < NDArray.scalar(Value.int(Int(0)))), ndarray_all_greater_0(x)).then(ndarray_all_false(y)),
+        # rule(eq(y).to(any(x)), ndarray_all_false(x)).then(union(y).with_(NDArray.scalar(Value.bool(FALSE)))),
+        # Indexing into unique counts counts are all positive
         rule(
-            eq(y).to(unique_counts(x)[Int(1)]),
-        ).then(ndarray_all_greater_0(y)),
-        rule(eq(y).to(astype(x, dtype)), ndarray_all_greater_0(x)).then(ndarray_all_greater_0(y)),
-        rule(eq(z).to(x / y), ndarray_all_greater_0(x), ndarray_all_greater_0(y)).then(ndarray_all_greater_0(z)),
-        rule(eq(z).to(NDArray.scalar(Value.float(Float(f)))), f > 0.0).then(ndarray_all_greater_0(z)),
-        rule(eq(z).to(NDArray.scalar(Value.int(Int(i)))), i > 0).then(ndarray_all_greater_0(z)),
-        # Also support abs(x) > 0
-        rule(eq(y).to(abs(x))).then(ndarray_all_greater_0(y)),
-        # And if all_greater_0(x) then x > 0 is all true
-        rule(eq(y).to(x > NDArray.scalar(Value.int(Int(0)))), ndarray_all_greater_0(x)).then(ndarray_all_true(y)),
-        rule(eq(b).to(x.to_bool()), ndarray_all_true(x)).then(union(b).with_(TRUE)),
+            eq(v).to(unique_counts(x)[Int(1)].index(idx)),
+        ).then(greater_zero(v)),
+        # Min value preserved over astype
+        rule(
+            greater_zero(v),
+            eq(v1).to(v.astype(dtype)),
+        ).then(
+            greater_zero(v1),
+        ),
+        # Min value of scalar is scalar itself
+        rule(eq(v).to(Value.float(Float(f))), f > 0.0).then(greater_zero(v)),
+        rule(eq(v).to(Value.int(Int(i))), i > 0).then(greater_zero(v)),
+        # If we have divison of v and v1, and both greater than zero, then the result is greater than zero
+        rule(
+            greater_zero(v),
+            greater_zero(v1),
+            eq(v2).to(v / v1),
+        ).then(
+            greater_zero(v2),
+        ),
+        # Define v < 0 to be false, if greater_zero(v)
+        rule(
+            greater_zero(v),
+            eq(v1).to(v < Value.int(Int(0))),
+        ).then(
+            union(v1).with_(Value.bool(FALSE)),
+        ),
+        # possible values of bool is bool
+        rewrite(possible_values(Value.bool(b))).to(TupleValue(Value.bool(b))),
+        # rule(eq(y).to(astype(x, dtype)), ndarray_all_greater_0(x)).then(ndarray_all_greater_0(y)),
+        # rule(eq(z).to(x / y), ndarray_all_greater_0(x), ndarray_all_greater_0(y)).then(ndarray_all_greater_0(z)),
+        # rule(eq(z).to(NDArray.scalar(Value.float(Float(f)))), f > 0.0).then(ndarray_all_greater_0(z)),
+        # rule(eq(z).to(NDArray.scalar(Value.int(Int(i)))), i > 0).then(ndarray_all_greater_0(z)),
+        # # Also support abs(x) > 0
+        # rule(eq(y).to(abs(x))).then(ndarray_all_greater_0(y)),
+        # # And if all_greater_0(x) then x > 0 is all true
+        # rule(eq(y).to(x > NDArray.scalar(Value.int(Int(0)))), ndarray_all_greater_0(x)).then(ndarray_all_true(y)),
+        # rule(eq(b).to(x.to_bool()), ndarray_all_true(x)).then(union(b).with_(TRUE)),
     ]
 
 
@@ -1197,18 +1362,10 @@ def _interval_analaysis(x: NDArray, y: NDArray, z: NDArray, dtype: DType, f: f64
 # Mathematical descriptions of arrays as:
 # 1. A shape `.shape`
 # 2. A dtype `.dtype`
-# 3. A mapping from indices to values `array_value(x, idx)`
+# 3. A mapping from indices to values `x.index(idx)`
 #
 # For all operations that are supported mathematically, define each of the above.
 ##
-
-
-@array_api_module.function
-def array_value(x: NDArray, idx: TupleInt) -> Value:
-    """
-    Indices into an ndarray to get a value.
-    """
-    ...
 
 
 @array_api_module.register
@@ -1216,12 +1373,12 @@ def _array_math(v: Value, vs: TupleValue, i: Int):
     # Scalar values
     yield rewrite(NDArray.scalar(v).shape).to(TupleInt.EMPTY)
     yield rewrite(NDArray.scalar(v).dtype).to(v.dtype)
-    yield rewrite(array_value(NDArray.scalar(v), TupleInt.EMPTY)).to(v)
+    yield rewrite(NDArray.scalar(v).index(TupleInt.EMPTY)).to(v)
 
     # Vector values
     yield rewrite(NDArray.vector(vs).shape).to(TupleInt(vs.length()))
     yield rewrite(NDArray.vector(vs).dtype).to(vs[Int(0)].dtype)
-    yield rewrite(array_value(NDArray.vector(vs), TupleInt(i))).to(vs[i])
+    yield rewrite(NDArray.vector(vs).index(TupleInt(i))).to(vs[i])
 
 
 @array_api_module.function(mutates_first_arg=True)
@@ -1238,7 +1395,7 @@ def _assume_dtype(x: NDArray, dtype: DType, idx: TupleInt):
     assume_dtype(x, dtype)
     yield rewrite(x.dtype).to(dtype)
     yield rewrite(x.shape).to(orig_x.shape)
-    yield rewrite(array_value(x, idx)).to(array_value(orig_x, idx))
+    yield rewrite(x.index(idx)).to(orig_x.index(idx))
 
 
 @array_api_module.function(mutates_first_arg=True)
@@ -1255,26 +1412,7 @@ def _assume_shape(x: NDArray, shape: TupleInt, idx: TupleInt):
     assume_shape(x, shape)
     yield rewrite(x.shape).to(shape)
     yield rewrite(x.dtype).to(orig_x.dtype)
-    yield rewrite(array_value(x, idx)).to(array_value(orig_x, idx))
-
-
-@array_api_module.function(mutates_first_arg=True)
-def assume_value(x: NDArray, value: Value) -> None:
-    """
-    Asserts that all values (scalars) in x are equal to value.
-
-    TODO: If we had first class lambdas, this would take an indexing function instead of a value.
-    """
-    ...
-
-
-@array_api_module.register
-def _assume_value(x: NDArray, value: Value, idx: TupleInt):
-    orig_x: NDArray = copy(x)
-    assume_value(x, value)
-    yield rewrite(array_value(x, idx)).to(value)
-    yield rewrite(x.shape).to(orig_x.shape)
-    yield rewrite(x.dtype).to(orig_x.dtype)
+    yield rewrite(x.index(idx)).to(orig_x.index(idx))
 
 
 @array_api_module.function(mutates_first_arg=True)
@@ -1293,9 +1431,9 @@ def _isfinite(x: NDArray, ti: TupleInt):
     # pass through getitem, shape, index
     yield rewrite(x.shape).to(orig_x.shape)
     yield rewrite(x.dtype).to(orig_x.dtype)
-    yield rewrite(array_value(x, ti)).to(array_value(orig_x, ti))
+    yield rewrite(x.index(ti)).to(orig_x.index(ti))
     # But say that any indixed value is finite
-    yield rewrite(array_value(x, ti).isfinite()).to(TRUE)
+    yield rewrite(x.index(ti).isfinite()).to(TRUE)
 
 
 @array_api_module.function(mutates_first_arg=True)
@@ -1306,58 +1444,36 @@ def assume_value_one_of(x: NDArray, values: TupleValue) -> None:
     ...
 
 
-@array_api_module.function
-def value_one_of(values: TupleValue) -> Value:
-    """
-    A value that is one of the values in the tuple.
-    """
-    ...
-
-
-@array_api_module.function
-def possible_values(values: Value) -> TupleValue:
-    """
-    A value that is one of the values in the tuple.
-    """
-    ...
-
-
-@array_api_module.register
-def _possible_values(tv: TupleValue, v: Value):
-    yield rewrite(possible_values(value_one_of(tv))).to(tv)
-
-
 @array_api_module.register
 def _assume_value_one_of(x: NDArray, v: Value, vs: TupleValue, idx: TupleInt):
-    # Pass through dtype and shape, but say that any value is also equal one of the values
     x_orig = copy(x)
     assume_value_one_of(x, vs)
+    # Pass through dtype and shape
     yield rewrite(x.shape).to(x_orig.shape)
     yield rewrite(x.dtype).to(x_orig.dtype)
-    yield rewrite(array_value(x, idx)).to(array_value(x_orig, idx))
-    yield rewrite(array_value(x, idx)).to(value_one_of(vs))
-
-
-ALL_INDICES: TupleInt = array_api_module.constant("ALL_INDICES", TupleInt)
+    # The array vales passes through, but say that the possible_values are one of the values
+    yield rule(eq(v).to(x.index(idx))).then(
+        union(v).with_(x_orig.index(idx)),
+        union(possible_values(v)).with_(vs),
+    )
 
 
 @array_api_module.register
 def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f64, b: Bool):
-    # yield rewrite(value_one_of(TupleValue(x) + xs).isfinite()).to(x.isfinite() & value_one_of(xs).isfinite())
-    # yield rewrite(value_one_of(TupleValue(x))).to(x)
-    # yield rewrite(value_one_of(TupleValue.EMPTY).isfinite()).to(TRUE)
-
     yield rewrite(Value.int(i).isfinite()).to(TRUE)
     yield rewrite(Value.bool(b).isfinite()).to(TRUE)
     yield rewrite(Value.float(Float(f)).isfinite()).to(TRUE, f != f64(math.nan))
 
     # a sum of an array is finite if all the values are finite
-    yield rewrite(isfinite(sum(arr))).to(NDArray.scalar(Value.bool(array_value(arr, ALL_INDICES).isfinite())))
+    yield rewrite(isfinite(sum(arr))).to(NDArray.scalar(Value.bool(arr.index(ALL_INDICES).isfinite())))
 
 
 @array_api_module.register
-def _unique(xs: TupleValue, a: NDArray):
-    yield rewrite(unique_values(x=a)).to(NDArray.vector(possible_values(array_value(a, ALL_INDICES))))
+def _unique(xs: TupleValue, a: NDArray, shape: TupleInt, copy: OptionalBool):
+    yield rewrite(unique_values(x=a)).to(NDArray.vector(possible_values(a.index(ALL_INDICES))))
+    # yield rewrite(
+    #     possible_values(reshape(a.index(shape, copy), ALL_INDICES)),
+    # ).to(possible_values(a.index(ALL_INDICES)))
 
 
 @array_api_module.register
@@ -1485,6 +1601,9 @@ def _py_expr(
     ob: OptionalBool,
     tnd: TupleNDArray,
     tnd_str: String,
+    device_: Device,
+    optional_device_: OptionalDevice,
+    optional_dtype_: OptionalDType,
 ):
     # Var
     yield rule(
@@ -1655,6 +1774,29 @@ def _py_expr(
         add_line(gensym_var, " = np.array(", v_str, ")"),
         incr_gensym,
     )
+
+    # zeros
+    yield rule(
+        eq(x).to(zeros(ti, optional_dtype_, optional_device_)),
+        eq(ti_str).to(tuple_int_expr(ti)),
+        eq(dtype_str).to(dtype_expr(dtype)),
+    ).then(
+        set_(ndarray_expr(x)).to(gensym_var),
+        add_line(gensym_var, " = np.zeros(", ti_str, ", dtype=", dtype_str, ")"),
+        incr_gensym,
+    )
+
+    # unique_values
+    yield rule(
+        eq(x).to(unique_values(y)),
+        eq(y_str).to(ndarray_expr(y)),
+    ).then(
+        set_(ndarray_expr(x)).to(gensym_var),
+        add_line(gensym_var, " = np.unique(", y_str, ")"),
+        incr_gensym,
+    )
+
+    # reshape
 
     # NDARRAy ops
 

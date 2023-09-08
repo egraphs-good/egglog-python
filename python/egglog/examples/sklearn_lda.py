@@ -38,8 +38,10 @@ with EGraph([array_api_module]):
 
 with EGraph([array_api_module]) as egraph:
     egraph.register(res)
-    egraph.run((run() * 10).saturate())
-    egraph.run((run() * 10).saturate())
+    egraph.run((run() * 10))
+    # egraph.run((run() * 10).saturate())
+    egraph.graphviz(n_inline_leaves=3).render("3", view=True)
+
     res = egraph.extract(expr=res)
     print(res)
     # egraph.display()
