@@ -1092,11 +1092,10 @@ def _reshape(
         # Indexing into a reshaped array is the same as indexing into the original array with a transformed index
         rewrite(reshape(x, shape, copy).index(ix)).to(x.index(reshape_transform_index(x.shape, shape, ix))),
         rewrite(reshape(x, shape, copy).shape).to(reshape_transform_shape(x.shape, shape)),
-
         # reshape_transform_shape recursively
         # TODO: handle all cases
         rewrite(reshape_transform_shape(TupleInt(i), TupleInt(Int(-1)))).to(TupleInt(i)),
-        ]
+    ]
 
 
 @array_api_module.function
@@ -1566,6 +1565,11 @@ def tuple_ndarray_expr(x: TupleNDArray) -> String:
     ...
 
 
+@array_api_module_string.function
+def optional_dtype_expr(x: OptionalDType) -> String:
+    ...
+
+
 @array_api_module_string.register
 def _py_expr(
     x: NDArray,
@@ -1779,11 +1783,24 @@ def _py_expr(
     yield rule(
         eq(x).to(zeros(ti, optional_dtype_, optional_device_)),
         eq(ti_str).to(tuple_int_expr(ti)),
-        eq(dtype_str).to(dtype_expr(dtype)),
+        eq(dtype_str).to(optional_dtype_expr(optional_dtype_)),
     ).then(
         set_(ndarray_expr(x)).to(gensym_var),
         add_line(gensym_var, " = np.zeros(", ti_str, ", dtype=", dtype_str, ")"),
         incr_gensym,
+    )
+
+    # Optional dtype
+    yield rule(
+        eq(optional_dtype_).to(OptionalDType.none),
+    ).then(
+        set_(optional_dtype_expr(optional_dtype_)).to(String("None")),
+    )
+    yield rule(
+        eq(optional_dtype_).to(OptionalDType.some(dtype)),
+        eq(dtype_str).to(dtype_expr(dtype)),
+    ).then(
+        set_(optional_dtype_expr(optional_dtype_)).to(dtype_str),
     )
 
     # unique_values

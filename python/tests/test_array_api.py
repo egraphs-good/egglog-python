@@ -61,7 +61,7 @@ def test_to_source():
     # while egraph.run((run())).updated:
     #     print(egraph.load_object(egraph.extract(PyObject.from_string(statements()))))
     egraph.graphviz().render(view=True)
-    egraph.graphviz(n_inline_leaves=3).render("inlined", view=True)
+    # egraph.graphviz(n_inline_leaves=3).render("inlined", view=True)
 
     egraph.run(run(fn_ruleset))
     fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.source)))
