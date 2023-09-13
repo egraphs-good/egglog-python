@@ -31,7 +31,7 @@ dependencies = ["typing-extensions", "black", "graphviz"]
 [project.optional-dependencies]
 dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
 
-test = ["pytest", "mypy", "scikit-learn", "array_api_compat"]
+test = ["pytest", "mypy", "scikit-learn", "array_api_compat", "syrupy"]
 
 docs = [
     "pydata-sphinx-theme",
@@ -61,6 +61,7 @@ strict_equality = true
 warn_unused_configs = true
 allow_redefinition = true
 enable_incomplete_feature = ["Unpack", "TypeVarTuple"]
+exclude = ["__snapshots__", "_build", "^conftest.py$"]
 
 [tool.maturin]
 python-source = "python"
@@ -70,3 +71,4 @@ addopts = ["--import-mode=importlib"]
 testpaths = ["python"]
 python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
+norecursedirs = ["__snapshots__"]

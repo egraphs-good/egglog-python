@@ -1,3 +1,4 @@
+exclude: ^python/tests/__snapshots__/
 default_language_version:
   python: python3.10
 ci:
@@ -9,7 +10,7 @@ repos:
       - id: isort
         name: isort
   - repo: https://github.com/psf/black
-    rev: 23.7.0
+    rev: 23.9.1
     hooks:
       - id: black
   - repo: https://github.com/pycqa/flake8

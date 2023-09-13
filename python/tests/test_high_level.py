@@ -1,3 +1,4 @@
+# mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
 import importlib
@@ -39,13 +40,13 @@ def test_eqsat_basic():
             ...
 
         @classmethod
-        def var(cls, v: StringLike) -> Math:  # type: ignore[empty-body]
+        def var(cls, v: StringLike) -> Math:
             ...
 
-        def __add__(self, other: Math) -> Math:  # type: ignore[empty-body]
+        def __add__(self, other: Math) -> Math:
             ...
 
-        def __mul__(self, other: Math) -> Math:  # type: ignore[empty-body]
+        def __mul__(self, other: Math) -> Math:
             ...
 
     # expr1 = 2 * (x + 3)
@@ -73,7 +74,7 @@ def test_fib():
     egraph = EGraph()
 
     @egraph.function
-    def fib(x: i64Like) -> i64:  # type: ignore[empty-body]
+    def fib(x: i64Like) -> i64:
         ...
 
     f0, f1, x = vars_("f0 f1 x", i64)
@@ -98,11 +99,11 @@ def test_fib_demand():
         def __init__(self, i: i64Like) -> None:
             ...
 
-        def __add__(self, other: Num) -> Num:  # type: ignore[empty-body]
+        def __add__(self, other: Num) -> Num:
             ...
 
     @egraph.function
-    def fib(x: i64Like) -> Num:  # type: ignore[empty-body]
+    def fib(x: i64Like) -> Num:
         ...
 
     a, b, x = vars_("a b x", i64)
@@ -124,7 +125,7 @@ def test_push_pop():
     egraph = EGraph()
 
     @egraph.function(merge=lambda old, new: old.max(new))
-    def foo() -> i64:  # type: ignore[empty-body]
+    def foo() -> i64:
         ...
 
     egraph.register(set_(foo()).to(i64(1)))
@@ -210,7 +211,7 @@ def test_keyword_args():
     egraph = EGraph()
 
     @egraph.function
-    def foo(x: i64Like, y: i64Like) -> i64:  # type: ignore[empty-body]
+    def foo(x: i64Like, y: i64Like) -> i64:
         ...
 
     pos = expr_parts(foo(i64(1), i64(2)))
@@ -233,10 +234,10 @@ def test_modules() -> None:
         def __init__(self, v: i64Like) -> None:
             ...
 
-    egraph = EGraph(deps=[m, m2])
+    egraph = EGraph([m, m2])
 
     @egraph.function
-    def from_numeric(n: Numeric) -> OtherNumeric:  # type: ignore[empty-body]
+    def from_numeric(n: Numeric) -> OtherNumeric:
         ...
 
     egraph.register(rewrite(OtherNumeric(1)).to(from_numeric(Numeric.ONE)))
@@ -252,7 +253,7 @@ def test_property():
             ...
 
         @property
-        def bar(self) -> i64:  # type: ignore[empty-body]
+        def bar(self) -> i64:
             ...
 
     egraph.register(set_(Foo().bar).to(i64(1)))
@@ -263,7 +264,7 @@ def test_default_args():
     egraph = EGraph()
 
     @egraph.function
-    def foo(x: i64Like, y: i64Like = i64(1)) -> i64:  # type: ignore[empty-body]
+    def foo(x: i64Like, y: i64Like = i64(1)) -> i64:
         ...
 
     assert expr_parts(foo(i64(1))) == expr_parts(foo(i64(1), i64(1)))
@@ -369,7 +370,7 @@ class TestMutate:
             def __init__(self, i: i64Like) -> None:
                 ...
 
-            def __add__(self, other: Math) -> Math:  # type: ignore[empty-body]
+            def __add__(self, other: Math) -> Math:
                 ...
 
         @egraph.function(mutates_first_arg=True)
@@ -415,10 +416,10 @@ def test_reflected_binary_method():
         def __init__(self, value: i64Like) -> None:
             ...
 
-        def __add__(self, other: Math) -> Math:  # type: ignore[empty-body]
+        def __add__(self, other: Math) -> Math:
             ...
 
-        def __radd__(self, other: Math) -> Math:  # type: ignore[empty-body]
+        def __radd__(self, other: Math) -> Math:
             ...
 
     converter(i64, Math, Math)
@@ -429,3 +430,81 @@ def test_reflected_binary_method():
         JustTypeRef("Math"),
         CallDecl(MethodRef("Math", "__add__"), (expr_parts(Math(i64(10))), expr_parts(Math(i64(5))))),
     )
+
+
+@pytest.mark.xfail(reason="https://github.com/egraphs-good/egglog/issues/229")
+def test_imperative():
+    egraph = EGraph(seminaive=False)
+
+    @egraph.function(merge=lambda old, new: join(old, new), default=String(""))
+    def statements() -> String:
+        ...
+
+    @egraph.function(merge=lambda old, new: old + new, default=i64(0))
+    def gensym() -> i64:
+        ...
+
+    gensym_var = join("_", gensym().to_string())
+
+    @egraph.class_
+    class Math(Expr):
+        @egraph.method(egg_fn="Num")
+        def __init__(self, value: i64Like) -> None:
+            ...
+
+        @egraph.method(egg_fn="Var")
+        @classmethod
+        def var(cls, v: StringLike) -> Math:
+            ...
+
+        @egraph.method(egg_fn="Add")
+        def __add__(self, other: Math) -> Math:
+            ...
+
+        @egraph.method(egg_fn="Mul")
+        def __mul__(self, other: Math) -> Math:
+            ...
+
+        @egraph.method(egg_fn="expr")  # type: ignore[misc]
+        @property
+        def expr(self) -> String:
+            ...
+
+    @egraph.register
+    def _rules(s: String, y_expr: String, z_expr: String, x: Math, i: i64, y: Math, z: Math):
+        yield rule(
+            eq(x).to(Math.var(s)),
+        ).then(
+            set_(x.expr).to(s),
+        )
+
+        yield rule(
+            eq(x).to(Math(i)),
+        ).then(
+            set_(x.expr).to(i.to_string()),
+        )
+
+        yield rule(
+            eq(x).to(y + z),
+            eq(y_expr).to(y.expr),
+            eq(z_expr).to(z.expr),
+        ).then(
+            set_(x.expr).to(gensym_var),
+            set_(statements()).to(join(gensym_var, " = ", y_expr, " + ", z_expr, "\n")),
+            set_(gensym()).to(i64(1)),
+        )
+        yield rule(
+            eq(x).to(y * z),
+            eq(y_expr).to(y.expr),
+            eq(z_expr).to(z.expr),
+        ).then(
+            set_(x.expr).to(gensym_var),
+            set_(statements()).to(join(gensym_var, " = ", y_expr, " * ", z_expr, "\n")),
+            set_(gensym()).to(i64(1)),
+        )
+
+    y = egraph.let("y", Math(2) * (Math.var("x") + Math(3)))
+
+    egraph.run(3)
+    egraph.check(eq(y.expr).to(String("_1")))
+    egraph.check(eq(statements()).to(String("_0 = x + 3\n_1 = 2 * _0\n")))
