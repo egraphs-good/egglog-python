@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from abc import ABC, abstractmethod
 from contextvars import ContextVar, Token
 from copy import deepcopy
@@ -104,12 +105,12 @@ class _BaseModule(ABC):
     """
 
     # Any modules you want to depend on
-    deps: InitVar[list[Module]] = []
+    modules: InitVar[list[Module]] = []
     # All dependencies flattened
     _flatted_deps: list[Module] = field(init=False, default_factory=list)
     _mod_decls: ModuleDeclarations = field(init=False)
 
-    def __post_init__(self, modules: list[Module] = []) -> None:
+    def __post_init__(self, modules: list[Module]) -> None:
         included_decls = [_BUILTIN_DECLS] if _BUILTIN_DECLS else []
         # Traverse all the included modules to flatten all their dependencies and add to the included declerations
         for mod in modules:
@@ -617,7 +618,7 @@ class _BaseModule(ABC):
 
 @dataclass
 class _Builtins(_BaseModule):
-    def __post_init__(self, modules: list[Module] = []) -> None:
+    def __post_init__(self, modules: list[Module]) -> None:
         """
         Register these declarations as builtins, so others can use them.
         """
@@ -663,13 +664,16 @@ class EGraph(_BaseModule):
     Represents an EGraph instance at runtime
     """
 
-    _egraph: bindings.EGraph = field(repr=False, default_factory=bindings.EGraph)
+    seminaive: InitVar[bool] = True
+
+    _egraph: bindings.EGraph = field(repr=False, init=False)
     # The current declarations which have been pushed to the stack
     _decl_stack: list[Declarations] = field(default_factory=list, repr=False)
     _token: Optional[Token[EGraph]] = None
 
-    def __post_init__(self, modules: list[Module] = []) -> None:
+    def __post_init__(self, modules: list[Module], seminaive) -> None:
         super().__post_init__(modules)
+        self._egraph = bindings.EGraph(seminaive=seminaive)
         for m in self._flatted_deps:
             for o in m._py_objects:
                 self._egraph.save_object(o)
@@ -1430,7 +1434,15 @@ def _command_generator(gen: CommandGenerator) -> Iterable[Command]:
     """
     Calls the function with variables of the type and name of the arguments.
     """
-    hints = get_type_hints(gen)
+    # Get the local scope from where the function is defined, so that we can get any type hints that are in the scope
+    # but not in the globals
+    current_frame = inspect.currentframe()
+    assert current_frame
+    register_frame = current_frame.f_back
+    assert register_frame
+    original_frame = register_frame.f_back
+    assert original_frame
+    hints = get_type_hints(gen, gen.__globals__, original_frame.f_locals)
     args = (_var(p.name, hints[p.name]) for p in signature(gen).parameters.values())
     return gen(*args)
 

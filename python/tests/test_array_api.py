@@ -11,8 +11,6 @@ def test_simplify_any_unique():
     egraph = EGraph([array_api_module])
     egraph.register(res)
     egraph.run((run() * 20).saturate())
-    # egraph.graphviz(inline_leaves=True).render(view=True)
-    # print(egraph.extract(res))
     egraph.check(eq(res).to(FALSE))
 
 
@@ -24,14 +22,11 @@ def test_tuple_value_includes():
     egraph.register(should_be_true)
     egraph.register(should_be_false)
     egraph.run((run() * 10).saturate())
-    egraph.graphviz(inline_leaves=True).render(view=True)
-    # print(egraph.extract(should_be_true))
-    # print(egraph.extract(should_be_false))
     egraph.check(eq(should_be_true).to(TRUE))
     egraph.check(eq(should_be_false).to(FALSE))
 
 
-def test_to_source():
+def test_to_source(snapshot_py):
     _NDArray_1 = NDArray.var("X")
     X_orig = copy(_NDArray_1)
     assume_dtype(_NDArray_1, DType.float64)
@@ -52,20 +47,19 @@ def test_to_source():
         OptionalDevice.some(_NDArray_1.device),
     )
     res = _NDArray_4 + _NDArray_1 + _NDArray_5
-    fn = FunctionExprTwo("my_fn", res, X_orig, Y_orig)
 
     egraph = EGraph([array_api_module_string])
-    egraph.register(fn)
+    fn = egraph.let("fn", FunctionExprTwo("my_fn", res, X_orig, Y_orig))
 
-    egraph.run(run() * 20)
+    egraph.run(20)
     # while egraph.run((run())).updated:
     #     print(egraph.load_object(egraph.extract(PyObject.from_string(statements()))))
-    egraph.graphviz().render(view=True)
+    # egraph.graphviz().render(view=True)
     # egraph.graphviz(n_inline_leaves=3).render("inlined", view=True)
 
     egraph.run(run(fn_ruleset))
     fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.source)))
-    print(fn_source)
+    assert fn_source == snapshot_py
     locals_: dict[str, object] = {}
     exec(fn_source, {"np": np}, locals_)  # type: ignore
     fn: object = locals_["my_fn"]
@@ -79,7 +73,5 @@ def test_reshape_index():
     egraph = EGraph([array_api_module])
     egraph.register(res)
     egraph.run(run() * 10)
-    # egraph.graphviz().render(view=True)
     equiv_expr = egraph.extract_multiple(res, 10)
-    print(equiv_expr)
     assert len(equiv_expr) == 2

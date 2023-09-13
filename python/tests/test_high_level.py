@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import pathlib
 from copy import copy
-from typing import ClassVar
+from typing import ClassVar, Iterable
 
 import pytest
 from egglog import *
@@ -14,6 +14,8 @@ from egglog.declarations import (
     MethodRef,
     TypedExprDecl,
 )
+from egglog.egraph import Action
+from numpy import add
 
 EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))
 
@@ -429,3 +431,82 @@ def test_reflected_binary_method():
         JustTypeRef("Math"),
         CallDecl(MethodRef("Math", "__add__"), (expr_parts(Math(i64(10))), expr_parts(Math(i64(5))))),
     )
+
+
+def test_imperative():
+    # Fails when seminaive is True (the default)
+    # https://github.com/egraphs-good/egglog/issues/229
+    egraph = EGraph(seminaive=False)
+
+    @egraph.function(merge=lambda old, new: join(old, new), default=String(""))
+    def statements() -> String:
+        ...
+
+    @egraph.function(merge=lambda old, new: old + new, default=i64(0))
+    def gensym() -> i64:
+        ...
+
+    gensym_var = join("_", gensym().to_string())
+
+    @egraph.class_
+    class Math(Expr):
+        @egraph.method(egg_fn="Num")
+        def __init__(self, value: i64Like) -> None:
+            ...
+
+        @egraph.method(egg_fn="Var")
+        @classmethod
+        def var(cls, v: StringLike) -> Math:  # type: ignore[empty-body]
+            ...
+
+        @egraph.method(egg_fn="Add")
+        def __add__(self, other: Math) -> Math:  # type: ignore[empty-body]
+            ...
+
+        @egraph.method(egg_fn="Mul")
+        def __mul__(self, other: Math) -> Math:  # type: ignore[empty-body]
+            ...
+
+        @egraph.method(egg_fn="expr")
+        @property
+        def expr(self) -> String:
+            ...
+
+    @egraph.register
+    def _rules(s: String, y_expr: String, z_expr: String, x: Math, i: i64, y: Math, z: Math):
+        yield rule(
+            eq(x).to(Math.var(s)),
+        ).then(
+            set_(x.expr).to(s),
+        )
+
+        yield rule(
+            eq(x).to(Math(i)),
+        ).then(
+            set_(x.expr).to(i.to_string()),
+        )
+
+        yield rule(
+            eq(x).to(y + z),
+            eq(y_expr).to(y.expr),
+            eq(z_expr).to(z.expr),
+        ).then(
+            set_(x.expr).to(gensym_var),
+            set_(statements()).to(join(gensym_var, " = ", y_expr, " + ", z_expr, "\n")),
+            set_(gensym()).to(i64(1)),
+        )
+        yield rule(
+            eq(x).to(y * z),
+            eq(y_expr).to(y.expr),
+            eq(z_expr).to(z.expr),
+        ).then(
+            set_(x.expr).to(gensym_var),
+            set_(statements()).to(join(gensym_var, " = ", y_expr, " * ", z_expr, "\n")),
+            set_(gensym()).to(i64(1)),
+        )
+
+    y = egraph.let("y", Math(2) * (Math.var("x") + Math(3)))
+
+    egraph.run(3)
+    egraph.check(eq(y.expr).to(String("_1")))
+    egraph.check(eq(statements()).to(String("_0 = x + 3\n_1 = 2 * _0\n")))
