@@ -18,12 +18,11 @@ def my_fn(X, y):
     _2 = np.unique(_1, return_counts=True)
     _3 = np.unique(_1)
     _4 = _2[1].astype(np.float64)
-    _4 = _2[1].astype(np.float64)
     _5 = _4 / _0
-    _6 = _5 + X
-    _7 = np.zeros((3,) + (4,), dtype=np.float64)
-    _6 = _5 + X
-    _7 = _6 + _7
-    _7 = np.zeros((3,) + (4,), dtype=np.float64)
-    _7 = _6 + _7
+    _6 = np.zeros((3,) + (4,), dtype=np.float64)
+    _7 = _5 + X
+    _6 = np.zeros((3,) + (4,), dtype=np.float64)
+    _7 = _7 + _6
+    _7 = _7 + _6
+    _7 = _5 + X
     return _7

@@ -466,7 +466,7 @@ def test_imperative():
             ...
 
         @egraph.method(egg_fn="expr")
-        @property
+        @property  # type: ignore[misc]
         def expr(self) -> String:
             ...
 
