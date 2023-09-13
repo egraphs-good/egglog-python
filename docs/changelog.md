@@ -4,6 +4,17 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
 ## Unreleased
 
+### Breaking Changes
+
+### New Features
+
+- Add ability to pass `seminaive` flag to Egraph to replicate `--naive` CLI flag [#48](https://github.com/metadsl/egglog-python/pull/48)
+- Add ability to inline leaves $n$ times instead of just once for visualization [#48](https://github.com/metadsl/egglog-python/pull/48)
+
+### Bug fixes
+
+### Uncategorized
+
 - Added initial supported for Python objects [#31](https://github.com/metadsl/egglog-python/pull/31)
 
   - Renamed `BaseExpr` to `Expr` for succinctness
