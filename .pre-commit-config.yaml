@@ -1,3 +1,4 @@
+exclude: ^python/tests/__snapshots__/
 default_language_version:
   python: python3.10
 ci:
