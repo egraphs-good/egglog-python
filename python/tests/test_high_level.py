@@ -465,8 +465,8 @@ def test_imperative():
         def __mul__(self, other: Math) -> Math:
             ...
 
-        @egraph.method(egg_fn="expr")
-        @property  # type: ignore[misc]
+        @egraph.method(egg_fn="expr")  # type: ignore[misc]
+        @property
         def expr(self) -> String:
             ...
 

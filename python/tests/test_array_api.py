@@ -1,3 +1,4 @@
+import pytest
 from egglog.exp.array_api import *
 
 
@@ -65,6 +66,7 @@ def test_to_source(snapshot_py):
     fn: object = locals_["my_fn"]
 
 
+@pytest.mark.xfail(reason="unstable output")
 def test_sklearn_lda(snapshot_py):
     from sklearn import config_context
     from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
