@@ -65,6 +65,36 @@ def test_to_source(snapshot_py):
     fn: object = locals_["my_fn"]
 
 
+def test_sklearn_lda(snapshot_py):
+    from sklearn import config_context
+    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+
+    X_arr = NDArray.var("X")
+    assume_dtype(X_arr, float64)
+    assume_shape(X_arr, TupleInt(150) + TupleInt(4))  # type: ignore
+    assume_isfinite(X_arr)
+
+    y_arr = NDArray.var("y")
+    assume_dtype(y_arr, int64)
+    assume_shape(y_arr, TupleInt(150))  # type: ignore
+    assume_value_one_of(y_arr, (0, 1, 2))  # type: ignore
+
+    with EGraph([array_api_module]):
+        with config_context(array_api_dispatch=True):
+            lda = LinearDiscriminantAnalysis(n_components=2)
+            X_r2 = lda.fit(X_arr, y_arr).transform(X_arr)
+
+    with EGraph([array_api_module]) as egraph:
+        egraph.register(X_r2)
+        egraph.run((run() * 10))
+        # egraph.run((run() * 10).saturate())
+        # egraph.graphviz(n_inline_leaves=3).render("3", view=True)
+
+        res = egraph.extract(X_r2)
+        assert str(res) == snapshot_py
+        # egraph.display()
+
+
 def test_reshape_index():
     # Verify that it doesn't expand forever
     x = NDArray.var("x")

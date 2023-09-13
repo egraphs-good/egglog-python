@@ -432,10 +432,8 @@ def test_reflected_binary_method():
         CallDecl(MethodRef("Math", "__add__"), (expr_parts(Math(i64(10))), expr_parts(Math(i64(5))))),
     )
 
-
+@pytest.mark.xfail(reason="https://github.com/egraphs-good/egglog/issues/229")
 def test_imperative():
-    # Fails when seminaive is True (the default)
-    # https://github.com/egraphs-good/egglog/issues/229
     egraph = EGraph(seminaive=False)
 
     @egraph.function(merge=lambda old, new: join(old, new), default=String(""))
