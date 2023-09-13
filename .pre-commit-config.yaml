@@ -1,3 +1,4 @@
+exclude: ^python/tests/__snapshots__/
 default_language_version:
   python: python3.10
 ci:
@@ -16,8 +17,6 @@ repos:
     rev: 6.1.0
     hooks:
       - id: flake8
-        exclude: ^python/tests/__snapshots__/
-
   - repo: local
     hooks:
       - id: mypy
