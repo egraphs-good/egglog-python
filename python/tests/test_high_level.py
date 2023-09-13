@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import pathlib
 from copy import copy
-from typing import ClassVar, Iterable
+from typing import ClassVar
 
 import pytest
 from egglog import *
@@ -14,8 +14,6 @@ from egglog.declarations import (
     MethodRef,
     TypedExprDecl,
 )
-from egglog.egraph import Action
-from numpy import add
 
 EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))
 
