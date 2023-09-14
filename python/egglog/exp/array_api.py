@@ -26,6 +26,7 @@ T = TypeVar("T", bound=Expr)
 
 def extract_py(e: Expr) -> Any:
     egraph = EGraph.current()
+    egraph.push()
     # print(e)
     egraph.register(e)
     egraph.run((run() * 30).saturate())
@@ -60,8 +61,10 @@ def extract_py(e: Expr) -> Any:
     except EggSmolError:
         other_versions = egraph.extract_multiple(final_object, 10)
         other_verions_str = "\n\n".join(map(str, other_versions))
+        egraph.graphviz().render(view=True)
         raise Exception(f"Failed to extract:\n{other_verions_str}")
     # print(res)
+    egraph.pop()
     return res
 
 
@@ -1235,10 +1238,7 @@ def _linalg(x: NDArray, full_matrices: Bool):
 # to analyze `any(((astype(unique_counts(NDArray.var("y"))[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float(150.0))) < NDArray.scalar(Value.int(Int(0)))).bool()``
 ##
 
-
-@array_api_module.function
-def greater_zero(value: Value) -> Unit:
-    ...
+greater_zero = array_api_module.relation("greater_zero", Value)
 
 
 # @array_api_module.function

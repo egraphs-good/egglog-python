@@ -256,7 +256,10 @@ convert_enums!(
             egglog::ast::Command::Relation {constructor, inputs} => Relation {
                 constructor: constructor.to_string(),
                 inputs: inputs.iter().map(|i| i.to_string()).collect()
-            }
+            };
+        PrintOverallStatistics()
+            _c -> egglog::ast::Command::PrintOverallStatistics,
+            egglog::ast::Command::PrintOverallStatistics => PrintOverallStatistics {}
     };
     egglog::ExtractReport: "{:?}" => ExtractReport {
         Best(termdag: TermDag, cost: usize, term: Term)
@@ -356,12 +359,28 @@ convert_struct!(
         i -> IdentSort {ident: i.ident.to_string(), sort: i.sort.to_string()};
     egglog::RunReport: "{:?}" => RunReport(
         updated: bool,
-        search_time: WrappedDuration,
-        apply_time: WrappedDuration,
-        rebuild_time: WrappedDuration
+        search_time_per_rule: HashMap<String, WrappedDuration>,
+        apply_time_per_rule: HashMap<String, WrappedDuration>,
+        search_time_per_ruleset: HashMap<String, WrappedDuration>,
+        apply_time_per_ruleset: HashMap<String, WrappedDuration>,
+        rebuild_time_per_ruleset: HashMap<String, WrappedDuration>
     )
-        r -> egglog::RunReport {updated: r.updated, search_time: r.search_time.0, apply_time: r.apply_time.0, rebuild_time: r.rebuild_time.0},
-        r -> RunReport {updated: r.updated, search_time: r.search_time.into(), apply_time: r.apply_time.into(), rebuild_time: r.rebuild_time.into()}
+        r -> egglog::RunReport {
+            updated: r.updated,
+            search_time_per_rule: r.search_time_per_rule.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
+            apply_time_per_rule: r.apply_time_per_rule.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
+            search_time_per_ruleset: r.search_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
+            apply_time_per_ruleset: r.apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
+            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect()
+        },
+        r -> RunReport {
+            updated: r.updated,
+            search_time_per_rule: r.search_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), v.clone().into())).collect(),
+            apply_time_per_rule: r.apply_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), v.clone().into())).collect(),
+            search_time_per_ruleset: r.search_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), v.clone().into())).collect(),
+            apply_time_per_ruleset: r.apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), v.clone().into())).collect(),
+            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), v.clone().into())).collect()
+        }
 );
 
 impl FromPyObject<'_> for Box<Schedule> {

@@ -3,9 +3,9 @@ def my_fn(X, y):
     assert X.dtype == np.float64
     assert y.dtype == np.int64
     assert X.dtype == np.float64
-    assert y.shape == (150,)
-    assert y.shape == (150,)
     _0 = np.array(150.0)
+    assert y.shape == (150,)
+    assert y.shape == (150,)
     assert X.shape == (150,) + (4,)
     assert X.shape == (150,) + (4,)
     assert y.shape == (150,)
@@ -20,9 +20,8 @@ def my_fn(X, y):
     _4 = _2[1].astype(np.float64)
     _5 = _4 / _0
     _6 = np.zeros((3,) + (4,), dtype=np.float64)
-    _7 = _5 + X
     _6 = np.zeros((3,) + (4,), dtype=np.float64)
-    _7 = _7 + _6
-    _7 = _7 + _6
     _7 = _5 + X
-    return _7
+    _8 = _7 + _6
+    _8 = _7 + _6
+    return _8

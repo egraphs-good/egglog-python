@@ -114,9 +114,6 @@ class TestEGraph:
 
         run_report = egraph.run_report()
         assert isinstance(run_report, RunReport)
-        total_time = run_report.search_time + run_report.apply_time + run_report.rebuild_time
-        # Verify  less than the total time (which includes time spent in Python).
-        assert total_time < (end_time - start_time)
 
     def test_extract(self):
         # Example from extraction-cost
