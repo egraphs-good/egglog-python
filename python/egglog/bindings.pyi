@@ -232,16 +232,20 @@ class IdentSort:
 @final
 class RunReport:
     updated: bool
-    search_time: timedelta
-    apply_time: timedelta
-    rebuild_time: timedelta
+    search_time_per_rule: dict[str, timedelta]
+    apply_time_per_rule: dict[str, timedelta]
+    search_time_per_ruleset: dict[str, timedelta]
+    apply_time_per_ruleset: dict[str, timedelta]
+    rebuild_time_per_ruleset: dict[str, timedelta]
 
     def __init__(
         self,
         updated: bool,
-        search_time: timedelta,
-        apply_time: timedelta,
-        rebuild_time: timedelta,
+        search_time_per_rule: dict[str, timedelta],
+        apply_time_per_rule: dict[str, timedelta],
+        search_time_per_ruleset: dict[str, timedelta],
+        apply_time_per_ruleset: dict[str, timedelta],
+        rebuild_time_per_ruleset: dict[str, timedelta],
     ) -> None: ...
 
 @final
@@ -425,6 +429,17 @@ class Include:
 class CheckProof:
     def __init__(self) -> None: ...
 
+@final
+class Relation:
+    constructor: str
+    inputs: list[str]
+
+    def __init__(self, constructor: str, inputs: list[str]) -> None: ...
+
+@final
+class PrintOverallStatistics:
+    def __init__(self) -> None: ...
+
 _Command = (
     SetOption
     | Datatype
@@ -450,6 +465,8 @@ _Command = (
     | Fail
     | Include
     | CheckProof
+    | Relation
+    | PrintOverallStatistics
 )
 
 def termdag_term_to_expr(termdag: TermDag, term: _Term) -> _Expr: ...

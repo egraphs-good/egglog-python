@@ -108,7 +108,7 @@ egraph.register(
         set_(freer(t)).to(fv1 | fv2 | fv3)
     ),
     # eval
-    rule(eq(t).to(Term.val(v))).then(set_(t.eval()).to(v)),
+    rule(eq(t).to(Term.val(v))).then(union(t.eval()).with_(v)),
     rule(eq(t).to(t1 + t2), eq(Val(i1)).to(t1.eval()), eq(Val(i2)).to(t2.eval())).then(
         union(t.eval()).with_(Val(i1 + i2))
     ),

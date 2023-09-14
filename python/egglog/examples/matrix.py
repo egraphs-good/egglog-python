@@ -154,12 +154,12 @@ C = egraph.let("C", Matrix.named("C"))
 
 # Set each to be a square matrix of the given dimension
 egraph.register(
-    set_(A.nrows()).to(n),
-    set_(A.ncols()).to(n),
-    set_(B.nrows()).to(m),
-    set_(B.ncols()).to(m),
-    set_(C.nrows()).to(p),
-    set_(C.ncols()).to(p),
+    union(A.nrows()).with_(n),
+    union(A.ncols()).with_(n),
+    union(B.nrows()).with_(m),
+    union(B.ncols()).with_(m),
+    union(C.nrows()).with_(p),
+    union(C.ncols()).with_(p),
 )
 # Create an example which should equal the kronecker product of A and B
 ex1 = egraph.let("ex1", kron(Matrix.identity(n), B) @ kron(A, Matrix.identity(m)))

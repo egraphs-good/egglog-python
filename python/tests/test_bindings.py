@@ -1,4 +1,3 @@
-import datetime
 import json
 import os
 import pathlib
@@ -104,19 +103,14 @@ class TestEGraph:
 
     def test_run_rules(self):
         egraph = EGraph()
-        start_time = datetime.datetime.now()
         egraph.run_program(
             Datatype("Math", [Variant("Add", ["Math", "Math"])]),
             RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")]))),
             RunSchedule(Repeat(10, Run(RunConfig("")))),
         )
-        end_time = datetime.datetime.now()
 
         run_report = egraph.run_report()
         assert isinstance(run_report, RunReport)
-        total_time = run_report.search_time + run_report.apply_time + run_report.rebuild_time
-        # Verify  less than the total time (which includes time spent in Python).
-        assert total_time < (end_time - start_time)
 
     def test_extract(self):
         # Example from extraction-cost

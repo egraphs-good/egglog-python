@@ -28,11 +28,12 @@ jobs:
           - "3.9"
           - "3.8"
     steps:
+      - uses: actions/checkout@v4
       - name: Setup python ${{ matrix.py }}
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.py }}
-      - uses: actions/checkout@v2
+          cache: "pip"
       - name: Cache cargo
         uses: actions/cache@v3
         with:
@@ -48,10 +49,11 @@ jobs:
   mypy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-python@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
-      - uses: actions/checkout@v2
+          cache: "pip"
       - name: Cache cargo
         uses: actions/cache@v3
         with:
@@ -68,10 +70,11 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-python@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
-      - uses: actions/checkout@v2
+          cache: "pip"
       - name: Install graphviz
         run: |
           sudo apt-get update
@@ -93,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1.40.1
         with:
           manylinux: auto
@@ -110,7 +113,7 @@ jobs:
     runs-on: windows-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1.40.1
         with:
           command: build
@@ -126,7 +129,7 @@ jobs:
     runs-on: macos-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1.40.1
         with:
           command: build

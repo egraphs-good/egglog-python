@@ -288,6 +288,7 @@ class ModuleDeclarations:
         default: Optional[ExprDecl],
         merge: Optional[ExprDecl],
         merge_action: list[bindings._Action],
+        is_relation: bool = False,
     ) -> Iterable[bindings._Command]:
         """
         Registers a callable with the given egg name. The callable's function needs to be registered
@@ -296,7 +297,7 @@ class ModuleDeclarations:
         egg_name = egg_name or ref.generate_egg_name()
         self._decl.register_callable_ref(ref, egg_name)
         self._decl.set_function_decl(ref, fn_decl)
-        return fn_decl.to_commands(self, egg_name, cost, default, merge, merge_action)
+        return fn_decl.to_commands(self, egg_name, cost, default, merge, merge_action, is_relation)
 
     def register_constant_callable(
         self, ref: ConstantCallableRef, type_ref: JustTypeRef, egg_name: Optional[str]
@@ -487,6 +488,7 @@ class FunctionDecl:
         default: Optional[ExprDecl] = None,
         merge: Optional[ExprDecl] = None,
         merge_action: list[bindings._Action] = [],
+        is_relation: bool = False,
     ) -> Iterable[bindings._Command]:
         if self.var_arg_type is not None:
             raise NotImplementedError("egglog does not support variable arguments yet.")
@@ -499,7 +501,11 @@ class FunctionDecl:
             arg_sorts.append(arg_sort)
         return_sort, cmds = mod_decls.register_sort(self.return_type.to_just())
         yield from cmds
-
+        if is_relation:
+            assert not default and not merge and not merge_action and not cost
+            assert return_sort == "Unit"
+            yield bindings.Relation(egg_name, arg_sorts)
+            return
         egg_fn_decl = bindings.FunctionDecl(
             egg_name,
             bindings.Schema(arg_sorts, return_sort),

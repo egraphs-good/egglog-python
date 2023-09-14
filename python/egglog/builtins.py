@@ -35,6 +35,10 @@ class String(Expr):
     def __init__(self, value: str):
         ...
 
+    @BUILTINS.method(egg_fn="replace")
+    def replace(self, old: StringLike, new: StringLike) -> String:  # type: ignore[empty-body]
+        ...
+
 
 @BUILTINS.function(egg_fn="+")
 def join(*strings: StringLike) -> String:  # type: ignore[empty-body]
@@ -148,6 +152,11 @@ class i64(Expr):
 
 
 converter(int, i64, i64)
+
+
+@BUILTINS.function(egg_fn="count-matches")
+def count_matches(s: StringLike, pattern: StringLike) -> i64:  # type: ignore[empty-body]
+    ...
 
 
 f64Like = Union[float, "f64"]

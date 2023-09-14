@@ -29,8 +29,8 @@ F = Bool.FALSE
 p, a, b, c, as_, bs = vars_("p a b c as bs", Bool)
 egraph.register(
     # clauses are assumed in the normal form (or a (or b (or c False)))
-    set_(~F).to(T),
-    set_(~T).to(F),
+    union(~F).with_(T),
+    union(~T).with_(F),
     # "Solving" negation equations
     rule(eq(~p).to(T)).then(union(p).with_(F)),
     rule(eq(~p).to(F)).then(union(p).with_(T)),
@@ -56,7 +56,7 @@ egraph.register(
         eq(T).to(a | as_),
         eq(T).to(~a | bs),
     ).then(
-        set_(as_ | bs).to(T),
+        union(as_ | bs).with_(T),
     ),
 )
 
@@ -71,11 +71,11 @@ p0 = egraph.let("p0", pred(0))
 p1 = egraph.let("p1", pred(1))
 p2 = egraph.let("p2", pred(2))
 egraph.register(
-    set_(p1 | (~p2 | F)).to(T),
-    set_(p2 | (~p0 | F)).to(T),
-    set_(p0 | (~p1 | F)).to(T),
+    union(p1 | (~p2 | F)).with_(T),
+    union(p2 | (~p0 | F)).with_(T),
+    union(p0 | (~p1 | F)).with_(T),
     union(p1).with_(F),
-    set_(~p0 | (~p1 | (p2 | F))).to(T),
+    union(~p0 | (~p1 | (p2 | F))).with_(T),
 )
 egraph.run(10)
 egraph.check(T != F)
