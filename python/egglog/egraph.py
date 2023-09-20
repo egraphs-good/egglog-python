@@ -677,7 +677,7 @@ class EGraph(_BaseModule):
     _decl_stack: list[Declarations] = field(default_factory=list, repr=False)
     _token: Optional[Token[EGraph]] = None
 
-    def __post_init__(self, modules: list[Module], seminaive) -> None:
+    def __post_init__(self, modules: list[Module], seminaive: bool) -> None:  # type: ignore
         super().__post_init__(modules)
         self._egraph = bindings.EGraph(seminaive=seminaive)
         for m in self._flatted_deps:
@@ -899,7 +899,7 @@ class EGraph(_BaseModule):
                 new_kvs.append(arg)
                 eval_str += f"__arg_{i}, "
             eval_str += ")"
-            return py_eval(eval_str, fn_locals.dict_update(new_kvs), fn_globals)
+            return py_eval(eval_str, fn_locals.dict_update(*new_kvs), fn_globals)
 
         return inner
 

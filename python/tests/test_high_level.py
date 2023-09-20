@@ -1,4 +1,3 @@
-# mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
 import importlib
@@ -8,7 +7,6 @@ from typing import ClassVar
 
 import pytest
 from egglog import *
-from egglog.builtins import count_matches
 from egglog.declarations import (
     CallDecl,
     FunctionRef,

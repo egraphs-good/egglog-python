@@ -4,7 +4,6 @@ N-Dimensional Arrays
 
 Example of building NDarray in the vein of Mathemetics of Arrays.
 """
-# mypy: disable-error-code=empty-body
 from __future__ import annotations
 
 from egglog import *
