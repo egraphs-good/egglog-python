@@ -245,21 +245,6 @@ As shown above, we can also use the `@classmethod` and `@property` decorators to
 Note that reflected methods (i.e. `__radd__`) are handled as a special case. If defined, they won't create their own egglog functions.
 Instead, whenever a reflected method is called, we will try to find the corresponding non-reflected method and call that instead.
 
-#### Custom Type Promotion
-
-Similar to how an `int` can be automatically upcasted to an `i64`, we also support registering conversion to your custom types. For example:
-
-```{code-cell} python
-converter(int, Math, Math)
-converter(str, Math, Math.var)
-
-Math(2) + 30 + "x"
-# equal to
-Math(2) + Math(i64(30)) + Math.var(String("x"))
-```
-
-Regstering a conversion from A to B will also register all transitively reachable conversions from A to B.
-
 ### Declarations
 
 In egglog, the `(declare ...)` command is syntactic sugar for a nullary function. In Python, these can be declare either as class variables or with the toplevel `egraph.constant` function:

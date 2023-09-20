@@ -18,6 +18,7 @@ from typing import (
     Literal,
     NoReturn,
     Optional,
+    Protocol,
     TypeVar,
     Union,
     cast,
@@ -91,6 +92,11 @@ IGNORED_ATTRIBUTES = {
 _BUILTIN_DECLS: Declarations | None = None
 
 ALWAYS_MUTATES_SELF = {"__setitem__", "__delitem__"}
+
+
+class PyObjectFunction(Protocol):
+    def __call__(self, *__args: PyObject) -> PyObject:
+        ...
 
 
 @dataclass
@@ -490,17 +496,10 @@ class _BaseModule(ABC):
     ) -> TypeOrVarRef:
         if isinstance(tp, TypeVar):
             return ClassTypeVarRef(cls_typevars.index(tp))
-        # If there is a union, it should be of a literal and another type to allow type promotion
+        # If there is a union, then we assume the first item is the type we want, and the others are types that can be converted to that type.
         if get_origin(tp) == Union:
-            args = get_args(tp)
-            if len(args) != 2:
-                raise TypeError("Union types are only supported for type promotion")
-            fst, snd = args
-            if fst in {int, str, float}:
-                return self._resolve_type_annotation(snd, cls_typevars, cls_type_and_name)
-            if snd in {int, str, float}:
-                return self._resolve_type_annotation(fst, cls_typevars, cls_type_and_name)
-            raise TypeError("Union types are only supported for type promotion")
+            first, *_rest = get_args(tp)
+            return self._resolve_type_annotation(first, cls_typevars, cls_type_and_name)
 
         # If this is the type for the class, use the class name
         if cls_type_and_name and tp == cls_type_and_name[0]:
@@ -878,6 +877,31 @@ class EGraph(_BaseModule):
         typed_expr_decl = expr_parts(obj)
         expr = typed_expr_decl.to_egg(self._mod_decls)
         return self._egraph.load_object(expr)
+
+    def eval_fn(self, fn: Callable) -> PyObjectFunction:
+        """
+        Takes a python callable and maps it to a callable which takes
+        and returns PyObjects.
+
+        It translates it to a call which uses `py_eval` to call the function, passing in the
+        args as locals, and using the globals from function.
+        """
+        from .builtins import py_eval
+
+        fn_globals = self.save_object(fn.__globals__)
+        fn_locals = self.save_object({"__fn": fn})
+
+        def inner(*__args: PyObject, __fn_locals=fn_locals) -> PyObject:
+            new_kvs: list[PyObject] = []
+            eval_str = "__fn("
+            for i, arg in enumerate(__args):
+                new_kvs.append(self.save_object(f"__arg_{i}"))
+                new_kvs.append(arg)
+                eval_str += f"__arg_{i}, "
+            eval_str += ")"
+            return py_eval(eval_str, fn_locals.dict_update(new_kvs), fn_globals)
+
+        return inner
 
     @classmethod
     def current(cls) -> EGraph:

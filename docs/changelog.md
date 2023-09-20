@@ -16,6 +16,8 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 - Add ability to inline leaves $n$ times instead of just once for visualization [#48](https://github.com/metadsl/egglog-python/pull/48)
 - Add `Relation` and `PrintOverallStatistics` low level commands [#46](https://github.com/metadsl/egglog-python/pull/46)
 - Adds `count-matches` and `replace` string commands [#46](https://github.com/metadsl/egglog-python/pull/46)
+- Adds ability for custom user defined types in a union for proper static typing with conversions
+- Adds `py_eval` function to `EGraph` as a helper to eval Python code.
 
 ### Bug fixes
 

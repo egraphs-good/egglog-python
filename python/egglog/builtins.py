@@ -27,7 +27,7 @@ __all__ = [
 ]
 
 
-StringLike = Union[str, "String"]
+StringLike = Union["String", str]
 
 
 @BUILTINS.class_
@@ -48,7 +48,7 @@ def join(*strings: StringLike) -> String:  # type: ignore[empty-body]
 converter(str, String, String)
 
 # The types which can be convertered into an i64
-i64Like = Union[int, "i64"]
+i64Like = Union["i64", int]
 
 
 @BUILTINS.class_(egg_sort="i64")
@@ -159,7 +159,7 @@ def count_matches(s: StringLike, pattern: StringLike) -> i64:  # type: ignore[em
     ...
 
 
-f64Like = Union[float, "f64"]
+f64Like = Union["f64", float]
 
 
 @BUILTINS.class_(egg_sort="f64")
@@ -317,6 +317,9 @@ class Set(Expr, Generic[T]):
     @BUILTINS.method(egg_fn="set-intersect")
     def __and__(self, other: Set[T]) -> Set[T]:  # type: ignore[empty-body]
         ...
+
+    # def peek(self) -> T:
+    #     ...
 
 
 @BUILTINS.class_(egg_sort="Rational")
