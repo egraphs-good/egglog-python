@@ -26,6 +26,7 @@ def test_to_string(snapshot_py) -> None:
         def __neg__(self) -> Math:
             ...
 
+        @egraph.method(cost=1000)
         @property
         def program(self) -> Program:
             ...
@@ -54,13 +55,19 @@ def test_to_string(snapshot_py) -> None:
         assigned_x = x.program.assign()
         yield rewrite(assume_pos(x).program).to(assigned_x.statement(Program("assert ") + assigned_x + " > 0"))
 
-    first = assume_pos(-Math.var("x")) + Math(3)
-    y = egraph.let("y", Math(2) * first + Math(0) + first)
-    compiled = Compiler().compile(y.program)
-    egraph.register(compiled)
-    egraph.run(100)
-    egraph.display(max_calls_per_function=40, n_inline_leaves=2)
-    assert egraph.load_object(egraph.extract(PyObject.from_string(compiled.string))) == snapshot_py
+    first = assume_pos(-Math.var("x")) + Math.var("x")
+    with egraph:
+        y = first
+        egraph.register(y.program)
+        egraph.run(10)
+        p = egraph.extract(y.program)
+    egraph.register(p)
+    egraph.register(p.compile())
+    egraph.run(40)
+    # egraph.display(n_inline_leaves=1)
+    e = egraph.load_object(egraph.extract(PyObject.from_string(p.expr)))
+    stmts = egraph.load_object(egraph.extract(PyObject.from_string(p.statements)))
+    assert (stmts + e + "\n") == snapshot_py
 
     # egraph.run(10)
     # egraph.check(eq(y.expr).to(String("_1")))

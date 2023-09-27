@@ -45,48 +45,35 @@ class Program(Expr):
         """
         ...
 
+    @property
+    def expr(self) -> String:
+        """
+        Returns the expression of the program, if it's been compiled
+        """
+        ...
+
+    @property
+    def statements(self) -> String:
+        """
+        Returns the statements of the program, if it's been compiled
+        """
+        ...
+
+    @property
+    def next_sym(self) -> i64:
+        """
+        Returns the next gensym to use.
+        """
+        ...
+
+    @program_gen_module.method(default=Unit())
+    def compile(self, next_sym: i64 = i64(0)) -> Unit:
+        """
+        Triggers compilation of the program.
+        """
+
 
 converter(String, Program, Program)
-
-
-@program_gen_module.class_
-class Compiler(Expr):
-    def __init__(
-        self,
-        # The mapping from programs to their compiled of the expressions
-        compiled_programs: Map[Program, Program] = Map[Program, Program].empty(),
-        # The next gensym counter
-        sym_counter: i64Like = i64(0),
-        # The cumulative list of statements seperated by newlines, all stored as the expression of a program
-        compiled_statements: Program = Program(""),
-        # The compiled expression from the last `compile` call
-        compiled_expr: Program = Program(""),
-    ) -> None:
-        ...
-
-    def compile(self, program: ProgramLike) -> Compiler:
-        ...
-
-    @property
-    def expr(self) -> Program:
-        ...
-
-    def set_expr(self, expr: Program) -> Compiler:
-        ...
-
-    def add_statement(self, statements: Program) -> Compiler:
-        ...
-
-    @property
-    def string(self) -> String:
-        ...
-
-    def added_sym(self) -> Compiler:
-        ...
-
-    @property
-    def next_sym(self) -> Program:
-        ...
 
 
 @program_gen_module.register
@@ -94,10 +81,12 @@ def _compile(
     s: String,
     s1: String,
     s2: String,
+    s3: String,
+    s4: String,
     p: Program,
     p1: Program,
     p2: Program,
-    c: Compiler,
+    # c: Compiler,
     statements: Program,
     expr: Program,
     i: i64,
@@ -106,51 +95,72 @@ def _compile(
     # Combining two strings is just joining them
     yield rewrite(Program(s1) + Program(s2)).to(Program(join(s1, s2)))
 
-    compiler = Compiler(m, i, statements, expr)
-    # Compiling a program that is already in the compiled programs is a no-op, but the expression is updated
-    yield rewrite(compiler.compile(p)).to(compiler.set_expr(m[p]), m.contains(p))
     # Compiling a string just gives that string
     program_expr = Program(s)
-    yield rewrite(compiler.compile(program_expr)).to(
-        Compiler(m.insert(program_expr, program_expr), i, statements, program_expr), m.not_contains(program_expr)
+    yield rule(program_expr.compile(i)).then(
+        set_(program_expr.expr).to(s),
+        set_(program_expr.statements).to(String("")),
+        set_(program_expr.next_sym).to(i),
     )
     # Compiling a statement means that we should use the expression of the statement as a statement and use the expression
     # of the underlying program
     program_statement = p.statement(p1)
-    p_compiled = compiler.compile(p)
-    p1_compiled = p_compiled.compile(p1)
-    yield rewrite(compiler.compile(program_statement)).to(
-        p1_compiled.add_statement(p1_compiled.expr).set_expr(p_compiled.expr), m.not_contains(program_statement)
+    # First compile the expression
+    yield rule(program_statement.compile(i)).then(p.compile(i))
+    # Then, when the expression is compiled, compile the statement, and set the expr of the whole statement
+    yield rule(
+        eq(p2).to(program_statement),
+        eq(i).to(p.next_sym),
+        eq(s).to(p.expr),
+    ).then(p1.compile(i), set_(p2.expr).to(s))
+    # When both are compiled, add the statements of both + the expr of p1 to the statements of p
+    yield rule(
+        eq(p2).to(program_statement),
+        eq(s1).to(p.statements),
+        eq(s2).to(p1.statements),
+        eq(s).to(p1.expr),
+        eq(i).to(p1.next_sym),
+    ).then(
+        set_(p2.statements).to(join(s1, s2, s, "\n")),
+        set_(p2.next_sym).to(i),
     )
 
     # Compiling an addition is the same as compiling one, then the other, then setting the expression as the addition
     # of the two
     program_add = p1 + p2
-    p1_compiled = compiler.compile(p1)
-    p2_compiled = p1_compiled.compile(p2)
-    yield rewrite(compiler.compile(program_add)).to(
-        p2_compiled.set_expr(p1_compiled.expr + p2_compiled.expr), m.not_contains(program_add)
+    # Compile the first
+    yield rule(program_add.compile(i)).then(p1.compile(i))
+    # Once the first is finished, do the second
+    yield rule(program_add, eq(i).to(p1.next_sym)).then(p2.compile(i))
+    # Once the second is finished, set the the addition to the addition of the two expressions
+    yield rule(
+        eq(p).to(program_add),
+        eq(s1).to(p1.expr),
+        eq(s2).to(p2.expr),
+        eq(s3).to(p1.statements),
+        eq(s4).to(p2.statements),
+        eq(i).to(p2.next_sym),
+    ).then(
+        set_(p.expr).to(join(s1, s2)),
+        set_(p.statements).to(join(s3, s4)),
+        set_(p.next_sym).to(i),
     )
 
     # Compiling an assign is the same as compiling the expression, adding an assign statement, then setting the
     # expression as the gensym
     program_assign = p.assign()
-    p_compiled = compiler.compile(p)
-    yield rewrite(compiler.compile(program_assign)).to(
-        p_compiled.add_statement(p_compiled.next_sym + " = " + p_compiled.expr)
-        .set_expr(p_compiled.next_sym)
-        .added_sym(),
-        m.not_contains(program_assign),
-    )
+    # Compile the expression
+    yield rule(program_assign.compile(i)).then(p.compile(i))
+    # Once the expression is compiled, add the assign statement to the statements and set the expr
 
-    yield rewrite(compiler.set_expr(p)).to(Compiler(m, i, statements, p))
-    yield rewrite(compiler.add_statement(p)).to(Compiler(m, i, statements + "\n" + p, expr), m.not_contains(p))
-    yield rewrite(compiler.add_statement(p)).to(compiler, m.contains(p))
-    yield rewrite(compiler.expr).to(expr)
-    yield rewrite(compiler.added_sym()).to(Compiler(m, i + 1, statements, expr))
-    yield rewrite(compiler.next_sym).to(Program(join("_", i.to_string())))
-
-    # Set `to_string` to the compiled statements added to the compiled expression
+    symbol = join(String("_"), i.to_string())
     yield rule(
-        eq(c).to(Compiler(m, i, Program(s1), Program(s2))),
-    ).then(set_(c.string).to(join(s1, "\n", s2, "\n")))
+        eq(p1).to(program_assign),
+        eq(s1).to(p.statements),
+        eq(s2).to(p.expr),
+        eq(i).to(p.next_sym),
+    ).then(
+        set_(p1.statements).to(join(s1, symbol, " = ", s2, "\n")),
+        set_(p1.expr).to(symbol),
+        set_(p1.next_sym).to(i + 1),
+    )
