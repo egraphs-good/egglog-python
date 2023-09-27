@@ -1502,7 +1502,7 @@ def _action_like(action_like: ActionLike) -> Action:
     return action_like
 
 
-FactLike = Union[Fact, Unit]
+FactLike = Union[Fact, Expr]
 
 
 def _fact_likes(fact_likes: Iterable[FactLike]) -> tuple[Fact, ...]:
