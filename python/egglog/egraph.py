@@ -7,8 +7,7 @@ from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from inspect import Parameter, currentframe, signature
 from types import FunctionType
-from typing import _GenericAlias  # type: ignore[attr-defined]
-from typing import (
+from typing import (  # type: ignore[attr-defined]
     TYPE_CHECKING,
     Any,
     Callable,
@@ -19,8 +18,10 @@ from typing import (
     NoReturn,
     Optional,
     Protocol,
+    TypedDict,
     TypeVar,
     Union,
+    _GenericAlias,
     cast,
     get_type_hints,
     overload,
@@ -28,7 +29,7 @@ from typing import (
 
 import graphviz
 from egglog.declarations import REFLECTED_BINARY_METHODS, Declarations
-from typing_extensions import ParamSpec, get_args, get_origin
+from typing_extensions import ParamSpec, Unpack, get_args, get_origin
 
 from . import bindings
 from .declarations import *
@@ -664,6 +665,12 @@ class Module(_BaseModule):
         return cast("PyObject", RuntimeExpr(self._mod_decls, typed_expr_decl))
 
 
+class GraphvizKwargs(TypedDict, total=False):
+    max_functions: Optional[int]
+    max_calls_per_function: Optional[int]
+    n_inline_leaves: int
+
+
 @dataclass
 class EGraph(_BaseModule):
     """
@@ -695,7 +702,7 @@ class EGraph(_BaseModule):
 
         return {"image/svg+xml": self.graphviz().pipe(format="svg", quiet=True, encoding="utf-8")}
 
-    def graphviz(self, **kwargs) -> graphviz.Source:
+    def graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
         return graphviz.Source(self._egraph.to_graphviz_string(**kwargs))
 
     def _repr_html_(self) -> str:
@@ -707,13 +714,17 @@ class EGraph(_BaseModule):
         """
         return self.graphviz().pipe(format="svg", quiet=True).decode()
 
-    def display(self, **kwargs):
+    def display(self, **kwargs: Unpack[GraphvizKwargs]):
         """
         Displays the e-graph in the notebook.
         """
-        from IPython.display import SVG, display
+        graphviz = self.graphviz(**kwargs)
+        if hasattr(__builtins__, "__IPYTHON__"):
+            from IPython.display import SVG, display
 
-        display(SVG(self.graphviz(**kwargs).pipe(format="svg", quiet=True, encoding="utf-8")))
+            display(SVG(graphviz.pipe(format="svg", quiet=True, encoding="utf-8")))
+        else:
+            graphviz.view()
 
     @overload
     def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> EXPR:
@@ -1127,7 +1138,7 @@ class Set(Action):
     def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Set:
         egg_call = self._call.__egg_typed_expr__.expr.to_egg(mod_decls)
         if not isinstance(egg_call, bindings.Call):
-            raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")
+            raise ValueError(f"Can only create a set with a call for the lhs, got {self._call}")
         return bindings.Set(
             egg_call.name,
             egg_call.args,

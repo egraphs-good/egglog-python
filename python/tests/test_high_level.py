@@ -1,3 +1,4 @@
+# mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
 import importlib
@@ -511,6 +512,98 @@ def test_imperative():
 
 @pytest.mark.xfail(reason="applies rules too many times b/c keeps matching")
 def test_imperative_stable():
+    # More stable version of imperative, which uses idempotent merge function
+    egraph = EGraph()
+
+    @egraph.function(merge=lambda old, new: new)
+    def statements() -> String:
+        ...
+
+    egraph.register(set_(statements()).to(String("")))
+
+    @egraph.function(merge=lambda old, new: old + new, default=i64(0))
+    def gensym() -> i64:
+        ...
+
+    @egraph.class_
+    class Math(Expr):
+        @egraph.method(egg_fn="Num")
+        def __init__(self, value: i64Like) -> None:
+            ...
+
+        @egraph.method(egg_fn="Var")
+        @classmethod
+        def var(cls, v: StringLike) -> Math:
+            ...
+
+        @egraph.method(egg_fn="Add")
+        def __add__(self, other: Math) -> Math:
+            ...
+
+        @egraph.method(egg_fn="Mul")
+        def __mul__(self, other: Math) -> Math:
+            ...
+
+        @egraph.method(egg_fn="expr")  # type: ignore[misc]
+        @property
+        def expr(self) -> String:
+            ...
+
+    @egraph.register
+    def _rules(
+        s: String,
+        y_expr: String,
+        z_expr: String,
+        old_statements: String,
+        x: Math,
+        i: i64,
+        y: Math,
+        z: Math,
+        old_gensym: i64,
+    ):
+        gensym_var = join("_", gensym().to_string())
+        yield rule(
+            eq(x).to(Math.var(s)),
+        ).then(
+            set_(x.expr).to(s),
+        )
+
+        yield rule(
+            eq(x).to(Math(i)),
+        ).then(
+            set_(x.expr).to(i.to_string()),
+        )
+
+        yield rule(
+            eq(x).to(y + z),
+            eq(y_expr).to(y.expr),
+            eq(z_expr).to(z.expr),
+            eq(old_statements).to(statements()),
+        ).then(
+            set_(x.expr).to(gensym_var),
+            set_(statements()).to(join(old_statements, gensym_var, " = ", y_expr, " + ", z_expr, "\n")),
+            set_(gensym()).to(i64(1)),
+        )
+        yield rule(
+            eq(x).to(y * z),
+            eq(y_expr).to(y.expr),
+            eq(z_expr).to(z.expr),
+            eq(old_statements).to(statements()),
+        ).then(
+            set_(x.expr).to(gensym_var),
+            set_(statements()).to(join(old_statements, gensym_var, " = ", y_expr, " * ", z_expr, "\n")),
+            set_(gensym()).to(i64(1)),
+        )
+
+    y = egraph.let("y", Math(2) * (Math.var("x") + Math(3)))
+
+    egraph.run(10)
+    egraph.check(eq(y.expr).to(String("_1")))
+    egraph.check(eq(statements()).to(String("_0 = x + 3\n_1 = 2 * _0\n")))
+
+
+def test_imperative_python():
+    # Tries implementing the same functionality but with a PyObject
     # More stable version of imperative, which uses idempotent merge function
     egraph = EGraph()
 

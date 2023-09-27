@@ -1,3 +1,5 @@
+# mypy: disable-error-code="empty-body"
+
 """
 Lambda Calculus
 ===============
