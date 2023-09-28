@@ -51,19 +51,19 @@ def test_to_string(snapshot_py) -> None:
         yield rewrite(Math(i).program).to(Program(i.to_string()))
         yield rewrite((y + z).program).to((y.program + " + " + z.program).assign())
         yield rewrite((y * z).program).to((y.program + " * " + z.program).assign())
-        yield rewrite((-y).program).to(Program("-(") + y.program + ")")
+        yield rewrite((-y).program).to(Program("-") + y.program)
         assigned_x = x.program.assign()
         yield rewrite(assume_pos(x).program).to(assigned_x.statement(Program("assert ") + assigned_x + " > 0"))
 
     first = assume_pos(-Math.var("x")) + Math.var("x")
     with egraph:
-        y = first
+        y = first + Math(2) + first
         egraph.register(y.program)
-        egraph.run(10)
+        egraph.run(100)
         p = egraph.extract(y.program)
     egraph.register(p)
     egraph.register(p.compile())
-    egraph.run(40)
+    egraph.run(100)
     # egraph.display(n_inline_leaves=1)
     e = egraph.load_object(egraph.extract(PyObject.from_string(p.expr)))
     stmts = egraph.load_object(egraph.extract(PyObject.from_string(p.statements)))

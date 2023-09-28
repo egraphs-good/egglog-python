@@ -165,16 +165,19 @@ def _compile(
     # of the two
     program_add = p1 + p2
 
-    # Set parents
-    yield rule(eq(p).to(program_add), p.compile(i)).then(set_(p1.parent).to(p), set_(p2.parent).to(p))
+    # Set parent of p1
+    yield rule(eq(p).to(program_add), p.compile(i)).then(set_(p1.parent).to(p))
 
-    # Compile p1, if p1 parent set
+    # Compile p1, if p1 parent equal
     yield rule(eq(p).to(program_add), p.compile(i), eq(p1.parent).to(program_add)).then(p1.compile(i))
 
-    # Compile p2, if p1 parent not set
+    # Set parent of p2, once p1 compiled
+    yield rule(eq(p).to(program_add), p1.next_sym).then(set_(p2.parent).to(p))
+
+    # Compile p2, if p1 parent not equal
     yield rule(eq(p).to(program_add), p.compile(i), p1.parent != p).then(p2.compile(i))
 
-    # Compile p2, if p1 parent set
+    # Compile p2, if p1 parent eqal
     yield rule(eq(p).to(program_add), eq(p1.parent).to(program_add), eq(i).to(p1.next_sym)).then(p2.compile(i))
 
     # Set p expr to join of p1 and p2
