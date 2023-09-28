@@ -318,9 +318,6 @@ class Set(Expr, Generic[T]):
     def __and__(self, other: Set[T]) -> Set[T]:  # type: ignore[empty-body]
         ...
 
-    # def peek(self) -> T:
-    #     ...
-
 
 @BUILTINS.class_(egg_sort="Rational")
 class Rational(Expr):
