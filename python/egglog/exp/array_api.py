@@ -15,6 +15,8 @@ from egglog.bindings import EggSmolError
 from egglog.egraph import Action
 from egglog.runtime import RuntimeExpr
 
+from .program_gen import *
+
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
 
@@ -1486,88 +1488,68 @@ def _size(x: NDArray):
 # Depends on `np` as a global variable.
 ##
 
-array_api_module_string = Module([array_api_module])
+array_api_module_string = Module([array_api_module, program_gen_module])
 
 
-@array_api_module_string.function(merge=lambda old, new: new, default=i64(0))
-def gensym() -> i64:
-    ...
-
-
-gensym_var = join("_", gensym().to_string())
-
-
-def add_line(*v: StringLike) -> Action:
-    return set_(statements()).to(join("    ", *v, "\n"))
-
-
-incr_gensym = set_(gensym()).to(gensym() + 1)
-
-
-@array_api_module_string.function(merge=lambda old, new: join(old, new), default=String(""))
-def statements() -> String:
+@array_api_module_string.function()
+def ndarray_program(x: NDArray) -> Program:
     ...
 
 
 @array_api_module_string.function()
-def ndarray_expr(x: NDArray) -> String:
+def dtype_program(x: DType) -> Program:
     ...
 
 
 @array_api_module_string.function()
-def dtype_expr(x: DType) -> String:
+def tuple_int_program(x: TupleInt) -> Program:
     ...
 
 
 @array_api_module_string.function()
-def tuple_int_expr(x: TupleInt) -> String:
+def int_program(x: Int) -> Program:
     ...
 
 
 @array_api_module_string.function()
-def int_expr(x: Int) -> String:
+def tuple_value_program(x: TupleValue) -> Program:
     ...
 
 
 @array_api_module_string.function()
-def tuple_value_expr(x: TupleValue) -> String:
-    ...
-
-
-@array_api_module_string.function()
-def value_expr(x: Value) -> String:
+def value_program(x: Value) -> Program:
     ...
 
 
 array_api_module_string.register(
-    set_(dtype_expr(DType.float64)).to(String("np.float64")),
-    set_(dtype_expr(DType.int64)).to(String("np.int64")),
+    union(dtype_program(DType.float64)).with_(Program("np.float64")),
+    union(dtype_program(DType.int64)).with_(Program("np.int64")),
 )
 
 
 @array_api_module_string.function
-def bool_expr(x: Bool) -> String:
+def bool_program(x: Bool) -> Program:
     ...
 
 
 array_api_module_string.register(
-    set_(bool_expr(TRUE)).to(String("True")),
-    set_(bool_expr(FALSE)).to(String("False")),
+    union(bool_program(TRUE)).with_(Program("True")),
+    union(bool_program(FALSE)).with_(Program("False")),
 )
 
 
 @array_api_module_string.function
-def float_expr(x: Float) -> String:
+def float_program(x: Float) -> Program:
     ...
 
 
 @array_api_module_string.function
-def tuple_ndarray_expr(x: TupleNDArray) -> String:
+def tuple_ndarray_program(x: TupleNDArray) -> Program:
     ...
 
 
 @array_api_module_string.function
-def optional_dtype_expr(x: OptionalDType) -> String:
+def optional_dtype_program(x: OptionalDType) -> Program:
     ...
 
 
@@ -1611,232 +1593,97 @@ def _py_expr(
     optional_dtype_: OptionalDType,
 ):
     # Var
-    yield rule(
-        eq(x).to(NDArray.var(s)),
-    ).then(
-        set_(lhs=ndarray_expr(x)).to(s),
-    )
+    yield rewrite(ndarray_program(NDArray.var(s))).to(Program(s))
 
     # Asssume dtype
     z_assumed_dtype = copy(z)
-    assume_dtype(z_assumed_dtype, dtype=dtype)
-    yield rule(
-        eq(x).to(z_assumed_dtype),
-        eq(z_str).to(ndarray_expr(z)),
-        eq(dtype_str).to(dtype_expr(dtype)),
-    ).then(
-        set_(ndarray_expr(x)).to(z_str),
-        add_line("assert ", z_str, ".dtype == ", dtype_str),
+    assume_dtype(z_assumed_dtype, dtype)
+    z_program = ndarray_program(z)
+    yield rewrite(ndarray_program(z_assumed_dtype)).to(
+        z_program.statement(Program("assert ") + z_program + ".dtype == " + dtype_program(dtype))
     )
-
     # assume shape
     z_assumed_shape = copy(z)
     assume_shape(z_assumed_shape, ti)
-    yield rule(
-        eq(x).to(z_assumed_shape),
-        eq(z_str).to(ndarray_expr(z)),
-        eq(ti_str).to(tuple_int_expr(ti)),
-    ).then(
-        set_(ndarray_expr(x)).to(z_str),
-        add_line("assert ", z_str, ".shape == ", ti_str),
+    yield rewrite(ndarray_program(z_assumed_shape)).to(
+        z_program.statement(Program("assert ") + z_program + ".shape == " + tuple_int_program(ti))
     )
     # tuple int
-    yield rule(
-        eq(ti).to(ti1 + ti2),
-        eq(ti_str1).to(tuple_int_expr(ti1)),
-        eq(ti_str2).to(tuple_int_expr(ti2)),
-    ).then(
-        set_(tuple_int_expr(ti)).to(join(ti_str1, " + ", ti_str2)),
-    )
-    yield rule(
-        eq(ti).to(TupleInt(i)),
-        eq(i_str).to(int_expr(i)),
-    ).then(
-        set_(tuple_int_expr(ti)).to(join("(", i_str, ",)")),
-    )
+    yield rewrite(tuple_int_program(ti1 + ti2)).to(tuple_int_program(ti1) + " + " + tuple_int_program(ti2))
+    yield rewrite(tuple_int_program(TupleInt(i))).to(Program("(") + int_program(i) + ",)")
     # Int
-    yield rule(
-        eq(i).to(Int(i64_)),
-    ).then(
-        set_(int_expr(i)).to(i64_.to_string()),
-    )
+    yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
 
     # assume isfinite
     z_assumed_isfinite = copy(z)
     assume_isfinite(z_assumed_isfinite)
-    yield rule(
-        eq(x).to(z_assumed_isfinite),
-        eq(z_str).to(ndarray_expr(z)),
-    ).then(
-        set_(ndarray_expr(x)).to(z_str),
-        add_line("assert np.all(np.isfinite(", z_str, "))"),
+    yield rewrite(ndarray_program(z_assumed_isfinite)).to(
+        z_program.statement(Program("assert np.all(np.isfinite(") + z_program + "))")
     )
 
     # Assume value_one_of
     z_assumed_value_one_of = copy(z)
     assume_value_one_of(z_assumed_value_one_of, tv)
-    yield rule(
-        eq(x).to(z_assumed_value_one_of),
-        # not_traversed(x),
-        eq(z_str).to(ndarray_expr(z)),
-        eq(tv_str).to(tuple_value_expr(tv)),
-    ).then(
-        set_(ndarray_expr(x)).to(z_str),
-        # traverse(x),
-        add_line("assert set(", z_str, ".flatten()) == set(", tv_str, ")"),
+    yield rewrite(ndarray_program(z_assumed_value_one_of)).to(
+        z_program.statement(Program("assert set(") + z_program + ".flatten()) == set(" + tuple_value_program(tv) + ")")
     )
-    # print(r._to_egg_command(array_api_module_string._mod_decls))
-    # yield r
+
     # tuple values
-    yield rule(
-        eq(tv).to(tv1 + tv2),
-        eq(tv1_str).to(tuple_value_expr(tv1)),
-        eq(tv2_str).to(tuple_value_expr(tv2)),
-    ).then(
-        set_(tuple_value_expr(tv)).to(join(tv1_str, " + ", tv2_str)),
-    )
-    yield rule(
-        eq(tv).to(TupleValue(v)),
-        eq(v_str).to(value_expr(v)),
-    ).then(
-        set_(tuple_value_expr(tv)).to(join("(", v_str, ",)")),
-    )
+    yield rewrite(tuple_value_program(tv1 + tv2)).to(tuple_value_program(tv1) + " + " + tuple_value_program(tv2))
+    yield rewrite(tuple_value_program(TupleValue(v))).to(Program("(") + value_program(v) + ",)")
 
     # Value
-    yield rule(
-        eq(v).to(Value.int(i)),
-        eq(i_str).to(int_expr(i)),
-    ).then(
-        set_(value_expr(v)).to(i_str),
-    )
-    yield rule(
-        eq(v).to(Value.bool(b)),
-        eq(b_str).to(bool_expr(b)),
-    ).then(
-        set_(value_expr(v)).to(b_str),
-    )
-    yield rule(
-        eq(v).to(Value.float(f)),
-        eq(f_str).to(float_expr(f)),
-    ).then(
-        set_(value_expr(v)).to(f_str),
-    )
+    yield rewrite(value_program(Value.int(i))).to(int_program(i))
+    yield rewrite(value_program(Value.bool(b))).to(bool_program(b))
+    yield rewrite(value_program(Value.float(f))).to(float_program(f))
 
     # Float
-    yield rule(
-        eq(f).to(Float(f64_)),
-    ).then(
-        set_(float_expr(f)).to(f64_.to_string()),
-    )
+    yield rewrite(float_program(Float(f64_))).to(Program(f64_.to_string()))
 
     # reshape (don't include copy, since not present in numpy)
-    yield rule(
-        eq(x).to(reshape(y, ti, ob)),
-        eq(y_str).to(ndarray_expr(y)),
-        eq(ti_str).to(tuple_int_expr(ti)),
-    ).then(
-        set_(ndarray_expr(x)).to(gensym_var),
-        add_line(gensym_var, " = ", y_str, ".reshape(", ti_str, ")"),
-        incr_gensym,
+    yield rewrite(ndarray_program(reshape(y, ti, ob))).to(
+        (ndarray_program(y) + ".reshape(" + tuple_int_program(ti) + ")").assign()
     )
 
     # astype
-    yield rule(
-        eq(x).to(astype(y, dtype)),
-        eq(y_str).to(ndarray_expr(y)),
-        eq(dtype_str).to(dtype_expr(dtype)),
-    ).then(
-        set_(ndarray_expr(x)).to(gensym_var),
-        add_line(gensym_var, " = ", y_str, ".astype(", dtype_str, ")"),
-        incr_gensym,
+    yield rewrite(ndarray_program(astype(y, dtype))).to(
+        (ndarray_program(y) + ".astype(" + dtype_program(dtype) + ")").assign()
     )
 
     # unique_counts(x) => unique(x, return_counts=True)
-    yield rule(
-        eq(tnd).to(unique_counts(y)),
-        eq(y_str).to(ndarray_expr(y)),
-    ).then(
-        set_(tuple_ndarray_expr(tnd)).to(gensym_var),
-        add_line(gensym_var, " = np.unique(", y_str, ", return_counts=True)"),
-        incr_gensym,
+    yield rewrite(tuple_ndarray_program(unique_counts(x))).to(
+        (Program("np.unique(") + ndarray_program(x) + ", return_counts=True)").assign()
     )
+
     # Tuple ndarray indexing
-    yield rule(
-        eq(x).to(tnd[i]),
-        eq(tnd_str).to(tuple_ndarray_expr(tnd)),
-        eq(i_str).to(int_expr(i)),
-    ).then(
-        set_(ndarray_expr(x)).to(join(tnd_str, "[", i_str, "]")),
-    )
+    yield rewrite(ndarray_program(tnd[i])).to(tuple_ndarray_program(tnd) + "[" + int_program(i) + "]")
 
     # ndarray scalar
     # TODO: Use dtype and shape and indexing instead?
-    yield rule(
-        eq(x).to(NDArray.scalar(v)),
-        eq(v_str).to(value_expr(v)),
-    ).then(
-        set_(ndarray_expr(x)).to(gensym_var),
-        add_line(gensym_var, " = np.array(", v_str, ")"),
-        incr_gensym,
-    )
+    # TODO: SPecify dtype?
+    yield rewrite(ndarray_program(NDArray.scalar(v))).to(Program("np.array(") + value_program(v) + ")")
 
     # zeros
-    yield rule(
-        eq(x).to(zeros(ti, optional_dtype_, optional_device_)),
-        eq(ti_str).to(tuple_int_expr(ti)),
-        eq(dtype_str).to(optional_dtype_expr(optional_dtype_)),
-    ).then(
-        set_(ndarray_expr(x)).to(gensym_var),
-        add_line(gensym_var, " = np.zeros(", ti_str, ", dtype=", dtype_str, ")"),
-        incr_gensym,
+    yield rewrite(ndarray_program(zeros(ti, optional_dtype_, optional_device_))).to(
+        (
+            Program("np.zeros(") + tuple_int_program(ti) + ", dtype=" + optional_dtype_program(optional_dtype_) + ")"
+        ).assign()
     )
 
     # Optional dtype
-    yield rule(
-        eq(optional_dtype_).to(OptionalDType.none),
-    ).then(
-        set_(optional_dtype_expr(optional_dtype_)).to(String("None")),
-    )
-    yield rule(
-        eq(optional_dtype_).to(OptionalDType.some(dtype)),
-        eq(dtype_str).to(dtype_expr(dtype)),
-    ).then(
-        set_(optional_dtype_expr(optional_dtype_)).to(dtype_str),
-    )
+    yield rewrite(optional_dtype_program(OptionalDType.none)).to(Program("None"))
+    yield rewrite(optional_dtype_program(OptionalDType.some(dtype))).to(dtype_program(dtype))
 
     # unique_values
-    yield rule(
-        eq(x).to(unique_values(y)),
-        eq(y_str).to(ndarray_expr(y)),
-    ).then(
-        set_(ndarray_expr(x)).to(gensym_var),
-        add_line(gensym_var, " = np.unique(", y_str, ")"),
-        incr_gensym,
-    )
+    yield rewrite(ndarray_program(unique_values(x))).to((Program("np.unique(") + ndarray_program(x) + ")").assign())
 
     # reshape
 
     # NDARRAy ops
-
-    yield rule(
-        eq(x).to(y + z),
-        eq(y_str).to(ndarray_expr(y)),
-        eq(z_str).to(ndarray_expr(z)),
-    ).then(
-        set_(ndarray_expr(x)).to(gensym_var),
-        add_line(gensym_var, " = ", y_str, " + ", z_str),
-        incr_gensym,
-    )
-
-    yield rule(
-        eq(x).to(y / z),
-        eq(y_str).to(ndarray_expr(y)),
-        eq(z_str).to(ndarray_expr(z)),
-    ).then(
-        set_(ndarray_expr(x)).to(gensym_var),
-        add_line(gensym_var, " = ", y_str, " / ", z_str),
-        incr_gensym,
-    )
+    yield rewrite(ndarray_program(x + y)).to((ndarray_program(x) + " + " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x - y)).to((ndarray_program(x) + " - " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x * y)).to((ndarray_program(x) + " * " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x / y)).to((ndarray_program(x) + " / " + ndarray_program(y)).assign())
 
 
 @array_api_module_string.class_

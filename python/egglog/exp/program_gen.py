@@ -4,6 +4,7 @@ Builds up imperative string expressions from a functional expression.
 """
 from __future__ import annotations
 
+from turtle import st
 from typing import Union
 
 from egglog import *
@@ -42,6 +43,12 @@ class Program(Expr):
     def assign(self) -> Program:
         """
         Returns a new program with the expression assigned to a gensym.
+        """
+        ...
+
+    def function_two(self, name: StringLike, arg1: ProgramLike, arg2: ProgramLike) -> Program:
+        """
+        Returns a new program defining a function with two arguments.
         """
         ...
 
@@ -99,9 +106,11 @@ def _compile(
     s2: String,
     s3: String,
     s4: String,
+    s5: String,
     p: Program,
     p1: Program,
     p2: Program,
+    p3: Program,
     # c: Compiler,
     statements: Program,
     expr: Program,
@@ -109,7 +118,7 @@ def _compile(
     m: Map[Program, Program],
 ):
     # Combining two strings is just joining them
-    yield rewrite(Program(s1) + Program(s2)).to(Program(join(s1, s2)))
+    # yield rewrite(Program(s1) + Program(s2)).to(Program(join(s1, s2)))
 
     # Compiling a string just gives that string
     program_expr = Program(s)
@@ -268,4 +277,30 @@ def _compile(
         set_(p.statements).to(join(symbol, " = ", s2, "\n")),
         set_(p.expr).to(symbol),
         set_(p.next_sym).to(i + 1),
+    )
+
+    ##
+    # Function two
+
+    # When compiling a function, the two args, p2 and p3, should get compiled when we compile p1, and should just be vars.
+    fn_two = p1.function_two(s1, p2, p3)
+    # 1. Set parent of p1
+    yield rule(eq(p).to(fn_two), fn_two.compile(i)).then(set_(p1.parent).to(p))
+    # TODO: Compile vars?
+    # 2. Compile p1 if parent set
+    yield rule(eq(p).to(fn_two), p.compile(i), eq(p1.parent).to(fn_two)).then(p1.compile(i))
+    # 3. Set statements to function body and the next sym to i
+    yield rule(
+        eq(p).to(fn_two),
+        p.compile(i),
+        eq(s2).to(p1.expr),
+        eq(s3).to(p1.statements),
+        eq(s4).to(p2.expr),
+        eq(s5).to(p3.expr),
+    ).then(
+        set_(p.statements).to(
+            join("def ", s1, "(", s4, ", ", s5, "):\n    ", s3.replace("\n", "\n    "), "return ", s2, "\n")
+        ),
+        set_(p.next_sym).to(i),
+        set_(p.expr).to(s1),
     )

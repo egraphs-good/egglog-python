@@ -55,20 +55,17 @@ def test_to_string(snapshot_py) -> None:
         assigned_x = x.program.assign()
         yield rewrite(assume_pos(x).program).to(assigned_x.statement(Program("assert ") + assigned_x + " > 0"))
 
-    first = assume_pos(-Math.var("x")) + Math.var("x")
+    first = assume_pos(-Math.var("x")) + Math.var("y")
+    fn = (first + Math(2) + first).program.function_two("my_fn", Math.var("x").program, Math.var("y").program)
     with egraph:
-        y = first + Math(2) + first
-        egraph.register(y.program)
-        egraph.run(100)
-        p = egraph.extract(y.program)
-    egraph.register(p)
-    egraph.register(p.compile())
-    egraph.run(100)
+        egraph.register(fn)
+        egraph.run(200)
+        fn = egraph.extract(fn)
+    egraph.register(fn)
+    egraph.register(fn.compile())
+    egraph.run(200)
     # egraph.display(n_inline_leaves=1)
-    e = egraph.load_object(egraph.extract(PyObject.from_string(p.expr)))
-    stmts = egraph.load_object(egraph.extract(PyObject.from_string(p.statements)))
-    assert (stmts + e + "\n") == snapshot_py
-
-    # egraph.run(10)
-    # egraph.check(eq(y.expr).to(String("_1")))
-    # egraph.check(eq(y.statements).to(String("_0 = x + -3\n_1 = 2 * _0\n")))
+    expr = egraph.load_object(egraph.extract(PyObject.from_string(fn.expr)))
+    assert expr == "my_fn"  # type: ignore
+    stmts = egraph.load_object(egraph.extract(PyObject.from_string(fn.statements)))
+    assert stmts == snapshot_py  # type: ignore
