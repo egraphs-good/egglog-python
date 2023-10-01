@@ -72,8 +72,13 @@ egraph.load_object(egraph.extract(PyObject.from_int(1)))
 We also support evaling arbitrary Python bode, given some locals and globals. This technically allows us to implement any Python method:
 
 ```{code-cell} python
-empty_dict = egraph.save_object({})
-egraph.load_object(egraph.extract(py_eval("1 + 2", empty_dict, empty_dict)))
+egraph.load_object(egraph.extract(py_eval("1 + 2")))
+```
+
+Execing Python code is also supported. In this case, the return value will be the updated globals dict, which will be copied first before using.
+
+```{code-cell} python
+egraph.load_object(egraph.extract(py_exec("x = 1 + 2")))
 ```
 
 Alongside this, we support a function `dict_update` method, which can allow you to combine some local local egglog expressions alongside, say, the locals and globals of the Python code you are evaling.

@@ -1,3 +1,4 @@
+# mypy: disable-error-code="empty-body"
 """
 Builtin sorts and function to egg.
 """
@@ -24,6 +25,7 @@ __all__ = [
     "join",
     "PyObject",
     "py_eval",
+    "py_exec",
 ]
 
 
@@ -454,8 +456,20 @@ class PyObject(Expr):
     def from_int(cls, i: i64Like) -> PyObject:  # type: ignore[empty-body]
         ...
 
+    @BUILTINS.method(egg_fn="py-dict")
+    @classmethod
+    def dict(cls, *keys_and_values: PyObject) -> PyObject:
+        ...
 
-# TODO: Maybe move to static method if we implement those?
+
 @BUILTINS.function(egg_fn="py-eval")
-def py_eval(code: StringLike, locals: PyObject, globals: PyObject) -> PyObject:  # type: ignore[empty-body]
+def py_eval(code: StringLike, globals: PyObject = PyObject.dict(), locals: PyObject = PyObject.dict()) -> PyObject:  # type: ignore[empty-body]
+    ...
+
+
+@BUILTINS.function(egg_fn="py-exec")
+def py_exec(code: StringLike, globals: PyObject = PyObject.dict(), locals: PyObject = PyObject.dict()) -> PyObject:
+    """
+    Copies the locals, execs the Python code, and returns the locals with any updates.
+    """
     ...

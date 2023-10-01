@@ -95,8 +95,36 @@ class Program(Expr):
         """
         ...
 
+    @program_gen_module.method(default=Unit())
+    def eval_py_object(self, globals: PyObject) -> Unit:
+        """
+        Evaluates the program and saves as the py_object
+        """
+
+    @property
+    def py_object(self) -> PyObject:
+        """
+        Returns the python object of the program, if it's been evaluated.
+        """
+        ...
+
 
 converter(String, Program, Program)
+
+
+@program_gen_module.register
+def _py_object(p: Program, expr: String, statements: String, g: PyObject):
+    # When we evaluate a program, we first want to compile to a string
+    yield rule(p.eval_py_object(g)).then(p.compile())
+    # Then we want to evaluate the statements/expr
+    yield rule(p.eval_py_object(g), eq(p.statements).to(statements), eq(p.expr).to(expr)).then(
+        set_(p.py_object).to(
+            py_eval(
+                "l['___res']",
+                PyObject.dict(PyObject.from_string("l"), py_exec(join(statements, "\n", "___res = ", expr), g)),
+            )
+        )
+    )
 
 
 @program_gen_module.register
