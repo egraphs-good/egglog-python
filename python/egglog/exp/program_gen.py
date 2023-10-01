@@ -46,7 +46,7 @@ class Program(Expr):
         """
         ...
 
-    def function_two(self, name: StringLike, arg1: ProgramLike, arg2: ProgramLike) -> Program:
+    def function_two(self, arg1: ProgramLike, arg2: ProgramLike, name: StringLike = String("__fn")) -> Program:
         """
         Returns a new program defining a function with two arguments.
         """
@@ -311,7 +311,7 @@ def _compile(
     # Function two
 
     # When compiling a function, the two args, p2 and p3, should get compiled when we compile p1, and should just be vars.
-    fn_two = p1.function_two(s1, p2, p3)
+    fn_two = p1.function_two(p2, p3, s1)
     # 1. Set parent of p1
     yield rule(eq(p).to(fn_two), fn_two.compile(i)).then(set_(p1.parent).to(p))
     # TODO: Compile vars?

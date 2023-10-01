@@ -61,7 +61,7 @@ def _rules(
 
 def test_to_string(snapshot_py) -> None:
     first = assume_pos(-Math.var("x")) + Math.var("y")
-    fn = (first + Math(2) + first).program.function_two("my_fn", Math.var("x").program, Math.var("y").program)
+    fn = (first + Math(2) + first).program.function_two(Math.var("x").program, Math.var("y").program, "my_fn")
     with egraph:
         egraph.register(fn)
         egraph.run(200)
@@ -80,9 +80,7 @@ def test_py_object():
     x = Math.var("x")
     y = Math.var("y")
     z = Math.var("z")
-    fn = (x + y + z).program.function_two("my_fn", x.program, y.program)
-    egraph.register(fn.compile())
-    egraph.run(100)
+    fn = (x + y + z).program.function_two(x.program, y.program)
     egraph.register(fn.eval_py_object(egraph.save_object({"z": 10})))
     egraph.run(100)
     res = egraph.load_object(egraph.extract(fn.py_object))
