@@ -28,7 +28,7 @@ _NDArray_6 = concat(
 _NDArray_7 = std(_NDArray_6, OptionalIntOrTuple.int(Int(0)))
 _NDArray_7[ndarray_index(std(_NDArray_6, OptionalIntOrTuple.int(Int(0))) == NDArray.scalar(Value.int(Int(0))))] = NDArray.scalar(Value.float(Float(1.0)))
 _TupleNDArray_1 = svd(sqrt(NDArray.scalar(Value.int(NDArray.scalar(Value.float(Float(1.0))).to_int() / Int(147)))) * (_NDArray_6 / _NDArray_7), FALSE)
-_Slice_1 = Slice(OptionalInt.none, OptionalInt.some(sum(astype(_TupleNDArray_1[Int(1)] > NDArray.scalar(Value.float(Float(0.0001))), DType.int32)).to_int()))
+_Slice_1 = Slice(OptionalInt.none, OptionalInt.some(astype(sum(_TupleNDArray_1[Int(1)] > NDArray.scalar(Value.float(Float(0.0001)))), DType.int32).to_int()))
 _NDArray_8 = (_TupleNDArray_1[Int(2)][IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.slice(_Slice_1)) + _MultiAxisIndexKey_1)] / _NDArray_7).T / _TupleNDArray_1[
     Int(1)
 ][IndexKey.slice(_Slice_1)]
@@ -49,8 +49,8 @@ _TupleNDArray_2 = svd(
                         Slice(
                             OptionalInt.none,
                             OptionalInt.some(
-                                sum(
-                                    astype(_TupleNDArray_2[Int(1)] > (NDArray.scalar(Value.float(Float(0.0001))) * _TupleNDArray_2[Int(1)][IndexKey.int(Int(0))]), DType.int32)
+                                astype(
+                                    sum(_TupleNDArray_2[Int(1)] > (NDArray.scalar(Value.float(Float(0.0001))) * _TupleNDArray_2[Int(1)][IndexKey.int(Int(0))])), DType.int32
                                 ).to_int()
                             ),
                         )

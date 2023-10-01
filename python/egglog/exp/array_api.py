@@ -12,7 +12,6 @@ from typing import Any, ClassVar, Iterator, TypeVar
 import numpy as np
 from egglog import *
 from egglog.bindings import EggSmolError
-from egglog.egraph import Action
 from egglog.runtime import RuntimeExpr
 
 from .program_gen import *
@@ -1684,32 +1683,3 @@ def _py_expr(
     yield rewrite(ndarray_program(x - y)).to((ndarray_program(x) + " - " + ndarray_program(y)).assign())
     yield rewrite(ndarray_program(x * y)).to((ndarray_program(x) + " * " + ndarray_program(y)).assign())
     yield rewrite(ndarray_program(x / y)).to((ndarray_program(x) + " / " + ndarray_program(y)).assign())
-
-
-@array_api_module_string.class_
-class FunctionExprTwo(Expr):
-    """
-    Python expression that takes two NDArrays as arguments and returns an NDArray.
-    """
-
-    def __init__(self, name: StringLike, res: NDArray, arg_1: NDArray, arg_2: NDArray) -> None:
-        ...
-
-    @property
-    def source(self) -> String:
-        ...
-
-
-fn_ruleset = array_api_module_string.ruleset("fn")
-
-
-@array_api_module_string.register
-def _function_expr(name: String, res: NDArray, arg1: String, arg2: String, f: FunctionExprTwo, s: String):
-    yield rule(
-        eq(f).to(FunctionExprTwo(name, res, NDArray.var(arg1), NDArray.var(arg2))),
-        ruleset=fn_ruleset,
-    ).then(
-        set_(f.source).to(
-            join("def ", name, "(", arg1, ", ", arg2, "):\n", statements(), "    return ", ndarray_expr(res), "\n")
-        ),
-    )
