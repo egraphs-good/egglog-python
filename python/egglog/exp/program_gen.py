@@ -4,7 +4,6 @@ Builds up imperative string expressions from a functional expression.
 """
 from __future__ import annotations
 
-from turtle import st
 from typing import Union
 
 from egglog import *

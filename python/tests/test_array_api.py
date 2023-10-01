@@ -1,4 +1,3 @@
-import pytest
 from egglog.exp.array_api import *
 
 

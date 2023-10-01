@@ -1,8 +1,6 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
-import math
-
 from egglog import *
 from egglog.exp.program_gen import *
 
@@ -27,7 +25,7 @@ class Math(Expr):
     def __neg__(self) -> Math:
         ...
 
-    @egraph.method(cost=1000)
+    @egraph.method(cost=1000)  # type: ignore
     @property
     def program(self) -> Program:
         ...
