@@ -48,14 +48,19 @@ def test_to_source(snapshot_py):
         OptionalDType.some(DType.float64),
         OptionalDevice.some(_NDArray_1.device),
     )
-    res = _NDArray_4 + _NDArray_1 + _NDArray_5
-    fn = ndarray_program(res).function_two(ndarray_program(X_orig), ndarray_program(Y_orig))
+    res = _NDArray_3 + _NDArray_5 + _NDArray_4
     egraph = EGraph([array_api_module_string])
-    egraph.register(fn.eval_py_object(egraph.save_object({"np": numpy})))
-
-    egraph.run(100)
-    egraph.display(n_inline_leaves=1)
-    fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.statements)))
+    with egraph:
+        egraph.register(res)
+        egraph.run(10000)
+        res = egraph.extract(res)
+    fn = ndarray_program(res).function_two(ndarray_program(X_orig), ndarray_program(Y_orig))
+    with egraph:
+        egraph.register(fn.eval_py_object(egraph.save_object({"np": numpy})))
+        egraph.run(10000)
+        fn = egraph.extract(fn)
+        # egraph.display(n_inline_leaves=0, split_primitive_outputs=True)
+        fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.statements)))
     assert fn_source == snapshot_py
 
 
