@@ -1,6 +1,7 @@
 from egglog.exp.array_api import *
 from egglog.exp.array_api_program_gen import *
 
+
 def test_simplify_any_unique():
     X = NDArray.var("X")
     res = any(
