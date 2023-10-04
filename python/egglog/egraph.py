@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import pathlib
+import tempfile
 from abc import ABC, abstractmethod
 from contextvars import ContextVar, Token
 from copy import deepcopy
@@ -705,7 +707,37 @@ class EGraph(_BaseModule):
         return {"image/svg+xml": self.graphviz().pipe(format="svg", quiet=True, encoding="utf-8")}
 
     def graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
-        return graphviz.Source(self._egraph.to_graphviz_string(**kwargs))
+        original = self._egraph.to_graphviz_string(**kwargs)
+        # Add link to stylesheet to the graph, so that edges light up on hover
+        # https://gist.github.com/sverweij/93e324f67310f66a8f5da5c2abe94682
+        styles = """/* the lines within the edges */
+      .edge:active path,
+      .edge:hover path {
+        stroke: fuchsia;
+        stroke-width: 3;
+        stroke-opacity: 1;
+      }
+      /* arrows are typically drawn with a polygon */
+      .edge:active polygon,
+      .edge:hover polygon {
+        stroke: fuchsia;
+        stroke-width: 3;
+        fill: fuchsia;
+        stroke-opacity: 1;
+        fill-opacity: 1;
+      }
+      /* If you happen to have text and want to color that as well... */
+      .edge:active text,
+      .edge:hover text {
+        fill: fuchsia;
+      }"""
+        p = pathlib.Path(tempfile.gettempdir()) / "graphviz-styles.css"
+        p.write_text(styles)
+        with_stylesheet = original.replace("{", f'{{stylesheet="{str(p)}"', 1)
+        return graphviz.Source(with_stylesheet)
+
+    def graphviz_svg(self, **kwargs: Unpack[GraphvizKwargs]) -> str:
+        return graphviz.pipe(format="svg", quiet=True, encoding="utf-8")
 
     def _repr_html_(self) -> str:
         """
@@ -714,7 +746,7 @@ class EGraph(_BaseModule):
         until this PR is merged and released
         https://github.com/sphinx-gallery/sphinx-gallery/pull/1138
         """
-        return self.graphviz().pipe(format="svg", quiet=True).decode()
+        return self.graphviz_svg()
 
     def display(self, **kwargs: Unpack[GraphvizKwargs]):
         """
@@ -724,7 +756,7 @@ class EGraph(_BaseModule):
         if IN_IPYTHON:
             from IPython.display import SVG, display
 
-            display(SVG(graphviz.pipe(format="svg", quiet=True, encoding="utf-8")))
+            display(SVG(self.graphviz_svg(**kwargs)))
         else:
             graphviz.render(view=True, format="svg", quiet=True)
 
