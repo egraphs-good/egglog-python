@@ -4,6 +4,10 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
 ## Unreleased
 
+...
+
+## 0.7.0 (2023-10-04)
+
 - Bump [egglog dep](https://github.com/egraphs-good/egglog/compare/4d67f262a6f27aa5cfb62a2cfc7df968959105df...45d05e727cceaab13413b4e51a60ee3be9fbf403)
 
 ### New Features
