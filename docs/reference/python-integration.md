@@ -118,6 +118,15 @@ assert egraph.load_object(egraph.extract(evalled)) == 3
 Similar to how an `int` can be automatically upcasted to an `i64`, we also support registering conversion to your custom types. For example:
 
 ```{code-cell} python
+@egraph.class_
+class Math(Expr):
+    def __init__(self, x: i64Like) -> None: ...
+
+    @classmethod
+    def var(cls, name: StringLike) -> Math: ...
+
+    def __add__(self, other: Math) -> Math: ...
+
 converter(i64, Math, Math)
 converter(String, Math, Math.var)
 

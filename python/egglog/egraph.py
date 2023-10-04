@@ -737,7 +737,7 @@ class EGraph(_BaseModule):
         return graphviz.Source(with_stylesheet)
 
     def graphviz_svg(self, **kwargs: Unpack[GraphvizKwargs]) -> str:
-        return graphviz.pipe(format="svg", quiet=True, encoding="utf-8")
+        return self.graphviz(**kwargs).pipe(format="svg", quiet=True, encoding="utf-8")
 
     def _repr_html_(self) -> str:
         """
