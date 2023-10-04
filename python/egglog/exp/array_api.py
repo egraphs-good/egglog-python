@@ -699,7 +699,7 @@ class NDArray(Expr):
     def __init__(self, py_array: PyObject) -> None:
         ...
 
-    @array_api_module.method(cost=100)
+    @array_api_module.method(cost=200)
     @classmethod
     def var(cls, name: StringLike) -> NDArray:
         ...
