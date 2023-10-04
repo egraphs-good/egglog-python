@@ -670,6 +670,7 @@ class GraphvizKwargs(TypedDict, total=False):
     max_functions: Optional[int]
     max_calls_per_function: Optional[int]
     n_inline_leaves: int
+    split_primitive_outputs: bool
 
 
 @dataclass
