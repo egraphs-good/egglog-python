@@ -72,8 +72,13 @@ egraph.load_object(egraph.extract(PyObject.from_int(1)))
 We also support evaling arbitrary Python bode, given some locals and globals. This technically allows us to implement any Python method:
 
 ```{code-cell} python
-empty_dict = egraph.save_object({})
-egraph.load_object(egraph.extract(py_eval("1 + 2", empty_dict, empty_dict)))
+egraph.load_object(egraph.extract(py_eval("1 + 2")))
+```
+
+Execing Python code is also supported. In this case, the return value will be the updated globals dict, which will be copied first before using.
+
+```{code-cell} python
+egraph.load_object(egraph.extract(py_exec("x = 1 + 2")))
 ```
 
 Alongside this, we support a function `dict_update` method, which can allow you to combine some local local egglog expressions alongside, say, the locals and globals of the Python code you are evaling.
@@ -87,11 +92,68 @@ locals_expr = egraph.save_object(locals())
 globals_expr = egraph.save_object(globals())
 # Need `one` to map to the expression for `1` not the Python object of the expression
 amended_globals = globals_expr.dict_update(PyObject.from_string("one"), one)
-evalled = py_eval("one + 2", locals_expr, amended_globals)
+evalled = py_eval("my_add(one,  2)", locals_expr, amended_globals)
 assert egraph.load_object(egraph.extract(evalled)) == 3
 ```
 
-This is a bit subtle at the moment, and we plan on adding an easier wrapper to eval arbitrary Python code in the future.
+### Simpler Eval
+
+Instead of using the above low level primitive for evaling, there is a higher level wrapper function, `egraph.eval_fn`.
+
+It takes in a Python function and converts it to a function of PyObjects, by using `py_eval`
+under the hood.
+
+The above code code be re-written like this:
+
+```{code-cell} python
+def my_add(a, b):
+    return a + b
+
+evalled = egraph.eval_fn(lambda a: my_add(a, 2))(one)
+assert egraph.load_object(egraph.extract(evalled)) == 3
+```
+
+#### Custom Type Promotion
+
+Similar to how an `int` can be automatically upcasted to an `i64`, we also support registering conversion to your custom types. For example:
+
+```{code-cell} python
+@egraph.class_
+class Math(Expr):
+    def __init__(self, x: i64Like) -> None: ...
+
+    @classmethod
+    def var(cls, name: StringLike) -> Math: ...
+
+    def __add__(self, other: Math) -> Math: ...
+
+converter(i64, Math, Math)
+converter(String, Math, Math.var)
+
+Math(2) + i64(30) + String("x")
+# equal to
+Math(2) + Math(i64(30)) + Math.var(String("x"))
+```
+
+Regstering a conversion from A to B will also register all transitively reachable conversions from A to B, so you can also use:
+
+```{code-cell} python
+Math(2) + 30 + "x"
+```
+
+If you want to have this work with the static type checker, you can define your own `Union` type, which MUST include
+have the Egglog class as the first item in the union. For example, in this case you could then define:
+
+```{code-cell} python
+from typing import Union
+MathLike = Union[Math, i64Like, StringLike]
+
+@egraph.function
+def some_math_fn(x: MathLike) -> MathLike:
+    ...
+
+some_math_fn(10)
+```
 
 ## "Preserved" methods
 

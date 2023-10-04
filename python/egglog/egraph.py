@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import inspect
+import pathlib
+import tempfile
 from abc import ABC, abstractmethod
 from contextvars import ContextVar, Token
 from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from inspect import Parameter, currentframe, signature
 from types import FunctionType
-from typing import _GenericAlias  # type: ignore[attr-defined]
-from typing import (
+from typing import (  # type: ignore[attr-defined]
     TYPE_CHECKING,
     Any,
     Callable,
@@ -18,8 +19,11 @@ from typing import (
     Literal,
     NoReturn,
     Optional,
+    Protocol,
+    TypedDict,
     TypeVar,
     Union,
+    _GenericAlias,
     cast,
     get_type_hints,
     overload,
@@ -27,10 +31,11 @@ from typing import (
 
 import graphviz
 from egglog.declarations import REFLECTED_BINARY_METHODS, Declarations
-from typing_extensions import ParamSpec, get_args, get_origin
+from typing_extensions import ParamSpec, Unpack, get_args, get_origin
 
 from . import bindings
 from .declarations import *
+from .ipython_magic import IN_IPYTHON
 from .monkeypatch import monkeypatch_forward_ref
 from .runtime import *
 from .runtime import _resolve_callable, class_to_ref
@@ -91,6 +96,11 @@ IGNORED_ATTRIBUTES = {
 _BUILTIN_DECLS: Declarations | None = None
 
 ALWAYS_MUTATES_SELF = {"__setitem__", "__delitem__"}
+
+
+class PyObjectFunction(Protocol):
+    def __call__(self, *__args: PyObject) -> PyObject:
+        ...
 
 
 @dataclass
@@ -490,17 +500,10 @@ class _BaseModule(ABC):
     ) -> TypeOrVarRef:
         if isinstance(tp, TypeVar):
             return ClassTypeVarRef(cls_typevars.index(tp))
-        # If there is a union, it should be of a literal and another type to allow type promotion
+        # If there is a union, then we assume the first item is the type we want, and the others are types that can be converted to that type.
         if get_origin(tp) == Union:
-            args = get_args(tp)
-            if len(args) != 2:
-                raise TypeError("Union types are only supported for type promotion")
-            fst, snd = args
-            if fst in {int, str, float}:
-                return self._resolve_type_annotation(snd, cls_typevars, cls_type_and_name)
-            if snd in {int, str, float}:
-                return self._resolve_type_annotation(fst, cls_typevars, cls_type_and_name)
-            raise TypeError("Union types are only supported for type promotion")
+            first, *_rest = get_args(tp)
+            return self._resolve_type_annotation(first, cls_typevars, cls_type_and_name)
 
         # If this is the type for the class, use the class name
         if cls_type_and_name and tp == cls_type_and_name[0]:
@@ -665,6 +668,13 @@ class Module(_BaseModule):
         return cast("PyObject", RuntimeExpr(self._mod_decls, typed_expr_decl))
 
 
+class GraphvizKwargs(TypedDict, total=False):
+    max_functions: Optional[int]
+    max_calls_per_function: Optional[int]
+    n_inline_leaves: int
+    split_primitive_outputs: bool
+
+
 @dataclass
 class EGraph(_BaseModule):
     """
@@ -678,7 +688,7 @@ class EGraph(_BaseModule):
     _decl_stack: list[Declarations] = field(default_factory=list, repr=False)
     _token: Optional[Token[EGraph]] = None
 
-    def __post_init__(self, modules: list[Module], seminaive) -> None:
+    def __post_init__(self, modules: list[Module], seminaive: bool) -> None:  # type: ignore
         super().__post_init__(modules)
         self._egraph = bindings.EGraph(seminaive=seminaive)
         for m in self._flatted_deps:
@@ -696,8 +706,38 @@ class EGraph(_BaseModule):
 
         return {"image/svg+xml": self.graphviz().pipe(format="svg", quiet=True, encoding="utf-8")}
 
-    def graphviz(self, **kwargs) -> graphviz.Source:
-        return graphviz.Source(self._egraph.to_graphviz_string(**kwargs))
+    def graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
+        original = self._egraph.to_graphviz_string(**kwargs)
+        # Add link to stylesheet to the graph, so that edges light up on hover
+        # https://gist.github.com/sverweij/93e324f67310f66a8f5da5c2abe94682
+        styles = """/* the lines within the edges */
+      .edge:active path,
+      .edge:hover path {
+        stroke: fuchsia;
+        stroke-width: 3;
+        stroke-opacity: 1;
+      }
+      /* arrows are typically drawn with a polygon */
+      .edge:active polygon,
+      .edge:hover polygon {
+        stroke: fuchsia;
+        stroke-width: 3;
+        fill: fuchsia;
+        stroke-opacity: 1;
+        fill-opacity: 1;
+      }
+      /* If you happen to have text and want to color that as well... */
+      .edge:active text,
+      .edge:hover text {
+        fill: fuchsia;
+      }"""
+        p = pathlib.Path(tempfile.gettempdir()) / "graphviz-styles.css"
+        p.write_text(styles)
+        with_stylesheet = original.replace("{", f'{{stylesheet="{str(p)}"', 1)
+        return graphviz.Source(with_stylesheet)
+
+    def graphviz_svg(self, **kwargs: Unpack[GraphvizKwargs]) -> str:
+        return self.graphviz(**kwargs).pipe(format="svg", quiet=True, encoding="utf-8")
 
     def _repr_html_(self) -> str:
         """
@@ -706,15 +746,19 @@ class EGraph(_BaseModule):
         until this PR is merged and released
         https://github.com/sphinx-gallery/sphinx-gallery/pull/1138
         """
-        return self.graphviz().pipe(format="svg", quiet=True).decode()
+        return self.graphviz_svg()
 
-    def display(self, **kwargs):
+    def display(self, **kwargs: Unpack[GraphvizKwargs]):
         """
         Displays the e-graph in the notebook.
         """
-        from IPython.display import SVG, display
+        graphviz = self.graphviz(**kwargs)
+        if IN_IPYTHON:
+            from IPython.display import SVG, display
 
-        display(SVG(self.graphviz(**kwargs).pipe(format="svg", quiet=True, encoding="utf-8")))
+            display(SVG(self.graphviz_svg(**kwargs)))
+        else:
+            graphviz.render(view=True, format="svg", quiet=True)
 
     @overload
     def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> EXPR:
@@ -878,6 +922,31 @@ class EGraph(_BaseModule):
         typed_expr_decl = expr_parts(obj)
         expr = typed_expr_decl.to_egg(self._mod_decls)
         return self._egraph.load_object(expr)
+
+    def eval_fn(self, fn: Callable) -> PyObjectFunction:
+        """
+        Takes a python callable and maps it to a callable which takes
+        and returns PyObjects.
+
+        It translates it to a call which uses `py_eval` to call the function, passing in the
+        args as locals, and using the globals from function.
+        """
+        from .builtins import py_eval
+
+        fn_globals = self.save_object(fn.__globals__)
+        fn_locals = self.save_object({"__fn": fn})
+
+        def inner(*__args: PyObject, __fn_locals=fn_locals) -> PyObject:
+            new_kvs: list[PyObject] = []
+            eval_str = "__fn("
+            for i, arg in enumerate(__args):
+                new_kvs.append(self.save_object(f"__arg_{i}"))
+                new_kvs.append(arg)
+                eval_str += f"__arg_{i}, "
+            eval_str += ")"
+            return py_eval(eval_str, fn_locals.dict_update(*new_kvs), fn_globals)
+
+        return inner
 
     @classmethod
     def current(cls) -> EGraph:
@@ -1103,7 +1172,7 @@ class Set(Action):
     def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Set:
         egg_call = self._call.__egg_typed_expr__.expr.to_egg(mod_decls)
         if not isinstance(egg_call, bindings.Call):
-            raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")
+            raise ValueError(f"Can only create a set with a call for the lhs, got {self._call}")
         return bindings.Set(
             egg_call.name,
             egg_call.args,
@@ -1467,7 +1536,7 @@ def _action_like(action_like: ActionLike) -> Action:
     return action_like
 
 
-FactLike = Union[Fact, Unit]
+FactLike = Union[Fact, Expr]
 
 
 def _fact_likes(fact_likes: Iterable[FactLike]) -> tuple[Fact, ...]:

@@ -1,8 +1,9 @@
+# mypy: disable-error-code="empty-body"
+
 """
 Lambda Calculus
 ===============
 """
-# mypy: disable-error-code=empty-body
 from __future__ import annotations
 
 from typing import Callable, ClassVar

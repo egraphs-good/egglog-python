@@ -60,7 +60,7 @@ check_untyped_defs = true
 strict_equality = true
 warn_unused_configs = true
 allow_redefinition = true
-enable_incomplete_feature = ["Unpack", "TypeVarTuple"]
+enable_incomplete_feature = ["Unpack"]
 exclude = ["__snapshots__", "_build", "^conftest.py$"]
 
 [tool.maturin]

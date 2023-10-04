@@ -90,6 +90,15 @@ impl Sort for PyObjectSort {
             py_object: self.clone(),
             string: typeinfo.get_sort(),
         });
+        typeinfo.add_primitive(Exec {
+            name: "py-exec".into(),
+            py_object: self.clone(),
+            string: typeinfo.get_sort(),
+        });
+        typeinfo.add_primitive(Dict {
+            name: "py-dict".into(),
+            py_object: self.clone(),
+        });
         typeinfo.add_primitive(DictUpdate {
             name: "py-dict-update".into(),
             py_object: self.clone(),
@@ -199,6 +208,86 @@ impl PrimitiveLike for Eval {
             py.eval(code.into(), globals, locals).unwrap().into()
         });
         Some(self.py_object.store(res_obj))
+    }
+}
+
+/// Copies the locals, execs the Python string, then returns the copied version of the locals with any updates
+/// (py-exec <str-obj> <globals-obj> <locals-obj>)
+struct Exec {
+    name: Symbol,
+    py_object: Arc<PyObjectSort>,
+    string: Arc<StringSort>,
+}
+
+impl PrimitiveLike for Exec {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [str, locals, globals]
+                if str.name() == self.string.name()
+                    && locals.name() == self.py_object.name()
+                    && globals.name() == self.py_object.name() =>
+            {
+                Some(self.py_object.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
+        let locals: PyObject = Python::with_gil(|py| {
+            let (_, globals) = self.py_object.load(&values[1]);
+            let globals = globals.downcast::<PyDict>(py).unwrap();
+            let (_, locals) = self.py_object.load(&values[2]);
+            let locals = locals.downcast::<PyDict>(py).unwrap().copy().unwrap();
+            py.run(code.into(), Some(globals), Some(locals)).unwrap();
+            locals.into()
+        });
+        Some(self.py_object.store(locals))
+    }
+}
+
+/// (py-dict [<key-object> <value-object>]*)
+struct Dict {
+    name: Symbol,
+    py_object: Arc<PyObjectSort>,
+}
+
+impl PrimitiveLike for Dict {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        // Should have an even number of args
+        if types.len() % 2 != 0 {
+            return None;
+        }
+        for tp in types.iter() {
+            // All tps should be object
+            if tp.name() != self.py_object.name() {
+                return None;
+            }
+        }
+        Some(self.py_object.clone())
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let dict: PyObject = Python::with_gil(|py| {
+            let dict = PyDict::new(py);
+            // Update the dict with the key-value pairs
+            for i in values.chunks_exact(2) {
+                let key = self.py_object.load(&i[0]).1;
+                let value = self.py_object.load(&i[1]).1;
+                dict.set_item(key, value).unwrap();
+            }
+            dict.into()
+        });
+        Some(self.py_object.store(dict))
     }
 }
 
