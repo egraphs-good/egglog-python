@@ -100,6 +100,8 @@ class Program(Expr):
         Evaluates the program and saves as the py_object
         """
 
+    # Only allow it to be set once, b/c hash of functions not stable
+    @program_gen_module.method(merge=lambda old, new: old)  # type: ignore[misc]
     @property
     def py_object(self) -> PyObject:
         """
@@ -210,11 +212,13 @@ def _compile(
     # Set parent of p2, once p1 compiled
     yield rule(eq(p).to(program_add), p1.next_sym).then(set_(p2.parent).to(p))
 
-    # Compile p2, if p1 parent not equal
-    yield rule(eq(p).to(program_add), p.compile(i), p1.parent != p).then(p2.compile(i))
+    # Compile p2, if p1 parent not equal, but p2 parent equal
+    yield rule(eq(p).to(program_add), p.compile(i), p1.parent != p, eq(p2.parent).to(p)).then(p2.compile(i))
 
     # Compile p2, if p1 parent eqal
-    yield rule(eq(p).to(program_add), eq(p1.parent).to(program_add), eq(i).to(p1.next_sym)).then(p2.compile(i))
+    yield rule(eq(p).to(program_add), eq(p1.parent).to(program_add), eq(i).to(p1.next_sym), eq(p2.parent).to(p)).then(
+        p2.compile(i)
+    )
 
     # Set p expr to join of p1 and p2
     yield rule(
@@ -311,12 +315,18 @@ def _compile(
 
     # When compiling a function, the two args, p2 and p3, should get compiled when we compile p1, and should just be vars.
     fn_two = p1.function_two(p2, p3, s1)
-    # 1. Set parent of p1
-    yield rule(eq(p).to(fn_two), fn_two.compile(i)).then(set_(p1.parent).to(p))
-    # TODO: Compile vars?
-    # 2. Compile p1 if parent set
-    yield rule(eq(p).to(fn_two), p.compile(i), eq(p1.parent).to(fn_two)).then(p1.compile(i))
-    # 3. Set statements to function body and the next sym to i
+    # 1. Set parents of both args to p and compile them
+    # Assumes that this if the first thing to compile, so no need to check, and assumes that compiling args doesn't result in any
+    # change in the next sym
+    yield rule(eq(p).to(fn_two), p.compile(i)).then(
+        set_(p2.parent).to(p),
+        set_(p3.parent).to(p),
+        set_(p1.parent).to(p),
+        p2.compile(i),
+        p3.compile(i),
+        p1.compile(i),
+    )
+    # 2. Set statements to function body and the next sym to i
     yield rule(
         eq(p).to(fn_two),
         p.compile(i),
