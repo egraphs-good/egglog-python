@@ -75,7 +75,7 @@ def test_sklearn_lda(snapshot_py):
     assume_shape(X_arr, TupleInt(150) + TupleInt(4))  # type: ignore
     assume_isfinite(X_arr)
 
-    y_arr = NDArray.var("y") d
+    y_arr = NDArray.var("y")
     assume_dtype(y_arr, int64)
     assume_shape(y_arr, TupleInt(150))  # type: ignore
     assume_value_one_of(y_arr, (0, 1, 2))  # type: ignore
