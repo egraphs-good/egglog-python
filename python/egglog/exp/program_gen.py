@@ -84,7 +84,7 @@ class Program(Expr):
         Triggers compilation of the program.
         """
 
-    @program_gen_module.method(merge=lambda old, new: old)  # type: ignore[misc]
+    @program_gen_module.method(merge=lambda old, new: old, cost=1000)  # type: ignore[misc]
     @property
     def parent(self) -> Program:
         """
