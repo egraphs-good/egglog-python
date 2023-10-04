@@ -4,11 +4,11 @@ EGRAPH_VAR = "_MAGIC_EGRAPH"
 
 try:
     get_ipython()  # type: ignore[name-defined]
-    in_ipython = True
+    IN_IPYTHON = True
 except NameError:
-    in_ipython = False
+    IN_IPYTHON = False
 
-if in_ipython:
+if IN_IPYTHON:
     import graphviz
     from IPython.core.magic import needs_local_scope, register_cell_magic
 

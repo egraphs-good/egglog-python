@@ -33,6 +33,7 @@ from typing_extensions import ParamSpec, Unpack, get_args, get_origin
 
 from . import bindings
 from .declarations import *
+from .ipython_magic import IN_IPYTHON
 from .monkeypatch import monkeypatch_forward_ref
 from .runtime import *
 from .runtime import _resolve_callable, class_to_ref
@@ -719,12 +720,12 @@ class EGraph(_BaseModule):
         Displays the e-graph in the notebook.
         """
         graphviz = self.graphviz(**kwargs)
-        if hasattr(__builtins__, "__IPYTHON__"):
+        if IN_IPYTHON:
             from IPython.display import SVG, display
 
             display(SVG(graphviz.pipe(format="svg", quiet=True, encoding="utf-8")))
         else:
-            graphviz.view()
+            graphviz.render(view=True, format="svg", quiet=True)
 
     @overload
     def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> EXPR:
