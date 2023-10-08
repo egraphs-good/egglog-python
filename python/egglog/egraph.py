@@ -5,7 +5,7 @@ import pathlib
 import tempfile
 from abc import ABC, abstractmethod
 from contextvars import ContextVar, Token
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import InitVar, dataclass, field
 from inspect import Parameter, currentframe, signature
 from types import FunctionType
@@ -206,12 +206,14 @@ class _BaseModule(ABC):
                 merge = method.merge
                 on_merge = method.on_merge
                 mutates_first_arg = method.mutates_self
+                unextractable = method.unextractable
                 if method.preserve:
                     self._mod_decls.register_preserved_method(cls_name, method_name, fn)
                     continue
             else:
                 fn = method
                 egg_fn, cost, default, merge, on_merge = None, None, None, None, None
+                unextractable = False
                 mutates_first_arg = False
             if isinstance(fn, classmethod):
                 fn = fn.__func__
@@ -254,6 +256,7 @@ class _BaseModule(ABC):
                     RuntimeClass(self._mod_decls, cls_name) if cls_name in {"i64", "String"} else cls,
                     cls_name,
                 ),
+                unextractable=unextractable,
             )
 
         # Register != as a method so we can print it as a string
@@ -284,6 +287,7 @@ class _BaseModule(ABC):
         merge: Optional[Callable[[Any, Any], Any]] = None,
         on_merge: Optional[Callable[[Any, Any], Iterable[ActionLike]]] = None,
         mutates_self: bool = False,
+        unextractable: bool = False,
     ) -> Callable[[CALLABLE], CALLABLE]:
         ...
 
@@ -297,6 +301,7 @@ class _BaseModule(ABC):
         merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
         on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
         mutates_self: bool = False,
+        unextractable: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
         ...
 
@@ -310,8 +315,11 @@ class _BaseModule(ABC):
         on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
         preserve: bool = False,
         mutates_self: bool = False,
+        unextractable: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
-        return lambda fn: _WrappedMethod(egg_fn, cost, default, merge, on_merge, fn, preserve, mutates_self)
+        return lambda fn: _WrappedMethod(
+            egg_fn, cost, default, merge, on_merge, fn, preserve, mutates_self, unextractable
+        )
 
     @overload
     def function(self, fn: CALLABLE, /) -> CALLABLE:
@@ -326,6 +334,7 @@ class _BaseModule(ABC):
         merge: Optional[Callable[[Any, Any], Any]] = None,
         on_merge: Optional[Callable[[Any, Any], Iterable[ActionLike]]] = None,
         mutates_first_arg: bool = False,
+        unextractable: bool = False,
     ) -> Callable[[CALLABLE], CALLABLE]:
         ...
 
@@ -339,6 +348,7 @@ class _BaseModule(ABC):
         merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
         on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
         mutates_first_arg: bool = False,
+        unextractable: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
         ...
 
@@ -365,6 +375,7 @@ class _BaseModule(ABC):
         default: Optional[RuntimeExpr] = None,
         merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]] = None,
         on_merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]]] = None,
+        unextractable: bool = False,
     ) -> RuntimeFunction:
         """
         Uncurried version of function decorator
@@ -372,7 +383,16 @@ class _BaseModule(ABC):
         name = fn.__name__
         # Save function decleartion
         self._register_function(
-            FunctionRef(name), egg_fn, fn, hint_locals, default, cost, merge, on_merge, mutates_first_arg
+            FunctionRef(name),
+            egg_fn,
+            fn,
+            hint_locals,
+            default,
+            cost,
+            merge,
+            on_merge,
+            mutates_first_arg,
+            unextractable=unextractable,
         )
         # Return a runtime function which will act like the decleration
         return RuntimeFunction(self._mod_decls, name)
@@ -395,6 +415,7 @@ class _BaseModule(ABC):
         cls_typevars: list[TypeVar] = [],
         is_init: bool = False,
         cls_type_and_name: Optional[tuple[type | RuntimeClass, str]] = None,
+        unextractable: bool = False,
     ) -> None:
         if not isinstance(fn, FunctionType):
             raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
@@ -489,6 +510,7 @@ class _BaseModule(ABC):
                 default_decl,
                 merge_decl,
                 [a._to_egg_action(self._mod_decls) for a in merge_action],
+                unextractable,
             )
         )
 
@@ -581,6 +603,7 @@ class _BaseModule(ABC):
             default=None,
             merge=None,
             merge_action=[],
+            unextractable=False,
             is_relation=True,
         )
         self._process_commands(commands)
@@ -666,6 +689,29 @@ class Module(_BaseModule):
         self._py_objects.append(obj)
         typed_expr_decl = TypedExprDecl.from_egg(self._mod_decls, expr)
         return cast("PyObject", RuntimeExpr(self._mod_decls, typed_expr_decl))
+
+    def unextractable(self) -> Module:
+        """
+        Makes a copy of this module with all functions marked as un-extractable
+        """
+        new = copy(self)
+        new._cmds = [
+            bindings.Function(
+                bindings.FunctionDecl(
+                    c.decl.name,
+                    c.decl.schema,
+                    c.decl.default,
+                    c.decl.merge,
+                    c.decl.merge_action,
+                    c.decl.cost,
+                    True,
+                )
+            )
+            if isinstance(c, bindings.Function)
+            else c
+            for c in new._cmds
+        ]
+        return new
 
 
 class GraphvizKwargs(TypedDict, total=False):
@@ -973,6 +1019,7 @@ class _WrappedMethod(Generic[P, EXPR]):
     fn: Callable[P, EXPR]
     preserve: bool
     mutates_self: bool
+    unextractable: bool
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> EXPR:
         raise NotImplementedError("We should never call a wrapped method. Did you forget to wrap the class?")

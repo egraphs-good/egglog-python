@@ -49,19 +49,41 @@ def test_to_source(snapshot_py):
         OptionalDType.some(DType.float64),
         OptionalDevice.some(_NDArray_1.device),
     )
+    _MultiAxisIndexKey_1 = MultiAxisIndexKey(MultiAxisIndexKeyItem.slice(Slice()))
+    _IndexKey_1 = IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.int(Int(0))) + _MultiAxisIndexKey_1)
+    _NDArray_5[_IndexKey_1] = mean(
+        _NDArray_1[ndarray_index(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(0))))],
+        OptionalIntOrTuple.int(Int(0)),
+    )
+    _IndexKey_2 = IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.int(Int(1))) + _MultiAxisIndexKey_1)
+    _NDArray_5[_IndexKey_2] = mean(
+        _NDArray_1[ndarray_index(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(1))))],
+        OptionalIntOrTuple.int(Int(0)),
+    )
+    _IndexKey_3 = IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.int(Int(2))) + _MultiAxisIndexKey_1)
+    _NDArray_5[_IndexKey_3] = mean(
+        _NDArray_1[ndarray_index(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(2))))],
+        OptionalIntOrTuple.int(Int(0)),
+    )
+
     res = _NDArray_3 + _NDArray_5 + _NDArray_4
+    egraph = EGraph([array_api_module])
+    egraph.register(res)
+    egraph.run(10000)
+    res = egraph.extract(res)
+
     egraph = EGraph([array_api_module_string])
-    with egraph:
-        egraph.register(res)
-        egraph.run(10000)
-        res = egraph.extract(res)
     fn = ndarray_program(res).function_two(ndarray_program(X_orig), ndarray_program(Y_orig))
-    with egraph:
-        egraph.register(fn.eval_py_object(egraph.save_object({"np": numpy})))
-        egraph.run(10000)
-        fn = egraph.extract(fn)
-        # egraph.display(n_inline_leaves=0, split_primitive_outputs=True)
-        fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.statements)))
+    egraph.register(fn)
+    egraph.run(10000)
+    fn = egraph.extract(fn)
+
+    egraph = EGraph([array_api_module_string])
+    egraph.register(fn.eval_py_object(egraph.save_object({"np": numpy})))
+    egraph.run(1000000)
+    # print(egraph.run(10))
+    # egraph.display(n_inline_leaves=0, split_primitive_outputs=True)
+    fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.statements)))
     assert fn_source == snapshot_py
 
 

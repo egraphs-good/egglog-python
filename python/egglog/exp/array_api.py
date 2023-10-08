@@ -877,6 +877,9 @@ class NDArray(Expr):
 
 @array_api_module.function
 def ndarray_index(x: NDArray) -> IndexKey:
+    """
+    Indexes by a masked array
+    """
     ...
 
 

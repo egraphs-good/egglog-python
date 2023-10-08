@@ -288,6 +288,7 @@ class ModuleDeclarations:
         default: Optional[ExprDecl],
         merge: Optional[ExprDecl],
         merge_action: list[bindings._Action],
+        unextractable: bool,
         is_relation: bool = False,
     ) -> Iterable[bindings._Command]:
         """
@@ -297,7 +298,7 @@ class ModuleDeclarations:
         egg_name = egg_name or ref.generate_egg_name()
         self._decl.register_callable_ref(ref, egg_name)
         self._decl.set_function_decl(ref, fn_decl)
-        return fn_decl.to_commands(self, egg_name, cost, default, merge, merge_action, is_relation)
+        return fn_decl.to_commands(self, egg_name, cost, default, merge, merge_action, is_relation, unextractable)
 
     def register_constant_callable(
         self, ref: ConstantCallableRef, type_ref: JustTypeRef, egg_name: Optional[str]
@@ -489,6 +490,7 @@ class FunctionDecl:
         merge: Optional[ExprDecl] = None,
         merge_action: list[bindings._Action] = [],
         is_relation: bool = False,
+        unextractable: bool = False,
     ) -> Iterable[bindings._Command]:
         if self.var_arg_type is not None:
             raise NotImplementedError("egglog does not support variable arguments yet.")
@@ -513,6 +515,7 @@ class FunctionDecl:
             merge.to_egg(mod_decls) if merge else None,
             merge_action,
             cost,
+            unextractable,
         )
         yield bindings.Function(egg_fn_decl)
 

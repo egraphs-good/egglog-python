@@ -11,7 +11,7 @@ from .program_gen import *
 # Depends on `np` as a global variable.
 ##
 
-array_api_module_string = Module([array_api_module, program_gen_module])
+array_api_module_string = Module([array_api_module.unextractable(), program_gen_module])
 
 
 @array_api_module_string.function()
@@ -76,6 +76,87 @@ def optional_dtype_program(x: OptionalDType) -> Program:
     ...
 
 
+@array_api_module_string.function
+def optional_int_program(x: OptionalInt) -> Program:
+    ...
+
+
+@array_api_module_string.register
+def _optional_int_program(x: Int):
+    yield rewrite(optional_int_program(OptionalInt.none)).to(Program("None"))
+    yield rewrite(optional_int_program(OptionalInt.some(x))).to(int_program(x))
+
+
+@array_api_module_string.function
+def slice_program(x: Slice) -> Program:
+    ...
+
+
+@array_api_module_string.register
+def _slice_program(start: OptionalInt, stop: OptionalInt, step: OptionalInt):
+    yield rewrite(slice_program(Slice(start, stop, step))).to(
+        Program("slice(")
+        + optional_int_program(start)
+        + ", "
+        + optional_int_program(stop)
+        + ", "
+        + optional_int_program(step)
+        + ")"
+    )
+
+
+@array_api_module_string.function
+def multi_axis_index_key_item_program(x: MultiAxisIndexKeyItem) -> Program:
+    ...
+
+
+@array_api_module_string.register
+def _multi_axis_index_key_item_program(i: Int, s: Slice):
+    yield rewrite(multi_axis_index_key_item_program(MultiAxisIndexKeyItem.int(i))).to(int_program(i))
+    yield rewrite(multi_axis_index_key_item_program(MultiAxisIndexKeyItem.slice(s))).to(slice_program(s))
+    yield rewrite(multi_axis_index_key_item_program(MultiAxisIndexKeyItem.ELLIPSIS)).to(Program("..."))
+    yield rewrite(multi_axis_index_key_item_program(MultiAxisIndexKeyItem.NONE)).to(Program("None"))
+
+
+@array_api_module_string.function
+def multi_axis_index_key_program(x: MultiAxisIndexKey) -> Program:
+    ...
+
+
+@array_api_module_string.register
+def _multi_axis_index_key_program(l: MultiAxisIndexKey, r: MultiAxisIndexKey, item: MultiAxisIndexKeyItem):
+    yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey(item))).to(multi_axis_index_key_item_program(item))
+    yield rewrite(multi_axis_index_key_program(l + r)).to(
+        multi_axis_index_key_program(l) + ", " + multi_axis_index_key_program(r)
+    )
+    yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey.EMPTY)).to(Program("()"))
+
+
+@array_api_module_string.function
+def index_key_program(x: IndexKey) -> Program:
+    ...
+
+
+@array_api_module_string.register
+def _index_key_program(i: Int, s: Slice, key: MultiAxisIndexKey, a: NDArray):
+    yield rewrite(index_key_program(IndexKey.ELLIPSIS)).to(Program("..."))
+    yield rewrite(index_key_program(IndexKey.int(i))).to(int_program(i))
+    yield rewrite(index_key_program(IndexKey.slice(s))).to(slice_program(s))
+    yield rewrite(index_key_program(IndexKey.multi_axis(key))).to(multi_axis_index_key_program(key))
+    yield rewrite(index_key_program(ndarray_index(a))).to(ndarray_program(a))
+
+
+@array_api_module_string.function
+def optional_int_or_tuple_program(x: OptionalIntOrTuple) -> Program:
+    ...
+
+
+@array_api_module_string.register
+def _optional_int_or_tuple_program(x: Int, t: TupleInt):
+    yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.int(x))).to(int_program(x))
+    yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.tuple(t))).to(tuple_int_program(t))
+
+
 @array_api_module_string.register
 def _py_expr(
     x: NDArray,
@@ -114,6 +195,9 @@ def _py_expr(
     device_: Device,
     optional_device_: OptionalDevice,
     optional_dtype_: OptionalDType,
+    optional_int_: OptionalInt,
+    optional_int_or_tuple_: OptionalIntOrTuple,
+    idx: IndexKey,
 ):
     # Var
     yield rewrite(ndarray_program(NDArray.var(s))).to(Program(s))
@@ -177,6 +261,12 @@ def _py_expr(
     yield rewrite(tuple_ndarray_program(unique_counts(x))).to(
         (Program("np.unique(") + ndarray_program(x) + ", return_counts=True)").assign()
     )
+    # unique_inverse(x) => unique(x, return_inverse=True)
+    yield rewrite(tuple_ndarray_program(unique_inverse(x))).to(
+        (Program("np.unique(") + ndarray_program(x) + ", return_inverse=True)").assign()
+    )
+
+    yield rewrite(ndarray_program(x == y)).to((ndarray_program(x) + " == " + ndarray_program(y)))
 
     # Tuple ndarray indexing
     yield rewrite(ndarray_program(tnd[i])).to(tuple_ndarray_program(tnd) + "[" + int_program(i) + "]")
@@ -207,3 +297,24 @@ def _py_expr(
     yield rewrite(ndarray_program(x - y)).to((ndarray_program(x) + " - " + ndarray_program(y)).assign())
     yield rewrite(ndarray_program(x * y)).to((ndarray_program(x) + " * " + ndarray_program(y)).assign())
     yield rewrite(ndarray_program(x / y)).to((ndarray_program(x) + " / " + ndarray_program(y)).assign())
+
+    # setitem
+    mod_x = copy(x)
+    mod_x[idx] = y
+    assigned_x = ndarray_program(x).assign()
+    yield rewrite(ndarray_program(mod_x)).to(
+        assigned_x.statement(assigned_x + "[" + index_key_program(idx) + "] = " + ndarray_program(y))
+    )
+    # getitem
+    yield rewrite(ndarray_program(x[idx])).to(ndarray_program(x) + "[" + index_key_program(idx) + "]")
+
+    # mean(x, axis)
+    yield rewrite(ndarray_program(mean(x, optional_int_or_tuple_))).to(
+        (
+            Program("np.mean(")
+            + ndarray_program(x)
+            + ", axis="
+            + optional_int_or_tuple_program(optional_int_or_tuple_)
+            + ")"
+        ).assign()
+    )
