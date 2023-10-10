@@ -43,15 +43,15 @@ def test_to_source(snapshot_py):
     # assume_value_one_of(_NDArray_2, (0, 1, 2))  # type: ignore
 
     _NDArray_3 = reshape(_NDArray_2, TupleInt(Int(-1)))
-    _NDArray_4 = astype(unique_counts(_NDArray_3)[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float(150.0)))
+    # _NDArray_4 = astype(unique_counts(_NDArray_3)[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float(150.0)))
     _NDArray_5 = zeros(
         unique_values(_NDArray_3).shape + TupleInt(Int(4)),
         OptionalDType.some(DType.float64),
         OptionalDevice.some(_NDArray_1.device),
     )
     _MultiAxisIndexKey_1 = MultiAxisIndexKey(MultiAxisIndexKeyItem.slice(Slice()))
-    _IndexKey_1 = IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.int(Int(0))) + _MultiAxisIndexKey_1)
-    _NDArray_5 = _NDArray_1[ndarray_index(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(0))))]
+    # _IndexKey_1 = IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.int(Int(0))) + _MultiAxisIndexKey_1)
+    # _NDArray_5 = _NDArray_1[ndarray_index(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(0))))]
     # _IndexKey_2 = IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.int(Int(1))) + _MultiAxisIndexKey_1)
     # _NDArray_5[_IndexKey_2] = mean(
     #     _NDArray_1[ndarray_index(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(1))))],
