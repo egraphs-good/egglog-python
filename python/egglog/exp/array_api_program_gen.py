@@ -190,6 +190,7 @@ def optional_int_or_tuple_program(x: OptionalIntOrTuple) -> Program:
 def _optional_int_or_tuple_program(x: Int, t: TupleInt):
     yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.int(x))).to(int_program(x))
     yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.tuple(t))).to(tuple_int_program(t))
+    yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.none)).to(Program("None"))
 
 
 @array_api_module_string.register

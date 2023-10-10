@@ -120,7 +120,7 @@ def test_to_source(snapshot_py):
     egraph.register(fn.eval_py_object(egraph.save_object({"np": numpy})))
     # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
     egraph.run(10000)
-    egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
+    # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
     fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.statements)))
     assert fn_source == snapshot_py
     fn = egraph.load_object(egraph.extract(fn.py_object))
