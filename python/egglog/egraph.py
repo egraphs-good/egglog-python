@@ -41,6 +41,8 @@ from .runtime import *
 from .runtime import _resolve_callable, class_to_ref
 
 if TYPE_CHECKING:
+    import ipywidgets
+
     from .builtins import PyObject, String
 
 monkeypatch_forward_ref()
@@ -674,6 +676,13 @@ class Module(_BaseModule):
     _cmds: list[bindings._Command] = field(default_factory=list, repr=False)
     _py_objects: list[object] = field(default_factory=list, repr=False)
 
+    @property
+    def as_egglog_string(self) -> str:
+        """
+        Returns the egglog string for this module.
+        """
+        return "\n".join(str(c) for c in self._cmds)
+
     def _process_commands(self, cmds: Iterable[bindings._Command]) -> None:
         self._cmds.extend(cmds)
 
@@ -993,6 +1002,30 @@ class EGraph(_BaseModule):
             return py_eval(eval_str, fn_locals.dict_update(*new_kvs), fn_globals)
 
         return inner
+
+    def saturate(self, *, performance=False, **kwargs: Unpack[GraphvizKwargs]) -> ipywidgets.Widget:
+        from .graphviz_widget import graphviz_widget_with_slider
+
+        dots = [str(self.graphviz(**kwargs))]
+        while self.run(1).updated:
+            dots.append(str(self.graphviz(**kwargs)))
+        return graphviz_widget_with_slider(dots, performance=performance)
+
+    def saturate_to_html(self, file="tmp.html", performance=False, **kwargs: Unpack[GraphvizKwargs]) -> None:
+        # raise NotImplementedError("Upstream bugs prevent rendering to HTML")
+
+        # import panel
+
+        # panel.extension("ipywidgets")
+
+        widget = self.saturate(performance=performance, **kwargs)
+        # panel.panel(widget).save(file)
+
+        from ipywidgets.embed import embed_minimal_html
+
+        embed_minimal_html("tmp.html", views=[widget], drop_defaults=False)
+        # Use panel while this issue persists
+        # https://github.com/jupyter-widgets/ipywidgets/issues/3761#issuecomment-1755563436
 
     @classmethod
     def current(cls) -> EGraph:

@@ -33,6 +33,7 @@ class Program(Expr):
         """
         ...
 
+    @program_gen_module.method(unextractable=True)
     def statement(self, statement: ProgramLike) -> Program:
         """
         Uses the expression of the statement and adds that as a statement to the program.
@@ -150,11 +151,10 @@ def _compile(
     # yield rewrite(Program(s1) + Program(s2)).to(Program(join(s1, s2)))
 
     # Compiling a string just gives that string
-    program_expr = Program(s)
-    yield rule(program_expr.compile(i)).then(
-        set_(program_expr.expr).to(s),
-        set_(program_expr.statements).to(String("")),
-        set_(program_expr.next_sym).to(i),
+    yield rule(eq(p).to(Program(s)), p.compile(i)).then(
+        set_(p.expr).to(s),
+        set_(p.statements).to(String("")),
+        set_(p.next_sym).to(i),
     )
 
     ##
@@ -166,14 +166,14 @@ def _compile(
     ##
     # Expr to statement
     ##
-    stmt = p1.expr_to_statement()
+    stmt = eq(p).to(p1.expr_to_statement())
     # 1. Set parent
-    yield rule(eq(p).to(stmt), p.compile(i)).then(set_(p1.parent).to(p))
+    yield rule(stmt, p.compile(i)).then(set_(p1.parent).to(p))
     # 2. Compile p1 if parent set
-    yield rule(eq(p).to(stmt), p.compile(i), eq(p1.parent).to(stmt)).then(p1.compile(i))
+    yield rule(stmt, p.compile(i), eq(p1.parent).to(p)).then(p1.compile(i))
     # 3.a. If parent not set, set statements to expr
     yield rule(
-        eq(p).to(stmt),
+        stmt,
         p.compile(i),
         p1.parent != p,
         eq(s1).to(p1.expr),
@@ -184,8 +184,8 @@ def _compile(
     )
     # 3.b. If parent set, set statements to expr + statements
     yield rule(
-        eq(p).to(stmt),
-        eq(p1.parent).to(stmt),
+        stmt,
+        eq(p1.parent).to(p),
         eq(s1).to(p1.expr),
         eq(s2).to(p1.statements),
         eq(i).to(p1.next_sym),
@@ -201,28 +201,26 @@ def _compile(
 
     # Compiling an addition is the same as compiling one, then the other, then setting the expression as the addition
     # of the two
-    program_add = p1 + p2
+    program_add = eq(p).to(p1 + p2)
 
     # Set parent of p1
-    yield rule(eq(p).to(program_add), p.compile(i)).then(set_(p1.parent).to(p))
+    yield rule(program_add, p.compile(i)).then(set_(p1.parent).to(p))
 
     # Compile p1, if p1 parent equal
-    yield rule(eq(p).to(program_add), p.compile(i), eq(p1.parent).to(program_add)).then(p1.compile(i))
+    yield rule(program_add, p.compile(i), eq(p1.parent).to(p)).then(p1.compile(i))
 
     # Set parent of p2, once p1 compiled
-    yield rule(eq(p).to(program_add), p1.next_sym).then(set_(p2.parent).to(p))
+    yield rule(program_add, p1.next_sym).then(set_(p2.parent).to(p))
 
     # Compile p2, if p1 parent not equal, but p2 parent equal
-    yield rule(eq(p).to(program_add), p.compile(i), p1.parent != p, eq(p2.parent).to(p)).then(p2.compile(i))
+    yield rule(program_add, p.compile(i), p1.parent != p, eq(p2.parent).to(p)).then(p2.compile(i))
 
     # Compile p2, if p1 parent eqal
-    yield rule(eq(p).to(program_add), eq(p1.parent).to(program_add), eq(i).to(p1.next_sym), eq(p2.parent).to(p)).then(
-        p2.compile(i)
-    )
+    yield rule(program_add, eq(p1.parent).to(p), eq(i).to(p1.next_sym), eq(p2.parent).to(p)).then(p2.compile(i))
 
     # Set p expr to join of p1 and p2
     yield rule(
-        eq(p).to(program_add),
+        program_add,
         eq(s1).to(p1.expr),
         eq(s2).to(p2.expr),
     ).then(
@@ -230,7 +228,7 @@ def _compile(
     )
     # Set p statements to join and next sym to p2 if both parents set
     yield rule(
-        eq(p).to(program_add),
+        program_add,
         eq(p1.parent).to(p),
         eq(p2.parent).to(p),
         eq(s1).to(p1.statements),
@@ -242,7 +240,7 @@ def _compile(
     )
     # Set p statements to empty and next sym to i if neither parents set
     yield rule(
-        eq(p).to(program_add),
+        program_add,
         p.compile(i),
         p1.parent != p,
         p2.parent != p,
@@ -252,7 +250,7 @@ def _compile(
     )
     # Set p statements to p1 and next sym to p1 if p1 parent set and p2 parent not set
     yield rule(
-        eq(p).to(program_add),
+        program_add,
         eq(p1.parent).to(p),
         p2.parent != p,
         eq(s1).to(p1.statements),
@@ -263,7 +261,7 @@ def _compile(
     )
     # Set p statements to p2 and next sym to p2 if p2 parent set and p1 parent not set
     yield rule(
-        eq(p).to(program_add),
+        program_add,
         eq(p2.parent).to(p),
         p1.parent != p,
         eq(s2).to(p2.statements),
@@ -279,16 +277,16 @@ def _compile(
 
     # Compiling an assign is the same as compiling the expression, adding an assign statement, then setting the
     # expression as the gensym
-    program_assign = p1.assign()
+    program_assign = eq(p).to(p1.assign())
     # Set parent
-    yield rule(eq(p).to(program_assign), p.compile(i)).then(set_(p1.parent).to(p))
+    yield rule(program_assign, p.compile(i)).then(set_(p1.parent).to(p))
     # If parent set, compile the expression
-    yield rule(eq(p).to(program_assign), p.compile(i), eq(p1.parent).to(program_assign)).then(p1.compile(i))
+    yield rule(program_assign, p.compile(i), eq(p1.parent).to(p)).then(p1.compile(i))
 
     # If p1 parent is p, then use statements of p, next sym of p
     symbol = join(String("_"), i.to_string())
     yield rule(
-        eq(p).to(program_assign),
+        program_assign,
         eq(p1.parent).to(p),
         eq(s1).to(p1.statements),
         eq(i).to(p1.next_sym),
@@ -300,7 +298,7 @@ def _compile(
     )
     # If p1 parent is not p, then just use assign as statement, next sym of i
     yield rule(
-        eq(p).to(program_assign),
+        program_assign,
         p1.parent != p,
         p.compile(i),
         eq(s2).to(p1.expr),
@@ -314,11 +312,11 @@ def _compile(
     # Function two
 
     # When compiling a function, the two args, p2 and p3, should get compiled when we compile p1, and should just be vars.
-    fn_two = p1.function_two(p2, p3, s1)
+    fn_two = eq(p).to(p1.function_two(p2, p3, s1))
     # 1. Set parents of both args to p and compile them
     # Assumes that this if the first thing to compile, so no need to check, and assumes that compiling args doesn't result in any
     # change in the next sym
-    yield rule(eq(p).to(fn_two), p.compile(i)).then(
+    yield rule(fn_two, p.compile(i)).then(
         set_(p2.parent).to(p),
         set_(p3.parent).to(p),
         set_(p1.parent).to(p),
@@ -328,7 +326,7 @@ def _compile(
     )
     # 2. Set statements to function body and the next sym to i
     yield rule(
-        eq(p).to(fn_two),
+        fn_two,
         p.compile(i),
         eq(s2).to(p1.expr),
         eq(s3).to(p1.statements),

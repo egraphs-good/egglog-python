@@ -24,6 +24,12 @@ def dtype_program(x: DType) -> Program:
     ...
 
 
+@array_api_module_string.register
+def _dtype_program():
+    yield rewrite(dtype_program(DType.float64)).to(Program("np.float64"))
+    yield rewrite(dtype_program(DType.int64)).to(Program("np.int64"))
+
+
 @array_api_module_string.function()
 def tuple_int_program(x: TupleInt) -> Program:
     ...
@@ -44,21 +50,15 @@ def value_program(x: Value) -> Program:
     ...
 
 
-array_api_module_string.register(
-    union(dtype_program(DType.float64)).with_(Program("np.float64")),
-    union(dtype_program(DType.int64)).with_(Program("np.int64")),
-)
-
-
 @array_api_module_string.function
 def bool_program(x: Bool) -> Program:
     ...
 
 
-array_api_module_string.register(
-    union(bool_program(TRUE)).with_(Program("True")),
-    union(bool_program(FALSE)).with_(Program("False")),
-)
+@array_api_module_string.register
+def _bool_program():
+    yield rewrite(bool_program(TRUE)).to(Program("True"))
+    yield rewrite(bool_program(FALSE)).to(Program("False"))
 
 
 @array_api_module_string.function
