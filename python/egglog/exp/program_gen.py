@@ -145,6 +145,7 @@ def _compile(
     statements: Program,
     expr: Program,
     i: i64,
+    i2: i64,
     m: Map[Program, Program],
 ):
     # Combining two strings is just joining them
@@ -210,13 +211,15 @@ def _compile(
     yield rule(program_add, p.compile(i), eq(p1.parent).to(p)).then(p1.compile(i))
 
     # Set parent of p2, once p1 compiled
-    yield rule(program_add, p1.next_sym).then(set_(p2.parent).to(p))
+    yield rule(program_add, p.compile(i), p1.next_sym).then(set_(p2.parent).to(p))
 
     # Compile p2, if p1 parent not equal, but p2 parent equal
     yield rule(program_add, p.compile(i), p1.parent != p, eq(p2.parent).to(p)).then(p2.compile(i))
 
     # Compile p2, if p1 parent eqal
-    yield rule(program_add, eq(p1.parent).to(p), eq(i).to(p1.next_sym), eq(p2.parent).to(p)).then(p2.compile(i))
+    yield rule(program_add, p.compile(i2), eq(p1.parent).to(p), eq(i).to(p1.next_sym), eq(p2.parent).to(p)).then(
+        p2.compile(i)
+    )
 
     # Set p expr to join of p1 and p2
     yield rule(

@@ -24,4 +24,5 @@ name = "egglog.bindings"
 
 [patch.'https://github.com/egraphs-good/egraph-serialize']
 
-egraph-serialize = { git = "https://github.com/saulshanabrook/egraph-serialize", rev = "a3f6fef9b958a335367d80d51e028c6db886fb6e" }
+egraph-serialize = { git = "https://github.com/saulshanabrook/egraph-serialize", rev = "95a5b802c662a1036b5549b0c5c7b4586dee211c" }
+# egraph-serialize = { path = "../egraph-serialize" }
