@@ -720,7 +720,7 @@ class Module(_BaseModule):
         Make a copy of this module with all function costs increased by x
         """
         return self._map_functions(
-            lambda decl, x=x: bindings.FunctionDecl( # type: ignore[misc]
+            lambda decl, x=x: bindings.FunctionDecl(  # type: ignore[misc]
                 decl.name,
                 decl.schema,
                 decl.default,
@@ -730,6 +730,34 @@ class Module(_BaseModule):
                 decl.unextractable,
             )
         )
+
+    def without_rules(self) -> Module:
+        """
+        Makes a copy of this module with all rules removed.
+        """
+        new = copy(self)
+        new._cmds = [
+            c for c in new._cmds if not isinstance(c, bindings.RuleCommand) and not isinstance(c, bindings.RewriteCommand) and not isinstance(c, bindings.BiRewriteCommand)
+        ]
+        return new
+
+    # def rename_ruleset(self, new_r: str) -> Module:
+    #     """
+    #     Makes a copy of this module with all default rulsets changed to the new one.
+    #     """
+    #     new = copy(self)
+    #     new._cmds = [
+    #         bindings.RuleCommand(c.name, new_r, c.rule)
+    #         if isinstance(c, bindings.RuleCommand) and not c.ruleset
+    #         else bindings.RewriteCommand(new_r, c.rewrite)
+    #         if isinstance(c, bindings.RewriteCommand) and not c.name
+    #         else bindings.BiRewriteCommand(new_r, c.rewrite)
+    #         if isinstance(c, bindings.BiRewriteCommand) and not c.name
+    #         else c
+    #         for c in new._cmds
+    #     ]
+    #     new._cmds.insert(0, bindings.AddRuleset(new_r))
+    #     return new
 
     def _map_functions(self, fn: Callable[[bindings.FunctionDecl], bindings.FunctionDecl]) -> Module:
         """

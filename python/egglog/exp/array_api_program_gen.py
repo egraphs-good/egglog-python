@@ -11,7 +11,7 @@ from .program_gen import *
 # Depends on `np` as a global variable.
 ##
 
-array_api_module_string = Module([array_api_module.unextractable(), program_gen_module])
+array_api_module_string = Module([array_api_module.without_rules(), program_gen_module])
 
 
 @array_api_module_string.function()
