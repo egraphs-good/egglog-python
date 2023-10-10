@@ -737,7 +737,11 @@ class Module(_BaseModule):
         """
         new = copy(self)
         new._cmds = [
-            c for c in new._cmds if not isinstance(c, bindings.RuleCommand) and not isinstance(c, bindings.RewriteCommand) and not isinstance(c, bindings.BiRewriteCommand)
+            c
+            for c in new._cmds
+            if not isinstance(c, bindings.RuleCommand)
+            and not isinstance(c, bindings.RewriteCommand)
+            and not isinstance(c, bindings.BiRewriteCommand)
         ]
         return new
 
