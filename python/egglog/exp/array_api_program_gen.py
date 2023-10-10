@@ -302,8 +302,6 @@ def _py_expr(
         (Program("np.unique(") + ndarray_program(x) + ", return_inverse=True)").assign()
     )
 
-    yield rewrite(ndarray_program(x == y)).to((ndarray_program(x) + " == " + ndarray_program(y)))
-
     # Tuple ndarray indexing
     yield rewrite(ndarray_program(tnd[i])).to(tuple_ndarray_program(tnd) + "[" + int_program(i) + "]")
 
@@ -379,9 +377,7 @@ def _py_expr(
         ).assign()
     )
     # Vector
-    yield rewrite(ndarray_program(NDArray.vector(tv))).to(
-        (Program("np.array(") + tuple_value_program(tv) + ")").assign()
-    )
+    yield rewrite(ndarray_program(NDArray.vector(tv))).to((Program("np.array(") + tuple_value_program(tv) + ")"))
     # std
     yield rewrite(ndarray_program(std(x, optional_int_or_tuple_))).to(
         (
