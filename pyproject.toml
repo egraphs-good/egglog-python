@@ -29,7 +29,7 @@ classifiers = [
 dependencies = ["typing-extensions", "black", "graphviz"]
 
 [project.optional-dependencies]
-dev = ["pre-commit", "black", "mypy", "flake8", "isort"]
+dev = ["pre-commit", "black", "mypy", "flake8", "isort", "anywidget[dev]"]
 
 test = ["pytest", "mypy", "scikit-learn", "array_api_compat", "syrupy"]
 
@@ -42,6 +42,7 @@ docs = [
     "scikit-learn",
     "array_api_compat",
     "matplotlib",
+    "anywidget",
 ]
 
 

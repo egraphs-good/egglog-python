@@ -38,9 +38,11 @@ def _num_rule(a: Num, b: Num, c: Num, i: i64, j: i64):
     yield rewrite(Num(i) + Num(j)).to(Num(i + j))
     yield rewrite(Num(i) * Num(j)).to(Num(i * j))
 
-egraph.run(10)
+egraph.saturate()
+```
+
+```{code-cell} python
 egraph.check(eq(expr1).to(expr2))
-egraph.display()
 egraph.extract(expr1)
 ```
 

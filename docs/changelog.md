@@ -4,7 +4,11 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
 ## Unreleased
 
-...
+### New Features
+
+- Add ability to print egglog string of module with `.as_egglog_string`
+- Add ability to visualize changes in egraph as it runs with `.saturate()`
+- Add ability to make functions and module unextractable.
 
 ## 0.7.0 (2023-10-04)
 
