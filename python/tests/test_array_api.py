@@ -154,27 +154,15 @@ def test_to_source(snapshot_py):
             + MultiAxisIndexKey(MultiAxisIndexKeyItem.slice(Slice(OptionalInt.none, OptionalInt.some(Int(2)))))
         )
     ]
-    print("Extracting expr")
     egraph = EGraph([array_api_module])
     egraph.register(res)
     egraph.run(1000)
     res = egraph.extract(res)
 
-    print("Extracting fn")
     egraph = EGraph([array_api_module_string])
     fn = ndarray_program(res).function_two(ndarray_program(X_orig), ndarray_program(Y_orig))
-    # egraph.register(fn)
-    # print("Running")
-    # egraph.run(50)
-    # print("Extracting")
-    # fn = egraph.extract(fn)
-
-    # print("Extracting string")
-    # egraph = EGraph([array_api_module_string])
     egraph.register(fn.eval_py_object(egraph.save_object({"np": numpy})))
-    # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
-    egraph.run(1000)
-    # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
+    egraph.run(10000)
     fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.statements)))
     assert fn_source == snapshot_py
     fn = egraph.load_object(egraph.extract(fn.py_object))
