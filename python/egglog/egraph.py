@@ -703,23 +703,40 @@ class Module(_BaseModule):
         """
         Makes a copy of this module with all functions marked as un-extractable
         """
-        new = copy(self)
-        new._cmds = [
-            bindings.Function(
-                bindings.FunctionDecl(
-                    c.decl.name,
-                    c.decl.schema,
-                    c.decl.default,
-                    c.decl.merge,
-                    c.decl.merge_action,
-                    c.decl.cost,
-                    True,
-                )
+        return self._map_functions(
+            lambda decl: bindings.FunctionDecl(
+                decl.name,
+                decl.schema,
+                decl.default,
+                decl.merge,
+                decl.merge_action,
+                decl.cost,
+                True,
             )
-            if isinstance(c, bindings.Function)
-            else c
-            for c in new._cmds
-        ]
+        )
+
+    def increase_cost(self, x: int = 10000) -> Module:
+        """
+        Make a copy of this module with all function costs increased by x
+        """
+        return self._map_functions(
+            lambda decl, x=x: bindings.FunctionDecl( # type: ignore[misc]
+                decl.name,
+                decl.schema,
+                decl.default,
+                decl.merge,
+                decl.merge_action,
+                (decl.cost or 1) + x,
+                decl.unextractable,
+            )
+        )
+
+    def _map_functions(self, fn: Callable[[bindings.FunctionDecl], bindings.FunctionDecl]) -> Module:
+        """
+        Returns a copy where all the functions have been mapped with the given function.
+        """
+        new = copy(self)
+        new._cmds = [bindings.Function(fn(c.decl)) if isinstance(c, bindings.Function) else c for c in new._cmds]
         return new
 
 

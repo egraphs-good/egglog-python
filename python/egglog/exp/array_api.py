@@ -252,9 +252,6 @@ class Int(Expr):
     def __mul__(self, other: Int) -> Int:
         ...
 
-    def __matmul__(self, other: Int) -> Int:
-        ...
-
     def __truediv__(self, other: Int) -> Int:
         ...
 

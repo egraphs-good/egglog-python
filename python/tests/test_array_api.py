@@ -66,8 +66,46 @@ def test_to_source(snapshot_py):
         _NDArray_1[ndarray_index(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(2))))],
         OptionalIntOrTuple.int(Int(0)),
     )
+    _NDArray_6 = concat(
+        TupleNDArray(
+            _NDArray_1[ndarray_index(_NDArray_3 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(0))])]
+            - _NDArray_5[_IndexKey_1]
+        )
+        + (
+            TupleNDArray(
+                _NDArray_1[ndarray_index(_NDArray_3 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(1))])]
+                - _NDArray_5[_IndexKey_2]
+            )
+            + TupleNDArray(
+                _NDArray_1[ndarray_index(_NDArray_3 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(2))])]
+                - _NDArray_5[_IndexKey_3]
+            )
+        ),
+        OptionalInt.some(Int(0)),
+    )
+    _NDArray_7 = std(_NDArray_6, OptionalIntOrTuple.int(Int(0)))
+    _NDArray_7[
+        ndarray_index(std(_NDArray_6, OptionalIntOrTuple.int(Int(0))) == NDArray.scalar(Value.int(Int(0))))
+    ] = NDArray.scalar(Value.float(Float(1.0)))
+    _TupleNDArray_1 = svd(
+        sqrt(NDArray.scalar(Value.int(NDArray.scalar(Value.float(Float(1.0))).to_int() / Int(147))))
+        * (_NDArray_6 / _NDArray_7),
+        FALSE,
+    )
+    _Slice_1 = Slice(
+        OptionalInt.none,
+        OptionalInt.some(
+            astype(sum(_TupleNDArray_1[Int(1)] > NDArray.scalar(Value.float(Float(0.0001)))), DType.int32).to_int()
+        ),
+    )
+    _NDArray_8 = (
+        _TupleNDArray_1[Int(2)][
+            IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.slice(_Slice_1)) + _MultiAxisIndexKey_1)
+        ]
+        / _NDArray_7
+    ).T / _TupleNDArray_1[Int(1)][IndexKey.slice(_Slice_1)]
 
-    res = _NDArray_5 + _NDArray_4
+    res = _NDArray_8 + _NDArray_4
     egraph = EGraph([array_api_module])
     egraph.register(res)
     egraph.run(10000)
@@ -80,10 +118,12 @@ def test_to_source(snapshot_py):
 
     egraph = EGraph([array_api_module_string])
     egraph.register(fn.eval_py_object(egraph.save_object({"np": numpy})))
+    # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
     egraph.run(10000)
-    # egraph.display(n_inline_leaves=0, split_primitive_outputs=True)
+    egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
     fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.statements)))
     assert fn_source == snapshot_py
+    fn = egraph.load_object(egraph.extract(fn.py_object))
 
 
 @pytest.mark.xfail(raises=AssertionError)
