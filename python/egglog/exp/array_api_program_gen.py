@@ -92,6 +92,7 @@ def value_program(x: Value) -> Program:
 def float_program(x: Float) -> Program:
     ...
 
+
 @array_api_module_string.register
 def _float_program(f: Float, g: Float, f64_: f64, i: Int):
     yield rewrite(float_program(Float(f64_))).to(Program(f64_.to_string()))
@@ -101,7 +102,6 @@ def _float_program(f: Float, g: Float, f64_: f64, i: Int):
     yield rewrite(float_program(f - g)).to(Program("(") + float_program(f) + " - " + float_program(g) + ")")
     yield rewrite(float_program(f * g)).to(Program("(") + float_program(f) + " * " + float_program(g) + ")")
     yield rewrite(float_program(f / g)).to(Program("(") + float_program(f) + " / " + float_program(g) + ")")
-
 
 
 @array_api_module_string.function
@@ -291,7 +291,6 @@ def _py_expr(
     yield rewrite(value_program(Value.bool(b))).to(bool_program(b))
     yield rewrite(value_program(Value.float(f))).to(float_program(f))
 
-\
     # reshape (don't include copy, since not present in numpy)
     yield rewrite(ndarray_program(reshape(y, ti, ob))).to(
         (ndarray_program(y) + ".reshape(" + tuple_int_program(ti) + ")").assign()
