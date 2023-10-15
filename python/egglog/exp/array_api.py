@@ -195,26 +195,6 @@ def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
 
 
 @array_api_module.class_
-class Float(Expr):
-    def __init__(self, value: f64Like) -> None:
-        ...
-
-    def abs(self) -> Float:
-        ...
-
-
-converter(float, Float, lambda x: Float(x))
-
-
-@array_api_module.register
-def _float(f: f64, f2: f64, r: Bool, o: Float):
-    return [
-        rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
-        rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
-    ]
-
-
-@array_api_module.class_
 class Int(Expr):
     def __init__(self, value: i64Like) -> None:
         ...
@@ -374,7 +354,44 @@ def _int(i: i64, j: i64, r: Bool, o: Int):
 
 
 converter(int, Int, lambda x: Int(x))
-# converter(float, Int, lambda x: Int(int(x)))
+
+
+@array_api_module.class_
+class Float(Expr):
+    def __init__(self, value: f64Like) -> None:
+        ...
+
+    def abs(self) -> Float:
+        ...
+
+    @classmethod
+    def from_int(cls, i: Int) -> Float:
+        ...
+
+    def __truediv__(self, other: Float) -> Float:
+        ...
+
+    def __mul__(self, other: Float) -> Float:
+        ...
+
+    def __add__(self, other: Float) -> Float:
+        ...
+
+    def __sub__(self, other: Float) -> Float:
+        ...
+
+
+converter(float, Float, lambda x: Float(x))
+converter(Int, Float, lambda x: Float.from_int(x))
+
+
+@array_api_module.register
+def _float(f: f64, f2: f64, r: Bool, o: Float, i: i64):
+    return [
+        rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
+        rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
+        rewrite(Float.from_int(Int(i))).to(Float(f64.from_i64(i))),
+    ]
 
 
 @array_api_module.class_
@@ -882,7 +899,9 @@ def ndarray_index(x: NDArray) -> IndexKey:
 
 converter(NDArray, IndexKey, ndarray_index)
 converter(Value, NDArray, NDArray.scalar)
-converter(NDArray, Int, lambda n: n.to_int())
+# Need this if we want to use ints in slices of arrays coming from 1d arrays, but make it more expensive
+# to prefer upcasting in the other direction when we can, which is safter at runtime
+converter(NDArray, Int, lambda n: n.to_int(), 100)
 converter(TupleValue, NDArray, NDArray.vector)
 
 

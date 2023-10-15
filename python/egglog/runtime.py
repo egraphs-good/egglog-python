@@ -59,38 +59,44 @@ LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
 # Converters
 ##
 
-# Mapping of types, from Python or egglog types to egglog types
-CONVERSIONS: dict[tuple[Type | JustTypeRef, JustTypeRef], Callable] = {}
+# Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
+CONVERSIONS: dict[tuple[Type | JustTypeRef, JustTypeRef], tuple[int, Callable]] = {}
 
 T = TypeVar("T")
 V = TypeVar("V", bound="Expr")
 
 
-def converter(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V]) -> None:
+class ConvertError(Exception):
+    pass
+
+
+def converter(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V], cost: int = 1) -> None:
     """
     Register a converter from some type to an egglog type.
     """
     to_type_name = process_tp(to_type)
     if not isinstance(to_type_name, JustTypeRef):
         raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
-    _register_converter(process_tp(from_type), to_type_name, fn)
+    _register_converter(process_tp(from_type), to_type_name, fn, cost)
 
 
-def _register_converter(a: Type | JustTypeRef, b: JustTypeRef, a_b: Callable) -> None:
+def _register_converter(a: Type | JustTypeRef, b: JustTypeRef, a_b: Callable, cost: int) -> None:
     """
     Registers a converter from some type to an egglog type, if not already registered.
 
     Also adds transitive converters, i.e. if registering A->B and there is already B->C, then A->C will be registered.
     Also, if registering A->B and there is already D->A, then D->B will be registered.
     """
-    if a == b or (a, b) in CONVERSIONS:
+    if a == b:
         return
-    CONVERSIONS[(a, b)] = a_b
-    for (c, d), c_d in list(CONVERSIONS.items()):
+    if (a, b) in CONVERSIONS and CONVERSIONS[(a, b)][0] <= cost:
+        return
+    CONVERSIONS[(a, b)] = (cost, a_b)
+    for (c, d), (other_cost, c_d) in list(CONVERSIONS.items()):
         if b == c:
-            _register_converter(a, d, _ComposedConverter(a_b, c_d))
+            _register_converter(a, d, _ComposedConverter(a_b, c_d), cost + other_cost)
         if a == d:
-            _register_converter(c, b, _ComposedConverter(c_d, a_b))
+            _register_converter(c, b, _ComposedConverter(c_d, a_b), cost + other_cost)
 
 
 @dataclass
@@ -127,15 +133,34 @@ def process_tp(tp: type | RuntimeTypeArgType) -> JustTypeRef | type:
     return tp
 
 
+def min_convertable_tp(decls: ModuleDeclarations, a: object, b: object, name: str) -> JustTypeRef:
+    """
+    Returns the minimum convertable type between a and b, that has a method `name`, raising a TypeError if no such type exists.
+    """
+    a_tp = _get_tp(a)
+    b_tp = _get_tp(b)
+    a_converts_to = {
+        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == a_tp and decls.has_method(to.name, name)
+    }
+    b_converts_to = {
+        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == b_tp and decls.has_method(to.name, name)
+    }
+    if isinstance(a_tp, JustTypeRef):
+        a_converts_to[a_tp] = 0
+    if isinstance(b_tp, JustTypeRef):
+        b_converts_to[b_tp] = 0
+    common = set(a_converts_to) & set(b_converts_to)
+    if not common:
+        raise ConvertError(f"Cannot convert {a_tp} and {b_tp} to a common type")
+    return min(common, key=lambda tp: a_converts_to[tp] + b_converts_to[tp])
+
+
+def identity(x: object) -> object:
+    return x
+
+
 def _resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
-    arg_type: JustTypeRef | type
-    if isinstance(arg, RuntimeExpr):
-        arg_type = arg.__egg_typed_expr__.tp
-    else:
-        arg_type = type(arg)
-        # If this value has a custom metaclass, let's use that as our index instead of the type
-        if type(arg_type) != type:  # noqa: E721
-            arg_type = type(arg_type)
+    arg_type = _get_tp(arg)
 
     # If we have any type variables, dont bother trying to resolve the literal, just return the arg
     try:
@@ -145,10 +170,21 @@ def _resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
     if arg_type == tp_just:
         return arg  # type: ignore
     try:
-        fn = CONVERSIONS[(arg_type, tp_just)]
+        fn = CONVERSIONS[(arg_type, tp_just)][1]
     except KeyError:
-        raise TypeError(f"Cannot convert {arg} ({repr(arg_type)}) to {tp}")
+        arg_type_str = arg_type.pretty() if isinstance(arg_type, JustTypeRef) else arg_type.__name__
+        raise ConvertError(f"Cannot convert {arg_type_str} to {tp_just.pretty()}")
     return fn(arg)
+
+
+def _get_tp(x: object) -> JustTypeRef | type:
+    if isinstance(x, RuntimeExpr):
+        return x.__egg_typed_expr__.tp
+    tp = type(x)
+    # If this value has a custom metaclass, let's use that as our index instead of the type
+    if type(tp) != type:  # noqa: E721
+        return type(tp)
+    return tp
 
 
 ##
@@ -349,6 +385,32 @@ class RuntimeClassMethod:
         return self.__egg_tp__.name
 
 
+# All methods which should return NotImplemented if they fail to resolve
+# From https://docs.python.org/3/reference/datamodel.html
+PARTIAL_METHODS = {
+    "__lt__",
+    "__le__",
+    "__eq__",
+    "__ne__",
+    "__gt__",
+    "__ge__",
+    "__add__",
+    "__sub__",
+    "__mul__",
+    "__matmul__",
+    "__truediv__",
+    "__floordiv__",
+    "__mod__",
+    "__divmod__",
+    "__pow__",
+    "__lshift__",
+    "__rshift__",
+    "__and__",
+    "__xor__",
+    "__or__",
+}
+
+
 @dataclass
 class RuntimeMethod:
     __egg_self__: RuntimeExpr
@@ -373,7 +435,11 @@ class RuntimeMethod:
 
     def __call__(self, *args: object, **kwargs) -> Optional[RuntimeExpr]:
         args = (self.__egg_self__, *args)
-        return _call(self.__egg_self__.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, kwargs)
+        try:
+            return _call(self.__egg_self__.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, kwargs)
+        except ConvertError as e:
+            name = self.__egg_method_name__
+            raise TypeError(f"Wrong types for {self.__egg_self__.__egg_typed_expr__.tp.pretty()}.{name}") from e
 
     @property
     def class_name(self) -> str:
@@ -452,6 +518,15 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
         try:
             method = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods[__name]
         except KeyError:
+            # If this is a "partial" method meaning that it can return NotImplemented,
+            # we want to find the "best" superparent (lowest cost) of the arg types to call with it, instead of just
+            # using the arg type of the self arg.
+            # This is neccesary so if we add like an int to a ndarray, it will upcast the int to an ndarray, instead of vice versa.
+            if __name in PARTIAL_METHODS:
+                try:
+                    return call_method_min_conversion(self, args[0], __name)
+                except ConvertError:
+                    return NotImplemented
             return RuntimeMethod(self, __name)(*args)
         else:
             return method(self, *args)
@@ -459,14 +534,40 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
     setattr(RuntimeExpr, name, _special_method)
 
 # For each of the reflected binary methods, translate to the corresponding non-reflected method
-for name, normal in REFLECTED_BINARY_METHODS.items():
+for reflected, non_reflected in REFLECTED_BINARY_METHODS.items():
 
-    def _reflected_method(self: RuntimeExpr, other: object, __normal: str = normal) -> Optional[RuntimeExpr]:
-        egg_tp = self.__egg_typed_expr__.tp.to_var()
-        converted_other = _resolve_literal(egg_tp, other)
-        return RuntimeMethod(converted_other, __normal)(self)
+    def _reflected_method(
+        self: RuntimeExpr, other: object, __non_reflected: str = non_reflected
+    ) -> Optional[RuntimeExpr]:
+        # All binary methods are also "partial" meaning we should try to upcast first.
+        return call_method_min_conversion(other, self, __non_reflected)
 
-    setattr(RuntimeExpr, name, _reflected_method)
+    setattr(RuntimeExpr, reflected, _reflected_method)
+
+
+def call_method_min_conversion(slf: object, other: object, name: str) -> Optional[RuntimeExpr]:
+    # Use the mod decls that is most general between the args, if both of them are expressions
+    mod_decls = get_general_decls(slf, other)
+    # find a minimum type that both can be converted to
+    # This is so so that calls like `-0.1 * Int("x")` work by upcasting both to floats.
+    min_tp = min_convertable_tp(mod_decls, slf, other, name)
+    slf = _resolve_literal(min_tp.to_var(), slf)
+    other = _resolve_literal(min_tp.to_var(), other)
+    method = RuntimeMethod(slf, name)
+    return method(other)
+
+
+def get_general_decls(a: object, b: object) -> ModuleDeclarations:
+    """
+    Returns the more general module declerations between the two, if both are expressions.
+    """
+    if isinstance(a, RuntimeExpr) and isinstance(b, RuntimeExpr):
+        return ModuleDeclarations.parent_decl(a.__egg_decls__, b.__egg_decls__)
+    elif isinstance(a, RuntimeExpr):
+        return a.__egg_decls__
+    assert isinstance(b, RuntimeExpr)
+    return b.__egg_decls__
+
 
 for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__hash__", "__iter__", "__index__"]:
 
