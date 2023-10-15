@@ -4,7 +4,7 @@ from __future__ import annotations
 import importlib
 import pathlib
 from copy import copy
-from typing import ClassVar
+from typing import ClassVar, Union
 
 import pytest
 from egglog import *
@@ -440,3 +440,78 @@ def test_reflected_binary_method():
         JustTypeRef("Math"),
         CallDecl(MethodRef("Math", "__add__"), (expr_parts(Math(i64(10))), expr_parts(Math(i64(5))))),
     )
+
+
+def test_upcast_args():
+    # -0.1 + Int(x) -> -0.1 + Float(x)
+    egraph = EGraph()
+
+    @egraph.class_
+    class Int(Expr):
+        def __init__(self, value: i64Like) -> None:
+            ...
+
+        def __add__(self, other: Int) -> Int:
+            ...
+
+    @egraph.class_
+    class Float(Expr):
+        def __init__(self, value: f64Like) -> None:
+            ...
+
+        def __add__(self, other: Float) -> Float:
+            ...
+
+        @classmethod
+        def from_int(cls, other: Int) -> Float:
+            ...
+
+    converter(i64, Int, Int)
+    converter(f64, Float, Float)
+    converter(Int, Float, Float.from_int)
+
+    res: Expr = -0.1 + Int(10)  # type: ignore
+    assert expr_parts(res) == expr_parts(Float(-0.1) + Float.from_int(Int(10)))
+
+    res: Expr = Int(10) + -0.1  # type: ignore
+    assert expr_parts(res) == expr_parts(Float.from_int(Int(10)) + Float(-0.1))
+
+
+def test_upcast_self_lower_cost():
+    # Verifies that self will be upcasted, if that upcast has a lower cast than converting the other arg
+    # i.e. Int(x) + NDArray(y) -> NDArray(Int(x)) + NDArray(y) instead of Int(x) + NDArray(y).to_int()
+    egraph = EGraph()
+
+    @egraph.class_
+    class Int(Expr):
+        def __init__(self, name: StringLike) -> None:
+            ...
+
+        def __add__(self, other: Int) -> Int:
+            ...
+
+    NDArrayLike = Union[Int, "NDArray"]
+
+    @egraph.class_
+    class NDArray(Expr):
+        def __init__(self, name: StringLike) -> None:
+            ...
+
+        def __add__(self, other: NDArrayLike) -> NDArray:
+            ...
+
+        def __radd__(self, other: NDArrayLike) -> NDArray:
+            ...
+
+        def to_int(self) -> Int:
+            ...
+
+        @classmethod
+        def from_int(cls, other: Int) -> NDArray:
+            ...
+
+    converter(Int, NDArray, NDArray.from_int)
+    converter(NDArray, Int, lambda a: a.to_int(), 100)
+
+    r = Int("x") + NDArray("y")
+    assert expr_parts(r) == expr_parts(NDArray.from_int(Int("x")) + NDArray("y"))

@@ -703,23 +703,72 @@ class Module(_BaseModule):
         """
         Makes a copy of this module with all functions marked as un-extractable
         """
+        return self._map_functions(
+            lambda decl: bindings.FunctionDecl(
+                decl.name,
+                decl.schema,
+                decl.default,
+                decl.merge,
+                decl.merge_action,
+                decl.cost,
+                True,
+            )
+        )
+
+    def increase_cost(self, x: int = 10000) -> Module:
+        """
+        Make a copy of this module with all function costs increased by x
+        """
+        return self._map_functions(
+            lambda decl, x=x: bindings.FunctionDecl(  # type: ignore[misc]
+                decl.name,
+                decl.schema,
+                decl.default,
+                decl.merge,
+                decl.merge_action,
+                (decl.cost or 1) + x,
+                decl.unextractable,
+            )
+        )
+
+    def without_rules(self) -> Module:
+        """
+        Makes a copy of this module with all rules removed.
+        """
         new = copy(self)
         new._cmds = [
-            bindings.Function(
-                bindings.FunctionDecl(
-                    c.decl.name,
-                    c.decl.schema,
-                    c.decl.default,
-                    c.decl.merge,
-                    c.decl.merge_action,
-                    c.decl.cost,
-                    True,
-                )
-            )
-            if isinstance(c, bindings.Function)
-            else c
+            c
             for c in new._cmds
+            if not isinstance(c, bindings.RuleCommand)
+            and not isinstance(c, bindings.RewriteCommand)
+            and not isinstance(c, bindings.BiRewriteCommand)
         ]
+        return new
+
+    # def rename_ruleset(self, new_r: str) -> Module:
+    #     """
+    #     Makes a copy of this module with all default rulsets changed to the new one.
+    #     """
+    #     new = copy(self)
+    #     new._cmds = [
+    #         bindings.RuleCommand(c.name, new_r, c.rule)
+    #         if isinstance(c, bindings.RuleCommand) and not c.ruleset
+    #         else bindings.RewriteCommand(new_r, c.rewrite)
+    #         if isinstance(c, bindings.RewriteCommand) and not c.name
+    #         else bindings.BiRewriteCommand(new_r, c.rewrite)
+    #         if isinstance(c, bindings.BiRewriteCommand) and not c.name
+    #         else c
+    #         for c in new._cmds
+    #     ]
+    #     new._cmds.insert(0, bindings.AddRuleset(new_r))
+    #     return new
+
+    def _map_functions(self, fn: Callable[[bindings.FunctionDecl], bindings.FunctionDecl]) -> Module:
+        """
+        Returns a copy where all the functions have been mapped with the given function.
+        """
+        new = copy(self)
+        new._cmds = [bindings.Function(fn(c.decl)) if isinstance(c, bindings.Function) else c for c in new._cmds]
         return new
 
 

@@ -320,6 +320,7 @@ dependencies = [
  "ordered-float",
  "pyo3",
  "pyo3-log",
+ "tempfile",
 ]
 
 [[package]]

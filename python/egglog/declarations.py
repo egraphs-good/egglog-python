@@ -189,9 +189,29 @@ class ModuleDeclarations:
     # A list of other declarations we can use, but not edit
     _included_decls: list[Declarations] = field(default_factory=list, repr=False)
 
+    @classmethod
+    def parent_decl(cls, a: ModuleDeclarations, b: ModuleDeclarations) -> ModuleDeclarations:
+        """
+        Returns the declerations which has the other as a child.
+        """
+        if b._decl in a.all_decls:
+            return a
+        elif a._decl in b.all_decls:
+            return b
+        raise ValueError("No parent decl found")
+
     @property
     def all_decls(self) -> Iterable[Declarations]:
         return itertools.chain([self._decl], self._included_decls)
+
+    def has_method(self, class_name: str, method_name: str) -> Optional[bool]:
+        """
+        Returns whether the given class has the given method, or None if we cant find the class.
+        """
+        for decl in self.all_decls:
+            if class_name in decl._classes:
+                return method_name in decl._classes[class_name].methods
+        return None
 
     def get_function_decl(self, ref: CallableRef) -> FunctionDecl:
         if isinstance(ref, (ClassVariableRef, ConstantRef)):

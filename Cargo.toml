@@ -18,6 +18,7 @@ pyo3-log = "0.8.1"
 log = "0.4.17"
 lalrpop-util = { version = "0.19.8", features = ["lexer"] }
 ordered-float = "*"
+tempfile = "3.8.0"
 
 [package.metadata.maturin]
 name = "egglog.bindings"

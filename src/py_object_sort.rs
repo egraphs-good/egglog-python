@@ -1,7 +1,10 @@
 use std::{
     any::Any,
+    ffi::CString,
+    io::Write,
     sync::{Arc, Mutex},
 };
+use tempfile::Builder;
 
 use egglog::sort::{FromSort, IntoSort, StringSort};
 use egglog::{
@@ -10,7 +13,9 @@ use egglog::{
     util::IndexMap,
     ArcSort, EGraph, PrimitiveLike, TypeInfo, Value,
 };
-use pyo3::{types::PyDict, AsPyPointer, IntoPy, PyObject, Python};
+use pyo3::{
+    ffi, intern, types::PyDict, AsPyPointer, IntoPy, PyAny, PyErr, PyObject, PyResult, Python,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum PyObjectIdent {
@@ -239,12 +244,23 @@ impl PrimitiveLike for Exec {
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
         let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
+        let code: &str = code.into();
         let locals: PyObject = Python::with_gil(|py| {
             let (_, globals) = self.py_object.load(&values[1]);
             let globals = globals.downcast::<PyDict>(py).unwrap();
             let (_, locals) = self.py_object.load(&values[2]);
             let locals = locals.downcast::<PyDict>(py).unwrap().copy().unwrap();
-            py.run(code.into(), Some(globals), Some(locals)).unwrap();
+            // Copy code into temporary file
+            // Keep it around so that if errors occur we can debug them after the program exits
+            let (mut file, path) = Builder::new()
+                .suffix(".py")
+                .tempfile()
+                .unwrap()
+                .keep()
+                .unwrap();
+            file.write_all(code.as_bytes()).unwrap();
+            let path = path.to_str().unwrap();
+            run_code_path(py, code, Some(globals), Some(locals), path).unwrap();
             locals.into()
         });
         Some(self.py_object.store(locals))
@@ -417,5 +433,60 @@ impl PrimitiveLike for FromInt {
         let int = i64::load(self.int.as_ref(), &values[0]);
         let obj: PyObject = Python::with_gil(|py| int.into_py(py));
         Some(self.py_object.store(obj))
+    }
+}
+
+/// Runs the code in the given context with a certain path.
+/// Copied from `run_code`, but allows specifying the path.
+fn run_code_path<'py>(
+    py: Python<'py>,
+    code: &str,
+    globals: Option<&PyDict>,
+    locals: Option<&PyDict>,
+    path: &str,
+) -> PyResult<&'py PyAny> {
+    let code = CString::new(code)?;
+    unsafe {
+        let mptr = ffi::PyImport_AddModule("__main__\0".as_ptr() as *const _);
+        if mptr.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+
+        let globals = globals
+            .map(AsPyPointer::as_ptr)
+            .unwrap_or_else(|| ffi::PyModule_GetDict(mptr));
+        let locals = locals.map(AsPyPointer::as_ptr).unwrap_or(globals);
+
+        // If `globals` don't provide `__builtins__`, most of the code will fail if Python
+        // version is <3.10. That's probably not what user intended, so insert `__builtins__`
+        // for them.
+        //
+        // See also:
+        // - https://github.com/python/cpython/pull/24564 (the same fix in CPython 3.10)
+        // - https://github.com/PyO3/pyo3/issues/3370
+        let builtins_s = intern!(py, "__builtins__").as_ptr();
+        let has_builtins = ffi::PyDict_Contains(globals, builtins_s);
+        if has_builtins == -1 {
+            return Err(PyErr::fetch(py));
+        }
+        if has_builtins == 0 {
+            // Inherit current builtins.
+            let builtins = ffi::PyEval_GetBuiltins();
+
+            // `PyDict_SetItem` doesn't take ownership of `builtins`, but `PyEval_GetBuiltins`
+            // seems to return a borrowed reference, so no leak here.
+            if ffi::PyDict_SetItem(globals, builtins_s, builtins) == -1 {
+                return Err(PyErr::fetch(py));
+            }
+        }
+
+        let code_obj = ffi::Py_CompileString(code.as_ptr(), path.as_ptr() as _, ffi::Py_file_input);
+        if code_obj.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+        let res_ptr = ffi::PyEval_EvalCode(code_obj, globals, locals);
+        ffi::Py_DECREF(code_obj);
+
+        py.from_owned_ptr_or_err(res_ptr)
     }
 }

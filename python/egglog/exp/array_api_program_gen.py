@@ -11,7 +11,7 @@ from .program_gen import *
 # Depends on `np` as a global variable.
 ##
 
-array_api_module_string = Module([array_api_module.unextractable(), program_gen_module])
+array_api_module_string = Module([array_api_module.without_rules(), program_gen_module])
 
 
 @array_api_module_string.function()
@@ -27,26 +27,15 @@ def dtype_program(x: DType) -> Program:
 @array_api_module_string.register
 def _dtype_program():
     yield rewrite(dtype_program(DType.float64)).to(Program("np.float64"))
+    yield rewrite(dtype_program(DType.float32)).to(Program("np.float32"))
     yield rewrite(dtype_program(DType.int64)).to(Program("np.int64"))
+    yield rewrite(dtype_program(DType.int32)).to(Program("np.int32"))
+    yield rewrite(dtype_program(DType.bool)).to(Program("np.bool"))
+    yield rewrite(dtype_program(DType.object)).to(Program("np.object_"))
 
 
 @array_api_module_string.function()
 def tuple_int_program(x: TupleInt) -> Program:
-    ...
-
-
-@array_api_module_string.function()
-def int_program(x: Int) -> Program:
-    ...
-
-
-@array_api_module_string.function()
-def tuple_value_program(x: TupleValue) -> Program:
-    ...
-
-
-@array_api_module_string.function()
-def value_program(x: Value) -> Program:
     ...
 
 
@@ -61,14 +50,71 @@ def _bool_program():
     yield rewrite(bool_program(FALSE)).to(Program("False"))
 
 
+@array_api_module_string.function()
+def int_program(x: Int) -> Program:
+    ...
+
+
+@array_api_module_string.register
+def _int_program(i64_: i64, i: Int, j: Int):
+    yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
+    yield rewrite(int_program(~i)).to(Program("~") + int_program(i))
+    yield rewrite(bool_program(i < j)).to(Program("(") + int_program(i) + " < " + int_program(j) + ")")
+    yield rewrite(bool_program(i <= j)).to(Program("(") + int_program(i) + " <= " + int_program(j) + ")")
+    yield rewrite(bool_program(i > j)).to(Program("(") + int_program(i) + " > " + int_program(j) + ")")
+    yield rewrite(bool_program(i >= j)).to(Program("(") + int_program(i) + " >= " + int_program(j) + ")")
+    yield rewrite(bool_program(i == j)).to(Program("(") + int_program(i) + " == " + int_program(j) + ")")
+    yield rewrite(int_program(i + j)).to(Program("(") + int_program(i) + " + " + int_program(j) + ")")
+    yield rewrite(int_program(i - j)).to(Program("(") + int_program(i) + " - " + int_program(j) + ")")
+    yield rewrite(int_program(i * j)).to(Program("(") + int_program(i) + " * " + int_program(j) + ")")
+    yield rewrite(int_program(i / j)).to(Program("(") + int_program(i) + " / " + int_program(j) + ")")
+    yield rewrite(int_program(i % j)).to(Program("(") + int_program(i) + " % " + int_program(j) + ")")
+    yield rewrite(int_program(i**j)).to(Program("(") + int_program(i) + " ** " + int_program(j) + ")")
+    yield rewrite(int_program(i & j)).to(Program("(") + int_program(i) + " & " + int_program(j) + ")")
+    yield rewrite(int_program(i | j)).to(Program("(") + int_program(i) + " | " + int_program(j) + ")")
+    yield rewrite(int_program(i ^ j)).to(Program("(") + int_program(i) + " ^ " + int_program(j) + ")")
+    yield rewrite(int_program(i << j)).to(Program("(") + int_program(i) + " << " + int_program(j) + ")")
+    yield rewrite(int_program(i >> j)).to(Program("(") + int_program(i) + " >> " + int_program(j) + ")")
+    yield rewrite(int_program(i // j)).to(Program("(") + int_program(i) + " // " + int_program(j) + ")")
+
+
+@array_api_module_string.function()
+def tuple_value_program(x: TupleValue) -> Program:
+    ...
+
+
+@array_api_module_string.function()
+def value_program(x: Value) -> Program:
+    ...
+
+
 @array_api_module_string.function
 def float_program(x: Float) -> Program:
     ...
 
 
+@array_api_module_string.register
+def _float_program(f: Float, g: Float, f64_: f64, i: Int):
+    yield rewrite(float_program(Float(f64_))).to(Program(f64_.to_string()))
+    yield rewrite(float_program(f.abs())).to(Program("np.abs(") + float_program(f) + ")")
+    yield rewrite(float_program(Float.from_int(i))).to(int_program(i))
+    yield rewrite(float_program(f + g)).to(Program("(") + float_program(f) + " + " + float_program(g) + ")")
+    yield rewrite(float_program(f - g)).to(Program("(") + float_program(f) + " - " + float_program(g) + ")")
+    yield rewrite(float_program(f * g)).to(Program("(") + float_program(f) + " * " + float_program(g) + ")")
+    yield rewrite(float_program(f / g)).to(Program("(") + float_program(f) + " / " + float_program(g) + ")")
+
+
 @array_api_module_string.function
 def tuple_ndarray_program(x: TupleNDArray) -> Program:
     ...
+
+
+@array_api_module_string.register
+def _tuple_ndarray_program(x: NDArray, l: TupleNDArray, r: TupleNDArray, i: Int):
+    yield rewrite(tuple_ndarray_program(TupleNDArray(x))).to(Program("(") + ndarray_program(x) + ",)")
+    yield rewrite(tuple_ndarray_program(l + r)).to(tuple_ndarray_program(l) + " + " + tuple_ndarray_program(r))
+    yield rewrite(int_program(l.length())).to(Program("len(") + tuple_ndarray_program(l) + ")")
+    yield rewrite(ndarray_program(l[i])).to(tuple_ndarray_program(l) + "[" + int_program(i) + "]")
 
 
 @array_api_module_string.function
@@ -155,6 +201,7 @@ def optional_int_or_tuple_program(x: OptionalIntOrTuple) -> Program:
 def _optional_int_or_tuple_program(x: Int, t: TupleInt):
     yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.int(x))).to(int_program(x))
     yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.tuple(t))).to(tuple_int_program(t))
+    yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.none)).to(Program("None"))
 
 
 @array_api_module_string.register
@@ -244,9 +291,6 @@ def _py_expr(
     yield rewrite(value_program(Value.bool(b))).to(bool_program(b))
     yield rewrite(value_program(Value.float(f))).to(float_program(f))
 
-    # Float
-    yield rewrite(float_program(Float(f64_))).to(Program(f64_.to_string()))
-
     # reshape (don't include copy, since not present in numpy)
     yield rewrite(ndarray_program(reshape(y, ti, ob))).to(
         (ndarray_program(y) + ".reshape(" + tuple_int_program(ti) + ")").assign()
@@ -265,8 +309,6 @@ def _py_expr(
     yield rewrite(tuple_ndarray_program(unique_inverse(x))).to(
         (Program("np.unique(") + ndarray_program(x) + ", return_inverse=True)").assign()
     )
-
-    yield rewrite(ndarray_program(x == y)).to((ndarray_program(x) + " == " + ndarray_program(y)))
 
     # Tuple ndarray indexing
     yield rewrite(ndarray_program(tnd[i])).to(tuple_ndarray_program(tnd) + "[" + int_program(i) + "]")
@@ -297,6 +339,20 @@ def _py_expr(
     yield rewrite(ndarray_program(x - y)).to((ndarray_program(x) + " - " + ndarray_program(y)).assign())
     yield rewrite(ndarray_program(x * y)).to((ndarray_program(x) + " * " + ndarray_program(y)).assign())
     yield rewrite(ndarray_program(x / y)).to((ndarray_program(x) + " / " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x < y)).to((ndarray_program(x) + " < " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x <= y)).to((ndarray_program(x) + " <= " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x > y)).to((ndarray_program(x) + " > " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x >= y)).to((ndarray_program(x) + " >= " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x == y)).to((ndarray_program(x) + " == " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x @ y)).to((ndarray_program(x) + " @ " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x % y)).to((ndarray_program(x) + " % " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x & y)).to((ndarray_program(x) + " & " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x | y)).to((ndarray_program(x) + " | " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x ^ y)).to((ndarray_program(x) + " ^ " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x << y)).to((ndarray_program(x) + " << " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x >> y)).to((ndarray_program(x) + " >> " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x // y)).to((ndarray_program(x) + " // " + ndarray_program(y)).assign())
+    yield rewrite(ndarray_program(x**y)).to((ndarray_program(x) + " ** " + ndarray_program(y)).assign())
 
     # setitem
     mod_x = copy(x)
@@ -312,6 +368,48 @@ def _py_expr(
     yield rewrite(ndarray_program(mean(x, optional_int_or_tuple_))).to(
         (
             Program("np.mean(")
+            + ndarray_program(x)
+            + ", axis="
+            + optional_int_or_tuple_program(optional_int_or_tuple_)
+            + ")"
+        ).assign()
+    )
+    # Concat
+    yield rewrite(ndarray_program(concat(tnd, optional_int_))).to(
+        (
+            Program("np.concatenate(")
+            + tuple_ndarray_program(tnd)
+            + ", axis="
+            + optional_int_program(optional_int_)
+            + ")"
+        ).assign()
+    )
+    # Vector
+    yield rewrite(ndarray_program(NDArray.vector(tv))).to((Program("np.array(") + tuple_value_program(tv) + ")"))
+    # std
+    yield rewrite(ndarray_program(std(x, optional_int_or_tuple_))).to(
+        (
+            Program("np.std(")
+            + ndarray_program(x)
+            + ", axis="
+            + optional_int_or_tuple_program(optional_int_or_tuple_)
+            + ")"
+        ).assign()
+    )
+    # svd
+    yield rewrite(tuple_ndarray_program(svd(x, b))).to(
+        (Program("np.linalg.svd(") + ndarray_program(x) + ", full_matrices=" + bool_program(b) + ")").assign()
+    )
+    # sqrt
+    yield rewrite(ndarray_program(sqrt(x))).to((Program("np.sqrt(") + ndarray_program(x) + ")").assign())
+    # to_int
+    yield rewrite(int_program(x.to_int())).to((ndarray_program(x) + ".item()"))
+    # Transpose
+    yield rewrite(ndarray_program(x.T)).to((ndarray_program(x) + ".T"))
+    # sum
+    yield rewrite(ndarray_program(sum(x, optional_int_or_tuple_))).to(
+        (
+            Program("np.sum(")
             + ndarray_program(x)
             + ", axis="
             + optional_int_or_tuple_program(optional_int_or_tuple_)

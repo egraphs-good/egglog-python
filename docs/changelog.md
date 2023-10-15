@@ -8,7 +8,10 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
 - Add ability to print egglog string of module with `.as_egglog_string`
 - Add ability to visualize changes in egraph as it runs with `.saturate()`
-- Add ability to make functions and module unextractable.
+- Add ability to make functions and module unextractable as well as increase the cost of a whole module.
+- Convert reflected methods based on both types
+- Allow specifying custom costs for conversions
+- In `py_exec` make a temporary file with source for tracebacks
 
 ## 0.7.0 (2023-10-04)
 
