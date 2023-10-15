@@ -13,7 +13,9 @@ use egglog::{
     util::IndexMap,
     ArcSort, EGraph, PrimitiveLike, TypeInfo, Value,
 };
-use pyo3::{ffi, types::PyDict, AsPyPointer, IntoPy, PyAny, PyErr, PyObject, PyResult, Python};
+use pyo3::{
+    ffi, intern, types::PyDict, AsPyPointer, IntoPy, PyAny, PyErr, PyObject, PyResult, Python,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum PyObjectIdent {
@@ -435,7 +437,7 @@ impl PrimitiveLike for FromInt {
 }
 
 /// Runs the code in the given context with a certain path.
-/// Copied from run_code, but allows specifying the path.
+/// Copied from `run_code`, but allows specifying the path.
 fn run_code_path<'py>(
     py: Python<'py>,
     code: &str,
@@ -454,6 +456,29 @@ fn run_code_path<'py>(
             .map(AsPyPointer::as_ptr)
             .unwrap_or_else(|| ffi::PyModule_GetDict(mptr));
         let locals = locals.map(AsPyPointer::as_ptr).unwrap_or(globals);
+
+        // If `globals` don't provide `__builtins__`, most of the code will fail if Python
+        // version is <3.10. That's probably not what user intended, so insert `__builtins__`
+        // for them.
+        //
+        // See also:
+        // - https://github.com/python/cpython/pull/24564 (the same fix in CPython 3.10)
+        // - https://github.com/PyO3/pyo3/issues/3370
+        let builtins_s = intern!(py, "__builtins__").as_ptr();
+        let has_builtins = ffi::PyDict_Contains(globals, builtins_s);
+        if has_builtins == -1 {
+            return Err(PyErr::fetch(py));
+        }
+        if has_builtins == 0 {
+            // Inherit current builtins.
+            let builtins = ffi::PyEval_GetBuiltins();
+
+            // `PyDict_SetItem` doesn't take ownership of `builtins`, but `PyEval_GetBuiltins`
+            // seems to return a borrowed reference, so no leak here.
+            if ffi::PyDict_SetItem(globals, builtins_s, builtins) == -1 {
+                return Err(PyErr::fetch(py));
+            }
+        }
 
         let code_obj = ffi::Py_CompileString(code.as_ptr(), path.as_ptr() as _, ffi::Py_file_input);
         if code_obj.is_null() {
