@@ -1,3 +1,4 @@
+import numba
 import pytest
 from egglog.exp.array_api import *
 from egglog.exp.array_api_numba import array_api_numba_module
@@ -251,6 +252,9 @@ def test_sklearn_lda_runs():
     real_res = run_lda(X_np, y_np)
     optimized_res = fn(X_np, y_np)  # type: ignore
     assert np.allclose(real_res, optimized_res)
+
+    numba_res = numba.njit(fn)(X_np, y_np)
+    assert np.allclose(real_res, numba_res)
 
 
 def test_reshape_index():

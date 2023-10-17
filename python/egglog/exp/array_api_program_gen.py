@@ -328,7 +328,7 @@ def _py_expr(
     z_assumed_value_one_of = copy(z)
     assume_value_one_of(z_assumed_value_one_of, tv)
     yield rewrite(ndarray_program(z_assumed_value_one_of)).to(
-        z_program.statement(Program("assert set(") + z_program + ".flatten()) == set(" + tuple_value_program(tv) + ")")
+        z_program.statement(Program("assert set(np.unique(") + z_program + ")) == set(" + tuple_value_program(tv) + ")")
     )
 
     # tuple values

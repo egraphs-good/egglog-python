@@ -4,7 +4,7 @@ def __fn(X, y):
     assert np.all(np.isfinite(X))
     assert y.dtype == np.dtype(np.int64)
     assert y.shape == (150,)
-    assert set(y.flatten()) == set((0,) + (1,) + (2,))
+    assert set(np.unique(y)) == set((0,) + (1,) + (2,))
     _0 = y.reshape((-1,))
     _1 = _0 == np.array(0)
     _2 = np.sum(_1)

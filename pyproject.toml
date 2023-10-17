@@ -31,7 +31,7 @@ dependencies = ["typing-extensions", "black", "graphviz"]
 [project.optional-dependencies]
 dev = ["pre-commit", "black", "mypy", "flake8", "isort", "anywidget[dev]"]
 
-test = ["pytest", "mypy", "scikit-learn", "array_api_compat", "syrupy"]
+test = ["pytest", "mypy", "scikit-learn", "array_api_compat", "syrupy", "numba"]
 
 docs = [
     "pydata-sphinx-theme",
@@ -43,6 +43,8 @@ docs = [
     "array_api_compat",
     "matplotlib",
     "anywidget",
+    "numba",
+    "seaborn",
 ]
 
 
