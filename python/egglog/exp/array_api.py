@@ -7,7 +7,6 @@ import math
 import numbers
 import sys
 from copy import copy
-from re import I
 from typing import Any, ClassVar, Iterator, TypeVar
 
 import numpy as np
