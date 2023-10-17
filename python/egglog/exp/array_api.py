@@ -7,6 +7,7 @@ import math
 import numbers
 import sys
 from copy import copy
+from re import I
 from typing import Any, ClassVar, Iterator, TypeVar
 
 import numpy as np
@@ -574,10 +575,6 @@ ALL_INDICES: TupleInt = array_api_module.constant("ALL_INDICES", TupleInt)
 @array_api_module.class_
 class Value(Expr):
     @classmethod
-    def var(cls, name: StringLike) -> Value:
-        ...
-
-    @classmethod
     def int(cls, i: Int) -> Value:
         ...
 
@@ -615,6 +612,10 @@ class Value(Expr):
         ...
 
     @property
+    def to_int(self) -> Int:
+        ...
+
+    @property
     def to_truthy_value(self) -> Value:
         """
         Converts the value to a bool, based on if its truthy.
@@ -627,6 +628,7 @@ class Value(Expr):
 converter(Int, Value, Value.int)
 converter(Float, Value, Value.float)
 converter(Bool, Value, Value.bool)
+converter(Value, Int, lambda x: x.to_int, 10)
 
 
 @array_api_module.register
@@ -638,6 +640,7 @@ def _value(i: Int, f: Float, b: Bool):
     yield rewrite(Value.bool(b).dtype).to(DType.bool)
 
     yield rewrite(Value.bool(b).to_bool).to(b)
+    yield rewrite(Value.int(i).to_int).to(i)
 
     yield rewrite(Value.bool(b).to_truthy_value).to(Value.bool(b))
     # TODO: Add more rules for to_bool_value
@@ -738,12 +741,9 @@ class NDArray(Expr):
     def shape(self) -> TupleInt:
         ...
 
-    def to_bool(self) -> Bool:
-        ...
-
     @array_api_module.method(preserve=True)
     def __bool__(self) -> bool:
-        return bool(self.to_bool())
+        return bool(self.to_value().to_bool)
 
     @property
     def size(self) -> Int:
@@ -868,7 +868,7 @@ class NDArray(Expr):
     def scalar(cls, value: Value) -> NDArray:
         ...
 
-    def to_int(self) -> Int:
+    def to_value(self) -> Value:
         ...
 
     @property
@@ -901,7 +901,7 @@ converter(NDArray, IndexKey, ndarray_index)
 converter(Value, NDArray, NDArray.scalar)
 # Need this if we want to use ints in slices of arrays coming from 1d arrays, but make it more expensive
 # to prefer upcasting in the other direction when we can, which is safter at runtime
-converter(NDArray, Int, lambda n: n.to_int(), 100)
+converter(NDArray, Value, lambda n: n.to_value(), 100)
 converter(TupleValue, NDArray, NDArray.vector)
 
 
@@ -910,8 +910,8 @@ def _ndarray(x: NDArray, b: Bool, f: Float, fi1: f64, fi2: f64):
     return [
         rewrite(x.ndim).to(x.shape.length()),
         # rewrite(NDArray.scalar(Value.bool(b)).to_bool()).to(b),
-        # Converting to a bool requires a scalar bool value
-        rewrite(x.to_bool()).to(x.index(TupleInt.EMPTY).to_bool),
+        # Converting to a value requires a scalar bool value
+        rewrite(x.to_value()).to(x.index(TupleInt.EMPTY)),
         # TODO: Push these down to float
         rewrite(NDArray.scalar(Value.float(f)) / NDArray.scalar(Value.float(f))).to(
             NDArray.scalar(Value.float(Float(1.0)))
@@ -1031,21 +1031,33 @@ converter(TupleInt, OptionalTupleInt, lambda x: OptionalTupleInt.some(x))
 
 
 @array_api_module.class_
+class IntOrTuple(Expr):
+    none: ClassVar[IntOrTuple]
+
+    @classmethod
+    def int(cls, value: Int) -> IntOrTuple:
+        ...
+
+    @classmethod
+    def tuple(cls, value: TupleInt) -> IntOrTuple:
+        ...
+
+
+converter(Int, IntOrTuple, IntOrTuple.int)
+converter(TupleInt, IntOrTuple, IntOrTuple.tuple)
+
+
+@array_api_module.class_
 class OptionalIntOrTuple(Expr):
     none: ClassVar[OptionalIntOrTuple]
 
     @classmethod
-    def int(cls, value: Int) -> OptionalIntOrTuple:
-        ...
-
-    @classmethod
-    def tuple(cls, value: TupleInt) -> OptionalIntOrTuple:
+    def some(cls, value: IntOrTuple) -> OptionalIntOrTuple:
         ...
 
 
 converter(type(None), OptionalIntOrTuple, lambda x: OptionalIntOrTuple.none)
-converter(Int, OptionalIntOrTuple, OptionalIntOrTuple.int)
-converter(TupleInt, OptionalIntOrTuple, OptionalIntOrTuple.tuple)
+converter(IntOrTuple, OptionalIntOrTuple, OptionalIntOrTuple.some)
 
 
 @array_api_module.function
@@ -1146,17 +1158,33 @@ def _concat(x: NDArray):
     ]
 
 
-@array_api_module.function
+@array_api_module.function(cost=500)
 def unique_counts(x: NDArray) -> TupleNDArray:
     ...
 
 
+@array_api_module.function(unextractable=True)
+def count_values(x: NDArray, values: NDArray) -> TupleValue:
+    """
+    Returns a tuple of the count of each of the values in the array.
+    """
+    ...
+
+
 @array_api_module.register
-def _unique_counts(x: NDArray):
+def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
     return [
         rewrite(unique_counts(x).length()).to(Int(2)),
         # Sum of all unique counts is the size of the array
         rewrite(sum(unique_counts(x)[Int(1)])).to(NDArray.scalar(Value.int(x.size))),
+        # The unique counts are the count of all the unique values
+        rewrite(unique_counts(x)[Int(1)]).to(NDArray.vector(count_values(x, unique_values(x)))),
+        rewrite(count_values(x, NDArray.vector(TupleValue(v) + tv))).to(
+            TupleValue(sum(x == NDArray.scalar(v)).to_value()) + count_values(x, NDArray.vector(tv))
+        ),
+        rewrite(count_values(x, NDArray.vector(TupleValue(v)))).to(
+            TupleValue(sum(x == NDArray.scalar(v)).to_value()),
+        ),
     ]
 
 
@@ -1177,7 +1205,7 @@ def _astype(x: NDArray, dtype: DType, i: i64):
 
 
 @array_api_module.function
-def std(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
+def square(x: NDArray) -> NDArray:
     ...
 
 
@@ -1203,17 +1231,21 @@ def _abs(f: Float):
     ]
 
 
-@array_api_module.function
+@array_api_module.function(cost=100)
 def unique_inverse(x: NDArray) -> TupleNDArray:
     ...
 
 
 @array_api_module.register
-def _unique_inverse(x: NDArray):
+def _unique_inverse(x: NDArray, i: Int):
     return [
         rewrite(unique_inverse(x).length()).to(Int(2)),
         # Shape of unique_inverse first element is same as shape of unique_values
-        rewrite(unique_inverse(x)[Int(0)].shape).to(unique_values(x).shape),
+        rewrite(unique_inverse(x)[Int(0)]).to(unique_values(x)),
+        # Creating a mask array of when the unique inverse is a value is the same as a mask array for when the value is that index of the unique values
+        rewrite(unique_inverse(x)[Int(1)] == NDArray.scalar(Value.int(i))).to(
+            x == NDArray.scalar(unique_values(x).index(TupleInt(i)))
+        ),
     ]
 
 
@@ -1225,13 +1257,23 @@ def zeros(
 
 
 @array_api_module.function
-def mean(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
+def expand_dims(x: NDArray, axis: Int = Int(0)) -> NDArray:
+    ...
+
+
+@array_api_module.function(cost=100000)
+def mean(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none, keepdims: Bool = FALSE) -> NDArray:
     ...
 
 
 # TODO: Possibly change names to include modules.
 @array_api_module.function(egg_fn="ndarray-sqrt")
 def sqrt(x: NDArray) -> NDArray:
+    ...
+
+
+@array_api_module.function(cost=100000)
+def std(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
     ...
 
 
