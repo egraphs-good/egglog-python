@@ -32,7 +32,10 @@ def f(i: i64Like) -> Bool:  # type: ignore[empty-body]
 
 
 i = var("i", i64)
-egraph.register(rule(R(i)).then(set_(f(i)).to(T)), R(i64(0)))
+egraph.register(
+    rule(R(i)).then(set_(f(i)).to(T)),
+    R(i64(0)),
+)
 
 egraph.run(3)
-egraph.check(eq(f(3)).to(T))
+egraph.check(eq(f(0)).to(T))

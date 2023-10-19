@@ -60,7 +60,7 @@ class Bool(Expr):
         ...
 
     @BUILTINS.method(egg_fn="not")
-    def __not__(self) -> Bool:  # type: ignore[empty-body]
+    def __invert__(self) -> Bool:  # type: ignore[empty-body]
         ...
 
     @BUILTINS.method(egg_fn="and")

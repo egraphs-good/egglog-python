@@ -579,14 +579,14 @@ class LitDecl:
     def to_egg(self, _decls: ModuleDeclarations) -> bindings.Lit:
         if self.value is None:
             return bindings.Lit(bindings.Unit())
+        if isinstance(self.value, bool):
+            return bindings.Lit(bindings.Bool(self.value))
         if isinstance(self.value, int):
             return bindings.Lit(bindings.Int(self.value))
         if isinstance(self.value, float):
             return bindings.Lit(bindings.F64(self.value))
         if isinstance(self.value, str):
             return bindings.Lit(bindings.String(self.value))
-        if isinstance(self.value, bool):
-            return bindings.Lit(bindings.Bool(self.value))
         assert_never(self.value)
 
     def pretty(self, context: PrettyContext, unwrap_lit=True, **kwargs) -> str:
@@ -597,14 +597,14 @@ class LitDecl:
         """
         if self.value is None:
             return "Unit()"
+        if isinstance(self.value, bool):
+            return f"Bool({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, int):
             return f"i64({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, float):
             return f"f64({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, str):
             return f"String({repr(self.value)})" if not unwrap_lit else repr(self.value)
-        if isinstance(self.value, bool):
-            return f"bool({self.value})" if not unwrap_lit else str(self.value)
         assert_never(self.value)
 
 
