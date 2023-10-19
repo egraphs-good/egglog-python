@@ -3,9 +3,9 @@ Module for generating array api code that works with Numba.
 """
 
 from __future__ import annotations
-from ast import Import
 
 import operator
+from ast import Import
 
 from egglog import *
 from egglog.exp.array_api import *
@@ -68,13 +68,13 @@ try:
 except ImportError:
     pass
 else:
+
     @infer_global(operator.eq)
     class DtypeEq(AbstractTemplate):
         def generic(self, args, kws):
             [lhs, rhs] = args
             if isinstance(lhs, types.DType) and isinstance(rhs, types.DType):
                 return signature(types.boolean, lhs, rhs)
-
 
     @lower_builtin(operator.eq, types.DType, types.DType)
     def const_eq_impl(context, builder, sig, args):
