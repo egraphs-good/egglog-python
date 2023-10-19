@@ -28,9 +28,19 @@ classifiers = [
 dependencies = ["typing-extensions", "black", "graphviz"]
 
 [project.optional-dependencies]
-dev = ["pre-commit", "black", "mypy", "flake8", "isort", "anywidget[dev]"]
 
-test = ["pytest", "mypy", "scikit-learn", "array_api_compat", "syrupy", "numba"]
+array = ["scikit-learn", "array_api_compat", 'numba; python_version<"3.12"']
+dev = [
+    "pre-commit",
+    "black",
+    "mypy",
+    "flake8",
+    "isort",
+    "anywidget[dev]",
+    "egglog[docs,test]",
+]
+
+test = ["pytest", "mypy", "syrupy", "egglog[array]"]
 
 docs = [
     "pydata-sphinx-theme",
@@ -38,12 +48,10 @@ docs = [
     "sphinx-autodoc-typehints",
     "sphinx-gallery",
     "nbconvert",
-    "scikit-learn",
-    "array_api_compat",
     "matplotlib",
     "anywidget",
-    "numba",
     "seaborn",
+    "egglog[array]",
 ]
 
 
