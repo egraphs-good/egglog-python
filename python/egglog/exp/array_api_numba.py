@@ -5,7 +5,6 @@ Module for generating array api code that works with Numba.
 from __future__ import annotations
 
 import operator
-from ast import Import
 
 from egglog import *
 from egglog.exp.array_api import *
