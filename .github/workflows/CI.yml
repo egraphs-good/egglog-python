@@ -29,41 +29,25 @@ jobs:
           - "3.8"
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.71.1
+      - uses: Swatinem/rust-cache@v2
       - name: Setup python ${{ matrix.py }}
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.py }}
           cache: "pip"
-      - name: Cache cargo
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: pip install -e .[test]
       - run: pytest
   mypy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.71.1
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
           cache: "pip"
-      - name: Cache cargo
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: pip install -e .[test] mypy pre-commit
       - run: pre-commit run --all-files mypy
       - run: pre-commit run --all-files stubtest
@@ -71,6 +55,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.71.1
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
@@ -79,16 +65,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y graphviz
-      - name: Cache cargo
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: pip install -e .[docs] pre-commit
       - run: pre-commit run --all-files docs
   linux:
