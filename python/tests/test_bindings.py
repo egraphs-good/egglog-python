@@ -118,7 +118,7 @@ class TestEGraph:
         egraph.run_program(
             Datatype("Expr", [Variant("Num", ["i64"], cost=5)]),
             ActionCommand(Let("x", Call("Num", [Lit(Int(1))]))),
-            QueryExtract(0, Fact(Var("x"))),
+            QueryExtract(0, Var("x")),
         )
 
         extract_report = egraph.extract_report()

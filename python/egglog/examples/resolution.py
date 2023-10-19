@@ -12,21 +12,21 @@ egraph = EGraph()
 
 
 @egraph.class_
-class Bool(Expr):
-    FALSE: ClassVar[Bool]
+class Boolean(Expr):
+    FALSE: ClassVar[Boolean]
 
-    def __or__(self, other: Bool) -> Bool:  # type: ignore[empty-body]
+    def __or__(self, other: Boolean) -> Boolean:  # type: ignore[empty-body]
         ...
 
-    def __invert__(self) -> Bool:  # type: ignore[empty-body]
+    def __invert__(self) -> Boolean:  # type: ignore[empty-body]
         ...
 
 
 # Show off two ways of creating constants, either as top level values or as classvars
-T = egraph.constant("T", Bool)
-F = Bool.FALSE
+T = egraph.constant("T", Boolean)
+F = Boolean.FALSE
 
-p, a, b, c, as_, bs = vars_("p a b c as bs", Bool)
+p, a, b, c, as_, bs = vars_("p a b c as bs", Boolean)
 egraph.register(
     # clauses are assumed in the normal form (or a (or b (or c False)))
     union(~F).with_(T),
@@ -63,7 +63,7 @@ egraph.register(
 
 # Example predicate
 @egraph.function
-def pred(x: i64Like) -> Bool:  # type: ignore[empty-body]
+def pred(x: i64Like) -> Boolean:  # type: ignore[empty-body]
     ...
 
 

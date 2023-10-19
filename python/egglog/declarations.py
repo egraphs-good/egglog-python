@@ -555,7 +555,7 @@ class VarDecl:
         return self.name
 
 
-LitType = Union[int, str, float, None]
+LitType = Union[int, str, float, bool, None]
 
 
 @dataclass(frozen=True)
@@ -570,6 +570,8 @@ class LitDecl:
             return TypedExprDecl(JustTypeRef("String"), cls(lit.value.value))
         if isinstance(lit.value, bindings.F64):
             return TypedExprDecl(JustTypeRef("f64"), cls(lit.value.value))
+        if isinstance(lit.value, bindings.Bool):
+            return TypedExprDecl(JustTypeRef("bool"), cls(lit.value.value))
         elif isinstance(lit.value, bindings.Unit):
             return TypedExprDecl(JustTypeRef("Unit"), cls(None))
         assert_never(lit.value)
@@ -583,6 +585,8 @@ class LitDecl:
             return bindings.Lit(bindings.F64(self.value))
         if isinstance(self.value, str):
             return bindings.Lit(bindings.String(self.value))
+        if isinstance(self.value, bool):
+            return bindings.Lit(bindings.Bool(self.value))
         assert_never(self.value)
 
     def pretty(self, context: PrettyContext, unwrap_lit=True, **kwargs) -> str:
@@ -599,6 +603,8 @@ class LitDecl:
             return f"f64({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, str):
             return f"String({repr(self.value)})" if not unwrap_lit else repr(self.value)
+        if isinstance(self.value, bool):
+            return f"bool({self.value})" if not unwrap_lit else str(self.value)
         assert_never(self.value)
 
 

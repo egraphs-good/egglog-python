@@ -52,7 +52,7 @@ __all__ = [
 BLACK_MODE = black.Mode(line_length=180)  # type: ignore
 
 UNIT_CLASS_NAME = "Unit"
-UNARY_LIT_CLASS_NAMES = {"i64", "f64", "String"}
+UNARY_LIT_CLASS_NAMES = {"i64", "f64", "Bool", "String"}
 LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
 
 ##
@@ -204,7 +204,7 @@ class RuntimeClass:
         # If this is a literal type, initializing it with a literal should return a literal
         if self.__egg_name__ in UNARY_LIT_CLASS_NAMES:
             assert len(args) == 1
-            assert isinstance(args[0], (int, float, str))
+            assert isinstance(args[0], (int, float, str, bool))
             return RuntimeExpr(self.__egg_decls__, TypedExprDecl(JustTypeRef(self.__egg_name__), LitDecl(args[0])))
         if self.__egg_name__ == UNIT_CLASS_NAME:
             assert len(args) == 0

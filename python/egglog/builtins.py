@@ -16,6 +16,8 @@ __all__ = [
     "i64Like",
     "f64",
     "f64Like",
+    "Bool",
+    "BoolLike",
     "String",
     "StringLike",
     "Map",
@@ -48,6 +50,37 @@ def join(*strings: StringLike) -> String:  # type: ignore[empty-body]
 
 
 converter(str, String, String)
+
+BoolLike = Union["Bool", bool]
+
+
+@BUILTINS.class_(egg_sort="bool")
+class Bool(Expr):
+    def __init__(self, value: bool):
+        ...
+
+    @BUILTINS.method(egg_fn="not")
+    def __not__(self) -> Bool:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="and")
+    def __and__(self, other: BoolLike) -> Bool:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="or")
+    def __or__(self, other: BoolLike) -> Bool:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="xor")
+    def __xor__(self, other: BoolLike) -> Bool:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="=>")
+    def implies(self, other: BoolLike) -> Bool:  # type: ignore[empty-body]
+        ...
+
+
+converter(bool, Bool, Bool)
 
 # The types which can be convertered into an i64
 i64Like = Union["i64", int]
@@ -150,6 +183,22 @@ class i64(Expr):
 
     @BUILTINS.method(egg_fn="to-string")
     def to_string(self) -> String:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="bool-<")
+    def bool_lt(self, other: i64Like) -> Bool:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="bool->")
+    def bool_gt(self, other: i64Like) -> Bool:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="bool-<=")
+    def bool_le(self, other: i64Like) -> Bool:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="bool->=")
+    def bool_ge(self, other: i64Like) -> Bool:  # type: ignore[empty-body]
         ...
 
 

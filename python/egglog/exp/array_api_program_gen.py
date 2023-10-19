@@ -16,7 +16,7 @@ array_api_module_string = Module([array_api_module.without_rules(), program_gen_
 
 
 @array_api_module_string.function
-def bool_program(x: Bool) -> Program:
+def bool_program(x: Boolean) -> Program:
     ...
 
 
@@ -131,7 +131,7 @@ def value_program(x: Value) -> Program:
 
 
 @array_api_module_string.register
-def _value_program(i: Int, b: Bool, f: Float, x: NDArray, v1: Value, v2: Value):
+def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Value):
     yield rewrite(value_program(Value.int(i))).to(int_program(i))
     yield rewrite(value_program(Value.bool(b))).to(bool_program(b))
     yield rewrite(value_program(Value.float(f))).to(float_program(f))
@@ -279,7 +279,7 @@ def _py_expr(
     tv2: TupleValue,
     v: Value,
     v_str: String,
-    b: Bool,
+    b: Boolean,
     f: Float,
     f_str: String,
     b_str: String,

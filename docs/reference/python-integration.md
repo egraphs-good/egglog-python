@@ -248,7 +248,7 @@ For example, let's say you are implementing a `Bool` expression, but you want to
 
 ```{code-cell} python
 @egraph.class_
-class Bool(Expr):
+class Boolean(Expr):
     @egraph.method(preserve=True)
     def __bool__(self) -> bool:
         # Add this expression converted to a Python object to the e-graph
@@ -261,11 +261,11 @@ class Bool(Expr):
     def to_py(self) -> PyObject:
         ...
 
-    def __or__(self, other: Bool) -> Bool:
+    def __or__(self, other: Boolean) -> Boolean:
         ...
 
-TRUE = egraph.constant("TRUE", Bool)
-FALSE = egraph.constant("FALSE", Bool)
+TRUE = egraph.constant("TRUE", Boolean)
+FALSE = egraph.constant("FALSE", Boolean)
 
 
 @egraph.register

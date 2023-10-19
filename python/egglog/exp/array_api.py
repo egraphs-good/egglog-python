@@ -74,7 +74,7 @@ array_api_module = Module()
 
 
 @array_api_module.class_
-class Bool(Expr):
+class Boolean(Expr):
     @array_api_module.method(preserve=True)
     def __bool__(self) -> bool:
         return extract_py(self)
@@ -82,20 +82,20 @@ class Bool(Expr):
     def to_py(self) -> PyObject:
         ...
 
-    def __or__(self, other: Bool) -> Bool:
+    def __or__(self, other: Boolean) -> Boolean:
         ...
 
-    def __and__(self, other: Bool) -> Bool:
+    def __and__(self, other: Boolean) -> Boolean:
         ...
 
 
-TRUE = array_api_module.constant("TRUE", Bool)
-FALSE = array_api_module.constant("FALSE", Bool)
-converter(bool, Bool, lambda x: TRUE if x else FALSE)
+TRUE = array_api_module.constant("TRUE", Boolean)
+FALSE = array_api_module.constant("FALSE", Boolean)
+converter(bool, Boolean, lambda x: TRUE if x else FALSE)
 
 
 @array_api_module.register
-def _bool(x: Bool):
+def _bool(x: Boolean):
     return [
         set_(TRUE.to_py()).to(array_api_module.save_object(True)),
         set_(FALSE.to_py()).to(array_api_module.save_object(False)),
@@ -115,7 +115,7 @@ class DType(Expr):
     object: ClassVar[DType]
     bool: ClassVar[DType]
 
-    def __eq__(self, other: DType) -> Bool:  # type: ignore[override]
+    def __eq__(self, other: DType) -> Boolean:  # type: ignore[override]
         ...
 
 
@@ -155,7 +155,7 @@ class IsDtypeKind(Expr):
 
 # TODO: Make kind more generic to support tuples.
 @array_api_module.function
-def isdtype(dtype: DType, kind: IsDtypeKind) -> Bool:
+def isdtype(dtype: DType, kind: IsDtypeKind) -> Boolean:
     ...
 
 
@@ -202,13 +202,13 @@ class Int(Expr):
     def __invert__(self) -> Int:
         ...
 
-    def __lt__(self, other: Int) -> Bool:
+    def __lt__(self, other: Int) -> Boolean:
         ...
 
-    def __le__(self, other: Int) -> Bool:
+    def __le__(self, other: Int) -> Boolean:
         ...
 
-    def __eq__(self, other: Int) -> Bool:  # type: ignore[override]
+    def __eq__(self, other: Int) -> Boolean:  # type: ignore[override]
         ...
 
     # Make != always return a Bool, so that numpy.unique works on a tuple of ints
@@ -217,10 +217,10 @@ class Int(Expr):
     def __ne__(self, other: Int) -> bool:  # type: ignore[override]
         return not extract_py(self == other)
 
-    def __gt__(self, other: Int) -> Bool:
+    def __gt__(self, other: Int) -> Boolean:
         ...
 
-    def __ge__(self, other: Int) -> Bool:
+    def __ge__(self, other: Int) -> Boolean:
         ...
 
     def __add__(self, other: Int) -> Int:
@@ -322,7 +322,7 @@ class Int(Expr):
 
 
 @array_api_module.register
-def _int(i: i64, j: i64, r: Bool, o: Int):
+def _int(i: i64, j: i64, r: Boolean, o: Int):
     yield rewrite(Int(i) == Int(i)).to(TRUE)
     yield rule(eq(r).to(Int(i) == Int(j)), i != j).then(union(r).with_(FALSE))
 
@@ -386,7 +386,7 @@ converter(Int, Float, lambda x: Float.from_int(x))
 
 
 @array_api_module.register
-def _float(f: f64, f2: f64, r: Bool, o: Float, i: i64):
+def _float(f: f64, f2: f64, r: Boolean, o: Float, i: i64):
     return [
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
         rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
@@ -582,10 +582,10 @@ class Value(Expr):
         ...
 
     @classmethod
-    def bool(cls, b: Bool) -> Value:
+    def bool(cls, b: Boolean) -> Value:
         ...
 
-    def isfinite(self) -> Bool:
+    def isfinite(self) -> Boolean:
         ...
 
     def __lt__(self, other: Value) -> Value:
@@ -607,7 +607,7 @@ class Value(Expr):
         ...
 
     @property
-    def to_bool(self) -> Bool:
+    def to_bool(self) -> Boolean:
         ...
 
     @property
@@ -626,12 +626,12 @@ class Value(Expr):
 
 converter(Int, Value, Value.int)
 converter(Float, Value, Value.float)
-converter(Bool, Value, Value.bool)
+converter(Boolean, Value, Value.bool)
 converter(Value, Int, lambda x: x.to_int, 10)
 
 
 @array_api_module.register
-def _value(i: Int, f: Float, b: Bool):
+def _value(i: Int, f: Float, b: Boolean):
     # Default dtypes
     # https://data-apis.org/array-api/latest/API_specification/data_types.html?highlight=dtype#default-data-types
     yield rewrite(Value.int(i).dtype).to(DType.int64)
@@ -661,7 +661,7 @@ class TupleValue(Expr):
     def __getitem__(self, i: Int) -> Value:
         ...
 
-    def includes(self, value: Value) -> Bool:
+    def includes(self, value: Value) -> Boolean:
         ...
 
 
@@ -905,7 +905,7 @@ converter(TupleValue, NDArray, NDArray.vector)
 
 
 @array_api_module.register
-def _ndarray(x: NDArray, b: Bool, f: Float, fi1: f64, fi2: f64):
+def _ndarray(x: NDArray, b: Boolean, f: Float, fi1: f64, fi2: f64):
     return [
         rewrite(x.ndim).to(x.shape.length()),
         # rewrite(NDArray.scalar(Value.bool(b)).to_bool()).to(b),
@@ -982,12 +982,12 @@ class OptionalBool(Expr):
     none: ClassVar[OptionalBool]
 
     @classmethod
-    def some(cls, value: Bool) -> OptionalBool:
+    def some(cls, value: Boolean) -> OptionalBool:
         ...
 
 
 converter(type(None), OptionalBool, lambda x: OptionalBool.none)
-converter(Bool, OptionalBool, lambda x: OptionalBool.some(x))
+converter(Boolean, OptionalBool, lambda x: OptionalBool.some(x))
 
 
 @array_api_module.class_
@@ -1261,7 +1261,7 @@ def expand_dims(x: NDArray, axis: Int = Int(0)) -> NDArray:
 
 
 @array_api_module.function(cost=100000)
-def mean(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none, keepdims: Bool = FALSE) -> NDArray:
+def mean(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none, keepdims: Boolean = FALSE) -> NDArray:
     ...
 
 
@@ -1280,7 +1280,7 @@ linalg = sys.modules[__name__]
 
 
 @array_api_module.function
-def svd(x: NDArray, full_matrices: Bool = TRUE) -> TupleNDArray:
+def svd(x: NDArray, full_matrices: Boolean = TRUE) -> TupleNDArray:
     """
     https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.svd.html
     """
@@ -1288,7 +1288,7 @@ def svd(x: NDArray, full_matrices: Bool = TRUE) -> TupleNDArray:
 
 
 @array_api_module.register
-def _linalg(x: NDArray, full_matrices: Bool):
+def _linalg(x: NDArray, full_matrices: Boolean):
     return [
         rewrite(svd(x, full_matrices).length()).to(Int(3)),
     ]
@@ -1350,7 +1350,7 @@ def _interval_analaysis(
     dtype: DType,
     f: f64,
     i: i64,
-    b: Bool,
+    b: Boolean,
     idx: TupleInt,
     v: Value,
     v1: Value,
@@ -1520,7 +1520,7 @@ def _assume_value_one_of(x: NDArray, v: Value, vs: TupleValue, idx: TupleInt):
 
 
 @array_api_module.register
-def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f64, b: Bool):
+def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f64, b: Boolean):
     yield rewrite(Value.int(i).isfinite()).to(TRUE)
     yield rewrite(Value.bool(b).isfinite()).to(TRUE)
     yield rewrite(Value.float(Float(f)).isfinite()).to(TRUE, f != f64(math.nan))

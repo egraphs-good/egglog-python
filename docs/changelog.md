@@ -4,6 +4,14 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 
 ## Unreleased
 
+### Breaking Changes
+
+- Test on Python 3.9 - 3.11, stop testing on 3.8 to follow Scientific Python versioning policy
+- Bump [egglog dep](https://github.com/egraphs-good/egglog/compare/45d05e727cceaab13413b4e51a60ee3be9fbf403...959afb9078b93df7d58afa519b1399c128132507)
+  - Adds `Bool` builtin
+  - Rename `PrintTable` command to `PrintFunction`
+  - Change extract command back to taking an expression instead of a fact
+
 ### New Features
 
 - Add ability to print egglog string of module with `.as_egglog_string`
@@ -12,6 +20,7 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 - Convert reflected methods based on both types
 - Allow specifying custom costs for conversions
 - In `py_exec` make a temporary file with source for tracebacks
+- Add an experimental Array API implementation with a scikit-learn test
 
 ## 0.7.0 (2023-10-04)
 

@@ -194,14 +194,14 @@ In egglog, the `(declare ...)` command is syntactic sugar for a nullary function
 from typing import ClassVar
 
 @egraph.class_
-class Bool:
-    TRUE: ClassVar[Bool]
+class Boolean:
+    TRUE: ClassVar[Boolean]
 
-    def __or__(self, other: Bool) -> Bool:
+    def __or__(self, other: Boolean) -> Boolean:
         ...
 
-FALSE = egraph.constant("False", Bool)
-Bool.TRUE | FALSE
+FALSE = egraph.constant("False", Boolean)
+Boolean.TRUE | FALSE
 ```
 
 ### Relations
