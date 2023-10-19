@@ -715,7 +715,7 @@ class Module(_BaseModule):
             )
         )
 
-    def increase_cost(self, x: int = 10000) -> Module:
+    def increase_cost(self, x: int = 10000000) -> Module:
         """
         Make a copy of this module with all function costs increased by x
         """

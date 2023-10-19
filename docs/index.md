@@ -11,6 +11,8 @@ allowing you to use e-graphs in Python for optimization, symbolic computation, a
 pip install egglog
 ```
 
+_This follows [SPEC 0](https://scientific-python.org/specs/spec-0000/) in terms of what Python versions are supported_
+
 ```{code-cell} python
 from __future__ import annotations
 from egglog import *

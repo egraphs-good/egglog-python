@@ -15,10 +15,9 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Natural Language :: English",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
@@ -29,9 +28,19 @@ classifiers = [
 dependencies = ["typing-extensions", "black", "graphviz"]
 
 [project.optional-dependencies]
-dev = ["pre-commit", "black", "mypy", "flake8", "isort", "anywidget[dev]"]
 
-test = ["pytest", "mypy", "scikit-learn", "array_api_compat", "syrupy"]
+array = ["scikit-learn", "array_api_compat", 'numba; python_version<"3.12"']
+dev = [
+    "pre-commit",
+    "black",
+    "mypy",
+    "flake8",
+    "isort",
+    "anywidget[dev]",
+    "egglog[docs,test]",
+]
+
+test = ["pytest", "mypy", "syrupy", "egglog[array]"]
 
 docs = [
     "pydata-sphinx-theme",
@@ -39,10 +48,10 @@ docs = [
     "sphinx-autodoc-typehints",
     "sphinx-gallery",
     "nbconvert",
-    "scikit-learn",
-    "array_api_compat",
     "matplotlib",
     "anywidget",
+    "seaborn",
+    "egglog[array]",
 ]
 
 
