@@ -184,24 +184,24 @@ In egglog, the `(declare ...)` command is syntactic sugar for a nullary function
 
 ```{code-cell} python
 # egg:
-# (datatype Bool)
-# (function or (Bool Bool) Bool)
-# (declare True Bool)
-# (declare False Bool)
+# (datatype Boolean)
+# (function or (Boolean Boolean) Boolean)
+# (declare True Boolean)
+# (declare False Boolean)
 # (or True False)
 #
 
 from typing import ClassVar
 
 @egraph.class_
-class Bool:
-    TRUE: ClassVar[Bool]
+class Boolean:
+    TRUE: ClassVar[Boolean]
 
-    def __or__(self, other: Bool) -> Bool:
+    def __or__(self, other: Boolean) -> Boolean:
         ...
 
-FALSE = egraph.constant("False", Bool)
-Bool.TRUE | FALSE
+FALSE = egraph.constant("False", Boolean)
+Boolean.TRUE | FALSE
 ```
 
 ### Relations
@@ -252,7 +252,7 @@ egraph.register(delete(fib(0)))
 
 ```{code-cell} python
 # egg: (union (or True False) True)
-egraph.register(union(Bool.TRUE | FALSE).with_(Bool.TRUE))
+egraph.register(union(Boolean.TRUE | FALSE).with_(Boolean.TRUE))
 ```
 
 Similar to the `set` funciton, this uses a fluent API, so that we can verify the types statically.

@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 
 #[pyfunction]
 fn termdag_term_to_expr(termdag: &TermDag, term: Term) -> Expr {
-    let mut termdag: egglog::TermDag = termdag.into();
+    let termdag: egglog::TermDag = termdag.into();
     let term: egglog::Term = term.into();
     termdag.term_to_expr(&term).into()
 }

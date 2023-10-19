@@ -10,10 +10,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.18.1", features = ["extension-module"] }
-egglog = { git = "https://github.com/egraphs-good/egglog", rev = "45d05e727cceaab13413b4e51a60ee3be9fbf403" }
-# egglog = { git = "https://github.com/oflatt/egg-smol", rev = "f6df3ff831b65405665e1751b0ef71c61b025432" }
+egglog = { git = "https://github.com/egraphs-good/egglog", rev = "959afb9078b93df7d58afa519b1399c128132507" }
+# egglog = { git = "https://github.com/oflatt/egg-smol", branch = "oflatt-fast-terms" }
 # egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "38b3014b34399cc78887ede09c845b2a5d6c7d19" }
-
 pyo3-log = "0.8.1"
 log = "0.4.17"
 lalrpop-util = { version = "0.19.8", features = ["lexer"] }

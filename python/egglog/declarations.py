@@ -555,7 +555,7 @@ class VarDecl:
         return self.name
 
 
-LitType = Union[int, str, float, None]
+LitType = Union[int, str, float, bool, None]
 
 
 @dataclass(frozen=True)
@@ -570,6 +570,8 @@ class LitDecl:
             return TypedExprDecl(JustTypeRef("String"), cls(lit.value.value))
         if isinstance(lit.value, bindings.F64):
             return TypedExprDecl(JustTypeRef("f64"), cls(lit.value.value))
+        if isinstance(lit.value, bindings.Bool):
+            return TypedExprDecl(JustTypeRef("bool"), cls(lit.value.value))
         elif isinstance(lit.value, bindings.Unit):
             return TypedExprDecl(JustTypeRef("Unit"), cls(None))
         assert_never(lit.value)
@@ -577,6 +579,8 @@ class LitDecl:
     def to_egg(self, _decls: ModuleDeclarations) -> bindings.Lit:
         if self.value is None:
             return bindings.Lit(bindings.Unit())
+        if isinstance(self.value, bool):
+            return bindings.Lit(bindings.Bool(self.value))
         if isinstance(self.value, int):
             return bindings.Lit(bindings.Int(self.value))
         if isinstance(self.value, float):
@@ -593,6 +597,8 @@ class LitDecl:
         """
         if self.value is None:
             return "Unit()"
+        if isinstance(self.value, bool):
+            return f"Bool({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, int):
             return f"i64({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, float):

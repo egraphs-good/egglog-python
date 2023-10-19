@@ -51,7 +51,12 @@ class String:
 class Unit:
     def __init__(self) -> None: ...
 
-_Literal = Int | F64 | String | Unit
+@final
+class Bool:
+    def __init__(self, b: bool) -> None: ...
+    value: bool
+
+_Literal = Int | F64 | String | Bool | Unit
 
 ##
 # Expressions
@@ -375,8 +380,8 @@ class Calc:
 @final
 class QueryExtract:
     variants: int
-    fact: _Fact
-    def __init__(self, variants: int, fact: _Fact) -> None: ...
+    expr: _Expr
+    def __init__(self, variants: int, expr: _Expr) -> None: ...
 
 @final
 class Check:
@@ -384,7 +389,7 @@ class Check:
     def __init__(self, facts: list[_Fact]) -> None: ...
 
 @final
-class PrintTable:
+class PrintFunction:
     name: str
     length: int
     def __init__(self, name: str, length: int) -> None: ...
@@ -457,7 +462,7 @@ _Command = (
     | Simplify
     | QueryExtract
     | Check
-    | PrintTable
+    | PrintFunction
     | PrintSize
     | Output
     | Input

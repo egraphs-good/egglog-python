@@ -17,6 +17,9 @@ convert_enums!(
         String_[name="String"][trait=Hash](value: String)
             s -> egglog::ast::Literal::String((&s.value).into()),
             egglog::ast::Literal::String(s) => String_ { value: s.to_string() };
+        Bool[trait=Hash](value: bool)
+            b -> egglog::ast::Literal::Bool(b.value),
+            egglog::ast::Literal::Bool(b) => Bool { value: *b };
         Unit[trait=Hash]()
             _x -> egglog::ast::Literal::Unit,
             egglog::ast::Literal::Unit => Unit {}
@@ -194,21 +197,21 @@ convert_enums!(
                 identifiers: identifiers.iter().map(|i| i.into()).collect(),
                 exprs: exprs.iter().map(|e| e.into()).collect()
             };
-        QueryExtract(variants: usize, fact: Fact_)
-            e -> egglog::ast::Command::Extract {
+        QueryExtract(variants: usize, expr: Expr)
+            e -> egglog::ast::Command::QueryExtract {
                 variants: e.variants,
-                fact: (&e.fact).into()
+                expr: (&e.expr).into()
             },
-            egglog::ast::Command::Extract {variants, fact} => QueryExtract {
+            egglog::ast::Command::QueryExtract {variants, expr} => QueryExtract {
                 variants: *variants,
-                fact: fact.into()
+                expr: expr.into()
             };
         Check(facts: Vec<Fact_>)
             c -> egglog::ast::Command::Check(c.facts.iter().map(|f| f.into()).collect()),
             egglog::ast::Command::Check(facts) => Check { facts: facts.iter().map(|f| f.into()).collect() };
-            PrintTable(name: String, length: usize)
-            p -> egglog::ast::Command::PrintTable((&p.name).into(), p.length),
-            egglog::ast::Command::PrintTable(n, l) => PrintTable {
+        PrintFunction(name: String, length: usize)
+            p -> egglog::ast::Command::PrintFunction((&p.name).into(), p.length),
+            egglog::ast::Command::PrintFunction(n, l) => PrintFunction {
                 name: n.to_string(),
                 length: *l
             };
