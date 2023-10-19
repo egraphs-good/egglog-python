@@ -269,7 +269,7 @@ FALSE = egraph.constant("FALSE", Boolean)
 
 
 @egraph.register
-def _bool(x: Bool):
+def _bool(x: Boolean):
     return [
         set_(TRUE.to_py()).to(egraph.save_object(True)),
         set_(FALSE.to_py()).to(egraph.save_object(False)),
