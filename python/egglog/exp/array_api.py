@@ -7,67 +7,16 @@ import math
 import numbers
 import sys
 from copy import copy
-from typing import Any, ClassVar, Iterator, TypeVar
+from typing import Any, ClassVar, Iterator, Protocol
 
 import numpy as np
 from egglog import *
-from egglog.bindings import EggSmolError
 from egglog.runtime import RuntimeExpr
 
 from .program_gen import *
 
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
-
-
-T = TypeVar("T", bound=Expr)
-
-# For now, have this global e-graph for this module, a bit hacky, but works as a proof of concept.
-# We need a global e-graph so that we have the preserved methods reference it to extract when they are called.
-
-
-def extract_py(e: Expr) -> Any:
-    egraph = EGraph.current()
-    egraph.push()
-    # print(e)
-    egraph.register(e)
-    egraph.run((run() * 30).saturate())
-    final_object = egraph.extract(e)
-    # with egraph:
-    # egraph.run((run() * 10).saturate())
-    # print(egraph.extract(final_object))
-
-    # Run saturation again b/c sometimes it doesn't work the first time.
-    # final_object = egraph.extract(egraph.extract(final_object))
-    # egraph.run(run(limit=10).saturate())
-    # final_object: Expr = egraph.extract(final_object)
-    # egraph.register(final_object.to_py())
-    # egraph.run(run(limit=10).saturate())
-
-    # try:
-    #     x = str((Int(1) * Int(3)) == Int(2))
-    # except Exception:
-    #     pass
-    # else:
-    #     if str(egraph.extract(final_object)) == x:
-    #         final_object = (Int(1) * Int(3)) == Int(2)
-    # pass
-    # raise Exception("Failed to extract")
-
-    # final_object = egraph.extract(egraph.extract(final_object))
-    # egraph.run(run(limit=10).saturate())
-
-    # print(f"     -> {egraph.extract(final_object)}\n")
-    try:
-        res = egraph.load_object(egraph.extract(final_object.to_py()))  # type: ignore[attr-defined]
-    except EggSmolError:
-        other_versions = egraph.extract_multiple(final_object, 10)
-        other_verions_str = "\n\n".join(map(str, other_versions))
-        egraph.graphviz().render(view=True)
-        raise Exception(f"Failed to extract:\n{other_verions_str}")
-    # print(res)
-    egraph.pop()
-    return res
 
 
 array_api_module = Module()
@@ -97,8 +46,8 @@ converter(bool, Boolean, lambda x: TRUE if x else FALSE)
 @array_api_module.register
 def _bool(x: Boolean):
     return [
-        set_(TRUE.to_py()).to(array_api_module.save_object(True)),
-        set_(FALSE.to_py()).to(array_api_module.save_object(False)),
+        rule(eq(x).to(TRUE)).then(set_(x.to_py()).to(array_api_module.save_object(True))),
+        rule(eq(x).to(FALSE)).then(set_(x.to_py()).to(array_api_module.save_object(False))),
         rewrite(TRUE | x).to(TRUE),
         rewrite(FALSE | x).to(x),
         rewrite(TRUE & x).to(x),
@@ -189,9 +138,6 @@ def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
         rewrite(isdtype(d, k1 | k2)).to(isdtype(d, k1) | isdtype(d, k2)),
         rewrite(k1 | IsDtypeKind.NULL).to(k1),
     ]
-
-
-# assert not bool(isdtype(DType.float32, IsDtypeKind.string("integral")))
 
 
 @array_api_module.class_
@@ -1540,3 +1486,19 @@ def _unique(xs: TupleValue, a: NDArray, shape: TupleInt, copy: OptionalBool):
 @array_api_module.register
 def _size(x: NDArray):
     yield rewrite(x.size).to(x.shape.product())
+
+
+class ToPy(Protocol):
+    def to_py(self) -> PyObject:
+        ...
+
+
+def extract_py(e: ToPy) -> Any:
+    """
+    Extract an expression as a python object, by running them return the `to_py()` object.
+    """
+    egraph = EGraph.current()
+    # with  as egraph:
+    egraph.register(e)
+    egraph.run((run() * 30).saturate())
+    return egraph.load_object(egraph.extract(e.to_py()))

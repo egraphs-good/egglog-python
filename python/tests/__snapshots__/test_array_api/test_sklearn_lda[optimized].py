@@ -35,7 +35,7 @@ _NDArray_9 = concat(
     ),
     OptionalInt.some(Int(0)),
 )
-_NDArray_10 = square(abs(_NDArray_9 - expand_dims(sum(_NDArray_9, _OptionalIntOrTuple_1) / NDArray.scalar(Value.int(_NDArray_9.shape[Int(0)])))))
+_NDArray_10 = square(_NDArray_9 - expand_dims(sum(_NDArray_9, _OptionalIntOrTuple_1) / NDArray.scalar(Value.int(_NDArray_9.shape[Int(0)]))))
 _NDArray_11 = sqrt(sum(_NDArray_10, _OptionalIntOrTuple_1) / NDArray.scalar(Value.int(_NDArray_10.shape[Int(0)])))
 _NDArray_12 = copy(_NDArray_11)
 _NDArray_12[ndarray_index(_NDArray_11 == NDArray.scalar(Value.int(Int(0))))] = NDArray.scalar(Value.float(Float(1.0)))

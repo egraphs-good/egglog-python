@@ -35,7 +35,7 @@ def _std(y: NDArray, x: NDArray, i: Int):
     axis = OptionalIntOrTuple.some(IntOrTuple.int(i))
     # https://numpy.org/doc/stable/reference/generated/numpy.std.html
     # "std = sqrt(mean(x)), where x = abs(a - a.mean())**2."
-    yield rewrite(std(x, axis)).to(sqrt(mean(square(abs(x - mean(x, axis, keepdims=TRUE))), axis)))
+    yield rewrite(std(x, axis)).to(sqrt(mean(square(x - mean(x, axis, keepdims=TRUE)), axis)))
 
 
 # Inline these changes until this PR is released to add suport for checking dtypes equal

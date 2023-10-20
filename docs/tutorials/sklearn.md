@@ -39,7 +39,7 @@ run_lda(X_np, y_np)
 Now, we can try executing it with `egglog` instead. In this mode, we aren't actually passing in any particular
 NDArray, but instead just using variables to represent the X and Y values.
 
-These are defined in the `egglog.exp.array_api` module, as typed values:
+These are defined in the [`egglog.exp.array_api` module](https://github.com/metadsl/egglog-python/blob/main/python/egglog/exp/array_api.py), as typed values:
 
 ```python
 @array_api_module.class_
@@ -104,16 +104,18 @@ for sklearn to finish executing and give us a result.
 
 ## Getting a result
 
+We can now run our lda function with our inputs, which have the constraints about them saved, and see the graph which
+will show all of the intermerdiate results we had to compute to get our answer:
+
 ```{code-cell} python
 from egglog import EGraph
 from egglog.exp.array_api import array_api_module
 
-with EGraph([array_api_module]):
+with EGraph([array_api_module]) as egraph:
     X_r2 = run_lda(X_arr, y_arr)
+    egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
 X_r2
 ```
-
-We have to instantiante an `EGraph` so that when we do reach eager evaluation, we will have something to run it on.
 
 We now have extracted out a program which is semantically equivalent to the original call! One thing you might notice
 is that the expression has more types than customary NumPy code. Every object is lifted into a strongly typed `egglog`
@@ -147,7 +149,7 @@ egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
 
 We are getting closer to a form we could translate back to Numba, but we have to make a few changes. Numba doesn't
 support the `axis` keyword for `mean` or `std`, but it does support it for `sum`, so we have to translate all forms
-from one to the other, with a rule like this (defined in `array_api_numba`):
+from one to the other, with a rule like this (defined in [`egglog.exp.array_api_numba`](https://github.com/metadsl/egglog-python/blob/main/python/egglog/exp/array_api_numba.py)):
 
 ```python
 rewrite(std(x, axis)).to(sqrt(mean(square(abs(x - mean(x, axis, keepdims=TRUE))), axis)))
@@ -184,7 +186,11 @@ yield rewrite(ndarray_program(mod_x)).to(
 )
 ```
 
-We pull in all those rewrite rules from the `array_api_program_gen` module, and run them to get back a real Python function:
+We pull in all those rewrite rules from the [`egglog.exp.array_api_program_gen` module](https://github.com/metadsl/egglog-python/blob/main/python/egglog/exp/array_api_program_gen.py).
+They depend on another module, [`egglog.exp.program_gen` module](https://github.com/metadsl/egglog-python/blob/main/python/egglog/exp/program_gen.py), which provides generic translations
+from expressions and statements into strings.
+
+We can run these rules to get out a Python function object:
 
 ```{code-cell} python
 from egglog.exp.array_api_program_gen import ndarray_function_two, array_api_module_string
@@ -221,7 +227,7 @@ Now we finally have a function we can run with numba, and dump the resulting LLV
 import numba
 import os
 
-os.environ['NUMBA_DUMP_OPTIMIZED'] = 'TRUE'
+os.environ['NUMBA_DUMP_OPTIMIZED'] = '1'
 
 fn_numba = numba.njit(fn)
 
@@ -261,6 +267,9 @@ so we might want to run a profiler on the original function to see where most of
 
 ```{code-cell} python
 %load_ext line_profiler
+```
+
+```{code-cell} python
 %lprun -f fn fn(X_np, y_np)
 ```
 
