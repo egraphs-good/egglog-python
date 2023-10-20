@@ -1499,6 +1499,7 @@ def extract_py(e: ToPy) -> Any:
     """
     egraph = EGraph.current()
     # with  as egraph:
+    assert isinstance(e, Expr)
     egraph.register(e)
     egraph.run((run() * 30).saturate())
     return egraph.load_object(egraph.extract(e.to_py()))
