@@ -245,7 +245,7 @@ import pandas as pd
 stmts = {
     "original": "run_lda(X_np, y_np)",
     "extracted": "fn(X_np, y_np)",
-    "extracted-numba": "fn_numba(X_np, y_np)",
+    "extracted numba": "fn_numba(X_np, y_np)",
 }
 df = pd.DataFrame.from_dict(
     {name: timeit.repeat(stmt, globals=globals(), number=1, repeat=10) for name, stmt in stmts.items()}
