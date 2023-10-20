@@ -41,30 +41,31 @@ def __fn(X, y):
     _30 = _29 / np.array(_28.shape[0])
     _31 = np.expand_dims(_30, 0)
     _32 = _28 - _31
-    _33 = np.square(_32)
-    _34 = np.sum(_33, axis=0)
-    _35 = _34 / np.array(_33.shape[0])
-    _36 = np.sqrt(_35)
-    _37 = _36
-    _38 = _36 == np.array(0)
-    _37[_38] = np.array(1.0)
-    _39 = _28 / _37
-    _40 = _21 * _39
-    _41 = np.linalg.svd(_40, full_matrices=False)
-    _42 = _41[1] > np.array(0.0001)
-    _43 = np.sum(_42)
-    _44 = _43.astype(np.dtype(np.int32))
-    _45 = _41[2][slice(None, _44.item(), None), slice(None, None, None)] / _37
-    _46 = _45.T / _41[1][slice(None, _44.item(), None)]
-    _47 = np.sqrt(np.array(((150 * _8.item()) * (1.0 / 2))))
-    _48 = _16 - _19
-    _49 = _47 * _48.T
-    _50 = _49.T @ _46
-    _51 = np.linalg.svd(_50, full_matrices=False)
-    _52 = np.array(0.0001) * _51[1][0]
-    _53 = _51[1] > _52
-    _54 = np.sum(_53)
-    _55 = _54.astype(np.dtype(np.int32))
-    _56 = _46 @ _51[2].T[slice(None, None, None), slice(None, _55.item(), None)]
-    _57 = _20 @ _56
-    return _57[slice(None, None, None), slice(None, 2, None)]
+    _33 = np.abs(_32)
+    _34 = np.square(_33)
+    _35 = np.sum(_34, axis=0)
+    _36 = _35 / np.array(_34.shape[0])
+    _37 = np.sqrt(_36)
+    _38 = _37
+    _39 = _37 == np.array(0)
+    _38[_39] = np.array(1.0)
+    _40 = _28 / _38
+    _41 = _21 * _40
+    _42 = np.linalg.svd(_41, full_matrices=False)
+    _43 = _42[1] > np.array(0.0001)
+    _44 = np.sum(_43)
+    _45 = _44.astype(np.dtype(np.int32))
+    _46 = _42[2][slice(None, _45.item(), None), slice(None, None, None)] / _38
+    _47 = _46.T / _42[1][slice(None, _45.item(), None)]
+    _48 = np.sqrt(np.array(((150 * _8.item()) * (1.0 / 2))))
+    _49 = _16 - _19
+    _50 = _48 * _49.T
+    _51 = _50.T @ _47
+    _52 = np.linalg.svd(_51, full_matrices=False)
+    _53 = np.array(0.0001) * _52[1][0]
+    _54 = _52[1] > _53
+    _55 = np.sum(_54)
+    _56 = _55.astype(np.dtype(np.int32))
+    _57 = _47 @ _52[2].T[slice(None, None, None), slice(None, _56.item(), None)]
+    _58 = _20 @ _57
+    return _58[slice(None, None, None), slice(None, 2, None)]
