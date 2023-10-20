@@ -221,20 +221,19 @@ elimination, and preserves the "imperative" aspects of setitem.
 
 ## Compiling to Numba
 
-Now we finally have a function we can run with numba, and dump the resulting LLVM:
+Now we finally have a function we can run with numba:
 
 ```{code-cell} python
 import numba
 import os
 
-os.environ['NUMBA_DUMP_OPTIMIZED'] = '1'
-
 fn_numba = numba.njit(fn)
 
 assert np.allclose(run_lda(X_np, y_np), fn_numba(X_np, y_np))
+fn_numba
 ```
 
-## Evalauting performance
+## Evaluating performance
 
 Let's see if it actually made anything quicker! Let's run a number of trials for the original function, our
 extracted version, and the optimized extracted version:
