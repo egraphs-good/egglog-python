@@ -111,7 +111,7 @@ nb_execution_mode = "force"
 # nb_execution_excludepatterns = ()
 
 # Execution timeout (seconds)
-nb_execution_timeout = 60 * 5
+nb_execution_timeout = 60 * 10
 
 # Use temporary folder for the execution current working directory
 # nb_execution_in_temp = False
