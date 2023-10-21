@@ -172,20 +172,30 @@ def _optional_int_program(x: Int):
 
 
 @array_api_module_string.function
+def optional_int_slice_program(x: OptionalInt) -> Program:
+    """
+    Translates an optional int to a program, but translates None as "" instead of None
+    """
+
+
+@array_api_module_string.register
+def _optional_int_slice_program(x: Int):
+    yield rewrite(optional_int_slice_program(OptionalInt.none)).to(Program(""))
+    yield rewrite(optional_int_slice_program(OptionalInt.some(x))).to(int_program(x))
+
+
+@array_api_module_string.function
 def slice_program(x: Slice) -> Program:
     ...
 
 
 @array_api_module_string.register
-def _slice_program(start: OptionalInt, stop: OptionalInt, step: OptionalInt):
-    yield rewrite(slice_program(Slice(start, stop, step))).to(
-        Program("slice(")
-        + optional_int_program(start)
-        + ", "
-        + optional_int_program(stop)
-        + ", "
-        + optional_int_program(step)
-        + ")"
+def _slice_program(start: OptionalInt, stop: OptionalInt, i: Int):
+    yield rewrite(slice_program(Slice(start, stop, OptionalInt.none))).to(
+        optional_int_slice_program(start) + ":" + optional_int_slice_program(stop)
+    )
+    yield rewrite(slice_program(Slice(start, stop, OptionalInt.some(i)))).to(
+        optional_int_slice_program(start) + ":" + optional_int_slice_program(stop) + ":" + int_program(i)
     )
 
 

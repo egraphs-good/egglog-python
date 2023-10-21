@@ -18,24 +18,24 @@ def __fn(X, y):
     _10 = _9
     _11 = np.sum(X[_1], axis=0)
     _12 = _11 / np.array(X[_1].shape[0])
-    _10[0, slice(None, None, None)] = _12
+    _10[0, :] = _12
     _13 = _10
     _14 = np.sum(X[_3], axis=0)
     _15 = _14 / np.array(X[_3].shape[0])
-    _13[1, slice(None, None, None)] = _15
+    _13[1, :] = _15
     _16 = _13
     _17 = np.sum(X[_5], axis=0)
     _18 = _17 / np.array(X[_5].shape[0])
-    _16[2, slice(None, None, None)] = _18
+    _16[2, :] = _18
     _19 = _8 @ _16
     _20 = X - _19
     _21 = np.sqrt(np.array((1.0 / 147)))
     _22 = _0 == np.array((0,) + (1,) + (2,))[0]
-    _23 = X[_22] - _16[0, slice(None, None, None)]
+    _23 = X[_22] - _16[0, :]
     _24 = _0 == np.array((0,) + (1,) + (2,))[1]
-    _25 = X[_24] - _16[1, slice(None, None, None)]
+    _25 = X[_24] - _16[1, :]
     _26 = _0 == np.array((0,) + (1,) + (2,))[2]
-    _27 = X[_26] - _16[2, slice(None, None, None)]
+    _27 = X[_26] - _16[2, :]
     _28 = np.concatenate((_23,) + (_25,) + (_27,), axis=0)
     _29 = np.sum(_28, axis=0)
     _30 = _29 / np.array(_28.shape[0])
@@ -54,8 +54,8 @@ def __fn(X, y):
     _42 = _41[1] > np.array(0.0001)
     _43 = np.sum(_42)
     _44 = _43.astype(np.dtype(np.int32))
-    _45 = _41[2][slice(None, _44.item(), None), slice(None, None, None)] / _37
-    _46 = _45.T / _41[1][slice(None, _44.item(), None)]
+    _45 = _41[2][:_44.item(), :] / _37
+    _46 = _45.T / _41[1][:_44.item()]
     _47 = np.sqrt(np.array(((150 * _8.item()) * (1.0 / 2))))
     _48 = _16 - _19
     _49 = _47 * _48.T
@@ -65,6 +65,6 @@ def __fn(X, y):
     _53 = _51[1] > _52
     _54 = np.sum(_53)
     _55 = _54.astype(np.dtype(np.int32))
-    _56 = _46 @ _51[2].T[slice(None, None, None), slice(None, _55.item(), None)]
+    _56 = _46 @ _51[2].T[:, :_55.item()]
     _57 = _20 @ _56
-    return _57[slice(None, None, None), slice(None, 2, None)]
+    return _57[:, :2]
