@@ -160,10 +160,10 @@ We can run those additional rewrites now to get a new extracted version
 ```{code-cell} python
 from egglog.exp.array_api_numba import array_api_numba_module
 egraph = EGraph([array_api_numba_module])
-egraph.register(X_r2)
+egraph.register(X_r2_optimized)
 egraph.run(10000)
-X_r2_optimized = egraph.extract(X_r2)
-X_r2_optimized
+X_r2_numba = egraph.extract(X_r2_optimized)
+X_r2_numba
 ```
 
 ## Compiling back to Python source
@@ -196,7 +196,7 @@ We can run these rules to get out a Python function object:
 from egglog.exp.array_api_program_gen import ndarray_function_two, array_api_module_string
 
 egraph = EGraph([array_api_module_string])
-fn_program = ndarray_function_two(X_r2_optimized, X_orig, y_orig)
+fn_program = ndarray_function_two(X_r2_numba, X_orig, y_orig)
 egraph.register(fn_program)
 egraph.run(10000)
 fn = egraph.load_object(egraph.extract(fn_program.py_object))
