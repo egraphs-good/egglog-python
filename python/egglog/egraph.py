@@ -68,6 +68,7 @@ __all__ = [
     "Schedule",
     "run",
     "seq",
+    "Command",
 ]
 
 T = TypeVar("T")

@@ -1033,6 +1033,7 @@ def sum(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArr
 def _sum(x: NDArray, y: NDArray, v: Value, dtype: DType):
     return [
         rewrite(sum(x / NDArray.scalar(v))).to(sum(x) / NDArray.scalar(v)),
+        # Sum of 0D array is
     ]
 
 
@@ -1353,15 +1354,6 @@ def _interval_analaysis(
         ),
         # possible values of bool is bool
         rewrite(possible_values(Value.bool(b))).to(TupleValue(Value.bool(b))),
-        # rule(eq(y).to(astype(x, dtype)), ndarray_all_greater_0(x)).then(ndarray_all_greater_0(y)),
-        # rule(eq(z).to(x / y), ndarray_all_greater_0(x), ndarray_all_greater_0(y)).then(ndarray_all_greater_0(z)),
-        # rule(eq(z).to(NDArray.scalar(Value.float(Float(f)))), f > 0.0).then(ndarray_all_greater_0(z)),
-        # rule(eq(z).to(NDArray.scalar(Value.int(Int(i)))), i > 0).then(ndarray_all_greater_0(z)),
-        # # Also support abs(x) > 0
-        # rule(eq(y).to(abs(x))).then(ndarray_all_greater_0(y)),
-        # # And if all_greater_0(x) then x > 0 is all true
-        # rule(eq(y).to(x > NDArray.scalar(Value.int(Int(0)))), ndarray_all_greater_0(x)).then(ndarray_all_true(y)),
-        # rule(eq(b).to(x.to_bool()), ndarray_all_true(x)).then(union(b).with_(TRUE)),
     ]
 
 
@@ -1375,17 +1367,38 @@ def _interval_analaysis(
 ##
 
 
+def _demand_shape(x: NDArray) -> Command:
+    __a = var("__a", NDArray)
+    return rule(eq(__a).to(x)).then(x.shape, x.shape.length())
+
+
 @array_api_module.register
-def _array_math(v: Value, vs: TupleValue, i: Int):
-    # Scalar values
+def _scalar_math(v: Value, vs: TupleValue, i: Int):
     yield rewrite(NDArray.scalar(v).shape).to(TupleInt.EMPTY)
     yield rewrite(NDArray.scalar(v).dtype).to(v.dtype)
     yield rewrite(NDArray.scalar(v).index(TupleInt.EMPTY)).to(v)
 
-    # Vector values
+
+@array_api_module.register
+def _vector_math(v: Value, vs: TupleValue, i: Int):
     yield rewrite(NDArray.vector(vs).shape).to(TupleInt(vs.length()))
     yield rewrite(NDArray.vector(vs).dtype).to(vs[Int(0)].dtype)
     yield rewrite(NDArray.vector(vs).index(TupleInt(i))).to(vs[i])
+
+
+@array_api_module.register
+def _reshape_math(x: NDArray, shape: TupleInt, copy: OptionalBool):
+    res = reshape(x, shape, copy)
+
+    yield _demand_shape(res)
+
+    # Reshaping a vec to a vec is the same as the vec
+    yield rewrite(reshape(x, TupleInt(Int(-1)), copy)).to(x, eq(x.shape.length()).to(Int(1)))
+
+
+##
+# Assumptions
+##
 
 
 @array_api_module.function(mutates_first_arg=True)
