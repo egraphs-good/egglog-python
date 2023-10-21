@@ -115,9 +115,10 @@ assert egraph.load_object(egraph.extract(evalled)) == 3
 
 ## Functions
 
+(type-promotion)=
+
 ### Type Promotion
 
-{#type-promotion}
 Similar to how an `int` can be automatically upcasted to an `i64`, we also support registering conversion to your custom types. For example:
 
 ```{code-cell} python

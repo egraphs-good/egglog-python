@@ -120,7 +120,7 @@ X_r2
 We now have extracted out a program which is semantically equivalent to the original call! One thing you might notice
 is that the expression has more types than customary NumPy code. Every object is lifted into a strongly typed `egglog`
 class. This is so that when we run optimizations, we know the types of all the objects. It still is compatible with
-normal Python objects, but they are [converted](#type-promotion) when they are passed as argument.
+normal Python objects, but they are [converted](type-promotion) when they are passed as argument.
 
 ## Optimizing our result
 
