@@ -870,6 +870,8 @@ def _ndarray(x: NDArray, b: Boolean, f: Float, fi1: f64, fi2: f64):
         rewrite(NDArray.scalar(Value.float(Float(fi1))) > NDArray.scalar(Value.float(Float(fi2)))).to(
             NDArray.scalar(Value.bool(FALSE)), fi1 <= fi2
         ),
+        # Transpose of tranpose is the original array
+        rewrite(x.T.T).to(x),
     ]
 
 
