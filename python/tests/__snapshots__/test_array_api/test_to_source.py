@@ -11,7 +11,7 @@ def __fn(X, y):
     _3 = np.sum(_2)
     _4 = y == np.array(2)
     _5 = np.sum(_4)
-    _6 = np.array((_1.item(), _3.item(), _5.item(),)).astype(np.dtype(np.float64))
+    _6 = np.array((_1, _3, _5,)).astype(np.dtype(np.float64))
     _7 = _6 / np.array(150.0)
     _8 = np.zeros((3, 4,), dtype=np.dtype(np.float64))
     _9 = np.sum(X[_0], axis=0)
@@ -46,8 +46,8 @@ def __fn(X, y):
     _34 = _33[1] > np.array(0.0001)
     _35 = _34.astype(np.dtype(np.int32))
     _36 = np.sum(_35)
-    _37 = _33[2][:_36.item(), :] / _29
-    _38 = _37.T / _33[1][:_36.item()]
+    _37 = _33[2][:_36, :] / _29
+    _38 = _37.T / _33[1][:_36]
     _39 = np.array(150) * _7
     _40 = _39 * np.array(0.5)
     _41 = np.sqrt(_40)
@@ -59,6 +59,6 @@ def __fn(X, y):
     _47 = _45[1] > _46
     _48 = _47.astype(np.dtype(np.int32))
     _49 = np.sum(_48)
-    _50 = _38 @ _45[2].T[:, :_49.item()]
+    _50 = _38 @ _45[2].T[:, :_49]
     _51 = _16 @ _50
     return _51[:, :2]
