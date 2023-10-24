@@ -1402,6 +1402,13 @@ def _reshape_math(x: NDArray, shape: TupleInt, copy: OptionalBool):
     yield rewrite(reshape(x, TupleInt(Int(-1)), copy)).to(x, eq(x.shape.length()).to(Int(1)))
 
 
+@array_api_module.register
+def _indexing_pushdown(x: NDArray, shape: TupleInt, copy: OptionalBool, i: Int):
+    # rewrite full getitem to indexec
+    yield rewrite(x[IndexKey.int(i)]).to(NDArray.scalar(x.index(TupleInt(i))))
+    # TODO: Multi index rewrite as well if all are ints
+
+
 ##
 # Assumptions
 ##

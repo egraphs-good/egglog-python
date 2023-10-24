@@ -5,8 +5,7 @@ assume_isfinite(_NDArray_1)
 _NDArray_2 = NDArray.var("y")
 assume_dtype(_NDArray_2, DType.int64)
 assume_shape(_NDArray_2, TupleInt(Int(150)))
-_TupleValue_1 = TupleValue(Value.int(Int(0))) + (TupleValue(Value.int(Int(1))) + TupleValue(Value.int(Int(2))))
-assume_value_one_of(_NDArray_2, _TupleValue_1)
+assume_value_one_of(_NDArray_2, TupleValue(Value.int(Int(0))) + (TupleValue(Value.int(Int(1))) + TupleValue(Value.int(Int(2)))))
 _NDArray_3 = astype(
     NDArray.vector(
         TupleValue(sum(_NDArray_2 == NDArray.scalar(Value.int(Int(0)))).to_value())
@@ -27,11 +26,7 @@ _IndexKey_3 = IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.int(In
 _NDArray_7 = _NDArray_1[ndarray_index(_NDArray_2 == NDArray.scalar(Value.int(Int(2))))]
 _NDArray_4[_IndexKey_3] = sum(_NDArray_7, _OptionalIntOrTuple_1) / NDArray.scalar(Value.int(_NDArray_7.shape[Int(0)]))
 _NDArray_8 = concat(
-    TupleNDArray(_NDArray_1[ndarray_index(_NDArray_2 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(0))])] - _NDArray_4[_IndexKey_1])
-    + (
-        TupleNDArray(_NDArray_1[ndarray_index(_NDArray_2 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(1))])] - _NDArray_4[_IndexKey_2])
-        + TupleNDArray(_NDArray_1[ndarray_index(_NDArray_2 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(2))])] - _NDArray_4[_IndexKey_3])
-    ),
+    TupleNDArray(_NDArray_5 - _NDArray_4[_IndexKey_1]) + (TupleNDArray(_NDArray_6 - _NDArray_4[_IndexKey_2]) + TupleNDArray(_NDArray_7 - _NDArray_4[_IndexKey_3])),
     OptionalInt.some(Int(0)),
 )
 _NDArray_9 = square(_NDArray_8 - expand_dims(sum(_NDArray_8, _OptionalIntOrTuple_1) / NDArray.scalar(Value.int(_NDArray_8.shape[Int(0)]))))
