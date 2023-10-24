@@ -391,25 +391,28 @@ def _py_expr(
 
     # reshape
 
+    def bin_op(res: NDArray, op: str) -> Command:
+        return rewrite(ndarray_program(res)).to((ndarray_program(x) + f" {op} " + ndarray_program(y)).assign())
+
     # NDARRAy ops
-    yield rewrite(ndarray_program(x + y)).to((ndarray_program(x) + " + " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x - y)).to((ndarray_program(x) + " - " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x * y)).to((ndarray_program(x) + " * " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x / y)).to((ndarray_program(x) + " / " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x < y)).to((ndarray_program(x) + " < " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x <= y)).to((ndarray_program(x) + " <= " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x > y)).to((ndarray_program(x) + " > " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x >= y)).to((ndarray_program(x) + " >= " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x == y)).to((ndarray_program(x) + " == " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x @ y)).to((ndarray_program(x) + " @ " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x % y)).to((ndarray_program(x) + " % " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x & y)).to((ndarray_program(x) + " & " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x | y)).to((ndarray_program(x) + " | " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x ^ y)).to((ndarray_program(x) + " ^ " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x << y)).to((ndarray_program(x) + " << " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x >> y)).to((ndarray_program(x) + " >> " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x // y)).to((ndarray_program(x) + " // " + ndarray_program(y)).assign())
-    yield rewrite(ndarray_program(x**y)).to((ndarray_program(x) + " ** " + ndarray_program(y)).assign())
+    yield bin_op(x + y, "+")
+    yield bin_op(x - y, "-")
+    yield bin_op(x * y, "*")
+    yield bin_op(x / y, "/")
+    yield bin_op(x < y, "<")
+    yield bin_op(x <= y, "<=")
+    yield bin_op(x > y, ">")
+    yield bin_op(x >= y, ">=")
+    yield bin_op(x == y, "==")
+    yield bin_op(x @ y, "@")
+    yield bin_op(x % y, "%")
+    yield bin_op(x & y, "&")
+    yield bin_op(x | y, "|")
+    yield bin_op(x ^ y, "^")
+    yield bin_op(x << y, "<<")
+    yield bin_op(x >> y, ">>")
+    yield bin_op(x // y, "//")
+    yield bin_op(x**y, "**")
 
     # setitem
     mod_x = copy(x)
