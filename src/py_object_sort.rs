@@ -6,7 +6,7 @@ use std::{
 };
 use tempfile::Builder;
 
-use egglog::sort::{FromSort, IntoSort, StringSort};
+use egglog::sort::{BoolSort, FromSort, IntoSort, StringSort};
 use egglog::{
     ast::{Expr, Literal, Symbol},
     sort::{I64Sort, Sort},
@@ -112,6 +112,11 @@ impl Sort for PyObjectSort {
             name: "py-to-string".into(),
             py_object: self.clone(),
             string: typeinfo.get_sort(),
+        });
+        typeinfo.add_primitive(ToBool {
+            name: "py-to-bool".into(),
+            py_object: self.clone(),
+            bool_: typeinfo.get_sort(),
         });
         typeinfo.add_primitive(FromString {
             name: "py-from-string".into(),
@@ -381,6 +386,34 @@ impl PrimitiveLike for ToString {
         });
         let symbol: Symbol = obj.into();
         symbol.store(self.string.as_ref())
+    }
+}
+
+/// (py-to-bool <obj>)
+struct ToBool {
+    name: Symbol,
+    py_object: Arc<PyObjectSort>,
+    bool_: Arc<BoolSort>,
+}
+
+impl PrimitiveLike for ToBool {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [obj] if obj.name() == self.py_object.name() => Some(self.bool_.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let obj: bool = Python::with_gil(|py| {
+            let (_, obj) = self.py_object.load(&values[0]);
+            obj.extract(py).unwrap()
+        });
+        obj.store(self.bool_.as_ref())
     }
 }
 

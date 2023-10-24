@@ -496,6 +496,10 @@ class PyObject(Expr):
     def to_string(self) -> String:  # type: ignore[empty-body]
         ...
 
+    @BUILTINS.method(egg_fn="py-to-bool")
+    def to_bool(self) -> Bool:  # type: ignore[empty-body]
+        ...
+
     @BUILTINS.method(egg_fn="py-dict-update")
     def dict_update(dict, *keys_and_values: PyObject) -> PyObject:  # type: ignore[empty-body]
         ...
