@@ -113,7 +113,7 @@ from egglog.exp.array_api import array_api_module
 
 with EGraph([array_api_module]) as egraph:
     X_r2 = run_lda(X_arr, y_arr)
-    egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
+    egraph.display(n_inline_leaves=3, split_primitive_outputs=True)
 X_r2
 ```
 
@@ -142,7 +142,7 @@ We can also take a look at the e-graph itself, even though it's quite large, whe
 expressions show up in the same group, or "e-class":
 
 ```{code-cell} python
-egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
+egraph.display(n_inline_leaves=3, split_primitive_outputs=True)
 ```
 
 ## Translating for Numba
@@ -152,6 +152,7 @@ support the `axis` keyword for `mean` or `std`, but it does support it for `sum`
 from one to the other, with a rule like this (defined in [`egglog.exp.array_api_numba`](https://github.com/metadsl/egglog-python/blob/main/python/egglog/exp/array_api_numba.py)):
 
 ```python
+axis = OptionalIntOrTuple.some(IntOrTuple.int(i))
 rewrite(std(x, axis)).to(sqrt(mean(square(abs(x - mean(x, axis, keepdims=TRUE))), axis)))
 ```
 
