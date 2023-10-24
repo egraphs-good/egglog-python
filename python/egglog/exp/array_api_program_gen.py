@@ -59,9 +59,20 @@ def tuple_int_program(x: TupleInt) -> Program:
     ...
 
 
+@array_api_module_string.function()
+def tuple_int_program_inner(x: TupleInt) -> Program:
+    ...
+
+
 @array_api_module_string.register
-def _tuple_int_program(i: Int, j: Int, ti: TupleInt):
+def _tuple_int_program(i: Int, j: Int, ti: TupleInt, ti1: TupleInt, ti2: TupleInt):
     yield rewrite(int_program(ti[i])).to(tuple_int_program(ti) + "[" + int_program(i) + "]")
+
+    yield rewrite(tuple_int_program(ti)).to(Program("(") + tuple_int_program_inner(ti) + ")")
+    yield rewrite(tuple_int_program_inner(ti1 + ti2)).to(
+        tuple_int_program_inner(ti1) + " " + tuple_int_program_inner(ti2)
+    )
+    yield rewrite(tuple_int_program_inner(TupleInt(i))).to(int_program(i) + ",")
 
 
 @array_api_module_string.function()
@@ -104,11 +115,6 @@ def _dtype_program():
     yield rewrite(dtype_program(DType.object)).to(Program("np.dtype(np.object_)"))
 
 
-@array_api_module_string.function()
-def tuple_value_program(x: TupleValue) -> Program:
-    ...
-
-
 @array_api_module_string.function
 def float_program(x: Float) -> Program:
     ...
@@ -135,11 +141,31 @@ def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Valu
     yield rewrite(value_program(Value.int(i))).to(int_program(i))
     yield rewrite(value_program(Value.bool(b))).to(bool_program(b))
     yield rewrite(value_program(Value.float(f))).to(float_program(f))
-    yield rewrite(value_program(x.to_value())).to((ndarray_program(x) + ".item()"))
+    # Could add .item() but we usually dont need it.
+    yield rewrite(value_program(x.to_value())).to(ndarray_program(x))
     yield rewrite(value_program(v1 < v2)).to(Program("(") + value_program(v1) + " < " + value_program(v2) + ")")
     yield rewrite(value_program(v1 / v2)).to(Program("(") + value_program(v1) + " / " + value_program(v2) + ")")
     yield rewrite(bool_program(v1.to_bool)).to(value_program(v1))
     yield rewrite(int_program(v1.to_int)).to(value_program(v1))
+
+
+@array_api_module_string.function()
+def tuple_value_program(x: TupleValue) -> Program:
+    ...
+
+
+@array_api_module_string.function
+def tuple_value_program_inner(x: TupleValue) -> Program:
+    ...
+
+
+@array_api_module_string.register
+def _tuple_value_program(tv1: TupleValue, tv2: TupleValue, v: Value):
+    yield rewrite(tuple_value_program(tv1)).to(Program("(") + tuple_value_program_inner(tv1) + ")")
+    yield rewrite(tuple_value_program_inner(tv1 + tv2)).to(
+        tuple_value_program_inner(tv1) + " " + tuple_value_program_inner(tv2)
+    )
+    yield rewrite(tuple_value_program_inner(TupleValue(v))).to(value_program(v) + ",")
 
 
 @array_api_module_string.function
@@ -147,10 +173,21 @@ def tuple_ndarray_program(x: TupleNDArray) -> Program:
     ...
 
 
+@array_api_module_string.function
+def tuple_ndarray_program_inner(x: TupleNDArray) -> Program:
+    # Maps to terms seperated by commas, without other parens
+    ...
+
+
 @array_api_module_string.register
 def _tuple_ndarray_program(x: NDArray, l: TupleNDArray, r: TupleNDArray, i: Int):
-    yield rewrite(tuple_ndarray_program(TupleNDArray(x))).to(Program("(") + ndarray_program(x) + ",)")
-    yield rewrite(tuple_ndarray_program(l + r)).to(tuple_ndarray_program(l) + " + " + tuple_ndarray_program(r))
+    yield rewrite(tuple_ndarray_program(r)).to(Program("(") + tuple_ndarray_program_inner(r) + ")")
+
+    yield rewrite(tuple_ndarray_program_inner(TupleNDArray(x))).to(ndarray_program(x) + ",")
+    yield rewrite(tuple_ndarray_program_inner(l + r)).to(
+        tuple_ndarray_program_inner(l) + " " + tuple_ndarray_program_inner(r)
+    )
+
     yield rewrite(int_program(l.length())).to(Program("len(") + tuple_ndarray_program(l) + ")")
     yield rewrite(ndarray_program(l[i])).to(tuple_ndarray_program(l) + "[" + int_program(i) + "]")
 
@@ -321,9 +358,6 @@ def _py_expr(
     yield rewrite(ndarray_program(z_assumed_shape)).to(
         z_program.statement(Program("assert ") + z_program + ".shape == " + tuple_int_program(ti))
     )
-    # tuple int
-    yield rewrite(tuple_int_program(ti1 + ti2)).to(tuple_int_program(ti1) + " + " + tuple_int_program(ti2))
-    yield rewrite(tuple_int_program(TupleInt(i))).to(Program("(") + int_program(i) + ",)")
     # Int
     yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
 
@@ -340,10 +374,6 @@ def _py_expr(
     yield rewrite(ndarray_program(z_assumed_value_one_of)).to(
         z_program.statement(Program("assert set(np.unique(") + z_program + ")) == set(" + tuple_value_program(tv) + ")")
     )
-
-    # tuple values
-    yield rewrite(tuple_value_program(tv1 + tv2)).to(tuple_value_program(tv1) + " + " + tuple_value_program(tv2))
-    yield rewrite(tuple_value_program(TupleValue(v))).to(Program("(") + value_program(v) + ",)")
 
     # Value
 
