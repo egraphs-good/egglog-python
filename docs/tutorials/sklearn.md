@@ -201,6 +201,8 @@ fn_program = ndarray_function_two(X_r2_numba, X_orig, y_orig)
 egraph.register(fn_program)
 egraph.run(10000)
 fn = egraph.load_object(egraph.extract(fn_program.py_object))
+import inspect
+print(inspect.getsource(fn))
 ```
 
 We can verify that the function gives the same result:
@@ -208,13 +210,6 @@ We can verify that the function gives the same result:
 ```{code-cell} python
 import numpy as np
 assert np.allclose(run_lda(X_np, y_np), fn(X_np, y_np))
-```
-
-We can also take a look at its generated source:
-
-```{code-cell} python
-import inspect
-print(inspect.getsource(fn))
 ```
 
 Although it isn't the prettiest, we can see that it has only emitted each expression once, for common subexpression
