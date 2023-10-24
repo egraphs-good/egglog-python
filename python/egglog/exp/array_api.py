@@ -337,6 +337,10 @@ def _float(f: f64, f2: f64, r: Boolean, o: Float, i: i64):
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
         rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
         rewrite(Float.from_int(Int(i))).to(Float(f64.from_i64(i))),
+        rewrite(Float(f) + Float(f2)).to(Float(f + f2)),
+        rewrite(Float(f) - Float(f2)).to(Float(f - f2)),
+        rewrite(Float(f) * Float(f2)).to(Float(f * f2)),
+        rewrite(Float(f) / Float(f2)).to(Float(f / f2)),
     ]
 
 
