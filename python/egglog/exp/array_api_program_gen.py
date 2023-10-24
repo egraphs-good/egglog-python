@@ -306,7 +306,7 @@ def _py_expr(
     idx: IndexKey,
 ):
     # Var
-    yield rewrite(ndarray_program(NDArray.var(s))).to(Program(s))
+    yield rewrite(ndarray_program(NDArray.var(s))).to(Program(s, True))
 
     # Asssume dtype
     z_assumed_dtype = copy(z)
