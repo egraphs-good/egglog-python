@@ -271,4 +271,30 @@ def test_reshape_index():
     egraph.register(res)
     egraph.run(run() * 10)
     equiv_expr = egraph.extract_multiple(res, 10)
+    assert len(equiv_expr) < 10
+
+
+def test_reshape_vec_noop():
+    x = NDArray.var("x")
+    assume_shape(x, TupleInt(Int(5)))
+    res = reshape(x, TupleInt(Int(-1)))
+    egraph = EGraph([array_api_module])
+    egraph.register(res)
+    egraph.run(run() * 10)
+    equiv_expr = egraph.extract_multiple(res, 10)
+
     assert len(equiv_expr) == 2
+    egraph.check(eq(res).to(x))
+
+
+# def test_reshape_transform_index():
+#     x = NDArray.var("x")
+#     assume_shape(x, TupleInt(Int(5)))
+#     res: Value = reshape(x, TupleInt(Int(-1))).index(ALL_INDICES)
+#     egraph = EGraph([array_api_module])
+#     egraph.register(res)
+#     egraph.run(20)
+#     egraph.check(eq(res).to(x.index(reshape_transform_index(TupleInt(Int(5)), TupleInt(Int(-1)), ALL_INDICES))))
+#     # egraph.display()
+#     # Verify that this doesn't blow up
+#     assert len(egraph.extract_multiple(res, 100)) < 10

@@ -1042,42 +1042,42 @@ def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none)
     ...
 
 
-@array_api_module.function
-def reshape_transform_index(original_shape: TupleInt, shape: TupleInt, index: TupleInt) -> TupleInt:
-    """
-    Transforms an indexing operation on a reshaped array to an indexing operation on the original array.
-    """
-    ...
+# @array_api_module.function
+# def reshape_transform_index(original_shape: TupleInt, shape: TupleInt, index: TupleInt) -> TupleInt:
+#     """
+#     Transforms an indexing operation on a reshaped array to an indexing operation on the original array.
+#     """
+#     ...
 
 
-@array_api_module.function
-def reshape_transform_shape(original_shape: TupleInt, shape: TupleInt) -> TupleInt:
-    """
-    Transforms the shape of an array to one that is reshaped, by replacing -1 with the correct value.
-    """
-    ...
+# @array_api_module.function
+# def reshape_transform_shape(original_shape: TupleInt, shape: TupleInt) -> TupleInt:
+#     """
+#     Transforms the shape of an array to one that is reshaped, by replacing -1 with the correct value.
+#     """
+#     ...
 
 
-@array_api_module.register
-def _reshape(
-    x: NDArray,
-    y: NDArray,
-    shape: TupleInt,
-    copy: OptionalBool,
-    i: Int,
-    s: String,
-    ix: TupleInt,
-):
-    return [
-        # dtype of result is same as input
-        rewrite(reshape(x, shape, copy).dtype).to(x.dtype),
-        # Indexing into a reshaped array is the same as indexing into the original array with a transformed index
-        rewrite(reshape(x, shape, copy).index(ix)).to(x.index(reshape_transform_index(x.shape, shape, ix))),
-        rewrite(reshape(x, shape, copy).shape).to(reshape_transform_shape(x.shape, shape)),
-        # reshape_transform_shape recursively
-        # TODO: handle all cases
-        rewrite(reshape_transform_shape(TupleInt(i), TupleInt(Int(-1)))).to(TupleInt(i)),
-    ]
+# @array_api_module.register
+# def _reshape(
+#     x: NDArray,
+#     y: NDArray,
+#     shape: TupleInt,
+#     copy: OptionalBool,
+#     i: Int,
+#     s: String,
+#     ix: TupleInt,
+# ):
+#     return [
+#         # dtype of result is same as input
+#         rewrite(reshape(x, shape, copy).dtype).to(x.dtype),
+#         # Indexing into a reshaped array is the same as indexing into the original array with a transformed index
+#         rewrite(reshape(x, shape, copy).index(ix)).to(x.index(reshape_transform_index(x.shape, shape, ix))),
+#         rewrite(reshape(x, shape, copy).shape).to(reshape_transform_shape(x.shape, shape)),
+#         # reshape_transform_shape recursively
+#         # TODO: handle all cases
+#         rewrite(reshape_transform_shape(TupleInt(i), TupleInt(Int(-1)))).to(TupleInt(i)),
+#     ]
 
 
 @array_api_module.function
@@ -1367,9 +1367,9 @@ def _interval_analaysis(
 ##
 
 
-def _demand_shape(x: NDArray) -> Command:
+def _demand_shape(compound: NDArray, inner: NDArray) -> Command:
     __a = var("__a", NDArray)
-    return rule(eq(__a).to(x)).then(x.shape, x.shape.length())
+    return rule(eq(__a).to(compound)).then(inner.shape, inner.shape.length())
 
 
 @array_api_module.register
@@ -1390,7 +1390,7 @@ def _vector_math(v: Value, vs: TupleValue, i: Int):
 def _reshape_math(x: NDArray, shape: TupleInt, copy: OptionalBool):
     res = reshape(x, shape, copy)
 
-    yield _demand_shape(res)
+    yield _demand_shape(res, x)
 
     # Reshaping a vec to a vec is the same as the vec
     yield rewrite(reshape(x, TupleInt(Int(-1)), copy)).to(x, eq(x.shape.length()).to(Int(1)))
