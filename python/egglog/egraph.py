@@ -1053,11 +1053,13 @@ class EGraph(_BaseModule):
 
         return inner
 
-    def saturate(self, *, performance=False, **kwargs: Unpack[GraphvizKwargs]) -> ipywidgets.Widget:
+    def saturate(self, *, max=1000, performance=False, **kwargs: Unpack[GraphvizKwargs]) -> ipywidgets.Widget:
         from .graphviz_widget import graphviz_widget_with_slider
 
         dots = [str(self.graphviz(**kwargs))]
-        while self.run(1).updated:
+        i = 0
+        while self.run(1).updated and i < max:
+            i += 1
             dots.append(str(self.graphviz(**kwargs)))
         return graphviz_widget_with_slider(dots, performance=performance)
 
