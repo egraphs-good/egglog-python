@@ -1,7 +1,6 @@
 import pathlib
 import subprocess
 
-
 ##
 # Built presentation in sphinx
 ##
