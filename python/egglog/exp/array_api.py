@@ -8,10 +8,10 @@ import numbers
 import sys
 from copy import copy
 from typing import Any, ClassVar, Iterator, Protocol
-from egglog.bindings import EggSmolError
 
 import numpy as np
 from egglog import *
+from egglog.bindings import EggSmolError
 from egglog.runtime import RuntimeExpr
 
 from .program_gen import *
