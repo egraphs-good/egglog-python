@@ -1,10 +1,11 @@
 use std::{
     any::Any,
+    env::temp_dir,
     ffi::CString,
+    fs::File,
     io::Write,
     sync::{Arc, Mutex},
 };
-use tempfile::Builder;
 
 use egglog::sort::{BoolSort, FromSort, IntoSort, StringSort};
 use egglog::{
@@ -16,6 +17,7 @@ use egglog::{
 use pyo3::{
     ffi, intern, types::PyDict, AsPyPointer, IntoPy, PyAny, PyErr, PyObject, PyResult, Python,
 };
+use uuid::Uuid;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum PyObjectIdent {
@@ -257,15 +259,19 @@ impl PrimitiveLike for Exec {
             let locals = locals.downcast::<PyDict>(py).unwrap().copy().unwrap();
             // Copy code into temporary file
             // Keep it around so that if errors occur we can debug them after the program exits
-            let (mut file, path) = Builder::new()
-                .suffix(".py")
-                .tempfile()
-                .unwrap()
-                .keep()
-                .unwrap();
+            let mut path = temp_dir();
+            let file_name = format!("egglog-{}.py", Uuid::new_v4());
+            path.push(file_name);
+            let mut file = File::create(path).unwrap();
             file.write_all(code.as_bytes()).unwrap();
-            let path = path.to_str().unwrap();
-            run_code_path(py, code, Some(globals), Some(locals), path).unwrap();
+            run_code_path(
+                py,
+                code,
+                Some(globals),
+                Some(locals),
+                path.to_str().unwrap(),
+            )
+            .unwrap();
             locals.into()
         });
         Some(self.py_object.store(locals))
