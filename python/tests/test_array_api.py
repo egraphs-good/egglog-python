@@ -1,4 +1,4 @@
-import pytest
+# import pytest
 from egglog.exp.array_api import *
 from egglog.exp.array_api_numba import array_api_numba_module
 from egglog.exp.array_api_program_gen import *
@@ -183,7 +183,7 @@ def run_lda(x, y):
         return lda.fit(x, y).transform(x)
 
 
-@pytest.mark.xfail(raises=AssertionError)
+# @pytest.mark.xfail(raises=AssertionError)
 def test_sklearn_lda(snapshot_py):
     X_arr = NDArray.var("X")
     assume_dtype(X_arr, float64)

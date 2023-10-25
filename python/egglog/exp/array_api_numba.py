@@ -38,6 +38,40 @@ def _std(y: NDArray, x: NDArray, i: Int):
     yield rewrite(std(x, axis)).to(sqrt(mean(square(x - mean(x, axis, keepdims=TRUE)), axis)))
 
 
+# rewrite unique_counts to count each value one by one, since numba doesn't support np.unique(..., return_counts=True)
+@array_api_numba_module.function(unextractable=True)
+def count_values(x: NDArray, values: NDArray) -> TupleValue:  # type: ignore
+    """
+    Returns a tuple of the count of each of the values in the array.
+    """
+    ...
+
+
+@array_api_numba_module.register
+def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
+    return [
+        # The unique counts are the count of all the unique values
+        rewrite(unique_counts(x)[Int(1)]).to(NDArray.vector(count_values(x, unique_values(x)))),
+        rewrite(count_values(x, NDArray.vector(TupleValue(v) + tv))).to(
+            TupleValue(sum(x == NDArray.scalar(v)).to_value()) + count_values(x, NDArray.vector(tv))
+        ),
+        rewrite(count_values(x, NDArray.vector(TupleValue(v)))).to(
+            TupleValue(sum(x == NDArray.scalar(v)).to_value()),
+        ),
+    ]
+
+
+# do the same for unique_inverse
+@array_api_numba_module.register
+def _unique_inverse(x: NDArray, i: Int):
+    return [
+        # Creating a mask array of when the unique inverse is a value is the same as a mask array for when the value is that index of the unique values
+        rewrite(unique_inverse(x)[Int(1)] == NDArray.scalar(Value.int(i))).to(
+            x == NDArray.scalar(unique_values(x).index(TupleInt(i)))
+        ),
+    ]
+
+
 # Inline these changes until this PR is released to add suport for checking dtypes equal
 # https://github.com/numba/numba/pull/9249
 try:

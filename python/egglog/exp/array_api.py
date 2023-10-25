@@ -8,6 +8,7 @@ import numbers
 import sys
 from copy import copy
 from typing import Any, ClassVar, Iterator, Protocol
+from egglog.bindings import EggSmolError
 
 import numpy as np
 from egglog import *
@@ -1119,36 +1120,6 @@ def _concat(x: NDArray):
     ]
 
 
-@array_api_module.function(cost=500)
-def unique_counts(x: NDArray) -> TupleNDArray:
-    ...
-
-
-@array_api_module.function(unextractable=True)
-def count_values(x: NDArray, values: NDArray) -> TupleValue:
-    """
-    Returns a tuple of the count of each of the values in the array.
-    """
-    ...
-
-
-@array_api_module.register
-def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
-    return [
-        rewrite(unique_counts(x).length()).to(Int(2)),
-        # Sum of all unique counts is the size of the array
-        rewrite(sum(unique_counts(x)[Int(1)])).to(NDArray.scalar(Value.int(x.size))),
-        # The unique counts are the count of all the unique values
-        rewrite(unique_counts(x)[Int(1)]).to(NDArray.vector(count_values(x, unique_values(x)))),
-        rewrite(count_values(x, NDArray.vector(TupleValue(v) + tv))).to(
-            TupleValue(sum(x == NDArray.scalar(v)).to_value()) + count_values(x, NDArray.vector(tv))
-        ),
-        rewrite(count_values(x, NDArray.vector(TupleValue(v)))).to(
-            TupleValue(sum(x == NDArray.scalar(v)).to_value()),
-        ),
-    ]
-
-
 @array_api_module.function
 def astype(x: NDArray, dtype: DType) -> NDArray:
     ...
@@ -1158,10 +1129,26 @@ def astype(x: NDArray, dtype: DType) -> NDArray:
 def _astype(x: NDArray, dtype: DType, i: i64):
     return [
         rewrite(astype(x, dtype).dtype).to(dtype),
-        rewrite(sum(astype(x, dtype))).to(astype(sum(x), dtype)),
         rewrite(astype(NDArray.scalar(Value.int(Int(i))), float64)).to(
             NDArray.scalar(Value.float(Float(f64.from_i64(i))))
         ),
+    ]
+
+
+@array_api_module.function(cost=500)
+def unique_counts(x: NDArray) -> TupleNDArray:
+    ...
+
+
+@array_api_module.register
+def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value, dtype: DType):
+    return [
+        rewrite(unique_counts(x).length()).to(Int(2)),
+        # Sum of all unique counts is the size of the array
+        rewrite(sum(unique_counts(x)[Int(1)])).to(NDArray.scalar(Value.int(x.size))),
+        # Same but with astype in the middle
+        # TODO: Replace
+        rewrite(sum(astype(unique_counts(x)[Int(1)], dtype))).to(astype(NDArray.scalar(Value.int(x.size)), dtype)),
     ]
 
 
@@ -1203,10 +1190,6 @@ def _unique_inverse(x: NDArray, i: Int):
         rewrite(unique_inverse(x).length()).to(Int(2)),
         # Shape of unique_inverse first element is same as shape of unique_values
         rewrite(unique_inverse(x)[Int(0)]).to(unique_values(x)),
-        # Creating a mask array of when the unique inverse is a value is the same as a mask array for when the value is that index of the unique values
-        rewrite(unique_inverse(x)[Int(1)] == NDArray.scalar(Value.int(i))).to(
-            x == NDArray.scalar(unique_values(x).index(TupleInt(i)))
-        ),
     ]
 
 
@@ -1369,6 +1352,13 @@ def _interval_analaysis(
         ),
         # possible values of bool is bool
         rewrite(possible_values(Value.bool(b))).to(TupleValue(Value.bool(b))),
+        # casting to a type preserves if > 0
+        rule(
+            eq(v1).to(v.astype(dtype)),
+            greater_zero(v),
+        ).then(
+            greater_zero(v1),
+        ),
     ]
 
 
@@ -1533,8 +1523,12 @@ def extract_py(e: ToPy) -> Any:
     Extract an expression as a python object, by running them return the `to_py()` object.
     """
     egraph = EGraph.current()
-    # with  as egraph:
     assert isinstance(e, Expr)
-    egraph.register(e)
-    egraph.run((run() * 30).saturate())
-    return egraph.load_object(egraph.extract(e.to_py()))
+    with egraph:
+        egraph.register(e)
+        egraph.run((run() * 30).saturate())
+        try:
+            return egraph.load_object(egraph.extract(e.to_py()))
+        except EggSmolError:
+            egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
+            raise ValueError("Cannot simplify:", egraph.extract(e))
