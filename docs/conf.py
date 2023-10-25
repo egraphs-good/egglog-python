@@ -2,6 +2,10 @@ import pathlib
 import subprocess
 
 ##
+# PyData Theme
+navigation_with_keys = False
+
+##
 # Built presentation in sphinx
 ##
 
