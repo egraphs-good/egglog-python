@@ -571,7 +571,7 @@ class LitDecl:
         if isinstance(lit.value, bindings.F64):
             return TypedExprDecl(JustTypeRef("f64"), cls(lit.value.value))
         if isinstance(lit.value, bindings.Bool):
-            return TypedExprDecl(JustTypeRef("bool"), cls(lit.value.value))
+            return TypedExprDecl(JustTypeRef("Bool"), cls(lit.value.value))
         elif isinstance(lit.value, bindings.Unit):
             return TypedExprDecl(JustTypeRef("Unit"), cls(None))
         assert_never(lit.value)

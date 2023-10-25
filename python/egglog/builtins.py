@@ -329,6 +329,10 @@ class Map(Expr, Generic[T, V]):
     def remove(self, key: T) -> Map[T, V]:  # type: ignore[empty-body]
         ...
 
+    @BUILTINS.method(egg_fn="rebuild")
+    def rebuild(self) -> Map[T, V]:  # type: ignore[empty-body]
+        ...
+
 
 @BUILTINS.class_(egg_sort="Set")
 class Set(Expr, Generic[T]):
@@ -367,6 +371,10 @@ class Set(Expr, Generic[T]):
 
     @BUILTINS.method(egg_fn="set-intersect")
     def __and__(self, other: Set[T]) -> Set[T]:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="rebuild")
+    def rebuild(self) -> Set[T]:  # type: ignore[empty-body]
         ...
 
 
@@ -440,6 +448,16 @@ class Rational(Expr):
     def cbrt(self) -> Rational:  # type: ignore[empty-body]
         ...
 
+    @BUILTINS.method(egg_fn="numer")  # type: ignore[misc]
+    @property
+    def numer(self) -> i64:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="denom")  # type: ignore[misc]
+    @property
+    def denom(self) -> i64:  # type: ignore[empty-body]
+        ...
+
 
 @BUILTINS.class_(egg_sort="Vec")
 class Vec(Expr, Generic[T]):
@@ -478,6 +496,10 @@ class Vec(Expr, Generic[T]):
 
     @BUILTINS.method(egg_fn="vec-get")
     def __getitem__(self, index: i64Like) -> T:  # type: ignore[empty-body]
+        ...
+
+    @BUILTINS.method(egg_fn="rebuild")
+    def rebuild(self) -> Vec[T]:
         ...
 
 

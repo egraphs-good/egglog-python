@@ -285,7 +285,7 @@ checksum = "675e35c02a51bb4d4618cb4885b3839ce6d1787c97b664474d9208d074742e20"
 [[package]]
 name = "egglog"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog?rev=959afb9078b93df7d58afa519b1399c128132507#959afb9078b93df7d58afa519b1399c128132507"
+source = "git+https://github.com/egraphs-good/egglog?rev=ceed816e9369570ffed9feeba157b19471dda70d#ceed816e9369570ffed9feeba157b19471dda70d"
 dependencies = [
  "clap",
  "egraph-serialize",

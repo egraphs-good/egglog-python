@@ -47,9 +47,9 @@ def test_to_source(snapshot_py):
 
     assume_dtype(_NDArray_2, int64)
     assume_shape(_NDArray_2, TupleInt(Int(150)))
-    _TupleValue_1 = TupleValue(Value.int(Int(0))) + (TupleValue(Value.int(Int(1))) + TupleValue(Value.int(Int(2))))
-    assume_value_one_of(_NDArray_2, _TupleValue_1)
-
+    assume_value_one_of(
+        _NDArray_2, TupleValue(Value.int(Int(0))) + (TupleValue(Value.int(Int(1))) + TupleValue(Value.int(Int(2))))
+    )
     _NDArray_3 = astype(
         NDArray.vector(
             TupleValue(sum(_NDArray_2 == NDArray.scalar(Value.int(Int(0)))).to_value())
@@ -81,20 +81,8 @@ def test_to_source(snapshot_py):
         Value.int(_NDArray_7.shape[Int(0)])
     )
     _NDArray_8 = concat(
-        TupleNDArray(
-            _NDArray_1[ndarray_index(_NDArray_2 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(0))])]
-            - _NDArray_4[_IndexKey_1]
-        )
-        + (
-            TupleNDArray(
-                _NDArray_1[ndarray_index(_NDArray_2 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(1))])]
-                - _NDArray_4[_IndexKey_2]
-            )
-            + TupleNDArray(
-                _NDArray_1[ndarray_index(_NDArray_2 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(2))])]
-                - _NDArray_4[_IndexKey_3]
-            )
-        ),
+        TupleNDArray(_NDArray_5 - _NDArray_4[_IndexKey_1])
+        + (TupleNDArray(_NDArray_6 - _NDArray_4[_IndexKey_2]) + TupleNDArray(_NDArray_7 - _NDArray_4[_IndexKey_3])),
         OptionalInt.some(Int(0)),
     )
     _NDArray_9 = square(
@@ -107,12 +95,12 @@ def test_to_source(snapshot_py):
         Value.float(Float(1.0))
     )
     _TupleNDArray_1 = svd(
-        sqrt(NDArray.scalar(Value.float(Float(0.006802721088435374)))) * (_NDArray_8 / _NDArray_11), FALSE
+        sqrt(NDArray.scalar(Value.float(Float.rational(Rational(1, 147))))) * (_NDArray_8 / _NDArray_11), FALSE
     )
     _Slice_1 = Slice(
         OptionalInt.none,
         OptionalInt.some(
-            sum(astype(_TupleNDArray_1[Int(1)] > NDArray.scalar(Value.float(Float(0.0001))), DType.int32))
+            astype(sum(_TupleNDArray_1[Int(1)] > NDArray.scalar(Value.float(Float(0.0001)))), DType.int32)
             .to_value()
             .to_int
         ),
@@ -125,7 +113,10 @@ def test_to_source(snapshot_py):
     ).T / _TupleNDArray_1[Int(1)][IndexKey.slice(_Slice_1)]
     _TupleNDArray_2 = svd(
         (
-            sqrt((NDArray.scalar(Value.int(Int(150))) * _NDArray_3) * NDArray.scalar(Value.float(Float(0.5))))
+            sqrt(
+                (NDArray.scalar(Value.int(Int(150))) * _NDArray_3)
+                * NDArray.scalar(Value.float(Float.rational(Rational(1, 2))))
+            )
             * (_NDArray_4 - (_NDArray_3 @ _NDArray_4)).T
         ).T
         @ _NDArray_12,
@@ -143,15 +134,15 @@ def test_to_source(snapshot_py):
                             Slice(
                                 OptionalInt.none,
                                 OptionalInt.some(
-                                    sum(
-                                        astype(
+                                    astype(
+                                        sum(
                                             _TupleNDArray_2[Int(1)]
                                             > (
                                                 NDArray.scalar(Value.float(Float(0.0001)))
                                                 * _TupleNDArray_2[Int(1)][IndexKey.int(Int(0))]
-                                            ),
-                                            DType.int32,
-                                        )
+                                            )
+                                        ),
+                                        DType.int32,
                                     )
                                     .to_value()
                                     .to_int

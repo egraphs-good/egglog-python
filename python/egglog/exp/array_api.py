@@ -311,6 +311,10 @@ class Float(Expr):
         ...
 
     @classmethod
+    def rational(cls, r: Rational) -> Float:
+        ...
+
+    @classmethod
     def from_int(cls, i: Int) -> Float:
         ...
 
@@ -332,15 +336,20 @@ converter(Int, Float, lambda x: Float.from_int(x))
 
 
 @array_api_module.register
-def _float(f: f64, f2: f64, r: Boolean, o: Float, i: i64):
+def _float(f: f64, f2: f64, i: i64, r: Rational, r1: Rational):
     return [
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
         rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
-        rewrite(Float.from_int(Int(i))).to(Float(f64.from_i64(i))),
+        # Convert from float to rationl, if its a whole number i.e. can ve converted to int
+        rewrite(Float(f)).to(Float.rational(Rational(f.to_i64(), 1)), eq(f64.from_i64(f.to_i64())).to(f)),
+        rewrite(Float.from_int(Int(i))).to(Float.rational(Rational(i, 1))),
         rewrite(Float(f) + Float(f2)).to(Float(f + f2)),
         rewrite(Float(f) - Float(f2)).to(Float(f - f2)),
         rewrite(Float(f) * Float(f2)).to(Float(f * f2)),
-        rewrite(Float(f) / Float(f2)).to(Float(f / f2)),
+        rewrite(Float.rational(r) / Float.rational(r1)).to(Float.rational(r / r1)),
+        rewrite(Float.rational(r) + Float.rational(r1)).to(Float.rational(r + r1)),
+        rewrite(Float.rational(r) - Float.rational(r1)).to(Float.rational(r - r1)),
+        rewrite(Float.rational(r) * Float.rational(r1)).to(Float.rational(r * r1)),
     ]
 
 

@@ -25,7 +25,7 @@ def __fn(X, y):
     _8[2, :] = _14
     _15 = _7 @ _8
     _16 = X - _15
-    _17 = np.sqrt(np.array(0.006802721088435374))
+    _17 = np.sqrt(np.array(float(1 / 147)))
     _18 = X[_0] - _8[0, :]
     _19 = X[_2] - _8[1, :]
     _20 = X[_4] - _8[2, :]
@@ -44,12 +44,12 @@ def __fn(X, y):
     _32 = _17 * _31
     _33 = np.linalg.svd(_32, full_matrices=False)
     _34 = _33[1] > np.array(0.0001)
-    _35 = _34.astype(np.dtype(np.int32))
-    _36 = np.sum(_35)
+    _35 = np.sum(_34)
+    _36 = _35.astype(np.dtype(np.int32))
     _37 = _33[2][:_36, :] / _29
     _38 = _37.T / _33[1][:_36]
     _39 = np.array(150) * _7
-    _40 = _39 * np.array(0.5)
+    _40 = _39 * np.array(float(1 / 2))
     _41 = np.sqrt(_40)
     _42 = _8 - _15
     _43 = _41 * _42.T
@@ -57,8 +57,8 @@ def __fn(X, y):
     _45 = np.linalg.svd(_44, full_matrices=False)
     _46 = np.array(0.0001) * _45[1][0]
     _47 = _45[1] > _46
-    _48 = _47.astype(np.dtype(np.int32))
-    _49 = np.sum(_48)
+    _48 = np.sum(_47)
+    _49 = _48.astype(np.dtype(np.int32))
     _50 = _38 @ _45[2].T[:, :_49]
     _51 = _16 @ _50
     return _51[:, :2]

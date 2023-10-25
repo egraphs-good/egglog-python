@@ -121,7 +121,7 @@ def float_program(x: Float) -> Program:
 
 
 @array_api_module_string.register
-def _float_program(f: Float, g: Float, f64_: f64, i: Int):
+def _float_program(f: Float, g: Float, f64_: f64, i: Int, r: Rational):
     yield rewrite(float_program(Float(f64_))).to(Program(f64_.to_string()))
     yield rewrite(float_program(f.abs())).to(Program("np.abs(") + float_program(f) + ")")
     yield rewrite(float_program(Float.from_int(i))).to(int_program(i))
@@ -129,6 +129,12 @@ def _float_program(f: Float, g: Float, f64_: f64, i: Int):
     yield rewrite(float_program(f - g)).to(Program("(") + float_program(f) + " - " + float_program(g) + ")")
     yield rewrite(float_program(f * g)).to(Program("(") + float_program(f) + " * " + float_program(g) + ")")
     yield rewrite(float_program(f / g)).to(Program("(") + float_program(f) + " / " + float_program(g) + ")")
+    yield rewrite(float_program(Float.rational(r))).to(
+        Program("float(") + Program(r.numer.to_string()) + " / " + Program(r.denom.to_string()) + ")", r.denom != i64(1)
+    )
+    yield rewrite(float_program(Float.rational(r))).to(
+        Program("float(") + Program(r.numer.to_string()) + ")", eq(r.denom).to(i64(1))
+    )
 
 
 @array_api_module_string.function()
