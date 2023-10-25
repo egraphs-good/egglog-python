@@ -1,4 +1,4 @@
-name: egglog-python
+name: egglog-python2
 channels:
   - conda-forge
 dependencies:
@@ -8,5 +8,3 @@ dependencies:
   - graphviz
   - rust
   - pip
-  - pip:
-      - "--editable .[docs]"
