@@ -32,4 +32,4 @@ sphinx:
 #       extra_requirements:
 #         - docs
 conda:
-  environment: environment.yml
+  environment: docs/environment.yml
