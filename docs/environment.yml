@@ -2,6 +2,7 @@ name: egglog-python
 channels:
   - conda-forge
 dependencies:
+  - python=3.10
   - numba
   - scikit-learn
   - graphviz
