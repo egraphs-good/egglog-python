@@ -4,6 +4,6 @@ channels:
 dependencies:
   - numba
   - scikit-learn
-  # - pip
-  # - pip:
-  #     - ".[docs]"
+  - pip
+  - pip:
+      - ".[docs]"
