@@ -9,4 +9,4 @@ dependencies:
   - rust
   - pip
   - pip:
-      - ".[docs]"
+      - "--editable .[docs]"
