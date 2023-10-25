@@ -485,6 +485,7 @@ fn run_code_path<'py>(
     path: &str,
 ) -> PyResult<&'py PyAny> {
     let code = CString::new(code)?;
+    let path = CString::new(path)?;
     unsafe {
         let mptr = ffi::PyImport_AddModule("__main__\0".as_ptr() as *const _);
         if mptr.is_null() {

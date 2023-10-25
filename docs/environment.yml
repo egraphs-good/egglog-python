@@ -1,4 +1,4 @@
-name: egglog-python2
+name: egglog-python
 channels:
   - conda-forge
   - nodefaults
