@@ -1,6 +1,8 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
+
 import inspect
+
 from egglog import *
 from egglog.exp.program_gen import *
 
