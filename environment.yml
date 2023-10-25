@@ -1,0 +1,9 @@
+name: egglog-python
+channels:
+  - conda-forge
+dependencies:
+  - numba
+  - scikit-learn
+  # - pip
+  # - pip:
+  #     - ".[docs]"
