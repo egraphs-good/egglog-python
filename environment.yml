@@ -4,6 +4,8 @@ channels:
 dependencies:
   - numba
   - scikit-learn
+  - graphviz
+  - rust
   - pip
   - pip:
       - ".[docs]"
