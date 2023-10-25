@@ -262,7 +262,7 @@ impl PrimitiveLike for Exec {
             let mut path = temp_dir();
             let file_name = format!("egglog-{}.py", Uuid::new_v4());
             path.push(file_name);
-            let mut file = File::create(path).unwrap();
+            let mut file = File::create(path.clone()).unwrap();
             file.write_all(code.as_bytes()).unwrap();
             run_code_path(
                 py,
