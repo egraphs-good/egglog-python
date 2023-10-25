@@ -1,9 +1,6 @@
 import pathlib
 import subprocess
 
-##
-# PyData Theme
-navigation_with_keys = False
 
 ##
 # Built presentation in sphinx
@@ -81,6 +78,11 @@ html_theme = "pydata_sphinx_theme"
 
 # https://pydata-sphinx-theme.readthedocs.io/en/latest/user_guide/header-links.html#fontawesome-icons
 html_theme_options = {
+    "use_edit_page_button": True,
+    "github_user": "metadsl",
+    "github_repo": "egglog-python",
+    "github_version": "main",
+    "doc_path": "docs",
     "icon_links": [
         {
             "name": "GitHub",
@@ -89,6 +91,7 @@ html_theme_options = {
             "type": "fontawesome",
         },
     ],
+    "navigation_with_keys": False,
 }
 
 # myst_nb default settings
