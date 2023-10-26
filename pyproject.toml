@@ -52,6 +52,7 @@ docs = [
     "anywidget",
     "seaborn",
     "egglog[array]",
+    "line-profiler",
 ]
 
 

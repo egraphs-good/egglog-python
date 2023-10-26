@@ -215,9 +215,9 @@ convert_enums!(
                 name: n.to_string(),
                 length: *l
             };
-        PrintSize(name: String)
-            p -> egglog::ast::Command::PrintSize((&p.name).into()),
-            egglog::ast::Command::PrintSize(n) => PrintSize { name: n.to_string() };
+        PrintSize(name: Option<String>)
+            p -> egglog::ast::Command::PrintSize(p.name.as_ref().map(|n| n.into())),
+            egglog::ast::Command::PrintSize(n) => PrintSize { name: n.map(|n| n.to_string()) };
         Output(file: String, exprs: Vec<Expr>)
             o -> egglog::ast::Command::Output {
                 file: (&o.file).into(),
@@ -293,7 +293,7 @@ convert_struct!(
         nodes: Vec<Term>,
         hashcons: HashMap<Term, usize>
     )
-        t -> egglog::TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), v.clone().into())).collect()},
+        t -> egglog::TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), *v)).collect()},
         t -> TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), *v)).collect()};
     egglog::ast::FunctionDecl: "{:?}" => FunctionDecl(
         name: String,
@@ -378,11 +378,11 @@ convert_struct!(
         },
         r -> RunReport {
             updated: r.updated,
-            search_time_per_rule: r.search_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), v.clone().into())).collect(),
-            apply_time_per_rule: r.apply_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), v.clone().into())).collect(),
-            search_time_per_ruleset: r.search_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), v.clone().into())).collect(),
-            apply_time_per_ruleset: r.apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), v.clone().into())).collect(),
-            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), v.clone().into())).collect()
+            search_time_per_rule: r.search_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
+            apply_time_per_rule: r.apply_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
+            search_time_per_ruleset: r.search_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
+            apply_time_per_ruleset: r.apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
+            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect()
         }
 );
 

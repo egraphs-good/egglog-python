@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// Create an empty EGraph.
 #[pyclass(
     unsendable,
-    text_signature = "(*, fact_directory=None, seminaive=True)"
+    text_signature = "(*, fact_directory=None, seminaive=True, terms_encoding=False)"
 )]
 pub struct EGraph {
     egraph: egglog::EGraph,
@@ -27,11 +27,14 @@ pub struct EGraph {
 #[pymethods]
 impl EGraph {
     #[new]
-    #[pyo3(signature = (*, fact_directory=None, seminaive=true))]
-    fn new(fact_directory: Option<PathBuf>, seminaive: bool) -> Self {
+    #[pyo3(signature = (*, fact_directory=None, seminaive=true, terms_encoding=false))]
+    fn new(fact_directory: Option<PathBuf>, seminaive: bool, terms_encoding: bool) -> Self {
         let mut egraph = egglog::EGraph::default();
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
+        if terms_encoding {
+            egraph.enable_terms_encoding();
+        }
         let py_object_arcsort = Arc::new(PyObjectSort::new("PyObject".into()));
         egraph.add_arcsort(py_object_arcsort.clone()).unwrap();
         Self {

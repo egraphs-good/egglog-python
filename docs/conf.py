@@ -77,6 +77,7 @@ html_theme = "pydata_sphinx_theme"
 
 # https://pydata-sphinx-theme.readthedocs.io/en/latest/user_guide/header-links.html#fontawesome-icons
 html_theme_options = {
+    "use_edit_page_button": True,
     "icon_links": [
         {
             "name": "GitHub",
@@ -85,6 +86,14 @@ html_theme_options = {
             "type": "fontawesome",
         },
     ],
+    "navigation_with_keys": False,
+}
+
+html_context = {
+    "github_user": "metadsl",
+    "github_repo": "egglog-python",
+    "github_version": "main",
+    "doc_path": "docs",
 }
 
 # myst_nb default settings
@@ -111,7 +120,7 @@ nb_execution_mode = "force"
 # nb_execution_excludepatterns = ()
 
 # Execution timeout (seconds)
-nb_execution_timeout = 60 * 5
+nb_execution_timeout = 60 * 10
 
 # Use temporary folder for the execution current working directory
 # nb_execution_in_temp = False

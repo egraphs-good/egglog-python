@@ -7,7 +7,7 @@ import math
 import numbers
 import sys
 from copy import copy
-from typing import Any, ClassVar, Iterator, TypeVar
+from typing import Any, ClassVar, Iterator, Protocol
 
 import numpy as np
 from egglog import *
@@ -18,56 +18,6 @@ from .program_gen import *
 
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
-
-
-T = TypeVar("T", bound=Expr)
-
-# For now, have this global e-graph for this module, a bit hacky, but works as a proof of concept.
-# We need a global e-graph so that we have the preserved methods reference it to extract when they are called.
-
-
-def extract_py(e: Expr) -> Any:
-    egraph = EGraph.current()
-    egraph.push()
-    # print(e)
-    egraph.register(e)
-    egraph.run((run() * 30).saturate())
-    final_object = egraph.extract(e)
-    # with egraph:
-    # egraph.run((run() * 10).saturate())
-    # print(egraph.extract(final_object))
-
-    # Run saturation again b/c sometimes it doesn't work the first time.
-    # final_object = egraph.extract(egraph.extract(final_object))
-    # egraph.run(run(limit=10).saturate())
-    # final_object: Expr = egraph.extract(final_object)
-    # egraph.register(final_object.to_py())
-    # egraph.run(run(limit=10).saturate())
-
-    # try:
-    #     x = str((Int(1) * Int(3)) == Int(2))
-    # except Exception:
-    #     pass
-    # else:
-    #     if str(egraph.extract(final_object)) == x:
-    #         final_object = (Int(1) * Int(3)) == Int(2)
-    # pass
-    # raise Exception("Failed to extract")
-
-    # final_object = egraph.extract(egraph.extract(final_object))
-    # egraph.run(run(limit=10).saturate())
-
-    # print(f"     -> {egraph.extract(final_object)}\n")
-    try:
-        res = egraph.load_object(egraph.extract(final_object.to_py()))  # type: ignore[attr-defined]
-    except EggSmolError:
-        other_versions = egraph.extract_multiple(final_object, 10)
-        other_verions_str = "\n\n".join(map(str, other_versions))
-        egraph.graphviz().render(view=True)
-        raise Exception(f"Failed to extract:\n{other_verions_str}")
-    # print(res)
-    egraph.pop()
-    return res
 
 
 array_api_module = Module()
@@ -97,8 +47,8 @@ converter(bool, Boolean, lambda x: TRUE if x else FALSE)
 @array_api_module.register
 def _bool(x: Boolean):
     return [
-        set_(TRUE.to_py()).to(array_api_module.save_object(True)),
-        set_(FALSE.to_py()).to(array_api_module.save_object(False)),
+        rule(eq(x).to(TRUE)).then(set_(x.to_py()).to(array_api_module.save_object(True))),
+        rule(eq(x).to(FALSE)).then(set_(x.to_py()).to(array_api_module.save_object(False))),
         rewrite(TRUE | x).to(TRUE),
         rewrite(FALSE | x).to(x),
         rewrite(TRUE & x).to(x),
@@ -189,9 +139,6 @@ def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
         rewrite(isdtype(d, k1 | k2)).to(isdtype(d, k1) | isdtype(d, k2)),
         rewrite(k1 | IsDtypeKind.NULL).to(k1),
     ]
-
-
-# assert not bool(isdtype(DType.float32, IsDtypeKind.string("integral")))
 
 
 @array_api_module.class_
@@ -364,6 +311,12 @@ class Float(Expr):
     def abs(self) -> Float:
         ...
 
+    # Make this more expensive than float, to get deterministic output
+    @array_api_module.method(cost=5)
+    @classmethod
+    def rational(cls, r: Rational) -> Float:
+        ...
+
     @classmethod
     def from_int(cls, i: Int) -> Float:
         ...
@@ -386,11 +339,20 @@ converter(Int, Float, lambda x: Float.from_int(x))
 
 
 @array_api_module.register
-def _float(f: f64, f2: f64, r: Boolean, o: Float, i: i64):
+def _float(f: f64, f2: f64, i: i64, r: Rational, r1: Rational):
     return [
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
         rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
-        rewrite(Float.from_int(Int(i))).to(Float(f64.from_i64(i))),
+        # Convert from float to rationl, if its a whole number i.e. can ve converted to int
+        rewrite(Float(f)).to(Float.rational(Rational(f.to_i64(), 1)), eq(f64.from_i64(f.to_i64())).to(f)),
+        rewrite(Float.from_int(Int(i))).to(Float.rational(Rational(i, 1))),
+        rewrite(Float(f) + Float(f2)).to(Float(f + f2)),
+        rewrite(Float(f) - Float(f2)).to(Float(f - f2)),
+        rewrite(Float(f) * Float(f2)).to(Float(f * f2)),
+        rewrite(Float.rational(r) / Float.rational(r1)).to(Float.rational(r / r1)),
+        rewrite(Float.rational(r) + Float.rational(r1)).to(Float.rational(r + r1)),
+        rewrite(Float.rational(r) - Float.rational(r1)).to(Float.rational(r - r1)),
+        rewrite(Float.rational(r) * Float.rational(r1)).to(Float.rational(r * r1)),
     ]
 
 
@@ -924,6 +886,8 @@ def _ndarray(x: NDArray, b: Boolean, f: Float, fi1: f64, fi2: f64):
         rewrite(NDArray.scalar(Value.float(Float(fi1))) > NDArray.scalar(Value.float(Float(fi2)))).to(
             NDArray.scalar(Value.bool(FALSE)), fi1 <= fi2
         ),
+        # Transpose of tranpose is the original array
+        rewrite(x.T.T).to(x),
     ]
 
 
@@ -1087,6 +1051,7 @@ def sum(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArr
 def _sum(x: NDArray, y: NDArray, v: Value, dtype: DType):
     return [
         rewrite(sum(x / NDArray.scalar(v))).to(sum(x) / NDArray.scalar(v)),
+        # Sum of 0D array is
     ]
 
 
@@ -1095,42 +1060,42 @@ def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none)
     ...
 
 
-@array_api_module.function
-def reshape_transform_index(original_shape: TupleInt, shape: TupleInt, index: TupleInt) -> TupleInt:
-    """
-    Transforms an indexing operation on a reshaped array to an indexing operation on the original array.
-    """
-    ...
+# @array_api_module.function
+# def reshape_transform_index(original_shape: TupleInt, shape: TupleInt, index: TupleInt) -> TupleInt:
+#     """
+#     Transforms an indexing operation on a reshaped array to an indexing operation on the original array.
+#     """
+#     ...
 
 
-@array_api_module.function
-def reshape_transform_shape(original_shape: TupleInt, shape: TupleInt) -> TupleInt:
-    """
-    Transforms the shape of an array to one that is reshaped, by replacing -1 with the correct value.
-    """
-    ...
+# @array_api_module.function
+# def reshape_transform_shape(original_shape: TupleInt, shape: TupleInt) -> TupleInt:
+#     """
+#     Transforms the shape of an array to one that is reshaped, by replacing -1 with the correct value.
+#     """
+#     ...
 
 
-@array_api_module.register
-def _reshape(
-    x: NDArray,
-    y: NDArray,
-    shape: TupleInt,
-    copy: OptionalBool,
-    i: Int,
-    s: String,
-    ix: TupleInt,
-):
-    return [
-        # dtype of result is same as input
-        rewrite(reshape(x, shape, copy).dtype).to(x.dtype),
-        # Indexing into a reshaped array is the same as indexing into the original array with a transformed index
-        rewrite(reshape(x, shape, copy).index(ix)).to(x.index(reshape_transform_index(x.shape, shape, ix))),
-        rewrite(reshape(x, shape, copy).shape).to(reshape_transform_shape(x.shape, shape)),
-        # reshape_transform_shape recursively
-        # TODO: handle all cases
-        rewrite(reshape_transform_shape(TupleInt(i), TupleInt(Int(-1)))).to(TupleInt(i)),
-    ]
+# @array_api_module.register
+# def _reshape(
+#     x: NDArray,
+#     y: NDArray,
+#     shape: TupleInt,
+#     copy: OptionalBool,
+#     i: Int,
+#     s: String,
+#     ix: TupleInt,
+# ):
+#     return [
+#         # dtype of result is same as input
+#         rewrite(reshape(x, shape, copy).dtype).to(x.dtype),
+#         # Indexing into a reshaped array is the same as indexing into the original array with a transformed index
+#         rewrite(reshape(x, shape, copy).index(ix)).to(x.index(reshape_transform_index(x.shape, shape, ix))),
+#         rewrite(reshape(x, shape, copy).shape).to(reshape_transform_shape(x.shape, shape)),
+#         # reshape_transform_shape recursively
+#         # TODO: handle all cases
+#         rewrite(reshape_transform_shape(TupleInt(i), TupleInt(Int(-1)))).to(TupleInt(i)),
+#     ]
 
 
 @array_api_module.function
@@ -1157,36 +1122,6 @@ def _concat(x: NDArray):
     ]
 
 
-@array_api_module.function(cost=500)
-def unique_counts(x: NDArray) -> TupleNDArray:
-    ...
-
-
-@array_api_module.function(unextractable=True)
-def count_values(x: NDArray, values: NDArray) -> TupleValue:
-    """
-    Returns a tuple of the count of each of the values in the array.
-    """
-    ...
-
-
-@array_api_module.register
-def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
-    return [
-        rewrite(unique_counts(x).length()).to(Int(2)),
-        # Sum of all unique counts is the size of the array
-        rewrite(sum(unique_counts(x)[Int(1)])).to(NDArray.scalar(Value.int(x.size))),
-        # The unique counts are the count of all the unique values
-        rewrite(unique_counts(x)[Int(1)]).to(NDArray.vector(count_values(x, unique_values(x)))),
-        rewrite(count_values(x, NDArray.vector(TupleValue(v) + tv))).to(
-            TupleValue(sum(x == NDArray.scalar(v)).to_value()) + count_values(x, NDArray.vector(tv))
-        ),
-        rewrite(count_values(x, NDArray.vector(TupleValue(v)))).to(
-            TupleValue(sum(x == NDArray.scalar(v)).to_value()),
-        ),
-    ]
-
-
 @array_api_module.function
 def astype(x: NDArray, dtype: DType) -> NDArray:
     ...
@@ -1196,10 +1131,26 @@ def astype(x: NDArray, dtype: DType) -> NDArray:
 def _astype(x: NDArray, dtype: DType, i: i64):
     return [
         rewrite(astype(x, dtype).dtype).to(dtype),
-        rewrite(sum(astype(x, dtype))).to(astype(sum(x), dtype)),
         rewrite(astype(NDArray.scalar(Value.int(Int(i))), float64)).to(
             NDArray.scalar(Value.float(Float(f64.from_i64(i))))
         ),
+    ]
+
+
+@array_api_module.function(cost=500)
+def unique_counts(x: NDArray) -> TupleNDArray:
+    ...
+
+
+@array_api_module.register
+def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value, dtype: DType):
+    return [
+        rewrite(unique_counts(x).length()).to(Int(2)),
+        # Sum of all unique counts is the size of the array
+        rewrite(sum(unique_counts(x)[Int(1)])).to(NDArray.scalar(Value.int(x.size))),
+        # Same but with astype in the middle
+        # TODO: Replace
+        rewrite(sum(astype(unique_counts(x)[Int(1)], dtype))).to(astype(NDArray.scalar(Value.int(x.size)), dtype)),
     ]
 
 
@@ -1241,10 +1192,6 @@ def _unique_inverse(x: NDArray, i: Int):
         rewrite(unique_inverse(x).length()).to(Int(2)),
         # Shape of unique_inverse first element is same as shape of unique_values
         rewrite(unique_inverse(x)[Int(0)]).to(unique_values(x)),
-        # Creating a mask array of when the unique inverse is a value is the same as a mask array for when the value is that index of the unique values
-        rewrite(unique_inverse(x)[Int(1)] == NDArray.scalar(Value.int(i))).to(
-            x == NDArray.scalar(unique_values(x).index(TupleInt(i)))
-        ),
     ]
 
 
@@ -1407,15 +1354,13 @@ def _interval_analaysis(
         ),
         # possible values of bool is bool
         rewrite(possible_values(Value.bool(b))).to(TupleValue(Value.bool(b))),
-        # rule(eq(y).to(astype(x, dtype)), ndarray_all_greater_0(x)).then(ndarray_all_greater_0(y)),
-        # rule(eq(z).to(x / y), ndarray_all_greater_0(x), ndarray_all_greater_0(y)).then(ndarray_all_greater_0(z)),
-        # rule(eq(z).to(NDArray.scalar(Value.float(Float(f)))), f > 0.0).then(ndarray_all_greater_0(z)),
-        # rule(eq(z).to(NDArray.scalar(Value.int(Int(i)))), i > 0).then(ndarray_all_greater_0(z)),
-        # # Also support abs(x) > 0
-        # rule(eq(y).to(abs(x))).then(ndarray_all_greater_0(y)),
-        # # And if all_greater_0(x) then x > 0 is all true
-        # rule(eq(y).to(x > NDArray.scalar(Value.int(Int(0)))), ndarray_all_greater_0(x)).then(ndarray_all_true(y)),
-        # rule(eq(b).to(x.to_bool()), ndarray_all_true(x)).then(union(b).with_(TRUE)),
+        # casting to a type preserves if > 0
+        rule(
+            eq(v1).to(v.astype(dtype)),
+            greater_zero(v),
+        ).then(
+            greater_zero(v1),
+        ),
     ]
 
 
@@ -1429,17 +1374,45 @@ def _interval_analaysis(
 ##
 
 
+def _demand_shape(compound: NDArray, inner: NDArray) -> Command:
+    __a = var("__a", NDArray)
+    return rule(eq(__a).to(compound)).then(inner.shape, inner.shape.length())
+
+
 @array_api_module.register
-def _array_math(v: Value, vs: TupleValue, i: Int):
-    # Scalar values
+def _scalar_math(v: Value, vs: TupleValue, i: Int):
     yield rewrite(NDArray.scalar(v).shape).to(TupleInt.EMPTY)
     yield rewrite(NDArray.scalar(v).dtype).to(v.dtype)
     yield rewrite(NDArray.scalar(v).index(TupleInt.EMPTY)).to(v)
 
-    # Vector values
+
+@array_api_module.register
+def _vector_math(v: Value, vs: TupleValue, i: Int):
     yield rewrite(NDArray.vector(vs).shape).to(TupleInt(vs.length()))
     yield rewrite(NDArray.vector(vs).dtype).to(vs[Int(0)].dtype)
     yield rewrite(NDArray.vector(vs).index(TupleInt(i))).to(vs[i])
+
+
+@array_api_module.register
+def _reshape_math(x: NDArray, shape: TupleInt, copy: OptionalBool):
+    res = reshape(x, shape, copy)
+
+    yield _demand_shape(res, x)
+
+    # Reshaping a vec to a vec is the same as the vec
+    yield rewrite(reshape(x, TupleInt(Int(-1)), copy)).to(x, eq(x.shape.length()).to(Int(1)))
+
+
+@array_api_module.register
+def _indexing_pushdown(x: NDArray, shape: TupleInt, copy: OptionalBool, i: Int):
+    # rewrite full getitem to indexec
+    yield rewrite(x[IndexKey.int(i)]).to(NDArray.scalar(x.index(TupleInt(i))))
+    # TODO: Multi index rewrite as well if all are ints
+
+
+##
+# Assumptions
+##
 
 
 @array_api_module.function(mutates_first_arg=True)
@@ -1540,3 +1513,24 @@ def _unique(xs: TupleValue, a: NDArray, shape: TupleInt, copy: OptionalBool):
 @array_api_module.register
 def _size(x: NDArray):
     yield rewrite(x.size).to(x.shape.product())
+
+
+class ToPy(Protocol):
+    def to_py(self) -> PyObject:
+        ...
+
+
+def extract_py(e: ToPy) -> Any:
+    """
+    Extract an expression as a python object, by running them return the `to_py()` object.
+    """
+    egraph = EGraph.current()
+    assert isinstance(e, Expr)
+    with egraph:
+        egraph.register(e)
+        egraph.run((run() * 30).saturate())
+        try:
+            return egraph.load_object(egraph.extract(e.to_py()))
+        except EggSmolError:
+            egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
+            raise ValueError("Cannot simplify:", egraph.extract(e))

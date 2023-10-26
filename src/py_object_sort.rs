@@ -1,12 +1,13 @@
 use std::{
     any::Any,
+    env::temp_dir,
     ffi::CString,
+    fs::File,
     io::Write,
     sync::{Arc, Mutex},
 };
-use tempfile::Builder;
 
-use egglog::sort::{FromSort, IntoSort, StringSort};
+use egglog::sort::{BoolSort, FromSort, IntoSort, StringSort};
 use egglog::{
     ast::{Expr, Literal, Symbol},
     sort::{I64Sort, Sort},
@@ -16,6 +17,7 @@ use egglog::{
 use pyo3::{
     ffi, intern, types::PyDict, AsPyPointer, IntoPy, PyAny, PyErr, PyObject, PyResult, Python,
 };
+use uuid::Uuid;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum PyObjectIdent {
@@ -113,6 +115,11 @@ impl Sort for PyObjectSort {
             py_object: self.clone(),
             string: typeinfo.get_sort(),
         });
+        typeinfo.add_primitive(ToBool {
+            name: "py-to-bool".into(),
+            py_object: self.clone(),
+            bool_: typeinfo.get_sort(),
+        });
         typeinfo.add_primitive(FromString {
             name: "py-from-string".into(),
             py_object: self.clone(),
@@ -165,7 +172,7 @@ impl PrimitiveLike for Ctor {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let ident = match values {
             [id] => PyObjectIdent::Unhashable(i64::load(self.i64.as_ref(), id) as usize),
             [type_hash, hash] => PyObjectIdent::Hashable(
@@ -203,7 +210,7 @@ impl PrimitiveLike for Eval {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
         let res_obj: PyObject = Python::with_gil(|py| {
             let (_, globals) = self.py_object.load(&values[1]);
@@ -242,7 +249,7 @@ impl PrimitiveLike for Exec {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
         let code: &str = code.into();
         let locals: PyObject = Python::with_gil(|py| {
@@ -252,15 +259,19 @@ impl PrimitiveLike for Exec {
             let locals = locals.downcast::<PyDict>(py).unwrap().copy().unwrap();
             // Copy code into temporary file
             // Keep it around so that if errors occur we can debug them after the program exits
-            let (mut file, path) = Builder::new()
-                .suffix(".py")
-                .tempfile()
-                .unwrap()
-                .keep()
-                .unwrap();
+            let mut path = temp_dir();
+            let file_name = format!("egglog-{}.py", Uuid::new_v4());
+            path.push(file_name);
+            let mut file = File::create(path.clone()).unwrap();
             file.write_all(code.as_bytes()).unwrap();
-            let path = path.to_str().unwrap();
-            run_code_path(py, code, Some(globals), Some(locals), path).unwrap();
+            run_code_path(
+                py,
+                code,
+                Some(globals),
+                Some(locals),
+                path.to_str().unwrap(),
+            )
+            .unwrap();
             locals.into()
         });
         Some(self.py_object.store(locals))
@@ -292,7 +303,7 @@ impl PrimitiveLike for Dict {
         Some(self.py_object.clone())
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let dict: PyObject = Python::with_gil(|py| {
             let dict = PyDict::new(py);
             // Update the dict with the key-value pairs
@@ -338,7 +349,7 @@ impl PrimitiveLike for DictUpdate {
         Some(self.py_object.clone())
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let dict: PyObject = Python::with_gil(|py| {
             // Copy the dict so we can mutate it and return it
             let (_, dict) = self.py_object.load(&values[0]);
@@ -374,13 +385,41 @@ impl PrimitiveLike for ToString {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let obj: String = Python::with_gil(|py| {
             let (_, obj) = self.py_object.load(&values[0]);
             obj.extract(py).unwrap()
         });
         let symbol: Symbol = obj.into();
         symbol.store(self.string.as_ref())
+    }
+}
+
+/// (py-to-bool <obj>)
+struct ToBool {
+    name: Symbol,
+    py_object: Arc<PyObjectSort>,
+    bool_: Arc<BoolSort>,
+}
+
+impl PrimitiveLike for ToBool {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [obj] if obj.name() == self.py_object.name() => Some(self.bool_.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+        let obj: bool = Python::with_gil(|py| {
+            let (_, obj) = self.py_object.load(&values[0]);
+            obj.extract(py).unwrap()
+        });
+        obj.store(self.bool_.as_ref())
     }
 }
 
@@ -403,7 +442,7 @@ impl PrimitiveLike for FromString {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let str = Symbol::load(self.string.as_ref(), &values[0]).to_string();
         let obj: PyObject = Python::with_gil(|py| str.into_py(py));
         Some(self.py_object.store(obj))
@@ -429,7 +468,7 @@ impl PrimitiveLike for FromInt {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let int = i64::load(self.int.as_ref(), &values[0]);
         let obj: PyObject = Python::with_gil(|py| int.into_py(py));
         Some(self.py_object.store(obj))
@@ -446,6 +485,7 @@ fn run_code_path<'py>(
     path: &str,
 ) -> PyResult<&'py PyAny> {
     let code = CString::new(code)?;
+    let path = CString::new(path)?;
     unsafe {
         let mptr = ffi::PyImport_AddModule("__main__\0".as_ptr() as *const _);
         if mptr.is_null() {

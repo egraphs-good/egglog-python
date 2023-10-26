@@ -285,7 +285,7 @@ checksum = "675e35c02a51bb4d4618cb4885b3839ce6d1787c97b664474d9208d074742e20"
 [[package]]
 name = "egglog"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog?rev=959afb9078b93df7d58afa519b1399c128132507#959afb9078b93df7d58afa519b1399c128132507"
+source = "git+https://github.com/egraphs-good/egglog?rev=ceed816e9369570ffed9feeba157b19471dda70d#ceed816e9369570ffed9feeba157b19471dda70d"
 dependencies = [
  "clap",
  "egraph-serialize",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "egglog-python"
-version = "0.7.0"
+version = "1.0.0"
 dependencies = [
  "egglog",
  "lalrpop-util 0.19.12",
@@ -320,7 +320,7 @@ dependencies = [
  "ordered-float",
  "pyo3",
  "pyo3-log",
- "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -1240,6 +1240,15 @@ name = "utf8parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
+
+[[package]]
+name = "uuid"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88ad59a7560b41a70d191093a945f0b87bc1deeda46fb237479708a1d6b6cdfc"
+dependencies = [
+ "getrandom",
+]
 
 [[package]]
 name = "version_check"

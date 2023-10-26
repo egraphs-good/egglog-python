@@ -1,6 +1,6 @@
 [package]
 name = "egglog-python"
-version = "0.7.0"
+version = "1.0.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -10,15 +10,14 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.18.1", features = ["extension-module"] }
-egglog = { git = "https://github.com/egraphs-good/egglog", rev = "959afb9078b93df7d58afa519b1399c128132507" }
+egglog = { git = "https://github.com/egraphs-good/egglog", rev = "ceed816e9369570ffed9feeba157b19471dda70d" }
 # egglog = { git = "https://github.com/oflatt/egg-smol", branch = "oflatt-fast-terms" }
 # egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "38b3014b34399cc78887ede09c845b2a5d6c7d19" }
 pyo3-log = "0.8.1"
 log = "0.4.17"
 lalrpop-util = { version = "0.19.8", features = ["lexer"] }
 ordered-float = "*"
-tempfile = "3.8.0"
-
+uuid = { version = "1.5.0", features = ["v4"] }
 [package.metadata.maturin]
 name = "egglog.bindings"
 
