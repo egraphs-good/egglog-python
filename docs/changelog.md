@@ -4,7 +4,9 @@ _This project uses semantic versioning_
 
 ## Unreleased
 
-...
+## 1.0.1 (2023-10-26)
+
+- Adds youtube video to [presentation slides](./explanation/2023_07_presentation).
 
 ## 1.0.0 (2023-10-26)
 
