@@ -7,10 +7,14 @@ _This project uses semantic versioning. Before 1.0.0, this means that every brea
 ### Breaking Changes
 
 - Test on Python 3.9 - 3.11, stop testing on 3.8 to follow Scientific Python versioning policy
-- Bump [egglog dep](https://github.com/egraphs-good/egglog/compare/45d05e727cceaab13413b4e51a60ee3be9fbf403...959afb9078b93df7d58afa519b1399c128132507)
+- Bump [egglog dep](https://github.com/egraphs-good/egglog/compare/45d05e727cceaab13413b4e51a60ee3be9fbf403...ceed816e9369570ffed9feeba157b19471dda70d)
   - Adds `Bool` builtin
   - Rename `PrintTable` command to `PrintFunction`
   - Change extract command back to taking an expression instead of a fact
+  - Adds `numer` and `denom` functions to `Rational` sort.
+  - Adds `terms_encoding` boolean flag for creating an EGraph
+  - Allow print size command to be called with no args to print all sizes
+  - Add `rebuild` method for sets, maps, and vecs.
 
 ### New Features
 

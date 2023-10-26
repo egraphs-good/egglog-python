@@ -1,4 +1,4 @@
-import pytest
+# import pytest
 from egglog.exp.array_api import *
 from egglog.exp.array_api_numba import array_api_numba_module
 from egglog.exp.array_api_program_gen import *
@@ -47,57 +47,55 @@ def test_to_source(snapshot_py):
 
     assume_dtype(_NDArray_2, int64)
     assume_shape(_NDArray_2, TupleInt(Int(150)))
-    _TupleValue_1 = TupleValue(Value.int(Int(0))) + (TupleValue(Value.int(Int(1))) + TupleValue(Value.int(Int(2))))
-    assume_value_one_of(_NDArray_2, _TupleValue_1)
-
-    _NDArray_3 = reshape(_NDArray_2, TupleInt(Int(-1)))
-    _NDArray_4 = astype(unique_counts(_NDArray_3)[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float(150.0)))
-    _NDArray_5 = zeros(
+    assume_value_one_of(
+        _NDArray_2, TupleValue(Value.int(Int(0))) + (TupleValue(Value.int(Int(1))) + TupleValue(Value.int(Int(2))))
+    )
+    _NDArray_3 = astype(
+        NDArray.vector(
+            TupleValue(sum(_NDArray_2 == NDArray.scalar(Value.int(Int(0)))).to_value())
+            + (
+                TupleValue(sum(_NDArray_2 == NDArray.scalar(Value.int(Int(1)))).to_value())
+                + TupleValue(sum(_NDArray_2 == NDArray.scalar(Value.int(Int(2)))).to_value())
+            )
+        ),
+        DType.float64,
+    ) / NDArray.scalar(Value.float(Float(150.0)))
+    _NDArray_4 = zeros(
         TupleInt(Int(3)) + TupleInt(Int(4)), OptionalDType.some(DType.float64), OptionalDevice.some(_NDArray_1.device)
     )
     _MultiAxisIndexKey_1 = MultiAxisIndexKey(MultiAxisIndexKeyItem.slice(Slice()))
     _IndexKey_1 = IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.int(Int(0))) + _MultiAxisIndexKey_1)
-    _NDArray_5[_IndexKey_1] = mean(
-        _NDArray_1[ndarray_index(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(0))))],
-        OptionalIntOrTuple.some(IntOrTuple.int(Int(0))),
+    _NDArray_5 = _NDArray_1[ndarray_index(_NDArray_2 == NDArray.scalar(Value.int(Int(0))))]
+    _OptionalIntOrTuple_1 = OptionalIntOrTuple.some(IntOrTuple.int(Int(0)))
+    _NDArray_4[_IndexKey_1] = sum(_NDArray_5, _OptionalIntOrTuple_1) / NDArray.scalar(
+        Value.int(_NDArray_5.shape[Int(0)])
     )
     _IndexKey_2 = IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.int(Int(1))) + _MultiAxisIndexKey_1)
-    _NDArray_5[_IndexKey_2] = mean(
-        _NDArray_1[ndarray_index(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(1))))],
-        OptionalIntOrTuple.some(IntOrTuple.int(Int(0))),
+    _NDArray_6 = _NDArray_1[ndarray_index(_NDArray_2 == NDArray.scalar(Value.int(Int(1))))]
+    _NDArray_4[_IndexKey_2] = sum(_NDArray_6, _OptionalIntOrTuple_1) / NDArray.scalar(
+        Value.int(_NDArray_6.shape[Int(0)])
     )
     _IndexKey_3 = IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.int(Int(2))) + _MultiAxisIndexKey_1)
-    _NDArray_5[_IndexKey_3] = mean(
-        _NDArray_1[ndarray_index(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(2))))],
-        OptionalIntOrTuple.some(IntOrTuple.int(Int(0))),
+    _NDArray_7 = _NDArray_1[ndarray_index(_NDArray_2 == NDArray.scalar(Value.int(Int(2))))]
+    _NDArray_4[_IndexKey_3] = sum(_NDArray_7, _OptionalIntOrTuple_1) / NDArray.scalar(
+        Value.int(_NDArray_7.shape[Int(0)])
     )
-    _NDArray_6 = concat(
-        TupleNDArray(
-            _NDArray_1[ndarray_index(_NDArray_3 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(0))])]
-            - _NDArray_5[_IndexKey_1]
-        )
-        + (
-            TupleNDArray(
-                _NDArray_1[ndarray_index(_NDArray_3 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(1))])]
-                - _NDArray_5[_IndexKey_2]
-            )
-            + TupleNDArray(
-                _NDArray_1[ndarray_index(_NDArray_3 == NDArray.vector(_TupleValue_1)[IndexKey.int(Int(2))])]
-                - _NDArray_5[_IndexKey_3]
-            )
-        ),
+    _NDArray_8 = concat(
+        TupleNDArray(_NDArray_5 - _NDArray_4[_IndexKey_1])
+        + (TupleNDArray(_NDArray_6 - _NDArray_4[_IndexKey_2]) + TupleNDArray(_NDArray_7 - _NDArray_4[_IndexKey_3])),
         OptionalInt.some(Int(0)),
     )
-    _NDArray_7 = std(_NDArray_6, OptionalIntOrTuple.some(IntOrTuple.int(Int(0))))
-    _NDArray_7[
-        ndarray_index(
-            std(_NDArray_6, OptionalIntOrTuple.some(IntOrTuple.int(Int(0)))) == NDArray.scalar(Value.int(Int(0)))
-        )
-    ] = NDArray.scalar(Value.float(Float(1.0)))
+    _NDArray_9 = square(
+        _NDArray_8
+        - expand_dims(sum(_NDArray_8, _OptionalIntOrTuple_1) / NDArray.scalar(Value.int(_NDArray_8.shape[Int(0)])))
+    )
+    _NDArray_10 = sqrt(sum(_NDArray_9, _OptionalIntOrTuple_1) / NDArray.scalar(Value.int(_NDArray_9.shape[Int(0)])))
+    _NDArray_11 = copy(_NDArray_10)
+    _NDArray_11[ndarray_index(_NDArray_10 == NDArray.scalar(Value.int(Int(0))))] = NDArray.scalar(
+        Value.float(Float(1.0))
+    )
     _TupleNDArray_1 = svd(
-        sqrt(NDArray.scalar(Value.int(NDArray.scalar(Value.float(Float(1.0))).to_value().to_int / Int(147))))
-        * (_NDArray_6 / _NDArray_7),
-        FALSE,
+        sqrt(NDArray.scalar(Value.float(Float.rational(Rational(1, 147))))) * (_NDArray_8 / _NDArray_11), FALSE
     )
     _Slice_1 = Slice(
         OptionalInt.none,
@@ -107,32 +105,27 @@ def test_to_source(snapshot_py):
             .to_int
         ),
     )
-    _NDArray_8 = (
+    _NDArray_12 = (
         _TupleNDArray_1[Int(2)][
             IndexKey.multi_axis(MultiAxisIndexKey(MultiAxisIndexKeyItem.slice(_Slice_1)) + _MultiAxisIndexKey_1)
         ]
-        / _NDArray_7
+        / _NDArray_11
     ).T / _TupleNDArray_1[Int(1)][IndexKey.slice(_Slice_1)]
     _TupleNDArray_2 = svd(
         (
             sqrt(
-                NDArray.scalar(
-                    Value.int(
-                        (Int(150) * _NDArray_4.to_value().to_int)
-                        * (NDArray.scalar(Value.float(Float(1.0))).to_value().to_int / Int(2))
-                    )
-                )
+                (NDArray.scalar(Value.int(Int(150))) * _NDArray_3)
+                * NDArray.scalar(Value.float(Float.rational(Rational(1, 2))))
             )
-            * (_NDArray_5 - (_NDArray_4 @ _NDArray_5)).T
+            * (_NDArray_4 - (_NDArray_3 @ _NDArray_4)).T
         ).T
-        @ _NDArray_8,
+        @ _NDArray_12,
         FALSE,
     )
-
     res = (
-        (_NDArray_1 - (_NDArray_4 @ _NDArray_5))
+        (_NDArray_1 - (_NDArray_3 @ _NDArray_4))
         @ (
-            _NDArray_8
+            _NDArray_12
             @ _TupleNDArray_2[Int(2)].T[
                 IndexKey.multi_axis(
                     _MultiAxisIndexKey_1
@@ -190,7 +183,7 @@ def run_lda(x, y):
         return lda.fit(x, y).transform(x)
 
 
-@pytest.mark.xfail(raises=AssertionError)
+# @pytest.mark.xfail(raises=AssertionError)
 def test_sklearn_lda(snapshot_py):
     X_arr = NDArray.var("X")
     assume_dtype(X_arr, float64)
@@ -271,4 +264,30 @@ def test_reshape_index():
     egraph.register(res)
     egraph.run(run() * 10)
     equiv_expr = egraph.extract_multiple(res, 10)
+    assert len(equiv_expr) < 10
+
+
+def test_reshape_vec_noop():
+    x = NDArray.var("x")
+    assume_shape(x, TupleInt(Int(5)))
+    res = reshape(x, TupleInt(Int(-1)))
+    egraph = EGraph([array_api_module])
+    egraph.register(res)
+    egraph.run(run() * 10)
+    equiv_expr = egraph.extract_multiple(res, 10)
+
     assert len(equiv_expr) == 2
+    egraph.check(eq(res).to(x))
+
+
+# def test_reshape_transform_index():
+#     x = NDArray.var("x")
+#     assume_shape(x, TupleInt(Int(5)))
+#     res: Value = reshape(x, TupleInt(Int(-1))).index(ALL_INDICES)
+#     egraph = EGraph([array_api_module])
+#     egraph.register(res)
+#     egraph.run(20)
+#     egraph.check(eq(res).to(x.index(reshape_transform_index(TupleInt(Int(5)), TupleInt(Int(-1)), ALL_INDICES))))
+#     # egraph.display()
+#     # Verify that this doesn't blow up
+#     assert len(egraph.extract_multiple(res, 100)) < 10

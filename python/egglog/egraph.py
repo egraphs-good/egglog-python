@@ -68,6 +68,7 @@ __all__ = [
     "Schedule",
     "run",
     "seq",
+    "Command",
 ]
 
 T = TypeVar("T")
@@ -790,7 +791,7 @@ class EGraph(_BaseModule):
     _egraph: bindings.EGraph = field(repr=False, init=False)
     # The current declarations which have been pushed to the stack
     _decl_stack: list[Declarations] = field(default_factory=list, repr=False)
-    _token: Optional[Token[EGraph]] = None
+    _token_stack: list[Token[EGraph]] = field(default_factory=list, repr=False)
 
     def __post_init__(self, modules: list[Module], seminaive: bool) -> None:  # type: ignore
         super().__post_init__(modules)
@@ -1002,13 +1003,12 @@ class EGraph(_BaseModule):
 
         Also sets the current egraph to this one.
         """
-        self._token = CURRENT_EGRAPH.set(self)
+        self._token_stack.append(CURRENT_EGRAPH.set(self))
         self.push()
         return self
 
     def __exit__(self, exc_type, exc, exc_tb):
-        assert self._token
-        CURRENT_EGRAPH.reset(self._token)
+        CURRENT_EGRAPH.reset(self._token_stack.pop())
         self.pop()
 
     def save_object(self, obj: object) -> PyObject:
@@ -1052,11 +1052,13 @@ class EGraph(_BaseModule):
 
         return inner
 
-    def saturate(self, *, performance=False, **kwargs: Unpack[GraphvizKwargs]) -> ipywidgets.Widget:
+    def saturate(self, *, max=1000, performance=False, **kwargs: Unpack[GraphvizKwargs]) -> ipywidgets.Widget:
         from .graphviz_widget import graphviz_widget_with_slider
 
         dots = [str(self.graphviz(**kwargs))]
-        while self.run(1).updated:
+        i = 0
+        while self.run(1).updated and i < max:
+            i += 1
             dots.append(str(self.graphviz(**kwargs)))
         return graphviz_widget_with_slider(dots, performance=performance)
 

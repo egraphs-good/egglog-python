@@ -509,6 +509,9 @@ class RuntimeExpr:
     def __setstate__(self, d):
         self.__egg_decls__, self.__egg_typed_expr__ = d
 
+    def __hash__(self):
+        return hash(self.__egg_typed_expr__)
+
 
 # Define each of the special methods, since we have already declared them for pretty printing
 for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call__", "__setitem__", "__delitem__"]:
@@ -569,7 +572,7 @@ def get_general_decls(a: object, b: object) -> ModuleDeclarations:
     return b.__egg_decls__
 
 
-for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__hash__", "__iter__", "__index__"]:
+for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__iter__", "__index__"]:
 
     def _preserved_method(self: RuntimeExpr, __name: str = name):
         try:

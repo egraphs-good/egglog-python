@@ -1,6 +1,8 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
+import inspect
+
 from egglog import *
 from egglog.exp.program_gen import *
 
@@ -83,3 +85,4 @@ def test_py_object():
     egraph.run(100)
     res = egraph.load_object(egraph.extract(fn.py_object))
     assert res(1, 2) == 13  # type: ignore
+    assert inspect.getsource(res)  # type: ignore

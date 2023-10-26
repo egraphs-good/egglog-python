@@ -21,7 +21,7 @@ class Program(Expr):
     The expression and statements are all represented as strings.
     """
 
-    def __init__(self, expr: StringLike) -> None:
+    def __init__(self, expr: StringLike, is_identifier: BoolLike = Bool(False)) -> None:
         """
         Create a program based on a string expression.
         """
@@ -110,6 +110,13 @@ class Program(Expr):
         """
         ...
 
+    @property
+    def is_identifer(self) -> Bool:
+        """
+        Returns whether the expression is an identifier. Used so that we don't re-assign any identifiers.
+        """
+        ...
+
 
 converter(String, Program, Program)
 
@@ -141,21 +148,20 @@ def _compile(
     p1: Program,
     p2: Program,
     p3: Program,
-    # c: Compiler,
-    statements: Program,
-    expr: Program,
     i: i64,
     i2: i64,
-    m: Map[Program, Program],
+    b: Bool,
 ):
-    # Combining two strings is just joining them
-    # yield rewrite(Program(s1) + Program(s2)).to(Program(join(s1, s2)))
+    ##
+    # Expression
+    ##
 
     # Compiling a string just gives that string
-    yield rule(eq(p).to(Program(s)), p.compile(i)).then(
+    yield rule(eq(p).to(Program(s, b)), p.compile(i)).then(
         set_(p.expr).to(s),
         set_(p.statements).to(String("")),
         set_(p.next_sym).to(i),
+        set_(p.is_identifer).to(b),
     )
 
     ##
@@ -168,8 +174,8 @@ def _compile(
     # Expr to statement
     ##
     stmt = eq(p).to(p1.expr_to_statement())
-    # 1. Set parent
-    yield rule(stmt, p.compile(i)).then(set_(p1.parent).to(p))
+    # 1. Set parent and is_identifier to false, since its empty
+    yield rule(stmt, p.compile(i)).then(set_(p1.parent).to(p), set_(p.is_identifer).to(Bool(False)))
     # 2. Compile p1 if parent set
     yield rule(stmt, p.compile(i), eq(p1.parent).to(p)).then(p1.compile(i))
     # 3.a. If parent not set, set statements to expr
@@ -204,8 +210,16 @@ def _compile(
     # of the two
     program_add = eq(p).to(p1 + p2)
 
+    # If the resulting expression is either of the inputs, then its an identifer if those are
+    # Otherwise, if its not equal to either input, its not an identifier
+    yield rule(program_add, eq(p.expr).to(p1.expr), eq(b).to(p1.is_identifer)).then(set_(p.is_identifer).to(b))
+    yield rule(program_add, eq(p.expr).to(p2.expr), eq(b).to(p2.is_identifer)).then(set_(p.is_identifer).to(b))
+    yield rule(program_add, p.expr != p1.expr, p.expr != p2.expr).then(set_(p.is_identifer).to(Bool(False)))
+
     # Set parent of p1
-    yield rule(program_add, p.compile(i)).then(set_(p1.parent).to(p))
+    yield rule(program_add, p.compile(i)).then(
+        set_(p1.parent).to(p),
+    )
 
     # Compile p1, if p1 parent equal
     yield rule(program_add, p.compile(i), eq(p1.parent).to(p)).then(p1.compile(i))
@@ -279,14 +293,16 @@ def _compile(
     ##
 
     # Compiling an assign is the same as compiling the expression, adding an assign statement, then setting the
-    # expression as the gensym
+    # expression as the gensym, and setting is_identifier to true
     program_assign = eq(p).to(p1.assign())
     # Set parent
-    yield rule(program_assign, p.compile(i)).then(set_(p1.parent).to(p))
+    yield rule(program_assign, p.compile(i)).then(set_(p1.parent).to(p), set_(p.is_identifer).to(Bool(True)))
     # If parent set, compile the expression
     yield rule(program_assign, p.compile(i), eq(p1.parent).to(p)).then(p1.compile(i))
 
-    # If p1 parent is p, then use statements of p, next sym of p
+    # 1. If p1 is not an identifier, then we must create a new one
+
+    # 1. a. If p1 parent is p, then use statements of p, next sym of p
     symbol = join(String("_"), i.to_string())
     yield rule(
         program_assign,
@@ -294,21 +310,51 @@ def _compile(
         eq(s1).to(p1.statements),
         eq(i).to(p1.next_sym),
         eq(s2).to(p1.expr),
+        eq(p1.is_identifer).to(Bool(False)),
     ).then(
         set_(p.statements).to(join(s1, symbol, " = ", s2, "\n")),
         set_(p.expr).to(symbol),
         set_(p.next_sym).to(i + 1),
     )
-    # If p1 parent is not p, then just use assign as statement, next sym of i
+    # 1. b. If p1 parent is not p, then just use assign as statement, next sym of i
     yield rule(
         program_assign,
         p1.parent != p,
         p.compile(i),
         eq(s2).to(p1.expr),
+        eq(p1.is_identifer).to(Bool(False)),
     ).then(
         set_(p.statements).to(join(symbol, " = ", s2, "\n")),
         set_(p.expr).to(symbol),
         set_(p.next_sym).to(i + 1),
+    )
+
+    # 2. If p1 is an identifier, then program assign is a no-op
+
+    # 1. a. If p1 parent is p, then use statements of p, next sym of p
+    yield rule(
+        program_assign,
+        eq(p1.parent).to(p),
+        eq(s1).to(p1.statements),
+        eq(i).to(p1.next_sym),
+        eq(s2).to(p1.expr),
+        eq(p1.is_identifer).to(Bool(True)),
+    ).then(
+        set_(p.statements).to(s1),
+        set_(p.expr).to(s2),
+        set_(p.next_sym).to(i),
+    )
+    # 1. b. If p1 parent is not p, then just use assign as statement, next sym of i
+    yield rule(
+        program_assign,
+        p1.parent != p,
+        p.compile(i),
+        eq(s2).to(p1.expr),
+        eq(p1.is_identifer).to(Bool(True)),
+    ).then(
+        set_(p.statements).to(String("")),
+        set_(p.expr).to(s2),
+        set_(p.next_sym).to(i),
     )
 
     ##
@@ -326,6 +372,7 @@ def _compile(
         p2.compile(i),
         p3.compile(i),
         p1.compile(i),
+        set_(p.is_identifer).to(Bool(True)),
     )
     # 2. Set statements to function body and the next sym to i
     yield rule(
