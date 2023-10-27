@@ -15,11 +15,6 @@ from dataclasses import dataclass, field
 from itertools import zip_longest
 from typing import (
     TYPE_CHECKING,
-    Callable,
-    Collection,
-    Iterable,
-    Optional,
-    Type,
     TypeVar,
     Union,
     cast,
@@ -35,6 +30,8 @@ from .declarations import BINARY_METHODS, REFLECTED_BINARY_METHODS, UNARY_METHOD
 from .type_constraint_solver import *
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Collection, Iterable
+
     from .egraph import Expr
 
 __all__ = [
@@ -60,7 +57,7 @@ LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
 ##
 
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
-CONVERSIONS: dict[tuple[Type | JustTypeRef, JustTypeRef], tuple[int, Callable]] = {}
+CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable]] = {}
 
 T = TypeVar("T")
 V = TypeVar("V", bound="Expr")
@@ -70,7 +67,7 @@ class ConvertError(Exception):
     pass
 
 
-def converter(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V], cost: int = 1) -> None:
+def converter(from_type: type[T], to_type: type[V], fn: Callable[[T], V], cost: int = 1) -> None:
     """
     Register a converter from some type to an egglog type.
     """
@@ -80,7 +77,7 @@ def converter(from_type: Type[T], to_type: Type[V], fn: Callable[[T], V], cost: 
     _register_converter(process_tp(from_type), to_type_name, fn, cost)
 
 
-def _register_converter(a: Type | JustTypeRef, b: JustTypeRef, a_b: Callable, cost: int) -> None:
+def _register_converter(a: type | JustTypeRef, b: JustTypeRef, a_b: Callable, cost: int) -> None:
     """
     Registers a converter from some type to an egglog type, if not already registered.
 
@@ -128,7 +125,7 @@ def convert(source: object, target: type[V]) -> V:
 
 
 def process_tp(tp: type | RuntimeTypeArgType) -> JustTypeRef | type:
-    if isinstance(tp, (RuntimeClass, RuntimeParamaterizedClass)):
+    if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
         return class_to_ref(tp)
     return tp
 
@@ -182,7 +179,7 @@ def _get_tp(x: object) -> JustTypeRef | type:
         return x.__egg_typed_expr__.tp
     tp = type(x)
     # If this value has a custom metaclass, let's use that as our index instead of the type
-    if type(tp) != type:  # noqa: E721
+    if type(tp) != type:
         return type(tp)
     return tp
 
@@ -197,14 +194,14 @@ class RuntimeClass:
     __egg_decls__: ModuleDeclarations
     __egg_name__: str
 
-    def __call__(self, *args: object) -> Optional[RuntimeExpr]:
+    def __call__(self, *args: object) -> RuntimeExpr | None:
         """
         Create an instance of this kind by calling the __init__ classmethod
         """
         # If this is a literal type, initializing it with a literal should return a literal
         if self.__egg_name__ in UNARY_LIT_CLASS_NAMES:
             assert len(args) == 1
-            assert isinstance(args[0], (int, float, str, bool))
+            assert isinstance(args[0], int | float | str | bool)
             return RuntimeExpr(self.__egg_decls__, TypedExprDecl(JustTypeRef(self.__egg_name__), LitDecl(args[0])))
         if self.__egg_name__ == UNIT_CLASS_NAME:
             assert len(args) == 0
@@ -263,7 +260,7 @@ class RuntimeParamaterizedClass:
         if len(self.__egg_tp__.args) != desired_args:
             raise ValueError(f"Expected {desired_args} type args, got {len(self.__egg_tp__.args)}")
 
-    def __call__(self, *args: object) -> Optional[RuntimeExpr]:
+    def __call__(self, *args: object) -> RuntimeExpr | None:
         return RuntimeClassMethod(self.__egg_decls__, class_to_ref(self), "__init__")(*args)
 
     def __getattr__(self, name: str) -> RuntimeClassMethod:
@@ -296,7 +293,7 @@ class RuntimeFunction:
         self.__egg_fn_ref__ = FunctionRef(self.__egg_name__)
         self.__egg_fn_decl__ = self.__egg_decls__.get_function_decl(self.__egg_fn_ref__)
 
-    def __call__(self, *args: object, **kwargs: object) -> Optional[RuntimeExpr]:
+    def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr | None:
         return _call(self.__egg_decls__, self.__egg_fn_ref__, self.__egg_fn_decl__, args, kwargs)
 
     def __str__(self) -> str:
@@ -307,11 +304,11 @@ def _call(
     decls: ModuleDeclarations,
     callable_ref: CallableRef,
     # Not included if this is the != method
-    fn_decl: Optional[FunctionDecl],
+    fn_decl: FunctionDecl | None,
     args: Collection[object],
     kwargs: dict[str, object],
-    bound_params: Optional[tuple[JustTypeRef, ...]] = None,
-) -> Optional[RuntimeExpr]:
+    bound_params: tuple[JustTypeRef, ...] | None = None,
+) -> RuntimeExpr | None:
     # Turn all keyword args into positional args
 
     if fn_decl:
@@ -371,7 +368,7 @@ class RuntimeClassMethod:
         except KeyError:
             raise AttributeError(f"Class {self.class_name} does not have method {self.__egg_method_name__}")
 
-    def __call__(self, *args: object, **kwargs) -> Optional[RuntimeExpr]:
+    def __call__(self, *args: object, **kwargs) -> RuntimeExpr | None:
         bound_params = self.__egg_tp__.args if isinstance(self.__egg_tp__, JustTypeRef) else None
         return _call(self.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, kwargs, bound_params)
 
@@ -416,7 +413,7 @@ class RuntimeMethod:
     __egg_self__: RuntimeExpr
     __egg_method_name__: str
     __egg_callable_ref__: MethodRef | PropertyRef = field(init=False)
-    __egg_fn_decl__: Optional[FunctionDecl] = field(init=False)
+    __egg_fn_decl__: FunctionDecl | None = field(init=False)
 
     def __post_init__(self):
         if self.__egg_method_name__ in self.__egg_self__.__egg_decls__.get_class_decl(self.class_name).properties:
@@ -433,7 +430,7 @@ class RuntimeMethod:
             except KeyError:
                 raise AttributeError(f"Class {self.class_name} does not have method {self.__egg_method_name__}")
 
-    def __call__(self, *args: object, **kwargs) -> Optional[RuntimeExpr]:
+    def __call__(self, *args: object, **kwargs) -> RuntimeExpr | None:
         args = (self.__egg_self__, *args)
         try:
             return _call(self.__egg_self__.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, kwargs)
@@ -475,7 +472,7 @@ class RuntimeExpr:
         pretty_expr = self.__egg_typed_expr__.expr.pretty(context, parens=False)
         try:
             if config.SHOW_TYPES:
-                raise NotImplementedError()
+                raise NotImplementedError
                 # s = f"_: {self.__egg_typed_expr__.tp.pretty()} = {pretty_expr}"
                 # return black.format_str(s, mode=black.FileMode()).strip()
             pretty_statements = context.render(pretty_expr)
@@ -496,8 +493,9 @@ class RuntimeExpr:
     # That's because we want to reserve __eq__ for domain specific equality checks, overloading this method.
     # To check if two exprs are equal, use the expr_eq method.
     def __eq__(self, other: NoReturn) -> Expr:  # type: ignore
+        msg = "Do not use == on RuntimeExpr. Compare the __egg_typed_expr__ attribute instead for structural equality."
         raise NotImplementedError(
-            "Do not use == on RuntimeExpr. Compare the __egg_typed_expr__ attribute instead for structural equality."
+            msg
         )
 
     # Implement these so that copy() works on this object
@@ -516,7 +514,7 @@ class RuntimeExpr:
 # Define each of the special methods, since we have already declared them for pretty printing
 for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call__", "__setitem__", "__delitem__"]:
 
-    def _special_method(self: RuntimeExpr, *args: object, __name: str = name) -> Optional[RuntimeExpr]:
+    def _special_method(self: RuntimeExpr, *args: object, __name: str = name) -> RuntimeExpr | None:
         # First, try to resolve as preserved method
         try:
             method = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods[__name]
@@ -541,14 +539,14 @@ for reflected, non_reflected in REFLECTED_BINARY_METHODS.items():
 
     def _reflected_method(
         self: RuntimeExpr, other: object, __non_reflected: str = non_reflected
-    ) -> Optional[RuntimeExpr]:
+    ) -> RuntimeExpr | None:
         # All binary methods are also "partial" meaning we should try to upcast first.
         return call_method_min_conversion(other, self, __non_reflected)
 
     setattr(RuntimeExpr, reflected, _reflected_method)
 
 
-def call_method_min_conversion(slf: object, other: object, name: str) -> Optional[RuntimeExpr]:
+def call_method_min_conversion(slf: object, other: object, name: str) -> RuntimeExpr | None:
     # Use the mod decls that is most general between the args, if both of them are expressions
     mod_decls = get_general_decls(slf, other)
     # find a minimum type that both can be converted to

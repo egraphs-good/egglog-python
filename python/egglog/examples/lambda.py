@@ -6,9 +6,12 @@ Lambda Calculus
 """
 from __future__ import annotations
 
-from typing import Callable, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from egglog import *
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 egraph = EGraph()
 

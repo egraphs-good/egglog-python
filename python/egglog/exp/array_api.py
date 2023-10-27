@@ -7,14 +7,18 @@ import math
 import numbers
 import sys
 from copy import copy
-from typing import Any, ClassVar, Iterator, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 import numpy as np
+
 from egglog import *
 from egglog.bindings import EggSmolError
 from egglog.runtime import RuntimeExpr
 
 from .program_gen import *
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
@@ -1533,4 +1537,5 @@ def extract_py(e: ToPy) -> Any:
             return egraph.load_object(egraph.extract(e.to_py()))
         except EggSmolError:
             egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
-            raise ValueError("Cannot simplify:", egraph.extract(e))
+            msg = "Cannot simplify:"
+            raise ValueError(msg, egraph.extract(e))

@@ -89,6 +89,7 @@ else:
             [lhs, rhs] = args
             if isinstance(lhs, types.DType) and isinstance(rhs, types.DType):
                 return signature(types.boolean, lhs, rhs)
+            return None
 
     @lower_builtin(operator.eq, types.DType, types.DType)
     def const_eq_impl(context, builder, sig, args):

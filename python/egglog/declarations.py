@@ -8,11 +8,14 @@ import itertools
 from collections import defaultdict
 from dataclasses import dataclass, field
 from inspect import Parameter, Signature
-from typing import Callable, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Union
 
 from typing_extensions import assert_never
 
 from . import bindings
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 __all__ = [
     "Declarations",
@@ -198,13 +201,14 @@ class ModuleDeclarations:
             return a
         elif a._decl in b.all_decls:
             return b
-        raise ValueError("No parent decl found")
+        msg = "No parent decl found"
+        raise ValueError(msg)
 
     @property
     def all_decls(self) -> Iterable[Declarations]:
         return itertools.chain([self._decl], self._included_decls)
 
-    def has_method(self, class_name: str, method_name: str) -> Optional[bool]:
+    def has_method(self, class_name: str, method_name: str) -> bool | None:
         """
         Returns whether the given class has the given method, or None if we cant find the class.
         """
@@ -214,14 +218,14 @@ class ModuleDeclarations:
         return None
 
     def get_function_decl(self, ref: CallableRef) -> FunctionDecl:
-        if isinstance(ref, (ClassVariableRef, ConstantRef)):
+        if isinstance(ref, ClassVariableRef | ConstantRef):
             for decls in self.all_decls:
                 try:
                     return decls.get_constant_type(ref).to_constant_function_decl()
                 except KeyError:
                     pass
             raise KeyError(f"Constant {ref} not found")
-        elif isinstance(ref, (FunctionRef, MethodRef, ClassMethodRef, PropertyRef)):
+        elif isinstance(ref, FunctionRef | MethodRef | ClassMethodRef | PropertyRef):
             for decls in self.all_decls:
                 try:
                     return decls.get_function_decl(ref)
@@ -263,12 +267,12 @@ class ModuleDeclarations:
         Given a class name, returns the first typevar regsisted with args of that class.
         """
         for decl in self.all_decls:
-            for tp in decl._type_ref_to_egg_sort.keys():
+            for tp in decl._type_ref_to_egg_sort:
                 if tp.name == cls_name and tp.args:
                     return tp.args
         return ()
 
-    def register_class(self, name: str, n_type_vars: int, egg_sort: Optional[str]) -> Iterable[bindings._Command]:
+    def register_class(self, name: str, n_type_vars: int, egg_sort: str | None) -> Iterable[bindings._Command]:
         # Register class first
         if name in self._decl._classes:
             raise ValueError(f"Class {name} already registered")
@@ -278,7 +282,7 @@ class ModuleDeclarations:
         return cmds
 
     def register_sort(
-        self, ref: JustTypeRef, egg_name: Optional[str] = None
+        self, ref: JustTypeRef, egg_name: str | None = None
     ) -> tuple[str, Iterable[bindings._Command]]:
         """
         Register a sort with the given name. If no name is given, one is generated.
@@ -303,10 +307,10 @@ class ModuleDeclarations:
         self,
         ref: FunctionCallableRef,
         fn_decl: FunctionDecl,
-        egg_name: Optional[str],
-        cost: Optional[int],
-        default: Optional[ExprDecl],
-        merge: Optional[ExprDecl],
+        egg_name: str | None,
+        cost: int | None,
+        default: ExprDecl | None,
+        merge: ExprDecl | None,
         merge_action: list[bindings._Action],
         unextractable: bool,
         is_relation: bool = False,
@@ -321,7 +325,7 @@ class ModuleDeclarations:
         return fn_decl.to_commands(self, egg_name, cost, default, merge, merge_action, is_relation, unextractable)
 
     def register_constant_callable(
-        self, ref: ConstantCallableRef, type_ref: JustTypeRef, egg_name: Optional[str]
+        self, ref: ConstantCallableRef, type_ref: JustTypeRef, egg_name: str | None
     ) -> Iterable[bindings._Command]:
         egg_function = ref.generate_egg_name()
         self._decl.register_callable_ref(ref, egg_function)
@@ -397,7 +401,8 @@ class ClassTypeVarRef:
     index: int
 
     def to_just(self) -> JustTypeRef:
-        raise NotImplementedError("egglog does not support generic classes yet.")
+        msg = "egglog does not support generic classes yet."
+        raise NotImplementedError(msg)
 
 
 @dataclass(frozen=True)
@@ -476,11 +481,11 @@ CallableRef = Union[ConstantCallableRef, FunctionCallableRef]
 class FunctionDecl:
     arg_types: tuple[TypeOrVarRef, ...]
     # Is None for relation which doesn't have named args
-    arg_names: Optional[tuple[str, ...]]
-    arg_defaults: tuple[Optional[ExprDecl], ...]
+    arg_names: tuple[str, ...] | None
+    arg_defaults: tuple[ExprDecl | None, ...]
     return_type: TypeOrVarRef
     mutates_first_arg: bool
-    var_arg_type: Optional[TypeOrVarRef] = None
+    var_arg_type: TypeOrVarRef | None = None
 
     def __post_init__(self):
         # If we mutate the first arg, then the first arg should be the same type as the return
@@ -505,15 +510,18 @@ class FunctionDecl:
         self,
         mod_decls: ModuleDeclarations,
         egg_name: str,
-        cost: Optional[int] = None,
-        default: Optional[ExprDecl] = None,
-        merge: Optional[ExprDecl] = None,
-        merge_action: list[bindings._Action] = [],
+        cost: int | None = None,
+        default: ExprDecl | None = None,
+        merge: ExprDecl | None = None,
+        merge_action: list[bindings._Action] | None = None,
         is_relation: bool = False,
         unextractable: bool = False,
     ) -> Iterable[bindings._Command]:
+        if merge_action is None:
+            merge_action = []
         if self.var_arg_type is not None:
-            raise NotImplementedError("egglog does not support variable arguments yet.")
+            msg = "egglog does not support variable arguments yet."
+            raise NotImplementedError(msg)
         arg_sorts: list[str] = []
         for a in self.arg_types:
             # Remove all vars from the type refs, raising an errory if we find one,
@@ -524,7 +532,10 @@ class FunctionDecl:
         return_sort, cmds = mod_decls.register_sort(self.return_type.to_just())
         yield from cmds
         if is_relation:
-            assert not default and not merge and not merge_action and not cost
+            assert not default
+            assert not merge
+            assert not merge_action
+            assert not cost
             assert return_sort == "Unit"
             yield bindings.Relation(egg_name, arg_sorts)
             return
@@ -546,7 +557,8 @@ class VarDecl:
 
     @classmethod
     def from_egg(cls, var: bindings.Var) -> TypedExprDecl:
-        raise NotImplementedError("Cannot turn var into egg type because typing unknown.")
+        msg = "Cannot turn var into egg type because typing unknown."
+        raise NotImplementedError(msg)
 
     def to_egg(self, _decls: ModuleDeclarations) -> bindings.Var:
         return bindings.Var(self.name)
@@ -604,7 +616,7 @@ class LitDecl:
         if isinstance(self.value, float):
             return f"f64({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, str):
-            return f"String({repr(self.value)})" if not unwrap_lit else repr(self.value)
+            return f"String({self.value!r})" if not unwrap_lit else repr(self.value)
         assert_never(self.value)
 
 
@@ -614,12 +626,13 @@ class CallDecl:
     args: tuple[TypedExprDecl, ...] = ()
     # type parameters that were bound to the callable, if it is a classmethod
     # Used for pretty printing classmethod calls with type parameters
-    bound_tp_params: Optional[tuple[JustTypeRef, ...]] = None
-    _cached_hash: Optional[int] = None
+    bound_tp_params: tuple[JustTypeRef, ...] | None = None
+    _cached_hash: int | None = None
 
     def __post_init__(self):
         if self.bound_tp_params and not isinstance(self.callable, ClassMethodRef):
-            raise ValueError("Cannot bind type parameters to a non-class method callable.")
+            msg = "Cannot bind type parameters to a non-class method callable."
+            raise ValueError(msg)
 
     def __hash__(self) -> int:
         # Modified hash which will cache result for performance
@@ -697,10 +710,7 @@ class CallDecl:
             expr = _pretty_call(context, ref.name, args)
         elif isinstance(ref, ClassMethodRef):
             tp_ref = JustTypeRef(ref.class_name, self.bound_tp_params or ())
-            if ref.method_name == "__init__":
-                fn_str = tp_ref.pretty()
-            else:
-                fn_str = f"{tp_ref.pretty( )}.{ref.method_name}"
+            fn_str = tp_ref.pretty() if ref.method_name == "__init__" else f"{tp_ref.pretty()}.{ref.method_name}"
             expr = _pretty_call(context, fn_str, args)
         elif isinstance(ref, MethodRef):
             name = ref.method_name
@@ -814,7 +824,7 @@ class PrettyContext:
         return name
 
     def render(self, expr: str) -> str:
-        return "\n".join(self.statements + [expr])
+        return "\n".join([*self.statements, expr])
 
     def traverse_for_parents(self, expr: ExprDecl) -> None:
         if expr in self._traversed_exprs:

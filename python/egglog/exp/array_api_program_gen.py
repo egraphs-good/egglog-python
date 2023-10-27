@@ -1,7 +1,8 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
-import numpy
+import numpy as np
+
 from egglog import *
 
 from .array_api import *
@@ -96,7 +97,7 @@ def _ndarray_function_two(f: Program, res: NDArray, l: NDArray, r: NDArray, o: P
     # When we have function, set the program and trigger it to be compiled
     yield rule(eq(f).to(ndarray_function_two(res, l, r))).then(
         union(f).with_(ndarray_program(res).function_two(ndarray_program(l), ndarray_program(r))),
-        f.eval_py_object(array_api_module_string.save_object({"np": numpy})),
+        f.eval_py_object(array_api_module_string.save_object({"np": np})),
     )
 
 
@@ -470,7 +471,7 @@ def _py_expr(
         (Program("np.concatenate(") + tuple_ndarray_program(tnd) + ", axis=" + int_program(i) + ")").assign()
     )
     # Vector
-    yield rewrite(ndarray_program(NDArray.vector(tv))).to((Program("np.array(") + tuple_value_program(tv) + ")"))
+    yield rewrite(ndarray_program(NDArray.vector(tv))).to(Program("np.array(") + tuple_value_program(tv) + ")")
     # std
     yield rewrite(ndarray_program(std(x))).to((Program("np.std(") + ndarray_program(x) + ")").assign())
     yield rewrite(ndarray_program(std(x, OptionalIntOrTuple.some(int_or_tuple_)))).to(
@@ -486,7 +487,7 @@ def _py_expr(
     # square
     yield rewrite(ndarray_program(square(x))).to((Program("np.square(") + ndarray_program(x) + ")").assign())
     # Transpose
-    yield rewrite(ndarray_program(x.T)).to((ndarray_program(x) + ".T"))
+    yield rewrite(ndarray_program(x.T)).to(ndarray_program(x) + ".T")
     # sum
     yield rewrite(ndarray_program(sum(x))).to((Program("np.sum(") + ndarray_program(x) + ")").assign())
     yield rewrite(ndarray_program(sum(x, OptionalIntOrTuple.some(int_or_tuple_)))).to(

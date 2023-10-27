@@ -36,7 +36,7 @@ StringLike = Union["String", str]
 
 @BUILTINS.class_
 class String(Expr):
-    def __init__(self, value: str):
+    def __init__(self, value: str) -> None:
         ...
 
     @BUILTINS.method(egg_fn="replace")
@@ -56,7 +56,7 @@ BoolLike = Union["Bool", bool]
 
 @BUILTINS.class_(egg_sort="bool")
 class Bool(Expr):
-    def __init__(self, value: bool):
+    def __init__(self, value: bool) -> None:
         ...
 
     @BUILTINS.method(egg_fn="not")
@@ -88,7 +88,7 @@ i64Like = Union["i64", int]
 
 @BUILTINS.class_(egg_sort="i64")
 class i64(Expr):
-    def __init__(self, value: int):
+    def __init__(self, value: int) -> None:
         ...
 
     @BUILTINS.method(egg_fn="+")
@@ -215,7 +215,7 @@ f64Like = Union["f64", float]
 
 @BUILTINS.class_(egg_sort="f64")
 class f64(Expr):
-    def __init__(self, value: float):
+    def __init__(self, value: float) -> None:
         ...
 
     @BUILTINS.method(egg_fn="neg")
@@ -381,7 +381,7 @@ class Set(Expr, Generic[T]):
 @BUILTINS.class_(egg_sort="Rational")
 class Rational(Expr):
     @BUILTINS.method(egg_fn="rational")
-    def __init__(self, num: i64Like, den: i64Like):
+    def __init__(self, num: i64Like, den: i64Like) -> None:
         ...
 
     @BUILTINS.method(egg_fn="to-f64")

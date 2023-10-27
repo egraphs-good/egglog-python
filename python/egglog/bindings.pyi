@@ -1,6 +1,6 @@
 from datetime import timedelta
 from pathlib import Path
-from typing import Optional
+from typing import TypeAlias
 
 from typing_extensions import final
 
@@ -11,13 +11,13 @@ class EGraph:
     def __init__(self, fact_directory: str | Path | None = None, seminaive=True, terms_encoding=False) -> None: ...
     def parse_program(self, __input: str, /) -> list[_Command]: ...
     def run_program(self, *commands: _Command) -> list[str]: ...
-    def extract_report(self) -> Optional[_ExtractReport]: ...
-    def run_report(self) -> Optional[RunReport]: ...
+    def extract_report(self) -> _ExtractReport | None: ...
+    def run_report(self) -> RunReport | None: ...
     def to_graphviz_string(
         self,
         *,
-        max_functions: Optional[int] = None,
-        max_calls_per_function: Optional[int] = None,
+        max_functions: int | None = None,
+        max_calls_per_function: int | None = None,
         n_inline_leaves: int = 0,
         split_primitive_outputs: bool = False,
     ) -> str: ...
@@ -56,7 +56,7 @@ class Bool:
     def __init__(self, b: bool) -> None: ...
     value: bool
 
-_Literal = Int | F64 | String | Bool | Unit
+_Literal: TypeAlias = Int | F64 | String | Bool | Unit
 
 ##
 # Expressions
@@ -79,7 +79,7 @@ class Call:
     args: list[_Expr]
 
 # Unions must be private becuase it is not actually exposed by the runtime library.
-_Expr = Lit | Var | Call
+_Expr: TypeAlias = Lit | Var | Call
 
 ##
 # Terms
@@ -101,7 +101,7 @@ class TermApp:
     name: str
     args: list[int]
 
-_Term = TermLit | TermVar | TermApp
+_Term: TypeAlias = TermLit | TermVar | TermApp
 
 @final
 class TermDag:
@@ -122,7 +122,7 @@ class Fact:
     def __init__(self, expr: _Expr) -> None: ...
     expr: _Expr
 
-_Fact = Fact | Eq
+_Fact: TypeAlias = Fact | Eq
 
 ##
 # Actions
@@ -169,7 +169,7 @@ class Extract:
     expr: _Expr
     variants: _Expr
 
-_Action = Let | Set | Delete | Union | Panic | Expr_ | Extract
+_Action: TypeAlias = Let | Set | Delete | Union | Panic | Expr_ | Extract
 
 ##
 # Other Structs
@@ -226,8 +226,8 @@ class Rewrite:
 @final
 class RunConfig:
     ruleset: str
-    until: Optional[list[_Fact]]
-    def __init__(self, ruleset: str, until: Optional[list[_Fact]] = None) -> None: ...
+    until: list[_Fact] | None
+    def __init__(self, ruleset: str, until: list[_Fact] | None = None) -> None: ...
 
 @final
 class IdentSort:
@@ -267,7 +267,7 @@ class Best:
     term: _Term
     def __init__(self, termdag: TermDag, cost: int, term: _Term) -> None: ...
 
-_ExtractReport = Variants | Best
+_ExtractReport: TypeAlias = Variants | Best
 
 ##
 # Schedules
@@ -294,7 +294,7 @@ class Sequence:
     schedules: list[_Schedule]
     def __init__(self, schedules: list[_Schedule]) -> None: ...
 
-_Schedule = Saturate | Repeat | Run | Sequence
+_Schedule: TypeAlias = Saturate | Repeat | Run | Sequence
 
 ##
 # Commands
@@ -321,8 +321,8 @@ class Declare:
 @final
 class Sort:
     name: str
-    presort_and_args: Optional[tuple[str, list[_Expr]]]
-    def __init__(self, name: str, presort_and_args: Optional[tuple[str, list[_Expr]]] = None) -> None: ...
+    presort_and_args: tuple[str, list[_Expr]] | None
+    def __init__(self, name: str, presort_and_args: tuple[str, list[_Expr]] | None = None) -> None: ...
 
 @final
 class Function:
@@ -396,8 +396,8 @@ class PrintFunction:
 
 @final
 class PrintSize:
-    name: Optional[str]
-    def __init__(self, name: Optional[str]) -> None: ...
+    name: str | None
+    def __init__(self, name: str | None) -> None: ...
 
 @final
 class Output:
@@ -446,7 +446,7 @@ class Relation:
 class PrintOverallStatistics:
     def __init__(self) -> None: ...
 
-_Command = (
+_Command: TypeAlias = (
     SetOption
     | Datatype
     | Declare

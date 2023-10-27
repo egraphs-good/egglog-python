@@ -4,6 +4,7 @@ import inspect
 import pathlib
 import tempfile
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable
 from contextvars import ContextVar, Token
 from copy import copy, deepcopy
 from dataclasses import InitVar, dataclass, field
@@ -12,26 +13,26 @@ from types import FunctionType
 from typing import (  # type: ignore[attr-defined]
     TYPE_CHECKING,
     Any,
-    Callable,
     ClassVar,
     Generic,
-    Iterable,
     Literal,
     NoReturn,
-    Optional,
     Protocol,
     TypedDict,
     TypeVar,
     Union,
     _GenericAlias,
     cast,
+    get_args,
+    get_origin,
     get_type_hints,
     overload,
 )
 
 import graphviz
+from typing_extensions import ParamSpec, Unpack
+
 from egglog.declarations import REFLECTED_BINARY_METHODS, Declarations
-from typing_extensions import ParamSpec, Unpack, get_args, get_origin
 
 from . import bindings
 from .declarations import *
@@ -168,7 +169,7 @@ class _BaseModule(ABC):
         cls: type[Expr],
         hint_locals: dict[str, Any],
         hint_globals: dict[str, Any],
-        egg_sort: Optional[str] = None,
+        egg_sort: str | None = None,
     ) -> RuntimeClass:
         """
         Registers a class.
@@ -193,7 +194,8 @@ class _BaseModule(ABC):
                 (inner_tp,) = v.__args__
                 self._register_constant(ClassVariableRef(cls_name, k), inner_tp, None, (cls, cls_name))
             else:
-                raise NotImplementedError("The only supported annotations on class attributes are class vars")
+                msg = "The only supported annotations on class attributes are class vars"
+                raise NotImplementedError(msg)
 
         # Then register each of its methods
         for method_name, method in cls_dict.items():
@@ -229,7 +231,8 @@ class _BaseModule(ABC):
                 fn = fn.fget
                 is_property = True
                 if is_classmethod:
-                    raise NotImplementedError("Can't have a classmethod property")
+                    msg = "Can't have a classmethod property"
+                    raise NotImplementedError(msg)
             else:
                 is_property = False
             ref: FunctionCallableRef = (
@@ -285,10 +288,10 @@ class _BaseModule(ABC):
     def method(  # type: ignore
         self,
         *,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        merge: Optional[Callable[[Any, Any], Any]] = None,
-        on_merge: Optional[Callable[[Any, Any], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        merge: Callable[[Any, Any], Any] | None = None,
+        on_merge: Callable[[Any, Any], Iterable[ActionLike]] | None = None,
         mutates_self: bool = False,
         unextractable: bool = False,
     ) -> Callable[[CALLABLE], CALLABLE]:
@@ -298,11 +301,11 @@ class _BaseModule(ABC):
     def method(
         self,
         *,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        default: Optional[EXPR] = None,
-        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
-        on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        default: EXPR | None = None,
+        merge: Callable[[EXPR, EXPR], EXPR] | None = None,
+        on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
         mutates_self: bool = False,
         unextractable: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
@@ -311,11 +314,11 @@ class _BaseModule(ABC):
     def method(
         self,
         *,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        default: Optional[EXPR] = None,
-        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
-        on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        default: EXPR | None = None,
+        merge: Callable[[EXPR, EXPR], EXPR] | None = None,
+        on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
         preserve: bool = False,
         mutates_self: bool = False,
         unextractable: bool = False,
@@ -332,10 +335,10 @@ class _BaseModule(ABC):
     def function(  # type: ignore
         self,
         *,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        merge: Optional[Callable[[Any, Any], Any]] = None,
-        on_merge: Optional[Callable[[Any, Any], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        merge: Callable[[Any, Any], Any] | None = None,
+        on_merge: Callable[[Any, Any], Iterable[ActionLike]] | None = None,
         mutates_first_arg: bool = False,
         unextractable: bool = False,
     ) -> Callable[[CALLABLE], CALLABLE]:
@@ -345,11 +348,11 @@ class _BaseModule(ABC):
     def function(
         self,
         *,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        default: Optional[EXPR] = None,
-        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
-        on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        default: EXPR | None = None,
+        merge: Callable[[EXPR, EXPR], EXPR] | None = None,
+        on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
         mutates_first_arg: bool = False,
         unextractable: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
@@ -373,11 +376,11 @@ class _BaseModule(ABC):
         fn: Callable[..., RuntimeExpr],
         hint_locals: dict[str, Any],
         mutates_first_arg: bool = False,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        default: Optional[RuntimeExpr] = None,
-        merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]] = None,
-        on_merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        default: RuntimeExpr | None = None,
+        merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None = None,
+        on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None = None,
         unextractable: bool = False,
     ) -> RuntimeFunction:
         """
@@ -403,23 +406,25 @@ class _BaseModule(ABC):
     def _register_function(
         self,
         ref: FunctionCallableRef,
-        egg_name: Optional[str],
+        egg_name: str | None,
         fn: Any,
         # Pass in the locals, retrieved from the frame when wrapping,
         # so that we support classes and function defined inside of other functions (which won't show up in the globals)
         hint_locals: dict[str, Any],
-        default: Optional[RuntimeExpr],
-        cost: Optional[int],
-        merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]],
-        on_merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]]],
+        default: RuntimeExpr | None,
+        cost: int | None,
+        merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None,
+        on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None,
         mutates_first_arg: bool,
         # The first arg is either cls, for a classmethod, a self type, or none for a function
         first_arg: Literal["cls"] | TypeOrVarRef | None = None,
-        cls_typevars: list[TypeVar] = [],
+        cls_typevars: list[TypeVar] | None = None,
         is_init: bool = False,
-        cls_type_and_name: Optional[tuple[type | RuntimeClass, str]] = None,
+        cls_type_and_name: tuple[type | RuntimeClass, str] | None = None,
         unextractable: bool = False,
     ) -> None:
+        if cls_typevars is None:
+            cls_typevars = []
         if not isinstance(fn, FunctionType):
             raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
 
@@ -446,7 +451,8 @@ class _BaseModule(ABC):
         found_var_arg = False
         for param in params:
             if found_var_arg:
-                raise ValueError("Can only have a single var arg at the end")
+                msg = "Can only have a single var arg at the end"
+                raise ValueError(msg)
             kind = param.kind
             if kind == Parameter.VAR_POSITIONAL:
                 found_var_arg = True
@@ -463,14 +469,15 @@ class _BaseModule(ABC):
             var_arg_type = None
         arg_types = tuple(self._resolve_type_annotation(hints[t.name], cls_typevars, cls_type_and_name) for t in params)
         # If the first arg is a self, and this not an __init__ fn, add this as a typeref
-        if isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)) and not is_init:
-            arg_types = (first_arg,) + arg_types
+        if isinstance(first_arg, ClassTypeVarRef | TypeRefWithVars) and not is_init:
+            arg_types = (first_arg, *arg_types)
 
         # If this is an init fn use the first arg as the return type
         if is_init:
             assert not mutates_first_arg
-            if not isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)):
-                raise ValueError("Init function must have a self type")
+            if not isinstance(first_arg, ClassTypeVarRef | TypeRefWithVars):
+                msg = "Init function must have a self type"
+                raise ValueError(msg)
             return_type = first_arg
         elif mutates_first_arg:
             return_type = arg_types[0]
@@ -521,7 +528,7 @@ class _BaseModule(ABC):
         self,
         tp: object,
         cls_typevars: list[TypeVar],
-        cls_type_and_name: Optional[tuple[type | RuntimeClass, str]],
+        cls_type_and_name: tuple[type | RuntimeClass, str] | None,
     ) -> TypeOrVarRef:
         if isinstance(tp, TypeVar):
             return ClassTypeVarRef(cls_typevars.index(tp))
@@ -546,7 +553,7 @@ class _BaseModule(ABC):
                 ),
             )
 
-        if isinstance(tp, (RuntimeClass, RuntimeParamaterizedClass)):
+        if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
             return class_to_ref(tp).to_var()
         raise TypeError(f"Unexpected type annotation {tp}")
 
@@ -581,14 +588,14 @@ class _BaseModule(ABC):
         ...
 
     @overload
-    def relation(self, name: str, tp1: type[T], /, *, egg_fn: Optional[str] = None) -> Callable[[T], Unit]:
+    def relation(self, name: str, tp1: type[T], /, *, egg_fn: str | None = None) -> Callable[[T], Unit]:
         ...
 
     @overload
-    def relation(self, name: str, /, *, egg_fn: Optional[str] = None) -> Callable[[], Unit]:
+    def relation(self, name: str, /, *, egg_fn: str | None = None) -> Callable[[], Unit]:
         ...
 
-    def relation(self, name: str, /, *tps: type, egg_fn: Optional[str] = None) -> Callable[..., Unit]:
+    def relation(self, name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..., Unit]:
         """
         Defines a relation, which is the same as a function which returns unit.
         """
@@ -617,7 +624,7 @@ class _BaseModule(ABC):
         fn_name = self._mod_decls.get_egg_fn(_resolve_callable(fn))
         self._process_commands([bindings.Input(fn_name, path)])
 
-    def constant(self, name: str, tp: type[EXPR], egg_name: Optional[str] = None) -> EXPR:
+    def constant(self, name: str, tp: type[EXPR], egg_name: str | None = None) -> EXPR:
         """
         Defines a named constant of a certain type.
 
@@ -631,8 +638,8 @@ class _BaseModule(ABC):
         self,
         ref: ConstantRef | ClassVariableRef,
         tp: object,
-        egg_name: Optional[str],
-        cls_type_and_name: Optional[tuple[type | RuntimeClass, str]],
+        egg_name: str | None,
+        cls_type_and_name: tuple[type | RuntimeClass, str] | None,
     ) -> JustTypeRef:
         """
         Register a constant, returning its typeref().
@@ -660,14 +667,14 @@ class _Builtins(_BaseModule):
         super().__post_init__(modules)
         global _BUILTIN_DECLS
         if _BUILTIN_DECLS is not None:
-            raise RuntimeError("Builtins already initialized")
+            msg = "Builtins already initialized"
+            raise RuntimeError(msg)
         _BUILTIN_DECLS = self._mod_decls._decl
 
     def _process_commands(self, cmds: Iterable[bindings._Command]) -> None:
         """
         Commands which would have been used to create the builtins are discarded, since they are already registered.
         """
-        pass
 
 
 @dataclass
@@ -772,8 +779,8 @@ class Module(_BaseModule):
 
 
 class GraphvizKwargs(TypedDict, total=False):
-    max_functions: Optional[int]
-    max_calls_per_function: Optional[int]
+    max_functions: int | None
+    max_calls_per_function: int | None
     n_inline_leaves: int
     split_primitive_outputs: bool
 
@@ -806,7 +813,6 @@ class EGraph(_BaseModule):
         """
         Returns the graphviz representation of the e-graph.
         """
-
         return {"image/svg+xml": self.graphviz().pipe(format="svg", quiet=True, encoding="utf-8")}
 
     def graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
@@ -836,7 +842,7 @@ class EGraph(_BaseModule):
       }"""
         p = pathlib.Path(tempfile.gettempdir()) / "graphviz-styles.css"
         p.write_text(styles)
-        with_stylesheet = original.replace("{", f'{{stylesheet="{str(p)}"', 1)
+        with_stylesheet = original.replace("{", f'{{stylesheet="{p!s}"', 1)
         return graphviz.Source(with_stylesheet)
 
     def graphviz_svg(self, **kwargs: Unpack[GraphvizKwargs]) -> str:
@@ -864,7 +870,7 @@ class EGraph(_BaseModule):
             graphviz.render(view=True, format="svg", quiet=True)
 
     @overload
-    def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> EXPR:
+    def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> EXPR:
         ...
 
     @overload
@@ -872,7 +878,7 @@ class EGraph(_BaseModule):
         ...
 
     def simplify(
-        self, expr: EXPR, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Optional[Ruleset] = None
+        self, expr: EXPR, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
     ) -> EXPR:
         """
         Simplifies the given expression.
@@ -884,7 +890,8 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.Simplify(egg_expr, limit_or_schedule._to_egg_schedule(self._mod_decls))])
         extract_report = self._egraph.extract_report()
         if not isinstance(extract_report, bindings.Best):
-            raise ValueError("No extract report saved")
+            msg = "No extract report saved"
+            raise ValueError(msg)
         new_typed_expr = TypedExprDecl.from_egg(
             self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
@@ -894,15 +901,17 @@ class EGraph(_BaseModule):
         """
         Include a file of rules.
         """
+        msg = "Not implemented yet, because we don't have a way of registering the types with Python"
         raise NotImplementedError(
-            "Not implemented yet, because we don't have a way of registering the types with Python"
+            msg
         )
 
     def output(self) -> None:
-        raise NotImplementedError("Not imeplemented yet, because there are no examples in the egglog repo")
+        msg = "Not imeplemented yet, because there are no examples in the egglog repo"
+        raise NotImplementedError(msg)
 
     @overload
-    def run(self, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> bindings.RunReport:
+    def run(self, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> bindings.RunReport:
         ...
 
     @overload
@@ -910,7 +919,7 @@ class EGraph(_BaseModule):
         ...
 
     def run(
-        self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Optional[Ruleset] = None
+        self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
     ) -> bindings.RunReport:
         """
         Run the egraph until the given limit or until the given facts are true.
@@ -923,7 +932,8 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.RunSchedule(schedule._to_egg_schedule(self._mod_decls))])
         run_report = self._egraph.run_report()
         if not run_report:
-            raise ValueError("No run report saved")
+            msg = "No run report saved"
+            raise ValueError(msg)
         return run_report
 
     def check(self, *facts: FactLike) -> None:
@@ -950,7 +960,8 @@ class EGraph(_BaseModule):
         egg_expr = typed_expr.to_egg(self._mod_decls)
         extract_report = self._run_extract(egg_expr, 0)
         if not isinstance(extract_report, bindings.Best):
-            raise ValueError("No extract report saved")
+            msg = "No extract report saved"
+            raise ValueError(msg)
         new_typed_expr = TypedExprDecl.from_egg(
             self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
@@ -966,7 +977,8 @@ class EGraph(_BaseModule):
         egg_expr = typed_expr.to_egg(self._mod_decls)
         extract_report = self._run_extract(egg_expr, n)
         if not isinstance(extract_report, bindings.Variants):
-            raise ValueError("Wrong extract report type")
+            msg = "Wrong extract report type"
+            raise ValueError(msg)
         new_exprs = [
             TypedExprDecl.from_egg(self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, term))
             for term in extract_report.terms
@@ -977,7 +989,8 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n))))])
         extract_report = self._egraph.extract_report()
         if not extract_report:
-            raise ValueError("No extract report saved")
+            msg = "No extract report saved"
+            raise ValueError(msg)
         return extract_report
 
     def push(self) -> None:
@@ -1093,18 +1106,19 @@ class _WrappedMethod(Generic[P, EXPR]):
     Used to wrap a method and store some extra options on it before processing it when processing the class.
     """
 
-    egg_fn: Optional[str]
-    cost: Optional[int]
-    default: Optional[EXPR]
-    merge: Optional[Callable[[EXPR, EXPR], EXPR]]
-    on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]]
+    egg_fn: str | None
+    cost: int | None
+    default: EXPR | None
+    merge: Callable[[EXPR, EXPR], EXPR] | None
+    on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None
     fn: Callable[P, EXPR]
     preserve: bool
     mutates_self: bool
     unextractable: bool
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> EXPR:
-        raise NotImplementedError("We should never call a wrapped method. Did you forget to wrap the class?")
+        msg = "We should never call a wrapped method. Did you forget to wrap the class?"
+        raise NotImplementedError(msg)
 
 
 class _ExprMetaclass(type):
@@ -1158,7 +1172,7 @@ class Ruleset:
     name: str
 
 
-def _ruleset_name(ruleset: Optional[Ruleset]) -> str:
+def _ruleset_name(ruleset: Ruleset | None) -> str:
     return ruleset.name if ruleset else ""
 
 
@@ -1446,12 +1460,12 @@ class Sequence(Schedule):
 # if the arguments are the same type of expression
 
 
-def rewrite(lhs: EXPR, ruleset: Optional[Ruleset] = None) -> _RewriteBuilder[EXPR]:
+def rewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _RewriteBuilder[EXPR]:
     """Rewrite the given expression to a new expression."""
     return _RewriteBuilder(lhs, ruleset)
 
 
-def birewrite(lhs: EXPR, ruleset: Optional[Ruleset] = None) -> _BirewriteBuilder[EXPR]:
+def birewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _BirewriteBuilder[EXPR]:
     """Rewrite the given expression to a new expression and vice versa."""
     return _BirewriteBuilder(lhs, ruleset)
 
@@ -1494,7 +1508,7 @@ def set_(lhs: EXPR) -> _SetBuilder[EXPR]:
     return _SetBuilder(lhs=lhs)
 
 
-def rule(*facts: FactLike, ruleset: Optional[Ruleset] = None, name: Optional[str] = None) -> _RuleBuilder:
+def rule(*facts: FactLike, ruleset: Ruleset | None = None, name: str | None = None) -> _RuleBuilder:
     """Create a rule with the given facts."""
     return _RuleBuilder(facts=_fact_likes(facts), name=name, ruleset=ruleset)
 
@@ -1506,7 +1520,7 @@ def var(name: str, bound: type[EXPR]) -> EXPR:
 
 def _var(name: str, bound: Any) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
-    if not isinstance(bound, (RuntimeClass, RuntimeParamaterizedClass)):
+    if not isinstance(bound, RuntimeClass | RuntimeParamaterizedClass):
         raise TypeError(f"Unexpected type {type(bound)}")
     return RuntimeExpr(bound.__egg_decls__, TypedExprDecl(class_to_ref(bound), VarDecl(name)))
 
@@ -1520,7 +1534,7 @@ def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
 @dataclass
 class _RewriteBuilder(Generic[EXPR]):
     lhs: EXPR
-    ruleset: Optional[Ruleset]
+    ruleset: Ruleset | None
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
         return Rewrite(
@@ -1537,7 +1551,7 @@ class _RewriteBuilder(Generic[EXPR]):
 @dataclass
 class _BirewriteBuilder(Generic[EXPR]):
     lhs: EXPR
-    ruleset: Optional[Ruleset]
+    ruleset: Ruleset | None
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
         return BiRewrite(
@@ -1587,8 +1601,8 @@ class _UnionBuilder(Generic[EXPR]):
 @dataclass
 class _RuleBuilder:
     facts: tuple[Fact, ...]
-    name: Optional[str]
-    ruleset: Optional[Ruleset]
+    name: str | None
+    ruleset: Ruleset | None
 
     def then(self, *actions: ActionLike) -> Command:
         return Rule(_action_likes(actions), self.facts, self.name or "", _ruleset_name(self.ruleset))
@@ -1609,7 +1623,7 @@ def to_runtime_expr(expr: Expr) -> RuntimeExpr:
     return expr
 
 
-def run(ruleset: Optional[Ruleset] = None, *until: Fact) -> Run:
+def run(ruleset: Ruleset | None = None, *until: Fact) -> Run:
     """
     Create a run configuration.
     """
