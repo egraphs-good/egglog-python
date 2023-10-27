@@ -18,7 +18,6 @@ from typing import (  # type: ignore[attr-defined]
     Literal,
     NoReturn,
     Protocol,
-    Self,
     TypedDict,
     TypeVar,
     Union,
@@ -31,7 +30,7 @@ from typing import (  # type: ignore[attr-defined]
 )
 
 import graphviz
-from typing_extensions import ParamSpec, Unpack
+from typing_extensions import ParamSpec, Self, Unpack
 
 from egglog.declarations import REFLECTED_BINARY_METHODS, Declarations
 
