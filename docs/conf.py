@@ -1,4 +1,4 @@
-import pathlib
+import pathlib  # noqa: INP001
 import subprocess
 
 ##
@@ -10,7 +10,7 @@ presentation_file = cwd / "explanation" / "pldi_2023_presentation.ipynb"
 output_dir = cwd / "presentations"
 
 subprocess.run(
-    [
+    [  # noqa: S603,S607
         "jupyter",
         "nbconvert",
         str(presentation_file),

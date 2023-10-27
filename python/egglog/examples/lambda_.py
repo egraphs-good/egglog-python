@@ -6,9 +6,12 @@ Lambda Calculus
 """
 from __future__ import annotations
 
-from typing import Callable, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from egglog import *
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 egraph = EGraph()
 
@@ -164,7 +167,7 @@ egraph.register(
 result = egraph.relation("result")
 
 
-def l(fn: Callable[[Term], Term]) -> Term:  # noqa
+def l(fn: Callable[[Term], Term]) -> Term:  # noqa: E743
     """
     Create a lambda term from a function
     """

@@ -7,9 +7,9 @@ import traitlets
 
 class GraphvizWidget(anywidget.AnyWidget):
     """
-    Graphviz widget to render multiple graphviz graphs. The index will choose the one that is currently displayed,
-    defaulting to the last one.
+    Graphviz widget to render multiple graphviz graphs.
 
+    The index will choose the one that is currently displayed, defaulting to the last one.
     If the index or the graphs change, there will be a re-rendering, with animation.
     """
 
@@ -20,7 +20,7 @@ class GraphvizWidget(anywidget.AnyWidget):
     performance = traitlets.Bool(False).tag(sync=True)
 
 
-def graphviz_widget_with_slider(dots: list[str], *, performance=False) -> ipywidgets.VBox:
+def graphviz_widget_with_slider(dots: list[str], *, performance: bool = False) -> ipywidgets.VBox:
     n_dots = len(dots)
     graphviz_widget = GraphvizWidget()
     graphviz_widget.dots = dots

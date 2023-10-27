@@ -7,7 +7,7 @@ name = "egglog"
 description = "e-graphs in Python built around the the egglog rust library"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 classifiers = [
     "Environment :: MacOS X",
     "Environment :: Win32 (MS Windows)",
@@ -30,15 +30,7 @@ dependencies = ["typing-extensions", "black", "graphviz"]
 [project.optional-dependencies]
 
 array = ["scikit-learn", "array_api_compat", 'numba; python_version<"3.12"']
-dev = [
-    "pre-commit",
-    "black",
-    "mypy",
-    "flake8",
-    "isort",
-    "anywidget[dev]",
-    "egglog[docs,test]",
-]
+dev = ["pre-commit", "ruff", "mypy", "anywidget[dev]", "egglog[docs,test]"]
 
 test = ["pytest", "mypy", "syrupy", "egglog[array]"]
 
@@ -55,14 +47,113 @@ docs = [
     "line-profiler",
 ]
 
+[tool.ruff]
+ignore = [
+    # allow star imports
+    "F405",
+    "F403",
+    # Dont care if cls isnt typed explicitly in classmethod
+    "ANN102",
+    # Same for self
+    "ANN101",
+    # Allow single line docstrings on multiple lines
+    "D200",
+    "D212",
+    # Allow shadoing builtins
+    "A003",
+    "A002",
+    # Allow Unused args
+    "ARG001",
+    "ARG002",
+    # Allow TODOs
+    "TD002",
+    "TD003",
+    "FIX002",
+    # Allow commented out code
+    "ARG001",
+    "ERA001",
+    # Allow boolean positional args
+    "FBT003",
+    "FBT002",
+    "FBT001",
+    # Allow creating types in function arg defaults
+    "B008",
+    # Allow no type annotations for private functions
+    "ANN202",
+    # Allow short var names
+    "E741",
+    # Allow docstring to not end with period
+    "D400",
+    "D415",
+    # Allow asserts
+    "S101",
+    # Allow try except in loop
+    "PERF203",
+    # Allow unused args
+    "ARG003",
+    # Allow no type annotation for kwargs
+    "ANN003",
+    # And for args
+    "ANN002",
+    # Allow globals
+    "PLW0603",
+    # Allow lots of statements
+    "PLR0915",
+    # Allow print
+    "T201",
+    # Allow constants
+    "PLR2004",
 
-[tool.black]
+    # Inconsistant formatting
+    "D203",
+    "COM812",
+    "COM819",
+    "E501",
+    "ISC001",
+    "Q001",
+    "Q002",
+    "Q003",
+    "W191",
+    "Q000",
+    "D206",
+    # Allow shadowing builtin
+    "A001",
+    # Allow unused lambda vars
+    "ARG005",
+    # Allow no space after first line of docstring
+    "D205",
+    # Allow "useless expressions" as they show up in examples
+    "B018",
+    # TODO: Remove the rest of these eventually
+    # Allow public methods to not have docstrings
+    "D102",
+    # Allow longer messages for custom errors
+    "TRY003",
+    # Allow f-string in exceptions
+    "EM102",
+    # No docstrings for public module
+    "D100",
+    # docstring public class
+    "D101",
+    # Docstring init
+    "D107",
+    # Docstring public function
+    "D103",
+    # docstring magic method
+    "D105",
+    # Allow lots of args for functions
+    "PLR0913",
+    # Allow non imperative docstrings
+    "D401",
+    # Allow private member refs
+    "SLF001",
+]
 line-length = 120
-
-[tool.isort]
-profile = "black"
-skip_gitignore = true
-
+# Allow lines to be as long as 120.
+src = ["python"]
+select = ["ALL"]
+extend-exclude = ["python/tests"]
+unsafe-fixes = true
 
 [tool.mypy]
 ignore_missing_imports = true

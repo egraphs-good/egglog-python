@@ -4,6 +4,7 @@ import inspect
 import pathlib
 import tempfile
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable
 from contextvars import ContextVar, Token
 from copy import copy, deepcopy
 from dataclasses import InitVar, dataclass, field
@@ -12,31 +13,30 @@ from types import FunctionType
 from typing import (  # type: ignore[attr-defined]
     TYPE_CHECKING,
     Any,
-    Callable,
     ClassVar,
     Generic,
-    Iterable,
     Literal,
     NoReturn,
-    Optional,
     Protocol,
     TypedDict,
     TypeVar,
     Union,
     _GenericAlias,
     cast,
+    get_args,
+    get_origin,
     get_type_hints,
     overload,
 )
 
 import graphviz
+from typing_extensions import ParamSpec, Self, Unpack
+
 from egglog.declarations import REFLECTED_BINARY_METHODS, Declarations
-from typing_extensions import ParamSpec, Unpack, get_args, get_origin
 
 from . import bindings
 from .declarations import *
 from .ipython_magic import IN_IPYTHON
-from .monkeypatch import monkeypatch_forward_ref
 from .runtime import *
 from .runtime import _resolve_callable, class_to_ref
 
@@ -45,7 +45,6 @@ if TYPE_CHECKING:
 
     from .builtins import PyObject, String
 
-monkeypatch_forward_ref()
 
 __all__ = [
     "EGraph",
@@ -118,7 +117,7 @@ class _BaseModule(ABC):
     """
 
     # Any modules you want to depend on
-    modules: InitVar[list[Module]] = []
+    modules: InitVar[list[Module]] = []  # noqa: RUF008
     # All dependencies flattened
     _flatted_deps: list[Module] = field(init=False, default_factory=list)
     _mod_decls: ModuleDeclarations = field(init=False)
@@ -163,12 +162,12 @@ class _BaseModule(ABC):
         assert len(args) == 1
         return self._class(args[0], prev_frame.f_locals, prev_frame.f_globals)
 
-    def _class(
+    def _class(  # noqa: PLR0912
         self,
         cls: type[Expr],
         hint_locals: dict[str, Any],
         hint_globals: dict[str, Any],
-        egg_sort: Optional[str] = None,
+        egg_sort: str | None = None,
     ) -> RuntimeClass:
         """
         Registers a class.
@@ -193,7 +192,8 @@ class _BaseModule(ABC):
                 (inner_tp,) = v.__args__
                 self._register_constant(ClassVariableRef(cls_name, k), inner_tp, None, (cls, cls_name))
             else:
-                raise NotImplementedError("The only supported annotations on class attributes are class vars")
+                msg = "The only supported annotations on class attributes are class vars"
+                raise NotImplementedError(msg)
 
         # Then register each of its methods
         for method_name, method in cls_dict.items():
@@ -229,7 +229,8 @@ class _BaseModule(ABC):
                 fn = fn.fget
                 is_property = True
                 if is_classmethod:
-                    raise NotImplementedError("Can't have a classmethod property")
+                    msg = "Can't have a classmethod property"
+                    raise NotImplementedError(msg)
             else:
                 is_property = False
             ref: FunctionCallableRef = (
@@ -282,13 +283,13 @@ class _BaseModule(ABC):
     # It will break the typing.
 
     @overload
-    def method(  # type: ignore
+    def method(
         self,
         *,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        merge: Optional[Callable[[Any, Any], Any]] = None,
-        on_merge: Optional[Callable[[Any, Any], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        merge: Callable[[Any, Any], Any] | None = None,
+        on_merge: Callable[[Any, Any], Iterable[ActionLike]] | None = None,
         mutates_self: bool = False,
         unextractable: bool = False,
     ) -> Callable[[CALLABLE], CALLABLE]:
@@ -298,11 +299,11 @@ class _BaseModule(ABC):
     def method(
         self,
         *,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        default: Optional[EXPR] = None,
-        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
-        on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        default: EXPR | None = None,
+        merge: Callable[[EXPR, EXPR], EXPR] | None = None,
+        on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
         mutates_self: bool = False,
         unextractable: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
@@ -311,11 +312,11 @@ class _BaseModule(ABC):
     def method(
         self,
         *,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        default: Optional[EXPR] = None,
-        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
-        on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        default: EXPR | None = None,
+        merge: Callable[[EXPR, EXPR], EXPR] | None = None,
+        on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
         preserve: bool = False,
         mutates_self: bool = False,
         unextractable: bool = False,
@@ -329,13 +330,13 @@ class _BaseModule(ABC):
         ...
 
     @overload
-    def function(  # type: ignore
+    def function(
         self,
         *,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        merge: Optional[Callable[[Any, Any], Any]] = None,
-        on_merge: Optional[Callable[[Any, Any], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        merge: Callable[[Any, Any], Any] | None = None,
+        on_merge: Callable[[Any, Any], Iterable[ActionLike]] | None = None,
         mutates_first_arg: bool = False,
         unextractable: bool = False,
     ) -> Callable[[CALLABLE], CALLABLE]:
@@ -345,11 +346,11 @@ class _BaseModule(ABC):
     def function(
         self,
         *,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        default: Optional[EXPR] = None,
-        merge: Optional[Callable[[EXPR, EXPR], EXPR]] = None,
-        on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        default: EXPR | None = None,
+        merge: Callable[[EXPR, EXPR], EXPR] | None = None,
+        on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
         mutates_first_arg: bool = False,
         unextractable: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
@@ -359,7 +360,7 @@ class _BaseModule(ABC):
         """
         Registers a function.
         """
-        fn_locals = currentframe().f_back.f_locals  # type: ignore
+        fn_locals = currentframe().f_back.f_locals  # type: ignore[union-attr]
 
         # If we have any positional args, then we are calling it directly on a function
         if args:
@@ -373,11 +374,11 @@ class _BaseModule(ABC):
         fn: Callable[..., RuntimeExpr],
         hint_locals: dict[str, Any],
         mutates_first_arg: bool = False,
-        egg_fn: Optional[str] = None,
-        cost: Optional[int] = None,
-        default: Optional[RuntimeExpr] = None,
-        merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]] = None,
-        on_merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]]] = None,
+        egg_fn: str | None = None,
+        cost: int | None = None,
+        default: RuntimeExpr | None = None,
+        merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None = None,
+        on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None = None,
         unextractable: bool = False,
     ) -> RuntimeFunction:
         """
@@ -400,26 +401,28 @@ class _BaseModule(ABC):
         # Return a runtime function which will act like the decleration
         return RuntimeFunction(self._mod_decls, name)
 
-    def _register_function(
+    def _register_function(  # noqa: C901, PLR0912
         self,
         ref: FunctionCallableRef,
-        egg_name: Optional[str],
-        fn: Any,
+        egg_name: str | None,
+        fn: object,
         # Pass in the locals, retrieved from the frame when wrapping,
         # so that we support classes and function defined inside of other functions (which won't show up in the globals)
         hint_locals: dict[str, Any],
-        default: Optional[RuntimeExpr],
-        cost: Optional[int],
-        merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr]],
-        on_merge: Optional[Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]]],
+        default: RuntimeExpr | None,
+        cost: int | None,
+        merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None,
+        on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None,
         mutates_first_arg: bool,
         # The first arg is either cls, for a classmethod, a self type, or none for a function
         first_arg: Literal["cls"] | TypeOrVarRef | None = None,
-        cls_typevars: list[TypeVar] = [],
+        cls_typevars: list[TypeVar] | None = None,
         is_init: bool = False,
-        cls_type_and_name: Optional[tuple[type | RuntimeClass, str]] = None,
+        cls_type_and_name: tuple[type | RuntimeClass, str] | None = None,
         unextractable: bool = False,
     ) -> None:
+        if cls_typevars is None:
+            cls_typevars = []
         if not isinstance(fn, FunctionType):
             raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
 
@@ -446,7 +449,8 @@ class _BaseModule(ABC):
         found_var_arg = False
         for param in params:
             if found_var_arg:
-                raise ValueError("Can only have a single var arg at the end")
+                msg = "Can only have a single var arg at the end"
+                raise ValueError(msg)
             kind = param.kind
             if kind == Parameter.VAR_POSITIONAL:
                 found_var_arg = True
@@ -463,14 +467,15 @@ class _BaseModule(ABC):
             var_arg_type = None
         arg_types = tuple(self._resolve_type_annotation(hints[t.name], cls_typevars, cls_type_and_name) for t in params)
         # If the first arg is a self, and this not an __init__ fn, add this as a typeref
-        if isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)) and not is_init:
-            arg_types = (first_arg,) + arg_types
+        if isinstance(first_arg, ClassTypeVarRef | TypeRefWithVars) and not is_init:
+            arg_types = (first_arg, *arg_types)
 
         # If this is an init fn use the first arg as the return type
         if is_init:
             assert not mutates_first_arg
-            if not isinstance(first_arg, (ClassTypeVarRef, TypeRefWithVars)):
-                raise ValueError("Init function must have a self type")
+            if not isinstance(first_arg, ClassTypeVarRef | TypeRefWithVars):
+                msg = "Init function must have a self type"
+                raise ValueError(msg)
             return_type = first_arg
         elif mutates_first_arg:
             return_type = arg_types[0]
@@ -521,7 +526,7 @@ class _BaseModule(ABC):
         self,
         tp: object,
         cls_typevars: list[TypeVar],
-        cls_type_and_name: Optional[tuple[type | RuntimeClass, str]],
+        cls_type_and_name: tuple[type | RuntimeClass, str] | None,
     ) -> TypeOrVarRef:
         if isinstance(tp, TypeVar):
             return ClassTypeVarRef(cls_typevars.index(tp))
@@ -535,20 +540,13 @@ class _BaseModule(ABC):
             return TypeRefWithVars(cls_type_and_name[1])
 
         # If this is the class for this method and we have a paramaterized class, recurse
-        if (
-            cls_type_and_name
-            and isinstance(tp, _GenericAlias)
-            and tp.__origin__ == cls_type_and_name[0]  # type: ignore
-        ):
+        if cls_type_and_name and isinstance(tp, _GenericAlias) and tp.__origin__ == cls_type_and_name[0]:
             return TypeRefWithVars(
                 cls_type_and_name[1],
-                tuple(
-                    self._resolve_type_annotation(a, cls_typevars, cls_type_and_name)
-                    for a in tp.__args__  # type: ignore
-                ),
+                tuple(self._resolve_type_annotation(a, cls_typevars, cls_type_and_name) for a in tp.__args__),
             )
 
-        if isinstance(tp, (RuntimeClass, RuntimeParamaterizedClass)):
+        if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
             return class_to_ref(tp).to_var()
         raise TypeError(f"Unexpected type annotation {tp}")
 
@@ -583,14 +581,14 @@ class _BaseModule(ABC):
         ...
 
     @overload
-    def relation(self, name: str, tp1: type[T], /, *, egg_fn: Optional[str] = None) -> Callable[[T], Unit]:
+    def relation(self, name: str, tp1: type[T], /, *, egg_fn: str | None = None) -> Callable[[T], Unit]:
         ...
 
     @overload
-    def relation(self, name: str, /, *, egg_fn: Optional[str] = None) -> Callable[[], Unit]:
+    def relation(self, name: str, /, *, egg_fn: str | None = None) -> Callable[[], Unit]:
         ...
 
-    def relation(self, name: str, /, *tps: type, egg_fn: Optional[str] = None) -> Callable[..., Unit]:
+    def relation(self, name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..., Unit]:
         """
         Defines a relation, which is the same as a function which returns unit.
         """
@@ -619,7 +617,7 @@ class _BaseModule(ABC):
         fn_name = self._mod_decls.get_egg_fn(_resolve_callable(fn))
         self._process_commands([bindings.Input(fn_name, path)])
 
-    def constant(self, name: str, tp: type[EXPR], egg_name: Optional[str] = None) -> EXPR:
+    def constant(self, name: str, tp: type[EXPR], egg_name: str | None = None) -> EXPR:
         """
         Defines a named constant of a certain type.
 
@@ -633,8 +631,8 @@ class _BaseModule(ABC):
         self,
         ref: ConstantRef | ClassVariableRef,
         tp: object,
-        egg_name: Optional[str],
-        cls_type_and_name: Optional[tuple[type | RuntimeClass, str]],
+        egg_name: str | None,
+        cls_type_and_name: tuple[type | RuntimeClass, str] | None,
     ) -> JustTypeRef:
         """
         Register a constant, returning its typeref().
@@ -662,14 +660,14 @@ class _Builtins(_BaseModule):
         super().__post_init__(modules)
         global _BUILTIN_DECLS
         if _BUILTIN_DECLS is not None:
-            raise RuntimeError("Builtins already initialized")
+            msg = "Builtins already initialized"
+            raise RuntimeError(msg)
         _BUILTIN_DECLS = self._mod_decls._decl
 
     def _process_commands(self, cmds: Iterable[bindings._Command]) -> None:
         """
         Commands which would have been used to create the builtins are discarded, since they are already registered.
         """
-        pass
 
 
 @dataclass
@@ -774,8 +772,8 @@ class Module(_BaseModule):
 
 
 class GraphvizKwargs(TypedDict, total=False):
-    max_functions: Optional[int]
-    max_calls_per_function: Optional[int]
+    max_functions: int | None
+    max_calls_per_function: int | None
     n_inline_leaves: int
     split_primitive_outputs: bool
 
@@ -793,7 +791,7 @@ class EGraph(_BaseModule):
     _decl_stack: list[Declarations] = field(default_factory=list, repr=False)
     _token_stack: list[Token[EGraph]] = field(default_factory=list, repr=False)
 
-    def __post_init__(self, modules: list[Module], seminaive: bool) -> None:  # type: ignore
+    def __post_init__(self, modules: list[Module], seminaive: bool) -> None:
         super().__post_init__(modules)
         self._egraph = bindings.EGraph(seminaive=seminaive)
         for m in self._flatted_deps:
@@ -808,7 +806,6 @@ class EGraph(_BaseModule):
         """
         Returns the graphviz representation of the e-graph.
         """
-
         return {"image/svg+xml": self.graphviz().pipe(format="svg", quiet=True, encoding="utf-8")}
 
     def graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
@@ -838,7 +835,7 @@ class EGraph(_BaseModule):
       }"""
         p = pathlib.Path(tempfile.gettempdir()) / "graphviz-styles.css"
         p.write_text(styles)
-        with_stylesheet = original.replace("{", f'{{stylesheet="{str(p)}"', 1)
+        with_stylesheet = original.replace("{", f'{{stylesheet="{p!s}"', 1)
         return graphviz.Source(with_stylesheet)
 
     def graphviz_svg(self, **kwargs: Unpack[GraphvizKwargs]) -> str:
@@ -846,14 +843,15 @@ class EGraph(_BaseModule):
 
     def _repr_html_(self) -> str:
         """
-        Add a _repr_html_ to be an SVG to work with sphinx gallery
+        Add a _repr_html_ to be an SVG to work with sphinx gallery.
+
         ala https://github.com/xflr6/graphviz/pull/121
         until this PR is merged and released
         https://github.com/sphinx-gallery/sphinx-gallery/pull/1138
         """
         return self.graphviz_svg()
 
-    def display(self, **kwargs: Unpack[GraphvizKwargs]):
+    def display(self, **kwargs: Unpack[GraphvizKwargs]) -> None:
         """
         Displays the e-graph in the notebook.
         """
@@ -866,7 +864,7 @@ class EGraph(_BaseModule):
             graphviz.render(view=True, format="svg", quiet=True)
 
     @overload
-    def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> EXPR:
+    def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> EXPR:
         ...
 
     @overload
@@ -874,7 +872,7 @@ class EGraph(_BaseModule):
         ...
 
     def simplify(
-        self, expr: EXPR, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Optional[Ruleset] = None
+        self, expr: EXPR, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
     ) -> EXPR:
         """
         Simplifies the given expression.
@@ -886,7 +884,8 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.Simplify(egg_expr, limit_or_schedule._to_egg_schedule(self._mod_decls))])
         extract_report = self._egraph.extract_report()
         if not isinstance(extract_report, bindings.Best):
-            raise ValueError("No extract report saved")
+            msg = "No extract report saved"
+            raise ValueError(msg)  # noqa: TRY004
         new_typed_expr = TypedExprDecl.from_egg(
             self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
@@ -896,15 +895,15 @@ class EGraph(_BaseModule):
         """
         Include a file of rules.
         """
-        raise NotImplementedError(
-            "Not implemented yet, because we don't have a way of registering the types with Python"
-        )
+        msg = "Not implemented yet, because we don't have a way of registering the types with Python"
+        raise NotImplementedError(msg)
 
     def output(self) -> None:
-        raise NotImplementedError("Not imeplemented yet, because there are no examples in the egglog repo")
+        msg = "Not imeplemented yet, because there are no examples in the egglog repo"
+        raise NotImplementedError(msg)
 
     @overload
-    def run(self, limit: int, /, *until: Fact, ruleset: Optional[Ruleset] = None) -> bindings.RunReport:
+    def run(self, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> bindings.RunReport:
         ...
 
     @overload
@@ -912,7 +911,7 @@ class EGraph(_BaseModule):
         ...
 
     def run(
-        self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Optional[Ruleset] = None
+        self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
     ) -> bindings.RunReport:
         """
         Run the egraph until the given limit or until the given facts are true.
@@ -925,7 +924,8 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.RunSchedule(schedule._to_egg_schedule(self._mod_decls))])
         run_report = self._egraph.run_report()
         if not run_report:
-            raise ValueError("No run report saved")
+            msg = "No run report saved"
+            raise ValueError(msg)
         return run_report
 
     def check(self, *facts: FactLike) -> None:
@@ -952,7 +952,8 @@ class EGraph(_BaseModule):
         egg_expr = typed_expr.to_egg(self._mod_decls)
         extract_report = self._run_extract(egg_expr, 0)
         if not isinstance(extract_report, bindings.Best):
-            raise ValueError("No extract report saved")
+            msg = "No extract report saved"
+            raise ValueError(msg)  # noqa: TRY004
         new_typed_expr = TypedExprDecl.from_egg(
             self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
@@ -968,7 +969,8 @@ class EGraph(_BaseModule):
         egg_expr = typed_expr.to_egg(self._mod_decls)
         extract_report = self._run_extract(egg_expr, n)
         if not isinstance(extract_report, bindings.Variants):
-            raise ValueError("Wrong extract report type")
+            msg = "Wrong extract report type"
+            raise ValueError(msg)  # noqa: TRY004
         new_exprs = [
             TypedExprDecl.from_egg(self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, term))
             for term in extract_report.terms
@@ -979,7 +981,8 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n))))])
         extract_report = self._egraph.extract_report()
         if not extract_report:
-            raise ValueError("No extract report saved")
+            msg = "No extract report saved"
+            raise ValueError(msg)
         return extract_report
 
     def push(self) -> None:
@@ -997,7 +1000,7 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.Pop(1)])
         self._mod_decls._decl = self._decl_stack.pop()
 
-    def __enter__(self) -> EGraph:
+    def __enter__(self) -> Self:
         """
         Copy the egraph state, so that it can be reverted back to the original state at the end.
 
@@ -1007,7 +1010,7 @@ class EGraph(_BaseModule):
         self.push()
         return self
 
-    def __exit__(self, exc_type, exc, exc_tb):
+    def __exit__(self, exc_type, exc, exc_tb) -> None:  # noqa: ANN001
         CURRENT_EGRAPH.reset(self._token_stack.pop())
         self.pop()
 
@@ -1029,8 +1032,7 @@ class EGraph(_BaseModule):
 
     def eval_fn(self, fn: Callable) -> PyObjectFunction:
         """
-        Takes a python callable and maps it to a callable which takes
-        and returns PyObjects.
+        Takes a python callable and maps it to a callable which takes and returns PyObjects.
 
         It translates it to a call which uses `py_eval` to call the function, passing in the
         args as locals, and using the globals from function.
@@ -1040,7 +1042,7 @@ class EGraph(_BaseModule):
         fn_globals = self.save_object(fn.__globals__)
         fn_locals = self.save_object({"__fn": fn})
 
-        def inner(*__args: PyObject, __fn_locals=fn_locals) -> PyObject:
+        def inner(*__args: PyObject, __fn_locals: PyObject = fn_locals) -> PyObject:
             new_kvs: list[PyObject] = []
             eval_str = "__fn("
             for i, arg in enumerate(__args):
@@ -1048,11 +1050,13 @@ class EGraph(_BaseModule):
                 new_kvs.append(arg)
                 eval_str += f"__arg_{i}, "
             eval_str += ")"
-            return py_eval(eval_str, fn_locals.dict_update(*new_kvs), fn_globals)
+            return py_eval(eval_str, __fn_locals.dict_update(*new_kvs), fn_globals)
 
         return inner
 
-    def saturate(self, *, max=1000, performance=False, **kwargs: Unpack[GraphvizKwargs]) -> ipywidgets.Widget:
+    def saturate(
+        self, *, max: int = 1000, performance: bool = False, **kwargs: Unpack[GraphvizKwargs]
+    ) -> ipywidgets.Widget:
         from .graphviz_widget import graphviz_widget_with_slider
 
         dots = [str(self.graphviz(**kwargs))]
@@ -1062,7 +1066,9 @@ class EGraph(_BaseModule):
             dots.append(str(self.graphviz(**kwargs)))
         return graphviz_widget_with_slider(dots, performance=performance)
 
-    def saturate_to_html(self, file="tmp.html", performance=False, **kwargs: Unpack[GraphvizKwargs]) -> None:
+    def saturate_to_html(
+        self, file: str = "tmp.html", performance: bool = False, **kwargs: Unpack[GraphvizKwargs]
+    ) -> None:
         # raise NotImplementedError("Upstream bugs prevent rendering to HTML")
 
         # import panel
@@ -1095,27 +1101,29 @@ class _WrappedMethod(Generic[P, EXPR]):
     Used to wrap a method and store some extra options on it before processing it when processing the class.
     """
 
-    egg_fn: Optional[str]
-    cost: Optional[int]
-    default: Optional[EXPR]
-    merge: Optional[Callable[[EXPR, EXPR], EXPR]]
-    on_merge: Optional[Callable[[EXPR, EXPR], Iterable[ActionLike]]]
+    egg_fn: str | None
+    cost: int | None
+    default: EXPR | None
+    merge: Callable[[EXPR, EXPR], EXPR] | None
+    on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None
     fn: Callable[P, EXPR]
     preserve: bool
     mutates_self: bool
     unextractable: bool
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> EXPR:
-        raise NotImplementedError("We should never call a wrapped method. Did you forget to wrap the class?")
+        msg = "We should never call a wrapped method. Did you forget to wrap the class?"
+        raise NotImplementedError(msg)
 
 
 class _ExprMetaclass(type):
     """
-    Metaclass of Expr, used to override isistance checks, so that runtime expressions are instances
-    of Expr at runtime.
+    Metaclass of Expr.
+
+    Used to override isistance checks, so that runtime expressions are instances of Expr at runtime.
     """
 
-    def __instancecheck__(self, instance: object) -> bool:
+    def __instancecheck__(cls, instance: object) -> bool:
         return isinstance(instance, RuntimeExpr)
 
 
@@ -1136,8 +1144,9 @@ class Expr(metaclass=_ExprMetaclass):
 
     def __eq__(self, other: NoReturn) -> NoReturn:  # type: ignore[override, empty-body]
         """
-        Equality is currently not supported. We only add this method so that
-        if you try to use it MyPy will warn you.
+        Equality is currently not supported.
+
+        We only add this method so that if you try to use it MyPy will warn you.
         """
         ...
 
@@ -1160,7 +1169,7 @@ class Ruleset:
     name: str
 
 
-def _ruleset_name(ruleset: Optional[Ruleset]) -> str:
+def _ruleset_name(ruleset: Ruleset | None) -> str:
     return ruleset.name if ruleset else ""
 
 
@@ -1303,7 +1312,7 @@ class Set(Action):
     def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Set:
         egg_call = self._call.__egg_typed_expr__.expr.to_egg(mod_decls)
         if not isinstance(egg_call, bindings.Call):
-            raise ValueError(f"Can only create a set with a call for the lhs, got {self._call}")
+            raise ValueError(f"Can only create a set with a call for the lhs, got {self._call}")  # noqa: TRY004
         return bindings.Set(
             egg_call.name,
             egg_call.args,
@@ -1332,12 +1341,12 @@ class Delete(Action):
     def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Delete:
         egg_call = self._call.__egg_typed_expr__.expr.to_egg(mod_decls)
         if not isinstance(egg_call, bindings.Call):
-            raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")
+            raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")  # noqa: TRY004
         return bindings.Delete(egg_call.name, egg_call.args)
 
 
 @dataclass
-class Union_(Action):
+class Union_(Action):  # noqa: N801
     _lhs: RuntimeExpr
     _rhs: RuntimeExpr
 
@@ -1448,12 +1457,12 @@ class Sequence(Schedule):
 # if the arguments are the same type of expression
 
 
-def rewrite(lhs: EXPR, ruleset: Optional[Ruleset] = None) -> _RewriteBuilder[EXPR]:
+def rewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _RewriteBuilder[EXPR]:
     """Rewrite the given expression to a new expression."""
     return _RewriteBuilder(lhs, ruleset)
 
 
-def birewrite(lhs: EXPR, ruleset: Optional[Ruleset] = None) -> _BirewriteBuilder[EXPR]:
+def birewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _BirewriteBuilder[EXPR]:
     """Rewrite the given expression to a new expression and vice versa."""
     return _BirewriteBuilder(lhs, ruleset)
 
@@ -1496,7 +1505,7 @@ def set_(lhs: EXPR) -> _SetBuilder[EXPR]:
     return _SetBuilder(lhs=lhs)
 
 
-def rule(*facts: FactLike, ruleset: Optional[Ruleset] = None, name: Optional[str] = None) -> _RuleBuilder:
+def rule(*facts: FactLike, ruleset: Ruleset | None = None, name: str | None = None) -> _RuleBuilder:
     """Create a rule with the given facts."""
     return _RuleBuilder(facts=_fact_likes(facts), name=name, ruleset=ruleset)
 
@@ -1506,9 +1515,9 @@ def var(name: str, bound: type[EXPR]) -> EXPR:
     return cast(EXPR, _var(name, bound))
 
 
-def _var(name: str, bound: Any) -> RuntimeExpr:
+def _var(name: str, bound: object) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
-    if not isinstance(bound, (RuntimeClass, RuntimeParamaterizedClass)):
+    if not isinstance(bound, RuntimeClass | RuntimeParamaterizedClass):
         raise TypeError(f"Unexpected type {type(bound)}")
     return RuntimeExpr(bound.__egg_decls__, TypedExprDecl(class_to_ref(bound), VarDecl(name)))
 
@@ -1522,7 +1531,7 @@ def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
 @dataclass
 class _RewriteBuilder(Generic[EXPR]):
     lhs: EXPR
-    ruleset: Optional[Ruleset]
+    ruleset: Ruleset | None
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
         return Rewrite(
@@ -1539,7 +1548,7 @@ class _RewriteBuilder(Generic[EXPR]):
 @dataclass
 class _BirewriteBuilder(Generic[EXPR]):
     lhs: EXPR
-    ruleset: Optional[Ruleset]
+    ruleset: Ruleset | None
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
         return BiRewrite(
@@ -1589,8 +1598,8 @@ class _UnionBuilder(Generic[EXPR]):
 @dataclass
 class _RuleBuilder:
     facts: tuple[Fact, ...]
-    name: Optional[str]
-    ruleset: Optional[Ruleset]
+    name: str | None
+    ruleset: Ruleset | None
 
     def then(self, *actions: ActionLike) -> Command:
         return Rule(_action_likes(actions), self.facts, self.name or "", _ruleset_name(self.ruleset))
@@ -1611,7 +1620,7 @@ def to_runtime_expr(expr: Expr) -> RuntimeExpr:
     return expr
 
 
-def run(ruleset: Optional[Ruleset] = None, *until: Fact) -> Run:
+def run(ruleset: Ruleset | None = None, *until: Fact) -> Run:
     """
     Create a run configuration.
     """
@@ -1625,7 +1634,7 @@ def seq(*schedules: Schedule) -> Schedule:
     return Sequence(tuple(schedules))
 
 
-CommandLike = Union[Command, Expr]
+CommandLike = Command | Expr
 
 
 def _command_like(command_like: CommandLike) -> Command:
@@ -1654,7 +1663,7 @@ def _command_generator(gen: CommandGenerator) -> Iterable[Command]:
     return gen(*args)
 
 
-ActionLike = Union[Action, Expr]
+ActionLike = Action | Expr
 
 
 def _action_likes(action_likes: Iterable[ActionLike]) -> tuple[Action, ...]:
@@ -1667,7 +1676,7 @@ def _action_like(action_like: ActionLike) -> Action:
     return action_like
 
 
-FactLike = Union[Fact, Expr]
+FactLike = Fact | Expr
 
 
 def _fact_likes(fact_likes: Iterable[FactLike]) -> tuple[Fact, ...]:

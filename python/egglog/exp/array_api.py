@@ -7,14 +7,19 @@ import math
 import numbers
 import sys
 from copy import copy
-from typing import Any, ClassVar, Iterator, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 import numpy as np
+
 from egglog import *
 from egglog.bindings import EggSmolError
 from egglog.runtime import RuntimeExpr
 
 from .program_gen import *
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from types import ModuleType
 
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
@@ -374,7 +379,7 @@ class TupleInt(Expr):
         return int(self.length())
 
     @array_api_module.method(preserve=True)
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Int]:
         return iter(self[Int(i)] for i in range(len(self)))
 
     def __getitem__(self, i: Int) -> Int:
@@ -421,7 +426,7 @@ class OptionalInt(Expr):
         ...
 
 
-converter(type(None), OptionalInt, lambda x: OptionalInt.none)
+converter(type(None), OptionalInt, lambda _: OptionalInt.none)
 converter(Int, OptionalInt, OptionalInt.some)
 
 
@@ -457,8 +462,8 @@ class MultiAxisIndexKeyItem(Expr):
         ...
 
 
-converter(type(...), MultiAxisIndexKeyItem, lambda x: MultiAxisIndexKeyItem.ELLIPSIS)
-converter(type(None), MultiAxisIndexKeyItem, lambda x: MultiAxisIndexKeyItem.NONE)
+converter(type(...), MultiAxisIndexKeyItem, lambda _: MultiAxisIndexKeyItem.ELLIPSIS)
+converter(type(None), MultiAxisIndexKeyItem, lambda _: MultiAxisIndexKeyItem.NONE)
 converter(Int, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.int)
 converter(Slice, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.slice)
 
@@ -517,7 +522,7 @@ class IndexKey(Expr):
         ...
 
 
-converter(type(...), IndexKey, lambda x: IndexKey.ELLIPSIS)
+converter(type(...), IndexKey, lambda _: IndexKey.ELLIPSIS)
 converter(Int, IndexKey, IndexKey.int)
 converter(Slice, IndexKey, IndexKey.slice)
 converter(MultiAxisIndexKey, IndexKey, IndexKey.multi_axis)
@@ -683,7 +688,7 @@ class NDArray(Expr):
         ...
 
     @array_api_module.method(preserve=True)
-    def __array_namespace__(self, api_version=None):
+    def __array_namespace__(self, api_version: object = None) -> ModuleType:
         return sys.modules[__name__]
 
     @property
@@ -833,7 +838,7 @@ class NDArray(Expr):
         ...
 
     @property
-    def T(self) -> NDArray:
+    def T(self) -> NDArray:  # noqa: N802
         """
         https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.array.T.html#array_api.array.T
         """
@@ -909,7 +914,7 @@ class TupleNDArray(Expr):
         return int(self.length())
 
     @array_api_module.method(preserve=True)
-    def __iter__(self):
+    def __iter__(self) -> Iterator[NDArray]:
         return iter(self[Int(i)] for i in range(len(self)))
 
     def __getitem__(self, i: Int) -> NDArray:
@@ -950,7 +955,7 @@ class OptionalBool(Expr):
         ...
 
 
-converter(type(None), OptionalBool, lambda x: OptionalBool.none)
+converter(type(None), OptionalBool, lambda _: OptionalBool.none)
 converter(Boolean, OptionalBool, lambda x: OptionalBool.some(x))
 
 
@@ -963,7 +968,7 @@ class OptionalDType(Expr):
         ...
 
 
-converter(type(None), OptionalDType, lambda x: OptionalDType.none)
+converter(type(None), OptionalDType, lambda _: OptionalDType.none)
 converter(DType, OptionalDType, lambda x: OptionalDType.some(x))
 
 
@@ -976,7 +981,7 @@ class OptionalDevice(Expr):
         ...
 
 
-converter(type(None), OptionalDevice, lambda x: OptionalDevice.none)
+converter(type(None), OptionalDevice, lambda _: OptionalDevice.none)
 converter(Device, OptionalDevice, lambda x: OptionalDevice.some(x))
 
 
@@ -989,7 +994,7 @@ class OptionalTupleInt(Expr):
         ...
 
 
-converter(type(None), OptionalTupleInt, lambda x: OptionalTupleInt.none)
+converter(type(None), OptionalTupleInt, lambda _: OptionalTupleInt.none)
 converter(TupleInt, OptionalTupleInt, lambda x: OptionalTupleInt.some(x))
 
 
@@ -1019,7 +1024,7 @@ class OptionalIntOrTuple(Expr):
         ...
 
 
-converter(type(None), OptionalIntOrTuple, lambda x: OptionalIntOrTuple.none)
+converter(type(None), OptionalIntOrTuple, lambda _: OptionalIntOrTuple.none)
 converter(IntOrTuple, OptionalIntOrTuple, OptionalIntOrTuple.some)
 
 
@@ -1520,7 +1525,7 @@ class ToPy(Protocol):
         ...
 
 
-def extract_py(e: ToPy) -> Any:
+def extract_py(e: ToPy) -> Any:  # noqa: ANN401
     """
     Extract an expression as a python object, by running them return the `to_py()` object.
     """
@@ -1531,6 +1536,7 @@ def extract_py(e: ToPy) -> Any:
         egraph.run((run() * 30).saturate())
         try:
             return egraph.load_object(egraph.extract(e.to_py()))
-        except EggSmolError:
+        except EggSmolError as e:
             egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
-            raise ValueError("Cannot simplify:", egraph.extract(e))
+            msg = "Cannot simplify:"
+            raise ValueError(msg, egraph.extract(e)) from e

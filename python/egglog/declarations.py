@@ -8,11 +8,14 @@ import itertools
 from collections import defaultdict
 from dataclasses import dataclass, field
 from inspect import Parameter, Signature
-from typing import Callable, Iterable, Optional, Union
+from typing import TYPE_CHECKING, TypeAlias
 
 from typing_extensions import assert_never
 
 from . import bindings
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 __all__ = [
     "Declarations",
@@ -109,41 +112,44 @@ class Declarations:
         """
         Sets a function declaration for the given callable reference.
         """
-        if isinstance(ref, FunctionRef):
-            if ref.name in self._functions:
-                raise ValueError(f"Function {ref.name} already registered")
-            self._functions[ref.name] = decl
-        elif isinstance(ref, MethodRef):
-            if ref.method_name in self._classes[ref.class_name].methods:
-                raise ValueError(f"Method {ref.class_name}.{ref.method_name} already registered")
-            self._classes[ref.class_name].methods[ref.method_name] = decl
-        elif isinstance(ref, ClassMethodRef):
-            if ref.method_name in self._classes[ref.class_name].class_methods:
-                raise ValueError(f"Class method {ref.class_name}.{ref.method_name} already registered")
-            self._classes[ref.class_name].class_methods[ref.method_name] = decl
-        elif isinstance(ref, PropertyRef):
-            if ref.property_name in self._classes[ref.class_name].properties:
-                raise ValueError(f"Property {ref.class_name}.{ref.property_name} already registered")
-            self._classes[ref.class_name].properties[ref.property_name] = decl
-        else:
-            assert_never(ref)
+        match ref:
+            case FunctionRef(name):
+                if name in self._functions:
+                    raise ValueError(f"Function {name} already registered")
+                self._functions[name] = decl
+            case MethodRef(class_name, method_name):
+                if method_name in self._classes[class_name].methods:
+                    raise ValueError(f"Method {class_name}.{method_name} already registered")
+                self._classes[class_name].methods[method_name] = decl
+            case ClassMethodRef(class_name, method_name):
+                if method_name in self._classes[class_name].class_methods:
+                    raise ValueError(f"Class method {class_name}.{method_name} already registered")
+                self._classes[class_name].class_methods[method_name] = decl
+            case PropertyRef(class_name, property_name):
+                if property_name in self._classes[class_name].properties:
+                    raise ValueError(f"Property {class_name}.{property_name} already registered")
+                self._classes[class_name].properties[property_name] = decl
+            case _:
+                assert_never(ref)
 
     def set_constant_type(self, ref: ConstantCallableRef, tp: JustTypeRef) -> None:
-        if isinstance(ref, ConstantRef):
-            if ref.name in self._constants:
-                raise ValueError(f"Constant {ref.name} already registered")
-            self._constants[ref.name] = tp
-        elif isinstance(ref, ClassVariableRef):
-            if ref.variable_name in self._classes[ref.class_name].class_variables:
-                raise ValueError(f"Class variable {ref.class_name}.{ref.variable_name} already registered")
-            self._classes[ref.class_name].class_variables[ref.variable_name] = tp
-        else:
-            assert_never(ref)
+        match ref:
+            case ConstantRef(name):
+                if name in self._constants:
+                    raise ValueError(f"Constant {name} already registered")
+                self._constants[name] = tp
+            case ClassVariableRef(class_name, variable_name):
+                if variable_name in self._classes[class_name].class_variables:
+                    raise ValueError(f"Class variable {class_name}.{variable_name} already registered")
+                self._classes[class_name].class_variables[variable_name] = tp
+            case _:
+                assert_never(ref)
 
     def register_callable_ref(self, ref: CallableRef, egg_name: str) -> None:
         """
-        Registers a callable reference with the given egg name. The callable's function needs to be registered
-        first.
+        Registers a callable reference with the given egg name.
+
+        The callable's function needs to be registered first.
         """
         if ref in self._callable_ref_to_egg_fn:
             raise ValueError(f"Callable ref {ref} already registered")
@@ -151,21 +157,23 @@ class Declarations:
         self._egg_fn_to_callable_refs[egg_name].add(ref)
 
     def get_function_decl(self, ref: FunctionCallableRef) -> FunctionDecl:
-        if isinstance(ref, FunctionRef):
-            return self._functions[ref.name]
-        elif isinstance(ref, MethodRef):
-            return self._classes[ref.class_name].methods[ref.method_name]
-        elif isinstance(ref, ClassMethodRef):
-            return self._classes[ref.class_name].class_methods[ref.method_name]
-        elif isinstance(ref, PropertyRef):
-            return self._classes[ref.class_name].properties[ref.property_name]
+        match ref:
+            case FunctionRef(name):
+                return self._functions[name]
+            case MethodRef(class_name, method_name):
+                return self._classes[class_name].methods[method_name]
+            case ClassMethodRef(class_name, method_name):
+                return self._classes[class_name].class_methods[method_name]
+            case PropertyRef(class_name, property_name):
+                return self._classes[class_name].properties[property_name]
         assert_never(ref)
 
     def get_constant_type(self, ref: ConstantCallableRef) -> JustTypeRef:
-        if isinstance(ref, ConstantRef):
-            return self._constants[ref.name]
-        elif isinstance(ref, ClassVariableRef):
-            return self._classes[ref.class_name].class_variables[ref.variable_name]
+        match ref:
+            case ConstantRef(name):
+                return self._constants[name]
+            case ClassVariableRef(class_name, variable_name):
+                return self._classes[class_name].class_variables[variable_name]
         assert_never(ref)
 
     def get_callable_refs(self, egg_name: str) -> Iterable[CallableRef]:
@@ -196,15 +204,16 @@ class ModuleDeclarations:
         """
         if b._decl in a.all_decls:
             return a
-        elif a._decl in b.all_decls:
+        if a._decl in b.all_decls:
             return b
-        raise ValueError("No parent decl found")
+        msg = "No parent decl found"
+        raise ValueError(msg)
 
     @property
     def all_decls(self) -> Iterable[Declarations]:
         return itertools.chain([self._decl], self._included_decls)
 
-    def has_method(self, class_name: str, method_name: str) -> Optional[bool]:
+    def has_method(self, class_name: str, method_name: str) -> bool | None:
         """
         Returns whether the given class has the given method, or None if we cant find the class.
         """
@@ -214,22 +223,21 @@ class ModuleDeclarations:
         return None
 
     def get_function_decl(self, ref: CallableRef) -> FunctionDecl:
-        if isinstance(ref, (ClassVariableRef, ConstantRef)):
+        if isinstance(ref, ClassVariableRef | ConstantRef):
             for decls in self.all_decls:
                 try:
                     return decls.get_constant_type(ref).to_constant_function_decl()
                 except KeyError:
                     pass
             raise KeyError(f"Constant {ref} not found")
-        elif isinstance(ref, (FunctionRef, MethodRef, ClassMethodRef, PropertyRef)):
+        if isinstance(ref, FunctionRef | MethodRef | ClassMethodRef | PropertyRef):
             for decls in self.all_decls:
                 try:
                     return decls.get_function_decl(ref)
                 except KeyError:
                     pass
             raise KeyError(f"Function {ref} not found")
-        else:
-            assert_never(ref)
+        assert_never(ref)
 
     def get_callable_refs(self, egg_name: str) -> Iterable[CallableRef]:
         return itertools.chain.from_iterable(decls.get_callable_refs(egg_name) for decls in self.all_decls)
@@ -263,12 +271,12 @@ class ModuleDeclarations:
         Given a class name, returns the first typevar regsisted with args of that class.
         """
         for decl in self.all_decls:
-            for tp in decl._type_ref_to_egg_sort.keys():
+            for tp in decl._type_ref_to_egg_sort:
                 if tp.name == cls_name and tp.args:
                     return tp.args
         return ()
 
-    def register_class(self, name: str, n_type_vars: int, egg_sort: Optional[str]) -> Iterable[bindings._Command]:
+    def register_class(self, name: str, n_type_vars: int, egg_sort: str | None) -> Iterable[bindings._Command]:
         # Register class first
         if name in self._decl._classes:
             raise ValueError(f"Class {name} already registered")
@@ -277,9 +285,7 @@ class ModuleDeclarations:
         _egg_sort, cmds = self.register_sort(JustTypeRef(name), egg_sort)
         return cmds
 
-    def register_sort(
-        self, ref: JustTypeRef, egg_name: Optional[str] = None
-    ) -> tuple[str, Iterable[bindings._Command]]:
+    def register_sort(self, ref: JustTypeRef, egg_name: str | None = None) -> tuple[str, Iterable[bindings._Command]]:
         """
         Register a sort with the given name. If no name is given, one is generated.
 
@@ -303,17 +309,18 @@ class ModuleDeclarations:
         self,
         ref: FunctionCallableRef,
         fn_decl: FunctionDecl,
-        egg_name: Optional[str],
-        cost: Optional[int],
-        default: Optional[ExprDecl],
-        merge: Optional[ExprDecl],
+        egg_name: str | None,
+        cost: int | None,
+        default: ExprDecl | None,
+        merge: ExprDecl | None,
         merge_action: list[bindings._Action],
         unextractable: bool,
         is_relation: bool = False,
     ) -> Iterable[bindings._Command]:
         """
-        Registers a callable with the given egg name. The callable's function needs to be registered
-        first.
+        Registers a callable with the given egg name.
+
+        The callable's function needs to be registered first.
         """
         egg_name = egg_name or ref.generate_egg_name()
         self._decl.register_callable_ref(ref, egg_name)
@@ -321,7 +328,7 @@ class ModuleDeclarations:
         return fn_decl.to_commands(self, egg_name, cost, default, merge, merge_action, is_relation, unextractable)
 
     def register_constant_callable(
-        self, ref: ConstantCallableRef, type_ref: JustTypeRef, egg_name: Optional[str]
+        self, ref: ConstantCallableRef, type_ref: JustTypeRef, egg_name: str | None
     ) -> Iterable[bindings._Command]:
         egg_function = ref.generate_egg_name()
         self._decl.register_callable_ref(ref, egg_function)
@@ -374,8 +381,9 @@ class JustTypeRef:
 
     def to_constant_function_decl(self) -> FunctionDecl:
         """
-        Create a function declaration for a constant function. This is similar to how egglog compiles
-        the `constant` command.
+        Create a function declaration for a constant function.
+
+        This is similar to how egglog compiles the `constant` command.
         """
         return FunctionDecl(
             arg_types=(),
@@ -390,14 +398,14 @@ class JustTypeRef:
 @dataclass(frozen=True)
 class ClassTypeVarRef:
     """
-    A class type variable represents one of the types of the class, if it is a generic
-    class.
+    A class type variable represents one of the types of the class, if it is a generic class.
     """
 
     index: int
 
     def to_just(self) -> JustTypeRef:
-        raise NotImplementedError("egglog does not support generic classes yet.")
+        msg = "egglog does not support generic classes yet."
+        raise NotImplementedError(msg)
 
 
 @dataclass(frozen=True)
@@ -409,7 +417,7 @@ class TypeRefWithVars:
         return JustTypeRef(self.name, tuple(a.to_just() for a in self.args))
 
 
-TypeOrVarRef = Union[ClassTypeVarRef, TypeRefWithVars]
+TypeOrVarRef: TypeAlias = ClassTypeVarRef | TypeRefWithVars
 
 
 @dataclass(frozen=True)
@@ -467,22 +475,22 @@ class PropertyRef:
         return f"{self.class_name}_{self.property_name}"
 
 
-ConstantCallableRef = Union[ConstantRef, ClassVariableRef]
-FunctionCallableRef = Union[FunctionRef, MethodRef, ClassMethodRef, PropertyRef]
-CallableRef = Union[ConstantCallableRef, FunctionCallableRef]
+ConstantCallableRef: TypeAlias = ConstantRef | ClassVariableRef
+FunctionCallableRef: TypeAlias = FunctionRef | MethodRef | ClassMethodRef | PropertyRef
+CallableRef: TypeAlias = ConstantCallableRef | FunctionCallableRef
 
 
 @dataclass(frozen=True)
 class FunctionDecl:
     arg_types: tuple[TypeOrVarRef, ...]
     # Is None for relation which doesn't have named args
-    arg_names: Optional[tuple[str, ...]]
-    arg_defaults: tuple[Optional[ExprDecl], ...]
+    arg_names: tuple[str, ...] | None
+    arg_defaults: tuple[ExprDecl | None, ...]
     return_type: TypeOrVarRef
     mutates_first_arg: bool
-    var_arg_type: Optional[TypeOrVarRef] = None
+    var_arg_type: TypeOrVarRef | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # If we mutate the first arg, then the first arg should be the same type as the return
         if self.mutates_first_arg:
             assert self.arg_types[0] == self.return_type
@@ -495,7 +503,7 @@ class FunctionDecl:
                 Parameter.POSITIONAL_OR_KEYWORD,
                 default=transform_default(TypedExprDecl(t.to_just(), d)) if d else Parameter.empty,
             )
-            for n, d, t in zip(arg_names, self.arg_defaults, self.arg_types)
+            for n, d, t in zip(arg_names, self.arg_defaults, self.arg_types, strict=True)
         ]
         if self.var_arg_type is not None:
             parameters.append(Parameter("__rest", Parameter.VAR_POSITIONAL))
@@ -505,15 +513,18 @@ class FunctionDecl:
         self,
         mod_decls: ModuleDeclarations,
         egg_name: str,
-        cost: Optional[int] = None,
-        default: Optional[ExprDecl] = None,
-        merge: Optional[ExprDecl] = None,
-        merge_action: list[bindings._Action] = [],
+        cost: int | None = None,
+        default: ExprDecl | None = None,
+        merge: ExprDecl | None = None,
+        merge_action: list[bindings._Action] | None = None,
         is_relation: bool = False,
         unextractable: bool = False,
     ) -> Iterable[bindings._Command]:
+        if merge_action is None:
+            merge_action = []
         if self.var_arg_type is not None:
-            raise NotImplementedError("egglog does not support variable arguments yet.")
+            msg = "egglog does not support variable arguments yet."
+            raise NotImplementedError(msg)
         arg_sorts: list[str] = []
         for a in self.arg_types:
             # Remove all vars from the type refs, raising an errory if we find one,
@@ -524,7 +535,10 @@ class FunctionDecl:
         return_sort, cmds = mod_decls.register_sort(self.return_type.to_just())
         yield from cmds
         if is_relation:
-            assert not default and not merge and not merge_action and not cost
+            assert not default
+            assert not merge
+            assert not merge_action
+            assert not cost
             assert return_sort == "Unit"
             yield bindings.Relation(egg_name, arg_sorts)
             return
@@ -546,7 +560,8 @@ class VarDecl:
 
     @classmethod
     def from_egg(cls, var: bindings.Var) -> TypedExprDecl:
-        raise NotImplementedError("Cannot turn var into egg type because typing unknown.")
+        msg = "Cannot turn var into egg type because typing unknown."
+        raise NotImplementedError(msg)
 
     def to_egg(self, _decls: ModuleDeclarations) -> bindings.Var:
         return bindings.Var(self.name)
@@ -555,7 +570,7 @@ class VarDecl:
         return self.name
 
 
-LitType = Union[int, str, float, bool, None]
+LitType: TypeAlias = int | str | float | bool | None
 
 
 @dataclass(frozen=True)
@@ -564,6 +579,8 @@ class LitDecl:
 
     @classmethod
     def from_egg(cls, lit: bindings.Lit) -> TypedExprDecl:
+        # TODO: Try rewriting with pattern matching once ctypes support __match_args__
+        # https://peps.python.org/pep-0622/#the-match-protocol
         if isinstance(lit.value, bindings.Int):
             return TypedExprDecl(JustTypeRef("i64"), cls(lit.value.value))
         if isinstance(lit.value, bindings.String):
@@ -572,7 +589,7 @@ class LitDecl:
             return TypedExprDecl(JustTypeRef("f64"), cls(lit.value.value))
         if isinstance(lit.value, bindings.Bool):
             return TypedExprDecl(JustTypeRef("Bool"), cls(lit.value.value))
-        elif isinstance(lit.value, bindings.Unit):
+        if isinstance(lit.value, bindings.Unit):
             return TypedExprDecl(JustTypeRef("Unit"), cls(None))
         assert_never(lit.value)
 
@@ -589,7 +606,7 @@ class LitDecl:
             return bindings.Lit(bindings.String(self.value))
         assert_never(self.value)
 
-    def pretty(self, context: PrettyContext, unwrap_lit=True, **kwargs) -> str:
+    def pretty(self, context: PrettyContext, unwrap_lit: bool = True, **kwargs) -> str:
         """
         Returns a string representation of the literal.
 
@@ -604,7 +621,7 @@ class LitDecl:
         if isinstance(self.value, float):
             return f"f64({self.value})" if not unwrap_lit else str(self.value)
         if isinstance(self.value, str):
-            return f"String({repr(self.value)})" if not unwrap_lit else repr(self.value)
+            return f"String({self.value!r})" if not unwrap_lit else repr(self.value)
         assert_never(self.value)
 
 
@@ -614,12 +631,13 @@ class CallDecl:
     args: tuple[TypedExprDecl, ...] = ()
     # type parameters that were bound to the callable, if it is a classmethod
     # Used for pretty printing classmethod calls with type parameters
-    bound_tp_params: Optional[tuple[JustTypeRef, ...]] = None
-    _cached_hash: Optional[int] = None
+    bound_tp_params: tuple[JustTypeRef, ...] | None = None
+    _cached_hash: int | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.bound_tp_params and not isinstance(self.callable, ClassMethodRef):
-            raise ValueError("Cannot bind type parameters to a non-class method callable.")
+            msg = "Cannot bind type parameters to a non-class method callable."
+            raise ValueError(msg)
 
     def __hash__(self) -> int:
         # Modified hash which will cache result for performance
@@ -662,7 +680,7 @@ class CallDecl:
         egg_fn = mod_decls.get_egg_fn(self.callable)
         return bindings.Call(egg_fn, [a.to_egg(mod_decls) for a in self.args])
 
-    def pretty(self, context: PrettyContext, parens=True, **kwargs) -> str:
+    def pretty(self, context: PrettyContext, parens: bool = True, **kwargs) -> str:  # noqa: C901
         """
         Pretty print the call.
 
@@ -677,7 +695,9 @@ class CallDecl:
         function_decl = context.mod_decls.get_function_decl(ref)
         # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
         n_defaults = 0
-        for arg, default in zip(reversed(args), reversed(function_decl.arg_defaults)):
+        for arg, default in zip(
+            reversed(args), reversed(function_decl.arg_defaults), strict=not function_decl.var_arg_type
+        ):
             if arg != default:
                 break
             n_defaults += 1
@@ -693,47 +713,47 @@ class CallDecl:
             args[0] = VarDecl(expr_name)
         else:
             expr_name = None
-        if isinstance(ref, FunctionRef):
-            expr = _pretty_call(context, ref.name, args)
-        elif isinstance(ref, ClassMethodRef):
-            tp_ref = JustTypeRef(ref.class_name, self.bound_tp_params or ())
-            if ref.method_name == "__init__":
-                fn_str = tp_ref.pretty()
-            else:
-                fn_str = f"{tp_ref.pretty( )}.{ref.method_name}"
-            expr = _pretty_call(context, fn_str, args)
-        elif isinstance(ref, MethodRef):
-            name = ref.method_name
-            slf, *args = args
-            slf = slf.pretty(context, unwrap_lit=False)
-            if name in UNARY_METHODS:
-                expr = f"{UNARY_METHODS[name]}{slf}"
-            elif name in BINARY_METHODS:
-                assert len(args) == 1
-                expr = f"{slf} {BINARY_METHODS[name]} {args[0].pretty(context)}"
-                if parens:
-                    expr = f"({expr})"
-            elif name == "__getitem__":
-                assert len(args) == 1
-                expr = f"{slf}[{args[0].pretty(context, parens=False)}]"
-            elif name == "__call__":
-                expr = _pretty_call(context, slf, args)
-            elif name == "__delitem__":
-                assert len(args) == 1
-                expr = f"del {slf}[{args[0].pretty(context, parens=False)}]"
-            elif name == "__setitem__":
-                assert len(args) == 2
-                expr = f"{slf}[{args[0].pretty(context, parens=False)}] = {args[1].pretty(context, parens=False)}"
-            else:
-                expr = _pretty_call(context, f"{slf}.{name}", args)
-        elif isinstance(ref, ConstantRef):
-            expr = ref.name
-        elif isinstance(ref, ClassVariableRef):
-            expr = f"{ref.class_name}.{ref.variable_name}"
-        elif isinstance(ref, PropertyRef):
-            expr = f"{args[0].pretty(context)}.{ref.property_name}"
-        else:
-            assert_never(ref)
+        match ref:
+            case FunctionRef(name):
+                expr = _pretty_call(context, name, args)
+            case ClassMethodRef(class_name, method_name):
+                tp_ref = JustTypeRef(class_name, self.bound_tp_params or ())
+                fn_str = tp_ref.pretty() if method_name == "__init__" else f"{tp_ref.pretty()}.{method_name}"
+                expr = _pretty_call(context, fn_str, args)
+            case MethodRef(_class_name, method_name):
+                slf, *args = args
+                slf = slf.pretty(context, unwrap_lit=False)
+                match method_name:
+                    case _ if method_name in UNARY_METHODS:
+                        expr = f"{UNARY_METHODS[method_name]}{slf}"
+                    case _ if method_name in BINARY_METHODS:
+                        assert len(args) == 1
+                        expr = f"{slf} {BINARY_METHODS[method_name]} {args[0].pretty(context)}"
+                        if parens:
+                            expr = f"({expr})"
+                    case "__getitem__":
+                        assert len(args) == 1
+                        expr = f"{slf}[{args[0].pretty(context, parens=False)}]"
+                    case "__call__":
+                        expr = _pretty_call(context, slf, args)
+                    case "__delitem__":
+                        assert len(args) == 1
+                        expr = f"del {slf}[{args[0].pretty(context, parens=False)}]"
+                    case "__setitem__":
+                        assert len(args) == 2
+                        expr = (
+                            f"{slf}[{args[0].pretty(context, parens=False)}] = {args[1].pretty(context, parens=False)}"
+                        )
+                    case _:
+                        expr = _pretty_call(context, f"{slf}.{method_name}", args)
+            case ConstantRef(name):
+                expr = name
+            case ClassVariableRef(class_name, variable_name):
+                expr = f"{class_name}.{variable_name}"
+            case PropertyRef(_class_name, property_name):
+                expr = f"{args[0].pretty(context)}.{property_name}"
+            case _:
+                assert_never(ref)
         # If we have a name, then we mutated
         if expr_name:
             context.statements.append(expr)
@@ -757,7 +777,7 @@ MAX_LINE_LENGTH = 110
 LINE_DIFFERENCE = 10
 
 
-def _plot_line_length(expr):
+def _plot_line_length(expr: object):
     """
     Plots the number of line lengths based on different max lengths
     """
@@ -773,7 +793,7 @@ def _plot_line_length(expr):
             new_l = len(str(expr).split())
             sizes.append((line_length, diff, new_l))
 
-    df = pd.DataFrame(sizes, columns=["MAX_LINE_LENGTH", "LENGTH_DIFFERENCE", "n"])
+    df = pd.DataFrame(sizes, columns=["MAX_LINE_LENGTH", "LENGTH_DIFFERENCE", "n"])  # noqa: PD901
 
     return alt.Chart(df).mark_rect().encode(x="MAX_LINE_LENGTH:O", y="LENGTH_DIFFERENCE:O", color="n:Q")
 
@@ -814,7 +834,7 @@ class PrettyContext:
         return name
 
     def render(self, expr: str) -> str:
-        return "\n".join(self.statements + [expr])
+        return "\n".join([*self.statements, expr])
 
     def traverse_for_parents(self, expr: ExprDecl) -> None:
         if expr in self._traversed_exprs:
@@ -875,7 +895,7 @@ def test_delitem_pretty():
 
 # TODO: Multiple mutations,
 
-ExprDecl = Union[VarDecl, LitDecl, CallDecl]
+ExprDecl: TypeAlias = VarDecl | LitDecl | CallDecl
 
 
 @dataclass(frozen=True)

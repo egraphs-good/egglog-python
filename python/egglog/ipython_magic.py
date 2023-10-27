@@ -14,9 +14,9 @@ if IN_IPYTHON:
 
     @needs_local_scope
     @register_cell_magic
-    def egglog(line, cell, local_ns):
+    def egglog(line, cell, local_ns):  # noqa: ANN001, ANN201
         """
-        Run an egglog program
+        Run an egglog program.
 
         Usage:
 
@@ -38,3 +38,4 @@ if IN_IPYTHON:
             print("\n".join(res))
         if "graph" in line:
             return graphviz.Source(e.to_graphviz_string())
+        return None
