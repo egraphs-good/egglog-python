@@ -695,7 +695,9 @@ class CallDecl:
         function_decl = context.mod_decls.get_function_decl(ref)
         # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
         n_defaults = 0
-        for arg, default in zip(reversed(args), reversed(function_decl.arg_defaults), strict=True):
+        for arg, default in zip(
+            reversed(args), reversed(function_decl.arg_defaults), strict=not function_decl.var_arg_type
+        ):
             if arg != default:
                 break
             n_defaults += 1
