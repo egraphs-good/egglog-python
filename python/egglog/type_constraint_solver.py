@@ -1,16 +1,20 @@
+"""Provides a class for solving type constraints."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from itertools import chain, repeat
-from typing import Collection, Optional
+from typing import TYPE_CHECKING, assert_never
 
 from .declarations import *
+
+if TYPE_CHECKING:
+    from collections.abc import Collection
 
 __all__ = ["TypeConstraintSolver", "TypeConstraintError"]
 
 
 class TypeConstraintError(RuntimeError):
-    pass
+    """Typing error when trying to infer the return type."""
 
 
 @dataclass
@@ -32,7 +36,7 @@ class TypeConstraintSolver:
         cs = cls()
         # For each param in the class, use this as the ith bound class typevar
         for i, tp in enumerate(tps):
-            cs._cls_typevar_index_to_type[i] = tp
+            cs._cls_typevar_index_to_type[i] = tp  # noqa: SLF001
         return cs
 
     def infer_return_type(
@@ -70,10 +74,11 @@ class TypeConstraintSolver:
         if isinstance(tp, ClassTypeVarRef):
             try:
                 return self._cls_typevar_index_to_type[tp.index]
-            except KeyError:
-                raise TypeConstraintError(f"Not enough bound typevars for {tp}")
+            except KeyError as e:
+                raise TypeConstraintError(f"Not enough bound typevars for {tp}") from e
         elif isinstance(tp, TypeRefWithVars):
             return JustTypeRef(
                 tp.name,
                 tuple(self._subtitute_typevars(arg) for arg in tp.args),
             )
+        assert_never(tp)

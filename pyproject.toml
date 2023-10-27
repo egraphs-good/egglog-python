@@ -7,7 +7,7 @@ name = "egglog"
 description = "e-graphs in Python built around the the egglog rust library"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 classifiers = [
     "Environment :: MacOS X",
     "Environment :: Win32 (MS Windows)",
@@ -30,15 +30,7 @@ dependencies = ["typing-extensions", "black", "graphviz"]
 [project.optional-dependencies]
 
 array = ["scikit-learn", "array_api_compat", 'numba; python_version<"3.12"']
-dev = [
-    "pre-commit",
-    "black",
-    "mypy",
-    "flake8",
-    "isort",
-    "anywidget[dev]",
-    "egglog[docs,test]",
-]
+dev = ["pre-commit", "ruff", "mypy", "anywidget[dev]", "egglog[docs,test]"]
 
 test = ["pytest", "mypy", "syrupy", "egglog[array]"]
 
@@ -55,14 +47,43 @@ docs = [
     "line-profiler",
 ]
 
-
-[tool.black]
+[tool.ruff]
+# Allow lines to be as long as 120.
 line-length = 120
-
-[tool.isort]
-profile = "black"
-skip_gitignore = true
-
+ignore = [
+    # allow star imports
+    "F405",
+    "F403",
+    # Dont care if cls isnt typed explicitly in classmethod
+    "ANN102",
+    # Same for self
+    "ANN101",
+    # Allow single line docstrings on multiple lines
+    "D200",
+    "D212",
+    # Inconsistant formatting
+    "D203",
+    "COM812",
+    "COM819",
+    "E501",
+    "ISC001",
+    "Q001",
+    "Q002",
+    "Q003",
+    "W191",
+    "Q000",
+    "D206",
+    # TODO: Remove the rest of these eventually
+    # Allow public methods to not have docstrings
+    "D102",
+    # Allow longer messages for custom errors
+    "TRY003",
+    # Allow f-string in exceptions
+    "EM102",
+]
+src = ["python"]
+select = ["ALL"]
+extend-exclude = ["python/tests"]
 
 [tool.mypy]
 ignore_missing_imports = true

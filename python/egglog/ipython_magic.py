@@ -16,7 +16,7 @@ if IN_IPYTHON:
     @register_cell_magic
     def egglog(line, cell, local_ns):
         """
-        Run an egglog program
+        Run an egglog program.
 
         Usage:
 
