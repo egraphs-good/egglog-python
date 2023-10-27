@@ -167,7 +167,7 @@ egraph.register(
 result = egraph.relation("result")
 
 
-def l(fn: Callable[[Term], Term]) -> Term:  # noqa
+def l(fn: Callable[[Term], Term]) -> Term:  # noqa: E743
     """
     Create a lambda term from a function
     """
@@ -219,7 +219,7 @@ assert_simplifies(
 )
 # lambda capture free
 with egraph:
-    e5 = egraph.let("e5", let_(y, Term.var(x) + Term.var(x), l(lambda x: Term.var(y))))
+    e5 = egraph.let("e5", let_(y, Term.var(x) + Term.var(x), l(lambda _: Term.var(y))))
     egraph.run(10)
     egraph.check(freer(l(lambda x: Term.var(y))).contains(y))
     egraph.check_fail(eq(e5).to(l(lambda x: x + x)))

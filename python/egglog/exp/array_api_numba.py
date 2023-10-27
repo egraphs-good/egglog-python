@@ -40,7 +40,7 @@ def _std(y: NDArray, x: NDArray, i: Int):
 
 # rewrite unique_counts to count each value one by one, since numba doesn't support np.unique(..., return_counts=True)
 @array_api_numba_module.function(unextractable=True)
-def count_values(x: NDArray, values: NDArray) -> TupleValue:  # type: ignore
+def count_values(x: NDArray, values: NDArray) -> TupleValue:
     """
     Returns a tuple of the count of each of the values in the array.
     """
@@ -85,14 +85,14 @@ else:
 
     @infer_global(operator.eq)
     class DtypeEq(AbstractTemplate):
-        def generic(self, args, kws):
+        def generic(self, args, kws):  # noqa: ANN201, ANN001
             [lhs, rhs] = args
             if isinstance(lhs, types.DType) and isinstance(rhs, types.DType):
                 return signature(types.boolean, lhs, rhs)
             return None
 
     @lower_builtin(operator.eq, types.DType, types.DType)
-    def const_eq_impl(context, builder, sig, args):
+    def const_eq_impl(context, builder, sig, args):  # noqa: ANN201, ANN001
         arg1, arg2 = sig.args
         val = 1 if arg1 == arg2 else 0
         res = ir.Constant(ir.IntType(1), val)

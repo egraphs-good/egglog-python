@@ -53,6 +53,7 @@ def _int_program(i64_: i64, i: Int, j: Int):
     yield rewrite(int_program(i << j)).to(Program("(") + int_program(i) + " << " + int_program(j) + ")")
     yield rewrite(int_program(i >> j)).to(Program("(") + int_program(i) + " >> " + int_program(j) + ")")
     yield rewrite(int_program(i // j)).to(Program("(") + int_program(i) + " // " + int_program(j) + ")")
+    yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
 
 
 @array_api_module_string.function()
@@ -79,12 +80,6 @@ def _tuple_int_program(i: Int, j: Int, ti: TupleInt, ti1: TupleInt, ti2: TupleIn
 @array_api_module_string.function()
 def ndarray_program(x: NDArray) -> Program:
     ...
-
-
-@array_api_module_string.register
-def _ndarray_program(x: NDArray):
-    yield rewrite(tuple_int_program(x.shape)).to(ndarray_program(x) + ".shape")
-    yield rewrite(ndarray_program(abs(x))).to((Program("np.abs(") + ndarray_program(x) + ")").assign())
 
 
 @array_api_module_string.function
@@ -204,6 +199,12 @@ def optional_dtype_program(x: OptionalDType) -> Program:
     ...
 
 
+@array_api_module_string.register
+def _optional_dtype_program(dtype: DType):
+    yield rewrite(optional_dtype_program(OptionalDType.none)).to(Program("None"))
+    yield rewrite(optional_dtype_program(OptionalDType.some(dtype))).to(dtype_program(dtype))
+
+
 @array_api_module_string.function
 def optional_int_program(x: OptionalInt) -> Program:
     ...
@@ -307,7 +308,7 @@ def _optional_int_or_tuple_program(it: IntOrTuple):
 
 
 @array_api_module_string.register
-def _py_expr(
+def _ndarray_program(
     x: NDArray,
     y: NDArray,
     z: NDArray,
@@ -315,7 +316,6 @@ def _py_expr(
     dtype: DType,
     ti: TupleInt,
     i: Int,
-    i64_: i64,
     tv: TupleValue,
     v: Value,
     ob: OptionalBool,
@@ -340,8 +340,6 @@ def _py_expr(
     yield rewrite(ndarray_program(z_assumed_shape)).to(
         z_program.statement(Program("assert ") + z_program + ".shape == " + tuple_int_program(ti))
     )
-    # Int
-    yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
 
     # assume isfinite
     z_assumed_isfinite = copy(z)
@@ -393,10 +391,6 @@ def _py_expr(
     yield rewrite(ndarray_program(zeros(ti, OptionalDType.some(dtype), optional_device_))).to(
         (Program("np.zeros(") + tuple_int_program(ti) + ", dtype=" + dtype_program(dtype) + ")").assign(),
     )
-
-    # Optional dtype
-    yield rewrite(optional_dtype_program(OptionalDType.none)).to(Program("None"))
-    yield rewrite(optional_dtype_program(OptionalDType.some(dtype))).to(dtype_program(dtype))
 
     # unique_values
     yield rewrite(ndarray_program(unique_values(x))).to((Program("np.unique(") + ndarray_program(x) + ")").assign())
@@ -493,3 +487,5 @@ def _py_expr(
     yield rewrite(ndarray_program(sum(x, OptionalIntOrTuple.some(int_or_tuple_)))).to(
         (Program("np.sum(") + ndarray_program(x) + ", axis=" + int_or_tuple_program(int_or_tuple_) + ")").assign()
     )
+    yield rewrite(tuple_int_program(x.shape)).to(ndarray_program(x) + ".shape")
+    yield rewrite(ndarray_program(abs(x))).to((Program("np.abs(") + ndarray_program(x) + ")").assign())

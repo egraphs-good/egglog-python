@@ -8,7 +8,9 @@ HIGH_COST: int
 
 @final
 class EGraph:
-    def __init__(self, fact_directory: str | Path | None = None, seminaive=True, terms_encoding=False) -> None: ...
+    def __init__(
+        self, *, fact_directory: str | Path | None = None, seminaive: bool = True, terms_encoding: bool = False
+    ) -> None: ...
     def parse_program(self, __input: str, /) -> list[_Command]: ...
     def run_program(self, *commands: _Command) -> list[str]: ...
     def extract_report(self) -> _ExtractReport | None: ...
@@ -159,7 +161,7 @@ class Panic:
     msg: str
 
 @final
-class Expr_:
+class Expr_:  # noqa: N801
     def __init__(self, expr: _Expr) -> None: ...
     expr: _Expr
 
@@ -191,7 +193,7 @@ class FunctionDecl:
         schema: Schema,
         default: _Expr | None = None,
         merge: _Expr | None = None,
-        merge_action: list[_Action] = [],
+        merge_action: list[_Action] = [],  # noqa: B006
         cost: int | None = None,
         unextractable: bool = False,
     ) -> None: ...
@@ -221,7 +223,7 @@ class Rewrite:
     rhs: _Expr
     conditions: list[_Fact]
 
-    def __init__(self, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []) -> None: ...
+    def __init__(self, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []) -> None: ...  # noqa: B006
 
 @final
 class RunConfig:

@@ -74,6 +74,10 @@ ignore = [
     "ERA001",
     # Allow boolean positional args
     "FBT003",
+    "FBT002",
+    "FBT001",
+    # Allow creating types in function arg defaults
+    "B008",
     # Allow no type annotations for private functions
     "ANN202",
     # Allow short var names
@@ -83,6 +87,23 @@ ignore = [
     "D415",
     # Allow asserts
     "S101",
+    # Allow try except in loop
+    "PERF203",
+    # Allow unused args
+    "ARG003",
+    # Allow no type annotation for kwargs
+    "ANN003",
+    # And for args
+    "ANN002",
+    # Allow globals
+    "PLW0603",
+    # Allow lots of statements
+    "PLR0915",
+    # Allow print
+    "T201",
+    # Allow constants
+    "PLR2004",
+
     # Inconsistant formatting
     "D203",
     "COM812",
@@ -95,7 +116,14 @@ ignore = [
     "W191",
     "Q000",
     "D206",
-
+    # Allow shadowing builtin
+    "A001",
+    # Allow unused lambda vars
+    "ARG005",
+    # Allow no space after first line of docstring
+    "D205",
+    # Allow "useless expressions" as they show up in examples
+    "B018",
     # TODO: Remove the rest of these eventually
     # Allow public methods to not have docstrings
     "D102",
@@ -117,6 +145,8 @@ ignore = [
     "PLR0913",
     # Allow non imperative docstrings
     "D401",
+    # Allow private member refs
+    "SLF001",
 ]
 line-length = 120
 # Allow lines to be as long as 120.

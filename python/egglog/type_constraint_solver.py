@@ -36,14 +36,14 @@ class TypeConstraintSolver:
         cs = cls()
         # For each param in the class, use this as the ith bound class typevar
         for i, tp in enumerate(tps):
-            cs._cls_typevar_index_to_type[i] = tp  # noqa: SLF001
+            cs._cls_typevar_index_to_type[i] = tp
         return cs
 
     def infer_return_type(
         self,
         fn_args: Collection[TypeOrVarRef],
         fn_return: TypeOrVarRef,
-        fn_var_args: Optional[TypeOrVarRef],
+        fn_var_args: TypeOrVarRef | None,
         args: Collection[JustTypeRef],
     ) -> JustTypeRef:
         # Infer the type of each type variable based on the actual types of the arguments
@@ -52,12 +52,12 @@ class TypeConstraintSolver:
         return self._subtitute_typevars(fn_return)
 
     def _infer_typevars_zip(
-        self, fn_args: Collection[TypeOrVarRef], fn_var_args: Optional[TypeOrVarRef], args: Collection[JustTypeRef]
+        self, fn_args: Collection[TypeOrVarRef], fn_var_args: TypeOrVarRef | None, args: Collection[JustTypeRef]
     ) -> None:
         if len(fn_args) != len(args) if fn_var_args is None else len(fn_args) > len(args):
             raise TypeConstraintError(f"Mismatch of args {fn_args} and {args}")
         all_fn_args = fn_args if fn_var_args is None else chain(fn_args, repeat(fn_var_args))
-        for fn_arg, arg in zip(all_fn_args, args):
+        for fn_arg, arg in zip(all_fn_args, args, strict=False):
             self._infer_typevars(fn_arg, arg)
 
     def _infer_typevars(self, fn_arg: TypeOrVarRef, arg: JustTypeRef) -> None:
@@ -71,14 +71,15 @@ class TypeConstraintSolver:
             raise TypeConstraintError(f"Expected {fn_arg}, got {arg}")
 
     def _subtitute_typevars(self, tp: TypeOrVarRef) -> JustTypeRef:
-        if isinstance(tp, ClassTypeVarRef):
-            try:
-                return self._cls_typevar_index_to_type[tp.index]
-            except KeyError as e:
-                raise TypeConstraintError(f"Not enough bound typevars for {tp}") from e
-        elif isinstance(tp, TypeRefWithVars):
-            return JustTypeRef(
-                tp.name,
-                tuple(self._subtitute_typevars(arg) for arg in tp.args),
-            )
+        match tp:
+            case ClassTypeVarRef(index):
+                try:
+                    return self._cls_typevar_index_to_type[index]
+                except KeyError as e:
+                    raise TypeConstraintError(f"Not enough bound typevars for {tp}") from e
+            case TypeRefWithVars(name, args):
+                return JustTypeRef(
+                    name,
+                    tuple(self._subtitute_typevars(arg) for arg in args),
+                )
         assert_never(tp)

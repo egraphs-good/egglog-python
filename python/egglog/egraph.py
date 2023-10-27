@@ -18,6 +18,7 @@ from typing import (  # type: ignore[attr-defined]
     Literal,
     NoReturn,
     Protocol,
+    Self,
     TypedDict,
     TypeVar,
     Union,
@@ -37,7 +38,6 @@ from egglog.declarations import REFLECTED_BINARY_METHODS, Declarations
 from . import bindings
 from .declarations import *
 from .ipython_magic import IN_IPYTHON
-from .monkeypatch import monkeypatch_forward_ref
 from .runtime import *
 from .runtime import _resolve_callable, class_to_ref
 
@@ -46,7 +46,6 @@ if TYPE_CHECKING:
 
     from .builtins import PyObject, String
 
-monkeypatch_forward_ref()
 
 __all__ = [
     "EGraph",
@@ -119,7 +118,7 @@ class _BaseModule(ABC):
     """
 
     # Any modules you want to depend on
-    modules: InitVar[list[Module]] = []
+    modules: InitVar[list[Module]] = []  # noqa: RUF008
     # All dependencies flattened
     _flatted_deps: list[Module] = field(init=False, default_factory=list)
     _mod_decls: ModuleDeclarations = field(init=False)
@@ -164,7 +163,7 @@ class _BaseModule(ABC):
         assert len(args) == 1
         return self._class(args[0], prev_frame.f_locals, prev_frame.f_globals)
 
-    def _class(
+    def _class(  # noqa: PLR0912
         self,
         cls: type[Expr],
         hint_locals: dict[str, Any],
@@ -285,7 +284,7 @@ class _BaseModule(ABC):
     # It will break the typing.
 
     @overload
-    def method(  # type: ignore
+    def method(
         self,
         *,
         egg_fn: str | None = None,
@@ -332,7 +331,7 @@ class _BaseModule(ABC):
         ...
 
     @overload
-    def function(  # type: ignore
+    def function(
         self,
         *,
         egg_fn: str | None = None,
@@ -362,7 +361,7 @@ class _BaseModule(ABC):
         """
         Registers a function.
         """
-        fn_locals = currentframe().f_back.f_locals  # type: ignore
+        fn_locals = currentframe().f_back.f_locals  # type: ignore[union-attr]
 
         # If we have any positional args, then we are calling it directly on a function
         if args:
@@ -403,11 +402,11 @@ class _BaseModule(ABC):
         # Return a runtime function which will act like the decleration
         return RuntimeFunction(self._mod_decls, name)
 
-    def _register_function(
+    def _register_function(  # noqa: C901, PLR0912
         self,
         ref: FunctionCallableRef,
         egg_name: str | None,
-        fn: Any,
+        fn: object,
         # Pass in the locals, retrieved from the frame when wrapping,
         # so that we support classes and function defined inside of other functions (which won't show up in the globals)
         hint_locals: dict[str, Any],
@@ -542,15 +541,10 @@ class _BaseModule(ABC):
             return TypeRefWithVars(cls_type_and_name[1])
 
         # If this is the class for this method and we have a paramaterized class, recurse
-        if (
-            cls_type_and_name and isinstance(tp, _GenericAlias) and tp.__origin__ == cls_type_and_name[0]  # type: ignore
-        ):
+        if cls_type_and_name and isinstance(tp, _GenericAlias) and tp.__origin__ == cls_type_and_name[0]:
             return TypeRefWithVars(
                 cls_type_and_name[1],
-                tuple(
-                    self._resolve_type_annotation(a, cls_typevars, cls_type_and_name)
-                    for a in tp.__args__  # type: ignore
-                ),
+                tuple(self._resolve_type_annotation(a, cls_typevars, cls_type_and_name) for a in tp.__args__),
             )
 
         if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
@@ -798,7 +792,7 @@ class EGraph(_BaseModule):
     _decl_stack: list[Declarations] = field(default_factory=list, repr=False)
     _token_stack: list[Token[EGraph]] = field(default_factory=list, repr=False)
 
-    def __post_init__(self, modules: list[Module], seminaive: bool) -> None:  # type: ignore
+    def __post_init__(self, modules: list[Module], seminaive: bool) -> None:
         super().__post_init__(modules)
         self._egraph = bindings.EGraph(seminaive=seminaive)
         for m in self._flatted_deps:
@@ -850,14 +844,15 @@ class EGraph(_BaseModule):
 
     def _repr_html_(self) -> str:
         """
-        Add a _repr_html_ to be an SVG to work with sphinx gallery
+        Add a _repr_html_ to be an SVG to work with sphinx gallery.
+
         ala https://github.com/xflr6/graphviz/pull/121
         until this PR is merged and released
         https://github.com/sphinx-gallery/sphinx-gallery/pull/1138
         """
         return self.graphviz_svg()
 
-    def display(self, **kwargs: Unpack[GraphvizKwargs]):
+    def display(self, **kwargs: Unpack[GraphvizKwargs]) -> None:
         """
         Displays the e-graph in the notebook.
         """
@@ -891,7 +886,7 @@ class EGraph(_BaseModule):
         extract_report = self._egraph.extract_report()
         if not isinstance(extract_report, bindings.Best):
             msg = "No extract report saved"
-            raise ValueError(msg)
+            raise ValueError(msg)  # noqa: TRY004
         new_typed_expr = TypedExprDecl.from_egg(
             self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
@@ -902,9 +897,7 @@ class EGraph(_BaseModule):
         Include a file of rules.
         """
         msg = "Not implemented yet, because we don't have a way of registering the types with Python"
-        raise NotImplementedError(
-            msg
-        )
+        raise NotImplementedError(msg)
 
     def output(self) -> None:
         msg = "Not imeplemented yet, because there are no examples in the egglog repo"
@@ -961,7 +954,7 @@ class EGraph(_BaseModule):
         extract_report = self._run_extract(egg_expr, 0)
         if not isinstance(extract_report, bindings.Best):
             msg = "No extract report saved"
-            raise ValueError(msg)
+            raise ValueError(msg)  # noqa: TRY004
         new_typed_expr = TypedExprDecl.from_egg(
             self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
@@ -978,7 +971,7 @@ class EGraph(_BaseModule):
         extract_report = self._run_extract(egg_expr, n)
         if not isinstance(extract_report, bindings.Variants):
             msg = "Wrong extract report type"
-            raise ValueError(msg)
+            raise ValueError(msg)  # noqa: TRY004
         new_exprs = [
             TypedExprDecl.from_egg(self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, term))
             for term in extract_report.terms
@@ -1008,7 +1001,7 @@ class EGraph(_BaseModule):
         self._process_commands([bindings.Pop(1)])
         self._mod_decls._decl = self._decl_stack.pop()
 
-    def __enter__(self) -> EGraph:
+    def __enter__(self) -> Self:
         """
         Copy the egraph state, so that it can be reverted back to the original state at the end.
 
@@ -1018,7 +1011,7 @@ class EGraph(_BaseModule):
         self.push()
         return self
 
-    def __exit__(self, exc_type, exc, exc_tb):
+    def __exit__(self, exc_type, exc, exc_tb) -> None:  # noqa: ANN001
         CURRENT_EGRAPH.reset(self._token_stack.pop())
         self.pop()
 
@@ -1040,8 +1033,7 @@ class EGraph(_BaseModule):
 
     def eval_fn(self, fn: Callable) -> PyObjectFunction:
         """
-        Takes a python callable and maps it to a callable which takes
-        and returns PyObjects.
+        Takes a python callable and maps it to a callable which takes and returns PyObjects.
 
         It translates it to a call which uses `py_eval` to call the function, passing in the
         args as locals, and using the globals from function.
@@ -1051,7 +1043,7 @@ class EGraph(_BaseModule):
         fn_globals = self.save_object(fn.__globals__)
         fn_locals = self.save_object({"__fn": fn})
 
-        def inner(*__args: PyObject, __fn_locals=fn_locals) -> PyObject:
+        def inner(*__args: PyObject, __fn_locals: PyObject = fn_locals) -> PyObject:
             new_kvs: list[PyObject] = []
             eval_str = "__fn("
             for i, arg in enumerate(__args):
@@ -1059,11 +1051,13 @@ class EGraph(_BaseModule):
                 new_kvs.append(arg)
                 eval_str += f"__arg_{i}, "
             eval_str += ")"
-            return py_eval(eval_str, fn_locals.dict_update(*new_kvs), fn_globals)
+            return py_eval(eval_str, __fn_locals.dict_update(*new_kvs), fn_globals)
 
         return inner
 
-    def saturate(self, *, max=1000, performance=False, **kwargs: Unpack[GraphvizKwargs]) -> ipywidgets.Widget:
+    def saturate(
+        self, *, max: int = 1000, performance: bool = False, **kwargs: Unpack[GraphvizKwargs]
+    ) -> ipywidgets.Widget:
         from .graphviz_widget import graphviz_widget_with_slider
 
         dots = [str(self.graphviz(**kwargs))]
@@ -1073,7 +1067,9 @@ class EGraph(_BaseModule):
             dots.append(str(self.graphviz(**kwargs)))
         return graphviz_widget_with_slider(dots, performance=performance)
 
-    def saturate_to_html(self, file="tmp.html", performance=False, **kwargs: Unpack[GraphvizKwargs]) -> None:
+    def saturate_to_html(
+        self, file: str = "tmp.html", performance: bool = False, **kwargs: Unpack[GraphvizKwargs]
+    ) -> None:
         # raise NotImplementedError("Upstream bugs prevent rendering to HTML")
 
         # import panel
@@ -1123,11 +1119,12 @@ class _WrappedMethod(Generic[P, EXPR]):
 
 class _ExprMetaclass(type):
     """
-    Metaclass of Expr, used to override isistance checks, so that runtime expressions are instances
-    of Expr at runtime.
+    Metaclass of Expr.
+
+    Used to override isistance checks, so that runtime expressions are instances of Expr at runtime.
     """
 
-    def __instancecheck__(self, instance: object) -> bool:
+    def __instancecheck__(cls, instance: object) -> bool:
         return isinstance(instance, RuntimeExpr)
 
 
@@ -1148,8 +1145,9 @@ class Expr(metaclass=_ExprMetaclass):
 
     def __eq__(self, other: NoReturn) -> NoReturn:  # type: ignore[override, empty-body]
         """
-        Equality is currently not supported. We only add this method so that
-        if you try to use it MyPy will warn you.
+        Equality is currently not supported.
+
+        We only add this method so that if you try to use it MyPy will warn you.
         """
         ...
 
@@ -1315,7 +1313,7 @@ class Set(Action):
     def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Set:
         egg_call = self._call.__egg_typed_expr__.expr.to_egg(mod_decls)
         if not isinstance(egg_call, bindings.Call):
-            raise ValueError(f"Can only create a set with a call for the lhs, got {self._call}")
+            raise ValueError(f"Can only create a set with a call for the lhs, got {self._call}")  # noqa: TRY004
         return bindings.Set(
             egg_call.name,
             egg_call.args,
@@ -1344,12 +1342,12 @@ class Delete(Action):
     def _to_egg_action(self, mod_decls: ModuleDeclarations) -> bindings.Delete:
         egg_call = self._call.__egg_typed_expr__.expr.to_egg(mod_decls)
         if not isinstance(egg_call, bindings.Call):
-            raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")
+            raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")  # noqa: TRY004
         return bindings.Delete(egg_call.name, egg_call.args)
 
 
 @dataclass
-class Union_(Action):
+class Union_(Action):  # noqa: N801
     _lhs: RuntimeExpr
     _rhs: RuntimeExpr
 
@@ -1518,7 +1516,7 @@ def var(name: str, bound: type[EXPR]) -> EXPR:
     return cast(EXPR, _var(name, bound))
 
 
-def _var(name: str, bound: Any) -> RuntimeExpr:
+def _var(name: str, bound: object) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
     if not isinstance(bound, RuntimeClass | RuntimeParamaterizedClass):
         raise TypeError(f"Unexpected type {type(bound)}")
@@ -1637,7 +1635,7 @@ def seq(*schedules: Schedule) -> Schedule:
     return Sequence(tuple(schedules))
 
 
-CommandLike = Union[Command, Expr]
+CommandLike = Command | Expr
 
 
 def _command_like(command_like: CommandLike) -> Command:
@@ -1666,7 +1664,7 @@ def _command_generator(gen: CommandGenerator) -> Iterable[Command]:
     return gen(*args)
 
 
-ActionLike = Union[Action, Expr]
+ActionLike = Action | Expr
 
 
 def _action_likes(action_likes: Iterable[ActionLike]) -> tuple[Action, ...]:
@@ -1679,7 +1677,7 @@ def _action_like(action_like: ActionLike) -> Action:
     return action_like
 
 
-FactLike = Union[Fact, Expr]
+FactLike = Fact | Expr
 
 
 def _fact_likes(fact_likes: Iterable[FactLike]) -> tuple[Fact, ...]:

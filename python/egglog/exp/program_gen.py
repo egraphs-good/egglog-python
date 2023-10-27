@@ -85,7 +85,7 @@ class Program(Expr):
         Triggers compilation of the program.
         """
 
-    @program_gen_module.method(merge=lambda old, new: old, unextractable=True)  # type: ignore[misc]
+    @program_gen_module.method(merge=lambda old, _new: old, unextractable=True)  # type: ignore[misc]
     @property
     def parent(self) -> Program:
         """
@@ -102,7 +102,7 @@ class Program(Expr):
         """
 
     # Only allow it to be set once, b/c hash of functions not stable
-    @program_gen_module.method(merge=lambda old, new: old)  # type: ignore[misc]
+    @program_gen_module.method(merge=lambda old, _new: old)  # type: ignore[misc]
     @property
     def py_object(self) -> PyObject:
         """

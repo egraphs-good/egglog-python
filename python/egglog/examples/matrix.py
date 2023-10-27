@@ -172,7 +172,6 @@ egraph.check(eq(B.nrows()).to(m))
 egraph.check(eq(kron(Matrix.identity(n), B).nrows()).to(n * m))
 
 # Verify it matches the expected result
-# TODO
 simple_ex1 = egraph.let("simple_ex1", kron(A, B))
 egraph.check(eq(ex1).to(simple_ex1))
 
