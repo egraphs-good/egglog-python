@@ -536,9 +536,7 @@ class _BaseModule(ABC):
 
         # If this is the class for this method and we have a paramaterized class, recurse
         if (
-            cls_type_and_name
-            and isinstance(tp, _GenericAlias)
-            and tp.__origin__ == cls_type_and_name[0]  # type: ignore
+            cls_type_and_name and isinstance(tp, _GenericAlias) and tp.__origin__ == cls_type_and_name[0]  # type: ignore
         ):
             return TypeRefWithVars(
                 cls_type_and_name[1],

@@ -48,8 +48,6 @@ docs = [
 ]
 
 [tool.ruff]
-# Allow lines to be as long as 120.
-line-length = 120
 ignore = [
     # allow star imports
     "F405",
@@ -61,6 +59,30 @@ ignore = [
     # Allow single line docstrings on multiple lines
     "D200",
     "D212",
+    # Allow shadoing builtins
+    "A003",
+    "A002",
+    # Allow Unused args
+    "ARG001",
+    "ARG002",
+    # Allow TODOs
+    "TD002",
+    "TD003",
+    "FIX002",
+    # Allow commented out code
+    "ARG001",
+    "ERA001",
+    # Allow boolean positional args
+    "FBT003",
+    # Allow no type annotations for private functions
+    "ANN202",
+    # Allow short var names
+    "E741",
+    # Allow docstring to not end with period
+    "D400",
+    "D415",
+    # Allow asserts
+    "S101",
     # Inconsistant formatting
     "D203",
     "COM812",
@@ -73,6 +95,7 @@ ignore = [
     "W191",
     "Q000",
     "D206",
+
     # TODO: Remove the rest of these eventually
     # Allow public methods to not have docstrings
     "D102",
@@ -80,10 +103,27 @@ ignore = [
     "TRY003",
     # Allow f-string in exceptions
     "EM102",
+    # No docstrings for public module
+    "D100",
+    # docstring public class
+    "D101",
+    # Docstring init
+    "D107",
+    # Docstring public function
+    "D103",
+    # docstring magic method
+    "D105",
+    # Allow lots of args for functions
+    "PLR0913",
+    # Allow non imperative docstrings
+    "D401",
 ]
+line-length = 120
+# Allow lines to be as long as 120.
 src = ["python"]
 select = ["ALL"]
 extend-exclude = ["python/tests"]
+unsafe-fixes = true
 
 [tool.mypy]
 ignore_missing_imports = true
