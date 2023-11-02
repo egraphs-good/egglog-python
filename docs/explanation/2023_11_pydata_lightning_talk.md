@@ -190,6 +190,11 @@ _ = sns.catplot(data=df_melt, x="function", y="time", kind="swarm")
 - `egglog` is a Python interface to e-graphs, which respects the underlying semantics but provides a Python interface.
 - Flexible enough to represent Array API and translate this back to Python source
 - If you have a Python library which optimizes/translates expressions, try it out!
-- Goal: support the ecosystem in collaborating better between libraries, to encourage experimentation and innovation, connection to academic computer science community.
+- Goals
 
-`pip install egglog`
+  - support the ecosystem in collaborating better between libraries, to encourage experimentation and innovation
+  - dont reimplement the world: build on academic programming language research
+
+- `pip install egglog`
+- https://github.com/metadsl/egglog-python
+- Say hello: https://egraphs.zulipchat.com/
