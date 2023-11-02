@@ -133,10 +133,23 @@ rewrite(
 
 +++ {"slideshow": {"slide_type": "slide"}}
 
+We can see the optimized expr:
+
 ```{code-cell} python
-# See generated code
+optimized_fn.expr
+```
+
+And the generated code:
+
+```{code-cell} python
 import inspect
 print(inspect.getsource(optimized_fn))
+```
+
+As well as the e-graph:
+
+```{code-cell} python
+optimized_fn.egraph
 ```
 
 +++ {"slideshow": {"slide_type": "slide"}}
