@@ -25,11 +25,10 @@ def graphviz_widget_with_slider(dots: list[str], *, performance: bool = False) -
     graphviz_widget = GraphvizWidget()
     graphviz_widget.dots = dots
     graphviz_widget.performance = performance
-    slider_widget = ipywidgets.IntSlider(
-        max=n_dots - 1,
-        value=n_dots - 1,
-    )
+    slider_widget = ipywidgets.IntSlider(max=n_dots - 1, value=0)
     ipywidgets.jslink((slider_widget, "value"), (graphviz_widget, "index"))
-    play_widget = ipywidgets.Play(max=n_dots - 1, repeat=True, interval=4000)
-    ipywidgets.jslink((slider_widget, "value"), (play_widget, "value"))
-    return ipywidgets.VBox([ipywidgets.HBox([play_widget, slider_widget]), graphviz_widget])
+    # play_widget = ipywidgets.Play(max=n_dots - 1, repeat=True, interval=4000)
+    # ipywidgets.jslink((slider_widget, "value"), (play_widget, "value"))
+    # top = pywidgets.HBox([play_widget, slider_widget])
+    top = slider_widget
+    return ipywidgets.VBox([top, graphviz_widget])
