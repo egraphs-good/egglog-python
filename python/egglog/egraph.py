@@ -809,6 +809,8 @@ class EGraph(_BaseModule):
         return {"image/svg+xml": self.graphviz().pipe(format="svg", quiet=True, encoding="utf-8")}
 
     def graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
+        # By default we want to split primitive outputs
+        kwargs.setdefault("split_primitive_outputs", True)
         original = self._egraph.to_graphviz_string(**kwargs)
         # Add link to stylesheet to the graph, so that edges light up on hover
         # https://gist.github.com/sverweij/93e324f67310f66a8f5da5c2abe94682
