@@ -173,6 +173,14 @@ class i64(Expr):  # noqa: N801
     def __gt__(self, other: i64Like) -> Unit:
         ...
 
+    @BUILTINS.method(egg_fn="<=")
+    def __le__(self, other: i64Like) -> Unit:  # type: ignore[empty-body,has-type]
+        ...
+
+    @BUILTINS.method(egg_fn=">=")
+    def __ge__(self, other: i64Like) -> Unit:
+        ...
+
     @BUILTINS.method(egg_fn="min")
     def min(self, other: i64Like) -> i64:
         ...

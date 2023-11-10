@@ -45,6 +45,7 @@ docs = [
     "seaborn",
     "egglog[array]",
     "line-profiler",
+    "sphinxcontrib-mermaid",
 ]
 
 [tool.ruff]

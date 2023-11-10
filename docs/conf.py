@@ -2,6 +2,13 @@ import pathlib  # noqa: INP001
 import subprocess
 
 ##
+# Myst
+##
+
+myst_enable_extensions = ["attrs_inline", "smartquotes", "strikethrough", "html_image"]
+myst_fence_as_directive = ["mermaid"]
+
+##
 # Built presentation in sphinx
 ##
 
@@ -32,6 +39,7 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx_autodoc_typehints",
     "sphinx_gallery.gen_gallery",
+    "sphinxcontrib.mermaid",
 ]
 
 
