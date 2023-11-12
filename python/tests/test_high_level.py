@@ -90,7 +90,6 @@ def test_fib():
     egraph.check(eq(fib(i64(7))).to(i64(21)))
 
 
-@pytest.mark.xfail
 def test_fib_demand():
     egraph = EGraph()
 
@@ -102,18 +101,30 @@ def test_fib_demand():
         def __add__(self, other: Num) -> Num:
             ...
 
-    @egraph.function
+    @egraph.function(cost=20)
     def fib(x: i64Like) -> Num:
         ...
 
-    a, b, x = vars_("a b x", i64)
-    f = var("f", Num)
-    egraph.register(
-        rewrite(Num(a) + Num(b)).to(Num(a + b)),
-        rule(eq(f).to(fib(x)), x > 1).then(set_(fib(x)).to(fib(x - 1) + fib(x - 2))),
-        set_(fib(0)).to(Num(0)),
-        set_(fib(1)).to(Num(1)),
-    )
+    @egraph.register
+    def _fib(a: i64, b: i64):
+        yield rewrite(
+            Num(a) + Num(b)
+        ).to(
+            Num(a + b)
+        )
+        yield rewrite(
+            fib(a)
+        ).to(
+            fib(a - 1) + fib(a - 2),
+            a > 1
+        )
+        yield rewrite(
+            fib(a)
+        ).to(
+            Num(a),
+            a <= 1
+        )
+
     f7 = egraph.let("f7", fib(7))
     egraph.run(14)
     egraph.check(eq(f7).to(Num(13)))
