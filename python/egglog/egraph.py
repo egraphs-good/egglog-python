@@ -53,6 +53,7 @@ __all__ = [
     "Expr",
     "Unit",
     "rewrite",
+    "birewrite",
     "eq",
     "panic",
     "let",
