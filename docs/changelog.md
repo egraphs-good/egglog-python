@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## Unreleased
 
+- Fixes not exposing `birewrite` at top level (#72)[https://github.com/metadsl/egglog-python/pull/72].
+
 ## 1.0.1 (2023-10-26)
 
 - Adds youtube video to [presentation slides](./explanation/2023_07_presentation).
