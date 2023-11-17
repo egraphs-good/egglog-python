@@ -20,19 +20,32 @@ impl EggSmolError {
 // and so return it from each function automatically
 // https://pyo3.rs/latest/function/error_handling.html#foreign-rust-error-types
 // TODO: Create classes for each of these errors
-pub struct WrappedError(egglog::Error);
+pub enum WrappedError {
+    Egglog(egglog::Error),
+    Py(PyErr),
+}
 
 // Convert from the WrappedError to the PyErr by creating a new Python error
 impl From<WrappedError> for PyErr {
     fn from(error: WrappedError) -> Self {
-        PyErr::new::<EggSmolError, _>(error.0.to_string())
+        match error {
+            WrappedError::Egglog(error) => PyErr::new::<EggSmolError, _>(error.to_string()),
+            WrappedError::Py(error) => error,
+        }
     }
 }
 
 // Convert from an egglog::Error to a WrappedError
 impl From<egglog::Error> for WrappedError {
     fn from(other: egglog::Error) -> Self {
-        Self(other)
+        Self::Egglog(other)
+    }
+}
+
+// Convert from a PyErr to a WrappedError
+impl From<PyErr> for WrappedError {
+    fn from(other: PyErr) -> Self {
+        Self::Py(other)
     }
 }
 

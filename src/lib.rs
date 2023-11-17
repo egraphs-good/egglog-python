@@ -19,6 +19,7 @@ fn termdag_term_to_expr(termdag: &TermDag, term: Term) -> Expr {
 fn bindings(_py: Python, m: &PyModule) -> PyResult<()> {
     pyo3_log::init();
 
+    m.add_class::<crate::py_object_sort::ArcPyObjectSort>()?;
     m.add_class::<crate::egraph::EGraph>()?;
     m.add_class::<crate::error::EggSmolError>()?;
     m.add("HIGH_COST", egglog::HIGH_COST)?;

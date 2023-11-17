@@ -317,6 +317,7 @@ dependencies = [
  "egglog",
  "lalrpop-util 0.19.12",
  "log",
+ "num-rational",
  "ordered-float",
  "pyo3",
  "pyo3-log",
