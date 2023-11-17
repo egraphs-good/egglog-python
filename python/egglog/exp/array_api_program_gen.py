@@ -92,7 +92,7 @@ def _ndarray_function_two(f: Program, res: NDArray, l: NDArray, r: NDArray, o: P
     # When we have function, set the program and trigger it to be compiled
     yield rule(eq(f).to(ndarray_function_two(res, l, r))).then(
         union(f).with_(ndarray_program(res).function_two(ndarray_program(l), ndarray_program(r))),
-        f.eval_py_object(array_api_module_string.save_object({"np": np})),
+        f.eval_py_object({"np": np}),
     )
 
 

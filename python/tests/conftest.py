@@ -1,12 +1,12 @@
 import copy
 
-import egglog.runtime
 import pytest
 from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
 
 @pytest.fixture(autouse=True)
 def reset_conversions():
+    import egglog.runtime
     old_conversions = copy.copy(egglog.runtime.CONVERSIONS)
     yield
     egglog.runtime.CONVERSIONS = old_conversions

@@ -96,7 +96,7 @@ class Program(Expr):
         ...
 
     @program_gen_module.method(default=Unit())
-    def eval_py_object(self, globals: PyObject) -> Unit:
+    def eval_py_object(self, globals: object) -> Unit:
         """
         Evaluates the program and saves as the py_object
         """

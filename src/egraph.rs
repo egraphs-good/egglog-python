@@ -2,12 +2,14 @@
 
 use crate::conversions::*;
 use crate::error::EggResult;
-use crate::py_object_sort::PyObjectSort;
+use crate::py_object_sort::{ArcPyObjectSort, MyPyObject, PyObjectSort};
 
-use egglog::sort::Sort;
+use egglog::sort::{BoolSort, F64Sort, FromSort as _, I64Sort, RationalSort, StringSort};
 use egglog::SerializeConfig;
 use log::info;
-use pyo3::{prelude::*, PyTraverseError, PyVisit};
+use pyo3::prelude::*;
+use std::any::Any;
+use std::borrow::BorrowMut;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,26 +19,35 @@ use std::sync::Arc;
 /// Create an empty EGraph.
 #[pyclass(
     unsendable,
-    text_signature = "(*, fact_directory=None, seminaive=True, terms_encoding=False)"
+    text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, terms_encoding=False)"
 )]
 pub struct EGraph {
     egraph: egglog::EGraph,
-    py_object_arcsort: Arc<PyObjectSort>,
+    py_object_arcsort: Option<Arc<PyObjectSort>>,
 }
 
 #[pymethods]
 impl EGraph {
     #[new]
-    #[pyo3(signature = (*, fact_directory=None, seminaive=true, terms_encoding=false))]
-    fn new(fact_directory: Option<PathBuf>, seminaive: bool, terms_encoding: bool) -> Self {
+    #[pyo3(signature = (py_object_sort=None, *, fact_directory=None, seminaive=true, terms_encoding=false))]
+    fn new(
+        py_object_sort: Option<ArcPyObjectSort>,
+        fact_directory: Option<PathBuf>,
+        seminaive: bool,
+        terms_encoding: bool,
+    ) -> Self {
         let mut egraph = egglog::EGraph::default();
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
         if terms_encoding {
             egraph.enable_terms_encoding();
         }
-        let py_object_arcsort = Arc::new(PyObjectSort::new("PyObject".into()));
-        egraph.add_arcsort(py_object_arcsort.clone()).unwrap();
+        let py_object_arcsort = if let Some(py_object_sort) = py_object_sort {
+            egraph.add_arcsort(py_object_sort.0.clone()).unwrap();
+            Some(py_object_sort.0)
+        } else {
+            None
+        };
         Self {
             egraph,
             py_object_arcsort,
@@ -111,43 +122,76 @@ impl EGraph {
         serialized.to_dot()
     }
 
-    /// Register a Python object with the EGraph and return the Expr which represents it.
-    #[pyo3(signature = (obj, /))]
-    fn save_object(&mut self, obj: PyObject) -> EggResult<Expr> {
-        info!("Adding Python object {:?}", obj);
-        let value = self.py_object_arcsort.store(obj);
-        let expr = self.py_object_arcsort.make_expr(&self.egraph, value).1;
-        Ok(expr.into())
-    }
-
-    /// Retrieve a Python object from the EGraph.
+    /// Evaluates an expression in the EGraph and returns the result as a Python object.
     #[pyo3(signature = (expr, /))]
-    fn load_object(&mut self, expr: Expr) -> EggResult<PyObject> {
-        let expr: egglog::ast::Expr = expr.into();
-        info!("Loading Python object {:?}", expr);
-        let (_, value) =
-            self.egraph
-                .eval_expr(&expr, Some(self.py_object_arcsort.clone()), false)?;
-        let (_, obj) = self.py_object_arcsort.load(&value);
-        Ok(obj)
+    fn eval_py_object(&mut self, expr: Expr) -> EggResult<MyPyObject> {
+        self.eval_sort(expr, self.py_object_arcsort.clone().unwrap())
+    }
+    #[pyo3(signature = (expr, /))]
+    fn eval_i64(&mut self, expr: Expr) -> EggResult<i64> {
+        self.eval_sort(expr, Arc::new(I64Sort::new("i64".into())))
     }
 
-    // Integrate with Python garbage collector
-    // https://pyo3.rs/main/class/protocols#garbage-collector-integration
+    #[pyo3(signature = (expr, /))]
+    fn eval_f64(&mut self, expr: Expr) -> EggResult<f64> {
+        self.eval_sort(expr, Arc::new(F64Sort::new("f64".into())))
+    }
 
-    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.py_object_arcsort
-            .objects
-            .lock()
+    #[pyo3(signature = (expr, /))]
+    fn eval_string(&mut self, expr: Expr) -> EggResult<String> {
+        let s: egglog::ast::Symbol =
+            self.eval_sort(expr, Arc::new(StringSort::new("String".into())))?;
+        Ok(s.to_string())
+    }
+
+    #[pyo3(signature = (expr, /))]
+    fn eval_bool(&mut self, expr: Expr) -> EggResult<bool> {
+        self.eval_sort(expr, Arc::new(BoolSort::new("bool".into())))
+    }
+
+    #[pyo3(signature = (expr, /))]
+    fn eval_rational(&mut self, py: Python<'_>, expr: Expr) -> EggResult<PyObject> {
+        // Need to get actual sort for rational, this hack doesnt work.
+        // todo!();
+        // For rational we need the actual sort on the e-graph, because it contains state
+        // There isn't a public way to get a sort right now, so until there is, we use a hack where we create
+        // a dummy expression of that sort, and use eval_expr to get the sort
+        let one = egglog::ast::Expr::Lit(egglog::ast::Literal::Int(1));
+        let arcsort = self
+            .egraph
+            .eval_expr(
+                &egglog::ast::Expr::Call("rational".into(), vec![one.clone(), one]),
+                None,
+                false,
+            )
             .unwrap()
-            .values()
-            .try_for_each(|obj| {
-                visit.call(obj)?;
-                Ok(())
-            })
-    }
+            .0;
+        let expr: egglog::ast::Expr = expr.into();
+        let (_, value) = self.egraph.eval_expr(&expr, Some(arcsort.clone()), false)?;
+        // Need to get actual sort for rational, this hack doesnt work.
+        todo!();
+        // let r = num_rational::Rational64::load(&arcsort, &value);
 
-    fn __clear__(&mut self) {
-        self.py_object_arcsort.objects.lock().unwrap().clear();
+        // // let r: num_rational::Rational64 =
+        // //     self.eval_sort(expr, Arc::downcast::<RationalSort>(arcsort).unwrap())?;
+        // let frac = py.import("fractions")?;
+        // let f = frac.call_method(
+        //     "Fraction",
+        //     (r.numer().into_py(py), r.denom().into_py(py)),
+        //     None,
+        // )?;
+        // Ok(f.into())
+    }
+}
+
+impl EGraph {
+    fn eval_sort<T: egglog::sort::Sort, V: egglog::sort::FromSort<Sort = T>>(
+        &mut self,
+        expr: Expr,
+        arcsort: Arc<T>,
+    ) -> EggResult<V> {
+        let expr: egglog::ast::Expr = expr.into();
+        let (_, value) = self.egraph.eval_expr(&expr, Some(arcsort.clone()), false)?;
+        Ok(V::load(&arcsort, &value))
     }
 }

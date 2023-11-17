@@ -17,6 +17,7 @@ from . import bindings
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
+
 __all__ = [
     "Declarations",
     "ModuleDeclarations",
@@ -35,13 +36,20 @@ __all__ = [
     "FunctionDecl",
     "VarDecl",
     "LitType",
+    "PyObjectDecl",
     "LitDecl",
     "CallDecl",
     "ExprDecl",
     "TypedExprDecl",
     "ClassDecl",
     "PrettyContext",
+    "GLOBAL_PY_OBJECT_SORT",
 ]
+
+# Create a global sort for python objects, so we can store them without an e-graph instance
+# Needed when serializing commands to egg commands when creating modules
+GLOBAL_PY_OBJECT_SORT = bindings.PyObjectSort()
+
 # Special methods which we might want to use as functions
 # Mapping to the operator they represent for pretty printing them
 # https://docs.python.org/3/reference/datamodel.html
@@ -570,6 +578,28 @@ class VarDecl:
         return self.name
 
 
+@dataclass(frozen=True)
+class PyObjectDecl:
+    value: object
+
+    def __hash__(self) -> int:
+        """Tries using the hash of the value, if unhashable use the ID."""
+        try:
+            return hash((type(self.value), self.value))
+        except TypeError:
+            return id(self.value)
+
+    @classmethod
+    def from_egg(cls, egraph: bindings.EGraph, call: bindings.Call) -> TypedExprDecl:
+        return TypedExprDecl(JustTypeRef("PyObject"), cls(egraph.eval_py_object(call)))
+
+    def to_egg(self, _decls: ModuleDeclarations) -> bindings._Expr:
+        return GLOBAL_PY_OBJECT_SORT.store(self.value)
+
+    def pretty(self, context: PrettyContext, **kwargs) -> str:
+        return repr(self.value)
+
+
 LitType: TypeAlias = int | str | float | bool | None
 
 
@@ -654,10 +684,10 @@ class CallDecl:
         return hash(self) == hash(other)
 
     @classmethod
-    def from_egg(cls, mod_decls: ModuleDeclarations, call: bindings.Call) -> TypedExprDecl:
+    def from_egg(cls, egraph: bindings.EGraph, mod_decls: ModuleDeclarations, call: bindings.Call) -> TypedExprDecl:
         from .type_constraint_solver import TypeConstraintSolver
 
-        results = tuple(TypedExprDecl.from_egg(mod_decls, a) for a in call.args)
+        results = tuple(TypedExprDecl.from_egg(egraph, mod_decls, a) for a in call.args)
         arg_types = tuple(r.tp for r in results)
 
         # Find the first callable ref that matches the call
@@ -895,7 +925,7 @@ def test_delitem_pretty():
 
 # TODO: Multiple mutations,
 
-ExprDecl: TypeAlias = VarDecl | LitDecl | CallDecl
+ExprDecl: TypeAlias = VarDecl | LitDecl | CallDecl | PyObjectDecl
 
 
 @dataclass(frozen=True)
@@ -904,13 +934,15 @@ class TypedExprDecl:
     expr: ExprDecl
 
     @classmethod
-    def from_egg(cls, mod_decls: ModuleDeclarations, expr: bindings._Expr) -> TypedExprDecl:
+    def from_egg(cls, egraph: bindings.EGraph, mod_decls: ModuleDeclarations, expr: bindings._Expr) -> TypedExprDecl:
         if isinstance(expr, bindings.Var):
             return VarDecl.from_egg(expr)
         if isinstance(expr, bindings.Lit):
             return LitDecl.from_egg(expr)
         if isinstance(expr, bindings.Call):
-            return CallDecl.from_egg(mod_decls, expr)
+            if expr.name == "py-object":
+                return PyObjectDecl.from_egg(egraph, expr)
+            return CallDecl.from_egg(egraph, mod_decls, expr)
         assert_never(expr)
 
     def to_egg(self, decls: ModuleDeclarations) -> bindings._Expr:

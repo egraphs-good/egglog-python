@@ -286,52 +286,34 @@ def test_default_args():
 
 class TestPyObject:
     def test_from_string(self):
-        egraph = EGraph()
-        res = egraph.simplify(PyObject.from_string("foo"), 1)
-        assert egraph.load_object(res) == "foo"
+        assert EGraph().eval(PyObject.from_string("foo")) == "foo"
 
     def test_to_string(self):
-        egraph = EGraph()
-        s = egraph.save_object("foo")
-        res = egraph.simplify(s.to_string(), 1)
-        assert expr_parts(res) == expr_parts(String("foo"))
+        assert EGraph().eval(PyObject("foo").to_string()) == "foo"
 
     def test_dict_update(self):
-        egraphs = EGraph()
         original_d = {"foo": "bar"}
-        obj = egraphs.save_object(original_d)
-        res = obj.dict_update(PyObject.from_string("foo"), PyObject.from_string("baz"))
-        simplified = egraphs.simplify(res, 1)
-        assert egraphs.load_object(simplified) == {"foo": "baz"}
+        res = EGraph().eval(PyObject(original_d).dict_update("foo", "baz"))
+        assert res == {"foo": "baz"}
         assert original_d == {"foo": "bar"}
 
     def test_eval(self):
-        egraph = EGraph()
-        x, y = 10, 20
-        res = py_eval("x + y", egraph.save_object({"x": x, "y": y}), egraph.save_object({}))
-        res_simpl = egraph.simplify(res, 1)
-        assert egraph.load_object(res_simpl) == 30
+        assert EGraph().eval(py_eval("x + y", {"x": 10, "y": 20}, {})) == 30
 
     def test_eval_local(self):
-        egraph = EGraph()
         x = "hi"
         res = py_eval(
             "my_add(x, y)",
-            egraph.save_object(locals()).dict_update(PyObject.from_string("y"), PyObject.from_string("there")),
-            egraph.save_object(globals()),
+            PyObject(locals()).dict_update("y", "there"),
+            globals()
         )
-        res_simpl = egraph.simplify(res, 1)
-        assert egraph.load_object(res_simpl) == "hithere"
+        assert EGraph().eval(res) == "hithere"
 
     def test_exec(self):
-        egraph = EGraph()
-        res = egraph.simplify(py_exec("x = 10"), 1)
-        assert egraph.load_object(res) == {"x": 10}
+        assert EGraph().eval(py_exec("x = 10")) == {"x": 10}
 
     def test_exec_globals(self):
-        egraph = EGraph()
-        res = egraph.simplify(py_exec("x = y + 1", egraph.save_object({"y": 10})), 1)
-        assert egraph.load_object(res) == {"x": 11}
+        assert EGraph().eval(py_exec("x = y + 1", {"y": 10})) == {"x": 11}
 
 
 def my_add(a, b):
@@ -526,3 +508,12 @@ def test_upcast_self_lower_cost():
 
     r = Int("x") + NDArray("y")
     assert expr_parts(r) == expr_parts(NDArray.from_int(Int("x")) + NDArray("y"))
+
+
+def test_eval():
+    egraph = EGraph()
+    assert egraph.eval(String("hi")) == "hi"
+    assert egraph.eval(i64(10)) == 10
+    assert egraph.eval(f64(10.0)) == 10.0
+    assert egraph.eval(Bool(True)) is True
+    assert egraph.eval(PyObject((1, 2))) == (1, 2)

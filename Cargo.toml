@@ -18,6 +18,8 @@ log = "0.4.17"
 lalrpop-util = { version = "0.19.8", features = ["lexer"] }
 ordered-float = "*"
 uuid = { version = "1.5.0", features = ["v4"] }
+num-rational = "*"
+
 [package.metadata.maturin]
 name = "egglog.bindings"
 

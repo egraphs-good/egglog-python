@@ -31,7 +31,7 @@ def jit(fn: X) -> X:
     fn_program = ndarray_function_two(res_optimized, NDArray.var(arg1), NDArray.var(arg2))
     egraph.register(fn_program)
     egraph.run(10000)
-    fn = cast(X, egraph.load_object(egraph.extract(fn_program.py_object)))
+    fn = cast(X, egraph.eval(fn_program.py_object))
     fn.egraph = svg  # type: ignore[attr-defined]
     fn.expr = res_optimized  # type: ignore[attr-defined]
     return fn

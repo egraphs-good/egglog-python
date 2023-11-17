@@ -2,9 +2,17 @@
 
 _This project uses semantic versioning_
 
-## Unreleased
+## Unreleased - 2.0.0
 
-- Fixes not exposing `birewrite` at top level (#72)[https://github.com/metadsl/egglog-python/pull/72].
+## Simplify accessing primitives
+
+Previously, there was no public way of turning an egglog primitive, i.e. `i64(10)`, into a Python primitive, i.e. `int(10)`. Now there is a `egraph.eval(...)` method which will evaluate a primitive expression and return a Python object.
+
+We also change the `PyObject` primitive to behave similarly. Instead of calling `egraph.load_object(pyobj)` you can now call `egraph.eval(pyobj)` to get the underlying Python object. Also, to unify it with the other objects, you can create a `PyObject` by using the constructor instead of `egraph.save_object(pyobj)`.
+
+## Bug fixes
+
+- Fix not exposing `birewrite` at top level (#72)[https://github.com/metadsl/egglog-python/pull/72].
 
 ## 1.0.1 (2023-10-26)
 

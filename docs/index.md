@@ -53,8 +53,6 @@ egraph.extract(expr1)
 This package is in development and is not ready for production use. The upstream `egglog` package itself
 is also subject to changes and is less stable than [`egg`](https://github.com/egraphs-good/egg).
 
-~~If you are looking for a more stable e-graphs library in Python, you can try [`snake-egg`](https://github.com/egraphs-good/snake-egg), which wraps `egg`.~~ At this point, this library is more actively developed than the `snake-egg` Python bindings.
-
 `egglog` is a rewrite of the `egg` library to use [relational e-matching](https://arxiv.org/abs/2108.02290) and to add datalog features.
 See the ["Better Together: Unifying Datalog and Equality Saturation"](https://arxiv.org/abs/2304.04332) paper for more details
 

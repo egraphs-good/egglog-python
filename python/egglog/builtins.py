@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Generic, TypeVar, Union
 
-from .egraph import BUILTINS, Expr, Unit
+from .egraph import BUILTINS, EGraph, Expr, Unit
 from .runtime import converter
 
 __all__ = [
@@ -59,6 +59,10 @@ class Bool(Expr):
     def __init__(self, value: bool) -> None:
         ...
 
+    @BUILTINS.method(preserve=True)
+    def __bool__(self) -> bool:
+        return EGraph.current().eval(self)
+
     @BUILTINS.method(egg_fn="not")
     def __invert__(self) -> Bool:
         ...
@@ -90,6 +94,10 @@ i64Like = Union["i64", int]  # noqa: N816
 class i64(Expr):  # noqa: N801
     def __init__(self, value: int) -> None:
         ...
+
+    @BUILTINS.method(preserve=True)
+    def __int__(self) -> int:
+        return EGraph.current().eval(self)
 
     @BUILTINS.method(egg_fn="+")
     def __add__(self, other: i64Like) -> i64:
@@ -513,8 +521,7 @@ class Vec(Expr, Generic[T]):
 
 @BUILTINS.class_(egg_sort="PyObject")
 class PyObject(Expr):
-    @BUILTINS.method(egg_fn="py-object")
-    def __init__(self, *hashes: i64) -> None:
+    def __init__(self, value: object) -> None:
         ...
 
     @BUILTINS.method(egg_fn="py-from-string")
@@ -531,7 +538,7 @@ class PyObject(Expr):
         ...
 
     @BUILTINS.method(egg_fn="py-dict-update")
-    def dict_update(self, *keys_and_values: PyObject) -> PyObject:
+    def dict_update(self, *keys_and_values: object) -> PyObject:
         ...
 
     @BUILTINS.method(egg_fn="py-from-int")
@@ -541,17 +548,20 @@ class PyObject(Expr):
 
     @BUILTINS.method(egg_fn="py-dict")
     @classmethod
-    def dict(cls, *keys_and_values: PyObject) -> PyObject:
+    def dict(cls, *keys_and_values: object) -> PyObject:
         ...
 
 
+converter(object, PyObject, PyObject)
+
+
 @BUILTINS.function(egg_fn="py-eval")
-def py_eval(code: StringLike, globals: PyObject = PyObject.dict(), locals: PyObject = PyObject.dict()) -> PyObject:
+def py_eval(code: StringLike, globals: object = PyObject.dict(), locals: object = PyObject.dict()) -> PyObject:
     ...
 
 
 @BUILTINS.function(egg_fn="py-exec")
-def py_exec(code: StringLike, globals: PyObject = PyObject.dict(), locals: PyObject = PyObject.dict()) -> PyObject:
+def py_exec(code: StringLike, globals: object = PyObject.dict(), locals: object = PyObject.dict()) -> PyObject:
     """
     Copies the locals, execs the Python code, and returns the locals with any updates.
     """

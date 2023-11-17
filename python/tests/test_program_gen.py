@@ -70,10 +70,8 @@ def test_to_string(snapshot_py) -> None:
     egraph.register(fn.compile())
     egraph.run(200)
     # egraph.display(n_inline_leaves=1)
-    expr = egraph.load_object(egraph.extract(PyObject.from_string(fn.expr)))
-    assert expr == "my_fn"  # type: ignore
-    stmts = egraph.load_object(egraph.extract(PyObject.from_string(fn.statements)))
-    assert stmts == snapshot_py  # type: ignore
+    assert egraph.eval(fn.expr) == "my_fn"
+    assert egraph.eval(fn.statements) == snapshot_py
 
 
 def test_py_object():
@@ -81,8 +79,8 @@ def test_py_object():
     y = Math.var("y")
     z = Math.var("z")
     fn = (x + y + z).program.function_two(x.program, y.program)
-    egraph.register(fn.eval_py_object(egraph.save_object({"z": 10})))
+    egraph.register(fn.eval_py_object({"z": 10}))
     egraph.run(100)
-    res = egraph.load_object(egraph.extract(fn.py_object))
+    res = egraph.eval(fn.py_object)
     assert res(1, 2) == 13  # type: ignore
     assert inspect.getsource(res)  # type: ignore

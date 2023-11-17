@@ -2,6 +2,7 @@ import json
 import os
 import pathlib
 import subprocess
+import fractions
 
 import pytest
 from egglog.bindings import *
@@ -183,3 +184,27 @@ class TestVariant:
         assert Variant("name", []) == Variant("name", [])
         assert Variant("name", []) != Variant("name", ["a"])
         assert Variant("name", []) != 10  # type: ignore
+
+
+class TestEval:
+    def test_i64(self):
+        assert EGraph().eval_i64(Lit(Int(1))) == 1
+
+    def test_f64(self):
+        assert EGraph().eval_f64(Lit(F64(1.0))) == 1.0
+
+
+    def test_string(self):
+        assert EGraph().eval_string(Lit(String("hi"))) == "hi"
+
+    def test_bool(self):
+        assert EGraph().eval_bool(Lit(Bool(True))) == True
+
+    @pytest.mark.xfail(reason="Depends on getting actual sort from egraph")
+    def test_rational(self):
+        egraph = EGraph()
+        rational = Call("rational", [Lit(Int(1)), Lit(Int(2))])
+        egraph.run_program(
+            ActionCommand(Expr_(Call("rational", [Lit(Int(1)), Lit(Int(2))])))
+        )
+        assert egraph.eval_rational(rational) == fractions.Fraction(1, 2)
