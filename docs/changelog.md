@@ -2,7 +2,7 @@
 
 _This project uses semantic versioning_
 
-## Unreleased - 2.0.0
+## 2.0.0 (2023-11-17)
 
 ## Simplify accessing primitives
 
@@ -12,7 +12,14 @@ We also change the `PyObject` primitive to behave similarly. Instead of calling 
 
 ## Bug fixes
 
-- Fix not exposing `birewrite` at top level (#72)[https://github.com/metadsl/egglog-python/pull/72].
+- Properly expose `birewrite` at top level (#72)[https://github.com/metadsl/egglog-python/pull/72].
+- Fix generation of graphviz interactive SVGs in docs.
+
+## Enhancements
+
+- Added PyData lighting talk and Portland state talk to [explanations](./explanation).
+- Add experimental `jit` decorator to wrap all ndarray/numba functionality together.
+- Switch to Ruff for linting
 
 ## 1.0.1 (2023-10-26)
 
