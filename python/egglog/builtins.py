@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Generic, TypeVar, Union
 
-from .egraph import BUILTINS, EGraph, Expr, Unit
+from .egraph import BUILTINS, Expr, Unit
 from .runtime import converter
 
 __all__ = [
@@ -59,10 +59,6 @@ class Bool(Expr):
     def __init__(self, value: bool) -> None:
         ...
 
-    @BUILTINS.method(preserve=True)
-    def __bool__(self) -> bool:
-        return EGraph.current().eval(self)
-
     @BUILTINS.method(egg_fn="not")
     def __invert__(self) -> Bool:
         ...
@@ -94,10 +90,6 @@ i64Like = Union["i64", int]  # noqa: N816
 class i64(Expr):  # noqa: N801
     def __init__(self, value: int) -> None:
         ...
-
-    @BUILTINS.method(preserve=True)
-    def __int__(self) -> int:
-        return EGraph.current().eval(self)
 
     @BUILTINS.method(egg_fn="+")
     def __add__(self, other: i64Like) -> i64:
