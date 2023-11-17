@@ -6,21 +6,30 @@ file_format: mystnb
 
 Alongside [the support for builtin `egglog` functionality](./egglog-translation.md), `egglog` also provides functionality to more easily integrate with the Python ecosystem.
 
+## Retrieving Primitive Values
+
+If you have a egglog primitive, you can turn it into a Python object by using `egraph.eval(...)` method:
+
+```{code-cell} python
+from __future__ import annotations
+
+from egglog import *
+
+egraph = EGraph()
+assert egraph.eval(i64(1) + 20) == 21
+```
+
 ## Python Object Sort
 
 We define a custom "primitive sort" (i.e. a builtin type) for `PyObject`s. This allows us to store any Python object in the e-graph.
 
 ### Saving Python Objects
 
-To create an expression of type `PyObject`, we have to use the `egraph.save_object` method. This method takes a Python object and returns an expression of type `PyObject`.
+To create an expression of type `PyObject`, we call the call the constructor with any Python object. It will
+save a reference to the object:
 
 ```{code-cell} python
-from __future__ import annotations
-from egglog import *
-
-egraph = EGraph()
-one = egraph.save_object(1)
-one
+PyObject(1)
 ```
 
 We see that this as saved internally as a pointer to the Python object. For hashable objects like `int` we store two integers, a hash of the type and a has of the value.
@@ -28,7 +37,8 @@ We see that this as saved internally as a pointer to the Python object. For hash
 We can also store unhashable objects in the e-graph like lists.
 
 ```{code-cell} python
-egraph.save_object([1, 2, 3])
+lst = PyObject([1, 2, 3])
+lst
 ```
 
 We see that this is stored with one number, simply the `id` of the object.
@@ -43,10 +53,10 @@ Creating hashable objects is safer, since while the rule might create new Python
 
 ### Retrieving Python Objects
 
-The inverse of `egraph.save_object` is `egraph.load_object`. This takes an expression of type `PyObject` and returns the Python object it represents.
+Like other primitives, we can retrieve the Python object from the e-graph by using the `egraph.eval(...)` method:
 
 ```{code-cell} python
-egraph.load_object(one)
+assert egraph.eval(lst) == [1, 2, 3]
 ```
 
 ### Builtin methods
@@ -56,29 +66,29 @@ Currently, we only support a few methods on `PyObject`s, but we plan to add more
 Conversion to/from a string:
 
 ```{code-cell} python
-egraph.extract(egraph.save_object('hi').to_string())
+egraph.eval(PyObject('hi').to_string())
 ```
 
 ```{code-cell} python
-egraph.load_object(egraph.extract(PyObject.from_string("1")))
+egraph.eval(PyObject.from_string("1"))
 ```
 
 Conversion from an int:
 
 ```{code-cell} python
-egraph.load_object(egraph.extract(PyObject.from_int(1)))
+egraph.eval(PyObject.from_int(1))
 ```
 
 We also support evaling arbitrary Python bode, given some locals and globals. This technically allows us to implement any Python method:
 
 ```{code-cell} python
-egraph.load_object(egraph.extract(py_eval("1 + 2")))
+egraph.eval(py_eval("1 + 2"))
 ```
 
 Execing Python code is also supported. In this case, the return value will be the updated globals dict, which will be copied first before using.
 
 ```{code-cell} python
-egraph.load_object(egraph.extract(py_exec("x = 1 + 2")))
+egraph.eval(py_exec("x = 1 + 2"))
 ```
 
 Alongside this, we support a function `dict_update` method, which can allow you to combine some local local egglog expressions alongside, say, the locals and globals of the Python code you are evaling.
@@ -88,12 +98,9 @@ Alongside this, we support a function `dict_update` method, which can allow you 
 def my_add(a, b):
     return a + b
 
-locals_expr = egraph.save_object(locals())
-globals_expr = egraph.save_object(globals())
-# Need `one` to map to the expression for `1` not the Python object of the expression
-amended_globals = globals_expr.dict_update(PyObject.from_string("one"), one)
-evalled = py_eval("my_add(one,  2)", locals_expr, amended_globals)
-assert egraph.load_object(egraph.extract(evalled)) == 3
+amended_globals = PyObject(globals()).dict_update("one", 1)
+evalled = py_eval("my_add(one,  2)", locals(), amended_globals)
+assert egraph.eval(evalled) == 3
 ```
 
 ### Simpler Eval
@@ -109,8 +116,8 @@ The above code code be re-written like this:
 def my_add(a, b):
     return a + b
 
-evalled = egraph.eval_fn(lambda a: my_add(a, 2))(one)
-assert egraph.load_object(egraph.extract(evalled)) == 3
+evalled = egraph.eval_fn(lambda a: my_add(a, 2))(1)
+assert egraph.eval(evalled) == 3
 ```
 
 ## Functions
@@ -256,9 +263,9 @@ class Boolean(Expr):
         # Add this expression converted to a Python object to the e-graph
         egraph.register(self)
         # Run until the e-graph saturates
-        egraph.run(run().saturate())
+        egraph.run(10)
         # Extract the Python object from the e-graph
-        return egraph.load_object(egraph.extract(self.to_py()))
+        return egraph.eval(self.to_py())
 
     def to_py(self) -> PyObject:
         ...
@@ -273,8 +280,8 @@ FALSE = egraph.constant("FALSE", Boolean)
 @egraph.register
 def _bool(x: Boolean):
     return [
-        set_(TRUE.to_py()).to(egraph.save_object(True)),
-        set_(FALSE.to_py()).to(egraph.save_object(False)),
+        set_(TRUE.to_py()).to(PyObject(True)),
+        set_(FALSE.to_py()).to(PyObject(False)),
         rewrite(TRUE | x).to(TRUE),
         rewrite(FALSE | x).to(x),
     ]

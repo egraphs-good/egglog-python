@@ -52,8 +52,8 @@ converter(bool, Boolean, lambda x: TRUE if x else FALSE)
 @array_api_module.register
 def _bool(x: Boolean):
     return [
-        rule(eq(x).to(TRUE)).then(set_(x.to_py()).to(array_api_module.save_object(True))),
-        rule(eq(x).to(FALSE)).then(set_(x.to_py()).to(array_api_module.save_object(False))),
+        rule(eq(x).to(TRUE)).then(set_(x.to_py()).to(PyObject(True))),
+        rule(eq(x).to(FALSE)).then(set_(x.to_py()).to(PyObject(False))),
         rewrite(TRUE | x).to(TRUE),
         rewrite(FALSE | x).to(x),
         rewrite(TRUE & x).to(x),
@@ -1535,8 +1535,8 @@ def extract_py(e: ToPy) -> Any:  # noqa: ANN401
         egraph.register(e)
         egraph.run((run() * 30).saturate())
         try:
-            return egraph.load_object(egraph.extract(e.to_py()))
-        except EggSmolError as e:
+            return egraph.eval(e.to_py())
+        except EggSmolError as exc:
             egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
             msg = "Cannot simplify:"
-            raise ValueError(msg, egraph.extract(e)) from e
+            raise ValueError(msg, egraph.extract(e)) from exc

@@ -43,7 +43,7 @@ from .runtime import _resolve_callable, class_to_ref
 if TYPE_CHECKING:
     import ipywidgets
 
-    from .builtins import PyObject, String
+    from .builtins import Bool, PyObject, String, f64, i64
 
 
 __all__ = [
@@ -535,7 +535,12 @@ class _BaseModule(ABC):
         if get_origin(tp) == Union:
             first, *_rest = get_args(tp)
             return self._resolve_type_annotation(first, cls_typevars, cls_type_and_name)
+        # If the type is `object` then this is assumed to be a PyObjetLike, i.e. converted into a PyObject
+        if tp == object:
+            return TypeRefWithVars("PyObject")
+            # from .builtins import PyObject
 
+            # tp = PyObject
         # If this is the type for the class, use the class name
         if cls_type_and_name and tp == cls_type_and_name[0]:
             return TypeRefWithVars(cls_type_and_name[1])
@@ -674,7 +679,6 @@ class _Builtins(_BaseModule):
 @dataclass
 class Module(_BaseModule):
     _cmds: list[bindings._Command] = field(default_factory=list, repr=False)
-    _py_objects: list[object] = field(default_factory=list, repr=False)
 
     @property
     def as_egglog_string(self) -> str:
@@ -685,19 +689,6 @@ class Module(_BaseModule):
 
     def _process_commands(self, cmds: Iterable[bindings._Command]) -> None:
         self._cmds.extend(cmds)
-
-    def save_object(self, obj: object) -> PyObject:
-        """
-        Save an object to the egraph.
-
-        In a module, creates a temp egraph to save the object and get the value, then saves it to add later
-        once we have a real egraph.
-        """
-        egraph = bindings.EGraph()
-        expr = egraph.save_object(obj)
-        self._py_objects.append(obj)
-        typed_expr_decl = TypedExprDecl.from_egg(self._mod_decls, expr)
-        return cast("PyObject", RuntimeExpr(self._mod_decls, typed_expr_decl))
 
     def unextractable(self) -> Module:
         """
@@ -794,10 +785,8 @@ class EGraph(_BaseModule):
 
     def __post_init__(self, modules: list[Module], seminaive: bool) -> None:
         super().__post_init__(modules)
-        self._egraph = bindings.EGraph(seminaive=seminaive)
+        self._egraph = bindings.EGraph(GLOBAL_PY_OBJECT_SORT, seminaive=seminaive)
         for m in self._flatted_deps:
-            for o in m._py_objects:
-                self._egraph.save_object(o)
             self._process_commands(m._cmds)
 
     def _process_commands(self, commands: Iterable[bindings._Command]) -> None:
@@ -890,7 +879,7 @@ class EGraph(_BaseModule):
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
         new_typed_expr = TypedExprDecl.from_egg(
-            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
+            self._egraph, self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
         return cast(EXPR, RuntimeExpr(self._mod_decls, new_typed_expr))
 
@@ -958,7 +947,7 @@ class EGraph(_BaseModule):
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
         new_typed_expr = TypedExprDecl.from_egg(
-            self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
+            self._egraph, self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
         )
         if new_typed_expr.tp != typed_expr.tp:
             raise RuntimeError(f"Type mismatch: {new_typed_expr.tp} != {typed_expr.tp}")
@@ -975,7 +964,9 @@ class EGraph(_BaseModule):
             msg = "Wrong extract report type"
             raise ValueError(msg)  # noqa: TRY004
         new_exprs = [
-            TypedExprDecl.from_egg(self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, term))
+            TypedExprDecl.from_egg(
+                self._egraph, self._mod_decls, bindings.termdag_term_to_expr(extract_report.termdag, term)
+            )
             for term in extract_report.terms
         ]
         return [cast(EXPR, RuntimeExpr(self._mod_decls, expr)) for expr in new_exprs]
@@ -1017,21 +1008,44 @@ class EGraph(_BaseModule):
         CURRENT_EGRAPH.reset(self._token_stack.pop())
         self.pop()
 
-    def save_object(self, obj: object) -> PyObject:
-        """
-        Save an object to the egraph.
-        """
-        expr = self._egraph.save_object(obj)
-        typed_expr_decl = TypedExprDecl.from_egg(self._mod_decls, expr)
-        return cast("PyObject", RuntimeExpr(self._mod_decls, typed_expr_decl))
+    @overload
+    def eval(self, expr: i64) -> int:
+        ...
 
-    def load_object(self, obj: PyObject) -> object:
+    @overload
+    def eval(self, expr: f64) -> float:
+        ...
+
+    @overload
+    def eval(self, expr: Bool) -> bool:
+        ...
+
+    @overload
+    def eval(self, expr: String) -> str:
+        ...
+
+    @overload
+    def eval(self, expr: PyObject) -> object:
+        ...
+
+    def eval(self, expr: Expr) -> object:
         """
-        Load an object from the egraph.
+        Evaluates the given expression (which must be a primitive type), returning the result.
         """
-        typed_expr_decl = expr_parts(obj)
-        expr = typed_expr_decl.to_egg(self._mod_decls)
-        return self._egraph.load_object(expr)
+        typed_expr = expr_parts(expr)
+        egg_expr = typed_expr.to_egg(self._mod_decls)
+        match typed_expr.tp:
+            case JustTypeRef("i64"):
+                return self._egraph.eval_i64(egg_expr)
+            case JustTypeRef("f64"):
+                return self._egraph.eval_f64(egg_expr)
+            case JustTypeRef("Bool"):
+                return self._egraph.eval_bool(egg_expr)
+            case JustTypeRef("String"):
+                return self._egraph.eval_string(egg_expr)
+            case JustTypeRef("PyObject"):
+                return self._egraph.eval_py_object(egg_expr)
+        raise NotImplementedError(f"Eval not implemented for {typed_expr.tp.name}")
 
     def eval_fn(self, fn: Callable) -> PyObjectFunction:
         """
@@ -1040,20 +1054,17 @@ class EGraph(_BaseModule):
         It translates it to a call which uses `py_eval` to call the function, passing in the
         args as locals, and using the globals from function.
         """
-        from .builtins import py_eval
+        from .builtins import PyObject, py_eval
 
-        fn_globals = self.save_object(fn.__globals__)
-        fn_locals = self.save_object({"__fn": fn})
-
-        def inner(*__args: PyObject, __fn_locals: PyObject = fn_locals) -> PyObject:
-            new_kvs: list[PyObject] = []
+        def inner(*__args: PyObject, __fn: Callable = fn) -> PyObject:
+            new_kvs: list[object] = []
             eval_str = "__fn("
             for i, arg in enumerate(__args):
-                new_kvs.append(self.save_object(f"__arg_{i}"))
+                new_kvs.append(f"__arg_{i}")
                 new_kvs.append(arg)
                 eval_str += f"__arg_{i}, "
             eval_str += ")"
-            return py_eval(eval_str, __fn_locals.dict_update(*new_kvs), fn_globals)
+            return py_eval(eval_str, PyObject({"__fn": __fn}).dict_update(*new_kvs), __fn.__globals__)
 
         return inner
 

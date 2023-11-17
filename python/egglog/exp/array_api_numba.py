@@ -1,3 +1,4 @@
+# mypy: disable-error-code="empty-body"
 """
 Module for generating array api code that works with Numba.
 """

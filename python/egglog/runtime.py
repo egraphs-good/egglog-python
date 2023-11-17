@@ -45,7 +45,7 @@ BLACK_MODE = black.Mode(line_length=180)
 
 UNIT_CLASS_NAME = "Unit"
 UNARY_LIT_CLASS_NAMES = {"i64", "f64", "Bool", "String"}
-LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME}
+LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME, "PyObject"}
 
 ##
 # Converters
@@ -165,11 +165,16 @@ def _resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
         # If the type is an egg type, it has to be a runtime expr
         assert isinstance(arg, RuntimeExpr)
         return arg
-    try:
-        fn = CONVERSIONS[(arg_type, tp_just)][1]
-    except KeyError as e:
+    # Try all parent types as well, if we are converting from a Python type
+    for arg_type_instance in arg_type.__mro__ if isinstance(arg_type, type) else [arg_type]:
+        try:
+            fn = CONVERSIONS[(cast(JustTypeRef | type, arg_type_instance), tp_just)][1]
+        except KeyError:
+            continue
+        break
+    else:
         arg_type_str = arg_type.pretty() if isinstance(arg_type, JustTypeRef) else arg_type.__name__
-        raise ConvertError(f"Cannot convert {arg_type_str} to {tp_just.pretty()}") from e
+        raise ConvertError(f"Cannot convert {arg_type_str} to {tp_just.pretty()}")
     return fn(arg)
 
 
@@ -198,6 +203,9 @@ class RuntimeClass:
         Create an instance of this kind by calling the __init__ classmethod
         """
         # If this is a literal type, initializing it with a literal should return a literal
+        if self.__egg_name__ == "PyObject":
+            assert len(args) == 1
+            return RuntimeExpr(self.__egg_decls__, TypedExprDecl(JustTypeRef(self.__egg_name__), PyObjectDecl(args[0])))
         if self.__egg_name__ in UNARY_LIT_CLASS_NAMES:
             assert len(args) == 1
             assert isinstance(args[0], int | float | str | bool)

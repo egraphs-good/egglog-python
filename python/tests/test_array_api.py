@@ -172,9 +172,9 @@ def test_to_source(snapshot_py):
     # new_fn = egraph.extract(fn)
     # egraph.register(new_fn)
     # egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
-    fn_source = egraph.load_object(egraph.extract(PyObject.from_string(fn.statements)))
+    fn_source = egraph.eval(fn.statements)
     assert fn_source == snapshot_py
-    fn = egraph.load_object(egraph.extract(fn.py_object))
+    fn = egraph.eval(fn.py_object)
 
 
 def run_lda(x, y):
@@ -237,7 +237,7 @@ def test_sklearn_lda_runs():
     fn_program = ndarray_function_two(X_r2, X_orig, y_orig)
     egraph.register(fn_program)
     egraph.run(10000)
-    fn = egraph.load_object(egraph.extract(fn_program.py_object))
+    fn = egraph.eval(fn_program.py_object)
     iris = datasets.load_iris()
 
     X_np, y_np = (iris.data, iris.target)
