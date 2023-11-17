@@ -7,7 +7,7 @@ import math
 import numbers
 import sys
 from copy import copy
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol
+from typing import TYPE_CHECKING, ClassVar, overload
 
 import numpy as np
 
@@ -32,9 +32,10 @@ array_api_module = Module()
 class Boolean(Expr):
     @array_api_module.method(preserve=True)
     def __bool__(self) -> bool:
-        return extract_py(self)
+        return try_evaling(self, self.bool)
 
-    def to_py(self) -> PyObject:
+    @property
+    def bool(self) -> Bool:
         ...
 
     def __or__(self, other: Boolean) -> Boolean:
@@ -52,8 +53,8 @@ converter(bool, Boolean, lambda x: TRUE if x else FALSE)
 @array_api_module.register
 def _bool(x: Boolean):
     return [
-        rule(eq(x).to(TRUE)).then(set_(x.to_py()).to(PyObject(True))),
-        rule(eq(x).to(FALSE)).then(set_(x.to_py()).to(PyObject(False))),
+        rule(eq(x).to(TRUE)).then(set_(x.bool).to(Bool(True))),
+        rule(eq(x).to(FALSE)).then(set_(x.bool).to(Bool(False))),
         rewrite(TRUE | x).to(TRUE),
         rewrite(FALSE | x).to(x),
         rewrite(TRUE & x).to(x),
@@ -167,7 +168,7 @@ class Int(Expr):
     # In _unique1d
     @array_api_module.method(preserve=True)
     def __ne__(self, other: Int) -> bool:  # type: ignore[override]
-        return not extract_py(self == other)
+        return not (self == other)
 
     def __gt__(self, other: Int) -> Boolean:
         ...
@@ -253,24 +254,25 @@ class Int(Expr):
     def __ror__(self, other: Int) -> Int:
         ...
 
+    @property
+    def i64(self) -> i64:
+        ...
+
     @array_api_module.method(preserve=True)
     def __int__(self) -> int:
-        return extract_py(self)
+        return try_evaling(self, self.i64)
 
     @array_api_module.method(preserve=True)
     def __index__(self) -> int:
-        return extract_py(self)
+        return int(self)
 
     @array_api_module.method(preserve=True)
     def __float__(self) -> float:
         return float(int(self))
 
-    def to_py(self) -> PyObject:
-        ...
-
     @array_api_module.method(preserve=True)
     def __bool__(self) -> bool:
-        return self != Int(0)
+        return bool(int(self))
 
 
 @array_api_module.register
@@ -290,7 +292,7 @@ def _int(i: i64, j: i64, r: Boolean, o: Int):
     yield rule(eq(r).to(Int(i) > Int(j)), i > j).then(union(r).with_(TRUE))
     yield rule(eq(r).to(Int(i) > Int(j)), i < j).then(union(r).with_(FALSE))
 
-    yield rule(eq(o).to(Int(j))).then(set_(o.to_py()).to(PyObject.from_int(j)))
+    yield rule(eq(o).to(Int(j))).then(set_(o.i64).to(j))
 
     yield rewrite(Int(i) + Int(j)).to(Int(i + j))
     yield rewrite(Int(i) - Int(j)).to(Int(i - j))
@@ -1036,7 +1038,7 @@ def asarray(a: NDArray, dtype: OptionalDType = OptionalDType.none, copy: Optiona
 @array_api_module.register
 def _assarray(a: NDArray, d: OptionalDType, ob: OptionalBool):
     yield rewrite(asarray(a, d, ob).ndim).to(a.ndim)  # asarray doesn't change ndim
-    yield rewrite(asarray(a)).to(a)  # asarray doesn't change to_py
+    yield rewrite(asarray(a)).to(a)
 
 
 @array_api_module.function
@@ -1520,23 +1522,26 @@ def _size(x: NDArray):
     yield rewrite(x.size).to(x.shape.product())
 
 
-class ToPy(Protocol):
-    def to_py(self) -> PyObject:
-        ...
+@overload
+def try_evaling(expr: Expr, prim_expr: i64) -> int:
+    ...
 
 
-def extract_py(e: ToPy) -> Any:  # noqa: ANN401
+@overload
+def try_evaling(expr: Expr, prim_expr: Bool) -> bool:
+    ...
+
+
+def try_evaling(expr: Expr, prim_expr: i64 | Bool) -> int | bool:
     """
-    Extract an expression as a python object, by running them return the `to_py()` object.
+    Try evaling the expression, and if it fails, display the egraph and raise an error.
     """
     egraph = EGraph.current()
-    assert isinstance(e, Expr)
-    with egraph:
-        egraph.register(e)
-        egraph.run((run() * 30).saturate())
-        try:
-            return egraph.eval(e.to_py())
-        except EggSmolError as exc:
-            egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
-            msg = "Cannot simplify:"
-            raise ValueError(msg, egraph.extract(e)) from exc
+    egraph.register(expr)
+    egraph.run((run() * 30).saturate())
+    try:
+        return egraph.eval(prim_expr)
+    except EggSmolError as exc:
+        egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
+        msg = "Cannot simplify:"
+        raise ValueError(msg, egraph.extract(expr)) from exc
