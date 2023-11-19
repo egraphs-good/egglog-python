@@ -4,9 +4,9 @@ _This project uses semantic versioning_
 
 ## 3.0.0 (UNRELEASED)
 
-### Breaking Changes
-
 Add support for outputing the serialization e-graph from the low level bindings. Note that this is not yet exposed a the high level yet.
+
+(#78)[https://github.com/metadsl/egglog-python/pull/78]
 
 ## 2.0.0 (2023-11-17)
 
