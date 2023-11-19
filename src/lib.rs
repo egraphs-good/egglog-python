@@ -2,6 +2,7 @@ mod conversions;
 mod egraph;
 mod error;
 mod py_object_sort;
+mod serialize;
 mod utils;
 
 use conversions::{Expr, Term, TermDag};
@@ -20,6 +21,7 @@ fn bindings(_py: Python, m: &PyModule) -> PyResult<()> {
     pyo3_log::init();
 
     m.add_class::<crate::py_object_sort::ArcPyObjectSort>()?;
+    m.add_class::<crate::serialize::SerializedEGraph>()?;
     m.add_class::<crate::egraph::EGraph>()?;
     m.add_class::<crate::error::EggSmolError>()?;
     m.add("HIGH_COST", egglog::HIGH_COST)?;

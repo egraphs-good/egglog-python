@@ -801,7 +801,11 @@ class EGraph(_BaseModule):
     def graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
         # By default we want to split primitive outputs
         kwargs.setdefault("split_primitive_outputs", True)
-        original = self._egraph.to_graphviz_string(**kwargs)
+        n_inline = kwargs.pop("n_inline_leaves", 0)
+        serialized = self._egraph.serialize(**kwargs)  # type: ignore[misc]
+        for _ in range(n_inline):
+            serialized.inline_leaves()
+        original = serialized.to_dot()
         # Add link to stylesheet to the graph, so that edges light up on hover
         # https://gist.github.com/sverweij/93e324f67310f66a8f5da5c2abe94682
         styles = """/* the lines within the edges */

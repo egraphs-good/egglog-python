@@ -3,13 +3,12 @@
 use crate::conversions::*;
 use crate::error::EggResult;
 use crate::py_object_sort::{ArcPyObjectSort, MyPyObject, PyObjectSort};
+use crate::serialize::SerializedEGraph;
 
-use egglog::sort::{BoolSort, F64Sort, FromSort as _, I64Sort, RationalSort, StringSort};
+use egglog::sort::{BoolSort, F64Sort, I64Sort, StringSort};
 use egglog::SerializeConfig;
 use log::info;
 use pyo3::prelude::*;
-use std::any::Any;
-use std::borrow::BorrowMut;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -95,31 +94,26 @@ impl EGraph {
             .map(|report| report.into())
     }
 
-    /// Returns the EGraph as graphviz string.
+    /// Serialize the EGraph to a SerializedEGraph object.
     #[pyo3(
-        signature = (*, max_functions=None, max_calls_per_function=None, n_inline_leaves=0, split_primitive_outputs=false),
-        text_signature = "(self, *, max_functions=None, max_calls_per_function=None, n_inline_leaves=0, split_primitive_outputs=False)"
+        signature = (*, max_functions=None, max_calls_per_function=None, include_temporary_functions=false, split_primitive_outputs=false),
+        text_signature = "(self, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=False, split_primitive_outputs=False)"
     )]
-    fn to_graphviz_string(
+    fn serialize(
         &self,
         max_functions: Option<usize>,
         max_calls_per_function: Option<usize>,
-        n_inline_leaves: usize,
+        include_temporary_functions: bool,
         split_primitive_outputs: bool,
-    ) -> String {
-        info!("Getting graphviz");
-        // TODO: Expose full serialized e-graph in the future
-        let mut serialized = self.egraph.serialize(SerializeConfig {
-            max_functions,
-            max_calls_per_function,
-            include_temporary_functions: false,
-            split_primitive_outputs,
-        });
-        for _ in 0..n_inline_leaves {
-            serialized.inline_leaves();
+    ) -> SerializedEGraph {
+        SerializedEGraph {
+            egraph: self.egraph.serialize(SerializeConfig {
+                max_functions,
+                max_calls_per_function,
+                include_temporary_functions,
+                split_primitive_outputs,
+            }),
         }
-        info!("Serialized egraph: {:?}", serialized);
-        serialized.to_dot()
     }
 
     /// Evaluates an expression in the EGraph and returns the result as a Python object.
@@ -150,7 +144,7 @@ impl EGraph {
     }
 
     #[pyo3(signature = (expr, /))]
-    fn eval_rational(&mut self, py: Python<'_>, expr: Expr) -> EggResult<PyObject> {
+    fn eval_rational(&mut self, _py: Python<'_>, expr: Expr) -> EggResult<PyObject> {
         // Need to get actual sort for rational, this hack doesnt work.
         // todo!();
         // For rational we need the actual sort on the e-graph, because it contains state
@@ -167,7 +161,7 @@ impl EGraph {
             .unwrap()
             .0;
         let expr: egglog::ast::Expr = expr.into();
-        let (_, value) = self.egraph.eval_expr(&expr, Some(arcsort.clone()), false)?;
+        let (_, _value) = self.egraph.eval_expr(&expr, Some(arcsort.clone()), false)?;
         // Need to get actual sort for rational, this hack doesnt work.
         todo!();
         // let r = num_rational::Rational64::load(&arcsort, &value);
