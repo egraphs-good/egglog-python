@@ -2,11 +2,13 @@
 
 _This project uses semantic versioning_
 
-## 3.0.0 (UNRELEASED)
+## 3.0.0 (2023-11-19)
 
 Add support for outputing the serialization e-graph from the low level bindings. Note that this is not yet exposed a the high level yet.
 
-(#78)[https://github.com/metadsl/egglog-python/pull/78]
+This removes the existing to graphviz function on the EGraph low level binding and moves it to a method on the serialized EGraph.
+
+See (#78)[https://github.com/metadsl/egglog-python/pull/78] for more details.
 
 ## 2.0.0 (2023-11-17)
 

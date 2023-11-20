@@ -7,4 +7,4 @@ allowing you to use e-graphs in Python for optimization, symbolic computation, a
 
 Please see the [documentation](https://egg-smol-python.readthedocs.io/en/latest/?badge=latest) for more information.
 
-Come say hello [on the e-graphs Zulip](https://egraphs.zulipchat.com/#narrow/stream/375765-egglog/topic/Python.20bindings) or [open an issue](https://github.com/metadsl/egglog-python/issues/new/choose)!
+Come say hello [on the e-graphs Zulip](https://egraphs.zulipchat.com/#narrow/stream/375765-egglog/) or [open an issue](https://github.com/metadsl/egglog-python/issues/new/choose)!
