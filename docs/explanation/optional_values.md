@@ -1,3 +1,7 @@
+```{post} 2022-11-20
+:author: Saul
+```
+
 # How does egglog handle boolean values?
 
 Some functions, like `<<` return an optional int.

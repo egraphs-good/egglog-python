@@ -1,4 +1,4 @@
-# `egglog`
+# High Level: `egglog`
 
 The top level module contains the high level API for using e-graphs in Python.
 

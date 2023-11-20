@@ -1,3 +1,7 @@
+```{post} 2022-11-29
+:author: Saul
+```
+
 # Define function vs define action.
 
 There is both a top level `define` method as well as a `define` action type. What is the difference between them? The method does accept a cost, otherwise they both accept a string and an expression. Let's look at the implementations.

@@ -46,6 +46,7 @@ docs = [
     "egglog[array]",
     "line-profiler",
     "sphinxcontrib-mermaid",
+    "ablog",
 ]
 
 [tool.ruff]

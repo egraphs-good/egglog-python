@@ -2,6 +2,27 @@ import pathlib  # noqa: INP001
 import subprocess
 
 ##
+# ABlog
+##
+
+blog_authors = {
+    "Saul": ("Saul Shanabrook", "https://saul.shanabrook.com"),
+}
+blog_default_author = "Saul"
+post_date_format = "%Y-%m-%d"
+post_auto_image = 1
+
+
+html_sidebars = {
+    "**": [
+        "sidebar-nav-bs",
+        "ablog/postcard.html",
+        "ablog/recentposts.html",
+        "ablog/tagcloud.html",
+        "ablog/categories.html",
+    ]
+}
+##
 # Myst
 ##
 
@@ -40,6 +61,8 @@ extensions = [
     "sphinx_autodoc_typehints",
     "sphinx_gallery.gen_gallery",
     "sphinxcontrib.mermaid",
+    "ablog",
+    "sphinx.ext.intersphinx",
 ]
 
 
@@ -83,6 +106,7 @@ nitpicky = True
 
 html_theme = "pydata_sphinx_theme"
 
+templates_path = ["_templates"]
 # https://pydata-sphinx-theme.readthedocs.io/en/latest/user_guide/header-links.html#fontawesome-icons
 html_theme_options = {
     "use_edit_page_button": True,
@@ -95,6 +119,7 @@ html_theme_options = {
         },
     ],
     "navigation_with_keys": False,
+    "article_footer_items": ["comments"],
 }
 
 html_context = {
@@ -119,7 +144,7 @@ html_context = {
 # nb_kernel_rgx_aliases = {}
 
 # Execution mode for notebooks
-nb_execution_mode = "force"
+nb_execution_mode = "cache"
 
 # Path to folder for caching notebooks (default: <outdir>)
 # nb_execution_cache_path = ''
