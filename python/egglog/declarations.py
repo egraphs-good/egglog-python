@@ -193,6 +193,9 @@ class Declarations:
     def get_egg_sort(self, ref: JustTypeRef) -> str:
         return self._type_ref_to_egg_sort[ref]
 
+    def op_mapping(self) -> dict[str, str]:
+        return {k: str(next(iter(v))) for k, v in self._egg_fn_to_callable_refs.items() if len(v) == 1}
+
 
 @dataclass
 class ModuleDeclarations:
@@ -204,6 +207,16 @@ class ModuleDeclarations:
     _decl: Declarations
     # A list of other declarations we can use, but not edit
     _included_decls: list[Declarations] = field(default_factory=list, repr=False)
+
+    def op_mapping(self) -> dict[str, str]:
+        """
+        Create a mapping of egglog function name to Python function name, for use in the serialized format
+        for better visualization.
+        """
+        mapping = self._decl.op_mapping()
+        for decl in self._included_decls:
+            mapping.update(decl.op_mapping())
+        return mapping
 
     @classmethod
     def parent_decl(cls, a: ModuleDeclarations, b: ModuleDeclarations) -> ModuleDeclarations:
@@ -435,6 +448,14 @@ class FunctionRef:
     def generate_egg_name(self) -> str:
         return self.name
 
+    def __str__(self) -> str:
+        return self.name
+
+
+# Use this special character in place of the args, so that if the args are inlined
+# in the viz, they will replace it
+ARG = "·"
+
 
 @dataclass(frozen=True)
 class MethodRef:
@@ -443,6 +464,22 @@ class MethodRef:
 
     def generate_egg_name(self) -> str:
         return f"{self.class_name}_{self.method_name}"
+
+    def __str__(self) -> str:  # noqa: PLR0911
+        match self.method_name:
+            case _ if self.method_name in UNARY_METHODS:
+                return f"{UNARY_METHODS[self.method_name]}{ARG}"
+            case _ if self.method_name in BINARY_METHODS:
+                return f"({ARG} {BINARY_METHODS[self.method_name]} {ARG})"
+            case "__getitem__":
+                return f"{ARG}[{ARG}]"
+            case "__call__":
+                return f"{ARG}({ARG})"
+            case "__delitem__":
+                return f"del {ARG}[{ARG}]"
+            case "__setitem__":
+                return f"{ARG}[{ARG}] = {ARG}"
+        return f"{self.class_name}.{self.method_name}"
 
 
 @dataclass(frozen=True)
@@ -456,12 +493,20 @@ class ClassMethodRef:
     def generate_egg_name(self) -> str:
         return f"{self.class_name}_{self.method_name}"
 
+    def __str__(self) -> str:
+        if self.method_name == "__init__":
+            return self.class_name
+        return f"{self.class_name}.{self.method_name}"
+
 
 @dataclass(frozen=True)
 class ConstantRef:
     name: str
 
     def generate_egg_name(self) -> str:
+        return self.name
+
+    def __str__(self) -> str:
         return self.name
 
 
@@ -473,6 +518,9 @@ class ClassVariableRef:
     def generate_egg_name(self) -> str:
         return f"{self.class_name}_{self.variable_name}"
 
+    def __str__(self) -> str:
+        return f"{self.class_name}.{self.variable_name}"
+
 
 @dataclass(frozen=True)
 class PropertyRef:
@@ -481,6 +529,9 @@ class PropertyRef:
 
     def generate_egg_name(self) -> str:
         return f"{self.class_name}_{self.property_name}"
+
+    def __str__(self) -> str:
+        return f"{self.class_name}.{self.property_name}"
 
 
 ConstantCallableRef: TypeAlias = ConstantRef | ClassVariableRef

@@ -2,6 +2,10 @@
 
 _This project uses semantic versioning_
 
+## 3.1.0 (UNRELEASED)
+
+- Update graphs to include more compact Python names of functions (#79)[https://github.com/metadsl/egglog-python/pull/79].
+
 ## 3.0.0 (2023-11-19)
 
 Add support for outputing the serialization e-graph from the low level bindings. Note that this is not yet exposed a the high level yet.
