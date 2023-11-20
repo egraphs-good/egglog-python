@@ -479,7 +479,7 @@ class MethodRef:
                 return f"del {ARG}[{ARG}]"
             case "__setitem__":
                 return f"{ARG}[{ARG}] = {ARG}"
-        return f"{self.class_name}.{self.method_name}"
+        return f"{ARG}.{self.method_name}"
 
 
 @dataclass(frozen=True)
@@ -531,7 +531,7 @@ class PropertyRef:
         return f"{self.class_name}_{self.property_name}"
 
     def __str__(self) -> str:
-        return f"{self.class_name}.{self.property_name}"
+        return f"{ARG}.{self.property_name}"
 
 
 ConstantCallableRef: TypeAlias = ConstantRef | ClassVariableRef
