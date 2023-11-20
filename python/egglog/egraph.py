@@ -803,6 +803,7 @@ class EGraph(_BaseModule):
         kwargs.setdefault("split_primitive_outputs", True)
         n_inline = kwargs.pop("n_inline_leaves", 0)
         serialized = self._egraph.serialize(**kwargs)  # type: ignore[misc]
+        serialized.map_ops(self._mod_decls.op_mapping())
         for _ in range(n_inline):
             serialized.inline_leaves()
         original = serialized.to_dot()
