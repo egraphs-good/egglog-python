@@ -106,6 +106,7 @@ nitpicky = True
 
 html_theme = "pydata_sphinx_theme"
 
+templates_path = ["_templates"]
 # https://pydata-sphinx-theme.readthedocs.io/en/latest/user_guide/header-links.html#fontawesome-icons
 html_theme_options = {
     "use_edit_page_button": True,
@@ -118,6 +119,7 @@ html_theme_options = {
         },
     ],
     "navigation_with_keys": False,
+    "article_footer_items": ["comments"],
 }
 
 html_context = {
