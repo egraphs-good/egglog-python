@@ -22,6 +22,8 @@ pip install anywidget
 
 It follows [SPEC 0](https://scientific-python.org/specs/spec-0000/) in terms of what Python versions are supported.
 
+(community)=
+
 ## Community
 
 There is [a Zulip stream](https://egraphs.zulipchat.com/#narrow/stream/375765-egglog) for the `egglog` project
