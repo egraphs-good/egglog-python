@@ -32,7 +32,7 @@ repos:
     hooks:
       - id: docs
         name: docs
-        entry: sphinx-build -j auto -T -nW -b html docs docs/_build/html
+        entry: sphinx-build -T -nW -b html docs docs/_build/html
         language: system
         pass_filenames: false
         require_serial: true

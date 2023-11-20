@@ -62,9 +62,10 @@ See the ["Better Together: Unifying Datalog and Equality Saturation"](https://ar
 
 We use the [Diátaxis framework](https://diataxis.fr/) to organize our documentation.
 
+## Contents
+
 ```{toctree}
 :maxdepth: 2
-auto_examples/index
 tutorials
 how-to-guides
 explanation
