@@ -146,6 +146,8 @@ egraph.check(eq(expr1).to(expr2))
 
 ```{toctree}
 changelog
+reference/usage
+reference/contributing
 reference/high-level
 reference/egglog-translation
 reference/python-integration
