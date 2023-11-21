@@ -957,7 +957,15 @@ class EGraph(_BaseModule):
         egg_facts = [f._to_egg_fact(self._mod_decls) for f in _fact_likes(facts)]
         return bindings.Check(egg_facts)
 
-    def extract(self, expr: EXPR) -> EXPR:
+    @overload
+    def extract(self, expr: EXPR, /, include_cost: Literal[False] = False) -> EXPR:
+        ...
+
+    @overload
+    def extract(self, expr: EXPR, /, include_cost: Literal[True]) -> tuple[EXPR, int]:
+        ...
+
+    def extract(self, expr: EXPR, include_cost: bool = False) -> EXPR | tuple[EXPR, int]:
         """
         Extract the lowest cost expression from the egraph.
         """
@@ -972,7 +980,10 @@ class EGraph(_BaseModule):
         )
         if new_typed_expr.tp != typed_expr.tp:
             raise RuntimeError(f"Type mismatch: {new_typed_expr.tp} != {typed_expr.tp}")
-        return cast(EXPR, RuntimeExpr(self._mod_decls, new_typed_expr))
+        res = cast(EXPR, RuntimeExpr(self._mod_decls, new_typed_expr))
+        if include_cost:
+            return res, extract_report.cost
+        return res
 
     def extract_multiple(self, expr: EXPR, n: int) -> list[EXPR]:
         """

@@ -476,6 +476,12 @@ The `(extract ...)` command in egglog translates to the `egraph.extract` method,
 egraph.extract(fib(1))
 ```
 
+If you want to see the cost as well, pass in the `include_cost` flag:
+
+```{code-cell} python
+egraph.extract(fib(1), include_cost=True)
+```
+
 Multiple items can also be extracted, returning a list of the lowest cost expressions, with `egraph.extract_multiple`:
 
 ```{code-cell} python

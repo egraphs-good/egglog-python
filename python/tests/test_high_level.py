@@ -197,6 +197,9 @@ def test_extract_constant_twice():
     egraph.extract(Numeric.ONE)
     egraph.extract(Numeric.ONE)
 
+def test_extract_include_cost():
+    _, cost = EGraph().extract(i64(0), include_cost=True)
+    assert cost == 1
 
 def test_relation():
     egraph = EGraph()
