@@ -473,6 +473,9 @@ def test_upcast_args():
     res: Expr = Int(10) + -0.1  # type: ignore
     assert expr_parts(res) == expr_parts(Float.from_int(Int(10)) + Float(-0.1))
 
+def test_rewrite_upcasts():
+    rewrite(i64(1)).to(0) # type: ignore
+
 
 def test_upcast_self_lower_cost():
     # Verifies that self will be upcasted, if that upcast has a lower cast than converting the other arg

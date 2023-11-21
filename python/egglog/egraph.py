@@ -38,7 +38,7 @@ from . import bindings
 from .declarations import *
 from .ipython_magic import IN_IPYTHON
 from .runtime import *
-from .runtime import _resolve_callable, class_to_ref
+from .runtime import _resolve_callable, class_to_ref, convert_to_same_type
 
 if TYPE_CHECKING:
     import ipywidgets
@@ -1580,10 +1580,11 @@ class _RewriteBuilder(Generic[EXPR]):
     ruleset: Ruleset | None
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
+        lhs = to_runtime_expr(self.lhs)
         return Rewrite(
             _ruleset_name(self.ruleset),
-            to_runtime_expr(self.lhs),
-            to_runtime_expr(rhs),
+            lhs,
+            convert_to_same_type(rhs, lhs),
             _fact_likes(conditions),
         )
 
@@ -1597,10 +1598,11 @@ class _BirewriteBuilder(Generic[EXPR]):
     ruleset: Ruleset | None
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
+        lhs = to_runtime_expr(self.lhs)
         return BiRewrite(
             _ruleset_name(self.ruleset),
-            to_runtime_expr(self.lhs),
-            to_runtime_expr(rhs),
+            lhs,
+            convert_to_same_type(rhs, lhs),
             _fact_likes(conditions),
         )
 
@@ -1613,7 +1615,8 @@ class _EqBuilder(Generic[EXPR]):
     expr: EXPR
 
     def to(self, *exprs: EXPR) -> Fact:
-        return Eq([to_runtime_expr(e) for e in (self.expr, *exprs)])
+        expr = to_runtime_expr(self.expr)
+        return Eq([expr] + [convert_to_same_type(e, expr) for e in exprs])
 
     def __str__(self) -> str:
         return f"eq({self.expr})"
@@ -1624,7 +1627,8 @@ class _SetBuilder(Generic[EXPR]):
     lhs: Expr
 
     def to(self, rhs: EXPR) -> Action:
-        return Set(to_runtime_expr(self.lhs), to_runtime_expr(rhs))
+        lhs = to_runtime_expr(self.lhs)
+        return Set(lhs, convert_to_same_type(rhs, lhs))
 
     def __str__(self) -> str:
         return f"set_({self.lhs})"
@@ -1635,7 +1639,8 @@ class _UnionBuilder(Generic[EXPR]):
     lhs: Expr
 
     def with_(self, rhs: EXPR) -> Action:
-        return Union_(to_runtime_expr(self.lhs), to_runtime_expr(rhs))
+        lhs = to_runtime_expr(self.lhs)
+        return Union_(lhs, convert_to_same_type(rhs, lhs))
 
     def __str__(self) -> str:
         return f"union({self.lhs})"
