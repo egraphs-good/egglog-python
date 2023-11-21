@@ -5,7 +5,8 @@ _This project uses semantic versioning_
 ## 3.1.0 (UNRELEASED)
 
 - Update graphs to include more compact Python names of functions (#79)[https://github.com/metadsl/egglog-python/pull/79].
-- Add way method to get egglog source from e-graph.
+- Add method to get egglog source from e-graph.
+- Add `include_cost` flag to `egraph.extract` to return the integer cost as well as an expression.
 
 ## 3.0.0 (2023-11-19)
 
