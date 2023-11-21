@@ -2,7 +2,9 @@
 
 _This project uses semantic versioning_
 
-## 3.1.0 (UNRELEASED)
+## UNRELEASED
+
+## 3.1.0 (2023-11-21)
 
 - Update graphs to include more compact Python names of functions (#79)[https://github.com/metadsl/egglog-python/pull/79].
 - Add method to get egglog source from e-graph (#82)[https://github.com/metadsl/egglog-python/pull/82].
