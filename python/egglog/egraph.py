@@ -777,20 +777,36 @@ class EGraph(_BaseModule):
     """
 
     seminaive: InitVar[bool] = True
+    save_egglog_string: InitVar[bool] = False
 
     _egraph: bindings.EGraph = field(repr=False, init=False)
     # The current declarations which have been pushed to the stack
     _decl_stack: list[Declarations] = field(default_factory=list, repr=False)
     _token_stack: list[Token[EGraph]] = field(default_factory=list, repr=False)
+    _egglog_string: str | None = field(default=None, repr=False, init=False)
 
-    def __post_init__(self, modules: list[Module], seminaive: bool) -> None:
+    def __post_init__(self, modules: list[Module], seminaive: bool, save_egglog_string: bool) -> None:
         super().__post_init__(modules)
         self._egraph = bindings.EGraph(GLOBAL_PY_OBJECT_SORT, seminaive=seminaive)
         for m in self._flatted_deps:
             self._process_commands(m._cmds)
+        if save_egglog_string:
+            self._egglog_string = ""
 
     def _process_commands(self, commands: Iterable[bindings._Command]) -> None:
         self._egraph.run_program(*commands)
+        if isinstance(self._egglog_string, str):
+            self._egglog_string += "\n".join(str(c) for c in commands) + "\n"
+
+    @property
+    def as_egglog_string(self) -> str:
+        """
+        Returns the egglog string for this module.
+        """
+        if self._egglog_string is None:
+            msg = "Can't get egglog string unless EGraph created with save_egglog_string=True"
+            raise ValueError(msg)
+        return self._egglog_string
 
     def _repr_mimebundle_(self, *args, **kwargs):
         """
