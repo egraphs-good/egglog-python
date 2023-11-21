@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+from multiprocessing import Value
 import pathlib
 from copy import copy
 from typing import ClassVar, Union
@@ -517,3 +518,15 @@ def test_eval():
     assert egraph.eval(f64(10.0)) == 10.0
     assert egraph.eval(Bool(True)) is True
     assert egraph.eval(PyObject((1, 2))) == (1, 2)
+
+
+def test_egglog_string():
+    egraph = EGraph(save_egglog_string=True)
+    egraph.register((i64(1)))
+    assert egraph.as_egglog_string
+
+def test_no_egglog_string():
+    egraph = EGraph()
+    egraph.register((i64(1)))
+    with pytest.raises(ValueError):
+        egraph.as_egglog_string

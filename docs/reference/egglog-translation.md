@@ -6,6 +6,8 @@ file_format: mystnb
 
 The high level bindings available at the top module (`egglog`) expose most of the functionality of the `egglog` text format. This guide exaplin how to translate between the two.
 
+Any EGraph can also be converted to egglog with the `egraph.as_egglog_string` property, as long as it was created with `Egraph(save_egglog_string=True)`.
+
 ## Unsupported features
 
 The currently unsupported features are:
