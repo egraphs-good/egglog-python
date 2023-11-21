@@ -119,6 +119,14 @@ def convert(source: object, target: type[V]) -> V:
     return cast(V, _resolve_literal(target_ref.to_var(), source))
 
 
+def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
+    """
+    Convert a source object to the same type as the target.
+    """
+    tp = target.__egg_typed_expr__.tp
+    return _resolve_literal(tp.to_var(), source)
+
+
 def process_tp(tp: type | RuntimeTypeArgType) -> JustTypeRef | type:
     if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
         return class_to_ref(tp)

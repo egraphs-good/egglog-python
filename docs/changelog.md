@@ -5,8 +5,9 @@ _This project uses semantic versioning_
 ## 3.1.0 (UNRELEASED)
 
 - Update graphs to include more compact Python names of functions (#79)[https://github.com/metadsl/egglog-python/pull/79].
-- Add method to get egglog source from e-graph.
-- Add `include_cost` flag to `egraph.extract` to return the integer cost as well as an expression.
+- Add method to get egglog source from e-graph (#82)[https://github.com/metadsl/egglog-python/pull/82].
+- Add `include_cost` flag to `egraph.extract` to return the integer cost as well as an expression (#86)[https://github.com/metadsl/egglog-python/pull/86].
+- Automatically try converting arguments to `eq`, `rewrite`, `set_`, and `union` to the correct type (#84)[https://github.com/metadsl/egglog-python/pull/84].
 
 ## 3.0.0 (2023-11-19)
 
