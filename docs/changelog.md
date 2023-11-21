@@ -4,10 +4,10 @@ _This project uses semantic versioning_
 
 ## 3.1.0 (UNRELEASED)
 
-- Update graphs to include more compact Python names of functions (#79)[https://github.com/metadsl/egglog-python/pull/79].
+- Update graphs to include more compact Python names of functions (#79)[https://github.com/egraphs-good/egglog-python/pull/79].
 - Add method to get egglog source from e-graph.
 - Add `include_cost` flag to `egraph.extract` to return the integer cost as well as an expression.
-- Update RTD name to new project name of `egglog-python` from `egg-smol-python` (#18)[https://github.com/metadsl/egglog-python/pull/18].
+- Update RTD name to new project name of `egglog-python` from `egg-smol-python` (#18)[https://github.com/egraphs-good/egglog-python/pull/18].
 
 ## 3.0.0 (2023-11-19)
 
@@ -15,7 +15,7 @@ Add support for outputing the serialization e-graph from the low level bindings.
 
 This removes the existing to graphviz function on the EGraph low level binding and moves it to a method on the serialized EGraph.
 
-See (#78)[https://github.com/metadsl/egglog-python/pull/78] for more details.
+See (#78)[https://github.com/egraphs-good/egglog-python/pull/78] for more details.
 
 ## 2.0.0 (2023-11-17)
 
@@ -27,7 +27,7 @@ We also change the `PyObject` primitive to behave similarly. Instead of calling 
 
 ## Bug fixes
 
-- Properly expose `birewrite` at top level (#72)[https://github.com/metadsl/egglog-python/pull/72].
+- Properly expose `birewrite` at top level (#72)[https://github.com/egraphs-good/egglog-python/pull/72].
 - Fix generation of graphviz interactive SVGs in docs.
 
 ## Enhancements
@@ -70,15 +70,15 @@ We also change the `PyObject` primitive to behave similarly. Instead of calling 
 
 ### New Features
 
-- Adds ability for custom user defined types in a union for proper static typing with conversions [#49](https://github.com/metadsl/egglog-python/pull/49)
-- Adds `py_eval` function to `EGraph` as a helper to eval Python code. [#49](https://github.com/metadsl/egglog-python/pull/49)
-- Adds on hover behavior for edges in graphviz SVG output to make them easier to trace [#49](https://github.com/metadsl/egglog-python/pull/49)
-- Adds `egglog.exp.program_gen` module that will compile expressions into Python statements/functions [#49](https://github.com/metadsl/egglog-python/pull/49)
-- Adds `py_exec` primitive function for executing Python code [#49](https://github.com/metadsl/egglog-python/pull/49)
+- Adds ability for custom user defined types in a union for proper static typing with conversions [#49](https://github.com/egraphs-good/egglog-python/pull/49)
+- Adds `py_eval` function to `EGraph` as a helper to eval Python code. [#49](https://github.com/egraphs-good/egglog-python/pull/49)
+- Adds on hover behavior for edges in graphviz SVG output to make them easier to trace [#49](https://github.com/egraphs-good/egglog-python/pull/49)
+- Adds `egglog.exp.program_gen` module that will compile expressions into Python statements/functions [#49](https://github.com/egraphs-good/egglog-python/pull/49)
+- Adds `py_exec` primitive function for executing Python code [#49](https://github.com/egraphs-good/egglog-python/pull/49)
 
 ### Bug fixes
 
-- Clean up example in tutorial with demand based expression generation [#49](https://github.com/metadsl/egglog-python/pull/49)
+- Clean up example in tutorial with demand based expression generation [#49](https://github.com/egraphs-good/egglog-python/pull/49)
 
 ## 0.6.0 (2023-09-20)
 
@@ -90,14 +90,14 @@ We also change the `PyObject` primitive to behave similarly. Instead of calling 
 
 ### New Features
 
-- Add ability to pass `seminaive` flag to Egraph to replicate `--naive` CLI flag [#48](https://github.com/metadsl/egglog-python/pull/48)
-- Add ability to inline leaves $n$ times instead of just once for visualization [#48](https://github.com/metadsl/egglog-python/pull/48)
-- Add `Relation` and `PrintOverallStatistics` low level commands [#46](https://github.com/metadsl/egglog-python/pull/46)
-- Adds `count-matches` and `replace` string commands [#46](https://github.com/metadsl/egglog-python/pull/46)
+- Add ability to pass `seminaive` flag to Egraph to replicate `--naive` CLI flag [#48](https://github.com/egraphs-good/egglog-python/pull/48)
+- Add ability to inline leaves $n$ times instead of just once for visualization [#48](https://github.com/egraphs-good/egglog-python/pull/48)
+- Add `Relation` and `PrintOverallStatistics` low level commands [#46](https://github.com/egraphs-good/egglog-python/pull/46)
+- Adds `count-matches` and `replace` string commands [#46](https://github.com/egraphs-good/egglog-python/pull/46)
 
 ### Uncategorized
 
-- Added initial supported for Python objects [#31](https://github.com/metadsl/egglog-python/pull/31)
+- Added initial supported for Python objects [#31](https://github.com/egraphs-good/egglog-python/pull/31)
 
   - Renamed `BaseExpr` to `Expr` for succinctness
   - Add [slides for zoom presentation with Open Teams](explanation/2023_07_presentation)
@@ -113,19 +113,19 @@ We also change the `PyObject` primitive to behave similarly. Instead of calling 
   - Added to/from i64 to i64 methods.
   - Upgraded `egg-smol` dependency ([changes](https://github.com/saulshanabrook/egg-smol/compare/353c4387640019bd2066991ee0488dc6d5c54168...2ac80cb1162c61baef295d8e6d00351bfe84883f))
 
-- Add support for functions which mutates their args, like `__setitem__` [#35](https://github.com/metadsl/egglog-python/pull/35)
-- Makes conversions transitive [#38](https://github.com/metadsl/egglog-python/pull/38)
-- Add support for reflective operators [#39](https://github.com/metadsl/egglog-python/pull/39)
-  - Make reflective operators map directly to non-reflective [#40](https://github.com/metadsl/egglog-python/pull/40)
-- Includes latest egglog changes [#42](https://github.com/metadsl/egglog-python/pull/42)
+- Add support for functions which mutates their args, like `__setitem__` [#35](https://github.com/egraphs-good/egglog-python/pull/35)
+- Makes conversions transitive [#38](https://github.com/egraphs-good/egglog-python/pull/38)
+- Add support for reflective operators [#39](https://github.com/egraphs-good/egglog-python/pull/39)
+  - Make reflective operators map directly to non-reflective [#40](https://github.com/egraphs-good/egglog-python/pull/40)
+- Includes latest egglog changes [#42](https://github.com/egraphs-good/egglog-python/pull/42)
   - Switches to termdag introduced in [egglog #176](https://github.com/egraphs-good/egglog/pull/176)
   - Removes custom fork of egglog now that visualizations are in core
   - Adds int and float to string functions
   - Switches `define` to `let`
-- Tidy up notebook appearence [#43](https://github.com/metadsl/egglog-python/pull/43)
+- Tidy up notebook appearence [#43](https://github.com/egraphs-good/egglog-python/pull/43)
   - Display expressions as code in Jupyter notebook
   - Display all expressions when graphing
-- Start adding to string support [#45](https://github.com/metadsl/egglog-python/pull/45)
+- Start adding to string support [#45](https://github.com/egraphs-good/egglog-python/pull/45)
   - Fix adding rules for sorts defined in other modules
   - Split out array API into multiple module
   - tidy up docs homepage
@@ -170,7 +170,7 @@ We also change the `PyObject` primitive to behave similarly. Instead of calling 
 
 ## 0.3.0 (2023-04-26)
 
-- [Upgrade `egglog` from `08a6e8fecdb77e6ba72a1b1d9ff4aff33229912c` to `6f2633a5fa379487fb389b80fc1225866f8b8c1a`.](https://github.com/metadsl/egglog-python/pull/14)
+- [Upgrade `egglog` from `08a6e8fecdb77e6ba72a1b1d9ff4aff33229912c` to `6f2633a5fa379487fb389b80fc1225866f8b8c1a`.](https://github.com/egraphs-good/egglog-python/pull/14)
 
 ## 0.2.0 (2023-03-27)
 
