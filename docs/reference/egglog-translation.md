@@ -4,7 +4,7 @@ file_format: mystnb
 
 # Translation to/from egglog
 
-The high level bindings available at the top module (`egglog`) expose most of the functionality of the `egglog` text format. This guide exaplin how to translate between the two.
+The high level bindings available at the top module (`egglog`) expose most of the functionality of the `egglog` text format. This guide explains how to translate between the two.
 
 Any EGraph can also be converted to egglog with the `egraph.as_egglog_string` property, as long as it was created with `Egraph(save_egglog_string=True)`.
 
@@ -21,7 +21,7 @@ The currently unsupported features are:
 
 The builtin types of Unit, String, Int, Map, and Rational are all exposed as Python classes.
 
-These can be imported from `egglog` can be instiated using the class constructor from the equivalent Python type. Many of the functions on them are mapped to Python operators. For example, the `>>` operator is mapped to `__rshift__` so it can be used as `a >> b` in Python.
+These can be imported from `egglog` can be instantiated using the class constructor from the equivalent Python type. Many of the functions on them are mapped to Python operators. For example, the `>>` operator is mapped to `__rshift__` so it can be used as `a >> b` in Python.
 
 ```{code-cell} python
 from __future__ import annotations
@@ -87,7 +87,7 @@ class Math(Expr):
 
 ### Parameterized sorts
 
-In egglog, the builtin `Map` sort can be paramterized with the key and value sorts. In Python, we can use the generic typing syntax to do the same:
+In egglog, the builtin `Map` sort can be parameterized with the key and value sorts. In Python, we can use the generic typing syntax to do the same:
 
 ```{code-cell} python
 # egg: (sort MyMap (Map i64 String))
@@ -97,7 +97,7 @@ MyMap = Map[i64, String]
 MyMap.empty().insert(i64(1), String("one"))
 ```
 
-Since the generic types in the `Map` sort as sepecified with the `Generic` class, all of the methods will be statically checked, to make sure the right key/value types are used.
+Since the generic types in the `Map` sort as specified with the `Generic` class, all of the methods will be statically checked, to make sure the right key/value types are used.
 
 This doesn't require any custom type analysis on our part, only using Python's built in annotations with generic types.
 
@@ -122,7 +122,7 @@ The `function` decorator supports a number of options as well, which can be pass
 - `cost`: The cost of the function. By default, this is 1.
 - `default`: A default value for the function. This must be the same type as the return type of the function.
 - `merge`: A function to merge the results of the function. This must be a function that takes two arguments of the return type, the old and the new, and returns a single value of the return type.
-- `on_merge`: A function to call when the function is merged. This must be a function that takes two arguments of the return type, the old and hte new, and a number of actions to take.
+- `on_merge`: A function to call when the function is merged. This must be a function that takes two arguments of the return type, the old and the new, and a number of actions to take.
 
 ```{code-cell} python
 # egg: (function foo () i64 :cost 10 :default 0 :merge (max old new))
@@ -135,7 +135,7 @@ The static types on the decorator preserve the type of the underlying function, 
 
 ### Datatype functions
 
-In egglog, the `(datatype ...)` command can also be used to declare functions. All of the functions declared in this block return the type of the declared datatype. Similarily, in Python, we can use the `@egraph.class_` decorator on a class to define a number of functions associated with that class. These
+In egglog, the `(datatype ...)` command can also be used to declare functions. All of the functions declared in this block return the type of the declared datatype. Similarly, in Python, we can use the `@egraph.class_` decorator on a class to define a number of functions associated with that class. These
 can be either instance methods (including any supported `__` method), class methods, or the `__init__` method. The return type of these functions is inferred from the return type of the function. Additionally, any supported keyword argument for the `@egraph.function` decorator can be used here as well, by using the `@egraph.method` decorator to add values.
 
 Note that by default, the egg name for any method is the Python class name combined with the method name. This allows us to define two classes with the same method name, with different signatures, that map to different egglog functions.
@@ -257,7 +257,7 @@ egraph.register(delete(fib(0)))
 egraph.register(union(Boolean.TRUE | FALSE).with_(Boolean.TRUE))
 ```
 
-Similar to the `set` funciton, this uses a fluent API, so that we can verify the types statically.
+Similar to the `set` function, this uses a fluent API, so that we can verify the types statically.
 
 ### Expr as an action
 
@@ -281,7 +281,7 @@ except BaseException as e:
 
 ## Defining Rules
 
-To define rules in Python, we create a rule with the `rule(*facts).then(*actions) `(rule ...)` command in egglog.
+To define rules in Python, we create a rule with the `rule(*facts).then(*actions) (rule ...)` command in egglog.
 
 ```{code-cell} python
 # egg:
@@ -369,7 +369,7 @@ Facts can be passed after the timeout to only run until those facts are reached:
 egraph.run(10000, eq(fib(7)).to(i64(13)))
 ```
 
-Rulsets can be run as well, by calling the `run` method on them:
+Rulesets can be run as well, by calling the `run` method on them:
 
 ```{code-cell} python
 # egg: (run 10 :ruleset path)

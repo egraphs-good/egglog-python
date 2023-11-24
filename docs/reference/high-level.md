@@ -6,15 +6,15 @@ file_format: mystnb
 
 The top level module contains the high level API for using e-graphs in Python.
 
-The high level API is not documented yet, becuase adding supporting for our custom objects requires [a custom AutoDoc extension](https://www.sphinx-doc.org/en/master/development/tutorials/autodoc_ext.html#autodoc-ext-tutorial).
+The high level API is not documented yet, because adding supporting for our custom objects requires [a custom AutoDoc extension](https://www.sphinx-doc.org/en/master/development/tutorials/autodoc_ext.html#autodoc-ext-tutorial).
 
 ## Example
 
 The high level API builds on the low level API and is designed to:
 
-1. Statically type checks as much as possible with MyPy
+1. Statically type check as much as possible with MyPy
 2. Be concise to write
-3. Feels "pythonic"
+3. Feel "pythonic"
 
 Here is the same example using the high level API:
 
