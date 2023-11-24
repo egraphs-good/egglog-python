@@ -4,7 +4,7 @@ This package is in active development and we welcome contributions.
 
 ## Documentation
 
-We use the [Diátaxis framework](https://diataxis.fr/) to organize our documentation. The "explaination" section has
+We use the [Diátaxis framework](https://diataxis.fr/) to organize our documentation. The "explanation" section has
 been renamed to "Blog" since most of the content there is more like a blog post than a reference manual. It uses
 the [ABlog](https://ablog.readthedocs.io/en/stable/index.html#how-it-works) extension.
 

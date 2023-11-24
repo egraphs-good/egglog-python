@@ -79,19 +79,19 @@ Conversion from an int:
 egraph.eval(PyObject.from_int(1))
 ```
 
-We also support evaling arbitrary Python bode, given some locals and globals. This technically allows us to implement any Python method:
+We also support evaluating arbitrary Python code, given some locals and globals. This technically allows us to implement any Python method:
 
 ```{code-cell} python
 egraph.eval(py_eval("1 + 2"))
 ```
 
-Execing Python code is also supported. In this case, the return value will be the updated globals dict, which will be copied first before using.
+Executing Python code is also supported. In this case, the return value will be the updated globals dict, which will be copied first before using.
 
 ```{code-cell} python
 egraph.eval(py_exec("x = 1 + 2"))
 ```
 
-Alongside this, we support a function `dict_update` method, which can allow you to combine some local local egglog expressions alongside, say, the locals and globals of the Python code you are evaling.
+Alongside this, we support a function `dict_update` method, which can allow you to combine some local egglog expressions alongside, say, the locals and globals of the Python code you are evaluating.
 
 ```{code-cell} python
 # Need this from our globals()
@@ -105,10 +105,9 @@ assert egraph.eval(evalled) == 3
 
 ### Simpler Eval
 
-Instead of using the above low level primitive for evaling, there is a higher level wrapper function, `eval_fn`.
+Instead of using the above low level primitive for evaluating, there is a higher level wrapper function, `eval_fn`.
 
-It takes in a Python function and converts it to a function of PyObjects, by using `py_eval`
-under the hood.
+It takes in a Python function and converts it to a function of PyObjects, by using `py_eval` under the hood.
 
 The above code code be re-written like this:
 
@@ -148,14 +147,14 @@ Math(2) + Math(i64(30)) + Math.var(String("x"))
 
 You can also specify a "cost" for a conversion, which will be used to determine which conversion to use when multiple are possible. For example `convert(i64, Math, 10)`.
 
-Regstering a conversion from A to B will also register all transitively reachable conversions from A to B, so you can also use:
+Registering a conversion from A to B will also register all transitively reachable conversions from A to B, so you can also use:
 
 ```{code-cell} python
 Math(2) + 30 + "x"
 ```
 
 If you want to have this work with the static type checker, you can define your own `Union` type, which MUST include
-have the `Expr`` class as the first item in the union. For example, in this case you could then define:
+the `Expr` class as the first item in the union. For example, in this case you could then define:
 
 ```{code-cell} python
 from typing import Union
@@ -185,7 +184,7 @@ bar(b=2, a=1)
 
 ### Default arguments
 
-Default argument values are also supported. They are not translated to egglog definition, which has no notion of optional values. Instead, they are added to the args when the functions is called.
+Default argument values are also supported. They are not translated to egglog definition, which has no notion of optional values. Instead, they are added to args when the functions is called.
 
 ```{code-cell} python
 # egg: (function bar (i64 i64) i64)
@@ -203,7 +202,7 @@ When defining a custom class, you are free to use any method names you like.
 
 ### Builtin Methods
 
-Most of the Python special dunder methods are supported as well:
+Most of the Python special dunder (= "double under") methods are supported as well:
 
 - `__lt__`
 - `__le__`
@@ -234,8 +233,8 @@ Most of the Python special dunder methods are supported as well:
 
 Currently `__divmod__` is not supported, since it returns multiple results and `__ne__` will shadow the builtin `!=` egglog operator.
 
-Also thse methods are currently used in the runtime class and cannot be overriden currently, although we could change this
-if the need arrises:
+Also these methods are currently used in the runtime class and cannot be overridden currently, although we could change this
+if the need arises:
 
 - `__getattr__`
 - `__repr__`
@@ -247,7 +246,7 @@ if the need arrises:
 
 ### "Preserved" methods
 
-You can use the the `@egraph.method(preserve=True)` decorator to mark a method as "preserved", meaning that calling it will actually execute the body of the function and a coresponding egglog function will not be created,
+You can use the `@egraph.method(preserve=True)` decorator to mark a method as "preserved", meaning that calling it will actually execute the body of the function and a corresponding egglog function will not be created,
 
 Normally, all methods defined on a egglog `Expr` will ignore their bodies and simply build an expression object based on the arguments.
 
@@ -294,7 +293,7 @@ if TRUE | FALSE:
     print("True!")
 ```
 
-Note that the following list of methods are only supported as "preserved" since thy have to return a specific Python object type:
+Note that the following list of methods are only supported as "preserved" since they have to return a specific Python object type:
 
 - `__bool__`
 - `__len__`
@@ -353,7 +352,7 @@ converter(Int, Float, Float.from_int)
 assert str(-1.0 + Int.var("x")) == "Float(-1.0) + Float.from_int(Int.var(\"x\"))"
 ```
 
-For methods which allow returning `NotImplemented`, i.e. the comparision + binary math methods, we will also try upcasting both
+For methods which allow returning `NotImplemented`, i.e. the comparison + binary math methods, we will also try upcasting both
 types to the type which is lowest cost to convert both to.
 
 For example, if you have `Float` and `Int` wrapper types and you have write the expr `-1.0 + Int.var("x")` you might want the result to be `Float(-1.0) + Float.from_int(Int.var("x"))`:
