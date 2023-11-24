@@ -568,7 +568,6 @@ def py_eval_fn(fn: Callable) -> PyObjectFunction:
     It translates it to a call which uses `py_eval` to call the function, passing in the
     args as locals, and using the globals from function.
     """
-    from .builtins import PyObject, py_eval
 
     def inner(*__args: PyObject, __fn: Callable = fn) -> PyObject:
         new_kvs: list[object] = []
