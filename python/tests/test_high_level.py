@@ -543,3 +543,21 @@ def test_eval_fn():
     egraph = EGraph()
 
     assert egraph.eval(py_eval_fn(lambda x: (x,))(PyObject.from_int(1))) == (1,)
+
+
+def _global_make_tuple(x):
+    return (x,)
+
+def test_eval_fn_globals():
+    egraph = EGraph()
+
+    assert egraph.eval(py_eval_fn(lambda x: _global_make_tuple(x))(PyObject.from_int(1))) == (1,)
+
+def test_eval_fn_locals():
+    egraph = EGraph()
+
+
+    def _locals_make_tuple(x):
+        return (x,)
+
+    assert egraph.eval(py_eval_fn(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))) == (1,)
