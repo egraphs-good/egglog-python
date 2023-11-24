@@ -2,9 +2,10 @@
 
 _This project uses semantic versioning_
 
-## UNRELEASED
+## 4.0.0 (UNRELEASED)
 
 - Fix `as_egglog_string` proprety.
+- Move `EGraph.eval_fn` to `py_eval_fn` since it doesn't need the `EGraph` anymore.
 
 ## 3.1.0 (2023-11-21)
 

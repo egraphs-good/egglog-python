@@ -536,3 +536,10 @@ def test_no_egglog_string():
     egraph.register((i64(1)))
     with pytest.raises(ValueError):
         egraph.as_egglog_string
+
+
+
+def test_eval_fn():
+    egraph = EGraph()
+
+    assert egraph.eval(py_eval_fn(lambda x: (x,))(PyObject.from_int(1))) == (1,)
