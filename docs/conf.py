@@ -113,7 +113,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/metadsl/egglog-python",
+            "url": "https://github.com/egraphs-good/egglog-python",
             "icon": "fa-brands fa-square-github",
             "type": "fontawesome",
         },
@@ -123,7 +123,7 @@ html_theme_options = {
 }
 
 html_context = {
-    "github_user": "metadsl",
+    "github_user": "egraphs-good",
     "github_repo": "egglog-python",
     "github_version": "main",
     "doc_path": "docs",

@@ -29,7 +29,7 @@ It follows [SPEC 0](https://scientific-python.org/specs/spec-0000/) in terms of 
 There is [a Zulip stream](https://egraphs.zulipchat.com/#narrow/stream/375765-egglog) for the `egglog` project
 which you are welcome to open a thread on.
 
-There are also [Github issues](https://github.com/metadsl/egglog-python/issues) and [discussions](https://github.com/metadsl/egglog-python/discussions)
+There are also [Github issues](https://github.com/egraphs-good/egglog-python/issues) and [discussions](https://github.com/egraphs-good/egglog-python/discussions)
 which you can use to ask questions.
 
 ## Stability

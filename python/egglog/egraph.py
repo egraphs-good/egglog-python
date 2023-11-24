@@ -794,6 +794,7 @@ class EGraph(_BaseModule):
             self._egglog_string = ""
 
     def _process_commands(self, commands: Iterable[bindings._Command]) -> None:
+        commands = list(commands)
         self._egraph.run_program(*commands)
         if isinstance(self._egglog_string, str):
             self._egglog_string += "\n".join(str(c) for c in commands) + "\n"
