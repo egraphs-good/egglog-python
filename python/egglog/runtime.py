@@ -206,7 +206,7 @@ class RuntimeClass:
     __egg_decls__: ModuleDeclarations
     __egg_name__: str
 
-    def __call__(self, *args: object) -> RuntimeExpr | None:
+    def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr | None:
         """
         Create an instance of this kind by calling the __init__ classmethod
         """
@@ -222,7 +222,7 @@ class RuntimeClass:
             assert len(args) == 0
             return RuntimeExpr(self.__egg_decls__, TypedExprDecl(JustTypeRef(self.__egg_name__), LitDecl(None)))
 
-        return RuntimeClassMethod(self.__egg_decls__, self.__egg_name__, "__init__")(*args)
+        return RuntimeClassMethod(self.__egg_decls__, self.__egg_name__, "__init__")(*args, **kwargs)
 
     def __dir__(self) -> list[str]:
         cls_decl = self.__egg_decls__.get_class_decl(self.__egg_name__)
@@ -527,7 +527,12 @@ class RuntimeExpr:
 # Define each of the special methods, since we have already declared them for pretty printing
 for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call__", "__setitem__", "__delitem__"]:
 
-    def _special_method(self: RuntimeExpr, *args: object, __name: str = name) -> RuntimeExpr | None:
+    def _special_method(
+        self: RuntimeExpr,
+        *args: object,
+        __name: str = name,
+        **kwargs: object,
+    ) -> RuntimeExpr | None:
         # First, try to resolve as preserved method
         try:
             method = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods[__name]
@@ -541,9 +546,9 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
                     return call_method_min_conversion(self, args[0], __name)
                 except ConvertError:
                     return NotImplemented
-            return RuntimeMethod(self, __name)(*args)
+            return RuntimeMethod(self, __name)(*args, **kwargs)
         else:
-            return method(self, *args)
+            return method(self, *args, **kwargs)
 
     setattr(RuntimeExpr, name, _special_method)
 

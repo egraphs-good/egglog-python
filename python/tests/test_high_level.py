@@ -234,6 +234,19 @@ def test_keyword_args():
     assert expr_parts(foo(y=i64(2), x=i64(1))) == pos
 
 
+def test_keyword_args_init():
+    egraph = EGraph()
+
+    @egraph.class_
+    class Foo(Expr):
+        def __init__(self, x: i64Like) -> None:
+            ...
+
+
+    assert expr_parts(Foo(1)) == expr_parts(Foo(x=1))
+
+
+
 def test_modules() -> None:
     m = Module()
 
