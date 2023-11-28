@@ -17,7 +17,6 @@ from typing import (  # type: ignore[attr-defined]
     Generic,
     Literal,
     NoReturn,
-    Protocol,
     TypedDict,
     TypeVar,
     Union,
@@ -99,11 +98,6 @@ IGNORED_ATTRIBUTES = {
 _BUILTIN_DECLS: Declarations | None = None
 
 ALWAYS_MUTATES_SELF = {"__setitem__", "__delitem__"}
-
-
-class PyObjectFunction(Protocol):
-    def __call__(self, *__args: PyObject) -> PyObject:
-        ...
 
 
 @dataclass
@@ -1079,27 +1073,6 @@ class EGraph(_BaseModule):
             case JustTypeRef("PyObject"):
                 return self._egraph.eval_py_object(egg_expr)
         raise NotImplementedError(f"Eval not implemented for {typed_expr.tp.name}")
-
-    def eval_fn(self, fn: Callable) -> PyObjectFunction:
-        """
-        Takes a python callable and maps it to a callable which takes and returns PyObjects.
-
-        It translates it to a call which uses `py_eval` to call the function, passing in the
-        args as locals, and using the globals from function.
-        """
-        from .builtins import PyObject, py_eval
-
-        def inner(*__args: PyObject, __fn: Callable = fn) -> PyObject:
-            new_kvs: list[object] = []
-            eval_str = "__fn("
-            for i, arg in enumerate(__args):
-                new_kvs.append(f"__arg_{i}")
-                new_kvs.append(arg)
-                eval_str += f"__arg_{i}, "
-            eval_str += ")"
-            return py_eval(eval_str, PyObject({"__fn": __fn}).dict_update(*new_kvs), __fn.__globals__)
-
-        return inner
 
     def saturate(
         self, *, max: int = 1000, performance: bool = False, **kwargs: Unpack[GraphvizKwargs]

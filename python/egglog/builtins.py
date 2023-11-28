@@ -5,10 +5,13 @@ Builtin sorts and function to egg.
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar, Union
+from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, Union
 
 from .egraph import BUILTINS, Expr, Unit
 from .runtime import converter
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 __all__ = [
     "BUILTINS",
@@ -28,6 +31,7 @@ __all__ = [
     "PyObject",
     "py_eval",
     "py_exec",
+    "py_eval_fn",
 ]
 
 
@@ -550,6 +554,32 @@ converter(object, PyObject, PyObject)
 @BUILTINS.function(egg_fn="py-eval")
 def py_eval(code: StringLike, globals: object = PyObject.dict(), locals: object = PyObject.dict()) -> PyObject:
     ...
+
+
+class PyObjectFunction(Protocol):
+    def __call__(self, *__args: PyObject) -> PyObject:
+        ...
+
+
+def py_eval_fn(fn: Callable) -> PyObjectFunction:
+    """
+    Takes a python callable and maps it to a callable which takes and returns PyObjects.
+
+    It translates it to a call which uses `py_eval` to call the function, passing in the
+    args as locals, and using the globals from function.
+    """
+
+    def inner(*__args: PyObject, __fn: Callable = fn) -> PyObject:
+        new_kvs: list[object] = []
+        eval_str = "__fn("
+        for i, arg in enumerate(__args):
+            new_kvs.append(f"__arg_{i}")
+            new_kvs.append(arg)
+            eval_str += f"__arg_{i}, "
+        eval_str += ")"
+        return py_eval(eval_str, PyObject({"__fn": __fn}).dict_update(*new_kvs), __fn.__globals__)
+
+    return inner
 
 
 @BUILTINS.function(egg_fn="py-exec")
