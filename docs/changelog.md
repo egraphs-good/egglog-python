@@ -2,7 +2,11 @@
 
 _This project uses semantic versioning_
 
-## Unreleased
+## UNRELEASED
+
+## 4.0.1 (2023-11-27)
+
+- Fix keyword args for `__init__` methods (#96)[https://github.com/metadsl/egglog-python/pull/96].
 
 ## 4.0.0 (2023-11-24)
 
