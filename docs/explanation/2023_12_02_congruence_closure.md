@@ -74,7 +74,7 @@ First, we can start by trying to prove that `f(a, b) = a` implies `f(f(a, b), b)
 with egraph:
     # start with our initial assumption
     egraph.register(
-        union(f(a, b)).with _(a)
+        union(f(a, b)).with_(a)
     )
     # Verify that we can prove the result
     egraph.check(
