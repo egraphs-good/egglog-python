@@ -104,15 +104,6 @@ We see that now `f(a)` is in the same e-class as `a` and so we can prove that `f
 
 I really enjoy how by converting these equivalence into these graphical forms makes proving equivalences about them intuitive and visual.
 
-```{code-cell} python
-egraph.display()
-egraph.run(1)
-egraph.display()
-egraph.run(1)
-egraph.display()
-egraph.check(eq(x).to(y))
-```
-
 ## "4. Extension to Theories of List Structure"
 
 Now lets take a look at the second use case it outlines, which is to be able to prove properties about lists:
