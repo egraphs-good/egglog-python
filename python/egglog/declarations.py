@@ -770,9 +770,6 @@ class CallDecl:
         if self in context.names:
             return context.names[self]
         ref, args = self.callable, [a.expr for a in self.args]
-        # Special case != since it doesn't have a decl
-        if isinstance(ref, MethodRef) and ref.method_name == "__ne__":
-            return f"{args[0].pretty(context)} != {args[1].pretty(context)}"
         function_decl = context.mod_decls.get_function_decl(ref)
         # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
         n_defaults = 0

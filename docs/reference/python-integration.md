@@ -208,6 +208,7 @@ Most of the Python special dunder (= "double under") methods are supported as we
 - `__le__`
 - `__eq__`
 - `__ne__`
+- `__ne__`
 - `__gt__`
 - `__ge__`
 - `__add__`
@@ -231,7 +232,7 @@ Most of the Python special dunder (= "double under") methods are supported as we
 - `__setitem__`
 - `__delitem__`
 
-Currently `__divmod__` is not supported, since it returns multiple results and `__ne__` will shadow the builtin `!=` egglog operator.
+Currently `__divmod__` is not supported, since it returns multiple results.
 
 Also these methods are currently used in the runtime class and cannot be overridden currently, although we could change this
 if the need arises:

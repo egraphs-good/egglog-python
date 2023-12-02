@@ -359,8 +359,32 @@ def test_f64_negation() -> None:
 
 def test_not_equals():
     egraph = EGraph()
-    egraph.check(i64(10) != i64(2))
+    egraph.check(ne(i64(10)).to(i64(2)))
 
+
+def test_custom_equality():
+    egraph = EGraph()
+
+    @egraph.class_
+    class Boolean(Expr):
+        def __init__(self, value: BoolLike) -> None:
+            ...
+
+        def __eq__(self, other: Boolean) -> Boolean: # type: ignore[override]
+            ...
+
+        def __ne__(self, other: Boolean) -> Boolean: # type: ignore[override]
+            ...
+
+    egraph.register(rewrite(Boolean(True) == Boolean(True)).to(Boolean(False)))
+    egraph.register(rewrite(Boolean(True) != Boolean(True)).to(Boolean(True)))
+
+    should_be_true = Boolean(True) == Boolean(True)
+    should_be_false = Boolean(True) != Boolean(True)
+    egraph.register(should_be_true, should_be_false)
+    egraph.run(10)
+    egraph.check(eq(should_be_true).to(Boolean(False)))
+    egraph.check(eq(should_be_false).to(Boolean(True)))
 
 class TestMutate:
     def test_setitem_defaults(self):
