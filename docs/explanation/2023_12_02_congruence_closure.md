@@ -139,7 +139,7 @@ def _list_axioms(x: T, y: T, z: T):
     # CDR(CONS(x, y)) = y
     yield rewrite(cdr(cons(x, y))).to(y)
     # ¬ATOM(x) ⊃ CONS(CAR(x), CDR(x)) = x
-    yield rule(not_atom(x)).then(union(cons(car(x), cdr(x)).with_(x)))
+    yield rule(not_atom(x)).then(union(cons(car(x), cdr(x))).with_(x))
     # ¬ATOM(CONS(x, y))
     yield rule(eq(z).to(cons(x, y))).then(not_atom(z))
 ```
