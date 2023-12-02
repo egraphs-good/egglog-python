@@ -29,7 +29,7 @@ In the first sentance of the intro of the first paper it introduces the concept 
 > since almost all proofs in both program verification and formalized mathematics
 > require reasoning about equalities [23].
 
-I went to follow that citation and read the original paper [**"Fast decision procedures based on congruence closure"** by Nelson and Oppen in 1980].
+I went to follow that citation and read the original paper [**"Fast decision procedures based on congruence closure"** by Nelson and Oppen in 1980](https://dl.acm.org/doi/10.1145/322186.322198).
 
 It was fun to see the original definitions of the congruence closure and to see what problems they were using it to solve.
 
@@ -185,4 +185,4 @@ Then it runs the `CAR(CONS(x, y)) = x` and `CDR(CONS(x, y)) = y` rules to unify 
 
 ## Conclusion
 
-I had fun translating these examples into `egglog`. I also took a look over the other paper mentioned in the begining and might write about those in a future post. They were obviously more complex, and I understand less of them, since they are about dependent types and cubical type theory. However, it was interesting to see the connetion between things like the theory of the univalance axiom and questions like formalizing the equivalence of different programming languages abstractions. I really enjoyed [Voevodsky's lectures on the foundation of mathematics](https://www.math.ias.edu/vladimir/lectures#:~:text=Foundations%20of%20mathematics%20%2D%20their%20past%2C%20present%20and%20future) intuitiavely it seems like the perspective of treating equivalence as a path seems like an interesting approach.
+I had fun translating these examples into `egglog`. I also took a look over the other paper mentioned in the begining and might write about those in a future post. They were obviously more complex, and I understand less of them, since they are about dependent types and cubical type theory. However, it was interesting to see the connetion between things like the theory of the univalance axiom and questions like formalizing the equivalence of different programming languages abstractions. I really enjoyed [Voevodsky's lectures on the foundation of mathematics](https://www.math.ias.edu/vladimir/lectures#:~:text=Foundations%20of%20mathematics%20%2D%20their%20past%2C%20present%20and%20future) intuitiavely it seems like the perspective of treating equivalence as a path seems like an interesting approach. Also, I can see how it relates to open questions of storing proofs of equivalences in egglog as well as how to think about the "directionality" of a equality relational more intentionally, as the addition of features like `merge` functions in `egglog` allow.
