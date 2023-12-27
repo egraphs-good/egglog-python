@@ -269,7 +269,7 @@ class ModuleDeclarations:
                 return decls.get_egg_fn(ref)
             except KeyError:
                 pass
-        raise KeyError(f"Callable ref {ref} not found")
+        raise KeyError(f"Callable ref {ref!r} not found")
 
     def get_egg_sort(self, ref: JustTypeRef) -> str:
         for decls in self.all_decls:

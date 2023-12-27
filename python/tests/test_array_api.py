@@ -1,4 +1,3 @@
-# import pytest
 from egglog.exp.array_api import *
 from egglog.exp.array_api_numba import array_api_numba_module
 from egglog.exp.array_api_program_gen import *

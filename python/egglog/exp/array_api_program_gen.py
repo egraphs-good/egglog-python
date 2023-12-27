@@ -126,7 +126,8 @@ def _float_program(f: Float, g: Float, f64_: f64, i: Int, r: Rational):
     yield rewrite(float_program(f * g)).to(Program("(") + float_program(f) + " * " + float_program(g) + ")")
     yield rewrite(float_program(f / g)).to(Program("(") + float_program(f) + " / " + float_program(g) + ")")
     yield rewrite(float_program(Float.rational(r))).to(
-        Program("float(") + Program(r.numer.to_string()) + " / " + Program(r.denom.to_string()) + ")", r.denom != i64(1)
+        Program("float(") + Program(r.numer.to_string()) + " / " + Program(r.denom.to_string()) + ")",
+        ne(r.denom).to(i64(1)),
     )
     yield rewrite(float_program(Float.rational(r))).to(
         Program("float(") + Program(r.numer.to_string()) + ")", eq(r.denom).to(i64(1))

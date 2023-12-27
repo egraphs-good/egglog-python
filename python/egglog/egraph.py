@@ -55,7 +55,6 @@ __all__ = [
     "birewrite",
     "eq",
     "ne",
-    "_ne",
     "panic",
     "let",
     "delete",
@@ -663,6 +662,8 @@ class _Builtins(_BaseModule):
             msg = "Builtins already initialized"
             raise RuntimeError(msg)
         _BUILTIN_DECLS = self._mod_decls._decl
+        # Register != operator
+        _BUILTIN_DECLS.register_callable_ref(FunctionRef("!="), "!=")
 
     def _process_commands(self, cmds: Iterable[bindings._Command]) -> None:
         """
@@ -1172,14 +1173,6 @@ class Unit(Expr):
         ...
 
 
-@BUILTINS.function(egg_fn="!=")
-def _ne(l: Expr, r: Expr) -> Unit:  # type: ignore[empty-body]
-    """
-    Translates to the != egg function.
-    """
-    ...
-
-
 @dataclass(frozen=True)
 class Ruleset:
     name: str
@@ -1602,7 +1595,20 @@ class _NeBuilder(Generic[EXPR]):
     expr: EXPR
 
     def to(self, expr: EXPR) -> Unit:
-        return _ne(self.expr, expr)
+        l_expr = cast(RuntimeExpr, self.expr)
+        return cast(
+            Unit,
+            RuntimeExpr(
+                BUILTINS._mod_decls,
+                TypedExprDecl(
+                    JustTypeRef("Unit"),
+                    CallDecl(
+                        FunctionRef("!="),
+                        (l_expr.__egg_typed_expr__, convert_to_same_type(expr, l_expr).__egg_typed_expr__),
+                    ),
+                ),
+            ),
+        )
 
     def __str__(self) -> str:
         return f"ne({self.expr})"

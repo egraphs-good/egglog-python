@@ -182,7 +182,7 @@ def _compile(
     yield rule(
         stmt,
         p.compile(i),
-        p1.parent != p,
+        ne(p1.parent).to(p),
         eq(s1).to(p1.expr),
     ).then(
         set_(p.statements).to(join(s1, "\n")),
@@ -214,7 +214,7 @@ def _compile(
     # Otherwise, if its not equal to either input, its not an identifier
     yield rule(program_add, eq(p.expr).to(p1.expr), eq(b).to(p1.is_identifer)).then(set_(p.is_identifer).to(b))
     yield rule(program_add, eq(p.expr).to(p2.expr), eq(b).to(p2.is_identifer)).then(set_(p.is_identifer).to(b))
-    yield rule(program_add, p.expr != p1.expr, p.expr != p2.expr).then(set_(p.is_identifer).to(Bool(False)))
+    yield rule(program_add, ne(p.expr).to(p1.expr), ne(p.expr).to(p2.expr)).then(set_(p.is_identifer).to(Bool(False)))
 
     # Set parent of p1
     yield rule(program_add, p.compile(i)).then(
@@ -228,7 +228,7 @@ def _compile(
     yield rule(program_add, p.compile(i), p1.next_sym).then(set_(p2.parent).to(p))
 
     # Compile p2, if p1 parent not equal, but p2 parent equal
-    yield rule(program_add, p.compile(i), p1.parent != p, eq(p2.parent).to(p)).then(p2.compile(i))
+    yield rule(program_add, p.compile(i), ne(p1.parent).to(p), eq(p2.parent).to(p)).then(p2.compile(i))
 
     # Compile p2, if p1 parent eqal
     yield rule(program_add, p.compile(i2), eq(p1.parent).to(p), eq(i).to(p1.next_sym), eq(p2.parent).to(p)).then(
@@ -259,8 +259,8 @@ def _compile(
     yield rule(
         program_add,
         p.compile(i),
-        p1.parent != p,
-        p2.parent != p,
+        ne(p1.parent).to(p),
+        ne(p2.parent).to(p),
     ).then(
         set_(p.statements).to(String("")),
         set_(p.next_sym).to(i),
@@ -269,7 +269,7 @@ def _compile(
     yield rule(
         program_add,
         eq(p1.parent).to(p),
-        p2.parent != p,
+        ne(p2.parent).to(p),
         eq(s1).to(p1.statements),
         eq(i).to(p1.next_sym),
     ).then(
@@ -280,7 +280,7 @@ def _compile(
     yield rule(
         program_add,
         eq(p2.parent).to(p),
-        p1.parent != p,
+        ne(p1.parent).to(p),
         eq(s2).to(p2.statements),
         eq(i).to(p2.next_sym),
     ).then(
@@ -319,7 +319,7 @@ def _compile(
     # 1. b. If p1 parent is not p, then just use assign as statement, next sym of i
     yield rule(
         program_assign,
-        p1.parent != p,
+        ne(p1.parent).to(p),
         p.compile(i),
         eq(s2).to(p1.expr),
         eq(p1.is_identifer).to(Bool(False)),
@@ -347,7 +347,7 @@ def _compile(
     # 1. b. If p1 parent is not p, then just use assign as statement, next sym of i
     yield rule(
         program_assign,
-        p1.parent != p,
+        ne(p1.parent).to(p),
         p.compile(i),
         eq(s2).to(p1.expr),
         eq(p1.is_identifer).to(Bool(True)),

@@ -435,15 +435,13 @@ class RuntimeMethod:
             self.__egg_callable_ref__ = PropertyRef(self.class_name, self.__egg_method_name__)
         else:
             self.__egg_callable_ref__ = MethodRef(self.class_name, self.__egg_method_name__)
-        # Special case for __ne__ which does not have a normal function defintion since
-        # it relies of type parameters
-        if self.__egg_method_name__ == "__ne__":
-            self.__egg_fn_decl__ = None
-        else:
-            try:
-                self.__egg_fn_decl__ = self.__egg_self__.__egg_decls__.get_function_decl(self.__egg_callable_ref__)
-            except KeyError as e:
-                raise AttributeError(f"Class {self.class_name} does not have method {self.__egg_method_name__}") from e
+        try:
+            self.__egg_fn_decl__ = self.__egg_self__.__egg_decls__.get_function_decl(self.__egg_callable_ref__)
+        except KeyError as e:
+            msg = f"Class {self.class_name} does not have method {self.__egg_method_name__}"
+            if self.__egg_method_name__ == "__ne__":
+                msg += ". Did you mean to use the ne(...).to(...)?"
+            raise AttributeError(msg) from e
 
     def __call__(self, *args: object, **kwargs) -> RuntimeExpr | None:
         args = (self.__egg_self__, *args)
