@@ -1,0 +1,71 @@
+# Implicit Definitions
+
+## Abstract
+
+## Motiviation
+
+## Examples
+
+```python
+from __future__ import annotations
+import egglog
+
+@egglog
+class Num:
+    def __init__(self, value: i64Like) -> None: ...
+
+    @classmethod
+    def var(cls, name: StringLike) -> Num: ...
+
+    def __add__(self, other: Num) -> Num: ...
+
+    def __mul__(self, other: Num) -> Num: ...
+
+
+# expr1 = 2 * (x + 3)
+expr1 = Num(2) * (Num.var("x") + Num(3))
+# expr2 = 6 + 2 * x
+expr2 = Num(6) + Num(2) * Num.var("x")
+
+a, b, c = vars_("a b c", Num)
+i, j = vars_("i j", i64)
+rules = egglog.ruleset(
+    rewrite(a + b).to(b + a),
+    rewrite(a * (b + c)).to((a * b) + (a * c)),
+    rewrite(Num(i) + Num(j)).to(Num(i + j)),
+    rewrite(Num(i) * Num(j)).to(Num(i * j)),
+)
+
+egraph = egglog.EGraph()
+egraph.add(expr1, expr2)
+egraph.run(rules * 10)
+egraph.check(eq(expr1).to(expr2))
+egraph
+```
+
+## Specification
+
+<!-- What to call this?? -->
+
+- `egglog[T: Callable | Type].wrap(f: T) -> T`
+- `egglog.simplify(expr: Expr, schedule: Schedule = DefaultSchedule) -> Expr`
+
+- `egglog.var(name: str, tp: type[T: Expr]) -> T`
+- `egglog.vars_(name: str, tp: type[T: Expr]) -> List[T]`
+
+- `egglog.EGraph(seminaive: bool = True, save_egglog_string: bool = False) -> egglog.EGraph`
+- `egraph.add(*exprs: Expr | Union | Set | Delete) -> None`
+- `egraph.check(*facts: Expr | Eq) -> None`
+- `egraph.run(schedule: Schedule = DefaultSchedule) -> None`
+- `egraph.extract[T: Expr](x:T) -> T`
+- `egraph.extract_multiple[T: Expr](x:T, max: int) -> List[T]`
+- `egraph.simplify[T: Expr](x: T, schedule: Schedule = DefaultSchedule) -> T`
+
+- `egglog.Ruleset(*rules: Rule | Rewrite | () -> Rules, egg_name: bool | None = None) -> egglog.Ruleset`
+- `ruleset.add(*rules: Rule | Rewrite | () -> Rules) -> None`
+
+Removes:
+
+- Let, Modules
+
+## Other Considerations
