@@ -4,6 +4,11 @@
 
 ## Motiviation
 
+- Remove modules because they are confusing
+- Make API smaller
+- Allow global use without egraph
+- remove star imports
+
 ## Examples
 
 ```python
@@ -29,7 +34,7 @@ expr2 = Num(6) + Num(2) * Num.var("x")
 
 a, b, c = vars_("a b c", Num)
 i, j = vars_("i j", i64)
-rules = egglog.ruleset(
+rules = egglog.Ruleset(
     rewrite(a + b).to(b + a),
     rewrite(a * (b + c)).to((a * b) + (a * c)),
     rewrite(Num(i) + Num(j)).to(Num(i + j)),
@@ -47,22 +52,36 @@ egraph
 
 <!-- What to call this?? -->
 
-- `egglog[T: Callable | Type].wrap(f: T) -> T`
-- `egglog.simplify(expr: Expr, schedule: Schedule = DefaultSchedule) -> Expr`
+- `egglog[T: Callable | Type].class_(f: T) -> T`
+- `egglog[T: Callable | Type].method(f: T) -> T`
+- `egglog[T: Callable | Type].function(f: T) -> T`
+
+- `egglog.Ruleset(*rules: Rule | Rewrite | () -> Rules, egg_name: bool | None = None) -> egglog.Ruleset`
+- `ruleset.add(*rules: Rule | Rewrite | () -> Rules) -> None`
 
 - `egglog.var(name: str, tp: type[T: Expr]) -> T`
 - `egglog.vars_(name: str, tp: type[T: Expr]) -> List[T]`
 
 - `egglog.EGraph(seminaive: bool = True, save_egglog_string: bool = False) -> egglog.EGraph`
-- `egraph.add(*exprs: Expr | Union | Set | Delete) -> None`
+- `egraph.register(*exprs: Expr | Union | Set | Delete) -> None`
 - `egraph.check(*facts: Expr | Eq) -> None`
 - `egraph.run(schedule: Schedule = DefaultSchedule) -> None`
-- `egraph.extract[T: Expr](x:T) -> T`
-- `egraph.extract_multiple[T: Expr](x:T, max: int) -> List[T]`
+- `egraph.extract[T: Expr](x: T) -> T`
+- `egraph.extract_multiple[T: Expr](x: T, max: int) -> List[T]`
 - `egraph.simplify[T: Expr](x: T, schedule: Schedule = DefaultSchedule) -> T`
+- `egraph.__enter__() -> egglog.EGraph`
+- `egraph.display(**kwargs) -> None`
 
-- `egglog.Ruleset(*rules: Rule | Rewrite | () -> Rules, egg_name: bool | None = None) -> egglog.Ruleset`
-- `ruleset.add(*rules: Rule | Rewrite | () -> Rules) -> None`
+Add()
+Check()
+Run()
+Extract()
+ExtractMultiple()
+Display()
+Push()
+Pop()
+
+-> Iter[SingleExtract, MultipleExtract, GraphViz]
 
 Removes:
 
