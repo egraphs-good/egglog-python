@@ -27,11 +27,6 @@ class Num:
     def __mul__(self, other: Num) -> Num: ...
 
 
-# expr1 = 2 * (x + 3)
-expr1 = Num(2) * (Num.var("x") + Num(3))
-# expr2 = 6 + 2 * x
-expr2 = Num(6) + Num(2) * Num.var("x")
-
 a, b, c = vars_("a b c", Num)
 i, j = vars_("i j", i64)
 rules = egglog.Ruleset(
@@ -41,6 +36,13 @@ rules = egglog.Ruleset(
     rewrite(Num(i) * Num(j)).to(Num(i * j)),
 )
 
+
+# expr1 = 2 * (x + 3)
+expr1 = Num(2) * (Num.var("x") + Num(3))
+# expr2 = 6 + 2 * x
+expr2 = Num(6) + Num(2) * Num.var("x")
+
+
 egraph = egglog.EGraph()
 egraph.add(expr1, expr2)
 egraph.run(rules * 10)
@@ -49,6 +51,8 @@ egraph
 ```
 
 ## Specification
+
+All function/type wrappers will move to the global `egglog` module, removing the need for modules.
 
 <!-- What to call this?? -->
 
