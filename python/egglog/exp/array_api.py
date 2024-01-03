@@ -278,7 +278,7 @@ class Int(Expr):
 @array_api_module.register
 def _int(i: i64, j: i64, r: Boolean, o: Int):
     yield rewrite(Int(i) == Int(i)).to(TRUE)
-    yield rule(eq(r).to(Int(i) == Int(j)), i != j).then(union(r).with_(FALSE))
+    yield rule(eq(r).to(Int(i) == Int(j)), ne(i).to(j)).then(union(r).with_(FALSE))
 
     yield rewrite(Int(i) >= Int(i)).to(TRUE)
     yield rule(eq(r).to(Int(i) >= Int(j)), i > j).then(union(r).with_(TRUE))
@@ -666,7 +666,7 @@ def _tuple_value(
         # Includes
         rewrite(TupleValue.EMPTY.includes(v)).to(FALSE),
         rewrite(TupleValue(v).includes(v)).to(TRUE),
-        rewrite(TupleValue(v).includes(v2)).to(FALSE, v != v2),
+        rewrite(TupleValue(v).includes(v2)).to(FALSE, ne(v).to(v2)),
         rewrite((ti + ti2).includes(v)).to(ti.includes(v) | ti2.includes(v)),
     ]
 
@@ -1503,7 +1503,7 @@ def _assume_value_one_of(x: NDArray, v: Value, vs: TupleValue, idx: TupleInt):
 def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f64, b: Boolean):
     yield rewrite(Value.int(i).isfinite()).to(TRUE)
     yield rewrite(Value.bool(b).isfinite()).to(TRUE)
-    yield rewrite(Value.float(Float(f)).isfinite()).to(TRUE, f != f64(math.nan))
+    yield rewrite(Value.float(Float(f)).isfinite()).to(TRUE, ne(f).to(f64(math.nan)))
 
     # a sum of an array is finite if all the values are finite
     yield rewrite(isfinite(sum(arr))).to(NDArray.scalar(Value.bool(arr.index(ALL_INDICES).isfinite())))

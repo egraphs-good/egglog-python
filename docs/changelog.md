@@ -4,6 +4,11 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 5.0.0 (UNRELEASED)
+
+- Move egglog `!=` function to be called with `ne(x).to(y)` instead of `x != y` so that user defined expressions
+  can
+
 ## 4.0.1 (2023-11-27)
 
 - Fix keyword args for `__init__` methods (#96)[https://github.com/metadsl/egglog-python/pull/96].

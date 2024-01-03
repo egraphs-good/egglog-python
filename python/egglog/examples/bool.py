@@ -13,7 +13,7 @@ egraph = EGraph()
 egraph.check(eq(T & T).to(T))
 egraph.check(eq(T & F).to(F))
 egraph.check(eq(T | F).to(T))
-egraph.check((T | F) != F)
+egraph.check(ne(T | F).to(F))
 
 egraph.check(eq(i64(1).bool_lt(2)).to(T))
 egraph.check(eq(i64(2).bool_lt(1)).to(F))
