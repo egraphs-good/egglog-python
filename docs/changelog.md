@@ -4,7 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-## 5.0.0 (UNRELEASED)
+## 5.0.0 (2024-01-16)
 
 - Move egglog `!=` function to be called with `ne(x).to(y)` instead of `x != y` so that user defined expressions
   can
