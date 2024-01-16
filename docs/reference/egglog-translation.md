@@ -52,14 +52,14 @@ Rational(1, 2) / Rational(2, 1)
 
 ### `!=` Operator
 
-The `!=` function in egglog works on any two types with the same sort. In Python, this is supported by overloading the `__ne__` operator, which is done by default in all builtin and custom sorts:
+The `!=` function in egglog works on any two types with the same sort. In Python, this is mapped to the `ne` function:
 
 ```{code-cell} python
 # egg: (!= 10 2)
-i64(10) != i64(2)
+ne(i64(10)).to(i64(2))
 ```
 
-This is checked statically, based on the `__ne__` definition in `Expr`, so that only sorts that have the same sort can be compared.
+This is a two part function so that we can statically check both sides are the same type.
 
 ## Declaring Sorts
 

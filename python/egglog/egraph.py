@@ -54,6 +54,7 @@ __all__ = [
     "rewrite",
     "birewrite",
     "eq",
+    "ne",
     "panic",
     "let",
     "delete",
@@ -259,8 +260,6 @@ class _BaseModule(ABC):
                 unextractable=unextractable,
             )
 
-        # Register != as a method so we can print it as a string
-        self._mod_decls._decl.register_callable_ref(MethodRef(cls_name, "__ne__"), "!=")
         return RuntimeClass(self._mod_decls, cls_name)
 
     # We seperate the function and method overloads to make it simpler to know if we are modifying a function or method,
@@ -664,6 +663,8 @@ class _Builtins(_BaseModule):
             msg = "Builtins already initialized"
             raise RuntimeError(msg)
         _BUILTIN_DECLS = self._mod_decls._decl
+        # Register != operator
+        _BUILTIN_DECLS.register_callable_ref(FunctionRef("!="), "!=")
 
     def _process_commands(self, cmds: Iterable[bindings._Command]) -> None:
         """
@@ -1153,22 +1154,10 @@ class Expr(metaclass=_ExprMetaclass):
     Expression base class, which adds suport for != to all expression types.
     """
 
-    def __ne__(self: EXPR, other_expr: EXPR) -> Unit:  # type: ignore[override, empty-body]
-        """
-        Compare whether to expressions are not equal.
-
-        :param self: The expression to compare.
-        :param other_expr: The other expression to compare to, which must be of the same type.
-        :meta public:
-        """
+    def __ne__(self, other: NoReturn) -> NoReturn:  # type: ignore[override, empty-body]
         ...
 
     def __eq__(self, other: NoReturn) -> NoReturn:  # type: ignore[override, empty-body]
-        """
-        Equality is currently not supported.
-
-        We only add this method so that if you try to use it MyPy will warn you.
-        """
         ...
 
 
@@ -1493,6 +1482,11 @@ def eq(expr: EXPR) -> _EqBuilder[EXPR]:
     return _EqBuilder(expr)
 
 
+def ne(expr: EXPR) -> _NeBuilder[EXPR]:
+    """Check if the given expression is not equal to the given value."""
+    return _NeBuilder(expr)
+
+
 def panic(message: str) -> Action:
     """Raise an error with the given message."""
     return Panic(message)
@@ -1595,6 +1589,30 @@ class _EqBuilder(Generic[EXPR]):
 
     def __str__(self) -> str:
         return f"eq({self.expr})"
+
+
+@dataclass
+class _NeBuilder(Generic[EXPR]):
+    expr: EXPR
+
+    def to(self, expr: EXPR) -> Unit:
+        l_expr = cast(RuntimeExpr, self.expr)
+        return cast(
+            Unit,
+            RuntimeExpr(
+                BUILTINS._mod_decls,
+                TypedExprDecl(
+                    JustTypeRef("Unit"),
+                    CallDecl(
+                        FunctionRef("!="),
+                        (l_expr.__egg_typed_expr__, convert_to_same_type(expr, l_expr).__egg_typed_expr__),
+                    ),
+                ),
+            ),
+        )
+
+    def __str__(self) -> str:
+        return f"ne({self.expr})"
 
 
 @dataclass

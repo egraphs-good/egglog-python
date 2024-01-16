@@ -117,7 +117,7 @@ egraph.register(
         union(t.eval()).with_(Val(i1 + i2))
     ),
     rule(eq(t).to(t1 == t2), eq(t1.eval()).to(t2.eval())).then(union(t.eval()).with_(Val.TRUE)),
-    rule(eq(t).to(t1 == t2), eq(t1.eval()).to(v1), eq(t2.eval()).to(v2), v1 != v2).then(
+    rule(eq(t).to(t1 == t2), eq(t1.eval()).to(v1), eq(t2.eval()).to(v2), ne(v1).to(v2)).then(
         union(t.eval()).with_(Val.FALSE)
     ),
     rule(eq(v).to(t.eval())).then(union(t).with_(Term.val(v))),
@@ -154,12 +154,12 @@ egraph.register(
     # let-var-same
     rewrite(let_(x, t, Term.var(x))).to(t),
     # let-var-diff
-    rewrite(let_(x, t, Term.var(y))).to(Term.var(y), x != y),
+    rewrite(let_(x, t, Term.var(y))).to(Term.var(y), ne(x).to(y)),
     # let-lam-same
     rewrite(let_(x, t, lam(x, t1))).to(lam(x, t1)),
     # let-lam-diff
-    rewrite(let_(x, t, lam(y, t1))).to(lam(y, let_(x, t, t1)), x != y, eq(fv).to(freer(t)), fv.not_contains(y)),
-    rule(eq(t).to(let_(x, t1, lam(y, t2))), x != y, eq(fv).to(freer(t1)), fv.contains(y)).then(
+    rewrite(let_(x, t, lam(y, t1))).to(lam(y, let_(x, t, t1)), ne(x).to(y), eq(fv).to(freer(t)), fv.not_contains(y)),
+    rule(eq(t).to(let_(x, t1, lam(y, t2))), ne(x).to(y), eq(fv).to(freer(t1)), fv.contains(y)).then(
         union(t).with_(lam(t.v(), let_(x, t1, let_(y, Term.var(t.v()), t2))))
     ),
 )

@@ -24,6 +24,11 @@ there is a global default ruleset that is used, `egglog.Ruleset`.
 
 This also adds support for classes with methods that are mutually recursive, by making type analysis more lazy.
 
+## 5.0.0 (2024-01-16)
+
+- Move egglog `!=` function to be called with `ne(x).to(y)` instead of `x != y` so that user defined expressions
+  can
+
 ## 4.0.1 (2023-11-27)
 
 - Fix keyword args for `__init__` methods (#96)[https://github.com/metadsl/egglog-python/pull/96].

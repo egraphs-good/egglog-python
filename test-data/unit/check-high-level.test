@@ -2,9 +2,9 @@
 from egglog import *
 _ = i64(0) == i64(0)  # E: Unsupported operand types for == ("i64" and "i64")
 
-[case notEqAllowed]
+[case notEqNotAllowed]
 from egglog import *
-_ = i64(0) != i64(0)  # type: Unit
+_ = i64(0) != i64(0)  # E: Unsupported operand types for != ("i64" and "i64")
 
 [case eqToAllowed]
 from egglog import *

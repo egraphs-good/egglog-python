@@ -78,7 +78,7 @@ egraph.register(
     union(~p0 | (~p1 | (p2 | F))).with_(T),
 )
 egraph.run(10)
-egraph.check(T != F)
+egraph.check(ne(T).to(F))
 egraph.check(eq(p0).to(F))
 egraph.check(eq(p2).to(F))
 egraph
