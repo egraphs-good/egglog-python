@@ -29,7 +29,7 @@ dependencies = ["typing-extensions", "black", "graphviz"]
 
 [project.optional-dependencies]
 
-array = ["scikit-learn", "array_api_compat", 'numba; python_version<"3.12"']
+array = ["scikit-learn", "array_api_compat", "numba==0.59.0rc1", "llvmlite==0.42.0rc1"]
 dev = ["pre-commit", "ruff", "mypy", "anywidget[dev]", "egglog[docs,test]"]
 
 test = ["pytest", "mypy", "syrupy", "egglog[array]"]
