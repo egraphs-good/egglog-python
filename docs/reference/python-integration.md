@@ -105,7 +105,7 @@ assert egraph.eval(evalled) == 3
 
 ### Simpler Eval
 
-Instead of using the above low level primitive for evaluating, there is a higher level wrapper function, `eval_fn`.
+Instead of using the above low level primitive for evaluating, there is a higher level wrapper function, `py_eval_fn`.
 
 It takes in a Python function and converts it to a function of PyObjects, by using `py_eval` under the hood.
 
@@ -115,7 +115,7 @@ The above code code be re-written like this:
 def my_add(a, b):
     return a + b
 
-evalled = eval_fn(lambda a: my_add(a, 2))(1)
+evalled = py_eval_fn(lambda a: my_add(a, 2))(1)
 assert egraph.eval(evalled) == 3
 ```
 

@@ -1,5 +1,4 @@
 import pathlib  # noqa: INP001
-import subprocess
 
 ##
 # ABlog
@@ -26,7 +25,7 @@ html_sidebars = {
 # Myst
 ##
 
-myst_enable_extensions = ["attrs_inline", "smartquotes", "strikethrough", "html_image"]
+myst_enable_extensions = ["attrs_inline", "smartquotes", "strikethrough", "html_image", "deflist"]
 myst_fence_as_directive = ["mermaid"]
 
 ##
@@ -37,20 +36,20 @@ cwd = pathlib.Path(__file__).parent
 presentation_file = cwd / "explanation" / "pldi_2023_presentation.ipynb"
 output_dir = cwd / "presentations"
 
-subprocess.run(
-    [  # noqa: S603,S607
-        "jupyter",
-        "nbconvert",
-        str(presentation_file),
-        "--to",
-        "slides",
-        "--output-dir",
-        str(output_dir),
-        "--TagRemovePreprocessor.remove_input_tags",
-        "remove-input",
-    ],
-    check=True,
-)
+# subprocess.run(
+#     [
+#         "jupyter",
+#         "nbconvert",
+#         str(presentation_file),
+#         "--to",
+#         "slides",
+#         "--output-dir",
+#         str(output_dir),
+#         "--TagRemovePreprocessor.remove_input_tags",
+#         "remove-input",
+#     ],
+#     check=True,
+# )
 
 html_extra_path = ["presentations/pldi_2023_presentation.slides.html"]
 

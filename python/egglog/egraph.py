@@ -146,6 +146,7 @@ class _BaseModule(ABC):
         """
         Registers a class.
         """
+        # Get locals and globals from parent frame so we can infer types from it.
         frame = currentframe()
         assert frame
         prev_frame = frame.f_back
