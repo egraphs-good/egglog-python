@@ -80,8 +80,8 @@ By default, the egg sort name is generated from the Python class name. You can o
 egraph = EGraph()
 
 # egg: (datatype Math2)
-@egraph.class_(egg_sort="Math2")
-class Math(Expr):
+@egraph.class_
+class Math(Expr, egg_sort="Math2"):
     pass
 ```
 
