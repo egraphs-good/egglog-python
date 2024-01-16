@@ -18,7 +18,6 @@ They also have an `__egg_context__` which contains the context needed to reprodu
 An egg context contains a number of fields neccesary to recompute the function in egg.
 
 
-1. 
 
 ## Rulesets
 

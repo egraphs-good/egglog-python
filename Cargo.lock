@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "egglog-python"
-version = "4.0.1"
+version = "5.0.0"
 dependencies = [
  "egglog",
  "egraph-serialize",

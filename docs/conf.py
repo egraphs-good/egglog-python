@@ -25,7 +25,13 @@ html_sidebars = {
 # Myst
 ##
 
-myst_enable_extensions = ["attrs_inline", "smartquotes", "strikethrough", "html_image", "deflist"]
+myst_enable_extensions = [
+    # "attrs_inline",
+    "smartquotes",
+    "strikethrough",
+    "html_image",
+    "deflist",
+]
 myst_fence_as_directive = ["mermaid"]
 
 ##
