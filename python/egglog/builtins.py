@@ -58,8 +58,8 @@ converter(str, String, String)
 BoolLike = Union["Bool", bool]
 
 
-@BUILTINS.class_
-class Bool(Expr, egg_sort="bool"):
+@BUILTINS.class_(egg_sort="bool")
+class Bool(Expr):
     def __init__(self, value: bool) -> None:
         ...
 
@@ -90,8 +90,8 @@ converter(bool, Bool, Bool)
 i64Like = Union["i64", int]  # noqa: N816
 
 
-@BUILTINS.class_
-class i64(Expr, egg_sort="i64"):  # noqa: N801
+@BUILTINS.class_(egg_sort="i64")
+class i64(Expr):  # noqa: N801
     def __init__(self, value: int) -> None:
         ...
 
@@ -225,8 +225,8 @@ def count_matches(s: StringLike, pattern: StringLike) -> i64:
 f64Like = Union["f64", float]  # noqa: N816
 
 
-@BUILTINS.class_
-class f64(Expr, egg_sort="f64"):  # noqa: N801
+@BUILTINS.class_(egg_sort="f64")
+class f64(Expr):  # noqa: N801
     def __init__(self, value: float) -> None:
         ...
 
@@ -314,8 +314,8 @@ T = TypeVar("T", bound=Expr)
 V = TypeVar("V", bound=Expr)
 
 
-@BUILTINS.class_
-class Map(Expr, Generic[T, V], egg_sort="Map"):
+@BUILTINS.class_(egg_sort="Map")
+class Map(Expr, Generic[T, V]):
     @BUILTINS.method(egg_fn="map-empty")
     @classmethod
     def empty(cls) -> Map[T, V]:
@@ -346,8 +346,8 @@ class Map(Expr, Generic[T, V], egg_sort="Map"):
         ...
 
 
-@BUILTINS.class_
-class Set(Expr, Generic[T], egg_sort="Set"):
+@BUILTINS.class_(egg_sort="Set")
+class Set(Expr, Generic[T]):
     @BUILTINS.method(egg_fn="set-of")
     def __init__(self, *args: T) -> None:
         ...
@@ -390,8 +390,8 @@ class Set(Expr, Generic[T], egg_sort="Set"):
         ...
 
 
-@BUILTINS.class_
-class Rational(Expr, egg_sort="Rational"):
+@BUILTINS.class_(egg_sort="Rational")
+class Rational(Expr):
     @BUILTINS.method(egg_fn="rational")
     def __init__(self, num: i64Like, den: i64Like) -> None:
         ...
@@ -471,8 +471,8 @@ class Rational(Expr, egg_sort="Rational"):
         ...
 
 
-@BUILTINS.class_
-class Vec(Expr, Generic[T], egg_sort="Vec"):
+@BUILTINS.class_(egg_sort="Vec")
+class Vec(Expr, Generic[T]):
     @BUILTINS.method(egg_fn="vec-of")
     def __init__(self, *args: T) -> None:
         ...
@@ -515,8 +515,8 @@ class Vec(Expr, Generic[T], egg_sort="Vec"):
         ...
 
 
-@BUILTINS.class_
-class PyObject(Expr, egg_sort="PyObject"):
+@BUILTINS.class_(egg_sort="PyObject")
+class PyObject(Expr):
     def __init__(self, value: object) -> None:
         ...
 

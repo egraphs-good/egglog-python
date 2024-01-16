@@ -42,8 +42,8 @@ egraph.register(
 )
 
 
-@egraph.class_
-class Matrix(Expr, egg_sort="MExpr"):
+@egraph.class_(egg_sort="MExpr")
+class Matrix(Expr):
     @egraph.method(egg_fn="Id")
     @classmethod
     def identity(cls, dim: Dim) -> Matrix:  # type: ignore[empty-body]
