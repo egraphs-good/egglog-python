@@ -577,7 +577,7 @@ def get_general_decls(a: object, b: object) -> ModuleDeclarations:
     Returns the more general module declerations between the two, if both are expressions.
     """
     if isinstance(a, RuntimeExpr) and isinstance(b, RuntimeExpr):
-        return ModuleDeclarations.parent_decl(a.__egg_decls__, b.__egg_decls__)
+        return a.__egg_decls__ + b.__egg_decls__
     if isinstance(a, RuntimeExpr):
         return a.__egg_decls__
     assert isinstance(b, RuntimeExpr)
