@@ -19,7 +19,7 @@ import black
 import black.parsing
 from typing_extensions import assert_never
 
-from . import bindings, config  # noqa: F401
+from . import bindings, config
 from .declarations import *
 from .declarations import BINARY_METHODS, REFLECTED_BINARY_METHODS, UNARY_METHODS
 from .type_constraint_solver import *
@@ -133,7 +133,7 @@ def process_tp(tp: type | RuntimeTypeArgType) -> JustTypeRef | type:
     return tp
 
 
-def min_convertable_tp(decls: ModuleDeclarations, a: object, b: object, name: str) -> JustTypeRef:
+def min_convertable_tp(decls: Declarations, a: object, b: object, name: str) -> JustTypeRef:
     """
     Returns the minimum convertable type between a and b, that has a method `name`, raising a TypeError if no such type exists.
     """
@@ -203,7 +203,7 @@ def _get_tp(x: object) -> JustTypeRef | type:
 
 @dataclass
 class RuntimeClass:
-    __egg_decls__: ModuleDeclarations
+    __egg_decls__: Declarations
     __egg_name__: str
 
     def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr | None:
@@ -265,7 +265,7 @@ class RuntimeClass:
 
 @dataclass
 class RuntimeParamaterizedClass:
-    __egg_decls__: ModuleDeclarations
+    __egg_decls__: Declarations
     # Note that this will never be a typevar because we don't use RuntimeParamaterizedClass for maps on their own methods
     # which is the only time we define function which take typevars
     __egg_tp__: JustTypeRef
@@ -299,7 +299,7 @@ def class_to_ref(cls: RuntimeTypeArgType) -> JustTypeRef:
 
 @dataclass
 class RuntimeFunction:
-    __egg_decls__: ModuleDeclarations
+    __egg_decls__: Declarations
     __egg_name__: str
     __egg_fn_ref__: FunctionRef = field(init=False)
     __egg_fn_decl__: FunctionDecl = field(init=False)
@@ -316,33 +316,26 @@ class RuntimeFunction:
 
 
 def _call(
-    decls: ModuleDeclarations,
+    decls_from_fn: Declarations,
     callable_ref: CallableRef,
-    # Not included if this is the != method
-    fn_decl: FunctionDecl | None,
+    fn_decl: FunctionDecl,
     args: Collection[object],
     kwargs: dict[str, object],
     bound_params: tuple[JustTypeRef, ...] | None = None,
 ) -> RuntimeExpr | None:
+    decls = decls_from_fn.copy()
     # Turn all keyword args into positional args
+    bound = fn_decl.to_signature(lambda expr: RuntimeExpr(decls_from_fn, expr)).bind(*args, **kwargs)
+    bound.apply_defaults()
+    assert not bound.kwargs
+    del args, kwargs
 
-    if fn_decl:
-        bound = fn_decl.to_signature(lambda expr: RuntimeExpr(decls, expr)).bind(*args, **kwargs)
-        bound.apply_defaults()
-        assert not bound.kwargs
-        args = bound.args
-        mutates_first_arg = fn_decl.mutates_first_arg
-    else:
-        assert not kwargs
-        mutates_first_arg = False
-    upcasted_args: list[RuntimeExpr]
-    if fn_decl is not None:
-        upcasted_args = [
-            _resolve_literal(cast(TypeOrVarRef, tp), arg)
-            for arg, tp in zip_longest(args, fn_decl.arg_types, fillvalue=fn_decl.var_arg_type)
-        ]
-    else:
-        upcasted_args = cast("list[RuntimeExpr]", args)
+    upcasted_args = [
+        _resolve_literal(cast(TypeOrVarRef, tp), arg)
+        for arg, tp in zip_longest(bound.args, fn_decl.arg_types, fillvalue=fn_decl.var_arg_type)
+    ]
+    decls.update(*upcasted_args)
+
     arg_decls = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
 
     arg_types = [decl.tp for decl in arg_decls]
@@ -359,7 +352,7 @@ def _call(
 
     expr_decl = CallDecl(callable_ref, arg_decls, bound_params)
     typed_expr_decl = TypedExprDecl(return_tp, expr_decl)
-    if mutates_first_arg:
+    if fn_decl.mutates_first_arg:
         first_arg = upcasted_args[0]
         first_arg.__egg_typed_expr__ = typed_expr_decl
         first_arg.__egg_decls__ = decls
@@ -369,7 +362,7 @@ def _call(
 
 @dataclass
 class RuntimeClassMethod:
-    __egg_decls__: ModuleDeclarations
+    __egg_decls__: Declarations
     # Either a string if it isn't bound or a tp if it s
     __egg_tp__: JustTypeRef | str
     __egg_method_name__: str
@@ -428,15 +421,17 @@ class RuntimeMethod:
     __egg_self__: RuntimeExpr
     __egg_method_name__: str
     __egg_callable_ref__: MethodRef | PropertyRef = field(init=False)
-    __egg_fn_decl__: FunctionDecl | None = field(init=False)
+    __egg_fn_decl__: FunctionDecl = field(init=False)
+    __egg_decls__: Declarations = field(init=False)
 
     def __post_init__(self) -> None:
-        if self.__egg_method_name__ in self.__egg_self__.__egg_decls__.get_class_decl(self.class_name).properties:
+        self.__egg_decls__ = self.__egg_self__.__egg_decls__
+        if self.__egg_method_name__ in self.__egg_decls__.get_class_decl(self.class_name).properties:
             self.__egg_callable_ref__ = PropertyRef(self.class_name, self.__egg_method_name__)
         else:
             self.__egg_callable_ref__ = MethodRef(self.class_name, self.__egg_method_name__)
         try:
-            self.__egg_fn_decl__ = self.__egg_self__.__egg_decls__.get_function_decl(self.__egg_callable_ref__)
+            self.__egg_fn_decl__ = self.__egg_decls__.get_function_decl(self.__egg_callable_ref__)
         except KeyError as e:
             msg = f"Class {self.class_name} does not have method {self.__egg_method_name__}"
             if self.__egg_method_name__ == "__ne__":
@@ -446,7 +441,7 @@ class RuntimeMethod:
     def __call__(self, *args: object, **kwargs) -> RuntimeExpr | None:
         args = (self.__egg_self__, *args)
         try:
-            return _call(self.__egg_self__.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, kwargs)
+            return _call(self.__egg_decls__, self.__egg_callable_ref__, self.__egg_fn_decl__, args, kwargs)
         except ConvertError as e:
             name = self.__egg_method_name__
             raise TypeError(f"Wrong types for {self.__egg_self__.__egg_typed_expr__.tp.pretty()}.{name}") from e
@@ -458,7 +453,7 @@ class RuntimeMethod:
 
 @dataclass
 class RuntimeExpr:
-    __egg_decls__: ModuleDeclarations
+    __egg_decls__: Declarations
     __egg_typed_expr__: TypedExprDecl
 
     def __getattr__(self, name: str) -> RuntimeMethod | RuntimeExpr | Callable | None:
@@ -501,6 +496,10 @@ class RuntimeExpr:
     def __dir__(self) -> Iterable[str]:
         return list(self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).methods)
 
+    @property
+    def __egg__(self) -> bindings._Expr:
+        return self.__egg_typed_expr__.to_egg(self.__egg_decls__)
+
     # Have __eq__ take no NoReturn (aka Never https://docs.python.org/3/library/typing.html#typing.Never) because
     # we don't wany any type that MyPy thinks is an expr to be used with __eq__.
     # That's because we want to reserve __eq__ for domain specific equality checks, overloading this method.
@@ -512,10 +511,10 @@ class RuntimeExpr:
     # Implement these so that copy() works on this object
     # otherwise copy will try to call `__getstate__` before object is initialized with properties which will cause inifinite recursion
 
-    def __getstate__(self) -> tuple[ModuleDeclarations, TypedExprDecl]:
+    def __getstate__(self) -> tuple[Declarations, TypedExprDecl]:
         return (self.__egg_decls__, self.__egg_typed_expr__)
 
-    def __setstate__(self, d: tuple[ModuleDeclarations, TypedExprDecl]) -> None:
+    def __setstate__(self, d: tuple[Declarations, TypedExprDecl]) -> None:
         self.__egg_decls__, self.__egg_typed_expr__ = d
 
     def __hash__(self) -> int:
@@ -572,12 +571,12 @@ def call_method_min_conversion(slf: object, other: object, name: str) -> Runtime
     return method(other)
 
 
-def get_general_decls(a: object, b: object) -> ModuleDeclarations:
+def get_general_decls(a: object, b: object) -> Declarations:
     """
     Returns the more general module declerations between the two, if both are expressions.
     """
     if isinstance(a, RuntimeExpr) and isinstance(b, RuntimeExpr):
-        return a.__egg_decls__ + b.__egg_decls__
+        return a.__egg_decls__ | b.__egg_decls__
     if isinstance(a, RuntimeExpr):
         return a.__egg_decls__
     assert isinstance(b, RuntimeExpr)
@@ -596,16 +595,25 @@ for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__it
     setattr(RuntimeExpr, name, _preserved_method)
 
 
-def _resolve_callable(callable: object) -> CallableRef:
+def _resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
     """
     Resolves a runtime callable into a ref
     """
+    # TODO: Fix these typings.
+    ref: CallableRef
+    decls: Declarations
     if isinstance(callable, RuntimeFunction):
-        return FunctionRef(callable.__egg_name__)
-    if isinstance(callable, RuntimeClassMethod):
-        return ClassMethodRef(callable.class_name, callable.__egg_method_name__)
-    if isinstance(callable, RuntimeMethod):
-        return MethodRef(callable.__egg_self__.__egg_typed_expr__.tp.name, callable.__egg_method_name__)
-    if isinstance(callable, RuntimeClass):
-        return ClassMethodRef(callable.__egg_name__, "__init__")
-    raise NotImplementedError(f"Cannot turn {callable} into a callable ref")
+        ref = FunctionRef(callable.__egg_name__)
+        decls = callable.__egg_decls__
+    elif isinstance(callable, RuntimeClassMethod):
+        ref = ClassMethodRef(callable.class_name, callable.__egg_method_name__)
+        decls = callable.__egg_decls__
+    elif isinstance(callable, RuntimeMethod):
+        ref = MethodRef(callable.__egg_self__.__egg_typed_expr__.tp.name, callable.__egg_method_name__)
+        decls = callable.__egg_decls__
+    elif isinstance(callable, RuntimeClass):
+        ref = ClassMethodRef(callable.__egg_name__, "__init__")
+        decls = callable.__egg_decls__
+    else:
+        raise NotImplementedError(f"Cannot turn {callable} into a callable ref")
+    return (ref, decls)
