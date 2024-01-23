@@ -5,10 +5,9 @@ Data only descriptions of the components of an egraph and the expressions.
 from __future__ import annotations
 
 from collections import defaultdict
-from copy import deepcopy
 from dataclasses import dataclass, field
 from inspect import Parameter, Signature
-from typing import TYPE_CHECKING, Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypeAlias, Union, runtime_checkable
 
 from typing_extensions import Self, assert_never
 
@@ -108,13 +107,13 @@ class HasDeclerations(Protocol):
         ...
 
 
-DeclerationsLike: TypeAlias = None | "Declarations" | HasDeclerations
+DeclerationsLike: TypeAlias = Union[HasDeclerations, None, "Declarations"]
 
 
 def upcast_decleratioons(declerations_like: Iterable[DeclerationsLike]) -> list[Declarations]:
     d = []
     for l in declerations_like:
-        if not l:
+        if l is None:
             continue
         if isinstance(l, HasDeclerations):
             d.append(l.__egg_decls__)
@@ -156,9 +155,17 @@ class Declarations:
         return new
 
     def copy(self) -> Declarations:
-        res = deepcopy(self)
-        res.record_cmds = True
-        return res
+        return Declarations(
+            record_cmds=True,
+            _functions=self._functions.copy(),
+            _classes=self._classes.copy(),
+            _constants=self._constants.copy(),
+            _egg_fn_to_callable_refs=defaultdict(set, {k: v.copy() for k, v in self._egg_fn_to_callable_refs.items()}),
+            _callable_ref_to_egg_fn=self._callable_ref_to_egg_fn.copy(),
+            _egg_sort_to_type_ref=self._egg_sort_to_type_ref.copy(),
+            _type_ref_to_egg_sort=self._type_ref_to_egg_sort.copy(),
+            _cmds=self._cmds.copy(),
+        )
 
     def add_cmd(self, name: str, cmd: bindings._Command) -> None:
         if not self.record_cmds:
@@ -184,7 +191,7 @@ class Declarations:
         if isinstance(other, HasDeclerations):
             other = other.__egg_decls__
         # If cmds are == skip unioning for time savings
-        if set(self._cmds) == set(other._cmds):
+        if set(self._cmds) == set(other._cmds) and self.record_cmds and other.record_cmds:
             return self
 
         self._functions |= other._functions

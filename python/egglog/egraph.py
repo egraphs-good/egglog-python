@@ -96,9 +96,9 @@ IGNORED_ATTRIBUTES = {
 }
 
 
-_BUILTIN_DECLS: Declarations | None = None
-
 ALWAYS_MUTATES_SELF = {"__setitem__", "__delitem__"}
+
+_PY_OBJECT_CLASS: RuntimeClass | None = None
 
 
 @dataclass
@@ -112,24 +112,28 @@ class _BaseModule:
     - Module: Stores a list of commands and additional declerations
     """
 
+    is_builtin: ClassVar[bool] = False
+
+    # TODO: If we want to preserve existing semantics, then we use the module to find the default schedules
+    # and add them to the
+
     modules: InitVar[list[Module]] = []  # noqa: RUF008
 
     # TODO: Move commands to Decleraration instance. Pass in is_builtins to declerations so we can skip adding commands for those. Pass in from module, set as argument of module and subclcass
-    is_builtin: bool = field(default=False)
 
     # Any modules you want to depend on
     # # All dependencies flattened
-    # _flatted_deps: list[Module] = field(init=False, default_factory=list)
+    _flatted_deps: list[Module] = field(init=False, default_factory=list)
     # _mod_decls: ModuleDeclarations = field(init=False)
 
-    # def __post_init__(self, modules: list[Module]) -> None:
-    #     included_decls = [_BUILTIN_DECLS] if _BUILTIN_DECLS else []
-    #     # Traverse all the included modules to flatten all their dependencies and add to the included declerations
-    #     for mod in modules:
-    #         for child_mod in [*mod._flatted_deps, mod]:
-    #             if child_mod not in self._flatted_deps:
-    #                 self._flatted_deps.append(child_mod)
-    #                 included_decls.append(child_mod._mod_decls._decl)
+    def __post_init__(self, modules: list[Module]) -> None:
+        #     included_decls = [_BUILTIN_DECLS] if _BUILTIN_DECLS else []
+        #     # Traverse all the included modules to flatten all their dependencies and add to the included declerations
+        for mod in modules:
+            for child_mod in [*mod._flatted_deps, mod]:
+                if child_mod not in self._flatted_deps:
+                    self._flatted_deps.append(child_mod)
+
     #     self._mod_decls = ModuleDeclarations(Declarations(), included_decls)
 
     def _decls(self) -> Declarations:
@@ -167,7 +171,7 @@ class _BaseModule:
         assert len(args) == 1
         return self._class(args[0], prev_frame.f_locals, prev_frame.f_globals)
 
-    def _class(  # noqa: PLR0912
+    def _class(  # noqa: PLR0912, C901
         self,
         cls: type[Expr],
         hint_locals: dict[str, Any],
@@ -177,8 +181,12 @@ class _BaseModule:
         """
         Registers a class.
         """
+        global _PY_OBJECT_CLASS
         decls = self._decls()
         cls_name = cls.__name__
+        runtime_class = RuntimeClass(decls, cls_name)
+        if cls_name == "PyObject":
+            _PY_OBJECT_CLASS = runtime_class
         # Get all the methods from the class
         cls_dict: dict[str, Any] = {
             k: v for k, v in cls.__dict__.items() if k not in IGNORED_ATTRIBUTES or isinstance(v, _WrappedMethod)
@@ -270,7 +278,7 @@ class _BaseModule:
                 unextractable=unextractable,
             )
         # self._process_commands(decls.list_cmds())
-        return RuntimeClass(decls, cls_name)
+        return runtime_class
 
     # We seperate the function and method overloads to make it simpler to know if we are modifying a function or method,
     # So that we can add the functions eagerly to the registry and wait on the methods till we process the class.
@@ -523,7 +531,7 @@ class _BaseModule:
             var_arg_type=var_arg_type,
             arg_types=arg_types,
             arg_names=arg_names,
-            arg_defaults=tuple(a.__egg_typed_expr__ for a in arg_defaults),
+            arg_defaults=tuple(a.__egg_typed_expr__ if a is not None else None for a in arg_defaults),
             mutates_first_arg=mutates_first_arg,
         )
         decls.register_function_callable(
@@ -625,6 +633,22 @@ class _BaseModule:
         decls.add_cmd(name, bindings.ActionCommand(bindings.Let(name, typed_expr.to_egg(decls))))
         return cast(EXPR, RuntimeExpr(decls, TypedExprDecl(typed_expr.tp, VarDecl(name))))
 
+    def register(self, command_or_generator: CommandLike | CommandGenerator, *command_likes: CommandLike) -> None:
+        """
+        Registers any number of rewrites or rules.
+        """
+        if isinstance(command_or_generator, FunctionType):
+            assert not command_likes
+            command_likes = tuple(_command_generator(command_or_generator))
+        else:
+            command_likes = (cast(CommandLike, command_or_generator), *command_likes)
+
+        self._register_commands(list(map(_command_like, command_likes)))
+
+    @abstractmethod
+    def _register_commands(self, cmds: list[Command]) -> None:
+        raise NotImplementedError
+
 
 def _resolve_type_annotation(
     decls: Declarations,
@@ -645,15 +669,14 @@ def _resolve_type_annotation(
     if get_origin(tp) == Union:
         first, *_rest = get_args(tp)
         return _resolve_type_annotation(decls, first, cls_typevars, cls_type_and_name)
-    # If the type is `object` then this is assumed to be a PyObjetLike, i.e. converted into a PyObject
-    if tp == object:
-        from .builtins import PyObject
-
-        return _resolve_type_annotation(decls, PyObject, [], None)
-
     # If this is the type for the class, use the class name
     if cls_type_and_name and tp == cls_type_and_name[0]:
         return TypeRefWithVars(cls_type_and_name[1])
+
+    # If the type is `object` then this is assumed to be a PyObjetLike, i.e. converted into a PyObject
+    if tp == object:
+        assert _PY_OBJECT_CLASS
+        return _resolve_type_annotation(decls, _PY_OBJECT_CLASS, [], None)
 
     # If this is the class for this method and we have a paramaterized class, recurse
     if cls_type_and_name and isinstance(tp, _GenericAlias) and tp.__origin__ == cls_type_and_name[0]:
@@ -670,7 +693,7 @@ def _resolve_type_annotation(
 
 @dataclass
 class _Builtins(_BaseModule):
-    is_builtin: bool = True
+    is_builtin: ClassVar[bool] = True
     # def __post_init__(self, modules: list[Module]) -> None:
     #     """
     #     Register these declarations as builtins, so others can use them.
@@ -689,11 +712,20 @@ class _Builtins(_BaseModule):
     #     """
     #     Commands which would have been used to create the builtins are discarded, since they are already registered.
     #     """
+    def _register_commands(self, cmds: list[Command]) -> None:
+        raise NotImplementedError
 
 
 @dataclass
 class Module(_BaseModule):
-    pass
+    cmds: list[Command] = field(default_factory=list)
+
+    def _register_commands(self, cmds: list[Command]) -> None:
+        self.cmds.extend(cmds)
+
+    def without_rules(self) -> Module:
+        return Module()
+
     # _cmds: list[bindings._Command] = field(default_factory=list, repr=False)
 
     # @property
@@ -830,12 +862,16 @@ class EGraph(_BaseModule):
     _token_stack: list[Token[EGraph]] = field(default_factory=list, repr=False)
 
     def __post_init__(self, modules: list[Module], seminaive: bool, save_egglog_string: bool) -> None:
-        # super().__post_init__(modules)
+        super().__post_init__(modules)
         self._egraph = bindings.EGraph(GLOBAL_PY_OBJECT_SORT, seminaive=seminaive)
-        # for m in self._flatted_deps:
-        #     self._process_commands(m._cmds)
+        for m in self._flatted_deps:
+            self._register_commands(m.cmds)
         if save_egglog_string:
             self._egglog_string = ""
+
+    def _register_commands(self, commands: list[Command]) -> None:
+        self._add_decls(*commands)
+        self._process_commands(command._to_egg_command() for command in commands)
 
     def _process_commands(self, commands: Iterable[bindings._Command]) -> None:
         commands = list(commands)
@@ -928,20 +964,6 @@ class EGraph(_BaseModule):
             display(SVG(self.graphviz_svg(**kwargs)))
         else:
             graphviz.render(view=True, format="svg", quiet=True)
-
-    def register(self, command_or_generator: CommandLike | CommandGenerator, *command_likes: CommandLike) -> None:
-        """
-        Registers any number of rewrites or rules.
-        """
-        if isinstance(command_or_generator, FunctionType):
-            assert not command_likes
-            command_likes = tuple(_command_generator(command_or_generator))
-        else:
-            command_likes = (cast(CommandLike, command_or_generator), *command_likes)
-
-        commands = list(map(_command_like, command_likes))
-        self._add_decls(*commands)
-        self._process_commands(command._to_egg_command() for command in commands)
 
     def input(self, fn: Callable[..., String], path: str) -> None:
         """
@@ -1797,12 +1819,11 @@ class _NeBuilder(Generic[EXPR]):
 
     def to(self, expr: EXPR) -> Unit:
         assert isinstance(self.expr, RuntimeExpr)
-        # l_expr = cast(RuntimeExpr, self.expr)
-        args = (self._expr, convert_to_same_type(expr, self._expr).__egg_typed_expr__)
+        args = (self.expr, convert_to_same_type(expr, self.expr))
         decls = Declarations.create(*args)
         res = RuntimeExpr(
             decls,
-            TypedExprDecl(JustTypeRef("Unit"), CallDecl(FunctionRef("!="), args)),
+            TypedExprDecl(JustTypeRef("Unit"), CallDecl(FunctionRef("!="), [a.__egg_typed_expr__ for a in args])),
         )
         return cast(Unit, res)
 
@@ -1845,6 +1866,15 @@ class _RuleBuilder:
         if self.ruleset:
             self.ruleset.append(rule)
         return rule
+
+
+def expr_parts(expr: Expr) -> TypedExprDecl:
+    """
+    Returns the underlying type and decleration of the expression. Useful for testing structural equality or debugging.
+    """
+    if not isinstance(expr, RuntimeExpr):
+        raise TypeError(f"Expected a RuntimeExpr not {expr}")
+    return expr.__egg_typed_expr__
 
 
 def to_runtime_expr(expr: Expr) -> RuntimeExpr:
