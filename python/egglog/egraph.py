@@ -968,11 +968,9 @@ class EGraph(_BaseModule):
         """
         Define a new expression in the egraph and return a reference to it.
         """
+        self._register_commands([let(name, expr)])
         expr = to_runtime_expr(expr)
-        decls = expr.__egg_decls__
-        typed_expr = expr.__egg_typed_expr__
-        self._process_commands([bindings.ActionCommand(bindings.Let(name, typed_expr.to_egg(decls)))])
-        return cast(EXPR, RuntimeExpr(decls, TypedExprDecl(typed_expr.tp, VarDecl(name))))
+        return cast(EXPR, RuntimeExpr(expr.__egg_decls__, TypedExprDecl(expr.__egg_typed_expr__.tp, VarDecl(name))))
 
     @overload
     def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> EXPR:
