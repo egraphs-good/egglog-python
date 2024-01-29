@@ -143,6 +143,10 @@ class Declarations:
     # Mapping from egg name (of sort or function) to command to create it.
     _cmds: dict[str, bindings._Command] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if "!=" not in self._egg_fn_to_callable_refs:
+            self.register_callable_ref(FunctionRef("!="), "!=")
+
     @classmethod
     def create(cls, *others: DeclerationsLike) -> Declarations:
         others = upcast_decleratioons(others)
@@ -757,6 +761,9 @@ class CallDecl:
         if self in context.names:
             return context.names[self]
         ref, args = self.callable, [a.expr for a in self.args]
+        # Special case !=
+        if ref == FunctionRef("!="):
+            return f"ne({args[0].pretty(context, parens=False)}).to({args[1].pretty(context, parens=False)})"
         function_decl = context.decls.get_function_decl(ref)
         # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
         n_defaults = 0

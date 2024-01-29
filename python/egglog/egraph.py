@@ -1823,7 +1823,7 @@ class _NeBuilder(Generic[EXPR]):
         decls = Declarations.create(*args)
         res = RuntimeExpr(
             decls,
-            TypedExprDecl(JustTypeRef("Unit"), CallDecl(FunctionRef("!="), [a.__egg_typed_expr__ for a in args])),
+            TypedExprDecl(JustTypeRef("Unit"), CallDecl(FunctionRef("!="), tuple(a.__egg_typed_expr__ for a in args))),
         )
         return cast(Unit, res)
 
