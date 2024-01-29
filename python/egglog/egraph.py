@@ -860,6 +860,10 @@ class EGraph(_BaseModule):
             self._egglog_string = ""
 
     def _register_commands(self, commands: list[Command]) -> None:
+        for c in commands:
+            if c.ruleset:
+                self._add_schedule(run(c.ruleset))
+
         self._add_decls(*commands)
         self._process_commands(command._to_egg_command() for command in commands)
 
@@ -1322,6 +1326,8 @@ class Command(ABC):
     Anything that can be passed to the `register` function in a Module is a Command.
     """
 
+    ruleset: Ruleset | None
+
     @property
     @abstractmethod
     def __egg_decls__(self) -> Declarations:
@@ -1338,7 +1344,7 @@ class Command(ABC):
 
 @dataclass
 class Rewrite(Command):
-    _ruleset: Ruleset | None
+    ruleset: Ruleset | None
     _lhs: RuntimeExpr
     _rhs: RuntimeExpr
     _conditions: tuple[Fact, ...]
@@ -1349,7 +1355,7 @@ class Rewrite(Command):
         return f"{self._fn_name}({self._lhs}).to({args_str})"
 
     def _to_egg_command(self) -> bindings._Command:
-        return bindings.RewriteCommand(_ruleset_name(self._ruleset), self._to_egg_rewrite())
+        return bindings.RewriteCommand(_ruleset_name(self.ruleset), self._to_egg_rewrite())
 
     def _to_egg_rewrite(self) -> bindings.Rewrite:
         return bindings.Rewrite(
@@ -1368,7 +1374,7 @@ class BiRewrite(Rewrite):
     _fn_name: ClassVar[str] = "birewrite"
 
     def _to_egg_command(self) -> bindings._Command:
-        return bindings.BiRewriteCommand(_ruleset_name(self._ruleset), self._to_egg_rewrite())
+        return bindings.BiRewriteCommand(_ruleset_name(self.ruleset), self._to_egg_rewrite())
 
 
 @dataclass
@@ -1453,6 +1459,10 @@ class Action(Command, ABC):
 
     def _to_egg_command(self) -> bindings._Command:
         return bindings.ActionCommand(self._to_egg_action())
+
+    @property
+    def ruleset(self) -> None:
+        return None
 
 
 @dataclass
