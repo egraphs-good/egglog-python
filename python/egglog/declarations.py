@@ -331,13 +331,15 @@ class Declarations:
             raise ValueError(f"Sort {egg_name} is already registered.")
         self._egg_sort_to_type_ref[egg_name] = ref
         self._type_ref_to_egg_sort[ref] = egg_name
-
         if not builtin:
             self.add_cmd(
                 egg_name,
                 bindings.Sort(
                     egg_name,
-                    (egg_sort, [bindings.Var(self.register_sort(arg, False)) for arg in ref.args])
+                    (
+                        self.get_egg_sort(JustTypeRef(ref.name)),
+                        [bindings.Var(self.register_sort(arg, False)) for arg in ref.args],
+                    )
                     if ref.args
                     else None,
                 ),
