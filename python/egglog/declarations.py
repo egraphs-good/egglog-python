@@ -169,6 +169,9 @@ class Declarations:
             _cmds=self._cmds.copy(),
         )
 
+    def __deepcopy__(self, memo: dict) -> Declarations:
+        return self.copy()
+
     def add_cmd(self, name: str, cmd: bindings._Command) -> None:
         self._cmds[name] = cmd
 
@@ -389,7 +392,7 @@ class Declarations:
         else:
             egg_fn_decl = bindings.FunctionDecl(
                 egg_name,
-                bindings.Schema(arg_sorts, self.get_egg_sort(fn_decl.return_type.to_just())),
+                bindings.Schema(arg_sorts, self.register_sort(fn_decl.return_type.to_just(), False)),
                 default.to_egg(self) if default else None,
                 merge.to_egg(self) if merge else None,
                 merge_action,
