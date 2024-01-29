@@ -747,9 +747,13 @@ class CallDecl:
             return TypedExprDecl(return_tp, cls(callable_ref, tuple(results)))
         raise ValueError(f"Could not find callable ref for call {call}")
 
-    def to_egg(self, decls: Declarations) -> bindings.Call:
+    def to_egg(self, decls: Declarations) -> bindings._Expr:
         """Convert a Call to an egg Call."""
+        # If this is a constant, then emit it just as a var, not as a call
         egg_fn = decls.get_egg_fn(self.callable)
+        if isinstance(self.callable, ConstantRef | ClassVariableRef):
+            decls.get_egg_fn
+            return bindings.Var(egg_fn)
         return bindings.Call(egg_fn, [a.to_egg(decls) for a in self.args])
 
     def pretty(self, context: PrettyContext, parens: bool = True, **kwargs) -> str:  # noqa: C901
