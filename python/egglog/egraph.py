@@ -622,16 +622,6 @@ class _BaseModule:
         decls.register_constant_callable(ref, type_ref, egg_name)
         return type_ref
 
-    def let(self, name: str, expr: EXPR) -> EXPR:
-        """
-        Define a new expression in the egraph and return a reference to it.
-        """
-        expr = to_runtime_expr(expr)
-        decls = expr.__egg_decls__.copy()
-        typed_expr = expr.__egg_typed_expr__
-        decls.add_cmd(name, bindings.ActionCommand(bindings.Let(name, typed_expr.to_egg(decls))))
-        return cast(EXPR, RuntimeExpr(decls, TypedExprDecl(typed_expr.tp, VarDecl(name))))
-
     def register(self, command_or_generator: CommandLike | CommandGenerator, *command_likes: CommandLike) -> None:
         """
         Registers any number of rewrites or rules.
@@ -973,6 +963,16 @@ class EGraph(_BaseModule):
         fn_name = decls.get_egg_fn(ref)
         self._process_commands(decls.list_cmds())
         self._process_commands([bindings.Input(fn_name, path)])
+
+    def let(self, name: str, expr: EXPR) -> EXPR:
+        """
+        Define a new expression in the egraph and return a reference to it.
+        """
+        expr = to_runtime_expr(expr)
+        decls = expr.__egg_decls__
+        typed_expr = expr.__egg_typed_expr__
+        self._process_commands([bindings.ActionCommand(bindings.Let(name, typed_expr.to_egg(decls)))])
+        return cast(EXPR, RuntimeExpr(decls, TypedExprDecl(typed_expr.tp, VarDecl(name))))
 
     @overload
     def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> EXPR:
