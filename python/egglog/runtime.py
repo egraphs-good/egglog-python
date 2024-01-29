@@ -323,7 +323,6 @@ def _call(
     kwargs: dict[str, object],
     bound_params: tuple[JustTypeRef, ...] | None = None,
 ) -> RuntimeExpr | None:
-    decls = decls_from_fn.copy()
     # Turn all keyword args into positional args
     bound = fn_decl.to_signature(lambda expr: RuntimeExpr(decls_from_fn, expr)).bind(*args, **kwargs)
     bound.apply_defaults()
@@ -334,11 +333,8 @@ def _call(
         _resolve_literal(cast(TypeOrVarRef, tp), arg)
         for arg, tp in zip_longest(bound.args, fn_decl.arg_types, fillvalue=fn_decl.var_arg_type)
     ]
-    decls.update(*upcasted_args)
 
     arg_decls = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
-
-    arg_types = [decl.tp for decl in arg_decls]
 
     if bound_params is not None:
         tcs = TypeConstraintSolver.from_type_parameters(bound_params)
@@ -346,12 +342,14 @@ def _call(
         tcs = TypeConstraintSolver()
 
     if fn_decl is not None:
+        arg_types = [decl.tp for decl in arg_decls]
         return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, fn_decl.var_arg_type, arg_types)
     else:
         return_tp = JustTypeRef("Unit")
 
     expr_decl = CallDecl(callable_ref, arg_decls, bound_params)
     typed_expr_decl = TypedExprDecl(return_tp, expr_decl)
+    decls = Declarations.create(decls_from_fn, *upcasted_args)
     if fn_decl.mutates_first_arg:
         first_arg = upcasted_args[0]
         first_arg.__egg_typed_expr__ = typed_expr_decl

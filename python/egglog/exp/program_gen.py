@@ -126,7 +126,11 @@ def _py_object(p: Program, expr: String, statements: String, g: PyObject):
     # When we evaluate a program, we first want to compile to a string
     yield rule(p.eval_py_object(g)).then(p.compile())
     # Then we want to evaluate the statements/expr
-    yield rule(p.eval_py_object(g), eq(p.statements).to(statements), eq(p.expr).to(expr)).then(
+    yield rule(
+        p.eval_py_object(g),
+        eq(p.statements).to(statements),
+        eq(p.expr).to(expr),
+    ).then(
         set_(p.py_object).to(
             py_eval(
                 "l['___res']",

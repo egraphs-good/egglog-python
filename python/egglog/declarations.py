@@ -126,7 +126,6 @@ def upcast_decleratioons(declerations_like: Iterable[DeclerationsLike]) -> list[
 
 @dataclass
 class Declarations:
-    record_cmds: bool = True
     _functions: dict[str, FunctionDecl] = field(default_factory=dict)
     _classes: dict[str, ClassDecl] = field(default_factory=dict)
     _constants: dict[str, JustTypeRef] = field(default_factory=dict)
@@ -156,7 +155,6 @@ class Declarations:
 
     def copy(self) -> Declarations:
         return Declarations(
-            record_cmds=True,
             _functions=self._functions.copy(),
             _classes=self._classes.copy(),
             _constants=self._constants.copy(),
@@ -168,8 +166,6 @@ class Declarations:
         )
 
     def add_cmd(self, name: str, cmd: bindings._Command) -> None:
-        if not self.record_cmds:
-            return
         self._cmds[name] = cmd
 
     def list_cmds(self) -> list[bindings._Command]:
@@ -191,8 +187,8 @@ class Declarations:
         if isinstance(other, HasDeclerations):
             other = other.__egg_decls__
         # If cmds are == skip unioning for time savings
-        if set(self._cmds) == set(other._cmds) and self.record_cmds and other.record_cmds:
-            return self
+        # if set(self._cmds) == set(other._cmds) and self.record_cmds and other.record_cmds:
+        #     return self
 
         self._functions |= other._functions
         self._classes |= other._classes
@@ -305,15 +301,15 @@ class Declarations:
                 return tp.args
         return ()
 
-    def register_class(self, name: str, n_type_vars: int, egg_sort: str | None) -> None:
+    def register_class(self, name: str, n_type_vars: int, builtin: bool, egg_sort: str | None) -> None:
         # Register class first
         if name in self._classes:
             raise ValueError(f"Class {name} already registered")
         decl = ClassDecl(n_type_vars=n_type_vars)
         self._classes[name] = decl
-        self.register_sort(JustTypeRef(name), egg_sort)
+        self.register_sort(JustTypeRef(name), builtin, egg_sort)
 
-    def register_sort(self, ref: JustTypeRef, egg_name: str | None = None) -> str:
+    def register_sort(self, ref: JustTypeRef, builtin: bool, egg_name: str | None = None) -> str:
         """
         Register a sort with the given name. If no name is given, one is generated.
 
@@ -332,12 +328,16 @@ class Declarations:
         self._egg_sort_to_type_ref[egg_name] = ref
         self._type_ref_to_egg_sort[ref] = egg_name
 
-        self.add_cmd(
-            egg_name,
-            bindings.Sort(
-                egg_name, (egg_sort, [bindings.Var(self.register_sort(arg)) for arg in ref.args]) if ref.args else None
-            ),
-        )
+        if not builtin:
+            self.add_cmd(
+                egg_name,
+                bindings.Sort(
+                    egg_name,
+                    (egg_sort, [bindings.Var(self.register_sort(arg, False)) for arg in ref.args])
+                    if ref.args
+                    else None,
+                ),
+            )
 
         return egg_name
 
@@ -351,6 +351,7 @@ class Declarations:
         merge: ExprDecl | None,
         merge_action: list[bindings._Action],
         unextractable: bool,
+        builtin: bool,
         is_relation: bool = False,
     ) -> None:
         """
@@ -363,7 +364,7 @@ class Declarations:
         self.set_function_decl(ref, fn_decl)
 
         # Skip generating the cmds if we don't want to record them, like for the builtins
-        if not self.record_cmds:
+        if builtin:
             return
 
         if fn_decl.var_arg_type is not None:
@@ -371,7 +372,7 @@ class Declarations:
             raise NotImplementedError(msg)
         # Remove all vars from the type refs, raising an errory if we find one,
         # since we cannot create egg functions with vars
-        arg_sorts = [self.register_sort(a.to_just()) for a in fn_decl.arg_types]
+        arg_sorts = [self.register_sort(a.to_just(), False) for a in fn_decl.arg_types]
         cmd: bindings._Command
         if is_relation:
             assert not default

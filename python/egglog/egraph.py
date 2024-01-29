@@ -136,9 +136,6 @@ class _BaseModule:
 
     #     self._mod_decls = ModuleDeclarations(Declarations(), included_decls)
 
-    def _decls(self) -> Declarations:
-        return Declarations(record_cmds=not self.is_builtin)
-
     # # TODO: Move to EGraph itself
     # @abstractmethod
     # def _process_commands(self, cmds: Iterable[bindings._Command]) -> None:
@@ -182,7 +179,7 @@ class _BaseModule:
         Registers a class.
         """
         global _PY_OBJECT_CLASS
-        decls = self._decls()
+        decls = Declarations()
         cls_name = cls.__name__
         runtime_class = RuntimeClass(decls, cls_name)
         if cls_name == "PyObject":
@@ -194,7 +191,7 @@ class _BaseModule:
         parameters: list[TypeVar] = cls_dict.pop("__parameters__", [])
 
         n_type_vars = len(parameters)
-        decls.register_class(cls_name, n_type_vars, egg_sort)
+        decls.register_class(cls_name, n_type_vars, self.is_builtin, egg_sort)
         # The type ref of self is paramterized by the type vars
         slf_type_ref = TypeRefWithVars(cls_name, tuple(ClassTypeVarRef(i) for i in range(n_type_vars)))
 
@@ -398,7 +395,7 @@ class _BaseModule:
         Uncurried version of function decorator
         """
         name = fn.__name__
-        decls = self._decls()
+        decls = Declarations()
         # Save function decleartion
         self._register_function(
             decls,
@@ -543,6 +540,7 @@ class _BaseModule:
             merged.__egg_typed_expr__.expr if merged is not None else None,
             [a._to_egg_action() for a in merge_action],
             unextractable,
+            self.is_builtin,
         )
 
     def ruleset(self, name: str) -> Ruleset:
@@ -576,7 +574,7 @@ class _BaseModule:
         """
         Defines a relation, which is the same as a function which returns unit.
         """
-        decls = self._decls()
+        decls = Declarations()
         arg_types = tuple(_resolve_type_annotation(decls, cast(object, tp), [], None) for tp in tps)
         fn_decl = FunctionDecl(
             arg_types, None, tuple(None for _ in tps), TypeRefWithVars("Unit"), mutates_first_arg=False
@@ -590,6 +588,7 @@ class _BaseModule:
             merge=None,
             merge_action=[],
             unextractable=False,
+            builtin=False,
             is_relation=True,
         )
         # self._process_commands(decls.list_cmds())
@@ -865,6 +864,7 @@ class EGraph(_BaseModule):
         super().__post_init__(modules)
         self._egraph = bindings.EGraph(GLOBAL_PY_OBJECT_SORT, seminaive=seminaive)
         for m in self._flatted_deps:
+            self._add_decls(*m.cmds)
             self._register_commands(m.cmds)
         if save_egglog_string:
             self._egglog_string = ""
