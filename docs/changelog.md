@@ -4,6 +4,28 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+### Auto Register Function and Class Definitions
+
+_not yet implemented_
+
+This is a large breaking change that moves the function and class decorators to the top level `egglog` module,
+from the `EGraph` and `Module` classes. Rulesets are also moved to be defined globally instead of on the `EGraph` class.
+
+The goal of this change is to remove the complexity of `Module`s and remove the need to think about what functions/classes
+need to be registered for each `EGraph`. Instead, we will implicitly register and functions/classes that are used
+in any rules or added in any commands.
+
+- `egraph.class_` -> Simply subclass from `egglog.Expr`
+- `egraph.method` -> `egglog.method`
+- `egraph.function` -> `egglog.function`
+- `egraph.relation` -> `egglog.relation`
+- `egraph.ruleset` -> `egglog.Ruleset`
+
+The `EGraph` class can take an optional `default_ruleset` argument to set the default ruleset for the `EGraph`. Otherwise,
+there is a global default ruleset that is used, `egglog.Ruleset`.
+
+This also adds support for classes with methods that are mutually recursive, by making type analysis more lazy.
+
 ## 5.0.0 (2024-01-16)
 
 - Move egglog `!=` function to be called with `ne(x).to(y)` instead of `x != y` so that user defined expressions

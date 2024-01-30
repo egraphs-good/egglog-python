@@ -85,10 +85,7 @@ _DTYPES = [float64, float32, int32, int64, DType.object]
 converter(type, DType, lambda x: convert(np.dtype(x), DType))
 converter(type(np.dtype), DType, lambda x: getattr(DType, x.name))  # type: ignore[call-overload]
 array_api_module.register(
-    *(
-        rewrite(l == r).to(TRUE if expr_parts(l) == expr_parts(r) else FALSE)
-        for l, r in itertools.product(_DTYPES, repeat=2)
-    )
+    *(rewrite(l == r).to(TRUE if l is r else FALSE) for l, r in itertools.product(_DTYPES, repeat=2))
 )
 
 

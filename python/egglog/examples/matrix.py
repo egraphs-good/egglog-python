@@ -127,17 +127,17 @@ egraph.register(
 egraph.register(
     # demand rows and columns when we multiply matrices
     rule(eq(C).to(A @ B)).then(
-        let("demand1", A.ncols()),
-        let("demand2", A.nrows()),
-        let("demand3", B.ncols()),
-        let("demand4", B.nrows()),
+        A.ncols(),
+        A.nrows(),
+        B.ncols(),
+        B.nrows(),
     ),
     # demand rows and columns when we take the kronecker product
     rule(eq(C).to(kron(A, B))).then(
-        let("demand1", A.ncols()),
-        let("demand2", A.nrows()),
-        let("demand3", B.ncols()),
-        let("demand4", B.nrows()),
+        A.ncols(),
+        A.nrows(),
+        B.ncols(),
+        B.nrows(),
     ),
 )
 

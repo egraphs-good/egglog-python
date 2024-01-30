@@ -26,7 +26,13 @@ html_sidebars = {
 # Myst
 ##
 
-myst_enable_extensions = ["attrs_inline", "smartquotes", "strikethrough", "html_image"]
+myst_enable_extensions = [
+    # "attrs_inline",
+    "smartquotes",
+    "strikethrough",
+    "html_image",
+    "deflist",
+]
 myst_fence_as_directive = ["mermaid"]
 
 ##
@@ -38,7 +44,7 @@ presentation_file = cwd / "explanation" / "pldi_2023_presentation.ipynb"
 output_dir = cwd / "presentations"
 
 subprocess.run(
-    [  # noqa: S603,S607
+    [  # noqa: S607, S603
         "jupyter",
         "nbconvert",
         str(presentation_file),

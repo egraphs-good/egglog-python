@@ -22,4 +22,5 @@ reference/high-level
 reference/egglog-translation
 reference/python-integration
 reference/bindings
+new_reference
 ```

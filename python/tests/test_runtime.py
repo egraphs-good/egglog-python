@@ -6,14 +6,12 @@ from egglog.type_constraint_solver import *
 
 
 def test_type_str():
-    decls = ModuleDeclarations(
-        Declarations(
+    decls = Declarations(
             _classes={
                 "i64": ClassDecl(),
                 "Map": ClassDecl(n_type_vars=2),
             }
         )
-    )
     i64 = RuntimeClass(decls, "i64")
     Map = RuntimeClass(decls, "Map")
     assert str(i64) == "i64"
@@ -21,8 +19,7 @@ def test_type_str():
 
 
 def test_function_call():
-    decls = ModuleDeclarations(
-        Declarations(
+    decls = Declarations(
             _classes={
                 "i64": ClassDecl(),
             },
@@ -36,7 +33,6 @@ def test_function_call():
                 ),
             },
         )
-    )
     one = RuntimeFunction(decls, "one")
     assert (
         one().__egg_typed_expr__  # type: ignore
@@ -48,8 +44,7 @@ def test_classmethod_call():
     from pytest import raises
 
     K, V = ClassTypeVarRef(0), ClassTypeVarRef(1)
-    decls = ModuleDeclarations(
-        Declarations(
+    decls = Declarations(
             _classes={
                 "i64": ClassDecl(),
                 "unit": ClassDecl(),
@@ -65,9 +60,13 @@ def test_classmethod_call():
                         )
                     },
                 ),
+            },
+            _type_ref_to_egg_sort={
+                JustTypeRef("i64"): "i64",
+                JustTypeRef("unit"): "unit",
+                JustTypeRef("Map"): "Map",
             }
         )
-    )
     Map = RuntimeClass(decls, "Map")
     with raises(TypeConstraintError):
         Map.create()  # type: ignore
@@ -75,23 +74,19 @@ def test_classmethod_call():
     unit = RuntimeClass(decls, "unit")
     assert (
         Map[i64, unit].create().__egg_typed_expr__  # type: ignore
-        == RuntimeExpr(
-            decls,
-            TypedExprDecl(
+        == TypedExprDecl(
                 JustTypeRef("Map", (JustTypeRef("i64"), JustTypeRef("unit"))),
                 CallDecl(
                     ClassMethodRef("Map", "create"),
                     (),
                     (JustTypeRef("i64"), JustTypeRef("unit")),
                 ),
-            ),
-        ).__egg_typed_expr__
+            )
     )
 
 
 def test_expr_special():
-    decls = ModuleDeclarations(
-        Declarations(
+    decls = Declarations(
             _classes={
                 "i64": ClassDecl(
                     methods={
@@ -115,7 +110,6 @@ def test_expr_special():
                 ),
             },
         )
-    )
     i64 = RuntimeClass(decls, "i64")
     one = i64(1)  # type: ignore
     res = one + one  # type: ignore
@@ -133,13 +127,11 @@ def test_expr_special():
 
 
 def test_class_variable():
-    decls = ModuleDeclarations(
-        Declarations(
+    decls = Declarations(
             _classes={
                 "i64": ClassDecl(class_variables={"one": JustTypeRef("i64")}),
             },
         )
-    )
     i64 = RuntimeClass(decls, "i64")
     one = i64.one
     assert isinstance(one, RuntimeExpr)

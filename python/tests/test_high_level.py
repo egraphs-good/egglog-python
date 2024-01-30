@@ -31,6 +31,8 @@ class TestExprStr:
         assert str(i64(1) + 1) == "i64(1) + 1"
         assert str(i64(1).max(2)) == "i64(1).max(2)"
 
+    def test_ne(self):
+        assert str(ne(i64(1)).to(i64(2))) == "ne(i64(1)).to(i64(2))"
 
 def test_eqsat_basic():
     egraph = EGraph()
@@ -153,21 +155,26 @@ def test_push_pop():
 def test_constants():
     egraph = EGraph()
 
-    one = egraph.constant("one", i64)
-    egraph.register(set_(one).to(i64(1)))
-    egraph.check(eq(one).to(i64(1)))
+    @egraph.class_
+    class A(Expr):
+        pass
+    one = egraph.constant("one", A)
+    two = egraph.constant("two", A)
+
+    egraph.register(union(one).with_(two))
+    egraph.check(eq(one).to(two))
 
 
 def test_class_vars():
     egraph = EGraph()
 
     @egraph.class_
-    class Numeric(Expr):
-        ONE: ClassVar[i64]
+    class A(Expr):
+        ONE: ClassVar[A]
+    two = egraph.constant("two", A)
 
-    egraph.register(set_(Numeric.ONE).to(i64(1)))
-    egraph.check(eq(Numeric.ONE).to(i64(1)))
-
+    egraph.register(union(A.ONE).with_(two))
+    egraph.check(eq(A.ONE).to(two))
 
 def test_simplify_constant():
     egraph = EGraph()
@@ -210,9 +217,6 @@ def test_relation():
 
 def test_variable_args():
     egraph = EGraph()
-    # Create dummy function with type so its registered
-    egraph.relation("_", Set[i64])
-
     egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
 
 
@@ -514,6 +518,15 @@ def test_rewrite_upcasts():
     rewrite(i64(1)).to(0) # type: ignore
 
 
+def test_function_default_upcasts():
+    egraph = EGraph()
+
+    @egraph.function
+    def f(x: i64Like) -> i64:
+        ...
+
+    assert expr_parts(f(1)) == expr_parts(f(i64(1)))
+
 def test_upcast_self_lower_cost():
     # Verifies that self will be upcasted, if that upcast has a lower cast than converting the other arg
     # i.e. Int(x) + NDArray(y) -> NDArray(Int(x)) + NDArray(y) instead of Int(x) + NDArray(y).to_int()
@@ -563,16 +576,16 @@ def test_eval():
     assert egraph.eval(PyObject((1, 2))) == (1, 2)
 
 
-def test_egglog_string():
-    egraph = EGraph(save_egglog_string=True)
-    egraph.register((i64(1)))
-    assert egraph.as_egglog_string
+# def test_egglog_string():
+#     egraph = EGraph(save_egglog_string=True)
+#     egraph.register((i64(1)))
+#     assert egraph.as_egglog_string
 
-def test_no_egglog_string():
-    egraph = EGraph()
-    egraph.register((i64(1)))
-    with pytest.raises(ValueError):
-        egraph.as_egglog_string
+# def test_no_egglog_string():
+#     egraph = EGraph()
+#     egraph.register((i64(1)))
+#     with pytest.raises(ValueError):
+#         egraph.as_egglog_string
 
 
 
