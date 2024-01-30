@@ -1,4 +1,5 @@
 import pathlib  # noqa: INP001
+import subprocess
 
 ##
 # ABlog
@@ -42,20 +43,20 @@ cwd = pathlib.Path(__file__).parent
 presentation_file = cwd / "explanation" / "pldi_2023_presentation.ipynb"
 output_dir = cwd / "presentations"
 
-# subprocess.run(
-#     [
-#         "jupyter",
-#         "nbconvert",
-#         str(presentation_file),
-#         "--to",
-#         "slides",
-#         "--output-dir",
-#         str(output_dir),
-#         "--TagRemovePreprocessor.remove_input_tags",
-#         "remove-input",
-#     ],
-#     check=True,
-# )
+subprocess.run(
+    [  # noqa: S607, S603
+        "jupyter",
+        "nbconvert",
+        str(presentation_file),
+        "--to",
+        "slides",
+        "--output-dir",
+        str(output_dir),
+        "--TagRemovePreprocessor.remove_input_tags",
+        "remove-input",
+    ],
+    check=True,
+)
 
 html_extra_path = ["presentations/pldi_2023_presentation.slides.html"]
 

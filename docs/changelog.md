@@ -6,6 +6,8 @@ _This project uses semantic versioning_
 
 ### Auto Register Function and Class Definitions
 
+_not yet implemented_
+
 This is a large breaking change that moves the function and class decorators to the top level `egglog` module,
 from the `EGraph` and `Module` classes. Rulesets are also moved to be defined globally instead of on the `EGraph` class.
 
