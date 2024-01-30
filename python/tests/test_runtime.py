@@ -60,6 +60,11 @@ def test_classmethod_call():
                         )
                     },
                 ),
+            },
+            _type_ref_to_egg_sort={
+                JustTypeRef("i64"): "i64",
+                JustTypeRef("unit"): "unit",
+                JustTypeRef("Map"): "Map",
             }
         )
     Map = RuntimeClass(decls, "Map")
@@ -69,17 +74,14 @@ def test_classmethod_call():
     unit = RuntimeClass(decls, "unit")
     assert (
         Map[i64, unit].create().__egg_typed_expr__  # type: ignore
-        == RuntimeExpr(
-            decls,
-            TypedExprDecl(
+        == TypedExprDecl(
                 JustTypeRef("Map", (JustTypeRef("i64"), JustTypeRef("unit"))),
                 CallDecl(
                     ClassMethodRef("Map", "create"),
                     (),
                     (JustTypeRef("i64"), JustTypeRef("unit")),
                 ),
-            ),
-        ).__egg_typed_expr__
+            )
     )
 
 
