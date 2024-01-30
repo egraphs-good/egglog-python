@@ -575,6 +575,7 @@ class _BaseModule:
         Defines a relation, which is the same as a function which returns unit.
         """
         decls = Declarations()
+        decls |= cast(RuntimeClass, Unit)
         arg_types = tuple(_resolve_type_annotation(decls, cast(object, tp), [], None) for tp in tps)
         fn_decl = FunctionDecl(
             arg_types, None, tuple(None for _ in tps), TypeRefWithVars("Unit"), mutates_first_arg=False
