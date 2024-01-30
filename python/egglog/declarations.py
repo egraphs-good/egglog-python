@@ -933,55 +933,6 @@ class PrettyContext:
                 self.traverse_for_parents(arg.expr)
 
 
-# def test_expr_pretty():
-#     context = PrettyContext(ModuleDeclarations(Declarations()))
-#     assert VarDecl("x").pretty(context) == "x"
-#     assert LitDecl(42).pretty(context) == "i64(42)"
-#     assert LitDecl("foo").pretty(context) == 'String("foo")'
-#     assert LitDecl(None).pretty(context) == "unit()"
-
-#     def v(x: str) -> TypedExprDecl:
-#         return TypedExprDecl(JustTypeRef(""), VarDecl(x))
-
-#     assert CallDecl(FunctionRef("foo"), (v("x"),)).pretty(context) == "foo(x)"
-#     assert CallDecl(FunctionRef("foo"), (v("x"), v("y"), v("z"))).pretty(context) == "foo(x, y, z)"
-#     assert CallDecl(MethodRef("foo", "__add__"), (v("x"), v("y"))).pretty(context) == "x + y"
-#     assert CallDecl(MethodRef("foo", "__getitem__"), (v("x"), v("y"))).pretty(context) == "x[y]"
-#     assert CallDecl(ClassMethodRef("foo", "__init__"), (v("x"), v("y"))).pretty(context) == "foo(x, y)"
-#     assert CallDecl(ClassMethodRef("foo", "bar"), (v("x"), v("y"))).pretty(context) == "foo.bar(x, y)"
-#     assert CallDecl(MethodRef("foo", "__call__"), (v("x"), v("y"))).pretty(context) == "x(y)"
-#     assert (
-#         CallDecl(
-#             ClassMethodRef("Map", "__init__"),
-#             (),
-#             (JustTypeRef("i64"), JustTypeRef("Unit")),
-#         ).pretty(context)
-#         == "Map[i64, Unit]()"
-#     )
-
-
-# def test_setitem_pretty():
-#     context = PrettyContext(ModuleDeclarations(Declarations()))
-
-#     def v(x: str) -> TypedExprDecl:
-#         return TypedExprDecl(JustTypeRef("typ"), VarDecl(x))
-
-#     final_expr = CallDecl(MethodRef("foo", "__setitem__"), (v("x"), v("y"), v("z"))).pretty(context)
-#     assert context.render(final_expr) == "_typ_1 = x\n_typ_1[y] = z\n_typ_1"
-
-
-# def test_delitem_pretty():
-#     context = PrettyContext(ModuleDeclarations(Declarations()))
-
-#     def v(x: str) -> TypedExprDecl:
-#         return TypedExprDecl(JustTypeRef("typ"), VarDecl(x))
-
-#     final_expr = CallDecl(MethodRef("foo", "__delitem__"), (v("x"), v("y"))).pretty(context)
-#     assert context.render(final_expr) == "_typ_1 = x\ndel _typ_1[y]\n_typ_1"
-
-
-# TODO: Multiple mutations,
-
 ExprDecl: TypeAlias = VarDecl | LitDecl | CallDecl | PyObjectDecl
 
 
