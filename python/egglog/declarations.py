@@ -778,7 +778,7 @@ class CallDecl:
         ref, args = self.callable, [a.expr for a in self.args]
         # Special case !=
         if ref == FunctionRef("!="):
-            return f"ne({args[0].pretty(context, parens=False)}).to({args[1].pretty(context, parens=False)})"
+            return f"ne({args[0].pretty(context, parens=False, unwrap_lit=False)}).to({args[1].pretty(context, parens=False, unwrap_lit=False)})"
         function_decl = context.decls.get_function_decl(ref)
         # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
         n_defaults = 0

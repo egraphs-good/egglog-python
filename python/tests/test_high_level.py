@@ -31,6 +31,8 @@ class TestExprStr:
         assert str(i64(1) + 1) == "i64(1) + 1"
         assert str(i64(1).max(2)) == "i64(1).max(2)"
 
+    def test_ne(self):
+        assert str(ne(i64(1)).to(i64(2))) == "ne(i64(1)).to(i64(2))"
 
 def test_eqsat_basic():
     egraph = EGraph()
@@ -153,21 +155,26 @@ def test_push_pop():
 def test_constants():
     egraph = EGraph()
 
-    one = egraph.constant("one", i64)
-    egraph.register(set_(one).to(i64(1)))
-    egraph.check(eq(one).to(i64(1)))
+    @egraph.class_
+    class A(Expr):
+        pass
+    one = egraph.constant("one", A)
+    two = egraph.constant("two", A)
+
+    egraph.register(union(one).with_(two))
+    egraph.check(eq(one).to(two))
 
 
 def test_class_vars():
     egraph = EGraph()
 
     @egraph.class_
-    class Numeric(Expr):
-        ONE: ClassVar[i64]
+    class A(Expr):
+        ONE: ClassVar[A]
+    two = egraph.constant("two", A)
 
-    egraph.register(set_(Numeric.ONE).to(i64(1)))
-    egraph.check(eq(Numeric.ONE).to(i64(1)))
-
+    egraph.register(union(A.ONE).with_(two))
+    egraph.check(eq(A.ONE).to(two))
 
 def test_simplify_constant():
     egraph = EGraph()
