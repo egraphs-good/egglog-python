@@ -518,6 +518,15 @@ def test_rewrite_upcasts():
     rewrite(i64(1)).to(0) # type: ignore
 
 
+def test_function_default_upcasts():
+    egraph = EGraph()
+
+    @egraph.function
+    def f(x: i64Like) -> i64:
+        ...
+
+    assert expr_parts(f(1)) == expr_parts(f(i64(1)))
+
 def test_upcast_self_lower_cost():
     # Verifies that self will be upcasted, if that upcast has a lower cast than converting the other arg
     # i.e. Int(x) + NDArray(y) -> NDArray(Int(x)) + NDArray(y) instead of Int(x) + NDArray(y).to_int()
