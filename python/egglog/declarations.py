@@ -406,7 +406,12 @@ class Declarations:
         egg_name = egg_name or ref.generate_egg_name()
         self.register_callable_ref(ref, egg_name)
         self.set_constant_type(ref, type_ref)
-        self.add_cmd(egg_name, bindings.Declare(egg_name, self.get_egg_sort(type_ref)))
+        egg_sort = self.register_sort(type_ref, False)
+        #  self.add_cmd(egg_name, bindings.Declare(egg_name, self.get_egg_sort(type_ref)))
+        # Use function decleration instead of constant b/c constants cannot be extracted
+        # https://github.com/egraphs-good/egglog/issues/334
+        fn_decl = bindings.FunctionDecl(egg_name, bindings.Schema([], egg_sort))
+        self.add_cmd(egg_name, bindings.Function(fn_decl))
 
     def register_preserved_method(self, class_: str, method: str, fn: Callable) -> None:
         self._classes[class_].preserved_methods[method] = fn
@@ -754,11 +759,12 @@ class CallDecl:
 
     def to_egg(self, decls: Declarations) -> bindings._Expr:
         """Convert a Call to an egg Call."""
-        # If this is a constant, then emit it just as a var, not as a call
+        # This was removed when we replaced declerations constants with our b/c of unextractable constants
+        # # If this is a constant, then emit it just as a var, not as a call
+        # if isinstance(self.callable, ConstantRef | ClassVariableRef):
+        #     decls.get_egg_fn
+        #     return bindings.Var(egg_fn)
         egg_fn = decls.get_egg_fn(self.callable)
-        if isinstance(self.callable, ConstantRef | ClassVariableRef):
-            decls.get_egg_fn
-            return bindings.Var(egg_fn)
         return bindings.Call(egg_fn, [a.to_egg(decls) for a in self.args])
 
     def pretty(self, context: PrettyContext, parens: bool = True, **kwargs) -> str:  # noqa: C901
