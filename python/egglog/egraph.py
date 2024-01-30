@@ -37,7 +37,7 @@ from . import bindings
 from .declarations import *
 from .ipython_magic import IN_IPYTHON
 from .runtime import *
-from .runtime import _resolve_callable, class_to_ref, convert_to_same_type
+from .runtime import _resolve_callable, _resolve_literal, class_to_ref, convert_to_same_type
 
 if TYPE_CHECKING:
     import ipywidgets
@@ -414,7 +414,7 @@ class _BaseModule:
         # Return a runtime function which will act like the decleration
         return RuntimeFunction(decls, name)
 
-    def _register_function(  # noqa: C901, PLR0912
+    def _register_function(
         self,
         decls: Declarations,
         ref: FunctionCallableRef,
@@ -448,46 +448,32 @@ class _BaseModule:
         hints = get_type_hints(fn, hint_globals, hint_locals)
 
         params = list(signature(fn).parameters.values())
-        arg_names = tuple(t.name for t in params)
-        arg_defaults = [p.default if p.default is not Parameter.empty else None for p in params]
-        decls.update(*arg_defaults)
 
         # If this is an init function, or a classmethod, remove the first arg name
         if is_init or first_arg == "cls":
-            arg_names = arg_names[1:]
-            arg_defaults = arg_defaults[1:]
-        # Remove first arg if this is a classmethod or a method, since it won't have an annotation
-        if first_arg is not None:
-            first, *params = params
-            if first.annotation != Parameter.empty:
-                raise ValueError(f"First arg of a method must not have an annotation, not {first.annotation}")
+            params = params[1:]
 
-        # Check that all the params are positional or keyword, and that there is only one var arg at the end
-        found_var_arg = False
-        for param in params:
-            if found_var_arg:
-                msg = "Can only have a single var arg at the end"
-                raise ValueError(msg)
-            kind = param.kind
-            if kind == Parameter.VAR_POSITIONAL:
-                found_var_arg = True
-            elif kind != Parameter.POSITIONAL_OR_KEYWORD:
-                raise ValueError(f"Can only register functions with positional or keyword args, not {param.kind}")
-
-        if found_var_arg:
+        if _last_param_variable(params):
             *params, var_arg_param = params
             # For now, we don't use the variable arg name
-            arg_names = arg_names[:-1]
-            arg_defaults = arg_defaults[:-1]
             var_arg_type = _resolve_type_annotation(decls, hints[var_arg_param.name], cls_typevars, cls_type_and_name)
         else:
             var_arg_type = None
         arg_types = tuple(
-            _resolve_type_annotation(decls, hints[t.name], cls_typevars, cls_type_and_name) for t in params
+            first_arg
+            # If the first arg is a self, and this not an __init__ fn, add this as a typeref
+            if i == 0 and isinstance(first_arg, ClassTypeVarRef | TypeRefWithVars) and not is_init
+            else _resolve_type_annotation(decls, hints[t.name], cls_typevars, cls_type_and_name)
+            for i, t in enumerate(params)
         )
-        # If the first arg is a self, and this not an __init__ fn, add this as a typeref
-        if isinstance(first_arg, ClassTypeVarRef | TypeRefWithVars) and not is_init:
-            arg_types = (first_arg, *arg_types)
+
+        # Resolve all default values as arg types
+        arg_defaults = [
+            _resolve_literal(t, p.default) if p.default is not Parameter.empty else None
+            for (t, p) in zip(arg_types, params, strict=True)
+        ]
+
+        decls.update(*arg_defaults)
 
         # If this is an init fn use the first arg as the return type
         if is_init:
@@ -527,8 +513,8 @@ class _BaseModule:
             return_type=return_type,
             var_arg_type=var_arg_type,
             arg_types=arg_types,
-            arg_names=arg_names,
-            arg_defaults=tuple(a.__egg_typed_expr__ if a is not None else None for a in arg_defaults),
+            arg_names=tuple(t.name for t in params),
+            arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
             mutates_first_arg=mutates_first_arg,
         )
         decls.register_function_callable(
@@ -638,6 +624,25 @@ class _BaseModule:
     @abstractmethod
     def _register_commands(self, cmds: list[Command]) -> None:
         raise NotImplementedError
+
+
+def _last_param_variable(params: list[Parameter]) -> bool:
+    """
+    Checks if the last paramater is a variable arg.
+
+    Raises an error if any of the other params are not positional or keyword.
+    """
+    found_var_arg = False
+    for param in params:
+        if found_var_arg:
+            msg = "Can only have a single var arg at the end"
+            raise ValueError(msg)
+        kind = param.kind
+        if kind == Parameter.VAR_POSITIONAL:
+            found_var_arg = True
+        elif kind != Parameter.POSITIONAL_OR_KEYWORD:
+            raise ValueError(f"Can only register functions with positional or keyword args, not {param.kind}")
+    return found_var_arg
 
 
 def _resolve_type_annotation(
