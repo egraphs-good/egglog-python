@@ -53,6 +53,8 @@ LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME, "PyObject"}
 
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
 CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable]] = {}
+# Global declerations to store all convertable types so we can query if they have certain methods or not
+CONVERSIONS_DECLS = Declarations()
 
 T = TypeVar("T")
 V = TypeVar("V", bound="Expr")
@@ -128,22 +130,28 @@ def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
 
 
 def process_tp(tp: type | RuntimeTypeArgType) -> JustTypeRef | type:
+    global CONVERSIONS_DECLS
     if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
+        CONVERSIONS_DECLS |= tp
         return class_to_ref(tp)
     return tp
 
 
-def min_convertable_tp(decls: Declarations, a: object, b: object, name: str) -> JustTypeRef:
+def min_convertable_tp(a: object, b: object, name: str) -> JustTypeRef:
     """
     Returns the minimum convertable type between a and b, that has a method `name`, raising a TypeError if no such type exists.
     """
     a_tp = _get_tp(a)
     b_tp = _get_tp(b)
     a_converts_to = {
-        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == a_tp and decls.has_method(to.name, name)
+        to: c
+        for ((from_, to), (c, _)) in CONVERSIONS.items()
+        if from_ == a_tp and CONVERSIONS_DECLS.has_method(to.name, name)
     }
     b_converts_to = {
-        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == b_tp and decls.has_method(to.name, name)
+        to: c
+        for ((from_, to), (c, _)) in CONVERSIONS.items()
+        if from_ == b_tp and CONVERSIONS_DECLS.has_method(to.name, name)
     }
     if isinstance(a_tp, JustTypeRef):
         a_converts_to[a_tp] = 0
@@ -559,27 +567,13 @@ for reflected, non_reflected in REFLECTED_BINARY_METHODS.items():
 
 
 def call_method_min_conversion(slf: object, other: object, name: str) -> RuntimeExpr | None:
-    # Use the mod decls that is most general between the args, if both of them are expressions
-    mod_decls = get_general_decls(slf, other)
     # find a minimum type that both can be converted to
     # This is so so that calls like `-0.1 * Int("x")` work by upcasting both to floats.
-    min_tp = min_convertable_tp(mod_decls, slf, other, name)
+    min_tp = min_convertable_tp(slf, other, name)
     slf = _resolve_literal(min_tp.to_var(), slf)
     other = _resolve_literal(min_tp.to_var(), other)
     method = RuntimeMethod(slf, name)
     return method(other)
-
-
-def get_general_decls(a: object, b: object) -> Declarations:
-    """
-    Returns the more general module declerations between the two, if both are expressions.
-    """
-    if isinstance(a, RuntimeExpr) and isinstance(b, RuntimeExpr):
-        return a.__egg_decls__ | b.__egg_decls__
-    if isinstance(a, RuntimeExpr):
-        return a.__egg_decls__
-    assert isinstance(b, RuntimeExpr)
-    return b.__egg_decls__
 
 
 for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__iter__", "__index__"]:
