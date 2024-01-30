@@ -8,7 +8,7 @@ _This project uses semantic versioning_
 
 _not yet implemented_
 
-This is a large breaking change that moves the function and class decorators to the top level `egglog` module,
+This is a large change that moves the function and class decorators to the top level `egglog` module,
 from the `EGraph` and `Module` classes. Rulesets are also moved to be defined globally instead of on the `EGraph` class.
 
 The goal of this change is to remove the complexity of `Module`s and remove the need to think about what functions/classes
@@ -20,11 +20,13 @@ in any rules or added in any commands.
 - `egraph.function` -> `egglog.function`
 - `egraph.relation` -> `egglog.relation`
 - `egraph.ruleset` -> `egglog.Ruleset`
+- `egraph.Module` -> Removed
 
 The `EGraph` class can take an optional `default_ruleset` argument to set the default ruleset for the `EGraph`. Otherwise,
 there is a global default ruleset that is used, `egglog.Ruleset`.
 
-This also adds support for classes with methods that are mutually recursive, by making type analysis more lazy.
+For backwards compatability, the existing methods and functions are preserved, to make this easier to adopt. They will
+all now raise deprication warnings.
 
 ## 5.0.0 (2024-01-16)
 
