@@ -217,9 +217,6 @@ def test_relation():
 
 def test_variable_args():
     egraph = EGraph()
-    # Create dummy function with type so its registered
-    egraph.relation("_", Set[i64])
-
     egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
 
 

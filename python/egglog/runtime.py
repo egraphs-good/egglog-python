@@ -346,10 +346,11 @@ def _call(
         return_tp = tcs.infer_return_type(fn_decl.arg_types, fn_decl.return_type, fn_decl.var_arg_type, arg_types)
     else:
         return_tp = JustTypeRef("Unit")
-
     expr_decl = CallDecl(callable_ref, arg_decls, bound_params)
     typed_expr_decl = TypedExprDecl(return_tp, expr_decl)
     decls = Declarations.create(decls_from_fn, *upcasted_args)
+    # Register return type sort in case it's a variadic generic that needs to be created
+    decls.register_sort(return_tp, False)
     if fn_decl.mutates_first_arg:
         first_arg = upcasted_args[0]
         first_arg.__egg_typed_expr__ = typed_expr_decl
