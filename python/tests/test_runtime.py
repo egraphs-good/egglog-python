@@ -9,11 +9,11 @@ def test_type_str():
     decls = Declarations(
             _classes={
                 "i64": ClassDecl(),
-                "Map": ClassDecl(n_type_vars=2),
+                "Map": ClassDecl(type_vars=("K", "V")),
             }
         )
-    i64 = RuntimeClass(decls, "i64")
-    Map = RuntimeClass(decls, "Map")
+    i64 = RuntimeClass(decls.update_other, "i64")
+    Map = RuntimeClass(decls.update_other, "Map")
     assert str(i64) == "i64"
     assert str(Map[i64, i64]) == "Map[i64, i64]"
 
@@ -43,13 +43,13 @@ def test_function_call():
 def test_classmethod_call():
     from pytest import raises
 
-    K, V = ClassTypeVarRef(0), ClassTypeVarRef(1)
+    K, V = ClassTypeVarRef("K"), ClassTypeVarRef("V")
     decls = Declarations(
             _classes={
                 "i64": ClassDecl(),
                 "unit": ClassDecl(),
                 "Map": ClassDecl(
-                    n_type_vars=2,
+                    type_vars=("K", "V"),
                     class_methods={
                         "create": FunctionDecl(
                             (),
@@ -67,11 +67,11 @@ def test_classmethod_call():
                 JustTypeRef("Map"): "Map",
             }
         )
-    Map = RuntimeClass(decls, "Map")
+    Map = RuntimeClass(decls.update_other, "Map")
     with raises(TypeConstraintError):
         Map.create()  # type: ignore
-    i64 = RuntimeClass(decls, "i64")
-    unit = RuntimeClass(decls, "unit")
+    i64 = RuntimeClass(decls.update_other, "i64")
+    unit = RuntimeClass(decls.update_other, "unit")
     assert (
         Map[i64, unit].create().__egg_typed_expr__  # type: ignore
         == TypedExprDecl(
@@ -110,7 +110,7 @@ def test_expr_special():
                 ),
             },
         )
-    i64 = RuntimeClass(decls, "i64")
+    i64 = RuntimeClass(decls.update_other, "i64")
     one = i64(1)  # type: ignore
     res = one + one  # type: ignore
     expected_res = RuntimeExpr(
@@ -132,7 +132,7 @@ def test_class_variable():
                 "i64": ClassDecl(class_variables={"one": JustTypeRef("i64")}),
             },
         )
-    i64 = RuntimeClass(decls, "i64")
+    i64 = RuntimeClass(decls.update_other, "i64")
     one = i64.one
     assert isinstance(one, RuntimeExpr)
     assert (
