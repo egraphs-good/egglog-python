@@ -37,10 +37,14 @@ jobs:
           cache: "pip"
       - run: pip install -e .[test]
       - name: Run benchmarks
+        if: matrix.py == '3.12'
         uses: CodSpeedHQ/action@v2
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           run: pytest --codspeed
+      - name: Run tests
+        if: matrix.py != '3.12'
+        run: pytest --benchmark-disable
   mypy:
     runs-on: ubuntu-latest
     steps:
