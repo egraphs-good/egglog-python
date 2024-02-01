@@ -36,18 +36,7 @@ jobs:
           python-version: ${{ matrix.py }}
           cache: "pip"
       - run: pip install -e .[test]
-      - name: Run benchmarks
-        if: matrix.py == '3.12'
-        run: pytest
-      - name: Run benchmarks w/ codspeed
-        if: matrix.py == '3.12'
-        uses: CodSpeedHQ/action@v2
-        with:
-          token: ${{ secrets.CODSPEED_TOKEN }}
-          run: pytest -vvv
-      - name: Run tests
-        if: matrix.py != '3.12'
-        run: pytest --benchmark-disable
+      - run: pytest --benchmark-disable
   mypy:
     runs-on: ubuntu-latest
     steps:
@@ -61,6 +50,21 @@ jobs:
       - run: pip install -e .[test] mypy pre-commit
       - run: pre-commit run --hook-stage manual mypy
       - run: pre-commit run --hook-stage manual stubtest
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.71.1
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+          cache: "pip"
+      - run: pip install -e .[test]
+      - uses: CodSpeedHQ/action@v2
+        with:
+          token: ${{ secrets.CODSPEED_TOKEN }}
+          run: pytest -vvv
   docs:
     runs-on: ubuntu-latest
     steps:
