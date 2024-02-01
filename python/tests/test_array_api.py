@@ -127,7 +127,7 @@ class TestLDA:
             y_arr = NDArray.var("y")
             assume_dtype(y_arr, y_np.dtype)
             assume_shape(y_arr, y_np.shape)  # type: ignore
-            assume_value_one_of(y_arr, (0, 1, 2))  # type: ignore
+            assume_value_one_of(y_arr, tuple(map(int, np.unique(y_np))))  # type: ignore
 
             with EGraph([array_api_module]):
                 return run_lda(X_arr, y_arr)
