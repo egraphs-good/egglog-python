@@ -38,10 +38,13 @@ jobs:
       - run: pip install -e .[test]
       - name: Run benchmarks
         if: matrix.py == '3.12'
+        run: pytest
+      - name: Run benchmarks w/ codspeed
+        if: matrix.py == '3.12'
         uses: CodSpeedHQ/action@v2
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
-          run: pytest --codspeed
+          run: pytest -vvv
       - name: Run tests
         if: matrix.py != '3.12'
         run: pytest --benchmark-disable
