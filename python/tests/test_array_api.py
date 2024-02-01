@@ -68,7 +68,7 @@ def test_reshape_vec_noop():
 
 # This test happens in different steps. Each will be benchmarked and saved as a snapshot.
 # The next step will load the old snapshot and run their test on it.
-# 1. Trace the sklearn function
+
 
 def run_lda(x, y):
     with config_context(array_api_dispatch=True):
@@ -80,16 +80,17 @@ iris = datasets.load_iris()
 X_np, y_np = (iris.data, iris.target)
 res = run_lda(X_np, y_np)
 
-def _load_py_snapshot(fn: Callable, var: str | None=None) -> Any:
+
+def _load_py_snapshot(fn: Callable, var: str | None = None) -> Any:
     """
     Load a python snapshot, evaling the code, and returning the `var` defined in it.
 
     If no var is provided, then return the last expression.
     """
-    path = Path(__file__).parent / '__snapshots__' / 'test_array_api' / f'TestLDA.{fn.__name__}.py'
+    path = Path(__file__).parent / "__snapshots__" / "test_array_api" / f"TestLDA.{fn.__name__}.py"
     contents = path.read_text()
 
-    contents = 'import numpy as np\nfrom egglog.exp.array_api import *\n' + contents
+    contents = "import numpy as np\nfrom egglog.exp.array_api import *\n" + contents
     globals: dict[str, Any] = {}
     if var is None:
         # exec once as a full statement
@@ -101,6 +102,7 @@ def _load_py_snapshot(fn: Callable, var: str | None=None) -> Any:
         exec(contents, globals)
         return globals[var]
 
+
 def load_source(expr):
     egraph = EGraph([array_api_module_string])
     fn_program = ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y"))
@@ -110,6 +112,7 @@ def load_source(expr):
     fn = cast(Any, egraph.eval(fn_program.py_object))
     assert np.allclose(res, run_lda(X_np, y_np))
     return egraph.eval(fn_program.statements)
+
 
 @pytest.mark.benchmark(min_rounds=3)
 class TestLDA:
@@ -145,10 +148,21 @@ class TestLDA:
         expr = _load_py_snapshot(self.test_optimize)
         assert benchmark(load_source, expr) == snapshot_py
 
-    def test_numba(self, benchmark):
-        fn = _load_py_snapshot(self.test_source_optimized, "__fn")
-        fn = numba.njit(fn)
-        # Do once for JIT compilation
-        assert np.allclose(res, fn(X_np, y_np))
-        # Then benchmark
-        benchmark(fn, X_np, y_np)
+    @pytest.mark.benchmark(
+            # Warmup once for numba to compile
+             warmup=True, warmup_iterations=1
+    )
+    @pytest.mark.parametrize(
+        ("fn",),
+        [
+            pytest.param(LinearDiscriminantAnalysis(n_components=2).fit_transform, id="base"),
+            pytest.param(run_lda, id="array_api"),
+            pytest.param(_load_py_snapshot(test_source_optimized, "__fn"), id="array_api-optimized"),
+            pytest.param(
+                numba.njit(_load_py_snapshot(test_source_optimized, "__fn")), id="array_api-optimized-numba"
+            ),
+        ],
+    )
+    def test_execution(self, fn, benchmark):
+        assert np.allclose(res, benchmark(fn, X_np, y_np))
+
