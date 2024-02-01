@@ -148,10 +148,6 @@ class TestLDA:
         expr = _load_py_snapshot(self.test_optimize)
         assert benchmark(load_source, expr) == snapshot_py
 
-    @pytest.mark.benchmark(
-            # Warmup once for numba to compile
-             warmup=True, warmup_iterations=1
-    )
     @pytest.mark.parametrize(
         ("fn",),
         [
@@ -164,5 +160,7 @@ class TestLDA:
         ],
     )
     def test_execution(self, fn, benchmark):
-        assert np.allclose(res, benchmark(fn, X_np, y_np))
+        # warmup once for numba
+        assert np.allclose(res, fn(X_np, y_np))
+        benchmark(fn, X_np, y_np)
 
