@@ -32,7 +32,14 @@ dependencies = ["typing-extensions", "black", "graphviz"]
 array = ["scikit-learn", "array_api_compat", 'numba; python_version<"3.12"']
 dev = ["pre-commit", "ruff", "mypy", "anywidget[dev]", "egglog[docs,test]"]
 
-test = ["pytest", "mypy", "syrupy", "egglog[array]"]
+test = [
+    "pytest",
+    "mypy",
+    "syrupy",
+    "egglog[array]",
+    "pytest-codspeed",
+    "pytest-benchmark",
+]
 
 docs = [
     "pydata-sphinx-theme",

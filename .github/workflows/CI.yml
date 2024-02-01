@@ -36,7 +36,11 @@ jobs:
           python-version: ${{ matrix.py }}
           cache: "pip"
       - run: pip install -e .[test]
-      - run: pytest
+      - name: Run benchmarks
+        uses: CodSpeedHQ/action@v2
+        with:
+          token: ${{ secrets.CODSPEED_TOKEN }}
+          run: pytest --codspeed
   mypy:
     runs-on: ubuntu-latest
     steps:
