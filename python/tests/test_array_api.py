@@ -114,7 +114,7 @@ def load_source(expr):
     return egraph.eval(fn_program.statements)
 
 
-@pytest.mark.benchmark(min_rounds=3)
+@pytest.mark.benchmark(min_rounds=1)
 class TestLDA:
     def test_trace(self, snapshot_py, benchmark):
         @benchmark
