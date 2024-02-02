@@ -44,8 +44,8 @@ def __fn(X, y):
     _32 = _17 * _31
     _33 = np.linalg.svd(_32, full_matrices=False)
     _34 = _33[1] > np.array(0.0001)
-    _35 = np.sum(_34)
-    _36 = _35.astype(np.dtype(np.int32))
+    _35 = _34.astype(np.dtype(np.int32))
+    _36 = np.sum(_35)
     _37 = _33[2][:_36, :] / _29
     _38 = _37.T / _33[1][:_36]
     _39 = np.array(150) * _7
@@ -57,8 +57,8 @@ def __fn(X, y):
     _45 = np.linalg.svd(_44, full_matrices=False)
     _46 = np.array(0.0001) * _45[1][0]
     _47 = _45[1] > _46
-    _48 = np.sum(_47)
-    _49 = _48.astype(np.dtype(np.int32))
+    _48 = _47.astype(np.dtype(np.int32))
+    _49 = np.sum(_48)
     _50 = _38 @ _45[2].T[:, :_49]
     _51 = _16 @ _50
     return _51[:, :2]
