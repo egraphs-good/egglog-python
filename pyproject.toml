@@ -39,6 +39,7 @@ test = [
     "egglog[array]",
     "pytest-codspeed",
     "pytest-benchmark",
+    "pytest-xdist",
 ]
 
 docs = [
