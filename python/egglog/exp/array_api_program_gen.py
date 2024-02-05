@@ -13,26 +13,28 @@ from .program_gen import *
 # Depends on `np` as a global variable.
 ##
 
-array_api_module_string = Module([array_api_module.without_rules(), program_gen_module])
+array_api_program_gen_ruleset = ruleset()
+
+array_api_program_gen_schedule = array_api_program_gen_ruleset * 10000 + program_gen_ruleset * 10000
 
 
-@array_api_module_string.function
+@function
 def bool_program(x: Boolean) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _bool_program():
     yield rewrite(bool_program(TRUE)).to(Program("True"))
     yield rewrite(bool_program(FALSE)).to(Program("False"))
 
 
-@array_api_module_string.function()
+@function
 def int_program(x: Int) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _int_program(i64_: i64, i: Int, j: Int):
     yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
     yield rewrite(int_program(~i)).to(Program("~") + int_program(i))
@@ -56,17 +58,17 @@ def _int_program(i64_: i64, i: Int, j: Int):
     yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
 
 
-@array_api_module_string.function()
+@function
 def tuple_int_program(x: TupleInt) -> Program:
     ...
 
 
-@array_api_module_string.function()
+@function
 def tuple_int_program_inner(x: TupleInt) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _tuple_int_program(i: Int, j: Int, ti: TupleInt, ti1: TupleInt, ti2: TupleInt):
     yield rewrite(int_program(ti[i])).to(tuple_int_program(ti) + "[" + int_program(i) + "]")
 
@@ -77,17 +79,17 @@ def _tuple_int_program(i: Int, j: Int, ti: TupleInt, ti1: TupleInt, ti2: TupleIn
     yield rewrite(tuple_int_program_inner(TupleInt(i))).to(int_program(i) + ",")
 
 
-@array_api_module_string.function()
+@function
 def ndarray_program(x: NDArray) -> Program:
     ...
 
 
-@array_api_module_string.function
+@function
 def ndarray_function_two(res: NDArray, l: NDArray, r: NDArray) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _ndarray_function_two(f: Program, res: NDArray, l: NDArray, r: NDArray, o: PyObject):
     # When we have function, set the program and trigger it to be compiled
     yield rule(eq(f).to(ndarray_function_two(res, l, r))).then(
@@ -96,12 +98,12 @@ def _ndarray_function_two(f: Program, res: NDArray, l: NDArray, r: NDArray, o: P
     )
 
 
-@array_api_module_string.function()
+@function
 def dtype_program(x: DType) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _dtype_program():
     yield rewrite(dtype_program(DType.float64)).to(Program("np.dtype(np.float64)"))
     yield rewrite(dtype_program(DType.float32)).to(Program("np.dtype(np.float32)"))
@@ -111,12 +113,12 @@ def _dtype_program():
     yield rewrite(dtype_program(DType.object)).to(Program("np.dtype(np.object_)"))
 
 
-@array_api_module_string.function
+@function
 def float_program(x: Float) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _float_program(f: Float, g: Float, f64_: f64, i: Int, r: Rational):
     yield rewrite(float_program(Float(f64_))).to(Program(f64_.to_string()))
     yield rewrite(float_program(f.abs())).to(Program("np.abs(") + float_program(f) + ")")
@@ -134,12 +136,12 @@ def _float_program(f: Float, g: Float, f64_: f64, i: Int, r: Rational):
     )
 
 
-@array_api_module_string.function()
+@function
 def value_program(x: Value) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Value):
     yield rewrite(value_program(Value.int(i))).to(int_program(i))
     yield rewrite(value_program(Value.bool(b))).to(bool_program(b))
@@ -152,17 +154,17 @@ def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Valu
     yield rewrite(int_program(v1.to_int)).to(value_program(v1))
 
 
-@array_api_module_string.function()
+@function
 def tuple_value_program(x: TupleValue) -> Program:
     ...
 
 
-@array_api_module_string.function
+@function
 def tuple_value_program_inner(x: TupleValue) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _tuple_value_program(tv1: TupleValue, tv2: TupleValue, v: Value):
     yield rewrite(tuple_value_program(tv1)).to(Program("(") + tuple_value_program_inner(tv1) + ")")
     yield rewrite(tuple_value_program_inner(tv1 + tv2)).to(
@@ -171,18 +173,18 @@ def _tuple_value_program(tv1: TupleValue, tv2: TupleValue, v: Value):
     yield rewrite(tuple_value_program_inner(TupleValue(v))).to(value_program(v) + ",")
 
 
-@array_api_module_string.function
+@function
 def tuple_ndarray_program(x: TupleNDArray) -> Program:
     ...
 
 
-@array_api_module_string.function
+@function
 def tuple_ndarray_program_inner(x: TupleNDArray) -> Program:
     # Maps to terms seperated by commas, without other parens
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _tuple_ndarray_program(x: NDArray, l: TupleNDArray, r: TupleNDArray, i: Int):
     yield rewrite(tuple_ndarray_program(r)).to(Program("(") + tuple_ndarray_program_inner(r) + ")")
 
@@ -195,47 +197,47 @@ def _tuple_ndarray_program(x: NDArray, l: TupleNDArray, r: TupleNDArray, i: Int)
     yield rewrite(ndarray_program(l[i])).to(tuple_ndarray_program(l) + "[" + int_program(i) + "]")
 
 
-@array_api_module_string.function
+@function
 def optional_dtype_program(x: OptionalDType) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _optional_dtype_program(dtype: DType):
     yield rewrite(optional_dtype_program(OptionalDType.none)).to(Program("None"))
     yield rewrite(optional_dtype_program(OptionalDType.some(dtype))).to(dtype_program(dtype))
 
 
-@array_api_module_string.function
+@function
 def optional_int_program(x: OptionalInt) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _optional_int_program(x: Int):
     yield rewrite(optional_int_program(OptionalInt.none)).to(Program("None"))
     yield rewrite(optional_int_program(OptionalInt.some(x))).to(int_program(x))
 
 
-@array_api_module_string.function
+@function
 def optional_int_slice_program(x: OptionalInt) -> Program:
     """
     Translates an optional int to a program, but translates None as "" instead of None
     """
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _optional_int_slice_program(x: Int):
     yield rewrite(optional_int_slice_program(OptionalInt.none)).to(Program(""))
     yield rewrite(optional_int_slice_program(OptionalInt.some(x))).to(int_program(x))
 
 
-@array_api_module_string.function
+@function
 def slice_program(x: Slice) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _slice_program(start: OptionalInt, stop: OptionalInt, i: Int):
     yield rewrite(slice_program(Slice(start, stop, OptionalInt.none))).to(
         optional_int_slice_program(start) + ":" + optional_int_slice_program(stop)
@@ -245,12 +247,12 @@ def _slice_program(start: OptionalInt, stop: OptionalInt, i: Int):
     )
 
 
-@array_api_module_string.function
+@function
 def multi_axis_index_key_item_program(x: MultiAxisIndexKeyItem) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _multi_axis_index_key_item_program(i: Int, s: Slice):
     yield rewrite(multi_axis_index_key_item_program(MultiAxisIndexKeyItem.int(i))).to(int_program(i))
     yield rewrite(multi_axis_index_key_item_program(MultiAxisIndexKeyItem.slice(s))).to(slice_program(s))
@@ -258,12 +260,12 @@ def _multi_axis_index_key_item_program(i: Int, s: Slice):
     yield rewrite(multi_axis_index_key_item_program(MultiAxisIndexKeyItem.NONE)).to(Program("None"))
 
 
-@array_api_module_string.function
+@function
 def multi_axis_index_key_program(x: MultiAxisIndexKey) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _multi_axis_index_key_program(l: MultiAxisIndexKey, r: MultiAxisIndexKey, item: MultiAxisIndexKeyItem):
     yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey(item))).to(multi_axis_index_key_item_program(item))
     yield rewrite(multi_axis_index_key_program(l + r)).to(
@@ -272,12 +274,12 @@ def _multi_axis_index_key_program(l: MultiAxisIndexKey, r: MultiAxisIndexKey, it
     yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey.EMPTY)).to(Program("()"))
 
 
-@array_api_module_string.function
+@function
 def index_key_program(x: IndexKey) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _index_key_program(i: Int, s: Slice, key: MultiAxisIndexKey, a: NDArray):
     yield rewrite(index_key_program(IndexKey.ELLIPSIS)).to(Program("..."))
     yield rewrite(index_key_program(IndexKey.int(i))).to(int_program(i))
@@ -286,29 +288,29 @@ def _index_key_program(i: Int, s: Slice, key: MultiAxisIndexKey, a: NDArray):
     yield rewrite(index_key_program(ndarray_index(a))).to(ndarray_program(a))
 
 
-@array_api_module_string.function
+@function
 def int_or_tuple_program(x: IntOrTuple) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _int_or_tuple_program(x: Int, t: TupleInt):
     yield rewrite(int_or_tuple_program(IntOrTuple.int(x))).to(int_program(x))
     yield rewrite(int_or_tuple_program(IntOrTuple.tuple(t))).to(tuple_int_program(t))
 
 
-@array_api_module_string.function
+@function
 def optional_int_or_tuple_program(x: OptionalIntOrTuple) -> Program:
     ...
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _optional_int_or_tuple_program(it: IntOrTuple):
     yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.some(it))).to(int_or_tuple_program(it))
     yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.none)).to(Program("None"))
 
 
-@array_api_module_string.register
+@array_api_program_gen_ruleset.register
 def _ndarray_program(
     x: NDArray,
     y: NDArray,

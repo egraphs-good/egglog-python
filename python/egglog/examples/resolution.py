@@ -11,7 +11,6 @@ from egglog import *
 egraph = EGraph()
 
 
-@egraph.class_
 class Boolean(Expr):
     FALSE: ClassVar[Boolean]
 
@@ -23,7 +22,7 @@ class Boolean(Expr):
 
 
 # Show off two ways of creating constants, either as top level values or as classvars
-T = egraph.constant("T", Boolean)
+T = constant("T", Boolean)
 F = Boolean.FALSE
 
 p, a, b, c, as_, bs = vars_("p a b c as bs", Boolean)
@@ -62,7 +61,7 @@ egraph.register(
 
 
 # Example predicate
-@egraph.function
+@function
 def pred(x: i64Like) -> Boolean:  # type: ignore[empty-body]
     ...
 

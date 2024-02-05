@@ -10,7 +10,7 @@ def test_conversion_custom_metaclass():
 
     egraph = EGraph()
 
-    @egraph.class_
+
     class MyTypeExpr(Expr):
         def __init__(self):
             ...
@@ -25,7 +25,7 @@ def test_conversion():
     class MyType:
         pass
 
-    @egraph.class_
+
     class MyTypeExpr(Expr):
         def __init__(self):
             ...
@@ -41,12 +41,12 @@ def test_conversion_transitive_forward():
     class MyType:
         pass
 
-    @egraph.class_
+
     class MyTypeExpr(Expr):
         def __init__(self):
             ...
 
-    @egraph.class_
+
     class MyTypeExpr2(Expr):
         def __init__(self):
             ...
@@ -63,12 +63,12 @@ def test_conversion_transitive_backward():
     class MyType:
         pass
 
-    @egraph.class_
+
     class MyTypeExpr(Expr):
         def __init__(self):
             ...
 
-    @egraph.class_
+
     class MyTypeExpr2(Expr):
         def __init__(self):
             ...
@@ -84,12 +84,12 @@ def test_conversion_transitive_cycle():
     class MyType:
         pass
 
-    @egraph.class_
+
     class MyTypeExpr(Expr):
         def __init__(self):
             ...
 
-    @egraph.class_
+
     class MyTypeExpr2(Expr):
         def __init__(self):
             ...

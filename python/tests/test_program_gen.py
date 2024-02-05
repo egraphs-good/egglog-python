@@ -6,10 +6,9 @@ import inspect
 from egglog import *
 from egglog.exp.program_gen import *
 
-egraph = EGraph([program_gen_module])
 
 
-@egraph.class_
+
 class Math(Expr):
     def __init__(self, value: i64Like) -> None:
         ...
@@ -27,19 +26,18 @@ class Math(Expr):
     def __neg__(self) -> Math:
         ...
 
-    @egraph.method(cost=1000)  # type: ignore
+    @method(cost=1000)  # type: ignore
     @property
     def program(self) -> Program:
         ...
 
 
-@egraph.function
+@function
 def assume_pos(x: Math) -> Math:
     ...
 
-
-@egraph.register
-def _rules(
+@ruleset
+def to_program_ruleset(
     s: String,
     y_expr: String,
     z_expr: String,
@@ -62,13 +60,10 @@ def _rules(
 def test_to_string(snapshot_py) -> None:
     first = assume_pos(-Math.var("x")) + Math.var("y")
     fn = (first + Math(2) + first).program.function_two(Math.var("x").program, Math.var("y").program, "my_fn")
-    with egraph:
-        egraph.register(fn)
-        egraph.run(200)
-        fn = egraph.extract(fn)
+    egraph = EGraph()
     egraph.register(fn)
     egraph.register(fn.compile())
-    egraph.run(200)
+    egraph.run(to_program_ruleset * 100 + program_gen_ruleset * 200)
     # egraph.display(n_inline_leaves=1)
     assert egraph.eval(fn.expr) == "my_fn"
     assert egraph.eval(fn.statements) == snapshot_py
@@ -79,8 +74,9 @@ def test_py_object():
     y = Math.var("y")
     z = Math.var("z")
     fn = (x + y + z).program.function_two(x.program, y.program)
+    egraph = EGraph()
     egraph.register(fn.eval_py_object({"z": 10}))
-    egraph.run(100)
+    egraph.run(to_program_ruleset * 100 + program_gen_ruleset * 100)
     res = egraph.eval(fn.py_object)
     assert res(1, 2) == 13  # type: ignore
     assert inspect.getsource(res)  # type: ignore

@@ -44,6 +44,7 @@ __all__ = [
     "EGraph",
     "Module",
     "function",
+    "ruleset",
     "method",
     "relation",
     "Expr",
@@ -54,6 +55,7 @@ __all__ = [
     "ne",
     "panic",
     "let",
+    "constant",
     "delete",
     "union",
     "set_",
@@ -250,7 +252,7 @@ class _BaseModule:
         # otherwise, we are passing some keyword args, so save those, and then return a partial
         return lambda fn: _function(fn, fn_locals, False, **kwargs)
 
-    @deprecated("Use top level Ruleset class constructor instead")
+    @deprecated("Use top level `ruleset` function instead")
     def ruleset(self, name: str) -> Ruleset:
         return Ruleset(name)
 
@@ -295,7 +297,7 @@ class _BaseModule:
         """
         return constant(name, tp, egg_name)
 
-    def register(self, command_or_generator: CommandLike | CommandGenerator, *command_likes: CommandLike) -> None:
+    def register(self, /, command_or_generator: CommandLike | CommandGenerator, *command_likes: CommandLike) -> None:
         """
         Registers any number of rewrites or rules.
         """
@@ -564,7 +566,7 @@ def function(*args, **kwargs) -> Any:
 def _function(
     fn: Callable[..., RuntimeExpr],
     hint_locals: dict[str, Any],
-    builtin: bool,
+    builtin: bool = False,
     mutates_first_arg: bool = False,
     egg_fn: str | None = None,
     cost: int | None = None,
@@ -834,13 +836,12 @@ class GraphvizKwargs(TypedDict, total=False):
 @dataclass
 class _EGraphState:
     """
-    State of the EGraph declerations, so we know what to
+    State of the EGraph declerations and rulesets, so when we pop/push the stack we know whats defined.
     """
 
     # The decleratons we have added. The _cmds represent all the symbols we have added
     decls: Declarations = field(default_factory=Declarations)
     # List of rulesets already added, so we don't re-add them if they are passed again
-
     added_rulesets: set[str] = field(default_factory=set)
 
     def add_decls(self, new_decls: Declarations) -> Iterable[bindings._Command]:
@@ -848,13 +849,11 @@ class _EGraphState:
         self.decls |= new_decls
         return new_cmds
 
-    def add_rulesets(self, new_rulesets: dict[str, list[bindings._Command]]) -> Iterable[bindings._Command]:
-        new_cmds = []
-        for k, v in new_rulesets.items():
-            if k not in self.added_rulesets:
-                new_cmds.extend(v)
-                self.added_rulesets.add(k)
-        return new_cmds
+    def add_rulesets(self, rulesets: Iterable[Ruleset]) -> Iterable[bindings._Command]:
+        for ruleset in rulesets:
+            if ruleset.egg_name not in self.added_rulesets:
+                self.added_rulesets.add(ruleset.egg_name)
+                yield from ruleset._cmds
 
 
 @dataclass
@@ -866,6 +865,7 @@ class EGraph(_BaseModule):
     seminaive: InitVar[bool] = True
     save_egglog_string: InitVar[bool] = False
 
+    default_ruleset: Ruleset | None = None
     _egraph: bindings.EGraph = field(repr=False, init=False)
     _egglog_string: str | None = field(default=None, repr=False, init=False)
     _state: _EGraphState = field(default_factory=_EGraphState, repr=False)
@@ -875,8 +875,9 @@ class EGraph(_BaseModule):
     _token_stack: list[Token[EGraph]] = field(default_factory=list, repr=False)
 
     def __post_init__(self, modules: list[Module], seminaive: bool, save_egglog_string: bool) -> None:
-        super().__post_init__(modules)
         self._egraph = bindings.EGraph(GLOBAL_PY_OBJECT_SORT, seminaive=seminaive)
+        super().__post_init__(modules)
+
         for m in self._flatted_deps:
             self._add_decls(*m.cmds)
             self._register_commands(m.cmds)
@@ -886,10 +887,10 @@ class EGraph(_BaseModule):
     def _register_commands(self, commands: list[Command]) -> None:
         for c in commands:
             if c.ruleset:
-                self._add_schedule(run(c.ruleset))
+                self._add_schedule(c.ruleset)
 
         self._add_decls(*commands)
-        self._process_commands(command._to_egg_command() for command in commands)
+        self._process_commands(command._to_egg_command(self._default_ruleset_name) for command in commands)
 
     def _process_commands(self, commands: Iterable[bindings._Command]) -> None:
         commands = list(commands)
@@ -1021,7 +1022,7 @@ class EGraph(_BaseModule):
         self._add_schedule(schedule)
 
         # decls = Declarations.create(expr, schedule)
-        self._process_commands([bindings.Simplify(expr.__egg__, schedule._to_egg_schedule())])
+        self._process_commands([bindings.Simplify(expr.__egg__, schedule._to_egg_schedule(self._default_ruleset_name))])
         extract_report = self._egraph.extract_report()
         if not isinstance(extract_report, bindings.Best):
             msg = "No extract report saved"
@@ -1033,6 +1034,13 @@ class EGraph(_BaseModule):
             expr.__egg_typed_expr__.tp,
         )
         return cast(EXPR, RuntimeExpr(self._state.decls.copy(), new_typed_expr))
+
+    @property
+    def _default_ruleset_name(self) -> str:
+        if self.default_ruleset:
+            self._add_schedule(self.default_ruleset)
+            return self.default_ruleset.egg_name
+        return ""
 
     def include(self, path: str) -> None:
         """
@@ -1065,7 +1073,7 @@ class EGraph(_BaseModule):
 
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
         self._add_schedule(schedule)
-        self._process_commands([bindings.RunSchedule(schedule._to_egg_schedule())])
+        self._process_commands([bindings.RunSchedule(schedule._to_egg_schedule(self._default_ruleset_name))])
         run_report = self._egraph.run_report()
         if not run_report:
             msg = "No run report saved"
@@ -1301,26 +1309,115 @@ class Unit(Expr, egg_sort="Unit", builtin=True):
         ...
 
 
-@dataclass
-class Ruleset:
-    name: str
-    __egg_decls__: Declarations = field(default_factory=Declarations, repr=False)
-    _cmds: list[bindings._Command] = field(default_factory=list, repr=False)
+def ruleset(
+    rule_or_generator: CommandLike | CommandGenerator | None = None, *rules: Rule | Rewrite, name: None | str = None
+) -> Ruleset:
+    """
+    Creates a ruleset with the following rules.
 
-    def __post_init__(self) -> None:
-        if self.name:
-            self._cmds.append(bindings.AddRuleset(self.name))
+    If no name is provided, one is generated based on the current module
+    """
+    r = Ruleset(name=name)
+    if rule_or_generator is not None:
+        r.register(rule_or_generator, *rules)
+    return r
+
+
+class Schedule(ABC):
+    def __mul__(self, length: int) -> Schedule:
+        """
+        Repeat the schedule a number of times.
+        """
+        return Repeat(length, self)
+
+    def saturate(self) -> Schedule:
+        """
+        Run the schedule until the e-graph is saturated.
+        """
+        return Saturate(self)
+
+    def __add__(self, other: Schedule) -> Schedule:
+        """
+        Run two schedules in sequence.
+        """
+        return Sequence((self, other))
+
+    @abstractmethod
+    def __str__(self) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _rulesets(self) -> Iterable[Ruleset]:
+        """
+        Mapping of all the rulesets used to commands.
+        """
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def __egg_decls__(self) -> Declarations:
+        raise NotImplementedError
+
+
+@dataclass
+class Ruleset(Schedule):
+    name: str | None
+    rules: list[Rule | Rewrite] = field(default_factory=list)
 
     def append(self, rule: Rule | Rewrite) -> None:
         """
         Register a rule with the ruleset.
         """
-        self._cmds.append(rule._to_egg_command())
-        self.__egg_decls__ |= rule
+        self.rules.append(rule)
 
+    def register(self, /, rule_or_generator: CommandLike | CommandGenerator, *rules: Rule | Rewrite) -> None:
+        """
+        Register rewrites or rules, either as a function or as values.
+        """
+        if isinstance(rule_or_generator, FunctionType):
+            assert not rules
+            rules = tuple(_command_generator(rule_or_generator))
+        else:
+            rules = (cast(Rule | Rewrite, rule_or_generator), *rules)
+        for r in rules:
+            self.append(r)
 
-def _ruleset_name(ruleset: Ruleset | None) -> str:
-    return ruleset.name if ruleset else ""
+    @property
+    def __egg_decls__(self) -> Declarations:
+        return Declarations.create(*self.rules)
+
+    @property
+    def _cmds(self) -> list[bindings._Command]:
+        cmds = [r._to_egg_command(self.egg_name) for r in self.rules]
+        if self.egg_name:
+            cmds.insert(0, bindings.AddRuleset(self.egg_name))
+        return cmds
+
+    def __str__(self) -> str:
+        return f"ruleset(name={self.egg_name!r})"
+
+    def __repr__(self) -> str:
+        if not self.rules:
+            return str(self)
+        rules = ", ".join(map(repr, self.rules))
+        return f"ruleset({rules}, name={self.egg_name!r})"
+
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        return bindings.Run(self._to_egg_config())
+
+    def _to_egg_config(self) -> bindings.RunConfig:
+        return bindings.RunConfig(self.egg_name, None)
+
+    def _rulesets(self) -> Iterable[Ruleset]:
+        yield self
+
+    @property
+    def egg_name(self):
+        return self.name or f"_ruleset_{id(self)}"
 
 
 class Command(ABC):
@@ -1340,7 +1437,7 @@ class Command(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _to_egg_command(self) -> bindings._Command:
+    def _to_egg_command(self, default_ruleset_name: str) -> bindings._Command:
         raise NotImplementedError
 
     @abstractmethod
@@ -1360,8 +1457,10 @@ class Rewrite(Command):
         args_str = ", ".join(map(str, [self._rhs, *self._conditions]))
         return f"{self._fn_name}({self._lhs}).to({args_str})"
 
-    def _to_egg_command(self) -> bindings._Command:
-        return bindings.RewriteCommand(_ruleset_name(self.ruleset), self._to_egg_rewrite())
+    def _to_egg_command(self, default_ruleset_name: str) -> bindings._Command:
+        return bindings.RewriteCommand(
+            self.ruleset.egg_name if self.ruleset else default_ruleset_name, self._to_egg_rewrite()
+        )
 
     def _to_egg_rewrite(self) -> bindings.Rewrite:
         return bindings.Rewrite(
@@ -1374,13 +1473,18 @@ class Rewrite(Command):
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(self._lhs, self._rhs, *self._conditions)
 
+    def with_ruleset(self, ruleset: Ruleset) -> Rewrite:
+        return Rewrite(ruleset, self._lhs, self._rhs, self._conditions)
+
 
 @dataclass
 class BiRewrite(Rewrite):
     _fn_name: ClassVar[str] = "birewrite"
 
-    def _to_egg_command(self) -> bindings._Command:
-        return bindings.BiRewriteCommand(_ruleset_name(self.ruleset), self._to_egg_rewrite())
+    def _to_egg_command(self, default_ruleset_name: str) -> bindings._Command:
+        return bindings.BiRewriteCommand(
+            self.ruleset.egg_name if self.ruleset else default_ruleset_name, self._to_egg_rewrite()
+        )
 
 
 @dataclass
@@ -1443,10 +1547,10 @@ class Rule(Command):
         body_str = ", ".join(map(str, self.body))
         return f"rule({body_str}).then({head_str})"
 
-    def _to_egg_command(self) -> bindings.RuleCommand:
+    def _to_egg_command(self, default_ruleset_name: str) -> bindings.RuleCommand:
         return bindings.RuleCommand(
             self.name,
-            _ruleset_name(self.ruleset),
+            self.ruleset.egg_name if self.ruleset else default_ruleset_name,
             bindings.Rule(
                 [a._to_egg_action() for a in self.head],
                 [f._to_egg_fact() for f in self.body],
@@ -1463,7 +1567,7 @@ class Action(Command, ABC):
     def _to_egg_action(self) -> bindings._Action:
         raise NotImplementedError
 
-    def _to_egg_command(self) -> bindings._Command:
+    def _to_egg_command(self, default_ruleset_name: str) -> bindings._Command:
         return bindings.ActionCommand(self._to_egg_action())
 
     @property
@@ -1574,46 +1678,6 @@ class Panic(Action):
         return Declarations()
 
 
-class Schedule(ABC):
-    def __mul__(self, length: int) -> Schedule:
-        """
-        Repeat the schedule a number of times.
-        """
-        return Repeat(length, self)
-
-    def saturate(self) -> Schedule:
-        """
-        Run the schedule until the e-graph is saturated.
-        """
-        return Saturate(self)
-
-    def __add__(self, other: Schedule) -> Schedule:
-        """
-        Run two schedules in sequence.
-        """
-        return Sequence((self, other))
-
-    @abstractmethod
-    def __str__(self) -> str:
-        raise NotImplementedError
-
-    @abstractmethod
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        raise NotImplementedError
-
-    @abstractmethod
-    def _rulesets(self) -> dict[str, list[bindings._Command]]:
-        """
-        Mapping of all the rulesets used to commands.
-        """
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def __egg_decls__(self) -> Declarations:
-        raise NotImplementedError
-
-
 @dataclass
 class Run(Schedule):
     """Configuration of a run"""
@@ -1626,18 +1690,18 @@ class Run(Schedule):
         args_str = ", ".join(map(str, [self.ruleset, *self.until]))
         return f"run({args_str})"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Run(self._to_egg_config())
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        return bindings.Run(self._to_egg_config(default_ruleset_name))
 
-    def _to_egg_config(self) -> bindings.RunConfig:
+    def _to_egg_config(self, default_ruleset_name: str) -> bindings.RunConfig:
         return bindings.RunConfig(
-            _ruleset_name(self.ruleset), [fact._to_egg_fact() for fact in self.until] if self.until else None
+            self.ruleset.egg_name if self.ruleset else default_ruleset_name,
+            [fact._to_egg_fact() for fact in self.until] if self.until else None,
         )
 
-    def _rulesets(self) -> dict[str, list[bindings._Command]]:
-        if not self.ruleset:
-            return {}
-        return {self.ruleset.name: self.ruleset._cmds}
+    def _rulesets(self) -> Iterable[Ruleset]:
+        if self.ruleset:
+            yield self.ruleset
 
     @property
     def __egg_decls__(self) -> Declarations:
@@ -1653,10 +1717,10 @@ class Saturate(Schedule):
     def __str__(self) -> str:
         return f"{self.schedule}.saturate()"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Saturate(self.schedule._to_egg_schedule())
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        return bindings.Saturate(self.schedule._to_egg_schedule(default_ruleset_name))
 
-    def _rulesets(self) -> dict[str, list[bindings._Command]]:
+    def _rulesets(self) -> Iterable[Ruleset]:
         return self.schedule._rulesets()
 
     @property
@@ -1672,10 +1736,10 @@ class Repeat(Schedule):
     def __str__(self) -> str:
         return f"{self.schedule} * {self.length}"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Repeat(self.length, self.schedule._to_egg_schedule())
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        return bindings.Repeat(self.length, self.schedule._to_egg_schedule(default_ruleset_name))
 
-    def _rulesets(self) -> dict[str, list[bindings._Command]]:
+    def _rulesets(self) -> Iterable[Ruleset]:
         return self.schedule._rulesets()
 
     @property
@@ -1690,11 +1754,12 @@ class Sequence(Schedule):
     def __str__(self) -> str:
         return f"sequence({', '.join(map(str, self.schedules))})"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Sequence([schedule._to_egg_schedule() for schedule in self.schedules])
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        return bindings.Sequence([schedule._to_egg_schedule(default_ruleset_name) for schedule in self.schedules])
 
-    def _rulesets(self) -> dict[str, list[bindings._Command]]:
-        return {k: v for d in self.schedules for k, v in d._rulesets().items()}
+    def _rulesets(self) -> Iterable[Ruleset]:
+        for s in self.schedules:
+            yield from s._rulesets()
 
     @property
     def __egg_decls__(self) -> Declarations:
@@ -1707,9 +1772,31 @@ class Sequence(Schedule):
 # if the arguments are the same type of expression
 
 
+@deprecated("Use <ruleset>.register(<rewrite>) instead of passing rulesets as arguments to rewrites.")
+@overload
+def rewrite(lhs: EXPR, ruleset: Ruleset) -> _RewriteBuilder[EXPR]:
+    ...
+
+
+@overload
+def rewrite(lhs: EXPR, ruleset: None = None) -> _RewriteBuilder[EXPR]:
+    ...
+
+
 def rewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _RewriteBuilder[EXPR]:
     """Rewrite the given expression to a new expression."""
     return _RewriteBuilder(lhs, ruleset)
+
+
+@deprecated("Use <ruleset>.register(<birewrite>) instead of passing rulesets as arguments to birewrites.")
+@overload
+def birewrite(lhs: EXPR, ruleset: Ruleset) -> _BirewriteBuilder[EXPR]:
+    ...
+
+
+@overload
+def birewrite(lhs: EXPR, ruleset: None = None) -> _BirewriteBuilder[EXPR]:
+    ...
 
 
 def birewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _BirewriteBuilder[EXPR]:
@@ -1760,6 +1847,17 @@ def set_(lhs: EXPR) -> _SetBuilder[EXPR]:
     return _SetBuilder(lhs=lhs)
 
 
+@deprecated("Use <ruleset>.register(<rule>) instead of passing rulesets as arguments to rules.")
+@overload
+def rule(*facts: FactLike, ruleset: Ruleset, name: str | None = None) -> _RuleBuilder:
+    ...
+
+
+@overload
+def rule(*facts: FactLike, ruleset: None = None, name: str | None = None) -> _RuleBuilder:
+    ...
+
+
 def rule(*facts: FactLike, ruleset: Ruleset | None = None, name: str | None = None) -> _RuleBuilder:
     """Create a rule with the given facts."""
     return _RuleBuilder(facts=_fact_likes(facts), name=name, ruleset=ruleset)
@@ -1788,7 +1886,7 @@ class _RewriteBuilder(Generic[EXPR]):
     lhs: EXPR
     ruleset: Ruleset | None
 
-    def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
+    def to(self, rhs: EXPR, *conditions: FactLike) -> Rewrite:
         lhs = to_runtime_expr(self.lhs)
         rule = Rewrite(self.ruleset, lhs, convert_to_same_type(rhs, lhs), _fact_likes(conditions))
         if self.ruleset:
@@ -1875,7 +1973,7 @@ class _RuleBuilder:
     name: str | None
     ruleset: Ruleset | None
 
-    def then(self, *actions: ActionLike) -> Command:
+    def then(self, *actions: ActionLike) -> Rule:
         rule = Rule(_action_likes(actions), self.facts, self.name or "", self.ruleset)
         if self.ruleset:
             self.ruleset.append(rule)
@@ -1920,7 +2018,7 @@ def _command_like(command_like: CommandLike) -> Command:
     return command_like
 
 
-CommandGenerator = Callable[..., Iterable[Command]]
+CommandGenerator = Callable[..., Iterable[Rule | Rewrite]]
 
 
 def _command_generator(gen: CommandGenerator) -> Iterable[Command]:

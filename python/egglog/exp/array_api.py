@@ -24,13 +24,13 @@ if TYPE_CHECKING:
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
 
+array_api_ruleset = ruleset()
+# Saturate doesn't work for some reason, so just set a high number here
+array_api_schedule = array_api_ruleset * 100000
 
-array_api_module = Module()
 
-
-@array_api_module.class_
 class Boolean(Expr):
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __bool__(self) -> bool:
         return try_evaling(self, self.bool)
 
@@ -45,12 +45,12 @@ class Boolean(Expr):
         ...
 
 
-TRUE = array_api_module.constant("TRUE", Boolean)
-FALSE = array_api_module.constant("FALSE", Boolean)
+TRUE = constant("TRUE", Boolean)
+FALSE = constant("FALSE", Boolean)
 converter(bool, Boolean, lambda x: TRUE if x else FALSE)
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _bool(x: Boolean):
     return [
         rule(eq(x).to(TRUE)).then(set_(x.bool).to(Bool(True))),
@@ -62,7 +62,6 @@ def _bool(x: Boolean):
     ]
 
 
-@array_api_module.class_
 class DType(Expr):
     float64: ClassVar[DType]
     float32: ClassVar[DType]
@@ -84,12 +83,11 @@ _DTYPES = [float64, float32, int32, int64, DType.object]
 
 converter(type, DType, lambda x: convert(np.dtype(x), DType))
 converter(type(np.dtype), DType, lambda x: getattr(DType, x.name))  # type: ignore[call-overload]
-array_api_module.register(
+array_api_ruleset.register(
     *(rewrite(l == r).to(TRUE if l is r else FALSE) for l, r in itertools.product(_DTYPES, repeat=2))
 )
 
 
-@array_api_module.class_
 class IsDtypeKind(Expr):
     NULL: ClassVar[IsDtypeKind]
 
@@ -101,13 +99,13 @@ class IsDtypeKind(Expr):
     def dtype(cls, d: DType) -> IsDtypeKind:
         ...
 
-    @array_api_module.method(cost=10)
+    @method(cost=10)
     def __or__(self, other: IsDtypeKind) -> IsDtypeKind:
         ...
 
 
 # TODO: Make kind more generic to support tuples.
-@array_api_module.function
+@function
 def isdtype(dtype: DType, kind: IsDtypeKind) -> Boolean:
     ...
 
@@ -119,7 +117,7 @@ converter(
 )
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
     return [
         rewrite(isdtype(DType.float32, IsDtypeKind.string("integral"))).to(FALSE),
@@ -144,7 +142,6 @@ def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
     ]
 
 
-@array_api_module.class_
 class Int(Expr):
     def __init__(self, value: i64Like) -> None:
         ...
@@ -163,7 +160,7 @@ class Int(Expr):
 
     # Make != always return a Bool, so that numpy.unique works on a tuple of ints
     # In _unique1d
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __ne__(self, other: Int) -> bool:  # type: ignore[override]
         return not (self == other)
 
@@ -255,24 +252,24 @@ class Int(Expr):
     def i64(self) -> i64:
         ...
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __int__(self) -> int:
         return try_evaling(self, self.i64)
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __index__(self) -> int:
         return int(self)
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __float__(self) -> float:
         return float(int(self))
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __bool__(self) -> bool:
         return bool(int(self))
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _int(i: i64, j: i64, r: Boolean, o: Int):
     yield rewrite(Int(i) == Int(i)).to(TRUE)
     yield rule(eq(r).to(Int(i) == Int(j)), ne(i).to(j)).then(union(r).with_(FALSE))
@@ -307,7 +304,6 @@ def _int(i: i64, j: i64, r: Boolean, o: Int):
 converter(int, Int, lambda x: Int(x))
 
 
-@array_api_module.class_
 class Float(Expr):
     def __init__(self, value: f64Like) -> None:
         ...
@@ -316,7 +312,7 @@ class Float(Expr):
         ...
 
     # Make this more expensive than float, to get deterministic output
-    @array_api_module.method(cost=5)
+    @method(cost=5)
     @classmethod
     def rational(cls, r: Rational) -> Float:
         ...
@@ -342,7 +338,7 @@ converter(float, Float, lambda x: Float(x))
 converter(Int, Float, lambda x: Float.from_int(x))
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _float(f: f64, f2: f64, i: i64, r: Rational, r1: Rational):
     return [
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
@@ -360,7 +356,6 @@ def _float(f: f64, f2: f64, i: i64, r: Rational, r1: Rational):
     ]
 
 
-@array_api_module.class_
 class TupleInt(Expr):
     EMPTY: ClassVar[TupleInt]
 
@@ -373,11 +368,11 @@ class TupleInt(Expr):
     def length(self) -> Int:
         ...
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __len__(self) -> int:
         return int(self.length())
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __iter__(self) -> Iterator[Int]:
         return iter(self[Int(i)] for i in range(len(self)))
 
@@ -399,7 +394,7 @@ converter(
 )
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _tuple_int(ti: TupleInt, ti2: TupleInt, i: Int, i2: Int, k: i64):
     return [
         rewrite(ti + TupleInt.EMPTY).to(ti),
@@ -416,7 +411,6 @@ def _tuple_int(ti: TupleInt, ti2: TupleInt, i: Int, i2: Int, k: i64):
     ]
 
 
-@array_api_module.class_
 class OptionalInt(Expr):
     none: ClassVar[OptionalInt]
 
@@ -429,7 +423,6 @@ converter(type(None), OptionalInt, lambda _: OptionalInt.none)
 converter(Int, OptionalInt, OptionalInt.some)
 
 
-@array_api_module.class_
 class Slice(Expr):
     def __init__(
         self,
@@ -447,7 +440,6 @@ converter(
 )
 
 
-@array_api_module.class_
 class MultiAxisIndexKeyItem(Expr):
     ELLIPSIS: ClassVar[MultiAxisIndexKeyItem]
     NONE: ClassVar[MultiAxisIndexKeyItem]
@@ -467,7 +459,6 @@ converter(Int, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.int)
 converter(Slice, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.slice)
 
 
-@array_api_module.class_
 class MultiAxisIndexKey(Expr):
     def __init__(self, item: MultiAxisIndexKeyItem) -> None:
         ...
@@ -489,7 +480,6 @@ converter(
 )
 
 
-@array_api_module.class_
 class IndexKey(Expr):
     """
     A key for indexing into an array
@@ -527,17 +517,17 @@ converter(Slice, IndexKey, IndexKey.slice)
 converter(MultiAxisIndexKey, IndexKey, IndexKey.multi_axis)
 
 
-@array_api_module.class_
 class Device(Expr):
     ...
 
 
-ALL_INDICES: TupleInt = array_api_module.constant("ALL_INDICES", TupleInt)
+ALL_INDICES: TupleInt = constant("ALL_INDICES", TupleInt)
 
 
 # TODO: Add pushdown for math on scalars to values
 # and add replacements
-@array_api_module.class_
+
+
 class Value(Expr):
     @classmethod
     def int(cls, i: Int) -> Value:
@@ -596,7 +586,7 @@ converter(Boolean, Value, Value.bool)
 converter(Value, Int, lambda x: x.to_int, 10)
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _value(i: Int, f: Float, b: Boolean):
     # Default dtypes
     # https://data-apis.org/array-api/latest/API_specification/data_types.html?highlight=dtype#default-data-types
@@ -611,7 +601,6 @@ def _value(i: Int, f: Float, b: Boolean):
     # TODO: Add more rules for to_bool_value
 
 
-@array_api_module.class_
 class TupleValue(Expr):
     EMPTY: ClassVar[TupleValue]
 
@@ -642,7 +631,7 @@ converter(
 )
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _tuple_value(
     ti: TupleValue,
     ti2: TupleValue,
@@ -668,7 +657,7 @@ def _tuple_value(
     ]
 
 
-@array_api_module.function
+@function
 def possible_values(values: Value) -> TupleValue:
     """
     A value that is one of the values in the tuple.
@@ -676,17 +665,16 @@ def possible_values(values: Value) -> TupleValue:
     ...
 
 
-@array_api_module.class_
 class NDArray(Expr):
     def __init__(self, py_array: PyObject) -> None:
         ...
 
-    @array_api_module.method(cost=200)
+    @method(cost=200)
     @classmethod
     def var(cls, name: StringLike) -> NDArray:
         ...
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __array_namespace__(self, api_version: object = None) -> ModuleType:
         return sys.modules[__name__]
 
@@ -706,7 +694,7 @@ class NDArray(Expr):
     def shape(self) -> TupleInt:
         ...
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __bool__(self) -> bool:
         return bool(self.to_value().to_bool)
 
@@ -714,11 +702,11 @@ class NDArray(Expr):
     def size(self) -> Int:
         ...
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __len__(self) -> int:
         return int(self.size)
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __iter__(self) -> Iterator[NDArray]:
         for i in range(len(self)):
             yield self[IndexKey.int(Int(i))]
@@ -854,7 +842,7 @@ class NDArray(Expr):
         ...
 
 
-@array_api_module.function
+@function
 def ndarray_index(x: NDArray) -> IndexKey:
     """
     Indexes by a masked array
@@ -870,7 +858,7 @@ converter(NDArray, Value, lambda n: n.to_value(), 100)
 converter(TupleValue, NDArray, NDArray.vector)
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _ndarray(x: NDArray, b: Boolean, f: Float, fi1: f64, fi2: f64):
     return [
         rewrite(x.ndim).to(x.shape.length()),
@@ -895,7 +883,6 @@ def _ndarray(x: NDArray, b: Boolean, f: Float, fi1: f64, fi2: f64):
     ]
 
 
-@array_api_module.class_
 class TupleNDArray(Expr):
     EMPTY: ClassVar[TupleNDArray]
 
@@ -908,11 +895,11 @@ class TupleNDArray(Expr):
     def length(self) -> Int:
         ...
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __len__(self) -> int:
         return int(self.length())
 
-    @array_api_module.method(preserve=True)
+    @method(preserve=True)
     def __iter__(self) -> Iterator[NDArray]:
         return iter(self[Int(i)] for i in range(len(self)))
 
@@ -932,7 +919,7 @@ converter(
 converter(list, TupleNDArray, lambda x: convert(tuple(x), TupleNDArray))
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _tuple_ndarray(ti: TupleNDArray, ti2: TupleNDArray, n: NDArray, i: Int, i2: Int, k: i64):
     return [
         rewrite(ti + TupleNDArray.EMPTY).to(ti),
@@ -945,7 +932,6 @@ def _tuple_ndarray(ti: TupleNDArray, ti2: TupleNDArray, n: NDArray, i: Int, i2: 
     ]
 
 
-@array_api_module.class_
 class OptionalBool(Expr):
     none: ClassVar[OptionalBool]
 
@@ -958,7 +944,6 @@ converter(type(None), OptionalBool, lambda _: OptionalBool.none)
 converter(Boolean, OptionalBool, lambda x: OptionalBool.some(x))
 
 
-@array_api_module.class_
 class OptionalDType(Expr):
     none: ClassVar[OptionalDType]
 
@@ -971,7 +956,6 @@ converter(type(None), OptionalDType, lambda _: OptionalDType.none)
 converter(DType, OptionalDType, lambda x: OptionalDType.some(x))
 
 
-@array_api_module.class_
 class OptionalDevice(Expr):
     none: ClassVar[OptionalDevice]
 
@@ -984,7 +968,6 @@ converter(type(None), OptionalDevice, lambda _: OptionalDevice.none)
 converter(Device, OptionalDevice, lambda x: OptionalDevice.some(x))
 
 
-@array_api_module.class_
 class OptionalTupleInt(Expr):
     none: ClassVar[OptionalTupleInt]
 
@@ -997,7 +980,6 @@ converter(type(None), OptionalTupleInt, lambda _: OptionalTupleInt.none)
 converter(TupleInt, OptionalTupleInt, lambda x: OptionalTupleInt.some(x))
 
 
-@array_api_module.class_
 class IntOrTuple(Expr):
     none: ClassVar[IntOrTuple]
 
@@ -1014,7 +996,6 @@ converter(Int, IntOrTuple, IntOrTuple.int)
 converter(TupleInt, IntOrTuple, IntOrTuple.tuple)
 
 
-@array_api_module.class_
 class OptionalIntOrTuple(Expr):
     none: ClassVar[OptionalIntOrTuple]
 
@@ -1027,23 +1008,23 @@ converter(type(None), OptionalIntOrTuple, lambda _: OptionalIntOrTuple.none)
 converter(IntOrTuple, OptionalIntOrTuple, OptionalIntOrTuple.some)
 
 
-@array_api_module.function
+@function
 def asarray(a: NDArray, dtype: OptionalDType = OptionalDType.none, copy: OptionalBool = OptionalBool.none) -> NDArray:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _assarray(a: NDArray, d: OptionalDType, ob: OptionalBool):
     yield rewrite(asarray(a, d, ob).ndim).to(a.ndim)  # asarray doesn't change ndim
     yield rewrite(asarray(a)).to(a)
 
 
-@array_api_module.function
+@function
 def isfinite(x: NDArray) -> NDArray:
     ...
 
 
-@array_api_module.function
+@function
 def sum(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
     """
     https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.sum.html?highlight=sum
@@ -1051,7 +1032,7 @@ def sum(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArr
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _sum(x: NDArray, y: NDArray, v: Value, dtype: DType):
     return [
         rewrite(sum(x / NDArray.scalar(v))).to(sum(x) / NDArray.scalar(v)),
@@ -1059,12 +1040,12 @@ def _sum(x: NDArray, y: NDArray, v: Value, dtype: DType):
     ]
 
 
-@array_api_module.function
+@function
 def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none) -> NDArray:
     ...
 
 
-# @array_api_module.function
+# @function
 # def reshape_transform_index(original_shape: TupleInt, shape: TupleInt, index: TupleInt) -> TupleInt:
 #     """
 #     Transforms an indexing operation on a reshaped array to an indexing operation on the original array.
@@ -1072,7 +1053,7 @@ def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none)
 #     ...
 
 
-# @array_api_module.function
+# @function
 # def reshape_transform_shape(original_shape: TupleInt, shape: TupleInt) -> TupleInt:
 #     """
 #     Transforms the shape of an array to one that is reshaped, by replacing -1 with the correct value.
@@ -1080,7 +1061,7 @@ def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none)
 #     ...
 
 
-# @array_api_module.register
+# @array_api_ruleset.register
 # def _reshape(
 #     x: NDArray,
 #     y: NDArray,
@@ -1102,36 +1083,36 @@ def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none)
 #     ]
 
 
-@array_api_module.function
+@function
 def unique_values(x: NDArray) -> NDArray:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _unique_values(x: NDArray):
     return [
         rewrite(unique_values(unique_values(x))).to(unique_values(x)),
     ]
 
 
-@array_api_module.function
+@function
 def concat(arrays: TupleNDArray, axis: OptionalInt = OptionalInt.none) -> NDArray:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _concat(x: NDArray):
     return [
         rewrite(concat(TupleNDArray(x))).to(x),
     ]
 
 
-@array_api_module.function
+@function
 def astype(x: NDArray, dtype: DType) -> NDArray:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _astype(x: NDArray, dtype: DType, i: i64):
     return [
         rewrite(astype(x, dtype).dtype).to(dtype),
@@ -1141,12 +1122,12 @@ def _astype(x: NDArray, dtype: DType, i: i64):
     ]
 
 
-@array_api_module.function(cost=500)
+@function(cost=500)
 def unique_counts(x: NDArray) -> TupleNDArray:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value, dtype: DType):
     return [
         rewrite(unique_counts(x).length()).to(Int(2)),
@@ -1158,39 +1139,39 @@ def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value, dtype: DTyp
     ]
 
 
-@array_api_module.function
+@function
 def square(x: NDArray) -> NDArray:
     ...
 
 
-@array_api_module.function
+@function
 def any(x: NDArray) -> NDArray:
     ...
 
 
-@array_api_module.function(egg_fn="ndarray-abs")
+@function(egg_fn="ndarray-abs")
 def abs(x: NDArray) -> NDArray:
     ...
 
 
-@array_api_module.function(egg_fn="ndarray-log")
+@function(egg_fn="ndarray-log")
 def log(x: NDArray) -> NDArray:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _abs(f: Float):
     return [
         rewrite(abs(NDArray.scalar(Value.float(f)))).to(NDArray.scalar(Value.float(f.abs()))),
     ]
 
 
-@array_api_module.function(cost=100)
+@function(cost=100)
 def unique_inverse(x: NDArray) -> TupleNDArray:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _unique_inverse(x: NDArray, i: Int):
     return [
         rewrite(unique_inverse(x).length()).to(Int(2)),
@@ -1199,30 +1180,30 @@ def _unique_inverse(x: NDArray, i: Int):
     ]
 
 
-@array_api_module.function
+@function
 def zeros(
     shape: TupleInt, dtype: OptionalDType = OptionalDType.none, device: OptionalDevice = OptionalDevice.none
 ) -> NDArray:
     ...
 
 
-@array_api_module.function
+@function
 def expand_dims(x: NDArray, axis: Int = Int(0)) -> NDArray:
     ...
 
 
-@array_api_module.function(cost=100000)
+@function(cost=100000)
 def mean(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none, keepdims: Boolean = FALSE) -> NDArray:
     ...
 
 
 # TODO: Possibly change names to include modules.
-@array_api_module.function(egg_fn="ndarray-sqrt")
+@function(egg_fn="ndarray-sqrt")
 def sqrt(x: NDArray) -> NDArray:
     ...
 
 
-@array_api_module.function(cost=100000)
+@function(cost=100000)
 def std(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
     ...
 
@@ -1230,7 +1211,7 @@ def std(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArr
 linalg = sys.modules[__name__]
 
 
-@array_api_module.function
+@function
 def svd(x: NDArray, full_matrices: Boolean = TRUE) -> TupleNDArray:
     """
     https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.svd.html
@@ -1238,7 +1219,7 @@ def svd(x: NDArray, full_matrices: Boolean = TRUE) -> TupleNDArray:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _linalg(x: NDArray, full_matrices: Boolean):
     return [
         rewrite(svd(x, full_matrices).length()).to(Int(3)),
@@ -1251,20 +1232,20 @@ def _linalg(x: NDArray, full_matrices: Boolean):
 # to analyze `any(((astype(unique_counts(NDArray.var("y"))[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float(150.0))) < NDArray.scalar(Value.int(Int(0)))).bool()``
 ##
 
-greater_zero = array_api_module.relation("greater_zero", Value)
+greater_zero = relation("greater_zero", Value)
 
 
-# @array_api_module.function
+# @function
 # def ndarray_all_greater_0(x: NDArray) -> Unit:
 #     ...
 
 
-# @array_api_module.function
+# @function
 # def ndarray_all_false(x: NDArray) -> Unit:
 #     ...
 
 
-# @array_api_module.function
+# @function
 # def ndarray_all_true(x: NDArray) -> Unit:
 #     ...
 
@@ -1277,7 +1258,7 @@ greater_zero = array_api_module.relation("greater_zero", Value)
 # def
 
 
-@array_api_module.function
+@function
 def broadcast_index(from_shape: TupleInt, to_shape: TupleInt, index: TupleInt) -> TupleInt:
     """
     Returns the index in the original array of the given index in the broadcasted array.
@@ -1285,7 +1266,7 @@ def broadcast_index(from_shape: TupleInt, to_shape: TupleInt, index: TupleInt) -
     ...
 
 
-@array_api_module.function
+@function
 def broadcast_shapes(shape1: TupleInt, shape2: TupleInt) -> TupleInt:
     """
     Returns the shape of the broadcasted array.
@@ -1293,7 +1274,7 @@ def broadcast_shapes(shape1: TupleInt, shape2: TupleInt) -> TupleInt:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _interval_analaysis(
     x: NDArray,
     y: NDArray,
@@ -1383,21 +1364,21 @@ def _demand_shape(compound: NDArray, inner: NDArray) -> Command:
     return rule(eq(__a).to(compound)).then(inner.shape, inner.shape.length())
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _scalar_math(v: Value, vs: TupleValue, i: Int):
     yield rewrite(NDArray.scalar(v).shape).to(TupleInt.EMPTY)
     yield rewrite(NDArray.scalar(v).dtype).to(v.dtype)
     yield rewrite(NDArray.scalar(v).index(TupleInt.EMPTY)).to(v)
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _vector_math(v: Value, vs: TupleValue, i: Int):
     yield rewrite(NDArray.vector(vs).shape).to(TupleInt(vs.length()))
     yield rewrite(NDArray.vector(vs).dtype).to(vs[Int(0)].dtype)
     yield rewrite(NDArray.vector(vs).index(TupleInt(i))).to(vs[i])
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _reshape_math(x: NDArray, shape: TupleInt, copy: OptionalBool):
     res = reshape(x, shape, copy)
 
@@ -1407,7 +1388,7 @@ def _reshape_math(x: NDArray, shape: TupleInt, copy: OptionalBool):
     yield rewrite(reshape(x, TupleInt(Int(-1)), copy)).to(x, eq(x.shape.length()).to(Int(1)))
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _indexing_pushdown(x: NDArray, shape: TupleInt, copy: OptionalBool, i: Int):
     # rewrite full getitem to indexec
     yield rewrite(x[IndexKey.int(i)]).to(NDArray.scalar(x.index(TupleInt(i))))
@@ -1419,7 +1400,7 @@ def _indexing_pushdown(x: NDArray, shape: TupleInt, copy: OptionalBool, i: Int):
 ##
 
 
-@array_api_module.function(mutates_first_arg=True)
+@function(mutates_first_arg=True)
 def assume_dtype(x: NDArray, dtype: DType) -> None:
     """
     Asserts that the dtype of x is dtype.
@@ -1427,7 +1408,7 @@ def assume_dtype(x: NDArray, dtype: DType) -> None:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _assume_dtype(x: NDArray, dtype: DType, idx: TupleInt):
     orig_x = copy(x)
     assume_dtype(x, dtype)
@@ -1436,7 +1417,7 @@ def _assume_dtype(x: NDArray, dtype: DType, idx: TupleInt):
     yield rewrite(x.index(idx)).to(orig_x.index(idx))
 
 
-@array_api_module.function(mutates_first_arg=True)
+@function(mutates_first_arg=True)
 def assume_shape(x: NDArray, shape: TupleInt) -> None:
     """
     Asserts that the shape of x is shape.
@@ -1444,7 +1425,7 @@ def assume_shape(x: NDArray, shape: TupleInt) -> None:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _assume_shape(x: NDArray, shape: TupleInt, idx: TupleInt):
     orig_x = copy(x)
     assume_shape(x, shape)
@@ -1453,7 +1434,7 @@ def _assume_shape(x: NDArray, shape: TupleInt, idx: TupleInt):
     yield rewrite(x.index(idx)).to(orig_x.index(idx))
 
 
-@array_api_module.function(mutates_first_arg=True)
+@function(mutates_first_arg=True)
 def assume_isfinite(x: NDArray) -> None:
     """
     Asserts that the scalar ndarray is non null and not infinite.
@@ -1461,7 +1442,7 @@ def assume_isfinite(x: NDArray) -> None:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _isfinite(x: NDArray, ti: TupleInt):
     orig_x = copy(x)
     assume_isfinite(x)
@@ -1474,7 +1455,7 @@ def _isfinite(x: NDArray, ti: TupleInt):
     yield rewrite(x.index(ti).isfinite()).to(TRUE)
 
 
-@array_api_module.function(mutates_first_arg=True)
+@function(mutates_first_arg=True)
 def assume_value_one_of(x: NDArray, values: TupleValue) -> None:
     """
     A value that is one of the values in the tuple.
@@ -1482,7 +1463,7 @@ def assume_value_one_of(x: NDArray, values: TupleValue) -> None:
     ...
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _assume_value_one_of(x: NDArray, v: Value, vs: TupleValue, idx: TupleInt):
     x_orig = copy(x)
     assume_value_one_of(x, vs)
@@ -1496,7 +1477,7 @@ def _assume_value_one_of(x: NDArray, v: Value, vs: TupleValue, idx: TupleInt):
     )
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f64, b: Boolean):
     yield rewrite(Value.int(i).isfinite()).to(TRUE)
     yield rewrite(Value.bool(b).isfinite()).to(TRUE)
@@ -1506,7 +1487,7 @@ def _ndarray_value_isfinite(arr: NDArray, x: Value, xs: TupleValue, i: Int, f: f
     yield rewrite(isfinite(sum(arr))).to(NDArray.scalar(Value.bool(arr.index(ALL_INDICES).isfinite())))
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _unique(xs: TupleValue, a: NDArray, shape: TupleInt, copy: OptionalBool):
     yield rewrite(unique_values(x=a)).to(NDArray.vector(possible_values(a.index(ALL_INDICES))))
     # yield rewrite(
@@ -1514,7 +1495,7 @@ def _unique(xs: TupleValue, a: NDArray, shape: TupleInt, copy: OptionalBool):
     # ).to(possible_values(a.index(ALL_INDICES)))
 
 
-@array_api_module.register
+@array_api_ruleset.register
 def _size(x: NDArray):
     yield rewrite(x.size).to(x.shape.product())
 
@@ -1535,7 +1516,7 @@ def try_evaling(expr: Expr, prim_expr: i64 | Bool) -> int | bool:
     """
     egraph = EGraph.current()
     egraph.register(expr)
-    egraph.run((run() * 30).saturate())
+    egraph.run(array_api_schedule)
     try:
         return egraph.eval(prim_expr)
     except EggSmolError as exc:

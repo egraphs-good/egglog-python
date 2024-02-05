@@ -6,13 +6,13 @@ from __future__ import annotations
 
 from egglog import *
 
-egraph = EGraph()
 
-
-@egraph.function
+@function
 def fib(x: i64Like) -> i64:  # type: ignore[empty-body]
     ...
 
+
+egraph = EGraph()
 
 f0, f1, x = vars_("f0 f1 x", i64)
 egraph.register(

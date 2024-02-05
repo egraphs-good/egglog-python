@@ -8,8 +8,8 @@ from __future__ import annotations
 from egglog import *
 from egglog.exp.array_api import *
 
-array_api_numba_module = Module([array_api_module])
-
+array_api_numba_ruleset = ruleset()
+array_api_numba_schedule = (array_api_schedule + array_api_numba_ruleset * 10000).saturate()
 # For these rules, we not only wanna rewrite, we also want to delete the original expression,
 # so that the rewritten one is used, even if the original one is simpler.
 
@@ -19,7 +19,7 @@ array_api_numba_module = Module([array_api_module])
 
 # Rewrite mean(x, <int>, <expand dims>) to use sum b/c numba cant do mean with axis
 # https://github.com/numba/numba/issues/1269
-@array_api_numba_module.register
+@array_api_numba_ruleset.register
 def _mean(y: NDArray, x: NDArray, i: Int):
     axis = OptionalIntOrTuple.some(IntOrTuple.int(i))
     res = sum(x, axis) / NDArray.scalar(Value.int(x.shape[i]))
@@ -29,7 +29,7 @@ def _mean(y: NDArray, x: NDArray, i: Int):
 
 
 # Rewrite std(x, <int>) to use mean and sum b/c numba cant do std with axis
-@array_api_numba_module.register
+@array_api_numba_ruleset.register
 def _std(y: NDArray, x: NDArray, i: Int):
     axis = OptionalIntOrTuple.some(IntOrTuple.int(i))
     # https://numpy.org/doc/stable/reference/generated/numpy.std.html
@@ -38,7 +38,7 @@ def _std(y: NDArray, x: NDArray, i: Int):
 
 
 # rewrite unique_counts to count each value one by one, since numba doesn't support np.unique(..., return_counts=True)
-@array_api_numba_module.function(unextractable=True)
+@function(unextractable=True)
 def count_values(x: NDArray, values: NDArray) -> TupleValue:
     """
     Returns a tuple of the count of each of the values in the array.
@@ -46,7 +46,7 @@ def count_values(x: NDArray, values: NDArray) -> TupleValue:
     ...
 
 
-@array_api_numba_module.register
+@array_api_numba_ruleset.register
 def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
     return [
         # The unique counts are the count of all the unique values
@@ -61,7 +61,7 @@ def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
 
 
 # do the same for unique_inverse
-@array_api_numba_module.register
+@array_api_numba_ruleset.register
 def _unique_inverse(x: NDArray, i: Int):
     return [
         # Creating a mask array of when the unique inverse is a value is the same as a mask array for when the value is that index of the unique values

@@ -23,10 +23,10 @@ egraph.check(eq(i64(1).bool_le(2)).to(T))
 egraph.check(eq(i64(2).bool_le(1)).to(F))
 egraph.check(eq(i64(1).bool_le(1)).to(T))
 
-R = egraph.relation("R", i64)
+R = relation("R", i64)
 
 
-@egraph.function
+@function
 def f(i: i64Like) -> Bool:  # type: ignore[empty-body]
     ...
 

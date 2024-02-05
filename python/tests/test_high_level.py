@@ -37,7 +37,7 @@ class TestExprStr:
 def test_eqsat_basic():
     egraph = EGraph()
 
-    @egraph.class_
+
     class Math(Expr):
         def __init__(self, value: i64Like) -> None:
             ...
@@ -76,7 +76,7 @@ def test_eqsat_basic():
 def test_fib():
     egraph = EGraph()
 
-    @egraph.function
+    @function
     def fib(x: i64Like) -> i64:
         ...
 
@@ -96,7 +96,7 @@ def test_fib():
 def test_fib_demand():
     egraph = EGraph()
 
-    @egraph.class_
+
     class Num(Expr):
         def __init__(self, i: i64Like) -> None:
             ...
@@ -104,7 +104,7 @@ def test_fib_demand():
         def __add__(self, other: Num) -> Num:
             ...
 
-    @egraph.function(cost=20)
+    @function(cost=20)
     def fib(x: i64Like) -> Num:
         ...
 
@@ -138,7 +138,7 @@ def test_fib_demand():
 def test_push_pop():
     egraph = EGraph()
 
-    @egraph.function(merge=lambda old, new: old.max(new))
+    @function(merge=lambda old, new: old.max(new))
     def foo() -> i64:
         ...
 
@@ -155,11 +155,11 @@ def test_push_pop():
 def test_constants():
     egraph = EGraph()
 
-    @egraph.class_
+
     class A(Expr):
         pass
-    one = egraph.constant("one", A)
-    two = egraph.constant("two", A)
+    one = constant("one", A)
+    two = constant("two", A)
 
     egraph.register(union(one).with_(two))
     egraph.check(eq(one).to(two))
@@ -168,10 +168,10 @@ def test_constants():
 def test_class_vars():
     egraph = EGraph()
 
-    @egraph.class_
+
     class A(Expr):
         ONE: ClassVar[A]
-    two = egraph.constant("two", A)
+    two = constant("two", A)
 
     egraph.register(union(A.ONE).with_(two))
     egraph.check(eq(A.ONE).to(two))
@@ -179,7 +179,7 @@ def test_class_vars():
 def test_simplify_constant():
     egraph = EGraph()
 
-    @egraph.class_
+
     class Numeric(Expr):
         ONE: ClassVar[Numeric]
 
@@ -197,7 +197,7 @@ def test_extract_constant_twice():
     # Sometimes extracting a constant twice will give an error
     egraph = EGraph()
 
-    @egraph.class_
+
     class Numeric(Expr):
         ONE: ClassVar[Numeric]
 
@@ -211,7 +211,7 @@ def test_extract_include_cost():
 def test_relation():
     egraph = EGraph()
 
-    test_relation = egraph.relation("test_relation", i64, i64)
+    test_relation = relation("test_relation", i64, i64)
     egraph.register(test_relation(i64(1), i64(1)))
 
 
@@ -229,7 +229,7 @@ def test_generic_sort():
 def test_keyword_args():
     egraph = EGraph()
 
-    @egraph.function
+    @function
     def foo(x: i64Like, y: i64Like) -> i64:
         ...
 
@@ -241,7 +241,7 @@ def test_keyword_args():
 def test_keyword_args_init():
     egraph = EGraph()
 
-    @egraph.class_
+
     class Foo(Expr):
         def __init__(self, x: i64Like) -> None:
             ...
@@ -268,7 +268,7 @@ def test_modules() -> None:
 
     egraph = EGraph([m, m2])
 
-    @egraph.function
+    @function
     def from_numeric(n: Numeric) -> OtherNumeric:
         ...
 
@@ -279,7 +279,7 @@ def test_modules() -> None:
 def test_property():
     egraph = EGraph()
 
-    @egraph.class_
+
     class Foo(Expr):
         def __init__(self) -> None:
             ...
@@ -295,7 +295,7 @@ def test_property():
 def test_default_args():
     egraph = EGraph()
 
-    @egraph.function
+    @function
     def foo(x: i64Like, y: i64Like = i64(1)) -> i64:
         ...
 
@@ -369,7 +369,7 @@ def test_not_equals():
 def test_custom_equality():
     egraph = EGraph()
 
-    @egraph.class_
+
     class Boolean(Expr):
         def __init__(self, value: BoolLike) -> None:
             ...
@@ -394,7 +394,7 @@ class TestMutate:
     def test_setitem_defaults(self):
         egraph = EGraph()
 
-        @egraph.class_
+
         class Foo(Expr):
             def __init__(self) -> None:
                 ...
@@ -413,7 +413,7 @@ class TestMutate:
     def test_function(self):
         egraph = EGraph()
 
-        @egraph.class_
+
         class Math(Expr):
             def __init__(self, i: i64Like) -> None:
                 ...
@@ -421,7 +421,7 @@ class TestMutate:
             def __add__(self, other: Math) -> Math:
                 ...
 
-        @egraph.function(mutates_first_arg=True)
+        @function(mutates_first_arg=True)
         def incr(x: Math) -> None:
             ...
 
@@ -459,7 +459,7 @@ def test_reflected_binary_method():
     # If we have a reflected binary method, it should be converted into the non-reflected version
     egraph = EGraph()
 
-    @egraph.class_
+
     class Math(Expr):
         def __init__(self, value: i64Like) -> None:
             ...
@@ -484,7 +484,7 @@ def test_upcast_args():
     # -0.1 + Int(x) -> -0.1 + Float(x)
     egraph = EGraph()
 
-    @egraph.class_
+
     class Int(Expr):
         def __init__(self, value: i64Like) -> None:
             ...
@@ -492,7 +492,7 @@ def test_upcast_args():
         def __add__(self, other: Int) -> Int:
             ...
 
-    @egraph.class_
+
     class Float(Expr):
         def __init__(self, value: f64Like) -> None:
             ...
@@ -521,7 +521,7 @@ def test_rewrite_upcasts():
 def test_function_default_upcasts():
     egraph = EGraph()
 
-    @egraph.function
+    @function
     def f(x: i64Like) -> i64:
         ...
 
@@ -532,7 +532,7 @@ def test_upcast_self_lower_cost():
     # i.e. Int(x) + NDArray(y) -> NDArray(Int(x)) + NDArray(y) instead of Int(x) + NDArray(y).to_int()
     egraph = EGraph()
 
-    @egraph.class_
+
     class Int(Expr):
         def __init__(self, name: StringLike) -> None:
             ...
@@ -542,7 +542,7 @@ def test_upcast_self_lower_cost():
 
     NDArrayLike = Union[Int, "NDArray"]
 
-    @egraph.class_
+
     class NDArray(Expr):
         def __init__(self, name: StringLike) -> None:
             ...

@@ -13,12 +13,7 @@ from egglog import *
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-egraph = EGraph()
 
-# TODO: Debug extracting constants
-
-
-@egraph.class_
 class Val(Expr):
     """
     A value is a number or a boolean.
@@ -31,13 +26,11 @@ class Val(Expr):
         ...
 
 
-@egraph.class_
 class Var(Expr):
     def __init__(self, v: StringLike) -> None:
         ...
 
 
-@egraph.class_
 class Term(Expr):
     @classmethod
     def val(cls, v: Val) -> Term:
@@ -63,22 +56,22 @@ class Term(Expr):
         ...
 
 
-@egraph.function
+@function
 def lam(x: Var, t: Term) -> Term:
     ...
 
 
-@egraph.function
+@function
 def let_(x: Var, t: Term, b: Term) -> Term:
     ...
 
 
-@egraph.function
+@function
 def fix(x: Var, t: Term) -> Term:
     ...
 
 
-@egraph.function
+@function
 def if_(c: Term, t: Term, f: Term) -> Term:
     ...
 
@@ -86,7 +79,7 @@ def if_(c: Term, t: Term, f: Term) -> Term:
 StringSet = Set[Var]
 
 
-@egraph.function(merge=lambda old, new: old & new)
+@function(merge=lambda old, new: old & new)
 def freer(t: Term) -> StringSet:
     ...
 
@@ -96,7 +89,7 @@ def freer(t: Term) -> StringSet:
 (x, y) = vars_("x y", Var)
 fv, fv1, fv2, fv3 = vars_("fv fv1 fv2 fv3", StringSet)
 i1, i2 = vars_("i1 i2", i64)
-egraph.register(
+lamdba_ruleset = ruleset(
     # freer
     rule(eq(t).to(Term.val(v))).then(set_(freer(t)).to(StringSet.empty())),
     rule(eq(t).to(Term.var(x))).then(set_(freer(t)).to(StringSet.empty().insert(x))),
@@ -164,7 +157,7 @@ egraph.register(
     ),
 )
 
-result = egraph.relation("result")
+result = relation("result")
 
 
 def l(fn: Callable[[Term], Term]) -> Term:  # noqa: E743
@@ -174,6 +167,9 @@ def l(fn: Callable[[Term], Term]) -> Term:  # noqa: E743
     # Use first var name from fn
     x = fn.__code__.co_varnames[0]
     return lam(Var(x), fn(Term.var(Var(x))))
+
+
+egraph = EGraph(default_ruleset=lamdba_ruleset)
 
 
 def assert_simplifies(left: Expr, right: Expr) -> None:

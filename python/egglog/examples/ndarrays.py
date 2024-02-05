@@ -13,7 +13,6 @@ from egglog import *
 egraph = EGraph()
 
 
-@egraph.class_
 class Value(Expr):
     def __init__(self, v: i64Like) -> None:
         ...
@@ -32,7 +31,6 @@ egraph.register(
 )
 
 
-@egraph.class_
 class Values(Expr):
     def __init__(self, v: Vec[Value]) -> None:
         ...
@@ -56,7 +54,6 @@ def _values(vs: Vec[Value], other: Vec[Value]):
     # yield rewrite(l.concat(r)[idx])
 
 
-@egraph.class_
 class NDArray(Expr):
     """
     An n-dimensional array.
@@ -69,7 +66,7 @@ class NDArray(Expr):
         ...
 
 
-@egraph.function
+@function
 def arange(n: Value) -> NDArray:
     ...
 
@@ -96,7 +93,7 @@ assert_simplifies(arange(Value(10))[Values(Vec(Value(0)))], Value(0))
 assert_simplifies(arange(Value(10))[Values(Vec(Value(1)))], Value(1))
 
 
-@egraph.function
+@function
 def py_value(s: StringLike) -> Value:
     ...
 
@@ -107,7 +104,7 @@ def _py_value(l: String, r: String):
     yield rewrite(py_value(l) * py_value(r)).to(py_value(join(l, " * ", r)))
 
 
-@egraph.function
+@function
 def py_values(s: StringLike) -> Values:
     ...
 
@@ -119,7 +116,7 @@ def _py_values(l: String, r: String):
     yield rewrite(py_values(l).concat(py_values(r))).to(py_values(join(l, " + ", r)))
 
 
-@egraph.function
+@function
 def py_ndarray(s: StringLike) -> NDArray:
     ...
 
@@ -136,7 +133,7 @@ assert_simplifies(arange(py_value("x"))[py_values("y")], py_value("np.arange(x)[
 # assert_simplifies(arange(py_value("x"))[py_values("y")], py_value("y[0]"))
 
 
-@egraph.function
+@function
 def cross(l: NDArray, r: NDArray) -> NDArray:
     ...
 
