@@ -68,6 +68,8 @@ __all__ = [
     "run",
     "seq",
     "Command",
+    "simplify",
+    "check",
 ]
 
 T = TypeVar("T")
@@ -97,6 +99,30 @@ IGNORED_ATTRIBUTES = {
 
 
 ALWAYS_MUTATES_SELF = {"__setitem__", "__delitem__"}
+
+
+def simplify(x: EXPR, schedule: Schedule | None = None) -> EXPR:
+    """
+    Simplify an expression by running the schedule.
+    """
+    if schedule:
+        return EGraph().simplify(x, schedule)
+    return EGraph().extract(x)
+
+
+def check(x: FactLike, schedule: Schedule | None = None, *given: Union_ | Expr | Set) -> None:
+    """
+    Verifies that the fact is true given some assumptions and after running the schedule.
+    """
+    egraph = EGraph()
+    if given:
+        egraph.register(*given)
+    if schedule:
+        egraph.run(schedule)
+    egraph.check(x)
+
+
+# def extract(res: )
 
 
 @dataclass
@@ -1947,7 +1973,7 @@ class _NeBuilder(Generic[EXPR]):
 class _SetBuilder(Generic[EXPR]):
     lhs: Expr
 
-    def to(self, rhs: EXPR) -> Action:
+    def to(self, rhs: EXPR) -> Set:
         lhs = to_runtime_expr(self.lhs)
         return Set(lhs, convert_to_same_type(rhs, lhs))
 

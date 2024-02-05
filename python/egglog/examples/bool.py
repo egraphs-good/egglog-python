@@ -1,3 +1,4 @@
+# mypy: disable-error-code="empty-body"
 """
 Boolean data type example and test
 ==================================
@@ -9,33 +10,30 @@ from egglog import *
 
 T = Bool(True)
 F = Bool(False)
-egraph = EGraph()
-egraph.check(eq(T & T).to(T))
-egraph.check(eq(T & F).to(F))
-egraph.check(eq(T | F).to(T))
-egraph.check(ne(T | F).to(F))
+check(eq(T & T).to(T))
+check(eq(T & F).to(F))
+check(eq(T | F).to(T))
+check(ne(T | F).to(F))
 
-egraph.check(eq(i64(1).bool_lt(2)).to(T))
-egraph.check(eq(i64(2).bool_lt(1)).to(F))
-egraph.check(eq(i64(1).bool_lt(1)).to(F))
+check(eq(i64(1).bool_lt(2)).to(T))
+check(eq(i64(2).bool_lt(1)).to(F))
+check(eq(i64(1).bool_lt(1)).to(F))
 
-egraph.check(eq(i64(1).bool_le(2)).to(T))
-egraph.check(eq(i64(2).bool_le(1)).to(F))
-egraph.check(eq(i64(1).bool_le(1)).to(T))
+check(eq(i64(1).bool_le(2)).to(T))
+check(eq(i64(2).bool_le(1)).to(F))
+check(eq(i64(1).bool_le(1)).to(T))
 
 R = relation("R", i64)
 
 
 @function
-def f(i: i64Like) -> Bool:  # type: ignore[empty-body]
+def f(i: i64Like) -> Bool:
     ...
 
 
 i = var("i", i64)
-egraph.register(
-    rule(R(i)).then(set_(f(i)).to(T)),
+check(
+    eq(f(0)).to(T),
+    ruleset(rule(R(i)).then(set_(f(i)).to(T))) * 3,
     R(i64(0)),
 )
-
-egraph.run(3)
-egraph.check(eq(f(0)).to(T))
