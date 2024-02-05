@@ -779,8 +779,12 @@ class CallDecl:
         # if isinstance(self.callable, ConstantRef | ClassVariableRef):
         #     decls.get_egg_fn
         #     return bindings.Var(egg_fn)
+        if hasattr(self, "_cached_egg"):
+            return self._cached_egg
         egg_fn = decls.get_egg_fn(self.callable)
-        return bindings.Call(egg_fn, [a.to_egg(decls) for a in self.args])
+        res = bindings.Call(egg_fn, [a.to_egg(decls) for a in self.args])
+        object.__setattr__(self, "_cached_egg", res)
+        return res
 
     def pretty(self, context: PrettyContext, parens: bool = True, **kwargs) -> str:  # noqa: C901
         """
