@@ -25,59 +25,50 @@ class Program(Expr):
         """
         Create a program based on a string expression.
         """
-        ...
 
     def __add__(self, other: ProgramLike) -> Program:
         """
         Concats the strings of the two expressions and also the statements.
         """
-        ...
 
     @program_gen_module.method(unextractable=True)
     def statement(self, statement: ProgramLike) -> Program:
         """
         Uses the expression of the statement and adds that as a statement to the program.
         """
-        ...
 
     def assign(self) -> Program:
         """
         Returns a new program with the expression assigned to a gensym.
         """
-        ...
 
     def function_two(self, arg1: ProgramLike, arg2: ProgramLike, name: StringLike = String("__fn")) -> Program:
         """
         Returns a new program defining a function with two arguments.
         """
-        ...
 
     def expr_to_statement(self) -> Program:
         """
         Returns a new program with the expression as a statement and the new expression empty.
         """
-        ...
 
     @property
     def expr(self) -> String:
         """
         Returns the expression of the program, if it's been compiled
         """
-        ...
 
     @property
     def statements(self) -> String:
         """
         Returns the statements of the program, if it's been compiled
         """
-        ...
 
     @property
     def next_sym(self) -> i64:
         """
         Returns the next gensym to use. This is set after calling `compile(i)` on a program.
         """
-        ...
 
     @program_gen_module.method(default=Unit())
     def compile(self, next_sym: i64 = i64(0)) -> Unit:
@@ -93,7 +84,6 @@ class Program(Expr):
 
         Only keeps the original parent, not any additional ones, so that each set of statements is only added once.
         """
-        ...
 
     @program_gen_module.method(default=Unit())
     def eval_py_object(self, globals: object) -> Unit:
@@ -108,14 +98,12 @@ class Program(Expr):
         """
         Returns the python object of the program, if it's been evaluated.
         """
-        ...
 
     @property
     def is_identifer(self) -> Bool:
         """
         Returns whether the expression is an identifier. Used so that we don't re-assign any identifiers.
         """
-        ...
 
 
 converter(String, Program, Program)

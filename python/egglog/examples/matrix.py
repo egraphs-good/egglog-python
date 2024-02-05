@@ -50,7 +50,6 @@ class Matrix(Expr):
         """
         Create an identity matrix of the given dimension.
         """
-        ...
 
     @egraph.method(egg_fn="NamedMat")
     @classmethod
@@ -58,28 +57,24 @@ class Matrix(Expr):
         """
         Create a named matrix.
         """
-        ...
 
     @egraph.method(egg_fn="MMul")
     def __matmul__(self, other: Matrix) -> Matrix:  # type: ignore[empty-body]
         """
         Matrix multiplication.
         """
-        ...
 
     @egraph.method(egg_fn="nrows")
     def nrows(self) -> Dim:  # type: ignore[empty-body]
         """
         Number of rows in the matrix.
         """
-        ...
 
     @egraph.method(egg_fn="ncols")
     def ncols(self) -> Dim:  # type: ignore[empty-body]
         """
         Number of columns in the matrix.
         """
-        ...
 
 
 @egraph.function(egg_fn="Kron")
@@ -89,7 +84,6 @@ def kron(a: Matrix, b: Matrix) -> Matrix:  # type: ignore[empty-body]
 
     https://en.wikipedia.org/wiki/Kronecker_product#Definition
     """
-    ...
 
 
 A, B, C, D = vars_("A B C D", Matrix)
