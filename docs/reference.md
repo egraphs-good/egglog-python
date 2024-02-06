@@ -15,12 +15,11 @@ higher level API on top of that, that is more friendly to use.
 
 ```{toctree}
 :maxdepth: 1
-changelog
 reference/usage
-reference/contributing
-reference/high-level
 reference/egglog-translation
 reference/python-integration
+reference/high-level
 reference/bindings
-new_reference
+reference/contributing
+changelog
 ```

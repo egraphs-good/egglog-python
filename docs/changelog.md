@@ -4,29 +4,57 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-### Auto Register Function and Class Definitions
+### Remove modules / Auto register functions/classes
 
-_not yet implemented_
+You can now create classes and functions without an EGraph! They will be automatically registered on any EGraph if they
+are used in any of the rules or commands. This means the methods to add functions/classes on an EGraph are deprecated and
+moved to the top level module:
 
-This is a large change that moves the function and class decorators to the top level `egglog` module,
-from the `EGraph` and `Module` classes. Rulesets are also moved to be defined globally instead of on the `EGraph` class.
-
-The goal of this change is to remove the complexity of `Module`s and remove the need to think about what functions/classes
-need to be registered for each `EGraph`. Instead, we will implicitly register and functions/classes that are used
-in any rules or added in any commands.
-
-- `egraph.class_` -> Simply subclass from `egglog.Expr`
+- `egraph.class_` -> Removed, simply subclass from `egglog.Expr`
 - `egraph.method` -> `egglog.method`
 - `egraph.function` -> `egglog.function`
 - `egraph.relation` -> `egglog.relation`
 - `egraph.ruleset` -> `egglog.Ruleset`
 - `egraph.Module` -> Removed
 
-The `EGraph` class can take an optional `default_ruleset` argument to set the default ruleset for the `EGraph`. Otherwise,
-there is a global default ruleset that is used, `egglog.Ruleset`.
+The goal of this change is to remove the complexity of `Module`s and remove the need to think about what functions/classes
+need to be registered for each `EGraph`.
+
+In turn, if you want to collect a set of rules, you can do that with a ruleset. Whenever you now run a ruleset or schedule,
+the ruleset will be automatically registered on the EGraph.
 
 For backwards compatability, the existing methods and functions are preserved, to make this easier to adopt. They will
 all now raise deprication warnings.
+
+### Allow future type references in classes
+
+Classes can now reference types that have not been defined yet, as long as they are defined before the class is used in a
+rule or expression. For example:
+
+```python
+class A(Expr):
+    def __init__(self, b: B) -> None: ...
+
+class B(Expr):
+    ...
+```
+
+### Top level commands
+
+We can now simplify and check expressions without explicity making an EGraph:
+
+```python
+check(<fact>, [<schedule>], *[<actions>])
+# is equivalent to
+e = EGraph()
+e.register(*<actions>)
+e.run(<schedule>)
+e.check(<fact>)
+
+simplify(<expr>, [<schedule>])
+# is equivalent to
+EGraph().simplify(<expr>, [<schedule>])
+```
 
 ## 5.0.0 (2024-01-16)
 

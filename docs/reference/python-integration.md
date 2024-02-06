@@ -128,7 +128,6 @@ assert egraph.eval(evalled) == 3
 Similar to how an `int` can be automatically upcasted to an `i64`, we also support registering conversion to your custom types. For example:
 
 ```{code-cell} python
-@egraph.class_
 class Math(Expr):
     def __init__(self, x: i64Like) -> None: ...
 
@@ -160,7 +159,7 @@ the `Expr` class as the first item in the union. For example, in this case you c
 from typing import Union
 MathLike = Union[Math, i64Like, StringLike]
 
-@egraph.function
+@function
 def some_math_fn(x: MathLike) -> MathLike:
     ...
 
@@ -173,7 +172,7 @@ All arguments for egg functions must be declared positional or keyword (the defa
 
 ```{code-cell} python
 # egg: (function bar (i64 i64) i64)
-@egraph.function
+@function
 def bar(a: i64Like, b: i64Like) -> i64:
     pass
 
@@ -188,7 +187,7 @@ Default argument values are also supported. They are not translated to egglog de
 
 ```{code-cell} python
 # egg: (function bar (i64 i64) i64)
-@egraph.function
+@function
 def baz(a: i64Like, b: i64Like=i64(0)) -> i64:
     pass
 
@@ -247,7 +246,7 @@ if the need arises:
 
 ### "Preserved" methods
 
-You can use the `@egraph.method(preserve=True)` decorator to mark a method as "preserved", meaning that calling it will actually execute the body of the function and a corresponding egglog function will not be created,
+You can use the `@method(preserve=True)` decorator to mark a method as "preserved", meaning that calling it will actually execute the body of the function and a corresponding egglog function will not be created,
 
 Normally, all methods defined on a egglog `Expr` will ignore their bodies and simply build an expression object based on the arguments.
 
@@ -256,9 +255,8 @@ However, there are times in Python when you need the return type of a method to 
 For example, let's say you are implementing a `Bool` expression, but you want to be able to use it in `if` statements in Python. That means it needs to define a `__bool__` methods which returns a Python `bool`, based on evaluating the expression.
 
 ```{code-cell} python
-@egraph.class_
 class Boolean(Expr):
-    @egraph.method(preserve=True)
+    @method(preserve=True)
     def __bool__(self) -> bool:
         # Add this expression converted to a Python object to the e-graph
         egraph.register(self)
@@ -314,9 +312,6 @@ Instead, whenever a reflected method is called, we will try to find the correspo
 Also, if a normal method fails because the arguments cannot be converted to the right types, the reflected version of the second arg will be tried.
 
 ```{code-cell} python
-egraph = EGraph()
-
-@egraph.class_
 class Int(Expr):
     def __init__(self, i: i64Like) -> None:
         ...
@@ -329,7 +324,6 @@ class Int(Expr):
         ...
 
 
-@egraph.class_
 class Float(Expr):
     def __init__(self, i: f64Like) -> None:
         ...
@@ -360,13 +354,12 @@ For example, if you have `Float` and `Int` wrapper types and you have write the 
 
 ### Mutating arguments
 
-In order to support Python functions and methods which mutate their arguments, you can pass in the `mutate_first_arg` keyword argument to the `@egraph.function` decorator and the `mutates_self` argument to the `@egraph.method` decorator. This will cause the first argument to be mutated in place, instead of being copied.
+In order to support Python functions and methods which mutate their arguments, you can pass in the `mutate_first_arg` keyword argument to the `@function` decorator and the `mutates_self` argument to the `@method` decorator. This will cause the first argument to be mutated in place, instead of being copied.
 
 ```{code-cell} python
 from copy import copy
-mutate_egraph = EGraph()
 
-@mutate_egraph.class_
+
 class Int(Expr):
     def __init__(self, i: i64Like) -> None:
         ...
@@ -374,7 +367,7 @@ class Int(Expr):
     def __add__(self, other: Int) -> Int:  # type: ignore[empty-body]
         ...
 
-@mutate_egraph.function(mutates_first_arg=True)
+@function(mutates_first_arg=True)
 def incr(x: Int) -> None:
     ...
 
@@ -384,6 +377,7 @@ incr(incr_i)
 
 x = Int(10)
 incr(x)
+mutate_egraph = EGraph()
 mutate_egraph.register(rewrite(incr_i).to(i + Int(1)), x)
 mutate_egraph.run(10)
 mutate_egraph.check(eq(x).to(Int(10) + Int(1)))

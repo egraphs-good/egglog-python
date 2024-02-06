@@ -71,6 +71,19 @@ __all__ = [
     "Command",
     "simplify",
     "check",
+    "GraphvizKwargs",
+    "Ruleset",
+    "_RewriteBuilder",
+    "_BirewriteBuilder",
+    "_EqBuilder",
+    "_NeBuilder",
+    "_SetBuilder",
+    "_UnionBuilder",
+    "Rule",
+    "Rewrite",
+    "BiRewrite",
+    "Union_",
+    "Action",
 ]
 
 T = TypeVar("T")
@@ -396,6 +409,9 @@ def method(
     mutates_self: bool = False,
     unextractable: bool = False,
 ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
+    """
+    Any method can be decorated with this to customize it's behavior. This is only supported in classes which subclass :class:`Expr`.
+    """
     return lambda fn: _WrappedMethod(egg_fn, cost, default, merge, on_merge, fn, preserve, mutates_self, unextractable)
 
 
@@ -583,7 +599,9 @@ def function(
 
 def function(*args, **kwargs) -> Any:
     """
-    Registers a function.
+    Defined by a unique name and a typing relation that will specify the return type based on the types of the argument expressions.
+
+
     """
     fn_locals = currentframe().f_back.f_locals  # type: ignore[union-attr]
 
@@ -768,7 +786,7 @@ def relation(name: str, /, *, egg_fn: str | None = None) -> Callable[[], Unit]:
 
 def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..., Unit]:
     """
-    Defines a relation, which is the same as a function which returns unit.
+    Creates a function whose return type is `Unit` and has a default value.
     """
     decls = Declarations()
     decls |= cast(RuntimeClass, Unit)
@@ -792,9 +810,8 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
 def constant(name: str, tp: type[EXPR], egg_name: str | None = None) -> EXPR:
     """
 
-    Defines a named constant of a certain type.
-
-    This is the same as defining a nullary function with a high cost.
+    A "constant" is implemented as the instantiation of a value that takes no args.
+    This creates a function with `name` and return type `tp` and returns a value of it being called.
     """
     ref = ConstantRef(name)
     decls = Declarations()
@@ -891,7 +908,9 @@ class _EGraphState:
 @dataclass
 class EGraph(_BaseModule):
     """
-    Represents an EGraph instance at runtime
+    A collection of expressions where each expression is part of a distinct equivalence class.
+
+    Can run actions, check facts, run schedules, or extract minimal cost expressions.
     """
 
     seminaive: InitVar[bool] = True
@@ -1313,7 +1332,7 @@ class _WrappedMethod(Generic[P, EXPR]):
 
 class Expr(metaclass=_ExprMetaclass):
     """
-    Expression base class, which adds suport for != to all expression types.
+    Either a function called with some number of argument expressions or a literal integer, float, or string, with a particular type.
     """
 
     def __ne__(self, other: NoReturn) -> NoReturn:  # type: ignore[override, empty-body]
@@ -1347,6 +1366,10 @@ def ruleset(
 
 
 class Schedule(ABC):
+    """
+    A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
+    """
+
     def __mul__(self, length: int) -> Schedule:
         """
         Repeat the schedule a number of times.
@@ -1388,6 +1411,10 @@ class Schedule(ABC):
 
 @dataclass
 class Ruleset(Schedule):
+    """
+    A collection of rules, which can be run as a schedule.
+    """
+
     name: str | None
     rules: list[Rule | Rewrite] = field(default_factory=list)
 
@@ -1439,7 +1466,7 @@ class Ruleset(Schedule):
         yield self
 
     @property
-    def egg_name(self):
+    def egg_name(self) -> str:
         return self.name or f"_ruleset_{id(self)}"
 
 
@@ -1513,7 +1540,7 @@ class BiRewrite(Rewrite):
 @dataclass
 class Fact(ABC):
     """
-    An e-graph fact, either an equality or a unit expression.
+    A query on an EGraph, either by an expression or an equivalence between multiple expressions.
     """
 
     @abstractmethod
@@ -1586,6 +1613,10 @@ class Rule(Command):
 
 
 class Action(Command, ABC):
+    """
+    A change to an EGraph, either unioning multiple expressing, setting the value of a function call, deleting an expression, or panicking.
+    """
+
     @abstractmethod
     def _to_egg_action(self) -> bindings._Action:
         raise NotImplementedError
@@ -1616,6 +1647,10 @@ class Let(Action):
 
 @dataclass
 class Set(Action):
+    """
+    Similar to union, except can be used on primitive expressions, whereas union can only be used on user defined expressions.
+    """
+
     _call: RuntimeExpr
     _rhs: RuntimeExpr
 
@@ -1654,6 +1689,10 @@ class ExprAction(Action):
 
 @dataclass
 class Delete(Action):
+    """
+    Remove a function call from an EGraph.
+    """
+
     _call: RuntimeExpr
 
     def __str__(self) -> str:
@@ -1672,6 +1711,10 @@ class Delete(Action):
 
 @dataclass
 class Union_(Action):  # noqa: N801
+    """
+    Merges two equivalence classes of two expressions.
+    """
+
     _lhs: RuntimeExpr
     _rhs: RuntimeExpr
 

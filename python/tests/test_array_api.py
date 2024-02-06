@@ -162,4 +162,3 @@ class TestLDA:
         # warmup once for numba
         assert np.allclose(res, fn(X_np, y_np))
         benchmark(fn, X_np, y_np)
-

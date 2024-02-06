@@ -50,18 +50,16 @@ two args and `f1` which takes one arg:
 ```{code-cell} python
 from egglog import *
 
-egraph = EGraph()
 
-@egraph.class_
-class T: pass
+class T(Expr): pass
 
-a = egraph.constant("a", T)
-b = egraph.constant("b", T)
+a = constant("a", T)
+b = constant("b", T)
 
-@egraph.function
+@function
 def f(x: T, y: T) -> T: pass
 
-@egraph.function
+@function
 def f1(x: T) -> T: pass
 ```
 
@@ -71,16 +69,16 @@ First, we can start by trying to prove that `f(a, b) = a` implies `f(f(a, b), b)
 
 ```{code-cell} python
 
-with egraph:
-    # start with our initial assumption
-    egraph.register(
-        union(f(a, b)).with_(a)
-    )
-    # Verify that we can prove the result
-    egraph.check(
-        eq(f(f(a, b), b)).to(a)
-    )
-    egraph.display()
+egraph = EGraph()
+# start with our initial assumption
+egraph.register(
+    union(f(a, b)).with_(a)
+)
+# Verify that we can prove the result
+egraph.check(
+    eq(f(f(a, b), b)).to(a)
+)
+egraph.display()
 ```
 
 One way to visually prove this is to see that `a` is in the same equivalence class (shows up as a cluster around multiple nodes in the graph) as `f(f(a, b), b)`, if we follow the arguments of `f`, the first is self referential to the same e-class, so we can follow it once more to get to a `f(f(a, b), b)` node.
@@ -89,15 +87,15 @@ The second example is a bit more interesting. We can display the e-graph twice. 
 
 ```{code-cell} python
 
-with egraph:
-    egraph.register(
-        union(f1(f1(f1(a)))).with_(a),
-    )
-    egraph.display()
-    egraph.register(
-        union(f1(f1(f1(f1(f1(a)))))).with_(a),
-    )
-    egraph.check(eq(f1(a)).to(a))
+egraph = EGraph()
+egraph.register(
+    union(f1(f1(f1(a)))).with_(a),
+)
+egraph.display()
+egraph.register(
+    union(f1(f1(f1(f1(f1(a)))))).with_(a),
+)
+egraph.check(eq(f1(a)).to(a))
 ```
 
 We see that now `f(a)` is in the same e-class as `a` and so we can prove that `f(a) = a`.
@@ -113,16 +111,16 @@ Now lets take a look at the second use case it outlines, which is to be able to 
 Again we start be definying our required functions:
 
 ```{code-cell} python
-@egraph.function
+@function
 def cons(x: T, y: T) -> T: pass
 
-@egraph.function
+@function
 def car(x: T) -> T: pass
 
-@egraph.function
+@function
 def cdr(x: T) -> T: pass
 
-@egraph.function(default=Unit())
+@function(default=Unit())
 def not_atom(x: T) -> Unit: pass
 ```
 
@@ -132,8 +130,8 @@ as one that returns the `Unit` type. We can also call it a "relation". It doesn'
 In this case, we also have certain axioms about our functions:
 
 ```{code-cell} python
-@egraph.register
-def _list_axioms(x: T, y: T, z: T):
+@ruleset
+def list_axioms(x: T, y: T, z: T):
     # CAR(CONS(x, y)) = x
     yield rewrite(car(cons(x, y))).to(x)
     # CDR(CONS(x, y)) = y
@@ -153,9 +151,10 @@ The fourth is similar, saying that if we find term that is a `cons` of two terms
 Now we can actually try to prove the example theorum. First we start with its assumptions:
 
 ```{code-cell} python
-x = egraph.constant("x", T)
-y = egraph.constant("y", T)
+x = constant("x", T)
+y = constant("y", T)
 
+egraph = EGraph()
 egraph.register(
     # CAR(x) = CAR(y)
     union(car(x)).with_(car(y)),
@@ -172,9 +171,9 @@ Then we can step-by-step run the rules until we can check for our result and pro
 
 ```{code-cell} python
 egraph.display()
-egraph.run(1)
+egraph.run(list_axioms)
 egraph.display()
-egraph.run(1)
+egraph.run(list_axioms)
 egraph.display()
 egraph.check(eq(x).to(y))
 ```
