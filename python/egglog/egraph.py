@@ -1054,10 +1054,7 @@ class EGraph(_BaseModule):
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
         new_typed_expr = TypedExprDecl.from_egg(
-            self._egraph,
-            self._state.decls,
-            bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term),
-            expr.__egg_typed_expr__.tp,
+            self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, extract_report.term, {}
         )
         return cast(EXPR, RuntimeExpr(self._state.decls.copy(), new_typed_expr))
 
@@ -1145,8 +1142,9 @@ class EGraph(_BaseModule):
         new_typed_expr = TypedExprDecl.from_egg(
             self._egraph,
             self._state.decls,
-            bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term),
             expr.__egg_typed_expr__.tp,
+            extract_report.termdag,
+            extract_report.term,
         )
         res = cast(EXPR, RuntimeExpr(self._state.decls.copy(), new_typed_expr))
         if include_cost:
@@ -1166,10 +1164,7 @@ class EGraph(_BaseModule):
             raise ValueError(msg)  # noqa: TRY004
         new_exprs = [
             TypedExprDecl.from_egg(
-                self._egraph,
-                self._state.decls,
-                bindings.termdag_term_to_expr(extract_report.termdag, term),
-                expr.__egg_typed_expr__.tp,
+                self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, term, {}
             )
             for term in extract_report.terms
         ]

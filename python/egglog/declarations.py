@@ -624,9 +624,8 @@ class VarDecl:
     name: str
 
     @classmethod
-    def from_egg(cls, var: bindings.Var) -> ExprDecl:
-        msg = "Cannot turn var into egg type because typing unknown."
-        raise NotImplementedError(msg)
+    def from_egg(cls, var: bindings.TermVar) -> ExprDecl:
+        return cls(var.name)
 
     def to_egg(self, _decls: Declarations) -> bindings.Var:
         return bindings.Var(self.name)
@@ -647,7 +646,8 @@ class PyObjectDecl:
             return id(self.value)
 
     @classmethod
-    def from_egg(cls, egraph: bindings.EGraph, call: bindings.Call) -> ExprDecl:
+    def from_egg(cls, egraph: bindings.EGraph, termdag: bindings.TermDag, term: bindings.TermApp) -> ExprDecl:
+        call = bindings.termdag_term_to_expr(termdag, term)
         return cls(egraph.eval_py_object(call))
 
     def to_egg(self, _decls: Declarations) -> bindings._Expr:
@@ -665,7 +665,7 @@ class LitDecl:
     value: LitType
 
     @classmethod
-    def from_egg(cls, lit: bindings.Lit) -> ExprDecl:
+    def from_egg(cls, lit: bindings.TermLit) -> ExprDecl:
         value = lit.value
         if isinstance(value, bindings.Unit):
             return cls(None)
@@ -733,7 +733,13 @@ class CallDecl:
 
     @classmethod
     def from_egg(
-        cls, egraph: bindings.EGraph, decls: Declarations, call: bindings.Call, return_tp: JustTypeRef
+        cls,
+        egraph: bindings.EGraph,
+        decls: Declarations,
+        return_tp: JustTypeRef,
+        termdag: bindings.TermDag,
+        term: bindings.TermApp,
+        cache: dict[int, TypedExprDecl],
     ) -> ExprDecl:
         """
         Convert an egg expression into a typed expression by using the declerations.
@@ -744,7 +750,7 @@ class CallDecl:
         from .type_constraint_solver import TypeConstraintError, TypeConstraintSolver
 
         # Find the first callable ref that matches the call
-        for callable_ref in decls.get_callable_refs(call.name):
+        for callable_ref in decls.get_callable_refs(term.name):
             # If this is a classmethod, we might need the type params that were bound for this type
             # This could be multiple types if the classmethod is ambiguous, like map create.
             possible_types: Iterable[JustTypeRef | None]
@@ -766,11 +772,16 @@ class CallDecl:
                     )
                 except TypeConstraintError:
                     continue
-                args = tuple(
-                    TypedExprDecl.from_egg(egraph, decls, a, tp) for a, tp in zip(call.args, arg_types, strict=False)
-                )
-                return cls(callable_ref, args, bound_tp_params)
-        raise ValueError(f"Could not find callable ref for call {call}")
+                args: list[TypedExprDecl] = []
+                for a, tp in zip(term.args, arg_types, strict=False):
+                    if a in cache:
+                        res = cache[a]
+                    else:
+                        res = TypedExprDecl.from_egg(egraph, decls, tp, termdag, termdag.nodes[a], cache)
+                        cache[a] = res
+                    args.append(res)
+                return cls(callable_ref, tuple(args), bound_tp_params)
+        raise ValueError(f"Could not find callable ref for call {term}")
 
     def to_egg(self, decls: Declarations) -> bindings._Expr:
         """Convert a Call to an egg Call."""
@@ -962,19 +973,26 @@ class TypedExprDecl:
 
     @classmethod
     def from_egg(
-        cls, egraph: bindings.EGraph, decls: Declarations, expr: bindings._Expr, tp: JustTypeRef
+        cls,
+        egraph: bindings.EGraph,
+        decls: Declarations,
+        tp: JustTypeRef,
+        termdag: bindings.TermDag,
+        term: bindings._Term,
+        cache: dict[int, TypedExprDecl],
     ) -> TypedExprDecl:
         expr_decl: ExprDecl
-        if isinstance(expr, bindings.Var):
-            expr_decl = VarDecl.from_egg(expr)
-        elif isinstance(expr, bindings.Lit):
-            expr_decl = LitDecl.from_egg(expr)
-        elif isinstance(expr, bindings.Call):
-            if expr.name == "py-object":
-                expr_decl = PyObjectDecl.from_egg(egraph, expr)
-            expr_decl = CallDecl.from_egg(egraph, decls, expr, tp)
+        if isinstance(term, bindings.TermVar):
+            expr_decl = VarDecl.from_egg(term)
+        elif isinstance(term, bindings.TermLit):
+            expr_decl = LitDecl.from_egg(term)
+        elif isinstance(term, bindings.TermApp):
+            if term.name == "py-object":
+                expr_decl = PyObjectDecl.from_egg(egraph, termdag, term)
+            else:
+                expr_decl = CallDecl.from_egg(egraph, decls, tp, termdag, term, cache)
         else:
-            assert_never(expr)
+            assert_never(term)
         return cls(tp, expr_decl)
 
     def to_egg(self, decls: Declarations) -> bindings._Expr:
