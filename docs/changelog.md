@@ -2,7 +2,9 @@
 
 _This project uses semantic versioning_
 
-## UNRELEASED
+## Unreleased
+
+## 6.0.0 (2024-02-06)
 
 ### Remove modules / Auto register functions/classes
 
