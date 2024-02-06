@@ -625,3 +625,23 @@ def test_lazy_types():
         ...
 
     simplify(A().b())
+
+
+# https://github.com/egraphs-good/egglog-python/issues/100
+def test_functions_seperate_pop():
+    egraph = EGraph()
+
+    class T(Expr):
+        def __init__(self, x: i64Like) -> None:
+            ...
+    with egraph:
+        @function
+        def f(x: T) -> T: ...
+
+        egraph.register(f(T(1)))
+
+    with egraph:
+        @function
+        def f(x: T, y: T) -> T: ...
+
+        egraph.register(f(T(1), T(2))) # type: ignore[call-arg]
