@@ -1056,7 +1056,7 @@ class EGraph(_BaseModule):
         new_typed_expr = TypedExprDecl.from_egg(
             self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, extract_report.term, {}
         )
-        return cast(EXPR, RuntimeExpr(self._state.decls.copy(), new_typed_expr))
+        return cast(EXPR, RuntimeExpr(self._state.decls, new_typed_expr))
 
     @property
     def _default_ruleset_name(self) -> str:
@@ -1142,7 +1142,7 @@ class EGraph(_BaseModule):
         new_typed_expr = TypedExprDecl.from_egg(
             self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, extract_report.term, {}
         )
-        res = cast(EXPR, RuntimeExpr(self._state.decls.copy(), new_typed_expr))
+        res = cast(EXPR, RuntimeExpr(self._state.decls, new_typed_expr))
         if include_cost:
             return res, extract_report.cost
         return res
@@ -1164,7 +1164,7 @@ class EGraph(_BaseModule):
             )
             for term in extract_report.terms
         ]
-        return [cast(EXPR, RuntimeExpr(self._state.decls.copy(), expr)) for expr in new_exprs]
+        return [cast(EXPR, RuntimeExpr(self._state.decls, expr)) for expr in new_exprs]
 
     def _run_extract(self, expr: bindings._Expr, n: int) -> bindings._ExtractReport:
         self._process_commands([bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n))))])
@@ -1722,9 +1722,7 @@ class Run(Schedule):
 
     @property
     def __egg_decls__(self) -> Declarations:
-        decls = self.ruleset.__egg_decls__.copy() if self.ruleset else Declarations()
-        decls.update(*self.until)
-        return decls
+        return Declarations.create(self.ruleset, *self.until)
 
 
 @dataclass

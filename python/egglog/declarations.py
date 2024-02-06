@@ -153,6 +153,8 @@ class Declarations:
         if not others:
             return Declarations()
         first, *rest = others
+        if not rest:
+            return first
         new = first.copy()
         new.update(*rest)
         return new
