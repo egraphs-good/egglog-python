@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from contextvars import ContextVar, Token
 from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
+from functools import cached_property
 from inspect import Parameter, currentframe, signature
 from types import FunctionType
 from typing import (
@@ -1403,7 +1404,7 @@ class Ruleset(Schedule):
         for r in rules:
             self.append(r)
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(*self.rules)
 
@@ -1486,7 +1487,7 @@ class Rewrite(Command):
             [c._to_egg_fact() for c in self._conditions],
         )
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(self._lhs, self._rhs, *self._conditions)
 
@@ -1532,7 +1533,7 @@ class Eq(Fact):
     def _to_egg_fact(self) -> bindings.Eq:
         return bindings.Eq([e.__egg__ for e in self._exprs])
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(*self._exprs)
 
@@ -1547,7 +1548,7 @@ class ExprFact(Fact):
     def _to_egg_fact(self) -> bindings.Fact:
         return bindings.Fact(self._expr.__egg__)
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return self._expr.__egg_decls__
 
@@ -1574,7 +1575,7 @@ class Rule(Command):
             ),
         )
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(*self.head, *self.body)
 
@@ -1626,7 +1627,7 @@ class Set(Action):
             self._rhs.__egg__,
         )
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(self._call, self._rhs)
 
@@ -1675,7 +1676,7 @@ class Union_(Action):  # noqa: N801
     def _to_egg_action(self) -> bindings.Union:
         return bindings.Union(self._lhs.__egg__, self._rhs.__egg__)
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(self._lhs, self._rhs)
 
@@ -1690,7 +1691,7 @@ class Panic(Action):
     def _to_egg_action(self) -> bindings.Panic:
         return bindings.Panic(self.message)
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations()
 
@@ -1720,7 +1721,7 @@ class Run(Schedule):
         if self.ruleset:
             yield self.ruleset
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(self.ruleset, *self.until)
 
@@ -1776,11 +1777,9 @@ class Sequence(Schedule):
         for s in self.schedules:
             yield from s._rulesets()
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
-        decls = Declarations()
-        decls.update(*self.schedules)
-        return decls
+        return Declarations.create(*self.schedules)
 
 
 # We use these builders so that when creating these structures we can type check

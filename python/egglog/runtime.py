@@ -251,6 +251,7 @@ class RuntimeClass:
     # This function should mutate the declerations and add to them
     # Used this instead of a lazy property so we can have a reference to the decls in the class as its computing
     lazy_decls: Callable[[Declarations], None] = field(repr=False)
+    # Cached declerations
     _inner_decls: Declarations | None = field(init=False, repr=False, default=None)
     __egg_name__: str
 
