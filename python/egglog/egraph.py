@@ -1140,11 +1140,7 @@ class EGraph(_BaseModule):
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
         new_typed_expr = TypedExprDecl.from_egg(
-            self._egraph,
-            self._state.decls,
-            expr.__egg_typed_expr__.tp,
-            extract_report.termdag,
-            extract_report.term,
+            self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, extract_report.term, {}
         )
         res = cast(EXPR, RuntimeExpr(self._state.decls.copy(), new_typed_expr))
         if include_cost:
