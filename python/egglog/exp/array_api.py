@@ -311,8 +311,6 @@ class Float(Expr):
     def abs(self) -> Float:
         ...
 
-    # Make this more expensive than float, to get deterministic output
-    @method(cost=5)
     @classmethod
     def rational(cls, r: Rational) -> Float:
         ...
