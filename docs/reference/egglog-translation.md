@@ -63,13 +63,10 @@ This is a two part function so that we can statically check both sides are the s
 
 ## Declaring Sorts
 
-Users can declare their own sorts in Python by subclassing the `Expr` class and decorating with `@egraph.class_` to register it with the e-graph:
+Users can declare their own sorts in Python by subclassing the `Expr` class:
 
 ```{code-cell} python
-egraph = EGraph()
-
 # egg: (datatype Math)
-@egraph.class_
 class Math(Expr):
     pass
 ```
@@ -77,11 +74,7 @@ class Math(Expr):
 By default, the egg sort name is generated from the Python class name. You can override this if you wish with the `egg_sort` keyword argument:
 
 ```{code-cell} python
-egraph = EGraph()
-
-# egg: (datatype Math2)
-@egraph.class_(egg_sort="Math2")
-class Math(Expr):
+class Math(Expr, egg_sort="Math2"):
     pass
 ```
 
@@ -103,13 +96,11 @@ This doesn't require any custom type analysis on our part, only using Python's b
 
 ## Declaring Functions
 
-In egglog, the most general way to declare a function is with the `(function ...)` command. In Python, we can use the `@egraph.function` decorator on a function with no body. The arg and return types are inferred from the function signature:
+In egglog, the most general way to declare a function is with the `(function ...)` command. In Python, we can use the `@function` decorator on a function with no body. The arg and return types are inferred from the function signature:
 
 ```{code-cell} python
-egraph = EGraph()
-
 # egg: (function fib (i64) i64)
-@egraph.function
+@function
 def fib(n: i64Like) -> i64:
     pass
 ```
@@ -126,7 +117,7 @@ The `function` decorator supports a number of options as well, which can be pass
 
 ```{code-cell} python
 # egg: (function foo () i64 :cost 10 :default 0 :merge (max old new))
-@egraph.function(egg_fn="foo", default=i64(0), cost=10, merge=lambda old, new: old.max(new))
+@function(egg_fn="foo", default=i64(0), cost=10, merge=lambda old, new: old.max(new))
 def my_foo() -> i64:
     pass
 ```
@@ -135,8 +126,8 @@ The static types on the decorator preserve the type of the underlying function, 
 
 ### Datatype functions
 
-In egglog, the `(datatype ...)` command can also be used to declare functions. All of the functions declared in this block return the type of the declared datatype. Similarly, in Python, we can use the `@egraph.class_` decorator on a class to define a number of functions associated with that class. These
-can be either instance methods (including any supported `__` method), class methods, or the `__init__` method. The return type of these functions is inferred from the return type of the function. Additionally, any supported keyword argument for the `@egraph.function` decorator can be used here as well, by using the `@egraph.method` decorator to add values.
+In egglog, the `(datatype ...)` command can also be used to declare functions. All of the functions declared in this block return the type of the declared datatype. Similarly, in Python, any methods of an `Expr` will be registered automatically. These
+can be either instance methods (including any supported `__` method), class methods, or the `__init__` method. The return type of these functions is inferred from the return type of the function. Additionally, any supported keyword argument for the `@function` decorator can be used here as well, by using the `@method` decorator to add values.
 
 Note that by default, the egg name for any method is the Python class name combined with the method name. This allows us to define two classes with the same method name, with different signatures, that map to different egglog functions.
 
@@ -149,25 +140,24 @@ Note that by default, the egg name for any method is the Python class name combi
 #   (Mul Math Math)
 #   (Neg Math))
 
-@egraph.class_
 class Math(Expr):
-    @egraph.method(egg_fn="Num")
+    @method(egg_fn="Num")
     def __init__(self, v: i64Like):
         ...
-    @egraph.method(egg_fn="Var")
+    @method(egg_fn="Var")
     @classmethod
     def var(cls, v: StringLike) -> Math:
         ...
 
-    @egraph.method(egg_fn="Add")
+    @method(egg_fn="Add")
     def __add__(self, other: Math) -> Math:
         ...
 
-    @egraph.method(egg_fn="Mul")
+    @method(egg_fn="Mul")
     def __mul__(self, other: Math) -> Math:
         ...
 
-    @egraph.method(egg_fn="Neg")
+    @method(egg_fn="Neg")
     @property
     def neg(self) -> Math:
         ...
@@ -182,7 +172,7 @@ For more information on how to define methods, see the [Python Integration](pyth
 
 ### Declarations
 
-In egglog, the `(declare ...)` command is syntactic sugar for a nullary function. In Python, these can be declare either as class variables or with the toplevel `egraph.constant` function:
+In egglog, the `(declare ...)` command is syntactic sugar for a nullary function. In Python, these can be declare either as class variables or with the toplevel `constant` function:
 
 ```{code-cell} python
 # egg:
@@ -195,29 +185,28 @@ In egglog, the `(declare ...)` command is syntactic sugar for a nullary function
 
 from typing import ClassVar
 
-@egraph.class_
-class Boolean:
+class Boolean(Expr):
     TRUE: ClassVar[Boolean]
 
     def __or__(self, other: Boolean) -> Boolean:
         ...
 
-FALSE = egraph.constant("False", Boolean)
+FALSE = constant("False", Boolean)
 Boolean.TRUE | FALSE
 ```
 
 ### Relations
 
-The `(relation ...)` command is syntactic sugar for a function that returns the `Unit` type. This can be declared in Python with the `egraph.relation` function:
+The `(relation ...)` command is syntactic sugar for a function that returns the `Unit` type. This can be declared in Python with the `relation` function:
 
 ```{code-cell} python
 # egg: (relation path (i64 i64))
 #      (path 1 2)
-path = egraph.relation("path", i64, i64)
+path = relation("path", i64, i64)
 path(i64(1), i64(2))
 ```
 
-The correct function type (in this case it would be `Callable[[i64, i64], Unit]`) is inferred from the arguments to the `egraph.relation` function, so that it can be checked statically.
+The correct function type (in this case it would be `Callable[[i64, i64], Unit]`) is inferred from the arguments to the `relation` function, so that it can be checked statically.
 
 ## Running Actions
 
@@ -228,6 +217,7 @@ Here are examples of all the actions:
 ### Let
 
 ```{code-cell} python
+egraph = EGraph()
 # egg: (let x 1)
 egraph.register(let("x", i64(1)))
 ```
@@ -309,19 +299,17 @@ The `eq` function is also fluent, similar to `set` and `union`, so that we can v
 
 ### Rulesets
 
-Rulesets can be generated in Python with the `egraph.ruleset(name)` function and used by registering rules with them:
+Rulesets can be generated in Python with the `ruleset([*rules], [name])` function and used by registering rules with them:
 
 ```{code-cell} python
 # egg: (relation edge (i64 i64))
-edge = egraph.relation("edge", i64, i64)
+edge = relation("edge", i64, i64)
 
 # egg: (ruleset path)
-path_ruleset = egraph.ruleset("path")
-# egg:
 # (rule ((edge x y))
 #       ((path x y)) :ruleset path)
 x, y = vars_("x y", i64)
-egraph.register(rule(edge(x, y), ruleset=path_ruleset).then(path(x, y)))
+path_ruleset = ruleset(rule(edge(x, y)).then(path(x, y)), name="path")
 ```
 
 ### Rewrites
@@ -355,7 +343,7 @@ def _math(a: Math, b: Math):
 
 ## Running
 
-To run the egraph, we can use the `egraph.run()` function. This will run until a fixed point is reached, or until a timeout is reached.
+To run the egraph, we can use the `egraph.run()` function. This will run all the default rules until a fixed point is reached, or until a timeout is reached.
 
 ```{code-cell} python
 # egg: (run 5)
@@ -382,7 +370,7 @@ After a run, you get a run report, with some timing information as well as wheth
 
 The `egraph.run` function also takes a `schedule` argument, which corresponds to the `(run-schedule ...)` command in egglog. A schedule can be either:
 
-- A run configuration, created with `run(limit=1, ruleset="", *until)`, corresponding to `(run ...)` in egglog
+- A run configuration, created with `run(limit=..., ruleset=..., *until)`, corresponding to `(run ...)` in egglog
 - Saturating an existing schedule, by calling the `schedule.saturate()` method, corresponding to `(saturate ...)` in egglog
 - A sequence of sequences run one after the other, created with `seq(*schedules)`, corresponding to `(seq ...)` in egglog
 - Repeating a schedule some number of times, created with `schedule * n`, corresponding to `(repeat ...)` in egglog
@@ -421,34 +409,31 @@ We can show an example of this by translating the `schedule-demo.egg` to Python:
 ```
 
 ```{code-cell} python
-step_egraph = EGraph()
-left = step_egraph.relation("left", i64)
-right = step_egraph.relation("right", i64)
-
-step_egraph.register(left(i64(0)), right(i64(0)))
+left = relation("left", i64)
+right = relation("right", i64)
 
 x, y = vars_("x y", i64)
 
-step_left = step_egraph.ruleset("step-left")
-step_right = step_egraph.ruleset("step-right")
-step_egraph.register(
+step_left = ruleset(
     rule(
         left(x),
         right(x),
-        ruleset=step_left
-    ).then(left(x + 1)),
+    ).then(left(x + 1))
+)
+step_right = ruleset(
     rule(
         left(x),
         right(y),
         eq(x).to(y + 1),
-        ruleset=step_right
     ).then(right(x))
 )
 
+step_egraph = EGraph()
+step_egraph.register(left(i64(0)), right(i64(0)))
 step_egraph.run(
     seq(
-        run(step_right).saturate(),
-        run(step_left).saturate(),
+        step_right.saturate(),
+        step_left.saturate(),
     ) * 10
 )
 ```
@@ -511,7 +496,7 @@ egraph
 
 The `(simplify ...)` command in egglog translates to the `egraph.simplify` method, which combines running a schedule and extracting:
 
-```{code-cell}
+```{code-cell} python
 # egg: (simplify (Mul (Num 6) (Add (Num 2) (Mul (Var "x") (Num 2)))) 20)
 egraph.simplify(Math(6) * (Math(2) + Math.var("x") * Math(2)), 20)
 ```
@@ -538,43 +523,4 @@ egraph.check_fail(eq(Math(0)).to(Math(1)))
 
 The `(include <path>)` command is used to add modularity, by allowing you to pull in the source from another egglog file into the current file.
 
-In Python, we support the same use case with the ability to define a `Module` which is then depended on in `EGraph`. All commands registered on a `Module` won't be run immediately on an `EGraph`, but instead stored so that when they are included, they will be run:
-
-```{code-cell} python
-# egg file: path.egg
-# (relation path (i64 i64))
-# (relation edge (i64 i64))
-#
-# (rule ((edge x y))
-#       ((path x y)))
-#
-# (rule ((path x y) (edge y z))
-#       ((path x z)))
-#
-# egg:
-# (include "path.egg")
-# (edge 1 2)
-# (edge 2 3)
-# (edge 3 4)
-# (run 3)
-# (check (path 1 3))
-
-path_mod = Module()
-path = path_mod.relation("path", i64, i64)
-edge = path_mod.relation("edge", i64, i64)
-
-x, y, z = vars_("x y z", i64)
-path_mod.register(
-    rule(edge(x, y)).then(path(x, y)),
-    rule(path(x, y), edge(y, z)).then(path(x, z)),
-)
-
-egraph = EGraph([path_mod])
-egraph.register(
-    edge(1, 2),
-    edge(2, 3),
-    edge(3, 4)
-)
-egraph.run(3)
-egraph.check(path(1, 3))
-```
+In Python, we can instead just import the desired types, functions, and rulesets and use them in our EGraph.

@@ -8,9 +8,10 @@ from collections.abc import Callable, Iterable
 from contextvars import ContextVar, Token
 from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
+from functools import cached_property
 from inspect import Parameter, currentframe, signature
-from types import FunctionType
-from typing import (  # type: ignore[attr-defined]
+from types import FrameType, FunctionType
+from typing import (
     TYPE_CHECKING,
     Any,
     ClassVar,
@@ -19,17 +20,13 @@ from typing import (  # type: ignore[attr-defined]
     NoReturn,
     TypedDict,
     TypeVar,
-    Union,
-    _GenericAlias,
     cast,
-    get_args,
-    get_origin,
     get_type_hints,
     overload,
 )
 
 import graphviz
-from typing_extensions import ParamSpec, Self, Unpack
+from typing_extensions import ParamSpec, Self, Unpack, deprecated
 
 from egglog.declarations import REFLECTED_BINARY_METHODS, Declarations
 
@@ -37,7 +34,6 @@ from . import bindings
 from .declarations import *
 from .ipython_magic import IN_IPYTHON
 from .runtime import *
-from .runtime import _resolve_callable, _resolve_literal, class_to_ref, convert_to_same_type
 
 if TYPE_CHECKING:
     import ipywidgets
@@ -48,7 +44,10 @@ if TYPE_CHECKING:
 __all__ = [
     "EGraph",
     "Module",
-    "BUILTINS",
+    "function",
+    "ruleset",
+    "method",
+    "relation",
     "Expr",
     "Unit",
     "rewrite",
@@ -57,6 +56,7 @@ __all__ = [
     "ne",
     "panic",
     "let",
+    "constant",
     "delete",
     "union",
     "set_",
@@ -69,6 +69,21 @@ __all__ = [
     "run",
     "seq",
     "Command",
+    "simplify",
+    "check",
+    "GraphvizKwargs",
+    "Ruleset",
+    "_RewriteBuilder",
+    "_BirewriteBuilder",
+    "_EqBuilder",
+    "_NeBuilder",
+    "_SetBuilder",
+    "_UnionBuilder",
+    "Rule",
+    "Rewrite",
+    "BiRewrite",
+    "Union_",
+    "Action",
 ]
 
 T = TypeVar("T")
@@ -91,6 +106,7 @@ IGNORED_ATTRIBUTES = {
     "__orig_bases__",
     "__annotations__",
     "__hash__",
+    "__qualname__",
     # Ignore all reflected binary method
     *REFLECTED_BINARY_METHODS.keys(),
 }
@@ -98,7 +114,29 @@ IGNORED_ATTRIBUTES = {
 
 ALWAYS_MUTATES_SELF = {"__setitem__", "__delitem__"}
 
-_PY_OBJECT_CLASS: RuntimeClass | None = None
+
+def simplify(x: EXPR, schedule: Schedule | None = None) -> EXPR:
+    """
+    Simplify an expression by running the schedule.
+    """
+    if schedule:
+        return EGraph().simplify(x, schedule)
+    return EGraph().extract(x)
+
+
+def check(x: FactLike, schedule: Schedule | None = None, *given: Union_ | Expr | Set) -> None:
+    """
+    Verifies that the fact is true given some assumptions and after running the schedule.
+    """
+    egraph = EGraph()
+    if given:
+        egraph.register(*given)
+    if schedule:
+        egraph.run(schedule)
+    egraph.check(x)
+
+
+# def extract(res: )
 
 
 @dataclass
@@ -111,8 +149,6 @@ class _BaseModule:
     - Builtins: Stores a list of the builtins which have already been pre-regsietered
     - Module: Stores a list of commands and additional declerations
     """
-
-    is_builtin: ClassVar[bool] = False
 
     # TODO: If we want to preserve existing semantics, then we use the module to find the default schedules
     # and add them to the
@@ -132,10 +168,12 @@ class _BaseModule:
                 if child_mod not in self._flatted_deps:
                     self._flatted_deps.append(child_mod)
 
+    @deprecated("Remove this decorator and move the egg_sort to the class statement, i.e. E(Expr, egg_sort='MySort').")
     @overload
     def class_(self, *, egg_sort: str) -> Callable[[TYPE], TYPE]:
         ...
 
+    @deprecated("Remove this decorator. Simply subclassing Expr is enough now.")
     @overload
     def class_(self, cls: TYPE, /) -> TYPE:
         ...
@@ -144,129 +182,19 @@ class _BaseModule:
         """
         Registers a class.
         """
-        # Get locals and globals from parent frame so we can infer types from it.
-        frame = currentframe()
-        assert frame
-        prev_frame = frame.f_back
-        assert prev_frame
-
         if kwargs:
             assert set(kwargs.keys()) == {"egg_sort"}
-            return lambda cls: self._class(cls, prev_frame.f_locals, prev_frame.f_globals, kwargs["egg_sort"])
+
+            def _inner(cls: object, egg_sort: str = kwargs["egg_sort"]):
+                assert isinstance(cls, RuntimeClass)
+                assert isinstance(cls.lazy_decls, _ClassDeclerationsConstructor)
+                cls.lazy_decls.egg_sort = egg_sort
+                return cls
+
+            return _inner
+
         assert len(args) == 1
-        return self._class(args[0], prev_frame.f_locals, prev_frame.f_globals)
-
-    def _class(  # noqa: PLR0912, C901
-        self,
-        cls: type[Expr],
-        hint_locals: dict[str, Any],
-        hint_globals: dict[str, Any],
-        egg_sort: str | None = None,
-    ) -> RuntimeClass:
-        """
-        Registers a class.
-        """
-        global _PY_OBJECT_CLASS
-        decls = Declarations()
-        cls_name = cls.__name__
-        runtime_class = RuntimeClass(decls, cls_name)
-        if cls_name == "PyObject":
-            _PY_OBJECT_CLASS = runtime_class
-        # Get all the methods from the class
-        cls_dict: dict[str, Any] = {
-            k: v for k, v in cls.__dict__.items() if k not in IGNORED_ATTRIBUTES or isinstance(v, _WrappedMethod)
-        }
-        parameters: list[TypeVar] = cls_dict.pop("__parameters__", [])
-
-        n_type_vars = len(parameters)
-        decls.register_class(cls_name, n_type_vars, self.is_builtin, egg_sort)
-        # The type ref of self is paramterized by the type vars
-        slf_type_ref = TypeRefWithVars(cls_name, tuple(ClassTypeVarRef(i) for i in range(n_type_vars)))
-
-        # First register any class vars as constants
-        hint_globals = hint_globals.copy()
-        hint_globals[cls_name] = cls
-        for k, v in get_type_hints(cls, globalns=hint_globals, localns=hint_locals).items():
-            if v.__origin__ == ClassVar:
-                (inner_tp,) = v.__args__
-                self._register_constant(decls, ClassVariableRef(cls_name, k), inner_tp, None, (cls, cls_name))
-            else:
-                msg = "The only supported annotations on class attributes are class vars"
-                raise NotImplementedError(msg)
-
-        # Then register each of its methods
-        for method_name, method in cls_dict.items():
-            is_init = method_name == "__init__"
-            # Don't register the init methods for literals, since those don't use the type checking mechanisms
-            if is_init and cls_name in LIT_CLASS_NAMES:
-                continue
-            if isinstance(method, _WrappedMethod):
-                fn = method.fn
-                egg_fn = method.egg_fn
-                cost = method.cost
-                default = method.default
-                merge = method.merge
-                on_merge = method.on_merge
-                mutates_first_arg = method.mutates_self
-                unextractable = method.unextractable
-                if method.preserve:
-                    decls.register_preserved_method(cls_name, method_name, fn)
-                    continue
-            else:
-                fn = method
-                egg_fn, cost, default, merge, on_merge = None, None, None, None, None
-                unextractable = False
-                mutates_first_arg = False
-            if isinstance(fn, classmethod):
-                fn = fn.__func__
-                is_classmethod = True
-            else:
-                # We count __init__ as a classmethod since it is called on the class
-                is_classmethod = is_init
-
-            if isinstance(fn, property):
-                fn = fn.fget
-                is_property = True
-                if is_classmethod:
-                    msg = "Can't have a classmethod property"
-                    raise NotImplementedError(msg)
-            else:
-                is_property = False
-            ref: FunctionCallableRef = (
-                ClassMethodRef(cls_name, method_name)
-                if is_classmethod
-                else PropertyRef(cls_name, method_name)
-                if is_property
-                else MethodRef(cls_name, method_name)
-            )
-            self._register_function(
-                decls,
-                ref,
-                egg_fn,
-                fn,
-                hint_locals,
-                default,
-                cost,
-                merge,
-                on_merge,
-                mutates_first_arg or method_name in ALWAYS_MUTATES_SELF,
-                "cls" if is_classmethod and not is_init else slf_type_ref,
-                parameters,
-                is_init,
-                # If this is an i64, use the runtime class for the alias so that i64Like is resolved properly
-                # Otherwise, this might be a Map in which case pass in the original cls so that we
-                # can do Map[T, V] on it, which is not allowed on the runtime class
-                cls_type_and_name=(
-                    RuntimeClass(decls, cls_name) if cls_name in {"i64", "String"} else cls,
-                    cls_name,
-                ),
-                unextractable=unextractable,
-            )
-        # self._process_commands(decls.list_cmds())
-        return runtime_class
-
-    # We seperate the function and method overloads to make it simpler to know if we are modifying a function or method,
-    # So that we can add the functions eagerly to the registry and wait on the methods till we process the class.
+        return args[0]
 
     @overload
     def method(
@@ -275,10 +203,6 @@ class _BaseModule:
         preserve: Literal[True],
     ) -> Callable[[CALLABLE], CALLABLE]:
         ...
-
-    # We have to seperate method/function overloads for those that use the T params and those that don't
-    # Otherwise, if you say just pass in `cost` then the T param is inferred as `Nothing` and
-    # It will break the typing.
 
     @overload
     def method(
@@ -307,6 +231,7 @@ class _BaseModule:
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
         ...
 
+    @deprecated("Use top level method function instead")
     def method(
         self,
         *,
@@ -354,171 +279,21 @@ class _BaseModule:
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
         ...
 
+    @deprecated("Use top level function `function` instead")
     def function(self, *args, **kwargs) -> Any:
         """
         Registers a function.
         """
-        fn_locals = currentframe().f_back.f_locals  # type: ignore[union-attr]
-
+        fn_locals = currentframe().f_back.f_back.f_locals  # type: ignore[union-attr]
         # If we have any positional args, then we are calling it directly on a function
         if args:
             assert len(args) == 1
-            return self._function(args[0], fn_locals)
+            return _function(args[0], fn_locals, False)
         # otherwise, we are passing some keyword args, so save those, and then return a partial
-        return lambda fn: self._function(fn, fn_locals, **kwargs)
+        return lambda fn: _function(fn, fn_locals, False, **kwargs)
 
-    def _function(
-        self,
-        fn: Callable[..., RuntimeExpr],
-        hint_locals: dict[str, Any],
-        mutates_first_arg: bool = False,
-        egg_fn: str | None = None,
-        cost: int | None = None,
-        default: RuntimeExpr | None = None,
-        merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None = None,
-        on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None = None,
-        unextractable: bool = False,
-    ) -> RuntimeFunction:
-        """
-        Uncurried version of function decorator
-        """
-        name = fn.__name__
-        decls = Declarations()
-        # Save function decleartion
-        self._register_function(
-            decls,
-            FunctionRef(name),
-            egg_fn,
-            fn,
-            hint_locals,
-            default,
-            cost,
-            merge,
-            on_merge,
-            mutates_first_arg,
-            unextractable=unextractable,
-        )
-        # self._process_commands(decls.list_cmds())
-        # Return a runtime function which will act like the decleration
-        return RuntimeFunction(decls, name)
-
-    def _register_function(
-        self,
-        decls: Declarations,
-        ref: FunctionCallableRef,
-        egg_name: str | None,
-        fn: object,
-        # Pass in the locals, retrieved from the frame when wrapping,
-        # so that we support classes and function defined inside of other functions (which won't show up in the globals)
-        hint_locals: dict[str, Any],
-        default: RuntimeExpr | None,
-        cost: int | None,
-        merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None,
-        on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None,
-        mutates_first_arg: bool,
-        # The first arg is either cls, for a classmethod, a self type, or none for a function
-        first_arg: Literal["cls"] | TypeOrVarRef | None = None,
-        cls_typevars: list[TypeVar] | None = None,
-        is_init: bool = False,
-        # We need this for very weird case around typevar identity, I forget the details :(
-        cls_type_and_name: tuple[type | RuntimeClass, str] | None = None,
-        unextractable: bool = False,
-    ) -> None:
-        if cls_typevars is None:
-            cls_typevars = []
-        if not isinstance(fn, FunctionType):
-            raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
-
-        hint_globals = fn.__globals__.copy()
-
-        if cls_type_and_name:
-            hint_globals[cls_type_and_name[1]] = cls_type_and_name[0]
-        hints = get_type_hints(fn, hint_globals, hint_locals)
-
-        params = list(signature(fn).parameters.values())
-
-        # If this is an init function, or a classmethod, remove the first arg name
-        if is_init or first_arg == "cls":
-            params = params[1:]
-
-        if _last_param_variable(params):
-            *params, var_arg_param = params
-            # For now, we don't use the variable arg name
-            var_arg_type = _resolve_type_annotation(decls, hints[var_arg_param.name], cls_typevars, cls_type_and_name)
-        else:
-            var_arg_type = None
-        arg_types = tuple(
-            first_arg
-            # If the first arg is a self, and this not an __init__ fn, add this as a typeref
-            if i == 0 and isinstance(first_arg, ClassTypeVarRef | TypeRefWithVars) and not is_init
-            else _resolve_type_annotation(decls, hints[t.name], cls_typevars, cls_type_and_name)
-            for i, t in enumerate(params)
-        )
-
-        # Resolve all default values as arg types
-        arg_defaults = [
-            _resolve_literal(t, p.default) if p.default is not Parameter.empty else None
-            for (t, p) in zip(arg_types, params, strict=True)
-        ]
-
-        decls.update(*arg_defaults)
-
-        # If this is an init fn use the first arg as the return type
-        if is_init:
-            assert not mutates_first_arg
-            if not isinstance(first_arg, ClassTypeVarRef | TypeRefWithVars):
-                msg = "Init function must have a self type"
-                raise ValueError(msg)
-            return_type = first_arg
-        elif mutates_first_arg:
-            return_type = arg_types[0]
-        else:
-            return_type = _resolve_type_annotation(decls, hints["return"], cls_typevars, cls_type_and_name)
-
-        decls |= default
-        merged = (
-            None
-            if merge is None
-            else merge(
-                RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("old"))),
-                RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("new"))),
-            )
-        )
-        decls |= merged
-
-        merge_action = (
-            []
-            if on_merge is None
-            else _action_likes(
-                on_merge(
-                    RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("old"))),
-                    RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("new"))),
-                )
-            )
-        )
-        decls.update(*merge_action)
-        fn_decl = FunctionDecl(
-            return_type=return_type,
-            var_arg_type=var_arg_type,
-            arg_types=arg_types,
-            arg_names=tuple(t.name for t in params),
-            arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
-            mutates_first_arg=mutates_first_arg,
-        )
-        decls.register_function_callable(
-            ref,
-            fn_decl,
-            egg_name,
-            cost,
-            None if default is None else default.__egg_typed_expr__.expr,
-            merged.__egg_typed_expr__.expr if merged is not None else None,
-            [a._to_egg_action() for a in merge_action],
-            unextractable,
-            self.is_builtin,
-        )
-
+    @deprecated("Use top level `ruleset` function instead")
     def ruleset(self, name: str) -> Ruleset:
-        # self._process_commands([bindings.AddRuleset(name)])
         return Ruleset(name)
 
     # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
@@ -544,31 +319,14 @@ class _BaseModule:
     def relation(self, name: str, /, *, egg_fn: str | None = None) -> Callable[[], Unit]:
         ...
 
+    @deprecated("Use top level relation function instead")
     def relation(self, name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..., Unit]:
         """
         Defines a relation, which is the same as a function which returns unit.
         """
-        decls = Declarations()
-        decls |= cast(RuntimeClass, Unit)
-        arg_types = tuple(_resolve_type_annotation(decls, cast(object, tp), [], None) for tp in tps)
-        fn_decl = FunctionDecl(
-            arg_types, None, tuple(None for _ in tps), TypeRefWithVars("Unit"), mutates_first_arg=False
-        )
-        decls.register_function_callable(
-            FunctionRef(name),
-            fn_decl,
-            egg_fn,
-            cost=None,
-            default=None,
-            merge=None,
-            merge_action=[],
-            unextractable=False,
-            builtin=False,
-            is_relation=True,
-        )
-        # self._process_commands(decls.list_cmds())
-        return cast(Callable[..., Unit], RuntimeFunction(decls, name))
+        return relation(name, *tps, egg_fn=egg_fn)
 
+    @deprecated("Use top level constant function instead")
     def constant(self, name: str, tp: type[EXPR], egg_name: str | None = None) -> EXPR:
         """
 
@@ -577,27 +335,9 @@ class _BaseModule:
         This is the same as defining a nullary function with a high cost.
         # TODO: Rename as declare to match eggglog?
         """
-        ref = ConstantRef(name)
-        decls = Declarations()
-        type_ref = self._register_constant(decls, ref, tp, egg_name, None)
-        return cast(EXPR, RuntimeExpr(decls, TypedExprDecl(type_ref, CallDecl(ref))))
+        return constant(name, tp, egg_name)
 
-    def _register_constant(
-        self,
-        decls: Declarations,
-        ref: ConstantRef | ClassVariableRef,
-        tp: object,
-        egg_name: str | None,
-        cls_type_and_name: tuple[type | RuntimeClass, str] | None,
-    ) -> JustTypeRef:
-        """
-        Register a constant, returning its typeref().
-        """
-        type_ref = _resolve_type_annotation(decls, tp, [], cls_type_and_name).to_just()
-        decls.register_constant_callable(ref, type_ref, egg_name)
-        return type_ref
-
-    def register(self, command_or_generator: CommandLike | CommandGenerator, *command_likes: CommandLike) -> None:
+    def register(self, /, command_or_generator: CommandLike | CommandGenerator, *command_likes: CommandLike) -> None:
         """
         Registers any number of rewrites or rules.
         """
@@ -612,6 +352,485 @@ class _BaseModule:
     @abstractmethod
     def _register_commands(self, cmds: list[Command]) -> None:
         raise NotImplementedError
+
+
+# We seperate the function and method overloads to make it simpler to know if we are modifying a function or method,
+# So that we can add the functions eagerly to the registry and wait on the methods till we process the class.
+
+
+@overload
+def method(
+    *,
+    preserve: Literal[True],
+) -> Callable[[CALLABLE], CALLABLE]:
+    ...
+
+
+# We have to seperate method/function overloads for those that use the T params and those that don't
+# Otherwise, if you say just pass in `cost` then the T param is inferred as `Nothing` and
+# It will break the typing.
+
+
+@overload
+def method(
+    *,
+    egg_fn: str | None = None,
+    cost: int | None = None,
+    merge: Callable[[Any, Any], Any] | None = None,
+    on_merge: Callable[[Any, Any], Iterable[ActionLike]] | None = None,
+    mutates_self: bool = False,
+    unextractable: bool = False,
+) -> Callable[[CALLABLE], CALLABLE]:
+    ...
+
+
+@overload
+def method(
+    *,
+    egg_fn: str | None = None,
+    cost: int | None = None,
+    default: EXPR | None = None,
+    merge: Callable[[EXPR, EXPR], EXPR] | None = None,
+    on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
+    mutates_self: bool = False,
+    unextractable: bool = False,
+) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
+    ...
+
+
+def method(
+    *,
+    egg_fn: str | None = None,
+    cost: int | None = None,
+    default: EXPR | None = None,
+    merge: Callable[[EXPR, EXPR], EXPR] | None = None,
+    on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
+    preserve: bool = False,
+    mutates_self: bool = False,
+    unextractable: bool = False,
+) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
+    """
+    Any method can be decorated with this to customize it's behavior. This is only supported in classes which subclass :class:`Expr`.
+    """
+    return lambda fn: _WrappedMethod(egg_fn, cost, default, merge, on_merge, fn, preserve, mutates_self, unextractable)
+
+
+class _ExprMetaclass(type):
+    """
+    Metaclass of Expr.
+
+    Used to override isistance checks, so that runtime expressions are instances of Expr at runtime.
+    """
+
+    def __new__(  # type: ignore[misc]
+        cls: type[_ExprMetaclass],
+        name: str,
+        bases: tuple[type, ...],
+        namespace: dict[str, Any],
+        egg_sort: str | None = None,
+        builtin: bool = False,
+    ) -> RuntimeClass | type:
+        # If this is the Expr subclass, just return the class
+        if not bases:
+            return super().__new__(cls, name, bases, namespace)
+
+        frame = currentframe()
+        assert frame
+        prev_frame = frame.f_back
+        assert prev_frame
+        return _ClassDeclerationsConstructor(
+            namespace=namespace,
+            # Store frame so that we can get live access to updated locals/globals
+            # Otherwise, f_locals returns a copy
+            # https://peps.python.org/pep-0667/
+            frame=prev_frame,
+            builtin=builtin,
+            egg_sort=egg_sort,
+            cls_name=name,
+        ).current_cls
+
+    def __instancecheck__(cls, instance: object) -> bool:
+        return isinstance(instance, RuntimeExpr)
+
+
+@dataclass
+class _ClassDeclerationsConstructor:
+    """
+    Lazy constructor for class declerations to support classes with methods whose types are not yet defined.
+    """
+
+    namespace: dict[str, Any]
+    frame: FrameType
+    builtin: bool
+    egg_sort: str | None
+    cls_name: str
+    current_cls: RuntimeClass = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.current_cls = RuntimeClass(self, self.cls_name)
+
+    def __call__(self, decls: Declarations) -> None:  # noqa: PLR0912
+        # Get all the methods from the class
+        cls_dict: dict[str, Any] = {
+            k: v for k, v in self.namespace.items() if k not in IGNORED_ATTRIBUTES or isinstance(v, _WrappedMethod)
+        }
+        parameters: list[TypeVar] = (
+            # Get the generic params from the orig bases generic class
+            self.namespace["__orig_bases__"][1].__parameters__ if "__orig_bases__" in self.namespace else []
+        )
+        type_vars = tuple(p.__name__ for p in parameters)
+        del parameters
+
+        decls.register_class(self.cls_name, type_vars, self.builtin, self.egg_sort)
+        # The type ref of self is paramterized by the type vars
+        slf_type_ref = TypeRefWithVars(self.cls_name, tuple(map(ClassTypeVarRef, type_vars)))
+
+        # Create a dummy type to pass to get_type_hints to resolve the annotations we have
+        class _Dummytype:
+            pass
+
+        _Dummytype.__annotations__ = self.namespace.get("__annotations__", {})
+        # Make lazy update to locals, so we keep a live handle on them after class creation
+        locals = self.frame.f_locals.copy()
+        locals[self.cls_name] = self.current_cls
+        for k, v in get_type_hints(_Dummytype, globalns=self.frame.f_globals, localns=locals).items():
+            if v.__origin__ == ClassVar:
+                (inner_tp,) = v.__args__
+                _register_constant(decls, ClassVariableRef(self.cls_name, k), inner_tp, None)
+            else:
+                msg = "The only supported annotations on class attributes are class vars"
+                raise NotImplementedError(msg)
+
+        # Then register each of its methods
+        for method_name, method in cls_dict.items():
+            is_init = method_name == "__init__"
+            # Don't register the init methods for literals, since those don't use the type checking mechanisms
+            if is_init and self.cls_name in LIT_CLASS_NAMES:
+                continue
+            if isinstance(method, _WrappedMethod):
+                fn = method.fn
+                egg_fn = method.egg_fn
+                cost = method.cost
+                default = method.default
+                merge = method.merge
+                on_merge = method.on_merge
+                mutates_first_arg = method.mutates_self
+                unextractable = method.unextractable
+                if method.preserve:
+                    decls.register_preserved_method(self.cls_name, method_name, fn)
+                    continue
+            else:
+                fn = method
+                egg_fn, cost, default, merge, on_merge = None, None, None, None, None
+                unextractable = False
+                mutates_first_arg = False
+            if isinstance(fn, classmethod):
+                fn = fn.__func__
+                is_classmethod = True
+            else:
+                # We count __init__ as a classmethod since it is called on the class
+                is_classmethod = is_init
+
+            if isinstance(fn, property):
+                fn = fn.fget
+                is_property = True
+                if is_classmethod:
+                    msg = "Can't have a classmethod property"
+                    raise NotImplementedError(msg)
+            else:
+                is_property = False
+            ref: FunctionCallableRef = (
+                ClassMethodRef(self.cls_name, method_name)
+                if is_classmethod
+                else PropertyRef(self.cls_name, method_name)
+                if is_property
+                else MethodRef(self.cls_name, method_name)
+            )
+            _register_function(
+                decls,
+                ref,
+                egg_fn,
+                fn,
+                locals,
+                default,
+                cost,
+                merge,
+                on_merge,
+                mutates_first_arg or method_name in ALWAYS_MUTATES_SELF,
+                self.builtin,
+                "cls" if is_classmethod and not is_init else slf_type_ref,
+                is_init,
+                unextractable=unextractable,
+            )
+
+
+@overload
+def function(fn: CALLABLE, /) -> CALLABLE:
+    ...
+
+
+@overload
+def function(
+    *,
+    egg_fn: str | None = None,
+    cost: int | None = None,
+    merge: Callable[[Any, Any], Any] | None = None,
+    on_merge: Callable[[Any, Any], Iterable[ActionLike]] | None = None,
+    mutates_first_arg: bool = False,
+    unextractable: bool = False,
+    builtin: bool = False,
+) -> Callable[[CALLABLE], CALLABLE]:
+    ...
+
+
+@overload
+def function(
+    *,
+    egg_fn: str | None = None,
+    cost: int | None = None,
+    default: EXPR | None = None,
+    merge: Callable[[EXPR, EXPR], EXPR] | None = None,
+    on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
+    mutates_first_arg: bool = False,
+    unextractable: bool = False,
+) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
+    ...
+
+
+def function(*args, **kwargs) -> Any:
+    """
+    Defined by a unique name and a typing relation that will specify the return type based on the types of the argument expressions.
+
+
+    """
+    fn_locals = currentframe().f_back.f_locals  # type: ignore[union-attr]
+
+    # If we have any positional args, then we are calling it directly on a function
+    if args:
+        assert len(args) == 1
+        return _function(args[0], fn_locals, False)
+    # otherwise, we are passing some keyword args, so save those, and then return a partial
+    return lambda fn: _function(fn, fn_locals, **kwargs)
+
+
+def _function(
+    fn: Callable[..., RuntimeExpr],
+    hint_locals: dict[str, Any],
+    builtin: bool = False,
+    mutates_first_arg: bool = False,
+    egg_fn: str | None = None,
+    cost: int | None = None,
+    default: RuntimeExpr | None = None,
+    merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None = None,
+    on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None = None,
+    unextractable: bool = False,
+) -> RuntimeFunction:
+    """
+    Uncurried version of function decorator
+    """
+    name = fn.__name__
+    decls = Declarations()
+    _register_function(
+        decls,
+        FunctionRef(name),
+        egg_fn,
+        fn,
+        hint_locals,
+        default,
+        cost,
+        merge,
+        on_merge,
+        mutates_first_arg,
+        builtin,
+        unextractable=unextractable,
+    )
+    return RuntimeFunction(decls, name)
+
+
+def _register_function(
+    decls: Declarations,
+    ref: FunctionCallableRef,
+    egg_name: str | None,
+    fn: object,
+    # Pass in the locals, retrieved from the frame when wrapping,
+    # so that we support classes and function defined inside of other functions (which won't show up in the globals)
+    hint_locals: dict[str, Any],
+    default: RuntimeExpr | None,
+    cost: int | None,
+    merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None,
+    on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None,
+    mutates_first_arg: bool,
+    is_builtin: bool,
+    # The first arg is either cls, for a classmethod, a self type, or none for a function
+    first_arg: Literal["cls"] | TypeOrVarRef | None = None,
+    is_init: bool = False,
+    unextractable: bool = False,
+) -> None:
+    if not isinstance(fn, FunctionType):
+        raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
+
+    hint_globals = fn.__globals__.copy()
+
+    hints = get_type_hints(fn, hint_globals, hint_locals)
+
+    params = list(signature(fn).parameters.values())
+
+    # If this is an init function, or a classmethod, remove the first arg name
+    if is_init or first_arg == "cls":
+        params = params[1:]
+
+    if _last_param_variable(params):
+        *params, var_arg_param = params
+        # For now, we don't use the variable arg name
+        var_arg_type = resolve_type_annotation(decls, hints[var_arg_param.name])
+    else:
+        var_arg_type = None
+    arg_types = tuple(
+        first_arg
+        # If the first arg is a self, and this not an __init__ fn, add this as a typeref
+        if i == 0 and isinstance(first_arg, ClassTypeVarRef | TypeRefWithVars) and not is_init
+        else resolve_type_annotation(decls, hints[t.name])
+        for i, t in enumerate(params)
+    )
+
+    # Resolve all default values as arg types
+    arg_defaults = [
+        resolve_literal(t, p.default) if p.default is not Parameter.empty else None
+        for (t, p) in zip(arg_types, params, strict=True)
+    ]
+
+    decls.update(*arg_defaults)
+
+    # If this is an init fn use the first arg as the return type
+    if is_init:
+        assert not mutates_first_arg
+        if not isinstance(first_arg, ClassTypeVarRef | TypeRefWithVars):
+            msg = "Init function must have a self type"
+            raise ValueError(msg)
+        return_type = first_arg
+    elif mutates_first_arg:
+        return_type = arg_types[0]
+    else:
+        return_type = resolve_type_annotation(decls, hints["return"])
+
+    decls |= default
+    merged = (
+        None
+        if merge is None
+        else merge(
+            RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("old"))),
+            RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("new"))),
+        )
+    )
+    decls |= merged
+
+    merge_action = (
+        []
+        if on_merge is None
+        else _action_likes(
+            on_merge(
+                RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("old"))),
+                RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("new"))),
+            )
+        )
+    )
+    decls.update(*merge_action)
+    fn_decl = FunctionDecl(
+        return_type=return_type,
+        var_arg_type=var_arg_type,
+        arg_types=arg_types,
+        arg_names=tuple(t.name for t in params),
+        arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
+        mutates_first_arg=mutates_first_arg,
+    )
+    decls.register_function_callable(
+        ref,
+        fn_decl,
+        egg_name,
+        cost,
+        None if default is None else default.__egg_typed_expr__.expr,
+        merged.__egg_typed_expr__.expr if merged is not None else None,
+        [a._to_egg_action() for a in merge_action],
+        unextractable,
+        is_builtin,
+    )
+
+
+# Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
+@overload
+def relation(
+    name: str, tp1: type[E1], tp2: type[E2], tp3: type[E3], tp4: type[E4], /
+) -> Callable[[E1, E2, E3, E4], Unit]:
+    ...
+
+
+@overload
+def relation(name: str, tp1: type[E1], tp2: type[E2], tp3: type[E3], /) -> Callable[[E1, E2, E3], Unit]:
+    ...
+
+
+@overload
+def relation(name: str, tp1: type[E1], tp2: type[E2], /) -> Callable[[E1, E2], Unit]:
+    ...
+
+
+@overload
+def relation(name: str, tp1: type[T], /, *, egg_fn: str | None = None) -> Callable[[T], Unit]:
+    ...
+
+
+@overload
+def relation(name: str, /, *, egg_fn: str | None = None) -> Callable[[], Unit]:
+    ...
+
+
+def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..., Unit]:
+    """
+    Creates a function whose return type is `Unit` and has a default value.
+    """
+    decls = Declarations()
+    decls |= cast(RuntimeClass, Unit)
+    arg_types = tuple(resolve_type_annotation(decls, tp) for tp in tps)
+    fn_decl = FunctionDecl(arg_types, None, tuple(None for _ in tps), TypeRefWithVars("Unit"), mutates_first_arg=False)
+    decls.register_function_callable(
+        FunctionRef(name),
+        fn_decl,
+        egg_fn,
+        cost=None,
+        default=None,
+        merge=None,
+        merge_action=[],
+        unextractable=False,
+        builtin=False,
+        is_relation=True,
+    )
+    return cast(Callable[..., Unit], RuntimeFunction(decls, name))
+
+
+def constant(name: str, tp: type[EXPR], egg_name: str | None = None) -> EXPR:
+    """
+
+    A "constant" is implemented as the instantiation of a value that takes no args.
+    This creates a function with `name` and return type `tp` and returns a value of it being called.
+    """
+    ref = ConstantRef(name)
+    decls = Declarations()
+    type_ref = _register_constant(decls, ref, tp, egg_name)
+    return cast(EXPR, RuntimeExpr(decls, TypedExprDecl(type_ref, CallDecl(ref))))
+
+
+def _register_constant(
+    decls: Declarations,
+    ref: ConstantRef | ClassVariableRef,
+    tp: object,
+    egg_name: str | None,
+) -> JustTypeRef:
+    """
+    Register a constant, returning its typeref().
+    """
+    type_ref = resolve_type_annotation(decls, tp).to_just()
+    decls.register_constant_callable(ref, type_ref, egg_name)
+    return type_ref
 
 
 def _last_param_variable(params: list[Parameter]) -> bool:
@@ -633,55 +852,9 @@ def _last_param_variable(params: list[Parameter]) -> bool:
     return found_var_arg
 
 
-def _resolve_type_annotation(
-    decls: Declarations,
-    tp: object,
-    cls_typevars: list[TypeVar],
-    cls_type_and_name: tuple[type | RuntimeClass, str] | None,
-) -> TypeOrVarRef:
-    """
-    Resolves a type object into a type reference.
-
-    The cls_typevars should be a list of type variables that were defined for that type, i.e. for class Dict(Generic[T, K]), they would be [T, K]
-
-    The cls_type_and_name is the type of the current class being traversed, in case it hasn't been added yet.
-    """
-    if isinstance(tp, TypeVar):
-        return ClassTypeVarRef(cls_typevars.index(tp))
-    # If there is a union, then we assume the first item is the type we want, and the others are types that can be converted to that type.
-    if get_origin(tp) == Union:
-        first, *_rest = get_args(tp)
-        return _resolve_type_annotation(decls, first, cls_typevars, cls_type_and_name)
-    # If this is the type for the class, use the class name
-    if cls_type_and_name and tp == cls_type_and_name[0]:
-        return TypeRefWithVars(cls_type_and_name[1])
-
-    # If the type is `object` then this is assumed to be a PyObjetLike, i.e. converted into a PyObject
-    if tp == object:
-        assert _PY_OBJECT_CLASS
-        return _resolve_type_annotation(decls, _PY_OBJECT_CLASS, [], None)
-
-    # If this is the class for this method and we have a paramaterized class, recurse
-    if cls_type_and_name and isinstance(tp, _GenericAlias) and tp.__origin__ == cls_type_and_name[0]:
-        return TypeRefWithVars(
-            cls_type_and_name[1],
-            tuple(_resolve_type_annotation(decls, a, cls_typevars, cls_type_and_name) for a in tp.__args__),
-        )
-
-    if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
-        decls |= tp
-        return class_to_ref(tp).to_var()
-    raise TypeError(f"Unexpected type annotation {tp}")
-
-
-@dataclass
-class _Builtins(_BaseModule):
-    is_builtin: ClassVar[bool] = True
-
-    def _register_commands(self, cmds: list[Command]) -> None:
-        raise NotImplementedError
-
-
+@deprecated(
+    "Modules are deprecated, use top level functions to register classes/functions and rulesets to register rules"
+)
 @dataclass
 class Module(_BaseModule):
     cmds: list[Command] = field(default_factory=list)
@@ -712,13 +885,12 @@ class GraphvizKwargs(TypedDict, total=False):
 @dataclass
 class _EGraphState:
     """
-    State of the EGraph declerations, so we know what to
+    State of the EGraph declerations and rulesets, so when we pop/push the stack we know whats defined.
     """
 
     # The decleratons we have added. The _cmds represent all the symbols we have added
     decls: Declarations = field(default_factory=Declarations)
     # List of rulesets already added, so we don't re-add them if they are passed again
-
     added_rulesets: set[str] = field(default_factory=set)
 
     def add_decls(self, new_decls: Declarations) -> Iterable[bindings._Command]:
@@ -726,24 +898,25 @@ class _EGraphState:
         self.decls |= new_decls
         return new_cmds
 
-    def add_rulesets(self, new_rulesets: dict[str, list[bindings._Command]]) -> Iterable[bindings._Command]:
-        new_cmds = []
-        for k, v in new_rulesets.items():
-            if k not in self.added_rulesets:
-                new_cmds.extend(v)
-                self.added_rulesets.add(k)
-        return new_cmds
+    def add_rulesets(self, rulesets: Iterable[Ruleset]) -> Iterable[bindings._Command]:
+        for ruleset in rulesets:
+            if ruleset.egg_name not in self.added_rulesets:
+                self.added_rulesets.add(ruleset.egg_name)
+                yield from ruleset._cmds
 
 
 @dataclass
 class EGraph(_BaseModule):
     """
-    Represents an EGraph instance at runtime
+    A collection of expressions where each expression is part of a distinct equivalence class.
+
+    Can run actions, check facts, run schedules, or extract minimal cost expressions.
     """
 
     seminaive: InitVar[bool] = True
     save_egglog_string: InitVar[bool] = False
 
+    default_ruleset: Ruleset | None = None
     _egraph: bindings.EGraph = field(repr=False, init=False)
     _egglog_string: str | None = field(default=None, repr=False, init=False)
     _state: _EGraphState = field(default_factory=_EGraphState, repr=False)
@@ -753,8 +926,9 @@ class EGraph(_BaseModule):
     _token_stack: list[Token[EGraph]] = field(default_factory=list, repr=False)
 
     def __post_init__(self, modules: list[Module], seminaive: bool, save_egglog_string: bool) -> None:
-        super().__post_init__(modules)
         self._egraph = bindings.EGraph(GLOBAL_PY_OBJECT_SORT, seminaive=seminaive)
+        super().__post_init__(modules)
+
         for m in self._flatted_deps:
             self._add_decls(*m.cmds)
             self._register_commands(m.cmds)
@@ -764,10 +938,10 @@ class EGraph(_BaseModule):
     def _register_commands(self, commands: list[Command]) -> None:
         for c in commands:
             if c.ruleset:
-                self._add_schedule(run(c.ruleset))
+                self._add_schedule(c.ruleset)
 
         self._add_decls(*commands)
-        self._process_commands(command._to_egg_command() for command in commands)
+        self._process_commands(command._to_egg_command(self._default_ruleset_name) for command in commands)
 
     def _process_commands(self, commands: Iterable[bindings._Command]) -> None:
         commands = list(commands)
@@ -865,7 +1039,7 @@ class EGraph(_BaseModule):
         """
         Loads a CSV file and sets it as *input, output of the function.
         """
-        ref, decls = _resolve_callable(fn)
+        ref, decls = resolve_callable(fn)
         fn_name = decls.get_egg_fn(ref)
         self._process_commands(decls.list_cmds())
         self._process_commands([bindings.Input(fn_name, path)])
@@ -899,15 +1073,22 @@ class EGraph(_BaseModule):
         self._add_schedule(schedule)
 
         # decls = Declarations.create(expr, schedule)
-        self._process_commands([bindings.Simplify(expr.__egg__, schedule._to_egg_schedule())])
+        self._process_commands([bindings.Simplify(expr.__egg__, schedule._to_egg_schedule(self._default_ruleset_name))])
         extract_report = self._egraph.extract_report()
         if not isinstance(extract_report, bindings.Best):
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
         new_typed_expr = TypedExprDecl.from_egg(
-            self._egraph, self._state.decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
+            self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, extract_report.term, {}
         )
-        return cast(EXPR, RuntimeExpr(self._state.decls.copy(), new_typed_expr))
+        return cast(EXPR, RuntimeExpr(self._state.decls, new_typed_expr))
+
+    @property
+    def _default_ruleset_name(self) -> str:
+        if self.default_ruleset:
+            self._add_schedule(self.default_ruleset)
+            return self.default_ruleset.egg_name
+        return ""
 
     def include(self, path: str) -> None:
         """
@@ -940,7 +1121,7 @@ class EGraph(_BaseModule):
 
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
         self._add_schedule(schedule)
-        self._process_commands([bindings.RunSchedule(schedule._to_egg_schedule())])
+        self._process_commands([bindings.RunSchedule(schedule._to_egg_schedule(self._default_ruleset_name))])
         run_report = self._egraph.run_report()
         if not run_report:
             msg = "No run report saved"
@@ -984,9 +1165,9 @@ class EGraph(_BaseModule):
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
         new_typed_expr = TypedExprDecl.from_egg(
-            self._egraph, self._state.decls, bindings.termdag_term_to_expr(extract_report.termdag, extract_report.term)
+            self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, extract_report.term, {}
         )
-        res = cast(EXPR, RuntimeExpr(self._state.decls.copy(), new_typed_expr))
+        res = cast(EXPR, RuntimeExpr(self._state.decls, new_typed_expr))
         if include_cost:
             return res, extract_report.cost
         return res
@@ -1004,11 +1185,11 @@ class EGraph(_BaseModule):
             raise ValueError(msg)  # noqa: TRY004
         new_exprs = [
             TypedExprDecl.from_egg(
-                self._egraph, self._state.decls, bindings.termdag_term_to_expr(extract_report.termdag, term)
+                self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, term, {}
             )
             for term in extract_report.terms
         ]
-        return [cast(EXPR, RuntimeExpr(self._state.decls.copy(), expr)) for expr in new_exprs]
+        return [cast(EXPR, RuntimeExpr(self._state.decls, expr)) for expr in new_exprs]
 
     def _run_extract(self, expr: bindings._Expr, n: int) -> bindings._ExtractReport:
         self._process_commands([bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n))))])
@@ -1149,32 +1330,9 @@ class _WrappedMethod(Generic[P, EXPR]):
         raise NotImplementedError(msg)
 
 
-class _ExprMetaclass(type):
-    """
-    Metaclass of Expr.
-
-    Used to override isistance checks, so that runtime expressions are instances of Expr at runtime.
-    """
-
-    # def __new__(
-    #     cls: type[_ExprMetaclass],
-    #     name: str,
-    #     bases: tuple[type, ...],
-    #     namespace: dict[str, Any],
-    #     egg_name: str | None = None,
-    # ) -> Self:
-    #     for attr_name, attr_value in attrs.items():
-    #         if isinstance(attr_value, _WrappedMethod):
-    #             attrs[attr_name] = attr_value.fn
-    #     return super().__new__(cls, name, bases, attrs)
-
-    def __instancecheck__(cls, instance: object) -> bool:
-        return isinstance(instance, RuntimeExpr)
-
-
 class Expr(metaclass=_ExprMetaclass):
     """
-    Expression base class, which adds suport for != to all expression types.
+    Either a function called with some number of argument expressions or a literal integer, float, or string, with a particular type.
     """
 
     def __ne__(self, other: NoReturn) -> NoReturn:  # type: ignore[override, empty-body]
@@ -1184,11 +1342,7 @@ class Expr(metaclass=_ExprMetaclass):
         ...
 
 
-BUILTINS = _Builtins()
-
-
-@BUILTINS.class_(egg_sort="Unit")
-class Unit(Expr):
+class Unit(Expr, egg_sort="Unit", builtin=True):
     """
     The unit type. This is also used to reprsent if a value exists, if it is resolved or not.
     """
@@ -1197,26 +1351,123 @@ class Unit(Expr):
         ...
 
 
-@dataclass
-class Ruleset:
-    name: str
-    __egg_decls__: Declarations = field(default_factory=Declarations, repr=False)
-    _cmds: list[bindings._Command] = field(default_factory=list, repr=False)
+def ruleset(
+    rule_or_generator: CommandLike | CommandGenerator | None = None, *rules: Rule | Rewrite, name: None | str = None
+) -> Ruleset:
+    """
+    Creates a ruleset with the following rules.
 
-    def __post_init__(self) -> None:
-        if self.name:
-            self._cmds.append(bindings.AddRuleset(self.name))
+    If no name is provided, one is generated based on the current module
+    """
+    r = Ruleset(name=name)
+    if rule_or_generator is not None:
+        r.register(rule_or_generator, *rules)
+    return r
+
+
+class Schedule(ABC):
+    """
+    A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
+    """
+
+    def __mul__(self, length: int) -> Schedule:
+        """
+        Repeat the schedule a number of times.
+        """
+        return Repeat(length, self)
+
+    def saturate(self) -> Schedule:
+        """
+        Run the schedule until the e-graph is saturated.
+        """
+        return Saturate(self)
+
+    def __add__(self, other: Schedule) -> Schedule:
+        """
+        Run two schedules in sequence.
+        """
+        return Sequence((self, other))
+
+    @abstractmethod
+    def __str__(self) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        raise NotImplementedError
+
+    @abstractmethod
+    def _rulesets(self) -> Iterable[Ruleset]:
+        """
+        Mapping of all the rulesets used to commands.
+        """
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def __egg_decls__(self) -> Declarations:
+        raise NotImplementedError
+
+
+@dataclass
+class Ruleset(Schedule):
+    """
+    A collection of rules, which can be run as a schedule.
+    """
+
+    name: str | None
+    rules: list[Rule | Rewrite] = field(default_factory=list)
 
     def append(self, rule: Rule | Rewrite) -> None:
         """
         Register a rule with the ruleset.
         """
-        self._cmds.append(rule._to_egg_command())
-        self.__egg_decls__ |= rule
+        self.rules.append(rule)
 
+    def register(self, /, rule_or_generator: CommandLike | CommandGenerator, *rules: Rule | Rewrite) -> None:
+        """
+        Register rewrites or rules, either as a function or as values.
+        """
+        if isinstance(rule_or_generator, FunctionType):
+            assert not rules
+            rules = tuple(_command_generator(rule_or_generator))
+        else:
+            rules = (cast(Rule | Rewrite, rule_or_generator), *rules)
+        for r in rules:
+            self.append(r)
 
-def _ruleset_name(ruleset: Ruleset | None) -> str:
-    return ruleset.name if ruleset else ""
+    @cached_property
+    def __egg_decls__(self) -> Declarations:
+        return Declarations.create(*self.rules)
+
+    @property
+    def _cmds(self) -> list[bindings._Command]:
+        cmds = [r._to_egg_command(self.egg_name) for r in self.rules]
+        if self.egg_name:
+            cmds.insert(0, bindings.AddRuleset(self.egg_name))
+        return cmds
+
+    def __str__(self) -> str:
+        return f"ruleset(name={self.egg_name!r})"
+
+    def __repr__(self) -> str:
+        if not self.rules:
+            return str(self)
+        rules = ", ".join(map(repr, self.rules))
+        return f"ruleset({rules}, name={self.egg_name!r})"
+
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        return bindings.Run(self._to_egg_config())
+
+    def _to_egg_config(self) -> bindings.RunConfig:
+        return bindings.RunConfig(self.egg_name, None)
+
+    def _rulesets(self) -> Iterable[Ruleset]:
+        yield self
+
+    @property
+    def egg_name(self) -> str:
+        return self.name or f"_ruleset_{id(self)}"
 
 
 class Command(ABC):
@@ -1236,7 +1487,7 @@ class Command(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _to_egg_command(self) -> bindings._Command:
+    def _to_egg_command(self, default_ruleset_name: str) -> bindings._Command:
         raise NotImplementedError
 
     @abstractmethod
@@ -1256,8 +1507,10 @@ class Rewrite(Command):
         args_str = ", ".join(map(str, [self._rhs, *self._conditions]))
         return f"{self._fn_name}({self._lhs}).to({args_str})"
 
-    def _to_egg_command(self) -> bindings._Command:
-        return bindings.RewriteCommand(_ruleset_name(self.ruleset), self._to_egg_rewrite())
+    def _to_egg_command(self, default_ruleset_name: str) -> bindings._Command:
+        return bindings.RewriteCommand(
+            self.ruleset.egg_name if self.ruleset else default_ruleset_name, self._to_egg_rewrite()
+        )
 
     def _to_egg_rewrite(self) -> bindings.Rewrite:
         return bindings.Rewrite(
@@ -1266,23 +1519,28 @@ class Rewrite(Command):
             [c._to_egg_fact() for c in self._conditions],
         )
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(self._lhs, self._rhs, *self._conditions)
+
+    def with_ruleset(self, ruleset: Ruleset) -> Rewrite:
+        return Rewrite(ruleset, self._lhs, self._rhs, self._conditions)
 
 
 @dataclass
 class BiRewrite(Rewrite):
     _fn_name: ClassVar[str] = "birewrite"
 
-    def _to_egg_command(self) -> bindings._Command:
-        return bindings.BiRewriteCommand(_ruleset_name(self.ruleset), self._to_egg_rewrite())
+    def _to_egg_command(self, default_ruleset_name: str) -> bindings._Command:
+        return bindings.BiRewriteCommand(
+            self.ruleset.egg_name if self.ruleset else default_ruleset_name, self._to_egg_rewrite()
+        )
 
 
 @dataclass
 class Fact(ABC):
     """
-    An e-graph fact, either an equality or a unit expression.
+    A query on an EGraph, either by an expression or an equivalence between multiple expressions.
     """
 
     @abstractmethod
@@ -1307,7 +1565,7 @@ class Eq(Fact):
     def _to_egg_fact(self) -> bindings.Eq:
         return bindings.Eq([e.__egg__ for e in self._exprs])
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(*self._exprs)
 
@@ -1322,7 +1580,7 @@ class ExprFact(Fact):
     def _to_egg_fact(self) -> bindings.Fact:
         return bindings.Fact(self._expr.__egg__)
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return self._expr.__egg_decls__
 
@@ -1339,31 +1597,35 @@ class Rule(Command):
         body_str = ", ".join(map(str, self.body))
         return f"rule({body_str}).then({head_str})"
 
-    def _to_egg_command(self) -> bindings.RuleCommand:
+    def _to_egg_command(self, default_ruleset_name: str) -> bindings.RuleCommand:
         return bindings.RuleCommand(
             self.name,
-            _ruleset_name(self.ruleset),
+            self.ruleset.egg_name if self.ruleset else default_ruleset_name,
             bindings.Rule(
                 [a._to_egg_action() for a in self.head],
                 [f._to_egg_fact() for f in self.body],
             ),
         )
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(*self.head, *self.body)
 
 
 class Action(Command, ABC):
+    """
+    A change to an EGraph, either unioning multiple expressing, setting the value of a function call, deleting an expression, or panicking.
+    """
+
     @abstractmethod
     def _to_egg_action(self) -> bindings._Action:
         raise NotImplementedError
 
-    def _to_egg_command(self) -> bindings._Command:
+    def _to_egg_command(self, default_ruleset_name: str) -> bindings._Command:
         return bindings.ActionCommand(self._to_egg_action())
 
     @property
-    def ruleset(self) -> None | Ruleset:
+    def ruleset(self) -> None | Ruleset:  # type: ignore[override]
         return None
 
 
@@ -1385,6 +1647,10 @@ class Let(Action):
 
 @dataclass
 class Set(Action):
+    """
+    Similar to union, except can be used on primitive expressions, whereas union can only be used on user defined expressions.
+    """
+
     _call: RuntimeExpr
     _rhs: RuntimeExpr
 
@@ -1401,7 +1667,7 @@ class Set(Action):
             self._rhs.__egg__,
         )
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(self._call, self._rhs)
 
@@ -1423,6 +1689,10 @@ class ExprAction(Action):
 
 @dataclass
 class Delete(Action):
+    """
+    Remove a function call from an EGraph.
+    """
+
     _call: RuntimeExpr
 
     def __str__(self) -> str:
@@ -1441,6 +1711,10 @@ class Delete(Action):
 
 @dataclass
 class Union_(Action):  # noqa: N801
+    """
+    Merges two equivalence classes of two expressions.
+    """
+
     _lhs: RuntimeExpr
     _rhs: RuntimeExpr
 
@@ -1450,7 +1724,7 @@ class Union_(Action):  # noqa: N801
     def _to_egg_action(self) -> bindings.Union:
         return bindings.Union(self._lhs.__egg__, self._rhs.__egg__)
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations.create(self._lhs, self._rhs)
 
@@ -1465,49 +1739,9 @@ class Panic(Action):
     def _to_egg_action(self) -> bindings.Panic:
         return bindings.Panic(self.message)
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
         return Declarations()
-
-
-class Schedule(ABC):
-    def __mul__(self, length: int) -> Schedule:
-        """
-        Repeat the schedule a number of times.
-        """
-        return Repeat(length, self)
-
-    def saturate(self) -> Schedule:
-        """
-        Run the schedule until the e-graph is saturated.
-        """
-        return Saturate(self)
-
-    def __add__(self, other: Schedule) -> Schedule:
-        """
-        Run two schedules in sequence.
-        """
-        return Sequence((self, other))
-
-    @abstractmethod
-    def __str__(self) -> str:
-        raise NotImplementedError
-
-    @abstractmethod
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        raise NotImplementedError
-
-    @abstractmethod
-    def _rulesets(self) -> dict[str, list[bindings._Command]]:
-        """
-        Mapping of all the rulesets used to commands.
-        """
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def __egg_decls__(self) -> Declarations:
-        raise NotImplementedError
 
 
 @dataclass
@@ -1522,24 +1756,22 @@ class Run(Schedule):
         args_str = ", ".join(map(str, [self.ruleset, *self.until]))
         return f"run({args_str})"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Run(self._to_egg_config())
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        return bindings.Run(self._to_egg_config(default_ruleset_name))
 
-    def _to_egg_config(self) -> bindings.RunConfig:
+    def _to_egg_config(self, default_ruleset_name: str) -> bindings.RunConfig:
         return bindings.RunConfig(
-            _ruleset_name(self.ruleset), [fact._to_egg_fact() for fact in self.until] if self.until else None
+            self.ruleset.egg_name if self.ruleset else default_ruleset_name,
+            [fact._to_egg_fact() for fact in self.until] if self.until else None,
         )
 
-    def _rulesets(self) -> dict[str, list[bindings._Command]]:
-        if not self.ruleset:
-            return {}
-        return {self.ruleset.name: self.ruleset._cmds}
+    def _rulesets(self) -> Iterable[Ruleset]:
+        if self.ruleset:
+            yield self.ruleset
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
-        decls = self.ruleset.__egg_decls__.copy() if self.ruleset else Declarations()
-        decls.update(*self.until)
-        return decls
+        return Declarations.create(self.ruleset, *self.until)
 
 
 @dataclass
@@ -1549,10 +1781,10 @@ class Saturate(Schedule):
     def __str__(self) -> str:
         return f"{self.schedule}.saturate()"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Saturate(self.schedule._to_egg_schedule())
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        return bindings.Saturate(self.schedule._to_egg_schedule(default_ruleset_name))
 
-    def _rulesets(self) -> dict[str, list[bindings._Command]]:
+    def _rulesets(self) -> Iterable[Ruleset]:
         return self.schedule._rulesets()
 
     @property
@@ -1568,10 +1800,10 @@ class Repeat(Schedule):
     def __str__(self) -> str:
         return f"{self.schedule} * {self.length}"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Repeat(self.length, self.schedule._to_egg_schedule())
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        return bindings.Repeat(self.length, self.schedule._to_egg_schedule(default_ruleset_name))
 
-    def _rulesets(self) -> dict[str, list[bindings._Command]]:
+    def _rulesets(self) -> Iterable[Ruleset]:
         return self.schedule._rulesets()
 
     @property
@@ -1586,26 +1818,47 @@ class Sequence(Schedule):
     def __str__(self) -> str:
         return f"sequence({', '.join(map(str, self.schedules))})"
 
-    def _to_egg_schedule(self) -> bindings._Schedule:
-        return bindings.Sequence([schedule._to_egg_schedule() for schedule in self.schedules])
+    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
+        return bindings.Sequence([schedule._to_egg_schedule(default_ruleset_name) for schedule in self.schedules])
 
-    def _rulesets(self) -> dict[str, list[bindings._Command]]:
-        return {k: v for d in self.schedules for k, v in d._rulesets().items()}
+    def _rulesets(self) -> Iterable[Ruleset]:
+        for s in self.schedules:
+            yield from s._rulesets()
 
-    @property
+    @cached_property
     def __egg_decls__(self) -> Declarations:
-        decls = Declarations()
-        decls.update(*self.schedules)
-        return decls
+        return Declarations.create(*self.schedules)
 
 
 # We use these builders so that when creating these structures we can type check
 # if the arguments are the same type of expression
 
 
+@deprecated("Use <ruleset>.register(<rewrite>) instead of passing rulesets as arguments to rewrites.")
+@overload
+def rewrite(lhs: EXPR, ruleset: Ruleset) -> _RewriteBuilder[EXPR]:
+    ...
+
+
+@overload
+def rewrite(lhs: EXPR, ruleset: None = None) -> _RewriteBuilder[EXPR]:
+    ...
+
+
 def rewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _RewriteBuilder[EXPR]:
     """Rewrite the given expression to a new expression."""
     return _RewriteBuilder(lhs, ruleset)
+
+
+@deprecated("Use <ruleset>.register(<birewrite>) instead of passing rulesets as arguments to birewrites.")
+@overload
+def birewrite(lhs: EXPR, ruleset: Ruleset) -> _BirewriteBuilder[EXPR]:
+    ...
+
+
+@overload
+def birewrite(lhs: EXPR, ruleset: None = None) -> _BirewriteBuilder[EXPR]:
+    ...
 
 
 def birewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _BirewriteBuilder[EXPR]:
@@ -1656,6 +1909,17 @@ def set_(lhs: EXPR) -> _SetBuilder[EXPR]:
     return _SetBuilder(lhs=lhs)
 
 
+@deprecated("Use <ruleset>.register(<rule>) instead of passing rulesets as arguments to rules.")
+@overload
+def rule(*facts: FactLike, ruleset: Ruleset, name: str | None = None) -> _RuleBuilder:
+    ...
+
+
+@overload
+def rule(*facts: FactLike, ruleset: None = None, name: str | None = None) -> _RuleBuilder:
+    ...
+
+
 def rule(*facts: FactLike, ruleset: Ruleset | None = None, name: str | None = None) -> _RuleBuilder:
     """Create a rule with the given facts."""
     return _RuleBuilder(facts=_fact_likes(facts), name=name, ruleset=ruleset)
@@ -1684,7 +1948,7 @@ class _RewriteBuilder(Generic[EXPR]):
     lhs: EXPR
     ruleset: Ruleset | None
 
-    def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
+    def to(self, rhs: EXPR, *conditions: FactLike) -> Rewrite:
         lhs = to_runtime_expr(self.lhs)
         rule = Rewrite(self.ruleset, lhs, convert_to_same_type(rhs, lhs), _fact_likes(conditions))
         if self.ruleset:
@@ -1745,7 +2009,7 @@ class _NeBuilder(Generic[EXPR]):
 class _SetBuilder(Generic[EXPR]):
     lhs: Expr
 
-    def to(self, rhs: EXPR) -> Action:
+    def to(self, rhs: EXPR) -> Set:
         lhs = to_runtime_expr(self.lhs)
         return Set(lhs, convert_to_same_type(rhs, lhs))
 
@@ -1771,7 +2035,7 @@ class _RuleBuilder:
     name: str | None
     ruleset: Ruleset | None
 
-    def then(self, *actions: ActionLike) -> Command:
+    def then(self, *actions: ActionLike) -> Rule:
         rule = Rule(_action_likes(actions), self.facts, self.name or "", self.ruleset)
         if self.ruleset:
             self.ruleset.append(rule)
@@ -1816,7 +2080,7 @@ def _command_like(command_like: CommandLike) -> Command:
     return command_like
 
 
-CommandGenerator = Callable[..., Iterable[Command]]
+CommandGenerator = Callable[..., Iterable[Rule | Rewrite]]
 
 
 def _command_generator(gen: CommandGenerator) -> Iterable[Command]:

@@ -6,7 +6,7 @@ from typing import Any, Callable, cast
 import ast
 
 from egglog.exp.array_api import *
-from egglog.exp.array_api_numba import array_api_numba_module
+from egglog.exp.array_api_numba import array_api_numba_schedule
 from egglog.exp.array_api_program_gen import *
 from sklearn import config_context, datasets
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -23,9 +23,9 @@ def test_simplify_any_unique():
         .to_bool
     )
 
-    egraph = EGraph([array_api_module])
+    egraph = EGraph()
     egraph.register(res)
-    egraph.run((run() * 20).saturate())
+    egraph.run(array_api_schedule)
     egraph.check(eq(res).to(FALSE))
 
 
@@ -33,10 +33,10 @@ def test_tuple_value_includes():
     x = TupleValue(Value.bool(FALSE))
     should_be_true = x.includes(Value.bool(FALSE))
     should_be_false = x.includes(Value.bool(TRUE))
-    egraph = EGraph([array_api_module])
+    egraph = EGraph()
     egraph.register(should_be_true)
     egraph.register(should_be_false)
-    egraph.run((run() * 10).saturate())
+    egraph.run(array_api_schedule)
     egraph.check(eq(should_be_true).to(TRUE))
     egraph.check(eq(should_be_false).to(FALSE))
 
@@ -46,9 +46,9 @@ def test_reshape_index():
     x = NDArray.var("x")
     new_shape = TupleInt(Int(-1))
     res = reshape(x, new_shape).index(TupleInt(Int(1)) + TupleInt(Int(2)))
-    egraph = EGraph([array_api_module])
+    egraph = EGraph()
     egraph.register(res)
-    egraph.run(run() * 10)
+    egraph.run(array_api_schedule)
     equiv_expr = egraph.extract_multiple(res, 10)
     assert len(equiv_expr) < 10
 
@@ -57,9 +57,9 @@ def test_reshape_vec_noop():
     x = NDArray.var("x")
     assume_shape(x, TupleInt(Int(5)))
     res = reshape(x, TupleInt(Int(-1)))
-    egraph = EGraph([array_api_module])
+    egraph = EGraph()
     egraph.register(res)
-    egraph.run(run() * 10)
+    egraph.run(array_api_schedule)
     equiv_expr = egraph.extract_multiple(res, 10)
 
     assert len(equiv_expr) == 2
@@ -104,10 +104,9 @@ def _load_py_snapshot(fn: Callable, var: str | None = None) -> Any:
 
 
 def load_source(expr):
-    egraph = EGraph([array_api_module_string])
-    fn_program = ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y"))
-    egraph.register(fn_program)
-    egraph.run(100000)
+    egraph = EGraph()
+    fn_program = egraph.let("fn_program", ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y")))
+    egraph.run(array_api_program_gen_schedule)
     # cast b/c issue with it not recognizing py_object as property
     fn = cast(Any, egraph.eval(fn_program.py_object))
     assert np.allclose(res, run_lda(X_np, y_np))
@@ -129,14 +128,14 @@ class TestLDA:
             assume_shape(y_arr, y_np.shape)  # type: ignore
             assume_value_one_of(y_arr, tuple(map(int, np.unique(y_np))))  # type: ignore
 
-            with EGraph([array_api_module]):
+            with EGraph():
                 return run_lda(X_arr, y_arr)
 
         assert str(X_r2) == snapshot_py
 
     def test_optimize(self, snapshot_py, benchmark):
         expr = _load_py_snapshot(self.test_trace)
-        simplified = benchmark(lambda: EGraph([array_api_numba_module]).simplify(expr, 100000))
+        simplified = benchmark(lambda: EGraph().simplify(expr, array_api_numba_schedule))
         assert str(simplified) == snapshot_py
 
     @pytest.mark.xfail(reason="Original source is not working")
@@ -163,4 +162,3 @@ class TestLDA:
         # warmup once for numba
         assert np.allclose(res, fn(X_np, y_np))
         benchmark(fn, X_np, y_np)
-

@@ -8,8 +8,6 @@ The top level module contains the high level API for using e-graphs in Python.
 
 The high level API is not documented yet, because adding supporting for our custom objects requires [a custom AutoDoc extension](https://www.sphinx-doc.org/en/master/development/tutorials/autodoc_ext.html#autodoc-ext-tutorial).
 
-## Example
-
 The high level API builds on the low level API and is designed to:
 
 1. Statically type check as much as possible with MyPy
@@ -61,10 +59,10 @@ egraph.run(10)
 egraph.check(eq(expr1).to(expr2))
 ```
 
-<!--
 ```{eval-rst}
 .. automodule:: egglog
    :members:
    :imported-members:
-   :special-members: __ne__
-``` -->
+   :private-members:
+   :show-inheritance:
+```

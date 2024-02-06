@@ -25,9 +25,7 @@ pip install egglog
 from __future__ import annotations
 from egglog import *
 
-egraph = EGraph()
 
-@egraph.class_
 class Num(Expr):
     def __init__(self, value: i64Like) -> None: ...
 
@@ -37,6 +35,8 @@ class Num(Expr):
     def __add__(self, other: Num) -> Num: ...
 
     def __mul__(self, other: Num) -> Num: ...
+
+egraph = EGraph()
 
 expr1 = egraph.let("expr1", Num(2) * (Num.var("x") + Num(3)))
 expr2 = egraph.let("expr2", Num(6) + Num(2) * Num.var("x"))

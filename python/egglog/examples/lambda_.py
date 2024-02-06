@@ -13,12 +13,7 @@ from egglog import *
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-egraph = EGraph()
 
-# TODO: Debug extracting constants
-
-
-@egraph.class_
 class Val(Expr):
     """
     A value is a number or a boolean.
@@ -31,13 +26,11 @@ class Val(Expr):
         ...
 
 
-@egraph.class_
 class Var(Expr):
     def __init__(self, v: StringLike) -> None:
         ...
 
 
-@egraph.class_
 class Term(Expr):
     @classmethod
     def val(cls, v: Val) -> Term:
@@ -63,22 +56,22 @@ class Term(Expr):
         ...
 
 
-@egraph.function
+@function
 def lam(x: Var, t: Term) -> Term:
     ...
 
 
-@egraph.function
+@function
 def let_(x: Var, t: Term, b: Term) -> Term:
     ...
 
 
-@egraph.function
+@function
 def fix(x: Var, t: Term) -> Term:
     ...
 
 
-@egraph.function
+@function
 def if_(c: Term, t: Term, f: Term) -> Term:
     ...
 
@@ -86,7 +79,7 @@ def if_(c: Term, t: Term, f: Term) -> Term:
 StringSet = Set[Var]
 
 
-@egraph.function(merge=lambda old, new: old & new)
+@function(merge=lambda old, new: old & new)
 def freer(t: Term) -> StringSet:
     ...
 
@@ -96,7 +89,7 @@ def freer(t: Term) -> StringSet:
 (x, y) = vars_("x y", Var)
 fv, fv1, fv2, fv3 = vars_("fv fv1 fv2 fv3", StringSet)
 i1, i2 = vars_("i1 i2", i64)
-egraph.register(
+lamdba_ruleset = ruleset(
     # freer
     rule(eq(t).to(Term.val(v))).then(set_(freer(t)).to(StringSet.empty())),
     rule(eq(t).to(Term.var(x))).then(set_(freer(t)).to(StringSet.empty().insert(x))),
@@ -164,7 +157,7 @@ egraph.register(
     ),
 )
 
-result = egraph.relation("result")
+result = relation("result")
 
 
 def l(fn: Callable[[Term], Term]) -> Term:  # noqa: E743
@@ -180,12 +173,8 @@ def assert_simplifies(left: Expr, right: Expr) -> None:
     """
     Simplify and print
     """
-    with egraph:
-        egraph.register(left)
-        egraph.run(30)
-        res = egraph.extract(left)
-        print(f"{left} ➡  {res}")
-        egraph.check(eq(left).to(right))
+    print(f"{left} ➡  {right}")
+    check(eq(left).to(right), lamdba_ruleset * 30, left)
 
 
 assert_simplifies((Term.val(Val(1))).eval(), Val(1))
@@ -200,10 +189,7 @@ assert_simplifies(
 # lambda if elim
 a = Term.var(Var("a"))
 b = Term.var(Var("b"))
-with egraph:
-    e1 = egraph.let("e1", if_(a == b, a + a, a + b))
-    egraph.run(10)
-    egraph.check(eq(e1).to(a + b))
+assert_simplifies(if_(a == b, a + a, a + b), a + b)
 
 # lambda let simple
 x = Var("x")
@@ -218,62 +204,62 @@ assert_simplifies(
     l(lambda x: x),
 )
 # lambda capture free
-with egraph:
-    e5 = egraph.let("e5", let_(y, Term.var(x) + Term.var(x), l(lambda x: Term.var(y))))
-    egraph.run(10)
-    egraph.check(freer(l(lambda x: Term.var(y))).contains(y))
-    egraph.check_fail(eq(e5).to(l(lambda x: x + x)))
+egraph = EGraph()
+e5 = egraph.let("e5", let_(y, Term.var(x) + Term.var(x), l(lambda x: Term.var(y))))
+egraph.run(lamdba_ruleset * 10)
+egraph.check(freer(l(lambda x: Term.var(y))).contains(y))
+egraph.check_fail(eq(e5).to(l(lambda x: x + x)))
 
 # lambda_closure_not_seven
-with egraph:
-    e6 = egraph.let(
-        "e6",
+egraph = EGraph()
+e6 = egraph.let(
+    "e6",
+    let_(
+        Var("five"),
+        Term.val(Val(5)),
         let_(
-            Var("five"),
-            Term.val(Val(5)),
-            let_(
-                Var("add-five"),
-                l(lambda x: x + Term.var(Var("five"))),
-                let_(Var("five"), Term.val(Val(6)), Term.var(Var("add-five"))(Term.val(Val(1)))),
-            ),
+            Var("add-five"),
+            l(lambda x: x + Term.var(Var("five"))),
+            let_(Var("five"), Term.val(Val(6)), Term.var(Var("add-five"))(Term.val(Val(1)))),
         ),
-    )
-    egraph.run(10)
-    egraph.check_fail(eq(e6).to(Term.val(Val(7))))
-    egraph.check(eq(e6).to(Term.val(Val(6))))
+    ),
+)
+egraph.run(lamdba_ruleset * 10)
+egraph.check_fail(eq(e6).to(Term.val(Val(7))))
+egraph.check(eq(e6).to(Term.val(Val(6))))
 
 
 # lambda_compose
-with egraph:
-    compose = Var("compose")
-    add1 = Var("add1")
-    e7 = egraph.let(
-        "e7",
-        let_(
-            compose,
-            l(
-                lambda f: l(
-                    lambda g: l(
-                        lambda x: f(g(x)),
-                    ),
+egraph = EGraph()
+compose = Var("compose")
+add1 = Var("add1")
+e7 = egraph.let(
+    "e7",
+    let_(
+        compose,
+        l(
+            lambda f: l(
+                lambda g: l(
+                    lambda x: f(g(x)),
                 ),
             ),
-            let_(
-                add1,
-                l(lambda y: y + Term.val(Val(1))),
-                Term.var(compose)(Term.var(add1))(Term.var(add1)),
-            ),
         ),
-    )
-    egraph.run(20)
-    egraph.register(
-        rule(
-            eq(t1).to(l(lambda x: Term.val(Val(1)) + l(lambda y: Term.val(Val(1)) + y)(x))),
-            eq(t2).to(l(lambda x: x + Term.val(Val(2)))),
-        ).then(result())
-    )
-    egraph.run(1)
-    egraph.check(result())
+        let_(
+            add1,
+            l(lambda y: y + Term.val(Val(1))),
+            Term.var(compose)(Term.var(add1))(Term.var(add1)),
+        ),
+    ),
+)
+egraph.run(lamdba_ruleset * 20)
+egraph.register(
+    rule(
+        eq(t1).to(l(lambda x: Term.val(Val(1)) + l(lambda y: Term.val(Val(1)) + y)(x))),
+        eq(t2).to(l(lambda x: x + Term.val(Val(2)))),
+    ).then(result())
+)
+egraph.run(1)
+egraph.check(result())
 
 
 # lambda_if_simple

@@ -8,12 +8,9 @@ from typing import Union
 
 from egglog import *
 
-program_gen_module = Module()
-
 ProgramLike = Union["Program", StringLike]
 
 
-@program_gen_module.class_
 class Program(Expr):
     """
     Semanticallly represents an expression with a number of ordered statements that it depends on to run.
@@ -33,7 +30,7 @@ class Program(Expr):
         """
         ...
 
-    @program_gen_module.method(unextractable=True)
+    @method(unextractable=True)
     def statement(self, statement: ProgramLike) -> Program:
         """
         Uses the expression of the statement and adds that as a statement to the program.
@@ -79,13 +76,13 @@ class Program(Expr):
         """
         ...
 
-    @program_gen_module.method(default=Unit())
+    @method(default=Unit())
     def compile(self, next_sym: i64 = i64(0)) -> Unit:
         """
         Triggers compilation of the program.
         """
 
-    @program_gen_module.method(merge=lambda old, _new: old, unextractable=True)  # type: ignore[misc]
+    @method(merge=lambda old, _new: old, unextractable=True)  # type: ignore[misc]
     @property
     def parent(self) -> Program:
         """
@@ -95,14 +92,14 @@ class Program(Expr):
         """
         ...
 
-    @program_gen_module.method(default=Unit())
+    @method(default=Unit())
     def eval_py_object(self, globals: object) -> Unit:
         """
         Evaluates the program and saves as the py_object
         """
 
     # Only allow it to be set once, b/c hash of functions not stable
-    @program_gen_module.method(merge=lambda old, _new: old)  # type: ignore[misc]
+    @method(merge=lambda old, _new: old)  # type: ignore[misc]
     @property
     def py_object(self) -> PyObject:
         """
@@ -120,8 +117,10 @@ class Program(Expr):
 
 converter(String, Program, Program)
 
+program_gen_ruleset = ruleset()
 
-@program_gen_module.register
+
+@program_gen_ruleset.register
 def _py_object(p: Program, expr: String, statements: String, g: PyObject):
     # When we evaluate a program, we first want to compile to a string
     yield rule(p.eval_py_object(g)).then(p.compile())
@@ -140,7 +139,7 @@ def _py_object(p: Program, expr: String, statements: String, g: PyObject):
     )
 
 
-@program_gen_module.register
+@program_gen_ruleset.register
 def _compile(
     s: String,
     s1: String,

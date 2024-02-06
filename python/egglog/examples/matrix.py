@@ -9,7 +9,6 @@ from egglog import *
 egraph = EGraph()
 
 
-@egraph.class_
 class Dim(Expr):
     """
     A dimension of a matix.
@@ -18,16 +17,16 @@ class Dim(Expr):
     Dim(3) * Dim.named("n")
     """
 
-    @egraph.method(egg_fn="Lit")
+    @method(egg_fn="Lit")
     def __init__(self, value: i64Like) -> None:
         ...
 
-    @egraph.method(egg_fn="NamedDim")
+    @method(egg_fn="NamedDim")
     @classmethod
     def named(cls, name: StringLike) -> Dim:  # type: ignore[empty-body]
         ...
 
-    @egraph.method(egg_fn="Times")
+    @method(egg_fn="Times")
     def __mul__(self, other: Dim) -> Dim:  # type: ignore[empty-body]
         ...
 
@@ -42,9 +41,8 @@ egraph.register(
 )
 
 
-@egraph.class_(egg_sort="MExpr")
-class Matrix(Expr):
-    @egraph.method(egg_fn="Id")
+class Matrix(Expr, egg_sort="MExpr"):
+    @method(egg_fn="Id")
     @classmethod
     def identity(cls, dim: Dim) -> Matrix:  # type: ignore[empty-body]
         """
@@ -52,7 +50,7 @@ class Matrix(Expr):
         """
         ...
 
-    @egraph.method(egg_fn="NamedMat")
+    @method(egg_fn="NamedMat")
     @classmethod
     def named(cls, name: StringLike) -> Matrix:  # type: ignore[empty-body]
         """
@@ -60,21 +58,21 @@ class Matrix(Expr):
         """
         ...
 
-    @egraph.method(egg_fn="MMul")
+    @method(egg_fn="MMul")
     def __matmul__(self, other: Matrix) -> Matrix:  # type: ignore[empty-body]
         """
         Matrix multiplication.
         """
         ...
 
-    @egraph.method(egg_fn="nrows")
+    @method(egg_fn="nrows")
     def nrows(self) -> Dim:  # type: ignore[empty-body]
         """
         Number of rows in the matrix.
         """
         ...
 
-    @egraph.method(egg_fn="ncols")
+    @method(egg_fn="ncols")
     def ncols(self) -> Dim:  # type: ignore[empty-body]
         """
         Number of columns in the matrix.
@@ -82,7 +80,7 @@ class Matrix(Expr):
         ...
 
 
-@egraph.function(egg_fn="Kron")
+@function(egg_fn="Kron")
 def kron(a: Matrix, b: Matrix) -> Matrix:  # type: ignore[empty-body]
     """
     Kronecker product of two matrices.
