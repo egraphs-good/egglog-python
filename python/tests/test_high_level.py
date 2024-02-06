@@ -611,3 +611,17 @@ def test_eval_fn_locals():
         return (x,)
 
     assert egraph.eval(py_eval_fn(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))) == (1,)
+
+
+def test_lazy_types():
+    class A(Expr):
+        def __init__(self) -> None:
+            ...
+
+        def b(self) -> B:
+            ...
+
+    class B(Expr):
+        ...
+
+    simplify(A().b())

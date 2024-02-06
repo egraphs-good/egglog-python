@@ -10,7 +10,7 @@ from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from functools import cached_property
 from inspect import Parameter, currentframe, signature
-from types import FunctionType
+from types import FrameType, FunctionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -422,17 +422,16 @@ class _ExprMetaclass(type):
         assert frame
         prev_frame = frame.f_back
         assert prev_frame
-        decls_constructor = _ClassDeclerationsConstructor(
+        return _ClassDeclerationsConstructor(
             namespace=namespace,
-            hint_locals=prev_frame.f_locals.copy(),
-            hint_globals=prev_frame.f_globals,
+            # Store frame so that we can get live access to updated locals/globals
+            # Otherwise, f_locals returns a copy
+            # https://peps.python.org/pep-0667/
+            frame=prev_frame,
             builtin=builtin,
             egg_sort=egg_sort,
             cls_name=name,
-        )
-        cls = RuntimeClass(decls_constructor, name)
-        decls_constructor.hint_locals[name] = cls
-        return cls
+        ).current_cls
 
     def __instancecheck__(cls, instance: object) -> bool:
         return isinstance(instance, RuntimeExpr)
@@ -445,11 +444,14 @@ class _ClassDeclerationsConstructor:
     """
 
     namespace: dict[str, Any]
-    hint_locals: dict[str, Any]
-    hint_globals: dict[str, Any]
+    frame: FrameType
     builtin: bool
     egg_sort: str | None
     cls_name: str
+    current_cls: RuntimeClass = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.current_cls = RuntimeClass(self, self.cls_name)
 
     def __call__(self, decls: Declarations) -> None:  # noqa: PLR0912
         # Get all the methods from the class
@@ -472,7 +474,10 @@ class _ClassDeclerationsConstructor:
             pass
 
         _Dummytype.__annotations__ = self.namespace.get("__annotations__", {})
-        for k, v in get_type_hints(_Dummytype, globalns=self.hint_globals, localns=self.hint_locals).items():
+        # Make lazy update to locals, so we keep a live handle on them after class creation
+        locals = self.frame.f_locals.copy()
+        locals[self.cls_name] = self.current_cls
+        for k, v in get_type_hints(_Dummytype, globalns=self.frame.f_globals, localns=locals).items():
             if v.__origin__ == ClassVar:
                 (inner_tp,) = v.__args__
                 _register_constant(decls, ClassVariableRef(self.cls_name, k), inner_tp, None)
@@ -530,7 +535,7 @@ class _ClassDeclerationsConstructor:
                 ref,
                 egg_fn,
                 fn,
-                self.hint_locals,
+                locals,
                 default,
                 cost,
                 merge,
