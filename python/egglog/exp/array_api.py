@@ -558,7 +558,6 @@ class Value(Expr):
         """
         Default dtype for this scalar value
         """
-        ...
 
     @property
     def to_bool(self) -> Boolean:
@@ -575,7 +574,6 @@ class Value(Expr):
 
         https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.any.html
         """
-        ...
 
 
 converter(Int, Value, Value.int)
@@ -660,7 +658,6 @@ def possible_values(values: Value) -> TupleValue:
     """
     A value that is one of the values in the tuple.
     """
-    ...
 
 
 class NDArray(Expr):
@@ -827,7 +824,6 @@ class NDArray(Expr):
         """
         https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.array.T.html#array_api.array.T
         """
-        ...
 
     @classmethod
     def vector(cls, values: TupleValue) -> NDArray:
@@ -837,7 +833,6 @@ class NDArray(Expr):
         """
         Return the value at the given indices.
         """
-        ...
 
 
 @function
@@ -845,7 +840,6 @@ def ndarray_index(x: NDArray) -> IndexKey:
     """
     Indexes by a masked array
     """
-    ...
 
 
 converter(NDArray, IndexKey, ndarray_index)
@@ -1027,7 +1021,6 @@ def sum(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArr
     """
     https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.sum.html?highlight=sum
     """
-    ...
 
 
 @array_api_ruleset.register
@@ -1214,7 +1207,6 @@ def svd(x: NDArray, full_matrices: Boolean = TRUE) -> TupleNDArray:
     """
     https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.svd.html
     """
-    ...
 
 
 @array_api_ruleset.register
@@ -1261,7 +1253,6 @@ def broadcast_index(from_shape: TupleInt, to_shape: TupleInt, index: TupleInt) -
     """
     Returns the index in the original array of the given index in the broadcasted array.
     """
-    ...
 
 
 @function
@@ -1269,7 +1260,6 @@ def broadcast_shapes(shape1: TupleInt, shape2: TupleInt) -> TupleInt:
     """
     Returns the shape of the broadcasted array.
     """
-    ...
 
 
 @array_api_ruleset.register
@@ -1403,7 +1393,6 @@ def assume_dtype(x: NDArray, dtype: DType) -> None:
     """
     Asserts that the dtype of x is dtype.
     """
-    ...
 
 
 @array_api_ruleset.register
@@ -1420,7 +1409,6 @@ def assume_shape(x: NDArray, shape: TupleInt) -> None:
     """
     Asserts that the shape of x is shape.
     """
-    ...
 
 
 @array_api_ruleset.register
@@ -1437,7 +1425,6 @@ def assume_isfinite(x: NDArray) -> None:
     """
     Asserts that the scalar ndarray is non null and not infinite.
     """
-    ...
 
 
 @array_api_ruleset.register
@@ -1458,7 +1445,6 @@ def assume_value_one_of(x: NDArray, values: TupleValue) -> None:
     """
     A value that is one of the values in the tuple.
     """
-    ...
 
 
 @array_api_ruleset.register

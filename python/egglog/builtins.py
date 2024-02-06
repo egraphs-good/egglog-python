@@ -577,4 +577,3 @@ def py_exec(code: StringLike, globals: object = PyObject.dict(), locals: object 
     """
     Copies the locals, execs the Python code, and returns the locals with any updates.
     """
-    ...

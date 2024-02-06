@@ -48,7 +48,6 @@ class Matrix(Expr, egg_sort="MExpr"):
         """
         Create an identity matrix of the given dimension.
         """
-        ...
 
     @method(egg_fn="NamedMat")
     @classmethod
@@ -56,28 +55,24 @@ class Matrix(Expr, egg_sort="MExpr"):
         """
         Create a named matrix.
         """
-        ...
 
     @method(egg_fn="MMul")
     def __matmul__(self, other: Matrix) -> Matrix:  # type: ignore[empty-body]
         """
         Matrix multiplication.
         """
-        ...
 
     @method(egg_fn="nrows")
     def nrows(self) -> Dim:  # type: ignore[empty-body]
         """
         Number of rows in the matrix.
         """
-        ...
 
     @method(egg_fn="ncols")
     def ncols(self) -> Dim:  # type: ignore[empty-body]
         """
         Number of columns in the matrix.
         """
-        ...
 
 
 @function(egg_fn="Kron")
@@ -87,7 +82,6 @@ def kron(a: Matrix, b: Matrix) -> Matrix:  # type: ignore[empty-body]
 
     https://en.wikipedia.org/wiki/Kronecker_product#Definition
     """
-    ...
 
 
 A, B, C, D = vars_("A B C D", Matrix)
