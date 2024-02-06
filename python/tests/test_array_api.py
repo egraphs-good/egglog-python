@@ -105,8 +105,7 @@ def _load_py_snapshot(fn: Callable, var: str | None = None) -> Any:
 
 def load_source(expr):
     egraph = EGraph()
-    fn_program = ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y"))
-    egraph.register(fn_program)
+    fn_program = egraph.let("fn_program", ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y")))
     egraph.run(array_api_program_gen_schedule)
     # cast b/c issue with it not recognizing py_object as property
     fn = cast(Any, egraph.eval(fn_program.py_object))
