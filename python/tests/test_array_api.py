@@ -1,15 +1,16 @@
-import pytest
+import ast
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, cast
 
 import numba
-from pathlib import Path
-from typing import Any, Callable, cast
-import ast
+import pytest
+from sklearn import config_context, datasets
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 from egglog.exp.array_api import *
 from egglog.exp.array_api_numba import array_api_numba_schedule
 from egglog.exp.array_api_program_gen import *
-from sklearn import config_context, datasets
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 
 def test_simplify_any_unique():
@@ -98,9 +99,8 @@ def _load_py_snapshot(fn: Callable, var: str | None = None) -> Any:
         # Eval the last statement
         last_expr = ast.unparse(ast.parse(contents).body[-1])
         return eval(last_expr, globals)
-    else:
-        exec(contents, globals)
-        return globals[var]
+    exec(contents, globals)
+    return globals[var]
 
 
 def load_source(expr):
@@ -108,7 +108,7 @@ def load_source(expr):
     fn_program = egraph.let("fn_program", ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y")))
     egraph.run(array_api_program_gen_schedule)
     # cast b/c issue with it not recognizing py_object as property
-    fn = cast(Any, egraph.eval(fn_program.py_object))
+    cast(Any, egraph.eval(fn_program.py_object))
     assert np.allclose(res, run_lda(X_np, y_np))
     return egraph.eval(fn_program.statements)
 
@@ -120,13 +120,13 @@ class TestLDA:
         def X_r2():
             X_arr = NDArray.var("X")
             assume_dtype(X_arr, X_np.dtype)
-            assume_shape(X_arr, X_np.shape)  # type: ignore
+            assume_shape(X_arr, X_np.shape)
             assume_isfinite(X_arr)
 
             y_arr = NDArray.var("y")
             assume_dtype(y_arr, y_np.dtype)
-            assume_shape(y_arr, y_np.shape)  # type: ignore
-            assume_value_one_of(y_arr, tuple(map(int, np.unique(y_np))))  # type: ignore
+            assume_shape(y_arr, y_np.shape)
+            assume_value_one_of(y_arr, tuple(map(int, np.unique(y_np))))  # type: ignore[arg-type]
 
             with EGraph():
                 return run_lda(X_arr, y_arr)
@@ -148,14 +148,12 @@ class TestLDA:
         assert benchmark(load_source, expr) == snapshot_py
 
     @pytest.mark.parametrize(
-        ("fn",),
+        "fn",
         [
             pytest.param(LinearDiscriminantAnalysis(n_components=2).fit_transform, id="base"),
             pytest.param(run_lda, id="array_api"),
             pytest.param(_load_py_snapshot(test_source_optimized, "__fn"), id="array_api-optimized"),
-            pytest.param(
-                numba.njit(_load_py_snapshot(test_source_optimized, "__fn")), id="array_api-optimized-numba"
-            ),
+            pytest.param(numba.njit(_load_py_snapshot(test_source_optimized, "__fn")), id="array_api-optimized-numba"),
         ],
     )
     def test_execution(self, fn, benchmark):

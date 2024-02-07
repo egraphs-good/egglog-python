@@ -3,6 +3,7 @@ import gc
 import weakref
 
 import pytest
+
 from egglog.bindings import *
 
 
@@ -45,7 +46,7 @@ class TestSaveLoad:
         del my_object
         gc.collect()
         assert ref() is not None
-        assert EGraph(sort).eval_py_object(expr)== MyObject()
+        assert EGraph(sort).eval_py_object(expr) == MyObject()
 
 
 class TestDictUpdate:
@@ -98,8 +99,8 @@ class TestEval:
                             Lit(String("my_add(x, y)")),
                             globals_,
                             Call("py-dict-update", [locals_, x_expr, one, y_expr, two]),
-                        ]
-                    )
+                        ],
+                    ),
                 )
             )
         )
@@ -114,9 +115,7 @@ class TestConversion:
         sort = PyObjectSort()
         egraph = EGraph(sort)
 
-        egraph.run_program(
-            ActionCommand(Let("res", Call("py-to-string", [sort.store("hi")])))
-        )
+        egraph.run_program(ActionCommand(Let("res", Call("py-to-string", [sort.store("hi")]))))
         assert egraph.eval_string(Var("res")) == "hi"
 
     def test_from_string(self):
@@ -129,4 +128,3 @@ class TestConversion:
             ActionCommand(Let("res", Call("py-from-string", [Lit(String("hi"))]))),
         )
         assert egraph.eval_py_object(Var("res")) == "hi"
-

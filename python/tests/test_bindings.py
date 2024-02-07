@@ -1,10 +1,11 @@
+import fractions
 import json
 import os
 import pathlib
 import subprocess
-import fractions
 
 import pytest
+
 from egglog.bindings import *
 
 
@@ -13,12 +14,12 @@ def get_egglog_folder() -> pathlib.Path:
     Return the egglog source folder
     """
     metadata_process = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "-q"],
+        ["cargo", "metadata", "--format-version", "1", "-q"],  # noqa: S607
         capture_output=True,
         check=True,
     )
     metadata = json.loads(metadata_process.stdout)
-    (egglog_package,) = [package for package in metadata["packages"] if package["name"] == "egglog"]
+    (egglog_package,) = (package for package in metadata["packages"] if package["name"] == "egglog")
     return pathlib.Path(egglog_package["manifest_path"]).parent
 
 
@@ -183,7 +184,7 @@ class TestVariant:
     def test_compare(self):
         assert Variant("name", []) == Variant("name", [])
         assert Variant("name", []) != Variant("name", ["a"])
-        assert Variant("name", []) != 10  # type: ignore
+        assert Variant("name", []) != 10  # type: ignore[comparison-overlap]
 
 
 class TestEval:
@@ -193,18 +194,15 @@ class TestEval:
     def test_f64(self):
         assert EGraph().eval_f64(Lit(F64(1.0))) == 1.0
 
-
     def test_string(self):
         assert EGraph().eval_string(Lit(String("hi"))) == "hi"
 
     def test_bool(self):
-        assert EGraph().eval_bool(Lit(Bool(True))) == True
+        assert EGraph().eval_bool(Lit(Bool(True))) is True
 
     @pytest.mark.xfail(reason="Depends on getting actual sort from egraph")
     def test_rational(self):
         egraph = EGraph()
         rational = Call("rational", [Lit(Int(1)), Lit(Int(2))])
-        egraph.run_program(
-            ActionCommand(Expr_(Call("rational", [Lit(Int(1)), Lit(Int(2))])))
-        )
+        egraph.run_program(ActionCommand(Expr_(Call("rational", [Lit(Int(1)), Lit(Int(2))]))))
         assert egraph.eval_rational(rational) == fractions.Fraction(1, 2)

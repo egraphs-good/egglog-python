@@ -1,16 +1,18 @@
 import pytest
+
 # from egglog.declarations import ModuleDeclarations
 from egglog.egraph import *
+
 # from egglog.egraph import _BUILTIN_DECLS, BUILTINS
 
 
 def test_tree_modules():
     """
-      BUILTINS
-      /  |  \
+    BUILTINS
+    /  |  \
       A  B  C
-      |  /
-      D
+    |  /
+    D
     """
     # assert _BUILTIN_DECLS
     # assert BUILTINS._mod_decls == ModuleDeclarations(_BUILTIN_DECLS, [])
@@ -34,5 +36,5 @@ def test_tree_modules():
     egraph = EGraph([D, B])
     # assert egraph._flatted_deps == [A, B, D]
     egraph.check(a(), b(), d())
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017, PT011
         egraph.check(c())

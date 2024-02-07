@@ -29,7 +29,12 @@ dependencies = ["typing-extensions", "black", "graphviz"]
 
 [project.optional-dependencies]
 
-array = ["scikit-learn", "array_api_compat", "numba==0.59.0rc1", "llvmlite==0.42.0rc1"]
+array = [
+    "scikit-learn",
+    "array_api_compat",
+    "numba==0.59.0rc1",
+    "llvmlite==0.42.0rc1",
+]
 dev = ["pre-commit", "ruff", "mypy", "anywidget[dev]", "egglog[docs,test]"]
 
 test = [
@@ -59,6 +64,17 @@ docs = [
 
 [tool.ruff]
 ignore = [
+    # Allow uppercase vars
+    "N806",
+    "N802",
+    # Allow subprocess run
+    "S603",
+    # ALlow any
+    "ANN401",
+    # Allow exec
+    "S102",
+    "S307",
+    "PGH001",
     # allow star imports
     "F405",
     "F403",
@@ -158,12 +174,17 @@ ignore = [
     # Allow private member refs
     "SLF001",
 ]
+
 line-length = 120
 # Allow lines to be as long as 120.
 src = ["python"]
 select = ["ALL"]
-extend-exclude = ["python/tests"]
+extend-exclude = ["python/tests/__snapshots__"]
 unsafe-fixes = true
+
+[tool.ruff.lint.per-file-ignores]
+# Don't require annotations for tests
+"python/tests/**" = ["ANN001", "ANN201"]
 
 [tool.mypy]
 ignore_missing_imports = true

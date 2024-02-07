@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import importlib
-from multiprocessing import Value
 import pathlib
 from copy import copy
 from typing import ClassVar, Union
 
 import pytest
+
 from egglog import *
 from egglog.declarations import (
     CallDecl,
@@ -34,9 +34,9 @@ class TestExprStr:
     def test_ne(self):
         assert str(ne(i64(1)).to(i64(2))) == "ne(i64(1)).to(i64(2))"
 
+
 def test_eqsat_basic():
     egraph = EGraph()
-
 
     class Math(Expr):
         def __init__(self, value: i64Like) -> None:
@@ -96,7 +96,6 @@ def test_fib():
 def test_fib_demand():
     egraph = EGraph()
 
-
     class Num(Expr):
         def __init__(self, i: i64Like) -> None:
             ...
@@ -110,23 +109,9 @@ def test_fib_demand():
 
     @egraph.register
     def _fib(a: i64, b: i64):
-        yield rewrite(
-            Num(a) + Num(b)
-        ).to(
-            Num(a + b)
-        )
-        yield rewrite(
-            fib(a)
-        ).to(
-            fib(a - 1) + fib(a - 2),
-            a > 1
-        )
-        yield rewrite(
-            fib(a)
-        ).to(
-            Num(a),
-            a <= 1
-        )
+        yield rewrite(Num(a) + Num(b)).to(Num(a + b))
+        yield rewrite(fib(a)).to(fib(a - 1) + fib(a - 2), a > 1)
+        yield rewrite(fib(a)).to(Num(a), a <= 1)
 
     f7 = egraph.let("f7", fib(7))
     egraph.run(14)
@@ -155,9 +140,9 @@ def test_push_pop():
 def test_constants():
     egraph = EGraph()
 
-
     class A(Expr):
         pass
+
     one = constant("one", A)
     two = constant("two", A)
 
@@ -168,17 +153,17 @@ def test_constants():
 def test_class_vars():
     egraph = EGraph()
 
-
     class A(Expr):
         ONE: ClassVar[A]
+
     two = constant("two", A)
 
     egraph.register(union(A.ONE).with_(two))
     egraph.check(eq(A.ONE).to(two))
 
+
 def test_simplify_constant():
     egraph = EGraph()
-
 
     class Numeric(Expr):
         ONE: ClassVar[Numeric]
@@ -197,16 +182,17 @@ def test_extract_constant_twice():
     # Sometimes extracting a constant twice will give an error
     egraph = EGraph()
 
-
     class Numeric(Expr):
         ONE: ClassVar[Numeric]
 
     egraph.extract(Numeric.ONE)
     egraph.extract(Numeric.ONE)
 
+
 def test_extract_include_cost():
     _, cost = EGraph().extract(i64(0), include_cost=True)
     assert cost == 1
+
 
 def test_relation():
     egraph = EGraph()
@@ -227,7 +213,7 @@ def test_generic_sort():
 
 
 def test_keyword_args():
-    egraph = EGraph()
+    EGraph()
 
     @function
     def foo(x: i64Like, y: i64Like) -> i64:
@@ -239,16 +225,13 @@ def test_keyword_args():
 
 
 def test_keyword_args_init():
-    egraph = EGraph()
-
+    EGraph()
 
     class Foo(Expr):
         def __init__(self, x: i64Like) -> None:
             ...
 
-
     assert expr_parts(Foo(1)) == expr_parts(Foo(x=1))
-
 
 
 def test_modules() -> None:
@@ -279,7 +262,6 @@ def test_modules() -> None:
 def test_property():
     egraph = EGraph()
 
-
     class Foo(Expr):
         def __init__(self) -> None:
             ...
@@ -293,7 +275,7 @@ def test_property():
 
 
 def test_default_args():
-    egraph = EGraph()
+    EGraph()
 
     @function
     def foo(x: i64Like, y: i64Like = i64(1)) -> i64:
@@ -323,11 +305,7 @@ class TestPyObject:
 
     def test_eval_local(self):
         x = "hi"
-        res = py_eval(
-            "my_add(x, y)",
-            PyObject(locals()).dict_update("y", "there"),
-            globals()
-        )
+        res = py_eval("my_add(x, y)", PyObject(locals()).dict_update("y", "there"), globals())
         assert EGraph().eval(res) == "hithere"
 
     def test_exec(self):
@@ -356,7 +334,7 @@ def test_f64_negation() -> None:
     expr2 = egraph.let("expr2", f64(2.0))
 
     # expr3 = -(-2.0)
-    expr3 = egraph.let("expr3", -(-f64(2.0)))
+    expr3 = egraph.let("expr3", -(-f64(2.0)))  # noqa: B002
     egraph.check(eq(expr1).to(-expr2))
     egraph.check(eq(expr3).to(expr2))
 
@@ -369,15 +347,14 @@ def test_not_equals():
 def test_custom_equality():
     egraph = EGraph()
 
-
     class Boolean(Expr):
         def __init__(self, value: BoolLike) -> None:
             ...
 
-        def __eq__(self, other: Boolean) -> Boolean: # type: ignore[override]
+        def __eq__(self, other: Boolean) -> Boolean:  # type: ignore[override]
             ...
 
-        def __ne__(self, other: Boolean) -> Boolean: # type: ignore[override]
+        def __ne__(self, other: Boolean) -> Boolean:  # type: ignore[override]
             ...
 
     egraph.register(rewrite(Boolean(True) == Boolean(True)).to(Boolean(False)))
@@ -390,10 +367,10 @@ def test_custom_equality():
     egraph.check(eq(should_be_true).to(Boolean(False)))
     egraph.check(eq(should_be_false).to(Boolean(True)))
 
+
 class TestMutate:
     def test_setitem_defaults(self):
-        egraph = EGraph()
-
+        EGraph()
 
         class Foo(Expr):
             def __init__(self) -> None:
@@ -412,7 +389,6 @@ class TestMutate:
 
     def test_function(self):
         egraph = EGraph()
-
 
         class Math(Expr):
             def __init__(self, i: i64Like) -> None:
@@ -457,8 +433,7 @@ def test_builtin_reflected():
 
 def test_reflected_binary_method():
     # If we have a reflected binary method, it should be converted into the non-reflected version
-    egraph = EGraph()
-
+    EGraph()
 
     class Math(Expr):
         def __init__(self, value: i64Like) -> None:
@@ -482,8 +457,7 @@ def test_reflected_binary_method():
 
 def test_upcast_args():
     # -0.1 + Int(x) -> -0.1 + Float(x)
-    egraph = EGraph()
-
+    EGraph()
 
     class Int(Expr):
         def __init__(self, value: i64Like) -> None:
@@ -491,7 +465,6 @@ def test_upcast_args():
 
         def __add__(self, other: Int) -> Int:
             ...
-
 
     class Float(Expr):
         def __init__(self, value: f64Like) -> None:
@@ -508,18 +481,19 @@ def test_upcast_args():
     converter(f64, Float, Float)
     converter(Int, Float, Float.from_int)
 
-    res: Expr = -0.1 + Int(10)  # type: ignore
+    res: Expr = -0.1 + Int(10)  # type: ignore[operator,assignment]
     assert expr_parts(res) == expr_parts(Float(-0.1) + Float.from_int(Int(10)))
 
-    res: Expr = Int(10) + -0.1  # type: ignore
+    res: Expr = Int(10) + -0.1  # type: ignore[operator,assignment]
     assert expr_parts(res) == expr_parts(Float.from_int(Int(10)) + Float(-0.1))
 
+
 def test_rewrite_upcasts():
-    rewrite(i64(1)).to(0) # type: ignore
+    rewrite(i64(1)).to(0)  # type: ignore[arg-type]
 
 
 def test_function_default_upcasts():
-    egraph = EGraph()
+    EGraph()
 
     @function
     def f(x: i64Like) -> i64:
@@ -527,11 +501,11 @@ def test_function_default_upcasts():
 
     assert expr_parts(f(1)) == expr_parts(f(i64(1)))
 
+
 def test_upcast_self_lower_cost():
     # Verifies that self will be upcasted, if that upcast has a lower cast than converting the other arg
     # i.e. Int(x) + NDArray(y) -> NDArray(Int(x)) + NDArray(y) instead of Int(x) + NDArray(y).to_int()
-    egraph = EGraph()
-
+    EGraph()
 
     class Int(Expr):
         def __init__(self, name: StringLike) -> None:
@@ -541,7 +515,6 @@ def test_upcast_self_lower_cost():
             ...
 
     NDArrayLike = Union[Int, "NDArray"]
-
 
     class NDArray(Expr):
         def __init__(self, name: StringLike) -> None:
@@ -588,7 +561,6 @@ def test_eval():
 #         egraph.as_egglog_string
 
 
-
 def test_eval_fn():
     egraph = EGraph()
 
@@ -598,14 +570,15 @@ def test_eval_fn():
 def _global_make_tuple(x):
     return (x,)
 
+
 def test_eval_fn_globals():
     egraph = EGraph()
 
     assert egraph.eval(py_eval_fn(lambda x: _global_make_tuple(x))(PyObject.from_int(1))) == (1,)
 
+
 def test_eval_fn_locals():
     egraph = EGraph()
-
 
     def _locals_make_tuple(x):
         return (x,)
@@ -634,27 +607,33 @@ def test_functions_seperate_pop():
     class T(Expr):
         def __init__(self, x: i64Like) -> None:
             ...
+
     with egraph:
+
         @function
-        def f(x: T) -> T: ...
+        def f(x: T) -> T:
+            ...
 
         egraph.register(f(T(1)))
 
     with egraph:
-        @function
-        def f(x: T, y: T) -> T: ...
 
-        egraph.register(f(T(1), T(2))) # type: ignore[call-arg]
+        @function
+        def f(x: T, y: T) -> T:
+            ...
+
+        egraph.register(f(T(1), T(2)))  # type: ignore[call-arg]
+
 
 # https://github.com/egraphs-good/egglog/issues/113
 def test_multiple_generics():
+    @function
+    def f() -> Vec[i64]:
+        ...
 
     @function
-    def f() -> Vec[i64]: ...
-
-    @function
-    def g() -> Vec[String]: ...
-
+    def g() -> Vec[String]:
+        ...
 
     egraph = EGraph()
 
