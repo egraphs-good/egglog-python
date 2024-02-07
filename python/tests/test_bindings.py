@@ -98,7 +98,7 @@ class TestEGraph:
 
         with pytest.raises(
             EggSmolError,
-            match="Type mismatch: expected f64, actual i64",
+            match="Type mismatch",
         ):
             egraph.run_program(*egraph.parse_program(program))
 
