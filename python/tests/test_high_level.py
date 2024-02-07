@@ -645,3 +645,23 @@ def test_functions_seperate_pop():
         def f(x: T, y: T) -> T: ...
 
         egraph.register(f(T(1), T(2))) # type: ignore[call-arg]
+
+# https://github.com/egraphs-good/egglog/issues/113
+def test_multiple_generics():
+
+    @function
+    def f() -> Vec[i64]: ...
+
+    @function
+    def g() -> Vec[String]: ...
+
+
+    egraph = EGraph()
+
+    egraph.register(
+        set_(f()).to(Vec[i64]()),
+        set_(g()).to(Vec[String]()),
+    )
+
+    assert str(egraph.extract(f())) == "Vec[i64].empty()"
+    assert str(egraph.extract(g())) == "Vec[String].empty()"
