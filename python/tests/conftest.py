@@ -5,8 +5,9 @@ from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
 
 @pytest.fixture(autouse=True)
-def reset_conversions():
+def _reset_conversions():
     import egglog.runtime
+
     old_conversions = copy.copy(egglog.runtime.CONVERSIONS)
     yield
     egglog.runtime.CONVERSIONS = old_conversions
@@ -19,6 +20,6 @@ class PythonSnapshotExtension(SingleFileSnapshotExtension):
         return str(data).encode()
 
 
-@pytest.fixture
+@pytest.fixture()
 def snapshot_py(snapshot):
     return snapshot.with_defaults(extension_class=PythonSnapshotExtension)

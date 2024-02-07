@@ -7,8 +7,6 @@ from egglog import *
 from egglog.exp.program_gen import *
 
 
-
-
 class Math(Expr):
     def __init__(self, value: i64Like) -> None:
         ...
@@ -26,7 +24,7 @@ class Math(Expr):
     def __neg__(self) -> Math:
         ...
 
-    @method(cost=1000)  # type: ignore
+    @method(cost=1000)  # type: ignore[misc]
     @property
     def program(self) -> Program:
         ...
@@ -35,6 +33,7 @@ class Math(Expr):
 @function
 def assume_pos(x: Math) -> Math:
     ...
+
 
 @ruleset
 def to_program_ruleset(
@@ -78,5 +77,5 @@ def test_py_object():
     egraph.register(fn.eval_py_object({"z": 10}))
     egraph.run(to_program_ruleset * 100 + program_gen_ruleset * 100)
     res = egraph.eval(fn.py_object)
-    assert res(1, 2) == 13  # type: ignore
-    assert inspect.getsource(res)  # type: ignore
+    assert res(1, 2) == 13  # type: ignore[operator]
+    assert inspect.getsource(res)  # type: ignore[arg-type]

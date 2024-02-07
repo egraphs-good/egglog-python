@@ -8,11 +8,10 @@ def test_conversion_custom_metaclass():
     class MyType(metaclass=MyMeta):
         pass
 
-    egraph = EGraph()
-
+    EGraph()
 
     class MyTypeExpr(Expr):
-        def __init__(self):
+        def __init__(self) -> None:
             ...
 
     converter(MyMeta, MyTypeExpr, lambda x: MyTypeExpr())
@@ -20,14 +19,13 @@ def test_conversion_custom_metaclass():
 
 
 def test_conversion():
-    egraph = EGraph()
+    EGraph()
 
     class MyType:
         pass
 
-
     class MyTypeExpr(Expr):
-        def __init__(self):
+        def __init__(self) -> None:
             ...
 
     converter(MyType, MyTypeExpr, lambda x: MyTypeExpr())
@@ -36,19 +34,17 @@ def test_conversion():
 
 
 def test_conversion_transitive_forward():
-    egraph = EGraph()
+    EGraph()
 
     class MyType:
         pass
 
-
     class MyTypeExpr(Expr):
-        def __init__(self):
+        def __init__(self) -> None:
             ...
 
-
     class MyTypeExpr2(Expr):
-        def __init__(self):
+        def __init__(self) -> None:
             ...
 
     converter(MyType, MyTypeExpr, lambda x: MyTypeExpr())
@@ -58,19 +54,17 @@ def test_conversion_transitive_forward():
 
 
 def test_conversion_transitive_backward():
-    egraph = EGraph()
+    EGraph()
 
     class MyType:
         pass
 
-
     class MyTypeExpr(Expr):
-        def __init__(self):
+        def __init__(self) -> None:
             ...
 
-
     class MyTypeExpr2(Expr):
-        def __init__(self):
+        def __init__(self) -> None:
             ...
 
     converter(MyTypeExpr, MyTypeExpr2, lambda x: MyTypeExpr2())
@@ -79,19 +73,17 @@ def test_conversion_transitive_backward():
 
 
 def test_conversion_transitive_cycle():
-    egraph = EGraph()
+    EGraph()
 
     class MyType:
         pass
 
-
     class MyTypeExpr(Expr):
-        def __init__(self):
+        def __init__(self) -> None:
             ...
 
-
     class MyTypeExpr2(Expr):
-        def __init__(self):
+        def __init__(self) -> None:
             ...
 
     converter(MyType, MyTypeExpr, lambda x: MyTypeExpr())

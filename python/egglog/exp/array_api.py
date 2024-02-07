@@ -819,7 +819,7 @@ class NDArray(Expr):
         ...
 
     @property
-    def T(self) -> NDArray:  # noqa: N802
+    def T(self) -> NDArray:
         """
         https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.array.T.html#array_api.array.T
         """

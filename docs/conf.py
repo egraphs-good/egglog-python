@@ -44,7 +44,7 @@ presentation_file = cwd / "explanation" / "pldi_2023_presentation.ipynb"
 output_dir = cwd / "presentations"
 
 subprocess.run(
-    [  # noqa: S607, S603
+    [  # noqa: S607
         "jupyter",
         "nbconvert",
         str(presentation_file),
