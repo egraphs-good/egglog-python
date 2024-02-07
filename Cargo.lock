@@ -285,16 +285,17 @@ checksum = "675e35c02a51bb4d4618cb4885b3839ce6d1787c97b664474d9208d074742e20"
 [[package]]
 name = "egglog"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog?rev=ceed816e9369570ffed9feeba157b19471dda70d#ceed816e9369570ffed9feeba157b19471dda70d"
+source = "git+https://github.com/egraphs-good/egglog?rev=4cc011f6b48029dd72104a38a2ca0c7657846e0b#4cc011f6b48029dd72104a38a2ca0c7657846e0b"
 dependencies = [
  "clap",
  "egraph-serialize",
  "env_logger",
+ "generic_symbolic_expressions",
  "hashbrown 0.14.1",
  "indexmap",
  "instant",
  "lalrpop",
- "lalrpop-util 0.20.0",
+ "lalrpop-util",
  "lazy_static",
  "log",
  "num-integer",
@@ -306,7 +307,6 @@ dependencies = [
  "serde_json",
  "smallvec",
  "symbol_table",
- "symbolic_expressions",
  "thiserror",
 ]
 
@@ -316,7 +316,7 @@ version = "6.0.0"
 dependencies = [
  "egglog",
  "egraph-serialize",
- "lalrpop-util 0.19.12",
+ "lalrpop-util",
  "log",
  "num-rational",
  "ordered-float",
@@ -329,7 +329,7 @@ dependencies = [
 [[package]]
 name = "egraph-serialize"
 version = "0.1.0"
-source = "git+https://github.com/saulshanabrook/egraph-serialize?rev=95a5b802c662a1036b5549b0c5c7b4586dee211c#95a5b802c662a1036b5549b0c5c7b4586dee211c"
+source = "git+https://github.com/egraphs-good/egraph-serialize?rev=5838c036623e91540831745b1574539e01c8cb23#5838c036623e91540831745b1574539e01c8cb23"
 dependencies = [
  "graphviz-rust",
  "indexmap",
@@ -417,6 +417,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "generic_symbolic_expressions"
+version = "5.0.3"
+source = "git+https://github.com/oflatt/symbolic-expressions?rev=655b6a4c06b4b3d3b2300e17779860b4abe440f0#655b6a4c06b4b3d3b2300e17779860b4abe440f0"
+
+[[package]]
 name = "getrandom"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -493,9 +498,9 @@ dependencies = [
 
 [[package]]
 name = "indoc"
-version = "1.0.9"
+version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfa799dd5ed20a7e349f3b4639aa80d74549c81716d9ec4f994c9b5815598306"
+checksum = "1e186cfbae8084e513daff4240b4797e342f988cecda4fb6c939150f96315fd8"
 
 [[package]]
 name = "instant"
@@ -566,7 +571,7 @@ dependencies = [
  "ena",
  "is-terminal",
  "itertools",
- "lalrpop-util 0.20.0",
+ "lalrpop-util",
  "petgraph",
  "pico-args",
  "regex",
@@ -575,15 +580,6 @@ dependencies = [
  "term",
  "tiny-keccak",
  "unicode-xid",
-]
-
-[[package]]
-name = "lalrpop-util"
-version = "0.19.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3c48237b9604c5a4702de6b824e02006c3214327564636aef27c1028a8fa0ed"
-dependencies = [
- "regex",
 ]
 
 [[package]]
@@ -625,9 +621,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.19"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b06a4cde4c0f271a446782e3eff8de789548ce57dbc8eca9292c27f4a42004b4"
+checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
 
 [[package]]
 name = "memchr"
@@ -637,9 +633,9 @@ checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
 name = "memoffset"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d61c719bcfbcf5d62b3a09efa6088de8c54bc0bfcd3ea7ae39fcc186108b8de1"
+checksum = "5a634b1c61a95585bd15607c6ab0c4e5b226e695ff2800ba0cdccddf208c406c"
 dependencies = [
  "autocfg",
 ]
@@ -825,9 +821,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.18.3"
+version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3b1ac5b3731ba34fdaa9785f8d74d17448cd18f30cf19e0c7e7b1fdb5272109"
+checksum = "9a89dc7a5850d0e983be1ec2a463a171d20990487c3cfcd68b5363f1ee3d6fe0"
 dependencies = [
  "cfg-if",
  "indoc",
@@ -842,9 +838,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.18.3"
+version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cb946f5ac61bb61a5014924910d936ebd2b23b705f7a4a3c40b05c720b079a3"
+checksum = "07426f0d8fe5a601f26293f300afd1a7b1ed5e78b2a705870c5f30893c5163be"
 dependencies = [
  "once_cell",
  "target-lexicon",
@@ -852,9 +848,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.18.3"
+version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd4d7c5337821916ea2a1d21d1092e8443cf34879e53a0ac653fbb98f44ff65c"
+checksum = "dbb7dec17e17766b46bca4f1a4215a85006b4c2ecde122076c562dd058da6cf1"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -862,9 +858,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-log"
-version = "0.8.3"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f47b0777feb17f61eea78667d61103758b243a871edc09a7786500a50467b605"
+checksum = "4c10808ee7250403bedb24bc30c32493e93875fef7ba3e4292226fe924f398bd"
 dependencies = [
  "arc-swap",
  "log",
@@ -873,25 +869,26 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.18.3"
+version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9d39c55dab3fc5a4b25bbd1ac10a2da452c4aca13bb450f22818a002e29648d"
+checksum = "05f738b4e40d50b5711957f142878cfa0f28e054aa0ebdfc3fd137a843f74ed3"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
  "quote",
- "syn 1.0.109",
+ "syn 2.0.32",
 ]
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.18.3"
+version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97daff08a4c48320587b5224cc98d609e3c27b6d437315bd40b605c98eeb5918"
+checksum = "0fc910d4851847827daf9d6cdd4a823fbdaab5b8818325c5e97a86da79e8881f"
 dependencies = [
+ "heck",
  "proc-macro2",
  "quote",
- "syn 1.0.109",
+ "syn 2.0.32",
 ]
 
 [[package]]
@@ -1106,17 +1103,13 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "symbol_table"
-version = "0.2.0"
-source = "git+https://github.com/mwillsey/symbol_table?rev=acddcf8938d1b4ed2fce048c9d83c30203d404b9#acddcf8938d1b4ed2fce048c9d83c30203d404b9"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "828f672b631c220bf6ea8a1d3b82c7d0fc998e5ba8373383d8604bc1e2a6245a"
 dependencies = [
  "ahash 0.7.6",
  "hashbrown 0.12.3",
 ]
-
-[[package]]
-name = "symbolic_expressions"
-version = "5.0.3"
-source = "git+https://github.com/oflatt/symbolic-expressions?rev=4c0ea5ca008f972450b2af72387e64d2c1c6a791#4c0ea5ca008f972450b2af72387e64d2c1c6a791"
 
 [[package]]
 name = "syn"
@@ -1234,9 +1227,9 @@ checksum = "f962df74c8c05a667b5ee8bcf162993134c104e96440b663c8daa176dc772d8c"
 
 [[package]]
 name = "unindent"
-version = "0.1.11"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1766d682d402817b5ac4490b3c3002d91dfa0d22812f341609f97b08757359c"
+checksum = "c7de7d73e1754487cb58364ee906a499937a0dfabd86bcb980fa99ec8c8fa2ce"
 
 [[package]]
 name = "utf8parse"
@@ -1246,9 +1239,9 @@ checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
 
 [[package]]
 name = "uuid"
-version = "1.5.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88ad59a7560b41a70d191093a945f0b87bc1deeda46fb237479708a1d6b6cdfc"
+checksum = "f00cc9702ca12d3c81455259621e676d0f7251cec66a21e98fe2e9a37db93b2a"
 dependencies = [
  "getrandom",
 ]

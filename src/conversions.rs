@@ -1,6 +1,7 @@
 // Create wrappers around input types so that convert from pyobjects to them
 // and then from them to the egg_smol types
 use crate::utils::*;
+use egglog::ast::Symbol;
 use ordered_float::OrderedFloat;
 use pyo3::prelude::*;
 use pyo3::types::PyDeltaAccess;
@@ -26,14 +27,14 @@ convert_enums!(
     };
     egglog::ast::Expr: "{}" => Expr {
         Lit(value: Literal)
-            l -> egglog::ast::Expr::Lit((&l.value).into()),
-            egglog::ast::Expr::Lit(l) => Lit { value: l.into() };
+            l -> egglog::ast::Expr::Lit((), (&l.value).into()),
+            egglog::ast::Expr::Lit(_, l) => Lit { value: l.into() };
         Var(name: String)
-            v -> egglog::ast::Expr::Var((&v.name).into()),
-            egglog::ast::Expr::Var(v) => Var { name: v.to_string() };
+            v -> egglog::ast::Expr::Var((), (&v.name).into()),
+            egglog::ast::Expr::Var(_, v) => Var { name: v.to_string() };
         Call(name: String, args: Vec<Expr>)
-            c -> egglog::ast::Expr::Call((&c.name).into(), c.args.iter().map(|e| e.into()).collect()),
-            egglog::ast::Expr::Call(c, a) => Call {
+            c -> egglog::ast::Expr::Call((), (&c.name).into(), c.args.iter().map(|e| e.into()).collect()),
+            egglog::ast::Expr::Call(_, c, a) => Call {
                 name: c.to_string(),
                 args: a.iter().map(|e| e.into()).collect()
             }
@@ -48,40 +49,40 @@ convert_enums!(
     };
     egglog::ast::Action: "{}" => Action {
         Let(lhs: String, rhs: Expr)
-            d -> egglog::ast::Action::Let((&d.lhs).into(), (&d.rhs).into()),
-            egglog::ast::Action::Let(n, e) => Let { lhs: n.to_string(), rhs: e.into() };
+            d -> egglog::ast::Action::Let((), (&d.lhs).into(), (&d.rhs).into()),
+            egglog::ast::Action::Let(_, n, e) => Let { lhs: n.to_string(), rhs: e.into() };
         Set(lhs: String, args: Vec<Expr>, rhs: Expr)
-            s -> egglog::ast::Action::Set((&s.lhs).into(), s.args.iter().map(|e| e.into()).collect(), (&s.rhs).into()),
-            egglog::ast::Action::Set(n, a, e) => Set {
+            s -> egglog::ast::Action::Set((), (&s.lhs).into(), s.args.iter().map(|e| e.into()).collect(), (&s.rhs).into()),
+            egglog::ast::Action::Set(_, n, a, e) => Set {
                 lhs: n.to_string(),
                 args: a.iter().map(|e| e.into()).collect(),
                 rhs: e.into()
             };
         Delete(sym: String, args: Vec<Expr>)
-            d -> egglog::ast::Action::Delete((&d.sym).into(), d.args.iter().map(|e| e.into()).collect()),
-            egglog::ast::Action::Delete(n, a) => Delete {
+            d -> egglog::ast::Action::Delete((), (&d.sym).into(), d.args.iter().map(|e| e.into()).collect()),
+            egglog::ast::Action::Delete(_, n, a) => Delete {
                 sym: n.to_string(),
                 args: a.iter().map(|e| e.into()).collect()
             };
         Union(lhs: Expr, rhs: Expr)
-            u -> egglog::ast::Action::Union((&u.lhs).into(), (&u.rhs).into()),
-            egglog::ast::Action::Union(l, r) => Union { lhs: l.into(), rhs: r.into() };
+            u -> egglog::ast::Action::Union((), (&u.lhs).into(), (&u.rhs).into()),
+            egglog::ast::Action::Union(_, l, r) => Union { lhs: l.into(), rhs: r.into() };
         Panic(msg: String)
-            p -> egglog::ast::Action::Panic(p.msg.to_string()),
-            egglog::ast::Action::Panic(msg) => Panic { msg: msg.to_string()  };
+            p -> egglog::ast::Action::Panic((), p.msg.to_string()),
+            egglog::ast::Action::Panic(_, msg) => Panic { msg: msg.to_string()  };
         Expr_(expr: Expr)
-            e -> egglog::ast::Action::Expr((&e.expr).into()),
-            egglog::ast::Action::Expr(e) => Expr_ { expr: e.into() };
+            e -> egglog::ast::Action::Expr((), (&e.expr).into()),
+            egglog::ast::Action::Expr(_, e) => Expr_ { expr: e.into() };
         Extract(expr: Expr, variants: Expr)
-            e -> egglog::ast::Action::Extract((&e.expr).into(), (&e.variants).into()),
-            egglog::ast::Action::Extract(e, v) => Extract {
+            e -> egglog::ast::Action::Extract((), (&e.expr).into(), (&e.variants).into()),
+            egglog::ast::Action::Extract(_, e, v) => Extract {
                 expr: e.into(),
                 variants: v.into()
             }
     };
     egglog::ast::Schedule: "{}" => Schedule {
         Saturate(schedule: Box<Schedule>)
-            s -> (&s.schedule).into(),
+            s -> egglog::ast::Schedule::Saturate(Box::new((&s.schedule).into())),
             egglog::ast::Schedule::Saturate(s) => Saturate { schedule: Box::new((s).into()) };
         Repeat(length: usize, schedule: Box<Schedule>)
             r -> egglog::ast::Schedule::Repeat(r.length, Box::new((&r.schedule).into())),
@@ -309,7 +310,7 @@ convert_struct!(
             schema: (&f.schema).into(),
             default: f.default.as_ref().map(|e| e.into()),
             merge: f.merge.as_ref().map(|e| e.into()),
-            merge_action: f.merge_action.iter().map(|a| a.into()).collect(),
+            merge_action: egglog::ast::GenericActions(f.merge_action.iter().map(|a| a.into()).collect()),
             cost: f.cost,
             unextractable: f.unextractable
         },
@@ -318,7 +319,7 @@ convert_struct!(
             schema: (&f.schema).into(),
             default: f.default.as_ref().map(|e| e.into()),
             merge: f.merge.as_ref().map(|e| e.into()),
-            merge_action: f.merge_action.iter().map(|a| a.into()).collect(),
+            merge_action: f.merge_action.0.iter().map(|a| a.into()).collect(),
             cost: f.cost,
             unextractable: f.unextractable
         };
@@ -335,18 +336,18 @@ convert_struct!(
     )
         s -> egglog::ast::Schema {input: s.input.iter().map(|v| v.into()).collect(), output: (&s.output).into()},
         s -> Schema {input: s.input.iter().map(|v| v.to_string()).collect(), output: s.output.to_string()};
-    egglog::ast::Rule: "{}" => Rule(
+    egglog::ast::GenericRule<Symbol, Symbol, ()>: "{}" => Rule(
         head: Vec<Action>,
         body: Vec<Fact_>
     )
-        r -> egglog::ast::Rule {head: r.head.iter().map(|v| v.into()).collect(), body: r.body.iter().map(|v| v.into()).collect()},
-        r -> Rule {head: r.head.iter().map(|v| v.into()).collect(), body: r.body.iter().map(|v| v.into()).collect()};
-    egglog::ast::Rewrite: "{:?}" => Rewrite(
+        r -> egglog::ast::GenericRule {head: egglog::ast::GenericActions(r.head.iter().map(|v| v.into()).collect()), body: r.body.iter().map(|v| v.into()).collect()},
+        r -> Rule {head: r.head.0.iter().map(|v| v.into()).collect(), body: r.body.iter().map(|v| v.into()).collect()};
+    egglog::ast::GenericRewrite<Symbol, Symbol, ()>: "{:?}" => Rewrite(
         lhs: Expr,
         rhs: Expr,
         conditions: Vec<Fact_> = Vec::new()
     )
-        r -> egglog::ast::Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()},
+        r -> egglog::ast::GenericRewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()},
         r -> Rewrite {lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()};
     egglog::ast::RunConfig: "{:?}" => RunConfig(
         ruleset: String,
@@ -366,7 +367,8 @@ convert_struct!(
         apply_time_per_rule: HashMap<String, WrappedDuration>,
         search_time_per_ruleset: HashMap<String, WrappedDuration>,
         apply_time_per_ruleset: HashMap<String, WrappedDuration>,
-        rebuild_time_per_ruleset: HashMap<String, WrappedDuration>
+        rebuild_time_per_ruleset: HashMap<String, WrappedDuration>,
+        num_matches_per_rule: HashMap<String, usize>
     )
         r -> egglog::RunReport {
             updated: r.updated,
@@ -374,7 +376,8 @@ convert_struct!(
             apply_time_per_rule: r.apply_time_per_rule.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
             search_time_per_ruleset: r.search_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
             apply_time_per_ruleset: r.apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect()
+            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
+            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone().into(), *v)).collect()
         },
         r -> RunReport {
             updated: r.updated,
@@ -382,7 +385,8 @@ convert_struct!(
             apply_time_per_rule: r.apply_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
             search_time_per_ruleset: r.search_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
             apply_time_per_ruleset: r.apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
-            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect()
+            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
+            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone().to_string(), *v)).collect()
         }
 );
 
