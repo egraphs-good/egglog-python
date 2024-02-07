@@ -1000,6 +1000,16 @@ class TypedExprDecl:
     def to_egg(self, decls: Declarations) -> bindings._Expr:
         return self.expr.to_egg(decls)
 
+    def descendants(self) -> list[TypedExprDecl]:
+        """
+        Returns a list of all the descendants of this expression.
+        """
+        l = [self]
+        if isinstance(self.expr, CallDecl):
+            for a in self.expr.args:
+                l.extend(a.descendants())
+        return l
+
 
 @dataclass
 class ClassDecl:
