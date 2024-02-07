@@ -25,8 +25,7 @@ if TYPE_CHECKING:
 numbers.Integral.register(RuntimeExpr)
 
 array_api_ruleset = ruleset()
-# Saturate doesn't work for some reason, so just set a high number here
-array_api_schedule = array_api_ruleset * 100000
+array_api_schedule = array_api_ruleset.saturate()
 
 
 class Boolean(Expr):

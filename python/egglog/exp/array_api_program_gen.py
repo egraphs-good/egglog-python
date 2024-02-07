@@ -15,7 +15,7 @@ from .program_gen import *
 
 array_api_program_gen_ruleset = ruleset()
 
-array_api_program_gen_schedule = array_api_program_gen_ruleset * 10000 + program_gen_ruleset * 10000
+array_api_program_gen_schedule = array_api_program_gen_ruleset.saturate() + program_gen_ruleset.saturate()
 
 
 @function

@@ -9,7 +9,7 @@ from egglog import *
 from egglog.exp.array_api import *
 
 array_api_numba_ruleset = ruleset()
-array_api_numba_schedule = (array_api_schedule + array_api_numba_ruleset * 10000).saturate()
+array_api_numba_schedule = (array_api_ruleset + array_api_numba_ruleset).saturate()
 # For these rules, we not only wanna rewrite, we also want to delete the original expression,
 # so that the rewritten one is used, even if the original one is simpler.
 
