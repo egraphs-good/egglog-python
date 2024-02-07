@@ -16,10 +16,7 @@ use std::sync::Arc;
 /// --
 ///
 /// Create an empty EGraph.
-#[pyclass(
-    unsendable,
-    text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, terms_encoding=False)"
-)]
+#[pyclass(unsendable)]
 pub struct EGraph {
     egraph: egglog::EGraph,
     py_object_arcsort: Option<Arc<PyObjectSort>>,
@@ -28,7 +25,10 @@ pub struct EGraph {
 #[pymethods]
 impl EGraph {
     #[new]
-    #[pyo3(signature = (py_object_sort=None, *, fact_directory=None, seminaive=true, terms_encoding=false))]
+    #[pyo3(
+        signature = (py_object_sort=None, *, fact_directory=None, seminaive=true, terms_encoding=false),
+        text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, terms_encoding=False)"
+    )]
     fn new(
         py_object_sort: Option<ArcPyObjectSort>,
         fact_directory: Option<PathBuf>,
@@ -96,22 +96,33 @@ impl EGraph {
 
     /// Serialize the EGraph to a SerializedEGraph object.
     #[pyo3(
-        signature = (*, max_functions=None, max_calls_per_function=None, include_temporary_functions=false, split_primitive_outputs=false),
-        text_signature = "(self, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=False, split_primitive_outputs=False)"
+        signature = (root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=false, split_primitive_outputs=false),
+        text_signature = "(self, root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=False, split_primitive_outputs=False)"
     )]
     fn serialize(
-        &self,
+        &mut self,
+        root_eclasses: Vec<Expr>,
         max_functions: Option<usize>,
         max_calls_per_function: Option<usize>,
         include_temporary_functions: bool,
         split_primitive_outputs: bool,
     ) -> SerializedEGraph {
+        let root_eclasses: Vec<egglog::Value> = root_eclasses
+            .into_iter()
+            .map(|x| {
+                self.egraph
+                    .eval_expr(&egglog::ast::Expr::from(x))
+                    .unwrap()
+                    .1
+            })
+            .collect();
         SerializedEGraph {
             egraph: self.egraph.serialize(SerializeConfig {
                 max_functions,
                 max_calls_per_function,
                 include_temporary_functions,
                 split_primitive_outputs,
+                root_eclasses,
             }),
         }
     }
@@ -150,18 +161,18 @@ impl EGraph {
         // For rational we need the actual sort on the e-graph, because it contains state
         // There isn't a public way to get a sort right now, so until there is, we use a hack where we create
         // a dummy expression of that sort, and use eval_expr to get the sort
-        let one = egglog::ast::Expr::Lit(egglog::ast::Literal::Int(1));
+        let one = egglog::ast::Expr::Lit((), egglog::ast::Literal::Int(1));
         let arcsort = self
             .egraph
-            .eval_expr(
-                &egglog::ast::Expr::Call("rational".into(), vec![one.clone(), one]),
-                None,
-                false,
-            )
+            .eval_expr(&egglog::ast::Expr::Call(
+                (),
+                "rational".into(),
+                vec![one.clone(), one],
+            ))
             .unwrap()
             .0;
         let expr: egglog::ast::Expr = expr.into();
-        let (_, _value) = self.egraph.eval_expr(&expr, Some(arcsort.clone()), false)?;
+        let (_, _value) = self.egraph.eval_expr(&expr)?;
         // Need to get actual sort for rational, this hack doesnt work.
         todo!();
         // let r = num_rational::Rational64::load(&arcsort, &value);
@@ -185,7 +196,7 @@ impl EGraph {
         arcsort: Arc<T>,
     ) -> EggResult<V> {
         let expr: egglog::ast::Expr = expr.into();
-        let (_, value) = self.egraph.eval_expr(&expr, Some(arcsort.clone()), false)?;
+        let (_, value) = self.egraph.eval_expr(&expr)?;
         Ok(V::load(&arcsort, &value))
     }
 }

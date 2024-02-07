@@ -1,9 +1,14 @@
 use crate::error::EggResult;
 use egglog::{
     ast::{Expr, Literal, Symbol},
+    constraint::{AllEqualTypeConstraint, SimpleTypeConstraint, TypeConstraint},
+    // core::AtomTerm,
     sort::{BoolSort, FromSort, I64Sort, IntoSort as _, Sort, StringSort},
     util::IndexMap,
-    ArcSort, EGraph, PrimitiveLike, TypeInfo, Value,
+    EGraph,
+    PrimitiveLike,
+    TypeInfo,
+    Value,
 };
 use pyo3::{
     ffi, intern, prelude::*, types::PyDict, AsPyPointer, IntoPy, PyAny, PyErr, PyObject, PyResult,
@@ -49,12 +54,12 @@ impl PyObjectIdent {
     pub fn to_expr(self) -> Expr {
         let children = match self {
             PyObjectIdent::Unhashable(id) => {
-                vec![Expr::Lit(Literal::Int(id as i64))]
+                vec![Expr::Lit((), Literal::Int(id as i64))]
             }
             PyObjectIdent::Hashable(type_hash, hash) => {
                 vec![
-                    Expr::Lit(Literal::Int(type_hash as i64)),
-                    Expr::Lit(Literal::Int(hash as i64)),
+                    Expr::Lit((), Literal::Int(type_hash as i64)),
+                    Expr::Lit((), Literal::Int(hash as i64)),
                 ]
             }
         };
@@ -182,17 +187,17 @@ impl Sort for PyObjectSort {
         typeinfo.add_primitive(Ctor {
             name: "py-object".into(),
             py_object: self.clone(),
-            i64:typeinfo.get_sort(),
+            i64:typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Eval {
             name: "py-eval".into(),
             py_object: self.clone(),
-            string: typeinfo.get_sort(),
+            string: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Exec {
             name: "py-exec".into(),
             py_object: self.clone(),
-            string: typeinfo.get_sort(),
+            string: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Dict {
             name: "py-dict".into(),
@@ -205,34 +210,34 @@ impl Sort for PyObjectSort {
         typeinfo.add_primitive(ToString {
             name: "py-to-string".into(),
             py_object: self.clone(),
-            string: typeinfo.get_sort(),
+            string: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(ToBool {
             name: "py-to-bool".into(),
             py_object: self.clone(),
-            bool_: typeinfo.get_sort(),
+            bool_: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(FromString {
             name: "py-from-string".into(),
             py_object: self.clone(),
-            string: typeinfo.get_sort(),
+            string: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(FromInt {
             name: "py-from-int".into(),
             py_object: self,
-            int: typeinfo.get_sort(),
+            int: typeinfo.get_sort_nofail(),
         });
     }
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (usize, Expr) {
         assert!(value.tag == self.name());
         let children = match self.load_ident(&value) {
             PyObjectIdent::Unhashable(id) => {
-                vec![Expr::Lit(Literal::Int(id as i64))]
+                vec![Expr::Lit((), Literal::Int(id as i64))]
             }
             PyObjectIdent::Hashable(type_hash, hash) => {
                 vec![
-                    Expr::Lit(Literal::Int(type_hash as i64)),
-                    Expr::Lit(Literal::Int(hash as i64)),
+                    Expr::Lit((), Literal::Int(type_hash as i64)),
+                    Expr::Lit((), Literal::Int(hash as i64)),
                 ]
             }
         };
@@ -240,6 +245,7 @@ impl Sort for PyObjectSort {
     }
 }
 
+/// (py-object <i64> | <i64> <i64>)
 struct Ctor {
     name: Symbol,
     py_object: Arc<PyObjectSort>,
@@ -251,16 +257,11 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [id] if id.name() == self.i64.name() => Some(self.py_object.clone()),
-            [type_hash, hash]
-                if type_hash.name() == self.i64.name() && hash.name() == self.i64.name() =>
-            {
-                Some(self.py_object.clone())
-            }
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_all_arguments_sort(self.i64.clone())
+            .with_output_sort(self.py_object.clone())
+            .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -288,17 +289,17 @@ impl PrimitiveLike for Eval {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [str, locals, globals]
-                if str.name() == self.string.name()
-                    && locals.name() == self.py_object.name()
-                    && globals.name() == self.py_object.name() =>
-            {
-                Some(self.py_object.clone())
-            }
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        return SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.string.clone(),
+                self.py_object.clone(),
+                self.py_object.clone(),
+                self.py_object.clone(),
+            ],
+        )
+        .into_box();
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -329,17 +330,17 @@ impl PrimitiveLike for Exec {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [str, locals, globals]
-                if str.name() == self.string.name()
-                    && locals.name() == self.py_object.name()
-                    && globals.name() == self.py_object.name() =>
-            {
-                Some(self.py_object.clone())
-            }
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.string.clone(),
+                self.py_object.clone(),
+                self.py_object.clone(),
+                self.py_object.clone(),
+            ],
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -377,18 +378,11 @@ impl PrimitiveLike for Dict {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        // Should have an even number of args
-        if types.len() % 2 != 0 {
-            return None;
-        }
-        for tp in types.iter() {
-            // All tps should be object
-            if tp.name() != self.py_object.name() {
-                return None;
-            }
-        }
-        Some(self.py_object.clone())
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_all_arguments_sort(self.py_object.clone())
+            .with_output_sort(self.py_object.clone())
+            .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -417,24 +411,11 @@ impl PrimitiveLike for DictUpdate {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        // Should have an odd number of args, with all the pairs plus the first arg
-        if types.len() % 2 == 0 {
-            return None;
-        }
-        for (i, tp) in types.iter().enumerate() {
-            // First tp should be dict
-            if i == 0 {
-                if tp.name() != self.py_object.name() {
-                    return None;
-                }
-            }
-            // All other tps should be object
-            else if tp.name() != self.py_object.name() {
-                return None;
-            }
-        }
-        Some(self.py_object.clone())
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_all_arguments_sort(self.py_object.clone())
+            .with_output_sort(self.py_object.clone())
+            .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -466,13 +447,13 @@ impl PrimitiveLike for ToString {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [obj] if obj.name() == self.py_object.name() => Some(self.string.clone()),
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.py_object.clone(), self.string.clone()],
+        )
+        .into_box()
     }
-
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let obj: String =
             Python::with_gil(|py| self.py_object.load(values[0]).extract(py).unwrap());
@@ -493,11 +474,12 @@ impl PrimitiveLike for ToBool {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [obj] if obj.name() == self.py_object.name() => Some(self.bool_.clone()),
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.py_object.clone(), self.bool_.clone()],
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -518,11 +500,12 @@ impl PrimitiveLike for FromString {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [str] if str.name() == self.string.name() => Some(self.py_object.clone()),
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.string.clone(), self.py_object.clone()],
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -544,11 +527,12 @@ impl PrimitiveLike for FromInt {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [int] if int.name() == self.int.name() => Some(self.py_object.clone()),
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        return SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.int.clone(), self.py_object.clone()],
+        )
+        .into_box();
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {

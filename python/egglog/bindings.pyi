@@ -36,6 +36,7 @@ class EGraph:
     def run_report(self) -> RunReport | None: ...
     def serialize(
         self,
+        root_eclasses: list[_Expr],
         *,
         max_functions: int | None = None,
         max_calls_per_function: int | None = None,
@@ -268,6 +269,7 @@ class RunReport:
     search_time_per_ruleset: dict[str, timedelta]
     apply_time_per_ruleset: dict[str, timedelta]
     rebuild_time_per_ruleset: dict[str, timedelta]
+    num_matches_per_rule: dict[str, int]
 
     def __init__(
         self,
@@ -277,6 +279,7 @@ class RunReport:
         search_time_per_ruleset: dict[str, timedelta],
         apply_time_per_ruleset: dict[str, timedelta],
         rebuild_time_per_ruleset: dict[str, timedelta],
+        num_matches_per_rule: dict[str, int],
     ) -> None: ...
 
 @final
