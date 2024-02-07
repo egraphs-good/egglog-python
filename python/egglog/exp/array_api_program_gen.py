@@ -55,7 +55,6 @@ def _int_program(i64_: i64, i: Int, j: Int):
     yield rewrite(int_program(i << j)).to(Program("(") + int_program(i) + " << " + int_program(j) + ")")
     yield rewrite(int_program(i >> j)).to(Program("(") + int_program(i) + " >> " + int_program(j) + ")")
     yield rewrite(int_program(i // j)).to(Program("(") + int_program(i) + " // " + int_program(j) + ")")
-    yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
 
 
 @function
@@ -481,8 +480,6 @@ def _ndarray_program(
     )
     # sqrt
     yield rewrite(ndarray_program(sqrt(x))).to((Program("np.sqrt(") + ndarray_program(x) + ")").assign())
-    # square
-    yield rewrite(ndarray_program(square(x))).to((Program("np.square(") + ndarray_program(x) + ")").assign())
     # Transpose
     yield rewrite(ndarray_program(x.T)).to(ndarray_program(x) + ".T")
     # sum
