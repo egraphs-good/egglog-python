@@ -82,7 +82,7 @@ convert_enums!(
     };
     egglog::ast::Schedule: "{}" => Schedule {
         Saturate(schedule: Box<Schedule>)
-            s -> (&s.schedule).into(),
+            s -> egglog::ast::Schedule::Saturate(Box::new((&s.schedule).into())),
             egglog::ast::Schedule::Saturate(s) => Saturate { schedule: Box::new((s).into()) };
         Repeat(length: usize, schedule: Box<Schedule>)
             r -> egglog::ast::Schedule::Repeat(r.length, Box::new((&r.schedule).into())),
