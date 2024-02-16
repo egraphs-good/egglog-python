@@ -494,11 +494,11 @@ class _ClassDeclerationsConstructor:
         locals = self.frame.f_locals.copy()
         locals[self.cls_name] = self.current_cls
         for k, v in get_type_hints(_Dummytype, globalns=self.frame.f_globals, localns=locals).items():
-            if v.__origin__ == ClassVar:
+            if getattr(v, "__origin__", None) == ClassVar:
                 (inner_tp,) = v.__args__
                 _register_constant(decls, ClassVariableRef(self.cls_name, k), inner_tp, None)
             else:
-                msg = "The only supported annotations on class attributes are class vars"
+                msg = f"On class {self.cls_name}, for attribute '{k}', expected a ClassVar, but got {v}"
                 raise NotImplementedError(msg)
 
         # Then register each of its methods
