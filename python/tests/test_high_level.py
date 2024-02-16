@@ -39,18 +39,14 @@ def test_eqsat_basic():
     egraph = EGraph()
 
     class Math(Expr):
-        def __init__(self, value: i64Like) -> None:
-            ...
+        def __init__(self, value: i64Like) -> None: ...
 
         @classmethod
-        def var(cls, v: StringLike) -> Math:
-            ...
+        def var(cls, v: StringLike) -> Math: ...
 
-        def __add__(self, other: Math) -> Math:
-            ...
+        def __add__(self, other: Math) -> Math: ...
 
-        def __mul__(self, other: Math) -> Math:
-            ...
+        def __mul__(self, other: Math) -> Math: ...
 
     # expr1 = 2 * (x + 3)
     expr1 = egraph.let("expr1", Math(2) * (Math.var("x") + Math(3)))
@@ -77,8 +73,7 @@ def test_fib():
     egraph = EGraph()
 
     @function
-    def fib(x: i64Like) -> i64:
-        ...
+    def fib(x: i64Like) -> i64: ...
 
     f0, f1, x = vars_("f0 f1 x", i64)
     egraph.register(
@@ -97,15 +92,12 @@ def test_fib_demand():
     egraph = EGraph()
 
     class Num(Expr):
-        def __init__(self, i: i64Like) -> None:
-            ...
+        def __init__(self, i: i64Like) -> None: ...
 
-        def __add__(self, other: Num) -> Num:
-            ...
+        def __add__(self, other: Num) -> Num: ...
 
     @function(cost=20)
-    def fib(x: i64Like) -> Num:
-        ...
+    def fib(x: i64Like) -> Num: ...
 
     @egraph.register
     def _fib(a: i64, b: i64):
@@ -124,8 +116,7 @@ def test_push_pop():
     egraph = EGraph()
 
     @function(merge=lambda old, new: old.max(new))
-    def foo() -> i64:
-        ...
+    def foo() -> i64: ...
 
     egraph.register(set_(foo()).to(i64(1)))
     egraph.check(eq(foo()).to(i64(1)))
@@ -216,8 +207,7 @@ def test_keyword_args():
     EGraph()
 
     @function
-    def foo(x: i64Like, y: i64Like) -> i64:
-        ...
+    def foo(x: i64Like, y: i64Like) -> i64: ...
 
     pos = expr_parts(foo(i64(1), i64(2)))
     assert expr_parts(foo(i64(1), y=i64(2))) == pos
@@ -228,8 +218,7 @@ def test_keyword_args_init():
     EGraph()
 
     class Foo(Expr):
-        def __init__(self, x: i64Like) -> None:
-            ...
+        def __init__(self, x: i64Like) -> None: ...
 
     assert expr_parts(Foo(1)) == expr_parts(Foo(x=1))
 
@@ -246,14 +235,12 @@ def test_modules() -> None:
     @m2.class_
     class OtherNumeric(Expr):
         @m2.method(cost=10)
-        def __init__(self, v: i64Like) -> None:
-            ...
+        def __init__(self, v: i64Like) -> None: ...
 
     egraph = EGraph([m, m2])
 
     @function
-    def from_numeric(n: Numeric) -> OtherNumeric:
-        ...
+    def from_numeric(n: Numeric) -> OtherNumeric: ...
 
     egraph.register(rewrite(OtherNumeric(1)).to(from_numeric(Numeric.ONE)))
     assert expr_parts(egraph.simplify(OtherNumeric(i64(1)), 10)) == expr_parts(from_numeric(Numeric.ONE))
@@ -263,12 +250,10 @@ def test_property():
     egraph = EGraph()
 
     class Foo(Expr):
-        def __init__(self) -> None:
-            ...
+        def __init__(self) -> None: ...
 
         @property
-        def bar(self) -> i64:
-            ...
+        def bar(self) -> i64: ...
 
     egraph.register(set_(Foo().bar).to(i64(1)))
     egraph.check(eq(Foo().bar).to(i64(1)))
@@ -278,8 +263,7 @@ def test_default_args():
     EGraph()
 
     @function
-    def foo(x: i64Like, y: i64Like = i64(1)) -> i64:
-        ...
+    def foo(x: i64Like, y: i64Like = i64(1)) -> i64: ...
 
     assert expr_parts(foo(i64(1))) == expr_parts(foo(i64(1), i64(1)))
 
@@ -348,8 +332,7 @@ def test_custom_equality():
     egraph = EGraph()
 
     class Boolean(Expr):
-        def __init__(self, value: BoolLike) -> None:
-            ...
+        def __init__(self, value: BoolLike) -> None: ...
 
         def __eq__(self, other: Boolean) -> Boolean:  # type: ignore[override]
             ...
@@ -373,11 +356,9 @@ class TestMutate:
         EGraph()
 
         class Foo(Expr):
-            def __init__(self) -> None:
-                ...
+            def __init__(self) -> None: ...
 
-            def __setitem__(self, key: i64Like, value: i64Like) -> None:
-                ...
+            def __setitem__(self, key: i64Like, value: i64Like) -> None: ...
 
         foo = Foo()
         foo[10] = 20
@@ -391,15 +372,12 @@ class TestMutate:
         egraph = EGraph()
 
         class Math(Expr):
-            def __init__(self, i: i64Like) -> None:
-                ...
+            def __init__(self, i: i64Like) -> None: ...
 
-            def __add__(self, other: Math) -> Math:
-                ...
+            def __add__(self, other: Math) -> Math: ...
 
         @function(mutates_first_arg=True)
-        def incr(x: Math) -> None:
-            ...
+        def incr(x: Math) -> None: ...
 
         x = Math(i64(10))
         x_copied = copy(x)
@@ -436,14 +414,11 @@ def test_reflected_binary_method():
     EGraph()
 
     class Math(Expr):
-        def __init__(self, value: i64Like) -> None:
-            ...
+        def __init__(self, value: i64Like) -> None: ...
 
-        def __add__(self, other: Math) -> Math:
-            ...
+        def __add__(self, other: Math) -> Math: ...
 
-        def __radd__(self, other: Math) -> Math:
-            ...
+        def __radd__(self, other: Math) -> Math: ...
 
     converter(i64, Math, Math)
 
@@ -460,22 +435,17 @@ def test_upcast_args():
     EGraph()
 
     class Int(Expr):
-        def __init__(self, value: i64Like) -> None:
-            ...
+        def __init__(self, value: i64Like) -> None: ...
 
-        def __add__(self, other: Int) -> Int:
-            ...
+        def __add__(self, other: Int) -> Int: ...
 
     class Float(Expr):
-        def __init__(self, value: f64Like) -> None:
-            ...
+        def __init__(self, value: f64Like) -> None: ...
 
-        def __add__(self, other: Float) -> Float:
-            ...
+        def __add__(self, other: Float) -> Float: ...
 
         @classmethod
-        def from_int(cls, other: Int) -> Float:
-            ...
+        def from_int(cls, other: Int) -> Float: ...
 
     converter(i64, Int, Int)
     converter(f64, Float, Float)
@@ -496,8 +466,7 @@ def test_function_default_upcasts():
     EGraph()
 
     @function
-    def f(x: i64Like) -> i64:
-        ...
+    def f(x: i64Like) -> i64: ...
 
     assert expr_parts(f(1)) == expr_parts(f(i64(1)))
 
@@ -508,30 +477,23 @@ def test_upcast_self_lower_cost():
     EGraph()
 
     class Int(Expr):
-        def __init__(self, name: StringLike) -> None:
-            ...
+        def __init__(self, name: StringLike) -> None: ...
 
-        def __add__(self, other: Int) -> Int:
-            ...
+        def __add__(self, other: Int) -> Int: ...
 
     NDArrayLike = Union[Int, "NDArray"]
 
     class NDArray(Expr):
-        def __init__(self, name: StringLike) -> None:
-            ...
+        def __init__(self, name: StringLike) -> None: ...
 
-        def __add__(self, other: NDArrayLike) -> NDArray:
-            ...
+        def __add__(self, other: NDArrayLike) -> NDArray: ...
 
-        def __radd__(self, other: NDArrayLike) -> NDArray:
-            ...
+        def __radd__(self, other: NDArrayLike) -> NDArray: ...
 
-        def to_int(self) -> Int:
-            ...
+        def to_int(self) -> Int: ...
 
         @classmethod
-        def from_int(cls, other: Int) -> NDArray:
-            ...
+        def from_int(cls, other: Int) -> NDArray: ...
 
     converter(Int, NDArray, NDArray.from_int)
     converter(NDArray, Int, lambda a: a.to_int(), 100)
@@ -588,14 +550,11 @@ def test_eval_fn_locals():
 
 def test_lazy_types():
     class A(Expr):
-        def __init__(self) -> None:
-            ...
+        def __init__(self) -> None: ...
 
-        def b(self) -> B:
-            ...
+        def b(self) -> B: ...
 
-    class B(Expr):
-        ...
+    class B(Expr): ...
 
     simplify(A().b())
 
@@ -605,22 +564,19 @@ def test_functions_seperate_pop():
     egraph = EGraph()
 
     class T(Expr):
-        def __init__(self, x: i64Like) -> None:
-            ...
+        def __init__(self, x: i64Like) -> None: ...
 
     with egraph:
 
         @function
-        def f(x: T) -> T:
-            ...
+        def f(x: T) -> T: ...
 
         egraph.register(f(T(1)))
 
     with egraph:
 
         @function
-        def f(x: T, y: T) -> T:
-            ...
+        def f(x: T, y: T) -> T: ...
 
         egraph.register(f(T(1), T(2)))  # type: ignore[call-arg]
 
@@ -628,12 +584,10 @@ def test_functions_seperate_pop():
 # https://github.com/egraphs-good/egglog/issues/113
 def test_multiple_generics():
     @function
-    def f() -> Vec[i64]:
-        ...
+    def f() -> Vec[i64]: ...
 
     @function
-    def g() -> Vec[String]:
-        ...
+    def g() -> Vec[String]: ...
 
     egraph = EGraph()
 

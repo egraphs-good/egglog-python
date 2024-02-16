@@ -3,6 +3,7 @@
 Basic equality saturation example.
 ==================================
 """
+
 from __future__ import annotations
 
 from egglog import *
@@ -11,18 +12,14 @@ egraph = EGraph()
 
 
 class Num(Expr):
-    def __init__(self, value: i64Like) -> None:
-        ...
+    def __init__(self, value: i64Like) -> None: ...
 
     @classmethod
-    def var(cls, name: StringLike) -> Num:
-        ...
+    def var(cls, name: StringLike) -> Num: ...
 
-    def __add__(self, other: Num) -> Num:
-        ...
+    def __add__(self, other: Num) -> Num: ...
 
-    def __mul__(self, other: Num) -> Num:
-        ...
+    def __mul__(self, other: Num) -> Num: ...
 
 
 expr1 = Num(2) * (Num.var("x") + Num(3))

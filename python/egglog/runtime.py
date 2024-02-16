@@ -359,7 +359,7 @@ class RuntimeParamaterizedClass:
 
     def __getattr__(self, name: str) -> RuntimeClassMethod | RuntimeClass:
         # Special case so when get_type_annotations proccessed it can work
-        if name in {"__origin__"}:
+        if name == "__origin__":
             return RuntimeClass(self.__egg_decls__.update_other, self.__egg_tp__.name)
         return RuntimeClassMethod(self.__egg_decls__, class_to_ref(self), name)
 

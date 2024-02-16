@@ -3,14 +3,14 @@
 Fibonacci numbers example
 =========================
 """
+
 from __future__ import annotations
 
 from egglog import *
 
 
 @function
-def fib(x: i64Like) -> i64:
-    ...
+def fib(x: i64Like) -> i64: ...
 
 
 f0, f1, x = vars_("f0 f1 x", i64)
