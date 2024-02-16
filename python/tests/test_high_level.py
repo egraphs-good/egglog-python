@@ -644,3 +644,11 @@ def test_multiple_generics():
 
     assert str(egraph.extract(f())) == "Vec[i64].empty()"
     assert str(egraph.extract(g())) == "Vec[String].empty()"
+
+
+def test_wrong_annotation_error():
+    class ZX(Expr):
+        symbol: str
+
+    with pytest.raises(NotImplementedError):
+        ZX.__egg_decls__  # type: ignore[attr-defined]
