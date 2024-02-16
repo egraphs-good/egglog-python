@@ -19,8 +19,7 @@ array_api_program_gen_schedule = array_api_program_gen_ruleset.saturate() + prog
 
 
 @function
-def bool_program(x: Boolean) -> Program:
-    ...
+def bool_program(x: Boolean) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -30,8 +29,7 @@ def _bool_program():
 
 
 @function
-def int_program(x: Int) -> Program:
-    ...
+def int_program(x: Int) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -58,13 +56,11 @@ def _int_program(i64_: i64, i: Int, j: Int):
 
 
 @function
-def tuple_int_program(x: TupleInt) -> Program:
-    ...
+def tuple_int_program(x: TupleInt) -> Program: ...
 
 
 @function
-def tuple_int_program_inner(x: TupleInt) -> Program:
-    ...
+def tuple_int_program_inner(x: TupleInt) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -79,13 +75,11 @@ def _tuple_int_program(i: Int, j: Int, ti: TupleInt, ti1: TupleInt, ti2: TupleIn
 
 
 @function
-def ndarray_program(x: NDArray) -> Program:
-    ...
+def ndarray_program(x: NDArray) -> Program: ...
 
 
 @function
-def ndarray_function_two(res: NDArray, l: NDArray, r: NDArray) -> Program:
-    ...
+def ndarray_function_two(res: NDArray, l: NDArray, r: NDArray) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -98,8 +92,7 @@ def _ndarray_function_two(f: Program, res: NDArray, l: NDArray, r: NDArray, o: P
 
 
 @function
-def dtype_program(x: DType) -> Program:
-    ...
+def dtype_program(x: DType) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -113,8 +106,7 @@ def _dtype_program():
 
 
 @function
-def float_program(x: Float) -> Program:
-    ...
+def float_program(x: Float) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -136,8 +128,7 @@ def _float_program(f: Float, g: Float, f64_: f64, i: Int, r: Rational):
 
 
 @function
-def value_program(x: Value) -> Program:
-    ...
+def value_program(x: Value) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -154,13 +145,11 @@ def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Valu
 
 
 @function
-def tuple_value_program(x: TupleValue) -> Program:
-    ...
+def tuple_value_program(x: TupleValue) -> Program: ...
 
 
 @function
-def tuple_value_program_inner(x: TupleValue) -> Program:
-    ...
+def tuple_value_program_inner(x: TupleValue) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -173,8 +162,7 @@ def _tuple_value_program(tv1: TupleValue, tv2: TupleValue, v: Value):
 
 
 @function
-def tuple_ndarray_program(x: TupleNDArray) -> Program:
-    ...
+def tuple_ndarray_program(x: TupleNDArray) -> Program: ...
 
 
 @function
@@ -197,8 +185,7 @@ def _tuple_ndarray_program(x: NDArray, l: TupleNDArray, r: TupleNDArray, i: Int)
 
 
 @function
-def optional_dtype_program(x: OptionalDType) -> Program:
-    ...
+def optional_dtype_program(x: OptionalDType) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -208,8 +195,7 @@ def _optional_dtype_program(dtype: DType):
 
 
 @function
-def optional_int_program(x: OptionalInt) -> Program:
-    ...
+def optional_int_program(x: OptionalInt) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -232,8 +218,7 @@ def _optional_int_slice_program(x: Int):
 
 
 @function
-def slice_program(x: Slice) -> Program:
-    ...
+def slice_program(x: Slice) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -247,8 +232,7 @@ def _slice_program(start: OptionalInt, stop: OptionalInt, i: Int):
 
 
 @function
-def multi_axis_index_key_item_program(x: MultiAxisIndexKeyItem) -> Program:
-    ...
+def multi_axis_index_key_item_program(x: MultiAxisIndexKeyItem) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -260,8 +244,7 @@ def _multi_axis_index_key_item_program(i: Int, s: Slice):
 
 
 @function
-def multi_axis_index_key_program(x: MultiAxisIndexKey) -> Program:
-    ...
+def multi_axis_index_key_program(x: MultiAxisIndexKey) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -274,8 +257,7 @@ def _multi_axis_index_key_program(l: MultiAxisIndexKey, r: MultiAxisIndexKey, it
 
 
 @function
-def index_key_program(x: IndexKey) -> Program:
-    ...
+def index_key_program(x: IndexKey) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -288,8 +270,7 @@ def _index_key_program(i: Int, s: Slice, key: MultiAxisIndexKey, a: NDArray):
 
 
 @function
-def int_or_tuple_program(x: IntOrTuple) -> Program:
-    ...
+def int_or_tuple_program(x: IntOrTuple) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -299,8 +280,7 @@ def _int_or_tuple_program(x: Int, t: TupleInt):
 
 
 @function
-def optional_int_or_tuple_program(x: OptionalIntOrTuple) -> Program:
-    ...
+def optional_int_or_tuple_program(x: OptionalIntOrTuple) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register

@@ -2,6 +2,7 @@
 Schedule demo
 =============
 """
+
 from __future__ import annotations
 
 from egglog import *

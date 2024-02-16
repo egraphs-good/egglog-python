@@ -27,8 +27,7 @@ R = relation("R", i64)
 
 
 @function
-def f(i: i64Like) -> Bool:
-    ...
+def f(i: i64Like) -> Bool: ...
 
 
 i = var("i", i64)

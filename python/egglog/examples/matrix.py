@@ -2,6 +2,7 @@
 Matrix multiplication and Kronecker product.
 ============================================
 """
+
 from __future__ import annotations
 
 from egglog import *
@@ -18,8 +19,7 @@ class Dim(Expr):
     """
 
     @method(egg_fn="Lit")
-    def __init__(self, value: i64Like) -> None:
-        ...
+    def __init__(self, value: i64Like) -> None: ...
 
     @method(egg_fn="NamedDim")
     @classmethod

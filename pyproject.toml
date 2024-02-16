@@ -182,6 +182,10 @@ select = ["ALL"]
 extend-exclude = ["python/tests/__snapshots__"]
 unsafe-fixes = true
 
+
+[tool.ruff.format]
+preview = true
+
 [tool.ruff.lint.per-file-ignores]
 # Don't require annotations for tests
 "python/tests/**" = ["ANN001", "ANN201"]

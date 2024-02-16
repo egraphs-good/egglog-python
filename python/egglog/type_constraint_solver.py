@@ -1,4 +1,5 @@
 """Provides a class for solving type constraints."""
+
 from __future__ import annotations
 
 from collections import defaultdict

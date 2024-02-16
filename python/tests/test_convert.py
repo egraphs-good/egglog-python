@@ -11,8 +11,7 @@ def test_conversion_custom_metaclass():
     EGraph()
 
     class MyTypeExpr(Expr):
-        def __init__(self) -> None:
-            ...
+        def __init__(self) -> None: ...
 
     converter(MyMeta, MyTypeExpr, lambda x: MyTypeExpr())
     assert expr_parts(convert(MyType(), MyTypeExpr)) == expr_parts(MyTypeExpr())
@@ -25,8 +24,7 @@ def test_conversion():
         pass
 
     class MyTypeExpr(Expr):
-        def __init__(self) -> None:
-            ...
+        def __init__(self) -> None: ...
 
     converter(MyType, MyTypeExpr, lambda x: MyTypeExpr())
 
@@ -40,12 +38,10 @@ def test_conversion_transitive_forward():
         pass
 
     class MyTypeExpr(Expr):
-        def __init__(self) -> None:
-            ...
+        def __init__(self) -> None: ...
 
     class MyTypeExpr2(Expr):
-        def __init__(self) -> None:
-            ...
+        def __init__(self) -> None: ...
 
     converter(MyType, MyTypeExpr, lambda x: MyTypeExpr())
     converter(MyTypeExpr, MyTypeExpr2, lambda x: MyTypeExpr2())
@@ -60,12 +56,10 @@ def test_conversion_transitive_backward():
         pass
 
     class MyTypeExpr(Expr):
-        def __init__(self) -> None:
-            ...
+        def __init__(self) -> None: ...
 
     class MyTypeExpr2(Expr):
-        def __init__(self) -> None:
-            ...
+        def __init__(self) -> None: ...
 
     converter(MyTypeExpr, MyTypeExpr2, lambda x: MyTypeExpr2())
     converter(MyType, MyTypeExpr, lambda x: MyTypeExpr())
@@ -79,12 +73,10 @@ def test_conversion_transitive_cycle():
         pass
 
     class MyTypeExpr(Expr):
-        def __init__(self) -> None:
-            ...
+        def __init__(self) -> None: ...
 
     class MyTypeExpr2(Expr):
-        def __init__(self) -> None:
-            ...
+        def __init__(self) -> None: ...
 
     converter(MyType, MyTypeExpr, lambda x: MyTypeExpr())
     converter(MyTypeExpr, MyTypeExpr2, lambda x: MyTypeExpr2())

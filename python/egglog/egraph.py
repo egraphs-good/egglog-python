@@ -170,13 +170,11 @@ class _BaseModule:
 
     @deprecated("Remove this decorator and move the egg_sort to the class statement, i.e. E(Expr, egg_sort='MySort').")
     @overload
-    def class_(self, *, egg_sort: str) -> Callable[[TYPE], TYPE]:
-        ...
+    def class_(self, *, egg_sort: str) -> Callable[[TYPE], TYPE]: ...
 
     @deprecated("Remove this decorator. Simply subclassing Expr is enough now.")
     @overload
-    def class_(self, cls: TYPE, /) -> TYPE:
-        ...
+    def class_(self, cls: TYPE, /) -> TYPE: ...
 
     def class_(self, *args, **kwargs) -> Any:
         """
@@ -201,8 +199,7 @@ class _BaseModule:
         self,
         *,
         preserve: Literal[True],
-    ) -> Callable[[CALLABLE], CALLABLE]:
-        ...
+    ) -> Callable[[CALLABLE], CALLABLE]: ...
 
     @overload
     def method(
@@ -214,8 +211,7 @@ class _BaseModule:
         on_merge: Callable[[Any, Any], Iterable[ActionLike]] | None = None,
         mutates_self: bool = False,
         unextractable: bool = False,
-    ) -> Callable[[CALLABLE], CALLABLE]:
-        ...
+    ) -> Callable[[CALLABLE], CALLABLE]: ...
 
     @overload
     def method(
@@ -228,8 +224,7 @@ class _BaseModule:
         on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
         mutates_self: bool = False,
         unextractable: bool = False,
-    ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
-        ...
+    ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]: ...
 
     @deprecated("Use top level method function instead")
     def method(
@@ -249,8 +244,7 @@ class _BaseModule:
         )
 
     @overload
-    def function(self, fn: CALLABLE, /) -> CALLABLE:
-        ...
+    def function(self, fn: CALLABLE, /) -> CALLABLE: ...
 
     @overload
     def function(
@@ -262,8 +256,7 @@ class _BaseModule:
         on_merge: Callable[[Any, Any], Iterable[ActionLike]] | None = None,
         mutates_first_arg: bool = False,
         unextractable: bool = False,
-    ) -> Callable[[CALLABLE], CALLABLE]:
-        ...
+    ) -> Callable[[CALLABLE], CALLABLE]: ...
 
     @overload
     def function(
@@ -276,8 +269,7 @@ class _BaseModule:
         on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
         mutates_first_arg: bool = False,
         unextractable: bool = False,
-    ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
-        ...
+    ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]: ...
 
     @deprecated("Use top level function `function` instead")
     def function(self, *args, **kwargs) -> Any:
@@ -300,24 +292,19 @@ class _BaseModule:
     @overload
     def relation(
         self, name: str, tp1: type[E1], tp2: type[E2], tp3: type[E3], tp4: type[E4], /
-    ) -> Callable[[E1, E2, E3, E4], Unit]:
-        ...
+    ) -> Callable[[E1, E2, E3, E4], Unit]: ...
 
     @overload
-    def relation(self, name: str, tp1: type[E1], tp2: type[E2], tp3: type[E3], /) -> Callable[[E1, E2, E3], Unit]:
-        ...
+    def relation(self, name: str, tp1: type[E1], tp2: type[E2], tp3: type[E3], /) -> Callable[[E1, E2, E3], Unit]: ...
 
     @overload
-    def relation(self, name: str, tp1: type[E1], tp2: type[E2], /) -> Callable[[E1, E2], Unit]:
-        ...
+    def relation(self, name: str, tp1: type[E1], tp2: type[E2], /) -> Callable[[E1, E2], Unit]: ...
 
     @overload
-    def relation(self, name: str, tp1: type[T], /, *, egg_fn: str | None = None) -> Callable[[T], Unit]:
-        ...
+    def relation(self, name: str, tp1: type[T], /, *, egg_fn: str | None = None) -> Callable[[T], Unit]: ...
 
     @overload
-    def relation(self, name: str, /, *, egg_fn: str | None = None) -> Callable[[], Unit]:
-        ...
+    def relation(self, name: str, /, *, egg_fn: str | None = None) -> Callable[[], Unit]: ...
 
     @deprecated("Use top level relation function instead")
     def relation(self, name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..., Unit]:
@@ -362,8 +349,7 @@ class _BaseModule:
 def method(
     *,
     preserve: Literal[True],
-) -> Callable[[CALLABLE], CALLABLE]:
-    ...
+) -> Callable[[CALLABLE], CALLABLE]: ...
 
 
 # We have to seperate method/function overloads for those that use the T params and those that don't
@@ -380,8 +366,7 @@ def method(
     on_merge: Callable[[Any, Any], Iterable[ActionLike]] | None = None,
     mutates_self: bool = False,
     unextractable: bool = False,
-) -> Callable[[CALLABLE], CALLABLE]:
-    ...
+) -> Callable[[CALLABLE], CALLABLE]: ...
 
 
 @overload
@@ -394,8 +379,7 @@ def method(
     on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
     mutates_self: bool = False,
     unextractable: bool = False,
-) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
-    ...
+) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]: ...
 
 
 def method(
@@ -565,8 +549,7 @@ class _ClassDeclerationsConstructor:
 
 
 @overload
-def function(fn: CALLABLE, /) -> CALLABLE:
-    ...
+def function(fn: CALLABLE, /) -> CALLABLE: ...
 
 
 @overload
@@ -579,8 +562,7 @@ def function(
     mutates_first_arg: bool = False,
     unextractable: bool = False,
     builtin: bool = False,
-) -> Callable[[CALLABLE], CALLABLE]:
-    ...
+) -> Callable[[CALLABLE], CALLABLE]: ...
 
 
 @overload
@@ -593,8 +575,7 @@ def function(
     on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
     mutates_first_arg: bool = False,
     unextractable: bool = False,
-) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
-    ...
+) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]: ...
 
 
 def function(*args, **kwargs) -> Any:
@@ -760,28 +741,23 @@ def _register_function(
 @overload
 def relation(
     name: str, tp1: type[E1], tp2: type[E2], tp3: type[E3], tp4: type[E4], /
-) -> Callable[[E1, E2, E3, E4], Unit]:
-    ...
+) -> Callable[[E1, E2, E3, E4], Unit]: ...
 
 
 @overload
-def relation(name: str, tp1: type[E1], tp2: type[E2], tp3: type[E3], /) -> Callable[[E1, E2, E3], Unit]:
-    ...
+def relation(name: str, tp1: type[E1], tp2: type[E2], tp3: type[E3], /) -> Callable[[E1, E2, E3], Unit]: ...
 
 
 @overload
-def relation(name: str, tp1: type[E1], tp2: type[E2], /) -> Callable[[E1, E2], Unit]:
-    ...
+def relation(name: str, tp1: type[E1], tp2: type[E2], /) -> Callable[[E1, E2], Unit]: ...
 
 
 @overload
-def relation(name: str, tp1: type[T], /, *, egg_fn: str | None = None) -> Callable[[T], Unit]:
-    ...
+def relation(name: str, tp1: type[T], /, *, egg_fn: str | None = None) -> Callable[[T], Unit]: ...
 
 
 @overload
-def relation(name: str, /, *, egg_fn: str | None = None) -> Callable[[], Unit]:
-    ...
+def relation(name: str, /, *, egg_fn: str | None = None) -> Callable[[], Unit]: ...
 
 
 def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..., Unit]:
@@ -1053,12 +1029,10 @@ class EGraph(_BaseModule):
         return cast(EXPR, RuntimeExpr(expr.__egg_decls__, TypedExprDecl(expr.__egg_typed_expr__.tp, VarDecl(name))))
 
     @overload
-    def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> EXPR:
-        ...
+    def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> EXPR: ...
 
     @overload
-    def simplify(self, expr: EXPR, schedule: Schedule, /) -> EXPR:
-        ...
+    def simplify(self, expr: EXPR, schedule: Schedule, /) -> EXPR: ...
 
     def simplify(
         self, expr: EXPR, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
@@ -1102,12 +1076,10 @@ class EGraph(_BaseModule):
         raise NotImplementedError(msg)
 
     @overload
-    def run(self, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> bindings.RunReport:
-        ...
+    def run(self, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> bindings.RunReport: ...
 
     @overload
-    def run(self, schedule: Schedule, /) -> bindings.RunReport:
-        ...
+    def run(self, schedule: Schedule, /) -> bindings.RunReport: ...
 
     def run(
         self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
@@ -1147,12 +1119,10 @@ class EGraph(_BaseModule):
         return bindings.Check(egg_facts)
 
     @overload
-    def extract(self, expr: EXPR, /, include_cost: Literal[False] = False) -> EXPR:
-        ...
+    def extract(self, expr: EXPR, /, include_cost: Literal[False] = False) -> EXPR: ...
 
     @overload
-    def extract(self, expr: EXPR, /, include_cost: Literal[True]) -> tuple[EXPR, int]:
-        ...
+    def extract(self, expr: EXPR, /, include_cost: Literal[True]) -> tuple[EXPR, int]: ...
 
     def extract(self, expr: EXPR, include_cost: bool = False) -> EXPR | tuple[EXPR, int]:
         """
@@ -1229,24 +1199,19 @@ class EGraph(_BaseModule):
         self.pop()
 
     @overload
-    def eval(self, expr: i64) -> int:
-        ...
+    def eval(self, expr: i64) -> int: ...
 
     @overload
-    def eval(self, expr: f64) -> float:
-        ...
+    def eval(self, expr: f64) -> float: ...
 
     @overload
-    def eval(self, expr: Bool) -> bool:
-        ...
+    def eval(self, expr: Bool) -> bool: ...
 
     @overload
-    def eval(self, expr: String) -> str:
-        ...
+    def eval(self, expr: String) -> str: ...
 
     @overload
-    def eval(self, expr: PyObject) -> object:
-        ...
+    def eval(self, expr: PyObject) -> object: ...
 
     def eval(self, expr: Expr) -> object:
         """
@@ -1347,8 +1312,7 @@ class Unit(Expr, egg_sort="Unit", builtin=True):
     The unit type. This is also used to reprsent if a value exists, if it is resolved or not.
     """
 
-    def __init__(self) -> None:
-        ...
+    def __init__(self) -> None: ...
 
 
 def ruleset(
@@ -1836,13 +1800,11 @@ class Sequence(Schedule):
 
 @deprecated("Use <ruleset>.register(<rewrite>) instead of passing rulesets as arguments to rewrites.")
 @overload
-def rewrite(lhs: EXPR, ruleset: Ruleset) -> _RewriteBuilder[EXPR]:
-    ...
+def rewrite(lhs: EXPR, ruleset: Ruleset) -> _RewriteBuilder[EXPR]: ...
 
 
 @overload
-def rewrite(lhs: EXPR, ruleset: None = None) -> _RewriteBuilder[EXPR]:
-    ...
+def rewrite(lhs: EXPR, ruleset: None = None) -> _RewriteBuilder[EXPR]: ...
 
 
 def rewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _RewriteBuilder[EXPR]:
@@ -1852,13 +1814,11 @@ def rewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _RewriteBuilder[EXPR]:
 
 @deprecated("Use <ruleset>.register(<birewrite>) instead of passing rulesets as arguments to birewrites.")
 @overload
-def birewrite(lhs: EXPR, ruleset: Ruleset) -> _BirewriteBuilder[EXPR]:
-    ...
+def birewrite(lhs: EXPR, ruleset: Ruleset) -> _BirewriteBuilder[EXPR]: ...
 
 
 @overload
-def birewrite(lhs: EXPR, ruleset: None = None) -> _BirewriteBuilder[EXPR]:
-    ...
+def birewrite(lhs: EXPR, ruleset: None = None) -> _BirewriteBuilder[EXPR]: ...
 
 
 def birewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _BirewriteBuilder[EXPR]:
@@ -1911,13 +1871,11 @@ def set_(lhs: EXPR) -> _SetBuilder[EXPR]:
 
 @deprecated("Use <ruleset>.register(<rule>) instead of passing rulesets as arguments to rules.")
 @overload
-def rule(*facts: FactLike, ruleset: Ruleset, name: str | None = None) -> _RuleBuilder:
-    ...
+def rule(*facts: FactLike, ruleset: Ruleset, name: str | None = None) -> _RuleBuilder: ...
 
 
 @overload
-def rule(*facts: FactLike, ruleset: None = None, name: str | None = None) -> _RuleBuilder:
-    ...
+def rule(*facts: FactLike, ruleset: None = None, name: str | None = None) -> _RuleBuilder: ...
 
 
 def rule(*facts: FactLike, ruleset: Ruleset | None = None, name: str | None = None) -> _RuleBuilder:

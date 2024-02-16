@@ -6,6 +6,7 @@ N-Dimensional Arrays
 
 Example of building NDarray in the vein of Mathemetics of Arrays.
 """
+
 from __future__ import annotations
 
 from egglog import *
@@ -14,14 +15,11 @@ egraph = EGraph()
 
 
 class Value(Expr):
-    def __init__(self, v: i64Like) -> None:
-        ...
+    def __init__(self, v: i64Like) -> None: ...
 
-    def __mul__(self, other: Value) -> Value:
-        ...
+    def __mul__(self, other: Value) -> Value: ...
 
-    def __add__(self, other: Value) -> Value:
-        ...
+    def __add__(self, other: Value) -> Value: ...
 
 
 i, j = vars_("i j", i64)
@@ -32,17 +30,13 @@ egraph.register(
 
 
 class Values(Expr):
-    def __init__(self, v: Vec[Value]) -> None:
-        ...
+    def __init__(self, v: Vec[Value]) -> None: ...
 
-    def __getitem__(self, idx: Value) -> Value:
-        ...
+    def __getitem__(self, idx: Value) -> Value: ...
 
-    def length(self) -> Value:
-        ...
+    def length(self) -> Value: ...
 
-    def concat(self, other: Values) -> Values:
-        ...
+    def concat(self, other: Values) -> Values: ...
 
 
 @egraph.register
@@ -59,16 +53,13 @@ class NDArray(Expr):
     An n-dimensional array.
     """
 
-    def __getitem__(self, idx: Values) -> Value:
-        ...
+    def __getitem__(self, idx: Values) -> Value: ...
 
-    def shape(self) -> Values:
-        ...
+    def shape(self) -> Values: ...
 
 
 @function
-def arange(n: Value) -> NDArray:
-    ...
+def arange(n: Value) -> NDArray: ...
 
 
 @egraph.register
@@ -94,8 +85,7 @@ assert_simplifies(arange(Value(10))[Values(Vec(Value(1)))], Value(1))
 
 
 @function
-def py_value(s: StringLike) -> Value:
-    ...
+def py_value(s: StringLike) -> Value: ...
 
 
 @egraph.register
@@ -105,8 +95,7 @@ def _py_value(l: String, r: String):
 
 
 @function
-def py_values(s: StringLike) -> Values:
-    ...
+def py_values(s: StringLike) -> Values: ...
 
 
 @egraph.register
@@ -117,8 +106,7 @@ def _py_values(l: String, r: String):
 
 
 @function
-def py_ndarray(s: StringLike) -> NDArray:
-    ...
+def py_ndarray(s: StringLike) -> NDArray: ...
 
 
 @egraph.register
@@ -134,8 +122,7 @@ assert_simplifies(arange(py_value("x"))[py_values("y")], py_value("np.arange(x)[
 
 
 @function
-def cross(l: NDArray, r: NDArray) -> NDArray:
-    ...
+def cross(l: NDArray, r: NDArray) -> NDArray: ...
 
 
 @egraph.register

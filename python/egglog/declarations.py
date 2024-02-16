@@ -103,8 +103,7 @@ UNARY_METHODS = {
 @runtime_checkable
 class HasDeclerations(Protocol):
     @property
-    def __egg_decls__(self) -> Declarations:
-        ...
+    def __egg_decls__(self) -> Declarations: ...
 
 
 DeclerationsLike: TypeAlias = Union[HasDeclerations, None, "Declarations"]
