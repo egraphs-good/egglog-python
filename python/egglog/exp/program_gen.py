@@ -2,6 +2,7 @@
 """
 Builds up imperative string expressions from a functional expression.
 """
+
 from __future__ import annotations
 
 from typing import Union
