@@ -2,7 +2,9 @@
 
 _This project uses semantic versioning_
 
-## Unreleased
+## UNRELEASED
+
+## 6.0.1 (2024-02-28)
 
 - Upgrade dependencies, including [egglog](https://github.com/egraphs-good/egglog/compare/ceed816e9369570ffed9feeba157b19471dda70d...4cc011f6b48029dd72104a38a2ca0c7657846e0b)
 - Fix bug where saturate wasn't properly getting translated.
