@@ -28,10 +28,9 @@ from typing import (
 import graphviz
 from typing_extensions import ParamSpec, Self, Unpack, deprecated
 
-from egglog.declarations import REFLECTED_BINARY_METHODS, Declarations
-
 from . import bindings
 from .declarations import *
+from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
 from .runtime import *
 
@@ -470,10 +469,7 @@ class _ClassDeclerationsConstructor:
         slf_type_ref = TypeRefWithVars(self.cls_name, tuple(map(ClassTypeVarRef, type_vars)))
 
         # Create a dummy type to pass to get_type_hints to resolve the annotations we have
-        class _Dummytype:
-            pass
-
-        _Dummytype.__annotations__ = self.namespace.get("__annotations__", {})
+        _Dummytype = type("_DummyType", (), {"__annotations__": self.namespace.get("__annotations__", {})})
         # Make lazy update to locals, so we keep a live handle on them after class creation
         locals = self.frame.f_locals.copy()
         locals[self.cls_name] = self.current_cls
@@ -859,29 +855,6 @@ class GraphvizKwargs(TypedDict, total=False):
 
 
 @dataclass
-class _EGraphState:
-    """
-    State of the EGraph declerations and rulesets, so when we pop/push the stack we know whats defined.
-    """
-
-    # The decleratons we have added. The _cmds represent all the symbols we have added
-    decls: Declarations = field(default_factory=Declarations)
-    # List of rulesets already added, so we don't re-add them if they are passed again
-    added_rulesets: set[str] = field(default_factory=set)
-
-    def add_decls(self, new_decls: Declarations) -> Iterable[bindings._Command]:
-        new_cmds = [v for k, v in new_decls._cmds.items() if k not in self.decls._cmds]
-        self.decls |= new_decls
-        return new_cmds
-
-    def add_rulesets(self, rulesets: Iterable[Ruleset]) -> Iterable[bindings._Command]:
-        for ruleset in rulesets:
-            if ruleset.egg_name not in self.added_rulesets:
-                self.added_rulesets.add(ruleset.egg_name)
-                yield from ruleset._cmds
-
-
-@dataclass
 class EGraph(_BaseModule):
     """
     A collection of expressions where each expression is part of a distinct equivalence class.
@@ -895,7 +868,7 @@ class EGraph(_BaseModule):
     default_ruleset: Ruleset | None = None
     _egraph: bindings.EGraph = field(repr=False, init=False)
     _egglog_string: str | None = field(default=None, repr=False, init=False)
-    _state: _EGraphState = field(default_factory=_EGraphState, repr=False)
+    _state: EGraphState = field(default_factory=EGraphState, repr=False)
     # For pushing/popping with egglog
     _state_stack: list[_EGraphState] = field(default_factory=list, repr=False)
     # For storing the global "current" egraph
@@ -931,7 +904,10 @@ class EGraph(_BaseModule):
 
     def _add_schedule(self, schedule: Schedule) -> None:
         self._add_decls(schedule)
-        self._process_commands(self._state.add_rulesets(schedule._rulesets()))
+        for ruleset in schedule._rulesets():
+            if ruleset.egg_name not in self._state.added_rulesets:
+                self._state.added_rulesets.add(ruleset.egg_name)
+                self._process_commands(ruleset._cmds)
 
     @property
     def as_egglog_string(self) -> str:

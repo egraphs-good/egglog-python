@@ -20,20 +20,22 @@ use std::sync::Arc;
 pub struct EGraph {
     egraph: egglog::EGraph,
     py_object_arcsort: Option<Arc<PyObjectSort>>,
+    cmds: Option<String>,
 }
 
 #[pymethods]
 impl EGraph {
     #[new]
     #[pyo3(
-        signature = (py_object_sort=None, *, fact_directory=None, seminaive=true, terms_encoding=false),
-        text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, terms_encoding=False)"
+        signature = (py_object_sort=None, *, fact_directory=None, seminaive=true, terms_encoding=false, record=false),
+        text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, terms_encoding=False, record=False)"
     )]
     fn new(
         py_object_sort: Option<ArcPyObjectSort>,
         fact_directory: Option<PathBuf>,
         seminaive: bool,
         terms_encoding: bool,
+        record: bool,
     ) -> Self {
         let mut egraph = egglog::EGraph::default();
         egraph.fact_directory = fact_directory;
@@ -50,6 +52,7 @@ impl EGraph {
         Self {
             egraph,
             py_object_arcsort,
+            cmds: if record { Some(String::new()) } else { None },
         }
     }
 
@@ -68,8 +71,20 @@ impl EGraph {
     fn run_program(&mut self, commands: Vec<Command>) -> EggResult<Vec<String>> {
         let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
         info!("Running commands {:?}", commands);
+        if let Some(cmds) = &mut self.cmds {
+            for cmd in &commands {
+                cmds.push_str(&cmd.to_string());
+                cmds.push('\n');
+            }
+        }
         let res = self.egraph.run_program(commands)?;
         Ok(res)
+    }
+
+    /// Returns the text of the commands that have been run so far, if `record` was passed.
+    #[pyo3(signature = ())]
+    fn commands(&self) -> Option<String> {
+        self.cmds.clone()
     }
 
     /// Gets the last expressions extracted from the EGraph, if the last command

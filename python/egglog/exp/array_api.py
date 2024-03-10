@@ -36,18 +36,28 @@ class Boolean(Expr):
     @property
     def bool(self) -> Bool: ...
 
-    def __or__(self, other: Boolean) -> Boolean: ...
+    def __or__(self, other: BooleanLike) -> Boolean: ...
 
-    def __and__(self, other: Boolean) -> Boolean: ...
+    def __and__(self, other: BooleanLike) -> Boolean: ...
 
+    def if_int(self, true_value: Int, false_value: Int) -> Int: ...
+
+
+# TODO: With if_int this will break... Constants cannot be defined without Int being defined...
+# Can we defer things in a smarter way so that we can define all these rules without the `Int`
+# being defined?
+BooleanLike = bool | Boolean
 
 TRUE = constant("TRUE", Boolean)
 FALSE = constant("FALSE", Boolean)
 converter(bool, Boolean, lambda x: TRUE if x else FALSE)
 
+# TODO: Maybe it's too hard to do type analysis with these deferred types and not worth it
+# Instead, just defer resolving all this until we need it
+
 
 @array_api_ruleset.register
-def _bool(x: Boolean):
+def _bool(x: Boolean, i: Int, j: Int):
     return [
         rule(eq(x).to(TRUE)).then(set_(x.bool).to(Bool(True))),
         rule(eq(x).to(FALSE)).then(set_(x.bool).to(Bool(False))),
@@ -55,6 +65,8 @@ def _bool(x: Boolean):
         rewrite(FALSE | x).to(x),
         rewrite(TRUE & x).to(x),
         rewrite(FALSE & x).to(FALSE),
+        rewrite(TRUE.if_int(i, j)).to(i),
+        rewrite(FALSE.if_int(i, j)).to(j),
     ]
 
 
