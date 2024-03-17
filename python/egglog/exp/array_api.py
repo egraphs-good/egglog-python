@@ -52,9 +52,6 @@ TRUE = constant("TRUE", Boolean)
 FALSE = constant("FALSE", Boolean)
 converter(bool, Boolean, lambda x: TRUE if x else FALSE)
 
-# TODO: Maybe it's too hard to do type analysis with these deferred types and not worth it
-# Instead, just defer resolving all this until we need it
-
 
 @array_api_ruleset.register
 def _bool(x: Boolean, i: Int, j: Int):

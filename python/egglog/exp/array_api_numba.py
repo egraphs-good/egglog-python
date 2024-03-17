@@ -34,7 +34,11 @@ def _std(y: NDArray, x: NDArray, i: Int):
     axis = OptionalIntOrTuple.some(IntOrTuple.int(i))
     # https://numpy.org/doc/stable/reference/generated/numpy.std.html
     # "std = sqrt(mean(x)), where x = abs(a - a.mean())**2."
-    yield rewrite(std(x, axis)).to(sqrt(mean(square(x - mean(x, axis, keepdims=TRUE)), axis)))
+    yield rewrite(
+        std(x, axis),
+    ).to(
+        sqrt(mean(square(x - mean(x, axis, keepdims=TRUE)), axis)),
+    )
 
 
 # rewrite unique_counts to count each value one by one, since numba doesn't support np.unique(..., return_counts=True)

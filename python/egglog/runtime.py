@@ -11,7 +11,7 @@ so they are not mangled by Python and can be accessed by the user.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from inspect import Parameter, Signature
 from itertools import zip_longest
 from typing import TYPE_CHECKING, NoReturn, TypeVar, Union, cast, get_args, get_origin
@@ -21,8 +21,8 @@ import black.parsing
 
 from . import bindings, config
 from .declarations import *
-from .declarations import DelayedTypeName
 from .pretty import *
+from .thunk import Thunk
 from .type_constraint_solver import *
 
 if TYPE_CHECKING:
@@ -36,7 +36,6 @@ __all__ = [
     "resolve_literal",
     "resolve_callable",
     "resolve_type_annotation",
-    "resolve_type_name",
     "RuntimeClass",
     "RuntimeParamaterizedClass",
     "RuntimeClassMethod",
@@ -74,17 +73,6 @@ _PY_OBJECT_CLASS: RuntimeClass | None = None
 T = TypeVar("T")
 
 
-def resolve_type_name(decls: Declarations, name: DelayedTypeName | T) -> str | T:
-    if isinstance(name, DelayedTypeName):
-        obj = name.resolved
-        assert isinstance(obj, RuntimeClass)
-        decls |= obj
-        tp = obj.__egg_tp__
-        assert not tp.args, "A delayed type name should not have args"
-        return resolve_type_or_var(decls, tp.name)
-    return name
-
-
 def resolve_type_annotation(decls: Declarations, tp: object) -> TypeOrVarRef:
     """
     Resolves a type object into a type reference.
@@ -114,17 +102,26 @@ def resolve_type_annotation(decls: Declarations, tp: object) -> TypeOrVarRef:
 
 @dataclass
 class RuntimeClass:
-    __egg_decls__: Declarations
+    __egg_decls_thunk__: Thunk[Declarations]
     __egg_tp__: TypeRefWithVars
 
     def __post_init__(self) -> None:
         global _PY_OBJECT_CLASS
         if self.__egg_tp__.name == "PyObject":
             _PY_OBJECT_CLASS = self
+        self.verify()
+
+    @property
+    def __egg_decls__(self) -> Declarations:
+        return self.__egg_decls_thunk__()
+
+    def verify(self) -> None:
+        if not self.__egg_tp__.args:
+            return
 
         # Raise error if we have args, but they are the wrong number
         desired_args = self.__egg_decls__.get_class_decl(self.__egg_tp__.name).type_vars
-        if self.__egg_tp__.args and len(self.__egg_tp__.args) != len(desired_args):
+        if len(self.__egg_tp__.args) != len(desired_args):
             raise ValueError(f"Expected {desired_args} type args, got {len(self.__egg_tp__.args)}")
 
     def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr | None:
@@ -143,7 +140,9 @@ class RuntimeClass:
             assert len(args) == 0
             return RuntimeExpr(self.__egg_decls__, TypedExprDecl(self.__egg_tp__.to_just(), LitDecl(None)))
 
-        return RuntimeClassMethod(self.__egg_decls__, self.__egg_tp__.to_just(), "__init__")(*args, **kwargs)
+        return RuntimeFunction(
+            self.__egg_decls__, ClassMethodRef(self.__egg_tp__.name, "__init__"), self.__egg_tp__.to_just()
+        )(*args, **kwargs)
 
     def __dir__(self) -> list[str]:
         cls_decl = self.__egg_decls__.get_class_decl(self.__egg_tp__.name)
@@ -162,11 +161,11 @@ class RuntimeClass:
             args = (args,)
         decls = self.__egg_decls__.copy()
         tp = TypeRefWithVars(self.__egg_tp__.name, tuple(resolve_type_annotation(decls, arg) for arg in args))
-        return RuntimeClass(self.__egg_decls__, tp)
+        return RuntimeClass(Thunk.value(decls), tp)
 
-    def __getattr__(self, name: str) -> RuntimeClassMethod | RuntimeExpr | Callable:
+    def __getattr__(self, name: str) -> RuntimeFunction | RuntimeExpr | Callable:
         if name == "__origin__" and self.__egg_tp__.args:
-            return RuntimeClass(self.__egg_decls__, TypeRefWithVars(self.__egg_tp__.name))
+            return RuntimeClass(self.__egg_decls_thunk__, TypeRefWithVars(self.__egg_tp__.name))
 
         # Special case some names that don't exist so we can exit early without resolving decls
         # Important so if we take union of RuntimeClass it won't try to resolve decls
@@ -189,12 +188,16 @@ class RuntimeClass:
             return_tp = cls_decl.class_variables[name]
             return RuntimeExpr(
                 self.__egg_decls__,
-                TypedExprDecl(return_tp.type_ref, CallDecl(ClassVariableRef(self.__egg_name__, name))),
+                TypedExprDecl(return_tp.type_ref, CallDecl(ClassVariableRef(self.__egg_tp__.name, name))),
             )
-        return RuntimeClassMethod(self.__egg_decls__, self.__egg_tp__, name)
+        if name in cls_decl.class_methods:
+            return RuntimeFunction(
+                self.__egg_decls__, ClassMethodRef(self.__egg_tp__.name, name), self.__egg_tp__.to_just()
+            )
+        raise AttributeError(f"Class {self.__egg_tp__.name} has no method {name}")
 
     def __str__(self) -> str:
-        return pretty_type_or_var(self.__egg_tp__)
+        return str(self.__egg_tp__)
 
     # Make hashable so can go in Union
     def __hash__(self) -> int:
@@ -212,8 +215,6 @@ class RuntimeFunction:
     __egg_bound__: JustTypeRef | TypedExprDecl | None
 
     def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr | None:
-        # return _call(self.__egg_decls__, self.__egg_fn_ref__, self.__egg_callable_decl__, args, kwargs)
-
         from .conversion import resolve_literal
 
         fn_decl = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl()
@@ -235,10 +236,9 @@ class RuntimeFunction:
         bound_tp = (
             None
             if self.__egg_bound__ is None
-            else resolve_just_type(
-                self.__egg_decls__,
-                self.__egg_bound__.tp if isinstance(self.__egg_bound__, TypedExprDecl) else self.__egg_bound__,
-            )
+            else self.__egg_bound__.tp
+            if isinstance(self.__egg_bound__, TypedExprDecl)
+            else self.__egg_bound__
         )
         if bound_tp and bound_tp.args:
             tcs.bind_class(bound_tp)
@@ -248,7 +248,7 @@ class RuntimeFunction:
         return_tp = tcs.infer_return_type(
             fn_decl.arg_types, fn_decl.return_type or fn_decl.arg_types[0], fn_decl.var_arg_type, arg_types, cls_name
         )
-        bound_params = cast(JustTypeRef, bound_class).args if isinstance(callable_ref, ClassMethodRef) else None
+        bound_params = cast(JustTypeRef, bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef) else None
         expr_decl = CallDecl(self.__egg_ref__, arg_exprs, bound_params)
         typed_expr_decl = TypedExprDecl(return_tp, expr_decl)
         # If there is not return type, we are mutating the first arg
@@ -379,46 +379,46 @@ PARTIAL_METHODS = {
 }
 
 
-@dataclass
-class RuntimeMethod:
-    __egg_self__: RuntimeExpr
-    __egg_method_name__: str
-    __egg_callable_ref__: MethodRef | PropertyRef = field(init=False)
-    __egg_fn_decl__: FunctionDecl = field(init=False, repr=False)
-    __egg_decls__: Declarations = field(init=False)
+# @dataclass
+# class RuntimeMethod:
+#     __egg_self__: RuntimeExpr
+#     __egg_method_name__: str
+#     __egg_callable_ref__: MethodRef | PropertyRef = field(init=False)
+#     __egg_fn_decl__: FunctionDecl = field(init=False, repr=False)
+#     __egg_decls__: Declarations = field(init=False)
 
-    def __post_init__(self) -> None:
-        self.__egg_decls__ = self.__egg_self__.__egg_decls__
-        if self.__egg_method_name__ in self.__egg_decls__.get_class_decl(self.class_name).properties:
-            self.__egg_callable_ref__ = PropertyRef(self.class_name, self.__egg_method_name__)
-        else:
-            self.__egg_callable_ref__ = MethodRef(self.class_name, self.__egg_method_name__)
-        try:
-            self.__egg_fn_decl__ = self.__egg_decls__.get_function_decl(self.__egg_callable_ref__)
-        except KeyError:
-            msg = f"Class {self.class_name} does not have method {self.__egg_method_name__}"
-            if self.__egg_method_name__ == "__ne__":
-                msg += ". Did you mean to use the ne(...).to(...)?"
-            raise AttributeError(msg) from None
+#     def __post_init__(self) -> None:
+#         self.__egg_decls__ = self.__egg_self__.__egg_decls__
+#         if self.__egg_method_name__ in self.__egg_decls__.get_class_decl(self.class_name).properties:
+#             self.__egg_callable_ref__ = PropertyRef(self.class_name, self.__egg_method_name__)
+#         else:
+#             self.__egg_callable_ref__ = MethodRef(self.class_name, self.__egg_method_name__)
+#         try:
+#             self.__egg_fn_decl__ = self.__egg_decls__.get_function_decl(self.__egg_callable_ref__)
+#         except KeyError:
+#             msg = f"Class {self.class_name} does not have method {self.__egg_method_name__}"
+#             if self.__egg_method_name__ == "__ne__":
+#                 msg += ". Did you mean to use the ne(...).to(...)?"
+#             raise AttributeError(msg) from None
 
-    def __call__(self, *args: object, **kwargs) -> RuntimeExpr | None:
-        args = (self.__egg_self__, *args)
-        try:
-            return _call(
-                self.__egg_decls__,
-                self.__egg_callable_ref__,
-                self.__egg_fn_decl__,
-                args,
-                kwargs,
-                self.__egg_self__.__egg_typed_expr__.tp,
-            )
-        except ConvertError as e:
-            name = self.__egg_method_name__
-            raise TypeError(f"Wrong types for {self.__egg_self__.__egg_typed_expr__.tp.pretty()}.{name}") from e
+#     def __call__(self, *args: object, **kwargs) -> RuntimeExpr | None:
+#         args = (self.__egg_self__, *args)
+#         try:
+#             return _call(
+#                 self.__egg_decls__,
+#                 self.__egg_callable_ref__,
+#                 self.__egg_fn_decl__,
+#                 args,
+#                 kwargs,
+#                 self.__egg_self__.__egg_typed_expr__.tp,
+#             )
+#         except ConvertError as e:
+#             name = self.__egg_method_name__
+#             raise TypeError(f"Wrong types for {self.__egg_self__.__egg_typed_expr__.tp.pretty()}.{name}") from e
 
-    @property
-    def class_name(self) -> str:
-        return self.__egg_self__.__egg_typed_expr__.tp.name
+#     @property
+#     def class_name(self) -> str:
+#         return self.__egg_self__.__egg_typed_expr__.tp.name
 
 
 @dataclass

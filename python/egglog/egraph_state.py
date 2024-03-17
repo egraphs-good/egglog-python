@@ -5,13 +5,12 @@ Implement conversion to/from egglog.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING, assert_never, overload
 from weakref import WeakKeyDictionary
 
 from . import bindings
 from .declarations import *
 from .pretty import *
-from .runtime import resolve_type_name
 from .type_constraint_solver import TypeConstraintError, TypeConstraintSolver
 
 if TYPE_CHECKING:
@@ -35,8 +34,8 @@ class EGraphState:
     egraph: bindings.EGraph
     # The decleratons we have added.
     __egg_decls__: Declarations = field(default_factory=Declarations)
-    # List of rulesets already added, so we don't re-add them if they are passed again
-    added_rulesets: set[str] = field(default_factory=set)
+    # Mapping of added rulesets to the added rules
+    rulesets: dict[str, set[RewriteOrRuleDec]] = field(default_factory=dict)
 
     # Bidirectional mapping between egg function names and python callable references.
     # Note that there are possibly mutliple callable references for a single egg function name, like `+`
@@ -57,7 +56,82 @@ class EGraphState:
         return EGraphState(
             egraph=self.egraph,
             __egg_decls__=self.__egg_decls__.copy(),
+            rulesets={k: v.copy() for k, v in self.rulesets.items()},
+            egg_fn_to_callable_refs={k: v.copy() for k, v in self.egg_fn_to_callable_refs.items()},
+            callable_ref_to_egg_fn=self.callable_ref_to_egg_fn.copy(),
+            type_ref_to_egg_sort=self.type_ref_to_egg_sort.copy(),
+            expr_to_egg_cache=self.expr_to_egg_cache.copy(),
         )
+
+    def ruleset_to_egg(self, name: str) -> str:
+        """
+        Returns the egglog name of a ruleset, registering it if it is not already registered, and adding any rules
+        that are not already added.
+        """
+        if name not in self.rulesets:
+            if name:
+                self.egraph.run_program(bindings.AddRuleset(name))
+            rules = self.rulesets[name] = set()
+        else:
+            rules = self.rulesets[name]
+        for rule in self.__egg_decls__._rulesets[name]:
+            if rule in rules:
+                continue
+            self.egraph.run_program(self.command_to_egg(rule, name))
+            rules.add(rule)
+        return name
+
+    def command_to_egg(self, cmd: CommandDecl, ruleset: str) -> bindings._Command:
+        match cmd:
+            case ActionCommandDecl(action):
+                return bindings.ActionCommand(self.action_to_egg(action))
+            case RewriteDecl(lhs, rhs, conditions) | BiRewriteDecl(lhs, rhs, conditions):
+                rewrite = bindings.Rewrite(
+                    self.expr_to_egg(lhs),
+                    self.expr_to_egg(rhs),
+                    [self.fact_to_egg(c) for c in conditions],
+                )
+                return (
+                    bindings.RewriteCommand(ruleset, rewrite)
+                    if isinstance(cmd, RewriteDecl)
+                    else bindings.BiRewriteCommand(ruleset, rewrite)
+                )
+            case RuleDecl(head, body, name):
+                rule = bindings.Rule(
+                    [self.action_to_egg(a) for a in head],
+                    [self.fact_to_egg(f) for f in body],
+                )
+                return bindings.RuleCommand(name or "", ruleset, rule)
+            case _:
+                assert_never(cmd)
+
+    def action_to_egg(self, action: ActionDecl) -> bindings._Action:
+        match action:
+            case LetDecl(name, expr):
+                return bindings.Let(name, self.expr_to_egg(expr))
+            case SetDecl(call, rhs):
+                call_ = self.expr_to_egg(call)
+                return bindings.Set(call_.name, call_.args, self.expr_to_egg(rhs))
+            case ExprActionDecl(expr):
+                return bindings.Expr_(self.expr_to_egg(expr))
+            case DeleteDecl(call):
+                call_ = self.expr_to_egg(call)
+                return bindings.Delete(call_.name, call_.args)
+            case UnionDecl(lhs, rhs):
+                return bindings.Union(self.expr_to_egg(lhs), self.expr_to_egg(rhs))
+            case PanicDecl(name):
+                return bindings.Panic(name)
+            case _:
+                assert_never(action)
+
+    def fact_to_egg(self, fact: FactDecl) -> bindings._Fact:
+        match fact:
+            case EqDecl(exprs):
+                return bindings.Eq([self.expr_to_egg(e) for e in exprs])
+            case ExprFactDecl(expr):
+                return bindings.Fact(self.expr_to_egg(expr))
+            case _:
+                assert_never(fact)
 
     def callable_ref_to_egg(self, ref: CallableRef) -> str:
         """
@@ -100,7 +174,6 @@ class EGraphState:
         """
         Returns the egg sort name for a type reference, registering it if it is not already registered.
         """
-        ref = resolve_just_type(self.__egg_decls__, ref)
         if ref in self.type_ref_to_egg_sort:
             return self.type_ref_to_egg_sort[ref]
         decl = self.__egg_decls__._classes[ref.name]
@@ -131,6 +204,12 @@ class EGraphState:
             for k, v in self.egg_fn_to_callable_refs.items()
             if len(v) == 1
         }
+
+    @overload
+    def expr_to_egg(self, expr_decl: CallDecl) -> bindings.Call: ...
+
+    @overload
+    def expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr: ...
 
     def expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:
         """
@@ -186,14 +265,15 @@ class EGraphState:
         """
         return frozenset(tp for tp in self.type_ref_to_egg_sort if tp.name == cls_name)
 
-    def _generate_type_egg_name(self, ref: JustTypeRef) -> str:
-        """
-        Generates an egg sort name for this type reference by linearizing the type.
-        """
-        name = resolve_type_name(self.__egg_decls__, ref.name)
-        if not ref.args:
-            return name
-        return f"{name}_{"_".join(map(_generate_type_egg_name, ref.args))}"
+
+def _generate_type_egg_name(ref: JustTypeRef) -> str:
+    """
+    Generates an egg sort name for this type reference by linearizing the type.
+    """
+    name = ref.name
+    if not ref.args:
+        return name
+    return f"{name}_{"_".join(map(_generate_type_egg_name, ref.args))}"
 
 
 def _generate_callable_egg_name(ref: CallableRef) -> str:

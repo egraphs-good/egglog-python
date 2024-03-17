@@ -1,26 +1,22 @@
 """
-Pretty printing for declerations
+Pretty printing for declerations.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import assert_never
+from typing import TYPE_CHECKING, TypeAlias, assert_never
 
 import black
 
 from .declarations import *
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
 __all__ = [
-    "pretty_command",
-    "pretty_action",
-    "pretty_fact",
-    "pretty_ruleset",
-    "pretty_expr",
-    "pretty_callable",
-    "pretty_type",
-    "pretty_type_or_var",
+    "pretty",
     "BINARY_METHODS",
     "UNARY_METHODS",
 ]
@@ -68,55 +64,40 @@ UNARY_METHODS = {
     "__invert__": "~",
 }
 
+FrozenDecls: TypeAlias = CommandDecl | ActionDecl | FactDecl | ExprDecl
+AllDecls: TypeAlias = RulesetDecl | FrozenDecls
 
-def pretty_command(decls: Declarations, command: CommandDecl) -> str:
-    """
-    Pretty print a command.
-    """
-
-
-def pretty_action(decls: Declarations, action: ActionDecl) -> str:
-    """
-    Pretty print an action.
-    """
+# TODO: Make all able to have aliases, besides RulesetDecl bc its not hasable
 
 
-def pretty_fact(decls: Declarations, fact: FactDecl) -> str:
+def pretty_decl(decls: Declarations, decl: AllDecls) -> str:
     """
-    Pretty print a fact.
-    """
+    Pretty print a decleration.
 
+    This will use re-format the result and put the expression on the last line, preceeded by the statements.
+    """
+    traverse = TraverseContext()
+    traverse(decl, toplevel=True)
+    pretty = traverse.pretty(decls)
+    expr = pretty(expr, unwrap_lit=False)
 
-def pretty_ruleset(decls: Declarations, ruleset: RulesetDecl) -> str:
-    """
-    Pretty print a ruleset.
-    """
-
-
-def pretty_expr(decls: Declarations, expr: ExprDecl, wrapping_fn: str | None) -> str:
-    """
-    Pretty print an expression.
-    """
-    context = PrettyContext(decls)
-    context.traverse_for_parents(expr)
-    pretty_expr = context(expr, parens=False)
-    pretty_statements = context.render(pretty_expr)
+    program = "\n".join([*pretty.statements, expr])
     try:
         # TODO: Try replacing with ruff for speed
         # https://github.com/amyreese/ruff-api
-        return black.format_str(pretty_statements, mode=BLACK_MODE).strip()
+        return black.format_str(program, mode=BLACK_MODE).strip()
     except black.parsing.InvalidInput:
-        return pretty_statements
+        return program
 
 
-def pretty_callable(decls: Declarations, ref: CallableRef) -> str:
+def pretty_callable_ref(decls: Declarations, ref: CallableRef) -> str:
     """
     Pretty print a callable reference, using a dummy value for
     the args if the function is not in the form `f(x, ...)`.
 
     To be used in the visualization.
     """
-    res = PrettyContext(decls)._call_inner(
+    res = PrettyContext(decls, {})._call_inner(
         ref,
         # Pass in three dummy args, which are the max used for any operation that
         # is not a generic function call
@@ -127,44 +108,102 @@ def pretty_callable(decls: Declarations, ref: CallableRef) -> str:
     return res[0] if isinstance(res, tuple) else res
 
 
-def pretty_type(type_ref: JustTypeRef) -> str:
+@dataclass
+class TraverseContext:
     """
-    Pretty print a type reference.
+    State for traversing expressions (or declerations that contain expressions), so we can know how many parents each
+    expression has.
     """
-    if type_ref.args:
-        return f"{type_ref.name}[{', '.join(map(pretty_type, type_ref.args))}]"
-    return type_ref.name
 
+    # All expressions we have seen (incremented the parent counts of all children)
+    _seen: set[FrozenDecls] = field(default_factory=set)
+    # The number of parents for each expressions
+    parents: Counter[FrozenDecls] = field(default_factory=Counter)
 
-def pretty_type_or_var(type_ref: TypeOrVarRef) -> str:
-    match type_ref:
-        case ClassTypeVarRef(name):
-            return name
-        case TypeRefWithVars(name, args):
-            if args:
-                return f"{name}[{', '.join(map(pretty_type_or_var, args))}]"
-            return name
-        case _:
-            assert_never(type_ref)
+    def pretty(self, decls: Declarations) -> PrettyContext:
+        """
+        Create a pretty context from the state of this traverse context.
+        """
+        return PrettyContext(decls, self.parents)
+
+    def __call__(self, decl: AllDecls, toplevel: bool = False) -> None:  # noqa: C901
+        # rulesets are not hashable
+        if not isinstance(decl, RulesetDecl):
+            if not toplevel:
+                self.parents[decl] += 1
+            if decl in self._seen:
+                return
+        match decl:
+            case ActionCommandDecl(action):
+                self(action)
+            case RewriteDecl(lhs, rhs, conditions) | BiRewriteDecl(lhs, rhs, conditions):
+                self(lhs)
+                self(rhs)
+                for cond in conditions:
+                    self(cond)
+            case RuleDecl(head, body, _):
+                for action in head:
+                    self(action)
+                for fact in body:
+                    self(fact)
+            case SetDecl(lhs, rhs) | UnionDecl(lhs, rhs):
+                self(lhs)
+                self(rhs)
+            case LetDecl(_, expr) | ExprActionDecl(expr) | DeleteDecl(expr) | ExprFactDecl(expr):
+                self(expr)
+            case PanicDecl(_) | VarDecl(_) | LitDecl(_) | PyObjectDecl(_):
+                pass
+            case EqDecl(exprs):
+                for expr in exprs:
+                    self(expr)
+            case CallDecl(_, args, _):
+                for arg in args:
+                    self(arg.expr)
+            case RulesetDecl(rules):
+                for rule in rules:
+                    self(rule)
+                return
+            case _:
+                assert_never(decl)
+
+        self._seen.add(decl)
 
 
 @dataclass
 class PrettyContext:
+    """
+
+    We need to build up a list of all the expressions we are pretty printing, so that we can see who has parents and who is mutated
+    and create temp variables for them.
+
+    """
+
     decls: Declarations
-    # List of statements of "context" setting variable for the expr
+    parents: Mapping[FrozenDecls, int]
+
+    # All the expressions we have saved as names
+    names: dict[FrozenDecls, str] = field(default_factory=dict)
+    # A list of statements assigning variables or calling destructive ops
     statements: list[str] = field(default_factory=list)
-
-    names: dict[ExprDecl, str] = field(default_factory=dict)
-    parents: dict[ExprDecl, int] = field(default_factory=lambda: defaultdict(lambda: 0))
-    _traversed_exprs: set[ExprDecl] = field(default_factory=set)
-
     # Mapping of type to the number of times we have generated a name for that type, used to generate unique names
     _gen_name_types: dict[str, int] = field(default_factory=lambda: defaultdict(lambda: 0))
 
-    def __call__(self, expr: ExprDecl, *, unwrap_lit: bool = True, parens: bool = False) -> str:  # noqa: PLR0911
-        if expr in self.names:
-            return self.names[expr]
-        match expr:
+    def fact(self, fact: FactDecl) -> str:
+        match fact:
+            case EqDecl(exprs):
+                first, *rest = exprs
+                return f"eq({self(first, unwrap_lit=False)}).to({', '.join(self(r, unwrap_lit=False) for r in rest)})"
+            case ExprFactDecl(expr):
+                return self(expr, unwrap_lit=False)
+            case _:
+                assert_never(fact)
+
+    def __call__(  # noqa: PLR0911
+        self, decl: AllDecls, *, unwrap_lit: bool = True, parens: bool = False
+    ) -> str:
+        if decl in self.names:
+            return self.names[decl]
+        match decl:
             case LitDecl(value):
                 match value:
                     case None:
@@ -179,35 +218,31 @@ class PrettyContext:
                         return repr(s) if unwrap_lit else f"String({s!r})"
                     case _:
                         assert_never(value)
-                        return None
             case VarDecl(name):
                 return name
-            case CallDecl(ref, args, bound_tp_params):
-                s, saved = self._call(ref, [a.expr for a in args], bound_tp_params, parens, self.parents[expr])
-                if saved:
-                    self.names[expr] = s
-                return s
+            case CallDecl(_, _, _):
+                return self._call(decl, parens)
             case PyObjectDecl(value):
                 return repr(value)
             case _:
-                assert_never(expr)
+                assert_never(decl)
 
     def _call(
         self,
-        ref: CallableRef,
-        args: list[ExprDecl],
-        bound_tp_params: tuple[JustTypeRef, ...] | None,
+        decl: CallDecl,
         parens: bool,
-        n_parents: int,
-    ) -> tuple[str, bool]:
+    ) -> str:
         """
         Pretty print the call. Also returns if it was saved as a name.
 
         :param parens: If true, wrap the call in parens if it is a binary method call.
         """
+        args = [a.expr for a in decl.args]
+        ref = decl.callable
         # Special case !=
-        if ref == FunctionRef("!="):
-            return f"ne({self(args[0], unwrap_lit=False)}).to({self(args[1], unwrap_lit=False)})", False
+        if decl.callable == FunctionRef("!="):
+            l, r = self(args[0], unwrap_lit=False), self(args[1], unwrap_lit=False)
+            return f"ne({l}).to({r})"
         function_decl = self.decls.get_callable_decl(ref).to_function_decl()
         # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
         n_defaults = 0
@@ -219,34 +254,36 @@ class PrettyContext:
             n_defaults += 1
         if n_defaults:
             args = args[:-n_defaults]
+
+        tp_name = function_decl.semantic_return_type.name
         if function_decl.mutates:
             first_arg = args[0]
             expr_str = self(first_arg)
-            # copy an identifer expression iff it has multiple parents (b/c then we can't mutate it directly)
+            # copy an identifier expression iff it has multiple parents (b/c then we can't mutate it directly)
             has_multiple_parents = self.parents[first_arg] > 1
-            expr_name = self.name_expr(
-                function_decl.semantic_return_type, expr_str, copy_identifier=has_multiple_parents
-            )
+            self.names[decl] = expr_name = self._name_expr(tp_name, expr_str, copy_identifier=has_multiple_parents)
             # Set the first arg to be the name of the mutated arg and return the name
             args[0] = VarDecl(expr_name)
         else:
             expr_name = None
-        res = self._call_inner(ref, args, bound_tp_params, parens)
+        res = self._call_inner(ref, args, decl.bound_tp_params, parens)
         expr = f"{res[0]}({', '.join(self(a, parens=False) for a in res[1])})" if isinstance(res, tuple) else res
         del res
         # If we have a name, then we mutated
         if expr_name:
             self.statements.append(expr)
-            return expr_name, True
+            return expr_name
 
         # We use a heuristic to decide whether to name this sub-expression as a variable
         # The rough goal is to reduce the number of newlines, given our line length of ~180
         # We determine it's worth making a new line for this expression if the total characters
         # it would take up is > than some constant (~ line length).
         line_diff: int = len(expr) - LINE_DIFFERENCE
+        n_parents = self.parents[decl]
         if n_parents > 1 and n_parents * line_diff > MAX_LINE_LENGTH:
-            return self.name_expr(function_decl.semantic_return_type, expr, copy_identifier=False), True
-        return expr, False
+            self.names[decl] = expr_name = self._name_expr(tp_name, expr, copy_identifier=False)
+            return expr_name
+        return expr
 
     def _call_inner(  # noqa: PLR0911
         self, ref: CallableRef, args: list[ExprDecl], bound_tp_params: tuple[JustTypeRef, ...] | None, parens: bool
@@ -291,35 +328,23 @@ class PrettyContext:
             case _:
                 assert_never(ref)
 
-    def generate_name(self, typ: str) -> str:
+    def _generate_name(self, typ: str) -> str:
         self._gen_name_types[typ] += 1
         return f"_{typ}_{self._gen_name_types[typ]}"
 
-    def name_expr(self, expr_type: TypeOrVarRef, expr_str: str, copy_identifier: bool) -> str:
-        tp_name = expr_type.to_just().name
+    def _name_expr(self, tp_name: str, expr_str: str, copy_identifier: bool) -> str:
+        # tp_name =
         # If the thing we are naming is already a variable, we don't need to name it
         if expr_str.isidentifier():
             if copy_identifier:
-                name = self.generate_name(tp_name)
+                name = self._generate_name(tp_name)
                 self.statements.append(f"{name} = copy({expr_str})")
             else:
                 name = expr_str
         else:
-            name = self.generate_name(tp_name)
+            name = self._generate_name(tp_name)
             self.statements.append(f"{name} = {expr_str}")
         return name
-
-    def render(self, expr: str) -> str:
-        return "\n".join([*self.statements, expr])
-
-    def traverse_for_parents(self, expr: ExprDecl) -> None:
-        if expr in self._traversed_exprs:
-            return
-        self._traversed_exprs.add(expr)
-        if isinstance(expr, CallDecl):
-            for arg in set(expr.args):
-                self.parents[arg.expr] += 1
-                self.traverse_for_parents(arg.expr)
 
 
 def _plot_line_length(expr: object):

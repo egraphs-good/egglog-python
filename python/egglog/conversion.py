@@ -154,8 +154,7 @@ def resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
             continue
         break
     else:
-        arg_type_str = pretty_type(arg_type) if isinstance(arg_type, JustTypeRef) else arg_type.__name__
-        raise ConvertError(f"Cannot convert {arg_type_str} to {pretty_type(tp_just)}")
+        raise ConvertError(f"Cannot convert {arg_type} to {tp_just}")
     return fn(arg)
 
 

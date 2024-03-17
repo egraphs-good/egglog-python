@@ -25,7 +25,6 @@ __all__ = [
     "ClassTypeVarRef",
     "TypeRefWithVars",
     "TypeOrVarRef",
-    "DelayedTypeName",
     "MethodRef",
     "ClassMethodRef",
     "FunctionRef",
@@ -46,7 +45,7 @@ __all__ = [
     "TypedExprDecl",
     "ClassDecl",
     "RulesetDecl",
-    "SaturatenDecl",
+    "SaturateDecl",
     "RepeatDecl",
     "SequenceDecl",
     "RunDecl",
@@ -94,6 +93,11 @@ def upcast_declerations(declerations_like: Iterable[DeclerationsLike]) -> list[D
         else:
             assert_never(l)
     return d
+
+
+@dataclass
+class RulesetDecl:
+    rules: list[RewriteOrRuleDec]
 
 
 @dataclass
@@ -241,12 +245,6 @@ class Declarations:
 
 
 @dataclass
-class RulesetDecl:
-    rules: list[RewriteOrRuleDec]
-    egg_name: str | None
-
-
-@dataclass
 class ClassDecl:
     egg_name: str | None
     type_vars: tuple[str, ...]
@@ -259,45 +257,21 @@ class ClassDecl:
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
 
 
-# A delayed reference to a type name, that couldn't be found when originally looking it up
-# Like https://peps.python.org/pep-0649/#the-stringizer-and-the-fake-globals-environment
-@dataclass(frozen=True)
-class DelayedTypeName:
-    """
-    A type reference that is not yet resolved.
-    """
-
-    name: str
-    locals: dict[str, object]
-    globals: dict[str, object]
-
-    def __hash__(self) -> int:
-        """
-        Define hash based on identity of the objects and globals/locals
-        """
-        return hash((self.name, id(self.locals), id(self.globals)))
-
-    @cached_property
-    def resolved(self) -> object:
-        """
-        Resolve the type by first looking in locals then in globals.
-        """
-        try:
-            return self.locals[self.name]
-        except KeyError:
-            return self.globals[self.name]
-
-
 # Have two different types of type refs, one that can include vars recursively and one that cannot.
 # We only use the one with vars for classmethods and methods, and the other one for egg references as
 # well as runtime values.
 @dataclass(frozen=True)
 class JustTypeRef:
-    name: str | DelayedTypeName
+    name: str
     args: tuple[JustTypeRef, ...] = ()
 
     def to_var(self) -> TypeRefWithVars:
         return TypeRefWithVars(self.name, tuple(a.to_var() for a in self.args))
+
+    def __str__(self) -> str:
+        if self.args:
+            return f"{self.name}[{', '.join(str(a) for a in self.args)}]"
+        return self.name
 
 
 @dataclass(frozen=True)
@@ -312,14 +286,22 @@ class ClassTypeVarRef:
         msg = "egglog does not support generic classes yet."
         raise NotImplementedError(msg)
 
+    def __str__(self) -> str:
+        return self.name
+
 
 @dataclass(frozen=True)
 class TypeRefWithVars:
-    name: str | DelayedTypeName
+    name: str
     args: tuple[TypeOrVarRef, ...] = ()
 
     def to_just(self) -> JustTypeRef:
         return JustTypeRef(self.name, tuple(a.to_just() for a in self.args))
+
+    def __str__(self) -> str:
+        if self.args:
+            return f"{self.name}[{', '.join(str(a) for a in self.args)}]"
+        return self.name
 
 
 TypeOrVarRef: TypeAlias = ClassTypeVarRef | TypeRefWithVars
@@ -599,14 +581,14 @@ ActionDecl: TypeAlias = LetDecl | SetDecl | ExprActionDecl | DeleteDecl | UnionD
 class RewriteDecl:
     lhs: ExprDecl
     rhs: ExprDecl
-    conditions: tuple[ExprDecl, ...]
+    conditions: tuple[FactDecl, ...]
 
 
 @dataclass(frozen=True)
 class BiRewriteDecl:
     lhs: ExprDecl
     rhs: ExprDecl
-    conditions: tuple[ExprDecl, ...]
+    conditions: tuple[FactDecl, ...]
 
 
 @dataclass(frozen=True)
