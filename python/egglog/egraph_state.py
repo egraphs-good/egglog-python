@@ -63,6 +63,20 @@ class EGraphState:
             expr_to_egg_cache=self.expr_to_egg_cache.copy(),
         )
 
+    def schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Schedule:
+        match schedule:
+            case SaturateDecl(schedule):
+                return bindings.Saturate(self.schedule_to_egg(schedule))
+            case RepeatDecl(schedule, times):
+                return bindings.Repeat(times, self.schedule_to_egg(schedule))
+            case SequenceDecl(schedules):
+                return bindings.Sequence([self.schedule_to_egg(s) for s in schedules])
+            case RunDecl(ruleset_name, until):
+                config = bindings.RunConfig(ruleset_name, None if until is None else list(map(self.fact_to_egg, until)))
+                return bindings.Run(config)
+            case _:
+                assert_never(schedule)
+
     def ruleset_to_egg(self, name: str) -> str:
         """
         Returns the egglog name of a ruleset, registering it if it is not already registered, and adding any rules
@@ -74,7 +88,7 @@ class EGraphState:
             rules = self.rulesets[name] = set()
         else:
             rules = self.rulesets[name]
-        for rule in self.__egg_decls__._rulesets[name]:
+        for rule in self.__egg_decls__._rulesets[name].rules:
             if rule in rules:
                 continue
             self.egraph.run_program(self.command_to_egg(rule, name))
@@ -200,7 +214,7 @@ class EGraphState:
         for better visualization.
         """
         return {
-            k: pretty_callable(self.__egg_decls__, next(iter(v)))
+            k: pretty_callable_ref(self.__egg_decls__, next(iter(v)))
             for k, v in self.egg_fn_to_callable_refs.items()
             if len(v) == 1
         }

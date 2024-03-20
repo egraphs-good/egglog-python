@@ -16,7 +16,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 __all__ = [
-    "pretty",
+    "pretty_decl",
+    "pretty_callable_ref",
     "BINARY_METHODS",
     "UNARY_METHODS",
 ]
@@ -64,13 +65,13 @@ UNARY_METHODS = {
     "__invert__": "~",
 }
 
-FrozenDecls: TypeAlias = CommandDecl | ActionDecl | FactDecl | ExprDecl
-AllDecls: TypeAlias = RulesetDecl | FrozenDecls
+# TODO: Schedule
+AllDecls: TypeAlias = RulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl
 
 # TODO: Make all able to have aliases, besides RulesetDecl bc its not hasable
 
 
-def pretty_decl(decls: Declarations, decl: AllDecls) -> str:
+def pretty_decl(decls: Declarations, decl: AllDecls, wrapping_fn: str | None = None) -> str:
     """
     Pretty print a decleration.
 
@@ -79,8 +80,9 @@ def pretty_decl(decls: Declarations, decl: AllDecls) -> str:
     traverse = TraverseContext()
     traverse(decl, toplevel=True)
     pretty = traverse.pretty(decls)
-    expr = pretty(expr, unwrap_lit=False)
-
+    expr = pretty(decl)
+    if wrapping_fn:
+        expr = f"{wrapping_fn}({expr})"
     program = "\n".join([*pretty.statements, expr])
     try:
         # TODO: Try replacing with ruff for speed
@@ -90,21 +92,26 @@ def pretty_decl(decls: Declarations, decl: AllDecls) -> str:
         return program
 
 
-def pretty_callable_ref(decls: Declarations, ref: CallableRef) -> str:
+def pretty_callable_ref(
+    decls: Declarations,
+    ref: CallableRef,
+    first_arg: ExprDecl | None = None,
+    bound_tp_params: tuple[JustTypeRef, ...] | None = None,
+) -> str:
     """
     Pretty print a callable reference, using a dummy value for
     the args if the function is not in the form `f(x, ...)`.
 
     To be used in the visualization.
     """
-    res = PrettyContext(decls, {})._call_inner(
-        ref,
-        # Pass in three dummy args, which are the max used for any operation that
-        # is not a generic function call
-        [LitDecl(ARG_STR)] * 3,
-        None,
-        False,
-    )
+    # Pass in three dummy args, which are the max used for any operation that
+    # is not a generic function call
+    args: list[ExprDecl] = [LitDecl(ARG_STR)] * 3
+    if first_arg:
+        args.insert(0, first_arg)
+    res = PrettyContext(decls, {})._call_inner(ref, args, bound_tp_params=bound_tp_params, parens=False)
+    # Either returns a function or a function with args. If args are provided, they would just be called,
+    # on the function, so return them, because they are dummies
     return res[0] if isinstance(res, tuple) else res
 
 
@@ -116,9 +123,9 @@ class TraverseContext:
     """
 
     # All expressions we have seen (incremented the parent counts of all children)
-    _seen: set[FrozenDecls] = field(default_factory=set)
+    _seen: set[AllDecls] = field(default_factory=set)
     # The number of parents for each expressions
-    parents: Counter[FrozenDecls] = field(default_factory=Counter)
+    parents: Counter[AllDecls] = field(default_factory=Counter)
 
     def pretty(self, decls: Declarations) -> PrettyContext:
         """
@@ -127,15 +134,11 @@ class TraverseContext:
         return PrettyContext(decls, self.parents)
 
     def __call__(self, decl: AllDecls, toplevel: bool = False) -> None:  # noqa: C901
-        # rulesets are not hashable
-        if not isinstance(decl, RulesetDecl):
-            if not toplevel:
-                self.parents[decl] += 1
-            if decl in self._seen:
-                return
+        if not toplevel:
+            self.parents[decl] += 1
+        if decl in self._seen:
+            return
         match decl:
-            case ActionCommandDecl(action):
-                self(action)
             case RewriteDecl(lhs, rhs, conditions) | BiRewriteDecl(lhs, rhs, conditions):
                 self(lhs)
                 self(rhs)
@@ -149,20 +152,28 @@ class TraverseContext:
             case SetDecl(lhs, rhs) | UnionDecl(lhs, rhs):
                 self(lhs)
                 self(rhs)
-            case LetDecl(_, expr) | ExprActionDecl(expr) | DeleteDecl(expr) | ExprFactDecl(expr):
-                self(expr)
+            case (
+                LetDecl(_, d)
+                | ExprActionDecl(d)
+                | DeleteDecl(d)
+                | ExprFactDecl(d)
+                | SaturateDecl(d)
+                | RepeatDecl(d, _)
+                | ActionCommandDecl(d)
+            ):
+                self(d)
             case PanicDecl(_) | VarDecl(_) | LitDecl(_) | PyObjectDecl(_):
                 pass
-            case EqDecl(exprs):
-                for expr in exprs:
-                    self(expr)
-            case CallDecl(_, args, _):
-                for arg in args:
-                    self(arg.expr)
-            case RulesetDecl(rules):
-                for rule in rules:
-                    self(rule)
-                return
+            case EqDecl(decls) | SequenceDecl(decls) | RulesetDecl(decls):
+                for de in decls:
+                    self(de)
+            case CallDecl(_, exprs, _):
+                for e in exprs:
+                    self(e.expr)
+            case RunDecl(_, until):
+                if until:
+                    for f in until:
+                        self(f)
             case _:
                 assert_never(decl)
 
@@ -179,10 +190,10 @@ class PrettyContext:
     """
 
     decls: Declarations
-    parents: Mapping[FrozenDecls, int]
+    parents: Mapping[AllDecls, int]
 
     # All the expressions we have saved as names
-    names: dict[FrozenDecls, str] = field(default_factory=dict)
+    names: dict[AllDecls, str] = field(default_factory=dict)
     # A list of statements assigning variables or calling destructive ops
     statements: list[str] = field(default_factory=list)
     # Mapping of type to the number of times we have generated a name for that type, used to generate unique names
@@ -192,38 +203,97 @@ class PrettyContext:
         match fact:
             case EqDecl(exprs):
                 first, *rest = exprs
-                return f"eq({self(first, unwrap_lit=False)}).to({', '.join(self(r, unwrap_lit=False) for r in rest)})"
+                return f"eq({self(first)}).to({', '.join(self(r) for r in rest)})"
             case ExprFactDecl(expr):
-                return self(expr, unwrap_lit=False)
+                return self(expr)
             case _:
                 assert_never(fact)
 
-    def __call__(  # noqa: PLR0911
-        self, decl: AllDecls, *, unwrap_lit: bool = True, parens: bool = False
+    def __call__(
+        self, decl: AllDecls, *, unwrap_lit: bool = False, parens: bool = False, ruleset_name: str | None = None
     ) -> str:
         if decl in self.names:
             return self.names[decl]
+        expr, tp_name = self.uncached(decl, unwrap_lit=unwrap_lit, parens=parens, ruleset_name=ruleset_name)
+        # We use a heuristic to decide whether to name this sub-expression as a variable
+        # The rough goal is to reduce the number of newlines, given our line length of ~180
+        # We determine it's worth making a new line for this expression if the total characters
+        # it would take up is > than some constant (~ line length).
+        line_diff: int = len(expr) - LINE_DIFFERENCE
+        n_parents = self.parents[decl]
+        if n_parents > 1 and n_parents * line_diff > MAX_LINE_LENGTH:
+            self.names[decl] = expr_name = self._name_expr(tp_name, expr, copy_identifier=False)
+            return expr_name
+        return expr
+
+    def uncached(self, decl: AllDecls, *, unwrap_lit: bool, parens: bool, ruleset_name: str | None) -> tuple[str, str]:  # noqa: PLR0911
         match decl:
             case LitDecl(value):
                 match value:
                     case None:
-                        return "Unit()"
+                        return "Unit()", "Unit"
                     case bool(b):
-                        return str(b) if unwrap_lit else f"Bool({b})"
+                        return str(b) if unwrap_lit else f"Bool({b})", "Bool"
                     case int(i):
-                        return str(i) if unwrap_lit else f"i64({i})"
+                        return str(i) if unwrap_lit else f"i64({i})", "i64"
                     case float(f):
-                        return str(f) if unwrap_lit else f"f64({f})"
+                        return str(f) if unwrap_lit else f"f64({f})", "f64"
                     case str(s):
-                        return repr(s) if unwrap_lit else f"String({s!r})"
+                        return repr(s) if unwrap_lit else f"String({s!r})", "String"
                     case _:
                         assert_never(value)
             case VarDecl(name):
-                return name
+                return name, name
             case CallDecl(_, _, _):
                 return self._call(decl, parens)
             case PyObjectDecl(value):
-                return repr(value)
+                return repr(value), "PyObject"
+            case ActionCommandDecl(action):
+                return self(action), "action"
+            case RewriteDecl(lhs, rhs, conditions) | BiRewriteDecl(lhs, rhs, conditions):
+                args = ", ".join(map(self, (rhs, *conditions)))
+                fn = "rewrite" if isinstance(decl, RewriteDecl) else "birewrite"
+                return f"{fn}({self(lhs)}).to({args})", "rewrite"
+            case RuleDecl(head, body, name):
+                l = ", ".join(map(self, body))
+                if name:
+                    l += f", name={name}"
+                r = ", ".join(map(self, head))
+                return f"rule({l}).then({r})", "rule"
+            case SetDecl(lhs, rhs):
+                return f"set_({self(lhs)}).to({self(rhs)})", "action"
+            case UnionDecl(lhs, rhs):
+                return f"union({self(lhs)}).with_({self(rhs)})", "action"
+            case LetDecl(name, expr):
+                return f"let({name!r}, {self(expr)}))", "action"
+            case ExprActionDecl(expr):
+                return self(expr), "action"
+            case ExprFactDecl(expr):
+                return self(expr), "fact"
+            case DeleteDecl(expr):
+                return f"delete({self(expr)})", "action"
+            case PanicDecl(s):
+                return f"panic({s!r})", "action"
+            case EqDecl(exprs):
+                first, *rest = exprs
+                return f"eq({self(first)}).to({', '.join(map(self, rest))})", "fact"
+            case RulesetDecl(rules):
+                args = ", ".join(map(self, rules))
+                return f"ruleset({args})", ruleset_name or "ruleset"
+            case SaturateDecl(schedule):
+                return f"{self(schedule)}.saturate()", "schedule"
+            case RepeatDecl(schedule, times):
+                return f"{self(schedule)} * {times}", "schedule"
+            case SequenceDecl(schedules):
+                args = ", ".join(map(self, schedules))
+                return f"sequence({args})", "schedule"
+            case RunDecl(ruleset_name, until):
+                ruleset = self.decls._rulesets[ruleset_name]
+                ruleset_str = self(ruleset, ruleset_name=ruleset_name)
+                if not until:
+                    return ruleset_str, "schedule"
+                args = ", ".join(map(self, until))
+                return f"run({ruleset_str}, {args})", "schedule"
             case _:
                 assert_never(decl)
 
@@ -231,7 +301,7 @@ class PrettyContext:
         self,
         decl: CallDecl,
         parens: bool,
-    ) -> str:
+    ) -> tuple[str, str]:
         """
         Pretty print the call. Also returns if it was saved as a name.
 
@@ -241,8 +311,8 @@ class PrettyContext:
         ref = decl.callable
         # Special case !=
         if decl.callable == FunctionRef("!="):
-            l, r = self(args[0], unwrap_lit=False), self(args[1], unwrap_lit=False)
-            return f"ne({l}).to({r})"
+            l, r = self(args[0]), self(args[1])
+            return f"ne({l}).to({r})", "Unit"
         function_decl = self.decls.get_callable_decl(ref).to_function_decl()
         # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
         n_defaults = 0
@@ -267,23 +337,16 @@ class PrettyContext:
         else:
             expr_name = None
         res = self._call_inner(ref, args, decl.bound_tp_params, parens)
-        expr = f"{res[0]}({', '.join(self(a, parens=False) for a in res[1])})" if isinstance(res, tuple) else res
-        del res
+        expr = (
+            f"{res[0]}({', '.join(self(a, parens=False, unwrap_lit=True) for a in res[1])})"
+            if isinstance(res, tuple)
+            else res
+        )
         # If we have a name, then we mutated
         if expr_name:
             self.statements.append(expr)
-            return expr_name
-
-        # We use a heuristic to decide whether to name this sub-expression as a variable
-        # The rough goal is to reduce the number of newlines, given our line length of ~180
-        # We determine it's worth making a new line for this expression if the total characters
-        # it would take up is > than some constant (~ line length).
-        line_diff: int = len(expr) - LINE_DIFFERENCE
-        n_parents = self.parents[decl]
-        if n_parents > 1 and n_parents * line_diff > MAX_LINE_LENGTH:
-            self.names[decl] = expr_name = self._name_expr(tp_name, expr, copy_identifier=False)
-            return expr_name
-        return expr
+            return expr_name, tp_name
+        return expr, tp_name
 
     def _call_inner(  # noqa: PLR0911
         self, ref: CallableRef, args: list[ExprDecl], bound_tp_params: tuple[JustTypeRef, ...] | None, parens: bool
@@ -295,28 +358,28 @@ class PrettyContext:
             case FunctionRef(name):
                 return name, args
             case ClassMethodRef(class_name, method_name):
-                fn_str = pretty_type(JustTypeRef(class_name, bound_tp_params or ()))
+                fn_str = str(JustTypeRef(class_name, bound_tp_params or ()))
                 if method_name != "__init__":
                     fn_str += f".{method_name}"
                 return fn_str, args
             case MethodRef(_class_name, method_name):
                 slf, *args = args
-                slf = self(slf, unwrap_lit=False, parens=True)
+                slf = self(slf, parens=True)
                 match method_name:
                     case _ if method_name in UNARY_METHODS:
                         expr = f"{UNARY_METHODS[method_name]}{slf}"
                         return f"({expr})" if parens else expr
                     case _ if method_name in BINARY_METHODS:
-                        expr = f"{slf} {BINARY_METHODS[method_name]} {self(args[0], parens=True)}"
+                        expr = f"{slf} {BINARY_METHODS[method_name]} {self(args[0], parens=True, unwrap_lit=True)}"
                         return f"({expr})" if parens else expr
                     case "__getitem__":
-                        return f"{slf}[{self(args[0])}]"
+                        return f"{slf}[{self(args[0], unwrap_lit=True)}]"
                     case "__call__":
                         return slf, args
                     case "__delitem__":
-                        return f"del {slf}[{self(args[0])}]"
+                        return f"del {slf}[{self(args[0], unwrap_lit=True)}]"
                     case "__setitem__":
-                        return f"{slf}[{self(args[0])}] = {self(args[1])}"
+                        return f"{slf}[{self(args[0], unwrap_lit=True)}] = {self(args[1], unwrap_lit=True)}"
                     case _:
                         return f"{slf}.{method_name}", args
             case ConstantRef(name):
@@ -324,7 +387,7 @@ class PrettyContext:
             case ClassVariableRef(class_name, variable_name):
                 return f"{class_name}.{variable_name}"
             case PropertyRef(_class_name, property_name):
-                return f"{self(args[0], parens=True, unwrap_lit=False)}.{property_name}"
+                return f"{self(args[0], parens=True)}.{property_name}"
             case _:
                 assert_never(ref)
 

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from .egraph import Expr
 
-__all__ = ["convert", "converter"]
+__all__ = ["convert", "converter", "resolve_literal"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
 CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable]] = {}
 # Global declerations to store all convertable types so we can query if they have certain methods or not
@@ -79,8 +79,8 @@ def convert(source: object, target: type[V]) -> V:
     """
     Convert a source object to a target type.
     """
-    target_ref = class_to_ref(cast(RuntimeTypeArgType, target))
-    return cast(V, resolve_literal(target_ref.to_var(), source))
+    assert isinstance(target, RuntimeClass)
+    return cast(V, resolve_literal(target.__egg_tp__, source))
 
 
 def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
@@ -91,20 +91,20 @@ def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
     return resolve_literal(tp.to_var(), source)
 
 
-def process_tp(tp: type | RuntimeTypeArgType) -> JustTypeRef | type:
+def process_tp(tp: type | RuntimeClass) -> JustTypeRef | type:
     """
     Process a type before converting it, to add it to the global declerations and resolve to a ref.
     """
     global CONVERSIONS_DECLS
-    if isinstance(tp, RuntimeClass | RuntimeParamaterizedClass):
+    if isinstance(tp, RuntimeClass):
         CONVERSIONS_DECLS |= tp
-        return class_to_ref(tp)
+        return tp.__egg_tp__.to_just()
     return tp
 
 
 def min_convertable_tp(a: object, b: object, name: str) -> JustTypeRef:
     """
-    Returns the minimum convertable type between a and b, that has a method `name`, raising a TypeError if no such type exists.
+    Returns the minimum convertable type between a and b, that has a method `name`, raising a ConvertError if no such type exists.
     """
     a_tp = _get_tp(a)
     b_tp = _get_tp(b)

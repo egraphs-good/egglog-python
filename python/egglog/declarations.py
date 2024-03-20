@@ -96,11 +96,6 @@ def upcast_declerations(declerations_like: Iterable[DeclerationsLike]) -> list[D
 
 
 @dataclass
-class RulesetDecl:
-    rules: list[RewriteOrRuleDec]
-
-
-@dataclass
 class Declarations:
     _functions: dict[str, FunctionDecl | RelationDecl] = field(default_factory=dict)
     _constants: dict[str, ConstantDecl] = field(default_factory=dict)
@@ -232,17 +227,6 @@ class Declarations:
     def get_class_decl(self, name: str) -> ClassDecl:
         return self._classes[name]
 
-    def set_class_decl(self, name: str, class_decl: ClassDecl) -> None:
-        # Register class first
-        if name in self._classes:
-            raise ValueError(f"Class {name} already registered")
-        self._classes[name] = class_decl
-
-    def register_preserved_method(self, class_: str, method: str, fn: Callable) -> None:
-        if method in self._classes[class_].preserved_methods:
-            raise ValueError(f"Method {class_}.{method} already registered")
-        self._classes[class_].preserved_methods[method] = fn
-
 
 @dataclass
 class ClassDecl:
@@ -255,6 +239,11 @@ class ClassDecl:
     methods: dict[str, FunctionDecl] = field(default_factory=dict)
     properties: dict[str, FunctionDecl] = field(default_factory=dict)
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
+
+
+@dataclass
+class RulesetDecl:
+    rules: list[RewriteOrRuleDec]
 
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.
@@ -272,6 +261,11 @@ class JustTypeRef:
         if self.args:
             return f"{self.name}[{', '.join(str(a) for a in self.args)}]"
         return self.name
+
+
+##
+# Type references with vars
+##
 
 
 @dataclass(frozen=True)
@@ -305,6 +299,10 @@ class TypeRefWithVars:
 
 
 TypeOrVarRef: TypeAlias = ClassTypeVarRef | TypeRefWithVars
+
+##
+# Callables References
+##
 
 
 @dataclass(frozen=True)
@@ -343,8 +341,10 @@ class PropertyRef:
 
 CallableRef: TypeAlias = FunctionRef | ConstantRef | MethodRef | ClassMethodRef | ClassVariableRef | PropertyRef
 
-# If we moved all the egg generation into here... How still would we change it to be lazy?
-# Have each of the TypeOrVarRef also be a DefferedTypeRef?
+
+##
+# Callables
+##
 
 
 @dataclass(frozen=True)
@@ -367,6 +367,7 @@ class RelationDecl:
             default=LitDecl(None),
             merge=None,
             unextractable=False,
+            on_merge=(),
         )
 
 
@@ -392,25 +393,27 @@ class ConstantDecl:
             default=None,
             merge=None,
             unextractable=False,
+            on_merge=(),
         )
 
 
 @dataclass(frozen=True)
 class FunctionDecl:
     # All args are delayed except for relations converted to function decls
-    arg_types: tuple[TypeRefWithVars, ...]
+    arg_types: tuple[TypeOrVarRef, ...]
     arg_names: tuple[str, ...]
     # List of defaults. None for any arg which doesn't have one.
     arg_defaults: tuple[ExprDecl | None, ...]
     # If None, then the first arg is mutated and returned
-    return_type: TypeRefWithVars | None
-    var_arg_type: TypeRefWithVars | None
+    return_type: TypeOrVarRef | None
+    var_arg_type: TypeOrVarRef | None
 
     # Egg params
     builtin: bool
     egg_name: str | None
     cost: int | None
     default: ExprDecl | None
+    on_merge: tuple[ActionDecl, ...]
     merge: ExprDecl | None
     unextractable: bool
 
@@ -418,7 +421,7 @@ class FunctionDecl:
         return self
 
     @property
-    def semantic_return_type(self) -> TypeRefWithVars:
+    def semantic_return_type(self) -> TypeOrVarRef:
         """
         The type that is returned by the function, which wil be in the first arg if it mutates it.
         """
@@ -430,6 +433,10 @@ class FunctionDecl:
 
 
 CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl
+
+##
+# Expressions
+##
 
 
 @dataclass(frozen=True)
@@ -460,6 +467,7 @@ class LitDecl:
 @dataclass(frozen=True)
 class CallDecl:
     callable: CallableRef
+    # TODO: Can I make these not typed expressions?
     args: tuple[TypedExprDecl, ...] = ()
     # type parameters that were bound to the callable, if it is a classmethod
     # Used for pretty printing classmethod calls with type parameters
@@ -503,6 +511,11 @@ class TypedExprDecl:
         return l
 
 
+##
+# Schedules
+##
+
+
 @dataclass(frozen=True)
 class SaturateDecl:
     schedule: ScheduleDecl
@@ -527,6 +540,10 @@ class RunDecl:
 
 ScheduleDecl: TypeAlias = SaturateDecl | RepeatDecl | SequenceDecl | RunDecl
 
+##
+# Facts
+##
+
 
 @dataclass(frozen=True)
 class EqDecl:
@@ -539,6 +556,10 @@ class ExprFactDecl:
 
 
 FactDecl: TypeAlias = EqDecl | ExprFactDecl
+
+##
+# Actions
+##
 
 
 @dataclass(frozen=True)
@@ -575,6 +596,11 @@ class PanicDecl:
 
 
 ActionDecl: TypeAlias = LetDecl | SetDecl | ExprActionDecl | DeleteDecl | UnionDecl | PanicDecl
+
+
+##
+# Commands
+##
 
 
 @dataclass(frozen=True)

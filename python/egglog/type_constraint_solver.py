@@ -10,12 +10,9 @@ from typing import TYPE_CHECKING
 from typing_extensions import assert_never
 
 from .declarations import *
-from .runtime import resolve_type_name
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable
-
-    from .declarations import DelayedTypeName
 
 
 __all__ = ["TypeConstraintSolver", "TypeConstraintError"]
@@ -42,10 +39,7 @@ class TypeConstraintSolver:
         Bind the typevars of a class to the given types.
         Used for a situation like Map[int, str].create().
         """
-        # Assume a delayed type name has no args
-        # if isinstance(ref.name, DelayedTypeName):
-        #     return
-        name = resolve_type_name(self._decls, ref.name)
+        name = ref.name
         cls_typevars = self._decls.get_class_decl(name).type_vars
         if len(cls_typevars) != len(ref.args):
             raise TypeConstraintError(f"Mismatch of typevars {cls_typevars} and {ref}")
@@ -59,7 +53,7 @@ class TypeConstraintSolver:
         fn_return: TypeOrVarRef,
         fn_var_args: TypeOrVarRef | None,
         args: Collection[JustTypeRef],
-        cls_name: str | DelayedTypeName | None,
+        cls_name: str | None,
     ) -> JustTypeRef:
         """
         Given some arg types, infer the return type.
@@ -107,7 +101,7 @@ class TypeConstraintSolver:
         fn_args: Collection[TypeOrVarRef],
         fn_var_args: TypeOrVarRef | None,
         args: Collection[JustTypeRef],
-        cls_name: str | None | DelayedTypeName,
+        cls_name: str | None,
     ) -> None:
         if len(fn_args) != len(args) if fn_var_args is None else len(fn_args) > len(args):
             raise TypeConstraintError(f"Mismatch of args {fn_args} and {args}")
@@ -115,7 +109,7 @@ class TypeConstraintSolver:
         for fn_arg, arg in zip(all_fn_args, args, strict=False):
             self._infer_typevars(fn_arg, arg, cls_name)
 
-    def _infer_typevars(self, fn_arg: TypeOrVarRef, arg: JustTypeRef, cls_name: str | None | DelayedTypeName) -> None:
+    def _infer_typevars(self, fn_arg: TypeOrVarRef, arg: JustTypeRef, cls_name: str | None) -> None:
         match fn_arg:
             case TypeRefWithVars(cls_name, fn_args):
                 if cls_name != arg.name:
@@ -126,7 +120,7 @@ class TypeConstraintSolver:
                     msg = "Cannot infer typevar without class name"
                     raise RuntimeError(msg)
 
-                class_typevars = self._cls_typevar_index_to_type[resolve_type_name(self._decls, cls_name)]
+                class_typevars = self._cls_typevar_index_to_type[cls_name]
                 if typevar in class_typevars:
                     if class_typevars[typevar] != arg:
                         raise TypeConstraintError(f"Expected {class_typevars[typevar]}, got {arg}")
@@ -135,12 +129,12 @@ class TypeConstraintSolver:
             case _:
                 assert_never(fn_arg)
 
-    def _subtitute_typevars(self, tp: TypeOrVarRef, cls_name: str | None | DelayedTypeName) -> JustTypeRef:
+    def _subtitute_typevars(self, tp: TypeOrVarRef, cls_name: str | None) -> JustTypeRef:
         match tp:
             case ClassTypeVarRef(name):
                 try:
                     assert cls_name is not None
-                    return self._cls_typevar_index_to_type[resolve_type_name(self._decls, cls_name)][name]
+                    return self._cls_typevar_index_to_type[cls_name][name]
                 except KeyError as e:
                     raise TypeConstraintError(f"Not enough bound typevars for {tp}") from e
             case TypeRefWithVars(name, args):
