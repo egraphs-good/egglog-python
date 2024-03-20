@@ -3,3 +3,5 @@
 .*egglog.bindings.CheckProof.__init__.*
 .*egglog.bindings.PrintOverallStatistics.__init__.*
 .*egglog.bindings.PyObjectSort.__init__.*
+.*egglog.bindings.Delete.__init__.*
+.*egglog.bindings.Subsume.__init__.*

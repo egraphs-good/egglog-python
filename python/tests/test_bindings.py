@@ -107,7 +107,7 @@ class TestEGraph:
         egraph = EGraph()
         egraph.run_program(
             Datatype("Math", [Variant("Add", ["Math", "Math"])]),
-            RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")]))),
+            RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")])), False),
             RunSchedule(Repeat(10, Run(RunConfig("")))),
         )
 
