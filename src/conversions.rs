@@ -47,6 +47,14 @@ convert_enums!(
             f -> egglog::ast::Fact::Fact((&f.expr).into()),
             egglog::ast::Fact::Fact(e) => Fact { expr: e.into() }
     };
+    egglog::ast::Change: "{:?}" => _Change {
+        Delete()
+            _d -> egglog::ast::Change::Delete,
+            egglog::ast::Change::Delete => Delete {};
+        Subsume()
+            _d -> egglog::ast::Change::Subsume,
+            egglog::ast::Change::Subsume => Subsume {}
+    };
     egglog::ast::Action: "{}" => Action {
         Let(lhs: String, rhs: Expr)
             d -> egglog::ast::Action::Let((), (&d.lhs).into(), (&d.rhs).into()),
@@ -58,9 +66,10 @@ convert_enums!(
                 args: a.iter().map(|e| e.into()).collect(),
                 rhs: e.into()
             };
-        Delete(sym: String, args: Vec<Expr>)
-            d -> egglog::ast::Action::Delete((), (&d.sym).into(), d.args.iter().map(|e| e.into()).collect()),
-            egglog::ast::Action::Delete(_, n, a) => Delete {
+        Change(change: _Change, sym: String, args: Vec<Expr>)
+            d -> egglog::ast::Action::Change((), (&d.change).into(), (&d.sym).into(), d.args.iter().map(|e| e.into()).collect()),
+            egglog::ast::Action::Change(_, c, n, a) => Change {
+                change: c.into(),
                 sym: n.to_string(),
                 args: a.iter().map(|e| e.into()).collect()
             };
@@ -162,11 +171,12 @@ convert_enums!(
                 ruleset: ruleset.to_string(),
                 rule: rule.into()
             };
-        RewriteCommand(name: String, rewrite: Rewrite)
-            r -> egglog::ast::Command::Rewrite((&r.name).into(), (&r.rewrite).into()),
-            egglog::ast::Command::Rewrite(name, r) => RewriteCommand {
+        RewriteCommand(name: String, rewrite: Rewrite, subsume: bool)
+            r -> egglog::ast::Command::Rewrite((&r.name).into(), (&r.rewrite).into(), r.subsume),
+            egglog::ast::Command::Rewrite(name, r, subsume) => RewriteCommand {
                 name: name.to_string(),
-                rewrite: r.into()
+                rewrite: r.into(),
+                subsume: *subsume
             };
         BiRewriteCommand(name: String, rewrite: Rewrite)
             r -> egglog::ast::Command::BiRewrite((&r.name).into(), (&r.rewrite).into()),
@@ -303,7 +313,8 @@ convert_struct!(
         merge: Option<Expr> = None,
         merge_action: Vec<Action> = Vec::new(),
         cost: Option<usize> = None,
-        unextractable: bool = false
+        unextractable: bool = false,
+        ignore_viz: bool = false
     )
         f -> egglog::ast::FunctionDecl {
             name: (&f.name).into(),
@@ -312,7 +323,8 @@ convert_struct!(
             merge: f.merge.as_ref().map(|e| e.into()),
             merge_action: egglog::ast::GenericActions(f.merge_action.iter().map(|a| a.into()).collect()),
             cost: f.cost,
-            unextractable: f.unextractable
+            unextractable: f.unextractable,
+            ignore_viz: f.ignore_viz
         },
         f -> FunctionDecl {
             name: f.name.to_string(),
@@ -321,7 +333,8 @@ convert_struct!(
             merge: f.merge.as_ref().map(|e| e.into()),
             merge_action: f.merge_action.0.iter().map(|a| a.into()).collect(),
             cost: f.cost,
-            unextractable: f.unextractable
+            unextractable: f.unextractable,
+            ignore_viz: f.ignore_viz
         };
     egglog::ast::Variant: "{:?}" => Variant(
         name: String,

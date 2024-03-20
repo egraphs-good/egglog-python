@@ -1465,6 +1465,7 @@ class Rewrite(Command):
     _lhs: RuntimeExpr
     _rhs: RuntimeExpr
     _conditions: tuple[Fact, ...]
+    _subsume: bool
     _fn_name: ClassVar[str] = "rewrite"
 
     def __str__(self) -> str:
@@ -1473,7 +1474,7 @@ class Rewrite(Command):
 
     def _to_egg_command(self, default_ruleset_name: str) -> bindings._Command:
         return bindings.RewriteCommand(
-            self.ruleset.egg_name if self.ruleset else default_ruleset_name, self._to_egg_rewrite()
+            self.ruleset.egg_name if self.ruleset else default_ruleset_name, self._to_egg_rewrite(), self._subsume
         )
 
     def _to_egg_rewrite(self) -> bindings.Rewrite:
@@ -1488,7 +1489,7 @@ class Rewrite(Command):
         return Declarations.create(self._lhs, self._rhs, *self._conditions)
 
     def with_ruleset(self, ruleset: Ruleset) -> Rewrite:
-        return Rewrite(ruleset, self._lhs, self._rhs, self._conditions)
+        return Rewrite(ruleset, self._lhs, self._rhs, self._conditions, self._subsume)
 
 
 @dataclass
@@ -1652,21 +1653,23 @@ class ExprAction(Action):
 
 
 @dataclass
-class Delete(Action):
+class Change(Action):
     """
-    Remove a function call from an EGraph.
+    Change a function call in an EGraph.
     """
 
+    change: Literal["delete", "subsume"]
     _call: RuntimeExpr
 
     def __str__(self) -> str:
-        return f"delete({self._call})"
+        return f"{self.change}({self._call})"
 
-    def _to_egg_action(self) -> bindings.Delete:
+    def _to_egg_action(self) -> bindings.Change:
         egg_call = self._call.__egg__
         if not isinstance(egg_call, bindings.Call):
             raise ValueError(f"Can only create a call with a call for the lhs, got {self._call}")  # noqa: TRY004
-        return bindings.Delete(egg_call.name, egg_call.args)
+        change: bindings._Change = bindings.Delete() if self.change == "delete" else bindings.Subsume()
+        return bindings.Change(change, egg_call.name, egg_call.args)
 
     @property
     def __egg_decls__(self) -> Declarations:
@@ -1800,16 +1803,16 @@ class Sequence(Schedule):
 
 @deprecated("Use <ruleset>.register(<rewrite>) instead of passing rulesets as arguments to rewrites.")
 @overload
-def rewrite(lhs: EXPR, ruleset: Ruleset) -> _RewriteBuilder[EXPR]: ...
+def rewrite(lhs: EXPR, ruleset: Ruleset, *, subsume: bool = False) -> _RewriteBuilder[EXPR]: ...
 
 
 @overload
-def rewrite(lhs: EXPR, ruleset: None = None) -> _RewriteBuilder[EXPR]: ...
+def rewrite(lhs: EXPR, ruleset: None = None, *, subsume: bool = False) -> _RewriteBuilder[EXPR]: ...
 
 
-def rewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _RewriteBuilder[EXPR]:
+def rewrite(lhs: EXPR, ruleset: Ruleset | None = None, *, subsume: bool = False) -> _RewriteBuilder[EXPR]:
     """Rewrite the given expression to a new expression."""
-    return _RewriteBuilder(lhs, ruleset)
+    return _RewriteBuilder(lhs, ruleset, subsume)
 
 
 @deprecated("Use <ruleset>.register(<birewrite>) instead of passing rulesets as arguments to birewrites.")
@@ -1852,7 +1855,12 @@ def expr_action(expr: Expr) -> Action:
 
 def delete(expr: Expr) -> Action:
     """Create a delete expression."""
-    return Delete(to_runtime_expr(expr))
+    return Change("delete", to_runtime_expr(expr))
+
+
+def subsume(expr: Expr) -> Action:
+    """Subsume an expression."""
+    return Change("subsume", to_runtime_expr(expr))
 
 
 def expr_fact(expr: Expr) -> Fact:
@@ -1905,10 +1913,11 @@ def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
 class _RewriteBuilder(Generic[EXPR]):
     lhs: EXPR
     ruleset: Ruleset | None
+    subsume: bool
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> Rewrite:
         lhs = to_runtime_expr(self.lhs)
-        rule = Rewrite(self.ruleset, lhs, convert_to_same_type(rhs, lhs), _fact_likes(conditions))
+        rule = Rewrite(self.ruleset, lhs, convert_to_same_type(rhs, lhs), _fact_likes(conditions), self.subsume)
         if self.ruleset:
             self.ruleset.append(rule)
         return rule
@@ -1924,7 +1933,7 @@ class _BirewriteBuilder(Generic[EXPR]):
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
         lhs = to_runtime_expr(self.lhs)
-        rule = BiRewrite(self.ruleset, lhs, convert_to_same_type(rhs, lhs), _fact_likes(conditions))
+        rule = BiRewrite(self.ruleset, lhs, convert_to_same_type(rhs, lhs), _fact_likes(conditions), False)
         if self.ruleset:
             self.ruleset.append(rule)
         return rule
