@@ -71,7 +71,9 @@ AllDecls: TypeAlias = RulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDe
 # TODO: Make all able to have aliases, besides RulesetDecl bc its not hasable
 
 
-def pretty_decl(decls: Declarations, decl: AllDecls, wrapping_fn: str | None = None) -> str:
+def pretty_decl(
+    decls: Declarations, decl: AllDecls, *, wrapping_fn: str | None = None, ruleset_name: str | None = None
+) -> str:
     """
     Pretty print a decleration.
 
@@ -80,7 +82,7 @@ def pretty_decl(decls: Declarations, decl: AllDecls, wrapping_fn: str | None = N
     traverse = TraverseContext()
     traverse(decl, toplevel=True)
     pretty = traverse.pretty(decls)
-    expr = pretty(decl)
+    expr = pretty(decl, ruleset_name=ruleset_name)
     if wrapping_fn:
         expr = f"{wrapping_fn}({expr})"
     program = "\n".join([*pretty.statements, expr])

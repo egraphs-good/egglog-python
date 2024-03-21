@@ -3,12 +3,11 @@ from __future__ import annotations
 import inspect
 import pathlib
 import tempfile
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import Callable, Iterable
 from contextvars import ContextVar, Token
 from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
-from functools import cached_property
 from inspect import Parameter, currentframe, signature
 from types import FrameType, FunctionType
 from typing import (
@@ -1283,50 +1282,41 @@ def ruleset(
     return r
 
 
-class Schedule(ABC):
+@dataclass
+class Schedule:
     """
     A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
     """
+
+    __egg_decls__: Declarations
+    schedule: ScheduleDecl
+
+    def __str__(self) -> str:
+        return pretty_decl(self.__egg_decls__, self.schedule)
+
+    def __repr__(self) -> str:
+        return str(self)
 
     def __mul__(self, length: int) -> Schedule:
         """
         Repeat the schedule a number of times.
         """
-        return Repeat(length, self)
+        return Schedule(self.__egg_decls__, RepeatDecl(self.schedule, length))
 
     def saturate(self) -> Schedule:
         """
         Run the schedule until the e-graph is saturated.
         """
-        return Saturate(self)
+        return Schedule(self.__egg_decls__, SaturateDecl(self.schedule))
 
     def __add__(self, other: Schedule) -> Schedule:
         """
         Run two schedules in sequence.
         """
-        return Sequence((self, other))
-
-    @abstractmethod
-    def __str__(self) -> str:
-        raise NotImplementedError
-
-    @abstractmethod
-    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
-        raise NotImplementedError
-
-    @abstractmethod
-    def _rulesets(self) -> Iterable[Ruleset]:
-        """
-        Mapping of all the rulesets used to commands.
-        """
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def __egg_decls__(self) -> Declarations:
-        raise NotImplementedError
+        return Schedule(Declarations.create(self, other), SequenceDecl((self.schedule, other.schedule)))
 
 
+# TODO: How should name work here? Is it randomly generated?
 @dataclass
 class Ruleset(Schedule):
     """
@@ -1334,20 +1324,16 @@ class Ruleset(Schedule):
     """
 
     name: str | None
-    rules: list[Rule | Rewrite] = field(default_factory=list)
 
-    # Make hashable so when traversing for pretty-fying we can know which rulesets we have already
-    # made into strings
-    def __hash__(self) -> int:
-        return hash((type(self), self.name, tuple(self.rules)))
-
-    def append(self, rule: Rule | Rewrite) -> None:
+    def append(self, rule: RewriteOrRule) -> None:
         """
         Register a rule with the ruleset.
         """
-        self.rules.append(rule)
+        self.__egg_decls__ |= rule
+        if
+        self.__egg_decl__.rules.append(rule.decl)
 
-    def register(self, /, rule_or_generator: CommandLike | CommandGenerator, *rules: Rule | Rewrite) -> None:
+    def register(self, /, rule_or_generator: RewriteOrRule | CommandGenerator, *rules: RewriteOrRule) -> None:
         """
         Register rewrites or rules, either as a function or as values.
         """
@@ -1355,138 +1341,50 @@ class Ruleset(Schedule):
             assert not rules
             rules = tuple(_command_generator(rule_or_generator))
         else:
-            rules = (cast(Rule | Rewrite, rule_or_generator), *rules)
+            rules = (cast(RewriteOrRule, rule_or_generator), *rules)
         for r in rules:
             self.append(r)
 
-    @cached_property
-    def __egg_decls__(self) -> Declarations:
-        return Declarations.create(*self.rules)
-
-    @property
-    def _cmds(self) -> list[bindings._Command]:
-        cmds = [r._to_egg_command(self.egg_name) for r in self.rules]
-        if self.egg_name:
-            cmds.insert(0, bindings.AddRuleset(self.egg_name))
-        return cmds
-
     def __str__(self) -> str:
-        return f"ruleset(name={self.egg_name!r})"
+        return pretty_decl(self.__egg_decls__, self.__egg_decl__, ruleset_name=self.name)
 
     def __repr__(self) -> str:
-        if not self.rules:
-            return str(self)
-        rules = ", ".join(map(repr, self.rules))
-        return f"ruleset({rules}, name={self.egg_name!r})"
-
-    def _to_egg_schedule(self, default_ruleset_name: str) -> bindings._Schedule:
-        return bindings.Run(self._to_egg_config())
-
-    def _to_egg_config(self) -> bindings.RunConfig:
-        return bindings.RunConfig(self.egg_name, None)
-
-    def _rulesets(self) -> Iterable[Ruleset]:
-        yield self
+        return str(self)
 
     @property
-    def egg_name(self) -> str:
-        return self.name or f"_ruleset_{id(self)}"
+    def __egg_decl__(self) -> RulesetDecl | None:
+        if self.name:
+            return self.__egg_decls__._rulesets[self.name]
+        return None
 
 
 @dataclass
-class Command:
-    """
-    A command that can be executed in the egg interpreter.
-
-    We only use this for commands which return no result and don't create new Python objects.
-
-    Anything that can be passed to the `register` function in a Module is a Command.
-    """
-
+class RewriteOrRule:
     __egg_decls__: Declarations
-    command: CommandDecl
+    decl: RewriteOrRuleDecl
     ruleset: Ruleset | None = None
 
     def __str__(self) -> str:
-        return pretty_decl(self.__egg_decls__, self.command)
+        return pretty_decl(self.__egg_decls__, self.decl)
 
     def __repr__(self) -> str:
         return str(self)
 
 
 @dataclass
-class Fact(ABC):
+class Fact:
     """
     A query on an EGraph, either by an expression or an equivalence between multiple expressions.
     """
 
-    @abstractmethod
-    def _to_egg_fact(self) -> bindings._Fact:
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def __egg_decls__(self) -> Declarations:
-        raise NotImplementedError
-
-
-@dataclass
-class Eq(Fact):
-    _exprs: list[RuntimeExpr]
+    __egg_decls__: Declarations
+    fact: ActionDecl
 
     def __str__(self) -> str:
-        first, *rest = self._exprs
-        args_str = ", ".join(map(str, rest))
-        return f"eq({first}).to({args_str})"
+        return pretty_decl(self.__egg_decls__, self.fact)
 
-    def _to_egg_fact(self) -> bindings.Eq:
-        return bindings.Eq([e.__egg__ for e in self._exprs])
-
-    @cached_property
-    def __egg_decls__(self) -> Declarations:
-        return Declarations.create(*self._exprs)
-
-
-@dataclass
-class ExprFact(Fact):
-    _expr: RuntimeExpr
-
-    def __str__(self) -> str:
-        return str(self._expr)
-
-    def _to_egg_fact(self) -> bindings.Fact:
-        return bindings.Fact(self._expr.__egg__)
-
-    @cached_property
-    def __egg_decls__(self) -> Declarations:
-        return self._expr.__egg_decls__
-
-
-@dataclass
-class Rule(Command):
-    head: tuple[Action, ...]
-    body: tuple[Fact, ...]
-    name: str
-    ruleset: Ruleset | None
-
-    def __str__(self) -> str:
-        head_str = ", ".join(map(str, self.head))
-        body_str = ", ".join(map(str, self.body))
-        return f"rule({body_str}).then({head_str})"
-
-    def _to_egg_command(self, default_ruleset_name: str) -> bindings.RuleCommand:
-        return bindings.RuleCommand(
-            self.name,
-            self.ruleset.egg_name if self.ruleset else default_ruleset_name,
-            bindings.Rule(
-                [a._to_egg_action() for a in self.head],
-                [f._to_egg_fact() for f in self.body],
-            ),
-        )
-
-    @cached_property
-    def __egg_decls__(self) -> Declarations:
-        return Declarations.create(*self.head, *self.body)
+    def __repr__(self) -> str:
+        return str(self)
 
 
 @dataclass
@@ -1783,14 +1681,14 @@ def _action_like(action_like: ActionLike) -> Action:
     return action_like
 
 
-CommandLike: TypeAlias = Command | ActionLike
+# CommandLike: TypeAlias = Command | ActionLike
 
 
-def _command_like(command_like: CommandLike) -> Command:
-    if isinstance(command_like, Command):
-        return command_like
-    action = _action_like(command_like)
-    return action_command(action)
+# def _command_like(command_like: CommandLike) -> Command:
+#     if isinstance(command_like, Command):
+#         return command_like
+#     action = _action_like(command_like)
+#     return action_command(action)
 
 
 CommandGenerator = Callable[..., Iterable[Rule | Rewrite]]

@@ -63,7 +63,7 @@ __all__ = [
     "RewriteDecl",
     "BiRewriteDecl",
     "RuleDecl",
-    "RewriteOrRuleDec",
+    "RewriteOrRuleDecl",
     "ActionCommandDecl",
     "CommandDecl",
 ]
@@ -243,7 +243,12 @@ class ClassDecl:
 
 @dataclass
 class RulesetDecl:
-    rules: list[RewriteOrRuleDec]
+    rules: list[RewriteOrRuleDecl]
+
+    # Make hashable so when traversing for pretty-fying we can know which rulesets we have already
+    # made into strings
+    def __hash__(self) -> int:
+        return hash((type(self), tuple(self.rules)))
 
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.
@@ -624,7 +629,7 @@ class RuleDecl:
     name: str | None
 
 
-RewriteOrRuleDec: TypeAlias = RewriteDecl | BiRewriteDecl | RuleDecl
+RewriteOrRuleDecl: TypeAlias = RewriteDecl | BiRewriteDecl | RuleDecl
 
 
 @dataclass(frozen=True)
@@ -632,4 +637,4 @@ class ActionCommandDecl:
     action: ActionDecl
 
 
-CommandDecl: TypeAlias = RewriteOrRuleDec | ActionCommandDecl
+CommandDecl: TypeAlias = RewriteOrRuleDecl | ActionCommandDecl

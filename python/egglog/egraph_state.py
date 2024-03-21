@@ -35,7 +35,7 @@ class EGraphState:
     # The decleratons we have added.
     __egg_decls__: Declarations = field(default_factory=Declarations)
     # Mapping of added rulesets to the added rules
-    rulesets: dict[str, set[RewriteOrRuleDec]] = field(default_factory=dict)
+    rulesets: dict[str, set[RewriteOrRuleDecl]] = field(default_factory=dict)
 
     # Bidirectional mapping between egg function names and python callable references.
     # Note that there are possibly mutliple callable references for a single egg function name, like `+`
