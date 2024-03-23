@@ -340,7 +340,7 @@ class RuntimeExpr:
         return self.__egg_pretty__(None)
 
     def __egg_pretty__(self, wrapping_fn: str | None) -> str:
-        return pretty_decl(self.__egg_decls__, self.__egg_typed_expr__.expr, wrapping_fn)
+        return pretty_decl(self.__egg_decls__, self.__egg_typed_expr__.expr, wrapping_fn=wrapping_fn)
 
     def _ipython_display_(self) -> None:
         from IPython.display import Code, display

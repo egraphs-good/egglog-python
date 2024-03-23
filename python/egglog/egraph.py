@@ -20,6 +20,7 @@ from typing import (
     TypeAlias,
     TypedDict,
     TypeVar,
+    assert_never,
     cast,
     get_type_hints,
     overload,
@@ -143,7 +144,7 @@ def simplify(x: EXPR, schedule: Schedule | None = None) -> EXPR:
     return EGraph().extract(x)
 
 
-def check(x: FactLike, schedule: Schedule | None = None, *given: Union_ | Expr | Set) -> None:
+def check(x: FactLike, schedule: Schedule | None = None, *given: ActionLike) -> None:
     """
     Verifies that the fact is true given some assumptions and after running the schedule.
     """
@@ -298,7 +299,7 @@ class _BaseModule:
 
     @deprecated("Use top level `ruleset` function instead")
     def ruleset(self, name: str) -> Ruleset:
-        return Ruleset(name)
+        return Ruleset.create(name)
 
     # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
     @overload
@@ -336,17 +337,22 @@ class _BaseModule:
         """
         return constant(name, tp, egg_name)
 
-    def register(self, /, command_or_generator: CommandLike | CommandGenerator, *command_likes: CommandLike) -> None:
+    def register(
+        self,
+        /,
+        command_or_generator: ActionLike | RewriteOrRule | RewriteOrRuleGenerator,
+        *command_likes: ActionLike | RewriteOrRule,
+    ) -> None:
         """
         Registers any number of rewrites or rules.
         """
         if isinstance(command_or_generator, FunctionType):
             assert not command_likes
-            command_likes = tuple(_command_generator(command_or_generator))
+            command_likes = tuple(_rewrite_or_rule_generator(command_or_generator))
         else:
             command_likes = (cast(CommandLike, command_or_generator), *command_likes)
-
-        self._register_commands(list(map(_command_like, command_likes)))
+        commands = [_command_like(c) for c in command_likes]
+        self._register_commands(commands)
 
     @abstractmethod
     def _register_commands(self, cmds: list[Command]) -> None:
@@ -469,7 +475,9 @@ def _generate_class_decls(
     for k, v in get_type_hints(_Dummytype, globalns=frame.f_globals, localns=frame.f_locals).items():
         if getattr(v, "__origin__", None) == ClassVar:
             (inner_tp,) = v.__args__
-            _register_constant(decls, ClassVariableRef(cls_name, k), inner_tp, None)
+            type_ref = resolve_type_annotation(decls, inner_tp).to_just()
+            cls_decl.class_variables[k] = ConstantDecl(type_ref, egg_name=None)
+
         else:
             msg = f"On class {cls_name}, for attribute '{k}', expected a ClassVar, but got {v}"
             raise NotImplementedError(msg)
@@ -710,7 +718,7 @@ def _fn_decl(
         unextractable=unextractable,
         builtin=is_builtin,
         default=None if default is None else default.__egg_typed_expr__.expr,
-        on_merge=[a._to_egg_action() for a in merge_action],
+        on_merge=tuple(a.action for a in merge_action),
     )
 
 
@@ -743,47 +751,21 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
     """
     decls = Declarations()
     decls |= cast(RuntimeClass, Unit)
-    arg_types = tuple(resolve_type_annotation(decls, tp) for tp in tps)
-    fn_decl = FunctionDecl(arg_types, None, tuple(None for _ in tps), TypeRefWithVars("Unit"), mutates_first_arg=False)
-    decls.register_function_callable(
-        FunctionRef(name),
-        fn_decl,
-        egg_fn,
-        cost=None,
-        default=None,
-        merge=None,
-        merge_action=[],
-        unextractable=False,
-        builtin=False,
-        is_relation=True,
-    )
-    return cast(Callable[..., Unit], RuntimeFunction(decls, name))
+    arg_types = tuple(resolve_type_annotation(decls, tp).to_just() for tp in tps)
+    decls._functions[name] = RelationDecl(arg_types, tuple(None for _ in tps), egg_fn)
+    return cast(Callable[..., Unit], RuntimeFunction(decls, FunctionRef(name), None))
 
 
 def constant(name: str, tp: type[EXPR], egg_name: str | None = None) -> EXPR:
     """
-
     A "constant" is implemented as the instantiation of a value that takes no args.
     This creates a function with `name` and return type `tp` and returns a value of it being called.
     """
     ref = ConstantRef(name)
     decls = Declarations()
-    type_ref = _register_constant(decls, ref, tp, egg_name)
-    return cast(EXPR, RuntimeExpr(decls, TypedExprDecl(type_ref, CallDecl(ref))))
-
-
-def _register_constant(
-    decls: Declarations,
-    ref: ConstantRef | ClassVariableRef,
-    tp: object,
-    egg_name: str | None,
-) -> JustTypeRef:
-    """
-    Register a constant, returning its typeref().
-    """
     type_ref = resolve_type_annotation(decls, tp).to_just()
-    decls.register_constant_callable(ref, type_ref, egg_name)
-    return type_ref
+    decls._constants[name] = ConstantDecl(type_ref, egg_name)
+    return cast(EXPR, RuntimeExpr(decls, TypedExprDecl(type_ref, CallDecl(ref))))
 
 
 def _last_param_variable(params: list[Parameter]) -> bool:
@@ -858,43 +840,22 @@ class EGraph(_BaseModule):
         super().__post_init__(modules)
 
         for m in self._flatted_deps:
-            self._add_decls(*m.cmds)
             self._register_commands(m.cmds)
 
-    def _register_commands(self, commands: list[Command]) -> None:
-        for c in commands:
-            if c.ruleset:
-                self._add_schedule(c.ruleset)
-
-        self._add_decls(*commands)
-        self._process_commands(command._to_egg_command(self._default_ruleset_name) for command in commands)
-
-    def _process_commands(self, commands: Iterable[bindings._Command]) -> None:
-        commands = list(commands)
-        self._egraph.run_program(*commands)
-        if isinstance(self._egglog_string, str):
-            self._egglog_string += "\n".join(str(c) for c in commands) + "\n"
-
     def _add_decls(self, *decls: DeclerationsLike) -> None:
-        for d in upcast_decleratioons(decls):
-            self._process_commands(self._state.add_decls(d))
-
-    def _add_schedule(self, schedule: Schedule) -> None:
-        self._add_decls(schedule)
-        for ruleset in schedule._rulesets():
-            if ruleset.egg_name not in self._state.added_rulesets:
-                self._state.added_rulesets.add(ruleset.egg_name)
-                self._process_commands(ruleset._cmds)
+        for d in decls:
+            self._state.__egg_decls__ |= d
 
     @property
     def as_egglog_string(self) -> str:
         """
         Returns the egglog string for this module.
         """
-        if self._egglog_string is None:
+        cmds = self._egraph.commands()
+        if cmds is None:
             msg = "Can't get egglog string unless EGraph created with save_egglog_string=True"
             raise ValueError(msg)
-        return self._egglog_string
+        return cmds
 
     def _repr_mimebundle_(self, *args, **kwargs):
         """
@@ -907,7 +868,7 @@ class EGraph(_BaseModule):
         kwargs.setdefault("split_primitive_outputs", True)
         n_inline = kwargs.pop("n_inline_leaves", 0)
         serialized = self._egraph.serialize([], **kwargs)  # type: ignore[misc]
-        serialized.map_ops(self._state.decls.op_mapping())
+        serialized.map_ops(self._state.op_mapping())
         for _ in range(n_inline):
             serialized.inline_leaves()
         original = serialized.to_dot()
@@ -969,17 +930,20 @@ class EGraph(_BaseModule):
         Loads a CSV file and sets it as *input, output of the function.
         """
         ref, decls = resolve_callable(fn)
-        fn_name = decls.get_egg_fn(ref)
-        self._process_commands(decls.list_cmds())
-        self._process_commands([bindings.Input(fn_name, path)])
+        self._add_decls(decls)
+        fn_name = self._state.callable_ref_to_egg(ref)
+        self._egraph.run_program(bindings.Input(fn_name, path))
 
     def let(self, name: str, expr: EXPR) -> EXPR:
         """
         Define a new expression in the egraph and return a reference to it.
         """
-        self._register_commands([let(name, expr)])
-        expr = to_runtime_expr(expr)
-        return cast(EXPR, RuntimeExpr(expr.__egg_decls__, TypedExprDecl(expr.__egg_typed_expr__.tp, VarDecl(name))))
+        action = let(name, expr)
+        self.register(action)
+        runtime_expr = to_runtime_expr(expr)
+        return cast(
+            EXPR, RuntimeExpr(self.__egg_decls__, TypedExprDecl(runtime_expr.__egg_typed_expr__.tp, VarDecl(name)))
+        )
 
     @overload
     def simplify(self, expr: EXPR, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> EXPR: ...
@@ -994,28 +958,19 @@ class EGraph(_BaseModule):
         Simplifies the given expression.
         """
         schedule = run(ruleset, *until) * limit_or_schedule if isinstance(limit_or_schedule, int) else limit_or_schedule
-        del limit_or_schedule
-        expr = to_runtime_expr(expr)
-        self._add_decls(expr)
-        self._add_schedule(schedule)
-
-        # decls = Declarations.create(expr, schedule)
-        self._process_commands([bindings.Simplify(expr.__egg__, schedule._to_egg_schedule(self._default_ruleset_name))])
+        del limit_or_schedule, until, ruleset
+        runtime_expr = to_runtime_expr(expr)
+        self._add_decls(runtime_expr, schedule)
+        egg_schedule = self._state.schedule_to_egg(schedule.schedule)
+        typed_expr = runtime_expr.__egg_typed_expr__
+        egg_expr = self._state.expr_to_egg(typed_expr.expr)
+        self._egraph.run_program(bindings.Simplify(egg_expr, egg_schedule))
         extract_report = self._egraph.extract_report()
         if not isinstance(extract_report, bindings.Best):
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
-        new_typed_expr = TypedExprDecl.from_egg(
-            self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, extract_report.term, {}
-        )
-        return cast(EXPR, RuntimeExpr(self._state.decls, new_typed_expr))
-
-    @property
-    def _default_ruleset_name(self) -> str:
-        if self.default_ruleset:
-            self._add_schedule(self.default_ruleset)
-            return self.default_ruleset.egg_name
-        return ""
+        (new_typed_expr,) = self._state.exprs_from_egg(extract_report.termdag, [extract_report.term], typed_expr.tp)
+        return cast(EXPR, RuntimeExpr(self.__egg_decls__, new_typed_expr))
 
     def include(self, path: str) -> None:
         """
@@ -1045,8 +1000,9 @@ class EGraph(_BaseModule):
         return self._run_schedule(limit_or_schedule)
 
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
-        self._add_schedule(schedule)
-        self._process_commands([bindings.RunSchedule(schedule._to_egg_schedule(self._default_ruleset_name))])
+        self._add_decls(schedule)
+        egg_schedule = self._state.schedule_to_egg(schedule.schedule)
+        self._egraph.run_program(bindings.RunSchedule(egg_schedule))
         run_report = self._egraph.run_report()
         if not run_report:
             msg = "No run report saved"
@@ -1057,18 +1013,18 @@ class EGraph(_BaseModule):
         """
         Check if a fact is true in the egraph.
         """
-        self._process_commands([self._facts_to_check(facts)])
+        self._egraph.run_program(self._facts_to_check(facts))
 
     def check_fail(self, *facts: FactLike) -> None:
         """
         Checks that one of the facts is not true
         """
-        self._process_commands([bindings.Fail(self._facts_to_check(facts))])
+        self._egraph.run_program(bindings.Fail(self._facts_to_check(facts)))
 
-    def _facts_to_check(self, facts: Iterable[FactLike]) -> bindings.Check:
-        facts = _fact_likes(facts)
+    def _facts_to_check(self, fact_likes: Iterable[FactLike]) -> bindings.Check:
+        facts = _fact_likes(fact_likes)
         self._add_decls(*facts)
-        egg_facts = [f._to_egg_fact() for f in _fact_likes(facts)]
+        egg_facts = [self._state.fact_to_egg(f.fact) for f in _fact_likes(facts)]
         return bindings.Check(egg_facts)
 
     @overload
@@ -1081,16 +1037,17 @@ class EGraph(_BaseModule):
         """
         Extract the lowest cost expression from the egraph.
         """
-        assert isinstance(expr, RuntimeExpr)
-        self._add_decls(expr)
-        extract_report = self._run_extract(expr.__egg__, 0)
+        runtime_expr = to_runtime_expr(expr)
+        self._add_decls(runtime_expr)
+        typed_expr = runtime_expr.__egg_typed_expr__
+        extract_report = self._run_extract(typed_expr.expr, 0)
+
         if not isinstance(extract_report, bindings.Best):
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
-        new_typed_expr = TypedExprDecl.from_egg(
-            self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, extract_report.term, {}
-        )
-        res = cast(EXPR, RuntimeExpr(self._state.decls, new_typed_expr))
+        (new_typed_expr,) = self._state.exprs_from_egg(extract_report.termdag, [extract_report.term], typed_expr.tp)
+
+        res = cast(EXPR, RuntimeExpr(self.__egg_decls__, new_typed_expr))
         if include_cost:
             return res, extract_report.cost
         return res
@@ -1099,23 +1056,20 @@ class EGraph(_BaseModule):
         """
         Extract multiple expressions from the egraph.
         """
-        assert isinstance(expr, RuntimeExpr)
-        self._add_decls(expr)
+        runtime_expr = to_runtime_expr(expr)
+        self._add_decls(runtime_expr)
+        typed_expr = runtime_expr.__egg_typed_expr__
 
-        extract_report = self._run_extract(expr.__egg__, n)
+        extract_report = self._run_extract(typed_expr.expr, n)
         if not isinstance(extract_report, bindings.Variants):
             msg = "Wrong extract report type"
             raise ValueError(msg)  # noqa: TRY004
-        new_exprs = [
-            TypedExprDecl.from_egg(
-                self._egraph, self._state.decls, expr.__egg_typed_expr__.tp, extract_report.termdag, term, {}
-            )
-            for term in extract_report.terms
-        ]
-        return [cast(EXPR, RuntimeExpr(self._state.decls, expr)) for expr in new_exprs]
+        new_exprs = self._state.exprs_from_egg(extract_report.termdag, extract_report.terms, typed_expr.tp)
+        return [cast(EXPR, RuntimeExpr(self.__egg_decls__, expr)) for expr in new_exprs]
 
-    def _run_extract(self, expr: bindings._Expr, n: int) -> bindings._ExtractReport:
-        self._process_commands([bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n))))])
+    def _run_extract(self, expr: ExprDecl, n: int) -> bindings._ExtractReport:
+        expr = self._state.expr_to_egg(expr)
+        self._egraph.run_program(bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n)))))
         extract_report = self._egraph.extract_report()
         if not extract_report:
             msg = "No extract report saved"
@@ -1126,7 +1080,7 @@ class EGraph(_BaseModule):
         """
         Push the current state of the egraph, so that it can be popped later and reverted back.
         """
-        self._process_commands([bindings.Push(1)])
+        self._egraph.run_program(bindings.Push(1))
         self._state_stack.append(self._state)
         self._state = deepcopy(self._state)
 
@@ -1134,7 +1088,7 @@ class EGraph(_BaseModule):
         """
         Pop the current state of the egraph, reverting back to the previous state.
         """
-        self._process_commands([bindings.Pop(1)])
+        self._egraph.run_program(bindings.Pop(1))
         self._state = self._state_stack.pop()
 
     def __enter__(self) -> Self:
@@ -1170,9 +1124,8 @@ class EGraph(_BaseModule):
         """
         Evaluates the given expression (which must be a primitive type), returning the result.
         """
-        assert isinstance(expr, RuntimeExpr)
-        typed_expr = expr.__egg_typed_expr__
-        egg_expr = expr.__egg__
+        typed_expr = to_runtime_expr(expr).__egg_typed_expr__
+        egg_expr = self._state.expr_to_egg(typed_expr.expr)
         match typed_expr.tp:
             case JustTypeRef("i64"):
                 return self._egraph.eval_i64(egg_expr)
@@ -1184,7 +1137,7 @@ class EGraph(_BaseModule):
                 return self._egraph.eval_string(egg_expr)
             case JustTypeRef("PyObject"):
                 return self._egraph.eval_py_object(egg_expr)
-        raise NotImplementedError(f"Eval not implemented for {typed_expr.tp.name}")
+        raise TypeError(f"Eval not implemented for {typed_expr.tp}")
 
     def saturate(
         self, *, max: int = 1000, performance: bool = False, **kwargs: Unpack[GraphvizKwargs]
@@ -1222,6 +1175,31 @@ class EGraph(_BaseModule):
         Returns the current egraph, which is the one in the context.
         """
         return CURRENT_EGRAPH.get()
+
+    @property
+    def _egraph(self) -> bindings.EGraph:
+        return self._state.egraph
+
+    @property
+    def __egg_decls__(self) -> Declarations:
+        return self._state.__egg_decls__
+
+    def _register_commands(self, cmds: list[Command]) -> None:
+        self._add_decls(*cmds)
+        self._egraph.run_program(*map(self._command_to_egg, cmds))
+
+    def _command_to_egg(self, cmd: Command) -> bindings._Command:
+        ruleset_name = ""
+        cmd_decl: CommandDecl
+        match cmd:
+            case RewriteOrRule(_, cmd_decl, ruleset):
+                if ruleset:
+                    ruleset_name = ruleset.__egg_name__
+            case Action(_, action):
+                cmd_decl = ActionCommandDecl(action)
+            case _:
+                assert_never(cmd)
+        return self._state.command_to_egg(cmd_decl, ruleset_name)
 
 
 CURRENT_EGRAPH = ContextVar[EGraph]("CURRENT_EGRAPH")
@@ -1269,14 +1247,16 @@ class Unit(Expr, egg_sort="Unit", builtin=True):
 
 
 def ruleset(
-    rule_or_generator: CommandLike | CommandGenerator | None = None, *rules: Rule | Rewrite, name: None | str = None
+    rule_or_generator: RewriteOrRule | RewriteOrRuleGenerator | None = None,
+    *rules: RewriteOrRule,
+    name: None | str = None,
 ) -> Ruleset:
     """
     Creates a ruleset with the following rules.
 
     If no name is provided, one is generated based on the current module
     """
-    r = Ruleset(name=name)
+    r = Ruleset.create(name)
     if rule_or_generator is not None:
         r.register(rule_or_generator, *rules)
     return r
@@ -1316,7 +1296,6 @@ class Schedule:
         return Schedule(Declarations.create(self, other), SequenceDecl((self.schedule, other.schedule)))
 
 
-# TODO: How should name work here? Is it randomly generated?
 @dataclass
 class Ruleset(Schedule):
     """
@@ -1325,37 +1304,49 @@ class Ruleset(Schedule):
 
     name: str | None
 
+    __egg_ruleset__: RulesetDecl = field(init=False)
+
+    @classmethod
+    def create(cls, name: str | None) -> Ruleset:
+        """
+        Create a new ruleset with a schedule that will call itself.
+        """
+        c = cls(Declarations(), RunDecl("", ()), name)
+        c.schedule = RunDecl(c.__egg_name__, ())
+        return c
+
+    def __post_init__(self) -> None:
+        self.__egg_ruleset__ = self.__egg_decls__._rulesets[self.__egg_name__] = RulesetDecl([])
+
     def append(self, rule: RewriteOrRule) -> None:
         """
         Register a rule with the ruleset.
         """
         self.__egg_decls__ |= rule
-        if
-        self.__egg_decl__.rules.append(rule.decl)
+        self.__egg_ruleset__.rules.append(rule.decl)
 
-    def register(self, /, rule_or_generator: RewriteOrRule | CommandGenerator, *rules: RewriteOrRule) -> None:
+    def register(self, /, rule_or_generator: RewriteOrRule | RewriteOrRuleGenerator, *rules: RewriteOrRule) -> None:
         """
         Register rewrites or rules, either as a function or as values.
         """
         if isinstance(rule_or_generator, FunctionType):
             assert not rules
-            rules = tuple(_command_generator(rule_or_generator))
+            rules = tuple(_rewrite_or_rule_generator(rule_or_generator))
         else:
             rules = (cast(RewriteOrRule, rule_or_generator), *rules)
         for r in rules:
             self.append(r)
 
     def __str__(self) -> str:
-        return pretty_decl(self.__egg_decls__, self.__egg_decl__, ruleset_name=self.name)
+        return pretty_decl(self.__egg_decls__, self.__egg_ruleset__, ruleset_name=self.name)
 
     def __repr__(self) -> str:
         return str(self)
 
+    # Create a unique name if we didn't pass one from the user
     @property
-    def __egg_decl__(self) -> RulesetDecl | None:
-        if self.name:
-            return self.__egg_decls__._rulesets[self.name]
-        return None
+    def __egg_name__(self) -> str:
+        return self.name or f"ruleset_{id(self)}"
 
 
 @dataclass
@@ -1378,7 +1369,7 @@ class Fact:
     """
 
     __egg_decls__: Declarations
-    fact: ActionDecl
+    fact: FactDecl
 
     def __str__(self) -> str:
         return pretty_decl(self.__egg_decls__, self.fact)
@@ -1470,7 +1461,8 @@ def delete(expr: Expr) -> Action:
 
 
 def expr_fact(expr: Expr) -> Fact:
-    return ExprFact(to_runtime_expr(expr))
+    runtime_expr = to_runtime_expr(expr)
+    return Fact(runtime_expr.__egg_decls__, ExprFactDecl(runtime_expr.__egg_typed_expr__.expr))
 
 
 def union(lhs: EXPR) -> _UnionBuilder[EXPR]:
@@ -1497,8 +1489,9 @@ def rule(*facts: FactLike, ruleset: Ruleset | None = None, name: str | None = No
     return _RuleBuilder(facts=_fact_likes(facts), name=name, ruleset=ruleset)
 
 
-def action_command(action: Action) -> Command:
-    return Command(action.__egg_decls__, ActionCommandDecl(action.action))
+@deprecated("This function is now a no-op, you can remove it and use actions as commands")
+def action_command(action: Action) -> Action:
+    return action
 
 
 def var(name: str, bound: type[EXPR]) -> EXPR:
@@ -1519,17 +1512,19 @@ def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
         yield var(name, bound)
 
 
-# TODO: Update these with declerations
-
-
 @dataclass
 class _RewriteBuilder(Generic[EXPR]):
     lhs: EXPR
     ruleset: Ruleset | None
 
-    def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
+    def to(self, rhs: EXPR, *conditions: FactLike) -> RewriteOrRule:
         lhs = to_runtime_expr(self.lhs)
-        rule = Rewrite(self.ruleset, lhs, convert_to_same_type(rhs, lhs), _fact_likes(conditions))
+        facts = _fact_likes(conditions)
+        rhs = convert_to_same_type(rhs, lhs)
+        rule = RewriteOrRule(
+            Declarations.create(lhs, rhs, *facts, self.ruleset),
+            RewriteDecl(lhs.__egg_typed_expr__.expr, rhs.__egg_typed_expr__.expr, tuple(f.fact for f in facts)),
+        )
         if self.ruleset:
             self.ruleset.append(rule)
         return rule
@@ -1544,9 +1539,14 @@ class _BirewriteBuilder(Generic[EXPR]):
     lhs: EXPR
     ruleset: Ruleset | None
 
-    def to(self, rhs: EXPR, *conditions: FactLike) -> Command:
+    def to(self, rhs: EXPR, *conditions: FactLike) -> RewriteOrRule:
         lhs = to_runtime_expr(self.lhs)
-        rule = BiRewrite(self.ruleset, lhs, convert_to_same_type(rhs, lhs), _fact_likes(conditions))
+        facts = _fact_likes(conditions)
+        rhs = convert_to_same_type(rhs, lhs)
+        rule = RewriteOrRule(
+            Declarations.create(lhs, rhs, *facts, self.ruleset),
+            BiRewriteDecl(lhs.__egg_typed_expr__.expr, rhs.__egg_typed_expr__.expr, tuple(f.fact for f in facts)),
+        )
         if self.ruleset:
             self.ruleset.append(rule)
         return rule
@@ -1562,7 +1562,8 @@ class _EqBuilder(Generic[EXPR]):
 
     def to(self, *exprs: EXPR) -> Fact:
         expr = to_runtime_expr(self.expr)
-        return Eq([expr] + [convert_to_same_type(e, expr) for e in exprs])
+        args = [expr, *(convert_to_same_type(e, expr) for e in exprs)]
+        return Fact(Declarations.create(*args), EqDecl(tuple(a.__egg_typed_expr__.expr for a in args)))
 
     def __repr__(self) -> str:
         return str(self)
@@ -1574,15 +1575,16 @@ class _EqBuilder(Generic[EXPR]):
 
 @dataclass
 class _NeBuilder(Generic[EXPR]):
-    expr: EXPR
+    lhs: EXPR
 
-    def to(self, expr: EXPR) -> Unit:
-        assert isinstance(self.expr, RuntimeExpr)
-        args = (self.expr, convert_to_same_type(expr, self.expr))
-        decls = Declarations.create(*args)
+    def to(self, rhs: EXPR) -> Unit:
+        lhs = to_runtime_expr(self.lhs)
+        rhs = convert_to_same_type(rhs, lhs)
         res = RuntimeExpr(
-            decls,
-            TypedExprDecl(JustTypeRef("Unit"), CallDecl(FunctionRef("!="), tuple(a.__egg_typed_expr__ for a in args))),
+            Declarations.create(lhs, rhs),
+            TypedExprDecl(
+                JustTypeRef("Unit"), CallDecl(FunctionRef("!="), (lhs.__egg_typed_expr__, rhs.__egg_typed_expr__))
+            ),
         )
         return cast(Unit, res)
 
@@ -1590,33 +1592,43 @@ class _NeBuilder(Generic[EXPR]):
         return str(self)
 
     def __str__(self) -> str:
-        expr = to_runtime_expr(self.expr)
+        expr = to_runtime_expr(self.lhs)
         return expr.__egg_pretty__("ne")
 
 
 @dataclass
 class _SetBuilder(Generic[EXPR]):
-    lhs: Expr
+    lhs: EXPR
 
-    def to(self, rhs: EXPR) -> Set:
+    def to(self, rhs: EXPR) -> Action:
         lhs = to_runtime_expr(self.lhs)
-        return Set(lhs, convert_to_same_type(rhs, lhs))
+        rhs = convert_to_same_type(rhs, lhs)
+        lhs_expr = lhs.__egg_typed_expr__.expr
+        assert isinstance(lhs_expr, CallDecl), "Can only set function calls"
+        return Action(
+            Declarations.create(lhs, rhs),
+            SetDecl(lhs_expr, rhs.__egg_typed_expr__.expr),
+        )
 
     def __repr__(self) -> str:
         return str(self)
 
     def __str__(self) -> str:
         lhs = to_runtime_expr(self.lhs)
-        return lhs.__egg_pretty__("ne")
+        return lhs.__egg_pretty__("set_")
 
 
 @dataclass
 class _UnionBuilder(Generic[EXPR]):
-    lhs: Expr
+    lhs: EXPR
 
     def with_(self, rhs: EXPR) -> Action:
         lhs = to_runtime_expr(self.lhs)
-        return Union_(lhs, convert_to_same_type(rhs, lhs))
+        rhs = convert_to_same_type(rhs, lhs)
+        return Action(
+            Declarations.create(lhs, rhs),
+            UnionDecl(lhs.__egg_typed_expr__.expr, rhs.__egg_typed_expr__.expr),
+        )
 
     def __repr__(self) -> str:
         return str(self)
@@ -1632,11 +1644,24 @@ class _RuleBuilder:
     name: str | None
     ruleset: Ruleset | None
 
-    def then(self, *actions: ActionLike) -> Rule:
-        rule = Rule(_action_likes(actions), self.facts, self.name or "", self.ruleset)
+    def then(self, *actions: ActionLike) -> RewriteOrRule:
+        actions = _action_likes(actions)
+        rule = RewriteOrRule(
+            Declarations.create(self.ruleset, *actions, *self.facts),
+            RuleDecl(tuple(a.action for a in actions), tuple(f.fact for f in self.facts), self.name),
+        )
         if self.ruleset:
             self.ruleset.append(rule)
         return rule
+
+    def __str__(self) -> str:
+        # TODO: Figure out how to stringify rulebuilder that preserves statements
+        args = list(map(str, self.facts))
+        if self.name is not None:
+            args.append(f"name={self.name}")
+        if ruleset is not None:
+            args.append(f"ruleset={self.ruleset}")
+        return f"rule({', '.join(args)})"
 
 
 def expr_parts(expr: Expr) -> TypedExprDecl:
@@ -1654,18 +1679,19 @@ def to_runtime_expr(expr: Expr) -> RuntimeExpr:
     return expr
 
 
-def run(ruleset: Ruleset | None = None, *until: Fact) -> Run:
+def run(ruleset: Ruleset | None = None, *until: Fact) -> Schedule:
     """
     Create a run configuration.
     """
-    return Run(ruleset, tuple(until))
+    decls = Declarations.create(ruleset, *until)
+    return Schedule(decls, RunDecl(ruleset.__egg_name__ if ruleset else "", tuple(f.fact for f in until) or None))
 
 
 def seq(*schedules: Schedule) -> Schedule:
     """
     Run a sequence of schedules.
     """
-    return Sequence(tuple(schedules))
+    return Schedule(Declarations.create(*schedules), SequenceDecl(tuple(s.schedule for s in schedules)))
 
 
 ActionLike: TypeAlias = Action | Expr
@@ -1681,20 +1707,21 @@ def _action_like(action_like: ActionLike) -> Action:
     return action_like
 
 
-# CommandLike: TypeAlias = Command | ActionLike
+Command: TypeAlias = Action | RewriteOrRule
+
+CommandLike: TypeAlias = ActionLike | RewriteOrRule
 
 
-# def _command_like(command_like: CommandLike) -> Command:
-#     if isinstance(command_like, Command):
-#         return command_like
-#     action = _action_like(command_like)
-#     return action_command(action)
+def _command_like(command_like: CommandLike) -> Command:
+    if isinstance(command_like, RewriteOrRule):
+        return command_like
+    return _action_like(command_like)
 
 
-CommandGenerator = Callable[..., Iterable[Rule | Rewrite]]
+RewriteOrRuleGenerator = Callable[..., Iterable[RewriteOrRule]]
 
 
-def _command_generator(gen: CommandGenerator) -> Iterable[Command]:
+def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator) -> Iterable[RewriteOrRule]:
     """
     Calls the function with variables of the type and name of the arguments.
     """

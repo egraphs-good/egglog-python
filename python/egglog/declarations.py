@@ -230,9 +230,9 @@ class Declarations:
 
 @dataclass
 class ClassDecl:
-    egg_name: str | None
-    type_vars: tuple[str, ...]
-    builtin: bool
+    egg_name: str | None = None
+    type_vars: tuple[str, ...] = ()
+    builtin: bool = False
     class_methods: dict[str, FunctionDecl] = field(default_factory=dict)
     # These have to be seperate from class_methods so that printing them can be done easily
     class_variables: dict[str, ConstantDecl] = field(default_factory=dict)
@@ -365,14 +365,8 @@ class RelationDecl:
             arg_names=tuple(f"__{i}" for i in range(len(self.arg_types))),
             arg_defaults=self.arg_defaults,
             return_type=TypeRefWithVars("Unit"),
-            var_arg_type=None,
-            builtin=False,
             egg_name=self.egg_name,
-            cost=None,
             default=LitDecl(None),
-            merge=None,
-            unextractable=False,
-            on_merge=(),
         )
 
 
@@ -391,14 +385,7 @@ class ConstantDecl:
             arg_names=(),
             arg_defaults=(),
             return_type=self.type_ref.to_var(),
-            var_arg_type=None,
-            builtin=False,
             egg_name=self.egg_name,
-            cost=None,
-            default=None,
-            merge=None,
-            unextractable=False,
-            on_merge=(),
         )
 
 
@@ -411,16 +398,16 @@ class FunctionDecl:
     arg_defaults: tuple[ExprDecl | None, ...]
     # If None, then the first arg is mutated and returned
     return_type: TypeOrVarRef | None
-    var_arg_type: TypeOrVarRef | None
+    var_arg_type: TypeOrVarRef | None = None
 
     # Egg params
-    builtin: bool
-    egg_name: str | None
-    cost: int | None
-    default: ExprDecl | None
-    on_merge: tuple[ActionDecl, ...]
-    merge: ExprDecl | None
-    unextractable: bool
+    builtin: bool = False
+    egg_name: str | None = None
+    cost: int | None = None
+    default: ExprDecl | None = None
+    on_merge: tuple[ActionDecl, ...] = ()
+    merge: ExprDecl | None = None
+    unextractable: bool = False
 
     def to_function_decl(self) -> FunctionDecl:
         return self
@@ -540,7 +527,7 @@ class SequenceDecl:
 @dataclass(frozen=True)
 class RunDecl:
     ruleset: str
-    until: list[FactDecl] | None
+    until: tuple[FactDecl, ...] | None
 
 
 ScheduleDecl: TypeAlias = SaturateDecl | RepeatDecl | SequenceDecl | RunDecl

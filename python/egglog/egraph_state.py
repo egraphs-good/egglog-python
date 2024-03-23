@@ -16,7 +16,7 @@ from .type_constraint_solver import TypeConstraintError, TypeConstraintSolver
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["EGraphState"]
+__all__ = ["EGraphState", "GLOBAL_PY_OBJECT_SORT"]
 
 # Create a global sort for python objects, so we can store them without an e-graph instance
 # Needed when serializing commands to egg commands when creating modules
@@ -265,13 +265,13 @@ class EGraphState:
         return res
 
     def exprs_from_egg(
-        self, egraph: bindings.EGraph, termdag: bindings.TermDag, terms: list[tuple[JustTypeRef, bindings._Term]]
+        self, termdag: bindings.TermDag, terms: list[bindings._Term], tp: JustTypeRef
     ) -> Iterable[TypedExprDecl]:
         """
         Create a function that can convert from an egg term to a typed expr.
         """
-        state = FromEggState(egraph, self, termdag)
-        return (state.from_expr(tp, term) for tp, term in terms)
+        state = FromEggState(self, termdag)
+        return [state.from_expr(tp, term) for term in terms]
 
     def _get_possible_types(self, cls_name: str) -> frozenset[JustTypeRef]:
         """
@@ -314,7 +314,6 @@ class FromEggState:
     Dataclass containing state used when converting from an egg term to a typed expr.
     """
 
-    egraph: bindings.EGraph
     state: EGraphState
     termdag: bindings.TermDag
     # Cache of termdag ID to TypedExprDecl
@@ -337,7 +336,7 @@ class FromEggState:
         elif isinstance(term, bindings.TermApp):
             if term.name == "py-object":
                 call = bindings.termdag_term_to_expr(self.termdag, term)
-                expr_decl = PyObjectDecl(self.egraph.eval_py_object(call))
+                expr_decl = PyObjectDecl(self.state.egraph.eval_py_object(call))
             else:
                 expr_decl = self.from_call(tp, term)
         else:

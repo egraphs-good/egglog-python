@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from .egraph import Expr
 
-__all__ = ["convert", "converter", "resolve_literal"]
+__all__ = ["convert", "converter", "resolve_literal", "convert_to_same_type"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
 CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable]] = {}
 # Global declerations to store all convertable types so we can query if they have certain methods or not
