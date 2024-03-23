@@ -156,9 +156,6 @@ def check(x: FactLike, schedule: Schedule | None = None, *given: ActionLike) -> 
     egraph.check(x)
 
 
-# def extract(res: )
-
-
 @dataclass
 class _BaseModule:
     """
@@ -299,7 +296,7 @@ class _BaseModule:
 
     @deprecated("Use top level `ruleset` function instead")
     def ruleset(self, name: str) -> Ruleset:
-        return Ruleset.create(name)
+        return Ruleset(name)
 
     # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
     @overload
@@ -348,7 +345,7 @@ class _BaseModule:
         """
         if isinstance(command_or_generator, FunctionType):
             assert not command_likes
-            command_likes = tuple(_rewrite_or_rule_generator(command_or_generator))
+            command_likes = tuple(_rewrite_or_rule_generator(command_or_generator)())
         else:
             command_likes = (cast(CommandLike, command_or_generator), *command_likes)
         commands = [_command_like(c) for c in command_likes]
@@ -1256,7 +1253,7 @@ def ruleset(
 
     If no name is provided, one is generated based on the current module
     """
-    r = Ruleset.create(name)
+    r = Ruleset(name)
     if rule_or_generator is not None:
         r.register(rule_or_generator, *rules)
     return r
@@ -1268,8 +1265,13 @@ class Schedule:
     A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
     """
 
-    __egg_decls__: Declarations
+    # Defer declerations so that we can have rule generators that used not yet defined yet
+    __egg_decls_thunk__: Callable[[], Declarations]
     schedule: ScheduleDecl
+
+    @property
+    def __egg_decls__(self) -> Declarations:
+        return self.__egg_decls_thunk__()
 
     def __str__(self) -> str:
         return pretty_decl(self.__egg_decls__, self.schedule)
@@ -1281,19 +1283,19 @@ class Schedule:
         """
         Repeat the schedule a number of times.
         """
-        return Schedule(self.__egg_decls__, RepeatDecl(self.schedule, length))
+        return Schedule(self.__egg_decls_thunk__, RepeatDecl(self.schedule, length))
 
     def saturate(self) -> Schedule:
         """
         Run the schedule until the e-graph is saturated.
         """
-        return Schedule(self.__egg_decls__, SaturateDecl(self.schedule))
+        return Schedule(self.__egg_decls_thunk__, SaturateDecl(self.schedule))
 
     def __add__(self, other: Schedule) -> Schedule:
         """
         Run two schedules in sequence.
         """
-        return Schedule(Declarations.create(self, other), SequenceDecl((self.schedule, other.schedule)))
+        return Schedule(Thunk.fn(Declarations.create, self, other), SequenceDecl((self.schedule, other.schedule)))
 
 
 @dataclass
@@ -1302,21 +1304,32 @@ class Ruleset(Schedule):
     A collection of rules, which can be run as a schedule.
     """
 
+    __egg_decls_thunk__: Callable[[], Declarations] = field(init=False)
+    schedule: RunDecl = field(init=False)
     name: str | None
 
+    # Current declerations we have accumulated
+    __egg_decls__: Declarations = field(default_factory=Declarations)
+    # Current rulesets we have accumulated
     __egg_ruleset__: RulesetDecl = field(init=False)
-
-    @classmethod
-    def create(cls, name: str | None) -> Ruleset:
-        """
-        Create a new ruleset with a schedule that will call itself.
-        """
-        c = cls(Declarations(), RunDecl("", ()), name)
-        c.schedule = RunDecl(c.__egg_name__, ())
-        return c
+    # Rule generator functions that have been deferred, to allow for late type binding
+    deferred_rule_gens: list[Callable[[], Iterable[RewriteOrRule]]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        # self.__egg_decls_thunk__ = Thunk.fn(lambda:
+        self.schedule = RunDecl(self.__egg_name__, ())
         self.__egg_ruleset__ = self.__egg_decls__._rulesets[self.__egg_name__] = RulesetDecl([])
+        self.__egg_decls_thunk__ = self._update_egg_decls
+
+    def _update_egg_decls(self) -> Declarations:
+        """
+        To return the egg decls, we go through our deferred rules and add any we haven't yet
+        """
+        while self.deferred_rule_gens:
+            rules = self.deferred_rule_gens.pop()()
+            self.__egg_decls__.update(*rules)
+            self.__egg_ruleset__.rules.extend(r.decl for r in rules)
+        return self.__egg_decls__
 
     def append(self, rule: RewriteOrRule) -> None:
         """
@@ -1329,13 +1342,13 @@ class Ruleset(Schedule):
         """
         Register rewrites or rules, either as a function or as values.
         """
-        if isinstance(rule_or_generator, FunctionType):
-            assert not rules
-            rules = tuple(_rewrite_or_rule_generator(rule_or_generator))
+        if isinstance(rule_or_generator, RewriteOrRule):
+            self.append(rule_or_generator)
+            for r in rules:
+                self.append(r)
         else:
-            rules = (cast(RewriteOrRule, rule_or_generator), *rules)
-        for r in rules:
-            self.append(r)
+            assert not rules
+            self.deferred_rule_gens.append(_rewrite_or_rule_generator(rule_or_generator))
 
     def __str__(self) -> str:
         return pretty_decl(self.__egg_decls__, self.__egg_ruleset__, ruleset_name=self.name)
@@ -1683,15 +1696,17 @@ def run(ruleset: Ruleset | None = None, *until: Fact) -> Schedule:
     """
     Create a run configuration.
     """
-    decls = Declarations.create(ruleset, *until)
-    return Schedule(decls, RunDecl(ruleset.__egg_name__ if ruleset else "", tuple(f.fact for f in until) or None))
+    return Schedule(
+        Thunk.fn(Declarations.create, ruleset, *until),
+        RunDecl(ruleset.__egg_name__ if ruleset else "", tuple(f.fact for f in until) or None),
+    )
 
 
 def seq(*schedules: Schedule) -> Schedule:
     """
     Run a sequence of schedules.
     """
-    return Schedule(Declarations.create(*schedules), SequenceDecl(tuple(s.schedule for s in schedules)))
+    return Schedule(Thunk.fn(Declarations.create, *schedules), SequenceDecl(tuple(s.schedule for s in schedules)))
 
 
 ActionLike: TypeAlias = Action | Expr
@@ -1721,9 +1736,9 @@ def _command_like(command_like: CommandLike) -> Command:
 RewriteOrRuleGenerator = Callable[..., Iterable[RewriteOrRule]]
 
 
-def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator) -> Iterable[RewriteOrRule]:
+def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator) -> Callable[[], Iterable[RewriteOrRule]]:
     """
-    Calls the function with variables of the type and name of the arguments.
+    Returns a thunk which will call the function with variables of the type and name of the arguments.
     """
     # Get the local scope from where the function is defined, so that we can get any type hints that are in the scope
     # but not in the globals
@@ -1734,8 +1749,8 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator) -> Iterable[RewriteO
     original_frame = register_frame.f_back
     assert original_frame
     hints = get_type_hints(gen, gen.__globals__, original_frame.f_locals)
-    args = (_var(p.name, hints[p.name]) for p in signature(gen).parameters.values())
-    return gen(*args)
+    args = [_var(p.name, hints[p.name]) for p in signature(gen).parameters.values()]
+    return lambda gen=gen, args=args: gen(*args)  # type: ignore[misc]
 
 
 FactLike = Fact | Expr

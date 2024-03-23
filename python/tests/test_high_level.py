@@ -474,7 +474,6 @@ def test_function_default_upcasts():
 def test_upcast_self_lower_cost():
     # Verifies that self will be upcasted, if that upcast has a lower cast than converting the other arg
     # i.e. Int(x) + NDArray(y) -> NDArray(Int(x)) + NDArray(y) instead of Int(x) + NDArray(y).to_int()
-    EGraph()
 
     class Int(Expr):
         def __init__(self, name: StringLike) -> None: ...
@@ -606,3 +605,24 @@ def test_wrong_annotation_error():
 
     with pytest.raises(NotImplementedError):
         ZX.__egg_decls__  # type: ignore[attr-defined]
+
+
+def test_deferred_ruleset():
+    @ruleset
+    def rules(x: AA):
+        yield rewrite(first(x)).to(second(x))
+
+    class AA(Expr):
+        def __init__(self) -> None: ...
+
+    @function
+    def first(x: AA) -> AA: ...
+
+    @function
+    def second(x: AA) -> AA: ...
+
+    check(
+        eq(first(AA())).to(second(AA())),
+        rules,
+        first(AA()),
+    )
