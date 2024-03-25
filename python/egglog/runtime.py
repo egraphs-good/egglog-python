@@ -99,7 +99,6 @@ class RuntimeClass(DelayedDeclerations):
         global _PY_OBJECT_CLASS
         if self.__egg_tp__.name == "PyObject":
             _PY_OBJECT_CLASS = self
-        self.verify()
 
     def verify(self) -> None:
         if not self.__egg_tp__.args:
