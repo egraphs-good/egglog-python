@@ -441,7 +441,9 @@ class _ExprMetaclass(type):
         # Store frame so that we can get live access to updated locals/globals
         # Otherwise, f_locals returns a copy
         # https://peps.python.org/pep-0667/
-        decls_thunk = Thunk.fn(_generate_class_decls, namespace, prev_frame, builtin, egg_sort, name)
+        decls_thunk = Thunk.fn(
+            _generate_class_decls, namespace, prev_frame, builtin, egg_sort, name, fallback=Declarations
+        )
         return RuntimeClass(decls_thunk, TypeRefWithVars(name))
 
     def __instancecheck__(cls, instance: object) -> bool:
