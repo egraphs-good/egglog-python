@@ -155,32 +155,6 @@ class Declarations:
         other._constants |= self._constants
         other._rulesets |= self._rulesets
 
-    # def set_callable_decl(self, ref: CallableRef, decl: CallableDecl) -> None:
-    #     """
-    #     Sets a function declaration for the given callable reference.
-    #     """
-    #     match ref:
-    #         case FunctionRef(name):
-    #             if name in self._functions:
-    #                 raise ValueError(f"Function {name} already registered")
-    #             self._functions[name] = decl
-    #         case MethodRef(class_name, method_name):
-    #             assert isinstance(decl, FunctionDecl | RelationDecl)
-    #             methods = self._classes[class_name].methods
-    #             if method_name in methods:
-    #                 raise ValueError(f"Method {class_name}.{method_name} already registered")
-    #             methods[method_name] = decl
-    #         case ClassMethodRef(class_name, method_name):
-    #             if method_name in self._classes[class_name].class_methods:
-    #                 raise ValueError(f"Class method {class_name}.{method_name} already registered")
-    #             self._classes[class_name].class_methods[method_name] = decl
-    #         case PropertyRef(class_name, property_name):
-    #             if property_name in self._classes[class_name].properties:
-    #                 raise ValueError(f"Property {class_name}.{property_name} already registered")
-    #             self._classes[class_name].properties[property_name] = decl
-    #         case _:
-    #             assert_never(ref)
-
     def get_callable_decl(self, ref: CallableRef) -> CallableDecl:
         match ref:
             case FunctionRef(name):
@@ -196,39 +170,6 @@ class Declarations:
             case PropertyRef(class_name, property_name):
                 return self._classes[class_name].properties[property_name]
         assert_never(ref)
-
-    # def set_constant_type(self, ref: ConstantCallableRef, tp: JustTypeRef) -> None:
-    #     match ref:
-    #         case ConstantRef(name):
-    #             if name in self._constants:
-    #                 raise ValueError(f"Constant {name} already registered")
-    #             self._constants[name] = tp
-    #         case ClassVariableRef(class_name, variable_name):
-    #             if variable_name in self._classes[class_name].class_variables:
-    #                 raise ValueError(f"Class variable {class_name}.{variable_name} already registered")
-    #             self._classes[class_name].class_variables[variable_name] = tp
-    #         case _:
-    #             assert_never(ref)
-
-    # def register_callable_ref(self, ref: CallableRef, egg_name: str) -> None:
-    #     """
-    #     Registers a callable reference with the given egg name.
-
-    #     The callable's function needs to be registered first.
-    #     """
-    #     if ref in self._callable_ref_to_egg_fn:
-    #         raise ValueError(f"Callable ref {ref} already registered")
-    #     self._callable_ref_to_egg_fn[ref] = egg_name
-    #     self._egg_fn_to_callable_refs[egg_name].add(ref)
-
-    # def get_callable_refs(self, egg_name: str) -> Iterable[CallableRef]:
-    #     return self._egg_fn_to_callable_refs[egg_name]
-
-    # def get_egg_fn(self, ref: CallableRef) -> str:
-    #     return self._callable_ref_to_egg_fn[ref]
-
-    # def get_egg_sort(self, ref: JustTypeRef) -> str:
-    #     return self._type_ref_to_egg_sort[ref]
 
     def has_method(self, class_name: str, method_name: str) -> bool | None:
         """
