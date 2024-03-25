@@ -6,7 +6,6 @@ import tempfile
 from abc import abstractmethod
 from collections.abc import Callable, Iterable
 from contextvars import ContextVar, Token
-from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from inspect import Parameter, currentframe, signature
 from types import FrameType, FunctionType
@@ -1099,7 +1098,7 @@ class EGraph(_BaseModule):
         """
         self._egraph.run_program(bindings.Push(1))
         self._state_stack.append(self._state)
-        self._state = deepcopy(self._state)
+        self._state = self._state.copy()
 
     def pop(self) -> None:
         """
