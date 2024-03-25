@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Declarations",
     "DeclerationsLike",
+    "DelayedDeclerations",
     "upcast_declerations",
     "Declarations",
     "JustTypeRef",
@@ -67,6 +68,15 @@ __all__ = [
     "ActionCommandDecl",
     "CommandDecl",
 ]
+
+
+@dataclass
+class DelayedDeclerations:
+    __egg_decls_thunk__: Callable[[], Declarations]
+
+    @property
+    def __egg_decls__(self) -> Declarations:
+        return self.__egg_decls_thunk__()
 
 
 @runtime_checkable

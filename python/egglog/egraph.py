@@ -289,9 +289,9 @@ class _BaseModule:
         # If we have any positional args, then we are calling it directly on a function
         if args:
             assert len(args) == 1
-            return _function(args[0], fn_locals, False)
+            return _FunctionConstructor(fn_locals)(args[0])
         # otherwise, we are passing some keyword args, so save those, and then return a partial
-        return lambda fn: _function(fn, fn_locals, False, **kwargs)
+        return _FunctionConstructor(fn_locals, **kwargs)
 
     @deprecated("Use top level `ruleset` function instead")
     def ruleset(self, name: str) -> Ruleset:
@@ -580,41 +580,42 @@ def function(*args, **kwargs) -> Any:
     # If we have any positional args, then we are calling it directly on a function
     if args:
         assert len(args) == 1
-        return _function(args[0], fn_locals, False)
+        return _FunctionConstructor(fn_locals)(args[0])
     # otherwise, we are passing some keyword args, so save those, and then return a partial
-    return lambda fn: _function(fn, fn_locals, **kwargs)
+    return _FunctionConstructor(fn_locals, **kwargs)
 
 
-def _function(
-    fn: Callable[..., RuntimeExpr],
-    hint_locals: dict[str, Any],
-    builtin: bool = False,
-    mutates_first_arg: bool = False,
-    egg_fn: str | None = None,
-    cost: int | None = None,
-    default: RuntimeExpr | None = None,
-    merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None = None,
-    on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None = None,
-    unextractable: bool = False,
-) -> RuntimeFunction:
-    """
-    Uncurried version of function decorator
-    """
-    decls = Declarations()
-    decls._functions[name := fn.__name__] = _fn_decl(
-        decls,
-        egg_fn,
-        fn,
-        hint_locals,
-        default,
-        cost,
-        merge,
-        on_merge,
-        mutates_first_arg,
-        builtin,
-        unextractable=unextractable,
-    )
-    return RuntimeFunction(decls, FunctionRef(name))
+@dataclass
+class _FunctionConstructor:
+    hint_locals: dict[str, Any]
+    builtin: bool = False
+    mutates_first_arg: bool = False
+    egg_fn: str | None = None
+    cost: int | None = None
+    default: RuntimeExpr | None = None
+    merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None = None
+    on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None = None
+    unextractable: bool = False
+
+    def __call__(self, fn: Callable[..., RuntimeExpr]) -> RuntimeFunction:
+        return RuntimeFunction(Thunk.fn(self.create_decls, fn), FunctionRef(fn.__name__))
+
+    def create_decls(self, fn: Callable[..., RuntimeExpr]) -> Declarations:
+        decls = Declarations()
+        decls._functions[fn.__name__] = _fn_decl(
+            decls,
+            self.egg_fn,
+            fn,
+            self.hint_locals,
+            self.default,
+            self.cost,
+            self.merge,
+            self.on_merge,
+            self.mutates_first_arg,
+            self.builtin,
+            unextractable=self.unextractable,
+        )
+        return decls
 
 
 def _fn_decl(
@@ -687,8 +688,8 @@ def _fn_decl(
         None
         if merge is None
         else merge(
-            RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("old"))),
-            RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("new"))),
+            RuntimeExpr.__from_value__(decls, TypedExprDecl(return_type.to_just(), VarDecl("old"))),
+            RuntimeExpr.__from_value__(decls, TypedExprDecl(return_type.to_just(), VarDecl("new"))),
         )
     )
     decls |= merged
@@ -698,8 +699,8 @@ def _fn_decl(
         if on_merge is None
         else _action_likes(
             on_merge(
-                RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("old"))),
-                RuntimeExpr(decls, TypedExprDecl(return_type.to_just(), VarDecl("new"))),
+                RuntimeExpr.__from_value__(decls, TypedExprDecl(return_type.to_just(), VarDecl("old"))),
+                RuntimeExpr.__from_value__(decls, TypedExprDecl(return_type.to_just(), VarDecl("new"))),
             )
         )
     )
@@ -747,11 +748,16 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
     """
     Creates a function whose return type is `Unit` and has a default value.
     """
+    decls_thunk = Thunk.fn(_relation_decls, name, tps, egg_fn)
+    return cast(Callable[..., Unit], RuntimeFunction(decls_thunk, FunctionRef(name)))
+
+
+def _relation_decls(name: str, tps: tuple[type, ...], egg_fn: str | None) -> Declarations:
     decls = Declarations()
     decls |= cast(RuntimeClass, Unit)
     arg_types = tuple(resolve_type_annotation(decls, tp).to_just() for tp in tps)
     decls._functions[name] = RelationDecl(arg_types, tuple(None for _ in tps), egg_fn)
-    return cast(Callable[..., Unit], RuntimeFunction(decls, FunctionRef(name)))
+    return decls
 
 
 def constant(name: str, tp: type[EXPR], egg_name: str | None = None) -> EXPR:
@@ -759,11 +765,14 @@ def constant(name: str, tp: type[EXPR], egg_name: str | None = None) -> EXPR:
     A "constant" is implemented as the instantiation of a value that takes no args.
     This creates a function with `name` and return type `tp` and returns a value of it being called.
     """
-    ref = ConstantRef(name)
+    return cast(EXPR, RuntimeExpr(Thunk.fn(_constant_thunk, name, tp, egg_name)))
+
+
+def _constant_thunk(name: str, tp: type, egg_name: str | None) -> tuple[Declarations, TypedExprDecl]:
     decls = Declarations()
     type_ref = resolve_type_annotation(decls, tp).to_just()
     decls._constants[name] = ConstantDecl(type_ref, egg_name)
-    return cast(EXPR, RuntimeExpr(decls, TypedExprDecl(type_ref, CallDecl(ref))))
+    return decls, TypedExprDecl(type_ref, CallDecl(ConstantRef(name)))
 
 
 def _last_param_variable(params: list[Parameter]) -> bool:
@@ -940,7 +949,10 @@ class EGraph(_BaseModule):
         self.register(action)
         runtime_expr = to_runtime_expr(expr)
         return cast(
-            EXPR, RuntimeExpr(self.__egg_decls__, TypedExprDecl(runtime_expr.__egg_typed_expr__.tp, VarDecl(name)))
+            EXPR,
+            RuntimeExpr.__from_value__(
+                self.__egg_decls__, TypedExprDecl(runtime_expr.__egg_typed_expr__.tp, VarDecl(name))
+            ),
         )
 
     @overload
@@ -968,7 +980,7 @@ class EGraph(_BaseModule):
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
         (new_typed_expr,) = self._state.exprs_from_egg(extract_report.termdag, [extract_report.term], typed_expr.tp)
-        return cast(EXPR, RuntimeExpr(self.__egg_decls__, new_typed_expr))
+        return cast(EXPR, RuntimeExpr.__from_value__(self.__egg_decls__, new_typed_expr))
 
     def include(self, path: str) -> None:
         """
@@ -1045,7 +1057,7 @@ class EGraph(_BaseModule):
             raise ValueError(msg)  # noqa: TRY004
         (new_typed_expr,) = self._state.exprs_from_egg(extract_report.termdag, [extract_report.term], typed_expr.tp)
 
-        res = cast(EXPR, RuntimeExpr(self.__egg_decls__, new_typed_expr))
+        res = cast(EXPR, RuntimeExpr.__from_value__(self.__egg_decls__, new_typed_expr))
         if include_cost:
             return res, extract_report.cost
         return res
@@ -1063,7 +1075,7 @@ class EGraph(_BaseModule):
             msg = "Wrong extract report type"
             raise ValueError(msg)  # noqa: TRY004
         new_exprs = self._state.exprs_from_egg(extract_report.termdag, extract_report.terms, typed_expr.tp)
-        return [cast(EXPR, RuntimeExpr(self.__egg_decls__, expr)) for expr in new_exprs]
+        return [cast(EXPR, RuntimeExpr.__from_value__(self.__egg_decls__, expr)) for expr in new_exprs]
 
     def _run_extract(self, expr: ExprDecl, n: int) -> bindings._ExtractReport:
         expr = self._state.expr_to_egg(expr)
@@ -1261,18 +1273,13 @@ def ruleset(
 
 
 @dataclass
-class Schedule:
+class Schedule(DelayedDeclerations):
     """
     A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
     """
 
     # Defer declerations so that we can have rule generators that used not yet defined yet
-    __egg_decls_thunk__: Callable[[], Declarations]
     schedule: ScheduleDecl
-
-    @property
-    def __egg_decls__(self) -> Declarations:
-        return self.__egg_decls_thunk__()
 
     def __str__(self) -> str:
         return pretty_decl(self.__egg_decls__, self.schedule)
@@ -1516,7 +1523,7 @@ def _var(name: str, bound: object) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
     if not isinstance(bound, RuntimeClass):
         raise TypeError(f"Unexpected type {type(bound)}")
-    return RuntimeExpr(bound.__egg_decls__, TypedExprDecl(bound.__egg_tp__.to_just(), VarDecl(name)))
+    return RuntimeExpr.__from_value__(bound.__egg_decls__, TypedExprDecl(bound.__egg_tp__.to_just(), VarDecl(name)))
 
 
 def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
@@ -1593,7 +1600,7 @@ class _NeBuilder(Generic[EXPR]):
     def to(self, rhs: EXPR) -> Unit:
         lhs = to_runtime_expr(self.lhs)
         rhs = convert_to_same_type(rhs, lhs)
-        res = RuntimeExpr(
+        res = RuntimeExpr.__from_value__(
             Declarations.create(lhs, rhs),
             TypedExprDecl(
                 JustTypeRef("Unit"), CallDecl(FunctionRef("!="), (lhs.__egg_typed_expr__, rhs.__egg_typed_expr__))

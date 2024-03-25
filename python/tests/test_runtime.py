@@ -30,10 +30,10 @@ def test_function_call():
             "one": FunctionDecl((), (), (), TypeRefWithVars("i64")),
         },
     )
-    one = RuntimeFunction(decls, FunctionRef("one"))
+    one = RuntimeFunction(Thunk.value(decls), FunctionRef("one"))
     assert (
         one().__egg_typed_expr__  # type: ignore[union-attr]
-        == RuntimeExpr(decls, TypedExprDecl(JustTypeRef("i64"), CallDecl(FunctionRef("one")))).__egg_typed_expr__
+        == TypedExprDecl(JustTypeRef("i64"), CallDecl(FunctionRef("one")))
     )
 
 
@@ -81,17 +81,13 @@ def test_expr_special():
     i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars("i64"))
     one = i64(1)
     res = one + one  # type: ignore[operator]
-    expected_res = RuntimeExpr(
-        decls,
-        TypedExprDecl(
-            JustTypeRef("i64"),
-            CallDecl(
-                MethodRef("i64", "__add__"),
-                (TypedExprDecl(JustTypeRef("i64"), LitDecl(1)), TypedExprDecl(JustTypeRef("i64"), LitDecl(1))),
-            ),
+    assert res.__egg_typed_expr__ == TypedExprDecl(
+        JustTypeRef("i64"),
+        CallDecl(
+            MethodRef("i64", "__add__"),
+            (TypedExprDecl(JustTypeRef("i64"), LitDecl(1)), TypedExprDecl(JustTypeRef("i64"), LitDecl(1))),
         ),
     )
-    assert res.__egg_typed_expr__ == expected_res.__egg_typed_expr__
 
 
 def test_class_variable():
@@ -103,9 +99,4 @@ def test_class_variable():
     i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars("i64"))
     one = i64.one
     assert isinstance(one, RuntimeExpr)
-    assert (
-        one.__egg_typed_expr__
-        == RuntimeExpr(
-            decls, TypedExprDecl(JustTypeRef("i64"), CallDecl(ClassVariableRef("i64", "one")))
-        ).__egg_typed_expr__
-    )
+    assert one.__egg_typed_expr__ == TypedExprDecl(JustTypeRef("i64"), CallDecl(ClassVariableRef("i64", "one")))

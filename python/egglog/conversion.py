@@ -6,17 +6,20 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from .declarations import *
 from .pretty import *
 from .runtime import *
+from .thunk import *
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from .declarations import HasDeclerations
     from .egraph import Expr
 
 __all__ = ["convert", "converter", "resolve_literal", "convert_to_same_type"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
 CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable]] = {}
 # Global declerations to store all convertable types so we can query if they have certain methods or not
-CONVERSIONS_DECLS = Declarations()
+# Defer it as a thunk so we can register conversions without triggering type signature loading
+CONVERSIONS_DECLS: Callable[[], Declarations] = Thunk.value(Declarations())
 
 T = TypeVar("T")
 V = TypeVar("V", bound="Expr")
@@ -97,26 +100,27 @@ def process_tp(tp: type | RuntimeClass) -> JustTypeRef | type:
     """
     global CONVERSIONS_DECLS
     if isinstance(tp, RuntimeClass):
-        CONVERSIONS_DECLS |= tp
+        CONVERSIONS_DECLS = Thunk.fn(_combine_decls, CONVERSIONS_DECLS, tp)
         return tp.__egg_tp__.to_just()
     return tp
+
+
+def _combine_decls(d: Callable[[], Declarations], x: HasDeclerations) -> Declarations:
+    return Declarations.create(d(), x)
 
 
 def min_convertable_tp(a: object, b: object, name: str) -> JustTypeRef:
     """
     Returns the minimum convertable type between a and b, that has a method `name`, raising a ConvertError if no such type exists.
     """
+    decls = CONVERSIONS_DECLS()
     a_tp = _get_tp(a)
     b_tp = _get_tp(b)
     a_converts_to = {
-        to: c
-        for ((from_, to), (c, _)) in CONVERSIONS.items()
-        if from_ == a_tp and CONVERSIONS_DECLS.has_method(to.name, name)
+        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == a_tp and decls.has_method(to.name, name)
     }
     b_converts_to = {
-        to: c
-        for ((from_, to), (c, _)) in CONVERSIONS.items()
-        if from_ == b_tp and CONVERSIONS_DECLS.has_method(to.name, name)
+        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == b_tp and decls.has_method(to.name, name)
     }
     if isinstance(a_tp, JustTypeRef):
         a_converts_to[a_tp] = 0
