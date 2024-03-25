@@ -538,7 +538,10 @@ def _generate_class_decls(
             case property():
                 cls_decl.properties[method_name] = create_decl(fn.fget, slf_type_ref)
             case _:
-                cls_decl.methods[method_name] = create_decl(fn, slf_type_ref)
+                if is_init:
+                    cls_decl.class_methods[method_name] = create_decl(fn, slf_type_ref)
+                else:
+                    cls_decl.methods[method_name] = create_decl(fn, slf_type_ref)
 
     return decls
 
