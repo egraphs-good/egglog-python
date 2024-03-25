@@ -1310,16 +1310,15 @@ class Ruleset(Schedule):
     name: str | None
 
     # Current declerations we have accumulated
-    __egg_decls__: Declarations = field(default_factory=Declarations)
+    _current_egg_decls: Declarations = field(default_factory=Declarations)
     # Current rulesets we have accumulated
     __egg_ruleset__: RulesetDecl = field(init=False)
     # Rule generator functions that have been deferred, to allow for late type binding
     deferred_rule_gens: list[Callable[[], Iterable[RewriteOrRule]]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        # self.__egg_decls_thunk__ = Thunk.fn(lambda:
         self.schedule = RunDecl(self.__egg_name__, ())
-        self.__egg_ruleset__ = self.__egg_decls__._rulesets[self.__egg_name__] = RulesetDecl([])
+        self.__egg_ruleset__ = self._current_egg_decls._rulesets[self.__egg_name__] = RulesetDecl([])
         self.__egg_decls_thunk__ = self._update_egg_decls
 
     def _update_egg_decls(self) -> Declarations:
@@ -1328,15 +1327,15 @@ class Ruleset(Schedule):
         """
         while self.deferred_rule_gens:
             rules = self.deferred_rule_gens.pop()()
-            self.__egg_decls__.update(*rules)
+            self._current_egg_decls.update(*rules)
             self.__egg_ruleset__.rules.extend(r.decl for r in rules)
-        return self.__egg_decls__
+        return self._current_egg_decls
 
     def append(self, rule: RewriteOrRule) -> None:
         """
         Register a rule with the ruleset.
         """
-        self.__egg_decls__ |= rule
+        self._current_egg_decls |= rule
         self.__egg_ruleset__.rules.append(rule.decl)
 
     def register(self, /, rule_or_generator: RewriteOrRule | RewriteOrRuleGenerator, *rules: RewriteOrRule) -> None:
@@ -1352,7 +1351,7 @@ class Ruleset(Schedule):
             self.deferred_rule_gens.append(_rewrite_or_rule_generator(rule_or_generator))
 
     def __str__(self) -> str:
-        return pretty_decl(self.__egg_decls__, self.__egg_ruleset__, ruleset_name=self.name)
+        return pretty_decl(self._current_egg_decls, self.__egg_ruleset__, ruleset_name=self.name)
 
     def __repr__(self) -> str:
         return str(self)
