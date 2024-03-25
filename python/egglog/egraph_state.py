@@ -195,7 +195,7 @@ class EGraphState:
             return self.type_ref_to_egg_sort[ref]
         decl = self.__egg_decls__._classes[ref.name]
         self.type_ref_to_egg_sort[ref] = egg_name = decl.egg_name or _generate_type_egg_name(ref)
-        if not decl.builtin:
+        if not decl.builtin or ref.args:
             self.egraph.run_program(
                 bindings.Sort(
                     egg_name,
