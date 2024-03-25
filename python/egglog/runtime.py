@@ -211,6 +211,8 @@ class RuntimeFunction(DelayedDeclerations):
     def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr | None:
         from .conversion import resolve_literal
 
+        if isinstance(self.__egg_bound__, TypedExprDecl):
+            args = (RuntimeExpr.__from_value__(self.__egg_decls__, self.__egg_bound__), *args)
         fn_decl = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl()
         # Turn all keyword args into positional args
         bound = callable_decl_to_signature(fn_decl, self.__egg_decls__).bind(*args, **kwargs)
