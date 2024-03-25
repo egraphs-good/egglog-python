@@ -178,7 +178,7 @@ class EGraphState:
                         ),
                         self.expr_to_egg(decl.default) if decl.default else None,
                         self.expr_to_egg(decl.merge) if decl.merge else None,
-                        [],  # TODO: Add merge action
+                        [self.action_to_egg(a) for a in decl.on_merge],
                         decl.cost,
                         decl.unextractable,
                     )
