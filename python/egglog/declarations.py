@@ -183,11 +183,15 @@ class Declarations:
 
     def get_callable_decl(self, ref: CallableRef) -> CallableDecl:
         match ref:
-            case ConstantRef(name) | FunctionRef(name):
+            case FunctionRef(name):
                 return self._functions[name]
+            case ConstantRef(name):
+                return self._constants[name]
             case MethodRef(class_name, method_name):
                 return self._classes[class_name].methods[method_name]
-            case ClassVariableRef(class_name, name) | ClassMethodRef(class_name, name):
+            case ClassVariableRef(class_name, name):
+                return self._classes[class_name].class_variables[name]
+            case ClassMethodRef(class_name, name):
                 return self._classes[class_name].class_methods[name]
             case PropertyRef(class_name, property_name):
                 return self._classes[class_name].properties[property_name]
