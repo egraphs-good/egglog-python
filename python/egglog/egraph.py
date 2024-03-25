@@ -82,11 +82,10 @@ __all__ = [
     "_NeBuilder",
     "_SetBuilder",
     "_UnionBuilder",
-    "Rule",
-    "Rewrite",
-    "BiRewrite",
-    "Union_",
+    "RewriteOrRule",
+    "Fact",
     "Action",
+    "Command",
 ]
 
 T = TypeVar("T")
@@ -473,7 +472,7 @@ def _generate_class_decls(
         if getattr(v, "__origin__", None) == ClassVar:
             (inner_tp,) = v.__args__
             type_ref = resolve_type_annotation(decls, inner_tp).to_just()
-            cls_decl.class_variables[k] = ConstantDecl(type_ref, egg_name=None)
+            cls_decl.class_variables[k] = ConstantDecl(type_ref)
 
         else:
             msg = f"On class {cls_name}, for attribute '{k}', expected a ClassVar, but got {v}"
@@ -613,7 +612,7 @@ def _function(
         builtin,
         unextractable=unextractable,
     )
-    return RuntimeFunction(decls, FunctionRef(name), None)
+    return RuntimeFunction(decls, FunctionRef(name))
 
 
 def _fn_decl(
@@ -750,7 +749,7 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
     decls |= cast(RuntimeClass, Unit)
     arg_types = tuple(resolve_type_annotation(decls, tp).to_just() for tp in tps)
     decls._functions[name] = RelationDecl(arg_types, tuple(None for _ in tps), egg_fn)
-    return cast(Callable[..., Unit], RuntimeFunction(decls, FunctionRef(name), None))
+    return cast(Callable[..., Unit], RuntimeFunction(decls, FunctionRef(name)))
 
 
 def constant(name: str, tp: type[EXPR], egg_name: str | None = None) -> EXPR:

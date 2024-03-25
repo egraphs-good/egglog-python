@@ -377,7 +377,7 @@ class ConstantDecl:
     """
 
     type_ref: JustTypeRef
-    egg_name: str | None
+    egg_name: str | None = None
 
     def to_function_decl(self) -> FunctionDecl:
         return FunctionDecl(

@@ -29,5 +29,5 @@ from .array_api import Int
 def fib(n: Int) -> Int:
     return (n <= Int(1)).if_int(
         Int(1),
-        fib(n - 1) + fib(n - 2),
+        fib(n - Int(1)) + fib(n - Int(2)),
     )

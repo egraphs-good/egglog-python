@@ -28,18 +28,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "LIT_CLASS_NAMES",
-    "class_to_ref",
-    "resolve_literal",
     "resolve_callable",
     "resolve_type_annotation",
     "RuntimeClass",
-    "RuntimeParamaterizedClass",
-    "RuntimeClassMethod",
     "RuntimeExpr",
     "RuntimeFunction",
-    "RuntimeTypeArgType",
     "REFLECTED_BINARY_METHODS",
-    "_PY_OBJECT_CLASS",
 ]
 
 
@@ -201,7 +195,7 @@ class RuntimeClass:
 
     # Make hashable so can go in Union
     def __hash__(self) -> int:
-        return hash((id(self.lazy_decls), self.__egg_name__))
+        return hash((id(self.__egg_decls_thunk__), self.__egg_tp__))
 
     # Support unioning like types
     def __or__(self, __value: type) -> object:
@@ -212,7 +206,7 @@ class RuntimeClass:
 class RuntimeFunction:
     __egg_decls__: Declarations
     __egg_ref__: CallableRef
-    __egg_bound__: JustTypeRef | TypedExprDecl | None
+    __egg_bound__: JustTypeRef | TypedExprDecl | None = None
 
     def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr | None:
         from .conversion import resolve_literal

@@ -4,6 +4,7 @@ import pytest
 
 from egglog.declarations import *
 from egglog.runtime import *
+from egglog.thunk import *
 from egglog.type_constraint_solver import *
 
 
@@ -14,8 +15,8 @@ def test_type_str():
             "Map": ClassDecl(type_vars=("K", "V")),
         }
     )
-    i64 = RuntimeClass(decls.update_other, "i64")
-    Map = RuntimeClass(decls.update_other, "Map")
+    i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars("i64"))
+    Map = RuntimeClass(Thunk.value(decls), TypeRefWithVars("Map"))
     assert str(i64) == "i64"
     assert str(Map[i64, i64]) == "Map[i64, i64]"
 
@@ -26,16 +27,10 @@ def test_function_call():
             "i64": ClassDecl(),
         },
         _functions={
-            "one": FunctionDecl(
-                (),
-                (),
-                (),
-                TypeRefWithVars("i64"),
-                False,
-            ),
+            "one": FunctionDecl((), (), (), TypeRefWithVars("i64")),
         },
     )
-    one = RuntimeFunction(decls, "one")
+    one = RuntimeFunction(decls, FunctionRef("one"))
     assert (
         one().__egg_typed_expr__  # type: ignore[union-attr]
         == RuntimeExpr(decls, TypedExprDecl(JustTypeRef("i64"), CallDecl(FunctionRef("one")))).__egg_typed_expr__
@@ -50,37 +45,20 @@ def test_classmethod_call():
             "unit": ClassDecl(),
             "Map": ClassDecl(
                 type_vars=("K", "V"),
-                class_methods={
-                    "create": FunctionDecl(
-                        (),
-                        (),
-                        (),
-                        TypeRefWithVars("Map", (K, V)),
-                        False,
-                    )
-                },
+                class_methods={"create": FunctionDecl((), (), (), TypeRefWithVars("Map", (K, V)))},
             ),
-        },
-        _type_ref_to_egg_sort={
-            JustTypeRef("i64"): "i64",
-            JustTypeRef("unit"): "unit",
-            JustTypeRef("Map"): "Map",
         },
     )
-    Map = RuntimeClass(decls.update_other, "Map")
+    Map = RuntimeClass(Thunk.value(decls), TypeRefWithVars("Map"))
     with pytest.raises(TypeConstraintError):
         Map.create()  # type: ignore[operator]
-    i64 = RuntimeClass(decls.update_other, "i64")
-    unit = RuntimeClass(decls.update_other, "unit")
+    i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars("i64"))
+    unit = RuntimeClass(Thunk.value(decls), TypeRefWithVars("unit"))
     assert (
-        Map[i64, unit].create().__egg_typed_expr__  # type: ignore[union-attr]
+        Map[i64, unit].create().__egg_typed_expr__  # type: ignore[union-attr, operator]
         == TypedExprDecl(
             JustTypeRef("Map", (JustTypeRef("i64"), JustTypeRef("unit"))),
-            CallDecl(
-                ClassMethodRef("Map", "create"),
-                (),
-                (JustTypeRef("i64"), JustTypeRef("unit")),
-            ),
+            CallDecl(ClassMethodRef("Map", "create"), (), (JustTypeRef("i64"), JustTypeRef("unit"))),
         )
     )
 
@@ -91,26 +69,16 @@ def test_expr_special():
             "i64": ClassDecl(
                 methods={
                     "__add__": FunctionDecl(
-                        (TypeRefWithVars("i64"), TypeRefWithVars("i64")),
-                        (),
-                        (None, None),
-                        TypeRefWithVars("i64"),
-                        False,
+                        (TypeRefWithVars("i64"), TypeRefWithVars("i64")), (), (None, None), TypeRefWithVars("i64")
                     )
                 },
                 class_methods={
-                    "__init__": FunctionDecl(
-                        (TypeRefWithVars("i64"),),
-                        (),
-                        (None,),
-                        TypeRefWithVars("i64"),
-                        False,
-                    )
+                    "__init__": FunctionDecl((TypeRefWithVars("i64"),), (), (None,), TypeRefWithVars("i64"))
                 },
             ),
         },
     )
-    i64 = RuntimeClass(decls.update_other, "i64")
+    i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars("i64"))
     one = i64(1)
     res = one + one  # type: ignore[operator]
     expected_res = RuntimeExpr(
@@ -129,10 +97,10 @@ def test_expr_special():
 def test_class_variable():
     decls = Declarations(
         _classes={
-            "i64": ClassDecl(class_variables={"one": JustTypeRef("i64")}),
+            "i64": ClassDecl(class_variables={"one": ConstantDecl(JustTypeRef("i64"))}),
         },
     )
-    i64 = RuntimeClass(decls.update_other, "i64")
+    i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars("i64"))
     one = i64.one
     assert isinstance(one, RuntimeExpr)
     assert (
