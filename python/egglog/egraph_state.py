@@ -60,7 +60,7 @@ class EGraphState:
             egraph=self.egraph,
             __egg_decls__=self.__egg_decls__.copy(),
             rulesets={k: v.copy() for k, v in self.rulesets.items()},
-            egg_fn_to_callable_refs={k: v.copy() for k, v in self.egg_fn_to_callable_refs.items()},
+            egg_fn_to_callable_refs=defaultdict(set, {k: v.copy() for k, v in self.egg_fn_to_callable_refs.items()}),
             callable_ref_to_egg_fn=self.callable_ref_to_egg_fn.copy(),
             type_ref_to_egg_sort=self.type_ref_to_egg_sort.copy(),
             expr_to_egg_cache=self.expr_to_egg_cache.copy(),
