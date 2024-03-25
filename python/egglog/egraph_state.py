@@ -379,7 +379,7 @@ class FromEggState:
                 for a, tp in zip(term.args, arg_types, strict=False):
                     try:
                         res = self.cache[a]
-                    except IndexError:
+                    except KeyError:
                         res = self.cache[a] = self.from_expr(tp, self.termdag.nodes[a])
                     args.append(res)
                 return CallDecl(callable_ref, tuple(args), bound_tp_params)
