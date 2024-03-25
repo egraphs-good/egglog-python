@@ -344,7 +344,11 @@ class _BaseModule:
         """
         if isinstance(command_or_generator, FunctionType):
             assert not command_likes
-            command_likes = tuple(_rewrite_or_rule_generator(command_or_generator)())
+            current_frame = inspect.currentframe()
+            assert current_frame
+            original_frame = current_frame.f_back
+            assert original_frame
+            command_likes = tuple(_rewrite_or_rule_generator(command_or_generator, original_frame))
         else:
             command_likes = (cast(CommandLike, command_or_generator), *command_likes)
         commands = [_command_like(c) for c in command_likes]
@@ -1355,7 +1359,11 @@ class Ruleset(Schedule):
                 self.append(r)
         else:
             assert not rules
-            self.deferred_rule_gens.append(_rewrite_or_rule_generator(rule_or_generator))
+            current_frame = inspect.currentframe()
+            assert current_frame
+            original_frame = current_frame.f_back
+            assert original_frame
+            self.deferred_rule_gens.append(Thunk.fn(_rewrite_or_rule_generator, rule_or_generator, original_frame))
 
     def __str__(self) -> str:
         return pretty_decl(self._current_egg_decls, self.__egg_ruleset__, ruleset_name=self.name)
@@ -1743,21 +1751,16 @@ def _command_like(command_like: CommandLike) -> Command:
 RewriteOrRuleGenerator = Callable[..., Iterable[RewriteOrRule]]
 
 
-def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator) -> Callable[[], Iterable[RewriteOrRule]]:
+def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) -> Iterable[RewriteOrRule]:
     """
     Returns a thunk which will call the function with variables of the type and name of the arguments.
     """
     # Get the local scope from where the function is defined, so that we can get any type hints that are in the scope
     # but not in the globals
-    current_frame = inspect.currentframe()
-    assert current_frame
-    register_frame = current_frame.f_back
-    assert register_frame
-    original_frame = register_frame.f_back
-    assert original_frame
-    hints = get_type_hints(gen, gen.__globals__, original_frame.f_locals)
+
+    hints = get_type_hints(gen, gen.__globals__, frame.f_locals)
     args = [_var(p.name, hints[p.name]) for p in signature(gen).parameters.values()]
-    return lambda gen=gen, args=args: gen(*args)  # type: ignore[misc]
+    return list(gen(*args))  # type: ignore[misc]
 
 
 FactLike = Fact | Expr
