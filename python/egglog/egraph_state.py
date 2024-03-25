@@ -4,6 +4,7 @@ Implement conversion to/from egglog.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, assert_never, overload
 from weakref import WeakKeyDictionary
@@ -40,7 +41,9 @@ class EGraphState:
     # Bidirectional mapping between egg function names and python callable references.
     # Note that there are possibly mutliple callable references for a single egg function name, like `+`
     # for both int and rational classes.
-    egg_fn_to_callable_refs: dict[str, set[CallableRef]] = field(default_factory=lambda: {"!=": {FunctionRef("!=")}})
+    egg_fn_to_callable_refs: dict[str, set[CallableRef]] = field(
+        default_factory=lambda: defaultdict(set, {"!=": {FunctionRef("!=")}})
+    )
     callable_ref_to_egg_fn: dict[CallableRef, str] = field(default_factory=lambda: {FunctionRef("!="): "!="})
 
     # Bidirectional mapping between egg sort names and python type references.
@@ -255,7 +258,7 @@ class EGraphState:
                         assert_never(value)
                 res = bindings.Lit(l)
             case CallDecl(ref, args, _):
-                res = bindings.Call(self.callable_ref_to_egg_fn[ref], [self.expr_to_egg(a.expr) for a in args])
+                res = bindings.Call(self.callable_ref_to_egg(ref), [self.expr_to_egg(a.expr) for a in args])
             case PyObjectDecl(value):
                 res = GLOBAL_PY_OBJECT_SORT.store(value)
             case _:
