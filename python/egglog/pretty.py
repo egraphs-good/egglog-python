@@ -65,10 +65,7 @@ UNARY_METHODS = {
     "__invert__": "~",
 }
 
-# TODO: Schedule
 AllDecls: TypeAlias = RulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl
-
-# TODO: Make all able to have aliases, besides RulesetDecl bc its not hasable
 
 
 def pretty_decl(
@@ -111,7 +108,9 @@ def pretty_callable_ref(
     args: list[ExprDecl] = [LitDecl(ARG_STR)] * 3
     if first_arg:
         args.insert(0, first_arg)
-    res = PrettyContext(decls, {})._call_inner(ref, args, bound_tp_params=bound_tp_params, parens=False)
+    res = PrettyContext(decls, defaultdict(lambda: 0))._call_inner(
+        ref, args, bound_tp_params=bound_tp_params, parens=False
+    )
     # Either returns a function or a function with args. If args are provided, they would just be called,
     # on the function, so return them, because they are dummies
     return res[0] if isinstance(res, tuple) else res
@@ -201,16 +200,6 @@ class PrettyContext:
     # Mapping of type to the number of times we have generated a name for that type, used to generate unique names
     _gen_name_types: dict[str, int] = field(default_factory=lambda: defaultdict(lambda: 0))
 
-    def fact(self, fact: FactDecl) -> str:
-        match fact:
-            case EqDecl(exprs):
-                first, *rest = exprs
-                return f"eq({self(first)}).to({', '.join(self(r) for r in rest)})"
-            case ExprFactDecl(expr):
-                return self(expr)
-            case _:
-                assert_never(fact)
-
     def __call__(
         self, decl: AllDecls, *, unwrap_lit: bool = False, parens: bool = False, ruleset_name: str | None = None
     ) -> str:
@@ -242,14 +231,13 @@ class PrettyContext:
                         return str(f) if unwrap_lit else f"f64({f})", "f64"
                     case str(s):
                         return repr(s) if unwrap_lit else f"String({s!r})", "String"
-                    case _:
-                        assert_never(value)
+                assert_never(value)
             case VarDecl(name):
                 return name, name
             case CallDecl(_, _, _):
                 return self._call(decl, parens)
             case PyObjectDecl(value):
-                return repr(value), "PyObject"
+                return repr(value) if unwrap_lit else f"PyObject({value!r})", "PyObject"
             case ActionCommandDecl(action):
                 return self(action), "action"
             case RewriteDecl(lhs, rhs, conditions) | BiRewriteDecl(lhs, rhs, conditions):
@@ -267,7 +255,7 @@ class PrettyContext:
             case UnionDecl(lhs, rhs):
                 return f"union({self(lhs)}).with_({self(rhs)})", "action"
             case LetDecl(name, expr):
-                return f"let({name!r}, {self(expr)}))", "action"
+                return f"let({name!r}, {self(expr)})", "action"
             case ExprActionDecl(expr):
                 return self(expr), "action"
             case ExprFactDecl(expr):
@@ -280,15 +268,19 @@ class PrettyContext:
                 first, *rest = exprs
                 return f"eq({self(first)}).to({', '.join(map(self, rest))})", "fact"
             case RulesetDecl(rules):
+                if ruleset_name:
+                    return f"ruleset(name={ruleset_name!r})", f"ruleset_{ruleset_name}"
                 args = ", ".join(map(self, rules))
-                return f"ruleset({args})", ruleset_name or "ruleset"
+                return f"ruleset({args})", "ruleset"
             case SaturateDecl(schedule):
-                return f"{self(schedule)}.saturate()", "schedule"
+                return f"{self(schedule, parens=True)}.saturate()", "schedule"
             case RepeatDecl(schedule, times):
-                return f"{self(schedule)} * {times}", "schedule"
+                return f"{self(schedule, parens=True)} * {times}", "schedule"
             case SequenceDecl(schedules):
+                if len(schedules) == 2:
+                    return f"{self(schedules[0], parens=True)} + {self(schedules[1], parens=True)}", "schedule"
                 args = ", ".join(map(self, schedules))
-                return f"sequence({args})", "schedule"
+                return f"seq({args})", "schedule"
             case RunDecl(ruleset_name, until):
                 ruleset = self.decls._rulesets[ruleset_name]
                 ruleset_str = self(ruleset, ruleset_name=ruleset_name)
@@ -296,8 +288,7 @@ class PrettyContext:
                     return ruleset_str, "schedule"
                 args = ", ".join(map(self, until))
                 return f"run({ruleset_str}, {args})", "schedule"
-            case _:
-                assert_never(decl)
+        assert_never(decl)
 
     def _call(
         self,
@@ -390,8 +381,7 @@ class PrettyContext:
                 return f"{class_name}.{variable_name}"
             case PropertyRef(_class_name, property_name):
                 return f"{self(args[0], parens=True)}.{property_name}"
-            case _:
-                assert_never(ref)
+        assert_never(ref)
 
     def _generate_name(self, typ: str) -> str:
         self._gen_name_types[typ] += 1
@@ -412,7 +402,7 @@ class PrettyContext:
         return name
 
 
-def _plot_line_length(expr: object):
+def _plot_line_length(expr: object):  # pragma: no cover
     """
     Plots the number of line lengths based on different max lengths
     """

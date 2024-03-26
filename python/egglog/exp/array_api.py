@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
 
-array_api_ruleset = ruleset()
+array_api_ruleset = ruleset(name="array_api_ruleset")
 array_api_schedule = array_api_ruleset.saturate()
 
 

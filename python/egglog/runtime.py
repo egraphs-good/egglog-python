@@ -251,7 +251,7 @@ class RuntimeFunction(DelayedDeclerations):
             first_arg = upcasted_args[0]
             first_arg.__egg_thunk__ = Thunk.value((decls, typed_expr_decl))
             return None
-        return RuntimeExpr.__from_value__(decls, TypedExprDecl(return_tp, expr_decl))
+        return RuntimeExpr.__from_value__(decls, typed_expr_decl)
 
     def __str__(self) -> str:
         first_arg, bound_tp_params = None, None
@@ -469,5 +469,4 @@ def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
             return ref, decls()
         case RuntimeClass(thunk, tp):
             return ClassMethodRef(tp.name, "__init__"), thunk()
-        case _:
-            raise TypeError(f"Cannot turn {callable} into a callable ref")
+    raise NotImplementedError(f"Cannot turn {callable} into a callable ref")

@@ -8,6 +8,7 @@ _This project uses semantic versioning_
 - Removes ability to set custom default ruleset for egraph. Either just use the empty default ruleset or explicitly set it for every run
 - Upgrade dependencies, including [egglog](https://github.com/egraphs-good/egglog/compare/ceed816e9369570ffed9feeba157b19471dda70d...4cc011f6b48029dd72104a38a2ca0c7657846e0b)
 - Fix bug where saturate wasn't properly getting translated.
+- Automatically mark Python builtin operators as preserved if they must return a real Python value
 
 ## 6.0.0 (2024-02-06)
 

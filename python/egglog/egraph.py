@@ -67,6 +67,9 @@ __all__ = [
     "vars_",
     "Fact",
     "expr_parts",
+    "expr_action",
+    "expr_fact",
+    "action_command",
     "Schedule",
     "run",
     "seq",
@@ -1709,13 +1712,14 @@ def to_runtime_expr(expr: Expr) -> RuntimeExpr:
     return expr
 
 
-def run(ruleset: Ruleset | None = None, *until: Fact) -> Schedule:
+def run(ruleset: Ruleset | None = None, *until: FactLike) -> Schedule:
     """
     Create a run configuration.
     """
+    facts = _fact_likes(until)
     return Schedule(
-        Thunk.fn(Declarations.create, ruleset, *until),
-        RunDecl(ruleset.__egg_name__ if ruleset else "", tuple(f.fact for f in until) or None),
+        Thunk.fn(Declarations.create, ruleset, *facts),
+        RunDecl(ruleset.__egg_name__ if ruleset else "", tuple(f.fact for f in facts) or None),
     )
 
 
