@@ -204,8 +204,13 @@ exclude = ["__snapshots__", "_build", "^conftest.py$"]
 python-source = "python"
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib", "-Werror"]
+addopts = ["--import-mode=importlib"]
 testpaths = ["python"]
 python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
 norecursedirs = ["__snapshots__"]
+filterwarnings = [
+    "error",
+    "ignore::numba.core.errors.NumbaPerformanceWarning",
+    "ignore::pytest_benchmark.logger.PytestBenchmarkWarning",
+]
