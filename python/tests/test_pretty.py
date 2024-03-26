@@ -1,6 +1,7 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
+from copy import copy
 from typing import TYPE_CHECKING, ClassVar
 
 import pytest
@@ -51,10 +52,23 @@ def has_default(x: A = A()) -> A: ...
 del_a = A()
 del del_a[g()]
 
+del_del_a = copy(del_a)
+del del_del_a[h()]
+
+del_del_a_two = copy(del_a)
+del del_del_a_two[A()]
+
 setitem_a = A()
 setitem_a[g()] = h()
 
 b = constant("b", A)
+
+
+@function
+def my_very_long_function_name() -> A: ...
+
+
+long_line = my_very_long_function_name() + my_very_long_function_name() + my_very_long_function_name()
 
 r = ruleset(name="r")
 
@@ -70,11 +84,29 @@ PARAMS = [
     pytest.param(A()(), "A()()", id="call"),
     pytest.param(del_a, "_A_1 = A()\ndel _A_1[g()]\n_A_1", id="delitem"),
     pytest.param(setitem_a, "_A_1 = A()\n_A_1[g()] = h()\n_A_1", id="setitem"),
+    pytest.param(del_a + del_a, "_A_1 = A()\ndel _A_1[g()]\n_A_1 + _A_1", id="existing de-duplicate"),
+    pytest.param(del_del_a, "_A_1 = A()\ndel _A_1[g()]\ndel _A_1[h()]\n_A_1", id="re-use variable"),
+    pytest.param(
+        del_del_a + del_del_a_two,
+        """_A_1 = A()
+del _A_1[g()]
+_A_2 = copy(_A_1)
+del _A_2[h()]
+_A_3 = copy(_A_1)
+del _A_3[A()]
+_A_2 + _A_3""",
+        id="copy name",
+    ),
     pytest.param(b, "b", id="constant"),
     pytest.param(A.V, "A.V", id="class variable"),
     pytest.param(A().prop, "A().prop", id="property"),
     pytest.param(ne(A()).to(g()), "ne(A()).to(g())", id="ne"),
     pytest.param(has_default(A()), "has_default()", id="has default"),
+    pytest.param(
+        rewrite(long_line).to(long_line),
+        "_A_1 = (my_very_long_function_name() + my_very_long_function_name()) + my_very_long_function_name()\nrewrite(_A_1).to(_A_1)",
+        id="wrap long line",
+    ),
     # primitives
     pytest.param(Unit(), "Unit()", id="unit"),
     pytest.param(Bool(True), "Bool(True)", id="bool"),
