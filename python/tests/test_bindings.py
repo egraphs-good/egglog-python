@@ -1,3 +1,4 @@
+import _thread
 import fractions
 import json
 import os
@@ -206,3 +207,19 @@ class TestEval:
         rational = Call("rational", [Lit(Int(1)), Lit(Int(2))])
         egraph.run_program(ActionCommand(Expr_(Call("rational", [Lit(Int(1)), Lit(Int(2))]))))
         assert egraph.eval_rational(rational) == fractions.Fraction(1, 2)
+
+
+class TestThreads:
+    """
+    Verify that objects can be accessed from multiple threads at the same time.
+    """
+
+    def test_run_program(self):
+        cmds = (
+            Datatype("Math", [Variant("Add", ["Math", "Math"])]),
+            RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")])), False),
+            RunSchedule(Repeat(10, Run(RunConfig("")))),
+        )
+
+        _thread.start_new_thread(EGraph().run_program, cmds)
+        _thread.start_new_thread(EGraph().run_program, cmds)

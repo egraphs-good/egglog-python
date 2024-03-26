@@ -204,7 +204,7 @@ exclude = ["__snapshots__", "_build", "^conftest.py$"]
 python-source = "python"
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib"]
+addopts = ["--import-mode=importlib", "-Werror"]
 testpaths = ["python"]
 python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
