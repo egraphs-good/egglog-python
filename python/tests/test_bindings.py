@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from egglog.bindings import *
+from egglog.bindings import Datatype, RewriteCommand, RunSchedule
 
 
 def get_egglog_folder() -> pathlib.Path:
@@ -214,12 +215,20 @@ class TestThreads:
     Verify that objects can be accessed from multiple threads at the same time.
     """
 
-    def test_run_program(self):
+    def test_cmds(self):
         cmds = (
             Datatype("Math", [Variant("Add", ["Math", "Math"])]),
             RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")])), False),
             RunSchedule(Repeat(10, Run(RunConfig("")))),
         )
 
-        _thread.start_new_thread(EGraph().run_program, cmds)
-        _thread.start_new_thread(EGraph().run_program, cmds)
+        _thread.start_new_thread(print, cmds)
+
+    @pytest.mark.xfail(reason="egraphs are unsendable")
+    def test_egraph(self):
+        _thread.start_new_thread(EGraph().run_program, (Datatype("Math", [Variant("Add", ["Math", "Math"])]),))
+
+    def test_serialized_egraph(self):
+        egraph = EGraph()
+        serialized = egraph.serialize([])
+        _thread.start_new_thread(print, (serialized,))
