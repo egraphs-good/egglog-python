@@ -38,7 +38,7 @@ macro_rules! convert_enums {
         }
     );*) => {
         $($(
-            #[pyclass(unsendable, frozen, module="egg_smol.bindings"$(, name=$py_name)?)]
+            #[pyclass(frozen, module="egg_smol.bindings"$(, name=$py_name)?)]
             #[derive(Clone, PartialEq, Eq$(, $trait_inner)?)]
             pub struct $variant {
                 $(
