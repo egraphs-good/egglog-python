@@ -357,7 +357,6 @@ class TestMutate:
 
         class Foo(Expr):
             def __init__(self) -> None: ...
-
             def __setitem__(self, key: i64Like, value: i64Like) -> None: ...
 
         foo = Foo()

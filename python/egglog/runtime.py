@@ -205,13 +205,14 @@ class RuntimeClass(DelayedDeclerations):
 @dataclass
 class RuntimeFunction(DelayedDeclerations):
     __egg_ref__: CallableRef
-    __egg_bound__: JustTypeRef | TypedExprDecl | None = None
+    # bound methods need to store RuntimeExpr not just TypedExprDecl, so they can mutate the expr if required on self
+    __egg_bound__: JustTypeRef | RuntimeExpr | None = None
 
     def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr | None:
         from .conversion import resolve_literal
 
-        if isinstance(self.__egg_bound__, TypedExprDecl):
-            args = (RuntimeExpr.__from_value__(self.__egg_decls__, self.__egg_bound__), *args)
+        if isinstance(self.__egg_bound__, RuntimeExpr):
+            args = (self.__egg_bound__, *args)
         fn_decl = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl()
         # Turn all keyword args into positional args
         bound = callable_decl_to_signature(fn_decl, self.__egg_decls__).bind(*args, **kwargs)
@@ -224,20 +225,19 @@ class RuntimeFunction(DelayedDeclerations):
             for arg, tp in zip_longest(bound.args, fn_decl.arg_types, fillvalue=fn_decl.var_arg_type)
         ]
 
-        arg_exprs = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
         decls = Declarations.create(self, *upcasted_args)
 
         tcs = TypeConstraintSolver(decls)
         bound_tp = (
             None
             if self.__egg_bound__ is None
-            else self.__egg_bound__.tp
-            if isinstance(self.__egg_bound__, TypedExprDecl)
+            else self.__egg_bound__.__egg_typed_expr__.tp
+            if isinstance(self.__egg_bound__, RuntimeExpr)
             else self.__egg_bound__
         )
         if bound_tp and bound_tp.args:
             tcs.bind_class(bound_tp)
-
+        arg_exprs = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
         arg_types = [expr.tp for expr in arg_exprs]
         cls_name = bound_tp.name if bound_tp else None
         return_tp = tcs.infer_return_type(
@@ -331,11 +331,9 @@ class RuntimeExpr:
             return preserved_methods[name].__get__(self)
 
         if name in class_decl.methods:
-            return RuntimeFunction(Thunk.value(self.__egg_decls__), MethodRef(cls_name, name), self.__egg_typed_expr__)
+            return RuntimeFunction(Thunk.value(self.__egg_decls__), MethodRef(cls_name, name), self)
         if name in class_decl.properties:
-            return RuntimeFunction(
-                Thunk.value(self.__egg_decls__), PropertyRef(cls_name, name), self.__egg_typed_expr__
-            )()
+            return RuntimeFunction(Thunk.value(self.__egg_decls__), PropertyRef(cls_name, name), self)()
         raise AttributeError(f"{cls_name} has no method {name}") from None
 
     def __repr__(self) -> str:
@@ -417,9 +415,8 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
             except ConvertError:
                 return NotImplemented
         if __name in class_decl.methods:
-            return RuntimeFunction(
-                Thunk.value(self.__egg_decls__), MethodRef(class_name, __name), self.__egg_typed_expr__
-            )(*args, **kwargs)
+            fn = RuntimeFunction(Thunk.value(self.__egg_decls__), MethodRef(class_name, __name), self)
+            return fn(*args, **kwargs)
         raise TypeError(f"{class_name!r} object does not support {__name}")
 
     setattr(RuntimeExpr, name, _special_method)
@@ -442,9 +439,7 @@ def call_method_min_conversion(slf: object, other: object, name: str) -> Runtime
     min_tp = min_convertable_tp(slf, other, name)
     slf = resolve_literal(min_tp.to_var(), slf)
     other = resolve_literal(min_tp.to_var(), other)
-    method = RuntimeFunction(
-        Thunk.value(slf.__egg_decls__), MethodRef(slf.__egg_class_name__, name), slf.__egg_typed_expr__
-    )
+    method = RuntimeFunction(Thunk.value(slf.__egg_decls__), MethodRef(slf.__egg_class_name__, name), slf)
     return method(other)
 
 
