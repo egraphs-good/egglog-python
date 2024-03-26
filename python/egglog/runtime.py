@@ -256,8 +256,8 @@ class RuntimeFunction(DelayedDeclerations):
     def __str__(self) -> str:
         first_arg, bound_tp_params = None, None
         match self.__egg_bound__:
-            case TypedExprDecl(_, expr):
-                first_arg = expr
+            case RuntimeExpr(_):
+                first_arg = self.__egg_bound__.__egg_typed_expr__.expr
             case JustTypeRef(_, args):
                 bound_tp_params = args
         return pretty_callable_ref(self.__egg_decls__, self.__egg_ref__, first_arg, bound_tp_params)
