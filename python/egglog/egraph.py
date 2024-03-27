@@ -1143,7 +1143,9 @@ class EGraph(_BaseModule):
         """
         Evaluates the given expression (which must be a primitive type), returning the result.
         """
-        typed_expr = to_runtime_expr(expr).__egg_typed_expr__
+        runtime_expr = to_runtime_expr(expr)
+        self._add_decls(runtime_expr)
+        typed_expr = runtime_expr.__egg_typed_expr__
         egg_expr = self._state.expr_to_egg(typed_expr.expr)
         match typed_expr.tp:
             case JustTypeRef("i64"):
