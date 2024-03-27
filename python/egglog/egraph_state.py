@@ -315,7 +315,7 @@ def _generate_type_egg_name(ref: JustTypeRef) -> str:
     name = ref.name
     if not ref.args:
         return name
-    return f"{name}_{"_".join(map(_generate_type_egg_name, ref.args))}"
+    return f"{name}_{'_'.join(map(_generate_type_egg_name, ref.args))}"
 
 
 def _generate_callable_egg_name(ref: CallableRef) -> str:
