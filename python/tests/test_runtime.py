@@ -69,11 +69,17 @@ def test_expr_special():
             "i64": ClassDecl(
                 methods={
                     "__add__": FunctionDecl(
-                        (TypeRefWithVars("i64"), TypeRefWithVars("i64")), (), (None, None), TypeRefWithVars("i64")
+                        (TypeRefWithVars("i64"), TypeRefWithVars("i64")),
+                        (
+                            "a",
+                            "b",
+                        ),
+                        (None, None),
+                        TypeRefWithVars("i64"),
                     )
                 },
                 class_methods={
-                    "__init__": FunctionDecl((TypeRefWithVars("i64"),), (), (None,), TypeRefWithVars("i64"))
+                    "__init__": FunctionDecl((TypeRefWithVars("i64"),), ("self",), (None,), TypeRefWithVars("i64"))
                 },
             ),
         },
