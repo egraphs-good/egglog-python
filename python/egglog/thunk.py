@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, ParamSpec, TypeVar, TypeVarTuple, Unpack
+from typing import TYPE_CHECKING, Generic, TypeVar
+
+from typing_extensions import ParamSpec, TypeVarTuple, Unpack
 
 if TYPE_CHECKING:
     from collections.abc import Callable
