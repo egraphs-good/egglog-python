@@ -24,7 +24,7 @@ class Thunk(Generic[T, Unpack[TS]]):
 
     @classmethod
     def fn(
-        cls, fn: Callable[[Unpack[TS]], T], *args: *tuple[Unpack[TS]], fallback: Callable[[], T] | None = None
+        cls, fn: Callable[[Unpack[TS]], T], *args: Unpack[TS], fallback: Callable[[], T] | None = None
     ) -> Thunk[T, Unpack[TS]]:
         """
         Create a thunk based on some functions and some partial args.
