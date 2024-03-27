@@ -43,9 +43,6 @@ class Boolean(Expr):
     def if_int(self, true_value: Int, false_value: Int) -> Int: ...
 
 
-# TODO: With if_int this will break... Constants cannot be defined without Int being defined...
-# Can we defer things in a smarter way so that we can define all these rules without the `Int`
-# being defined?
 BooleanLike = Boolean | bool
 
 TRUE = constant("TRUE", Boolean)

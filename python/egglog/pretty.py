@@ -6,9 +6,10 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeAlias, assert_never
+from typing import TYPE_CHECKING, TypeAlias
 
 import black
+from typing_extensions import assert_never
 
 from .declarations import *
 

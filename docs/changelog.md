@@ -7,6 +7,7 @@ _This project uses semantic versioning_
 - Defers adding rules in functions until they are used, so that you can use types that are not present yet.
 - Removes ability to set custom default ruleset for egraph. Either just use the empty default ruleset or explicitly set it for every run
 - Automatically mark Python builtin operators as preserved if they must return a real Python value
+- Properly pretty print all items (rewrites, actions, exprs, etc) so that expressions are de-duplicated and state is handled correctly.
 
 ## 6.1.0 (2024-03-06)
 

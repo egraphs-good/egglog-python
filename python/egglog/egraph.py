@@ -19,14 +19,13 @@ from typing import (
     TypeAlias,
     TypedDict,
     TypeVar,
-    assert_never,
     cast,
     get_type_hints,
     overload,
 )
 
 import graphviz
-from typing_extensions import ParamSpec, Self, Unpack, deprecated
+from typing_extensions import ParamSpec, Self, Unpack, assert_never, deprecated
 
 from . import bindings
 from .conversion import *

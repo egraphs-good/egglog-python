@@ -6,8 +6,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, assert_never, overload
+from typing import TYPE_CHECKING, overload
 from weakref import WeakKeyDictionary
+
+from typing_extensions import assert_never
 
 from . import bindings
 from .declarations import *
