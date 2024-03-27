@@ -109,7 +109,7 @@ class EGraphState:
                     [self.fact_to_egg(c) for c in conditions],
                 )
                 return (
-                    bindings.RewriteCommand(ruleset, rewrite)
+                    bindings.RewriteCommand(ruleset, rewrite, cmd.subsume)
                     if isinstance(cmd, RewriteDecl)
                     else bindings.BiRewriteCommand(ruleset, rewrite)
                 )
@@ -132,10 +132,18 @@ class EGraphState:
                 return bindings.Set(call_.name, call_.args, self.expr_to_egg(rhs))
             case ExprActionDecl(typed_expr):
                 return bindings.Expr_(self.typed_expr_to_egg(typed_expr))
-            case DeleteDecl(tp, call):
+            case ChangeDecl(tp, call, change):
                 self.type_ref_to_egg(tp)
                 call_ = self.expr_to_egg(call)
-                return bindings.Delete(call_.name, call_.args)
+                egg_change: bindings._Change
+                match change:
+                    case "delete":
+                        egg_change = bindings.Delete()
+                    case "subsume":
+                        egg_change = bindings.Subsume()
+                    case _:
+                        assert_never(change)
+                return bindings.Change(egg_change, call_.name, call_.args)
             case UnionDecl(tp, lhs, rhs):
                 self.type_ref_to_egg(tp)
                 return bindings.Union(self.expr_to_egg(lhs), self.expr_to_egg(rhs))

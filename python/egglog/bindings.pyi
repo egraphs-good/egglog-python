@@ -153,6 +153,20 @@ class Fact:
 _Fact: TypeAlias = Fact | Eq
 
 ##
+# Change
+##
+
+@final
+class Delete:
+    def __init__(self) -> None: ...
+
+@final
+class Subsume:
+    def __init__(self) -> None: ...
+
+_Change: TypeAlias = Delete | Subsume
+
+##
 # Actions
 ##
 
@@ -170,10 +184,11 @@ class Set:
     rhs: _Expr
 
 @final
-class Delete:
+class Change:
+    change: _Change
     sym: str
     args: list[_Expr]
-    def __init__(self, sym: str, args: list[_Expr]) -> None: ...
+    def __init__(self, change: _Change, sym: str, args: list[_Expr]) -> None: ...
 
 @final
 class Union:
@@ -197,7 +212,7 @@ class Extract:
     expr: _Expr
     variants: _Expr
 
-_Action: TypeAlias = Let | Set | Delete | Union | Panic | Expr_ | Extract
+_Action: TypeAlias = Let | Set | Change | Union | Panic | Expr_ | Extract
 
 ##
 # Other Structs
@@ -212,6 +227,7 @@ class FunctionDecl:
     merge_action: list[_Action]
     cost: int | None
     unextractable: bool
+    ignore_viz: bool
 
     def __init__(
         self,
@@ -222,6 +238,7 @@ class FunctionDecl:
         merge_action: list[_Action] = [],  # noqa: B006
         cost: int | None = None,
         unextractable: bool = False,
+        ignore_viz: bool = False,
     ) -> None: ...
 
 @final
@@ -376,7 +393,8 @@ class RewriteCommand:
     # TODO: Rename to ruleset
     name: str
     rewrite: Rewrite
-    def __init__(self, name: str, rewrite: Rewrite) -> None: ...
+    subsume: bool
+    def __init__(self, name: str, rewrite: Rewrite, subsume: bool) -> None: ...
 
 @final
 class BiRewriteCommand:

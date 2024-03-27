@@ -60,6 +60,7 @@ __all__ = [
     "let",
     "constant",
     "delete",
+    "subsume",
     "union",
     "set_",
     "rule",
@@ -1444,16 +1445,16 @@ class Action:
 
 @deprecated("Use <ruleset>.register(<rewrite>) instead of passing rulesets as arguments to rewrites.")
 @overload
-def rewrite(lhs: EXPR, ruleset: Ruleset) -> _RewriteBuilder[EXPR]: ...
+def rewrite(lhs: EXPR, ruleset: Ruleset, *, subsume: bool = False) -> _RewriteBuilder[EXPR]: ...
 
 
 @overload
-def rewrite(lhs: EXPR, ruleset: None = None) -> _RewriteBuilder[EXPR]: ...
+def rewrite(lhs: EXPR, ruleset: None = None, *, subsume: bool = False) -> _RewriteBuilder[EXPR]: ...
 
 
-def rewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _RewriteBuilder[EXPR]:
+def rewrite(lhs: EXPR, ruleset: Ruleset | None = None, *, subsume: bool = False) -> _RewriteBuilder[EXPR]:
     """Rewrite the given expression to a new expression."""
-    return _RewriteBuilder(lhs, ruleset)
+    return _RewriteBuilder(lhs, ruleset, subsume)
 
 
 @deprecated("Use <ruleset>.register(<birewrite>) instead of passing rulesets as arguments to birewrites.")
@@ -1502,7 +1503,16 @@ def delete(expr: Expr) -> Action:
     typed_expr = runtime_expr.__egg_typed_expr__
     call_decl = typed_expr.expr
     assert isinstance(call_decl, CallDecl), "Can only delete calls, not literals or vars"
-    return Action(runtime_expr.__egg_decls__, DeleteDecl(typed_expr.tp, call_decl))
+    return Action(runtime_expr.__egg_decls__, ChangeDecl(typed_expr.tp, call_decl, "delete"))
+
+
+def subsume(expr: Expr) -> Action:
+    """Subsume an expression so it cannot be matched against or extracted"""
+    runtime_expr = to_runtime_expr(expr)
+    typed_expr = runtime_expr.__egg_typed_expr__
+    call_decl = typed_expr.expr
+    assert isinstance(call_decl, CallDecl), "Can only subsume calls, not literals or vars"
+    return Action(runtime_expr.__egg_decls__, ChangeDecl(typed_expr.tp, call_decl, "subsume"))
 
 
 def expr_fact(expr: Expr) -> Fact:
@@ -1561,6 +1571,7 @@ def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
 class _RewriteBuilder(Generic[EXPR]):
     lhs: EXPR
     ruleset: Ruleset | None
+    subsume: bool
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> RewriteOrRule:
         lhs = to_runtime_expr(self.lhs)
@@ -1573,6 +1584,7 @@ class _RewriteBuilder(Generic[EXPR]):
                 lhs.__egg_typed_expr__.expr,
                 rhs.__egg_typed_expr__.expr,
                 tuple(f.fact for f in facts),
+                self.subsume,
             ),
         )
         if self.ruleset:

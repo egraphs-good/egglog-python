@@ -10,11 +10,8 @@ from egglog.exp.array_api import *
 
 array_api_numba_ruleset = ruleset()
 array_api_numba_schedule = (array_api_ruleset + array_api_numba_ruleset).saturate()
-# For these rules, we not only wanna rewrite, we also want to delete the original expression,
+# For these rules, we not only wanna rewrite, we also want to subsume the original expression,
 # so that the rewritten one is used, even if the original one is simpler.
-
-# TODO: Try deleting instead if we support that in the future, and remove high cost
-# https://egraphs.zulipchat.com/#narrow/stream/375765-egglog/topic/replacing.20an.20expression.20with.20delete
 
 
 # Rewrite mean(x, <int>, <expand dims>) to use sum b/c numba cant do mean with axis
@@ -24,8 +21,8 @@ def _mean(y: NDArray, x: NDArray, i: Int):
     axis = OptionalIntOrTuple.some(IntOrTuple.int(i))
     res = sum(x, axis) / NDArray.scalar(Value.int(x.shape[i]))
 
-    yield rewrite(mean(x, axis, FALSE)).to(res)
-    yield rewrite(mean(x, axis, TRUE)).to(expand_dims(res, i))
+    yield rewrite(mean(x, axis, FALSE), subsume=True).to(res)
+    yield rewrite(mean(x, axis, TRUE), subsume=True).to(expand_dims(res, i))
 
 
 # Rewrite std(x, <int>) to use mean and sum b/c numba cant do std with axis
@@ -36,6 +33,7 @@ def _std(y: NDArray, x: NDArray, i: Int):
     # "std = sqrt(mean(x)), where x = abs(a - a.mean())**2."
     yield rewrite(
         std(x, axis),
+        subsume=True,
     ).to(
         sqrt(mean(square(x - mean(x, axis, keepdims=TRUE)), axis)),
     )
@@ -53,11 +51,11 @@ def count_values(x: NDArray, values: NDArray) -> TupleValue:
 def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
     return [
         # The unique counts are the count of all the unique values
-        rewrite(unique_counts(x)[Int(1)]).to(NDArray.vector(count_values(x, unique_values(x)))),
-        rewrite(count_values(x, NDArray.vector(TupleValue(v) + tv))).to(
+        rewrite(unique_counts(x)[Int(1)], subsume=True).to(NDArray.vector(count_values(x, unique_values(x)))),
+        rewrite(count_values(x, NDArray.vector(TupleValue(v) + tv)), subsume=True).to(
             TupleValue(sum(x == NDArray.scalar(v)).to_value()) + count_values(x, NDArray.vector(tv))
         ),
-        rewrite(count_values(x, NDArray.vector(TupleValue(v)))).to(
+        rewrite(count_values(x, NDArray.vector(TupleValue(v))), subsume=True).to(
             TupleValue(sum(x == NDArray.scalar(v)).to_value()),
         ),
     ]
@@ -68,7 +66,7 @@ def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
 def _unique_inverse(x: NDArray, i: Int):
     return [
         # Creating a mask array of when the unique inverse is a value is the same as a mask array for when the value is that index of the unique values
-        rewrite(unique_inverse(x)[Int(1)] == NDArray.scalar(Value.int(i))).to(
+        rewrite(unique_inverse(x)[Int(1)] == NDArray.scalar(Value.int(i)), subsume=True).to(
             x == NDArray.scalar(unique_values(x).index(TupleInt(i)))
         ),
     ]

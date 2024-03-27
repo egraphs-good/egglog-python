@@ -17,18 +17,21 @@ def test_tree_modules():
     # assert _BUILTIN_DECLS
     # assert BUILTINS._mod_decls == ModuleDeclarations(_BUILTIN_DECLS, [])
 
-    A, B, C = Module(), Module(), Module()
+    with pytest.deprecated_call():
+        A, B, C = Module(), Module(), Module()
     # assert list(A._mod_decls._included_decls) == [_BUILTIN_DECLS]
 
-    a = A.relation("a")
-    b = B.relation("b")
-    c = C.relation("c")
+    with pytest.deprecated_call():
+        a = A.relation("a")
+        b = B.relation("b")
+        c = C.relation("c")
     A.register(a())
     B.register(b())
     C.register(c())
 
-    D = Module([A, B])
-    d = D.relation("d")
+    with pytest.deprecated_call():
+        D = Module([A, B])
+        d = D.relation("d")
     D.register(d())
 
     assert D._flatted_deps == [A, B]

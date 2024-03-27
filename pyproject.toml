@@ -209,6 +209,11 @@ testpaths = ["python"]
 python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
 norecursedirs = ["__snapshots__"]
+filterwarnings = [
+    "error",
+    "ignore::numba.core.errors.NumbaPerformanceWarning",
+    "ignore::pytest_benchmark.logger.PytestBenchmarkWarning",
+]
 
 [tool.coverage.report]
 exclude_also = [

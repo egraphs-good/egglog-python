@@ -155,7 +155,7 @@ class TraverseContext:
                 self(rhs)
             case LetDecl(_, d) | ExprActionDecl(d) | ExprFactDecl(d):
                 self(d.expr)
-            case DeleteDecl(_, d) | SaturateDecl(d) | RepeatDecl(d, _) | ActionCommandDecl(d):
+            case ChangeDecl(_, d, _) | SaturateDecl(d) | RepeatDecl(d, _) | ActionCommandDecl(d):
                 self(d)
             case PanicDecl(_) | VarDecl(_) | LitDecl(_) | PyObjectDecl(_):
                 pass
@@ -254,8 +254,8 @@ class PrettyContext:
                 return self(expr.expr), "action"
             case ExprFactDecl(expr):
                 return self(expr.expr), "fact"
-            case DeleteDecl(_, expr):
-                return f"delete({self(expr)})", "action"
+            case ChangeDecl(_, expr, change):
+                return f"{change}({self(expr)})", "action"
             case PanicDecl(s):
                 return f"panic({s!r})", "action"
             case EqDecl(_, exprs):

@@ -224,18 +224,22 @@ def test_keyword_args_init():
 
 
 def test_modules() -> None:
-    m = Module()
+    with pytest.deprecated_call():
+        m = Module()
 
     @m.class_
     class Numeric(Expr):
         ONE: ClassVar[Numeric]
 
-    m2 = Module()
+    with pytest.deprecated_call():
+        m2 = Module()
 
-    @m2.class_
-    class OtherNumeric(Expr):
-        @m2.method(cost=10)
-        def __init__(self, v: i64Like) -> None: ...
+    with pytest.deprecated_call():
+
+        @m2.class_
+        class OtherNumeric(Expr):
+            @m2.method(cost=10)
+            def __init__(self, v: i64Like) -> None: ...
 
     egraph = EGraph([m, m2])
 

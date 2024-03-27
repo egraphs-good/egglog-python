@@ -989,7 +989,7 @@ def _astype(x: NDArray, dtype: DType, i: i64):
     ]
 
 
-@function(cost=500)
+@function
 def unique_counts(x: NDArray) -> TupleNDArray: ...
 
 
@@ -1028,7 +1028,7 @@ def _abs(f: Float):
     ]
 
 
-@function(cost=100)
+@function
 def unique_inverse(x: NDArray) -> TupleNDArray: ...
 
 
@@ -1051,7 +1051,7 @@ def zeros(
 def expand_dims(x: NDArray, axis: Int = Int(0)) -> NDArray: ...
 
 
-@function(cost=100000)
+@function
 def mean(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none, keepdims: Boolean = FALSE) -> NDArray: ...
 
 
@@ -1060,7 +1060,7 @@ def mean(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none, keepdim
 def sqrt(x: NDArray) -> NDArray: ...
 
 
-@function(cost=100000)
+@function
 def std(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray: ...
 
 

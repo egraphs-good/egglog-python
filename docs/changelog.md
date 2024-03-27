@@ -2,13 +2,22 @@
 
 _This project uses semantic versioning_
 
-## Unreleased
+## UNRELEASED
 
 - Defers adding rules in functions until they are used, so that you can use types that are not present yet.
 - Removes ability to set custom default ruleset for egraph. Either just use the empty default ruleset or explicitly set it for every run
+- Automatically mark Python builtin operators as preserved if they must return a real Python value
+
+## 6.1.0 (2024-03-06)
+
+- Upgrade [egglog](https://github.com/egraphs-good/egglog/compare/4cc011f6b48029dd72104a38a2ca0c7657846e0b...0113af1d6476b75d4319591cc3d675f96a71cdc5)
+  - Adds subsume action
+- Makes all objects besides EGraphs "sendable" aka threadsafe ([#129](https://github.com/egraphs-good/egglog-python/pull/129))
+
+## 6.0.1 (2024-02-28)
+
 - Upgrade dependencies, including [egglog](https://github.com/egraphs-good/egglog/compare/ceed816e9369570ffed9feeba157b19471dda70d...4cc011f6b48029dd72104a38a2ca0c7657846e0b)
 - Fix bug where saturate wasn't properly getting translated.
-- Automatically mark Python builtin operators as preserved if they must return a real Python value
 
 ## 6.0.0 (2024-02-06)
 

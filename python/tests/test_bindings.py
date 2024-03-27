@@ -1,3 +1,4 @@
+import _thread
 import fractions
 import json
 import os
@@ -7,6 +8,7 @@ import subprocess
 import pytest
 
 from egglog.bindings import *
+from egglog.bindings import Datatype, RewriteCommand, RunSchedule
 
 
 def get_egglog_folder() -> pathlib.Path:
@@ -107,7 +109,7 @@ class TestEGraph:
         egraph = EGraph()
         egraph.run_program(
             Datatype("Math", [Variant("Add", ["Math", "Math"])]),
-            RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")]))),
+            RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")])), False),
             RunSchedule(Repeat(10, Run(RunConfig("")))),
         )
 
@@ -206,3 +208,27 @@ class TestEval:
         rational = Call("rational", [Lit(Int(1)), Lit(Int(2))])
         egraph.run_program(ActionCommand(Expr_(Call("rational", [Lit(Int(1)), Lit(Int(2))]))))
         assert egraph.eval_rational(rational) == fractions.Fraction(1, 2)
+
+
+class TestThreads:
+    """
+    Verify that objects can be accessed from multiple threads at the same time.
+    """
+
+    def test_cmds(self):
+        cmds = (
+            Datatype("Math", [Variant("Add", ["Math", "Math"])]),
+            RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")])), False),
+            RunSchedule(Repeat(10, Run(RunConfig("")))),
+        )
+
+        _thread.start_new_thread(print, cmds)
+
+    @pytest.mark.xfail(reason="egraphs are unsendable")
+    def test_egraph(self):
+        _thread.start_new_thread(EGraph().run_program, (Datatype("Math", [Variant("Add", ["Math", "Math"])]),))
+
+    def test_serialized_egraph(self):
+        egraph = EGraph()
+        serialized = egraph.serialize([])
+        _thread.start_new_thread(print, (serialized,))

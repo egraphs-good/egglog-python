@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import TYPE_CHECKING, Protocol, TypeAlias, Union, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, Union, runtime_checkable
 
 from typing_extensions import Self, assert_never
 
@@ -57,7 +57,7 @@ __all__ = [
     "LetDecl",
     "SetDecl",
     "ExprActionDecl",
-    "DeleteDecl",
+    "ChangeDecl",
     "UnionDecl",
     "PanicDecl",
     "ActionDecl",
@@ -553,9 +553,10 @@ class ExprActionDecl:
 
 
 @dataclass(frozen=True)
-class DeleteDecl:
+class ChangeDecl:
     tp: JustTypeRef
     call: CallDecl
+    change: Literal["delete", "subsume"]
 
 
 @dataclass(frozen=True)
@@ -570,7 +571,7 @@ class PanicDecl:
     msg: str
 
 
-ActionDecl: TypeAlias = LetDecl | SetDecl | ExprActionDecl | DeleteDecl | UnionDecl | PanicDecl
+ActionDecl: TypeAlias = LetDecl | SetDecl | ExprActionDecl | ChangeDecl | UnionDecl | PanicDecl
 
 
 ##
@@ -584,6 +585,7 @@ class RewriteDecl:
     lhs: ExprDecl
     rhs: ExprDecl
     conditions: tuple[FactDecl, ...]
+    subsume: bool
 
 
 @dataclass(frozen=True)
