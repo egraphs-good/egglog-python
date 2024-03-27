@@ -1638,8 +1638,9 @@ class _NeBuilder(Generic[EXPR]):
     def to(self, rhs: EXPR) -> Unit:
         lhs = to_runtime_expr(self.lhs)
         rhs = convert_to_same_type(rhs, lhs)
+        assert isinstance(Unit, RuntimeClass)
         res = RuntimeExpr.__from_value__(
-            Declarations.create(lhs, rhs),
+            Declarations.create(Unit, lhs, rhs),
             TypedExprDecl(
                 JustTypeRef("Unit"), CallDecl(FunctionRef("!="), (lhs.__egg_typed_expr__, rhs.__egg_typed_expr__))
             ),
