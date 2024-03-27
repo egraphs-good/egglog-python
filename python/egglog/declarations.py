@@ -110,7 +110,7 @@ class Declarations:
     _functions: dict[str, FunctionDecl | RelationDecl] = field(default_factory=dict)
     _constants: dict[str, ConstantDecl] = field(default_factory=dict)
     _classes: dict[str, ClassDecl] = field(default_factory=dict)
-    _rulesets: dict[str, RulesetDecl] = field(default_factory=dict)
+    _rulesets: dict[str, RulesetDecl] = field(default_factory=lambda: {"": RulesetDecl([])})
 
     @classmethod
     def create(cls, *others: DeclerationsLike) -> Declarations:
