@@ -214,6 +214,13 @@ class EGraphState:
                     ),
                 )
             )
+        # For builtin classes, let's also make sure we have the mapping of all egg fn names for class methods, because
+        # these can be created even without adding them to the e-graph, like `vec-empty` which can be extracted
+        # even if you never use that function.
+        if decl.builtin:
+            for method in decl.class_methods:
+                self.callable_ref_to_egg(ClassMethodRef(ref.name, method))
+
         return egg_name
 
     def op_mapping(self) -> dict[str, str]:
