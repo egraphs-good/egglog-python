@@ -78,7 +78,6 @@ def resolve_type_annotation(decls: Declarations, tp: object) -> TypeOrVarRef:
     # If the type is `object` then this is assumed to be a PyObjectLike, i.e. converted into a PyObject
     if tp == object:
         assert _PY_OBJECT_CLASS
-        # TODO: Try removing this now and just passing in py object class
         return resolve_type_annotation(decls, _PY_OBJECT_CLASS)
     if isinstance(tp, RuntimeClass):
         decls |= tp
