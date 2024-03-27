@@ -140,7 +140,7 @@ class TraverseContext:
         if decl in self._seen:
             return
         match decl:
-            case RewriteDecl(lhs, rhs, conditions) | BiRewriteDecl(lhs, rhs, conditions):
+            case RewriteDecl(_, lhs, rhs, conditions) | BiRewriteDecl(_, lhs, rhs, conditions):
                 self(lhs)
                 self(rhs)
                 for cond in conditions:
@@ -150,22 +150,16 @@ class TraverseContext:
                     self(action)
                 for fact in body:
                     self(fact)
-            case SetDecl(lhs, rhs) | UnionDecl(lhs, rhs):
+            case SetDecl(_, lhs, rhs) | UnionDecl(_, lhs, rhs):
                 self(lhs)
                 self(rhs)
-            case (
-                LetDecl(_, d)
-                | ExprActionDecl(d)
-                | DeleteDecl(d)
-                | ExprFactDecl(d)
-                | SaturateDecl(d)
-                | RepeatDecl(d, _)
-                | ActionCommandDecl(d)
-            ):
+            case LetDecl(_, d) | ExprActionDecl(d) | ExprFactDecl(d):
+                self(d.expr)
+            case DeleteDecl(_, d) | SaturateDecl(d) | RepeatDecl(d, _) | ActionCommandDecl(d):
                 self(d)
             case PanicDecl(_) | VarDecl(_) | LitDecl(_) | PyObjectDecl(_):
                 pass
-            case EqDecl(decls) | SequenceDecl(decls) | RulesetDecl(decls):
+            case EqDecl(_, decls) | SequenceDecl(decls) | RulesetDecl(decls):
                 for de in decls:
                     self(de)
             case CallDecl(_, exprs, _):
@@ -240,7 +234,7 @@ class PrettyContext:
                 return repr(value) if unwrap_lit else f"PyObject({value!r})", "PyObject"
             case ActionCommandDecl(action):
                 return self(action), "action"
-            case RewriteDecl(lhs, rhs, conditions) | BiRewriteDecl(lhs, rhs, conditions):
+            case RewriteDecl(_, lhs, rhs, conditions) | BiRewriteDecl(_, lhs, rhs, conditions):
                 args = ", ".join(map(self, (rhs, *conditions)))
                 fn = "rewrite" if isinstance(decl, RewriteDecl) else "birewrite"
                 return f"{fn}({self(lhs)}).to({args})", "rewrite"
@@ -250,21 +244,21 @@ class PrettyContext:
                     l += f", name={name}"
                 r = ", ".join(map(self, head))
                 return f"rule({l}).then({r})", "rule"
-            case SetDecl(lhs, rhs):
+            case SetDecl(_, lhs, rhs):
                 return f"set_({self(lhs)}).to({self(rhs)})", "action"
-            case UnionDecl(lhs, rhs):
+            case UnionDecl(_, lhs, rhs):
                 return f"union({self(lhs)}).with_({self(rhs)})", "action"
             case LetDecl(name, expr):
-                return f"let({name!r}, {self(expr)})", "action"
+                return f"let({name!r}, {self(expr.expr)})", "action"
             case ExprActionDecl(expr):
-                return self(expr), "action"
+                return self(expr.expr), "action"
             case ExprFactDecl(expr):
-                return self(expr), "fact"
-            case DeleteDecl(expr):
+                return self(expr.expr), "fact"
+            case DeleteDecl(_, expr):
                 return f"delete({self(expr)})", "action"
             case PanicDecl(s):
                 return f"panic({s!r})", "action"
-            case EqDecl(exprs):
+            case EqDecl(_, exprs):
                 first, *rest = exprs
                 return f"eq({self(first)}).to({', '.join(map(self, rest))})", "fact"
             case RulesetDecl(rules):

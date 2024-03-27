@@ -1479,25 +1479,26 @@ def panic(message: str) -> Action:
 def let(name: str, expr: Expr) -> Action:
     """Create a let binding."""
     runtime_expr = to_runtime_expr(expr)
-    return Action(runtime_expr.__egg_decls__, LetDecl(name, runtime_expr.__egg_typed_expr__.expr))
+    return Action(runtime_expr.__egg_decls__, LetDecl(name, runtime_expr.__egg_typed_expr__))
 
 
 def expr_action(expr: Expr) -> Action:
     runtime_expr = to_runtime_expr(expr)
-    return Action(runtime_expr.__egg_decls__, ExprActionDecl(runtime_expr.__egg_typed_expr__.expr))
+    return Action(runtime_expr.__egg_decls__, ExprActionDecl(runtime_expr.__egg_typed_expr__))
 
 
 def delete(expr: Expr) -> Action:
     """Create a delete expression."""
     runtime_expr = to_runtime_expr(expr)
-    call_decl = runtime_expr.__egg_typed_expr__.expr
+    typed_expr = runtime_expr.__egg_typed_expr__
+    call_decl = typed_expr.expr
     assert isinstance(call_decl, CallDecl), "Can only delete calls, not literals or vars"
-    return Action(runtime_expr.__egg_decls__, DeleteDecl(call_decl))
+    return Action(runtime_expr.__egg_decls__, DeleteDecl(typed_expr.tp, call_decl))
 
 
 def expr_fact(expr: Expr) -> Fact:
     runtime_expr = to_runtime_expr(expr)
-    return Fact(runtime_expr.__egg_decls__, ExprFactDecl(runtime_expr.__egg_typed_expr__.expr))
+    return Fact(runtime_expr.__egg_decls__, ExprFactDecl(runtime_expr.__egg_typed_expr__))
 
 
 def union(lhs: EXPR) -> _UnionBuilder[EXPR]:
@@ -1558,7 +1559,12 @@ class _RewriteBuilder(Generic[EXPR]):
         rhs = convert_to_same_type(rhs, lhs)
         rule = RewriteOrRule(
             Declarations.create(lhs, rhs, *facts, self.ruleset),
-            RewriteDecl(lhs.__egg_typed_expr__.expr, rhs.__egg_typed_expr__.expr, tuple(f.fact for f in facts)),
+            RewriteDecl(
+                lhs.__egg_typed_expr__.tp,
+                lhs.__egg_typed_expr__.expr,
+                rhs.__egg_typed_expr__.expr,
+                tuple(f.fact for f in facts),
+            ),
         )
         if self.ruleset:
             self.ruleset.append(rule)
@@ -1580,7 +1586,12 @@ class _BirewriteBuilder(Generic[EXPR]):
         rhs = convert_to_same_type(rhs, lhs)
         rule = RewriteOrRule(
             Declarations.create(lhs, rhs, *facts, self.ruleset),
-            BiRewriteDecl(lhs.__egg_typed_expr__.expr, rhs.__egg_typed_expr__.expr, tuple(f.fact for f in facts)),
+            BiRewriteDecl(
+                lhs.__egg_typed_expr__.tp,
+                lhs.__egg_typed_expr__.expr,
+                rhs.__egg_typed_expr__.expr,
+                tuple(f.fact for f in facts),
+            ),
         )
         if self.ruleset:
             self.ruleset.append(rule)
@@ -1598,7 +1609,10 @@ class _EqBuilder(Generic[EXPR]):
     def to(self, *exprs: EXPR) -> Fact:
         expr = to_runtime_expr(self.expr)
         args = [expr, *(convert_to_same_type(e, expr) for e in exprs)]
-        return Fact(Declarations.create(*args), EqDecl(tuple(a.__egg_typed_expr__.expr for a in args)))
+        return Fact(
+            Declarations.create(*args),
+            EqDecl(expr.__egg_typed_expr__.tp, tuple(a.__egg_typed_expr__.expr for a in args)),
+        )
 
     def __repr__(self) -> str:
         return str(self)
@@ -1642,7 +1656,7 @@ class _SetBuilder(Generic[EXPR]):
         assert isinstance(lhs_expr, CallDecl), "Can only set function calls"
         return Action(
             Declarations.create(lhs, rhs),
-            SetDecl(lhs_expr, rhs.__egg_typed_expr__.expr),
+            SetDecl(lhs.__egg_typed_expr__.tp, lhs_expr, rhs.__egg_typed_expr__.expr),
         )
 
     def __repr__(self) -> str:
@@ -1662,7 +1676,7 @@ class _UnionBuilder(Generic[EXPR]):
         rhs = convert_to_same_type(rhs, lhs)
         return Action(
             Declarations.create(lhs, rhs),
-            UnionDecl(lhs.__egg_typed_expr__.expr, rhs.__egg_typed_expr__.expr),
+            UnionDecl(lhs.__egg_typed_expr__.tp, lhs.__egg_typed_expr__.expr, rhs.__egg_typed_expr__.expr),
         )
 
     def __repr__(self) -> str:

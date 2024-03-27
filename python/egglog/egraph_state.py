@@ -102,7 +102,8 @@ class EGraphState:
         match cmd:
             case ActionCommandDecl(action):
                 return bindings.ActionCommand(self.action_to_egg(action))
-            case RewriteDecl(lhs, rhs, conditions) | BiRewriteDecl(lhs, rhs, conditions):
+            case RewriteDecl(tp, lhs, rhs, conditions) | BiRewriteDecl(tp, lhs, rhs, conditions):
+                self.type_ref_to_egg(tp)
                 rewrite = bindings.Rewrite(
                     self.expr_to_egg(lhs),
                     self.expr_to_egg(rhs),
@@ -124,17 +125,20 @@ class EGraphState:
 
     def action_to_egg(self, action: ActionDecl) -> bindings._Action:
         match action:
-            case LetDecl(name, expr):
-                return bindings.Let(name, self.expr_to_egg(expr))
-            case SetDecl(call, rhs):
+            case LetDecl(name, typed_expr):
+                return bindings.Let(name, self.typed_expr_to_egg(typed_expr))
+            case SetDecl(tp, call, rhs):
+                self.type_ref_to_egg(tp)
                 call_ = self.expr_to_egg(call)
                 return bindings.Set(call_.name, call_.args, self.expr_to_egg(rhs))
-            case ExprActionDecl(expr):
-                return bindings.Expr_(self.expr_to_egg(expr))
-            case DeleteDecl(call):
+            case ExprActionDecl(typed_expr):
+                return bindings.Expr_(self.typed_expr_to_egg(typed_expr))
+            case DeleteDecl(tp, call):
+                self.type_ref_to_egg(tp)
                 call_ = self.expr_to_egg(call)
                 return bindings.Delete(call_.name, call_.args)
-            case UnionDecl(lhs, rhs):
+            case UnionDecl(tp, lhs, rhs):
+                self.type_ref_to_egg(tp)
                 return bindings.Union(self.expr_to_egg(lhs), self.expr_to_egg(rhs))
             case PanicDecl(name):
                 return bindings.Panic(name)
@@ -143,10 +147,11 @@ class EGraphState:
 
     def fact_to_egg(self, fact: FactDecl) -> bindings._Fact:
         match fact:
-            case EqDecl(exprs):
+            case EqDecl(tp, exprs):
+                self.type_ref_to_egg(tp)
                 return bindings.Eq([self.expr_to_egg(e) for e in exprs])
-            case ExprFactDecl(expr):
-                return bindings.Fact(self.expr_to_egg(expr))
+            case ExprFactDecl(typed_expr):
+                return bindings.Fact(self.typed_expr_to_egg(typed_expr))
             case _:
                 assert_never(fact)
 
@@ -222,6 +227,10 @@ class EGraphState:
             if len(v) == 1
         }
 
+    def typed_expr_to_egg(self, typed_expr_decl: TypedExprDecl) -> bindings._Expr:
+        self.type_ref_to_egg(typed_expr_decl.tp)
+        return self.expr_to_egg(typed_expr_decl.expr)
+
     @overload
     def expr_to_egg(self, expr_decl: CallDecl) -> bindings.Call: ...
 
@@ -258,7 +267,7 @@ class EGraphState:
                         assert_never(value)
                 res = bindings.Lit(l)
             case CallDecl(ref, args, _):
-                res = bindings.Call(self.callable_ref_to_egg(ref), [self.expr_to_egg(a.expr) for a in args])
+                res = bindings.Call(self.callable_ref_to_egg(ref), [self.typed_expr_to_egg(a) for a in args])
             case PyObjectDecl(value):
                 res = GLOBAL_PY_OBJECT_SORT.store(value)
             case _:

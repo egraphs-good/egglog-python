@@ -494,12 +494,13 @@ ScheduleDecl: TypeAlias = SaturateDecl | RepeatDecl | SequenceDecl | RunDecl
 
 @dataclass(frozen=True)
 class EqDecl:
+    tp: JustTypeRef
     exprs: tuple[ExprDecl, ...]
 
 
 @dataclass(frozen=True)
 class ExprFactDecl:
-    expr: ExprDecl
+    typed_expr: TypedExprDecl
 
 
 FactDecl: TypeAlias = EqDecl | ExprFactDecl
@@ -512,27 +513,30 @@ FactDecl: TypeAlias = EqDecl | ExprFactDecl
 @dataclass(frozen=True)
 class LetDecl:
     name: str
-    expr: ExprDecl
+    typed_expr: TypedExprDecl
 
 
 @dataclass(frozen=True)
 class SetDecl:
+    tp: JustTypeRef
     call: CallDecl
     rhs: ExprDecl
 
 
 @dataclass(frozen=True)
 class ExprActionDecl:
-    expr: ExprDecl
+    typed_expr: TypedExprDecl
 
 
 @dataclass(frozen=True)
 class DeleteDecl:
+    tp: JustTypeRef
     call: CallDecl
 
 
 @dataclass(frozen=True)
 class UnionDecl:
+    tp: JustTypeRef
     lhs: ExprDecl
     rhs: ExprDecl
 
@@ -552,6 +556,7 @@ ActionDecl: TypeAlias = LetDecl | SetDecl | ExprActionDecl | DeleteDecl | UnionD
 
 @dataclass(frozen=True)
 class RewriteDecl:
+    tp: JustTypeRef
     lhs: ExprDecl
     rhs: ExprDecl
     conditions: tuple[FactDecl, ...]
@@ -559,6 +564,7 @@ class RewriteDecl:
 
 @dataclass(frozen=True)
 class BiRewriteDecl:
+    tp: JustTypeRef
     lhs: ExprDecl
     rhs: ExprDecl
     conditions: tuple[FactDecl, ...]
