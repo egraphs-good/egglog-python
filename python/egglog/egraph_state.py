@@ -75,15 +75,15 @@ class EGraphState:
             case SequenceDecl(schedules):
                 return bindings.Sequence([self.schedule_to_egg(s) for s in schedules])
             case RunDecl(ruleset_name, until):
-                config = bindings.RunConfig(ruleset_name, None if until is None else list(map(self.fact_to_egg, until)))
+                self.ruleset_to_egg(ruleset_name)
+                config = bindings.RunConfig(ruleset_name, None if not until else list(map(self.fact_to_egg, until)))
                 return bindings.Run(config)
             case _:
                 assert_never(schedule)
 
-    def ruleset_to_egg(self, name: str) -> str:
+    def ruleset_to_egg(self, name: str) -> None:
         """
-        Returns the egglog name of a ruleset, registering it if it is not already registered, and adding any rules
-        that are not already added.
+        Registers a ruleset if it's not already registered.
         """
         if name not in self.rulesets:
             if name:
@@ -96,7 +96,6 @@ class EGraphState:
                 continue
             self.egraph.run_program(self.command_to_egg(rule, name))
             rules.add(rule)
-        return name
 
     def command_to_egg(self, cmd: CommandDecl, ruleset: str) -> bindings._Command:
         match cmd:
