@@ -194,10 +194,13 @@ converter(int, Int, lambda x: Int(x))
 
 
 class Float(Expr):
+    # Differentiate costs of three constructors so extraction is deterministic if all three are present
+    @method(cost=3)
     def __init__(self, value: f64Like) -> None: ...
 
     def abs(self) -> Float: ...
 
+    @method(cost=2)
     @classmethod
     def rational(cls, r: Rational) -> Float: ...
 
