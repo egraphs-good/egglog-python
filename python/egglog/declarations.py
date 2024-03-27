@@ -402,6 +402,15 @@ class PyObjectDecl:
         except TypeError:
             return id(self.value)
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PyObjectDecl):
+            return False
+        return self.parts == other.parts
+
+    @property
+    def parts(self) -> tuple[type, object]:
+        return (type(self.value), self.value)
+
 
 LitType: TypeAlias = int | str | float | bool | None
 
@@ -409,6 +418,21 @@ LitType: TypeAlias = int | str | float | bool | None
 @dataclass(frozen=True)
 class LitDecl:
     value: LitType
+
+    def __hash__(self) -> int:
+        """
+        Include type in has so that 1.0 != 1
+        """
+        return hash(self.parts)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, LitDecl):
+            return False
+        return self.parts == other.parts
+
+    @property
+    def parts(self) -> tuple[type, LitType]:
+        return (type(self.value), self.value)
 
 
 @dataclass(frozen=True)
