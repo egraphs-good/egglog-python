@@ -6,6 +6,7 @@ from .array_api import Int
 
 # https://github.com/sklam/pyasir/blob/c363ff4f8f91177700ad4108dd5042b9b97d8289/pyasir/tests/test_fib.py
 
+# In progress - should be able to re-create this
 # @df.func
 # def fib_ir(n: pyasir.Int64) -> pyasir.Int64:
 #     @df.switch(n <= 1)
@@ -25,6 +26,7 @@ from .array_api import Int
 #     return r
 
 
+# With something like this:
 @egglog.function
 def fib(n: Int) -> Int:
     return (n <= Int(1)).if_int(
