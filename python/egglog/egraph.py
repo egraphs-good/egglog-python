@@ -1279,7 +1279,7 @@ def ruleset(
     """
     r = Ruleset(name)
     if rule_or_generator is not None:
-        r.register(rule_or_generator, *rules)
+        r.register(rule_or_generator, *rules, _increase_frame=True)
     return r
 
 
@@ -1356,7 +1356,13 @@ class Ruleset(Schedule):
         self._current_egg_decls |= rule
         self.__egg_ruleset__.rules.append(rule.decl)
 
-    def register(self, /, rule_or_generator: RewriteOrRule | RewriteOrRuleGenerator, *rules: RewriteOrRule) -> None:
+    def register(
+        self,
+        /,
+        rule_or_generator: RewriteOrRule | RewriteOrRuleGenerator,
+        *rules: RewriteOrRule,
+        _increase_frame: bool = False,
+    ) -> None:
         """
         Register rewrites or rules, either as a function or as values.
         """
@@ -1370,6 +1376,9 @@ class Ruleset(Schedule):
             assert current_frame
             original_frame = current_frame.f_back
             assert original_frame
+            if _increase_frame:
+                original_frame = original_frame.f_back
+                assert original_frame
             self.deferred_rule_gens.append(Thunk.fn(_rewrite_or_rule_generator, rule_or_generator, original_frame))
 
     def __str__(self) -> str:
