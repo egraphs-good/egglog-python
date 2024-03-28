@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
 
-array_api_ruleset = ruleset()
+array_api_ruleset = ruleset(name="array_api_ruleset")
 array_api_schedule = array_api_ruleset.saturate()
 
 
@@ -36,10 +36,14 @@ class Boolean(Expr):
     @property
     def bool(self) -> Bool: ...
 
-    def __or__(self, other: Boolean) -> Boolean: ...
+    def __or__(self, other: BooleanLike) -> Boolean: ...
 
-    def __and__(self, other: Boolean) -> Boolean: ...
+    def __and__(self, other: BooleanLike) -> Boolean: ...
 
+    def if_int(self, true_value: Int, false_value: Int) -> Int: ...
+
+
+BooleanLike = Boolean | bool
 
 TRUE = constant("TRUE", Boolean)
 FALSE = constant("FALSE", Boolean)
@@ -47,7 +51,7 @@ converter(bool, Boolean, lambda x: TRUE if x else FALSE)
 
 
 @array_api_ruleset.register
-def _bool(x: Boolean):
+def _bool(x: Boolean, i: Int, j: Int):
     return [
         rule(eq(x).to(TRUE)).then(set_(x.bool).to(Bool(True))),
         rule(eq(x).to(FALSE)).then(set_(x.bool).to(Bool(False))),
@@ -55,82 +59,8 @@ def _bool(x: Boolean):
         rewrite(FALSE | x).to(x),
         rewrite(TRUE & x).to(x),
         rewrite(FALSE & x).to(FALSE),
-    ]
-
-
-class DType(Expr):
-    float64: ClassVar[DType]
-    float32: ClassVar[DType]
-    int64: ClassVar[DType]
-    int32: ClassVar[DType]
-    object: ClassVar[DType]
-    bool: ClassVar[DType]
-
-    def __eq__(self, other: DType) -> Boolean:  # type: ignore[override]
-        ...
-
-
-float64 = DType.float64
-float32 = DType.float32
-int32 = DType.int32
-int64 = DType.int64
-
-_DTYPES = [float64, float32, int32, int64, DType.object]
-
-converter(type, DType, lambda x: convert(np.dtype(x), DType))
-converter(type(np.dtype), DType, lambda x: getattr(DType, x.name))  # type: ignore[call-overload]
-array_api_ruleset.register(
-    *(rewrite(l == r).to(TRUE if l is r else FALSE) for l, r in itertools.product(_DTYPES, repeat=2))
-)
-
-
-class IsDtypeKind(Expr):
-    NULL: ClassVar[IsDtypeKind]
-
-    @classmethod
-    def string(cls, s: StringLike) -> IsDtypeKind: ...
-
-    @classmethod
-    def dtype(cls, d: DType) -> IsDtypeKind: ...
-
-    @method(cost=10)
-    def __or__(self, other: IsDtypeKind) -> IsDtypeKind: ...
-
-
-# TODO: Make kind more generic to support tuples.
-@function
-def isdtype(dtype: DType, kind: IsDtypeKind) -> Boolean: ...
-
-
-converter(DType, IsDtypeKind, lambda x: IsDtypeKind.dtype(x))
-converter(str, IsDtypeKind, lambda x: IsDtypeKind.string(x))
-converter(
-    tuple, IsDtypeKind, lambda x: convert(x[0], IsDtypeKind) | convert(x[1:], IsDtypeKind) if x else IsDtypeKind.NULL
-)
-
-
-@array_api_ruleset.register
-def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
-    return [
-        rewrite(isdtype(DType.float32, IsDtypeKind.string("integral"))).to(FALSE),
-        rewrite(isdtype(DType.float64, IsDtypeKind.string("integral"))).to(FALSE),
-        rewrite(isdtype(DType.object, IsDtypeKind.string("integral"))).to(FALSE),
-        rewrite(isdtype(DType.int64, IsDtypeKind.string("integral"))).to(TRUE),
-        rewrite(isdtype(DType.int32, IsDtypeKind.string("integral"))).to(TRUE),
-        rewrite(isdtype(DType.float32, IsDtypeKind.string("real floating"))).to(TRUE),
-        rewrite(isdtype(DType.float64, IsDtypeKind.string("real floating"))).to(TRUE),
-        rewrite(isdtype(DType.object, IsDtypeKind.string("real floating"))).to(FALSE),
-        rewrite(isdtype(DType.int64, IsDtypeKind.string("real floating"))).to(FALSE),
-        rewrite(isdtype(DType.int32, IsDtypeKind.string("real floating"))).to(FALSE),
-        rewrite(isdtype(DType.float32, IsDtypeKind.string("complex floating"))).to(FALSE),
-        rewrite(isdtype(DType.float64, IsDtypeKind.string("complex floating"))).to(FALSE),
-        rewrite(isdtype(DType.object, IsDtypeKind.string("complex floating"))).to(FALSE),
-        rewrite(isdtype(DType.int64, IsDtypeKind.string("complex floating"))).to(FALSE),
-        rewrite(isdtype(DType.int32, IsDtypeKind.string("complex floating"))).to(FALSE),
-        rewrite(isdtype(d, IsDtypeKind.NULL)).to(FALSE),
-        rewrite(isdtype(d, IsDtypeKind.dtype(d))).to(TRUE),
-        rewrite(isdtype(d, k1 | k2)).to(isdtype(d, k1) | isdtype(d, k2)),
-        rewrite(k1 | IsDtypeKind.NULL).to(k1),
+        rewrite(TRUE.if_int(i, j)).to(i),
+        rewrite(FALSE.if_int(i, j)).to(j),
     ]
 
 
@@ -264,10 +194,13 @@ converter(int, Int, lambda x: Int(x))
 
 
 class Float(Expr):
+    # Differentiate costs of three constructors so extraction is deterministic if all three are present
+    @method(cost=3)
     def __init__(self, value: f64Like) -> None: ...
 
     def abs(self) -> Float: ...
 
+    @method(cost=2)
     @classmethod
     def rational(cls, r: Rational) -> Float: ...
 
@@ -364,6 +297,85 @@ class OptionalInt(Expr):
 
 converter(type(None), OptionalInt, lambda _: OptionalInt.none)
 converter(Int, OptionalInt, OptionalInt.some)
+
+
+class DType(Expr):
+    float64: ClassVar[DType]
+    float32: ClassVar[DType]
+    int64: ClassVar[DType]
+    int32: ClassVar[DType]
+    object: ClassVar[DType]
+    bool: ClassVar[DType]
+
+    def __eq__(self, other: DType) -> Boolean:  # type: ignore[override]
+        ...
+
+
+float64 = DType.float64
+float32 = DType.float32
+int32 = DType.int32
+int64 = DType.int64
+
+_DTYPES = [float64, float32, int32, int64, DType.object]
+
+converter(type, DType, lambda x: convert(np.dtype(x), DType))
+converter(type(np.dtype), DType, lambda x: getattr(DType, x.name))  # type: ignore[call-overload]
+
+
+@array_api_ruleset.register
+def _():
+    for l, r in itertools.product(_DTYPES, repeat=2):
+        yield rewrite(l == r).to(TRUE if l is r else FALSE)
+
+
+class IsDtypeKind(Expr):
+    NULL: ClassVar[IsDtypeKind]
+
+    @classmethod
+    def string(cls, s: StringLike) -> IsDtypeKind: ...
+
+    @classmethod
+    def dtype(cls, d: DType) -> IsDtypeKind: ...
+
+    @method(cost=10)
+    def __or__(self, other: IsDtypeKind) -> IsDtypeKind: ...
+
+
+# TODO: Make kind more generic to support tuples.
+@function
+def isdtype(dtype: DType, kind: IsDtypeKind) -> Boolean: ...
+
+
+converter(DType, IsDtypeKind, lambda x: IsDtypeKind.dtype(x))
+converter(str, IsDtypeKind, lambda x: IsDtypeKind.string(x))
+converter(
+    tuple, IsDtypeKind, lambda x: convert(x[0], IsDtypeKind) | convert(x[1:], IsDtypeKind) if x else IsDtypeKind.NULL
+)
+
+
+@array_api_ruleset.register
+def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
+    return [
+        rewrite(isdtype(DType.float32, IsDtypeKind.string("integral"))).to(FALSE),
+        rewrite(isdtype(DType.float64, IsDtypeKind.string("integral"))).to(FALSE),
+        rewrite(isdtype(DType.object, IsDtypeKind.string("integral"))).to(FALSE),
+        rewrite(isdtype(DType.int64, IsDtypeKind.string("integral"))).to(TRUE),
+        rewrite(isdtype(DType.int32, IsDtypeKind.string("integral"))).to(TRUE),
+        rewrite(isdtype(DType.float32, IsDtypeKind.string("real floating"))).to(TRUE),
+        rewrite(isdtype(DType.float64, IsDtypeKind.string("real floating"))).to(TRUE),
+        rewrite(isdtype(DType.object, IsDtypeKind.string("real floating"))).to(FALSE),
+        rewrite(isdtype(DType.int64, IsDtypeKind.string("real floating"))).to(FALSE),
+        rewrite(isdtype(DType.int32, IsDtypeKind.string("real floating"))).to(FALSE),
+        rewrite(isdtype(DType.float32, IsDtypeKind.string("complex floating"))).to(FALSE),
+        rewrite(isdtype(DType.float64, IsDtypeKind.string("complex floating"))).to(FALSE),
+        rewrite(isdtype(DType.object, IsDtypeKind.string("complex floating"))).to(FALSE),
+        rewrite(isdtype(DType.int64, IsDtypeKind.string("complex floating"))).to(FALSE),
+        rewrite(isdtype(DType.int32, IsDtypeKind.string("complex floating"))).to(FALSE),
+        rewrite(isdtype(d, IsDtypeKind.NULL)).to(FALSE),
+        rewrite(isdtype(d, IsDtypeKind.dtype(d))).to(TRUE),
+        rewrite(isdtype(d, k1 | k2)).to(isdtype(d, k1) | isdtype(d, k2)),
+        rewrite(k1 | IsDtypeKind.NULL).to(k1),
+    ]
 
 
 class Slice(Expr):

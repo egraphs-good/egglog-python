@@ -4,6 +4,11 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Defers adding rules in functions until they are used, so that you can use types that are not present yet.
+- Removes ability to set custom default ruleset for egraph. Either just use the empty default ruleset or explicitly set it for every run
+- Automatically mark Python builtin operators as preserved if they must return a real Python value
+- Properly pretty print all items (rewrites, actions, exprs, etc) so that expressions are de-duplicated and state is handled correctly.
+
 ## 6.1.0 (2024-03-06)
 
 - Upgrade [egglog](https://github.com/egraphs-good/egglog/compare/4cc011f6b48029dd72104a38a2ca0c7657846e0b...0113af1d6476b75d4319591cc3d675f96a71cdc5)

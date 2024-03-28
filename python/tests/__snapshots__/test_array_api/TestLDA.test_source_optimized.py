@@ -12,7 +12,7 @@ def __fn(X, y):
     _4 = y == np.array(2)
     _5 = np.sum(_4)
     _6 = np.array((_1, _3, _5,)).astype(np.dtype(np.float64))
-    _7 = _6 / np.array(150.0)
+    _7 = _6 / np.array(float(150))
     _8 = np.zeros((3, 4,), dtype=np.dtype(np.float64))
     _9 = np.sum(X[_0], axis=0)
     _10 = _9 / np.array(X[_0].shape[0])
@@ -39,7 +39,7 @@ def __fn(X, y):
     _28 = _27 / np.array(_26.shape[0])
     _29 = np.sqrt(_28)
     _30 = _29 == np.array(0)
-    _29[_30] = np.array(1.0)
+    _29[_30] = np.array(float(1))
     _31 = _21 / _29
     _32 = _17 * _31
     _33 = np.linalg.svd(_32, full_matrices=False)

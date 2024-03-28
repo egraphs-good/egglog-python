@@ -6,11 +6,11 @@ from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
 @pytest.fixture(autouse=True)
 def _reset_conversions():
-    import egglog.runtime
+    import egglog.conversion
 
-    old_conversions = copy.copy(egglog.runtime.CONVERSIONS)
+    old_conversions = copy.copy(egglog.conversion.CONVERSIONS)
     yield
-    egglog.runtime.CONVERSIONS = old_conversions
+    egglog.conversion.CONVERSIONS = old_conversions
 
 
 class PythonSnapshotExtension(SingleFileSnapshotExtension):

@@ -214,3 +214,13 @@ filterwarnings = [
     "ignore::numba.core.errors.NumbaPerformanceWarning",
     "ignore::pytest_benchmark.logger.PytestBenchmarkWarning",
 ]
+
+[tool.coverage.report]
+exclude_also = [
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+    "assert_never\\(",
+]

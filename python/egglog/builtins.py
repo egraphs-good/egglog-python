@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union
 
+from .conversion import converter
 from .egraph import Expr, Unit, function, method
-from .runtime import converter
 
 if TYPE_CHECKING:
     from collections.abc import Callable

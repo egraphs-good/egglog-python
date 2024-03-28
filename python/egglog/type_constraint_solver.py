@@ -14,6 +14,7 @@ from .declarations import *
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable
 
+
 __all__ = ["TypeConstraintSolver", "TypeConstraintError"]
 
 
@@ -38,10 +39,11 @@ class TypeConstraintSolver:
         Bind the typevars of a class to the given types.
         Used for a situation like Map[int, str].create().
         """
-        cls_typevars = self._decls.get_class_decl(ref.name).type_vars
+        name = ref.name
+        cls_typevars = self._decls.get_class_decl(name).type_vars
         if len(cls_typevars) != len(ref.args):
             raise TypeConstraintError(f"Mismatch of typevars {cls_typevars} and {ref}")
-        bound_typevars = self._cls_typevar_index_to_type[ref.name]
+        bound_typevars = self._cls_typevar_index_to_type[name]
         for i, arg in enumerate(ref.args):
             bound_typevars[cls_typevars[i]] = arg
 
@@ -117,6 +119,7 @@ class TypeConstraintSolver:
                 if cls_name is None:
                     msg = "Cannot infer typevar without class name"
                     raise RuntimeError(msg)
+
                 class_typevars = self._cls_typevar_index_to_type[cls_name]
                 if typevar in class_typevars:
                     if class_typevars[typevar] != arg:

@@ -103,49 +103,54 @@ def _load_py_snapshot(fn: Callable, var: str | None = None) -> Any:
     return globals[var]
 
 
-def load_source(expr):
-    egraph = EGraph()
-    fn_program = egraph.let("fn_program", ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y")))
-    egraph.run(array_api_program_gen_schedule)
-    # cast b/c issue with it not recognizing py_object as property
-    cast(Any, egraph.eval(fn_program.py_object))
-    assert np.allclose(res, run_lda(X_np, y_np))
-    return egraph.eval(fn_program.statements)
+def load_source(expr, egraph: EGraph):
+    with egraph:
+        fn_program = egraph.let("fn_program", ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y")))
+        egraph.run(array_api_program_gen_schedule)
+        # cast b/c issue with it not recognizing py_object as property
+        cast(Any, egraph.eval(fn_program.py_object))
+        assert np.allclose(res, run_lda(X_np, y_np))
+        return egraph.eval(fn_program.statements)
+
+
+def trace_lda(egraph: EGraph):
+    X_arr = NDArray.var("X")
+    assume_dtype(X_arr, X_np.dtype)
+    assume_shape(X_arr, X_np.shape)
+    assume_isfinite(X_arr)
+
+    y_arr = NDArray.var("y")
+    assume_dtype(y_arr, y_np.dtype)
+    assume_shape(y_arr, y_np.shape)
+    assume_value_one_of(y_arr, tuple(map(int, np.unique(y_np))))  # type: ignore[arg-type]
+
+    with egraph:
+        return run_lda(X_arr, y_arr)
 
 
 @pytest.mark.benchmark(min_rounds=3)
 class TestLDA:
     def test_trace(self, snapshot_py, benchmark):
-        @benchmark
-        def X_r2():
-            X_arr = NDArray.var("X")
-            assume_dtype(X_arr, X_np.dtype)
-            assume_shape(X_arr, X_np.shape)
-            assume_isfinite(X_arr)
-
-            y_arr = NDArray.var("y")
-            assume_dtype(y_arr, y_np.dtype)
-            assume_shape(y_arr, y_np.shape)
-            assume_value_one_of(y_arr, tuple(map(int, np.unique(y_np))))  # type: ignore[arg-type]
-
-            with EGraph():
-                return run_lda(X_arr, y_arr)
-
+        X_r2 = benchmark(trace_lda, EGraph())
         assert str(X_r2) == snapshot_py
 
     def test_optimize(self, snapshot_py, benchmark):
-        expr = _load_py_snapshot(self.test_trace)
-        simplified = benchmark(lambda: EGraph().simplify(expr, array_api_numba_schedule))
+        egraph = EGraph()
+        expr = trace_lda(egraph)
+        simplified = benchmark(egraph.simplify, expr, array_api_numba_schedule)
         assert str(simplified) == snapshot_py
 
     @pytest.mark.xfail(reason="Original source is not working")
     def test_source(self, snapshot_py, benchmark):
-        expr = _load_py_snapshot(self.test_trace)
-        assert benchmark(load_source, expr) == snapshot_py
+        egraph = EGraph()
+        expr = trace_lda(egraph)
+        assert benchmark(load_source, expr, egraph) == snapshot_py
 
     def test_source_optimized(self, snapshot_py, benchmark):
-        expr = _load_py_snapshot(self.test_optimize)
-        assert benchmark(load_source, expr) == snapshot_py
+        egraph = EGraph()
+        expr = trace_lda(egraph)
+        optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
+        assert benchmark(load_source, optimized_expr, egraph) == snapshot_py
 
     @pytest.mark.parametrize(
         "fn",
