@@ -1207,7 +1207,8 @@ class EGraph(_BaseModule):
 
     def _register_commands(self, cmds: list[Command]) -> None:
         self._add_decls(*cmds)
-        self._egraph.run_program(*map(self._command_to_egg, cmds))
+        egg_cmds = list(map(self._command_to_egg, cmds))
+        self._egraph.run_program(*egg_cmds)
 
     def _command_to_egg(self, cmd: Command) -> bindings._Command:
         ruleset_name = ""

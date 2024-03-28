@@ -283,7 +283,9 @@ class EGraphState:
                         assert_never(value)
                 res = bindings.Lit(l)
             case CallDecl(ref, args, _):
-                res = bindings.Call(self.callable_ref_to_egg(ref), [self.typed_expr_to_egg(a) for a in args])
+                egg_fn = self.callable_ref_to_egg(ref)
+                egg_args = [self.typed_expr_to_egg(a) for a in args]
+                res = bindings.Call(egg_fn, egg_args)
             case PyObjectDecl(value):
                 res = GLOBAL_PY_OBJECT_SORT.store(value)
             case _:
