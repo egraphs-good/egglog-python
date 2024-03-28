@@ -205,8 +205,10 @@ class EGraphState:
         """
         Returns the egg sort name for a type reference, registering it if it is not already registered.
         """
-        if ref in self.type_ref_to_egg_sort:
+        try:
             return self.type_ref_to_egg_sort[ref]
+        except KeyError:
+            pass
         decl = self.__egg_decls__._classes[ref.name]
         self.type_ref_to_egg_sort[ref] = egg_name = decl.egg_name or _generate_type_egg_name(ref)
         if not decl.builtin or ref.args:
@@ -259,8 +261,10 @@ class EGraphState:
 
         Cached using weakrefs to avoid memory leaks.
         """
-        if expr_decl in self.expr_to_egg_cache:
+        try:
             return self.expr_to_egg_cache[expr_decl]
+        except KeyError:
+            pass
 
         res: bindings._Expr
         match expr_decl:
