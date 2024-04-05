@@ -1,0 +1,35 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: 'Egglog Python: A Pythonic Library for E-graphs'
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Saul
+    family-names: Shanabrook
+    email: s.shanabrook@gmail.com
+    orcid: 'https://orcid.org/0000-0002-0258-4236'
+identifiers:
+  - type: other
+    value: 'arXiv:2305.04311'
+repository-code: 'https://github.com/egraphs-good/egglog-python'
+url: 'https://egglog-python.readthedocs.io/'
+abstract: >-
+  E-graphs have emerged as a versatile data structure with
+  applications in synthesis, optimization, and verification
+  through techniques such as equality saturation. This paper
+  introduces Python bindings for the experimental egglog
+  library (previously called egg-smol), which aims to bring
+  the benefits of e-graphs to the Python ecosystem. The
+  bindings offer a high-level, Pythonic API providing an
+  accessible and familiar interface for Python users. By
+  integrating e-graph techniques with Python, we hope to
+  enable collaboration and innovation across various domains
+  in the scientific computing and machine learning
+  communities. We discuss the advantages of using Python
+  bindings for both Python and existing egg-smol users, as
+  well as possible future directions for development.
+license: MIT
