@@ -9,7 +9,7 @@ name = "egglog_python"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.20.2", features = ["extension-module"] }
+pyo3 = { version = "0.21", features = ["extension-module", "gil-refs"] }
 
 # https://github.com/egraphs-good/egglog/compare/ceed816e9369570ffed9feeba157b19471dda70d...main
 egglog = { git = "https://github.com/egraphs-good/egglog", rev = "0113af1d6476b75d4319591cc3d675f96a71cdc5" }
