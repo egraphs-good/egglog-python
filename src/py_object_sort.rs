@@ -14,6 +14,7 @@ use pyo3::{
     ffi, intern, prelude::*, types::PyDict, AsPyPointer, IntoPy, PyAny, PyErr, PyObject, PyResult,
     PyTraverseError, PyVisit, Python,
 };
+
 use std::{
     any::Any,
     env::temp_dir,
@@ -44,7 +45,7 @@ pub enum PyObjectIdent {
 impl PyObjectIdent {
     pub fn from_pyobject(obj: &PyObject) -> Self {
         Python::with_gil(|py| {
-            let o = obj.as_ref(py);
+            let o = obj.bind(py);
             match o.hash() {
                 Ok(hash) => PyObjectIdent::Hashable(o.get_type().hash().unwrap(), hash),
                 Err(_) => PyObjectIdent::Unhashable(obj.as_ptr() as usize),
@@ -306,10 +307,10 @@ impl PrimitiveLike for Eval {
         let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
         let res_obj: PyObject = Python::with_gil(|py| {
             let globals = self.py_object.load(values[1]);
-            let globals = globals.downcast::<PyDict>(py).unwrap();
+            let globals = globals.downcast_bound::<PyDict>(py).unwrap();
             let locals = self.py_object.load(values[2]);
-            let locals = locals.downcast::<PyDict>(py).unwrap();
-            py.eval(code.into(), Some(globals), Some(locals))
+            let locals = locals.downcast_bound::<PyDict>(py).unwrap();
+            py.eval_bound(code.into(), Some(globals), Some(locals))
                 .unwrap()
                 .into()
         });
@@ -348,10 +349,10 @@ impl PrimitiveLike for Exec {
         let code: &str = code.into();
         let locals: PyObject = Python::with_gil(|py| {
             let globals = self.py_object.load(values[1]);
-            let globals = globals.downcast::<PyDict>(py).unwrap();
+            let globals = globals.downcast_bound::<PyDict>(py).unwrap();
             let locals = self.py_object.load(values[2]);
             // Copy the locals so we can mutate them and return them
-            let locals = locals.downcast::<PyDict>(py).unwrap().copy().unwrap();
+            let locals = locals.downcast_bound::<PyDict>(py).unwrap().copy().unwrap();
             // Copy code into temporary file
             // Keep it around so that if errors occur we can debug them after the program exits
             let mut path = temp_dir();
@@ -360,7 +361,7 @@ impl PrimitiveLike for Exec {
             let mut file = File::create(path.clone()).unwrap();
             file.write_all(code.as_bytes()).unwrap();
             let path = path.to_str().unwrap();
-            run_code_path(py, code, Some(globals), Some(locals), path).unwrap();
+            run_code_path(py, code, Some(globals), Some(&locals), path).unwrap();
             locals.into()
         });
         Some(self.py_object.store(locals))
@@ -387,7 +388,7 @@ impl PrimitiveLike for Dict {
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let dict: PyObject = Python::with_gil(|py| {
-            let dict = PyDict::new(py);
+            let dict = PyDict::new_bound(py);
             // Update the dict with the key-value pairs
             for i in values.chunks_exact(2) {
                 let key = self.py_object.load(i[0]);
@@ -422,7 +423,7 @@ impl PrimitiveLike for DictUpdate {
         let dict: PyObject = Python::with_gil(|py| {
             let dict = self.py_object.load(values[0]);
             // Copy the dict so we can mutate it and return it
-            let dict = dict.downcast::<PyDict>(py).unwrap().copy().unwrap();
+            let dict = dict.downcast_bound::<PyDict>(py).unwrap().copy().unwrap();
             // Update the dict with the key-value pairs
             for i in values[1..].chunks_exact(2) {
                 let key = self.py_object.load(i[0]);
@@ -544,13 +545,14 @@ impl PrimitiveLike for FromInt {
 
 /// Runs the code in the given context with a certain path.
 /// Copied from `run_code`, but allows specifying the path.
+/// https://github.com/PyO3/pyo3/blob/5d2f5b5702319150d41258de77f589119134ee74/src/marker.rs#L678
 fn run_code_path<'py>(
     py: Python<'py>,
     code: &str,
-    globals: Option<&PyDict>,
-    locals: Option<&PyDict>,
+    globals: Option<&Bound<'py, PyDict>>,
+    locals: Option<&Bound<'py, PyDict>>,
     path: &str,
-) -> PyResult<&'py PyAny> {
+) -> PyResult<Bound<'py, PyAny>> {
     let code = CString::new(code)?;
     let path = CString::new(path)?;
     unsafe {
@@ -594,6 +596,6 @@ fn run_code_path<'py>(
         let res_ptr = ffi::PyEval_EvalCode(code_obj, globals, locals);
         ffi::Py_DECREF(code_obj);
 
-        py.from_owned_ptr_or_err(res_ptr)
+        Bound::from_owned_ptr_or_err(py, res_ptr).map(|instance| instance.downcast_into_unchecked())
     }
 }

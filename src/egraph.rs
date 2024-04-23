@@ -176,16 +176,16 @@ impl EGraph {
         // For rational we need the actual sort on the e-graph, because it contains state
         // There isn't a public way to get a sort right now, so until there is, we use a hack where we create
         // a dummy expression of that sort, and use eval_expr to get the sort
-        let one = egglog::ast::Expr::Lit((), egglog::ast::Literal::Int(1));
-        let arcsort = self
-            .egraph
-            .eval_expr(&egglog::ast::Expr::Call(
-                (),
-                "rational".into(),
-                vec![one.clone(), one],
-            ))
-            .unwrap()
-            .0;
+        let _one = egglog::ast::Expr::Lit((), egglog::ast::Literal::Int(1));
+        // let arcsort = self
+        //     .egraph
+        //     .eval_expr(&egglog::ast::Expr::Call(
+        //         (),
+        //         "rational".into(),
+        //         vec![one.clone(), one],
+        //     ))
+        //     .unwrap()
+        //     .0;
         let expr: egglog::ast::Expr = expr.into();
         let (_, _value) = self.egraph.eval_expr(&expr)?;
         // Need to get actual sort for rational, this hack doesnt work.

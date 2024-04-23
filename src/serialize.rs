@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use pyo3::prelude::*;
 
-#[pyclass(
-    text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, terms_encoding=False)"
-)]
+#[pyclass()]
 pub struct SerializedEGraph {
     pub egraph: egraph_serialize::EGraph,
 }
