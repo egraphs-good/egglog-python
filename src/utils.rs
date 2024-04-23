@@ -16,7 +16,7 @@ pub fn data_repr<T: pyo3::PyClass>(
         .iter()
         .map(|name| {
             obj.getattr(py, *name)
-                .and_then(|x| x.call_method(py, "__repr__", (), None)?.extract(py))
+                .and_then(|x| x.call_method_bound(py, "__repr__", (), None)?.extract(py))
         })
         .collect();
     Ok(format!("{}({})", class_name, field_strings?.join(", ")))
@@ -159,7 +159,7 @@ macro_rules! convert_enums {
             }
         }
     )*
-    pub fn add_enums_to_module(module: &PyModule) -> PyResult<()> {
+    pub fn add_enums_to_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
         $(
             $(
                 module.add_class::<$variant>()?;
@@ -233,7 +233,7 @@ macro_rules! convert_struct {
                 }
             }
         )*
-        pub fn add_structs_to_module(module: &PyModule) -> PyResult<()> {
+        pub fn add_structs_to_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
             $(
                 module.add_class::<$to_type>()?;
             )*

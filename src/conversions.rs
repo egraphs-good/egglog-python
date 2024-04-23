@@ -475,7 +475,7 @@ impl FromPyObject<'_> for WrappedDuration {
 impl IntoPy<PyObject> for WrappedDuration {
     fn into_py(self, py: Python<'_>) -> PyObject {
         let d = self.0;
-        pyo3::types::PyDelta::new(
+        pyo3::types::PyDelta::new_bound(
             py,
             0,
             0,

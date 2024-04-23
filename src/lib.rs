@@ -17,7 +17,7 @@ fn termdag_term_to_expr(termdag: &TermDag, term: Term) -> Expr {
 
 /// Bindings for egg_smol rust library
 #[pymodule]
-fn bindings(_py: Python, m: &PyModule) -> PyResult<()> {
+fn bindings(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
 
     m.add_class::<crate::py_object_sort::ArcPyObjectSort>()?;
