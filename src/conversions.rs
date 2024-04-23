@@ -463,7 +463,7 @@ impl From<std::time::Duration> for WrappedDuration {
 
 impl FromPyObject<'_> for WrappedDuration {
     fn extract(ob: &'_ PyAny) -> PyResult<Self> {
-        let py_delta = <pyo3::types::PyDelta as PyTryFrom>::try_from(ob)?;
+        let py_delta = ob.downcast::<pyo3::types::PyDelta>()?;
 
         Ok(WrappedDuration(std::time::Duration::new(
             py_delta.get_days() as u64 * 24 * 60 * 60 + py_delta.get_seconds() as u64,
