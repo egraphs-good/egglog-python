@@ -62,7 +62,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     part = sys.argv[1]
-    cargo_path = Path("cargo.toml")
+    cargo_path = Path("Cargo.toml")
     changelog_path = Path("docs/changelog.md")
 
     cargo_content = cargo_path.read_text()
