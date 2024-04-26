@@ -38,7 +38,7 @@ jobs:
           VERSION=$(python increment_version.py $TYPE)
           git checkout -b "release-$VERSION"
           git commit -am "Version $VERSION"
-          gh pr create --fill
+          gh pr create --fill --head release-$VERSION
           echo "version=$VERSION" >> GITHUB_OUTPUT
         id: bump
         env:
