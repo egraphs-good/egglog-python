@@ -26,8 +26,7 @@ on:
 jobs:
   bump:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    permissions: write-all
     outputs:
       version: ${{ steps.bump.outputs.version }}
     steps:
@@ -118,8 +117,7 @@ jobs:
           args: --skip-existing *
   tag-and-merge:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    permissions: write-all
     needs: [release, bump]
     steps:
       - uses: actions/checkout@v4
