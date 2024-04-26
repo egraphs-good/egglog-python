@@ -5,7 +5,7 @@ This script automates the process of version bumping for Rust projects managed w
 from the cargo.toml file, increments it based on the specified component (major, minor, or patch), and updates
 both the cargo.toml and changelog.md files accordingly.
 
-It will also add a git commit with the changes and tag it with the new version.
+It will also print out the new version number.
 
 Usage:
     Run the script from the command line, specifying the type of version increment as an argument:
@@ -17,14 +17,13 @@ Arguments:
     minor - Increments the minor component of the version, sets patch to 0
     patch - Increments the patch component of the version
 
-https://chat.openai.com/share/6b08906d-23a3-4193-9f4e-87076ce56ddb
+From https://chat.openai.com/share/6b08906d-23a3-4193-9f4e-87076ce56ddb
 
 
 """
 
 import datetime
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -77,6 +76,4 @@ if __name__ == "__main__":
     old_version = f"{major}.{minor}.{patch}"
     update_cargo_toml(cargo_path, new_version)
     update_changelog(changelog_path, new_version)
-
-    subprocess.run(["git", "commit", "-am", f"Version {new_version}"], check=True)  # noqa: S607
-    subprocess.run(["git", "tag", f"v{new_version}"], check=True)  # noqa: S607
+    print(new_version)
