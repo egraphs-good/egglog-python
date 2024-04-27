@@ -43,7 +43,7 @@ def bump_version(major: int, minor: int, patch: int, part: str) -> str:
 
 def update_cargo_toml(file_path: Path, new_version: str) -> None:
     content = file_path.read_text()
-    content = re.sub(r'version = "(\d+\.\d+\.\d+)"', f'version = "{new_version}"', content)
+    content = re.sub(r'version = "(\d+\.\d+\.\d+)"', f'version = "{new_version}"', content, count=1)
     file_path.write_text(content)
 
 
@@ -51,7 +51,7 @@ def update_changelog(file_path: Path, new_version: str) -> None:
     today = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d")
     content = file_path.read_text()
     new_section = f"## UNRELEASED\n\n## {new_version} ({today})"
-    content = content.replace("## UNRELEASED", new_section)
+    content = content.replace("## UNRELEASED", new_section, 1)
     file_path.write_text(content)
 
 
