@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 7.0.0 (2024-04-27)
+
 - Defers adding rules in functions until they are used, so that you can use types that are not present yet.
 - Removes ability to set custom default ruleset for egraph. Either just use the empty default ruleset or explicitly set it for every run
 - Automatically mark Python builtin operators as preserved if they must return a real Python value
