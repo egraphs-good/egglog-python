@@ -1,6 +1,6 @@
 [package]
 name = "egglog-python"
-version = "6.1.0"
+version = "7.0.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -19,9 +19,9 @@ egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize", r
 serde_json = "*"
 pyo3-log = "0.10.0"
 log = "0.4.20"
-lalrpop-util = { version = "0.20.0", features = ["lexer"] }
+lalrpop-util = { version = "7.0.0", features = ["lexer"] }
 ordered-float = "*"
-uuid = { version = "1.7.0", features = ["v4"] }
+uuid = { version = "7.0.0", features = ["v4"] }
 num-rational = "*"
 
 [package.metadata.maturin]
