@@ -127,7 +127,7 @@ jobs:
       - run: |
           git tag "v$VERSION"
           git push --tags
-          gh pr merge --auto --delete-branch
+          gh pr merge --admin --delete-branch
         env:
           VERSION: ${{ needs.bump.outputs.version }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
