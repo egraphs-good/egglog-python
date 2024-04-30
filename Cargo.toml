@@ -21,7 +21,7 @@ pyo3-log = "0.10.0"
 log = "0.4.21"
 lalrpop-util = { version = "0.20.0", features = ["lexer"] }
 ordered-float = "*"
-uuid = { version = "1.7.0", features = ["v4"] }
+uuid = { version = "1.8.0", features = ["v4"] }
 num-rational = "*"
 
 [package.metadata.maturin]
