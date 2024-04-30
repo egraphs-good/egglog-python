@@ -19,7 +19,7 @@ egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize", r
 serde_json = "*"
 pyo3-log = "0.10.0"
 log = "0.4.21"
-lalrpop-util = { version = "0.20.0", features = ["lexer"] }
+lalrpop-util = { version = "0.20.2", features = ["lexer"] }
 ordered-float = "*"
 uuid = { version = "1.8.0", features = ["v4"] }
 num-rational = "*"
