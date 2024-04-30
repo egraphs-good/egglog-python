@@ -265,7 +265,7 @@ impl PrimitiveLike for Ctor {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let ident = match values {
             [id] => PyObjectIdent::Unhashable(i64::load(self.i64.as_ref(), id) as usize),
             [type_hash, hash] => PyObjectIdent::Hashable(
@@ -303,7 +303,7 @@ impl PrimitiveLike for Eval {
         .into_box();
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
         let res_obj: PyObject = Python::with_gil(|py| {
             let globals = self.py_object.load(values[1]);
@@ -344,7 +344,7 @@ impl PrimitiveLike for Exec {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
         let code: &str = code.into();
         let locals: PyObject = Python::with_gil(|py| {
@@ -386,7 +386,7 @@ impl PrimitiveLike for Dict {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let dict: PyObject = Python::with_gil(|py| {
             let dict = PyDict::new_bound(py);
             // Update the dict with the key-value pairs
@@ -419,7 +419,7 @@ impl PrimitiveLike for DictUpdate {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let dict: PyObject = Python::with_gil(|py| {
             let dict = self.py_object.load(values[0]);
             // Copy the dict so we can mutate it and return it
@@ -455,7 +455,7 @@ impl PrimitiveLike for ToString {
         )
         .into_box()
     }
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let obj: String =
             Python::with_gil(|py| self.py_object.load(values[0]).extract(py).unwrap());
         let symbol: Symbol = obj.into();
@@ -483,7 +483,7 @@ impl PrimitiveLike for ToBool {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let obj: bool = Python::with_gil(|py| self.py_object.load(values[0]).extract(py).unwrap());
         obj.store(self.bool_.as_ref())
     }
@@ -509,7 +509,7 @@ impl PrimitiveLike for FromString {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let str = Symbol::load(self.string.as_ref(), &values[0]).to_string();
         let obj: PyObject = Python::with_gil(|py| str.into_py(py));
         Some(self.py_object.store(obj))
@@ -536,7 +536,7 @@ impl PrimitiveLike for FromInt {
         .into_box();
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let int = i64::load(self.int.as_ref(), &values[0]);
         let obj: PyObject = Python::with_gil(|py| int.into_py(py));
         Some(self.py_object.store(obj))

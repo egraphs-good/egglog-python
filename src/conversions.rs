@@ -273,7 +273,16 @@ convert_enums!(
             };
         PrintOverallStatistics()
             _c -> egglog::ast::Command::PrintOverallStatistics,
-            egglog::ast::Command::PrintOverallStatistics => PrintOverallStatistics {}
+            egglog::ast::Command::PrintOverallStatistics => PrintOverallStatistics {};
+        UnstableCombinedRuleset(name: String, rulesets: Vec<String>)
+            r -> egglog::ast::Command::UnstableCombinedRuleset(
+                (&r.name).into(),
+                r.rulesets.iter().map(|i| i.into()).collect()
+            ),
+            egglog::ast::Command::UnstableCombinedRuleset(name, rulesets) => UnstableCombinedRuleset {
+                name: name.to_string(),
+                rulesets: rulesets.iter().map(|i| i.to_string()).collect()
+            }
     };
     egglog::ExtractReport: "{:?}" => ExtractReport {
         Best(termdag: TermDag, cost: usize, term: Term)
