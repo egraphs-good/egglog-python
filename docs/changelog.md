@@ -4,6 +4,10 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Upgrade [egglog](https://github.com/egraphs-good/egglog/compare/0113af1d6476b75d4319591cc3d675f96a71cdc5...fb4a9f114f9bb93154d6eff0dbab079b5cb4ebb6)
+  - Adds `UnstableCombinedRulset` to commands
+  - Adds `UnstableFn` sort
+
 ## 7.0.0 (2024-04-27)
 
 - Defers adding rules in functions until they are used, so that you can use types that are not present yet.
