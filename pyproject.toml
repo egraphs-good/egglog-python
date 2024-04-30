@@ -32,7 +32,7 @@ dependencies = ["typing-extensions", "black", "graphviz"]
 array = [
     "scikit-learn",
     "array_api_compat",
-    "numba==0.59.0rc1",
+    "numba==0.59.1",
     "llvmlite==0.42.0",
 ]
 dev = ["pre-commit", "ruff", "mypy", "anywidget[dev]", "egglog[docs,test]"]
