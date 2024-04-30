@@ -5,7 +5,9 @@ Builtin sorts and function to egg.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union
+from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union, overload
+
+from typing_extensions import TypeVarTuple, Unpack
 
 from .conversion import converter
 from .egraph import Expr, Unit, function, method
@@ -31,6 +33,7 @@ __all__ = [
     "py_eval",
     "py_exec",
     "py_eval_fn",
+    "UnstableFn",
 ]
 
 
@@ -461,3 +464,32 @@ def py_exec(code: StringLike, globals: object = PyObject.dict(), locals: object 
     """
     Copies the locals, execs the Python code, and returns the locals with any updates.
     """
+
+
+TS = TypeVarTuple("TS")
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+
+
+class UnstableFn(Expr, Generic[T, Unpack[TS]], builtin=True):
+    @overload
+    def __init__(self, f: Callable[[Unpack[TS]], T]) -> None: ...
+
+    @overload
+    def __init__(self, f: Callable[[T1, Unpack[TS]], T], _a: T1, /) -> None: ...
+
+    @overload
+    def __init__(self, f: Callable[[T1, T2, Unpack[TS]], T], _a: T1, _b: T2, /) -> None: ...
+
+    @overload
+    def __init__(self, f: Callable[[T1, T2, T3, Unpack[TS]], T], _a: T1, _b: T2, _c: T3, /) -> None: ...
+
+    # etc, for partial application
+
+    @method(egg_fn="unstable-fn")
+    def __init__(self, f, *partial) -> None: ...
+
+    @method(egg_fn="unstable-app")
+    def __call__(self, *args: Unpack[TS]) -> T: ...
