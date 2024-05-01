@@ -143,7 +143,7 @@ def resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
     try:
         tp_just = tp.to_just()
     except NotImplementedError:
-        # If this is a var, it has to be a runtime exprssions
+        # If this is a var, it has to be a runtime expession
         assert isinstance(arg, RuntimeExpr)
         return arg
     if arg_type == tp_just:

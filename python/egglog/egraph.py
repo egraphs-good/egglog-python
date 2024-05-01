@@ -456,7 +456,7 @@ class _ExprMetaclass(type):
         return isinstance(instance, RuntimeExpr)
 
 
-def _generate_class_decls(
+def _generate_class_decls(  # noqa: C901
     namespace: dict[str, Any], frame: FrameType, builtin: bool, egg_sort: str | None, cls_name: str
 ) -> Declarations:
     """
@@ -518,6 +518,16 @@ def _generate_class_decls(
         locals = frame.f_locals
 
         def create_decl(fn: object, first: Literal["cls"] | TypeRefWithVars) -> FunctionDecl:
+            special_function_name: SpecialFunctions | None = (
+                "fn-partial" if egg_fn == "unstable-fn" else "fn-app" if egg_fn == "unstable-app" else None  # noqa: B023
+            )
+            if special_function_name:
+                return FunctionDecl(
+                    special_function_name,
+                    builtin=True,
+                    egg_name=egg_fn,  # noqa: B023
+                )
+
             return _fn_decl(
                 decls,
                 egg_fn,  # noqa: B023
@@ -715,11 +725,13 @@ def _fn_decl(
     )
     decls.update(*merge_action)
     return FunctionDecl(
-        return_type=None if mutates_first_arg else return_type,
-        var_arg_type=var_arg_type,
-        arg_types=arg_types,
-        arg_names=tuple(t.name for t in params),
-        arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
+        FunctionSignature(
+            return_type=None if mutates_first_arg else return_type,
+            var_arg_type=var_arg_type,
+            arg_types=arg_types,
+            arg_names=tuple(t.name for t in params),
+            arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
+        ),
         cost=cost,
         egg_name=egg_name,
         merge=merged.__egg_typed_expr__.expr if merged is not None else None,

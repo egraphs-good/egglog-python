@@ -4,9 +4,11 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-- Upgrade [egglog](https://github.com/egraphs-good/egglog/compare/0113af1d6476b75d4319591cc3d675f96a71cdc5...fb4a9f114f9bb93154d6eff0dbab079b5cb4ebb6)
+- Upgrade [egglog](https://github.com/egraphs-good/egglog/compare/0113af1d6476b75d4319591cc3d675f96a71cdc5...fb4a9f114f9bb93154d6eff0dbab079b5cb4ebb6) ([#143](https://github.com/egraphs-good/egglog-python/pull/143))
   - Adds `UnstableCombinedRulset` to commands
   - Adds `UnstableFn` sort
+- Add ability to use `UnstableFn` in the high level bindings
+  - Also adds ability to refer to methods and property off of classes instead of only off of instances
 
 ## 7.0.0 (2024-04-27)
 

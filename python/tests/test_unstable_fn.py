@@ -63,6 +63,14 @@ def test_call_fn():
     check(eq(UnstableFn(square)(3)).to(square(3)))
 
 
+def test_string_fn():
+    assert str(UnstableFn(square)) == "UnstableFn(square)"
+
+
+def test_string_fn_partial():
+    assert str(UnstableFn(Math.__mul__, 2)) == "UnstableFn(Math.__mul__, 2)"
+
+
 @ruleset
 def map_ruleset(f: MathFn, x: Math, xs: MathList):
     yield rewrite(MathList.NIL.map(f)).to(MathList.NIL)
@@ -132,3 +140,9 @@ def test_composed_i64_math():
         (math_ruleset + square_ruleset + composed_i64_math_ruleset).saturate(),
         res,
     )
+
+
+def test_extract():
+    f = UnstableFn(i64.__mul__, 2)
+    res = EGraph().extract(f)
+    assert expr_parts(res) == expr_parts(f)

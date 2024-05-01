@@ -11,7 +11,7 @@ so they are not mangled by Python and can be accessed by the user.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from inspect import Parameter, Signature
 from itertools import zip_longest
 from typing import TYPE_CHECKING, NoReturn, TypeVar, Union, cast, get_args, get_origin
@@ -113,25 +113,47 @@ class RuntimeClass(DelayedDeclerations):
         Create an instance of this kind by calling the __init__ classmethod
         """
         # If this is a literal type, initializing it with a literal should return a literal
-        if self.__egg_tp__.name == "PyObject":
+        if (name := self.__egg_tp__.name) == "PyObject":
             assert len(args) == 1
             return RuntimeExpr.__from_value__(
                 self.__egg_decls__, TypedExprDecl(self.__egg_tp__.to_just(), PyObjectDecl(args[0]))
             )
-        if self.__egg_tp__.name in UNARY_LIT_CLASS_NAMES:
+        if name == "UnstableFn":
+            assert not kwargs
+            fn_arg, *partial_args = args
+            del args
+            # Assumes we don't have types set for UnstableFn w/ generics, that they have to be inferred
+
+            # 1. Create a runtime function for the first arg
+            assert isinstance(fn_arg, RuntimeFunction)
+            # 2. Call it with the partial args, and use untyped vars for the rest of the args
+            res = fn_arg(*partial_args, __egg_partial_function=True)
+            assert res is not None, "Mutable partial functions not supported"
+            # 3. Use the inferred return type and inferred rest arg types as the types of the function, and
+            #    the partially applied args as the args.
+            call = (res_typed_expr := res.__egg_typed_expr__).expr
+            return_tp = res_typed_expr.tp
+            assert isinstance(call, CallDecl), "partial function must be a call"
+            n_args = len(partial_args)
+            value = PartialCallDecl(replace(call, args=call.args[:n_args]))
+            remaining_arg_types = [a.tp for a in call.args[n_args:]]
+            type_ref = JustTypeRef("UnstableFn", (return_tp, *remaining_arg_types))
+            return RuntimeExpr.__from_value__(Declarations.create(self, res), TypedExprDecl(type_ref, value))
+
+        if name in UNARY_LIT_CLASS_NAMES:
             assert len(args) == 1
             assert isinstance(args[0], int | float | str | bool)
             return RuntimeExpr.__from_value__(
                 self.__egg_decls__, TypedExprDecl(self.__egg_tp__.to_just(), LitDecl(args[0]))
             )
-        if self.__egg_tp__.name == UNIT_CLASS_NAME:
+        if name == UNIT_CLASS_NAME:
             assert len(args) == 0
             return RuntimeExpr.__from_value__(
                 self.__egg_decls__, TypedExprDecl(self.__egg_tp__.to_just(), LitDecl(None))
             )
 
         return RuntimeFunction(
-            Thunk.value(self.__egg_decls__), ClassMethodRef(self.__egg_tp__.name, "__init__"), self.__egg_tp__.to_just()
+            Thunk.value(self.__egg_decls__), ClassMethodRef(name, "__init__"), self.__egg_tp__.to_just()
         )(*args, **kwargs)
 
     def __dir__(self) -> list[str]:
@@ -184,6 +206,12 @@ class RuntimeClass(DelayedDeclerations):
             return RuntimeFunction(
                 Thunk.value(self.__egg_decls__), ClassMethodRef(self.__egg_tp__.name, name), self.__egg_tp__.to_just()
             )
+        # allow referencing properties and methods as class variables as well
+        if name in cls_decl.properties:
+            return RuntimeFunction(Thunk.value(self.__egg_decls__), PropertyRef(self.__egg_tp__.name, name))
+        if name in cls_decl.methods:
+            return RuntimeFunction(Thunk.value(self.__egg_decls__), MethodRef(self.__egg_tp__.name, name))
+
         msg = f"Class {self.__egg_tp__.name} has no method {name}"
         if name == "__ne__":
             msg += ". Did you mean to use the ne(...).to(...)?"
@@ -207,21 +235,24 @@ class RuntimeFunction(DelayedDeclerations):
     # bound methods need to store RuntimeExpr not just TypedExprDecl, so they can mutate the expr if required on self
     __egg_bound__: JustTypeRef | RuntimeExpr | None = None
 
-    def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr | None:
+    def __call__(self, *args: object, __egg_partial_function: bool = False, **kwargs: object) -> RuntimeExpr | None:
         from .conversion import resolve_literal
 
         if isinstance(self.__egg_bound__, RuntimeExpr):
             args = (self.__egg_bound__, *args)
-        fn_decl = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl()
+        signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl().signature
+        assert isinstance(signature, FunctionSignature)
+
         # Turn all keyword args into positional args
-        bound = callable_decl_to_signature(fn_decl, self.__egg_decls__).bind(*args, **kwargs)
+        bound = to_py_signature(signature, self.__egg_decls__, __egg_partial_function).bind(*args, **kwargs)
+        del kwargs
         bound.apply_defaults()
         assert not bound.kwargs
-        del args, kwargs
+        args = bound.args
 
         upcasted_args = [
             resolve_literal(cast(TypeOrVarRef, tp), arg)
-            for arg, tp in zip_longest(bound.args, fn_decl.arg_types, fillvalue=fn_decl.var_arg_type)
+            for arg, tp in zip_longest(args, signature.arg_types, fillvalue=signature.var_arg_type)
         ]
 
         decls = Declarations.create(self, *upcasted_args)
@@ -240,13 +271,13 @@ class RuntimeFunction(DelayedDeclerations):
         arg_types = [expr.tp for expr in arg_exprs]
         cls_name = bound_tp.name if bound_tp else None
         return_tp = tcs.infer_return_type(
-            fn_decl.arg_types, fn_decl.return_type or fn_decl.arg_types[0], fn_decl.var_arg_type, arg_types, cls_name
+            signature.arg_types, signature.semantic_return_type, signature.var_arg_type, arg_types, cls_name
         )
         bound_params = cast(JustTypeRef, bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef) else None
         expr_decl = CallDecl(self.__egg_ref__, arg_exprs, bound_params)
         typed_expr_decl = TypedExprDecl(return_tp, expr_decl)
         # If there is not return type, we are mutating the first arg
-        if not fn_decl.return_type:
+        if not signature.return_type:
             first_arg = upcasted_args[0]
             first_arg.__egg_thunk__ = Thunk.value((decls, typed_expr_decl))
             return None
@@ -262,19 +293,26 @@ class RuntimeFunction(DelayedDeclerations):
         return pretty_callable_ref(self.__egg_decls__, self.__egg_ref__, first_arg, bound_tp_params)
 
 
-def callable_decl_to_signature(
-    decl: FunctionDecl,
-    decls: Declarations,
-) -> Signature:
+def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: bool) -> Signature:
+    """
+    Convert to a Python signature.
+
+    If optional_args is true, then all args will be treated as optional, as if a default was provided that makes them
+    a var with that arg name as the value.
+
+    Used for partial application to try binding a function with only some of its args.
+    """
     parameters = [
         Parameter(
             n,
             Parameter.POSITIONAL_OR_KEYWORD,
-            default=RuntimeExpr.__from_value__(decls, TypedExprDecl(t.to_just(), d)) if d else Parameter.empty,
+            default=RuntimeExpr.__from_value__(decls, TypedExprDecl(t.to_just(), d if d is not None else VarDecl(n)))
+            if d is not None or optional_args
+            else Parameter.empty,
         )
-        for n, d, t in zip(decl.arg_names, decl.arg_defaults, decl.arg_types, strict=True)
+        for n, d, t in zip(sig.arg_names, sig.arg_defaults, sig.arg_types, strict=True)
     ]
-    if isinstance(decl, FunctionDecl) and decl.var_arg_type is not None:
+    if isinstance(sig, FunctionDecl) and sig.var_arg_type is not None:
         parameters.append(Parameter("__rest", Parameter.VAR_POSITIONAL))
     return Signature(parameters)
 

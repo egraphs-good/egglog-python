@@ -184,11 +184,13 @@ class EGraphState:
                 )
             case FunctionDecl():
                 if not decl.builtin:
+                    signature = decl.signature
+                    assert isinstance(signature, FunctionSignature), "Cannot turn special function to egg"
                     egg_fn_decl = bindings.FunctionDecl(
                         egg_name,
                         bindings.Schema(
-                            [self.type_ref_to_egg(a.to_just()) for a in decl.arg_types],
-                            self.type_ref_to_egg(decl.semantic_return_type.to_just()),
+                            [self.type_ref_to_egg(a.to_just()) for a in signature.arg_types],
+                            self.type_ref_to_egg(signature.semantic_return_type.to_just()),
                         ),
                         self.expr_to_egg(decl.default) if decl.default else None,
                         self.expr_to_egg(decl.merge) if decl.merge else None,
@@ -292,6 +294,9 @@ class EGraphState:
                 res = bindings.Call(egg_fn, egg_args)
             case PyObjectDecl(value):
                 res = GLOBAL_PY_OBJECT_SORT.store(value)
+            case PartialCallDecl(call_decl):
+                egg_fn_call = self.expr_to_egg(call_decl)
+                res = bindings.Call("unstable-fn", [bindings.Lit(bindings.String(egg_fn_call.name)), *egg_fn_call.args])
             case _:
                 assert_never(expr_decl.expr)
 
@@ -371,24 +376,45 @@ class FromEggState:
             if term.name == "py-object":
                 call = bindings.termdag_term_to_expr(self.termdag, term)
                 expr_decl = PyObjectDecl(self.state.egraph.eval_py_object(call))
+            if term.name == "unstable-fn":
+                # Get function name
+                fn_term, *arg_terms = term.args
+                fn_value = self.resolve_term(fn_term, JustTypeRef("String"))
+                assert isinstance(fn_value.expr, LitDecl)
+                fn_name = fn_value.expr.value
+                assert isinstance(fn_name, str)
+
+                # Resolve what types the partiallied applied args are
+                assert tp.name == "UnstableFn"
+                call_decl = self.from_call(tp.args[0], bindings.TermApp(fn_name, arg_terms))
+                expr_decl = PartialCallDecl(call_decl)
             else:
                 expr_decl = self.from_call(tp, term)
         else:
             assert_never(term)
         return TypedExprDecl(tp, expr_decl)
 
-    def from_call(self, tp: JustTypeRef, term: bindings.TermApp) -> CallDecl:
+    def from_call(
+        self,
+        tp: JustTypeRef,
+        term: bindings.TermApp,  # additional_arg_tps: tuple[JustTypeRef, ...]
+    ) -> CallDecl:
         """
         Convert a call to a CallDecl.
 
         There could be Python call refs which match the call, so we need to find the correct one.
+
+        The additional_arg_tps are known types for arguments that come after the term args, used to infer types
+        for partially applied functions, where we know the types of the later args, but not of the earlier ones where
+        we have values for.
         """
         # Find the first callable ref that matches the call
         for callable_ref in self.state.egg_fn_to_callable_refs[term.name]:
             # If this is a classmethod, we might need the type params that were bound for this type
             # This could be multiple types if the classmethod is ambiguous, like map create.
             possible_types: Iterable[JustTypeRef | None]
-            fn_decl = self.decls.get_callable_decl(callable_ref).to_function_decl()
+            signature = self.decls.get_callable_decl(callable_ref).to_function_decl().signature
+            assert isinstance(signature, FunctionSignature)
             if isinstance(callable_ref, ClassMethodRef):
                 possible_types = self.state._get_possible_types(callable_ref.class_name)
                 cls_name = callable_ref.class_name
@@ -402,16 +428,17 @@ class FromEggState:
 
                 try:
                     arg_types, bound_tp_params = tcs.infer_arg_types(
-                        fn_decl.arg_types, fn_decl.semantic_return_type, fn_decl.var_arg_type, tp, cls_name
+                        signature.arg_types, signature.semantic_return_type, signature.var_arg_type, tp, cls_name
                     )
                 except TypeConstraintError:
                     continue
-                args: list[TypedExprDecl] = []
-                for a, tp in zip(term.args, arg_types, strict=False):
-                    try:
-                        res = self.cache[a]
-                    except KeyError:
-                        res = self.cache[a] = self.from_expr(tp, self.termdag.nodes[a])
-                    args.append(res)
-                return CallDecl(callable_ref, tuple(args), bound_tp_params)
+                args = tuple(self.resolve_term(a, tp) for a, tp in zip(term.args, arg_types, strict=False))
+                return CallDecl(callable_ref, args, bound_tp_params)
         raise ValueError(f"Could not find callable ref for call {term}")
+
+    def resolve_term(self, term_id: int, tp: JustTypeRef) -> TypedExprDecl:
+        try:
+            return self.cache[term_id]
+        except KeyError:
+            res = self.cache[term_id] = self.from_expr(tp, self.termdag.nodes[term_id])
+            return res

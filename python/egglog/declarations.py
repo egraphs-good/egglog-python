@@ -39,6 +39,7 @@ __all__ = [
     "CallableDecl",
     "VarDecl",
     "PyObjectDecl",
+    "PartialCallDecl",
     "LitType",
     "LitDecl",
     "CallDecl",
@@ -67,6 +68,8 @@ __all__ = [
     "RewriteOrRuleDecl",
     "ActionCommandDecl",
     "CommandDecl",
+    "SpecialFunctions",
+    "FunctionSignature",
 ]
 
 
@@ -86,9 +89,6 @@ class HasDeclerations(Protocol):
 
 
 DeclerationsLike: TypeAlias = Union[HasDeclerations, None, "Declarations"]
-
-
-# TODO: Make all ClassDecls take deferred type refs, which return new decls when resolving.
 
 
 def upcast_declerations(declerations_like: Iterable[DeclerationsLike]) -> list[Declarations]:
@@ -316,10 +316,12 @@ class RelationDecl:
 
     def to_function_decl(self) -> FunctionDecl:
         return FunctionDecl(
-            arg_types=tuple(a.to_var() for a in self.arg_types),
-            arg_names=tuple(f"__{i}" for i in range(len(self.arg_types))),
-            arg_defaults=self.arg_defaults,
-            return_type=TypeRefWithVars("Unit"),
+            FunctionSignature(
+                arg_types=tuple(a.to_var() for a in self.arg_types),
+                arg_names=tuple(f"__{i}" for i in range(len(self.arg_types))),
+                arg_defaults=self.arg_defaults,
+                return_type=TypeRefWithVars("Unit"),
+            ),
             egg_name=self.egg_name,
             default=LitDecl(None),
         )
@@ -336,24 +338,40 @@ class ConstantDecl:
 
     def to_function_decl(self) -> FunctionDecl:
         return FunctionDecl(
-            arg_types=(),
-            arg_names=(),
-            arg_defaults=(),
-            return_type=self.type_ref.to_var(),
+            FunctionSignature(return_type=self.type_ref.to_var()),
             egg_name=self.egg_name,
         )
 
 
+# special cases for partial function creation and application, which cannot use the normal python rules
+SpecialFunctions: TypeAlias = Literal["fn-partial", "fn-app"]
+
+
+@dataclass(frozen=True)
+class FunctionSignature:
+    arg_types: tuple[TypeOrVarRef, ...] = ()
+    arg_names: tuple[str, ...] = ()
+    # List of defaults. None for any arg which doesn't have one.
+    arg_defaults: tuple[ExprDecl | None, ...] = ()
+    # If None, then the first arg is mutated and returned
+    return_type: TypeOrVarRef | None = None
+    var_arg_type: TypeOrVarRef | None = None
+
+    @property
+    def semantic_return_type(self) -> TypeOrVarRef:
+        """
+        The type that is returned by the function, which wil be in the first arg if it mutates it.
+        """
+        return self.return_type or self.arg_types[0]
+
+    @property
+    def mutates(self) -> bool:
+        return self.return_type is None
+
+
 @dataclass(frozen=True)
 class FunctionDecl:
-    # All args are delayed except for relations converted to function decls
-    arg_types: tuple[TypeOrVarRef, ...]
-    arg_names: tuple[str, ...]
-    # List of defaults. None for any arg which doesn't have one.
-    arg_defaults: tuple[ExprDecl | None, ...]
-    # If None, then the first arg is mutated and returned
-    return_type: TypeOrVarRef | None
-    var_arg_type: TypeOrVarRef | None = None
+    signature: FunctionSignature | SpecialFunctions = field(default_factory=FunctionSignature)
 
     # Egg params
     builtin: bool = False
@@ -366,17 +384,6 @@ class FunctionDecl:
 
     def to_function_decl(self) -> FunctionDecl:
         return self
-
-    @property
-    def semantic_return_type(self) -> TypeOrVarRef:
-        """
-        The type that is returned by the function, which wil be in the first arg if it mutates it.
-        """
-        return self.return_type or self.arg_types[0]
-
-    @property
-    def mutates(self) -> bool:
-        return self.return_type is None
 
 
 CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl
@@ -463,7 +470,20 @@ class CallDecl:
         return hash(self) == hash(other)
 
 
-ExprDecl: TypeAlias = VarDecl | LitDecl | CallDecl | PyObjectDecl
+@dataclass(frozen=True)
+class PartialCallDecl:
+    """
+    A partially applied function aka a function sort.
+
+    Note it does not need to have any args, in which case it's just a function pointer.
+
+    Seperated from the call decl so it's clear it is translated to a `unstable-fn` call.
+    """
+
+    call: CallDecl
+
+
+ExprDecl: TypeAlias = VarDecl | LitDecl | CallDecl | PyObjectDecl | PartialCallDecl
 
 
 @dataclass(frozen=True)
