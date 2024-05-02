@@ -60,7 +60,7 @@ def square_ruleset(x: Math):
 
 
 def test_call_fn():
-    check(eq(UnstableFn(square)(3)).to(square(3)), None, square(3))
+    check_eq(UnstableFn(square)(3), square(3))
 
 
 def test_string_fn():
@@ -81,11 +81,10 @@ x = MathList(1, MathList(2, MathList(3, None)))
 
 
 def test_map():
-    squared_r = x.map(UnstableFn(square))
-    check(
-        eq(squared_r).to(MathList(1, MathList(4, MathList(9, None)))),
+    check_eq(
+        x.map(UnstableFn(square)),
+        MathList(1, MathList(4, MathList(9, None))),
         (math_ruleset + square_ruleset + map_ruleset).saturate(),
-        squared_r,
     )
 
 
@@ -95,11 +94,10 @@ def list_multiple_ruleset(x: Math, xs: MathList):
 
 
 def test_partial_application():
-    doubled_x = x * 2
-    check(
-        eq(doubled_x).to(MathList(2, MathList(4, MathList(6, None)))),
+    check_eq(
+        x * 2,
+        MathList(2, MathList(4, MathList(6, None))),
         (math_ruleset + list_multiple_ruleset + map_ruleset).saturate(),
-        doubled_x,
     )
 
 
@@ -114,11 +112,10 @@ def composed_math_ruleset(f: MathFn, g: MathFn, x: Math):
 
 def test_composed():
     square_of_double = UnstableFn(composed_math, UnstableFn(square), UnstableFn(Math.__mul__, 2))
-    squared_doubled_x = x.map(square_of_double)
-    check(
-        eq(squared_doubled_x).to(MathList(4, MathList(16, MathList(36, None)))),
+    check_eq(
+        x.map(square_of_double),
+        MathList(4, MathList(16, MathList(36, None))),
         (math_ruleset + square_ruleset + map_ruleset + composed_math_ruleset).saturate(),
-        squared_doubled_x,
     )
 
 
@@ -134,11 +131,10 @@ def composed_i64_math_ruleset(f: MathFn, g: i64Fun, i: i64):
 
 
 def test_composed_i64_math():
-    res = composed_i64_math(UnstableFn(square), UnstableFn(i64.__mul__, 2), 4)
-    check(
-        eq(res).to(square(64)),
+    check_eq(
+        composed_i64_math(UnstableFn(square), UnstableFn(i64.__mul__, 2), 4),
+        square(64),
         (math_ruleset + square_ruleset + composed_i64_math_ruleset).saturate(),
-        res,
     )
 
 

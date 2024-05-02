@@ -88,6 +88,7 @@ __all__ = [
     "Fact",
     "Action",
     "Command",
+    "check_eq",
 ]
 
 T = TypeVar("T")
@@ -143,6 +144,18 @@ def simplify(x: EXPR, schedule: Schedule | None = None) -> EXPR:
     if schedule:
         return EGraph().simplify(x, schedule)
     return EGraph().extract(x)
+
+
+def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None) -> None:
+    """
+    Verifies that two expressions are equal after running the schedule.
+    """
+    egraph = EGraph()
+    x = egraph.let("x", x)
+    y = egraph.let("y", y)
+    if schedule:
+        egraph.run(schedule)
+    egraph.check(eq(x).to(y))
 
 
 def check(x: FactLike, schedule: Schedule | None = None, *given: ActionLike) -> None:
