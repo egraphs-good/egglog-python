@@ -106,7 +106,7 @@ def pretty_callable_ref(
     """
     # Pass in three dummy args, which are the max used for any operation that
     # is not a generic function call
-    args: list[ExprDecl] = [LitDecl(ARG_STR)] * 3
+    args: list[ExprDecl] = [VarDecl(ARG_STR)] * 3
     if first_arg:
         args.insert(0, first_arg)
     res = PrettyContext(decls, defaultdict(lambda: 0))._call_inner(
