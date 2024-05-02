@@ -241,23 +241,27 @@ class RuntimeFunction(DelayedDeclerations):
         if isinstance(self.__egg_bound__, RuntimeExpr):
             args = (self.__egg_bound__, *args)
         signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl().signature
+        decls = self.__egg_decls__.copy()
+        # Special case function application bc we dont support variadic generics yet generally
         if signature == "fn-app":
-            fn, *current_args = args
+            fn, *rest_args = args
+            args = tuple(rest_args)
+            assert not kwargs
             assert isinstance(fn, RuntimeExpr)
-            fn_expr = fn.__egg_typed_expr__.expr
-            assert isinstance(fn_expr, PartialCallDecl)
-            fn_call = fn_expr.call
-            # If we have a bound type, the
-            if fn_call.bound_tp_params:
-                assert isinstance(fn_call.callable, ClassMethodRef)
-                bound_tp = JustTypeRef(fn_call.callable.class_name, fn_call.bound_tp_params)
-            else:
-                bound_tp = None
-            new_runtime_fn = RuntimeFunction(Thunk.value(fn.__egg_decls__), fn_call.callable, bound_tp)
-            all_args = [RuntimeExpr.__from_value__(fn.__egg_decls__, a) for a in fn_call.args] + current_args
-            return new_runtime_fn(*all_args)
-
-        assert isinstance(signature, FunctionSignature)
+            decls.update(fn)
+            function_value = fn.__egg_typed_expr__
+            fn_tp = function_value.tp
+            assert fn_tp.name == "UnstableFn"
+            fn_return_tp, *fn_arg_tps = fn_tp.args
+            signature = FunctionSignature(
+                tuple(tp.to_var() for tp in fn_arg_tps),
+                tuple(f"_{i}" for i in range(len(fn_arg_tps))),
+                (None,) * len(fn_arg_tps),
+                fn_return_tp.to_var(),
+            )
+        else:
+            function_value = None
+            assert isinstance(signature, FunctionSignature)
 
         # Turn all keyword args into positional args
         py_signature = to_py_signature(signature, self.__egg_decls__, _egg_partial_function)
@@ -271,8 +275,7 @@ class RuntimeFunction(DelayedDeclerations):
             resolve_literal(cast(TypeOrVarRef, tp), arg)
             for arg, tp in zip_longest(args, signature.arg_types, fillvalue=signature.var_arg_type)
         ]
-
-        decls = Declarations.create(self, *upcasted_args)
+        decls.update(*upcasted_args)
 
         tcs = TypeConstraintSolver(decls)
         bound_tp = (
@@ -291,6 +294,9 @@ class RuntimeFunction(DelayedDeclerations):
             signature.arg_types, signature.semantic_return_type, signature.var_arg_type, arg_types, cls_name
         )
         bound_params = cast(JustTypeRef, bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef) else None
+        # If we were using unstable-app to call a funciton, add that function back as the first arg.
+        if function_value:
+            arg_exprs = (function_value, *arg_exprs)
         expr_decl = CallDecl(self.__egg_ref__, arg_exprs, bound_params)
         typed_expr_decl = TypedExprDecl(return_tp, expr_decl)
         # If there is not return type, we are mutating the first arg
