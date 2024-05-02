@@ -70,7 +70,9 @@ impl EGraph {
     #[pyo3(signature=(*commands))]
     fn run_program(&mut self, commands: Vec<Command>) -> EggResult<Vec<String>> {
         let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
-        info!("Running commands {:?}", commands);
+        for cmd in &commands {
+            info!("{}", cmd);
+        }
         if let Some(cmds) = &mut self.cmds {
             for cmd in &commands {
                 cmds.push_str(&cmd.to_string());
