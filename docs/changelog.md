@@ -9,6 +9,7 @@ _This project uses semantic versioning_
   - Adds `UnstableFn` sort
 - Add ability to use `UnstableFn` in the high level bindings
   - Also adds ability to refer to methods and property off of classes instead of only off of instances
+  - Fixes a bug where you could not write binary dunder methods (like `__add__`) that didn't have symetric arguments
 
 ## 7.0.0 (2024-04-27)
 

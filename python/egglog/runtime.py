@@ -473,10 +473,14 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
             try:
                 return call_method_min_conversion(self, args[0], __name)
             except ConvertError:
-                return NotImplemented
+                # Defer raising not imeplemented in case the dunder method is not symmetrical, then
+                # we use the standard process
+                pass
         if __name in class_decl.methods:
             fn = RuntimeFunction(Thunk.value(self.__egg_decls__), MethodRef(class_name, __name), self)
             return fn(*args, **kwargs)  # type: ignore[arg-type]
+        if __name in PARTIAL_METHODS:
+            return NotImplemented
         raise TypeError(f"{class_name!r} object does not support {__name}")
 
     setattr(RuntimeExpr, name, _special_method)
