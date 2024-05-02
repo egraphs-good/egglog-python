@@ -127,7 +127,7 @@ class RuntimeClass(DelayedDeclerations):
             # 1. Create a runtime function for the first arg
             assert isinstance(fn_arg, RuntimeFunction)
             # 2. Call it with the partial args, and use untyped vars for the rest of the args
-            res = fn_arg(*partial_args, __egg_partial_function=True)
+            res = fn_arg(*partial_args, _egg_partial_function=True)
             assert res is not None, "Mutable partial functions not supported"
             # 3. Use the inferred return type and inferred rest arg types as the types of the function, and
             #    the partially applied args as the args.
@@ -154,7 +154,7 @@ class RuntimeClass(DelayedDeclerations):
 
         return RuntimeFunction(
             Thunk.value(self.__egg_decls__), ClassMethodRef(name, "__init__"), self.__egg_tp__.to_just()
-        )(*args, **kwargs)
+        )(*args, **kwargs)  # type: ignore[arg-type]
 
     def __dir__(self) -> list[str]:
         cls_decl = self.__egg_decls__.get_class_decl(self.__egg_tp__.name)
@@ -235,7 +235,7 @@ class RuntimeFunction(DelayedDeclerations):
     # bound methods need to store RuntimeExpr not just TypedExprDecl, so they can mutate the expr if required on self
     __egg_bound__: JustTypeRef | RuntimeExpr | None = None
 
-    def __call__(self, *args: object, __egg_partial_function: bool = False, **kwargs: object) -> RuntimeExpr | None:
+    def __call__(self, *args: object, _egg_partial_function: bool = False, **kwargs: object) -> RuntimeExpr | None:
         from .conversion import resolve_literal
 
         if isinstance(self.__egg_bound__, RuntimeExpr):
@@ -244,7 +244,8 @@ class RuntimeFunction(DelayedDeclerations):
         assert isinstance(signature, FunctionSignature)
 
         # Turn all keyword args into positional args
-        bound = to_py_signature(signature, self.__egg_decls__, __egg_partial_function).bind(*args, **kwargs)
+        py_signature = to_py_signature(signature, self.__egg_decls__, _egg_partial_function)
+        bound = py_signature.bind(*args, **kwargs)
         del kwargs
         bound.apply_defaults()
         assert not bound.kwargs
@@ -453,7 +454,7 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
                 return NotImplemented
         if __name in class_decl.methods:
             fn = RuntimeFunction(Thunk.value(self.__egg_decls__), MethodRef(class_name, __name), self)
-            return fn(*args, **kwargs)
+            return fn(*args, **kwargs)  # type: ignore[arg-type]
         raise TypeError(f"{class_name!r} object does not support {__name}")
 
     setattr(RuntimeExpr, name, _special_method)
