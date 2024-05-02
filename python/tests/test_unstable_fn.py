@@ -60,7 +60,7 @@ def square_ruleset(x: Math):
 
 
 def test_call_fn():
-    check(eq(UnstableFn(square)(3)).to(square(3)))
+    check(eq(UnstableFn(square)(3)).to(square(3)), None, square(3))
 
 
 def test_string_fn():
@@ -68,7 +68,7 @@ def test_string_fn():
 
 
 def test_string_fn_partial():
-    assert str(UnstableFn(Math.__mul__, 2)) == "UnstableFn(Math.__mul__, 2)"
+    assert str(UnstableFn(Math.__mul__, 2)) == "UnstableFn(Math.__mul__, Math(2))"
 
 
 @ruleset
