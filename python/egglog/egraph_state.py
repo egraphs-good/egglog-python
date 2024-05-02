@@ -214,19 +214,22 @@ class EGraphState:
         decl = self.__egg_decls__._classes[ref.name]
         self.type_ref_to_egg_sort[ref] = egg_name = decl.egg_name or _generate_type_egg_name(ref)
         if not decl.builtin or ref.args:
-            self.egraph.run_program(
-                bindings.Sort(
-                    egg_name,
-                    (
-                        (
-                            self.type_ref_to_egg(JustTypeRef(ref.name)),
-                            [bindings.Var(self.type_ref_to_egg(a)) for a in ref.args],
-                        )
-                        if ref.args
-                        else None
-                    ),
-                )
-            )
+            if ref.args:
+                if ref.name == "UnstableFn":
+                    # UnstableFn is a special case, where the rest of args are collected into a call
+                    type_args: list[bindings._Expr] = [
+                        bindings.Call(
+                            self.type_ref_to_egg(ref.args[1]),
+                            [bindings.Var(self.type_ref_to_egg(a)) for a in ref.args[1:]],
+                        ),
+                        bindings.Var(self.type_ref_to_egg(ref.args[0])),
+                    ]
+                else:
+                    type_args = [bindings.Var(self.type_ref_to_egg(a)) for a in ref.args]
+                args = (self.type_ref_to_egg(JustTypeRef(ref.name)), type_args)
+            else:
+                args = None
+            self.egraph.run_program(bindings.Sort(egg_name, args))
         # For builtin classes, let's also make sure we have the mapping of all egg fn names for class methods, because
         # these can be created even without adding them to the e-graph, like `vec-empty` which can be extracted
         # even if you never use that function.
