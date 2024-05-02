@@ -220,7 +220,7 @@ class EGraphState:
                     type_args: list[bindings._Expr] = [
                         bindings.Call(
                             self.type_ref_to_egg(ref.args[1]),
-                            [bindings.Var(self.type_ref_to_egg(a)) for a in ref.args[1:]],
+                            [bindings.Var(self.type_ref_to_egg(a)) for a in ref.args[2:]],
                         ),
                         bindings.Var(self.type_ref_to_egg(ref.args[0])),
                     ]
