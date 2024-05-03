@@ -147,7 +147,7 @@ def simplify(x: EXPR, schedule: Schedule | None = None) -> EXPR:
     return EGraph().extract(x)
 
 
-def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None) -> None:
+def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None) -> EGraph:
     """
     Verifies that two expressions are equal after running the schedule.
     """
@@ -161,6 +161,7 @@ def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None) -> None:
         egraph.check(fact)
     except bindings.EggSmolError as err:
         raise AssertionError(f"Failed {eq(x).to(y)}\n -> {ne(egraph.extract(x)).to(egraph.extract(y))})") from err
+    return egraph
 
 
 def check(x: FactLike, schedule: Schedule | None = None, *given: ActionLike) -> None:

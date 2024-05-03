@@ -420,7 +420,7 @@ from functools import partial
 x = MathList.EMPTY.append(Math(1))
 added_two = x.map(partial(Math.__add__, Math(2)))
 
-check_eq(added_two, MathList.EMPTY.append(Math(1) + Math(2)), math_list_ruleset.saturate())
+check_eq(added_two, MathList.EMPTY.append(Math(2) + Math(1)), math_list_ruleset.saturate())
 ```
 
 Note that this is all built on the [unstable function support added as a sort to egglog](https://github.com/egraphs-good/egglog/pull/348).
