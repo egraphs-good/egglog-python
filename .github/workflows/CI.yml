@@ -77,4 +77,4 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y graphviz
       - run: pip install -e .[docs] pre-commit
-      - run: pre-commit run --hook-stage --all-files manual docs
+      - run: pre-commit run --hook-stage manual --all-files docs
