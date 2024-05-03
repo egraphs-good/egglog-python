@@ -75,6 +75,7 @@ __all__ = [
     "seq",
     "Command",
     "simplify",
+    "unstable_combine_rulesets",
     "check",
     "GraphvizKwargs",
     "Ruleset",
@@ -88,6 +89,7 @@ __all__ = [
     "Fact",
     "Action",
     "Command",
+    "check_eq",
 ]
 
 T = TypeVar("T")
@@ -143,6 +145,23 @@ def simplify(x: EXPR, schedule: Schedule | None = None) -> EXPR:
     if schedule:
         return EGraph().simplify(x, schedule)
     return EGraph().extract(x)
+
+
+def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None) -> EGraph:
+    """
+    Verifies that two expressions are equal after running the schedule.
+    """
+    egraph = EGraph()
+    x_var = egraph.let("__check_eq_x", x)
+    y_var = egraph.let("__check_eq_y", y)
+    if schedule:
+        egraph.run(schedule)
+    fact = eq(x_var).to(y_var)
+    try:
+        egraph.check(fact)
+    except bindings.EggSmolError as err:
+        raise AssertionError(f"Failed {eq(x).to(y)}\n -> {ne(egraph.extract(x)).to(egraph.extract(y))})") from err
+    return egraph
 
 
 def check(x: FactLike, schedule: Schedule | None = None, *given: ActionLike) -> None:
@@ -456,7 +475,7 @@ class _ExprMetaclass(type):
         return isinstance(instance, RuntimeExpr)
 
 
-def _generate_class_decls(
+def _generate_class_decls(  # noqa: C901
     namespace: dict[str, Any], frame: FrameType, builtin: bool, egg_sort: str | None, cls_name: str
 ) -> Declarations:
     """
@@ -518,6 +537,16 @@ def _generate_class_decls(
         locals = frame.f_locals
 
         def create_decl(fn: object, first: Literal["cls"] | TypeRefWithVars) -> FunctionDecl:
+            special_function_name: SpecialFunctions | None = (
+                "fn-partial" if egg_fn == "unstable-fn" else "fn-app" if egg_fn == "unstable-app" else None  # noqa: B023
+            )
+            if special_function_name:
+                return FunctionDecl(
+                    special_function_name,
+                    builtin=True,
+                    egg_name=egg_fn,  # noqa: B023
+                )
+
             return _fn_decl(
                 decls,
                 egg_fn,  # noqa: B023
@@ -649,6 +678,10 @@ def _fn_decl(
         raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
 
     hint_globals = fn.__globals__.copy()
+    # Copy Callable into global if not present bc sometimes it gets automatically removed by ruff to type only block
+    # https://docs.astral.sh/ruff/rules/typing-only-standard-library-import/
+    if "Callable" not in hint_globals:
+        hint_globals["Callable"] = Callable
 
     hints = get_type_hints(fn, hint_globals, hint_locals)
 
@@ -715,11 +748,13 @@ def _fn_decl(
     )
     decls.update(*merge_action)
     return FunctionDecl(
-        return_type=None if mutates_first_arg else return_type,
-        var_arg_type=var_arg_type,
-        arg_types=arg_types,
-        arg_names=tuple(t.name for t in params),
-        arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
+        FunctionSignature(
+            return_type=None if mutates_first_arg else return_type,
+            var_arg_type=var_arg_type,
+            arg_types=arg_types,
+            arg_names=tuple(t.name for t in params),
+            arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
+        ),
         cost=cost,
         egg_name=egg_name,
         merge=merged.__egg_typed_expr__.expr if merged is not None else None,
@@ -933,13 +968,12 @@ class EGraph(_BaseModule):
         """
         Displays the e-graph in the notebook.
         """
-        graphviz = self.graphviz(**kwargs)
         if IN_IPYTHON:
             from IPython.display import SVG, display
 
             display(SVG(self.graphviz_svg(**kwargs)))
         else:
-            graphviz.render(view=True, format="svg", quiet=True)
+            self.graphviz(**kwargs).render(view=True, format="svg", quiet=True)
 
     def input(self, fn: Callable[..., String], path: str) -> None:
         """
@@ -1059,7 +1093,7 @@ class EGraph(_BaseModule):
         runtime_expr = to_runtime_expr(expr)
         self._add_decls(runtime_expr)
         typed_expr = runtime_expr.__egg_typed_expr__
-        extract_report = self._run_extract(typed_expr.expr, 0)
+        extract_report = self._run_extract(typed_expr, 0)
 
         if not isinstance(extract_report, bindings.Best):
             msg = "No extract report saved"
@@ -1079,15 +1113,16 @@ class EGraph(_BaseModule):
         self._add_decls(runtime_expr)
         typed_expr = runtime_expr.__egg_typed_expr__
 
-        extract_report = self._run_extract(typed_expr.expr, n)
+        extract_report = self._run_extract(typed_expr, n)
         if not isinstance(extract_report, bindings.Variants):
             msg = "Wrong extract report type"
             raise ValueError(msg)  # noqa: TRY004
         new_exprs = self._state.exprs_from_egg(extract_report.termdag, extract_report.terms, typed_expr.tp)
         return [cast(EXPR, RuntimeExpr.__from_value__(self.__egg_decls__, expr)) for expr in new_exprs]
 
-    def _run_extract(self, expr: ExprDecl, n: int) -> bindings._ExtractReport:
-        expr = self._state.expr_to_egg(expr)
+    def _run_extract(self, typed_expr: TypedExprDecl, n: int) -> bindings._ExtractReport:
+        self._state.type_ref_to_egg(typed_expr.tp)
+        expr = self._state.expr_to_egg(typed_expr.expr)
         self._egraph.run_program(bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n)))))
         extract_report = self._egraph.extract_report()
         if not extract_report:
@@ -1276,8 +1311,10 @@ def ruleset(
     """
     Creates a ruleset with the following rules.
 
-    If no name is provided, one is generated based on the current module
+    If no name is provided, try using the name of the funciton.
     """
+    if isinstance(rule_or_generator, FunctionType):
+        name = name or rule_or_generator.__name__
     r = Ruleset(name)
     if rule_or_generator is not None:
         r.register(rule_or_generator, *rules, _increase_frame=True)
@@ -1388,10 +1425,46 @@ class Ruleset(Schedule):
     def __repr__(self) -> str:
         return str(self)
 
+    def __or__(self, other: Ruleset | UnstableCombinedRuleset) -> UnstableCombinedRuleset:
+        return unstable_combine_rulesets(self, other)
+
     # Create a unique name if we didn't pass one from the user
     @property
     def __egg_name__(self) -> str:
         return self.name or f"ruleset_{id(self)}"
+
+
+@dataclass
+class UnstableCombinedRuleset(Schedule):
+    __egg_decls_thunk__: Callable[[], Declarations] = field(init=False)
+    schedule: RunDecl = field(init=False)
+    name: str | None
+    rulesets: InitVar[list[Ruleset | UnstableCombinedRuleset]]
+
+    def __post_init__(self, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
+        self.schedule = RunDecl(self.__egg_name__, ())
+        self.__egg_decls_thunk__ = Thunk.fn(self._create_egg_decls, *rulesets)
+
+    @property
+    def __egg_name__(self) -> str:
+        return self.name or f"combined_ruleset_{id(self)}"
+
+    def _create_egg_decls(self, *rulesets: Ruleset | UnstableCombinedRuleset) -> Declarations:
+        decls = Declarations.create(*rulesets)
+        decls._rulesets[self.__egg_name__] = CombinedRulesetDecl(tuple(r.__egg_name__ for r in rulesets))
+        return decls
+
+    def __or__(self, other: Ruleset | UnstableCombinedRuleset) -> UnstableCombinedRuleset:
+        return unstable_combine_rulesets(self, other)
+
+
+def unstable_combine_rulesets(
+    *rulesets: Ruleset | UnstableCombinedRuleset, name: str | None = None
+) -> UnstableCombinedRuleset:
+    """
+    Combine multiple rulesets into a single ruleset.
+    """
+    return UnstableCombinedRuleset(name, list(rulesets))
 
 
 @dataclass
@@ -1556,9 +1629,9 @@ def var(name: str, bound: type[EXPR]) -> EXPR:
 
 def _var(name: str, bound: object) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
-    if not isinstance(bound, RuntimeClass):
-        raise TypeError(f"Unexpected type {type(bound)}")
-    return RuntimeExpr.__from_value__(bound.__egg_decls__, TypedExprDecl(bound.__egg_tp__.to_just(), VarDecl(name)))
+    decls = Declarations()
+    type_ref = resolve_type_annotation(decls, bound)
+    return RuntimeExpr.__from_value__(decls, TypedExprDecl(type_ref.to_just(), VarDecl(name)))
 
 
 def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
@@ -1801,8 +1874,10 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     """
     # Get the local scope from where the function is defined, so that we can get any type hints that are in the scope
     # but not in the globals
-
-    hints = get_type_hints(gen, gen.__globals__, frame.f_locals)
+    globals = gen.__globals__.copy()
+    if "Callable" not in globals:
+        globals["Callable"] = Callable
+    hints = get_type_hints(gen, globals, frame.f_locals)
     args = [_var(p.name, hints[p.name]) for p in signature(gen).parameters.values()]
     return list(gen(*args))  # type: ignore[misc]
 

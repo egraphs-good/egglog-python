@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from typing_extensions import ParamSpec, TypeVarTuple, Unpack
+from typing_extensions import TypeVarTuple, Unpack
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 __all__ = ["Thunk"]
 
 T = TypeVar("T")
-P = ParamSpec("P")
 TS = TypeVarTuple("TS")
 
 

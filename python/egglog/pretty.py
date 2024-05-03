@@ -66,7 +66,7 @@ UNARY_METHODS = {
     "__invert__": "~",
 }
 
-AllDecls: TypeAlias = RulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl
+AllDecls: TypeAlias = RulesetDecl | CombinedRulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl
 
 
 def pretty_decl(
@@ -106,7 +106,7 @@ def pretty_callable_ref(
     """
     # Pass in three dummy args, which are the max used for any operation that
     # is not a generic function call
-    args: list[ExprDecl] = [LitDecl(ARG_STR)] * 3
+    args: list[ExprDecl] = [VarDecl(ARG_STR)] * 3
     if first_arg:
         args.insert(0, first_arg)
     res = PrettyContext(decls, defaultdict(lambda: 0))._call_inner(
@@ -115,6 +115,10 @@ def pretty_callable_ref(
     # Either returns a function or a function with args. If args are provided, they would just be called,
     # on the function, so return them, because they are dummies
     return res[0] if isinstance(res, tuple) else res
+
+
+# TODO: Add a different pretty callable ref that doesnt fill in wholes but instead returns the function
+# so that things like Math.__add__ will be represented properly
 
 
 @dataclass
@@ -170,6 +174,10 @@ class TraverseContext:
                 if until:
                     for f in until:
                         self(f)
+            case PartialCallDecl(c):
+                self(c)
+            case CombinedRulesetDecl(_):
+                pass
             case _:
                 assert_never(decl)
 
@@ -231,6 +239,9 @@ class PrettyContext:
                 return name, name
             case CallDecl(_, _, _):
                 return self._call(decl, parens)
+            case PartialCallDecl(CallDecl(ref, typed_args, _)):
+                arg_strs = (_pretty_callable(ref), *(self(a.expr, parens=False, unwrap_lit=True) for a in typed_args))
+                return f"UnstableFn({', '.join(arg_strs)})", "fn"
             case PyObjectDecl(value):
                 return repr(value) if unwrap_lit else f"PyObject({value!r})", "PyObject"
             case ActionCommandDecl(action):
@@ -267,6 +278,10 @@ class PrettyContext:
                     return f"ruleset(name={ruleset_name!r})", f"ruleset_{ruleset_name}"
                 args = ", ".join(map(self, rules))
                 return f"ruleset({args})", "ruleset"
+            case CombinedRulesetDecl(rulesets):
+                if ruleset_name:
+                    rulesets = (*rulesets, f"name={ruleset_name!r})")
+                return f"unstable_combine_rulesets({', '.join(rulesets)})", "combined_ruleset"
             case SaturateDecl(schedule):
                 return f"{self(schedule, parens=True)}.saturate()", "schedule"
             case RepeatDecl(schedule, times):
@@ -302,19 +317,28 @@ class PrettyContext:
             l, r = self(args[0]), self(args[1])
             return f"ne({l}).to({r})", "Unit"
         function_decl = self.decls.get_callable_decl(ref).to_function_decl()
+        signature = function_decl.signature
+
         # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
         n_defaults = 0
-        for arg, default in zip(
-            reversed(args), reversed(function_decl.arg_defaults), strict=not function_decl.var_arg_type
-        ):
-            if arg != default:
-                break
-            n_defaults += 1
+        # Dont try counting defaults for function application
+        if isinstance(signature, FunctionSignature):
+            for arg, default in zip(
+                reversed(args), reversed(signature.arg_defaults), strict=not signature.var_arg_type
+            ):
+                if arg != default:
+                    break
+                n_defaults += 1
         if n_defaults:
             args = args[:-n_defaults]
 
-        tp_name = function_decl.semantic_return_type.name
-        if function_decl.mutates:
+        # If this is a function application, the type is the first type arg of the function object
+        if signature == "fn-app":
+            tp_name = decl.args[0].tp.args[0].name
+        else:
+            assert isinstance(signature, FunctionSignature)
+            tp_name = signature.semantic_return_type.name
+        if isinstance(signature, FunctionSignature) and signature.mutates:
             first_arg = args[0]
             expr_str = self(first_arg)
             # copy an identifier expression iff it has multiple parents (b/c then we can't mutate it directly)
@@ -395,6 +419,28 @@ class PrettyContext:
             name = self._generate_name(tp_name)
             self.statements.append(f"{name} = {expr_str}")
         return name
+
+
+def _pretty_callable(ref: CallableRef) -> str:
+    """
+    Returns a function call as a string.
+    """
+    match ref:
+        case FunctionRef(name):
+            return name
+        case (
+            ClassMethodRef(class_name, method_name)
+            | MethodRef(class_name, method_name)
+            | PropertyRef(class_name, method_name)
+        ):
+            return f"{class_name}.{method_name}"
+        case ConstantRef(_):
+            msg = "Constants should not be callable"
+            raise NotImplementedError(msg)
+        case ClassVariableRef(_, _):
+            msg = "Class variables should not be callable"
+            raise NotADirectoryError(msg)
+    assert_never(ref)
 
 
 def _plot_line_length(expr: object):  # pragma: no cover

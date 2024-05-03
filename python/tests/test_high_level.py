@@ -629,3 +629,22 @@ def test_deferred_ruleset():
         rules,
         first(AA()),
     )
+
+
+def test_access_method_on_class():
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+        def b(self, x: i64Like) -> A: ...
+
+    assert expr_parts(A.b(A(), 1)) == expr_parts(A().b(1))
+
+
+def test_access_property_on_class():
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+        @property
+        def b(self) -> i64: ...
+
+    assert expr_parts(A.b(A())) == expr_parts(A().b)

@@ -45,8 +45,8 @@ jobs:
           python-version: "3.10"
           cache: "pip"
       - run: pip install -e .[test] mypy pre-commit
-      - run: pre-commit run --hook-stage manual mypy
-      - run: pre-commit run --hook-stage manual stubtest
+      - run: pre-commit run --hook-stage manual --all-files mypy
+      - run: pre-commit run --hook-stage manual --all-files stubtest
   benchmark:
     runs-on: ubuntu-latest
     steps:
@@ -77,4 +77,4 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y graphviz
       - run: pip install -e .[docs] pre-commit
-      - run: pre-commit run --hook-stage manual docs
+      - run: pre-commit run --hook-stage manual --all-files docs
