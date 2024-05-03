@@ -106,7 +106,7 @@ class RuntimeClass(DelayedDeclerations):
         global _PY_OBJECT_CLASS, _UNSTABLE_FN_CLASS
         if (name := self.__egg_tp__.name) == "PyObject":
             _PY_OBJECT_CLASS = self
-        elif name == "UnstableFn":
+        elif name == "UnstableFn" and not self.__egg_tp__.args:
             _UNSTABLE_FN_CLASS = self
 
     def verify(self) -> None:
