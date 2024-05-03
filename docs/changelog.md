@@ -9,7 +9,7 @@ _This project uses semantic versioning_
 - Upgrade [egglog](https://github.com/egraphs-good/egglog/compare/0113af1d6476b75d4319591cc3d675f96a71cdc5...fb4a9f114f9bb93154d6eff0dbab079b5cb4ebb6) ([#143](https://github.com/egraphs-good/egglog-python/pull/143))
   - Adds `bindings.UnstableCombinedRulset` to commands
   - Adds `UnstableFn` sort
-- Adds high level function references using `UnstableFn`
+- Adds support for first class functions as values using Python's built in `Callable` syntax and `partial`.
 - Adds way to combine ruleset with `r1 | r2` syntax or the experimental `unstable_combine_rulesets(*rs, name=None)` function.
 
 ## Minor improvements

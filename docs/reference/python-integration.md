@@ -388,3 +388,40 @@ Any function which mutates its first argument must return `None`. In egglog, thi
 returns the type of its first argument.
 
 Note that dunder methods such as `__setitem__` will automatically be marked as mutating their first argument.
+
+## Functions as Value
+
+In Python, functions are first class objects, and can be passed around as values. You can use the builtin `Callable`
+type annotation to specify that a function is expected as an argument. You can then pass egglog functions directly
+and call them with rewrite rules. For example, here is how you could define a `MathList` class which supports mapping:
+
+```{code-cell} python
+from collections.abc import Callable
+
+class MathList(Expr):
+    EMPTY: ClassVar[MathList]
+
+    def append(self, x: Math) -> MathList: ...
+
+    def map(self, fn: Callable[[Math], Math]) -> MathList: ...
+
+@ruleset
+def math_list_ruleset(xs: MathList, x: Math, f: Callable[[Math], Math]):
+    yield rewrite(MathList.EMPTY.map(f)).to(MathList.EMPTY)
+    yield rewrite(xs.append(x).map(f)).to(xs.map(f).append(f(x)))
+```
+
+To support partial application, you can use the builtin `functools.partial` function:
+
+```{code-cell} python
+from functools import partial
+
+x = MathList.EMPTY.append(Math(1))
+added_two = x.map(partial(Math.__add__, Math(2)))
+
+check_eq(added_two, MathList.EMPTY.append(Math(1) + Math(2)), math_list_ruleset.saturate())
+```
+
+Note that this is all built on the [unstable function support added as a sort to egglog](https://github.com/egraphs-good/egglog/pull/348).
+While this sort is exposed directly at the high level with the `UnstableFn` class, we don't reccomend depending on it directly, and instead
+using the builtin Python type annotations. This will allow us to change the implementation in the future without breaking user code.
