@@ -75,6 +75,7 @@ __all__ = [
     "seq",
     "Command",
     "simplify",
+    "unstable_combine_rulesets",
     "check",
     "GraphvizKwargs",
     "Ruleset",
@@ -958,13 +959,12 @@ class EGraph(_BaseModule):
         """
         Displays the e-graph in the notebook.
         """
-        graphviz = self.graphviz(**kwargs)
         if IN_IPYTHON:
             from IPython.display import SVG, display
 
             display(SVG(self.graphviz_svg(**kwargs)))
         else:
-            graphviz.render(view=True, format="svg", quiet=True)
+            self.graphviz(**kwargs).render(view=True, format="svg", quiet=True)
 
     def input(self, fn: Callable[..., String], path: str) -> None:
         """
