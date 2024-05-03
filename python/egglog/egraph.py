@@ -677,6 +677,10 @@ def _fn_decl(
         raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
 
     hint_globals = fn.__globals__.copy()
+    # Copy Callable into global if not present bc sometimes it gets automatically removed by ruff to type only block
+    # https://docs.astral.sh/ruff/rules/typing-only-standard-library-import/
+    if "Callable" not in hint_globals:
+        hint_globals["Callable"] = Callable
 
     hints = get_type_hints(fn, hint_globals, hint_locals)
 

@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import ClassVar, TypeAlias
+from typing import TYPE_CHECKING, ClassVar, TypeAlias
 
 from egglog import *
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class Math(Expr):
@@ -147,8 +150,35 @@ def test_extract():
 
 
 def test_pass_in_function():
-    assert expr_parts(x.map(square)) == expr_parts(x.map(UnstableFn(square)))
+    assert expr_parts(x.map(square)) == expr_parts(x.map(UnstableFn(square)))  # type: ignore[arg-type]
 
 
 def test_pass_in_partial():
-    assert expr_parts(x.map(partial(Math.__mul__, Math(2)))) == expr_parts(x.map(UnstableFn(Math.__mul__, Math(2))))
+    assert expr_parts(x.map(partial(Math.__mul__, Math(2)))) == expr_parts(x.map(UnstableFn(Math.__mul__, Math(2))))  # type: ignore[arg-type]
+
+
+class A(Expr): ...
+
+
+class B(Expr): ...
+
+
+class C(Expr): ...
+
+
+def test_callable_accepted_as_type():
+    from egglog.runtime import RuntimeFunction
+
+    @function
+    def func(f: UnstableFn[C, A, B]) -> C: ...
+
+    assert isinstance(func, RuntimeFunction)
+    original = func.__egg_decls__, func.__egg_ref__
+
+    @function  # type: ignore[no-redef]
+    def func(f: Callable[[A, B], C]) -> C: ...
+
+    assert isinstance(func, RuntimeFunction)
+    converted = func.__egg_decls__, func.__egg_ref__
+
+    assert converted == original

@@ -11,6 +11,7 @@ so they are not mangled by Python and can be accessed by the user.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from inspect import Parameter, Signature
 from itertools import zip_longest
@@ -22,7 +23,7 @@ from .thunk import Thunk
 from .type_constraint_solver import *
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Iterable
 
     from .egraph import Expr
 
@@ -60,6 +61,8 @@ REFLECTED_BINARY_METHODS = {
 # Set this globally so we can get access to PyObject when we have a type annotation of just object.
 # This is the only time a type annotation doesn't need to include the egglog type b/c object is top so that would be redundant statically.
 _PY_OBJECT_CLASS: RuntimeClass | None = None
+# Same for functions
+_UNSTABLE_FN_CLASS: RuntimeClass | None = None
 
 T = TypeVar("T")
 
@@ -79,6 +82,11 @@ def resolve_type_annotation(decls: Declarations, tp: object) -> TypeOrVarRef:
     if tp == object:
         assert _PY_OBJECT_CLASS
         return resolve_type_annotation(decls, _PY_OBJECT_CLASS)
+    # If the type is a `Callable` then convert it into a UnstableFn
+    if get_origin(tp) == Callable:
+        assert _UNSTABLE_FN_CLASS
+        args, ret = get_args(tp)
+        return resolve_type_annotation(decls, _UNSTABLE_FN_CLASS[(ret, *args)])
     if isinstance(tp, RuntimeClass):
         decls |= tp
         return tp.__egg_tp__
@@ -95,9 +103,11 @@ class RuntimeClass(DelayedDeclerations):
     __egg_tp__: TypeRefWithVars
 
     def __post_init__(self) -> None:
-        global _PY_OBJECT_CLASS
-        if self.__egg_tp__.name == "PyObject":
+        global _PY_OBJECT_CLASS, _UNSTABLE_FN_CLASS
+        if (name := self.__egg_tp__.name) == "PyObject":
             _PY_OBJECT_CLASS = self
+        elif name == "UnstableFn":
+            _UNSTABLE_FN_CLASS = self
 
     def verify(self) -> None:
         if not self.__egg_tp__.args:
