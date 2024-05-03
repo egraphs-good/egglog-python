@@ -501,8 +501,8 @@ def call_method_min_conversion(slf: object, other: object, name: str) -> Runtime
     # find a minimum type that both can be converted to
     # This is so so that calls like `-0.1 * Int("x")` work by upcasting both to floats.
     min_tp = min_convertable_tp(slf, other, name)
-    slf = resolve_literal(min_tp.to_var(), slf)
-    other = resolve_literal(min_tp.to_var(), other)
+    slf = resolve_literal(TypeRefWithVars(min_tp), slf)
+    other = resolve_literal(TypeRefWithVars(min_tp), other)
     method = RuntimeFunction(Thunk.value(slf.__egg_decls__), MethodRef(slf.__egg_class_name__, name), slf)
     return method(other)
 

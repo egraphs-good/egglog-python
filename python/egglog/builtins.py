@@ -5,12 +5,14 @@ Builtin sorts and function to egg.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union, overload
 
 from typing_extensions import TypeVarTuple, Unpack
 
 from .conversion import converter
 from .egraph import Expr, Unit, function, method
+from .runtime import RuntimeFunction
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -495,3 +497,7 @@ class UnstableFn(Expr, Generic[T, Unpack[TS]], builtin=True):
 
     @method(egg_fn="unstable-app")
     def __call__(self, *args: Unpack[TS]) -> T: ...
+
+
+converter(RuntimeFunction, UnstableFn, UnstableFn)
+converter(partial, UnstableFn, lambda p: UnstableFn(p.func, *p.args))

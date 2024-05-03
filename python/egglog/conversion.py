@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, NewType, TypeVar, cast
 
 from .declarations import *
 from .pretty import *
@@ -16,7 +16,8 @@ if TYPE_CHECKING:
 
 __all__ = ["convert", "converter", "resolve_literal", "convert_to_same_type"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
-CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable]] = {}
+TypeName = NewType("TypeName", str)
+CONVERSIONS: dict[tuple[type | TypeName, TypeName], tuple[int, Callable]] = {}
 # Global declerations to store all convertable types so we can query if they have certain methods or not
 # Defer it as a thunk so we can register conversions without triggering type signature loading
 CONVERSIONS_DECLS: Callable[[], Declarations] = Thunk.value(Declarations())
@@ -34,12 +35,12 @@ def converter(from_type: type[T], to_type: type[V], fn: Callable[[T], V], cost: 
     Register a converter from some type to an egglog type.
     """
     to_type_name = process_tp(to_type)
-    if not isinstance(to_type_name, JustTypeRef):
+    if not isinstance(to_type_name, str):
         raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
     _register_converter(process_tp(from_type), to_type_name, fn, cost)
 
 
-def _register_converter(a: type | JustTypeRef, b: JustTypeRef, a_b: Callable, cost: int) -> None:
+def _register_converter(a: type | TypeName, b: TypeName, a_b: Callable, cost: int) -> None:
     """
     Registers a converter from some type to an egglog type, if not already registered.
 
@@ -94,14 +95,17 @@ def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
     return resolve_literal(tp.to_var(), source)
 
 
-def process_tp(tp: type | RuntimeClass) -> JustTypeRef | type:
+def process_tp(tp: type | RuntimeClass) -> TypeName | type:
     """
     Process a type before converting it, to add it to the global declerations and resolve to a ref.
     """
     global CONVERSIONS_DECLS
     if isinstance(tp, RuntimeClass):
         CONVERSIONS_DECLS = Thunk.fn(_combine_decls, CONVERSIONS_DECLS, tp)
-        return tp.__egg_tp__.to_just()
+        egg_tp = tp.__egg_tp__
+        if egg_tp.args:
+            raise TypeError(f"Cannot register a converter for a generic type, got {tp}")
+        return TypeName(egg_tp.name)
     return tp
 
 
@@ -109,7 +113,7 @@ def _combine_decls(d: Callable[[], Declarations], x: HasDeclerations) -> Declara
     return Declarations.create(d(), x)
 
 
-def min_convertable_tp(a: object, b: object, name: str) -> JustTypeRef:
+def min_convertable_tp(a: object, b: object, name: str) -> TypeName:
     """
     Returns the minimum convertable type between a and b, that has a method `name`, raising a ConvertError if no such type exists.
     """
@@ -117,14 +121,14 @@ def min_convertable_tp(a: object, b: object, name: str) -> JustTypeRef:
     a_tp = _get_tp(a)
     b_tp = _get_tp(b)
     a_converts_to = {
-        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == a_tp and decls.has_method(to.name, name)
+        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == a_tp and decls.has_method(to, name)
     }
     b_converts_to = {
-        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == b_tp and decls.has_method(to.name, name)
+        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == b_tp and decls.has_method(to, name)
     }
-    if isinstance(a_tp, JustTypeRef):
+    if isinstance(a_tp, str):
         a_converts_to[a_tp] = 0
-    if isinstance(b_tp, JustTypeRef):
+    if isinstance(b_tp, str):
         b_converts_to[b_tp] = 0
     common = set(a_converts_to) & set(b_converts_to)
     if not common:
@@ -146,25 +150,26 @@ def resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
         # If this is a var, it has to be a runtime expession
         assert isinstance(arg, RuntimeExpr)
         return arg
-    if arg_type == tp_just:
+    tp_name = TypeName(tp_just.name)
+    if arg_type == tp_name:
         # If the type is an egg type, it has to be a runtime expr
         assert isinstance(arg, RuntimeExpr)
         return arg
     # Try all parent types as well, if we are converting from a Python type
     for arg_type_instance in arg_type.__mro__ if isinstance(arg_type, type) else [arg_type]:
         try:
-            fn = CONVERSIONS[(cast(JustTypeRef | type, arg_type_instance), tp_just)][1]
+            fn = CONVERSIONS[(cast(TypeName | type, arg_type_instance), tp_name)][1]
         except KeyError:
             continue
         break
     else:
-        raise ConvertError(f"Cannot convert {arg_type} to {tp_just}")
+        raise ConvertError(f"Cannot convert {arg_type} to {tp_name}")
     return fn(arg)
 
 
-def _get_tp(x: object) -> JustTypeRef | type:
+def _get_tp(x: object) -> TypeName | type:
     if isinstance(x, RuntimeExpr):
-        return x.__egg_typed_expr__.tp
+        return TypeName(x.__egg_typed_expr__.tp.name)
     tp = type(x)
     # If this value has a custom metaclass, let's use that as our index instead of the type
     if type(tp) != type:

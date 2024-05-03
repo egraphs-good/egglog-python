@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import ClassVar, TypeAlias
 
 from egglog import *
@@ -143,3 +144,11 @@ def test_extract():
     f = UnstableFn(i64.__mul__, i64(2))
     res = EGraph().extract(f)
     assert expr_parts(res) == expr_parts(f)
+
+
+def test_pass_in_function():
+    assert expr_parts(x.map(square)) == expr_parts(x.map(UnstableFn(square)))
+
+
+def test_pass_in_partial():
+    assert expr_parts(x.map(partial(Math.__mul__, Math(2)))) == expr_parts(x.map(UnstableFn(Math.__mul__, Math(2))))
