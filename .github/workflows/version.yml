@@ -61,7 +61,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-linux
           path: dist
 
   windows:
@@ -79,7 +79,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-windows
           path: dist
 
   macos:
@@ -97,7 +97,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-macos
           path: dist
 
   release:
@@ -108,7 +108,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: wheels
+          pattern: wheels-*
+          merge-multiple: true
       - name: Publish to PyPI
         uses: PyO3/maturin-action@v1.42.1
         env:
