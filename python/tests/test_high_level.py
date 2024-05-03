@@ -631,7 +631,7 @@ def test_deferred_ruleset():
     )
 
 
-def test_access_method_on_class(self):
+def test_access_method_on_class():
     class A(Expr):
         def __init__(self) -> None: ...
 
@@ -640,7 +640,7 @@ def test_access_method_on_class(self):
     assert expr_parts(A.b(A(), 1)) == expr_parts(A().b(1))
 
 
-def test_access_property_on_class(self):
+def test_access_property_on_class():
     class A(Expr):
         def __init__(self) -> None: ...
 
