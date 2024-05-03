@@ -483,8 +483,10 @@ class UnstableFn(Expr, Generic[T, Unpack[TS]], builtin=True):
     @overload
     def __init__(self, f: Callable[[T1, T2, Unpack[TS]], T], _a: T1, _b: T2, /) -> None: ...
 
-    @overload
-    def __init__(self, f: Callable[[T1, T2, T3, Unpack[TS]], T], _a: T1, _b: T2, _c: T3, /) -> None: ...
+    # Removing due to bug in MyPy
+    # https://github.com/python/mypy/issues/17212
+    # @overload
+    # def __init__(self, f: Callable[[T1, T2, T3, Unpack[TS]], T], _a: T1, _b: T2, _c: T3, /) -> None: ...
 
     # etc, for partial application
 

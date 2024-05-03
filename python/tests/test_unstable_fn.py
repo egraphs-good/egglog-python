@@ -32,7 +32,7 @@ def math_ruleset(x: i64, y: i64):
     yield rewrite(Math(x) * Math(y)).to(Math(x * y))
 
 
-MathFn = UnstableFn[Math, Math]
+MathFn: TypeAlias = UnstableFn[Math, Math]
 
 
 class MathList(Expr):
@@ -68,7 +68,7 @@ def test_string_fn():
 
 
 def test_string_fn_partial():
-    assert str(UnstableFn(Math.__mul__, 2)) == "UnstableFn(Math.__mul__, Math(2))"
+    assert str(UnstableFn(Math.__mul__, Math(2))) == "UnstableFn(Math.__mul__, Math(2))"
 
 
 @ruleset
@@ -111,7 +111,7 @@ def composed_math_ruleset(f: MathFn, g: MathFn, x: Math):
 
 
 def test_composed():
-    square_of_double = UnstableFn(composed_math, UnstableFn(square), UnstableFn(Math.__mul__, 2))
+    square_of_double = UnstableFn(composed_math, UnstableFn(square), UnstableFn(Math.__mul__, Math(2)))  # type: ignore[arg-type]
     check_eq(
         x.map(square_of_double),
         MathList(4, MathList(16, MathList(36, None))),
@@ -128,18 +128,18 @@ def composed_i64_math(f: MathFn, g: i64Fun, i: i64Like) -> Math: ...
 
 @ruleset
 def composed_i64_math_ruleset(f: MathFn, g: i64Fun, i: i64):
-    yield rewrite(composed_i64_math(f, g, i)).to(f(g(i)))
+    yield rewrite(composed_i64_math(f, g, i)).to(f(Math(g(i))))
 
 
 def test_composed_i64_math():
     check_eq(
-        composed_i64_math(UnstableFn(square), UnstableFn(i64.__mul__, 2), 4),
+        composed_i64_math(UnstableFn(square), UnstableFn(i64.__mul__, i64(2)), 4),
         Math(64),
         (math_ruleset | square_ruleset | composed_i64_math_ruleset).saturate(),
     )
 
 
 def test_extract():
-    f = UnstableFn(i64.__mul__, 2)
+    f = UnstableFn(i64.__mul__, i64(2))
     res = EGraph().extract(f)
     assert expr_parts(res) == expr_parts(f)
