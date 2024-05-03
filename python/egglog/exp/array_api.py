@@ -18,7 +18,7 @@ from egglog.runtime import RuntimeExpr
 from .program_gen import *
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from types import ModuleType
 
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
@@ -257,7 +257,7 @@ class TupleInt(Expr):
 
     def __getitem__(self, i: Int) -> Int: ...
 
-    def product(self) -> Int: ...
+    def fold(self, init: Int, f: Callable[[Int, Int], Int]) -> Int: ...
 
 
 converter(
@@ -272,7 +272,7 @@ converter(
 
 
 @array_api_ruleset.register
-def _tuple_int(ti: TupleInt, ti2: TupleInt, i: Int, i2: Int, k: i64):
+def _tuple_int(ti: TupleInt, ti2: TupleInt, i: Int, i2: Int, k: i64, f: Callable[[Int, Int], Int]):
     return [
         rewrite(ti + TupleInt.EMPTY).to(ti),
         rewrite(TupleInt(i).length()).to(Int(1)),
@@ -281,10 +281,10 @@ def _tuple_int(ti: TupleInt, ti2: TupleInt, i: Int, i2: Int, k: i64):
         rewrite((TupleInt(i) + ti)[Int(0)]).to(i),
         # Rule for indexing > 0
         rule(eq(i).to((TupleInt(i2) + ti)[Int(k)]), k > 0).then(union(i).with_(ti[Int(k - 1)])),
-        # Product
-        rewrite(TupleInt(i).product()).to(i),
-        rewrite((TupleInt(i) + ti).product()).to(i * ti.product()),
-        rewrite(TupleInt.EMPTY.product()).to(Int(1)),
+        # fold
+        rewrite(TupleInt.EMPTY.fold(i, f)).to(i),
+        rewrite(TupleInt(i2).fold(i, f)).to(f(i, i2)),
+        rewrite((TupleInt(i2) + ti).fold(i, f)).to(ti.fold(f(i, i2), f)),
     ]
 
 
@@ -1346,7 +1346,7 @@ def _unique(xs: TupleValue, a: NDArray, shape: TupleInt, copy: OptionalBool):
 
 @array_api_ruleset.register
 def _size(x: NDArray):
-    yield rewrite(x.size).to(x.shape.product())
+    yield rewrite(x.size).to(x.shape.fold(Int(0), Int.__mul__))
 
 
 @overload
