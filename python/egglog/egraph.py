@@ -1301,8 +1301,10 @@ def ruleset(
     """
     Creates a ruleset with the following rules.
 
-    If no name is provided, one is generated based on the current module
+    If no name is provided, try using the name of the funciton.
     """
+    if isinstance(rule_or_generator, FunctionType):
+        name = name or rule_or_generator.__name__
     r = Ruleset(name)
     if rule_or_generator is not None:
         r.register(rule_or_generator, *rules, _increase_frame=True)
