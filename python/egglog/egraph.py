@@ -1413,10 +1413,46 @@ class Ruleset(Schedule):
     def __repr__(self) -> str:
         return str(self)
 
+    def __or__(self, other: Ruleset | UnstableCombinedRuleset) -> UnstableCombinedRuleset:
+        return unstable_combine_rulesets(self, other)
+
     # Create a unique name if we didn't pass one from the user
     @property
     def __egg_name__(self) -> str:
         return self.name or f"ruleset_{id(self)}"
+
+
+@dataclass
+class UnstableCombinedRuleset(Schedule):
+    __egg_decls_thunk__: Callable[[], Declarations] = field(init=False)
+    schedule: RunDecl = field(init=False)
+    name: str | None
+    rulesets: InitVar[list[Ruleset | UnstableCombinedRuleset]]
+
+    def __post_init__(self, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
+        self.schedule = RunDecl(self.__egg_name__, ())
+        self.__egg_decls_thunk__ = Thunk.fn(self._create_egg_decls, *rulesets)
+
+    @property
+    def __egg_name__(self) -> str:
+        return self.name or f"combined_ruleset_{id(self)}"
+
+    def _create_egg_decls(self, *rulesets: Ruleset | UnstableCombinedRuleset) -> Declarations:
+        decls = Declarations.create(*rulesets)
+        decls._rulesets[self.__egg_name__] = CombinedRulesetDecl(tuple(r.__egg_name__ for r in rulesets))
+        return decls
+
+    def __or__(self, other: Ruleset | UnstableCombinedRuleset) -> UnstableCombinedRuleset:
+        return unstable_combine_rulesets(self, other)
+
+
+def unstable_combine_rulesets(
+    *rulesets: Ruleset | UnstableCombinedRuleset, name: str | None = None
+) -> UnstableCombinedRuleset:
+    """
+    Combine multiple rulesets into a single ruleset.
+    """
+    return UnstableCombinedRuleset(name, list(rulesets))
 
 
 @dataclass

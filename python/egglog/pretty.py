@@ -66,7 +66,7 @@ UNARY_METHODS = {
     "__invert__": "~",
 }
 
-AllDecls: TypeAlias = RulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl
+AllDecls: TypeAlias = RulesetDecl | CombinedRulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl
 
 
 def pretty_decl(
@@ -176,6 +176,8 @@ class TraverseContext:
                         self(f)
             case PartialCallDecl(c):
                 self(c)
+            case CombinedRulesetDecl(_):
+                pass
             case _:
                 assert_never(decl)
 
@@ -276,6 +278,10 @@ class PrettyContext:
                     return f"ruleset(name={ruleset_name!r})", f"ruleset_{ruleset_name}"
                 args = ", ".join(map(self, rules))
                 return f"ruleset({args})", "ruleset"
+            case CombinedRulesetDecl(rulesets):
+                if ruleset_name:
+                    rulesets = (*rulesets, f"name={ruleset_name!r})")
+                return f"unstable_combine_rulesets({', '.join(rulesets)})", "combined_ruleset"
             case SaturateDecl(schedule):
                 return f"{self(schedule, parens=True)}.saturate()", "schedule"
             case RepeatDecl(schedule, times):

@@ -47,6 +47,7 @@ __all__ = [
     "TypedExprDecl",
     "ClassDecl",
     "RulesetDecl",
+    "CombinedRulesetDecl",
     "SaturateDecl",
     "RepeatDecl",
     "SequenceDecl",
@@ -110,7 +111,7 @@ class Declarations:
     _functions: dict[str, FunctionDecl | RelationDecl] = field(default_factory=dict)
     _constants: dict[str, ConstantDecl] = field(default_factory=dict)
     _classes: dict[str, ClassDecl] = field(default_factory=dict)
-    _rulesets: dict[str, RulesetDecl] = field(default_factory=lambda: {"": RulesetDecl([])})
+    _rulesets: dict[str, RulesetDecl | CombinedRulesetDecl] = field(default_factory=lambda: {"": RulesetDecl([])})
 
     @classmethod
     def create(cls, *others: DeclerationsLike) -> Declarations:
@@ -196,7 +197,7 @@ class ClassDecl:
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(frozen=True)
 class RulesetDecl:
     rules: list[RewriteOrRuleDecl]
 
@@ -204,6 +205,11 @@ class RulesetDecl:
     # made into strings
     def __hash__(self) -> int:
         return hash((type(self), tuple(self.rules)))
+
+
+@dataclass(frozen=True)
+class CombinedRulesetDecl:
+    rulesets: tuple[str, ...]
 
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.

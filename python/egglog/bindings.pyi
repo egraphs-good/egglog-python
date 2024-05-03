@@ -494,6 +494,12 @@ class Relation:
 class PrintOverallStatistics:
     def __init__(self) -> None: ...
 
+@final
+class UnstableCombinedRuleset:
+    name: str
+    rulesets: list[str]
+    def __init__(self, name: str, rulesets: list[str]) -> None: ...
+
 _Command: TypeAlias = (
     SetOption
     | Datatype
@@ -521,6 +527,7 @@ _Command: TypeAlias = (
     | CheckProof
     | Relation
     | PrintOverallStatistics
+    | UnstableCombinedRuleset
 )
 
 def termdag_term_to_expr(termdag: TermDag, term: _Term) -> _Expr: ...

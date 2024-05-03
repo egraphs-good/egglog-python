@@ -84,7 +84,7 @@ def test_map():
     check_eq(
         x.map(UnstableFn(square)),
         MathList(1, MathList(4, MathList(9, None))),
-        (math_ruleset + square_ruleset + map_ruleset).saturate(),
+        (math_ruleset | square_ruleset | map_ruleset).saturate(),
     )
 
 
@@ -97,7 +97,7 @@ def test_partial_application():
     check_eq(
         x * 2,
         MathList(2, MathList(4, MathList(6, None))),
-        (math_ruleset + list_multiple_ruleset + map_ruleset).saturate(),
+        (math_ruleset | list_multiple_ruleset | map_ruleset).saturate(),
     )
 
 
@@ -115,7 +115,7 @@ def test_composed():
     check_eq(
         x.map(square_of_double),
         MathList(4, MathList(16, MathList(36, None))),
-        (math_ruleset + square_ruleset + map_ruleset + composed_math_ruleset).saturate(),
+        (math_ruleset | square_ruleset | map_ruleset | composed_math_ruleset).saturate(),
     )
 
 
@@ -134,7 +134,7 @@ def test_composed_i64_math():
     check_eq(
         composed_i64_math(UnstableFn(square), UnstableFn(i64.__mul__, 2), 4),
         square(64),
-        (math_ruleset + square_ruleset + composed_i64_math_ruleset).saturate(),
+        (math_ruleset | square_ruleset | composed_i64_math_ruleset).saturate(),
     )
 
 

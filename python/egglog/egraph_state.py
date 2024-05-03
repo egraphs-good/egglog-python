@@ -87,17 +87,26 @@ class EGraphState:
         """
         Registers a ruleset if it's not already registered.
         """
-        if name not in self.rulesets:
-            if name:
-                self.egraph.run_program(bindings.AddRuleset(name))
-            rules = self.rulesets[name] = set()
-        else:
-            rules = self.rulesets[name]
-        for rule in self.__egg_decls__._rulesets[name].rules:
-            if rule in rules:
-                continue
-            self.egraph.run_program(self.command_to_egg(rule, name))
-            rules.add(rule)
+        match self.__egg_decls__._rulesets[name]:
+            case RulesetDecl(rules):
+                if name not in self.rulesets:
+                    if name:
+                        self.egraph.run_program(bindings.AddRuleset(name))
+                    added_rules = self.rulesets[name] = set()
+                else:
+                    added_rules = self.rulesets[name]
+                for rule in rules:
+                    if rule in added_rules:
+                        continue
+                    self.egraph.run_program(self.command_to_egg(rule, name))
+                    added_rules.add(rule)
+            case CombinedRulesetDecl(rulesets):
+                if name in self.rulesets:
+                    return
+                self.rulesets[name] = set()
+                for ruleset in rulesets:
+                    self.ruleset_to_egg(ruleset)
+                self.egraph.run_program(bindings.UnstableCombinedRuleset(name, list(rulesets)))
 
     def command_to_egg(self, cmd: CommandDecl, ruleset: str) -> bindings._Command:
         match cmd:

@@ -4,12 +4,19 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## New Feaatures
+
 - Upgrade [egglog](https://github.com/egraphs-good/egglog/compare/0113af1d6476b75d4319591cc3d675f96a71cdc5...fb4a9f114f9bb93154d6eff0dbab079b5cb4ebb6) ([#143](https://github.com/egraphs-good/egglog-python/pull/143))
-  - Adds `UnstableCombinedRulset` to commands
+  - Adds `bindings.UnstableCombinedRulset` to commands
   - Adds `UnstableFn` sort
-- Add ability to use `UnstableFn` in the high level bindings
-  - Also adds ability to refer to methods and property off of classes instead of only off of instances
-  - Fixes a bug where you could not write binary dunder methods (like `__add__`) that didn't have symetric arguments
+- Adds high level function references using `UnstableFn`
+- Adds way to combine ruleset with `r1 | r2` syntax or the experimental `unstable_combine_rulesets(*rs, name=None)` function.
+
+## Minor improvements
+
+- Fixes a bug where you could not write binary dunder methods (like `__add__`) that didn't have symetric arguments
+- Use function name as ruleset name by default when creating ruleset from function
+- Adds ability to refer to methods and property off of classes instead of only off of instances (i.e. `Math.__add__(x, y)`)
 
 ## 7.0.0 (2024-04-27)
 
