@@ -27,7 +27,7 @@ def test_function_call():
             "i64": ClassDecl(),
         },
         _functions={
-            "one": FunctionDecl((), (), (), TypeRefWithVars("i64")),
+            "one": FunctionDecl(FunctionSignature(return_type=TypeRefWithVars("i64"))),
         },
     )
     one = RuntimeFunction(Thunk.value(decls), FunctionRef("one"))
@@ -45,7 +45,7 @@ def test_classmethod_call():
             "unit": ClassDecl(),
             "Map": ClassDecl(
                 type_vars=("K", "V"),
-                class_methods={"create": FunctionDecl((), (), (), TypeRefWithVars("Map", (K, V)))},
+                class_methods={"create": FunctionDecl(FunctionSignature(return_type=TypeRefWithVars("Map", (K, V))))},
             ),
         },
     )
@@ -69,17 +69,18 @@ def test_expr_special():
             "i64": ClassDecl(
                 methods={
                     "__add__": FunctionDecl(
-                        (TypeRefWithVars("i64"), TypeRefWithVars("i64")),
-                        (
-                            "a",
-                            "b",
-                        ),
-                        (None, None),
-                        TypeRefWithVars("i64"),
+                        FunctionSignature(
+                            (TypeRefWithVars("i64"), TypeRefWithVars("i64")),
+                            ("a", "b"),
+                            (None, None),
+                            TypeRefWithVars("i64"),
+                        )
                     )
                 },
                 class_methods={
-                    "__init__": FunctionDecl((TypeRefWithVars("i64"),), ("self",), (None,), TypeRefWithVars("i64"))
+                    "__init__": FunctionDecl(
+                        FunctionSignature((TypeRefWithVars("i64"),), ("self",), (None,), TypeRefWithVars("i64"))
+                    )
                 },
             ),
         },
