@@ -122,6 +122,7 @@ def test_composed():
 i64Fun: TypeAlias = UnstableFn[i64, i64]  # noqa: N816, PYI042
 
 
+@function
 def composed_i64_math(f: MathFn, g: i64Fun, i: i64Like) -> Math: ...
 
 
