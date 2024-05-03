@@ -152,11 +152,15 @@ def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None) -> None:
     Verifies that two expressions are equal after running the schedule.
     """
     egraph = EGraph()
-    x = egraph.let("__check_eq_x", x)
-    y = egraph.let("__check_eq_y", y)
+    x_var = egraph.let("__check_eq_x", x)
+    y_var = egraph.let("__check_eq_y", y)
     if schedule:
         egraph.run(schedule)
-    egraph.check(eq(x).to(y))
+    fact = eq(x_var).to(y_var)
+    try:
+        egraph.check(fact)
+    except bindings.EggSmolError as err:
+        raise AssertionError(f"Failed {eq(x).to(y)}\n -> {ne(egraph.extract(x)).to(egraph.extract(y))})") from err
 
 
 def check(x: FactLike, schedule: Schedule | None = None, *given: ActionLike) -> None:
