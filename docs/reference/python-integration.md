@@ -389,7 +389,7 @@ returns the type of its first argument.
 
 Note that dunder methods such as `__setitem__` will automatically be marked as mutating their first argument.
 
-## Functions as Value
+## Functions as Values
 
 In Python, functions are first class objects, and can be passed around as values. You can use the builtin `Callable`
 type annotation to specify that a function is expected as an argument. You can then pass egglog functions directly
@@ -397,6 +397,7 @@ and call them with rewrite rules. For example, here is how you could define a `M
 
 ```{code-cell} python
 from collections.abc import Callable
+from typing import ClassVar
 
 class MathList(Expr):
     EMPTY: ClassVar[MathList]
