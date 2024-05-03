@@ -134,7 +134,7 @@ def composed_i64_math_ruleset(f: MathFn, g: i64Fun, i: i64):
 def test_composed_i64_math():
     check_eq(
         composed_i64_math(UnstableFn(square), UnstableFn(i64.__mul__, 2), 4),
-        square(64),
+        Math(64),
         (math_ruleset | square_ruleset | composed_i64_math_ruleset).saturate(),
     )
 
