@@ -335,7 +335,7 @@ def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: 
         )
         for n, d, t in zip(sig.arg_names, sig.arg_defaults, sig.arg_types, strict=True)
     ]
-    if isinstance(sig, FunctionDecl) and sig.var_arg_type is not None:
+    if isinstance(sig, FunctionSignature) and sig.var_arg_type is not None:
         parameters.append(Parameter("__rest", Parameter.VAR_POSITIONAL))
     return Signature(parameters)
 
