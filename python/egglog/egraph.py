@@ -1628,9 +1628,9 @@ def var(name: str, bound: type[EXPR]) -> EXPR:
 
 def _var(name: str, bound: object) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
-    if not isinstance(bound, RuntimeClass):
-        raise TypeError(f"Unexpected type {type(bound)}")
-    return RuntimeExpr.__from_value__(bound.__egg_decls__, TypedExprDecl(bound.__egg_tp__.to_just(), VarDecl(name)))
+    decls = Declarations()
+    type_ref = resolve_type_annotation(decls, bound)
+    return RuntimeExpr.__from_value__(decls, TypedExprDecl(type_ref.to_just(), VarDecl(name)))
 
 
 def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
@@ -1873,8 +1873,10 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     """
     # Get the local scope from where the function is defined, so that we can get any type hints that are in the scope
     # but not in the globals
-
-    hints = get_type_hints(gen, gen.__globals__, frame.f_locals)
+    globals = gen.__globals__.copy()
+    if "Callable" not in globals:
+        globals["Callable"] = Callable
+    hints = get_type_hints(gen, globals, frame.f_locals)
     args = [_var(p.name, hints[p.name]) for p in signature(gen).parameters.values()]
     return list(gen(*args))  # type: ignore[misc]
 

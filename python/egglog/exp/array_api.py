@@ -1346,7 +1346,7 @@ def _unique(xs: TupleValue, a: NDArray, shape: TupleInt, copy: OptionalBool):
 
 @array_api_ruleset.register
 def _size(x: NDArray):
-    yield rewrite(x.size).to(x.shape.fold(Int(0), Int.__mul__))
+    yield rewrite(x.size).to(x.shape.fold(Int(1), Int.__mul__))
 
 
 @overload

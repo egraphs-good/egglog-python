@@ -70,6 +70,8 @@ T = TypeVar("T")
 def resolve_type_annotation(decls: Declarations, tp: object) -> TypeOrVarRef:
     """
     Resolves a type object into a type reference.
+
+    Any runtime type object decls will be add to those passed in.
     """
     if isinstance(tp, TypeVar):
         return ClassTypeVarRef(tp.__name__)
@@ -295,7 +297,12 @@ class RuntimeFunction(DelayedDeclerations):
             if isinstance(self.__egg_bound__, RuntimeExpr)
             else self.__egg_bound__
         )
-        if bound_tp and bound_tp.args:
+        if (
+            bound_tp
+            and bound_tp.args
+            # Don't  bind class if we have a first class function arg, b/c we don't support that yet
+            and not function_value
+        ):
             tcs.bind_class(bound_tp)
         arg_exprs = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
         arg_types = [expr.tp for expr in arg_exprs]
