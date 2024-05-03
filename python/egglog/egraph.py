@@ -1088,7 +1088,7 @@ class EGraph(_BaseModule):
         runtime_expr = to_runtime_expr(expr)
         self._add_decls(runtime_expr)
         typed_expr = runtime_expr.__egg_typed_expr__
-        extract_report = self._run_extract(typed_expr.expr, 0)
+        extract_report = self._run_extract(typed_expr, 0)
 
         if not isinstance(extract_report, bindings.Best):
             msg = "No extract report saved"
@@ -1108,15 +1108,16 @@ class EGraph(_BaseModule):
         self._add_decls(runtime_expr)
         typed_expr = runtime_expr.__egg_typed_expr__
 
-        extract_report = self._run_extract(typed_expr.expr, n)
+        extract_report = self._run_extract(typed_expr, n)
         if not isinstance(extract_report, bindings.Variants):
             msg = "Wrong extract report type"
             raise ValueError(msg)  # noqa: TRY004
         new_exprs = self._state.exprs_from_egg(extract_report.termdag, extract_report.terms, typed_expr.tp)
         return [cast(EXPR, RuntimeExpr.__from_value__(self.__egg_decls__, expr)) for expr in new_exprs]
 
-    def _run_extract(self, expr: ExprDecl, n: int) -> bindings._ExtractReport:
-        expr = self._state.expr_to_egg(expr)
+    def _run_extract(self, typed_expr: TypedExprDecl, n: int) -> bindings._ExtractReport:
+        self._state.type_ref_to_egg(typed_expr.tp)
+        expr = self._state.expr_to_egg(typed_expr.expr)
         self._egraph.run_program(bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n)))))
         extract_report = self._egraph.extract_report()
         if not extract_report:
