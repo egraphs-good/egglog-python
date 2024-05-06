@@ -1,6 +1,82 @@
 # Contributing
 
-This package is in active development and we welcome contributions.
+## Development
+
+This package is in active development and welcomes contributions!
+
+Feel free to bring up any questions/comments on [the Zulip chat](https://egraphs.zulipchat.com/) or open an issue.
+
+All feedback is welcome and encouraged, it's great to hear about anything that works well or could be improved.
+
+### Getting Started
+
+To get started locally developing with this project, fork it and clone it to your local machine.
+
+Using [the Github CLI](https://github.com/cli/cli#installation) this would be:
+
+```bash
+brew install gh
+gh repo fork egraphs-good/egglog-python --clone
+cd egglog-python
+```
+
+Then [install Rust](https://www.rust-lang.org/tools/install) and get a Python environment set up with a compatible version. Using [miniconda](https://formulae.brew.sh/cask/miniconda) this would be:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+brew install --cask miniconda
+conda create -n egglog-python python
+conda activate egglog-python
+```
+
+Then install the package in editable mode with the development dependencies:
+
+```bash
+pip install -e .[dev]
+```
+
+Anytime you change the rust code, you can run `pip install -e .` to recompile the rust code.
+
+### Running Tests
+
+To run the tests, you can use the `pytest` command:
+
+```bash
+pytest
+```
+
+All code must pass ruff linters and formaters. This will be checked automatically by the pre-commit if you run `pre-commit install`.
+
+To run it manually, you can use:
+
+```bash
+pre-commit run --all-files ruff
+```
+
+If you make changes to the rust bindings, you can check that the stub files accurately reflect the rust code by running:
+
+```bash
+pre-commit run --all-files --hook-stage manual stubtest
+```
+
+All code must all pass MyPy type checking. To run that locally use:
+
+```bash
+pre-commit run --all-files --hook-stage manual mypy
+```
+
+Finally, to build the docs locally and test that they work, you can run:
+
+```bash
+pre-commit run --all-files --hook-stage manual docs
+```
+
+## Making changes
+
+All changes that impact users should be documented in the `docs/changelog.md` file. Please also add tests for any new features
+or bug fixes.
+
+When you are ready to submit your changes, please open a pull request. The CI will run the tests and check the code style.
 
 ## Documentation
 
