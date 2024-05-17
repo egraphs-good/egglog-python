@@ -71,6 +71,7 @@ __all__ = [
     "CommandDecl",
     "SpecialFunctions",
     "FunctionSignature",
+    "DefaultReplacement",
 ]
 
 
@@ -333,6 +334,21 @@ class RelationDecl:
         )
 
 
+# TODO: Move this to a type of replacement instead of part of constant or function
+
+
+@dataclass(frozen=True)
+class DefaultReplacement:
+    """
+    The default replacement for the function.
+
+    If the ruleset is not specified, it is the default ruleset.
+    """
+
+    expr: ExprDecl
+    ruleset: str | None
+
+
 @dataclass(frozen=True)
 class ConstantDecl:
     """
@@ -340,11 +356,13 @@ class ConstantDecl:
     """
 
     type_ref: JustTypeRef
+    default_replacement: DefaultReplacement | None
     egg_name: str | None = None
 
     def to_function_decl(self) -> FunctionDecl:
         return FunctionDecl(
             FunctionSignature(return_type=self.type_ref.to_var()),
+            default_replacement=self.default_replacement,
             egg_name=self.egg_name,
         )
 
@@ -378,7 +396,7 @@ class FunctionSignature:
 @dataclass(frozen=True)
 class FunctionDecl:
     signature: FunctionSignature | SpecialFunctions = field(default_factory=FunctionSignature)
-
+    default_replacement: DefaultReplacement | None = None
     # Egg params
     builtin: bool = False
     egg_name: str | None = None

@@ -30,6 +30,7 @@ from typing_extensions import ParamSpec, Self, Unpack, assert_never, deprecated
 from . import bindings
 from .conversion import *
 from .declarations import *
+from .declarations import DefaultReplacement
 from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_decl
@@ -352,7 +353,7 @@ class _BaseModule:
         This is the same as defining a nullary function with a high cost.
         # TODO: Rename as declare to match eggglog?
         """
-        return constant(name, tp, egg_name)
+        return constant(name, tp, egg_name=egg_name)
 
     def register(
         self,
@@ -452,6 +453,7 @@ class _ExprMetaclass(type):
         namespace: dict[str, Any],
         egg_sort: str | None = None,
         builtin: bool = False,
+        ruleset: Ruleset | None = None,
     ) -> RuntimeClass | type:
         # If this is the Expr subclass, just return the class
         if not bases:
@@ -467,7 +469,14 @@ class _ExprMetaclass(type):
         # Otherwise, f_locals returns a copy
         # https://peps.python.org/pep-0667/
         decls_thunk = Thunk.fn(
-            _generate_class_decls, namespace, prev_frame, builtin, egg_sort, name, fallback=Declarations
+            _generate_class_decls,
+            namespace,
+            prev_frame,
+            builtin,
+            egg_sort,
+            name,
+            ruleset,
+            fallback=Declarations,
         )
         return RuntimeClass(decls_thunk, TypeRefWithVars(name))
 
@@ -476,7 +485,12 @@ class _ExprMetaclass(type):
 
 
 def _generate_class_decls(  # noqa: C901
-    namespace: dict[str, Any], frame: FrameType, builtin: bool, egg_sort: str | None, cls_name: str
+    namespace: dict[str, Any],
+    frame: FrameType,
+    builtin: bool,
+    egg_sort: str | None,
+    cls_name: str,
+    ruleset: Ruleset | None,
 ) -> Declarations:
     """
     Lazy constructor for class declerations to support classes with methods whose types are not yet defined.
@@ -498,8 +512,9 @@ def _generate_class_decls(  # noqa: C901
     for k, v in get_type_hints(_Dummytype, globalns=frame.f_globals, localns=frame.f_locals).items():
         if getattr(v, "__origin__", None) == ClassVar:
             (inner_tp,) = v.__args__
-            type_ref = resolve_type_annotation(decls, inner_tp).to_just()
-            cls_decl.class_variables[k] = ConstantDecl(type_ref)
+            type_ref = resolve_type_annotation(decls, inner_tp)
+            default_replacement = _resolve_default_replacement(type_ref, namespace.pop(k, None), ruleset)
+            cls_decl.class_variables[k] = ConstantDecl(type_ref.to_just(), default_replacement)
 
         else:
             msg = f"On class {cls_name}, for attribute '{k}', expected a ClassVar, but got {v}"
@@ -536,7 +551,7 @@ def _generate_class_decls(  # noqa: C901
             continue
         locals = frame.f_locals
 
-        def create_decl(fn: object, first: Literal["cls"] | TypeRefWithVars) -> FunctionDecl:
+        def create_decl(fn: object, first: str | TypeRefWithVars) -> FunctionDecl:
             special_function_name: SpecialFunctions | None = (
                 "fn-partial" if egg_fn == "unstable-fn" else "fn-app" if egg_fn == "unstable-app" else None  # noqa: B023
             )
@@ -565,7 +580,7 @@ def _generate_class_decls(  # noqa: C901
 
         match fn:
             case classmethod():
-                cls_decl.class_methods[method_name] = create_decl(fn.__func__, "cls")
+                cls_decl.class_methods[method_name] = create_decl(fn.__func__, cls_name)
             case property():
                 cls_decl.properties[method_name] = create_decl(fn.fget, slf_type_ref)
             case _:
@@ -591,6 +606,7 @@ def function(
     mutates_first_arg: bool = False,
     unextractable: bool = False,
     builtin: bool = False,
+    ruleset: Ruleset | None = None,
 ) -> Callable[[CALLABLE], CALLABLE]: ...
 
 
@@ -604,6 +620,7 @@ def function(
     on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
     mutates_first_arg: bool = False,
     unextractable: bool = False,
+    ruleset: Ruleset | None = None,
 ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]: ...
 
 
@@ -634,6 +651,7 @@ class _FunctionConstructor:
     merge: Callable[[RuntimeExpr, RuntimeExpr], RuntimeExpr] | None = None
     on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None = None
     unextractable: bool = False
+    ruleset: Ruleset | None = None
 
     def __call__(self, fn: Callable[..., RuntimeExpr]) -> RuntimeFunction:
         return RuntimeFunction(Thunk.fn(self.create_decls, fn), FunctionRef(fn.__name__))
@@ -652,6 +670,7 @@ class _FunctionConstructor:
             self.mutates_first_arg,
             self.builtin,
             unextractable=self.unextractable,
+            ruleset=self.ruleset,
         )
         return decls
 
@@ -669,10 +688,11 @@ def _fn_decl(
     on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None,
     mutates_first_arg: bool,
     is_builtin: bool,
-    # The first arg is either cls, for a classmethod, a self type, or none for a function
-    first_arg: Literal["cls"] | TypeOrVarRef | None = None,
+    # The first arg is either cls (in which case this a str for the class name), for a classmethod, a self type, or none for a function
+    first_arg: str | TypeOrVarRef | None = None,
     is_init: bool = False,
     unextractable: bool = False,
+    ruleset: Ruleset | None = None,
 ) -> FunctionDecl:
     if not isinstance(fn, FunctionType):
         raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
@@ -688,7 +708,7 @@ def _fn_decl(
     params = list(signature(fn).parameters.values())
 
     # If this is an init function, or a classmethod, remove the first arg name
-    if is_init or first_arg == "cls":
+    if is_init or isinstance(first_arg, str):
         params = params[1:]
 
     if _last_param_variable(params):
@@ -725,6 +745,23 @@ def _fn_decl(
     else:
         return_type = resolve_type_annotation(decls, hints["return"])
 
+    arg_names = tuple(t.name for t in params)
+    # Trying setting a default value if we get anything besides None from calling the function wtih vars
+
+    if not is_builtin and not is_init and not mutates_first_arg:
+        var_args: list[object] = [
+            RuntimeExpr.__from_value__(decls, TypedExprDecl(tp.to_just(), VarDecl(name)))
+            for name, tp in zip(arg_names, arg_types, strict=False)
+        ]
+        # If this is a classmethod, add the class as the first arg
+        if isinstance(first_arg, str):
+            tp = TypeRefWithVars(first_arg)
+            var_args.insert(0, RuntimeClass(Thunk.value(decls), tp))
+        value = fn(*var_args)
+    else:
+        value = None
+    default_replacement = _resolve_default_replacement(return_type, value, ruleset)
+
     decls |= default
     merged = (
         None
@@ -752,9 +789,10 @@ def _fn_decl(
             return_type=None if mutates_first_arg else return_type,
             var_arg_type=var_arg_type,
             arg_types=arg_types,
-            arg_names=tuple(t.name for t in params),
+            arg_names=arg_names,
             arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
         ),
+        default_replacement=default_replacement,
         cost=cost,
         egg_name=egg_name,
         merge=merged.__egg_typed_expr__.expr if merged is not None else None,
@@ -804,19 +842,39 @@ def _relation_decls(name: str, tps: tuple[type, ...], egg_fn: str | None) -> Dec
     return decls
 
 
-def constant(name: str, tp: type[EXPR], egg_name: str | None = None) -> EXPR:
+def constant(
+    name: str,
+    tp: type[EXPR],
+    default_replacement: EXPR | None = None,
+    /,
+    *,
+    egg_name: str | None = None,
+    ruleset: Ruleset | None = None,
+) -> EXPR:
     """
     A "constant" is implemented as the instantiation of a value that takes no args.
     This creates a function with `name` and return type `tp` and returns a value of it being called.
     """
-    return cast(EXPR, RuntimeExpr(Thunk.fn(_constant_thunk, name, tp, egg_name)))
+    return cast(EXPR, RuntimeExpr(Thunk.fn(_constant_thunk, name, tp, egg_name, default_replacement, ruleset)))
 
 
-def _constant_thunk(name: str, tp: type, egg_name: str | None) -> tuple[Declarations, TypedExprDecl]:
+def _constant_thunk(
+    name: str, tp: type, egg_name: str | None, default_replacement: object, ruleset: Ruleset | None
+) -> tuple[Declarations, TypedExprDecl]:
     decls = Declarations()
-    type_ref = resolve_type_annotation(decls, tp).to_just()
-    decls._constants[name] = ConstantDecl(type_ref, egg_name)
-    return decls, TypedExprDecl(type_ref, CallDecl(ConstantRef(name)))
+    type_ref = resolve_type_annotation(decls, tp)
+    default_replacement = _resolve_default_replacement(type_ref, default_replacement, ruleset)
+    decls._constants[name] = ConstantDecl(type_ref.to_just(), default_replacement, egg_name)
+    return decls, TypedExprDecl(type_ref.to_just(), CallDecl(ConstantRef(name)))
+
+
+def _resolve_default_replacement(tp: TypeOrVarRef, value: object, ruleset: Ruleset | None) -> DefaultReplacement | None:
+    from .conversion import resolve_literal
+
+    if value is None:
+        return None
+    expr = resolve_literal(tp, value).__egg_typed_expr__.expr
+    return DefaultReplacement(expr, ruleset.__egg_name__ if ruleset else None)
 
 
 def _last_param_variable(params: list[Parameter]) -> bool:

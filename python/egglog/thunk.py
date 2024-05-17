@@ -21,7 +21,7 @@ class Thunk(Generic[T, Unpack[TS]]):
     Cached delayed function call.
     """
 
-    state: Resolved[T] | Unresolved[T, Unpack[TS]] | Resolving[T]
+    state: Resolved[T] | Unresolved[T, Unpack[TS]] | Resolving[T] | Error
 
     @classmethod
     def fn(
@@ -44,14 +44,21 @@ class Thunk(Generic[T, Unpack[TS]]):
                 return value
             case Unresolved(fn, args, fallback):
                 self.state = Resolving(fallback)
-                res = fn(*args)
-                self.state = Resolved(res)
-                return res
+                try:
+                    res = fn(*args)
+                except Exception as e:
+                    self.state = Error(e)
+                    raise
+                else:
+                    self.state = Resolved(res)
+                    return res
             case Resolving(fallback):
                 if fallback is None:
                     msg = "Recursively resolving thunk without fallback"
                     raise ValueError(msg)
                 return fallback()
+            case Error(e):
+                raise e
 
 
 @dataclass
@@ -69,3 +76,8 @@ class Unresolved(Generic[T, Unpack[TS]]):
 @dataclass
 class Resolving(Generic[T]):
     fallback: Callable[[], T] | None
+
+
+@dataclass
+class Error:
+    e: Exception

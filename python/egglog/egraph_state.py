@@ -19,6 +19,8 @@ from .type_constraint_solver import TypeConstraintError, TypeConstraintSolver
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from .declarations import DefaultReplacement
+
 __all__ = ["EGraphState", "GLOBAL_PY_OBJECT_SORT"]
 
 # Create a global sort for python objects, so we can store them without an e-graph instance
@@ -185,32 +187,53 @@ class EGraphState:
         match decl:
             case RelationDecl(arg_types, _, _):
                 self.egraph.run_program(bindings.Relation(egg_name, [self.type_ref_to_egg(a) for a in arg_types]))
-            case ConstantDecl(tp, _):
+            case ConstantDecl(tp, default_replacement, _):
                 # Use function decleration instead of constant b/c constants cannot be extracted
                 # https://github.com/egraphs-good/egglog/issues/334
                 self.egraph.run_program(
                     bindings.Function(bindings.FunctionDecl(egg_name, bindings.Schema([], self.type_ref_to_egg(tp))))
                 )
-            case FunctionDecl():
-                if not decl.builtin:
-                    signature = decl.signature
+                self.default_replacement_to_egg(default_replacement, tp, ref, (), ())
+            case FunctionDecl(
+                signature, default_replacemment, builtin, _, cost, default, on_merge, merge, unextractable
+            ):
+                if not builtin:
                     assert isinstance(signature, FunctionSignature), "Cannot turn special function to egg"
+                    return_type = signature.semantic_return_type.to_just()
+                    arg_types = tuple(a.to_just() for a in signature.arg_types)
                     egg_fn_decl = bindings.FunctionDecl(
                         egg_name,
-                        bindings.Schema(
-                            [self.type_ref_to_egg(a.to_just()) for a in signature.arg_types],
-                            self.type_ref_to_egg(signature.semantic_return_type.to_just()),
-                        ),
-                        self.expr_to_egg(decl.default) if decl.default else None,
-                        self.expr_to_egg(decl.merge) if decl.merge else None,
-                        [self.action_to_egg(a) for a in decl.on_merge],
-                        decl.cost,
-                        decl.unextractable,
+                        bindings.Schema(list(map(self.type_ref_to_egg, arg_types)), self.type_ref_to_egg(return_type)),
+                        self.expr_to_egg(default) if default else None,
+                        self.expr_to_egg(merge) if merge else None,
+                        [self.action_to_egg(a) for a in on_merge],
+                        cost,
+                        unextractable,
                     )
                     self.egraph.run_program(bindings.Function(egg_fn_decl))
+                    self.default_replacement_to_egg(
+                        default_replacemment, return_type, ref, signature.arg_names, arg_types
+                    )
             case _:
                 assert_never(decl)
         return egg_name
+
+    def default_replacement_to_egg(
+        self,
+        default_replacement: DefaultReplacement | None,
+        tp: JustTypeRef,
+        fn: CallableRef,
+        arg_names: tuple[str, ...],
+        arg_types: tuple[JustTypeRef, ...],
+    ) -> None:
+        if default_replacement is None:
+            return
+        args = tuple(TypedExprDecl(tp, VarDecl(name)) for name, tp in zip(arg_names, arg_types, strict=False))
+        lhs = CallDecl(fn, args)
+        rewrite = RewriteDecl(tp, lhs, default_replacement.expr, (), False)
+        ruleset_name = default_replacement.ruleset or ""
+        self.__egg_decls__._rulesets[ruleset_name].rules.append(rewrite)
+        self.ruleset_to_egg(ruleset_name)
 
     def type_ref_to_egg(self, ref: JustTypeRef) -> str:
         """
@@ -428,7 +451,10 @@ class FromEggState:
             signature = self.decls.get_callable_decl(callable_ref).to_function_decl().signature
             assert isinstance(signature, FunctionSignature)
             if isinstance(callable_ref, ClassMethodRef):
-                possible_types = self.state._get_possible_types(callable_ref.class_name)
+                # Need OR in case we have class method whose class whas never added as a sort, which would happen
+                # if the class method didn't return that type and no other function did. In this case, we don't need
+                # to care about the type vars and we we don't need to bind any possible type.
+                possible_types = self.state._get_possible_types(callable_ref.class_name) or [None]
                 cls_name = callable_ref.class_name
             else:
                 possible_types = [None]
@@ -437,7 +463,6 @@ class FromEggState:
                 tcs = TypeConstraintSolver(self.decls)
                 if possible_type and possible_type.args:
                     tcs.bind_class(possible_type)
-
                 try:
                     arg_types, bound_tp_params = tcs.infer_arg_types(
                         signature.arg_types, signature.semantic_return_type, signature.var_arg_type, tp, cls_name
