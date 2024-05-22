@@ -4,7 +4,7 @@ from __future__ import annotations
 import importlib
 import pathlib
 from copy import copy
-from typing import ClassVar, Union
+from typing import ClassVar, TypeAlias, Union
 
 import pytest
 
@@ -483,7 +483,7 @@ def test_upcast_self_lower_cost():
 
         def __add__(self, other: Int) -> Int: ...
 
-    NDArrayLike = Union[Int, "NDArray"]
+    NDArrayLike: TypeAlias = Union[Int, "NDArray"]
 
     class NDArray(Expr):
         def __init__(self, name: StringLike) -> None: ...
@@ -648,3 +648,86 @@ def test_access_property_on_class():
         def b(self) -> i64: ...
 
     assert expr_parts(A.b(A())) == expr_parts(A().b)
+
+
+class A(Expr):
+    def __init__(self) -> None: ...
+
+
+class TestDefaultReplacements:
+    def test_function(self):
+        @function
+        def f() -> A:
+            return A()
+
+        check_eq(f(), A(), run())
+
+    def test_function_ruleset(self):
+        r = ruleset()
+
+        @function(ruleset=r)
+        def f() -> A:
+            return A()
+
+        check_eq(f(), A(), r)
+
+    def test_constant(self):
+        a = constant("a", A, A())
+        print(a.__egg_decls__.default_ruleset)
+        check_eq(a, A(), run())
+
+    def test_constant_ruleset(self):
+        r = ruleset()
+        a = constant("a", A, A(), ruleset=r)
+
+        check_eq(a, A(), r)
+
+    def test_method(self):
+        class B(Expr):
+            def __init__(self) -> None: ...
+            def f(self) -> A:
+                return A()
+
+        check_eq(B().f(), A(), run())
+
+    def test_method_ruleset(self):
+        r = ruleset()
+
+        class B(Expr, ruleset=r):
+            def __init__(self) -> None: ...
+            def f(self) -> A:
+                return A()
+
+        check_eq(B().f(), A(), r)
+
+    def test_classmethod(self):
+        class B(Expr):
+            @classmethod
+            def f(cls) -> A:
+                return A()
+
+        check_eq(B.f(), A(), run())
+
+    def test_classmethod_ruleset(self):
+        r = ruleset()
+
+        class B(Expr, ruleset=r):
+            @classmethod
+            def f(cls) -> A:
+                return A()
+
+        check_eq(B.f(), A(), r)
+
+    def test_classvar(self):
+        class B(Expr):
+            a: ClassVar[A] = A()
+
+        check_eq(B.a, A(), run())
+
+    def test_classvar_ruleset(self):
+        r = ruleset()
+
+        class B(Expr, ruleset=r):
+            a: ClassVar[A] = A()
+
+        check_eq(B.a, A(), r)

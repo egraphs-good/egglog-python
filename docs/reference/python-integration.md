@@ -426,3 +426,87 @@ check_eq(added_two, MathList.EMPTY.append(Math(2) + Math(1)), math_list_ruleset.
 Note that this is all built on the [unstable function support added as a sort to egglog](https://github.com/egraphs-good/egglog/pull/348).
 While this sort is exposed directly at the high level with the `UnstableFn` class, we don't reccomend depending on it directly, and instead
 using the builtin Python type annotations. This will allow us to change the implementation in the future without breaking user code.
+
+## Default Replacements
+
+When defining a function or a constant, you can also provide a default replacement value. This is useful when
+you might want both the original value and the replaced value in the e-graph, so that later rules could reference either.
+
+```{code-cell} python
+@function
+def math_float(f: f64Like) -> Math:
+    ...
+
+
+# Can add a default replacement value for a constants
+pi = egraph.constant("pi", Math, math_float(3.14))
+
+
+# or for a function by providing a body
+@function
+def square(x: Math) -> Math:
+    return x * x
+
+# thse rewrites will be added to the e-graph under the default ruleset
+egraph = EGraph()
+egraph.register(pi)
+egraph.register(square(Math.var('x')))
+egraph.run(1)
+egraph.check(eq(pi).to(math_float(3.14)))
+egraph.check(eq(square(Math.var('x'))).to(Math.var('x') * Math.var('x')))
+egraph
+```
+
+This is equivalent to adding the rewrite rules to the e-graph directly, like this, but just more succinct:
+
+```python
+x  = var("x", Math)
+egraph.register(rewrite(pi).to(math_float(3.14)))
+egraph.register(rewrite(square(x)).to(x * x))
+```
+
+You can also specify a ruleset to add the rewrites to, by passing in the `ruleset` keyword argument:
+
+```{code-cell} python
+math_ruleset = ruleset()
+
+e_constant = egraph.constant("e", Math, math_float(2.71), ruleset=math_ruleset)
+@function(ruleset=math_ruleset)
+def cube(x: Math) -> Math:
+    return x * x * x
+
+
+egraph.register(e_constant)
+egraph.register(cube(Math.var('x')))
+egraph.run(math_ruleset)
+egraph.check(eq(e_constant).to(math_float(2.71)))
+egraph.check(eq(cube(Math.var('x'))).to(Math.var('x') * Math.var('x') * Math.var('x')))
+```
+
+### Default Replacement for Classes
+
+In classes, you can also provide a default replacement value, and an optional ruleset on the class constructor:
+
+```{code-cell} python
+other_math_ruleset = ruleset()
+
+
+class OtherMath(Expr, ruleset=other_math_ruleset):
+    PI: ClassVar[OtherMath] = OtherMath(3.14)
+
+    def __init__(self, x: f64Like) -> None:
+        ...
+
+    def double(self) -> OtherMath:
+        return self + self
+
+    def __add__(self, other: OtherMath) -> OtherMath:
+        ...
+
+x = OtherMath.PI.double()
+egraph = EGraph()
+egraph.register(x)
+egraph.run(other_math_ruleset * 2)
+egraph.check(eq(x).to(OtherMath(3.14) + OtherMath(3.14)))
+egraph
+```

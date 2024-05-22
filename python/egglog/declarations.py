@@ -71,6 +71,8 @@ __all__ = [
     "CommandDecl",
     "SpecialFunctions",
     "FunctionSignature",
+    "DefaultRewriteDecl",
+    "InitRef",
 ]
 
 
@@ -113,6 +115,12 @@ class Declarations:
     _classes: dict[str, ClassDecl] = field(default_factory=dict)
     _rulesets: dict[str, RulesetDecl | CombinedRulesetDecl] = field(default_factory=lambda: {"": RulesetDecl([])})
 
+    @property
+    def default_ruleset(self) -> RulesetDecl:
+        ruleset = self._rulesets[""]
+        assert isinstance(ruleset, RulesetDecl)
+        return ruleset
+
     @classmethod
     def create(cls, *others: DeclerationsLike) -> Declarations:
         others = upcast_declerations(others)
@@ -127,7 +135,7 @@ class Declarations:
 
     def copy(self) -> Declarations:
         new = Declarations()
-        new |= self
+        self.update_other(new)
         return new
 
     def update(self, *others: DeclerationsLike) -> None:
@@ -154,9 +162,13 @@ class Declarations:
         other._functions |= self._functions
         other._classes |= self._classes
         other._constants |= self._constants
+        # Must combine rulesets bc the empty ruleset might be different, bc DefaultRewriteDecl
+        # is added to functions.
+        combined_default_rules: set[RewriteOrRuleDecl] = {*self.default_ruleset.rules, *other.default_ruleset.rules}
         other._rulesets |= self._rulesets
+        other._rulesets[""] = RulesetDecl(list(combined_default_rules))
 
-    def get_callable_decl(self, ref: CallableRef) -> CallableDecl:
+    def get_callable_decl(self, ref: CallableRef) -> CallableDecl:  # noqa: PLR0911
         match ref:
             case FunctionRef(name):
                 return self._functions[name]
@@ -170,7 +182,28 @@ class Declarations:
                 return self._classes[class_name].class_methods[name]
             case PropertyRef(class_name, property_name):
                 return self._classes[class_name].properties[property_name]
+            case InitRef(class_name):
+                init_fn = self._classes[class_name].init
+                assert init_fn
+                return init_fn
         assert_never(ref)
+
+    def set_function_decl(
+        self, ref: FunctionRef | MethodRef | ClassMethodRef | PropertyRef | InitRef, decl: FunctionDecl
+    ) -> None:
+        match ref:
+            case FunctionRef(name):
+                self._functions[name] = decl
+            case MethodRef(class_name, method_name):
+                self._classes[class_name].methods[method_name] = decl
+            case ClassMethodRef(class_name, name):
+                self._classes[class_name].class_methods[name] = decl
+            case PropertyRef(class_name, property_name):
+                self._classes[class_name].properties[property_name] = decl
+            case InitRef(class_name):
+                self._classes[class_name].init = decl
+            case _:
+                assert_never(ref)
 
     def has_method(self, class_name: str, method_name: str) -> bool | None:
         """
@@ -183,12 +216,20 @@ class Declarations:
     def get_class_decl(self, name: str) -> ClassDecl:
         return self._classes[name]
 
+    def get_paramaterized_class(self, name: str) -> TypeRefWithVars:
+        """
+        Returns a class reference with type parameters, if the class is paramaterized.
+        """
+        type_vars = self._classes[name].type_vars
+        return TypeRefWithVars(name, tuple(map(ClassTypeVarRef, type_vars)))
+
 
 @dataclass
 class ClassDecl:
     egg_name: str | None = None
     type_vars: tuple[str, ...] = ()
     builtin: bool = False
+    init: FunctionDecl | None = None
     class_methods: dict[str, FunctionDecl] = field(default_factory=dict)
     # These have to be seperate from class_methods so that printing them can be done easily
     class_variables: dict[str, ConstantDecl] = field(default_factory=dict)
@@ -294,6 +335,11 @@ class ClassMethodRef:
 
 
 @dataclass(frozen=True)
+class InitRef:
+    class_name: str
+
+
+@dataclass(frozen=True)
 class ClassVariableRef:
     class_name: str
     var_name: str
@@ -305,7 +351,9 @@ class PropertyRef:
     property_name: str
 
 
-CallableRef: TypeAlias = FunctionRef | ConstantRef | MethodRef | ClassMethodRef | ClassVariableRef | PropertyRef
+CallableRef: TypeAlias = (
+    FunctionRef | ConstantRef | MethodRef | ClassMethodRef | InitRef | ClassVariableRef | PropertyRef
+)
 
 
 ##
@@ -378,7 +426,6 @@ class FunctionSignature:
 @dataclass(frozen=True)
 class FunctionDecl:
     signature: FunctionSignature | SpecialFunctions = field(default_factory=FunctionSignature)
-
     # Egg params
     builtin: bool = False
     egg_name: str | None = None
@@ -458,7 +505,7 @@ class CallDecl:
     bound_tp_params: tuple[JustTypeRef, ...] | None = None
 
     def __post_init__(self) -> None:
-        if self.bound_tp_params and not isinstance(self.callable, ClassMethodRef):
+        if self.bound_tp_params and not isinstance(self.callable, ClassMethodRef | InitRef):
             msg = "Cannot bind type parameters to a non-class method callable."
             raise ValueError(msg)
 
@@ -629,7 +676,13 @@ class RuleDecl:
     name: str | None
 
 
-RewriteOrRuleDecl: TypeAlias = RewriteDecl | BiRewriteDecl | RuleDecl
+@dataclass(frozen=True)
+class DefaultRewriteDecl:
+    ref: CallableRef
+    expr: ExprDecl
+
+
+RewriteOrRuleDecl: TypeAlias = RewriteDecl | BiRewriteDecl | RuleDecl | DefaultRewriteDecl
 
 
 @dataclass(frozen=True)

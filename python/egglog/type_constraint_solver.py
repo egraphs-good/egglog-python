@@ -79,6 +79,7 @@ class TypeConstraintSolver:
         Also returns the bound type params if the class name is passed in.
         """
         self._infer_typevars(fn_return, return_, cls_name)
+        # Need to be generator so it can be infinite for variable args
         arg_types = (
             self._subtitute_typevars(a, cls_name) for a in chain(fn_args, repeat(fn_var_args) if fn_var_args else [])
         )

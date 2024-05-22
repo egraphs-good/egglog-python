@@ -100,7 +100,7 @@ def test_expr_special():
 def test_class_variable():
     decls = Declarations(
         _classes={
-            "i64": ClassDecl(class_variables={"one": ConstantDecl(JustTypeRef("i64"))}),
+            "i64": ClassDecl(class_variables={"one": ConstantDecl(JustTypeRef("i64"), None)}),
         },
     )
     i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars("i64"))

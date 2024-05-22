@@ -130,6 +130,16 @@ class EGraphState:
                     [self.fact_to_egg(f) for f in body],
                 )
                 return bindings.RuleCommand(name or "", ruleset, rule)
+            case DefaultRewriteDecl(ref, expr):
+                decl = self.__egg_decls__.get_callable_decl(ref).to_function_decl()
+                sig = decl.signature
+                assert isinstance(sig, FunctionSignature)
+                args = tuple(
+                    TypedExprDecl(tp.to_just(), VarDecl(name))
+                    for name, tp in zip(sig.arg_names, sig.arg_types, strict=False)
+                )
+                rewrite_decl = RewriteDecl(sig.semantic_return_type.to_just(), CallDecl(ref, args), expr, (), False)
+                return self.command_to_egg(rewrite_decl, ruleset)
             case _:
                 assert_never(cmd)
 
@@ -245,6 +255,8 @@ class EGraphState:
         if decl.builtin:
             for method in decl.class_methods:
                 self.callable_ref_to_egg(ClassMethodRef(ref.name, method))
+            if decl.init:
+                self.callable_ref_to_egg(InitRef(ref.name))
 
         return egg_name
 
@@ -355,6 +367,8 @@ def _generate_callable_egg_name(ref: CallableRef) -> str:
             | PropertyRef(cls_name, name)
         ):
             return f"{cls_name}_{name}"
+        case InitRef(cls_name):
+            return f"{cls_name}___init__"
         case _:
             assert_never(ref)
 
@@ -427,8 +441,11 @@ class FromEggState:
             possible_types: Iterable[JustTypeRef | None]
             signature = self.decls.get_callable_decl(callable_ref).to_function_decl().signature
             assert isinstance(signature, FunctionSignature)
-            if isinstance(callable_ref, ClassMethodRef):
-                possible_types = self.state._get_possible_types(callable_ref.class_name)
+            if isinstance(callable_ref, ClassMethodRef | InitRef):
+                # Need OR in case we have class method whose class whas never added as a sort, which would happen
+                # if the class method didn't return that type and no other function did. In this case, we don't need
+                # to care about the type vars and we we don't need to bind any possible type.
+                possible_types = self.state._get_possible_types(callable_ref.class_name) or [None]
                 cls_name = callable_ref.class_name
             else:
                 possible_types = [None]
@@ -437,7 +454,6 @@ class FromEggState:
                 tcs = TypeConstraintSolver(self.decls)
                 if possible_type and possible_type.args:
                     tcs.bind_class(possible_type)
-
                 try:
                     arg_types, bound_tp_params = tcs.infer_arg_types(
                         signature.arg_types, signature.semantic_return_type, signature.var_arg_type, tp, cls_name
