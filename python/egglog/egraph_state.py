@@ -116,8 +116,8 @@ class EGraphState:
             case RewriteDecl(tp, lhs, rhs, conditions) | BiRewriteDecl(tp, lhs, rhs, conditions):
                 self.type_ref_to_egg(tp)
                 rewrite = bindings.Rewrite(
-                    self.expr_to_egg(lhs),
-                    self.expr_to_egg(rhs),
+                    self._expr_to_egg(lhs),
+                    self._expr_to_egg(rhs),
                     [self.fact_to_egg(c) for c in conditions],
                 )
                 return (
@@ -150,13 +150,13 @@ class EGraphState:
                 return bindings.Let(name, self.typed_expr_to_egg(typed_expr))
             case SetDecl(tp, call, rhs):
                 self.type_ref_to_egg(tp)
-                call_ = self.expr_to_egg(call)
-                return bindings.Set(call_.name, call_.args, self.expr_to_egg(rhs))
+                call_ = self._expr_to_egg(call)
+                return bindings.Set(call_.name, call_.args, self._expr_to_egg(rhs))
             case ExprActionDecl(typed_expr):
                 return bindings.Expr_(self.typed_expr_to_egg(typed_expr))
             case ChangeDecl(tp, call, change):
                 self.type_ref_to_egg(tp)
-                call_ = self.expr_to_egg(call)
+                call_ = self._expr_to_egg(call)
                 egg_change: bindings._Change
                 match change:
                     case "delete":
@@ -168,7 +168,7 @@ class EGraphState:
                 return bindings.Change(egg_change, call_.name, call_.args)
             case UnionDecl(tp, lhs, rhs):
                 self.type_ref_to_egg(tp)
-                return bindings.Union(self.expr_to_egg(lhs), self.expr_to_egg(rhs))
+                return bindings.Union(self._expr_to_egg(lhs), self._expr_to_egg(rhs))
             case PanicDecl(name):
                 return bindings.Panic(name)
             case _:
@@ -178,7 +178,7 @@ class EGraphState:
         match fact:
             case EqDecl(tp, exprs):
                 self.type_ref_to_egg(tp)
-                return bindings.Eq([self.expr_to_egg(e) for e in exprs])
+                return bindings.Eq([self._expr_to_egg(e) for e in exprs])
             case ExprFactDecl(typed_expr):
                 return bindings.Fact(self.typed_expr_to_egg(typed_expr))
             case _:
@@ -212,8 +212,8 @@ class EGraphState:
                             [self.type_ref_to_egg(a.to_just()) for a in signature.arg_types],
                             self.type_ref_to_egg(signature.semantic_return_type.to_just()),
                         ),
-                        self.expr_to_egg(decl.default) if decl.default else None,
-                        self.expr_to_egg(decl.merge) if decl.merge else None,
+                        self._expr_to_egg(decl.default) if decl.default else None,
+                        self._expr_to_egg(decl.merge) if decl.merge else None,
                         [self.action_to_egg(a) for a in decl.on_merge],
                         decl.cost,
                         decl.unextractable,
@@ -274,15 +274,15 @@ class EGraphState:
 
     def typed_expr_to_egg(self, typed_expr_decl: TypedExprDecl) -> bindings._Expr:
         self.type_ref_to_egg(typed_expr_decl.tp)
-        return self.expr_to_egg(typed_expr_decl.expr)
+        return self._expr_to_egg(typed_expr_decl.expr)
 
     @overload
-    def expr_to_egg(self, expr_decl: CallDecl) -> bindings.Call: ...
+    def _expr_to_egg(self, expr_decl: CallDecl) -> bindings.Call: ...
 
     @overload
-    def expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr: ...
+    def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr: ...
 
-    def expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:
+    def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:
         """
         Convert an ExprDecl to an egg expression.
 
@@ -320,7 +320,7 @@ class EGraphState:
             case PyObjectDecl(value):
                 res = GLOBAL_PY_OBJECT_SORT.store(value)
             case PartialCallDecl(call_decl):
-                egg_fn_call = self.expr_to_egg(call_decl)
+                egg_fn_call = self._expr_to_egg(call_decl)
                 res = bindings.Call("unstable-fn", [bindings.Lit(bindings.String(egg_fn_call.name)), *egg_fn_call.args])
             case _:
                 assert_never(expr_decl.expr)
@@ -442,7 +442,7 @@ class FromEggState:
             possible_types: Iterable[JustTypeRef | None]
             signature = self.decls.get_callable_decl(callable_ref).to_function_decl().signature
             assert isinstance(signature, FunctionSignature)
-            if isinstance(callable_ref, ClassMethodRef | InitRef):
+            if isinstance(callable_ref, ClassMethodRef | InitRef | MethodRef):
                 # Need OR in case we have class method whose class whas never added as a sort, which would happen
                 # if the class method didn't return that type and no other function did. In this case, we don't need
                 # to care about the type vars and we we don't need to bind any possible type.
@@ -462,7 +462,14 @@ class FromEggState:
                 except TypeConstraintError:
                     continue
                 args = tuple(self.resolve_term(a, tp) for a, tp in zip(term.args, arg_types, strict=False))
-                return CallDecl(callable_ref, args, bound_tp_params)
+
+                return CallDecl(
+                    callable_ref,
+                    args,
+                    # Don't include bound type params if this is just a method, we only needed them for type resolution
+                    # but dont need to store them
+                    bound_tp_params if isinstance(callable_ref, ClassMethodRef | InitRef) else None,
+                )
         raise ValueError(f"Could not find callable ref for call {term}")
 
     def resolve_term(self, term_id: int, tp: JustTypeRef) -> TypedExprDecl:

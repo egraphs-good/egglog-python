@@ -730,3 +730,17 @@ class TestDefaultReplacements:
             a: ClassVar[A] = A()
 
         check_eq(B.a, A(), r)
+
+
+class TestIssue166:
+    """
+    Raised by @cgyurgyik in https://github.com/egraphs-good/egglog-python/issues/166
+    """
+
+    def test_inserting_map(self):
+        egraph = EGraph()
+        m = egraph.let("map", Map[String, i64].empty().insert(String("a"), i64(42)))
+        egraph.simplify(m, 5)
+
+    def test_creating_map(self):
+        EGraph().simplify(Map[String, i64].empty(), 1)
