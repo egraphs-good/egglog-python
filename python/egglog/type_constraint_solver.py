@@ -79,10 +79,10 @@ class TypeConstraintSolver:
         Also returns the bound type params if the class name is passed in.
         """
         self._infer_typevars(fn_return, return_, cls_name)
-        # Need to be generator so it can be infinite for variable args
-        arg_types = (
-            self._subtitute_typevars(a, cls_name) for a in chain(fn_args, repeat(fn_var_args) if fn_var_args else [])
-        )
+        arg_types: Iterable[JustTypeRef] = [self._subtitute_typevars(a, cls_name) for a in fn_args]
+        if fn_var_args:
+            # Need to be generator so it can be infinite for variable args
+            arg_types = chain(arg_types, repeat(self._subtitute_typevars(fn_var_args, cls_name)))
         bound_typevars = (
             tuple(
                 v
@@ -133,8 +133,8 @@ class TypeConstraintSolver:
     def _subtitute_typevars(self, tp: TypeOrVarRef, cls_name: str | None) -> JustTypeRef:
         match tp:
             case ClassTypeVarRef(name):
+                assert cls_name is not None
                 try:
-                    assert cls_name is not None
                     return self._cls_typevar_index_to_type[cls_name][name]
                 except KeyError as e:
                     raise TypeConstraintError(f"Not enough bound typevars for {tp}") from e

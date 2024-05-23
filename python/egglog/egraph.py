@@ -1068,7 +1068,8 @@ class EGraph(_BaseModule):
         self._add_decls(runtime_expr, schedule)
         egg_schedule = self._state.schedule_to_egg(schedule.schedule)
         typed_expr = runtime_expr.__egg_typed_expr__
-        egg_expr = self._state.expr_to_egg(typed_expr.expr)
+        # Must also register type
+        egg_expr = self._state.typed_expr_to_egg(typed_expr)
         self._egraph.run_program(bindings.Simplify(egg_expr, egg_schedule))
         extract_report = self._egraph.extract_report()
         if not isinstance(extract_report, bindings.Best):
@@ -1173,8 +1174,7 @@ class EGraph(_BaseModule):
         return [cast(EXPR, RuntimeExpr.__from_value__(self.__egg_decls__, expr)) for expr in new_exprs]
 
     def _run_extract(self, typed_expr: TypedExprDecl, n: int) -> bindings._ExtractReport:
-        self._state.type_ref_to_egg(typed_expr.tp)
-        expr = self._state.expr_to_egg(typed_expr.expr)
+        expr = self._state.typed_expr_to_egg(typed_expr)
         self._egraph.run_program(bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n)))))
         extract_report = self._egraph.extract_report()
         if not extract_report:
@@ -1233,7 +1233,7 @@ class EGraph(_BaseModule):
         runtime_expr = to_runtime_expr(expr)
         self._add_decls(runtime_expr)
         typed_expr = runtime_expr.__egg_typed_expr__
-        egg_expr = self._state.expr_to_egg(typed_expr.expr)
+        egg_expr = self._state.typed_expr_to_egg(typed_expr)
         match typed_expr.tp:
             case JustTypeRef("i64"):
                 return self._egraph.eval_i64(egg_expr)
