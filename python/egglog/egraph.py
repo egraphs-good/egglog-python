@@ -530,6 +530,8 @@ def _generate_class_decls(
         (k, v) for k, v in namespace.items() if k not in IGNORED_ATTRIBUTES or isinstance(v, _WrappedMethod)
     ]
 
+    # all methods we should try adding default functions for
+    default_function_refs: dict[ClassMethodRef | MethodRef | PropertyRef, Callable] = {}
     # Then register each of its methods
     for method_name, method in filtered_namespace:
         is_init = method_name == "__init__"
@@ -560,9 +562,15 @@ def _generate_class_decls(
             case _:
                 ref = InitRef(cls_name) if is_init else MethodRef(cls_name, method_name)
 
-        _fn_decl(
-            decls, egg_fn, ref, fn, locals, default, cost, merge, on_merge, mutates, builtin, ruleset, unextractable
-        )
+        _fn_decl(decls, egg_fn, ref, fn, locals, default, cost, merge, on_merge, mutates, builtin, unextractable)
+
+        if not builtin and not isinstance(ref, InitRef) and not mutates:
+            default_function_refs[ref] = fn
+
+    # Add all rewrite methods at the end so that all methods are registered first and can be accessed
+    # in the bodies
+    for ref, fn in default_function_refs.items():
+        _add_default_rewrite_function(decls, ref, fn, ruleset)
 
     return decls
 
@@ -636,7 +644,7 @@ class _FunctionConstructor:
         _fn_decl(
             decls,
             self.egg_fn,
-            FunctionRef(fn.__name__),
+            (ref := FunctionRef(fn.__name__)),
             fn,
             self.hint_locals,
             self.default,
@@ -645,9 +653,9 @@ class _FunctionConstructor:
             self.on_merge,
             self.mutates_first_arg,
             self.builtin,
-            self.ruleset,
             unextractable=self.unextractable,
         )
+        _add_default_rewrite_function(decls, ref, fn, self.ruleset)
         return decls
 
 
@@ -665,11 +673,10 @@ def _fn_decl(
     on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None,
     mutates_first_arg: bool,
     is_builtin: bool,
-    ruleset: Ruleset | None,
     unextractable: bool = False,
 ) -> None:
     """
-    Sets the function decl for the function object and also sets the default rewrite if the function doesn't return None.
+    Sets the function decl for the function object.
     """
     if not isinstance(fn, FunctionType):
         raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
@@ -768,19 +775,6 @@ def _fn_decl(
     )
     decls.set_function_decl(ref, decl)
 
-    # Trying setting a default value if we get anything besides None from calling the function wtih vars
-
-    if not is_builtin and not isinstance(ref, InitRef) and not mutates_first_arg:
-        var_args: list[object] = [
-            RuntimeExpr.__from_value__(decls, TypedExprDecl(tp.to_just(), VarDecl(_rule_var_name(name))))
-            for name, tp in zip(arg_names, arg_types, strict=False)
-        ]
-        # If this is a classmethod, add the class as the first arg
-        if isinstance(ref, ClassMethodRef):
-            tp = decls.get_paramaterized_class(ref.class_name)
-            var_args.insert(0, RuntimeClass(Thunk.value(decls), tp))
-        _add_default_rewrite(decls, ref, return_type, fn(*var_args), ruleset)
-
 
 # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
 @overload
@@ -846,6 +840,26 @@ def _constant_thunk(
     decls._constants[name] = ConstantDecl(type_ref.to_just(), egg_name)
     _add_default_rewrite(decls, callable_ref, type_ref, default_replacement, ruleset)
     return decls, TypedExprDecl(type_ref.to_just(), CallDecl(callable_ref))
+
+
+def _add_default_rewrite_function(decls: Declarations, ref: CallableRef, fn: Callable, ruleset: Ruleset | None) -> None:
+    """
+    Adds a default rewrite for a function, by calling the functions with vars and adding it if it is not None.
+    """
+    callable_decl = decls.get_callable_decl(ref)
+    assert isinstance(callable_decl, FunctionDecl)
+    signature = callable_decl.signature
+    assert isinstance(signature, FunctionSignature)
+
+    var_args: list[object] = [
+        RuntimeExpr.__from_value__(decls, TypedExprDecl(tp.to_just(), VarDecl(_rule_var_name(name))))
+        for name, tp in zip(signature.arg_names, signature.arg_types, strict=False)
+    ]
+    # If this is a classmethod, add the class as the first arg
+    if isinstance(ref, ClassMethodRef):
+        tp = decls.get_paramaterized_class(ref.class_name)
+        var_args.insert(0, RuntimeClass(Thunk.value(decls), tp))
+    _add_default_rewrite(decls, ref, signature.semantic_return_type, fn(*var_args), ruleset)
 
 
 def _add_default_rewrite(

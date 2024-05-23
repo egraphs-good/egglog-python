@@ -82,7 +82,13 @@ class DelayedDeclerations:
 
     @property
     def __egg_decls__(self) -> Declarations:
-        return self.__egg_decls_thunk__()
+        try:
+            return self.__egg_decls_thunk__()
+        # Catch attribute error, so that it isn't bubbled up as a missing attribute and fallbacks on `__getattr__`
+        # instead raise explicitly
+        except AttributeError as err:
+            msg = "Error resolving declerations"
+            raise RuntimeError(msg) from err
 
 
 @runtime_checkable

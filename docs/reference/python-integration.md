@@ -135,6 +135,7 @@ class Math(Expr):
     def var(cls, name: StringLike) -> Math: ...
 
     def __add__(self, other: Math) -> Math: ...
+    def __mul__(self, other: Math) -> Math: ...
 
 converter(i64, Math, Math)
 converter(String, Math, Math.var)
@@ -439,7 +440,7 @@ def math_float(f: f64Like) -> Math:
 
 
 # Can add a default replacement value for a constants
-pi = egraph.constant("pi", Math, math_float(3.14))
+pi = constant("pi", Math, math_float(3.14))
 
 
 # or for a function by providing a body
@@ -470,7 +471,8 @@ You can also specify a ruleset to add the rewrites to, by passing in the `rulese
 ```{code-cell} python
 math_ruleset = ruleset()
 
-e_constant = egraph.constant("e", Math, math_float(2.71), ruleset=math_ruleset)
+e_constant = constant("e", Math, math_float(2.71), ruleset=math_ruleset)
+
 @function(ruleset=math_ruleset)
 def cube(x: Math) -> Math:
     return x * x * x
@@ -485,28 +487,26 @@ egraph.check(eq(cube(Math.var('x'))).to(Math.var('x') * Math.var('x') * Math.var
 
 ### Default Replacement for Classes
 
-In classes, you can also provide a default replacement value, and an optional ruleset on the class constructor:
+In classes, you can also provide a default replacement value for constants and methods, and an optional ruleset on the class constructor:
 
 ```{code-cell} python
 other_math_ruleset = ruleset()
 
 
-class OtherMath(Expr, ruleset=other_math_ruleset):
-    PI: ClassVar[OtherMath] = OtherMath(3.14)
+class WrappedMath(Expr, ruleset=other_math_ruleset):
+    PI: ClassVar[Math] = math_float(3.14)
 
-    def __init__(self, x: f64Like) -> None:
-        ...
+    def __init__(self, x: Math) -> None: ...
 
-    def double(self) -> OtherMath:
+    def double(self) -> WrappedMath:
         return self + self
 
-    def __add__(self, other: OtherMath) -> OtherMath:
-        ...
+    def __add__(self, other: WrappedMath) -> WrappedMath: ...
 
-x = OtherMath.PI.double()
+x = WrappedMath(WrappedMath.PI).double()
 egraph = EGraph()
 egraph.register(x)
 egraph.run(other_math_ruleset * 2)
-egraph.check(eq(x).to(OtherMath(3.14) + OtherMath(3.14)))
+egraph.check(eq(x).to(WrappedMath(math_float(3.14)) + WrappedMath(math_float(3.14))))
 egraph
 ```
