@@ -731,6 +731,23 @@ class TestDefaultReplacements:
 
         check_eq(B.a, A(), r)
 
+    def test_method_refer_to_later(self):
+        """
+        Verify that an earlier method body can refer to values defined in later ones
+        """
+
+        class B(Expr):
+            def __init__(self) -> None: ...
+            def f(self) -> A:
+                return self.g()
+
+            def g(self) -> A: ...
+
+        B()
+        left = B().f()
+        right = B().g()
+        check_eq(left, right, run())
+
 
 class TestIssue166:
     """
