@@ -19,7 +19,7 @@ from .type_constraint_solver import TypeConstraintError, TypeConstraintSolver
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["EGraphState", "GLOBAL_PY_OBJECT_SORT"]
+__all__ = ["EGraphState", "GLOBAL_PY_OBJECT_SORT", "_rule_var_name"]
 
 # Create a global sort for python objects, so we can store them without an e-graph instance
 # Needed when serializing commands to egg commands when creating modules
@@ -98,7 +98,8 @@ class EGraphState:
                 for rule in rules:
                     if rule in added_rules:
                         continue
-                    self.egraph.run_program(self.command_to_egg(rule, name))
+                    cmd = self.command_to_egg(rule, name)
+                    self.egraph.run_program(cmd)
                     added_rules.add(rule)
             case CombinedRulesetDecl(rulesets):
                 if name in self.rulesets:
@@ -135,7 +136,7 @@ class EGraphState:
                 sig = decl.signature
                 assert isinstance(sig, FunctionSignature)
                 args = tuple(
-                    TypedExprDecl(tp.to_just(), VarDecl(name))
+                    TypedExprDecl(tp.to_just(), VarDecl(_rule_var_name(name)))
                     for name, tp in zip(sig.arg_names, sig.arg_types, strict=False)
                 )
                 rewrite_decl = RewriteDecl(sig.semantic_return_type.to_just(), CallDecl(ref, args), expr, (), False)
@@ -470,3 +471,10 @@ class FromEggState:
         except KeyError:
             res = self.cache[term_id] = self.from_expr(tp, self.termdag.nodes[term_id])
             return res
+
+
+def _rule_var_name(s: str) -> str:
+    """
+    Create a hidden variable name, for rewrites, so that let bindings or function won't conflict with it
+    """
+    return f"__var__{s}"

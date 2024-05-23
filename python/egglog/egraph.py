@@ -772,7 +772,7 @@ def _fn_decl(
 
     if not is_builtin and not isinstance(ref, InitRef) and not mutates_first_arg:
         var_args: list[object] = [
-            RuntimeExpr.__from_value__(decls, TypedExprDecl(tp.to_just(), VarDecl(name)))
+            RuntimeExpr.__from_value__(decls, TypedExprDecl(tp.to_just(), VarDecl(_rule_var_name(name))))
             for name, tp in zip(arg_names, arg_types, strict=False)
         ]
         # If this is a classmethod, add the class as the first arg
@@ -1930,7 +1930,7 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     if "Callable" not in globals:
         globals["Callable"] = Callable
     hints = get_type_hints(gen, globals, frame.f_locals)
-    args = [_var(p.name, hints[p.name]) for p in signature(gen).parameters.values()]
+    args = [_var(_rule_var_name(p.name), hints[p.name]) for p in signature(gen).parameters.values()]
     return list(gen(*args))  # type: ignore[misc]
 
 
