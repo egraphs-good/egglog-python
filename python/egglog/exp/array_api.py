@@ -882,7 +882,10 @@ converter(IntOrTuple, OptionalIntOrTuple, OptionalIntOrTuple.some)
 
 @function
 def asarray(
-    a: NDArray, dtype: OptionalDType = OptionalDType.none, copy: OptionalBool = OptionalBool.none
+    a: NDArray,
+    dtype: OptionalDType = OptionalDType.none,
+    copy: OptionalBool = OptionalBool.none,
+    device: OptionalDevice = OptionalDevice.none,
 ) -> NDArray: ...
 
 
