@@ -275,7 +275,10 @@ class RuntimeFunction(DelayedDeclerations):
 
         # Turn all keyword args into positional args
         py_signature = to_py_signature(signature, self.__egg_decls__, _egg_partial_function)
-        bound = py_signature.bind(*args, **kwargs)
+        try:
+            bound = py_signature.bind(*args, **kwargs)
+        except TypeError as err:
+            raise TypeError(f"Failed to call {self} with args {args} and kwargs {kwargs}") from err
         del kwargs
         bound.apply_defaults()
         assert not bound.kwargs
