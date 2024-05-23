@@ -163,10 +163,8 @@ class RuntimeClass(DelayedDeclerations):
             return RuntimeExpr.__from_value__(
                 self.__egg_decls__, TypedExprDecl(self.__egg_tp__.to_just(), LitDecl(None))
             )
-
-        return RuntimeFunction(
-            Thunk.value(self.__egg_decls__), ClassMethodRef(name, "__init__"), self.__egg_tp__.to_just()
-        )(*args, **kwargs)  # type: ignore[arg-type]
+        fn = RuntimeFunction(Thunk.value(self.__egg_decls__), InitRef(name), self.__egg_tp__.to_just())
+        return fn(*args, **kwargs)  # type: ignore[arg-type]
 
     def __dir__(self) -> list[str]:
         cls_decl = self.__egg_decls__.get_class_decl(self.__egg_tp__.name)
@@ -277,7 +275,10 @@ class RuntimeFunction(DelayedDeclerations):
 
         # Turn all keyword args into positional args
         py_signature = to_py_signature(signature, self.__egg_decls__, _egg_partial_function)
-        bound = py_signature.bind(*args, **kwargs)
+        try:
+            bound = py_signature.bind(*args, **kwargs)
+        except TypeError as err:
+            raise TypeError(f"Failed to call {self} with args {args} and kwargs {kwargs}") from err
         del kwargs
         bound.apply_defaults()
         assert not bound.kwargs
@@ -310,7 +311,9 @@ class RuntimeFunction(DelayedDeclerations):
         return_tp = tcs.infer_return_type(
             signature.arg_types, signature.semantic_return_type, signature.var_arg_type, arg_types, cls_name
         )
-        bound_params = cast(JustTypeRef, bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef) else None
+        bound_params = (
+            cast(JustTypeRef, bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef | InitRef) else None
+        )
         # If we were using unstable-app to call a funciton, add that function back as the first arg.
         if function_value:
             arg_exprs = (function_value, *arg_exprs)

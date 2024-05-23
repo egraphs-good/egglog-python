@@ -166,6 +166,8 @@ class TraverseContext:
                 pass
             case EqDecl(_, decls) | SequenceDecl(decls) | RulesetDecl(decls):
                 for de in decls:
+                    if isinstance(de, DefaultRewriteDecl):
+                        continue
                     self(de)
             case CallDecl(_, exprs, _):
                 for e in exprs:
@@ -177,6 +179,8 @@ class TraverseContext:
             case PartialCallDecl(c):
                 self(c)
             case CombinedRulesetDecl(_):
+                pass
+            case DefaultRewriteDecl():
                 pass
             case _:
                 assert_never(decl)
@@ -276,7 +280,7 @@ class PrettyContext:
             case RulesetDecl(rules):
                 if ruleset_name:
                     return f"ruleset(name={ruleset_name!r})", f"ruleset_{ruleset_name}"
-                args = ", ".join(map(self, rules))
+                args = ", ".join(self(r) for r in rules if not isinstance(r, DefaultRewriteDecl))
                 return f"ruleset({args})", "ruleset"
             case CombinedRulesetDecl(rulesets):
                 if ruleset_name:
@@ -298,6 +302,9 @@ class PrettyContext:
                     return ruleset_str, "schedule"
                 args = ", ".join(map(self, until))
                 return f"run({ruleset_str}, {args})", "schedule"
+            case DefaultRewriteDecl():
+                msg = "default rewrites should not be pretty printed"
+                raise TypeError(msg)
         assert_never(decl)
 
     def _call(
@@ -370,10 +377,8 @@ class PrettyContext:
             case FunctionRef(name):
                 return name, args
             case ClassMethodRef(class_name, method_name):
-                fn_str = str(JustTypeRef(class_name, bound_tp_params or ()))
-                if method_name != "__init__":
-                    fn_str += f".{method_name}"
-                return fn_str, args
+                tp_ref = JustTypeRef(class_name, bound_tp_params or ())
+                return f"{tp_ref}.{method_name}", args
             case MethodRef(_class_name, method_name):
                 slf, *args = args
                 slf = self(slf, parens=True)
@@ -400,6 +405,9 @@ class PrettyContext:
                 return f"{class_name}.{variable_name}"
             case PropertyRef(_class_name, property_name):
                 return f"{self(args[0], parens=True)}.{property_name}"
+            case InitRef(class_name):
+                tp_ref = JustTypeRef(class_name, bound_tp_params or ())
+                return str(tp_ref), args
         assert_never(ref)
 
     def _generate_name(self, typ: str) -> str:
@@ -434,6 +442,8 @@ def _pretty_callable(ref: CallableRef) -> str:
             | PropertyRef(class_name, method_name)
         ):
             return f"{class_name}.{method_name}"
+        case InitRef(class_name):
+            return class_name
         case ConstantRef(_):
             msg = "Constants should not be callable"
             raise NotImplementedError(msg)
