@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Adds ability to use function bodies as default rewrites ([#167](https://github.com/egraphs-good/egglog-python/pull/167))
+
 ## 7.1.0 (2024-05-03)
 
 ## New Feaatures
