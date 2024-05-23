@@ -673,7 +673,6 @@ class TestDefaultReplacements:
 
     def test_constant(self):
         a = constant("a", A, A())
-        print(a.__egg_decls__.default_ruleset)
         check_eq(a, A(), run())
 
     def test_constant_ruleset(self):
