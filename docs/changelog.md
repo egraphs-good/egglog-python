@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 7.2.0 (2024-05-23)
+
 - Adds ability to use function bodies as default rewrites ([#167](https://github.com/egraphs-good/egglog-python/pull/167))
 - Fixed bug with creating empty maps and adding to maps ([#168](https://github.com/egraphs-good/egglog-python/pull/168))
 
