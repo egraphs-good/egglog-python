@@ -428,6 +428,27 @@ Note that this is all built on the [unstable function support added as a sort to
 While this sort is exposed directly at the high level with the `UnstableFn` class, we don't reccomend depending on it directly, and instead
 using the builtin Python type annotations. This will allow us to change the implementation in the future without breaking user code.
 
+### Unwrapped functions
+
+We also support using normal python functions, either named or anonymous, as values. These will automaticalyl be wrapped as egglog functions when passed to a function which expects an egglog function.
+
+```{code-cell} python
+x = MathList.EMPTY.append(Math(1))
+added_two = x.map(lambda x: x + Math(2))
+check_eq(added_two, MathList.EMPTY.append(Math(1) + Math(2)), (math_list_ruleset + run()) * 10)
+```
+
+Their definition will be added to the default rulset, unless they are defined in the body of a function themselves or
+in a rule function:
+
+```{code-cell} python
+@function(ruleset=math_list_ruleset)
+def map_add_two(x: MathList) -> MathList:
+    return x.map(lambda x: x + Math(2))
+
+check_eq(map_add_two(MathList.EMPTY.append(Math(1))), MathList.EMPTY.append(Math(1) + Math(2)), math_list_ruleset.saturate())
+```
+
 ## Default Replacements
 
 When defining a function or a constant, you can also provide a default replacement value. This is useful when

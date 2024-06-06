@@ -6,16 +6,20 @@ Builtin sorts and function to egg.
 from __future__ import annotations
 
 from functools import partial
-from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union, overload
+from types import FunctionType
+from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union, cast, overload
 
 from typing_extensions import TypeVarTuple, Unpack
 
-from .conversion import converter
-from .egraph import Expr, Unit, function, method
-from .runtime import RuntimeFunction
+from .conversion import converter, get_type_args
+from .egraph import Expr, Unit, function, get_current_ruleset, method
+from .functionalize import functionalize
+from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
+from .thunk import Thunk
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
 
 __all__ = [
     "i64",
@@ -501,3 +505,33 @@ class UnstableFn(Expr, Generic[T, Unpack[TS]], builtin=True):
 
 converter(RuntimeFunction, UnstableFn, UnstableFn)
 converter(partial, UnstableFn, lambda p: UnstableFn(p.func, *p.args))
+
+
+def _convert_function(a: FunctionType) -> UnstableFn:
+    """
+    Converts a function type to an unstable function
+
+    Would just be UnstableFn(function(a)) but we have to look for any nonlocals and globals
+    which are runtime expressions with `var`s in them and add them as args to the function
+    """
+    # Update annotations of a to be the type we are trying to convert to
+    return_tp, *arg_tps = get_type_args()
+    a.__annotations__ = {
+        "return": return_tp,
+        **dict(zip(a.__code__.co_varnames, arg_tps, strict=True)),
+    }
+    # Modify name to make it unique
+    a.__name__ = f"{a.__name__} {hash(a.__code__)}"
+    transformed_fn = functionalize(a, value_to_annotation)
+    assert isinstance(transformed_fn, partial)
+    return UnstableFn(function(ruleset=get_current_ruleset())(transformed_fn.func), *transformed_fn.args)
+
+
+def value_to_annotation(a: object) -> type | None:
+    # only lift runtime expressions (which could contain vars) not any other nonlocals/globals we use in the function
+    if not isinstance(a, RuntimeExpr):
+        return None
+    return cast(type, RuntimeClass(Thunk.value(a.__egg_decls__), a.__egg_typed_expr__.tp.to_var()))
+
+
+converter(FunctionType, UnstableFn, _convert_function)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NewType, TypeVar, cast
 
@@ -9,7 +11,7 @@ from .runtime import *
 from .thunk import *
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Generator
 
     from .declarations import HasDeclerations
     from .egraph import Expr
@@ -84,7 +86,7 @@ def convert(source: object, target: type[V]) -> V:
     Convert a source object to a target type.
     """
     assert isinstance(target, RuntimeClass)
-    return cast(V, resolve_literal(target.__egg_tp__, source))
+    return cast(V, resolve_literal(target.__egg_tp__, source, target.__egg_decls_thunk__))
 
 
 def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
@@ -92,7 +94,7 @@ def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
     Convert a source object to the same type as the target.
     """
     tp = target.__egg_typed_expr__.tp
-    return resolve_literal(tp.to_var(), source)
+    return resolve_literal(tp.to_var(), source, Thunk.value(target.__egg_decls__))
 
 
 def process_tp(tp: type | RuntimeClass) -> TypeName | type:
@@ -140,7 +142,28 @@ def identity(x: object) -> object:
     return x
 
 
-def resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
+TYPE_ARGS = ContextVar[tuple[RuntimeClass, ...]]("TYPE_ARGS")
+
+
+def get_type_args() -> tuple[RuntimeClass, ...]:
+    """
+    Get the type args for the type being converted.
+    """
+    return TYPE_ARGS.get()
+
+
+@contextmanager
+def with_type_args(args: tuple[JustTypeRef, ...], decls: Callable[[], Declarations]) -> Generator[None, None, None]:
+    token = TYPE_ARGS.set(tuple(RuntimeClass(decls, a.to_var()) for a in args))
+    try:
+        yield
+    finally:
+        TYPE_ARGS.reset(token)
+
+
+def resolve_literal(
+    tp: TypeOrVarRef, arg: object, decls: Callable[[], Declarations] = CONVERSIONS_DECLS
+) -> RuntimeExpr:
     arg_type = _get_tp(arg)
 
     # If we have any type variables, dont bother trying to resolve the literal, just return the arg
@@ -164,7 +187,8 @@ def resolve_literal(tp: TypeOrVarRef, arg: object) -> RuntimeExpr:
         break
     else:
         raise ConvertError(f"Cannot convert {arg_type} to {tp_name}")
-    return fn(arg)
+    with with_type_args(tp_just.args, decls):
+        return fn(arg)
 
 
 def _get_tp(x: object) -> TypeName | type:

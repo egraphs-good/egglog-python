@@ -285,7 +285,7 @@ class RuntimeFunction(DelayedDeclerations):
         args = bound.args
 
         upcasted_args = [
-            resolve_literal(cast(TypeOrVarRef, tp), arg)
+            resolve_literal(cast(TypeOrVarRef, tp), arg, Thunk.value(decls))
             for arg, tp in zip_longest(args, signature.arg_types, fillvalue=signature.var_arg_type)
         ]
         decls.update(*upcasted_args)
@@ -389,6 +389,7 @@ PARTIAL_METHODS = {
 @dataclass
 class RuntimeExpr:
     # Defer needing decls/expr so we can make constants that don't resolve their class types
+    # TODO: Refactor as two thunks, one for decls and one for expr, to make it easier to construct
     __egg_thunk__: Callable[[], tuple[Declarations, TypedExprDecl]]
 
     @classmethod

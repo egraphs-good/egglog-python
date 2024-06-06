@@ -157,7 +157,8 @@ def test_pass_in_partial():
     assert expr_parts(x.map(partial(Math.__mul__, Math(2)))) == expr_parts(x.map(UnstableFn(Math.__mul__, Math(2))))  # type: ignore[arg-type]
 
 
-class A(Expr): ...
+class A(Expr):
+    def __init__(self) -> None: ...
 
 
 class B(Expr): ...
@@ -182,3 +183,139 @@ def test_callable_accepted_as_type():
     converted = func.__egg_decls__, func.__egg_ref__
 
     assert converted == original
+
+
+@function
+def a_to_b(x: A) -> B: ...
+
+
+@function
+def b_to_c(b: B) -> C: ...
+
+
+class TestNormalFns:
+    """
+    Verify that you can pass in normal function, that have not been annotated with @function
+    and they will work with UnstableFn
+    """
+
+    def test_basic(self):
+        """
+        Verify that if we pass in a function it will work even if it isn't wrapped in @function
+        """
+
+        def f(x: A) -> C:
+            return b_to_c(a_to_b(x))
+
+        @function
+        def call(f: Callable[[A], C], x: A) -> C:
+            return f(x)
+
+        x = call(f, A())
+
+        assert check_eq(x, b_to_c(a_to_b(A())), run() * 10)
+
+    def test_nonlocals_lifted(self):
+        """
+        Verify that if a function body refers to nonlocals, they are lifted into functions args which are partially applied
+        """
+
+        # convert to nullary function once this is fixed
+        # https://github.com/egraphs-good/egglog/issues/382
+        @function
+        def call(f: Callable[[A], C]) -> C:
+            return f(A())
+
+        @function
+        def f(x: A) -> C:
+            # Verify that inner variable is lifted to partial application in a rewrite like this
+            def inner(_: A) -> C:
+                return b_to_c(a_to_b(x))
+
+            return call(inner)
+
+        assert check_eq(f(A()), b_to_c(a_to_b(A())), run() * 10)
+
+    def test_rewrite_ruleset_used(self):
+        """
+        Verify if I use a function in a rule defined in a ruleset function, it will use that context for the ruleset name.
+        """
+
+        @function
+        def transform_a(a: A) -> A: ...
+
+        @function
+        def my_transform_a(a: A) -> A: ...
+
+        r = ruleset()
+
+        @function(ruleset=r)
+        def apply_f(f: Callable[[A], A], x: A) -> A:
+            return f(x)
+
+        @r.register
+        def _rewrite(a: A):
+            yield rewrite(transform_a(a)).to(apply_f(lambda x: my_transform_a(x), a))
+
+        assert check_eq(transform_a(A()), my_transform_a(A()), r * 10)
+
+    def test_rewrite_ruleset_used_constructor(self):
+        """
+        Verify if I use a function in a rule defined in a ruleset function, it will use that context for the ruleset name.
+        """
+
+        @function
+        def transform_a(a: A) -> A: ...
+
+        @function
+        def my_transform_a(a: A) -> A: ...
+
+        apply_ruleset = ruleset()
+
+        @function(ruleset=apply_ruleset)
+        def apply_f(f: Callable[[A], A], x: A) -> A:
+            return f(x)
+
+        @ruleset
+        def my_ruleset(a: A):
+            yield rewrite(transform_a(a)).to(apply_f(lambda x: my_transform_a(x), a))
+
+        assert check_eq(transform_a(A()), my_transform_a(A()), (my_ruleset | apply_ruleset) * 10)
+
+    def test_default_rewrite_used(self):
+        """
+        Verify that if I use a function in a default definition, it will use the the ruleset of the
+        function that is being defined.
+        """
+        r = ruleset()
+
+        @function
+        def my_transform_a(a: A) -> A: ...
+
+        @function(ruleset=r)
+        def apply_f(f: Callable[[A], A], x: A) -> A:
+            return f(x)
+
+        @function(ruleset=r)
+        def transform_a(a: A) -> A:
+            return apply_f(lambda x: my_transform_a(x), a)
+
+        assert check_eq(transform_a(A()), my_transform_a(A()), r * 10)
+
+    def test_multiple_lambdas(self):
+        """
+        Verify that multiple lambdas can be added and the name won't conflict
+        """
+
+        @function
+        def apply_f(f: Callable[[A], A], x: A) -> A:
+            return f(x)
+
+        alt_a = constant("alt_a", A)
+
+        egraph = EGraph()
+        x = egraph.let("x", apply_f(lambda x: A(), A()))
+        y = egraph.let("y", apply_f(lambda x: alt_a, A()))
+        egraph.run(10)
+        egraph.check(eq(x).to(A()))
+        egraph.check(eq(y).to(alt_a))

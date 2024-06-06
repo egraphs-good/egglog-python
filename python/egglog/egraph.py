@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import inspect
 import pathlib
 import tempfile
 from abc import abstractmethod
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field
 from inspect import Parameter, currentframe, signature
@@ -719,7 +720,7 @@ def _fn_decl(
 
     # Resolve all default values as arg types
     arg_defaults = [
-        resolve_literal(t, p.default) if p.default is not Parameter.empty else None
+        resolve_literal(t, p.default, Thunk.value(decls)) if p.default is not Parameter.empty else None
         for (t, p) in zip(arg_types, params, strict=True)
     ]
 
@@ -859,7 +860,9 @@ def _add_default_rewrite_function(decls: Declarations, ref: CallableRef, fn: Cal
     if isinstance(ref, ClassMethodRef):
         tp = decls.get_paramaterized_class(ref.class_name)
         var_args.insert(0, RuntimeClass(Thunk.value(decls), tp))
-    _add_default_rewrite(decls, ref, signature.semantic_return_type, fn(*var_args), ruleset)
+    with set_current_ruleset(ruleset):
+        default_rewrite = fn(*var_args)
+    _add_default_rewrite(decls, ref, signature.semantic_return_type, default_rewrite, ruleset)
 
 
 def _add_default_rewrite(
@@ -872,7 +875,7 @@ def _add_default_rewrite(
     """
     if default_rewrite is None:
         return
-    resolved_value = resolve_literal(type_ref, default_rewrite)
+    resolved_value = resolve_literal(type_ref, default_rewrite, Thunk.value(decls))
     rewrite_decl = DefaultRewriteDecl(ref, resolved_value.__egg_typed_expr__.expr)
     if ruleset:
         ruleset_decls = ruleset._current_egg_decls
@@ -1448,7 +1451,8 @@ class Ruleset(Schedule):
         To return the egg decls, we go through our deferred rules and add any we haven't yet
         """
         while self.deferred_rule_gens:
-            rules = self.deferred_rule_gens.pop()()
+            with set_current_ruleset(self):
+                rules = self.deferred_rule_gens.pop()()
             self._current_egg_decls.update(*rules)
             self.__egg_ruleset__.rules.extend(r.decl for r in rules)
         return self._current_egg_decls
@@ -1959,3 +1963,19 @@ def _fact_like(fact_like: FactLike) -> Fact:
     if isinstance(fact_like, Expr):
         return expr_fact(fact_like)
     return fact_like
+
+
+_CURRENT_RULESET = ContextVar[Ruleset | None]("CURRENT_RULESET", default=None)
+
+
+def get_current_ruleset() -> Ruleset | None:
+    return _CURRENT_RULESET.get()
+
+
+@contextlib.contextmanager
+def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
+    token = _CURRENT_RULESET.set(r)
+    try:
+        yield
+    finally:
+        _CURRENT_RULESET.reset(token)

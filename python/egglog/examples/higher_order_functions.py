@@ -16,15 +16,12 @@ if TYPE_CHECKING:
 
 class Math(Expr):
     def __init__(self, i: i64Like) -> None: ...
-
     def __add__(self, other: Math) -> Math: ...
 
 
 class MathList(Expr):
     def __init__(self) -> None: ...
-
     def append(self, i: Math) -> MathList: ...
-
     def map(self, f: Callable[[Math], Math]) -> MathList: ...
 
 
@@ -36,15 +33,13 @@ def math_ruleset(i: i64, j: i64, xs: MathList, x: Math, f: Callable[[Math], Math
 
 
 @function(ruleset=math_ruleset)
-def increment_by_one(x: Math) -> Math:
-    return x + Math(1)
+def incr_list(xs: MathList) -> MathList:
+    return xs.map(lambda x: x + Math(1))
 
 
 egraph = EGraph()
-x = egraph.let("x", MathList().append(Math(1)).append(Math(2)))
-y = egraph.let("y", x.map(increment_by_one))
+y = egraph.let("y", incr_list(MathList().append(Math(1)).append(Math(2))))
 egraph.run(math_ruleset.saturate())
-
 egraph.check(eq(y).to(MathList().append(Math(2)).append(Math(3))))
 
 egraph

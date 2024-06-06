@@ -4,6 +4,9 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Adds ability to use anonymous functions where callables are needed. These are automatically transformed to egglog
+  functions with default rewrites.
+
 ## 7.2.0 (2024-05-23)
 
 - Adds ability to use function bodies as default rewrites ([#167](https://github.com/egraphs-good/egglog-python/pull/167))
