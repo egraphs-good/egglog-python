@@ -73,6 +73,14 @@ extensions = [
 
 
 ##
+# Intersphinx
+##
+
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+}
+
+##
 # Sphinx Gallery
 # https://sphinx-gallery.github.io/stable/configuration.html#build-pattern
 ##
