@@ -30,7 +30,7 @@ def test_function_call():
             "one": FunctionDecl(FunctionSignature(return_type=TypeRefWithVars("i64"))),
         },
     )
-    one = RuntimeFunction(Thunk.value(decls), FunctionRef("one"))
+    one = RuntimeFunction(Thunk.value(decls), Thunk.value(FunctionRef("one")))
     assert (
         one().__egg_typed_expr__  # type: ignore[union-attr]
         == TypedExprDecl(JustTypeRef("i64"), CallDecl(FunctionRef("one")))

@@ -9,10 +9,27 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-__all__ = ["Thunk"]
+__all__ = ["Thunk", "split_thunk"]
 
 T = TypeVar("T")
 TS = TypeVarTuple("TS")
+V = TypeVar("V")
+
+
+def split_thunk(fn: Callable[[], tuple[T, V]]) -> tuple[Callable[[], T], Callable[[], V]]:
+    s = _Split(fn)
+    return s.left, s.right
+
+
+@dataclass
+class _Split(Generic[T, V]):
+    fn: Callable[[], tuple[T, V]]
+
+    def left(self) -> T:
+        return self.fn()[0]
+
+    def right(self) -> V:
+        return self.fn()[1]
 
 
 @dataclass

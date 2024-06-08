@@ -244,8 +244,10 @@ class PrettyContext:
             case CallDecl(_, _, _):
                 return self._call(decl, parens)
             case PartialCallDecl(CallDecl(ref, typed_args, _)):
+                if not typed_args:
+                    return _pretty_callable(ref), "fn"
                 arg_strs = (_pretty_callable(ref), *(self(a.expr, parens=False, unwrap_lit=True) for a in typed_args))
-                return f"UnstableFn({', '.join(arg_strs)})", "fn"
+                return f"partial({', '.join(arg_strs)})", "fn"
             case PyObjectDecl(value):
                 return repr(value) if unwrap_lit else f"PyObject({value!r})", "PyObject"
             case ActionCommandDecl(action):
