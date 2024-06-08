@@ -68,11 +68,11 @@ def test_call_fn():
 
 
 def test_string_fn():
-    assert str(UnstableFn(square)) == "UnstableFn(square)"
+    assert str(UnstableFn(square)) == "square"
 
 
 def test_string_fn_partial():
-    assert str(UnstableFn(Math.__mul__, Math(2))) == "UnstableFn(Math.__mul__, Math(2))"
+    assert str(UnstableFn(Math.__mul__, Math(2))) == "partial(Math.__mul__, Math(2))"
 
 
 @ruleset
@@ -319,3 +319,13 @@ class TestNormalFns:
         egraph.run(10)
         egraph.check(eq(x).to(A()))
         egraph.check(eq(y).to(alt_a))
+
+    def test_name_is_body(self):
+        @function
+        def higher_order(f: Callable[[A], A]) -> A: ...
+
+        @function
+        def transform_a(a: A) -> A: ...
+
+        v = higher_order(lambda a: transform_a(a))
+        assert str(v) == "higher_order(lambda a: transform_a(a))"
