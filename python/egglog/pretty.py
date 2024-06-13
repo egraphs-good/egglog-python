@@ -377,6 +377,8 @@ class PrettyContext:
         """
         match ref:
             case FunctionRef(name):
+                # Any function name that is not an identifier is an anonymous function
+                name = name if name.isidentifier() else f"({name})"
                 return name, args
             case ClassMethodRef(class_name, method_name):
                 tp_ref = JustTypeRef(class_name, bound_tp_params or ())
