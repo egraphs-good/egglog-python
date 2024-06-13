@@ -73,6 +73,7 @@ __all__ = [
     "FunctionSignature",
     "DefaultRewriteDecl",
     "InitRef",
+    "HasDeclerations",
 ]
 
 
@@ -87,7 +88,11 @@ class DelayedDeclerations:
         # Catch attribute error, so that it isn't bubbled up as a missing attribute and fallbacks on `__getattr__`
         # instead raise explicitly
         except AttributeError as err:
-            msg = "Error resolving declerations"
+            msg = f"Cannot resolve declerations for {self}"
+            raise RuntimeError(msg) from err
+        # Might as well catch others too so we have more context when they raise
+        except Exception as err:  # noqa: BLE001
+            msg = f"Cannot resolve declerations for {self}"
             raise RuntimeError(msg) from err
 
 

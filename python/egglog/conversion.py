@@ -13,7 +13,6 @@ from .thunk import *
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-    from .declarations import HasDeclerations
     from .egraph import Expr
 
 __all__ = ["convert", "converter", "resolve_literal", "convert_to_same_type"]
