@@ -524,7 +524,9 @@ def _convert_function(a: FunctionType) -> UnstableFn:
     a.__name__ = f"{a.__name__} {hash(a.__code__)}"
     transformed_fn = functionalize(a, value_to_annotation)
     assert isinstance(transformed_fn, partial)
-    return UnstableFn(function(ruleset=get_current_ruleset())(transformed_fn.func), *transformed_fn.args)
+    return UnstableFn(
+        function(ruleset=get_current_ruleset(), use_body_as_name=True)(transformed_fn.func), *transformed_fn.args
+    )
 
 
 def value_to_annotation(a: object) -> type | None:

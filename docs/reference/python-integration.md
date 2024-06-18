@@ -430,7 +430,7 @@ using the builtin Python type annotations. This will allow us to change the impl
 
 ### Unwrapped functions
 
-We also support using normal python functions, either named or anonymous, as values. These will automaticalyl be wrapped as egglog functions when passed to a function which expects an egglog function.
+We also support using normal python functions, either named or anonymous, as values. These will automatically be wrapped as egglog functions when passed to a function which expects an egglog function.
 
 ```{code-cell} python
 x = MathList.EMPTY.append(Math(1))
@@ -447,6 +447,12 @@ def map_add_two(x: MathList) -> MathList:
     return x.map(lambda x: x + Math(2))
 
 check_eq(map_add_two(MathList.EMPTY.append(Math(1))), MathList.EMPTY.append(Math(1) + Math(2)), math_list_ruleset.saturate())
+```
+
+Their name will just be the body of the function, so that two anonymous functions with the same body will be considered equal.
+
+```{code-cell} python
+added_two
 ```
 
 ## Default Replacements

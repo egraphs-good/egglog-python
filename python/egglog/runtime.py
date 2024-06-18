@@ -127,8 +127,8 @@ class RuntimeClass(DelayedDeclerations):
         # If this is a literal type, initializing it with a literal should return a literal
         if (name := self.__egg_tp__.name) == "PyObject":
             assert len(args) == 1
-            return RuntimeExpr.__from_value__(
-                self.__egg_decls__, TypedExprDecl(self.__egg_tp__.to_just(), PyObjectDecl(args[0]))
+            return RuntimeExpr(
+                self.__egg_decls_thunk__, Thunk.value(TypedExprDecl(self.__egg_tp__.to_just(), PyObjectDecl(args[0])))
             )
         if name == "UnstableFn":
             assert not kwargs
@@ -150,20 +150,20 @@ class RuntimeClass(DelayedDeclerations):
             value = PartialCallDecl(replace(call, args=call.args[:n_args]))
             remaining_arg_types = [a.tp for a in call.args[n_args:]]
             type_ref = JustTypeRef("UnstableFn", (return_tp, *remaining_arg_types))
-            return RuntimeExpr.__from_value__(Declarations.create(self, res), TypedExprDecl(type_ref, value))
+            return RuntimeExpr.__from_values__(Declarations.create(self, res), TypedExprDecl(type_ref, value))
 
         if name in UNARY_LIT_CLASS_NAMES:
             assert len(args) == 1
             assert isinstance(args[0], int | float | str | bool)
-            return RuntimeExpr.__from_value__(
-                self.__egg_decls__, TypedExprDecl(self.__egg_tp__.to_just(), LitDecl(args[0]))
+            return RuntimeExpr(
+                self.__egg_decls_thunk__, Thunk.value(TypedExprDecl(self.__egg_tp__.to_just(), LitDecl(args[0])))
             )
         if name == UNIT_CLASS_NAME:
             assert len(args) == 0
-            return RuntimeExpr.__from_value__(
-                self.__egg_decls__, TypedExprDecl(self.__egg_tp__.to_just(), LitDecl(None))
+            return RuntimeExpr(
+                self.__egg_decls_thunk__, Thunk.value(TypedExprDecl(self.__egg_tp__.to_just(), LitDecl(None)))
             )
-        fn = RuntimeFunction(Thunk.value(self.__egg_decls__), InitRef(name), self.__egg_tp__.to_just())
+        fn = RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(InitRef(name)), self.__egg_tp__.to_just())
         return fn(*args, **kwargs)  # type: ignore[arg-type]
 
     def __dir__(self) -> list[str]:
@@ -208,19 +208,21 @@ class RuntimeClass(DelayedDeclerations):
         # if this is a class variable, return an expr for it, otherwise, assume it's a method
         if name in cls_decl.class_variables:
             return_tp = cls_decl.class_variables[name]
-            return RuntimeExpr.__from_value__(
-                self.__egg_decls__,
-                TypedExprDecl(return_tp.type_ref, CallDecl(ClassVariableRef(self.__egg_tp__.name, name))),
+            return RuntimeExpr(
+                self.__egg_decls_thunk__,
+                Thunk.value(TypedExprDecl(return_tp.type_ref, CallDecl(ClassVariableRef(self.__egg_tp__.name, name)))),
             )
         if name in cls_decl.class_methods:
             return RuntimeFunction(
-                Thunk.value(self.__egg_decls__), ClassMethodRef(self.__egg_tp__.name, name), self.__egg_tp__.to_just()
+                self.__egg_decls_thunk__,
+                Thunk.value(ClassMethodRef(self.__egg_tp__.name, name)),
+                self.__egg_tp__.to_just(),
             )
         # allow referencing properties and methods as class variables as well
         if name in cls_decl.properties:
-            return RuntimeFunction(Thunk.value(self.__egg_decls__), PropertyRef(self.__egg_tp__.name, name))
+            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(PropertyRef(self.__egg_tp__.name, name)))
         if name in cls_decl.methods:
-            return RuntimeFunction(Thunk.value(self.__egg_decls__), MethodRef(self.__egg_tp__.name, name))
+            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(self.__egg_tp__.name, name)))
 
         msg = f"Class {self.__egg_tp__.name} has no method {name}"
         if name == "__ne__":
@@ -241,9 +243,13 @@ class RuntimeClass(DelayedDeclerations):
 
 @dataclass
 class RuntimeFunction(DelayedDeclerations):
-    __egg_ref__: CallableRef
+    __egg_ref_thunk__: Callable[[], CallableRef]
     # bound methods need to store RuntimeExpr not just TypedExprDecl, so they can mutate the expr if required on self
     __egg_bound__: JustTypeRef | RuntimeExpr | None = None
+
+    @property
+    def __egg_ref__(self) -> CallableRef:
+        return self.__egg_ref_thunk__()
 
     def __call__(self, *args: object, _egg_partial_function: bool = False, **kwargs: object) -> RuntimeExpr | None:
         from .conversion import resolve_literal
@@ -322,9 +328,10 @@ class RuntimeFunction(DelayedDeclerations):
         # If there is not return type, we are mutating the first arg
         if not signature.return_type:
             first_arg = upcasted_args[0]
-            first_arg.__egg_thunk__ = Thunk.value((decls, typed_expr_decl))
+            first_arg.__egg_decls_thunk__ = Thunk.value(decls)
+            first_arg.__egg_typed_expr_thunk__ = Thunk.value(typed_expr_decl)
             return None
-        return RuntimeExpr.__from_value__(decls, typed_expr_decl)
+        return RuntimeExpr.__from_values__(decls, typed_expr_decl)
 
     def __str__(self) -> str:
         first_arg, bound_tp_params = None, None
@@ -349,7 +356,7 @@ def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: 
         Parameter(
             n,
             Parameter.POSITIONAL_OR_KEYWORD,
-            default=RuntimeExpr.__from_value__(decls, TypedExprDecl(t.to_just(), d if d is not None else VarDecl(n)))
+            default=RuntimeExpr.__from_values__(decls, TypedExprDecl(t.to_just(), d if d is not None else VarDecl(n)))
             if d is not None or optional_args
             else Parameter.empty,
         )
@@ -387,22 +394,16 @@ PARTIAL_METHODS = {
 
 
 @dataclass
-class RuntimeExpr:
-    # Defer needing decls/expr so we can make constants that don't resolve their class types
-    # TODO: Refactor as two thunks, one for decls and one for expr, to make it easier to construct
-    __egg_thunk__: Callable[[], tuple[Declarations, TypedExprDecl]]
+class RuntimeExpr(DelayedDeclerations):
+    __egg_typed_expr_thunk__: Callable[[], TypedExprDecl]
 
     @classmethod
-    def __from_value__(cls, d: Declarations, e: TypedExprDecl) -> RuntimeExpr:
-        return cls(Thunk.value((d, e)))
-
-    @property
-    def __egg_decls__(self) -> Declarations:
-        return self.__egg_thunk__()[0]
+    def __from_values__(cls, d: Declarations, e: TypedExprDecl) -> RuntimeExpr:
+        return cls(Thunk.value(d), Thunk.value(e))
 
     @property
     def __egg_typed_expr__(self) -> TypedExprDecl:
-        return self.__egg_thunk__()[1]
+        return self.__egg_typed_expr_thunk__()
 
     def __getattr__(self, name: str) -> RuntimeFunction | RuntimeExpr | Callable | None:
         cls_name = self.__egg_class_name__
@@ -412,9 +413,9 @@ class RuntimeExpr:
             return preserved_methods[name].__get__(self)
 
         if name in class_decl.methods:
-            return RuntimeFunction(Thunk.value(self.__egg_decls__), MethodRef(cls_name, name), self)
+            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(cls_name, name)), self)
         if name in class_decl.properties:
-            return RuntimeFunction(Thunk.value(self.__egg_decls__), PropertyRef(cls_name, name), self)()
+            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(PropertyRef(cls_name, name)), self)()
         raise AttributeError(f"{cls_name} has no method {name}") from None
 
     def __repr__(self) -> str:
@@ -457,10 +458,11 @@ class RuntimeExpr:
     # otherwise copy will try to call `__getstate__` before object is initialized with properties which will cause inifinite recursion
 
     def __getstate__(self) -> tuple[Declarations, TypedExprDecl]:
-        return self.__egg_thunk__()
+        return self.__egg_decls__, self.__egg_typed_expr__
 
     def __setstate__(self, d: tuple[Declarations, TypedExprDecl]) -> None:
-        self.__egg_thunk__ = Thunk.value(d)
+        self.__egg_decls_thunk__ = Thunk.value(d[0])
+        self.__egg_typed_expr_thunk__ = Thunk.value(d[1])
 
     def __hash__(self) -> int:
         return hash(self.__egg_typed_expr__)
@@ -498,7 +500,7 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
                 # we use the standard process
                 pass
         if __name in class_decl.methods:
-            fn = RuntimeFunction(Thunk.value(self.__egg_decls__), MethodRef(class_name, __name), self)
+            fn = RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(class_name, __name)), self)
             return fn(*args, **kwargs)  # type: ignore[arg-type]
         if __name in PARTIAL_METHODS:
             return NotImplemented
@@ -524,7 +526,7 @@ def call_method_min_conversion(slf: object, other: object, name: str) -> Runtime
     min_tp = min_convertable_tp(slf, other, name)
     slf = resolve_literal(TypeRefWithVars(min_tp), slf)
     other = resolve_literal(TypeRefWithVars(min_tp), other)
-    method = RuntimeFunction(Thunk.value(slf.__egg_decls__), MethodRef(slf.__egg_class_name__, name), slf)
+    method = RuntimeFunction(slf.__egg_decls_thunk__, Thunk.value(MethodRef(slf.__egg_class_name__, name)), slf)
     return method(other)
 
 
@@ -546,7 +548,7 @@ def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
     """
     match callable:
         case RuntimeFunction(decls, ref, _):
-            return ref, decls()
+            return ref(), decls()
         case RuntimeClass(thunk, tp):
             return ClassMethodRef(tp.name, "__init__"), thunk()
     raise NotImplementedError(f"Cannot turn {callable} into a callable ref")
