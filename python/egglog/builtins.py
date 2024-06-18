@@ -521,7 +521,7 @@ def _convert_function(a: FunctionType) -> UnstableFn:
         **dict(zip(a.__code__.co_varnames, arg_tps, strict=True)),
     }
     # Modify name to make it unique
-    a.__name__ = f"{a.__name__} {hash(a.__code__)}"
+    # a.__name__ = f"{a.__name__} {hash(a.__code__)}"
     transformed_fn = functionalize(a, value_to_annotation)
     assert isinstance(transformed_fn, partial)
     return UnstableFn(

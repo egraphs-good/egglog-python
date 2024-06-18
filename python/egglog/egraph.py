@@ -465,10 +465,14 @@ class _ExprMetaclass(type):
         prev_frame = frame.f_back
         assert prev_frame
 
+        # Pass in an instance of the class so that when we are generating the decls
+        # we can update them eagerly so that we can access the methods in the class body
+        runtime_cls = RuntimeClass(None, TypeRefWithVars(name))  # type: ignore[arg-type]
+
         # Store frame so that we can get live access to updated locals/globals
         # Otherwise, f_locals returns a copy
         # https://peps.python.org/pep-0667/
-        decls_thunk = Thunk.fn(
+        runtime_cls.__egg_decls_thunk__ = Thunk.fn(
             _generate_class_decls,
             namespace,
             prev_frame,
@@ -476,9 +480,9 @@ class _ExprMetaclass(type):
             egg_sort,
             name,
             ruleset,
-            fallback=Declarations,
+            runtime_cls,
         )
-        return RuntimeClass(decls_thunk, TypeRefWithVars(name))
+        return runtime_cls
 
     def __instancecheck__(cls, instance: object) -> bool:
         return isinstance(instance, RuntimeExpr)
@@ -491,6 +495,7 @@ def _generate_class_decls(
     egg_sort: str | None,
     cls_name: str,
     ruleset: Ruleset | None,
+    runtime_cls: RuntimeClass,
 ) -> Declarations:
     """
     Lazy constructor for class declerations to support classes with methods whose types are not yet defined.
@@ -503,6 +508,8 @@ def _generate_class_decls(
     del parameters
     cls_decl = ClassDecl(egg_sort, type_vars, builtin)
     decls = Declarations(_classes={cls_name: cls_decl})
+    # Update class think eagerly when resolving so that lookups work in methods
+    runtime_cls.__egg_decls_thunk__ = Thunk.value(decls)
 
     ##
     # Register class variables
@@ -522,9 +529,6 @@ def _generate_class_decls(
     ##
     # Register methods, classmethods, preserved methods, and properties
     ##
-
-    # The type ref of self is paramterized by the type vars
-    TypeRefWithVars(cls_name, tuple(map(ClassTypeVarRef, type_vars)))
 
     # Get all the methods from the class
     filtered_namespace: list[tuple[str, Any]] = [
@@ -679,7 +683,16 @@ def _fn_body_name(fn: Callable, decls: Declarations, function_decl: FunctionDecl
         RuntimeExpr.__from_values__(decls, TypedExprDecl(tp.to_just(), VarDecl(n)))
         for n, tp in zip(signature.arg_names, signature.arg_types, strict=False)
     ]
-    return f"lambda {', '.join(signature.arg_names)}: {fn(*args)}"
+    fn = f"lambda {', '.join(signature.arg_names)}: {fn(*args)}"
+    tp = f"Callable[[{', '.join(str(tp) for tp in signature.arg_types)}], {signature.return_type}]"
+    return f"cast({tp}, {fn})"
+
+
+def d(x):
+    return x
+
+
+d
 
 
 def _fn_decl(
@@ -884,7 +897,11 @@ def _add_default_rewrite_function(decls: Declarations, ref: CallableRef, fn: Cal
         tp = decls.get_paramaterized_class(ref.class_name)
         var_args.insert(0, RuntimeClass(Thunk.value(decls), tp))
     with set_current_ruleset(ruleset):
-        default_rewrite = fn(*var_args)
+        try:
+            default_rewrite = fn(*var_args)
+        except Exception as err:  # noqa: BLE001
+            msg = f"Error when calling {fn}"
+            raise ValueError(msg) from err
     _add_default_rewrite(decls, ref, signature.semantic_return_type, default_rewrite, ruleset)
 
 
@@ -1715,9 +1732,9 @@ def action_command(action: Action) -> Action:
     return action
 
 
-def var(name: str, bound: type[EXPR]) -> EXPR:
+def var(name: str, bound: type[T]) -> T:
     """Create a new variable with the given name and type."""
-    return cast(EXPR, _var(name, bound))
+    return cast(T, _var(name, bound))
 
 
 def _var(name: str, bound: object) -> RuntimeExpr:

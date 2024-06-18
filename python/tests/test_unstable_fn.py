@@ -164,7 +164,8 @@ class A(Expr):
 class B(Expr): ...
 
 
-class C(Expr): ...
+class C(Expr):
+    def __init__(self) -> None: ...
 
 
 def test_callable_accepted_as_type():
@@ -328,4 +329,40 @@ class TestNormalFns:
         def transform_a(a: A) -> A: ...
 
         v = higher_order(lambda a: transform_a(a))
-        assert str(v) == "higher_order(lambda a: transform_a(a))"
+        assert str(v) == "higher_order(cast(Callable[[A], A], lambda a: transform_a(a)))"
+
+    def test_multiple_same(self):
+        """
+        Test that multiple lambdas with the same body.
+        """
+
+        @function
+        def apply_f(f: Callable[[A], A], x: A) -> A:
+            return f(x)
+
+        egraph = EGraph()
+        x = egraph.let("x", apply_f(lambda x: A(), A()))
+        y = egraph.let("y", apply_f(lambda x: A(), A()))
+        egraph.run(10)
+        egraph.check(eq(x).to(A()))
+        egraph.check(eq(y).to(A()))
+
+    def test_multiple_same_different_type(self):
+        """
+        Test that multiple lambdas with the same body but different types work.
+        """
+
+        @function
+        def apply_A(f: Callable[[A], A], x: A) -> A:
+            return f(x)
+
+        @function
+        def apply_C(f: Callable[[C], C], x: C) -> C:
+            return f(x)
+
+        egraph = EGraph()
+        x = egraph.let("x", apply_A(lambda x: x, A()))
+        y = egraph.let("y", apply_C(lambda x: x, C()))
+        egraph.run(10)
+        egraph.check(eq(x).to(A()))
+        egraph.check(eq(y).to(C()))

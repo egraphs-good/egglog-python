@@ -602,14 +602,6 @@ def test_multiple_generics():
     assert str(egraph.extract(g())) == "Vec[String].empty()"
 
 
-def test_wrong_annotation_error():
-    class ZX(Expr):
-        symbol: str
-
-    with pytest.raises(NotImplementedError):
-        ZX.__egg_decls__  # type: ignore[attr-defined]
-
-
 def test_deferred_ruleset():
     @ruleset
     def rules(x: AA):
@@ -747,6 +739,15 @@ class TestDefaultReplacements:
         left = B().f()
         right = B().g()
         check_eq(left, right, run())
+
+    def test_classmethod_own_class(self):
+        class B(Expr):
+            def __init__(self) -> None: ...
+            @classmethod
+            def f(cls) -> B:
+                return B()
+
+        check_eq(B.f(), B(), run())
 
 
 class TestIssue166:

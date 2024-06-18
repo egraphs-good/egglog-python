@@ -256,7 +256,10 @@ class RuntimeFunction(DelayedDeclerations):
 
         if isinstance(self.__egg_bound__, RuntimeExpr):
             args = (self.__egg_bound__, *args)
-        signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl().signature
+        try:
+            signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl().signature
+        except Exception as e:
+            raise TypeError(f"Failed to find callable {self}") from e
         decls = self.__egg_decls__.copy()
         # Special case function application bc we dont support variadic generics yet generally
         if signature == "fn-app":

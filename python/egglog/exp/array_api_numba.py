@@ -67,6 +67,6 @@ def _unique_inverse(x: NDArray, i: Int):
     return [
         # Creating a mask array of when the unique inverse is a value is the same as a mask array for when the value is that index of the unique values
         rewrite(unique_inverse(x)[Int(1)] == NDArray.scalar(Value.int(i)), subsume=True).to(
-            x == NDArray.scalar(unique_values(x).index(TupleInt(i)))
+            x == NDArray.scalar(unique_values(x).index((i,)))
         ),
     ]

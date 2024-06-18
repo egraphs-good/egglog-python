@@ -56,22 +56,32 @@ def _int_program(i64_: i64, i: Int, j: Int):
 
 
 @function
-def tuple_int_program(x: TupleInt) -> Program: ...
+def tuple_int_program(x: TupleInt) -> Program:
+    ...
+    # Could be rewritten as a fold, but we don't support generic folds yet
+    # return x.fold(Program("("), lambda acc, i: acc + ", " + int_program(i)) + ")"
 
 
 @function
-def tuple_int_program_inner(x: TupleInt) -> Program: ...
+def tuple_int_program_inner(x: TupleInt) -> Program:
+    """
+    Returns the tuple w/ out the parenthesis
+    """
 
 
 @array_api_program_gen_ruleset.register
-def _tuple_int_program(i: Int, j: Int, ti: TupleInt, ti1: TupleInt, ti2: TupleInt):
+def _tuple_int_program(i: Int, ti: TupleInt, k: i64, idx_fn: Callable[[Int], Int]):
     yield rewrite(int_program(ti[i])).to(tuple_int_program(ti) + "[" + int_program(i) + "]")
+    yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_int_program(ti) + ")")
 
     yield rewrite(tuple_int_program(ti)).to(Program("(") + tuple_int_program_inner(ti) + ")")
-    yield rewrite(tuple_int_program_inner(ti1 + ti2)).to(
-        tuple_int_program_inner(ti1) + " " + tuple_int_program_inner(ti2)
+
+    yield rewrite(tuple_int_program_inner(TupleInt(0, idx_fn))).to(Program(""))
+
+    yield rewrite(tuple_int_program_inner(TupleInt(Int(k), idx_fn))).to(
+        int_program(idx_fn(Int(0))) + ", " + tuple_int_program_inner(TupleInt(Int(k - 1), lambda i: idx_fn(i + 1))),
+        ne(k).to(i64(0)),
     )
-    yield rewrite(tuple_int_program_inner(TupleInt(i))).to(int_program(i) + ",")
 
 
 @function
@@ -248,12 +258,15 @@ def multi_axis_index_key_program(x: MultiAxisIndexKey) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _multi_axis_index_key_program(l: MultiAxisIndexKey, r: MultiAxisIndexKey, item: MultiAxisIndexKeyItem):
-    yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey(item))).to(multi_axis_index_key_item_program(item))
-    yield rewrite(multi_axis_index_key_program(l + r)).to(
-        multi_axis_index_key_program(l) + ", " + multi_axis_index_key_program(r)
+def _multi_axis_index_key_program(idx_fn: Callable[[Int], MultiAxisIndexKeyItem], k: i64):
+    yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey(0, idx_fn))).to(Program(""))
+
+    yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey(Int(k), idx_fn))).to(
+        multi_axis_index_key_item_program(idx_fn(Int(0)))
+        + ", "
+        + multi_axis_index_key_program(MultiAxisIndexKey(Int(k - 1), lambda i: idx_fn(i + 1))),
+        ne(k).to(i64(0)),
     )
-    yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey.EMPTY)).to(Program("()"))
 
 
 @function
@@ -266,7 +279,7 @@ def _index_key_program(i: Int, s: Slice, key: MultiAxisIndexKey, a: NDArray):
     yield rewrite(index_key_program(IndexKey.int(i))).to(int_program(i))
     yield rewrite(index_key_program(IndexKey.slice(s))).to(slice_program(s))
     yield rewrite(index_key_program(IndexKey.multi_axis(key))).to(multi_axis_index_key_program(key))
-    yield rewrite(index_key_program(ndarray_index(a))).to(ndarray_program(a))
+    yield rewrite(index_key_program(IndexKey.ndarray(a))).to(ndarray_program(a))
 
 
 @function

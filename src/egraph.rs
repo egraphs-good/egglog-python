@@ -1,7 +1,7 @@
 // Wrapper around EGraph type
 
 use crate::conversions::*;
-use crate::error::EggResult;
+use crate::error::{EggResult, WrappedError};
 use crate::py_object_sort::{ArcPyObjectSort, MyPyObject, PyObjectSort};
 use crate::serialize::SerializedEGraph;
 
@@ -70,17 +70,18 @@ impl EGraph {
     #[pyo3(signature=(*commands))]
     fn run_program(&mut self, commands: Vec<Command>) -> EggResult<Vec<String>> {
         let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
+        let mut cmds_str = String::new();
         for cmd in &commands {
-            info!("{}", cmd);
+            cmds_str = cmds_str + &cmd.to_string() + "\n";
         }
+        info!("Running commands:\n{}", cmds_str);
         if let Some(cmds) = &mut self.cmds {
-            for cmd in &commands {
-                cmds.push_str(&cmd.to_string());
-                cmds.push('\n');
-            }
+            cmds.push_str(&cmds_str);
         }
-        let res = self.egraph.run_program(commands)?;
-        Ok(res)
+
+        self.egraph
+            .run_program(commands)
+            .map_err(|e| WrappedError::Egglog(e, "\nCommands:\n".to_string() + &cmds_str))
     }
 
     /// Returns the text of the commands that have been run so far, if `record` was passed.
