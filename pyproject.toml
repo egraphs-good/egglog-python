@@ -60,6 +60,7 @@ docs = [
     "line-profiler",
     "sphinxcontrib-mermaid",
     "ablog",
+    "rich",
 ]
 
 [tool.ruff]
