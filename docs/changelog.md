@@ -6,6 +6,7 @@ _This project uses semantic versioning_
 
 - Adds ability to use anonymous functions where callables are needed. These are automatically transformed to egglog
   functions with default rewrites.
+- Add `sort` and `fn` mid level commands
 
 ## 7.2.0 (2024-05-23)
 

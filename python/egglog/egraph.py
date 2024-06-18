@@ -91,6 +91,8 @@ __all__ = [
     "Action",
     "Command",
     "check_eq",
+    "sort",
+    "fn",
 ]
 
 T = TypeVar("T")
@@ -2002,3 +2004,42 @@ def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
         yield
     finally:
         _CURRENT_RULESET.reset(token)
+
+
+##
+# Mid level IR
+##
+
+
+def sort(name: str) -> type[Expr]:
+    """
+    Create a new sort with the given name.
+
+    Similar to subclassing `Expr`, but doesn't work as well with static type checking.
+    """
+    res = RuntimeClass(Thunk.value(Declarations(_classes={name: ClassDecl()})), TypeRefWithVars(name))
+    return cast(type[Expr], res)
+
+
+def fn(
+    name: str, *args_and_return_tp: type[Expr], cost: int | None = None, unextractable: bool = False
+) -> Callable[..., EXPR]:
+    """
+    Create a new function with the given name and argument types.
+
+    Similar to using the `@function` decorator, but more dynamic and so doesn't play as well with static typing.
+    """
+    *args, return_type = args_and_return_tp
+    decls = Declarations()
+    decls._functions[name] = FunctionDecl(
+        FunctionSignature(
+            arg_types=tuple(resolve_type_annotation(decls, a) for a in args),
+            arg_names=tuple(f"__{i}" for i in range(len(args))),
+            arg_defaults=tuple(None for _ in args),
+            return_type=resolve_type_annotation(decls, return_type),
+        ),
+        cost=cost,
+        unextractable=unextractable,
+    )
+    res = RuntimeFunction(Thunk.value(decls), Thunk.value(FunctionRef(name)))
+    return cast(Callable[..., EXPR], res)
