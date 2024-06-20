@@ -6,8 +6,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, overload
-from weakref import WeakKeyDictionary
+from typing import TYPE_CHECKING, Literal, overload
 
 from typing_extensions import assert_never
 
@@ -52,7 +51,8 @@ class EGraphState:
     type_ref_to_egg_sort: dict[JustTypeRef, str] = field(default_factory=dict)
 
     # Cache of egg expressions for converting to egg
-    expr_to_egg_cache: WeakKeyDictionary[ExprDecl, bindings._Expr] = field(default_factory=WeakKeyDictionary)
+    # Also include a bool of whether it is might contain an unboard var, to know if we can add a let binding to do CSO for it
+    expr_to_egg_cache: dict[ExprDecl, tuple[bindings._Expr, bool]] = field(default_factory=dict)
 
     def copy(self) -> EGraphState:
         """
@@ -116,8 +116,8 @@ class EGraphState:
             case RewriteDecl(tp, lhs, rhs, conditions) | BiRewriteDecl(tp, lhs, rhs, conditions):
                 self.type_ref_to_egg(tp)
                 rewrite = bindings.Rewrite(
-                    self._expr_to_egg(lhs),
-                    self._expr_to_egg(rhs),
+                    self._expr_to_egg(lhs)[0],
+                    self._expr_to_egg(rhs)[0],
                     [self.fact_to_egg(c) for c in conditions],
                 )
                 return (
@@ -147,16 +147,19 @@ class EGraphState:
     def action_to_egg(self, action: ActionDecl) -> bindings._Action:
         match action:
             case LetDecl(name, typed_expr):
-                return bindings.Let(name, self.typed_expr_to_egg(typed_expr))
+                egg_expr, might_contain_unbound = self._typed_expr_to_egg(typed_expr)
+                # Add to cache so we know if might be unbound or not
+                self.expr_to_egg_cache[VarDecl(name)] = (bindings.Var(name), might_contain_unbound)
+                return bindings.Let(name, egg_expr)
             case SetDecl(tp, call, rhs):
                 self.type_ref_to_egg(tp)
-                call_ = self._expr_to_egg(call)
-                return bindings.Set(call_.name, call_.args, self._expr_to_egg(rhs))
+                call_ = self._expr_to_egg(call, "not-first")[0]
+                return bindings.Set(call_.name, call_.args, self._expr_to_egg(rhs)[0])
             case ExprActionDecl(typed_expr):
                 return bindings.Expr_(self.typed_expr_to_egg(typed_expr))
             case ChangeDecl(tp, call, change):
                 self.type_ref_to_egg(tp)
-                call_ = self._expr_to_egg(call)
+                call_ = self._expr_to_egg(call, "not-first")[0]
                 egg_change: bindings._Change
                 match change:
                     case "delete":
@@ -168,7 +171,7 @@ class EGraphState:
                 return bindings.Change(egg_change, call_.name, call_.args)
             case UnionDecl(tp, lhs, rhs):
                 self.type_ref_to_egg(tp)
-                return bindings.Union(self._expr_to_egg(lhs), self._expr_to_egg(rhs))
+                return bindings.Union(self._expr_to_egg(lhs)[0], self._expr_to_egg(rhs)[0])
             case PanicDecl(name):
                 return bindings.Panic(name)
             case _:
@@ -178,9 +181,9 @@ class EGraphState:
         match fact:
             case EqDecl(tp, exprs):
                 self.type_ref_to_egg(tp)
-                return bindings.Eq([self._expr_to_egg(e) for e in exprs])
+                return bindings.Eq([self._expr_to_egg(e, False)[0] for e in exprs])
             case ExprFactDecl(typed_expr):
-                return bindings.Fact(self.typed_expr_to_egg(typed_expr))
+                return bindings.Fact(self._typed_expr_to_egg(typed_expr, False)[0])
             case _:
                 assert_never(fact)
 
@@ -212,8 +215,8 @@ class EGraphState:
                             [self.type_ref_to_egg(a.to_just()) for a in signature.arg_types],
                             self.type_ref_to_egg(signature.semantic_return_type.to_just()),
                         ),
-                        self._expr_to_egg(decl.default) if decl.default else None,
-                        self._expr_to_egg(decl.merge) if decl.merge else None,
+                        self._expr_to_egg(decl.default)[0] if decl.default else None,
+                        self._expr_to_egg(decl.merge)[0] if decl.merge else None,
                         [self.action_to_egg(a) for a in decl.on_merge],
                         decl.cost,
                         decl.unextractable,
@@ -273,30 +276,45 @@ class EGraphState:
         }
 
     def typed_expr_to_egg(self, typed_expr_decl: TypedExprDecl) -> bindings._Expr:
+        return self._typed_expr_to_egg(typed_expr_decl)[0]
+
+    def _typed_expr_to_egg(
+        self, typed_expr_decl: TypedExprDecl, transform_let: bool = True
+    ) -> tuple[bindings._Expr, bool]:
         self.type_ref_to_egg(typed_expr_decl.tp)
-        return self._expr_to_egg(typed_expr_decl.expr)
+        return self._expr_to_egg(typed_expr_decl.expr, transform_let)
 
     @overload
-    def _expr_to_egg(self, expr_decl: CallDecl) -> bindings.Call: ...
+    def _expr_to_egg(
+        self, expr_decl: CallDecl, transform_let: Literal[False, "not-first"]
+    ) -> tuple[bindings.Call, bool]: ...
 
     @overload
-    def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr: ...
+    def _expr_to_egg(self, expr_decl: ExprDecl, transform_let: bool = True) -> tuple[bindings._Expr, bool]: ...
 
-    def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:
+    def _expr_to_egg(
+        self, expr_decl: ExprDecl, transform_let: bool | Literal["not-first"] = True
+    ) -> tuple[bindings._Expr, bool]:
         """
         Convert an ExprDecl to an egg expression.
 
         Cached using weakrefs to avoid memory leaks.
+
+        If transform_let is True, then we will create a let binding for the expression if its children dont contain any unboard variables.
+
+        If it's false, it won't.
+
+        If it's "not-first", then it will skip trying to create a let binding on the top level, but then will for the rest
         """
         try:
             return self.expr_to_egg_cache[expr_decl]
         except KeyError:
             pass
-
         res: bindings._Expr
         match expr_decl:
             case VarDecl(name):
                 res = bindings.Var(name)
+                might_be_unbound = True
             case LitDecl(value):
                 l: bindings._Literal
                 match value:
@@ -313,20 +331,37 @@ class EGraphState:
                     case _:
                         assert_never(value)
                 res = bindings.Lit(l)
+                might_be_unbound = False
             case CallDecl(ref, args, _):
                 egg_fn = self.callable_ref_to_egg(ref)
-                egg_args = [self.typed_expr_to_egg(a) for a in args]
-                res = bindings.Call(egg_fn, egg_args)
+                if args:
+                    inner_transform_let = True if transform_let == "not-first" else transform_let
+                    egg_args, might_be_unbounds = zip(
+                        *(self._typed_expr_to_egg(a, inner_transform_let) for a in args), strict=True
+                    )
+                else:
+                    egg_args, might_be_unbounds = (), ()
+                might_be_unbound = any(might_be_unbounds)
+                res = bindings.Call(egg_fn, list(egg_args))
+                # Create a let binding for the function call, so we don't have to repeat it
+                if transform_let is True and not might_be_unbound:
+                    let_name = f"__expr_{hash(expr_decl)}"
+                    try:
+                        self.egraph.run_program(bindings.ActionCommand(bindings.Let(let_name, res)))
+                    except bindings.EggSmolError:
+                        pass
+                    else:
+                        res = bindings.Var(let_name)
             case PyObjectDecl(value):
                 res = GLOBAL_PY_OBJECT_SORT.store(value)
+                might_be_unbound = False
             case PartialCallDecl(call_decl):
-                egg_fn_call = self._expr_to_egg(call_decl)
+                egg_fn_call, might_be_unbound = self._expr_to_egg(call_decl, "not-first")
                 res = bindings.Call("unstable-fn", [bindings.Lit(bindings.String(egg_fn_call.name)), *egg_fn_call.args])
             case _:
                 assert_never(expr_decl.expr)
-
-        self.expr_to_egg_cache[expr_decl] = res
-        return res
+        self.expr_to_egg_cache[expr_decl] = res, might_be_unbound
+        return res, might_be_unbound
 
     def exprs_from_egg(
         self, termdag: bindings.TermDag, terms: list[bindings._Term], tp: JustTypeRef
