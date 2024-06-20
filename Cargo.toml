@@ -1,11 +1,11 @@
 [package]
-name = "egglog-python"
+name = "egglog"
 version = "7.2.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
-name = "egglog_python"
+name = "egglog"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -24,9 +24,6 @@ lalrpop-util = { version = "0.20.2", features = ["lexer"] }
 ordered-float = "*"
 uuid = { version = "1.8.0", features = ["v4"] }
 num-rational = "*"
-
-[package.metadata.maturin]
-name = "egglog.bindings"
 
 # Use unreleased version of egraph-serialize in egglog as well
 [patch.crates-io]

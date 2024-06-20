@@ -320,10 +320,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "egglog-python"
+name = "egglog"
 version = "7.2.0"
 dependencies = [
- "egglog",
+ "egglog 0.1.0",
  "egraph-serialize",
  "lalrpop-util",
  "log",

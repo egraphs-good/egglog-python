@@ -15,7 +15,7 @@ fn termdag_term_to_expr(termdag: &TermDag, term: Term) -> Expr {
     termdag.term_to_expr(&term).into()
 }
 
-/// Bindings for egg_smol rust library
+/// Bindings for egglog rust library
 #[pymodule]
 fn bindings(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
