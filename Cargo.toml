@@ -14,7 +14,7 @@ pyo3 = { version = "0.21", features = ["extension-module"] }
 # https://github.com/egraphs-good/egglog/compare/ceed816e9369570ffed9feeba157b19471dda70d...main
 # egglog = { git = "https://github.com/egraphs-good/egglog", rev = "fb4a9f114f9bb93154d6eff0dbab079b5cb4ebb6" }
 # egglog = { git = "https://github.com/oflatt/egg-smol", branch = "oflatt-fast-terms" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "92b3d9d04fb8ecde2194578db7aa480fd6217429" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "5025db25930c7dffaff579149a862e50ebae2c0a" }
 egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize", rev = "5838c036623e91540831745b1574539e01c8cb23" }
 serde_json = "*"
 pyo3-log = "0.10.0"
