@@ -309,14 +309,6 @@ class EGraphState:
     def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:
         """
         Convert an ExprDecl to an egg expression.
-
-        Cached using weakrefs to avoid memory leaks.
-
-        If transform_let is True, then we will create a let binding for the expression if its children dont contain any unboard variables.
-
-        If it's false, it won't.
-
-        If it's "not-first", then it will skip trying to create a let binding on the top level, but then will for the rest
         """
         try:
             return self.expr_to_egg_cache[expr_decl]
