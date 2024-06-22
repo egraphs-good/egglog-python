@@ -7,7 +7,6 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, overload
-from weakref import WeakKeyDictionary
 
 from typing_extensions import assert_never
 
@@ -52,7 +51,7 @@ class EGraphState:
     type_ref_to_egg_sort: dict[JustTypeRef, str] = field(default_factory=dict)
 
     # Cache of egg expressions for converting to egg
-    expr_to_egg_cache: WeakKeyDictionary[ExprDecl, bindings._Expr] = field(default_factory=WeakKeyDictionary)
+    expr_to_egg_cache: dict[ExprDecl, bindings._Expr] = field(default_factory=dict)
 
     def copy(self) -> EGraphState:
         """
@@ -147,6 +146,7 @@ class EGraphState:
     def action_to_egg(self, action: ActionDecl) -> bindings._Action:
         match action:
             case LetDecl(name, typed_expr):
+                self.expr_to_egg_cache[VarDecl(name)] = bindings.Var(name)
                 return bindings.Let(name, self.typed_expr_to_egg(typed_expr))
             case SetDecl(tp, call, rhs):
                 self.type_ref_to_egg(tp)
@@ -180,7 +180,7 @@ class EGraphState:
                 self.type_ref_to_egg(tp)
                 return bindings.Eq([self._expr_to_egg(e) for e in exprs])
             case ExprFactDecl(typed_expr):
-                return bindings.Fact(self.typed_expr_to_egg(typed_expr))
+                return bindings.Fact(self.typed_expr_to_egg(typed_expr, False))
             case _:
                 assert_never(fact)
 
@@ -272,9 +272,33 @@ class EGraphState:
             if len(v) == 1
         }
 
-    def typed_expr_to_egg(self, typed_expr_decl: TypedExprDecl) -> bindings._Expr:
+    def typed_expr_to_egg(self, typed_expr_decl: TypedExprDecl, transform_let: bool = True) -> bindings._Expr:
+        # transform all expressions with multiple parents into a let binding, so that less expressions
+        # are sent to egglog. Only for performance reasons.
+        if transform_let:
+            have_multiple_parents = _exprs_multiple_parents(typed_expr_decl)
+            for expr in reversed(have_multiple_parents):
+                self._transform_let(expr)
+
         self.type_ref_to_egg(typed_expr_decl.tp)
         return self._expr_to_egg(typed_expr_decl.expr)
+
+    def _transform_let(self, typed_expr: TypedExprDecl) -> None:
+        """
+        Rewrites this expression as a let binding if it's not already a let binding.
+        """
+        name = f"__expr_{hash(typed_expr)}"
+        var_decl = VarDecl(name)
+        if var_decl in self.expr_to_egg_cache:
+            return
+        cmd = bindings.ActionCommand(bindings.Let(name, self.typed_expr_to_egg(typed_expr)))
+        try:
+            self.egraph.run_program(cmd)
+        # errors when creating let bindings for things like `(vec-empty)`
+        except bindings.EggSmolError:
+            return
+        self.expr_to_egg_cache[typed_expr.expr] = bindings.Var(name)
+        self.expr_to_egg_cache[var_decl] = bindings.Var(name)
 
     @overload
     def _expr_to_egg(self, expr_decl: CallDecl) -> bindings.Call: ...
@@ -287,12 +311,17 @@ class EGraphState:
         Convert an ExprDecl to an egg expression.
 
         Cached using weakrefs to avoid memory leaks.
+
+        If transform_let is True, then we will create a let binding for the expression if its children dont contain any unboard variables.
+
+        If it's false, it won't.
+
+        If it's "not-first", then it will skip trying to create a let binding on the top level, but then will for the rest
         """
         try:
             return self.expr_to_egg_cache[expr_decl]
         except KeyError:
             pass
-
         res: bindings._Expr
         match expr_decl:
             case VarDecl(name):
@@ -315,7 +344,7 @@ class EGraphState:
                 res = bindings.Lit(l)
             case CallDecl(ref, args, _):
                 egg_fn = self.callable_ref_to_egg(ref)
-                egg_args = [self.typed_expr_to_egg(a) for a in args]
+                egg_args = [self.typed_expr_to_egg(a, False) for a in args]
                 res = bindings.Call(egg_fn, egg_args)
             case PyObjectDecl(value):
                 res = GLOBAL_PY_OBJECT_SORT.store(value)
@@ -324,7 +353,6 @@ class EGraphState:
                 res = bindings.Call("unstable-fn", [bindings.Lit(bindings.String(egg_fn_call.name)), *egg_fn_call.args])
             case _:
                 assert_never(expr_decl.expr)
-
         self.expr_to_egg_cache[expr_decl] = res
         return res
 
@@ -342,6 +370,27 @@ class EGraphState:
         Given a class name, returns all possible registered types that it can be.
         """
         return frozenset(tp for tp in self.type_ref_to_egg_sort if tp.name == cls_name)
+
+
+def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
+    """
+    Returns all expressions that have multiple parents (a list but semantically just an ordered set).
+    """
+    to_traverse = {typed_expr}
+    traversed = set[TypedExprDecl]()
+    traversed_twice = list[TypedExprDecl]()
+    while to_traverse:
+        typed_expr = to_traverse.pop()
+        if typed_expr in traversed:
+            traversed_twice.append(typed_expr)
+            continue
+        traversed.add(typed_expr)
+        expr = typed_expr.expr
+        if isinstance(expr, CallDecl):
+            to_traverse.update(expr.args)
+        elif isinstance(expr, PartialCallDecl):
+            to_traverse.update(expr.call.args)
+    return traversed_twice
 
 
 def _generate_type_egg_name(ref: JustTypeRef) -> str:
