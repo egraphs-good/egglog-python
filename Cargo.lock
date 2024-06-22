@@ -300,7 +300,7 @@ dependencies = [
  "env_logger",
  "generic_symbolic_expressions",
  "hashbrown 0.14.1",
- "im",
+ "im-rc",
  "indexmap",
  "instant",
  "lalrpop",
@@ -495,10 +495,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
-name = "im"
+name = "im-rc"
 version = "15.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0acd33ff0285af998aaf9b57342af478078f53492322fafc47450e09397e0e9"
+checksum = "af1955a75fa080c677d3972822ec4bad316169ab1cfc6c257a942c2265dbe5fe"
 dependencies = [
  "bitmaps",
  "rand_core",
