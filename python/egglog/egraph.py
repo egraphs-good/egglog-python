@@ -1188,7 +1188,7 @@ class EGraph(_BaseModule):
         facts = _fact_likes(fact_likes)
         self._add_decls(*facts)
         egg_facts = [self._state.fact_to_egg(f.fact) for f in _fact_likes(facts)]
-        return bindings.Check(egg_facts)
+        return bindings.Check(bindings.DUMMY_SPAN, egg_facts)
 
     @overload
     def extract(self, expr: EXPR, /, include_cost: Literal[False] = False) -> EXPR: ...
@@ -1232,7 +1232,11 @@ class EGraph(_BaseModule):
 
     def _run_extract(self, typed_expr: TypedExprDecl, n: int) -> bindings._ExtractReport:
         expr = self._state.typed_expr_to_egg(typed_expr)
-        self._egraph.run_program(bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n)))))
+        self._egraph.run_program(
+            bindings.ActionCommand(
+                bindings.Extract(bindings.DUMMY_SPAN, expr, bindings.Lit(bindings.DUMMY_SPAN, bindings.Int(n)))
+            )
+        )
         extract_report = self._egraph.extract_report()
         if not extract_report:
             msg = "No extract report saved"

@@ -5,6 +5,7 @@ use crate::error::{EggResult, WrappedError};
 use crate::py_object_sort::{ArcPyObjectSort, MyPyObject, PyObjectSort};
 use crate::serialize::SerializedEGraph;
 
+use egglog::ast::DUMMY_SPAN;
 use egglog::sort::{BoolSort, F64Sort, I64Sort, StringSort};
 use egglog::SerializeConfig;
 use log::info;
@@ -57,10 +58,10 @@ impl EGraph {
     }
 
     /// Parse a program into a list of commands.
-    #[pyo3(signature = (input, /))]
-    fn parse_program(&mut self, input: &str) -> EggResult<Vec<Command>> {
+    #[pyo3(signature = (input, /, filename=None))]
+    fn parse_program(&mut self, input: &str, filename: Option<String>) -> EggResult<Vec<Command>> {
         info!("Parsing program");
-        let commands = self.egraph.parse_program(input)?;
+        let commands = self.egraph.parse_program(filename, input)?;
         Ok(commands.into_iter().map(|x| x.into()).collect())
     }
 
@@ -179,7 +180,7 @@ impl EGraph {
         // For rational we need the actual sort on the e-graph, because it contains state
         // There isn't a public way to get a sort right now, so until there is, we use a hack where we create
         // a dummy expression of that sort, and use eval_expr to get the sort
-        let _one = egglog::ast::Expr::Lit((), egglog::ast::Literal::Int(1));
+        let _one = egglog::ast::Expr::Lit(DUMMY_SPAN.clone(), egglog::ast::Literal::Int(1));
         // let arcsort = self
         //     .egraph
         //     .eval_expr(&egglog::ast::Expr::Call(

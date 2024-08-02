@@ -70,15 +70,15 @@ class EGraphState:
     def schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Schedule:
         match schedule:
             case SaturateDecl(schedule):
-                return bindings.Saturate(self.schedule_to_egg(schedule))
+                return bindings.Saturate(bindings.DUMMY_SPAN, self.schedule_to_egg(schedule))
             case RepeatDecl(schedule, times):
-                return bindings.Repeat(times, self.schedule_to_egg(schedule))
+                return bindings.Repeat(bindings.DUMMY_SPAN, times, self.schedule_to_egg(schedule))
             case SequenceDecl(schedules):
-                return bindings.Sequence([self.schedule_to_egg(s) for s in schedules])
+                return bindings.Sequence(bindings.DUMMY_SPAN, [self.schedule_to_egg(s) for s in schedules])
             case RunDecl(ruleset_name, until):
                 self.ruleset_to_egg(ruleset_name)
                 config = bindings.RunConfig(ruleset_name, None if not until else list(map(self.fact_to_egg, until)))
-                return bindings.Run(config)
+                return bindings.Run(bindings.DUMMY_SPAN, config)
             case _:
                 assert_never(schedule)
 
@@ -115,6 +115,7 @@ class EGraphState:
             case RewriteDecl(tp, lhs, rhs, conditions) | BiRewriteDecl(tp, lhs, rhs, conditions):
                 self.type_ref_to_egg(tp)
                 rewrite = bindings.Rewrite(
+                    bindings.DUMMY_SPAN,
                     self._expr_to_egg(lhs),
                     self._expr_to_egg(rhs),
                     [self.fact_to_egg(c) for c in conditions],
@@ -126,6 +127,7 @@ class EGraphState:
                 )
             case RuleDecl(head, body, name):
                 rule = bindings.Rule(
+                    bindings.DUMMY_SPAN,
                     [self.action_to_egg(a) for a in head],
                     [self.fact_to_egg(f) for f in body],
                 )
@@ -146,14 +148,14 @@ class EGraphState:
     def action_to_egg(self, action: ActionDecl) -> bindings._Action:
         match action:
             case LetDecl(name, typed_expr):
-                self.expr_to_egg_cache[VarDecl(name)] = bindings.Var(name)
-                return bindings.Let(name, self.typed_expr_to_egg(typed_expr))
+                self.expr_to_egg_cache[VarDecl(name)] = bindings.Var(bindings.DUMMY_SPAN, name)
+                return bindings.Let(bindings.DUMMY_SPAN, name, self.typed_expr_to_egg(typed_expr))
             case SetDecl(tp, call, rhs):
                 self.type_ref_to_egg(tp)
                 call_ = self._expr_to_egg(call)
-                return bindings.Set(call_.name, call_.args, self._expr_to_egg(rhs))
+                return bindings.Set(bindings.DUMMY_SPAN, call_.name, call_.args, self._expr_to_egg(rhs))
             case ExprActionDecl(typed_expr):
-                return bindings.Expr_(self.typed_expr_to_egg(typed_expr))
+                return bindings.Expr_(bindings.DUMMY_SPAN, self.typed_expr_to_egg(typed_expr))
             case ChangeDecl(tp, call, change):
                 self.type_ref_to_egg(tp)
                 call_ = self._expr_to_egg(call)
@@ -165,12 +167,12 @@ class EGraphState:
                         egg_change = bindings.Subsume()
                     case _:
                         assert_never(change)
-                return bindings.Change(egg_change, call_.name, call_.args)
+                return bindings.Change(bindings.DUMMY_SPAN, egg_change, call_.name, call_.args)
             case UnionDecl(tp, lhs, rhs):
                 self.type_ref_to_egg(tp)
-                return bindings.Union(self._expr_to_egg(lhs), self._expr_to_egg(rhs))
+                return bindings.Union(bindings.DUMMY_SPAN, self._expr_to_egg(lhs), self._expr_to_egg(rhs))
             case PanicDecl(name):
-                return bindings.Panic(name)
+                return bindings.Panic(bindings.DUMMY_SPAN, name)
             case _:
                 assert_never(action)
 
@@ -178,7 +180,7 @@ class EGraphState:
         match fact:
             case EqDecl(tp, exprs):
                 self.type_ref_to_egg(tp)
-                return bindings.Eq([self._expr_to_egg(e) for e in exprs])
+                return bindings.Eq(bindings.DUMMY_SPAN, [self._expr_to_egg(e) for e in exprs])
             case ExprFactDecl(typed_expr):
                 return bindings.Fact(self.typed_expr_to_egg(typed_expr, False))
             case _:
@@ -239,13 +241,14 @@ class EGraphState:
                     # UnstableFn is a special case, where the rest of args are collected into a call
                     type_args: list[bindings._Expr] = [
                         bindings.Call(
+                            bindings.DUMMY_SPAN,
                             self.type_ref_to_egg(ref.args[1]),
-                            [bindings.Var(self.type_ref_to_egg(a)) for a in ref.args[2:]],
+                            [bindings.Var(bindings.DUMMY_SPAN, self.type_ref_to_egg(a)) for a in ref.args[2:]],
                         ),
-                        bindings.Var(self.type_ref_to_egg(ref.args[0])),
+                        bindings.Var(bindings.DUMMY_SPAN, self.type_ref_to_egg(ref.args[0])),
                     ]
                 else:
-                    type_args = [bindings.Var(self.type_ref_to_egg(a)) for a in ref.args]
+                    type_args = [bindings.Var(bindings.DUMMY_SPAN, self.type_ref_to_egg(a)) for a in ref.args]
                 args = (self.type_ref_to_egg(JustTypeRef(ref.name)), type_args)
             else:
                 args = None
@@ -291,14 +294,14 @@ class EGraphState:
         var_decl = VarDecl(name)
         if var_decl in self.expr_to_egg_cache:
             return
-        cmd = bindings.ActionCommand(bindings.Let(name, self.typed_expr_to_egg(typed_expr)))
+        cmd = bindings.ActionCommand(bindings.Let(bindings.DUMMY_SPAN, name, self.typed_expr_to_egg(typed_expr)))
         try:
             self.egraph.run_program(cmd)
         # errors when creating let bindings for things like `(vec-empty)`
         except bindings.EggSmolError:
             return
-        self.expr_to_egg_cache[typed_expr.expr] = bindings.Var(name)
-        self.expr_to_egg_cache[var_decl] = bindings.Var(name)
+        self.expr_to_egg_cache[typed_expr.expr] = bindings.Var(bindings.DUMMY_SPAN, name)
+        self.expr_to_egg_cache[var_decl] = bindings.Var(bindings.DUMMY_SPAN, name)
 
     @overload
     def _expr_to_egg(self, expr_decl: CallDecl) -> bindings.Call: ...
@@ -306,7 +309,7 @@ class EGraphState:
     @overload
     def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr: ...
 
-    def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:
+    def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:  # noqa: C901, PLR0912
         """
         Convert an ExprDecl to an egg expression.
 
@@ -325,7 +328,7 @@ class EGraphState:
         res: bindings._Expr
         match expr_decl:
             case VarDecl(name):
-                res = bindings.Var(name)
+                res = bindings.Var(bindings.DUMMY_SPAN, name)
             case LitDecl(value):
                 l: bindings._Literal
                 match value:
@@ -341,16 +344,20 @@ class EGraphState:
                         l = bindings.String(s)
                     case _:
                         assert_never(value)
-                res = bindings.Lit(l)
+                res = bindings.Lit(bindings.DUMMY_SPAN, l)
             case CallDecl(ref, args, _):
                 egg_fn = self.callable_ref_to_egg(ref)
                 egg_args = [self.typed_expr_to_egg(a, False) for a in args]
-                res = bindings.Call(egg_fn, egg_args)
+                res = bindings.Call(bindings.DUMMY_SPAN, egg_fn, egg_args)
             case PyObjectDecl(value):
                 res = GLOBAL_PY_OBJECT_SORT.store(value)
             case PartialCallDecl(call_decl):
                 egg_fn_call = self._expr_to_egg(call_decl)
-                res = bindings.Call("unstable-fn", [bindings.Lit(bindings.String(egg_fn_call.name)), *egg_fn_call.args])
+                res = bindings.Call(
+                    bindings.DUMMY_SPAN,
+                    "unstable-fn",
+                    [bindings.Lit(bindings.DUMMY_SPAN, bindings.String(egg_fn_call.name)), *egg_fn_call.args],
+                )
             case _:
                 assert_never(expr_decl.expr)
         self.expr_to_egg_cache[expr_decl] = res

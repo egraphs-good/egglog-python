@@ -1,6 +1,6 @@
 use crate::error::EggResult;
 use egglog::{
-    ast::{Expr, Literal, Symbol},
+    ast::{Expr, Literal, Span, Symbol, DUMMY_SPAN},
     constraint::{AllEqualTypeConstraint, SimpleTypeConstraint, TypeConstraint},
     // core::AtomTerm,
     sort::{BoolSort, FromSort, I64Sort, IntoSort as _, Sort, StringSort},
@@ -55,16 +55,16 @@ impl PyObjectIdent {
     pub fn to_expr(self) -> Expr {
         let children = match self {
             PyObjectIdent::Unhashable(id) => {
-                vec![Expr::Lit((), Literal::Int(id as i64))]
+                vec![Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(id as i64))]
             }
             PyObjectIdent::Hashable(type_hash, hash) => {
                 vec![
-                    Expr::Lit((), Literal::Int(type_hash as i64)),
-                    Expr::Lit((), Literal::Int(hash as i64)),
+                    Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(type_hash as i64)),
+                    Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(hash as i64)),
                 ]
             }
         };
-        Expr::call("py-object", children)
+        Expr::call_no_span("py-object", children)
     }
 }
 
@@ -233,16 +233,16 @@ impl Sort for PyObjectSort {
         assert!(value.tag == self.name());
         let children = match self.load_ident(&value) {
             PyObjectIdent::Unhashable(id) => {
-                vec![Expr::Lit((), Literal::Int(id as i64))]
+                vec![Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(id as i64))]
             }
             PyObjectIdent::Hashable(type_hash, hash) => {
                 vec![
-                    Expr::Lit((), Literal::Int(type_hash as i64)),
-                    Expr::Lit((), Literal::Int(hash as i64)),
+                    Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(type_hash as i64)),
+                    Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(hash as i64)),
                 ]
             }
         };
-        (1, Expr::call("py-object", children))
+        (1, Expr::call_no_span("py-object", children))
     }
 }
 
@@ -258,8 +258,8 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.i64.clone())
             .with_output_sort(self.py_object.clone())
             .into_box()
@@ -290,7 +290,7 @@ impl PrimitiveLike for Eval {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         return SimpleTypeConstraint::new(
             self.name(),
             vec![
@@ -299,6 +299,7 @@ impl PrimitiveLike for Eval {
                 self.py_object.clone(),
                 self.py_object.clone(),
             ],
+            span.clone(),
         )
         .into_box();
     }
@@ -331,7 +332,7 @@ impl PrimitiveLike for Exec {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![
@@ -340,6 +341,7 @@ impl PrimitiveLike for Exec {
                 self.py_object.clone(),
                 self.py_object.clone(),
             ],
+            span.clone(),
         )
         .into_box()
     }
@@ -379,8 +381,8 @@ impl PrimitiveLike for Dict {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.py_object.clone())
             .with_output_sort(self.py_object.clone())
             .into_box()
@@ -412,8 +414,8 @@ impl PrimitiveLike for DictUpdate {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.py_object.clone())
             .with_output_sort(self.py_object.clone())
             .into_box()
@@ -448,10 +450,11 @@ impl PrimitiveLike for ToString {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.py_object.clone(), self.string.clone()],
+            span.clone(),
         )
         .into_box()
     }
@@ -475,10 +478,11 @@ impl PrimitiveLike for ToBool {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.py_object.clone(), self.bool_.clone()],
+            span.clone(),
         )
         .into_box()
     }
@@ -501,10 +505,11 @@ impl PrimitiveLike for FromString {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.string.clone(), self.py_object.clone()],
+            span.clone(),
         )
         .into_box()
     }
@@ -528,10 +533,11 @@ impl PrimitiveLike for FromInt {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         return SimpleTypeConstraint::new(
             self.name(),
             vec![self.int.clone(), self.py_object.clone()],
+            span.clone(),
         )
         .into_box();
     }

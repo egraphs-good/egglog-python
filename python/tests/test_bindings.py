@@ -8,7 +8,6 @@ import subprocess
 import pytest
 
 from egglog.bindings import *
-from egglog.bindings import Datatype, RewriteCommand, RunSchedule
 
 
 def get_egglog_folder() -> pathlib.Path:
@@ -40,14 +39,14 @@ SLOW_TESTS = ["repro-unsound"]
 def test_example(example_file: pathlib.Path):
     egraph = EGraph(fact_directory=EGG_SMOL_FOLDER)
     commands = egraph.parse_program(example_file.read_text())
-    # TODO: Include currently relyies on the CWD instead of the fact directory. We should fix this upstream
+    # TODO: Include currently relies on the CWD instead of the fact directory. We should fix this upstream
     # and then remove this workaround.
     os.chdir(EGG_SMOL_FOLDER)
     egraph.run_program(*commands)
 
 
 class TestEGraph:
-    def test_parse_program(self):
+    def test_parse_program(self, snapshot_py):
         res = EGraph().parse_program(
             """(datatype Math
           (Num i64)
@@ -56,38 +55,10 @@ class TestEGraph:
           (Mul Math Math))
 
         ;; expr1 = 2 * (x + 3)
-        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))"""
+        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))""",
+            filename="test.egg",
         )
-
-        assert res == [
-            Datatype(
-                "Math",
-                [
-                    Variant("Num", ["i64"]),
-                    Variant("Var", ["String"]),
-                    Variant("Add", ["Math", "Math"]),
-                    Variant("Mul", ["Math", "Math"]),
-                ],
-            ),
-            ActionCommand(
-                Let(
-                    "expr1",
-                    Call(
-                        "Mul",
-                        [
-                            Call("Num", [Lit(Int(2))]),
-                            Call(
-                                "Add",
-                                [
-                                    Call("Var", [Lit(String("x"))]),
-                                    Call("Num", [Lit(Int(3))]),
-                                ],
-                            ),
-                        ],
-                    ),
-                )
-            ),
-        ]
+        assert res == snapshot_py
 
     def test_parse_and_run_program(self):
         program = "(check (= (+ 2 2) 4))"
@@ -109,8 +80,16 @@ class TestEGraph:
         egraph = EGraph()
         egraph.run_program(
             Datatype("Math", [Variant("Add", ["Math", "Math"])]),
-            RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")])), False),
-            RunSchedule(Repeat(10, Run(RunConfig("")))),
+            RewriteCommand(
+                "",
+                Rewrite(
+                    DUMMY_SPAN,
+                    Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "a"), Var(DUMMY_SPAN, "b")]),
+                    Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "b"), Var(DUMMY_SPAN, "a")]),
+                ),
+                False,
+            ),
+            RunSchedule(Repeat(DUMMY_SPAN, 10, Run(DUMMY_SPAN, RunConfig("")))),
         )
 
         run_report = egraph.run_report()
@@ -121,27 +100,31 @@ class TestEGraph:
         egraph = EGraph()
         egraph.run_program(
             Datatype("Expr", [Variant("Num", ["i64"], cost=5)]),
-            ActionCommand(Let("x", Call("Num", [Lit(Int(1))]))),
-            QueryExtract(0, Var("x")),
+            ActionCommand(Let(DUMMY_SPAN, "x", Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))),
+            QueryExtract(0, Var(DUMMY_SPAN, "x")),
         )
 
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
         assert extract_report.cost == 6
-        assert termdag_term_to_expr(extract_report.termdag, extract_report.term) == Call("Num", [Lit(Int(1))])
+        assert termdag_term_to_expr(extract_report.termdag, extract_report.term) == Call(
+            DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]
+        )
 
     def test_simplify(self):
         egraph = EGraph()
         egraph.run_program(
             Datatype("Expr", [Variant("Num", ["i64"], cost=5)]),
-            ActionCommand(Let("x", Call("Num", [Lit(Int(1))]))),
-            Simplify(Var("x"), Run(RunConfig(""))),
+            ActionCommand(Let(DUMMY_SPAN, "x", Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))),
+            Simplify(Var(DUMMY_SPAN, "x"), Run(DUMMY_SPAN, RunConfig(""))),
         )
 
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
         assert extract_report.cost == 6
-        assert termdag_term_to_expr(extract_report.termdag, extract_report.term) == Call("Num", [Lit(Int(1))])
+        assert termdag_term_to_expr(extract_report.termdag, extract_report.term) == Call(
+            DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]
+        )
 
     def test_sort_alias(self):
         # From map example
@@ -149,22 +132,58 @@ class TestEGraph:
         egraph.run_program(
             Sort(
                 "MyMap",
-                ("Map", [Var("i64"), Var("String")]),
+                ("Map", [Var(DUMMY_SPAN, "i64"), Var(DUMMY_SPAN, "String")]),
             ),
-            ActionCommand(Let("my_map1", Call("map-insert", [Call("map-empty", []), Lit(Int(1)), Lit(String("one"))]))),
-            ActionCommand(Let("my_map2", Call("map-insert", [Var("my_map1"), Lit(Int(2)), Lit(String("two"))]))),
-            Check([Eq([Lit(String("one")), Call("map-get", [Var("my_map1"), Lit(Int(1))])])]),
-            ActionCommand(Extract(Var("my_map2"), Lit(Int(0)))),
+            ActionCommand(
+                Let(
+                    DUMMY_SPAN,
+                    "my_map1",
+                    Call(
+                        DUMMY_SPAN,
+                        "map-insert",
+                        [Call(DUMMY_SPAN, "map-empty", []), Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, String("one"))],
+                    ),
+                )
+            ),
+            ActionCommand(
+                Let(
+                    DUMMY_SPAN,
+                    "my_map2",
+                    Call(
+                        DUMMY_SPAN,
+                        "map-insert",
+                        [Var(DUMMY_SPAN, "my_map1"), Lit(DUMMY_SPAN, Int(2)), Lit(DUMMY_SPAN, String("two"))],
+                    ),
+                )
+            ),
+            Check(
+                DUMMY_SPAN,
+                [
+                    Eq(
+                        DUMMY_SPAN,
+                        [
+                            Lit(DUMMY_SPAN, String("one")),
+                            Call(DUMMY_SPAN, "map-get", [Var(DUMMY_SPAN, "my_map1"), Lit(DUMMY_SPAN, Int(1))]),
+                        ],
+                    )
+                ],
+            ),
+            ActionCommand(Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "my_map2"), Lit(DUMMY_SPAN, Int(0)))),
         )
 
         extract_report = egraph.extract_report()
         assert isinstance(extract_report, Best)
         assert termdag_term_to_expr(extract_report.termdag, extract_report.term) == Call(
+            DUMMY_SPAN,
             "map-insert",
             [
-                Call("map-insert", [Call("map-empty", []), Lit(Int(2)), Lit(String("two"))]),
-                Lit(Int(1)),
-                Lit(String("one")),
+                Call(
+                    DUMMY_SPAN,
+                    "map-insert",
+                    [Call(DUMMY_SPAN, "map-empty", []), Lit(DUMMY_SPAN, Int(2)), Lit(DUMMY_SPAN, String("two"))],
+                ),
+                Lit(DUMMY_SPAN, Int(1)),
+                Lit(DUMMY_SPAN, String("one")),
             ],
         )
         assert extract_report.cost == 4
@@ -191,22 +210,26 @@ class TestVariant:
 
 class TestEval:
     def test_i64(self):
-        assert EGraph().eval_i64(Lit(Int(1))) == 1
+        assert EGraph().eval_i64(Lit(DUMMY_SPAN, Int(1))) == 1
 
     def test_f64(self):
-        assert EGraph().eval_f64(Lit(F64(1.0))) == 1.0
+        assert EGraph().eval_f64(Lit(DUMMY_SPAN, F64(1.0))) == 1.0
 
     def test_string(self):
-        assert EGraph().eval_string(Lit(String("hi"))) == "hi"
+        assert EGraph().eval_string(Lit(DUMMY_SPAN, String("hi"))) == "hi"
 
     def test_bool(self):
-        assert EGraph().eval_bool(Lit(Bool(True))) is True
+        assert EGraph().eval_bool(Lit(DUMMY_SPAN, Bool(True))) is True
 
     @pytest.mark.xfail(reason="Depends on getting actual sort from egraph")
     def test_rational(self):
         egraph = EGraph()
-        rational = Call("rational", [Lit(Int(1)), Lit(Int(2))])
-        egraph.run_program(ActionCommand(Expr_(Call("rational", [Lit(Int(1)), Lit(Int(2))]))))
+        rational = Call(DUMMY_SPAN, "rational", [Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(2))])
+        egraph.run_program(
+            ActionCommand(
+                Expr_(DUMMY_SPAN, Call(DUMMY_SPAN, "rational", [Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(2))]))
+            )
+        )
         assert egraph.eval_rational(rational) == fractions.Fraction(1, 2)
 
 
@@ -218,8 +241,16 @@ class TestThreads:
     def test_cmds(self):
         cmds = (
             Datatype("Math", [Variant("Add", ["Math", "Math"])]),
-            RewriteCommand("", Rewrite(Call("Add", [Var("a"), Var("b")]), Call("Add", [Var("b"), Var("a")])), False),
-            RunSchedule(Repeat(10, Run(RunConfig("")))),
+            RewriteCommand(
+                "",
+                Rewrite(
+                    DUMMY_SPAN,
+                    Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "a"), Var(DUMMY_SPAN, "b")]),
+                    Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "b"), Var(DUMMY_SPAN, "a")]),
+                ),
+                False,
+            ),
+            RunSchedule(Repeat(DUMMY_SPAN, 10, Run(DUMMY_SPAN, RunConfig("")))),
         )
 
         _thread.start_new_thread(print, cmds)

@@ -5,7 +5,7 @@ mod py_object_sort;
 mod serialize;
 mod utils;
 
-use conversions::{Expr, Term, TermDag};
+use conversions::{Expr, Span, Term, TermDag};
 use pyo3::prelude::*;
 
 #[pyfunction]
@@ -20,6 +20,8 @@ fn termdag_term_to_expr(termdag: &TermDag, term: Term) -> Expr {
 fn bindings(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
 
+    let dummy: Span = egglog::ast::DUMMY_SPAN.clone().into();
+    m.add("DUMMY_SPAN", dummy)?;
     m.add_class::<crate::py_object_sort::ArcPyObjectSort>()?;
     m.add_class::<crate::serialize::SerializedEGraph>()?;
     m.add_class::<crate::egraph::EGraph>()?;
