@@ -10,25 +10,25 @@ updates:
     schedule:
       interval: "weekly"
     groups:
-      production-dependencies:
+      rust-production:
         dependency-type: "production"
-      development-dependencies:
+      rust-development:
         dependency-type: "development"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     groups:
-      production-dependencies:
+      actions-production:
         dependency-type: "production"
-      development-dependencies:
+      actions-development:
         dependency-type: "development"
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
     groups:
-      production-dependencies:
+      python-production:
         dependency-type: "production"
-      development-dependencies:
+      python-development:
         dependency-type: "development"
