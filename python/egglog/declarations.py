@@ -13,10 +13,11 @@ from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, Union, runtime_c
 from typing_extensions import Self, assert_never
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Mapping
 
 
 __all__ = [
+    "replace_typed_expr",
     "Declarations",
     "DeclerationsLike",
     "DelayedDeclerations",
@@ -29,6 +30,7 @@ __all__ = [
     "MethodRef",
     "ClassMethodRef",
     "FunctionRef",
+    "UnnamedFunctionRef",
     "ConstantRef",
     "ClassVariableRef",
     "PropertyRef",
@@ -83,15 +85,12 @@ class DelayedDeclerations:
 
     @property
     def __egg_decls__(self) -> Declarations:
+        thunk = self.__egg_decls_thunk__
         try:
-            return self.__egg_decls_thunk__()
+            return thunk()
         # Catch attribute error, so that it isn't bubbled up as a missing attribute and fallbacks on `__getattr__`
         # instead raise explicitly
         except AttributeError as err:
-            msg = f"Cannot resolve declerations for {self}"
-            raise RuntimeError(msg) from err
-        # Might as well catch others too so we have more context when they raise
-        except Exception as err:  # noqa: BLE001
             msg = f"Cannot resolve declerations for {self}"
             raise RuntimeError(msg) from err
 
@@ -121,7 +120,8 @@ def upcast_declerations(declerations_like: Iterable[DeclerationsLike]) -> list[D
 
 @dataclass
 class Declarations:
-    _functions: dict[str, FunctionDecl | RelationDecl] = field(default_factory=dict)
+    # TODO: Replace with set of unnamed function decls
+    _functions: dict[str | UnnamedFunctionRef, FunctionDecl | RelationDecl] = field(default_factory=dict)
     _constants: dict[str, ConstantDecl] = field(default_factory=dict)
     _classes: dict[str, ClassDecl] = field(default_factory=dict)
     _rulesets: dict[str, RulesetDecl | CombinedRulesetDecl] = field(default_factory=lambda: {"": RulesetDecl([])})
@@ -324,8 +324,25 @@ TypeOrVarRef: TypeAlias = ClassTypeVarRef | TypeRefWithVars
 
 
 @dataclass(frozen=True)
+class UnnamedFunctionRef:
+    """
+    A reference to a function that doesn't have a name, but does have a body.
+    """
+
+    arg_types: tuple[JustTypeRef, ...]
+    arg_names: tuple[str, ...]
+    res: TypedExprDecl
+
+    @property
+    def args(self) -> tuple[TypedExprDecl, ...]:
+        return tuple(
+            TypedExprDecl(tp, VarDecl(name, False)) for tp, name in zip(self.arg_types, self.arg_names, strict=True)
+        )
+
+
+@dataclass(frozen=True)
 class FunctionRef:
-    name: str
+    name: str | UnnamedFunctionRef
 
 
 @dataclass(frozen=True)
@@ -460,6 +477,8 @@ CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl
 @dataclass(frozen=True)
 class VarDecl:
     name: str
+    # Differentiate between let bound vars and vars created in rules so that they won't shadow in egglog, by adding a prefix
+    is_let: bool
 
 
 @dataclass(frozen=True)
@@ -564,6 +583,38 @@ class TypedExprDecl:
             for a in self.expr.args:
                 l.extend(a.descendants())
         return l
+
+
+def replace_typed_expr(typed_expr: TypedExprDecl, replacements: Mapping[TypedExprDecl, TypedExprDecl]) -> TypedExprDecl:
+    """
+    Replace all the typed expressions in the given typed expression with the replacements.
+    """
+    # keep track of the traversed expressions for memoization
+    traversed: dict[TypedExprDecl, TypedExprDecl] = {}
+
+    def _inner(typed_expr: TypedExprDecl) -> TypedExprDecl:
+        if typed_expr in traversed:
+            return traversed[typed_expr]
+        if typed_expr in replacements:
+            res = replacements[typed_expr]
+        else:
+            match typed_expr.expr:
+                case (
+                    CallDecl(callable, args, bound_tp_params)
+                    | PartialCallDecl(CallDecl(callable, args, bound_tp_params))
+                ):
+                    new_args = tuple(_inner(a) for a in args)
+                    call_decl = CallDecl(callable, new_args, bound_tp_params)
+                    res = TypedExprDecl(
+                        typed_expr.tp,
+                        call_decl if isinstance(typed_expr.expr, CallDecl) else PartialCallDecl(call_decl),
+                    )
+                case _:
+                    res = typed_expr
+        traversed[typed_expr] = res
+        return res
+
+    return _inner(typed_expr)
 
 
 ##

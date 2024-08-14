@@ -70,7 +70,7 @@ def tuple_int_program_inner(x: TupleInt) -> Program:
 
 
 @array_api_program_gen_ruleset.register
-def _tuple_int_program(i: Int, ti: TupleInt, k: i64, idx_fn: Callable[[Int], Int]):
+def _tuple_int_program(i: Int, ti: TupleInt, k: i64, idx_fn: Callable[[Int], Int], vec_int: Vec[Int]):
     yield rewrite(int_program(ti[i])).to(tuple_int_program(ti) + "[" + int_program(i) + "]")
     yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_int_program(ti) + ")")
 
@@ -81,6 +81,16 @@ def _tuple_int_program(i: Int, ti: TupleInt, k: i64, idx_fn: Callable[[Int], Int
     yield rewrite(tuple_int_program_inner(TupleInt(Int(k), idx_fn))).to(
         int_program(idx_fn(Int(0))) + ", " + tuple_int_program_inner(TupleInt(Int(k - 1), lambda i: idx_fn(i + 1))),
         ne(k).to(i64(0)),
+    )
+
+    yield rewrite(tuple_int_program_inner(TupleInt.from_vec(Vec[Int]()))).to(Program(""))
+    yield rewrite(tuple_int_program_inner(TupleInt.from_vec(vec_int))).to(
+        int_program(vec_int[0]) + ", " + tuple_int_program_inner(TupleInt.from_vec(vec_int.remove(0))),
+        vec_int.length() > 1,
+    )
+    yield rewrite(tuple_int_program_inner(TupleInt.from_vec(vec_int))).to(
+        int_program(vec_int[0]) + ",",
+        eq(vec_int.length()).to(i64(1)),
     )
 
 
@@ -258,7 +268,9 @@ def multi_axis_index_key_program(x: MultiAxisIndexKey) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _multi_axis_index_key_program(idx_fn: Callable[[Int], MultiAxisIndexKeyItem], k: i64):
+def _multi_axis_index_key_program(
+    idx_fn: Callable[[Int], MultiAxisIndexKeyItem], k: i64, vec: Vec[MultiAxisIndexKeyItem], i: MultiAxisIndexKeyItem
+):
     yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey(0, idx_fn))).to(Program(""))
 
     yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey(Int(k), idx_fn))).to(
@@ -266,6 +278,20 @@ def _multi_axis_index_key_program(idx_fn: Callable[[Int], MultiAxisIndexKeyItem]
         + ", "
         + multi_axis_index_key_program(MultiAxisIndexKey(Int(k - 1), lambda i: idx_fn(i + 1))),
         ne(k).to(i64(0)),
+    )
+
+    yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey.from_vec(Vec[MultiAxisIndexKeyItem]()))).to(
+        Program("")
+    )
+    yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey.from_vec(vec))).to(
+        multi_axis_index_key_item_program(vec[0]) + ",",
+        eq(vec.length()).to(i64(1)),
+    )
+    yield rewrite(multi_axis_index_key_program(MultiAxisIndexKey.from_vec(vec))).to(
+        multi_axis_index_key_item_program(vec[0])
+        + ", "
+        + multi_axis_index_key_program(MultiAxisIndexKey.from_vec(vec.remove(0))),
+        vec.length() > 1,
     )
 
 

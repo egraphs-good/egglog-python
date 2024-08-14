@@ -4,6 +4,7 @@ Implement conversion to/from egglog.
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, overload
@@ -18,7 +19,7 @@ from .type_constraint_solver import TypeConstraintError, TypeConstraintSolver
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["EGraphState", "GLOBAL_PY_OBJECT_SORT", "_rule_var_name"]
+__all__ = ["EGraphState", "GLOBAL_PY_OBJECT_SORT"]
 
 # Create a global sort for python objects, so we can store them without an e-graph instance
 # Needed when serializing commands to egg commands when creating modules
@@ -132,15 +133,19 @@ class EGraphState:
                     [self.fact_to_egg(f) for f in body],
                 )
                 return bindings.RuleCommand(name or "", ruleset, rule)
+            # TODO: Replace with just constants value and looking at REF of function
             case DefaultRewriteDecl(ref, expr):
                 decl = self.__egg_decls__.get_callable_decl(ref).to_function_decl()
                 sig = decl.signature
                 assert isinstance(sig, FunctionSignature)
-                args = tuple(
-                    TypedExprDecl(tp.to_just(), VarDecl(_rule_var_name(name)))
+                # Replace args with rule_var_name mapping
+                arg_mapping = tuple(
+                    TypedExprDecl(tp.to_just(), VarDecl(name, False))
                     for name, tp in zip(sig.arg_names, sig.arg_types, strict=False)
                 )
-                rewrite_decl = RewriteDecl(sig.semantic_return_type.to_just(), CallDecl(ref, args), expr, (), False)
+                rewrite_decl = RewriteDecl(
+                    sig.semantic_return_type.to_just(), CallDecl(ref, arg_mapping), expr, (), False
+                )
                 return self.command_to_egg(rewrite_decl, ruleset)
             case _:
                 assert_never(cmd)
@@ -148,8 +153,10 @@ class EGraphState:
     def action_to_egg(self, action: ActionDecl) -> bindings._Action:
         match action:
             case LetDecl(name, typed_expr):
-                self.expr_to_egg_cache[VarDecl(name)] = bindings.Var(bindings.DUMMY_SPAN, name)
-                return bindings.Let(bindings.DUMMY_SPAN, name, self.typed_expr_to_egg(typed_expr))
+                var_decl = VarDecl(name, True)
+                var_egg = self._expr_to_egg(var_decl)
+                self.expr_to_egg_cache[var_decl] = var_egg
+                return bindings.Let(bindings.DUMMY_SPAN, var_egg.name, self.typed_expr_to_egg(typed_expr))
             case SetDecl(tp, call, rhs):
                 self.type_ref_to_egg(tp)
                 call_ = self._expr_to_egg(call)
@@ -193,7 +200,9 @@ class EGraphState:
         if ref in self.callable_ref_to_egg_fn:
             return self.callable_ref_to_egg_fn[ref]
         decl = self.__egg_decls__.get_callable_decl(ref)
-        self.callable_ref_to_egg_fn[ref] = egg_name = decl.egg_name or _generate_callable_egg_name(ref)
+        self.callable_ref_to_egg_fn[ref] = egg_name = decl.egg_name or _sanitize_egg_ident(
+            self._generate_callable_egg_name(ref)
+        )
         self.egg_fn_to_callable_refs[egg_name].add(ref)
         match decl:
             case RelationDecl(arg_types, _, _):
@@ -290,26 +299,31 @@ class EGraphState:
         """
         Rewrites this expression as a let binding if it's not already a let binding.
         """
-        name = f"__expr_{hash(typed_expr)}"
-        var_decl = VarDecl(name)
+        var_decl = VarDecl(f"__expr_{hash(typed_expr)}", True)
         if var_decl in self.expr_to_egg_cache:
             return
-        cmd = bindings.ActionCommand(bindings.Let(bindings.DUMMY_SPAN, name, self.typed_expr_to_egg(typed_expr)))
+        var_egg = self._expr_to_egg(var_decl)
+        cmd = bindings.ActionCommand(
+            bindings.Let(bindings.DUMMY_SPAN, var_egg.name, self.typed_expr_to_egg(typed_expr))
+        )
         try:
             self.egraph.run_program(cmd)
         # errors when creating let bindings for things like `(vec-empty)`
         except bindings.EggSmolError:
             return
-        self.expr_to_egg_cache[typed_expr.expr] = bindings.Var(bindings.DUMMY_SPAN, name)
-        self.expr_to_egg_cache[var_decl] = bindings.Var(bindings.DUMMY_SPAN, name)
+        self.expr_to_egg_cache[typed_expr.expr] = var_egg
+        self.expr_to_egg_cache[var_decl] = var_egg
 
     @overload
     def _expr_to_egg(self, expr_decl: CallDecl) -> bindings.Call: ...
 
     @overload
+    def _expr_to_egg(self, expr_decl: VarDecl) -> bindings.Var: ...
+
+    @overload
     def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr: ...
 
-    def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:  # noqa: C901, PLR0912
+    def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:
         """
         Convert an ExprDecl to an egg expression.
 
@@ -327,7 +341,10 @@ class EGraphState:
             pass
         res: bindings._Expr
         match expr_decl:
-            case VarDecl(name):
+            case VarDecl(name, is_let):
+                # prefix let bindings with % to avoid name conflicts with rewrites
+                if is_let:
+                    name = f"%{name}"
                 res = bindings.Var(bindings.DUMMY_SPAN, name)
             case LitDecl(value):
                 l: bindings._Literal
@@ -378,6 +395,47 @@ class EGraphState:
         """
         return frozenset(tp for tp in self.type_ref_to_egg_sort if tp.name == cls_name)
 
+    def _generate_callable_egg_name(self, ref: CallableRef) -> str:
+        """
+        Generates a valid egg function name for a callable reference.
+        """
+        match ref:
+            case FunctionRef(name):
+                match name:
+                    case str(name):
+                        return name
+                    case UnnamedFunctionRef(arg_types, arg_names, val):
+                        parts = (
+                            list(arg_names)
+                            + [self.type_ref_to_egg(tp) for tp in arg_types]
+                            + [str(self.typed_expr_to_egg(val, False))]
+                        )
+                        return "_".join(parts)
+            case ConstantRef(name):
+                return name
+            case (
+                MethodRef(cls_name, name)
+                | ClassMethodRef(cls_name, name)
+                | ClassVariableRef(cls_name, name)
+                | PropertyRef(cls_name, name)
+            ):
+                return f"{cls_name}.{name}"
+            case InitRef(cls_name):
+                return f"{cls_name}.__init__"
+            case _:
+                assert_never(ref)
+
+
+# https://chatgpt.com/share/9ab899b4-4e17-4426-a3f2-79d67a5ec456
+_EGGLOG_INVALID_IDENT = re.compile(r"[^\w\-+*/?!=<>&|^/%]")
+
+
+def _sanitize_egg_ident(input_string: str) -> str:
+    """
+    Replaces all invalid characters in an egg identifier with an underscore.
+    """
+    return _EGGLOG_INVALID_IDENT.sub("_", input_string)
+
 
 def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
     """
@@ -410,26 +468,6 @@ def _generate_type_egg_name(ref: JustTypeRef) -> str:
     return f"{name}_{'_'.join(map(_generate_type_egg_name, ref.args))}"
 
 
-def _generate_callable_egg_name(ref: CallableRef) -> str:
-    """
-    Generates a valid egg function name for a callable reference.
-    """
-    match ref:
-        case FunctionRef(name) | ConstantRef(name):
-            return name
-        case (
-            MethodRef(cls_name, name)
-            | ClassMethodRef(cls_name, name)
-            | ClassVariableRef(cls_name, name)
-            | PropertyRef(cls_name, name)
-        ):
-            return f"{cls_name}_{name}"
-        case InitRef(cls_name):
-            return f"{cls_name}___init__"
-        case _:
-            assert_never(ref)
-
-
 @dataclass
 class FromEggState:
     """
@@ -451,7 +489,7 @@ class FromEggState:
         """
         expr_decl: ExprDecl
         if isinstance(term, bindings.TermVar):
-            expr_decl = VarDecl(term.name)
+            expr_decl = VarDecl(term.name, True)
         elif isinstance(term, bindings.TermLit):
             value = term.value
             expr_decl = LitDecl(None if isinstance(value, bindings.Unit) else value.value)
@@ -534,10 +572,3 @@ class FromEggState:
         except KeyError:
             res = self.cache[term_id] = self.from_expr(tp, self.termdag.nodes[term_id])
             return res
-
-
-def _rule_var_name(s: str) -> str:
-    """
-    Create a hidden variable name, for rewrites, so that let bindings or function won't conflict with it
-    """
-    return f"__var__{s}"

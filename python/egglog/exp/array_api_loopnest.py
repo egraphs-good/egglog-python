@@ -1,3 +1,11 @@
+"""
+In progress module
+
+https://gist.github.com/sklam/5e5737137d48d6e5b816d14a90076f1d
+
+"""
+
+# %%
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
@@ -6,12 +14,16 @@ from egglog.exp.array_api import *
 
 
 class ShapeAPI(Expr):
-    def __init__(self, dims: TupleInt) -> None: ...
+    @method(unextractable=True)
+    def __init__(self, dims: TupleIntLike) -> None: ...
 
-    def deselect(self, axis: TupleInt) -> ShapeAPI: ...
+    @method(unextractable=True)
+    def deselect(self, axis: TupleIntLike) -> ShapeAPI: ...
 
-    def select(self, axis: TupleInt) -> ShapeAPI: ...
+    @method(unextractable=True)
+    def select(self, axis: TupleIntLike) -> ShapeAPI: ...
 
+    @method(unextractable=True)
     def to_tuple(self) -> TupleInt: ...
 
 
@@ -19,10 +31,10 @@ class ShapeAPI(Expr):
 def shape_api_ruleset(dims: TupleInt, axis: TupleInt):  # noqa: ANN201
     s = ShapeAPI(dims)
     yield rewrite(s.deselect(axis)).to(
-        ShapeAPI(range_(dims.length()).filter(lambda i: ~axis.contains(i)).map(lambda i: dims[i]))
+        ShapeAPI(TupleInt.range(dims.length()).filter(lambda i: ~axis.contains(i)).map(lambda i: dims[i]))
     )
     yield rewrite(s.select(axis)).to(
-        ShapeAPI(range_(dims.length()).filter(lambda i: axis.contains(i)).map(lambda i: dims[i]))
+        ShapeAPI(TupleInt.range(dims.length()).filter(lambda i: axis.contains(i)).map(lambda i: dims[i]))
     )
     yield rewrite(s.to_tuple()).to(dims)
 
@@ -36,11 +48,12 @@ class OptionalLoopNestAPI(Expr):
 
 
 class LoopNestAPI(Expr):
-    def __init__(self, dim: Int, inner: OptionalLoopNestAPI = OptionalLoopNestAPI.NONE) -> None: ...
+    def __init__(self, dim: Int, inner: OptionalLoopNestAPI) -> None: ...
 
     @classmethod
     def from_tuple(cls, args: TupleInt) -> OptionalLoopNestAPI: ...
 
+    @method(preserve=True)
     def __iter__(self) -> Iterator[TupleInt]:
         return iter(self.indices)
 
@@ -49,36 +62,53 @@ class LoopNestAPI(Expr):
 
     def get_dims(self) -> TupleInt: ...
 
-    def reduce(self, fn: Callable[[NDArray, TupleInt], NDArray], init: NDArrayLike) -> NDArray: ...
+    def fold(self, fn: Callable[[NDArray, TupleInt], NDArray], init: NDArrayLike) -> NDArray: ...
+
+
+@function
+def tuple_tuple_int_reduce_ndarray(
+    xs: TupleTupleInt, fn: Callable[[NDArray, TupleInt], NDArray], init: NDArray
+) -> NDArray: ...
+
+
+@function
+def tuple_int_map_tuple_int(xs: TupleInt, fn: Callable[[Int], TupleInt]) -> TupleTupleInt: ...
+
+
+@function
+def tuple_tuple_int_product(xs: TupleTupleInt) -> TupleTupleInt: ...
 
 
 @array_api_ruleset.register
 def _loopnest_api_ruleset(
-    head: enp.Int,
-    tail: enp.TupleInt,
+    head: Int,
+    tail: TupleInt,
     lna: LoopNestAPI,
-    fn: Callable[[enp.NDArray, enp.TupleInt], enp.NDArray],
-    init: enp.NDArray,
-    dim: enp.Int,
+    fn: Callable[[NDArray, TupleInt], NDArray],
+    init: NDArray,
+    dim: Int,
+    idx_fn: Callable[[Int], Int],
+    i: i64,
 ):
     # from_tuple
-    yield rewrite(LoopNestAPI.from_tuple(enp.TupleInt.EMPTY)).to(OptionalLoopNestAPI.NONE)
-    yield rewrite(
-        LoopNestAPI.from_tuple(enp.TupleInt.some(head, tail)),
-    ).to(
-        OptionalLoopNestAPI(LoopNestAPI(head, LoopNestAPI.from_tuple(tail))),
+    yield rewrite(LoopNestAPI.from_tuple(TupleInt(0, idx_fn))).to(OptionalLoopNestAPI.NONE)
+    yield rewrite(LoopNestAPI.from_tuple(TupleInt(Int(i), idx_fn))).to(
+        OptionalLoopNestAPI(
+            LoopNestAPI(idx_fn(Int(0)), LoopNestAPI.from_tuple(TupleInt(Int(i - 1), lambda i: idx_fn(i + 1))))
+        ),
+        ne(i).to(i64(0)),
     )
     # reduce
-    yield rewrite(lna.reduce(fn, init)).to(lna.indices.reduce_ndarray(fn, init))
+    yield rewrite(lna.fold(fn, init)).to(tuple_tuple_int_reduce_ndarray(lna.indices, fn, init))
     # get_dims
-    yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI.NONE).get_dims()).to(enp.TupleInt(dim))
-    yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI(lna)).get_dims()).to(enp.TupleInt(dim) + lna.get_dims())
+    yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI.NONE).get_dims()).to(TupleInt.single(dim))
+    yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI(lna)).get_dims()).to(TupleInt.single(dim) + lna.get_dims())
     # indices
-    yield rewrite(lna.indices).to(lna.get_dims().map_tuple_int(enp.range_).product())
+    yield rewrite(lna.indices).to(tuple_tuple_int_product(tuple_int_map_tuple_int(lna.get_dims(), TupleInt.range)))
 
 
-@function(ruleset=array_api_ruleset)
-def linalg_norm(X: NDArray, axis: TupleInt) -> NDArray:  # noqa: N803
+@function(ruleset=array_api_ruleset, unextractable=True)
+def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:  # noqa: N803
     # peel off the outer shape for result array
     outshape = ShapeAPI(X.shape).deselect(axis).to_tuple()
     # get only the inner shape for reduction
@@ -90,6 +120,24 @@ def linalg_norm(X: NDArray, axis: TupleInt) -> NDArray:  # noqa: N803
         lambda k: sqrt(
             LoopNestAPI.from_tuple(reduce_axis)
             .unwrap()
-            .reduce(lambda carry, i: carry + real(conj(x := X[i + k]) * x), init=0.0)
+            .fold(lambda carry, i: carry + real(conj(x := X[i + k]) * x), init=0.0)
         ).to_value(),
     )
+
+
+# %%
+egraph = EGraph(save_egglog_string=True)
+
+X = NDArray.var("X")
+assume_shape(X, (3, 2, 3, 4))
+val = linalg_norm(X, (0, 1))
+val.shape.to_py()
+
+# %%
+egraph = EGraph()
+egraph.register(val.shape[2])
+egraph.run(array_api_ruleset.saturate())
+egraph.display(split_functions=[Int, TRUE, FALSE], n_inline_leaves=2)
+
+
+# %%

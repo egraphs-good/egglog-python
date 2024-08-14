@@ -63,7 +63,7 @@ class Thunk(Generic[T, Unpack[TS]]):
                     res = fn(*args)
                 except Exception as e:
                     self.state = Error(e)
-                    raise
+                    raise e from None
                 else:
                     self.state = Resolved(res)
                     return res

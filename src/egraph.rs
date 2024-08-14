@@ -19,7 +19,7 @@ use std::sync::Arc;
 /// Create an empty EGraph.
 #[pyclass(unsendable)]
 pub struct EGraph {
-    egraph: egglog::EGraph,
+    pub(crate) egraph: egglog::EGraph,
     py_object_arcsort: Option<Arc<PyObjectSort>>,
     cmds: Option<String>,
 }
@@ -80,9 +80,9 @@ impl EGraph {
             cmds.push_str(&cmds_str);
         }
 
-        self.egraph
-            .run_program(commands)
-            .map_err(|e| WrappedError::Egglog(e, "\nCommands:\n".to_string() + &cmds_str))
+        self.egraph.run_program(commands).map_err(|e| {
+            WrappedError::Egglog(e, "\nWhen running commands:\n".to_string() + &cmds_str)
+        })
     }
 
     /// Returns the text of the commands that have been run so far, if `record` was passed.
@@ -115,8 +115,8 @@ impl EGraph {
 
     /// Serialize the EGraph to a SerializedEGraph object.
     #[pyo3(
-        signature = (root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=false, split_primitive_outputs=false),
-        text_signature = "(self, root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=False, split_primitive_outputs=False)"
+        signature = (root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=false),
+        text_signature = "(self, root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=False)"
     )]
     fn serialize(
         &mut self,
@@ -124,7 +124,6 @@ impl EGraph {
         max_functions: Option<usize>,
         max_calls_per_function: Option<usize>,
         include_temporary_functions: bool,
-        split_primitive_outputs: bool,
     ) -> SerializedEGraph {
         let root_eclasses: Vec<egglog::Value> = root_eclasses
             .into_iter()
@@ -140,7 +139,6 @@ impl EGraph {
                 max_functions,
                 max_calls_per_function,
                 include_temporary_functions,
-                split_primitive_outputs,
                 root_eclasses,
             }),
         }

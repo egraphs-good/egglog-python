@@ -33,7 +33,7 @@ export function render({ model, el }) {
         // Don't animate transitions between shapes for performance
         tweenPaths: !performance,
         tweenShapes: !performance,
-        useWorker: true,
+        useWorker: false,
       })
       .transition(() => d3.transition("t").duration(2000).ease(d3.easeLinear))
       .renderDot(dot);

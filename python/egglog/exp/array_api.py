@@ -267,8 +267,12 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
     All constructors should be rewritten to the functional semantics in the __init__ method.
     """
 
+    @classmethod
+    def var(cls, name: StringLike) -> TupleInt: ...
+
     EMPTY: ClassVar[TupleInt]
 
+    @method(unextractable=True)
     def __init__(self, length: IntLike, idx_fn: Callable[[Int], Int]) -> None: ...
 
     @classmethod
@@ -307,6 +311,20 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
     def contains(self, i: Int) -> Boolean:
         return self.fold_boolean(FALSE, lambda acc, j: acc | (i == j))
 
+    @method(cost=100)
+    def filter(self, f: Callable[[Int], Boolean]) -> TupleInt: ...
+
+    @method(cost=100)
+    def map(self, f: Callable[[Int], Int]) -> TupleInt:
+        return TupleInt(self.length(), lambda i: f(self[i]))
+
+    @classmethod
+    def if_(cls, b: Boolean, i: TupleInt, j: TupleInt) -> TupleInt: ...
+
+    @method(preserve=True)
+    def to_py(self) -> tuple[int, ...]:
+        return tuple(int(i) for i in self)
+
 
 # TODO: Upcast args for Vec[Int] constructor
 converter(tuple, TupleInt, lambda x: TupleInt.from_vec(Vec(*(convert(i, Int) for i in x))))
@@ -322,14 +340,19 @@ def _tuple_int(
     f: Callable[[Int, Int], Int],
     bool_f: Callable[[Boolean, Int], Boolean],
     idx_fn: Callable[[Int], Int],
+    map_fn: Callable[[Int], Int],
+    filter_f: Callable[[Int], Boolean],
     vs: Vec[Int],
     b: Boolean,
+    ti: TupleInt,
+    ti2: TupleInt,
 ):
+    remaining = TupleInt(k - 1, lambda i: idx_fn(i + 1)).filter(filter_f)
     return [
-        # index_vec_int
-        rewrite(index_vec_int(vs, Int(k))).to(vs[k]),
         rewrite(TupleInt(i, idx_fn).length()).to(i),
         rewrite(TupleInt(i, idx_fn)[i2]).to(idx_fn(i2)),
+        # index_vec_int
+        rewrite(index_vec_int(vs, Int(k))).to(vs[k], vs.length() > k),
         # fold
         rewrite(TupleInt(0, idx_fn).fold(i, f)).to(i),
         rewrite(TupleInt(Int(k), idx_fn).fold(i, f)).to(
@@ -342,9 +365,52 @@ def _tuple_int(
             bool_f(TupleInt(k - 1, lambda i: idx_fn(i + 1)).fold_boolean(b, bool_f), idx_fn(Int(0))),
             ne(k).to(i64(0)),
         ),
+        # filter TODO: could be written as fold w/ generic types
+        rewrite(TupleInt(0, idx_fn).filter(filter_f)).to(TupleInt(0, idx_fn)),
+        rewrite(TupleInt(Int(k), idx_fn).filter(filter_f)).to(
+            TupleInt.if_(filter_f(value := idx_fn(Int(k))), TupleInt.single(value) + remaining, remaining),
+            ne(k).to(i64(0)),
+        ),
         # Empty
         rewrite(TupleInt.EMPTY).to(TupleInt(0, bottom_indexing)),
+        # if_
+        rewrite(TupleInt.if_(TRUE, ti, ti2)).to(ti),
+        rewrite(TupleInt.if_(FALSE, ti, ti2)).to(ti2),
     ]
+
+
+class TupleTupleInt(Expr, ruleset=array_api_ruleset):
+    @classmethod
+    def var(cls, name: StringLike) -> TupleTupleInt: ...
+
+    EMPTY: ClassVar[TupleTupleInt]
+
+    def __init__(self, length: IntLike, idx_fn: Callable[[Int], TupleInt]) -> None: ...
+
+    @classmethod
+    def single(cls, i: TupleInt) -> TupleTupleInt:
+        return TupleTupleInt(Int(1), lambda _: i)
+
+    @classmethod
+    def from_vec(cls, vec: Vec[Int]) -> TupleInt:
+        return TupleInt(vec.length(), partial(index_vec_int, vec))
+
+    def __add__(self, other: TupleTupleInt) -> TupleTupleInt:
+        return TupleTupleInt(
+            self.length() + other.length(),
+            lambda i: TupleInt.if_(i < self.length(), self[i], other[i - self.length()]),
+        )
+
+    def length(self) -> Int: ...
+    def __getitem__(self, i: IntLike) -> TupleInt: ...
+
+    @method(preserve=True)
+    def __len__(self) -> int:
+        return int(self.length())
+
+    @method(preserve=True)
+    def __iter__(self) -> Iterator[TupleInt]:
+        return iter(self[i] for i in range(len(self)))
 
 
 @function
@@ -820,8 +886,19 @@ converter(TupleValue, NDArray, NDArray.vector)
 
 
 @array_api_ruleset.register
-def _ndarray(x: NDArray, b: Boolean, f: Float, fi1: f64, fi2: f64):
+def _ndarray(
+    x: NDArray,
+    b: Boolean,
+    f: Float,
+    fi1: f64,
+    fi2: f64,
+    shape: TupleInt,
+    dtype: DType,
+    idx_fn: Callable[[TupleInt], Value],
+):
     return [
+        rewrite(NDArray(shape, dtype, idx_fn).shape).to(shape),
+        rewrite(NDArray(shape, dtype, idx_fn).dtype).to(dtype),
         rewrite(x.ndim).to(x.shape.length()),
         # rewrite(NDArray.scalar(Value.bool(b)).to_bool()).to(b),
         # Converting to a value requires a scalar bool value
@@ -1145,9 +1222,11 @@ def sqrt(x: NDArray) -> NDArray: ...
 def std(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray: ...
 
 
+@function
 def real(x: NDArray) -> NDArray: ...
 
 
+@function
 def conj(x: NDArray) -> NDArray: ...
 
 
@@ -1364,7 +1443,7 @@ def _assume_dtype(x: NDArray, dtype: DType, idx: TupleInt):
 
 
 @function(mutates_first_arg=True)
-def assume_shape(x: NDArray, shape: TupleInt) -> None:
+def assume_shape(x: NDArray, shape: TupleIntLike) -> None:
     """
     Asserts that the shape of x is shape.
     """
@@ -1461,6 +1540,18 @@ def try_evaling(expr: Expr, prim_expr: i64 | Bool) -> int | bool:
     try:
         return egraph.eval(prim_expr)
     except EggSmolError as exc:
-        egraph.display(n_inline_leaves=2, split_primitive_outputs=True)
-        msg = "Cannot simplify:"
-        raise ValueError(msg, egraph.extract(expr)) from exc
+        egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
+        try:
+            msg = f"Cannot simplify to primitive {egraph.extract(expr)}"
+        except EggSmolError:
+            msg = f"Cannot simplify to primitive or extract {expr}"
+
+        # string = (
+        #     egraph.as_egglog_string
+        #     + "\n"
+        #     + str(egraph._state.typed_expr_to_egg(cast(RuntimeExpr, prim_expr).__egg_typed_expr__))
+        # )
+        # # save to "tmp.egg"
+        # with open("tmp.egg", "w") as f:
+        #     f.write(string)
+        raise ValueError(msg) from exc

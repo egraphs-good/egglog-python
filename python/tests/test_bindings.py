@@ -5,6 +5,7 @@ import os
 import pathlib
 import subprocess
 
+import black
 import pytest
 
 from egglog.bindings import *
@@ -45,6 +46,9 @@ def test_example(example_file: pathlib.Path):
     egraph.run_program(*commands)
 
 
+BLACK_MODE = black.Mode(line_length=88)
+
+
 class TestEGraph:
     def test_parse_program(self, snapshot_py):
         res = EGraph().parse_program(
@@ -58,7 +62,8 @@ class TestEGraph:
         (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))""",
             filename="test.egg",
         )
-        assert res == snapshot_py
+        res_str = black.format_str(str(res), mode=BLACK_MODE).strip()
+        assert res_str == snapshot_py
 
     def test_parse_and_run_program(self):
         program = "(check (= (+ 2 2) 4))"

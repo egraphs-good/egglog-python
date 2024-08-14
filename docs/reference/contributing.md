@@ -32,10 +32,10 @@ conda activate egglog-python
 Then install the package in editable mode with the development dependencies:
 
 ```bash
-pip install -e .[dev]
+maturin develop -E .[dev]
 ```
 
-Anytime you change the rust code, you can run `pip install -e .` to recompile the rust code.
+Anytime you change the rust code, you can run `maturin develop -E` to recompile the rust code.
 
 ### Running Tests
 

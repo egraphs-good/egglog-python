@@ -329,7 +329,7 @@ class TestNormalFns:
         def transform_a(a: A) -> A: ...
 
         v = higher_order(lambda a: transform_a(a))
-        assert str(v) == "higher_order(cast(Callable[[A], A], lambda a: transform_a(a)))"
+        assert str(v) == "higher_order(lambda a: transform_a(a))"
 
     def test_multiple_same(self):
         """
