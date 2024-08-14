@@ -131,7 +131,9 @@ egraph = EGraph(save_egglog_string=True)
 X = NDArray.var("X")
 assume_shape(X, (3, 2, 3, 4))
 val = linalg_norm(X, (0, 1))
-val.shape.to_py()
+egraph.register(val.shape)
+egraph.run(array_api_ruleset.saturate())
+egraph.extract_multiple(val.shape, 10)
 
 # %%
 egraph = EGraph()
