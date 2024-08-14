@@ -84,7 +84,7 @@ class Bool(Expr, egg_sort="bool", builtin=True):
 converter(bool, Bool, Bool)
 
 # The types which can be convertered into an i64
-i64Like = Union["i64", int]  # noqa: N816
+i64Like: TypeAlias = Union["i64", int]  # noqa: N816, PYI042
 
 
 class i64(Expr, builtin=True):  # noqa: N801
@@ -186,7 +186,7 @@ converter(int, i64, i64)
 def count_matches(s: StringLike, pattern: StringLike) -> i64: ...
 
 
-f64Like = Union["f64", float]  # noqa: N816
+f64Like: TypeAlias = Union["f64", float]  # noqa: N816, PYI042
 
 
 class f64(Expr, builtin=True):  # noqa: N801
@@ -408,6 +408,12 @@ class Vec(Expr, Generic[T], builtin=True):
     @method(egg_fn="rebuild")
     def rebuild(self) -> Vec[T]: ...
 
+    @method(egg_fn="vec-remove")
+    def remove(self, index: i64Like) -> Vec[T]: ...
+
+    @method(egg_fn="vec-set")
+    def set(self, index: i64Like, value: T) -> Vec[T]: ...
+
 
 class PyObject(Expr, builtin=True):
     def __init__(self, value: object) -> None: ...
@@ -518,10 +524,11 @@ def _convert_function(a: FunctionType) -> UnstableFn:
     return_tp, *arg_tps = get_type_args()
     a.__annotations__ = {
         "return": return_tp,
-        **dict(zip(a.__code__.co_varnames, arg_tps, strict=True)),
+        # The first varnames should always be the arg names
+        **dict(zip(a.__code__.co_varnames, arg_tps, strict=False)),
     }
     # Modify name to make it unique
-    a.__name__ = f"{a.__name__} {hash(a.__code__)}"
+    # a.__name__ = f"{a.__name__} {hash(a.__code__)}"
     transformed_fn = functionalize(a, value_to_annotation)
     assert isinstance(transformed_fn, partial)
     return UnstableFn(

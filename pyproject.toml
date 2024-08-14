@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=0.13,<0.14"]
+requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -62,7 +62,7 @@ docs = [
     "ablog",
 ]
 
-[tool.ruff]
+[tool.ruff.lint]
 ignore = [
     # Allow uppercase vars
     "N806",
@@ -74,7 +74,7 @@ ignore = [
     # Allow exec
     "S102",
     "S307",
-    "PGH001",
+    "S307",
     # allow star imports
     "F405",
     "F403",
@@ -173,12 +173,16 @@ ignore = [
     "D401",
     # Allow private member refs
     "SLF001",
+    # allow blind exception to add context
+    "BLE001",
 ]
+select = ["ALL"]
+
+[tool.ruff]
 
 line-length = 120
 # Allow lines to be as long as 120.
 src = ["python"]
-select = ["ALL"]
 extend-exclude = ["python/tests/__snapshots__"]
 unsafe-fixes = true
 
@@ -201,6 +205,7 @@ exclude = ["__snapshots__", "_build", "^conftest.py$"]
 
 [tool.maturin]
 python-source = "python"
+module-name = "egglog.bindings"
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]

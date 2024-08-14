@@ -1,21 +1,29 @@
 [package]
-name = "egglog-python"
+name = "egglog_python"
 version = "7.2.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
-name = "egglog_python"
+name = "egglog"
 crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.21", features = ["extension-module"] }
 
 # https://github.com/egraphs-good/egglog/compare/ceed816e9369570ffed9feeba157b19471dda70d...main
-egglog = { git = "https://github.com/egraphs-good/egglog", rev = "fb4a9f114f9bb93154d6eff0dbab079b5cb4ebb6" }
+# egglog = { git = "https://github.com/egraphs-good/egglog", rev = "fb4a9f114f9bb93154d6eff0dbab079b5cb4ebb6" }
+# egglog = { path = "../egg-smol" }
 # egglog = { git = "https://github.com/oflatt/egg-smol", branch = "oflatt-fast-terms" }
-# egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "38b3014b34399cc78887ede09c845b2a5d6c7d19" }
-egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize", rev = "5838c036623e91540831745b1574539e01c8cb23" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "a555b2f5e82c684442775cc1a5da94b71930113c" }
+egraph-serialize = { git = "https://github.com/saulshanabrook/egraph-serialize", rev = "1c205fcc6d3426800b828e9264dbadbd4a5ef6e9", features = [
+    "serde",
+    "graphviz",
+] }
+# egraph-serialize = { path = "../egraph-serialize", features = [
+#     "serde",
+#     "graphviz",
+# ] }
 serde_json = "*"
 pyo3-log = "0.10.0"
 log = "0.4.21"
@@ -24,10 +32,11 @@ ordered-float = "*"
 uuid = { version = "1.8.0", features = ["v4"] }
 num-rational = "*"
 
-[package.metadata.maturin]
-name = "egglog.bindings"
-
 # Use unreleased version of egraph-serialize in egglog as well
-[patch.crates-io]
-egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize", rev = "5838c036623e91540831745b1574539e01c8cb23" }
+# [patch.crates-io]
+# egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize", rev = "5838c036623e91540831745b1574539e01c8cb23" }
 # egraph-serialize = { path = "../egraph-serialize" }
+
+# enable debug symbols for easier profiling
+# [profile.release]
+# debug = 1

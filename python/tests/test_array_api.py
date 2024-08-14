@@ -45,8 +45,8 @@ def test_tuple_value_includes():
 def test_reshape_index():
     # Verify that it doesn't expand forever
     x = NDArray.var("x")
-    new_shape = TupleInt(Int(-1))
-    res = reshape(x, new_shape).index(TupleInt(Int(1)) + TupleInt(Int(2)))
+    new_shape = TupleInt.single(Int(-1))
+    res = reshape(x, new_shape).index(TupleInt.single(Int(1)) + TupleInt.single(Int(2)))
     egraph = EGraph()
     egraph.register(res)
     egraph.run(array_api_schedule)
@@ -56,8 +56,8 @@ def test_reshape_index():
 
 def test_reshape_vec_noop():
     x = NDArray.var("x")
-    assume_shape(x, TupleInt(Int(5)))
-    res = reshape(x, TupleInt(Int(-1)))
+    assume_shape(x, TupleInt.single(Int(5)))
+    res = reshape(x, TupleInt.single(Int(-1)))
     egraph = EGraph()
     egraph.register(res)
     egraph.run(array_api_schedule)

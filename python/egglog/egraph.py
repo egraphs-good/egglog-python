@@ -465,10 +465,14 @@ class _ExprMetaclass(type):
         prev_frame = frame.f_back
         assert prev_frame
 
+        # Pass in an instance of the class so that when we are generating the decls
+        # we can update them eagerly so that we can access the methods in the class body
+        runtime_cls = RuntimeClass(None, TypeRefWithVars(name))  # type: ignore[arg-type]
+
         # Store frame so that we can get live access to updated locals/globals
         # Otherwise, f_locals returns a copy
         # https://peps.python.org/pep-0667/
-        decls_thunk = Thunk.fn(
+        runtime_cls.__egg_decls_thunk__ = Thunk.fn(
             _generate_class_decls,
             namespace,
             prev_frame,
@@ -476,21 +480,22 @@ class _ExprMetaclass(type):
             egg_sort,
             name,
             ruleset,
-            fallback=Declarations,
+            runtime_cls,
         )
-        return RuntimeClass(decls_thunk, TypeRefWithVars(name))
+        return runtime_cls
 
     def __instancecheck__(cls, instance: object) -> bool:
         return isinstance(instance, RuntimeExpr)
 
 
-def _generate_class_decls(
+def _generate_class_decls(  # noqa: C901
     namespace: dict[str, Any],
     frame: FrameType,
     builtin: bool,
     egg_sort: str | None,
     cls_name: str,
     ruleset: Ruleset | None,
+    runtime_cls: RuntimeClass,
 ) -> Declarations:
     """
     Lazy constructor for class declerations to support classes with methods whose types are not yet defined.
@@ -503,6 +508,8 @@ def _generate_class_decls(
     del parameters
     cls_decl = ClassDecl(egg_sort, type_vars, builtin)
     decls = Declarations(_classes={cls_name: cls_decl})
+    # Update class think eagerly when resolving so that lookups work in methods
+    runtime_cls.__egg_decls_thunk__ = Thunk.value(decls)
 
     ##
     # Register class variables
@@ -523,16 +530,13 @@ def _generate_class_decls(
     # Register methods, classmethods, preserved methods, and properties
     ##
 
-    # The type ref of self is paramterized by the type vars
-    TypeRefWithVars(cls_name, tuple(map(ClassTypeVarRef, type_vars)))
-
     # Get all the methods from the class
     filtered_namespace: list[tuple[str, Any]] = [
         (k, v) for k, v in namespace.items() if k not in IGNORED_ATTRIBUTES or isinstance(v, _WrappedMethod)
     ]
 
     # all methods we should try adding default functions for
-    default_function_refs: dict[ClassMethodRef | MethodRef | PropertyRef, Callable] = {}
+    add_default_funcs: list[Callable[[], None]] = []
     # Then register each of its methods
     for method_name, method in filtered_namespace:
         is_init = method_name == "__init__"
@@ -551,7 +555,6 @@ def _generate_class_decls(
             cls_decl.preserved_methods[method_name] = fn
             continue
         locals = frame.f_locals
-
         ref: ClassMethodRef | MethodRef | PropertyRef | InitRef
         match fn:
             case classmethod():
@@ -562,17 +565,25 @@ def _generate_class_decls(
                 fn = fn.fget
             case _:
                 ref = InitRef(cls_name) if is_init else MethodRef(cls_name, method_name)
+        special_function_name: SpecialFunctions | None = (
+            "fn-partial" if egg_fn == "unstable-fn" else "fn-app" if egg_fn == "unstable-app" else None
+        )
+        if special_function_name:
+            decl = FunctionDecl(special_function_name, builtin=True, egg_name=egg_fn)
+            decls.set_function_decl(ref, decl)
+            continue
 
-        decl = _fn_decl(decls, egg_fn, ref, fn, locals, default, cost, merge, on_merge, mutates, builtin, unextractable)
-        decls.set_function_decl(ref, decl)
+        _, add_rewrite = _fn_decl(
+            decls, egg_fn, ref, fn, locals, default, cost, merge, on_merge, mutates, builtin, ruleset, unextractable
+        )
 
         if not builtin and not isinstance(ref, InitRef) and not mutates:
-            default_function_refs[ref] = fn
+            add_default_funcs.append(add_rewrite)
 
     # Add all rewrite methods at the end so that all methods are registered first and can be accessed
     # in the bodies
-    for ref, fn in default_function_refs.items():
-        _add_default_rewrite_function(decls, ref, fn, ruleset)
+    for add_rewrite in add_default_funcs:
+        add_rewrite()
 
     return decls
 
@@ -646,11 +657,11 @@ class _FunctionConstructor:
 
     def create_decls(self, fn: Callable[..., RuntimeExpr]) -> tuple[Declarations, CallableRef]:
         decls = Declarations()
-
-        callable_decl = _fn_decl(
+        ref = None if self.use_body_as_name else FunctionRef(fn.__name__)
+        ref, add_rewrite = _fn_decl(
             decls,
             self.egg_fn,
-            (ref := FunctionRef(fn.__name__)),
+            ref,
             fn,
             self.hint_locals,
             self.default,
@@ -659,33 +670,18 @@ class _FunctionConstructor:
             self.on_merge,
             self.mutates_first_arg,
             self.builtin,
+            self.ruleset,
             unextractable=self.unextractable,
         )
-        if self.use_body_as_name:
-            ref = FunctionRef(_fn_body_name(fn, decls, callable_decl))
-        decls.set_function_decl(ref, callable_decl)
-        _add_default_rewrite_function(decls, ref, fn, self.ruleset)
+        add_rewrite()
         return decls, ref
-
-
-def _fn_body_name(fn: Callable, decls: Declarations, function_decl: FunctionDecl) -> str:
-    """
-    Creates a function name from the function body.
-    """
-    signature = function_decl.signature
-    assert isinstance(signature, FunctionSignature)
-
-    args: list[object] = [
-        RuntimeExpr.__from_values__(decls, TypedExprDecl(tp.to_just(), VarDecl(n)))
-        for n, tp in zip(signature.arg_names, signature.arg_types, strict=False)
-    ]
-    return f"lambda {', '.join(signature.arg_names)}: {fn(*args)}"
 
 
 def _fn_decl(
     decls: Declarations,
     egg_name: str | None,
-    ref: FunctionRef | MethodRef | PropertyRef | ClassMethodRef | InitRef,
+    # If ref is Callable, then generate the ref from the function name
+    ref: FunctionRef | MethodRef | PropertyRef | ClassMethodRef | InitRef | None,
     fn: object,
     # Pass in the locals, retrieved from the frame when wrapping,
     # so that we support classes and function defined inside of other functions (which won't show up in the globals)
@@ -696,21 +692,14 @@ def _fn_decl(
     on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None,
     mutates_first_arg: bool,
     is_builtin: bool,
+    ruleset: Ruleset | None = None,
     unextractable: bool = False,
-) -> FunctionDecl:
+) -> tuple[CallableRef, Callable[[], None]]:
     """
-    Sets the function decl for the function object.
+    Sets the function decl for the function object and returns the ref as well as a thunk that sets the default callable.
     """
     if not isinstance(fn, FunctionType):
         raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
-
-    # partial function creation and calling are handled with a special case in the type checker, so don't
-    # use the normal logic
-    special_function_name: SpecialFunctions | None = (
-        "fn-partial" if egg_name == "unstable-fn" else "fn-app" if egg_name == "unstable-app" else None
-    )
-    if special_function_name:
-        return FunctionDecl(special_function_name, builtin=True, egg_name=egg_name)
 
     hint_globals = fn.__globals__.copy()
     # Copy Callable into global if not present bc sometimes it gets automatically removed by ruff to type only block
@@ -762,8 +751,8 @@ def _fn_decl(
         None
         if merge is None
         else merge(
-            RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), VarDecl("old"))),
-            RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), VarDecl("new"))),
+            RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), VarDecl("old", False))),
+            RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), VarDecl("new", False))),
         )
     )
     decls |= merged
@@ -773,28 +762,47 @@ def _fn_decl(
         if on_merge is None
         else _action_likes(
             on_merge(
-                RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), VarDecl("old"))),
-                RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), VarDecl("new"))),
+                RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), VarDecl("old", False))),
+                RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), VarDecl("new", False))),
             )
         )
     )
     decls.update(*merge_action)
-    return FunctionDecl(
-        FunctionSignature(
+    # defer this in generator so it doesnt resolve for builtins eagerly
+    args = (TypedExprDecl(tp.to_just(), VarDecl(name, False)) for name, tp in zip(arg_names, arg_types, strict=True))
+    res_ref: FunctionRef | MethodRef | ClassMethodRef | PropertyRef | InitRef | UnnamedFunctionRef
+    res_thunk: Callable[[], object]
+    # If we were not passed in a ref, this is an unnamed funciton, so eagerly compute the value and use that to refer to it
+    if not ref:
+        tuple_args = tuple(args)
+        res = _create_default_value(decls, ref, fn, tuple_args, ruleset)
+        assert isinstance(res, RuntimeExpr)
+        res_ref = UnnamedFunctionRef(tuple_args, res.__egg_typed_expr__)
+        decls._unnamed_functions.add(res_ref)
+        res_thunk = Thunk.value(res)
+
+    else:
+        signature_ = FunctionSignature(
             return_type=None if mutates_first_arg else return_type,
             var_arg_type=var_arg_type,
             arg_types=arg_types,
             arg_names=arg_names,
             arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
-        ),
-        cost=cost,
-        egg_name=egg_name,
-        merge=merged.__egg_typed_expr__.expr if merged is not None else None,
-        unextractable=unextractable,
-        builtin=is_builtin,
-        default=None if default is None else default.__egg_typed_expr__.expr,
-        on_merge=tuple(a.action for a in merge_action),
-    )
+        )
+        decl = FunctionDecl(
+            signature=signature_,
+            cost=cost,
+            egg_name=egg_name,
+            merge=merged.__egg_typed_expr__.expr if merged is not None else None,
+            unextractable=unextractable,
+            builtin=is_builtin,
+            default=None if default is None else default.__egg_typed_expr__.expr,
+            on_merge=tuple(a.action for a in merge_action),
+        )
+        res_ref = ref
+        decls.set_function_decl(ref, decl)
+        res_thunk = Thunk.fn(_create_default_value, decls, ref, fn, args, ruleset)
+    return res_ref, Thunk.fn(_add_default_rewrite_function, decls, res_ref, return_type, ruleset, res_thunk)
 
 
 # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
@@ -865,27 +873,34 @@ def _constant_thunk(
     return decls, TypedExprDecl(type_ref.to_just(), CallDecl(callable_ref))
 
 
-def _add_default_rewrite_function(decls: Declarations, ref: CallableRef, fn: Callable, ruleset: Ruleset | None) -> None:
-    """
-    Adds a default rewrite for a function, by calling the functions with vars and adding it if it is not None.
+def _create_default_value(
+    decls: Declarations,
+    ref: CallableRef | None,
+    fn: Callable,
+    args: Iterable[TypedExprDecl],
+    ruleset: Ruleset | None,
+) -> object:
+    args: list[object] = [RuntimeExpr.__from_values__(decls, a) for a in args]
 
-    """
-    callable_decl = decls.get_callable_decl(ref)
-    assert isinstance(callable_decl, FunctionDecl)
-    signature = callable_decl.signature
-    assert isinstance(signature, FunctionSignature)
-
-    var_args: list[object] = [
-        RuntimeExpr.__from_values__(decls, TypedExprDecl(tp.to_just(), VarDecl(_rule_var_name(name))))
-        for name, tp in zip(signature.arg_names, signature.arg_types, strict=False)
-    ]
     # If this is a classmethod, add the class as the first arg
     if isinstance(ref, ClassMethodRef):
         tp = decls.get_paramaterized_class(ref.class_name)
-        var_args.insert(0, RuntimeClass(Thunk.value(decls), tp))
+        args.insert(0, RuntimeClass(Thunk.value(decls), tp))
     with set_current_ruleset(ruleset):
-        default_rewrite = fn(*var_args)
-    _add_default_rewrite(decls, ref, signature.semantic_return_type, default_rewrite, ruleset)
+        return fn(*args)
+
+
+def _add_default_rewrite_function(
+    decls: Declarations,
+    ref: CallableRef,
+    res_type: TypeOrVarRef,
+    ruleset: Ruleset | None,
+    value_thunk: Callable[[], object],
+) -> None:
+    """
+    Helper functions that resolves a value thunk to create the default value.
+    """
+    _add_default_rewrite(decls, ref, res_type, value_thunk(), ruleset)
 
 
 def _add_default_rewrite(
@@ -957,6 +972,7 @@ class GraphvizKwargs(TypedDict, total=False):
     max_calls_per_function: int | None
     n_inline_leaves: int
     split_primitive_outputs: bool
+    split_functions: list[object]
 
 
 @dataclass
@@ -1007,10 +1023,20 @@ class EGraph(_BaseModule):
 
     def graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
         # By default we want to split primitive outputs
-        kwargs.setdefault("split_primitive_outputs", True)
+        split_primitive_outputs = kwargs.pop("split_primitive_outputs", True)
+        split_additional_functions = kwargs.pop("split_functions", [])
         n_inline = kwargs.pop("n_inline_leaves", 0)
-        serialized = self._egraph.serialize([], **kwargs)  # type: ignore[misc]
+        serialized = self._egraph.serialize(
+            [],
+            max_functions=kwargs.pop("max_functions", None),
+            max_calls_per_function=kwargs.pop("max_calls_per_function", None),
+            include_temporary_functions=False,
+        )
+        if split_primitive_outputs or split_additional_functions:
+            additional_ops = set(map(self._callable_to_egg, split_additional_functions))
+            serialized.split_e_classes(self._egraph, additional_ops)
         serialized.map_ops(self._state.op_mapping())
+
         for _ in range(n_inline):
             serialized.inline_leaves()
         original = serialized.to_dot()
@@ -1070,10 +1096,12 @@ class EGraph(_BaseModule):
         """
         Loads a CSV file and sets it as *input, output of the function.
         """
+        self._egraph.run_program(bindings.Input(self._callable_to_egg(fn), path))
+
+    def _callable_to_egg(self, fn: object) -> str:
         ref, decls = resolve_callable(fn)
         self._add_decls(decls)
-        fn_name = self._state.callable_ref_to_egg(ref)
-        self._egraph.run_program(bindings.Input(fn_name, path))
+        return self._state.callable_ref_to_egg(ref)
 
     def let(self, name: str, expr: EXPR) -> EXPR:
         """
@@ -1086,7 +1114,7 @@ class EGraph(_BaseModule):
         return cast(
             EXPR,
             RuntimeExpr.__from_values__(
-                self.__egg_decls__, TypedExprDecl(runtime_expr.__egg_typed_expr__.tp, VarDecl(name))
+                self.__egg_decls__, TypedExprDecl(runtime_expr.__egg_typed_expr__.tp, VarDecl(name, True))
             ),
         )
 
@@ -1171,7 +1199,7 @@ class EGraph(_BaseModule):
         facts = _fact_likes(fact_likes)
         self._add_decls(*facts)
         egg_facts = [self._state.fact_to_egg(f.fact) for f in _fact_likes(facts)]
-        return bindings.Check(egg_facts)
+        return bindings.Check(bindings.DUMMY_SPAN, egg_facts)
 
     @overload
     def extract(self, expr: EXPR, /, include_cost: Literal[False] = False) -> EXPR: ...
@@ -1215,7 +1243,11 @@ class EGraph(_BaseModule):
 
     def _run_extract(self, typed_expr: TypedExprDecl, n: int) -> bindings._ExtractReport:
         expr = self._state.typed_expr_to_egg(typed_expr)
-        self._egraph.run_program(bindings.ActionCommand(bindings.Extract(expr, bindings.Lit(bindings.Int(n)))))
+        self._egraph.run_program(
+            bindings.ActionCommand(
+                bindings.Extract(bindings.DUMMY_SPAN, expr, bindings.Lit(bindings.DUMMY_SPAN, bindings.Int(n)))
+            )
+        )
         extract_report = self._egraph.extract_report()
         if not extract_report:
             msg = "No extract report saved"
@@ -1288,13 +1320,18 @@ class EGraph(_BaseModule):
         raise TypeError(f"Eval not implemented for {typed_expr.tp}")
 
     def saturate(
-        self, *, max: int = 1000, performance: bool = False, **kwargs: Unpack[GraphvizKwargs]
+        self,
+        schedule: Schedule | None = None,
+        *,
+        max: int = 1000,
+        performance: bool = False,
+        **kwargs: Unpack[GraphvizKwargs],
     ) -> ipywidgets.Widget:
         from .graphviz_widget import graphviz_widget_with_slider
 
         dots = [str(self.graphviz(**kwargs))]
         i = 0
-        while self.run(1).updated and i < max:
+        while self.run(schedule or 1).updated and i < max:
             i += 1
             dots.append(str(self.graphviz(**kwargs)))
         return graphviz_widget_with_slider(dots, performance=performance)
@@ -1322,7 +1359,10 @@ class EGraph(_BaseModule):
         """
         Returns the current egraph, which is the one in the context.
         """
-        return CURRENT_EGRAPH.get()
+        try:
+            return CURRENT_EGRAPH.get()
+        except LookupError:
+            return cls(save_egglog_string=True)
 
     @property
     def _egraph(self) -> bindings.EGraph:
@@ -1715,16 +1755,16 @@ def action_command(action: Action) -> Action:
     return action
 
 
-def var(name: str, bound: type[EXPR]) -> EXPR:
+def var(name: str, bound: type[T]) -> T:
     """Create a new variable with the given name and type."""
-    return cast(EXPR, _var(name, bound))
+    return cast(T, _var(name, bound))
 
 
 def _var(name: str, bound: object) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
     decls = Declarations()
     type_ref = resolve_type_annotation(decls, bound)
-    return RuntimeExpr.__from_values__(decls, TypedExprDecl(type_ref.to_just(), VarDecl(name)))
+    return RuntimeExpr.__from_values__(decls, TypedExprDecl(type_ref.to_just(), VarDecl(name, False)))
 
 
 def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:
@@ -1971,7 +2011,7 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     if "Callable" not in globals:
         globals["Callable"] = Callable
     hints = get_type_hints(gen, globals, frame.f_locals)
-    args = [_var(_rule_var_name(p.name), hints[p.name]) for p in signature(gen).parameters.values()]
+    args = [_var(p.name, hints[p.name]) for p in signature(gen).parameters.values()]
     return list(gen(*args))  # type: ignore[misc]
 
 

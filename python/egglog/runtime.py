@@ -256,7 +256,10 @@ class RuntimeFunction(DelayedDeclerations):
 
         if isinstance(self.__egg_bound__, RuntimeExpr):
             args = (self.__egg_bound__, *args)
-        signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl().signature
+        try:
+            signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl().signature
+        except Exception as e:
+            raise TypeError(f"Failed to find callable {self}") from e
         decls = self.__egg_decls__.copy()
         # Special case function application bc we dont support variadic generics yet generally
         if signature == "fn-app":
@@ -356,7 +359,9 @@ def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: 
         Parameter(
             n,
             Parameter.POSITIONAL_OR_KEYWORD,
-            default=RuntimeExpr.__from_values__(decls, TypedExprDecl(t.to_just(), d if d is not None else VarDecl(n)))
+            default=RuntimeExpr.__from_values__(
+                decls, TypedExprDecl(t.to_just(), d if d is not None else VarDecl(n, True))
+            )
             if d is not None or optional_args
             else Parameter.empty,
         )
@@ -550,5 +555,10 @@ def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
         case RuntimeFunction(decls, ref, _):
             return ref(), decls()
         case RuntimeClass(thunk, tp):
-            return ClassMethodRef(tp.name, "__init__"), thunk()
-    raise NotImplementedError(f"Cannot turn {callable} into a callable ref")
+            return InitRef(tp.name), thunk()
+        case RuntimeExpr(decl_thunk, expr_thunk):
+            if not isinstance((expr := expr_thunk().expr), CallDecl) or not isinstance(expr.callable, ConstantRef):
+                raise NotImplementedError(f"Can only turn constants into callable refs, not {expr}")
+            return expr.callable, decl_thunk()
+        case _:
+            raise NotImplementedError(f"Cannot turn {callable} of type {type(callable)} into a callable ref")

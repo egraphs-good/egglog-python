@@ -39,9 +39,8 @@ def functionalize(f: T, get_annotation: Callable[[object], type | None]) -> T:
         res = partial(h, a, g)
     """
     code = f.__code__
-    names = code.co_names
+    names = tuple(n for n in code.co_names if n in f.__globals__)
     free_vars = code.co_freevars
-    names + free_vars
 
     global_values: list[Any] = [f.__globals__[name] for name in names]
     free_var_values = [cell.cell_contents for cell in f.__closure__] if f.__closure__ else []

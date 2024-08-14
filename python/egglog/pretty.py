@@ -16,6 +16,7 @@ from .declarations import *
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+
 __all__ = [
     "pretty_decl",
     "pretty_callable_ref",
@@ -77,9 +78,9 @@ def pretty_decl(
 
     This will use re-format the result and put the expression on the last line, preceeded by the statements.
     """
-    traverse = TraverseContext()
+    traverse = TraverseContext(decls)
     traverse(decl, toplevel=True)
-    pretty = traverse.pretty(decls)
+    pretty = traverse.pretty()
     expr = pretty(decl, ruleset_name=ruleset_name)
     if wrapping_fn:
         expr = f"{wrapping_fn}({expr})"
@@ -106,15 +107,20 @@ def pretty_callable_ref(
     """
     # Pass in three dummy args, which are the max used for any operation that
     # is not a generic function call
-    args: list[ExprDecl] = [VarDecl(ARG_STR)] * 3
+    args: list[ExprDecl] = [VarDecl(ARG_STR, False)] * 3
     if first_arg:
         args.insert(0, first_arg)
-    res = PrettyContext(decls, defaultdict(lambda: 0))._call_inner(
-        ref, args, bound_tp_params=bound_tp_params, parens=False
-    )
+    context = PrettyContext(decls, defaultdict(lambda: 0))
+    res = context._call_inner(ref, args, bound_tp_params=bound_tp_params, parens=False)
     # Either returns a function or a function with args. If args are provided, they would just be called,
     # on the function, so return them, because they are dummies
-    return res[0] if isinstance(res, tuple) else res
+    if isinstance(res, tuple):
+        name = res[0]
+        # if this is an unnamed function, return it but don't partially apply any args
+        if isinstance(name, UnnamedFunctionRef):
+            return context._pretty_function_body(name, [])
+        return name
+    return res
 
 
 # TODO: Add a different pretty callable ref that doesnt fill in wholes but instead returns the function
@@ -128,16 +134,18 @@ class TraverseContext:
     expression has.
     """
 
+    decls: Declarations
+
     # All expressions we have seen (incremented the parent counts of all children)
     _seen: set[AllDecls] = field(default_factory=set)
     # The number of parents for each expressions
     parents: Counter[AllDecls] = field(default_factory=Counter)
 
-    def pretty(self, decls: Declarations) -> PrettyContext:
+    def pretty(self) -> PrettyContext:
         """
         Create a pretty context from the state of this traverse context.
         """
-        return PrettyContext(decls, self.parents)
+        return PrettyContext(self.decls, self.parents)
 
     def __call__(self, decl: AllDecls, toplevel: bool = False) -> None:  # noqa: C901
         if not toplevel:
@@ -169,9 +177,13 @@ class TraverseContext:
                     if isinstance(de, DefaultRewriteDecl):
                         continue
                     self(de)
-            case CallDecl(_, exprs, _):
-                for e in exprs:
-                    self(e.expr)
+            case CallDecl(ref, exprs, _):
+                match ref:
+                    case FunctionRef(UnnamedFunctionRef(_, res)):
+                        self(res.expr)
+                    case _:
+                        for e in exprs:
+                            self(e.expr)
             case RunDecl(_, until):
                 if until:
                     for f in until:
@@ -244,10 +256,7 @@ class PrettyContext:
             case CallDecl(_, _, _):
                 return self._call(decl, parens)
             case PartialCallDecl(CallDecl(ref, typed_args, _)):
-                if not typed_args:
-                    return _pretty_callable(ref), "fn"
-                arg_strs = (_pretty_callable(ref), *(self(a.expr, parens=False, unwrap_lit=True) for a in typed_args))
-                return f"partial({', '.join(arg_strs)})", "fn"
+                return self._pretty_partial(ref, [a.expr for a in typed_args]), "fn"
             case PyObjectDecl(value):
                 return repr(value) if unwrap_lit else f"PyObject({value!r})", "PyObject"
             case ActionCommandDecl(action):
@@ -354,12 +363,16 @@ class PrettyContext:
             has_multiple_parents = self.parents[first_arg] > 1
             self.names[decl] = expr_name = self._name_expr(tp_name, expr_str, copy_identifier=has_multiple_parents)
             # Set the first arg to be the name of the mutated arg and return the name
-            args[0] = VarDecl(expr_name)
+            args[0] = VarDecl(expr_name, True)
         else:
             expr_name = None
         res = self._call_inner(ref, args, decl.bound_tp_params, parens)
         expr = (
-            f"{res[0]}({', '.join(self(a, parens=False, unwrap_lit=True) for a in res[1])})"
+            (
+                f"{name}({', '.join(self(a, parens=False, unwrap_lit=True) for a in res[1])})"
+                if isinstance((name := res[0]), str)
+                else ((called := self._pretty_function_body(name, res[1])) if not parens else f"({called})")
+            )
             if isinstance(res, tuple)
             else res
         )
@@ -370,8 +383,12 @@ class PrettyContext:
         return expr, tp_name
 
     def _call_inner(  # noqa: PLR0911
-        self, ref: CallableRef, args: list[ExprDecl], bound_tp_params: tuple[JustTypeRef, ...] | None, parens: bool
-    ) -> tuple[str, list[ExprDecl]] | str:
+        self,
+        ref: CallableRef,
+        args: list[ExprDecl],
+        bound_tp_params: tuple[JustTypeRef, ...] | None,
+        parens: bool,
+    ) -> tuple[str | UnnamedFunctionRef, list[ExprDecl]] | str:
         """
         Pretty print the call, returning either the full function call or a tuple of the function and the args.
         """
@@ -410,6 +427,8 @@ class PrettyContext:
             case InitRef(class_name):
                 tp_ref = JustTypeRef(class_name, bound_tp_params or ())
                 return str(tp_ref), args
+            case UnnamedFunctionRef():
+                return ref, args
         assert_never(ref)
 
     def _generate_name(self, typ: str) -> str:
@@ -430,29 +449,52 @@ class PrettyContext:
             self.statements.append(f"{name} = {expr_str}")
         return name
 
+    def _pretty_partial(self, ref: CallableRef, args: list[ExprDecl]) -> str:
+        """
+        Returns a partial function call as a string.
+        """
+        match ref:
+            case FunctionRef(name):
+                fn = name
+            case UnnamedFunctionRef():
+                return self._pretty_function_body(ref, args)
+            case (
+                ClassMethodRef(class_name, method_name)
+                | MethodRef(class_name, method_name)
+                | PropertyRef(class_name, method_name)
+            ):
+                fn = f"{class_name}.{method_name}"
+            case InitRef(class_name):
+                fn = class_name
+            case ConstantRef(_):
+                msg = "Constants should not be callable"
+                raise NotImplementedError(msg)
+            case ClassVariableRef(_, _):
+                msg = "Class variables should not be callable"
+                raise NotADirectoryError(msg)
+            case _:
+                assert_never(ref)
+        if not args:
+            return fn
+        arg_strs = (
+            fn,
+            *(self(a, parens=False, unwrap_lit=True) for a in args),
+        )
+        return f"partial({', '.join(arg_strs)})"
 
-def _pretty_callable(ref: CallableRef) -> str:
-    """
-    Returns a function call as a string.
-    """
-    match ref:
-        case FunctionRef(name):
-            return name
-        case (
-            ClassMethodRef(class_name, method_name)
-            | MethodRef(class_name, method_name)
-            | PropertyRef(class_name, method_name)
-        ):
-            return f"{class_name}.{method_name}"
-        case InitRef(class_name):
-            return class_name
-        case ConstantRef(_):
-            msg = "Constants should not be callable"
-            raise NotImplementedError(msg)
-        case ClassVariableRef(_, _):
-            msg = "Class variables should not be callable"
-            raise NotADirectoryError(msg)
-    assert_never(ref)
+    def _pretty_function_body(self, fn: UnnamedFunctionRef, args: list[ExprDecl]) -> str:
+        """
+        Pretty print the body of a function, partially applying some arguments.
+        """
+        var_args = fn.args
+        replacements = {var_arg: TypedExprDecl(var_arg.tp, arg) for var_arg, arg in zip(var_args, args, strict=False)}
+        var_args = var_args[len(args) :]
+        res = replace_typed_expr(fn.res, replacements)
+        arg_names = fn.args[len(args) :]
+        prefix = "lambda"
+        if arg_names:
+            prefix += f" {', '.join(self(a.expr) for a in arg_names)}"
+        return f"{prefix}: {self(res.expr)}"
 
 
 def _plot_line_length(expr: object):  # pragma: no cover

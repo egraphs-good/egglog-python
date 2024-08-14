@@ -13,7 +13,6 @@ from .thunk import *
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-    from .declarations import HasDeclerations
     from .egraph import Expr
 
 __all__ = ["convert", "converter", "resolve_literal", "convert_to_same_type"]
@@ -171,7 +170,7 @@ def resolve_literal(
         tp_just = tp.to_just()
     except NotImplementedError:
         # If this is a var, it has to be a runtime expession
-        assert isinstance(arg, RuntimeExpr)
+        assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
         return arg
     tp_name = TypeName(tp_just.name)
     if arg_type == tp_name:

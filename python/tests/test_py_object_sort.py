@@ -63,12 +63,13 @@ class TestDictUpdate:
         egraph.run_program(
             ActionCommand(
                 Let(
+                    DUMMY_SPAN,
                     "new_dict",
-                    Call("py-dict-update", [dict_expr, a_expr, new_value_expr, b_expr, new_value_expr]),
+                    Call(DUMMY_SPAN, "py-dict-update", [dict_expr, a_expr, new_value_expr, b_expr, new_value_expr]),
                 )
             )
         )
-        assert egraph.eval_py_object(Var("new_dict")) == {"a": 2, "b": 2}
+        assert egraph.eval_py_object(Var(DUMMY_SPAN, "new_dict")) == {"a": 2, "b": 2}
 
         # Verify that the original dict is unchanged
         assert initial_dict == {"a": 1}
@@ -92,19 +93,21 @@ class TestEval:
         egraph.run_program(
             ActionCommand(
                 Let(
+                    DUMMY_SPAN,
                     "res",
                     Call(
+                        DUMMY_SPAN,
                         "py-eval",
                         [
-                            Lit(String("my_add(x, y)")),
+                            Lit(DUMMY_SPAN, String("my_add(x, y)")),
                             globals_,
-                            Call("py-dict-update", [locals_, x_expr, one, y_expr, two]),
+                            Call(DUMMY_SPAN, "py-dict-update", [locals_, x_expr, one, y_expr, two]),
                         ],
                     ),
                 )
             )
         )
-        assert egraph.eval_py_object(Var("res")) == 3
+        assert egraph.eval_py_object(Var(DUMMY_SPAN, "res")) == 3
 
 
 class TestConversion:
@@ -115,8 +118,8 @@ class TestConversion:
         sort = PyObjectSort()
         egraph = EGraph(sort)
 
-        egraph.run_program(ActionCommand(Let("res", Call("py-to-string", [sort.store("hi")]))))
-        assert egraph.eval_string(Var("res")) == "hi"
+        egraph.run_program(ActionCommand(Let(DUMMY_SPAN, "res", Call(DUMMY_SPAN, "py-to-string", [sort.store("hi")]))))
+        assert egraph.eval_string(Var(DUMMY_SPAN, "res")) == "hi"
 
     def test_from_string(self):
         """
@@ -125,6 +128,6 @@ class TestConversion:
         sort = PyObjectSort()
         egraph = EGraph(sort)
         egraph.run_program(
-            ActionCommand(Let("res", Call("py-from-string", [Lit(String("hi"))]))),
+            ActionCommand(Let(DUMMY_SPAN, "res", Call(DUMMY_SPAN, "py-from-string", [Lit(DUMMY_SPAN, String("hi"))]))),
         )
-        assert egraph.eval_py_object(Var("res")) == "hi"
+        assert egraph.eval_py_object(Var(DUMMY_SPAN, "res")) == "hi"

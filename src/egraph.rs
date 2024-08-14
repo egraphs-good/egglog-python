@@ -1,10 +1,11 @@
 // Wrapper around EGraph type
 
 use crate::conversions::*;
-use crate::error::EggResult;
+use crate::error::{EggResult, WrappedError};
 use crate::py_object_sort::{ArcPyObjectSort, MyPyObject, PyObjectSort};
 use crate::serialize::SerializedEGraph;
 
+use egglog::ast::DUMMY_SPAN;
 use egglog::sort::{BoolSort, F64Sort, I64Sort, StringSort};
 use egglog::SerializeConfig;
 use log::info;
@@ -18,7 +19,7 @@ use std::sync::Arc;
 /// Create an empty EGraph.
 #[pyclass(unsendable)]
 pub struct EGraph {
-    egraph: egglog::EGraph,
+    pub(crate) egraph: egglog::EGraph,
     py_object_arcsort: Option<Arc<PyObjectSort>>,
     cmds: Option<String>,
 }
@@ -57,10 +58,10 @@ impl EGraph {
     }
 
     /// Parse a program into a list of commands.
-    #[pyo3(signature = (input, /))]
-    fn parse_program(&mut self, input: &str) -> EggResult<Vec<Command>> {
+    #[pyo3(signature = (input, /, filename=None))]
+    fn parse_program(&mut self, input: &str, filename: Option<String>) -> EggResult<Vec<Command>> {
         info!("Parsing program");
-        let commands = self.egraph.parse_program(input)?;
+        let commands = self.egraph.parse_program(filename, input)?;
         Ok(commands.into_iter().map(|x| x.into()).collect())
     }
 
@@ -70,17 +71,18 @@ impl EGraph {
     #[pyo3(signature=(*commands))]
     fn run_program(&mut self, commands: Vec<Command>) -> EggResult<Vec<String>> {
         let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
+        let mut cmds_str = String::new();
         for cmd in &commands {
-            info!("{}", cmd);
+            cmds_str = cmds_str + &cmd.to_string() + "\n";
         }
+        info!("Running commands:\n{}", cmds_str);
         if let Some(cmds) = &mut self.cmds {
-            for cmd in &commands {
-                cmds.push_str(&cmd.to_string());
-                cmds.push('\n');
-            }
+            cmds.push_str(&cmds_str);
         }
-        let res = self.egraph.run_program(commands)?;
-        Ok(res)
+
+        self.egraph.run_program(commands).map_err(|e| {
+            WrappedError::Egglog(e, "\nWhen running commands:\n".to_string() + &cmds_str)
+        })
     }
 
     /// Returns the text of the commands that have been run so far, if `record` was passed.
@@ -113,8 +115,8 @@ impl EGraph {
 
     /// Serialize the EGraph to a SerializedEGraph object.
     #[pyo3(
-        signature = (root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=false, split_primitive_outputs=false),
-        text_signature = "(self, root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=False, split_primitive_outputs=False)"
+        signature = (root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=false),
+        text_signature = "(self, root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=False)"
     )]
     fn serialize(
         &mut self,
@@ -122,7 +124,6 @@ impl EGraph {
         max_functions: Option<usize>,
         max_calls_per_function: Option<usize>,
         include_temporary_functions: bool,
-        split_primitive_outputs: bool,
     ) -> SerializedEGraph {
         let root_eclasses: Vec<egglog::Value> = root_eclasses
             .into_iter()
@@ -138,7 +139,6 @@ impl EGraph {
                 max_functions,
                 max_calls_per_function,
                 include_temporary_functions,
-                split_primitive_outputs,
                 root_eclasses,
             }),
         }
@@ -178,7 +178,7 @@ impl EGraph {
         // For rational we need the actual sort on the e-graph, because it contains state
         // There isn't a public way to get a sort right now, so until there is, we use a hack where we create
         // a dummy expression of that sort, and use eval_expr to get the sort
-        let _one = egglog::ast::Expr::Lit((), egglog::ast::Literal::Int(1));
+        let _one = egglog::ast::Expr::Lit(DUMMY_SPAN.clone(), egglog::ast::Literal::Int(1));
         // let arcsort = self
         //     .egraph
         //     .eval_expr(&egglog::ast::Expr::Call(

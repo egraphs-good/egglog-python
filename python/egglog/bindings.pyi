@@ -14,6 +14,7 @@ class SerializedEGraph:
     def to_dot(self) -> str: ...
     def to_json(self) -> str: ...
     def map_ops(self, map: dict[str, str]) -> None: ...
+    def split_e_classes(self, egraph: EGraph, ops: set[str]) -> None: ...
 
 @final
 class PyObjectSort:
@@ -32,7 +33,7 @@ class EGraph:
         record: bool = False,
     ) -> None: ...
     def commands(self) -> str | None: ...
-    def parse_program(self, __input: str, /) -> list[_Command]: ...
+    def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
     def run_program(self, *commands: _Command) -> list[str]: ...
     def extract_report(self) -> _ExtractReport | None: ...
     def run_report(self) -> RunReport | None: ...
@@ -43,7 +44,6 @@ class EGraph:
         max_functions: int | None = None,
         max_calls_per_function: int | None = None,
         include_temporary_functions: bool = False,
-        split_primitive_outputs: bool = False,
     ) -> SerializedEGraph: ...
     def eval_py_object(self, __expr: _Expr) -> object: ...
     def eval_i64(self, __expr: _Expr) -> int: ...
@@ -55,6 +55,25 @@ class EGraph:
 @final
 class EggSmolError(Exception):
     context: str
+
+##
+# Spans
+##
+
+@final
+class SrcFile:
+    def __init__(self, name: str, contents: str | None = None) -> None: ...
+    name: str
+    contents: str | None
+
+@final
+class Span:
+    def __init__(self, file: SrcFile, start: int, end: int) -> None: ...
+    file: SrcFile
+    start: int
+    end: int
+
+DUMMY_SPAN: Span = ...
 
 ##
 # Literals
@@ -92,17 +111,20 @@ _Literal: TypeAlias = Int | F64 | String | Bool | Unit
 
 @final
 class Lit:
-    def __init__(self, value: _Literal) -> None: ...
+    def __init__(self, span: Span, value: _Literal) -> None: ...
+    span: Span
     value: _Literal
 
 @final
 class Var:
-    def __init__(self, name: str) -> None: ...
+    def __init__(self, span: Span, name: str) -> None: ...
+    span: Span
     name: str
 
 @final
 class Call:
-    def __init__(self, name: str, args: list[_Expr]) -> None: ...
+    def __init__(self, span: Span, name: str, args: list[_Expr]) -> None: ...
+    span: Span
     name: str
     args: list[_Expr]
 
@@ -142,7 +164,8 @@ class TermDag:
 
 @final
 class Eq:
-    def __init__(self, exprs: list[_Expr]) -> None: ...
+    def __init__(self, span: Span, exprs: list[_Expr]) -> None: ...
+    span: Span
     exprs: list[_Expr]
 
 @final
@@ -172,43 +195,50 @@ _Change: TypeAlias = Delete | Subsume
 
 @final
 class Let:
-    def __init__(self, lhs: str, rhs: _Expr) -> None: ...
+    def __init__(self, span: Span, lhs: str, rhs: _Expr) -> None: ...
+    span: Span
     lhs: str
     rhs: _Expr
 
 @final
 class Set:
-    def __init__(self, lhs: str, args: list[_Expr], rhs: _Expr) -> None: ...
+    def __init__(self, span: Span, lhs: str, args: list[_Expr], rhs: _Expr) -> None: ...
+    span: Span
     lhs: str
     args: list[_Expr]
     rhs: _Expr
 
 @final
 class Change:
+    span: Span
     change: _Change
     sym: str
     args: list[_Expr]
-    def __init__(self, change: _Change, sym: str, args: list[_Expr]) -> None: ...
+    def __init__(self, span: Span, change: _Change, sym: str, args: list[_Expr]) -> None: ...
 
 @final
 class Union:
-    def __init__(self, lhs: _Expr, rhs: _Expr) -> None: ...
+    def __init__(self, span: Span, lhs: _Expr, rhs: _Expr) -> None: ...
+    span: Span
     lhs: _Expr
     rhs: _Expr
 
 @final
 class Panic:
-    def __init__(self, msg: str) -> None: ...
+    def __init__(self, span: Span, msg: str) -> None: ...
+    span: Span
     msg: str
 
 @final
 class Expr_:  # noqa: N801
-    def __init__(self, expr: _Expr) -> None: ...
+    def __init__(self, span: Span, expr: _Expr) -> None: ...
+    span: Span
     expr: _Expr
 
 @final
 class Extract:
-    def __init__(self, expr: _Expr, variants: _Expr) -> None: ...
+    def __init__(self, span: Span, expr: _Expr, variants: _Expr) -> None: ...
+    span: Span
     expr: _Expr
     variants: _Expr
 
@@ -256,17 +286,19 @@ class Schema:
 
 @final
 class Rule:
+    span: Span
     head: list[_Action]
     body: list[_Fact]
-    def __init__(self, head: list[_Action], body: list[_Fact]) -> None: ...
+    def __init__(self, span: Span, head: list[_Action], body: list[_Fact]) -> None: ...
 
 @final
 class Rewrite:
+    span: Span
     lhs: _Expr
     rhs: _Expr
     conditions: list[_Fact]
 
-    def __init__(self, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []) -> None: ...  # noqa: B006
+    def __init__(self, span: Span, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []) -> None: ...  # noqa: B006
 
 @final
 class RunConfig:
@@ -322,24 +354,28 @@ _ExtractReport: TypeAlias = Variants | Best
 
 @final
 class Saturate:
+    span: Span
     schedule: _Schedule
-    def __init__(self, schedule: _Schedule) -> None: ...
+    def __init__(self, span: Span, schedule: _Schedule) -> None: ...
 
 @final
 class Repeat:
+    span: Span
     length: int
     schedule: _Schedule
-    def __init__(self, length: int, schedule: _Schedule) -> None: ...
+    def __init__(self, span: Span, length: int, schedule: _Schedule) -> None: ...
 
 @final
 class Run:
+    span: Span
     config: RunConfig
-    def __init__(self, config: RunConfig) -> None: ...
+    def __init__(self, span: Span, config: RunConfig) -> None: ...
 
 @final
 class Sequence:
+    span: Span
     schedules: list[_Schedule]
-    def __init__(self, schedules: list[_Schedule]) -> None: ...
+    def __init__(self, span: Span, schedules: list[_Schedule]) -> None: ...
 
 _Schedule: TypeAlias = Saturate | Repeat | Run | Sequence
 
@@ -361,9 +397,10 @@ class Datatype:
 
 @final
 class Declare:
+    span: Span
     name: str
     sort: str
-    def __init__(self, name: str, sort: str) -> None: ...
+    def __init__(self, span: Span, name: str, sort: str) -> None: ...
 
 @final
 class Sort:
@@ -421,9 +458,10 @@ class Simplify:
 
 @final
 class Calc:
+    span: Span
     identifiers: list[IdentSort]
     exprs: list[_Expr]
-    def __init__(self, identifiers: list[IdentSort], exprs: list[_Expr]) -> None: ...
+    def __init__(self, span: Span, identifiers: list[IdentSort], exprs: list[_Expr]) -> None: ...
 
 @final
 class QueryExtract:
@@ -433,14 +471,16 @@ class QueryExtract:
 
 @final
 class Check:
+    span: Span
     facts: list[_Fact]
-    def __init__(self, facts: list[_Fact]) -> None: ...
+    def __init__(self, span: Span, facts: list[_Fact]) -> None: ...
 
 @final
 class PrintFunction:
+    span: Span
     name: str
     length: int
-    def __init__(self, name: str, length: int) -> None: ...
+    def __init__(self, span: Span, name: str, length: int) -> None: ...
 
 @final
 class PrintSize:

@@ -1,6 +1,8 @@
-use std::collections::HashMap;
-
 use pyo3::prelude::*;
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use crate::egraph::EGraph;
 
 #[pyclass()]
 pub struct SerializedEGraph {
@@ -27,6 +29,13 @@ impl SerializedEGraph {
     /// Serialize the egraph to a json string.
     fn to_json(&self) -> String {
         serde_json::to_string(&self.egraph).unwrap()
+    }
+
+    /// Split all primitive nodes, as well as other ops that match, into seperate e-classes
+    fn split_e_classes(&mut self, egraph: &EGraph, ops: HashSet<String>) {
+        self.egraph.split_e_classes(|id, node| {
+            egraph.egraph.from_node_id(id).is_primitive() || ops.contains(&node.op)
+        })
     }
 
     /// Map each op name to a new op name.

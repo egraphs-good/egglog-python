@@ -13,10 +13,11 @@ from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, Union, runtime_c
 from typing_extensions import Self, assert_never
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Mapping
 
 
 __all__ = [
+    "replace_typed_expr",
     "Declarations",
     "DeclerationsLike",
     "DelayedDeclerations",
@@ -29,6 +30,7 @@ __all__ = [
     "MethodRef",
     "ClassMethodRef",
     "FunctionRef",
+    "UnnamedFunctionRef",
     "ConstantRef",
     "ClassVariableRef",
     "PropertyRef",
@@ -73,6 +75,7 @@ __all__ = [
     "FunctionSignature",
     "DefaultRewriteDecl",
     "InitRef",
+    "HasDeclerations",
 ]
 
 
@@ -82,12 +85,13 @@ class DelayedDeclerations:
 
     @property
     def __egg_decls__(self) -> Declarations:
+        thunk = self.__egg_decls_thunk__
         try:
-            return self.__egg_decls_thunk__()
+            return thunk()
         # Catch attribute error, so that it isn't bubbled up as a missing attribute and fallbacks on `__getattr__`
         # instead raise explicitly
         except AttributeError as err:
-            msg = "Error resolving declerations"
+            msg = f"Cannot resolve declerations for {self}"
             raise RuntimeError(msg) from err
 
 
@@ -116,6 +120,7 @@ def upcast_declerations(declerations_like: Iterable[DeclerationsLike]) -> list[D
 
 @dataclass
 class Declarations:
+    _unnamed_functions: set[UnnamedFunctionRef] = field(default_factory=set)
     _functions: dict[str, FunctionDecl | RelationDecl] = field(default_factory=dict)
     _constants: dict[str, ConstantDecl] = field(default_factory=dict)
     _classes: dict[str, ClassDecl] = field(default_factory=dict)
@@ -192,6 +197,8 @@ class Declarations:
                 init_fn = self._classes[class_name].init
                 assert init_fn
                 return init_fn
+            case UnnamedFunctionRef():
+                return ref.to_function_decl()
         assert_never(ref)
 
     def set_function_decl(
@@ -319,6 +326,37 @@ TypeOrVarRef: TypeAlias = ClassTypeVarRef | TypeRefWithVars
 
 
 @dataclass(frozen=True)
+class UnnamedFunctionRef:
+    """
+    A reference to a function that doesn't have a name, but does have a body.
+    """
+
+    # tuple of var arg names and their types
+    args: tuple[TypedExprDecl, ...]
+    res: TypedExprDecl
+
+    def to_function_decl(self) -> FunctionDecl:
+        arg_types = []
+        arg_names = []
+        for a in self.args:
+            arg_types.append(a.tp.to_var())
+            assert isinstance(a.expr, VarDecl)
+            arg_names.append(a.expr.name)
+        return FunctionDecl(
+            FunctionSignature(
+                arg_types=tuple(arg_types),
+                arg_names=tuple(arg_names),
+                arg_defaults=(None,) * len(self.args),
+                return_type=self.res.tp.to_var(),
+            ),
+        )
+
+    @property
+    def egg_name(self) -> None | str:
+        return None
+
+
+@dataclass(frozen=True)
 class FunctionRef:
     name: str
 
@@ -358,7 +396,14 @@ class PropertyRef:
 
 
 CallableRef: TypeAlias = (
-    FunctionRef | ConstantRef | MethodRef | ClassMethodRef | InitRef | ClassVariableRef | PropertyRef
+    FunctionRef
+    | ConstantRef
+    | MethodRef
+    | ClassMethodRef
+    | InitRef
+    | ClassVariableRef
+    | PropertyRef
+    | UnnamedFunctionRef
 )
 
 
@@ -455,6 +500,8 @@ CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl
 @dataclass(frozen=True)
 class VarDecl:
     name: str
+    # Differentiate between let bound vars and vars created in rules so that they won't shadow in egglog, by adding a prefix
+    is_let: bool
 
 
 @dataclass(frozen=True)
@@ -559,6 +606,38 @@ class TypedExprDecl:
             for a in self.expr.args:
                 l.extend(a.descendants())
         return l
+
+
+def replace_typed_expr(typed_expr: TypedExprDecl, replacements: Mapping[TypedExprDecl, TypedExprDecl]) -> TypedExprDecl:
+    """
+    Replace all the typed expressions in the given typed expression with the replacements.
+    """
+    # keep track of the traversed expressions for memoization
+    traversed: dict[TypedExprDecl, TypedExprDecl] = {}
+
+    def _inner(typed_expr: TypedExprDecl) -> TypedExprDecl:
+        if typed_expr in traversed:
+            return traversed[typed_expr]
+        if typed_expr in replacements:
+            res = replacements[typed_expr]
+        else:
+            match typed_expr.expr:
+                case (
+                    CallDecl(callable, args, bound_tp_params)
+                    | PartialCallDecl(CallDecl(callable, args, bound_tp_params))
+                ):
+                    new_args = tuple(_inner(a) for a in args)
+                    call_decl = CallDecl(callable, new_args, bound_tp_params)
+                    res = TypedExprDecl(
+                        typed_expr.tp,
+                        call_decl if isinstance(typed_expr.expr, CallDecl) else PartialCallDecl(call_decl),
+                    )
+                case _:
+                    res = typed_expr
+        traversed[typed_expr] = res
+        return res
+
+    return _inner(typed_expr)
 
 
 ##
