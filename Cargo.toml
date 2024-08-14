@@ -25,11 +25,11 @@ egraph-serialize = { git = "https://github.com/saulshanabrook/egraph-serialize",
 #     "graphviz",
 # ] }
 serde_json = "*"
-pyo3-log = "0.10.0"
-log = "0.4.21"
+pyo3-log = "0.11.0"
+log = "0.4.22"
 lalrpop-util = { version = "0.20.2", features = ["lexer"] }
 ordered-float = "*"
-uuid = { version = "1.8.0", features = ["v4"] }
+uuid = { version = "1.10.0", features = ["v4"] }
 num-rational = "*"
 
 # Use unreleased version of egraph-serialize in egglog as well
