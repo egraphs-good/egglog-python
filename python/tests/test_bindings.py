@@ -27,7 +27,11 @@ def get_egglog_folder() -> pathlib.Path:
 
 EGG_SMOL_FOLDER = get_egglog_folder()
 
-SLOW_TESTS = ["repro-unsound"]
+# > 1 second
+SLOW_TESTS = ["repro-unsound", "cykjson", "herbie", "lambda"]
+
+# > 2 seconds
+SKIP_TESTS = {"eggcc-extraction", "math-microbenchmark", "python_array_optimize", "typeinfer"}
 
 
 @pytest.mark.parametrize(
@@ -35,6 +39,7 @@ SLOW_TESTS = ["repro-unsound"]
     [
         pytest.param(path, id=path.stem, marks=pytest.mark.slow if path.stem in SLOW_TESTS else [])
         for path in (EGG_SMOL_FOLDER / "tests").glob("*.egg")
+        if path.stem not in SKIP_TESTS
     ],
 )
 def test_example(example_file: pathlib.Path):

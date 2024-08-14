@@ -24,11 +24,6 @@ jobs:
           - "3.11"
           - "3.10"
     steps:
-      # https://github.com/actions/runner/issues/2468#issuecomment-1651313943
-      - name: Set Swap Space
-        uses: pierotofy/set-swap-space@master
-        with:
-          swap-size-gb: 10
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.71.1
       - uses: Swatinem/rust-cache@v2
