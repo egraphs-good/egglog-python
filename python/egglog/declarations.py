@@ -120,8 +120,8 @@ def upcast_declerations(declerations_like: Iterable[DeclerationsLike]) -> list[D
 
 @dataclass
 class Declarations:
-    # TODO: Replace with set of unnamed function decls
-    _functions: dict[str | UnnamedFunctionRef, FunctionDecl | RelationDecl] = field(default_factory=dict)
+    _unnamed_functions: set[UnnamedFunctionRef] = field(default_factory=set)
+    _functions: dict[str, FunctionDecl | RelationDecl] = field(default_factory=dict)
     _constants: dict[str, ConstantDecl] = field(default_factory=dict)
     _classes: dict[str, ClassDecl] = field(default_factory=dict)
     _rulesets: dict[str, RulesetDecl | CombinedRulesetDecl] = field(default_factory=lambda: {"": RulesetDecl([])})
@@ -197,6 +197,8 @@ class Declarations:
                 init_fn = self._classes[class_name].init
                 assert init_fn
                 return init_fn
+            case UnnamedFunctionRef():
+                return ref.to_function_decl()
         assert_never(ref)
 
     def set_function_decl(
@@ -329,20 +331,34 @@ class UnnamedFunctionRef:
     A reference to a function that doesn't have a name, but does have a body.
     """
 
-    arg_types: tuple[JustTypeRef, ...]
-    arg_names: tuple[str, ...]
+    # tuple of var arg names and their types
+    args: tuple[TypedExprDecl, ...]
     res: TypedExprDecl
 
-    @property
-    def args(self) -> tuple[TypedExprDecl, ...]:
-        return tuple(
-            TypedExprDecl(tp, VarDecl(name, False)) for tp, name in zip(self.arg_types, self.arg_names, strict=True)
+    def to_function_decl(self) -> FunctionDecl:
+        arg_types = []
+        arg_names = []
+        for a in self.args:
+            arg_types.append(a.tp.to_var())
+            assert isinstance(a.expr, VarDecl)
+            arg_names.append(a.expr.name)
+        return FunctionDecl(
+            FunctionSignature(
+                arg_types=tuple(arg_types),
+                arg_names=tuple(arg_names),
+                arg_defaults=(None,) * len(self.args),
+                return_type=self.res.tp.to_var(),
+            ),
         )
+
+    @property
+    def egg_name(self) -> None | str:
+        return None
 
 
 @dataclass(frozen=True)
 class FunctionRef:
-    name: str | UnnamedFunctionRef
+    name: str
 
 
 @dataclass(frozen=True)
@@ -380,7 +396,14 @@ class PropertyRef:
 
 
 CallableRef: TypeAlias = (
-    FunctionRef | ConstantRef | MethodRef | ClassMethodRef | InitRef | ClassVariableRef | PropertyRef
+    FunctionRef
+    | ConstantRef
+    | MethodRef
+    | ClassMethodRef
+    | InitRef
+    | ClassVariableRef
+    | PropertyRef
+    | UnnamedFunctionRef
 )
 
 

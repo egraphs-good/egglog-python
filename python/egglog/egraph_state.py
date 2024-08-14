@@ -401,16 +401,8 @@ class EGraphState:
         """
         match ref:
             case FunctionRef(name):
-                match name:
-                    case str(name):
-                        return name
-                    case UnnamedFunctionRef(arg_types, arg_names, val):
-                        parts = (
-                            list(arg_names)
-                            + [self.type_ref_to_egg(tp) for tp in arg_types]
-                            + [str(self.typed_expr_to_egg(val, False))]
-                        )
-                        return "_".join(parts)
+                return name
+
             case ConstantRef(name):
                 return name
             case (
@@ -422,6 +414,11 @@ class EGraphState:
                 return f"{cls_name}.{name}"
             case InitRef(cls_name):
                 return f"{cls_name}.__init__"
+            case UnnamedFunctionRef(args, val):
+                parts = [str(self._expr_to_egg(a.expr)) + "-" + str(self.type_ref_to_egg(a.tp)) for a in args] + [
+                    str(self.typed_expr_to_egg(val, False))
+                ]
+                return "_".join(parts)
             case _:
                 assert_never(ref)
 

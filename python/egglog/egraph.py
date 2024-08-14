@@ -694,7 +694,7 @@ def _fn_decl(
     is_builtin: bool,
     ruleset: Ruleset | None = None,
     unextractable: bool = False,
-) -> tuple[FunctionRef | MethodRef | PropertyRef | ClassMethodRef | InitRef, Callable[[], None]]:
+) -> tuple[CallableRef, Callable[[], None]]:
     """
     Sets the function decl for the function object and returns the ref as well as a thunk that sets the default callable.
     """
@@ -707,10 +707,7 @@ def _fn_decl(
     if "Callable" not in hint_globals:
         hint_globals["Callable"] = Callable
 
-    try:
-        hints = get_type_hints(fn, hint_globals, hint_locals)
-    except Exception as e:
-        raise TypeError(f"Failed to get type hints for {fn}") from e
+    hints = get_type_hints(fn, hint_globals, hint_locals)
 
     params = list(signature(fn).parameters.values())
 
@@ -771,33 +768,41 @@ def _fn_decl(
         )
     )
     decls.update(*merge_action)
-
-    signature_ = FunctionSignature(
-        return_type=None if mutates_first_arg else return_type,
-        var_arg_type=var_arg_type,
-        arg_types=arg_types,
-        arg_names=arg_names,
-        arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
-    )
-    decl = FunctionDecl(
-        signature=signature_,
-        cost=cost,
-        egg_name=egg_name,
-        merge=merged.__egg_typed_expr__.expr if merged is not None else None,
-        unextractable=unextractable,
-        builtin=is_builtin,
-        default=None if default is None else default.__egg_typed_expr__.expr,
-        on_merge=tuple(a.action for a in merge_action),
-    )
-    res = Thunk.fn(_create_default_value, decls, ref, fn, signature_, ruleset)
+    # defer this in generator so it doesnt resolve for builtins eagerly
+    args = (TypedExprDecl(tp.to_just(), VarDecl(name, False)) for name, tp in zip(arg_names, arg_types, strict=True))
+    res_ref: FunctionRef | MethodRef | ClassMethodRef | PropertyRef | InitRef | UnnamedFunctionRef
+    res_thunk: Callable[[], object]
     # If we were not passed in a ref, this is an unnamed funciton, so eagerly compute the value and use that to refer to it
     if not ref:
-        res_value = res()
-        assert isinstance(res_value, RuntimeExpr)
-        just_arg_types = tuple(tp.to_just() for tp in arg_types)
-        ref = FunctionRef(UnnamedFunctionRef(just_arg_types, arg_names, res_value.__egg_typed_expr__))
-    decls.set_function_decl(ref, decl)
-    return ref, Thunk.fn(_add_default_rewrite_function, decls, ref, signature_.semantic_return_type, ruleset, res)
+        tuple_args = tuple(args)
+        res = _create_default_value(decls, ref, fn, tuple_args, ruleset)
+        assert isinstance(res, RuntimeExpr)
+        res_ref = UnnamedFunctionRef(tuple_args, res.__egg_typed_expr__)
+        decls._unnamed_functions.add(res_ref)
+        res_thunk = Thunk.value(res)
+
+    else:
+        signature_ = FunctionSignature(
+            return_type=None if mutates_first_arg else return_type,
+            var_arg_type=var_arg_type,
+            arg_types=arg_types,
+            arg_names=arg_names,
+            arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
+        )
+        decl = FunctionDecl(
+            signature=signature_,
+            cost=cost,
+            egg_name=egg_name,
+            merge=merged.__egg_typed_expr__.expr if merged is not None else None,
+            unextractable=unextractable,
+            builtin=is_builtin,
+            default=None if default is None else default.__egg_typed_expr__.expr,
+            on_merge=tuple(a.action for a in merge_action),
+        )
+        res_ref = ref
+        decls.set_function_decl(ref, decl)
+        res_thunk = Thunk.fn(_create_default_value, decls, ref, fn, args, ruleset)
+    return res_ref, Thunk.fn(_add_default_rewrite_function, decls, res_ref, return_type, ruleset, res_thunk)
 
 
 # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
@@ -872,30 +877,17 @@ def _create_default_value(
     decls: Declarations,
     ref: CallableRef | None,
     fn: Callable,
-    signature: FunctionSignature,
+    args: Iterable[TypedExprDecl],
     ruleset: Ruleset | None,
 ) -> object:
-    args: list[object] = [
-        RuntimeExpr.__from_values__(
-            decls,
-            TypedExprDecl(
-                tp.to_just(),
-                VarDecl(name, False),
-            ),
-        )
-        for name, tp in zip(signature.arg_names, signature.arg_types, strict=False)
-    ]
+    args: list[object] = [RuntimeExpr.__from_values__(decls, a) for a in args]
 
     # If this is a classmethod, add the class as the first arg
     if isinstance(ref, ClassMethodRef):
         tp = decls.get_paramaterized_class(ref.class_name)
         args.insert(0, RuntimeClass(Thunk.value(decls), tp))
     with set_current_ruleset(ruleset):
-        try:
-            return fn(*args)
-        except Exception as err:
-            msg = f"Error when calling {fn}"
-            raise ValueError(msg) from err
+        return fn(*args)
 
 
 def _add_default_rewrite_function(
@@ -903,7 +895,7 @@ def _add_default_rewrite_function(
     ref: CallableRef,
     res_type: TypeOrVarRef,
     ruleset: Ruleset | None,
-    value_thunk: Thunk,
+    value_thunk: Callable[[], object],
 ) -> None:
     """
     Helper functions that resolves a value thunk to create the default value.

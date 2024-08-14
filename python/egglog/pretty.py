@@ -179,7 +179,7 @@ class TraverseContext:
                     self(de)
             case CallDecl(ref, exprs, _):
                 match ref:
-                    case FunctionRef(UnnamedFunctionRef(_, _, res)):
+                    case FunctionRef(UnnamedFunctionRef(_, res)):
                         self(res.expr)
                     case _:
                         for e in exprs:
@@ -427,6 +427,8 @@ class PrettyContext:
             case InitRef(class_name):
                 tp_ref = JustTypeRef(class_name, bound_tp_params or ())
                 return str(tp_ref), args
+            case UnnamedFunctionRef():
+                return ref, args
         assert_never(ref)
 
     def _generate_name(self, typ: str) -> str:
@@ -453,9 +455,9 @@ class PrettyContext:
         """
         match ref:
             case FunctionRef(name):
-                if not isinstance(name, str):
-                    return self._pretty_function_body(name, args)
                 fn = name
+            case UnnamedFunctionRef():
+                return self._pretty_function_body(ref, args)
             case (
                 ClassMethodRef(class_name, method_name)
                 | MethodRef(class_name, method_name)
@@ -484,16 +486,14 @@ class PrettyContext:
         """
         Pretty print the body of a function, partially applying some arguments.
         """
-        var_args = [
-            TypedExprDecl(tp, VarDecl(name, False)) for tp, name in zip(fn.arg_types, fn.arg_names, strict=True)
-        ]
+        var_args = fn.args
         replacements = {var_arg: TypedExprDecl(var_arg.tp, arg) for var_arg, arg in zip(var_args, args, strict=False)}
         var_args = var_args[len(args) :]
         res = replace_typed_expr(fn.res, replacements)
-        arg_names = fn.arg_names[len(args) :]
+        arg_names = fn.args[len(args) :]
         prefix = "lambda"
         if arg_names:
-            prefix += f" {', '.join(arg_names)}"
+            prefix += f" {', '.join(self(a.expr) for a in arg_names)}"
         return f"{prefix}: {self(res.expr)}"
 
 
