@@ -54,8 +54,8 @@ jobs:
         with:
           ref: version-${{ needs.bump.outputs.version }}
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v1
-      - uses: PyO3/maturin-action@v1.42.1
+        uses: docker/setup-qemu-action@v3
+      - uses: PyO3/maturin-action@v1.44.0
         with:
           manylinux: auto
           command: build
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: version-${{ needs.bump.outputs.version }}
-      - uses: PyO3/maturin-action@v1.42.1
+      - uses: PyO3/maturin-action@v1.44.0
         with:
           command: build
           args: --release -o dist --find-interpreter
@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: version-${{ needs.bump.outputs.version }}
-      - uses: PyO3/maturin-action@v1.42.1
+      - uses: PyO3/maturin-action@v1.44.0
         with:
           command: build
           args: --release -o dist --universal2 --find-interpreter
@@ -113,7 +113,7 @@ jobs:
           pattern: wheels-*
           merge-multiple: true
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1.42.1
+        uses: PyO3/maturin-action@v1.44.0
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         with:
