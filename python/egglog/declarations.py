@@ -622,9 +622,8 @@ def replace_typed_expr(typed_expr: TypedExprDecl, replacements: Mapping[TypedExp
             res = replacements[typed_expr]
         else:
             match typed_expr.expr:
-                case (
+                case CallDecl(callable, args, bound_tp_params) | PartialCallDecl(
                     CallDecl(callable, args, bound_tp_params)
-                    | PartialCallDecl(CallDecl(callable, args, bound_tp_params))
                 ):
                     new_args = tuple(_inner(a) for a in args)
                     call_decl = CallDecl(callable, new_args, bound_tp_params)
