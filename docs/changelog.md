@@ -10,6 +10,7 @@ _This project uses semantic versioning_
   - Adds source annotations to expressions for tracebacks
   - Adds ability to inline other functions besides primitives in serialized output
 - Adds `remove` and `set` methods to `Vec`
+- Upgrades to use the new egraph-visualizer so we can have interactive visualizations
 
 ## 7.2.0 (2024-05-23)
 

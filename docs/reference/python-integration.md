@@ -537,3 +537,30 @@ egraph.run(other_math_ruleset * 2)
 egraph.check(eq(x).to(WrappedMath(math_float(3.14)) + WrappedMath(math_float(3.14))))
 egraph
 ```
+
+## Visualization
+
+The default renderer for the e-graph in a Jupyter Notebook [an interactive Javascript visualizer](https://github.com/egraphs-good/egraph-visualizer):
+
+```{code-cell} python
+egraph
+```
+
+You can also customize the visualization through using the <inv:egglog.EGraph.display> method:
+
+```{code-cell} python
+egraph.display()
+```
+
+If you would like to visualize the progression of the e-graph over time, you can use the <inv:egglog.EGraph.saturate> method to
+run a number of iterations and then visualize the e-graph at each step:
+
+```{code-cell} python
+egraph = EGraph()
+egraph.register(Math(2) + Math(100))
+i, j = vars_("i j", i64)
+r = ruleset(
+    rewrite(Math(i) + Math(j)).to(Math(i + j)),
+)
+egraph.saturate(r)
+```

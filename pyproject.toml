@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Software Development :: Interpreters",
     "Typing :: Typed",
 ]
-dependencies = ["typing-extensions", "black", "graphviz"]
+dependencies = ["typing-extensions", "black", "graphviz", "anywidget"]
 
 [project.optional-dependencies]
 

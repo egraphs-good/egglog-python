@@ -180,7 +180,7 @@ def resolve_literal(
     # Try all parent types as well, if we are converting from a Python type
     for arg_type_instance in arg_type.__mro__ if isinstance(arg_type, type) else [arg_type]:
         try:
-            fn = CONVERSIONS[(cast(TypeName | type, arg_type_instance), tp_name)][1]
+            fn = CONVERSIONS[(arg_type_instance, tp_name)][1]
         except KeyError:
             continue
         break

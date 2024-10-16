@@ -38,8 +38,6 @@ from .runtime import *
 from .thunk import *
 
 if TYPE_CHECKING:
-    import ipywidgets
-
     from .builtins import Bool, PyObject, String, f64, i64
 
 
@@ -973,6 +971,7 @@ class GraphvizKwargs(TypedDict, total=False):
     n_inline_leaves: int
     split_primitive_outputs: bool
     split_functions: list[object]
+    include_temporary_functions: bool
 
 
 @dataclass
@@ -1015,82 +1014,8 @@ class EGraph(_BaseModule):
             raise ValueError(msg)
         return cmds
 
-    def _repr_mimebundle_(self, *args, **kwargs):
-        """
-        Returns the graphviz representation of the e-graph.
-        """
-        return {"image/svg+xml": self.graphviz().pipe(format="svg", quiet=True, encoding="utf-8")}
-
-    def graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
-        # By default we want to split primitive outputs
-        split_primitive_outputs = kwargs.pop("split_primitive_outputs", True)
-        split_additional_functions = kwargs.pop("split_functions", [])
-        n_inline = kwargs.pop("n_inline_leaves", 0)
-        serialized = self._egraph.serialize(
-            [],
-            max_functions=kwargs.pop("max_functions", None),
-            max_calls_per_function=kwargs.pop("max_calls_per_function", None),
-            include_temporary_functions=False,
-        )
-        if split_primitive_outputs or split_additional_functions:
-            additional_ops = set(map(self._callable_to_egg, split_additional_functions))
-            serialized.split_e_classes(self._egraph, additional_ops)
-        serialized.map_ops(self._state.op_mapping())
-
-        for _ in range(n_inline):
-            serialized.inline_leaves()
-        original = serialized.to_dot()
-        # Add link to stylesheet to the graph, so that edges light up on hover
-        # https://gist.github.com/sverweij/93e324f67310f66a8f5da5c2abe94682
-        styles = """/* the lines within the edges */
-      .edge:active path,
-      .edge:hover path {
-        stroke: fuchsia;
-        stroke-width: 3;
-        stroke-opacity: 1;
-      }
-      /* arrows are typically drawn with a polygon */
-      .edge:active polygon,
-      .edge:hover polygon {
-        stroke: fuchsia;
-        stroke-width: 3;
-        fill: fuchsia;
-        stroke-opacity: 1;
-        fill-opacity: 1;
-      }
-      /* If you happen to have text and want to color that as well... */
-      .edge:active text,
-      .edge:hover text {
-        fill: fuchsia;
-      }"""
-        p = pathlib.Path(tempfile.gettempdir()) / "graphviz-styles.css"
-        p.write_text(styles)
-        with_stylesheet = original.replace("{", f'{{stylesheet="{p!s}"', 1)
-        return graphviz.Source(with_stylesheet)
-
-    def graphviz_svg(self, **kwargs: Unpack[GraphvizKwargs]) -> str:
-        return self.graphviz(**kwargs).pipe(format="svg", quiet=True, encoding="utf-8")
-
-    def _repr_html_(self) -> str:
-        """
-        Add a _repr_html_ to be an SVG to work with sphinx gallery.
-
-        ala https://github.com/xflr6/graphviz/pull/121
-        until this PR is merged and released
-        https://github.com/sphinx-gallery/sphinx-gallery/pull/1138
-        """
-        return self.graphviz_svg()
-
-    def display(self, **kwargs: Unpack[GraphvizKwargs]) -> None:
-        """
-        Displays the e-graph in the notebook.
-        """
-        if IN_IPYTHON:
-            from IPython.display import SVG, display
-
-            display(SVG(self.graphviz_svg(**kwargs)))
-        else:
-            self.graphviz(**kwargs).render(view=True, format="svg", quiet=True)
+    def _ipython_display_(self) -> None:
+        self.display()
 
     def input(self, fn: Callable[..., String], path: str) -> None:
         """
@@ -1319,40 +1244,100 @@ class EGraph(_BaseModule):
                 return self._egraph.eval_py_object(egg_expr)
         raise TypeError(f"Eval not implemented for {typed_expr.tp}")
 
-    def saturate(
+    def _serialize(
         self,
-        schedule: Schedule | None = None,
-        *,
-        max: int = 1000,
-        performance: bool = False,
         **kwargs: Unpack[GraphvizKwargs],
-    ) -> ipywidgets.Widget:
-        from .graphviz_widget import graphviz_widget_with_slider
+    ) -> bindings.SerializedEGraph:
+        max_functions = kwargs.pop("max_functions", None)
+        max_calls_per_function = kwargs.pop("max_calls_per_function", None)
+        split_primitive_outputs = kwargs.pop("split_primitive_outputs", True)
+        split_functions = kwargs.pop("split_functions", [])
+        include_temporary_functions = kwargs.pop("include_temporary_functions", False)
+        n_inline_leaves = kwargs.pop("n_inline_leaves", 1)
+        serialized = self._egraph.serialize(
+            [],
+            max_functions=max_functions,
+            max_calls_per_function=max_calls_per_function,
+            include_temporary_functions=include_temporary_functions,
+        )
+        if split_primitive_outputs or split_functions:
+            additional_ops = set(map(self._callable_to_egg, split_functions))
+            serialized.split_e_classes(self._egraph, additional_ops)
+        serialized.map_ops(self._state.op_mapping())
 
-        dots = [str(self.graphviz(**kwargs))]
+        for _ in range(n_inline_leaves):
+            serialized.inline_leaves()
+
+        return serialized
+
+    def _graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
+        serialized = self._serialize(**kwargs)
+
+        original = serialized.to_dot()
+        # Add link to stylesheet to the graph, so that edges light up on hover
+        # https://gist.github.com/sverweij/93e324f67310f66a8f5da5c2abe94682
+        styles = """/* the lines within the edges */
+      .edge:active path,
+      .edge:hover path {
+        stroke: fuchsia;
+        stroke-width: 3;
+        stroke-opacity: 1;
+      }
+      /* arrows are typically drawn with a polygon */
+      .edge:active polygon,
+      .edge:hover polygon {
+        stroke: fuchsia;
+        stroke-width: 3;
+        fill: fuchsia;
+        stroke-opacity: 1;
+        fill-opacity: 1;
+      }
+      /* If you happen to have text and want to color that as well... */
+      .edge:active text,
+      .edge:hover text {
+        fill: fuchsia;
+      }"""
+        p = pathlib.Path(tempfile.gettempdir()) / "graphviz-styles.css"
+        p.write_text(styles)
+        with_stylesheet = original.replace("{", f'{{stylesheet="{p!s}"', 1)
+        return graphviz.Source(with_stylesheet)
+
+    def display(self, graphviz: bool = False, **kwargs: Unpack[GraphvizKwargs]) -> None:
+        """
+        Displays the e-graph.
+
+        If in IPython it will display it inline, otherwise it will write it to a file and open it.
+        """
+        from IPython.display import SVG, display
+
+        from .visualizer_widget import VisualizerWidget
+
+        if graphviz:
+            if IN_IPYTHON:
+                svg = self._graphviz(**kwargs).pipe(format="svg", quiet=True, encoding="utf-8")
+                display(SVG(svg))
+            else:
+                self._graphviz(**kwargs).render(view=True, format="svg", quiet=True)
+        else:
+            serialized = self._serialize(**kwargs)
+            VisualizerWidget(egraphs=[serialized.to_json()]).display_or_open()
+
+    def saturate(self, schedule: Schedule | None = None, *, max: int = 1000, **kwargs: Unpack[GraphvizKwargs]) -> None:
+        """
+        Saturate the egraph, running the given schedule until the egraph is saturated.
+        It serializes the egraph at each step and returns a widget to visualize the egraph.
+        """
+        from .visualizer_widget import VisualizerWidget
+
+        def to_json() -> str:
+            return self._serialize(**kwargs).to_json()
+
+        egraphs = [to_json()]
         i = 0
         while self.run(schedule or 1).updated and i < max:
             i += 1
-            dots.append(str(self.graphviz(**kwargs)))
-        return graphviz_widget_with_slider(dots, performance=performance)
-
-    def saturate_to_html(
-        self, file: str = "tmp.html", performance: bool = False, **kwargs: Unpack[GraphvizKwargs]
-    ) -> None:
-        # raise NotImplementedError("Upstream bugs prevent rendering to HTML")
-
-        # import panel
-
-        # panel.extension("ipywidgets")
-
-        widget = self.saturate(performance=performance, **kwargs)
-        # panel.panel(widget).save(file)
-
-        from ipywidgets.embed import embed_minimal_html
-
-        embed_minimal_html("tmp.html", views=[widget], drop_defaults=False)
-        # Use panel while this issue persists
-        # https://github.com/jupyter-widgets/ipywidgets/issues/3761#issuecomment-1755563436
+            egraphs.append(to_json())
+        VisualizerWidget(egraphs=egraphs).display_or_open()
 
     @classmethod
     def current(cls) -> EGraph:
