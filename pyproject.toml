@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Software Development :: Interpreters",
     "Typing :: Typed",
 ]
-dependencies = ["typing-extensions", "black", "graphviz"]
+dependencies = ["typing-extensions", "black", "graphviz", "anywidget"]
 
 [project.optional-dependencies]
 
@@ -208,7 +208,7 @@ python-source = "python"
 module-name = "egglog.bindings"
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib"]
+addopts = ["--import-mode=importlib", "-n=auto"]
 testpaths = ["python"]
 python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]

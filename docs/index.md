@@ -2,9 +2,9 @@
 file_format: mystnb
 ---
 
-# [`egglog`](https://github.com/egraphs-good/egglog/) Python
+# `egglog` Python
 
-`egglog` is a Python package that provides bindings to the Rust library of the same name,
+`egglog` is a Python package that provides bindings to [the Rust library of the same name](https://github.com/egraphs-good/egglog/),
 allowing you to use e-graphs in Python for optimization, symbolic computation, and analysis.
 
 It wraps the Rust library [`egglog`](https://github.com/egraphs-good/egglog) which
@@ -13,13 +13,9 @@ See the ["Better Together: Unifying Datalog and Equality Saturation"](https://ar
 
 > We present egglog, a fixpoint reasoning system that unifies Datalog and equality saturation (EqSat). Like Datalog, it supports efficient incremental execution, cooperating analyses, and lattice-based reasoning. Like EqSat, it supports term rewriting, efficient congruence closure, and extraction of optimized terms.
 
-## [Installation](./reference/usage)
-
 ```shell
 pip install egglog
 ```
-
-## Example
 
 ```{code-cell} python
 from __future__ import annotations
@@ -49,14 +45,9 @@ def _num_rule(a: Num, b: Num, c: Num, i: i64, j: i64):
     yield rewrite(Num(i) * Num(j)).to(Num(i * j))
 
 egraph.saturate()
-```
-
-```{code-cell} python
 egraph.check(eq(expr1).to(expr2))
 egraph.extract(expr1)
 ```
-
-## Contents
 
 ```{toctree}
 :maxdepth: 2
