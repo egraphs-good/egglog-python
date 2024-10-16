@@ -208,7 +208,7 @@ python-source = "python"
 module-name = "egglog.bindings"
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib", "-n=auto"]
+addopts = ["--import-mode=importlib"]
 testpaths = ["python"]
 python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
