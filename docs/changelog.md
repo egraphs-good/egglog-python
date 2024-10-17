@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 8.0.0 (2024-10-17)
+
 - Adds ability to use anonymous functions where callables are needed. These are automatically transformed to egglog
   functions with default rewrites.
 - Upgrade [egglog](https://github.com/egraphs-good/egglog/compare/fb4a9f114f9bb93154d6eff0dbab079b5cb4ebb6...saulshanabrook:egg-smol:a555b2f5e82c684442775cc1a5da94b71930113c)
