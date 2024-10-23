@@ -1,3 +1,4 @@
+.PHONY: all clean from-local mypy stubtest docs
 
 all: python/egglog/visualizer.js
 
