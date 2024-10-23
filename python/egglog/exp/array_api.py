@@ -1538,13 +1538,14 @@ def try_evaling(expr: Expr, prim_expr: i64 | Bool) -> int | bool:
     egraph.register(expr)
     egraph.run(array_api_schedule)
     try:
+        extracted = egraph.extract(expr)
+    except EggSmolError as exc:
+        raise ValueError(f"Cannot extract {expr}") from exc
+    try:
         return egraph.eval(prim_expr)
     except EggSmolError as exc:
         egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
-        try:
-            msg = f"Cannot simplify to primitive {egraph.extract(expr)}"
-        except EggSmolError:
-            msg = f"Cannot simplify to primitive or extract {expr}"
+        msg = f"Cannot simplify to primitive {extracted}"
 
         # string = (
         #     egraph.as_egglog_string

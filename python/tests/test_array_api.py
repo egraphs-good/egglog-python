@@ -1,7 +1,7 @@
 import ast
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numba
 import pytest
@@ -79,7 +79,7 @@ def run_lda(x, y):
 
 iris = datasets.load_iris()
 X_np, y_np = (iris.data, iris.target)
-res = run_lda(X_np, y_np)
+res_np = run_lda(X_np, y_np)
 
 
 def _load_py_snapshot(fn: Callable, var: str | None = None) -> Any:
@@ -104,13 +104,9 @@ def _load_py_snapshot(fn: Callable, var: str | None = None) -> Any:
 
 
 def load_source(expr, egraph: EGraph):
-    with egraph:
-        fn_program = egraph.let("fn_program", ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y")))
-        egraph.run(array_api_program_gen_schedule)
-        # cast b/c issue with it not recognizing py_object as property
-        cast(Any, egraph.eval(fn_program.py_object))
-        assert np.allclose(res, run_lda(X_np, y_np))
-        return egraph.eval(fn_program.statements)
+    fn_program = egraph.let("fn_program", ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y")))
+    egraph.run(array_api_program_gen_schedule)
+    return egraph.eval(egraph.extract(fn_program.statements))
 
 
 def trace_lda(egraph: EGraph):
@@ -147,9 +143,10 @@ class TestLDA:
         assert benchmark(load_source, expr, egraph) == snapshot_py
 
     def test_source_optimized(self, snapshot_py, benchmark):
-        egraph = EGraph()
-        expr = trace_lda(egraph)
-        optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
+        egraph = EGraph(save_egglog_string=True)
+        with egraph:
+            expr = trace_lda(egraph)
+            optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
         assert benchmark(load_source, optimized_expr, egraph) == snapshot_py
 
     @pytest.mark.parametrize(
@@ -163,5 +160,5 @@ class TestLDA:
     )
     def test_execution(self, fn, benchmark):
         # warmup once for numba
-        assert np.allclose(res, fn(X_np, y_np))
+        assert np.allclose(res_np, fn(X_np, y_np))
         benchmark(fn, X_np, y_np)
