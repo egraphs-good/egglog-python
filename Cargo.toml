@@ -21,12 +21,12 @@ egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
 #     "serde",
 #     "graphviz",
 # ] }
-serde_json = "1.0.1"
+serde_json = "1.0.132"
 pyo3-log = "0.11.0"
-log = "0.4.21"
-lalrpop-util = { version = "0.20", features = ["lexer"] }
+log = "0.4.22"
+lalrpop-util = { version = "0.22", features = ["lexer"] }
 ordered-float = "3.7"
-uuid = { version = "1.8.0", features = ["v4"] }
+uuid = { version = "1.11.0", features = ["v4"] }
 
 # Use unreleased version of egraph-serialize in egglog as well
 # [patch.crates-io]
