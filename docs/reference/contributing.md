@@ -20,22 +20,20 @@ gh repo fork egraphs-good/egglog-python --clone
 cd egglog-python
 ```
 
-Then [install Rust](https://www.rust-lang.org/tools/install) and get a Python environment set up with a compatible version. Using [miniconda](https://formulae.brew.sh/cask/miniconda) this would be:
+Then [install Rust](https://www.rust-lang.org/tools/install) and get a Python environment set up with a compatible version. Using [uv](https://docs.astral.sh/uv/getting-started/installation/) this would be:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-brew install --cask miniconda
-conda create -n egglog-python python
-conda activate egglog-python
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 Then install the package in editable mode with the development dependencies:
 
 ```bash
-maturin develop -E dev,docs,test,array
+uv sync --all-extras
 ```
 
-Anytime you change the rust code, you can run `maturin develop` to recompile the rust code.
+Anytime you change the rust code, you can run `uv sync` to recompile the rust code.
 
 If you would like to download a new version of the visualizer source, run `make clean; make`. This will download
 the most recent released version from the github actions artifact in the [egraph-visualizer](https://github.com/egraphs-good/egraph-visualizer) repo. It is checked in because it's a pain to get cargo to include only one git ignored file while ignoring the rest of the files that were ignored.
@@ -45,7 +43,7 @@ the most recent released version from the github actions artifact in the [egraph
 To run the tests, you can use the `pytest` command:
 
 ```bash
-pytest
+uv run pytest
 ```
 
 All code must pass ruff linters and formaters. This will be checked automatically by the pre-commit if you run `pre-commit install`.
@@ -53,25 +51,25 @@ All code must pass ruff linters and formaters. This will be checked automaticall
 To run it manually, you can use:
 
 ```bash
-pre-commit run --all-files ruff
+uv run pre-commit run --all-files ruff
 ```
 
 If you make changes to the rust bindings, you can check that the stub files accurately reflect the rust code by running:
 
 ```bash
-pre-commit run --all-files --hook-stage manual stubtest
+make stubtest
 ```
 
 All code must all pass MyPy type checking. To run that locally use:
 
 ```bash
-pre-commit run --all-files --hook-stage manual mypy
+make mypy
 ```
 
 Finally, to build the docs locally and test that they work, you can run:
 
 ```bash
-pre-commit run --all-files --hook-stage manual docs
+make docs
 ```
 
 ## Making changes

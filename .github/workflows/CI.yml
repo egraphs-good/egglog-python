@@ -25,56 +25,69 @@ jobs:
           - "3.10"
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
       - name: Setup python ${{ matrix.py }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.py }}
-          cache: "pip"
-      - run: pip install -e .[test]
-      - run: pytest --benchmark-disable -vvv
+      - run: uv sync --extra test
+      - run: uv run pytest --benchmark-disable -vvv
+      - run: uv cache prune --ci
   mypy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
+          # Run on oldest Python version to catch more errors
           python-version: "3.10"
-          cache: "pip"
-      - run: pip install -e .[test] mypy pre-commit
-      - run: pre-commit run --hook-stage manual --all-files mypy
-      - run: pre-commit run --hook-stage manual --all-files stubtest
+      - run: uv sync --extra test
+      - run: make mypy
+      - run: make stubtest
+      - run: uv cache prune --ci
+
   benchmark:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-          cache: "pip"
-      - run: pip install -e .[test]
+          python-version-file: ".python-version"
+      - run: uv sync --extra test
       - uses: CodSpeedHQ/action@v3
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
-          run: pytest -vvv -n auto
+          run: uv run pytest -vvv -n auto
+      - run: uv cache prune --ci
+
   docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-          cache: "pip"
+          python-version-file: ".python-version"
       - name: Install graphviz
         run: |
           sudo apt-get update
           sudo apt-get install -y graphviz
-      - run: pip install -e .[docs] pre-commit
-      - run: pre-commit run --hook-stage manual --all-files docs
+      - run: uv sync --extra docs
+      - run: make docs
+      - run: uv cache prune --ci

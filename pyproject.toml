@@ -35,7 +35,7 @@ array = [
     "numba==0.59.1",
     "llvmlite==0.42.0",
 ]
-dev = ["pre-commit", "ruff", "mypy", "anywidget[dev]", "egglog[docs,test]"]
+dev = ["ruff", "pre-commit", "mypy", "anywidget[dev]", "egglog[docs,test]"]
 
 test = [
     "pytest",
@@ -61,6 +61,7 @@ docs = [
     "sphinxcontrib-mermaid",
     "ablog",
 ]
+
 
 [tool.ruff.lint]
 ignore = [
@@ -243,3 +244,6 @@ exclude_also = [
     "@(abc\\.)?abstractmethod",
     "assert_never\\(",
 ]
+
+[tool.uv.workspace]
+members = ["egglog"]
