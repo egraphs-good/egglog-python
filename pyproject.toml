@@ -129,6 +129,20 @@ ignore = [
     "T201",
     # Allow constants
     "PLR2004",
+    # Allow missing type annotations
+    "ANN001",
+    # allow missing return types
+    "ANN201",
+    # Allow uppercase args
+    "N803",
+    # allow generic df name
+    "PD901",
+    # Allow future anywhere in file
+    "F404",
+    # allow imports anywhere in cell
+    "E402",
+    # Alllow open()
+    "PTH123",
 
     # Inconsistant formatting
     "D203",

@@ -22,6 +22,6 @@ class PythonSnapshotExtension(SingleFileSnapshotExtension):
         return str(data).encode()
 
 
-@pytest.fixture()
+@pytest.fixture
 def snapshot_py(snapshot):
     return snapshot.with_defaults(extension_class=PythonSnapshotExtension)

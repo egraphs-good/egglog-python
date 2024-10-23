@@ -195,6 +195,6 @@ def _get_tp(x: object) -> TypeName | type:
         return TypeName(x.__egg_typed_expr__.tp.name)
     tp = type(x)
     # If this value has a custom metaclass, let's use that as our index instead of the type
-    if type(tp) != type:
+    if type(tp) is not type:
         return type(tp)
     return tp
