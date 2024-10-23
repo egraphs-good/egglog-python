@@ -1538,21 +1538,23 @@ def try_evaling(expr: Expr, prim_expr: i64 | Bool) -> int | bool:
     egraph.register(expr)
     egraph.run(array_api_schedule)
     try:
-        extracted = egraph.extract(expr)
+        extracted = egraph.extract(prim_expr)
     except EggSmolError as exc:
-        raise ValueError(f"Cannot extract {expr}") from exc
-    try:
-        return egraph.eval(prim_expr)
-    except EggSmolError as exc:
+        # Try giving some context, by showing the smallest version of the larger expression
+        try:
+            expr_extracted = egraph.extract(expr)
+        except EggSmolError as inner_exc:
+            raise ValueError(f"Cannot simplify {expr}") from inner_exc
         egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
-        msg = f"Cannot simplify to primitive {extracted}"
-
-        # string = (
-        #     egraph.as_egglog_string
-        #     + "\n"
-        #     + str(egraph._state.typed_expr_to_egg(cast(RuntimeExpr, prim_expr).__egg_typed_expr__))
-        # )
-        # # save to "tmp.egg"
-        # with open("tmp.egg", "w") as f:
-        #     f.write(string)
+        msg = f"Cannot simplify to primitive {expr_extracted}"
         raise ValueError(msg) from exc
+    return egraph.eval(extracted)
+
+    # string = (
+    #     egraph.as_egglog_string
+    #     + "\n"
+    #     + str(egraph._state.typed_expr_to_egg(cast(RuntimeExpr, prim_expr).__egg_typed_expr__))
+    # )
+    # # save to "tmp.egg"
+    # with open("tmp.egg", "w") as f:
+    #     f.write(string)
