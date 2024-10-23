@@ -1,8 +1,4 @@
 exclude: ^python/tests/__snapshots__/
-default_language_version:
-  python: python3.10
-ci:
-  skip: [mypy, docs, stubtest]
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.7.0
@@ -10,30 +6,3 @@ repos:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
-  - repo: local
-    hooks:
-      - id: mypy
-        name: mypy
-        entry: dmypy run -- python/
-        language: system
-        require_serial: true
-        pass_filenames: false
-        stages: [manual]
-  - repo: local
-    hooks:
-      - id: stubtest
-        name: stubtest
-        entry: python -m mypy.stubtest egglog.bindings  --allowlist stubtest_allow
-        language: system
-        pass_filenames: false
-        require_serial: true
-        stages: [manual]
-  - repo: local
-    hooks:
-      - id: docs
-        name: docs
-        entry: sphinx-build -T -b html docs docs/_build/html
-        language: system
-        pass_filenames: false
-        require_serial: true
-        stages: [manual]
