@@ -36,7 +36,6 @@ jobs:
           python-version: ${{ matrix.py }}
       - run: uv sync --extra test --locked
       - run: uv run pytest --benchmark-disable -vvv
-      - run: uv cache prune --ci
   mypy:
     runs-on: ubuntu-latest
     steps:
@@ -53,7 +52,6 @@ jobs:
       - run: uv sync --extra test --locked
       - run: make mypy
       - run: make stubtest
-      - run: uv cache prune --ci
 
   benchmark:
     runs-on: ubuntu-latest
@@ -72,7 +70,6 @@ jobs:
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           run: uv run pytest -vvv -n auto
-      - run: uv cache prune --ci
 
   docs:
     runs-on: ubuntu-latest
@@ -92,4 +89,3 @@ jobs:
           sudo apt-get install -y graphviz
       - run: uv sync --extra docs --locked
       - run: make docs
-      - run: uv cache prune --ci
