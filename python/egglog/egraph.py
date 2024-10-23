@@ -1021,7 +1021,7 @@ class EGraph(_BaseModule):
         """
         Loads a CSV file and sets it as *input, output of the function.
         """
-        self._egraph.run_program(bindings.Input(self._callable_to_egg(fn), path))
+        self._egraph.run_program(bindings.Input(bindings.DUMMY_SPAN, self._callable_to_egg(fn), path))
 
     def _callable_to_egg(self, fn: object) -> str:
         ref, decls = resolve_callable(fn)
@@ -1063,7 +1063,7 @@ class EGraph(_BaseModule):
         typed_expr = runtime_expr.__egg_typed_expr__
         # Must also register type
         egg_expr = self._state.typed_expr_to_egg(typed_expr)
-        self._egraph.run_program(bindings.Simplify(egg_expr, egg_schedule))
+        self._egraph.run_program(bindings.Simplify(bindings.DUMMY_SPAN, egg_expr, egg_schedule))
         extract_report = self._egraph.extract_report()
         if not isinstance(extract_report, bindings.Best):
             msg = "No extract report saved"
@@ -1118,7 +1118,7 @@ class EGraph(_BaseModule):
         """
         Checks that one of the facts is not true
         """
-        self._egraph.run_program(bindings.Fail(self._facts_to_check(facts)))
+        self._egraph.run_program(bindings.Fail(bindings.DUMMY_SPAN, self._facts_to_check(facts)))
 
     def _facts_to_check(self, fact_likes: Iterable[FactLike]) -> bindings.Check:
         facts = _fact_likes(fact_likes)
@@ -1191,7 +1191,7 @@ class EGraph(_BaseModule):
         """
         Pop the current state of the egraph, reverting back to the previous state.
         """
-        self._egraph.run_program(bindings.Pop(1))
+        self._egraph.run_program(bindings.Pop(bindings.DUMMY_SPAN, 1))
         self._state = self._state_stack.pop()
 
     def __enter__(self) -> Self:
@@ -1262,7 +1262,7 @@ class EGraph(_BaseModule):
         )
         if split_primitive_outputs or split_functions:
             additional_ops = set(map(self._callable_to_egg, split_functions))
-            serialized.split_e_classes(self._egraph, additional_ops)
+            serialized.split_classes(self._egraph, additional_ops)
         serialized.map_ops(self._state.op_mapping())
 
         for _ in range(n_inline_leaves):
@@ -1322,7 +1322,14 @@ class EGraph(_BaseModule):
             serialized = self._serialize(**kwargs)
             VisualizerWidget(egraphs=[serialized.to_json()]).display_or_open()
 
-    def saturate(self, schedule: Schedule | None = None, *, max: int = 1000, **kwargs: Unpack[GraphvizKwargs]) -> None:
+    def saturate(
+        self,
+        schedule: Schedule | None = None,
+        *,
+        expr: Expr | None = None,
+        max: int = 1000,
+        **kwargs: Unpack[GraphvizKwargs],
+    ) -> None:
         """
         Saturate the egraph, running the given schedule until the egraph is saturated.
         It serializes the egraph at each step and returns a widget to visualize the egraph.
@@ -1330,6 +1337,8 @@ class EGraph(_BaseModule):
         from .visualizer_widget import VisualizerWidget
 
         def to_json() -> str:
+            if expr:
+                print(self.extract(expr))
             return self._serialize(**kwargs).to_json()
 
         egraphs = [to_json()]

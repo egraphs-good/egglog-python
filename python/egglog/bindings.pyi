@@ -5,8 +5,6 @@ from typing import TypeAlias
 
 from typing_extensions import final
 
-HIGH_COST: int
-
 @final
 class SerializedEGraph:
     def inline_leaves(self) -> None: ...
@@ -14,13 +12,14 @@ class SerializedEGraph:
     def to_dot(self) -> str: ...
     def to_json(self) -> str: ...
     def map_ops(self, map: dict[str, str]) -> None: ...
-    def split_e_classes(self, egraph: EGraph, ops: set[str]) -> None: ...
+    def split_classes(self, egraph: EGraph, ops: set[str]) -> None: ...
 
 @final
 class PyObjectSort:
     def __init__(self) -> None: ...
     def store(self, __o: object, /) -> _Expr: ...
 
+def parse_program(__input: str, /, filename: str | None = None) -> list[_Command]: ...
 @final
 class EGraph:
     def __init__(
@@ -29,11 +28,9 @@ class EGraph:
         *,
         fact_directory: str | Path | None = None,
         seminaive: bool = True,
-        terms_encoding: bool = False,
         record: bool = False,
     ) -> None: ...
     def commands(self) -> str | None: ...
-    def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
     def run_program(self, *commands: _Command) -> list[str]: ...
     def extract_report(self) -> _ExtractReport | None: ...
     def run_report(self) -> RunReport | None: ...
@@ -250,6 +247,7 @@ _Action: TypeAlias = Let | Set | Change | Union | Panic | Expr_ | Extract
 
 @final
 class FunctionDecl:
+    span: Span
     name: str
     schema: Schema
     default: _Expr | None
@@ -261,6 +259,7 @@ class FunctionDecl:
 
     def __init__(
         self,
+        span: Span,
         name: str,
         schema: Schema,
         default: _Expr | None = None,
@@ -273,7 +272,8 @@ class FunctionDecl:
 
 @final
 class Variant:
-    def __init__(self, name: str, types: list[str], cost: int | None = None) -> None: ...
+    def __init__(self, span: Span, name: str, types: list[str], cost: int | None = None) -> None: ...
+    span: Span
     name: str
     types: list[str]
     cost: int | None
@@ -380,6 +380,23 @@ class Sequence:
 _Schedule: TypeAlias = Saturate | Repeat | Run | Sequence
 
 ##
+# Subdatatypes
+##
+
+@final
+class SubVariants:
+    def __init__(self, variants: list[Variant]) -> None: ...
+    variants: list[Variant]
+
+@final
+class NewSort:
+    def __init__(self, name: str, args: list[_Expr]) -> None: ...
+    name: str
+    args: list[_Expr]
+
+_Subdatatypes: TypeAlias = SubVariants | NewSort
+
+##
 # Commands
 ##
 
@@ -391,22 +408,23 @@ class SetOption:
 
 @final
 class Datatype:
-    name: str
-    variants: list[Variant]
-    def __init__(self, name: str, variants: list[Variant]) -> None: ...
-
-@final
-class Declare:
     span: Span
     name: str
-    sort: str
-    def __init__(self, span: Span, name: str, sort: str) -> None: ...
+    variants: list[Variant]
+    def __init__(self, span: Span, name: str, variants: list[Variant]) -> None: ...
+
+@final
+class Datatypes:
+    span: Span
+    datatypes: list[tuple[Span, str, _Subdatatypes]]
+    def __init__(self, span: Span, datatypes: list[tuple[Span, str, _Subdatatypes]]) -> None: ...
 
 @final
 class Sort:
+    span: Span
     name: str
     presort_and_args: tuple[str, list[_Expr]] | None
-    def __init__(self, name: str, presort_and_args: tuple[str, list[_Expr]] | None = None) -> None: ...
+    def __init__(self, span: Span, name: str, presort_and_args: tuple[str, list[_Expr]] | None = None) -> None: ...
 
 @final
 class Function:
@@ -452,22 +470,17 @@ class RunSchedule:
 
 @final
 class Simplify:
+    span: Span
     expr: _Expr
     schedule: _Schedule
-    def __init__(self, expr: _Expr, schedule: _Schedule) -> None: ...
-
-@final
-class Calc:
-    span: Span
-    identifiers: list[IdentSort]
-    exprs: list[_Expr]
-    def __init__(self, span: Span, identifiers: list[IdentSort], exprs: list[_Expr]) -> None: ...
+    def __init__(self, span: Span, expr: _Expr, schedule: _Schedule) -> None: ...
 
 @final
 class QueryExtract:
+    span: Span
     variants: int
     expr: _Expr
-    def __init__(self, variants: int, expr: _Expr) -> None: ...
+    def __init__(self, span: Span, variants: int, expr: _Expr) -> None: ...
 
 @final
 class Check:
@@ -484,20 +497,23 @@ class PrintFunction:
 
 @final
 class PrintSize:
+    span: Span
     name: str | None
-    def __init__(self, name: str | None) -> None: ...
+    def __init__(self, span: Span, name: str | None) -> None: ...
 
 @final
 class Output:
+    span: Span
     file: str
     exprs: list[_Expr]
-    def __init__(self, file: str, exprs: list[_Expr]) -> None: ...
+    def __init__(self, span: Span, file: str, exprs: list[_Expr]) -> None: ...
 
 @final
 class Input:
+    span: Span
     name: str
     file: str
-    def __init__(self, name: str, file: str) -> None: ...
+    def __init__(self, span: Span, name: str, file: str) -> None: ...
 
 @final
 class Push:
@@ -506,29 +522,29 @@ class Push:
 
 @final
 class Pop:
+    span: Span
     length: int
-    def __init__(self, length: int) -> None: ...
+    def __init__(self, span: Span, length: int) -> None: ...
 
 @final
 class Fail:
+    span: Span
     command: _Command
-    def __init__(self, command: _Command) -> None: ...
+    def __init__(self, span: Span, command: _Command) -> None: ...
 
 @final
 class Include:
+    span: Span
     path: str
-    def __init__(self, path: str) -> None: ...
-
-@final
-class CheckProof:
-    def __init__(self) -> None: ...
+    def __init__(self, span: Span, path: str) -> None: ...
 
 @final
 class Relation:
+    span: Span
     constructor: str
     inputs: list[str]
 
-    def __init__(self, constructor: str, inputs: list[str]) -> None: ...
+    def __init__(self, span: Span, constructor: str, inputs: list[str]) -> None: ...
 
 @final
 class PrintOverallStatistics:
@@ -543,7 +559,7 @@ class UnstableCombinedRuleset:
 _Command: TypeAlias = (
     SetOption
     | Datatype
-    | Declare
+    | Datatypes
     | Sort
     | Function
     | AddRuleset
@@ -552,7 +568,6 @@ _Command: TypeAlias = (
     | BiRewriteCommand
     | ActionCommand
     | RunSchedule
-    | Calc
     | Simplify
     | QueryExtract
     | Check
@@ -564,7 +579,6 @@ _Command: TypeAlias = (
     | Pop
     | Fail
     | Include
-    | CheckProof
     | Relation
     | PrintOverallStatistics
     | UnstableCombinedRuleset

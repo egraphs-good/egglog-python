@@ -28,22 +28,18 @@ pub struct EGraph {
 impl EGraph {
     #[new]
     #[pyo3(
-        signature = (py_object_sort=None, *, fact_directory=None, seminaive=true, terms_encoding=false, record=false),
-        text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, terms_encoding=False, record=False)"
+        signature = (py_object_sort=None, *, fact_directory=None, seminaive=true, record=false),
+        text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, record=False)"
     )]
     fn new(
         py_object_sort: Option<ArcPyObjectSort>,
         fact_directory: Option<PathBuf>,
         seminaive: bool,
-        terms_encoding: bool,
         record: bool,
     ) -> Self {
         let mut egraph = egglog::EGraph::default();
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
-        if terms_encoding {
-            egraph.enable_terms_encoding();
-        }
         let py_object_arcsort = if let Some(py_object_sort) = py_object_sort {
             egraph.add_arcsort(py_object_sort.0.clone()).unwrap();
             Some(py_object_sort.0)
@@ -55,14 +51,6 @@ impl EGraph {
             py_object_arcsort,
             cmds: if record { Some(String::new()) } else { None },
         }
-    }
-
-    /// Parse a program into a list of commands.
-    #[pyo3(signature = (input, /, filename=None))]
-    fn parse_program(&mut self, input: &str, filename: Option<String>) -> EggResult<Vec<Command>> {
-        info!("Parsing program");
-        let commands = self.egraph.parse_program(filename, input)?;
-        Ok(commands.into_iter().map(|x| x.into()).collect())
     }
 
     /// Run a series of commands on the EGraph.
@@ -151,24 +139,23 @@ impl EGraph {
     }
     #[pyo3(signature = (expr, /))]
     fn eval_i64(&mut self, expr: Expr) -> EggResult<i64> {
-        self.eval_sort(expr, Arc::new(I64Sort::new("i64".into())))
+        self.eval_sort(expr, Arc::new(I64Sort))
     }
 
     #[pyo3(signature = (expr, /))]
     fn eval_f64(&mut self, expr: Expr) -> EggResult<f64> {
-        self.eval_sort(expr, Arc::new(F64Sort::new("f64".into())))
+        self.eval_sort(expr, Arc::new(F64Sort))
     }
 
     #[pyo3(signature = (expr, /))]
     fn eval_string(&mut self, expr: Expr) -> EggResult<String> {
-        let s: egglog::ast::Symbol =
-            self.eval_sort(expr, Arc::new(StringSort::new("String".into())))?;
+        let s: egglog::ast::Symbol = self.eval_sort(expr, Arc::new(StringSort))?;
         Ok(s.to_string())
     }
 
     #[pyo3(signature = (expr, /))]
     fn eval_bool(&mut self, expr: Expr) -> EggResult<bool> {
-        self.eval_sort(expr, Arc::new(BoolSort::new("bool".into())))
+        self.eval_sort(expr, Arc::new(BoolSort))
     }
 
     #[pyo3(signature = (expr, /))]

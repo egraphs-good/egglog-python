@@ -32,8 +32,8 @@ impl SerializedEGraph {
     }
 
     /// Split all primitive nodes, as well as other ops that match, into seperate e-classes
-    fn split_e_classes(&mut self, egraph: &EGraph, ops: HashSet<String>) {
-        self.egraph.split_e_classes(|id, node| {
+    fn split_classes(&mut self, egraph: &EGraph, ops: HashSet<String>) {
+        self.egraph.split_classes(|id, node| {
             egraph.egraph.from_node_id(id).is_primitive() || ops.contains(&node.op)
         })
     }
