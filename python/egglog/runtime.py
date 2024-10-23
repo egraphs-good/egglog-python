@@ -81,7 +81,7 @@ def resolve_type_annotation(decls: Declarations, tp: object) -> TypeOrVarRef:
         return resolve_type_annotation(decls, first)
 
     # If the type is `object` then this is assumed to be a PyObjectLike, i.e. converted into a PyObject
-    if tp == object:
+    if tp is object:
         assert _PY_OBJECT_CLASS
         return resolve_type_annotation(decls, _PY_OBJECT_CLASS)
     # If the type is a `Callable` then convert it into a UnstableFn

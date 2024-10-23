@@ -28,7 +28,7 @@ class ShapeAPI(Expr):
 
 
 @array_api_ruleset.register
-def shape_api_ruleset(dims: TupleInt, axis: TupleInt):  # noqa: ANN201
+def shape_api_ruleset(dims: TupleInt, axis: TupleInt):
     s = ShapeAPI(dims)
     yield rewrite(s.deselect(axis)).to(
         ShapeAPI(TupleInt.range(dims.length()).filter(lambda i: ~axis.contains(i)).map(lambda i: dims[i]))
@@ -108,7 +108,7 @@ def _loopnest_api_ruleset(
 
 
 @function(ruleset=array_api_ruleset, unextractable=True)
-def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:  # noqa: N803
+def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:
     # peel off the outer shape for result array
     outshape = ShapeAPI(X.shape).deselect(axis).to_tuple()
     # get only the inner shape for reduction

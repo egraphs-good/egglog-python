@@ -26,7 +26,7 @@ class MathList(Expr):
 
 
 @ruleset
-def math_ruleset(i: i64, j: i64, xs: MathList, x: Math, f: Callable[[Math], Math]):  # noqa: ANN201
+def math_ruleset(i: i64, j: i64, xs: MathList, x: Math, f: Callable[[Math], Math]):
     yield rewrite(Math(i) + Math(j)).to(Math(i + j))
     yield rewrite(xs.append(x).map(f)).to(xs.map(f).append(f(x)))
     yield rewrite(MathList().map(f)).to(MathList())

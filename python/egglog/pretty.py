@@ -147,7 +147,7 @@ class TraverseContext:
         """
         return PrettyContext(self.decls, self.parents)
 
-    def __call__(self, decl: AllDecls, toplevel: bool = False) -> None:  # noqa: C901
+    def __call__(self, decl: AllDecls, toplevel: bool = False) -> None:  # noqa: C901, PLR0912
         if not toplevel:
             self.parents[decl] += 1
         if decl in self._seen:
@@ -236,7 +236,7 @@ class PrettyContext:
             return expr_name
         return expr
 
-    def uncached(self, decl: AllDecls, *, unwrap_lit: bool, parens: bool, ruleset_name: str | None) -> tuple[str, str]:  # noqa: PLR0911
+    def uncached(self, decl: AllDecls, *, unwrap_lit: bool, parens: bool, ruleset_name: str | None) -> tuple[str, str]:  # noqa: C901, PLR0911, PLR0912
         match decl:
             case LitDecl(value):
                 match value:
@@ -382,7 +382,7 @@ class PrettyContext:
             return expr_name, tp_name
         return expr, tp_name
 
-    def _call_inner(  # noqa: PLR0911
+    def _call_inner(  # noqa: C901, PLR0911, PLR0912
         self,
         ref: CallableRef,
         args: list[ExprDecl],
@@ -513,6 +513,6 @@ def _plot_line_length(expr: object):  # pragma: no cover
             new_l = len(str(expr).split())
             sizes.append((line_length, diff, new_l))
 
-    df = pd.DataFrame(sizes, columns=["MAX_LINE_LENGTH", "LENGTH_DIFFERENCE", "n"])  # noqa: PD901
+    df = pd.DataFrame(sizes, columns=["MAX_LINE_LENGTH", "LENGTH_DIFFERENCE", "n"])
 
     return alt.Chart(df).mark_rect().encode(x="MAX_LINE_LENGTH:O", y="LENGTH_DIFFERENCE:O", color="n:Q")

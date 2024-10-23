@@ -486,7 +486,7 @@ class _ExprMetaclass(type):
         return isinstance(instance, RuntimeExpr)
 
 
-def _generate_class_decls(  # noqa: C901
+def _generate_class_decls(  # noqa: C901,PLR0912
     namespace: dict[str, Any],
     frame: FrameType,
     builtin: bool,
@@ -1208,7 +1208,7 @@ class EGraph(_BaseModule):
         self.push()
         return self
 
-    def __exit__(self, exc_type, exc, exc_tb) -> None:  # noqa: ANN001
+    def __exit__(self, exc_type, exc, exc_tb) -> None:
         CURRENT_EGRAPH.reset(self._token_stack.pop())
         self.pop()
 

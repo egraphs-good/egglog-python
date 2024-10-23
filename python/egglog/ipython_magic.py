@@ -14,7 +14,7 @@ if IN_IPYTHON:
 
     @needs_local_scope
     @register_cell_magic
-    def egglog(line, cell, local_ns):  # noqa: ANN001, ANN201
+    def egglog(line, cell, local_ns):
         """
         Run an egglog program.
 

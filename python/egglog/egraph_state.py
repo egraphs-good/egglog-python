@@ -330,7 +330,7 @@ class EGraphState:
     @overload
     def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr: ...
 
-    def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:
+    def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr:  # noqa: PLR0912,C901
         """
         Convert an ExprDecl to an egg expression.
         """
