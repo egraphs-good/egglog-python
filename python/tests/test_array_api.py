@@ -104,9 +104,10 @@ def _load_py_snapshot(fn: Callable, var: str | None = None) -> Any:
 
 
 def load_source(expr, egraph: EGraph):
-    fn_program = egraph.let("fn_program", ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y")))
-    egraph.run(array_api_program_gen_schedule)
-    return egraph.eval(egraph.extract(fn_program.statements))
+    with egraph:
+        fn_program = egraph.let("fn_program", ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y")))
+        egraph.run(array_api_program_gen_schedule)
+        return egraph.eval(egraph.extract(fn_program.statements))
 
 
 def trace_lda(egraph: EGraph):
