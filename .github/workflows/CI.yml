@@ -79,6 +79,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
