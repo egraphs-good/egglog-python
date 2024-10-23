@@ -58,7 +58,7 @@ jobs:
           python-version: "3.12"
           cache: "pip"
       - run: pip install -e .[test]
-      - uses: CodSpeedHQ/action@v2
+      - uses: CodSpeedHQ/action@v3
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           run: pytest -vvv -n auto
