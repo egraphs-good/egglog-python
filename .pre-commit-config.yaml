@@ -1,8 +1,6 @@
 exclude: ^python/tests/__snapshots__/
 default_language_version:
-  python: python3.10
-ci:
-  skip: [mypy, docs, stubtest]
+  python: python3.12
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.7.0
