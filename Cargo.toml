@@ -9,28 +9,24 @@ name = "egglog"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.21", features = ["extension-module"] }
+pyo3 = { version = "0.22.5", features = ["extension-module"] }
 
 # https://github.com/egraphs-good/egglog/compare/ceed816e9369570ffed9feeba157b19471dda70d...main
-# egglog = { git = "https://github.com/egraphs-good/egglog", rev = "fb4a9f114f9bb93154d6eff0dbab079b5cb4ebb6" }
+egglog = { git = "https://github.com/egraphs-good/egglog", rev = "b0db06832264c9b22694bd3de2bdacd55bbe9e32" }
 # egglog = { path = "../egg-smol" }
 # egglog = { git = "https://github.com/oflatt/egg-smol", branch = "oflatt-fast-terms" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "a555b2f5e82c684442775cc1a5da94b71930113c" }
-egraph-serialize = { git = "https://github.com/saulshanabrook/egraph-serialize", rev = "1c205fcc6d3426800b828e9264dbadbd4a5ef6e9", features = [
-    "serde",
-    "graphviz",
-] }
+# egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "a555b2f5e82c684442775cc1a5da94b71930113c" }
+egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
 # egraph-serialize = { path = "../egraph-serialize", features = [
 #     "serde",
 #     "graphviz",
 # ] }
-serde_json = "*"
-pyo3-log = "0.10.0"
+serde_json = "1.0.1"
+pyo3-log = "0.11.0"
 log = "0.4.21"
-lalrpop-util = { version = "0.20.2", features = ["lexer"] }
-ordered-float = "*"
+lalrpop-util = { version = "0.20", features = ["lexer"] }
+ordered-float = "3.7"
 uuid = { version = "1.8.0", features = ["v4"] }
-num-rational = "*"
 
 # Use unreleased version of egraph-serialize in egglog as well
 # [patch.crates-io]

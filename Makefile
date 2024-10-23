@@ -22,3 +22,7 @@ python/egglog/visualizer.js python/egglog/visualizer.css: visualizer.tgz
 
 clean:
 	rm -rf package python/egglog/visualizer.css python/egglog/visualizer.js visualizer.tgz
+
+from-local:
+	cp ../egraph-visualizer/dist/index.js python/egglog/visualizer.js
+	cp ../egraph-visualizer/dist/style.css python/egglog/visualizer.css

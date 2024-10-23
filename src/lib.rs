@@ -5,7 +5,8 @@ mod py_object_sort;
 mod serialize;
 mod utils;
 
-use conversions::{Expr, Span, Term, TermDag};
+use conversions::{Command, Expr, Span, Term, TermDag};
+use error::EggResult;
 use pyo3::prelude::*;
 
 #[pyfunction]
@@ -15,9 +16,16 @@ fn termdag_term_to_expr(termdag: &TermDag, term: Term) -> Expr {
     termdag.term_to_expr(&term).into()
 }
 
+/// Parse a program into a list of commands.
+#[pyfunction(signature = (input, /, filename=None))]
+fn parse_program(input: &str, filename: Option<String>) -> EggResult<Vec<Command>> {
+    let commands = egglog::ast::parse_program(filename, input)?;
+    Ok(commands.into_iter().map(|x| x.into()).collect())
+}
+
 /// Bindings for egglog rust library
 #[pymodule]
-fn bindings(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
 
     let dummy: Span = egglog::ast::DUMMY_SPAN.clone().into();
@@ -26,8 +34,8 @@ fn bindings(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::serialize::SerializedEGraph>()?;
     m.add_class::<crate::egraph::EGraph>()?;
     m.add_class::<crate::error::EggSmolError>()?;
-    m.add("HIGH_COST", egglog::HIGH_COST)?;
     m.add_function(wrap_pyfunction!(termdag_term_to_expr, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_program, m)?)?;
 
     crate::conversions::add_structs_to_module(m)?;
     crate::conversions::add_enums_to_module(m)?;

@@ -36,7 +36,7 @@ eqsat_basic = """(datatype Math
 (check (= expr1 expr2))"""
 
 egraph = EGraph()
-commands = egraph.parse_program(eqsat_basic)
+commands = parse_program(eqsat_basic)
 egraph.run_program(*commands)
 ```
 

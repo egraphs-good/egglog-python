@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -206,6 +206,7 @@ exclude = ["__snapshots__", "_build", "^conftest.py$"]
 [tool.maturin]
 python-source = "python"
 module-name = "egglog.bindings"
+features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
