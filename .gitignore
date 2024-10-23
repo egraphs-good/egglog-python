@@ -69,7 +69,6 @@ docs/_build/
 .vscode/
 
 # Pyenv
-.python-version
 
 TODO
 *.code-workspace
