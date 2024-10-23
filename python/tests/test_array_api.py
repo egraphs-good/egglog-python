@@ -145,9 +145,8 @@ class TestLDA:
 
     def test_source_optimized(self, snapshot_py, benchmark):
         egraph = EGraph()
-        with egraph:
-            expr = trace_lda(egraph)
-            optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
+        expr = trace_lda(egraph)
+        optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
         assert benchmark(load_source, optimized_expr, egraph) == snapshot_py
 
     @pytest.mark.parametrize(
