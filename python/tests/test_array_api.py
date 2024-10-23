@@ -143,7 +143,7 @@ class TestLDA:
         assert benchmark(load_source, expr, egraph) == snapshot_py
 
     def test_source_optimized(self, snapshot_py, benchmark):
-        egraph = EGraph(save_egglog_string=True)
+        egraph = EGraph()
         with egraph:
             expr = trace_lda(egraph)
             optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
