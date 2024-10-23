@@ -35,7 +35,7 @@ Then install the package in editable mode with the development dependencies:
 maturin develop -E dev,docs,test,array
 ```
 
-Anytime you change the rust code, you can run `maturin develop -E` to recompile the rust code.
+Anytime you change the rust code, you can run `maturin develop` to recompile the rust code.
 
 If you would like to download a new version of the visualizer source, run `make clean; make`. This will download
 the most recent released version from the github actions artifact in the [egraph-visualizer](https://github.com/egraphs-good/egraph-visualizer) repo. It is checked in because it's a pain to get cargo to include only one git ignored file while ignoring the rest of the files that were ignored.

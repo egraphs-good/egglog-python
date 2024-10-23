@@ -1,6 +1,5 @@
 # Add allows for all no arg classes because they somehow take all args at runtime
 .*egglog.bindings.Unit.__init__.*
-.*egglog.bindings.CheckProof.__init__.*
 .*egglog.bindings.PrintOverallStatistics.__init__.*
 .*egglog.bindings.PyObjectSort.__init__.*
 .*egglog.bindings.Delete.__init__.*

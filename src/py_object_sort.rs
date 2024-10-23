@@ -95,14 +95,10 @@ impl PyObjectSort {
     }
 
     pub fn load_ident(&self, value: &Value) -> PyObjectIdent {
-        self.get_index(value).0
-    }
-
-    fn get_index(&self, value: &Value) -> (PyObjectIdent, Py<PyAny>) {
         let objects = self.0.lock().unwrap();
         let i = value.bits as usize;
-        let (ident, obj) = objects.get_index(i).unwrap();
-        (*ident, obj.clone())
+        let (ident, _) = objects.get_index(i).unwrap();
+        ident.clone()
     }
 
     pub fn store(&self, obj: PyObject) -> Value {
@@ -112,9 +108,11 @@ impl PyObjectSort {
         value(i)
     }
 
-    pub fn load(&self, value: Value) -> PyObject {
-        let (_, obj) = self.get_index(&value);
-        obj
+    pub fn load(&self, py: Python<'_>, value: Value) -> PyObject {
+        let objects = self.0.lock().unwrap();
+        let i = value.bits as usize;
+        let (_ident, obj) = objects.get_index(i).unwrap();
+        obj.clone_ref(py)
     }
 }
 
@@ -124,7 +122,7 @@ pub struct MyPyObject(pub PyObject);
 impl FromSort for MyPyObject {
     type Sort = PyObjectSort;
     fn load(sort: &Self::Sort, value: &Value) -> Self {
-        let (_, obj) = sort.get_index(value);
+        let obj = Python::with_gil(|py| sort.load(py, *value));
         MyPyObject(obj)
     }
 }
@@ -307,9 +305,9 @@ impl PrimitiveLike for Eval {
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
         let res_obj: PyObject = Python::with_gil(|py| {
-            let globals = self.py_object.load(values[1]);
+            let globals = self.py_object.load(py, values[1]);
             let globals = globals.downcast_bound::<PyDict>(py).unwrap();
-            let locals = self.py_object.load(values[2]);
+            let locals = self.py_object.load(py, values[2]);
             let locals = locals.downcast_bound::<PyDict>(py).unwrap();
             py.eval_bound(code.into(), Some(globals), Some(locals))
                 .unwrap()
@@ -350,9 +348,9 @@ impl PrimitiveLike for Exec {
         let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
         let code: &str = code.into();
         let locals: PyObject = Python::with_gil(|py| {
-            let globals = self.py_object.load(values[1]);
+            let globals = self.py_object.load(py, values[1]);
             let globals = globals.downcast_bound::<PyDict>(py).unwrap();
-            let locals = self.py_object.load(values[2]);
+            let locals = self.py_object.load(py, values[2]);
             // Copy the locals so we can mutate them and return them
             let locals = locals.downcast_bound::<PyDict>(py).unwrap().copy().unwrap();
             // Copy code into temporary file
@@ -393,8 +391,8 @@ impl PrimitiveLike for Dict {
             let dict = PyDict::new_bound(py);
             // Update the dict with the key-value pairs
             for i in values.chunks_exact(2) {
-                let key = self.py_object.load(i[0]);
-                let value = self.py_object.load(i[1]);
+                let key = self.py_object.load(py, i[0]);
+                let value = self.py_object.load(py, i[1]);
                 dict.set_item(key, value).unwrap();
             }
             dict.into()
@@ -423,13 +421,13 @@ impl PrimitiveLike for DictUpdate {
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let dict: PyObject = Python::with_gil(|py| {
-            let dict = self.py_object.load(values[0]);
+            let dict = self.py_object.load(py, values[0]);
             // Copy the dict so we can mutate it and return it
             let dict = dict.downcast_bound::<PyDict>(py).unwrap().copy().unwrap();
             // Update the dict with the key-value pairs
             for i in values[1..].chunks_exact(2) {
-                let key = self.py_object.load(i[0]);
-                let value = self.py_object.load(i[1]);
+                let key = self.py_object.load(py, i[0]);
+                let value = self.py_object.load(py, i[1]);
                 dict.set_item(key, value).unwrap();
             }
             dict.into()
@@ -460,7 +458,7 @@ impl PrimitiveLike for ToString {
     }
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let obj: String =
-            Python::with_gil(|py| self.py_object.load(values[0]).extract(py).unwrap());
+            Python::with_gil(|py| self.py_object.load(py, values[0]).extract(py).unwrap());
         let symbol: Symbol = obj.into();
         symbol.store(self.string.as_ref())
     }
@@ -488,7 +486,8 @@ impl PrimitiveLike for ToBool {
     }
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
-        let obj: bool = Python::with_gil(|py| self.py_object.load(values[0]).extract(py).unwrap());
+        let obj: bool =
+            Python::with_gil(|py| self.py_object.load(py, values[0]).extract(py).unwrap());
         obj.store(self.bool_.as_ref())
     }
 }

@@ -126,20 +126,24 @@ def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:  # noqa: N803
 
 
 # %%
-egraph = EGraph(save_egglog_string=True)
+# egraph = EGraph(save_egglog_string=True)
+
+# egraph.register(val.shape)
+# egraph.run(array_api_ruleset.saturate())
+# egraph.extract_multiple(val.shape, 10)
+
+# %%
 
 X = NDArray.var("X")
 assume_shape(X, (3, 2, 3, 4))
 val = linalg_norm(X, (0, 1))
-egraph.register(val.shape)
-egraph.run(array_api_ruleset.saturate())
-egraph.extract_multiple(val.shape, 10)
-
-# %%
 egraph = EGraph()
-egraph.register(val.shape[2])
-egraph.run(array_api_ruleset.saturate())
-egraph.display(split_functions=[Int, TRUE, FALSE], n_inline_leaves=2)
+x = egraph.let("x", val.shape[2])
+# egraph.display(n_inline_leaves=0)
+# egraph.extract(x)
+# egraph.saturate(array_api_ruleset, expr=val.shape[2], split_functions=[Int, TRUE, FALSE], n_inline_leaves=2)
+# egraph.run(array_api_ruleset.saturate())
+# egraph.display()
 
 
 # %%

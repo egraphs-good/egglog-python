@@ -206,18 +206,25 @@ class EGraphState:
         self.egg_fn_to_callable_refs[egg_name].add(ref)
         match decl:
             case RelationDecl(arg_types, _, _):
-                self.egraph.run_program(bindings.Relation(egg_name, [self.type_ref_to_egg(a) for a in arg_types]))
+                self.egraph.run_program(
+                    bindings.Relation(bindings.DUMMY_SPAN, egg_name, [self.type_ref_to_egg(a) for a in arg_types])
+                )
             case ConstantDecl(tp, _):
                 # Use function decleration instead of constant b/c constants cannot be extracted
                 # https://github.com/egraphs-good/egglog/issues/334
                 self.egraph.run_program(
-                    bindings.Function(bindings.FunctionDecl(egg_name, bindings.Schema([], self.type_ref_to_egg(tp))))
+                    bindings.Function(
+                        bindings.FunctionDecl(
+                            bindings.DUMMY_SPAN, egg_name, bindings.Schema([], self.type_ref_to_egg(tp))
+                        )
+                    )
                 )
             case FunctionDecl():
                 if not decl.builtin:
                     signature = decl.signature
                     assert isinstance(signature, FunctionSignature), "Cannot turn special function to egg"
                     egg_fn_decl = bindings.FunctionDecl(
+                        bindings.DUMMY_SPAN,
                         egg_name,
                         bindings.Schema(
                             [self.type_ref_to_egg(a.to_just()) for a in signature.arg_types],
@@ -261,7 +268,7 @@ class EGraphState:
                 args = (self.type_ref_to_egg(JustTypeRef(ref.name)), type_args)
             else:
                 args = None
-            self.egraph.run_program(bindings.Sort(egg_name, args))
+            self.egraph.run_program(bindings.Sort(bindings.DUMMY_SPAN, egg_name, args))
         # For builtin classes, let's also make sure we have the mapping of all egg fn names for class methods, because
         # these can be created even without adding them to the e-graph, like `vec-empty` which can be extracted
         # even if you never use that function.

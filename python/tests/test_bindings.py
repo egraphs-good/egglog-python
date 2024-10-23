@@ -44,7 +44,7 @@ SKIP_TESTS = {"eggcc-extraction", "math-microbenchmark", "python_array_optimize"
 )
 def test_example(example_file: pathlib.Path):
     egraph = EGraph(fact_directory=EGG_SMOL_FOLDER)
-    commands = egraph.parse_program(example_file.read_text())
+    commands = parse_program(example_file.read_text())
     # TODO: Include currently relies on the CWD instead of the fact directory. We should fix this upstream
     # and then remove this workaround.
     os.chdir(EGG_SMOL_FOLDER)
@@ -56,7 +56,7 @@ BLACK_MODE = black.Mode(line_length=88)
 
 class TestEGraph:
     def test_parse_program(self, snapshot_py):
-        res = EGraph().parse_program(
+        res = parse_program(
             """(datatype Math
           (Num i64)
           (Var String)
@@ -74,7 +74,7 @@ class TestEGraph:
         program = "(check (= (+ 2 2) 4))"
         egraph = EGraph()
 
-        assert egraph.run_program(*egraph.parse_program(program)) == []
+        assert egraph.run_program(*parse_program(program)) == []
 
     def test_parse_and_run_program_exception(self):
         program = "(check (= 1 1.0))"
@@ -82,14 +82,14 @@ class TestEGraph:
 
         with pytest.raises(
             EggSmolError,
-            match="Type mismatch",
+            match="to have type",
         ):
-            egraph.run_program(*egraph.parse_program(program))
+            egraph.run_program(*parse_program(program))
 
     def test_run_rules(self):
         egraph = EGraph()
         egraph.run_program(
-            Datatype("Math", [Variant("Add", ["Math", "Math"])]),
+            Datatype(DUMMY_SPAN, "Math", [Variant(DUMMY_SPAN, "Add", ["Math", "Math"])]),
             RewriteCommand(
                 "",
                 Rewrite(
@@ -109,9 +109,9 @@ class TestEGraph:
         # Example from extraction-cost
         egraph = EGraph()
         egraph.run_program(
-            Datatype("Expr", [Variant("Num", ["i64"], cost=5)]),
+            Datatype(DUMMY_SPAN, "Expr", [Variant(DUMMY_SPAN, "Num", ["i64"], cost=5)]),
             ActionCommand(Let(DUMMY_SPAN, "x", Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))),
-            QueryExtract(0, Var(DUMMY_SPAN, "x")),
+            QueryExtract(DUMMY_SPAN, 0, Var(DUMMY_SPAN, "x")),
         )
 
         extract_report = egraph.extract_report()
@@ -124,9 +124,9 @@ class TestEGraph:
     def test_simplify(self):
         egraph = EGraph()
         egraph.run_program(
-            Datatype("Expr", [Variant("Num", ["i64"], cost=5)]),
+            Datatype(DUMMY_SPAN, "Expr", [Variant(DUMMY_SPAN, "Num", ["i64"], cost=5)]),
             ActionCommand(Let(DUMMY_SPAN, "x", Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))),
-            Simplify(Var(DUMMY_SPAN, "x"), Run(DUMMY_SPAN, RunConfig(""))),
+            Simplify(DUMMY_SPAN, Var(DUMMY_SPAN, "x"), Run(DUMMY_SPAN, RunConfig(""))),
         )
 
         extract_report = egraph.extract_report()
@@ -141,6 +141,7 @@ class TestEGraph:
         egraph = EGraph()
         egraph.run_program(
             Sort(
+                DUMMY_SPAN,
                 "MyMap",
                 ("Map", [Var(DUMMY_SPAN, "i64"), Var(DUMMY_SPAN, "String")]),
             ),
@@ -201,21 +202,21 @@ class TestEGraph:
 
 class TestVariant:
     def test_repr(self):
-        assert repr(Variant("name", [])) == "Variant('name', [], None)"
+        assert repr(Variant(DUMMY_SPAN, "name", [])) == f"Variant({DUMMY_SPAN!r}, 'name', [], None)"
 
     def test_name(self):
-        assert Variant("name", []).name == "name"
+        assert Variant(DUMMY_SPAN, "name", []).name == "name"
 
     def test_types(self):
-        assert Variant("name", ["a", "b"]).types == ["a", "b"]
+        assert Variant(DUMMY_SPAN, "name", ["a", "b"]).types == ["a", "b"]
 
     def test_cost(self):
-        assert Variant("name", [], cost=1).cost == 1
+        assert Variant(DUMMY_SPAN, "name", [], cost=1).cost == 1
 
     def test_compare(self):
-        assert Variant("name", []) == Variant("name", [])
-        assert Variant("name", []) != Variant("name", ["a"])
-        assert Variant("name", []) != 10  # type: ignore[comparison-overlap]
+        assert Variant(DUMMY_SPAN, "name", []) == Variant(DUMMY_SPAN, "name", [])
+        assert Variant(DUMMY_SPAN, "name", []) != Variant(DUMMY_SPAN, "name", ["a"])
+        assert Variant(DUMMY_SPAN, "name", []) != 10  # type: ignore[comparison-overlap]
 
 
 class TestEval:
@@ -250,7 +251,7 @@ class TestThreads:
 
     def test_cmds(self):
         cmds = (
-            Datatype("Math", [Variant("Add", ["Math", "Math"])]),
+            Datatype(DUMMY_SPAN, "Math", [Variant(DUMMY_SPAN, "Add", ["Math", "Math"])]),
             RewriteCommand(
                 "",
                 Rewrite(
@@ -267,7 +268,9 @@ class TestThreads:
 
     @pytest.mark.xfail(reason="egraphs are unsendable")
     def test_egraph(self):
-        _thread.start_new_thread(EGraph().run_program, (Datatype("Math", [Variant("Add", ["Math", "Math"])]),))
+        _thread.start_new_thread(
+            EGraph().run_program, (Datatype(DUMMY_SPAN, "Math", [Variant(DUMMY_SPAN, "Add", ["Math", "Math"])]),)
+        )
 
     def test_serialized_egraph(self):
         egraph = EGraph()
