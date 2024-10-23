@@ -82,7 +82,7 @@ class TestEGraph:
 
         with pytest.raises(
             EggSmolError,
-            match="Type mismatch",
+            match="to have type",
         ):
             egraph.run_program(*parse_program(program))
 
@@ -202,7 +202,7 @@ class TestEGraph:
 
 class TestVariant:
     def test_repr(self):
-        assert repr(Variant(DUMMY_SPAN, "name", [])) == "Variant('name', [], None)"
+        assert repr(Variant(DUMMY_SPAN, "name", [])) == f"Variant({DUMMY_SPAN!r}, 'name', [], None)"
 
     def test_name(self):
         assert Variant(DUMMY_SPAN, "name", []).name == "name"

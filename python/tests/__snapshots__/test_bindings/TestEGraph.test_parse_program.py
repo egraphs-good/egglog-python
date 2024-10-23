@@ -1,11 +1,67 @@
 [
     Datatype(
+        Span(
+            SrcFile(
+                "test.egg",
+                '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
+            ),
+            0,
+            110,
+        ),
         "Math",
         [
-            Variant("Num", ["i64"], None),
-            Variant("Var", ["String"], None),
-            Variant("Add", ["Math", "Math"], None),
-            Variant("Mul", ["Math", "Math"], None),
+            Variant(
+                Span(
+                    SrcFile(
+                        "test.egg",
+                        '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
+                    ),
+                    25,
+                    34,
+                ),
+                "Num",
+                ["i64"],
+                None,
+            ),
+            Variant(
+                Span(
+                    SrcFile(
+                        "test.egg",
+                        '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
+                    ),
+                    45,
+                    57,
+                ),
+                "Var",
+                ["String"],
+                None,
+            ),
+            Variant(
+                Span(
+                    SrcFile(
+                        "test.egg",
+                        '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
+                    ),
+                    68,
+                    83,
+                ),
+                "Add",
+                ["Math", "Math"],
+                None,
+            ),
+            Variant(
+                Span(
+                    SrcFile(
+                        "test.egg",
+                        '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
+                    ),
+                    94,
+                    109,
+                ),
+                "Mul",
+                ["Math", "Math"],
+                None,
+            ),
         ],
     ),
     ActionCommand(
