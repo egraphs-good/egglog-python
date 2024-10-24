@@ -163,7 +163,7 @@ class TestLDA:
         with egraph:
             expr = lda(X, y)
             optimized_expr = simplify_lda(egraph, expr)
-        fn_program = ndarray_function_two(optimized_expr, X, y)
+        fn_program = ndarray_function_two(optimized_expr, NDArray.var("X"), NDArray.var("y"))
         py_object = benchmark(load_source, fn_program, egraph)
         assert np.allclose(py_object(X_np, y_np), res_np)
         assert egraph.eval(fn_program.statements) == snapshot_py
