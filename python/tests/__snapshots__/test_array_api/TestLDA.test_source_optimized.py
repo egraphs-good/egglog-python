@@ -1,10 +1,4 @@
 def __fn(X, y):
-    assert X.dtype == np.dtype(np.float64)
-    assert X.shape == (150, 4,)
-    assert np.all(np.isfinite(X))
-    assert y.dtype == np.dtype(np.int64)
-    assert y.shape == (150,)
-    assert set(np.unique(y)) == set((0, 1, 2,))
     _0 = y == np.array(0)
     _1 = np.sum(_0)
     _2 = y == np.array(1)
