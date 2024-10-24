@@ -5,6 +5,8 @@ _This project uses semantic versioning_
 ## UNRELEASED
 
 - Upgrade dependencies including [egglog](https://github.com/egraphs-good/egglog/compare/saulshanabrook:egg-smol:a555b2f5e82c684442775cc1a5da94b71930113c...b0db06832264c9b22694bd3de2bdacd55bbe9e32)
+- Fix bug with non glob star import
+- Fix bug extracting functions
 
 ## 8.0.0 (2024-10-17)
 
