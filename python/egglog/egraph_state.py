@@ -493,7 +493,7 @@ class FromEggState:
             if term.name == "py-object":
                 call = bindings.termdag_term_to_expr(self.termdag, term)
                 expr_decl = PyObjectDecl(self.state.egraph.eval_py_object(call))
-            if term.name == "unstable-fn":
+            elif term.name == "unstable-fn":
                 # Get function name
                 fn_term, *arg_terms = term.args
                 fn_value = self.resolve_term(fn_term, JustTypeRef("String"))

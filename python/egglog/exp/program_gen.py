@@ -83,8 +83,18 @@ class Program(Expr):
         Only keeps the original parent, not any additional ones, so that each set of statements is only added once.
         """
 
-    @method(default=Unit())
-    def eval_py_object(self, globals: object) -> Unit:
+    @property
+    def is_identifer(self) -> Bool:
+        """
+        Returns whether the expression is an identifier. Used so that we don't re-assign any identifiers.
+        """
+
+
+converter(String, Program, Program)
+
+
+class EvalProgram(Expr):
+    def __init__(self, program: Program, globals: object) -> None:
         """
         Evaluates the program and saves as the py_object
         """
@@ -98,38 +108,34 @@ class Program(Expr):
         """
 
     @property
-    def is_identifer(self) -> Bool:
+    def statements(self) -> String:
         """
-        Returns whether the expression is an identifier. Used so that we don't re-assign any identifiers.
+        Returns the statements of the program, if it's been compiled
         """
 
 
-converter(String, Program, Program)
-
-program_gen_ruleset = ruleset()
-
-
-@program_gen_ruleset.register
-def _py_object(p: Program, expr: String, statements: String, g: PyObject):
+@ruleset
+def eval_program_rulseset(ep: EvalProgram, p: Program, expr: String, statements: String, g: PyObject):
     # When we evaluate a program, we first want to compile to a string
-    yield rule(p.eval_py_object(g)).then(p.compile())
+    yield rule(EvalProgram(p, g)).then(p.compile())
     # Then we want to evaluate the statements/expr
     yield rule(
-        p.eval_py_object(g),
+        eq(ep).to(EvalProgram(p, g)),
         eq(p.statements).to(statements),
         eq(p.expr).to(expr),
     ).then(
-        set_(p.py_object).to(
+        set_(ep.py_object).to(
             py_eval(
                 "l['___res']",
                 PyObject.dict(PyObject.from_string("l"), py_exec(join(statements, "\n", "___res = ", expr), g)),
             )
-        )
+        ),
+        set_(ep.statements).to(statements),
     )
 
 
-@program_gen_ruleset.register
-def _compile(
+@ruleset
+def program_gen_ruleset(
     s: String,
     s1: String,
     s2: String,

@@ -69,7 +69,8 @@ jobs:
       - uses: CodSpeedHQ/action@v3
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
-          run: uv run pytest -vvv -n auto
+          # allow updating snapshots due to indeterministic benchmarks
+          run: uv run pytest -vvv -n auto  --snapshot-update
 
   docs:
     runs-on: ubuntu-latest

@@ -9,6 +9,7 @@ from sklearn import config_context, datasets
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 from egglog.exp.array_api import *
+from egglog.exp.array_api_jit import jit
 from egglog.exp.array_api_numba import array_api_numba_schedule
 from egglog.exp.array_api_program_gen import *
 
@@ -103,51 +104,69 @@ def _load_py_snapshot(fn: Callable, var: str | None = None) -> Any:
     return globals[var]
 
 
-def load_source(expr, egraph: EGraph):
-    with egraph:
-        fn_program = egraph.let("fn_program", ndarray_function_two(expr, NDArray.var("X"), NDArray.var("y")))
-        egraph.run(array_api_program_gen_schedule)
-        return egraph.eval(egraph.extract(fn_program.statements))
+def load_source(fn_program: EvalProgram, egraph: EGraph):
+    egraph.register(fn_program)
+    egraph.run(array_api_program_gen_schedule)
+    # dp the needed pieces in here for benchmarking
+    return egraph.eval(egraph.extract(fn_program.py_object))
 
 
-def trace_lda(egraph: EGraph):
-    X_arr = NDArray.var("X")
-    assume_dtype(X_arr, X_np.dtype)
-    assume_shape(X_arr, X_np.shape)
-    assume_isfinite(X_arr)
+def lda(X, y):
+    assume_dtype(X, X_np.dtype)
+    assume_shape(X, X_np.shape)
+    assume_isfinite(X)
 
-    y_arr = NDArray.var("y")
-    assume_dtype(y_arr, y_np.dtype)
-    assume_shape(y_arr, y_np.shape)
-    assume_value_one_of(y_arr, tuple(map(int, np.unique(y_np))))  # type: ignore[arg-type]
+    assume_dtype(y, y_np.dtype)
+    assume_shape(y, y_np.shape)
+    assume_value_one_of(y, tuple(map(int, np.unique(y_np))))  # type: ignore[arg-type]
+    return run_lda(X, y)
 
-    with egraph:
-        return run_lda(X_arr, y_arr)
+
+def simplify_lda(egraph: EGraph, expr: NDArray) -> NDArray:
+    egraph.register(expr)
+    egraph.run(array_api_numba_schedule)
+    return egraph.extract(expr)
 
 
 @pytest.mark.benchmark(min_rounds=3)
 class TestLDA:
+    """
+    Incrementally benchmark each part of the LDA to see how long it takes to run.
+    """
+
     def test_trace(self, snapshot_py, benchmark):
-        X_r2 = benchmark(trace_lda, EGraph())
+        X = NDArray.var("X")
+        y = NDArray.var("y")
+        with EGraph():
+            X_r2 = benchmark(lda, X, y)
         assert str(X_r2) == snapshot_py
 
     def test_optimize(self, snapshot_py, benchmark):
         egraph = EGraph()
-        expr = trace_lda(egraph)
-        simplified = benchmark(egraph.simplify, expr, array_api_numba_schedule)
+        X = NDArray.var("X")
+        y = NDArray.var("y")
+        with egraph:
+            expr = lda(X, y)
+            simplified = benchmark(simplify_lda, egraph, expr)
         assert str(simplified) == snapshot_py
 
-    @pytest.mark.xfail(reason="Original source is not working")
-    def test_source(self, snapshot_py, benchmark):
-        egraph = EGraph()
-        expr = trace_lda(egraph)
-        assert benchmark(load_source, expr, egraph) == snapshot_py
+    # @pytest.mark.xfail(reason="Original source is not working")
+    # def test_source(self, snapshot_py, benchmark):
+    #     egraph = EGraph()
+    #     expr = trace_lda(egraph)
+    #     assert benchmark(load_source, expr, egraph) == snapshot_py
 
     def test_source_optimized(self, snapshot_py, benchmark):
         egraph = EGraph()
-        expr = trace_lda(egraph)
-        optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
-        assert benchmark(load_source, optimized_expr, egraph) == snapshot_py
+        X = NDArray.var("X")
+        y = NDArray.var("y")
+        with egraph:
+            expr = lda(X, y)
+            optimized_expr = simplify_lda(egraph, expr)
+        fn_program = ndarray_function_two(optimized_expr, NDArray.var("X"), NDArray.var("y"))
+        py_object = benchmark(load_source, fn_program, egraph)
+        assert np.allclose(py_object(X_np, y_np), res_np)
+        assert egraph.eval(fn_program.statements) == snapshot_py
 
     @pytest.mark.parametrize(
         "fn",
@@ -156,9 +175,29 @@ class TestLDA:
             pytest.param(run_lda, id="array_api"),
             pytest.param(_load_py_snapshot(test_source_optimized, "__fn"), id="array_api-optimized"),
             pytest.param(numba.njit(_load_py_snapshot(test_source_optimized, "__fn")), id="array_api-optimized-numba"),
+            pytest.param(jit(lda), id="array_api-jit"),
         ],
     )
     def test_execution(self, fn, benchmark):
         # warmup once for numba
         assert np.allclose(res_np, fn(X_np, y_np))
         benchmark(fn, X_np, y_np)
+
+
+# if calling as script, print out egglog source for test
+# similar to jit, but don't include pyobject parts so it works in vanilla egglog
+if __name__ == "__main__":
+    print("Generating egglog source for test")
+    egraph = EGraph(save_egglog_string=True)
+    X_ = NDArray.var("X")
+    y_ = NDArray.var("y")
+    with egraph:
+        expr = lda(X_, y_)
+    optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
+    fn_program = ndarray_function_two_program(optimized_expr, X_, y_)
+    egraph.register(fn_program.compile())
+    egraph.run(array_api_program_gen_ruleset.saturate() + program_gen_ruleset.saturate())
+    egraph.extract(fn_program.statements)
+    name = "python.egg"
+    print("Saving to", name)
+    Path(name).write_text(egraph.as_egglog_string)

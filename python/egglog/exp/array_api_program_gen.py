@@ -1,8 +1,6 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
-import numpy as np
-
 from egglog import *
 
 from .array_api import *
@@ -13,9 +11,12 @@ from .program_gen import *
 # Depends on `np` as a global variable.
 ##
 
-array_api_program_gen_ruleset = ruleset()
+array_api_program_gen_ruleset = ruleset(name="array_api_program_gen_ruleset")
+array_api_program_gen_eval_ruleset = ruleset(name="array_api_program_gen_eval_ruleset")
 
-array_api_program_gen_schedule = array_api_program_gen_ruleset.saturate() + program_gen_ruleset.saturate()
+array_api_program_gen_schedule = (
+    array_api_program_gen_ruleset | program_gen_ruleset | array_api_program_gen_eval_ruleset | eval_program_rulseset
+).saturate()
 
 
 @function
@@ -98,17 +99,14 @@ def _tuple_int_program(i: Int, ti: TupleInt, k: i64, idx_fn: Callable[[Int], Int
 def ndarray_program(x: NDArray) -> Program: ...
 
 
-@function
-def ndarray_function_two(res: NDArray, l: NDArray, r: NDArray) -> Program: ...
+@function(ruleset=array_api_program_gen_ruleset)
+def ndarray_function_two_program(res: NDArray, l: NDArray, r: NDArray) -> Program:
+    return ndarray_program(res).function_two(ndarray_program(l), ndarray_program(r))
 
 
-@array_api_program_gen_ruleset.register
-def _ndarray_function_two(f: Program, res: NDArray, l: NDArray, r: NDArray, o: PyObject):
-    # When we have function, set the program and trigger it to be compiled
-    yield rule(eq(f).to(ndarray_function_two(res, l, r))).then(
-        union(f).with_(ndarray_program(res).function_two(ndarray_program(l), ndarray_program(r))),
-        f.eval_py_object({"np": np}),
-    )
+@function(ruleset=array_api_program_gen_eval_ruleset)
+def ndarray_function_two(res: NDArray, l: NDArray, r: NDArray) -> EvalProgram:
+    return EvalProgram(ndarray_function_two_program(res, l, r), {"np": np})
 
 
 @function
