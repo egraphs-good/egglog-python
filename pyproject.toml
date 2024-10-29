@@ -35,7 +35,14 @@ array = [
     "numba==0.59.1",
     "llvmlite==0.42.0",
 ]
-dev = ["ruff", "pre-commit", "mypy", "anywidget[dev]", "egglog[docs,test]"]
+dev = [
+    "ruff",
+    "pre-commit",
+    "mypy",
+    "anywidget[dev]",
+    "egglog[docs,test]",
+    "jupyterlab",
+]
 
 test = [
     "pytest",
