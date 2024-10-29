@@ -1369,22 +1369,9 @@ class EGraph(_BaseModule):
         Saturate the egraph, running the given schedule until the egraph is saturated.
         It serializes the egraph at each step and returns a widget to visualize the egraph.
         """
-        # from .visualizer_widget import VisualizerWidget
-
-        last_expr = None
-        index = 0
-        exprs = []
+        from .visualizer_widget import VisualizerWidget
 
         def to_json() -> str:
-            nonlocal last_expr, index
-            if expr is not None:
-                extracted = self.extract(expr)
-                # s = str(extracted)
-                if extracted.__egg_typed_expr__ != last_expr:
-                    exprs.append(extracted)
-                    last_expr = extracted.__egg_typed_expr__
-                    print(f"# {index}:\n", str(extracted), "\n")
-                    index += 1
             return self._serialize(**kwargs).to_json()
 
         egraphs = [to_json()]
@@ -1392,8 +1379,7 @@ class EGraph(_BaseModule):
         while self.run(schedule or 1).updated and i < max:
             i += 1
             egraphs.append(to_json())
-        # VisualizerWidget(egraphs=egraphs).display_or_open()
-        return exprs
+        VisualizerWidget(egraphs=egraphs).display_or_open()
 
     @classmethod
     def current(cls) -> EGraph:
