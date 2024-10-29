@@ -764,6 +764,7 @@ class RuleDecl:
 class DefaultRewriteDecl:
     ref: CallableRef
     expr: ExprDecl
+    subsume: bool
 
 
 RewriteOrRuleDecl: TypeAlias = RewriteDecl | BiRewriteDecl | RuleDecl | DefaultRewriteDecl
