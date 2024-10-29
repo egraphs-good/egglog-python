@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import copy
+from functools import partial
 from typing import TYPE_CHECKING, ClassVar
 
 import pytest
@@ -9,6 +10,8 @@ import pytest
 from egglog import *
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from egglog.runtime import RuntimeExpr
 
 
@@ -47,6 +50,14 @@ def p() -> i64: ...
 
 @function
 def has_default(x: A = A()) -> A: ...
+
+
+@function
+def higher_order(x: Callable[[A], A]) -> A: ...
+
+
+@function
+def binary(x: A, y: A) -> A: ...
 
 
 del_a = A()
@@ -141,6 +152,11 @@ _A_2 + _A_3""",
     # Functions
     pytest.param(f, "f", id="function"),
     pytest.param(A().method, "A().method", id="method"),
+    # lambda
+    pytest.param(higher_order(lambda x: A() + x), "higher_order(lambda x: A() + x)", id="lambda"),
+    # partial
+    pytest.param(higher_order(partial(binary, A())), "higher_order(partial(binary, A()))", id="partial"),
+    pytest.param(higher_order(lambda x: f(b)), "higher_order(lambda x: f(b))", id="partial-lambda"),
 ]
 
 
