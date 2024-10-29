@@ -14,29 +14,25 @@ from egglog.exp.array_api import *
 
 
 class ShapeAPI(Expr):
-    @method(unextractable=True)
     def __init__(self, dims: TupleIntLike) -> None: ...
 
-    @method(unextractable=True)
     def deselect(self, axis: TupleIntLike) -> ShapeAPI: ...
 
-    @method(unextractable=True)
     def select(self, axis: TupleIntLike) -> ShapeAPI: ...
 
-    @method(unextractable=True)
     def to_tuple(self) -> TupleInt: ...
 
 
 @array_api_ruleset.register
 def shape_api_ruleset(dims: TupleInt, axis: TupleInt):
     s = ShapeAPI(dims)
-    yield rewrite(s.deselect(axis)).to(
+    yield rewrite(s.deselect(axis), subsume=True).to(
         ShapeAPI(TupleInt.range(dims.length()).filter(lambda i: ~axis.contains(i)).map(lambda i: dims[i]))
     )
-    yield rewrite(s.select(axis)).to(
+    yield rewrite(s.select(axis), subsume=True).to(
         ShapeAPI(TupleInt.range(dims.length()).filter(lambda i: axis.contains(i)).map(lambda i: dims[i]))
     )
-    yield rewrite(s.to_tuple()).to(dims)
+    yield rewrite(s.to_tuple(), subsume=True).to(dims)
 
 
 class OptionalLoopNestAPI(Expr):
@@ -91,23 +87,27 @@ def _loopnest_api_ruleset(
     i: i64,
 ):
     # from_tuple
-    yield rewrite(LoopNestAPI.from_tuple(TupleInt(0, idx_fn))).to(OptionalLoopNestAPI.NONE)
-    yield rewrite(LoopNestAPI.from_tuple(TupleInt(Int(i), idx_fn))).to(
+    yield rewrite(LoopNestAPI.from_tuple(TupleInt(0, idx_fn)), subsume=True).to(OptionalLoopNestAPI.NONE)
+    yield rewrite(LoopNestAPI.from_tuple(TupleInt(Int(i), idx_fn)), subsume=True).to(
         OptionalLoopNestAPI(
             LoopNestAPI(idx_fn(Int(0)), LoopNestAPI.from_tuple(TupleInt(Int(i - 1), lambda i: idx_fn(i + 1))))
         ),
         ne(i).to(i64(0)),
     )
     # reduce
-    yield rewrite(lna.fold(fn, init)).to(tuple_tuple_int_reduce_ndarray(lna.indices, fn, init))
+    yield rewrite(lna.fold(fn, init), subsume=True).to(tuple_tuple_int_reduce_ndarray(lna.indices, fn, init))
     # get_dims
-    yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI.NONE).get_dims()).to(TupleInt.single(dim))
-    yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI(lna)).get_dims()).to(TupleInt.single(dim) + lna.get_dims())
+    yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI.NONE).get_dims(), subsume=True).to(TupleInt.single(dim))
+    yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI(lna)).get_dims(), subsume=True).to(
+        TupleInt.single(dim) + lna.get_dims()
+    )
     # indices
-    yield rewrite(lna.indices).to(tuple_tuple_int_product(tuple_int_map_tuple_int(lna.get_dims(), TupleInt.range)))
+    yield rewrite(lna.indices, subsume=True).to(
+        tuple_tuple_int_product(tuple_int_map_tuple_int(lna.get_dims(), TupleInt.range))
+    )
 
 
-@function(ruleset=array_api_ruleset, unextractable=True)
+@function(ruleset=array_api_ruleset, subsume=True)
 def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:
     # peel off the outer shape for result array
     outshape = ShapeAPI(X.shape).deselect(axis).to_tuple()

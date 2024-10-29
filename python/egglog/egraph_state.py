@@ -134,7 +134,7 @@ class EGraphState:
                 )
                 return bindings.RuleCommand(name or "", ruleset, rule)
             # TODO: Replace with just constants value and looking at REF of function
-            case DefaultRewriteDecl(ref, expr):
+            case DefaultRewriteDecl(ref, expr, subsume):
                 decl = self.__egg_decls__.get_callable_decl(ref).to_function_decl()
                 sig = decl.signature
                 assert isinstance(sig, FunctionSignature)
@@ -144,7 +144,7 @@ class EGraphState:
                     for name, tp in zip(sig.arg_names, sig.arg_types, strict=False)
                 )
                 rewrite_decl = RewriteDecl(
-                    sig.semantic_return_type.to_just(), CallDecl(ref, arg_mapping), expr, (), False
+                    sig.semantic_return_type.to_just(), CallDecl(ref, arg_mapping), expr, (), subsume
                 )
                 return self.command_to_egg(rewrite_decl, ruleset)
             case _:

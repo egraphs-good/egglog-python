@@ -40,7 +40,7 @@ def _std(y: NDArray, x: NDArray, i: Int):
 
 
 # rewrite unique_counts to count each value one by one, since numba doesn't support np.unique(..., return_counts=True)
-@function(unextractable=True)
+@function
 def count_values(x: NDArray, values: NDArray) -> TupleValue:
     """
     Returns a tuple of the count of each of the values in the array.

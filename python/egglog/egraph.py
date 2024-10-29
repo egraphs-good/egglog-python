@@ -269,7 +269,7 @@ class _BaseModule:
         unextractable: bool = False,
     ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
         return lambda fn: _WrappedMethod(
-            egg_fn, cost, default, merge, on_merge, fn, preserve, mutates_self, unextractable
+            egg_fn, cost, default, merge, on_merge, fn, preserve, mutates_self, unextractable, False
         )
 
     @overload
@@ -404,6 +404,7 @@ def method(
     on_merge: Callable[[Any, Any], Iterable[ActionLike]] | None = None,
     mutates_self: bool = False,
     unextractable: bool = False,
+    subsume: bool = False,
 ) -> Callable[[CALLABLE], CALLABLE]: ...
 
 
@@ -417,6 +418,7 @@ def method(
     on_merge: Callable[[EXPR, EXPR], Iterable[ActionLike]] | None = None,
     mutates_self: bool = False,
     unextractable: bool = False,
+    subsume: bool = False,
 ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]: ...
 
 
@@ -430,11 +432,14 @@ def method(
     preserve: bool = False,
     mutates_self: bool = False,
     unextractable: bool = False,
+    subsume: bool = False,
 ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]:
     """
     Any method can be decorated with this to customize it's behavior. This is only supported in classes which subclass :class:`Expr`.
     """
-    return lambda fn: _WrappedMethod(egg_fn, cost, default, merge, on_merge, fn, preserve, mutates_self, unextractable)
+    return lambda fn: _WrappedMethod(
+        egg_fn, cost, default, merge, on_merge, fn, preserve, mutates_self, unextractable, subsume
+    )
 
 
 class _ExprMetaclass(type):
@@ -519,7 +524,9 @@ def _generate_class_decls(  # noqa: C901,PLR0912
             (inner_tp,) = v.__args__
             type_ref = resolve_type_annotation(decls, inner_tp)
             cls_decl.class_variables[k] = ConstantDecl(type_ref.to_just())
-            _add_default_rewrite(decls, ClassVariableRef(cls_name, k), type_ref, namespace.pop(k, None), ruleset)
+            _add_default_rewrite(
+                decls, ClassVariableRef(cls_name, k), type_ref, namespace.pop(k, None), ruleset, subsume=False
+            )
         else:
             msg = f"On class {cls_name}, for attribute '{k}', expected a ClassVar, but got {v}"
             raise NotImplementedError(msg)
@@ -542,12 +549,12 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         if is_init and cls_name in LIT_CLASS_NAMES:
             continue
         match method:
-            case _WrappedMethod(egg_fn, cost, default, merge, on_merge, fn, preserve, mutates, unextractable):
+            case _WrappedMethod(egg_fn, cost, default, merge, on_merge, fn, preserve, mutates, unextractable, subsume):
                 pass
             case _:
                 egg_fn, cost, default, merge, on_merge = None, None, None, None, None
                 fn = method
-                unextractable, preserve = False, False
+                unextractable, preserve, subsume = False, False, False
                 mutates = method_name in ALWAYS_MUTATES_SELF
         if preserve:
             cls_decl.preserved_methods[method_name] = fn
@@ -572,7 +579,20 @@ def _generate_class_decls(  # noqa: C901,PLR0912
             continue
 
         _, add_rewrite = _fn_decl(
-            decls, egg_fn, ref, fn, locals, default, cost, merge, on_merge, mutates, builtin, ruleset, unextractable
+            decls,
+            egg_fn,
+            ref,
+            fn,
+            locals,
+            default,
+            cost,
+            merge,
+            on_merge,
+            mutates,
+            builtin,
+            ruleset=ruleset,
+            unextractable=unextractable,
+            subsume=subsume,
         )
 
         if not builtin and not isinstance(ref, InitRef) and not mutates:
@@ -602,6 +622,7 @@ def function(
     builtin: bool = False,
     ruleset: Ruleset | None = None,
     use_body_as_name: bool = False,
+    subsume: bool = False,
 ) -> Callable[[CALLABLE], CALLABLE]: ...
 
 
@@ -617,6 +638,7 @@ def function(
     unextractable: bool = False,
     ruleset: Ruleset | None = None,
     use_body_as_name: bool = False,
+    subsume: bool = False,
 ) -> Callable[[Callable[P, EXPR]], Callable[P, EXPR]]: ...
 
 
@@ -649,6 +671,7 @@ class _FunctionConstructor:
     unextractable: bool = False
     ruleset: Ruleset | None = None
     use_body_as_name: bool = False
+    subsume: bool = False
 
     def __call__(self, fn: Callable[..., RuntimeExpr]) -> RuntimeFunction:
         return RuntimeFunction(*split_thunk(Thunk.fn(self.create_decls, fn)))
@@ -668,7 +691,8 @@ class _FunctionConstructor:
             self.on_merge,
             self.mutates_first_arg,
             self.builtin,
-            self.ruleset,
+            ruleset=self.ruleset,
+            subsume=self.subsume,
             unextractable=self.unextractable,
         )
         add_rewrite()
@@ -690,6 +714,7 @@ def _fn_decl(
     on_merge: Callable[[RuntimeExpr, RuntimeExpr], Iterable[ActionLike]] | None,
     mutates_first_arg: bool,
     is_builtin: bool,
+    subsume: bool,
     ruleset: Ruleset | None = None,
     unextractable: bool = False,
 ) -> tuple[CallableRef, Callable[[], None]]:
@@ -804,7 +829,7 @@ def _fn_decl(
         res_ref = ref
         decls.set_function_decl(ref, decl)
         res_thunk = Thunk.fn(_create_default_value, decls, ref, fn, args, ruleset)
-    return res_ref, Thunk.fn(_add_default_rewrite_function, decls, res_ref, return_type, ruleset, res_thunk)
+    return res_ref, Thunk.fn(_add_default_rewrite_function, decls, res_ref, return_type, ruleset, res_thunk, subsume)
 
 
 # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
@@ -871,7 +896,7 @@ def _constant_thunk(
     type_ref = resolve_type_annotation(decls, tp)
     callable_ref = ConstantRef(name)
     decls._constants[name] = ConstantDecl(type_ref.to_just(), egg_name)
-    _add_default_rewrite(decls, callable_ref, type_ref, default_replacement, ruleset)
+    _add_default_rewrite(decls, callable_ref, type_ref, default_replacement, ruleset, subsume=False)
     return decls, TypedExprDecl(type_ref.to_just(), CallDecl(callable_ref))
 
 
@@ -898,15 +923,21 @@ def _add_default_rewrite_function(
     res_type: TypeOrVarRef,
     ruleset: Ruleset | None,
     value_thunk: Callable[[], object],
+    subsume: bool,
 ) -> None:
     """
     Helper functions that resolves a value thunk to create the default value.
     """
-    _add_default_rewrite(decls, ref, res_type, value_thunk(), ruleset)
+    _add_default_rewrite(decls, ref, res_type, value_thunk(), ruleset, subsume)
 
 
 def _add_default_rewrite(
-    decls: Declarations, ref: CallableRef, type_ref: TypeOrVarRef, default_rewrite: object, ruleset: Ruleset | None
+    decls: Declarations,
+    ref: CallableRef,
+    type_ref: TypeOrVarRef,
+    default_rewrite: object,
+    ruleset: Ruleset | None,
+    subsume: bool,
 ) -> None:
     """
     Adds a default rewrite for the callable, if the default rewrite is not None
@@ -916,7 +947,7 @@ def _add_default_rewrite(
     if default_rewrite is None:
         return
     resolved_value = resolve_literal(type_ref, default_rewrite, Thunk.value(decls))
-    rewrite_decl = DefaultRewriteDecl(ref, resolved_value.__egg_typed_expr__.expr)
+    rewrite_decl = DefaultRewriteDecl(ref, resolved_value.__egg_typed_expr__.expr, subsume)
     if ruleset:
         ruleset_decls = ruleset._current_egg_decls
         ruleset_decl = ruleset.__egg_ruleset__
@@ -1338,11 +1369,22 @@ class EGraph(_BaseModule):
         Saturate the egraph, running the given schedule until the egraph is saturated.
         It serializes the egraph at each step and returns a widget to visualize the egraph.
         """
-        from .visualizer_widget import VisualizerWidget
+        # from .visualizer_widget import VisualizerWidget
+
+        last_expr = None
+        index = 0
+        exprs = []
 
         def to_json() -> str:
-            if expr:
-                print(self.extract(expr))
+            nonlocal last_expr, index
+            if expr is not None:
+                extracted = self.extract(expr)
+                # s = str(extracted)
+                if extracted.__egg_typed_expr__ != last_expr:
+                    exprs.append(extracted)
+                    last_expr = extracted.__egg_typed_expr__
+                    print(f"# {index}:\n", str(extracted), "\n")
+                    index += 1
             return self._serialize(**kwargs).to_json()
 
         egraphs = [to_json()]
@@ -1350,7 +1392,8 @@ class EGraph(_BaseModule):
         while self.run(schedule or 1).updated and i < max:
             i += 1
             egraphs.append(to_json())
-        VisualizerWidget(egraphs=egraphs).display_or_open()
+        # VisualizerWidget(egraphs=egraphs).display_or_open()
+        return exprs
 
     @classmethod
     def current(cls) -> EGraph:
@@ -1407,6 +1450,7 @@ class _WrappedMethod(Generic[P, EXPR]):
     preserve: bool
     mutates_self: bool
     unextractable: bool
+    subsume: bool
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> EXPR:
         msg = "We should never call a wrapped method. Did you forget to wrap the class?"

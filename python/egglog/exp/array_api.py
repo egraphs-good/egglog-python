@@ -271,7 +271,6 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
     EMPTY: ClassVar[TupleInt]
 
-    @method(unextractable=True)
     def __init__(self, length: IntLike, idx_fn: Callable[[Int], Int]) -> None: ...
 
     @classmethod
@@ -286,6 +285,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
     def from_vec(cls, vec: Vec[Int]) -> TupleInt:
         return TupleInt(vec.length(), partial(index_vec_int, vec))
 
+    @method(subsume=True)
     def __add__(self, other: TupleInt) -> TupleInt:
         return TupleInt(
             self.length() + other.length(),
@@ -307,13 +307,13 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
     def fold_boolean(self, init: Boolean, f: Callable[[Boolean, Int], Boolean]) -> Boolean: ...
 
+    @method(subsume=True)
     def contains(self, i: Int) -> Boolean:
         return self.fold_boolean(FALSE, lambda acc, j: acc | (i == j))
 
-    @method(cost=100)
     def filter(self, f: Callable[[Int], Boolean]) -> TupleInt: ...
 
-    @method(cost=100)
+    @method(subsume=True)
     def map(self, f: Callable[[Int], Int]) -> TupleInt:
         return TupleInt(self.length(), lambda i: f(self[i]))
 
@@ -371,7 +371,7 @@ def _tuple_int(
             ne(k).to(i64(0)),
         ),
         # Empty
-        rewrite(TupleInt.EMPTY).to(TupleInt(0, bottom_indexing)),
+        rewrite(TupleInt.EMPTY, subsume=True).to(TupleInt(0, bottom_indexing)),
         # if_
         rewrite(TupleInt.if_(TRUE, ti, ti2)).to(ti),
         rewrite(TupleInt.if_(FALSE, ti, ti2)).to(ti2),
@@ -387,13 +387,16 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
     def __init__(self, length: IntLike, idx_fn: Callable[[Int], TupleInt]) -> None: ...
 
     @classmethod
+    @method(subsume=True)
     def single(cls, i: TupleInt) -> TupleTupleInt:
         return TupleTupleInt(Int(1), lambda _: i)
 
     @classmethod
+    @method(subsume=True)
     def from_vec(cls, vec: Vec[Int]) -> TupleInt:
         return TupleInt(vec.length(), partial(index_vec_int, vec))
 
+    @method(subsume=True)
     def __add__(self, other: TupleTupleInt) -> TupleTupleInt:
         return TupleTupleInt(
             self.length() + other.length(),
@@ -731,7 +734,7 @@ def _tuple_value(
         rewrite(TupleValue.EMPTY.includes(v)).to(FALSE),
         rewrite(TupleValue(v).includes(v)).to(TRUE),
         rewrite(TupleValue(v).includes(v2)).to(FALSE, ne(v).to(v2)),
-        rewrite((ti + ti2).includes(v)).to(ti.includes(v) | ti2.includes(v)),
+        rewrite((ti + ti2).includes(v), subsume=True).to(ti.includes(v) | ti2.includes(v)),
     ]
 
 
