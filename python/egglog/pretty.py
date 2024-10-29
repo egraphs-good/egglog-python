@@ -115,11 +115,7 @@ def pretty_callable_ref(
     # Either returns a function or a function with args. If args are provided, they would just be called,
     # on the function, so return them, because they are dummies
     if isinstance(res, tuple):
-        name = res[0]
-        # if this is an unnamed function, return it but don't partially apply any args
-        if isinstance(name, UnnamedFunctionRef):
-            return context._pretty_function_body(name, [])
-        return name
+        return res[0]
     return res
 
 
@@ -256,7 +252,7 @@ class PrettyContext:
             case CallDecl(_, _, _):
                 return self._call(decl, parens)
             case PartialCallDecl(CallDecl(ref, typed_args, _)):
-                return self._pretty_partial(ref, [a.expr for a in typed_args]), "fn"
+                return self._pretty_partial(ref, [a.expr for a in typed_args], parens), "fn"
             case PyObjectDecl(value):
                 return repr(value) if unwrap_lit else f"PyObject({value!r})", "PyObject"
             case ActionCommandDecl(action):
@@ -368,11 +364,7 @@ class PrettyContext:
             expr_name = None
         res = self._call_inner(ref, args, decl.bound_tp_params, parens)
         expr = (
-            (
-                f"{name}({', '.join(self(a, parens=False, unwrap_lit=True) for a in res[1])})"
-                if isinstance((name := res[0]), str)
-                else ((called := self._pretty_function_body(name, res[1])) if not parens else f"({called})")
-            )
+            (f"{res[0]}({', '.join(self(a, parens=False, unwrap_lit=True) for a in res[1])})")
             if isinstance(res, tuple)
             else res
         )
@@ -388,7 +380,7 @@ class PrettyContext:
         args: list[ExprDecl],
         bound_tp_params: tuple[JustTypeRef, ...] | None,
         parens: bool,
-    ) -> tuple[str | UnnamedFunctionRef, list[ExprDecl]] | str:
+    ) -> tuple[str, list[ExprDecl]] | str:
         """
         Pretty print the call, returning either the full function call or a tuple of the function and the args.
         """
@@ -428,7 +420,8 @@ class PrettyContext:
                 tp_ref = JustTypeRef(class_name, bound_tp_params or ())
                 return str(tp_ref), args
             case UnnamedFunctionRef():
-                return ref, args
+                expr = self._pretty_function_body(ref, [])
+                return f"({expr})", args
         assert_never(ref)
 
     def _generate_name(self, typ: str) -> str:
@@ -449,7 +442,7 @@ class PrettyContext:
             self.statements.append(f"{name} = {expr_str}")
         return name
 
-    def _pretty_partial(self, ref: CallableRef, args: list[ExprDecl]) -> str:
+    def _pretty_partial(self, ref: CallableRef, args: list[ExprDecl], parens: bool) -> str:
         """
         Returns a partial function call as a string.
         """
@@ -457,7 +450,8 @@ class PrettyContext:
             case FunctionRef(name):
                 fn = name
             case UnnamedFunctionRef():
-                return self._pretty_function_body(ref, args)
+                res = self._pretty_function_body(ref, args)
+                return f"({res})" if parens else res
             case (
                 ClassMethodRef(class_name, method_name)
                 | MethodRef(class_name, method_name)
