@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, ClassVar, TypeAlias, overload
 import numpy as np
 
 from egglog import *
-from egglog.bindings import EggSmolError
 from egglog.runtime import RuntimeExpr
 
 from .program_gen import *
@@ -1539,13 +1538,14 @@ def try_evaling(expr: Expr, prim_expr: i64 | Bool) -> int | bool:
     egraph.run(array_api_schedule)
     try:
         extracted = egraph.extract(prim_expr)
-    except EggSmolError as exc:
+    # Catch base exceptions so that we catch rust panics which happen when trying to extract subsumed nodes
+    except BaseException as exc:
+        egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
         # Try giving some context, by showing the smallest version of the larger expression
         try:
             expr_extracted = egraph.extract(expr)
-        except EggSmolError as inner_exc:
+        except BaseException as inner_exc:
             raise ValueError(f"Cannot simplify {expr}") from inner_exc
-        egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
         msg = f"Cannot simplify to primitive {expr_extracted}"
         raise ValueError(msg) from exc
     return egraph.eval(extracted)
