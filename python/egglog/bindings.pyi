@@ -264,7 +264,7 @@ class FunctionDecl:
         schema: Schema,
         default: _Expr | None = None,
         merge: _Expr | None = None,
-        merge_action: list[_Action] = [],  # noqa: B006
+        merge_action: list[_Action] = [],
         cost: int | None = None,
         unextractable: bool = False,
         ignore_viz: bool = False,
@@ -298,7 +298,7 @@ class Rewrite:
     rhs: _Expr
     conditions: list[_Fact]
 
-    def __init__(self, span: Span, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []) -> None: ...  # noqa: B006
+    def __init__(self, span: Span, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []) -> None: ...
 
 @final
 class RunConfig:
