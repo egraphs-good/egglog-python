@@ -45,6 +45,29 @@ jobs:
           TYPE: ${{ inputs.type }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  linux-cross:
+    name: build linux
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [aarch64, ppc64]
+    needs: [bump]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: version-${{ needs.bump.outputs.version }}
+      - uses: PyO3/maturin-action@v1.42.1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          command: build
+          args: --release --sdist -o dist --find-interpreter
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux
+          path: dist
+
   linux:
     name: build linux
     runs-on: ubuntu-latest
@@ -107,7 +130,7 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch')
-    needs: [macos, windows, linux]
+    needs: [macos, windows, linux, linux-cross]
     steps:
       - uses: actions/download-artifact@v4
         with:
