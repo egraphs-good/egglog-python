@@ -18,6 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
@@ -33,7 +34,7 @@ array = [
     "scikit-learn",
     "array_api_compat",
     "numba==0.59.1",
-    "llvmlite==0.42.0",
+    "llvmlite==0.43.0",
 ]
 dev = [
     "ruff",
