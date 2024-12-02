@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
     from .egraph import Expr
 
-__all__ = ["convert", "converter", "resolve_literal", "convert_to_same_type"]
+__all__ = ["convert", "convert_to_same_type", "converter", "resolve_literal"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
 TypeName = NewType("TypeName", str)
 CONVERSIONS: dict[tuple[type | TypeName, TypeName], tuple[int, Callable]] = {}
