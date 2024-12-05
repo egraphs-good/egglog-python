@@ -762,3 +762,15 @@ class TestIssue166:
 
     def test_creating_map(self):
         EGraph().simplify(Map[String, i64].empty(), 1)
+
+
+def test_helpful_error_function_class():
+    class E(Expr):
+        @function(cost=10)
+        def __init__(self) -> None: ...
+
+    with pytest.raises(
+        ValueError,
+        match="Error processing E.__init__: Inside of classes, wrap methods with the `method` decorator, not `function`",
+    ):
+        E()

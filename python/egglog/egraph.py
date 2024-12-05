@@ -577,23 +577,25 @@ def _generate_class_decls(  # noqa: C901,PLR0912
             decl = FunctionDecl(special_function_name, builtin=True, egg_name=egg_fn)
             decls.set_function_decl(ref, decl)
             continue
-
-        _, add_rewrite = _fn_decl(
-            decls,
-            egg_fn,
-            ref,
-            fn,
-            locals,
-            default,
-            cost,
-            merge,
-            on_merge,
-            mutates,
-            builtin,
-            ruleset=ruleset,
-            unextractable=unextractable,
-            subsume=subsume,
-        )
+        try:
+            _, add_rewrite = _fn_decl(
+                decls,
+                egg_fn,
+                ref,
+                fn,
+                locals,
+                default,
+                cost,
+                merge,
+                on_merge,
+                mutates,
+                builtin,
+                ruleset=ruleset,
+                unextractable=unextractable,
+                subsume=subsume,
+            )
+        except ValueError as e:
+            raise ValueError(f"Error processing {cls_name}.{method_name}: {e}") from e
 
         if not builtin and not isinstance(ref, InitRef) and not mutates:
             add_default_funcs.append(add_rewrite)
@@ -721,6 +723,9 @@ def _fn_decl(
     """
     Sets the function decl for the function object and returns the ref as well as a thunk that sets the default callable.
     """
+    if isinstance(fn, RuntimeFunction):
+        msg = "Inside of classes, wrap methods with the `method` decorator, not `function`"
+        raise ValueError(msg)  # noqa: TRY004
     if not isinstance(fn, FunctionType):
         raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
 
