@@ -29,12 +29,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "LIT_CLASS_NAMES",
-    "resolve_callable",
-    "resolve_type_annotation",
+    "REFLECTED_BINARY_METHODS",
     "RuntimeClass",
     "RuntimeExpr",
     "RuntimeFunction",
-    "REFLECTED_BINARY_METHODS",
+    "resolve_callable",
+    "resolve_type_annotation",
 ]
 
 
