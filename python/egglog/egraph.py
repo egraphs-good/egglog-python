@@ -595,7 +595,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
                 subsume=subsume,
             )
         except ValueError as e:
-            raise ValueError(f"Error processing {cls_name}.{method_name}") from e
+            raise ValueError(f"Error processing {cls_name}.{method_name}: {e}") from e
 
         if not builtin and not isinstance(ref, InitRef) and not mutates:
             add_default_funcs.append(add_rewrite)
