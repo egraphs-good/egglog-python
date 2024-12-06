@@ -278,7 +278,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         return TupleInt(Int(1), lambda _: i)
 
     @classmethod
-    def range(cls, stop: Int) -> TupleInt:
+    def range(cls, stop: IntLike) -> TupleInt:
         return TupleInt(stop, lambda i: i)
 
     @classmethod
@@ -346,7 +346,6 @@ def _tuple_int(
     ti: TupleInt,
     ti2: TupleInt,
 ):
-    remaining = TupleInt(k - 1, lambda i: idx_fn(i + 1)).filter(filter_f)
     return [
         rewrite(TupleInt(i, idx_fn).length()).to(i),
         rewrite(TupleInt(i, idx_fn)[i2]).to(idx_fn(i2)),
@@ -367,7 +366,11 @@ def _tuple_int(
         # filter TODO: could be written as fold w/ generic types
         rewrite(TupleInt(0, idx_fn).filter(filter_f)).to(TupleInt(0, idx_fn)),
         rewrite(TupleInt(Int(k), idx_fn).filter(filter_f)).to(
-            TupleInt.if_(filter_f(value := idx_fn(Int(k))), TupleInt.single(value) + remaining, remaining),
+            TupleInt.if_(
+                filter_f(value := idx_fn(Int(k - 1))),
+                (remaining := TupleInt(k - 1, idx_fn).filter(filter_f)) + TupleInt.single(value),
+                remaining,
+            ),
             ne(k).to(i64(0)),
         ),
         # Empty
