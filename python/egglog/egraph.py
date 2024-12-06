@@ -1377,10 +1377,14 @@ class EGraph(_BaseModule):
         """
         Saturate the egraph, running the given schedule until the egraph is saturated.
         It serializes the egraph at each step and returns a widget to visualize the egraph.
+
+        If an `expr` is passed, it's also extracted after each run and printed
         """
         from .visualizer_widget import VisualizerWidget
 
         def to_json() -> str:
+            if expr is not None:
+                print(self.extract(expr), "\n")
             return self._serialize(**kwargs).to_json()
 
         egraphs = [to_json()]
