@@ -9,6 +9,7 @@ _This project uses semantic versioning_
 - Add better error message when using @function in class (thanks @shinawy)
 - Add error method if `@method` decorator is in wrong place
 - Subsumes lambda functions after replacing
+- Add working loopnest test
 
 ## 8.0.1 (2024-10-24)
 
