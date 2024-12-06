@@ -12,6 +12,8 @@ from __future__ import annotations
 from egglog import *
 from egglog.exp.array_api import *
 
+__all__ = ["LoopNestAPI", "OptionalLoopNestAPI", "ShapeAPI"]
+
 
 class ShapeAPI(Expr):
     def __init__(self, dims: TupleIntLike) -> None: ...
@@ -105,76 +107,3 @@ def _loopnest_api_ruleset(
     yield rewrite(lna.indices, subsume=True).to(
         tuple_tuple_int_product(tuple_int_map_tuple_int(lna.get_dims(), TupleInt.range))
     )
-
-
-@function(ruleset=array_api_ruleset, subsume=True)
-def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:
-    # peel off the outer shape for result array
-    outshape = ShapeAPI(X.shape).deselect(axis).to_tuple()
-    # get only the inner shape for reduction
-    reduce_axis = ShapeAPI(X.shape).select(axis).to_tuple()
-
-    return NDArray(
-        outshape,
-        X.dtype,
-        lambda k: sqrt(
-            LoopNestAPI.from_tuple(reduce_axis)
-            .unwrap()
-            .fold(lambda carry, i: carry + real(conj(x := X[i + k]) * x), init=0.0)
-        ).to_value(),
-    )
-
-
-# %%
-# egraph = EGraph(save_egglog_string=True)
-
-# egraph.register(val.shape)
-# egraph.run(array_api_ruleset.saturate())
-# egraph.extract_multiple(val.shape, 10)
-
-# %%
-
-X = NDArray.var("X")
-assume_shape(X, (3, 2, 3, 4))
-val = linalg_norm(X, (0, 1))
-egraph = EGraph()
-x = egraph.let("x", val.shape[2])
-# egraph.display(n_inline_leaves=0)
-# egraph.extract(x)
-# egraph.saturate(array_api_ruleset, expr=x, split_functions=[Int, TRUE, FALSE], n_inline_leaves=0)
-# egraph.run(array_api_ruleset.saturate())
-# egraph.extract(x)
-# egraph.display()
-
-
-# %%
-
-# x = xs[-2]
-# # %%
-# decls = x.__egg_decls__
-# # RuntimeExpr.__from_values__(x.__egg_decls__, x.__egg_typed_expr__.expr.args[1].expr.args[1])
-
-# # %%
-# # x.__egg_typed_expr__.expr.args[1].expr.args[1]  # %%
-
-# # %%
-# # egraph.extract(RuntimeExpr.__from_values__(x.__egg_decls__, x.__egg_typed_expr__.expr.args[1].expr.args[1]))
-
-
-# from egglog import pretty
-
-# decl = (
-#     x.__egg_typed_expr__.expr.args[1]
-#     .expr.args[2]
-#     .expr.args[0]
-#     .expr.args[1]
-#     .expr.call.args[0]
-#     .expr.call.args[0]
-#     .expr.call.args[0]
-# )
-
-# # pprint.pprint(decl)
-
-# print(pretty.pretty_decl(decls, decl.expr))
-
-# # %%

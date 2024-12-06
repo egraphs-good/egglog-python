@@ -570,6 +570,10 @@ def _generate_class_decls(  # noqa: C901,PLR0912
                 fn = fn.fget
             case _:
                 ref = InitRef(cls_name) if is_init else MethodRef(cls_name, method_name)
+        if isinstance(fn, _WrappedMethod):
+            msg = f"{cls_name}.{method_name} Add the @method(...) decorator above @classmethod or @property"
+
+            raise ValueError(msg)  # noqa: TRY004
         special_function_name: SpecialFunctions | None = (
             "fn-partial" if egg_fn == "unstable-fn" else "fn-app" if egg_fn == "unstable-app" else None
         )
@@ -1373,10 +1377,14 @@ class EGraph(_BaseModule):
         """
         Saturate the egraph, running the given schedule until the egraph is saturated.
         It serializes the egraph at each step and returns a widget to visualize the egraph.
+
+        If an `expr` is passed, it's also extracted after each run and printed
         """
         from .visualizer_widget import VisualizerWidget
 
         def to_json() -> str:
+            if expr is not None:
+                print(self.extract(expr), "\n")
             return self._serialize(**kwargs).to_json()
 
         egraphs = [to_json()]

@@ -8,8 +8,10 @@ import pytest
 from sklearn import config_context, datasets
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
+from egglog.egraph import set_current_ruleset
 from egglog.exp.array_api import *
 from egglog.exp.array_api_jit import jit
+from egglog.exp.array_api_loopnest import *
 from egglog.exp.array_api_numba import array_api_numba_schedule
 from egglog.exp.array_api_program_gen import *
 
@@ -68,6 +70,41 @@ def test_reshape_vec_noop():
     egraph.check(eq(res).to(x))
 
 
+def test_filter():
+    with set_current_ruleset(array_api_ruleset):
+        x = TupleInt.range(5).filter(lambda i: i < 2).length()
+    check_eq(x, Int(2), array_api_schedule)
+
+
+@function(ruleset=array_api_ruleset, subsume=True)
+def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:
+    # peel off the outer shape for result array
+    outshape = ShapeAPI(X.shape).deselect(axis).to_tuple()
+    # get only the inner shape for reduction
+    reduce_axis = ShapeAPI(X.shape).select(axis).to_tuple()
+
+    return NDArray(
+        outshape,
+        X.dtype,
+        lambda k: sqrt(
+            LoopNestAPI.from_tuple(reduce_axis)
+            .unwrap()
+            .fold(lambda carry, i: carry + real(conj(x := X[i + k]) * x), init=0.0)
+        ).to_value(),
+    )
+
+
+class TestLoopNest:
+    def test_shape(self):
+        X = NDArray.var("X")
+        assume_shape(X, (3, 2, 3, 4))
+        val = linalg_norm(X, (0, 1))
+
+        check_eq(val.shape.length(), Int(2), array_api_schedule)
+        check_eq(val.shape[0], Int(3), array_api_schedule)
+        check_eq(val.shape[1], Int(4), array_api_schedule)
+
+
 # This test happens in different steps. Each will be benchmarked and saved as a snapshot.
 # The next step will load the old snapshot and run their test on it.
 
@@ -80,7 +117,6 @@ def run_lda(x, y):
 
 iris = datasets.load_iris()
 X_np, y_np = (iris.data, iris.target)
-res_np = run_lda(X_np, y_np)
 
 
 def _load_py_snapshot(fn: Callable, var: str | None = None) -> Any:
@@ -165,7 +201,7 @@ class TestLDA:
             optimized_expr = simplify_lda(egraph, expr)
         fn_program = ndarray_function_two(optimized_expr, NDArray.var("X"), NDArray.var("y"))
         py_object = benchmark(load_source, fn_program, egraph)
-        assert np.allclose(py_object(X_np, y_np), res_np)
+        assert np.allclose(py_object(X_np, y_np), run_lda(X_np, y_np))
         assert egraph.eval(fn_program.statements) == snapshot_py
 
     @pytest.mark.parametrize(
@@ -180,7 +216,7 @@ class TestLDA:
     )
     def test_execution(self, fn, benchmark):
         # warmup once for numba
-        assert np.allclose(res_np, fn(X_np, y_np))
+        assert np.allclose(run_lda(X_np, y_np), fn(X_np, y_np))
         benchmark(fn, X_np, y_np)
 
 
