@@ -532,7 +532,8 @@ def _convert_function(a: FunctionType) -> UnstableFn:
     transformed_fn = functionalize(a, value_to_annotation)
     assert isinstance(transformed_fn, partial)
     return UnstableFn(
-        function(ruleset=get_current_ruleset(), use_body_as_name=True)(transformed_fn.func), *transformed_fn.args
+        function(ruleset=get_current_ruleset(), use_body_as_name=True, subsume=True)(transformed_fn.func),
+        *transformed_fn.args,
     )
 
 
