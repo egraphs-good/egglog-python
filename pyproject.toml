@@ -241,6 +241,8 @@ filterwarnings = [
     "error",
     "ignore::numba.core.errors.NumbaPerformanceWarning",
     "ignore::pytest_benchmark.logger.PytestBenchmarkWarning",
+    # https://github.com/manzt/anywidget/blob/d38bb3f5f9cfc7e49e2ff1aa1ba994d66327cb02/pyproject.toml#L120
+    "ignore:Deprecated in traitlets 4.1, use the instance .metadata:DeprecationWarning",
 ]
 
 [tool.coverage.report]
