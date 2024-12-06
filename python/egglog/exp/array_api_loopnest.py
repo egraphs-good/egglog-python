@@ -69,12 +69,63 @@ def tuple_tuple_int_reduce_ndarray(
 ) -> NDArray: ...
 
 
+@array_api_ruleset.register
+def _tuple_tuple_int_reduce_ndarray(
+    idx_fn: Callable[[Int], TupleInt], f: Callable[[NDArray, TupleInt], NDArray], i: NDArray, k: i64
+):
+    yield rewrite(tuple_tuple_int_reduce_ndarray(TupleTupleInt(0, idx_fn), f, i)).to(i)
+    yield rewrite(tuple_tuple_int_reduce_ndarray(TupleTupleInt(Int(k), idx_fn), f, i), subsume=True).to(
+        f(
+            tuple_tuple_int_reduce_ndarray(TupleTupleInt(k - 1, lambda i: idx_fn(i + 1)), f, i),
+            idx_fn(Int(0)),
+        ),
+        ne(k).to(i64(0)),
+    )
+
+
 @function
 def tuple_int_map_tuple_int(xs: TupleInt, fn: Callable[[Int], TupleInt]) -> TupleTupleInt: ...
 
 
+@array_api_ruleset.register
+def _tuple_int_map_tuple_int(length: Int, fn: Callable[[Int], TupleInt], idx_fn: Callable[[Int], Int]):
+    yield rewrite(
+        tuple_int_map_tuple_int(
+            TupleInt(length, idx_fn),
+            fn,
+        )
+    ).to(TupleTupleInt(length, lambda i: fn(idx_fn(i))))
+
+
 @function
-def tuple_tuple_int_product(xs: TupleTupleInt) -> TupleTupleInt: ...
+def tuple_tuple_int_map_int(xs: TupleTupleInt, fn: Callable[[TupleInt], Int]) -> TupleInt: ...
+
+
+@array_api_ruleset.register
+def _tuple_tuple_int_map_int(length: Int, fn: Callable[[TupleInt], Int], idx_fn: Callable[[Int], TupleInt]):
+    yield rewrite(
+        tuple_tuple_int_map_int(
+            TupleTupleInt(length, idx_fn),
+            fn,
+        )
+    ).to(TupleInt(length, lambda i: fn(idx_fn(i))))
+
+
+@function
+def tuple_tuple_int_product_index(xs: TupleTupleInt, i: Int) -> TupleInt: ...
+
+
+@function(subsume=True, ruleset=array_api_ruleset)
+def tuple_tuple_int_product(xs: TupleTupleInt) -> TupleTupleInt:
+    """
+    Cartesian product of inputs
+
+    https://docs.python.org/3/library/itertools.html#itertools.product
+    """
+    # length is product of lengths
+    length = tuple_tuple_int_map_int(xs, lambda x: x.length()).fold(Int(1), lambda x, y: x * y)
+
+    return TupleTupleInt(length, partial(tuple_tuple_int_product_index, xs))
 
 
 @array_api_ruleset.register
@@ -107,3 +158,5 @@ def _loopnest_api_ruleset(
     yield rewrite(lna.indices, subsume=True).to(
         tuple_tuple_int_product(tuple_int_map_tuple_int(lna.get_dims(), TupleInt.range))
     )
+    # unwrap
+    yield rewrite(OptionalLoopNestAPI(lna).unwrap()).to(lna)

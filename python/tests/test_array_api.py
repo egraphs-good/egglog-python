@@ -94,6 +94,19 @@ def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:
     )
 
 
+X = NDArray.var("X")
+assume_shape(X, (3, 2, 3, 4))
+val = linalg_norm(X, (0, 1))
+i = constant("i", Int)
+j = constant("j", Int)
+idxed = val.index((i, j))
+
+egraph = EGraph()
+egraph.register(idxed)
+egraph.run(array_api_schedule)
+print(egraph.extract(idxed))
+
+
 class TestLoopNest:
     def test_shape(self):
         X = NDArray.var("X")
@@ -222,18 +235,18 @@ class TestLDA:
 
 # if calling as script, print out egglog source for test
 # similar to jit, but don't include pyobject parts so it works in vanilla egglog
-if __name__ == "__main__":
-    print("Generating egglog source for test")
-    egraph = EGraph(save_egglog_string=True)
-    X_ = NDArray.var("X")
-    y_ = NDArray.var("y")
-    with egraph:
-        expr = lda(X_, y_)
-    optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
-    fn_program = ndarray_function_two_program(optimized_expr, X_, y_)
-    egraph.register(fn_program.compile())
-    egraph.run(array_api_program_gen_ruleset.saturate() + program_gen_ruleset.saturate())
-    egraph.extract(fn_program.statements)
-    name = "python.egg"
-    print("Saving to", name)
-    Path(name).write_text(egraph.as_egglog_string)
+# if __name__ == "__main__":
+#     print("Generating egglog source for test")
+#     egraph = EGraph(save_egglog_string=True)
+#     X_ = NDArray.var("X")
+#     y_ = NDArray.var("y")
+#     with egraph:
+#         expr = lda(X_, y_)
+#     optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
+#     fn_program = ndarray_function_two_program(optimized_expr, X_, y_)
+#     egraph.register(fn_program.compile())
+#     egraph.run(array_api_program_gen_ruleset.saturate() + program_gen_ruleset.saturate())
+#     egraph.extract(fn_program.statements)
+#     name = "python.egg"
+#     print("Saving to", name)
+#     Path(name).write_text(egraph.as_egglog_string)

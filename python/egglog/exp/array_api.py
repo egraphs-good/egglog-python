@@ -303,6 +303,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
     def __iter__(self) -> Iterator[Int]:
         return iter(self[i] for i in range(len(self)))
 
+    # TODO: Rename to reduce to match Python? And re-order?
     def fold(self, init: Int, f: Callable[[Int, Int], Int]) -> Int: ...
 
     def fold_boolean(self, init: Boolean, f: Callable[[Boolean, Int], Boolean]) -> Boolean: ...
@@ -861,7 +862,8 @@ class NDArray(Expr):
     def __ror__(self, other: NDArray) -> NDArray: ...
 
     @classmethod
-    def scalar(cls, value: Value) -> NDArray: ...
+    def scalar(cls, value: Value) -> NDArray:
+        return NDArray(TupleInt.EMPTY, value.dtype, lambda _: value)
 
     def to_value(self) -> Value: ...
 
@@ -900,10 +902,12 @@ def _ndarray(
     shape: TupleInt,
     dtype: DType,
     idx_fn: Callable[[TupleInt], Value],
+    idx: TupleInt,
 ):
     return [
         rewrite(NDArray(shape, dtype, idx_fn).shape).to(shape),
         rewrite(NDArray(shape, dtype, idx_fn).dtype).to(dtype),
+        rewrite(NDArray(shape, dtype, idx_fn).index(idx), subsume=True).to(idx_fn(idx)),
         rewrite(x.ndim).to(x.shape.length()),
         # rewrite(NDArray.scalar(Value.bool(b)).to_bool()).to(b),
         # Converting to a value requires a scalar bool value
