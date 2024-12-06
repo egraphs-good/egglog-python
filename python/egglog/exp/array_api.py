@@ -386,13 +386,13 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
 
     def __init__(self, length: IntLike, idx_fn: Callable[[Int], TupleInt]) -> None: ...
 
-    @classmethod
     @method(subsume=True)
+    @classmethod
     def single(cls, i: TupleInt) -> TupleTupleInt:
         return TupleTupleInt(Int(1), lambda _: i)
 
-    @classmethod
     @method(subsume=True)
+    @classmethod
     def from_vec(cls, vec: Vec[Int]) -> TupleInt:
         return TupleInt(vec.length(), partial(index_vec_int, vec))
 

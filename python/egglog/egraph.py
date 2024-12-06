@@ -570,6 +570,10 @@ def _generate_class_decls(  # noqa: C901,PLR0912
                 fn = fn.fget
             case _:
                 ref = InitRef(cls_name) if is_init else MethodRef(cls_name, method_name)
+        if isinstance(fn, _WrappedMethod):
+            msg = f"{cls_name}.{method_name} Add the @method(...) decorator above @classmethod or @property"
+
+            raise ValueError(msg)  # noqa: TRY004
         special_function_name: SpecialFunctions | None = (
             "fn-partial" if egg_fn == "unstable-fn" else "fn-app" if egg_fn == "unstable-app" else None
         )
