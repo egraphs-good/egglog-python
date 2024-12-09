@@ -18,10 +18,10 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "pretty_decl",
-    "pretty_callable_ref",
     "BINARY_METHODS",
     "UNARY_METHODS",
+    "pretty_callable_ref",
+    "pretty_decl",
 ]
 MAX_LINE_LENGTH = 110
 LINE_DIFFERENCE = 10
