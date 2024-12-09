@@ -18,13 +18,13 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "pretty_decl",
-    "pretty_callable_ref",
     "BINARY_METHODS",
     "UNARY_METHODS",
+    "pretty_callable_ref",
+    "pretty_decl",
 ]
-MAX_LINE_LENGTH = 110
-LINE_DIFFERENCE = 10
+MAX_LINE_LENGTH = 80
+LINE_DIFFERENCE = 0
 BLACK_MODE = black.Mode(line_length=180)
 
 # Use this special character in place of the args, so that if the args are inlined
@@ -227,7 +227,7 @@ class PrettyContext:
         # it would take up is > than some constant (~ line length).
         line_diff: int = len(expr) - LINE_DIFFERENCE
         n_parents = self.parents[decl]
-        if n_parents > 1 and n_parents * line_diff > MAX_LINE_LENGTH:
+        if n_parents > 1 and line_diff > 10:
             self.names[decl] = expr_name = self._name_expr(tp_name, expr, copy_identifier=False)
             return expr_name
         return expr

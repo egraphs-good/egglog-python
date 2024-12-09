@@ -45,7 +45,7 @@ class OptionalLoopNestAPI(Expr):
     def unwrap(self) -> LoopNestAPI: ...
 
 
-class LoopNestAPI(Expr):
+class LoopNestAPI(Expr, ruleset=array_api_ruleset):
     def __init__(self, dim: Int, inner: OptionalLoopNestAPI) -> None: ...
 
     @classmethod
@@ -53,92 +53,16 @@ class LoopNestAPI(Expr):
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[TupleInt]:
-        return iter(self.indices)
+        return iter(self.indices())
 
-    @property
-    def indices(self) -> TupleTupleInt: ...
+    def indices(self) -> TupleTupleInt:
+        return self.get_dims().map_tuple_int(TupleInt.range).product()
 
     def get_dims(self) -> TupleInt: ...
 
-    def fold(self, fn: Callable[[NDArray, TupleInt], NDArray], init: NDArrayLike) -> NDArray: ...
-
-
-@function
-def tuple_tuple_int_reduce_ndarray(
-    xs: TupleTupleInt, fn: Callable[[NDArray, TupleInt], NDArray], init: NDArray
-) -> NDArray: ...
-
 
 @array_api_ruleset.register
-def _tuple_tuple_int_reduce_ndarray(
-    idx_fn: Callable[[Int], TupleInt], f: Callable[[NDArray, TupleInt], NDArray], i: NDArray, k: i64
-):
-    yield rewrite(tuple_tuple_int_reduce_ndarray(TupleTupleInt(0, idx_fn), f, i)).to(i)
-    yield rewrite(tuple_tuple_int_reduce_ndarray(TupleTupleInt(Int(k), idx_fn), f, i), subsume=True).to(
-        f(
-            tuple_tuple_int_reduce_ndarray(TupleTupleInt(k - 1, lambda i: idx_fn(i + 1)), f, i),
-            idx_fn(Int(0)),
-        ),
-        ne(k).to(i64(0)),
-    )
-
-
-@function
-def tuple_int_map_tuple_int(xs: TupleInt, fn: Callable[[Int], TupleInt]) -> TupleTupleInt: ...
-
-
-@array_api_ruleset.register
-def _tuple_int_map_tuple_int(length: Int, fn: Callable[[Int], TupleInt], idx_fn: Callable[[Int], Int]):
-    yield rewrite(
-        tuple_int_map_tuple_int(
-            TupleInt(length, idx_fn),
-            fn,
-        )
-    ).to(TupleTupleInt(length, lambda i: fn(idx_fn(i))))
-
-
-@function
-def tuple_tuple_int_map_int(xs: TupleTupleInt, fn: Callable[[TupleInt], Int]) -> TupleInt: ...
-
-
-@array_api_ruleset.register
-def _tuple_tuple_int_map_int(length: Int, fn: Callable[[TupleInt], Int], idx_fn: Callable[[Int], TupleInt]):
-    yield rewrite(
-        tuple_tuple_int_map_int(
-            TupleTupleInt(length, idx_fn),
-            fn,
-        )
-    ).to(TupleInt(length, lambda i: fn(idx_fn(i))))
-
-
-@function
-def tuple_tuple_int_product_index(xs: TupleTupleInt, i: Int) -> TupleInt: ...
-
-
-@function(subsume=True, ruleset=array_api_ruleset)
-def tuple_tuple_int_product(xs: TupleTupleInt) -> TupleTupleInt:
-    """
-    Cartesian product of inputs
-
-    https://docs.python.org/3/library/itertools.html#itertools.product
-    """
-    # length is product of lengths
-    length = tuple_tuple_int_map_int(xs, lambda x: x.length()).fold(Int(1), lambda x, y: x * y)
-
-    return TupleTupleInt(length, partial(tuple_tuple_int_product_index, xs))
-
-
-@array_api_ruleset.register
-def _loopnest_api_ruleset(
-    head: Int,
-    tail: TupleInt,
-    lna: LoopNestAPI,
-    fn: Callable[[NDArray, TupleInt], NDArray],
-    init: NDArray,
-    dim: Int,
-    idx_fn: Callable[[Int], Int],
-    i: i64,
-):
+def _loopnest_api_ruleset(lna: LoopNestAPI, dim: Int, idx_fn: Callable[[Int], Int], i: i64):
     # from_tuple
     yield rewrite(LoopNestAPI.from_tuple(TupleInt(0, idx_fn)), subsume=True).to(OptionalLoopNestAPI.NONE)
     yield rewrite(LoopNestAPI.from_tuple(TupleInt(Int(i), idx_fn)), subsume=True).to(
@@ -147,16 +71,10 @@ def _loopnest_api_ruleset(
         ),
         ne(i).to(i64(0)),
     )
-    # reduce
-    yield rewrite(lna.fold(fn, init), subsume=True).to(tuple_tuple_int_reduce_ndarray(lna.indices, fn, init))
     # get_dims
     yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI.NONE).get_dims(), subsume=True).to(TupleInt.single(dim))
     yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI(lna)).get_dims(), subsume=True).to(
         TupleInt.single(dim) + lna.get_dims()
-    )
-    # indices
-    yield rewrite(lna.indices, subsume=True).to(
-        tuple_tuple_int_product(tuple_int_map_tuple_int(lna.get_dims(), TupleInt.range))
     )
     # unwrap
     yield rewrite(OptionalLoopNestAPI(lna).unwrap()).to(lna)

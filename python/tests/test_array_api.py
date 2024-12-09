@@ -86,11 +86,11 @@ def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:
     return NDArray(
         outshape,
         X.dtype,
-        lambda k: sqrt(
-            LoopNestAPI.from_tuple(reduce_axis)
-            .unwrap()
-            .fold(lambda carry, i: carry + real(conj(x := X[i + k]) * x), init=0.0)
-        ).to_value(),
+        lambda k: LoopNestAPI.from_tuple(reduce_axis)
+        .unwrap()
+        .indices()
+        .reduce_value(lambda carry, i: carry + ((x := X.index(i + k)).conj() * x).real(), init=0.0)
+        .sqrt(),
     )
 
 
@@ -101,9 +101,53 @@ i = constant("i", Int)
 j = constant("j", Int)
 idxed = val.index((i, j))
 
-egraph = EGraph()
-egraph.register(idxed)
-egraph.run(array_api_schedule)
+egraph = EGraph(save_egglog_string=True)
+idxed = egraph.let("idxed", idxed)
+# egraph.run(array_api_ruleset * 43)
+# egraph.run(array_api_schedule)
+
+i = 0
+
+last = ""
+while True:
+    res = egraph.run(array_api_ruleset)
+    if not res.updated:
+        break
+    i += 1
+    #     if i < 43:
+    #         continue
+    # print([r for r, n in res.num_matches_per_rule.items() if n])
+    #     for r, n in res.num_matches_per_rule.items():
+    #         if n > 0:
+    #             print(r, n)
+    new = str(egraph.extract(idxed))
+    print(i)
+    if new == last:
+        continue
+    print(new, "\n\n")
+    last = new
+# try:
+# res = ""
+# n_same = 0
+# i = 0
+# while True:
+#     print(i, n_same)
+#     i += 1
+#     egraph.run(array_api_ruleset)
+#     new_res = str(egraph.extract(idxed))
+#     if new_res == res:
+#         n_same += 1
+#     else:
+#         n_same = 0
+#     if n_same == 15:
+#         break
+#     res = new_res
+# print(n_same)
+# print(res)
+# egraph.display(split_primitive_outputs=True, n_inline_leaves=3)
+# except:
+#     Path("tmp.egg").write_text(egraph.as_egglog_string)
+# egraph.run(array_api_schedule)
 print(egraph.extract(idxed))
 
 

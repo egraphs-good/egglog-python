@@ -22,24 +22,24 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "i64",
-    "i64Like",
-    "f64",
-    "f64Like",
     "Bool",
     "BoolLike",
-    "String",
-    "StringLike",
     "Map",
+    "PyObject",
     "Rational",
     "Set",
-    "Vec",
-    "join",
-    "PyObject",
-    "py_eval",
-    "py_exec",
-    "py_eval_fn",
+    "String",
+    "StringLike",
     "UnstableFn",
+    "Vec",
+    "f64",
+    "f64Like",
+    "i64",
+    "i64Like",
+    "join",
+    "py_eval",
+    "py_eval_fn",
+    "py_exec",
 ]
 
 
@@ -209,6 +209,9 @@ class f64(Expr, builtin=True):  # noqa: N801
 
     @method(egg_fn="%")
     def __mod__(self, other: f64Like) -> f64: ...
+
+    @method(egg_fn="^")
+    def __pow__(self, other: f64Like) -> f64: ...
 
     def __radd__(self, other: f64Like) -> f64: ...
 
