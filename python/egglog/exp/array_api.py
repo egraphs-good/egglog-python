@@ -364,11 +364,9 @@ def _tuple_int_create_from_vec(
     # yield rewrite(x.index(TupleInt(3, idx_fn))).to(
     #     x.index(TupleInt.from_vec(Vec(idx_fn(Int(0)), idx_fn(Int(1)), idx_fn(Int(2)))))
     # )
-    yield rewrite(x.index(TupleInt(4, idx_fn))).to(
-        x.index(
-            TupleInt.from_vec(Vec(idx_fn(Int(0)), idx_fn(Int(1)), idx_fn(Int(2)), idx_fn(Int(3))))
-            # TupleInt.EMPTY.append(idx_fn(Int(0))).append(idx_fn(Int(1))).append(idx_fn(Int(2))).append(idx_fn(Int(3)))
-        )
+    yield rewrite(TupleInt(4, idx_fn)).to(
+        TupleInt.from_vec(Vec(idx_fn(Int(0)), idx_fn(Int(1)), idx_fn(Int(2)), idx_fn(Int(3))))
+        # TupleInt.EMPTY.append(idx_fn(Int(0))).append(idx_fn(Int(1))).append(idx_fn(Int(2))).append(idx_fn(Int(3)))
     )
 
 
