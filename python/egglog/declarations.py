@@ -570,7 +570,7 @@ class CallDecl:
         return hash((self.callable, self.args, self.bound_tp_params))
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, egglog.declarations.CallDecl):
+        if not isinstance(other, CallDecl):
             return False
         return self.callable == other.callable and self.args == other.args and self.bound_tp_params == other.bound_tp_params
 
