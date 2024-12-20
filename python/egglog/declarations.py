@@ -575,8 +575,11 @@ class CallDecl:
             return False
         if hash(self) != hash(other):
             return False
-        return self.callable == other.callable and self.args == other.args and self.bound_tp_params == other.bound_tp_params
-
+        return (
+            self.callable == other.callable
+            and self.args == other.args
+            and self.bound_tp_params == other.bound_tp_params
+        )
 
 
 @dataclass(frozen=True)
