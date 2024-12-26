@@ -35116,7 +35116,9 @@ const b_ = {
   "elk.algorithm": "layered",
   "elk.direction": "DOWN",
   // This seems to result in a more compact layout
-  "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+  // disable to stop stack size error
+  // https://github.com/kieler/elkjs/issues/314
+  // "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
   "elk.layered.mergeEdges": "true"
   // Can you use spline routing instead which generates non orthogonal edges
   // "elk.edgeRouting": "SPLINES",
@@ -35220,7 +35222,7 @@ function m_(l, Z, u, s, G, i) {
     for (const [k, U] of R) {
       const w = Z(U.op), z = `node-${k}`, D = {
         id: z,
-        data: { label: U.op, id: k },
+        data: { label: U.op, id: k, ...U.subsumed ? { subsumed: !0 } : {} },
         width: w.width,
         height: w.height,
         ports: [],
@@ -35418,22 +35420,23 @@ function L_({ data: l, selected: Z }) {
   );
 }
 function GF(l) {
-  var Z, u, s;
+  var u, s, G, i;
+  const Z = ((u = l == null ? void 0 : l.data) == null ? void 0 : u.subsumed) || !1;
   return /* @__PURE__ */ B.jsxs(
     "div",
     {
-      className: `p-1 rounded-md outline bg-white outline-black h-full w-full ${l != null && l.selected ? "outline-2" : "outline-1"}`,
+      className: `p-1 rounded-md outline bg-white ${Z ? "outline-gray-300" : "outline-black"} h-full w-full ${l != null && l.selected ? "outline-2" : "outline-1"}`,
       ref: l == null ? void 0 : l.outerRef,
       children: [
         l != null && l.outerRef ? /* @__PURE__ */ B.jsx(B.Fragment, {}) : /* @__PURE__ */ B.jsx(mF, { type: "node", id: l.data.id }),
         /* @__PURE__ */ B.jsx(
           "div",
           {
-            className: "font-mono text-xs truncate max-w-96 min-w-4 text-center",
-            title: `${(Z = l == null ? void 0 : l.data) == null ? void 0 : Z.id}
-${(u = l == null ? void 0 : l.data) == null ? void 0 : u.label}`,
+            className: `font-mono text-xs truncate max-w-96 min-w-4 text-center ${Z ? "text-gray-300" : ""}`,
+            title: `${(s = l == null ? void 0 : l.data) == null ? void 0 : s.id}
+${(G = l == null ? void 0 : l.data) == null ? void 0 : G.label}`,
             ref: l == null ? void 0 : l.innerRef,
-            children: (s = l == null ? void 0 : l.data) == null ? void 0 : s.label
+            children: (i = l == null ? void 0 : l.data) == null ? void 0 : i.label
           }
         ),
         l != null && l.outerRef ? /* @__PURE__ */ B.jsx(B.Fragment, {}) : /* @__PURE__ */ B.jsx(Rm, { type: "source", position: Tl.Bottom, className: "invisible" })
