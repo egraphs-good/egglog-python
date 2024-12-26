@@ -23,8 +23,8 @@ __all__ = [
     "pretty_callable_ref",
     "pretty_decl",
 ]
-MAX_LINE_LENGTH = 80
-LINE_DIFFERENCE = 0
+MAX_LINE_LENGTH = 110
+LINE_DIFFERENCE = 10
 BLACK_MODE = black.Mode(line_length=180)
 
 # Use this special character in place of the args, so that if the args are inlined
@@ -227,7 +227,7 @@ class PrettyContext:
         # it would take up is > than some constant (~ line length).
         line_diff: int = len(expr) - LINE_DIFFERENCE
         n_parents = self.parents[decl]
-        if n_parents > 1 and line_diff > 10:
+        if n_parents > 1 and n_parents * line_diff > MAX_LINE_LENGTH:
             self.names[decl] = expr_name = self._name_expr(tp_name, expr, copy_identifier=False)
             return expr_name
         return expr
