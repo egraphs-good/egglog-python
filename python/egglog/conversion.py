@@ -15,13 +15,22 @@ if TYPE_CHECKING:
 
     from .egraph import Expr
 
-__all__ = ["convert", "converter", "resolve_literal", "convert_to_same_type"]
+__all__ = ["convert", "convert_to_same_type", "converter", "resolve_literal"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
 TypeName = NewType("TypeName", str)
 CONVERSIONS: dict[tuple[type | TypeName, TypeName], tuple[int, Callable]] = {}
 # Global declerations to store all convertable types so we can query if they have certain methods or not
-# Defer it as a thunk so we can register conversions without triggering type signature loading
-CONVERSIONS_DECLS: Callable[[], Declarations] = Thunk.value(Declarations())
+_CONVERSION_DECLS = Declarations.create()
+# Defer a list of declerations to be added to the global declerations, so that we can not trigger them procesing
+# until we need them
+_TO_PROCESS_DECLS: list[DeclerationsLike] = []
+
+
+def _retrieve_conversion_decls() -> Declarations:
+    _CONVERSION_DECLS.update(*_TO_PROCESS_DECLS)
+    _TO_PROCESS_DECLS.clear()
+    return _CONVERSION_DECLS
+
 
 T = TypeVar("T")
 V = TypeVar("V", bound="Expr")
@@ -100,9 +109,8 @@ def process_tp(tp: type | RuntimeClass) -> TypeName | type:
     """
     Process a type before converting it, to add it to the global declerations and resolve to a ref.
     """
-    global CONVERSIONS_DECLS
     if isinstance(tp, RuntimeClass):
-        CONVERSIONS_DECLS = Thunk.fn(_combine_decls, CONVERSIONS_DECLS, tp)
+        _TO_PROCESS_DECLS.append(tp)
         egg_tp = tp.__egg_tp__
         if egg_tp.args:
             raise TypeError(f"Cannot register a converter for a generic type, got {tp}")
@@ -110,15 +118,11 @@ def process_tp(tp: type | RuntimeClass) -> TypeName | type:
     return tp
 
 
-def _combine_decls(d: Callable[[], Declarations], x: HasDeclerations) -> Declarations:
-    return Declarations.create(d(), x)
-
-
 def min_convertable_tp(a: object, b: object, name: str) -> TypeName:
     """
     Returns the minimum convertable type between a and b, that has a method `name`, raising a ConvertError if no such type exists.
     """
-    decls = CONVERSIONS_DECLS()
+    decls = _retrieve_conversion_decls()
     a_tp = _get_tp(a)
     b_tp = _get_tp(b)
     a_converts_to = {
@@ -161,7 +165,7 @@ def with_type_args(args: tuple[JustTypeRef, ...], decls: Callable[[], Declaratio
 
 
 def resolve_literal(
-    tp: TypeOrVarRef, arg: object, decls: Callable[[], Declarations] = CONVERSIONS_DECLS
+    tp: TypeOrVarRef, arg: object, decls: Callable[[], Declarations] = _retrieve_conversion_decls
 ) -> RuntimeExpr:
     arg_type = _get_tp(arg)
 
