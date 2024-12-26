@@ -29,12 +29,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "LIT_CLASS_NAMES",
-    "resolve_callable",
-    "resolve_type_annotation",
+    "REFLECTED_BINARY_METHODS",
     "RuntimeClass",
     "RuntimeExpr",
     "RuntimeFunction",
-    "REFLECTED_BINARY_METHODS",
+    "resolve_callable",
+    "resolve_type_annotation",
 ]
 
 
@@ -199,7 +199,11 @@ class RuntimeClass(DelayedDeclerations):
         }:
             raise AttributeError
 
-        cls_decl = self.__egg_decls__._classes[self.__egg_tp__.name]
+        try:
+            cls_decl = self.__egg_decls__._classes[self.__egg_tp__.name]
+        except Exception as e:
+            e.add_note(f"Error processing class {self.__egg_tp__.name}")
+            raise
 
         preserved_methods = cls_decl.preserved_methods
         if name in preserved_methods:
@@ -259,7 +263,8 @@ class RuntimeFunction(DelayedDeclerations):
         try:
             signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl().signature
         except Exception as e:
-            raise TypeError(f"Failed to find callable {self}") from e
+            e.add_note(f"Failed to find callable {self}")
+            raise
         decls = self.__egg_decls__.copy()
         # Special case function application bc we dont support variadic generics yet generally
         if signature == "fn-app":

@@ -42,53 +42,53 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "EGraph",
-    "Module",
-    "function",
-    "ruleset",
-    "method",
-    "relation",
-    "Expr",
-    "Unit",
-    "rewrite",
-    "birewrite",
-    "eq",
-    "ne",
-    "panic",
-    "let",
-    "constant",
-    "delete",
-    "subsume",
-    "union",
-    "set_",
-    "rule",
-    "var",
-    "vars_",
-    "Fact",
-    "expr_parts",
-    "expr_action",
-    "expr_fact",
-    "action_command",
-    "Schedule",
-    "run",
-    "seq",
+    "Action",
     "Command",
-    "simplify",
-    "unstable_combine_rulesets",
-    "check",
+    "Command",
+    "EGraph",
+    "Expr",
+    "Fact",
+    "Fact",
     "GraphvizKwargs",
+    "Module",
+    "RewriteOrRule",
     "Ruleset",
-    "_RewriteBuilder",
+    "Schedule",
+    "Unit",
     "_BirewriteBuilder",
     "_EqBuilder",
     "_NeBuilder",
+    "_RewriteBuilder",
     "_SetBuilder",
     "_UnionBuilder",
-    "RewriteOrRule",
-    "Fact",
-    "Action",
-    "Command",
+    "action_command",
+    "birewrite",
+    "check",
     "check_eq",
+    "constant",
+    "delete",
+    "eq",
+    "expr_action",
+    "expr_fact",
+    "expr_parts",
+    "function",
+    "let",
+    "method",
+    "ne",
+    "panic",
+    "relation",
+    "rewrite",
+    "rule",
+    "ruleset",
+    "run",
+    "seq",
+    "set_",
+    "simplify",
+    "subsume",
+    "union",
+    "unstable_combine_rulesets",
+    "var",
+    "vars_",
 ]
 
 T = TypeVar("T")
@@ -146,20 +146,29 @@ def simplify(x: EXPR, schedule: Schedule | None = None) -> EXPR:
     return EGraph().extract(x)
 
 
-def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None) -> EGraph:
+def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None, *, add_second=True, display=False) -> EGraph:
     """
     Verifies that two expressions are equal after running the schedule.
+
+    If add_second is true, then the second expression is added to the egraph before running the schedule.
     """
     egraph = EGraph()
     x_var = egraph.let("__check_eq_x", x)
-    y_var = egraph.let("__check_eq_y", y)
+    y_var: EXPR = egraph.let("__check_eq_y", y) if add_second else y
     if schedule:
-        egraph.run(schedule)
+        try:
+            egraph.run(schedule)
+        finally:
+            if display:
+                egraph.display()
     fact = eq(x_var).to(y_var)
     try:
         egraph.check(fact)
     except bindings.EggSmolError as err:
-        raise AssertionError(f"Failed {eq(x).to(y)}\n -> {ne(egraph.extract(x)).to(egraph.extract(y))})") from err
+        if display:
+            egraph.display()
+        err.add_note(f"Failed:\n{eq(x).to(y)}\n\nExtracted:\n {eq(egraph.extract(x)).to(egraph.extract(y))})")
+        raise
     return egraph
 
 
@@ -598,8 +607,9 @@ def _generate_class_decls(  # noqa: C901,PLR0912
                 unextractable=unextractable,
                 subsume=subsume,
             )
-        except ValueError as e:
-            raise ValueError(f"Error processing {cls_name}.{method_name}: {e}") from e
+        except Exception as e:
+            e.add_note(f"Error processing {cls_name}.{method_name}")
+            raise
 
         if not builtin and not isinstance(ref, InitRef) and not mutates:
             add_default_funcs.append(add_rewrite)
@@ -1389,10 +1399,16 @@ class EGraph(_BaseModule):
 
         egraphs = [to_json()]
         i = 0
-        while self.run(schedule or 1).updated and i < max:
-            i += 1
+        # Always visualize, even if we encounter an error
+        try:
+            while (self.run(schedule or 1).updated) and i < max:
+                i += 1
+                egraphs.append(to_json())
+        except:
             egraphs.append(to_json())
-        VisualizerWidget(egraphs=egraphs).display_or_open()
+            raise
+        finally:
+            VisualizerWidget(egraphs=egraphs).display_or_open()
 
     @classmethod
     def current(cls) -> EGraph:

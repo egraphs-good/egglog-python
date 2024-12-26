@@ -11,6 +11,7 @@ _This project uses semantic versioning_
 - Subsumes lambda functions after replacing
 - Add working loopnest test
 - Improve tracebacks on failing conversions.
+- Use `add_note` for exception to add more context, instead of raising a new exception, to make it easier to debug.
 
 ## 8.0.1 (2024-10-24)
 

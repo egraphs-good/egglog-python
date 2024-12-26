@@ -1671,9 +1671,10 @@ def try_evaling(expr: Expr, prim_expr: i64 | Bool) -> int | bool:
         try:
             expr_extracted = egraph.extract(expr)
         except BaseException as inner_exc:
-            raise ValueError(f"Cannot simplify {expr}") from inner_exc
-        msg = f"Cannot simplify to primitive {expr_extracted}"
-        raise ValueError(msg) from exc
+            inner_exc.add_note(f"Cannot simplify {expr}")
+            raise
+        exc.add_note(f"Cannot simplify to primitive {expr_extracted}")
+        raise
     return egraph.eval(extracted)
 
     # string = (
