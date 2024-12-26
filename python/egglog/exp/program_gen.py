@@ -5,11 +5,11 @@ Builds up imperative string expressions from a functional expression.
 
 from __future__ import annotations
 
-from typing import Union
+from typing import TypeAlias, Union
 
 from egglog import *
 
-ProgramLike = Union["Program", StringLike]
+ProgramLike: TypeAlias = Union["Program", StringLike]
 
 
 class Program(Expr):
