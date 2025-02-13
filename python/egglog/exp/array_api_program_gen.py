@@ -15,7 +15,11 @@ array_api_program_gen_ruleset = ruleset(name="array_api_program_gen_ruleset")
 array_api_program_gen_eval_ruleset = ruleset(name="array_api_program_gen_eval_ruleset")
 
 array_api_program_gen_schedule = (
-    array_api_program_gen_ruleset | program_gen_ruleset | array_api_program_gen_eval_ruleset | eval_program_rulseset
+    array_api_program_gen_ruleset
+    | program_gen_ruleset
+    | array_api_program_gen_eval_ruleset
+    | eval_program_rulseset
+    | array_api_vec_to_cons_ruleset
 ).saturate()
 
 
@@ -57,41 +61,24 @@ def _int_program(i64_: i64, i: Int, j: Int):
 
 
 @function
+def tuple_int_foldl_program(xs: TupleInt, f: Callable[[Program, Int], Program], init: ProgramLike) -> Program: ...
+
+
+@function(ruleset=array_api_program_gen_ruleset)
 def tuple_int_program(x: TupleInt) -> Program:
-    ...
-    # Could be rewritten as a fold, but we don't support generic folds yet
-    # return x.fold(Program("("), lambda acc, i: acc + ", " + int_program(i)) + ")"
-
-
-@function
-def tuple_int_program_inner(x: TupleInt) -> Program:
-    """
-    Returns the tuple w/ out the parenthesis
-    """
+    return tuple_int_foldl_program(x, lambda acc, i: acc + int_program(i) + ", ", "(") + ")"
 
 
 @array_api_program_gen_ruleset.register
-def _tuple_int_program(i: Int, ti: TupleInt, k: i64, idx_fn: Callable[[Int], Int], vec_int: Vec[Int]):
+def _tuple_int_program(i: Int, ti: TupleInt, ti2: TupleInt, f: Callable[[Program, Int], Program], init: Program):
     yield rewrite(int_program(ti[i])).to(tuple_int_program(ti) + "[" + int_program(i) + "]")
     yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_int_program(ti) + ")")
 
-    yield rewrite(tuple_int_program(ti)).to(Program("(") + tuple_int_program_inner(ti) + ")")
+    yield rewrite(tuple_int_foldl_program(TupleInt.EMPTY, f, init)).to(init)
+    yield rewrite(tuple_int_foldl_program(ti.append(i), f, init)).to(f(tuple_int_foldl_program(ti, f, init), i))
 
-    yield rewrite(tuple_int_program_inner(TupleInt(0, idx_fn))).to(Program(""))
-
-    yield rewrite(tuple_int_program_inner(TupleInt(Int(k), idx_fn))).to(
-        int_program(idx_fn(Int(0))) + ", " + tuple_int_program_inner(TupleInt(Int(k - 1), lambda i: idx_fn(i + 1))),
-        ne(k).to(i64(0)),
-    )
-
-    yield rewrite(tuple_int_program_inner(TupleInt.from_vec(Vec[Int]()))).to(Program(""))
-    yield rewrite(tuple_int_program_inner(TupleInt.from_vec(vec_int))).to(
-        int_program(vec_int[0]) + ", " + tuple_int_program_inner(TupleInt.from_vec(vec_int.remove(0))),
-        vec_int.length() > 1,
-    )
-    yield rewrite(tuple_int_program_inner(TupleInt.from_vec(vec_int))).to(
-        int_program(vec_int[0]) + ",",
-        eq(vec_int.length()).to(i64(1)),
+    yield rewrite(tuple_int_program(ti + ti2)).to(
+        Program("(") + tuple_int_program(ti) + " + " + tuple_int_program(ti2) + ")"
     )
 
 
@@ -150,7 +137,7 @@ def value_program(x: Value) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Value):
+def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Value, xs: NDArray, ti: TupleInt):
     yield rewrite(value_program(Value.int(i))).to(int_program(i))
     yield rewrite(value_program(Value.bool(b))).to(bool_program(b))
     yield rewrite(value_program(Value.float(f))).to(float_program(f))
@@ -160,46 +147,47 @@ def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Valu
     yield rewrite(value_program(v1 / v2)).to(Program("(") + value_program(v1) + " / " + value_program(v2) + ")")
     yield rewrite(bool_program(v1.to_bool)).to(value_program(v1))
     yield rewrite(int_program(v1.to_int)).to(value_program(v1))
+    yield rewrite(value_program(xs.index(ti))).to(ndarray_program(xs) + "[" + tuple_int_program(ti) + "]")
 
 
 @function
-def tuple_value_program(x: TupleValue) -> Program: ...
+def tuple_value_foldl_program(xs: TupleValue, f: Callable[[Program, Value], Program], init: ProgramLike) -> Program: ...
 
 
-@function
-def tuple_value_program_inner(x: TupleValue) -> Program: ...
+@function(ruleset=array_api_program_gen_ruleset)
+def tuple_value_program(x: TupleValue) -> Program:
+    return tuple_value_foldl_program(x, lambda acc, i: acc + value_program(i) + ", ", "(") + ")"
 
 
 @array_api_program_gen_ruleset.register
-def _tuple_value_program(tv1: TupleValue, tv2: TupleValue, v: Value):
-    yield rewrite(tuple_value_program(tv1)).to(Program("(") + tuple_value_program_inner(tv1) + ")")
-    yield rewrite(tuple_value_program_inner(tv1 + tv2)).to(
-        tuple_value_program_inner(tv1) + " " + tuple_value_program_inner(tv2)
-    )
-    yield rewrite(tuple_value_program_inner(TupleValue(v))).to(value_program(v) + ",")
+def _tuple_value_program(i: Int, ti: TupleValue, f: Callable[[Program, Value], Program], v: Value, init: Program):
+    yield rewrite(value_program(ti[i])).to(tuple_value_program(ti) + "[" + int_program(i) + "]")
+    yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_value_program(ti) + ")")
+
+    yield rewrite(tuple_value_foldl_program(TupleValue.EMPTY, f, init)).to(init)
+    yield rewrite(tuple_value_foldl_program(ti.append(v), f, init)).to(f(tuple_value_foldl_program(ti, f, init), v))
 
 
 @function
-def tuple_ndarray_program(x: TupleNDArray) -> Program: ...
+def tuple_ndarray_foldl_program(
+    xs: TupleNDArray, f: Callable[[Program, NDArray], Program], init: ProgramLike
+) -> Program: ...
 
 
-@function
-def tuple_ndarray_program_inner(x: TupleNDArray) -> Program:
-    # Maps to terms seperated by commas, without other parens
-    ...
+@function(ruleset=array_api_program_gen_ruleset)
+def tuple_ndarray_program(x: TupleNDArray) -> Program:
+    return tuple_ndarray_foldl_program(x, lambda acc, i: acc + ndarray_program(i) + ", ", "(") + ")"
 
 
 @array_api_program_gen_ruleset.register
-def _tuple_ndarray_program(x: NDArray, l: TupleNDArray, r: TupleNDArray, i: Int):
-    yield rewrite(tuple_ndarray_program(r)).to(Program("(") + tuple_ndarray_program_inner(r) + ")")
+def _tuple_ndarray_program(
+    i: Int, ti: TupleNDArray, f: Callable[[Program, NDArray], Program], v: NDArray, init: Program
+):
+    yield rewrite(ndarray_program(ti[i])).to(tuple_ndarray_program(ti) + "[" + int_program(i) + "]")
+    yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_ndarray_program(ti) + ")")
 
-    yield rewrite(tuple_ndarray_program_inner(TupleNDArray(x))).to(ndarray_program(x) + ",")
-    yield rewrite(tuple_ndarray_program_inner(l + r)).to(
-        tuple_ndarray_program_inner(l) + " " + tuple_ndarray_program_inner(r)
-    )
-
-    yield rewrite(int_program(l.length())).to(Program("len(") + tuple_ndarray_program(l) + ")")
-    yield rewrite(ndarray_program(l[i])).to(tuple_ndarray_program(l) + "[" + int_program(i) + "]")
+    yield rewrite(tuple_ndarray_foldl_program(TupleNDArray.EMPTY, f, init)).to(init)
+    yield rewrite(tuple_ndarray_foldl_program(ti.append(v), f, init)).to(f(tuple_ndarray_foldl_program(ti, f, init), v))
 
 
 @function
@@ -342,6 +330,7 @@ def _ndarray_program(
     optional_device_: OptionalDevice,
     int_or_tuple_: IntOrTuple,
     idx: IndexKey,
+    odtype: OptionalDType,
 ):
     # Var
     yield rewrite(ndarray_program(NDArray.var(s))).to(Program(s, True))
@@ -506,3 +495,8 @@ def _ndarray_program(
     )
     yield rewrite(tuple_int_program(x.shape)).to(ndarray_program(x) + ".shape")
     yield rewrite(ndarray_program(abs(x))).to((Program("np.abs(") + ndarray_program(x) + ")").assign())
+
+    # asarray
+    yield rewrite(ndarray_program(asarray(x, odtype))).to(
+        Program("np.asarray(") + ndarray_program(x) + ", " + optional_dtype_program(odtype) + ")"
+    )

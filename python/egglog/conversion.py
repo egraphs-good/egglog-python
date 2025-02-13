@@ -148,11 +148,11 @@ def identity(x: object) -> object:
 TYPE_ARGS = ContextVar[tuple[RuntimeClass, ...]]("TYPE_ARGS")
 
 
-def get_type_args() -> tuple[RuntimeClass, ...]:
+def get_type_args() -> tuple[type, ...]:
     """
     Get the type args for the type being converted.
     """
-    return TYPE_ARGS.get()
+    return cast(tuple[type, ...], TYPE_ARGS.get())
 
 
 @contextmanager

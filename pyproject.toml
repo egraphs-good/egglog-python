@@ -27,14 +27,16 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = ["typing-extensions", "black", "graphviz", "anywidget"]
+dynamic = ["version"]
 
 [project.optional-dependencies]
 
 array = [
     "scikit-learn",
     "array_api_compat",
-    "numba==0.59.1",
-    "llvmlite==0.42.0",
+    "numba>=0.59.1",
+    "llvmlite>=0.42.0",
+    "numpy>2",
 ]
 dev = [
     "ruff",
@@ -215,7 +217,7 @@ preview = true
 
 [tool.ruff.lint.per-file-ignores]
 # Don't require annotations for tests
-"python/tests/**" = ["ANN001", "ANN201"]
+"python/tests/**" = ["ANN001", "ANN201", "INP001"]
 
 [tool.mypy]
 ignore_missing_imports = true

@@ -1,8 +1,8 @@
 import pathlib
+import webbrowser
 
 import anywidget
 import traitlets
-from graphviz.backend.viewing import view
 from IPython.display import display
 from ipywidgets.embed import embed_minimal_html
 
@@ -36,4 +36,4 @@ class VisualizerWidget(anywidget.AnyWidget):
         # https://github.com/manzt/anywidget/issues/339#issuecomment-1755654547
         embed_minimal_html(file, views=[self], drop_defaults=False)
         print("Visualizer widget saved to", file)
-        view(file)
+        webbrowser.open(file.as_uri())

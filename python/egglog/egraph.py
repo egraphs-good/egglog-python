@@ -8,6 +8,7 @@ from abc import abstractmethod
 from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field
+from functools import partial
 from inspect import Parameter, currentframe, signature
 from types import FrameType, FunctionType
 from typing import (
@@ -1633,7 +1634,9 @@ class UnstableCombinedRuleset(Schedule):
 
     def __post_init__(self, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
         self.schedule = RunDecl(self.__egg_name__, ())
-        self.__egg_decls_thunk__ = Thunk.fn(self._create_egg_decls, *rulesets)
+        # Don't use thunk so that this is re-evaluated each time its requsted, so that additions inside will
+        # be added after its been evaluated once.
+        self.__egg_decls_thunk__ = partial(self._create_egg_decls, *rulesets)
 
     @property
     def __egg_name__(self) -> str:

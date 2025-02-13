@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import egglog
-
-from .array_api import Int
 
 # https://github.com/sklam/pyasir/blob/c363ff4f8f91177700ad4108dd5042b9b97d8289/pyasir/tests/test_fib.py
 
@@ -27,9 +24,9 @@ from .array_api import Int
 
 
 # With something like this:
-@egglog.function
-def fib(n: Int) -> Int:
-    return (n <= Int(1)).if_int(
-        Int(1),
-        fib(n - Int(1)) + fib(n - Int(2)),
-    )
+# @egglog.function
+# def fib(n: Int) -> Int:
+#     return (n <= Int(1)).if_int(
+#         Int(1),
+#         fib(n - Int(1)) + fib(n - Int(2)),
+#     )

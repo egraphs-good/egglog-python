@@ -771,6 +771,6 @@ def test_helpful_error_function_class():
 
     with pytest.raises(
         ValueError,
-        match="Error processing E.__init__: Inside of classes, wrap methods with the `method` decorator, not `function`",
+        match="Inside of classes, wrap methods with the `method` decorator, not `function`\nError processing E.__init__",
     ):
         E()

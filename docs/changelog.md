@@ -9,9 +9,11 @@ _This project uses semantic versioning_
 - Add better error message when using @function in class (thanks @shinawy)
 - Add error method if `@method` decorator is in wrong place
 - Subsumes lambda functions after replacing
-- Add working loopnest test
+- Add working loopnest test and rewrite array api suport to be more general
 - Improve tracebacks on failing conversions.
 - Use `add_note` for exception to add more context, instead of raising a new exception, to make it easier to debug.
+- Add conversions from vecs (TODO)
+- Open files with webbrowser instead of internal graphviz util for better support
 
 ## 8.0.1 (2024-10-24)
 

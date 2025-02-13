@@ -1,19 +1,19 @@
 def __fn(X, y):
     assert X.dtype == np.dtype(np.float64)
-    assert X.shape == (150, 4,)
+    assert X.shape == (150, 4, )
     assert np.all(np.isfinite(X))
     assert y.dtype == np.dtype(np.int64)
-    assert y.shape == (150,)
-    assert set(np.unique(y)) == set((0, 1, 2,))
+    assert y.shape == (150, )
+    assert set(np.unique(y)) == set((0, 1, 2, ))
     _0 = y == np.array(0)
     _1 = np.sum(_0)
     _2 = y == np.array(1)
     _3 = np.sum(_2)
     _4 = y == np.array(2)
     _5 = np.sum(_4)
-    _6 = np.array((_1, _3, _5,)).astype(np.dtype(np.float64))
+    _6 = np.array((_1, _3, _5, )).astype(np.dtype(np.float64))
     _7 = _6 / np.array(float(150))
-    _8 = np.zeros((3, 4,), dtype=np.dtype(np.float64))
+    _8 = np.zeros((3, 4, ), dtype=np.dtype(np.float64))
     _9 = np.sum(X[_0], axis=0)
     _10 = _9 / np.array(X[_0].shape[0])
     _8[0, :,] = _10
@@ -25,11 +25,11 @@ def __fn(X, y):
     _8[2, :,] = _14
     _15 = _7 @ _8
     _16 = X - _15
-    _17 = np.sqrt(np.array(float(1 / 147)))
+    _17 = np.sqrt(np.asarray(np.array(float(1 / 147)), np.dtype(np.float64)))
     _18 = X[_0] - _8[0, :,]
     _19 = X[_2] - _8[1, :,]
     _20 = X[_4] - _8[2, :,]
-    _21 = np.concatenate((_18, _19, _20,), axis=0)
+    _21 = np.concatenate((_18, _19, _20, ), axis=0)
     _22 = np.sum(_21, axis=0)
     _23 = _22 / np.array(_21.shape[0])
     _24 = np.expand_dims(_23, 0)

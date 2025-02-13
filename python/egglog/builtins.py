@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union, 
 
 from typing_extensions import TypeVarTuple, Unpack
 
-from .conversion import converter, get_type_args
+from .conversion import convert, converter, get_type_args
 from .egraph import Expr, Unit, function, get_current_ruleset, method
 from .functionalize import functionalize
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
@@ -416,6 +416,9 @@ class Vec(Expr, Generic[T], builtin=True):
 
     @method(egg_fn="vec-set")
     def set(self, index: i64Like, value: T) -> Vec[T]: ...
+
+
+converter(tuple, Vec, lambda t: Vec(*(convert(x, get_type_args()[0]) for x in t)))
 
 
 class PyObject(Expr, builtin=True):

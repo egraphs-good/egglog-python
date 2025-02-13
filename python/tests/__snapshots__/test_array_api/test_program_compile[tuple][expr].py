@@ -1,0 +1,1 @@
+tuple_value_program(TupleValue.from_vec(Vec[Value](Value.int(Int(1)), Value.int(Int(2)))))
