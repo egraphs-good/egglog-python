@@ -225,8 +225,7 @@ def linalg_norm_v2(X: NDArrayLike, axis: TupleIntLike) -> NDArray:
     )
 
 
-def linalg_val(linalg_fn: Callable[[NDArray, TupleIntLike], NDArray]) -> NDArray:
-    X = NDArray.var("X")
+def linalg_val(X: NDArray, linalg_fn: Callable[[NDArray, TupleIntLike], NDArray]) -> NDArray:
     assume_shape(X, (3, 2, 3, 4))
     return linalg_fn(X, (0, 1))
 
@@ -234,20 +233,25 @@ def linalg_val(linalg_fn: Callable[[NDArray, TupleIntLike], NDArray]) -> NDArray
 class TestLoopNest:
     @pytest.mark.parametrize("linalg_fn", [linalg_norm, linalg_norm_v2])
     def test_shape(self, linalg_fn):
-        check_eq(linalg_val(linalg_fn).shape, TupleInt.from_vec((3, 4)), array_api_schedule)
+        X = np.random.random((3, 2, 3, 4))
+        expect = np.linalg.norm(X, axis=(0, 1))
+        assert expect.shape == (3, 4)
+
+        check_eq(linalg_val(constant("X", NDArray), linalg_fn).shape, TupleInt.from_vec((3, 4)), array_api_schedule)
 
     @pytest.mark.parametrize("linalg_fn", [linalg_norm, linalg_norm_v2])
-    def test_index(self, linalg_fn):
+    def test_abstract_index(self, linalg_fn):
         i = constant("i", Int)
         j = constant("j", Int)
-        idxed = linalg_val(linalg_fn).index((i, j))
-        _NDArray_1 = NDArray.var("X")
-        _Value_1 = _NDArray_1.index(TupleInt.from_vec(Vec[Int](Int(0), Int(0), i, j)))
-        _Value_2 = _NDArray_1.index(TupleInt.from_vec(Vec[Int](Int(0), Int(1), i, j)))
-        _Value_3 = _NDArray_1.index(TupleInt.from_vec(Vec[Int](Int(1), Int(0), i, j)))
-        _Value_4 = _NDArray_1.index(TupleInt.from_vec(Vec[Int](Int(1), Int(1), i, j)))
-        _Value_5 = _NDArray_1.index(TupleInt.from_vec(Vec[Int](Int(2), Int(0), i, j)))
-        _Value_6 = _NDArray_1.index(TupleInt.from_vec(Vec[Int](Int(2), Int(1), i, j)))
+        X = constant("X", NDArray)
+        idxed = linalg_val(X, linalg_fn).index((i, j))
+
+        _Value_1 = X.index(TupleInt.from_vec(Vec[Int](Int(0), Int(0), i, j)))
+        _Value_2 = X.index(TupleInt.from_vec(Vec[Int](Int(0), Int(1), i, j)))
+        _Value_3 = X.index(TupleInt.from_vec(Vec[Int](Int(1), Int(0), i, j)))
+        _Value_4 = X.index(TupleInt.from_vec(Vec[Int](Int(1), Int(1), i, j)))
+        _Value_5 = X.index(TupleInt.from_vec(Vec[Int](Int(2), Int(0), i, j)))
+        _Value_6 = X.index(TupleInt.from_vec(Vec[Int](Int(2), Int(1), i, j)))
         res = (
             (
                 (
@@ -262,6 +266,36 @@ class TestLoopNest:
             + (_Value_6.conj() * _Value_6).real()
         ).sqrt()
         check_eq(idxed, res, array_api_schedule)
+
+    def test_index_codegen(self, snapshot_py):
+        X = NDArray.var("X")
+        i = Int.var("i")
+        j = Int.var("j")
+        idxed = linalg_val(X, linalg_norm_v2).index((i, j))
+        simplified_index = simplify(idxed, array_api_schedule)
+        assert str(simplified_index) == snapshot_py(name="expr")
+
+        res = EvalProgram(
+            value_program(simplified_index).function_three(ndarray_program(X), int_program(i), int_program(j)),
+            {"np": np},
+        )
+        egraph = EGraph()
+        egraph.register(res)
+        egraph.run(array_api_program_gen_schedule)
+        print(
+            egraph.extract(
+                value_program(simplified_index).function_three(ndarray_program(X), int_program(i), int_program(j))
+            )
+        )
+        # egraph.display(split_primitive_outputs=True, n_inline_leaves=3, split_functions=[TupleInt.EMPTY, TupleInt.append, Int])
+        assert egraph.eval(res.statements) == snapshot_py(name="code")
+
+        fn_value = egraph.eval(res.py_object)
+        X = np.random.random((3, 2, 3, 4))
+        expect = np.linalg.norm(X, axis=(0, 1))
+
+        for idxs in np.ndindex(*expect.shape):
+            assert np.allclose(fn_value(X, *idxs), expect[idxs], rtol=1e-03)
 
 
 # This test happens in different steps. Each will be benchmarked and saved as a snapshot.

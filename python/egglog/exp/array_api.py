@@ -119,6 +119,9 @@ class Int(Expr, ruleset=array_api_ruleset):
     # https://en.wikipedia.org/wiki/Bottom_type
     NEVER: ClassVar[Int]
 
+    @classmethod
+    def var(cls, name: StringLike) -> Int: ...
+
     def __init__(self, value: i64Like) -> None: ...
 
     def __invert__(self) -> Int: ...

@@ -1,8 +1,7 @@
 """
-In progress module
+Example module to replicate behavior expressed in
 
 https://gist.github.com/sklam/5e5737137d48d6e5b816d14a90076f1d
-
 """
 
 # %%

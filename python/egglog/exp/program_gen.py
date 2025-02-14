@@ -45,6 +45,13 @@ class Program(Expr):
         Returns a new program defining a function with two arguments.
         """
 
+    def function_three(
+        self, arg1: ProgramLike, arg2: ProgramLike, arg3: ProgramLike, name: StringLike = String("__fn")
+    ) -> Program:
+        """
+        Returns a new program defining a function with three arguments.
+        """
+
     def expr_to_statement(self) -> Program:
         """
         Returns a new program with the expression as a statement and the new expression empty.
@@ -142,10 +149,12 @@ def program_gen_ruleset(
     s3: String,
     s4: String,
     s5: String,
+    s6: String,
     p: Program,
     p1: Program,
     p2: Program,
     p3: Program,
+    p4: Program,
     i: i64,
     i2: i64,
     b: Bool,
@@ -357,6 +366,7 @@ def program_gen_ruleset(
 
     ##
     # Function two
+    ##
 
     # When compiling a function, the two args, p2 and p3, should get compiled when we compile p1, and should just be vars.
     fn_two = eq(p).to(p1.function_two(p2, p3, s1))
@@ -383,6 +393,38 @@ def program_gen_ruleset(
     ).then(
         set_(p.statements).to(
             join("def ", s1, "(", s4, ", ", s5, "):\n    ", s3.replace("\n", "\n    "), "return ", s2, "\n")
+        ),
+        set_(p.next_sym).to(i),
+        set_(p.expr).to(s1),
+    )
+
+    ##
+    # Function three
+    ##
+
+    fn_three = eq(p).to(p1.function_three(p2, p3, p4, s1))
+    yield rule(fn_three, p.compile(i)).then(
+        set_(p2.parent).to(p),
+        set_(p3.parent).to(p),
+        set_(p1.parent).to(p),
+        set_(p4.parent).to(p),
+        p2.compile(i),
+        p3.compile(i),
+        p1.compile(i),
+        p4.compile(i),
+        set_(p.is_identifer).to(Bool(True)),
+    )
+    yield rule(
+        fn_three,
+        p.compile(i),
+        eq(s2).to(p1.expr),
+        eq(s3).to(p1.statements),
+        eq(s4).to(p2.expr),
+        eq(s5).to(p3.expr),
+        eq(s6).to(p4.expr),
+    ).then(
+        set_(p.statements).to(
+            join("def ", s1, "(", s4, ", ", s5, ", ", s6, "):\n    ", s3.replace("\n", "\n    "), "return ", s2, "\n")
         ),
         set_(p.next_sym).to(i),
         set_(p.expr).to(s1),

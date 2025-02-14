@@ -38,7 +38,8 @@ def int_program(x: Int) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _int_program(i64_: i64, i: Int, j: Int):
+def _int_program(i64_: i64, i: Int, j: Int, s: String):
+    yield rewrite(int_program(Int.var(s))).to(Program(s, True))
     yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
     yield rewrite(int_program(~i)).to(Program("~") + int_program(i))
     yield rewrite(bool_program(i < j)).to(Program("(") + int_program(i) + " < " + int_program(j) + ")")
@@ -145,9 +146,14 @@ def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Valu
     yield rewrite(value_program(x.to_value())).to(ndarray_program(x))
     yield rewrite(value_program(v1 < v2)).to(Program("(") + value_program(v1) + " < " + value_program(v2) + ")")
     yield rewrite(value_program(v1 / v2)).to(Program("(") + value_program(v1) + " / " + value_program(v2) + ")")
+    yield rewrite(value_program(v1 + v2)).to(Program("(") + value_program(v1) + " + " + value_program(v2) + ")")
+    yield rewrite(value_program(v1 * v2)).to(Program("(") + value_program(v1) + " * " + value_program(v2) + ")")
     yield rewrite(bool_program(v1.to_bool)).to(value_program(v1))
     yield rewrite(int_program(v1.to_int)).to(value_program(v1))
-    yield rewrite(value_program(xs.index(ti))).to(ndarray_program(xs) + "[" + tuple_int_program(ti) + "]")
+    yield rewrite(value_program(xs.index(ti))).to((ndarray_program(xs) + "[" + tuple_int_program(ti) + "]").assign())
+    yield rewrite(value_program(v1.sqrt())).to(Program("np.sqrt(") + value_program(v1) + ")")
+    yield rewrite(value_program(v1.real())).to(Program("np.real(") + value_program(v1) + ")")
+    yield rewrite(value_program(v1.conj())).to(Program("np.conj(") + value_program(v1) + ")")
 
 
 @function

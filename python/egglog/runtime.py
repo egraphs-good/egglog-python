@@ -601,8 +601,10 @@ def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
         case RuntimeClass(thunk, tp):
             return InitRef(tp.name), thunk()
         case RuntimeExpr(decl_thunk, expr_thunk):
-            if not isinstance((expr := expr_thunk().expr), CallDecl) or not isinstance(expr.callable, ConstantRef):
-                raise NotImplementedError(f"Can only turn constants into callable refs, not {expr}")
+            if not isinstance((expr := expr_thunk().expr), CallDecl) or not isinstance(
+                expr.callable, ConstantRef | ClassVariableRef
+            ):
+                raise NotImplementedError(f"Can only turn constants or classvars into callable refs, not {expr}")
             return expr.callable, decl_thunk()
         case _:
             raise NotImplementedError(f"Cannot turn {callable} of type {type(callable)} into a callable ref")
