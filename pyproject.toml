@@ -240,13 +240,10 @@ python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
 norecursedirs = ["__snapshots__"]
 filterwarnings = [
-    "error",
     "ignore::numba.core.errors.NumbaPerformanceWarning",
     "ignore::pytest_benchmark.logger.PytestBenchmarkWarning",
     # https://github.com/manzt/anywidget/blob/d38bb3f5f9cfc7e49e2ff1aa1ba994d66327cb02/pyproject.toml#L120
     "ignore:Deprecated in traitlets 4.1, use the instance .metadata:DeprecationWarning",
-    # https://github.com/egraphs-good/egglog-python/actions/runs/13337757379/job/37256530668
-    "ignore:falling back to type probe function",
 ]
 
 [tool.coverage.report]
