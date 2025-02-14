@@ -290,7 +290,7 @@ class TestLoopNest:
         # egraph.display(split_primitive_outputs=True, n_inline_leaves=3, split_functions=[TupleInt.EMPTY, TupleInt.append, Int])
         assert egraph.eval(res.statements) == snapshot_py(name="code")
 
-        fn_value = egraph.eval(res.py_object)
+        fn_value = cast(Callable, egraph.eval(res.py_object))
         X = np.random.random((3, 2, 3, 4))
         expect = np.linalg.norm(X, axis=(0, 1))
 
