@@ -588,7 +588,13 @@ class CallDecl:
         # Override eq to use cached hash for perf
         if not isinstance(other, CallDecl):
             return False
-        return hash(self) == hash(other)
+        if hash(self) != hash(other):
+            return False
+        return (
+            self.callable == other.callable
+            and self.args == other.args
+            and self.bound_tp_params == other.bound_tp_params
+        )
 
 
 @dataclass(frozen=True)
