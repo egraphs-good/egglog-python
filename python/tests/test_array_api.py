@@ -40,6 +40,12 @@ class TestTupleValue:
 
 
 class TestTupleInt:
+    def test_conversion(self):
+        @function
+        def f(x: TupleIntLike) -> TupleInt: ...
+
+        assert expr_parts(f((1, 2))) == expr_parts(f(TupleInt.from_vec(Vec[Int](Int(1), Int(2)))))
+
     def test_cons_to_vec(self):
         check_eq(
             TupleInt.EMPTY.append(2),
@@ -208,7 +214,8 @@ def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:
 
 
 @function(ruleset=array_api_ruleset, subsume=True)
-def linalg_norm_v2(X: NDArray, axis: TupleIntLike) -> NDArray:
+def linalg_norm_v2(X: NDArrayLike, axis: TupleIntLike) -> NDArray:
+    X = cast(NDArray, X)
     return NDArray(
         X.shape.deselect(axis),
         X.dtype,
@@ -227,7 +234,7 @@ def linalg_val(linalg_fn: Callable[[NDArray, TupleIntLike], NDArray]) -> NDArray
 class TestLoopNest:
     @pytest.mark.parametrize("linalg_fn", [linalg_norm, linalg_norm_v2])
     def test_shape(self, linalg_fn):
-        check_eq(linalg_val(linalg_fn).shape, TupleInt.from_vec(Vec(Int(3), Int(4))), array_api_schedule)
+        check_eq(linalg_val(linalg_fn).shape, TupleInt.from_vec((3, 4)), array_api_schedule)
 
     @pytest.mark.parametrize("linalg_fn", [linalg_norm, linalg_norm_v2])
     def test_index(self, linalg_fn):
@@ -324,7 +331,7 @@ def simplify_lda(egraph: EGraph, expr: NDArray) -> NDArray:
 @pytest.mark.parametrize(
     "program",
     [
-        pytest.param(tuple_value_program(TupleInt.from_vec((1, 2))), id="tuple"),
+        pytest.param(tuple_value_program((1, 2)), id="tuple"),
     ],
 )
 def test_program_compile(program: Program, snapshot_py):

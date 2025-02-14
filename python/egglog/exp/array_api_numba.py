@@ -41,10 +41,12 @@ def _std(y: NDArray, x: NDArray, i: Int):
 
 # rewrite unique_counts to count each value one by one, since numba doesn't support np.unique(..., return_counts=True)
 @function(ruleset=array_api_numba_ruleset, subsume=True)
-def count_values(x: NDArray, values: TupleValue) -> TupleValue:
+def count_values(x: NDArrayLike, values: TupleValueLike) -> TupleValue:
     """
     Returns a tuple of the count of each of the values in the array as values
     """
+    x = cast(NDArray, x)
+    values = cast(TupleValue, values)
     return TupleValue(values.length(), lambda i: sum(x == values[i]).to_value())
 
 

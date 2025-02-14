@@ -774,3 +774,31 @@ def test_helpful_error_function_class():
         match="Inside of classes, wrap methods with the `method` decorator, not `function`\nError processing E.__init__",
     ):
         E()
+
+
+def test_vec_like_conversion():
+    """
+    Test that we can use a generic type alias for conversion
+    """
+
+    @function
+    def my_fn(xs: VecLike[i64, i64Like]) -> Unit: ...
+
+    assert expr_parts(my_fn((1, 2))) == expr_parts(my_fn(Vec[i64](i64(1), i64(2))))
+    assert expr_parts(my_fn([])) == expr_parts(my_fn(Vec[i64]()))
+
+
+def test_set_like_conversion():
+    @function
+    def my_fn(xs: SetLike[i64, i64Like]) -> Unit: ...
+
+    assert expr_parts(my_fn({1, 2})) == expr_parts(my_fn(Set[i64](i64(1), i64(2))))
+    assert expr_parts(my_fn(set())) == expr_parts(my_fn(Set[i64]()))
+
+
+def test_map_like_conversion():
+    @function
+    def my_fn(xs: MapLike[i64, String, i64Like, StringLike]) -> Unit: ...
+
+    assert expr_parts(my_fn({1: "hi"})) == expr_parts(my_fn(Map[i64, String].empty().insert(i64(1), String("hi"))))
+    assert expr_parts(my_fn({})) == expr_parts(my_fn(Map[i64, String].empty()))

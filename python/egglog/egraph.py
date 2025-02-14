@@ -36,6 +36,7 @@ from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_decl
 from .runtime import *
+from .runtime import resolve_type_annotation_mutate
 from .thunk import *
 
 if TYPE_CHECKING:
@@ -517,7 +518,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         # Get the generic params from the orig bases generic class
         namespace["__orig_bases__"][1].__parameters__ if "__orig_bases__" in namespace else []
     )
-    type_vars = tuple(p.__name__ for p in parameters)
+    type_vars = tuple(ClassTypeVarRef.from_type_var(p) for p in parameters)
     del parameters
     cls_decl = ClassDecl(egg_sort, type_vars, builtin)
     decls = Declarations(_classes={cls_name: cls_decl})
@@ -532,7 +533,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     for k, v in get_type_hints(_Dummytype, globalns=frame.f_globals, localns=frame.f_locals).items():
         if getattr(v, "__origin__", None) == ClassVar:
             (inner_tp,) = v.__args__
-            type_ref = resolve_type_annotation(decls, inner_tp)
+            type_ref = resolve_type_annotation_mutate(decls, inner_tp)
             cls_decl.class_variables[k] = ConstantDecl(type_ref.to_just())
             _add_default_rewrite(
                 decls, ClassVariableRef(cls_name, k), type_ref, namespace.pop(k, None), ruleset, subsume=False
@@ -765,13 +766,13 @@ def _fn_decl(
     if _last_param_variable(params):
         *params, var_arg_param = params
         # For now, we don't use the variable arg name
-        var_arg_type = resolve_type_annotation(decls, hints[var_arg_param.name])
+        var_arg_type = resolve_type_annotation_mutate(decls, hints[var_arg_param.name])
     else:
         var_arg_type = None
     arg_types = tuple(
         decls.get_paramaterized_class(ref.class_name)
         if i == 0 and isinstance(ref, MethodRef | PropertyRef)
-        else resolve_type_annotation(decls, hints[t.name])
+        else resolve_type_annotation_mutate(decls, hints[t.name])
         for i, t in enumerate(params)
     )
 
@@ -788,7 +789,7 @@ def _fn_decl(
         if isinstance(ref, InitRef)
         else arg_types[0]
         if mutates_first_arg
-        else resolve_type_annotation(decls, hints["return"])
+        else resolve_type_annotation_mutate(decls, hints["return"])
     )
 
     arg_names = tuple(t.name for t in params)
@@ -886,7 +887,7 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
 def _relation_decls(name: str, tps: tuple[type, ...], egg_fn: str | None) -> Declarations:
     decls = Declarations()
     decls |= cast(RuntimeClass, Unit)
-    arg_types = tuple(resolve_type_annotation(decls, tp).to_just() for tp in tps)
+    arg_types = tuple(resolve_type_annotation_mutate(decls, tp).to_just() for tp in tps)
     decls._functions[name] = RelationDecl(arg_types, tuple(None for _ in tps), egg_fn)
     return decls
 
@@ -913,7 +914,7 @@ def _constant_thunk(
     name: str, tp: type, egg_name: str | None, default_replacement: object, ruleset: Ruleset | None
 ) -> tuple[Declarations, TypedExprDecl]:
     decls = Declarations()
-    type_ref = resolve_type_annotation(decls, tp)
+    type_ref = resolve_type_annotation_mutate(decls, tp)
     callable_ref = ConstantRef(name)
     decls._constants[name] = ConstantDecl(type_ref.to_just(), egg_name)
     _add_default_rewrite(decls, callable_ref, type_ref, default_replacement, ruleset, subsume=False)
@@ -1822,9 +1823,10 @@ def var(name: str, bound: type[T]) -> T:
 
 def _var(name: str, bound: object) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
-    decls = Declarations()
-    type_ref = resolve_type_annotation(decls, bound)
-    return RuntimeExpr.__from_values__(decls, TypedExprDecl(type_ref.to_just(), VarDecl(name, False)))
+    decls_like, type_ref = resolve_type_annotation(bound)
+    return RuntimeExpr(
+        Thunk.fn(Declarations.create, decls_like), Thunk.value(TypedExprDecl(type_ref.to_just(), VarDecl(name, False)))
+    )
 
 
 def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:

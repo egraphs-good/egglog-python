@@ -382,9 +382,10 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         return TupleInt(stop, lambda i: i)
 
     @classmethod
-    def from_vec(cls, vec: Vec[Int]) -> TupleInt: ...
+    def from_vec(cls, vec: VecLike[Int, IntLike]) -> TupleInt: ...
 
-    def __add__(self, other: TupleInt) -> TupleInt:
+    def __add__(self, other: TupleIntLike) -> TupleInt:
+        other = cast(TupleInt, other)
         return TupleInt(
             self.length() + other.length(), lambda i: Int.if_(i < self.length(), self[i], other[i - self.length()])
         )
@@ -403,7 +404,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
     def foldl(self, f: Callable[[Int, Int], Int], init: Int) -> Int: ...
     def foldl_boolean(self, f: Callable[[Boolean, Int], Boolean], init: Boolean) -> Boolean: ...
-    def foldl_tuple_int(self, f: Callable[[TupleInt, Int], TupleInt], init: TupleInt) -> TupleInt: ...
+    def foldl_tuple_int(self, f: Callable[[TupleInt, Int], TupleInt], init: TupleIntLike) -> TupleInt: ...
 
     @method(subsume=True)
     def contains(self, i: Int) -> Boolean:
@@ -451,10 +452,9 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         return TupleInt.range(self.length()).filter(lambda i: ~indices.contains(i)).map(lambda i: self[i])
 
 
-# TODO: Upcast args for Vec[Int] constructor
-converter(tuple, TupleInt, lambda x: TupleInt.from_vec(Vec[Int](*(convert(i, Int) for i in x))))
+converter(Vec[Int], TupleInt, lambda x: TupleInt.from_vec(x))
 
-TupleIntLike: TypeAlias = TupleInt | tuple[IntLike, ...]
+TupleIntLike: TypeAlias = TupleInt | VecLike[Int, IntLike]
 
 
 @array_api_ruleset.register
@@ -518,8 +518,9 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
 
     @method(subsume=True)
     @classmethod
-    def single(cls, i: TupleInt) -> TupleTupleInt:
-        return TupleTupleInt(Int(1), lambda _: i)
+    def single(cls, i: TupleIntLike) -> TupleTupleInt:
+        i = cast(TupleInt, i)
+        return TupleTupleInt(1, lambda _: i)
 
     @method(subsume=True)
     @classmethod
@@ -527,7 +528,8 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
 
     def append(self, i: TupleIntLike) -> TupleTupleInt: ...
 
-    def __add__(self, other: TupleTupleInt) -> TupleTupleInt:
+    def __add__(self, other: TupleTupleIntLike) -> TupleTupleInt:
+        other = cast(TupleTupleInt, other)
         return TupleTupleInt(
             self.length() + other.length(),
             lambda i: TupleInt.if_(i < self.length(), self[i], other[i - self.length()]),
@@ -570,7 +572,9 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
         )
 
 
-converter(tuple, TupleTupleInt, lambda x: TupleTupleInt.from_vec(Vec[TupleInt](*(convert(i, TupleInt) for i in x))))
+converter(Vec[TupleInt], TupleTupleInt, lambda x: TupleTupleInt.from_vec(x))
+
+TupleTupleIntLike: TypeAlias = TupleTupleInt | VecLike[TupleInt, TupleIntLike]
 
 
 @array_api_ruleset.register
@@ -814,7 +818,8 @@ class TupleValue(Expr, ruleset=array_api_ruleset):
     @classmethod
     def from_vec(cls, vec: Vec[Value]) -> TupleValue: ...
 
-    def __add__(self, other: TupleValue) -> TupleValue:
+    def __add__(self, other: TupleValueLike) -> TupleValue:
+        other = cast(TupleValue, other)
         return TupleValue(
             self.length() + other.length(),
             lambda i: Value.if_(i < self.length(), self[i], other[i - self.length()]),
@@ -826,18 +831,21 @@ class TupleValue(Expr, ruleset=array_api_ruleset):
 
     def foldl_boolean(self, f: Callable[[Boolean, Value], Boolean], init: BooleanLike) -> Boolean: ...
 
-    def contains(self, value: Value) -> Boolean:
+    def contains(self, value: ValueLike) -> Boolean:
+        value = cast(Value, value)
         return self.foldl_boolean(lambda acc, j: acc | (value == j), FALSE)
 
     @method(subsume=True)
     @classmethod
-    def from_tuple_int(cls, ti: TupleInt) -> TupleValue:
+    def from_tuple_int(cls, ti: TupleIntLike) -> TupleValue:
+        ti = cast(TupleInt, ti)
         return TupleValue(ti.length(), lambda i: Value.int(ti[i]))
 
 
-converter(tuple, TupleValue, lambda x: TupleValue.from_vec(Vec(*(convert(i, Value) for i in x))))
+converter(Vec[Value], TupleValue, lambda x: TupleValue.from_vec(x))
+converter(TupleInt, TupleValue, lambda x: TupleValue.from_tuple_int(x))
 
-TupleValueLike: TypeAlias = TupleValue | tuple[ValueLike, ...] | TupleIntLike
+TupleValueLike: TypeAlias = TupleValue | VecLike[Value, ValueLike] | TupleIntLike
 
 
 @array_api_ruleset.register
@@ -997,7 +1005,7 @@ ALL_INDICES: TupleInt = constant("ALL_INDICES", TupleInt)
 
 
 class NDArray(Expr, ruleset=array_api_ruleset):
-    def __init__(self, shape: TupleInt, dtype: DType, idx_fn: Callable[[TupleInt], Value]) -> None: ...
+    def __init__(self, shape: TupleIntLike, dtype: DType, idx_fn: Callable[[TupleInt], Value]) -> None: ...
 
     NEVER: ClassVar[NDArray]
 
@@ -1207,7 +1215,8 @@ class TupleNDArray(Expr, ruleset=array_api_ruleset):
     @classmethod
     def from_vec(cls, vec: Vec[NDArray]) -> TupleNDArray: ...
 
-    def __add__(self, other: TupleNDArray) -> TupleNDArray:
+    def __add__(self, other: TupleNDArrayLike) -> TupleNDArray:
+        other = cast(TupleNDArray, other)
         return TupleNDArray(
             self.length() + other.length(),
             lambda i: NDArray.if_(i < self.length(), self[i], other[i - self.length()]),
@@ -1226,11 +1235,9 @@ class TupleNDArray(Expr, ruleset=array_api_ruleset):
         return iter(self[i] for i in range(len(self)))
 
 
-converter(tuple, TupleNDArray, lambda x: TupleNDArray.from_vec(Vec(*(convert(i, NDArray) for i in x))))
-converter(list, TupleNDArray, lambda x: convert(tuple(x), TupleNDArray))
+converter(Vec[NDArray], TupleNDArray, lambda x: TupleNDArray.from_vec(x))
 
-
-TupleNDArrayLike: TypeAlias = TupleValue | tuple[NDArrayLike, ...] | list[NDArrayLike]
+TupleNDArrayLike: TypeAlias = TupleNDArray | VecLike[NDArray, NDArrayLike]
 
 
 @array_api_ruleset.register
@@ -1305,7 +1312,7 @@ class OptionalTupleInt(Expr, ruleset=array_api_ruleset):
     none: ClassVar[OptionalTupleInt]
 
     @classmethod
-    def some(cls, value: TupleInt) -> OptionalTupleInt: ...
+    def some(cls, value: TupleIntLike) -> OptionalTupleInt: ...
 
 
 converter(type(None), OptionalTupleInt, lambda _: OptionalTupleInt.none)
@@ -1319,7 +1326,7 @@ class IntOrTuple(Expr, ruleset=array_api_ruleset):
     def int(cls, value: Int) -> IntOrTuple: ...
 
     @classmethod
-    def tuple(cls, value: TupleInt) -> IntOrTuple: ...
+    def tuple(cls, value: TupleIntLike) -> IntOrTuple: ...
 
 
 converter(Int, IntOrTuple, IntOrTuple.int)
@@ -1372,7 +1379,7 @@ def _sum(x: NDArray, y: NDArray, v: Value, dtype: DType):
 
 
 @function
-def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none) -> NDArray: ...
+def reshape(x: NDArray, shape: TupleIntLike, copy: OptionalBool = OptionalBool.none) -> NDArray: ...
 
 
 # @function
@@ -1430,7 +1437,7 @@ def _unique_values(x: NDArray):
 
 
 @function
-def concat(arrays: TupleNDArray, axis: OptionalInt = OptionalInt.none) -> NDArray: ...
+def concat(arrays: TupleNDArrayLike, axis: OptionalInt = OptionalInt.none) -> NDArray: ...
 
 
 @array_api_ruleset.register
@@ -1520,7 +1527,7 @@ def _unique_inverse(x: NDArray, i: Int):
 
 @function
 def zeros(
-    shape: TupleInt, dtype: OptionalDType = OptionalDType.none, device: OptionalDevice = OptionalDevice.none
+    shape: TupleIntLike, dtype: OptionalDType = OptionalDType.none, device: OptionalDevice = OptionalDevice.none
 ) -> NDArray: ...
 
 
@@ -1608,14 +1615,14 @@ greater_zero = relation("greater_zero", Value)
 
 
 @function
-def broadcast_index(from_shape: TupleInt, to_shape: TupleInt, index: TupleInt) -> TupleInt:
+def broadcast_index(from_shape: TupleIntLike, to_shape: TupleIntLike, index: TupleIntLike) -> TupleInt:
     """
     Returns the index in the original array of the given index in the broadcasted array.
     """
 
 
 @function
-def broadcast_shapes(shape1: TupleInt, shape2: TupleInt) -> TupleInt:
+def broadcast_shapes(shape1: TupleIntLike, shape2: TupleIntLike) -> TupleInt:
     """
     Returns the shape of the broadcasted array.
     """
@@ -1807,7 +1814,7 @@ def _isfinite(x: NDArray, ti: TupleInt):
 
 
 @function(mutates_first_arg=True)
-def assume_value_one_of(x: NDArray, values: TupleValue) -> None:
+def assume_value_one_of(x: NDArray, values: TupleValueLike) -> None:
     """
     A value that is one of the values in the tuple.
     """

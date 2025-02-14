@@ -5,7 +5,7 @@ assume_isfinite(_NDArray_1)
 _NDArray_2 = NDArray.var("y")
 assume_dtype(_NDArray_2, DType.int64)
 assume_shape(_NDArray_2, TupleInt.from_vec(Vec[Int](Int(150))))
-assume_value_one_of(_NDArray_2, TupleValue.from_vec(Vec(Value.int(Int(0)), Value.int(Int(1)), Value.int(Int(2)))))
+assume_value_one_of(_NDArray_2, TupleValue.from_vec(Vec[Value](Value.int(Int(0)), Value.int(Int(1)), Value.int(Int(2)))))
 _NDArray_3 = asarray(reshape(asarray(_NDArray_2), TupleInt.from_vec(Vec[Int](Int(-1)))))
 _NDArray_4 = astype(unique_counts(_NDArray_3)[Int(1)], asarray(_NDArray_1).dtype) / NDArray.scalar(Value.float(Float(150.0)))
 _NDArray_5 = zeros(
@@ -21,10 +21,10 @@ _IndexKey_2 = IndexKey.multi_axis(MultiAxisIndexKey.from_vec(Vec(MultiAxisIndexK
 _NDArray_5[_IndexKey_2] = mean(asarray(_NDArray_1)[IndexKey.ndarray(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(1))))], _OptionalIntOrTuple_1)
 _IndexKey_3 = IndexKey.multi_axis(MultiAxisIndexKey.from_vec(Vec(MultiAxisIndexKeyItem.int(Int(2)), _MultiAxisIndexKeyItem_1)))
 _NDArray_5[_IndexKey_3] = mean(asarray(_NDArray_1)[IndexKey.ndarray(unique_inverse(_NDArray_3)[Int(1)] == NDArray.scalar(Value.int(Int(2))))], _OptionalIntOrTuple_1)
-_NDArray_6 = unique_values(concat(TupleNDArray.from_vec(Vec(unique_values(asarray(_NDArray_3))))))
+_NDArray_6 = unique_values(concat(TupleNDArray.from_vec(Vec[NDArray](unique_values(asarray(_NDArray_3))))))
 _NDArray_7 = concat(
     TupleNDArray.from_vec(
-        Vec(
+        Vec[NDArray](
             asarray(_NDArray_1)[IndexKey.ndarray(_NDArray_3 == _NDArray_6[IndexKey.int(Int(0))])] - _NDArray_5[_IndexKey_1],
             asarray(_NDArray_1)[IndexKey.ndarray(_NDArray_3 == _NDArray_6[IndexKey.int(Int(1))])] - _NDArray_5[_IndexKey_2],
             asarray(_NDArray_1)[IndexKey.ndarray(_NDArray_3 == _NDArray_6[IndexKey.int(Int(2))])] - _NDArray_5[_IndexKey_3],

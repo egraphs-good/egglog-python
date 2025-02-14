@@ -61,11 +61,11 @@ def _int_program(i64_: i64, i: Int, j: Int):
 
 
 @function
-def tuple_int_foldl_program(xs: TupleInt, f: Callable[[Program, Int], Program], init: ProgramLike) -> Program: ...
+def tuple_int_foldl_program(xs: TupleIntLike, f: Callable[[Program, Int], Program], init: ProgramLike) -> Program: ...
 
 
 @function(ruleset=array_api_program_gen_ruleset)
-def tuple_int_program(x: TupleInt) -> Program:
+def tuple_int_program(x: TupleIntLike) -> Program:
     return tuple_int_foldl_program(x, lambda acc, i: acc + int_program(i) + ", ", "(") + ")"
 
 
@@ -151,11 +151,13 @@ def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Valu
 
 
 @function
-def tuple_value_foldl_program(xs: TupleValue, f: Callable[[Program, Value], Program], init: ProgramLike) -> Program: ...
+def tuple_value_foldl_program(
+    xs: TupleValueLike, f: Callable[[Program, Value], Program], init: ProgramLike
+) -> Program: ...
 
 
 @function(ruleset=array_api_program_gen_ruleset)
-def tuple_value_program(x: TupleValue) -> Program:
+def tuple_value_program(x: TupleValueLike) -> Program:
     return tuple_value_foldl_program(x, lambda acc, i: acc + value_program(i) + ", ", "(") + ")"
 
 
@@ -170,12 +172,12 @@ def _tuple_value_program(i: Int, ti: TupleValue, f: Callable[[Program, Value], P
 
 @function
 def tuple_ndarray_foldl_program(
-    xs: TupleNDArray, f: Callable[[Program, NDArray], Program], init: ProgramLike
+    xs: TupleNDArrayLike, f: Callable[[Program, NDArray], Program], init: ProgramLike
 ) -> Program: ...
 
 
 @function(ruleset=array_api_program_gen_ruleset)
-def tuple_ndarray_program(x: TupleNDArray) -> Program:
+def tuple_ndarray_program(x: TupleNDArrayLike) -> Program:
     return tuple_ndarray_foldl_program(x, lambda acc, i: acc + ndarray_program(i) + ", ", "(") + ")"
 
 
