@@ -5,13 +5,13 @@ Builtin sorts and function to egg.
 
 from __future__ import annotations
 
-from functools import partial
+from functools import partial, reduce
 from types import FunctionType
 from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union, cast, overload
 
 from typing_extensions import TypeVarTuple, Unpack
 
-from .conversion import converter, get_type_args
+from .conversion import convert, converter, get_type_args
 from .egraph import Expr, Unit, function, get_current_ruleset, method
 from .functionalize import functionalize
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
@@ -22,24 +22,27 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "i64",
-    "i64Like",
-    "f64",
-    "f64Like",
     "Bool",
     "BoolLike",
-    "String",
-    "StringLike",
     "Map",
+    "MapLike",
+    "PyObject",
     "Rational",
     "Set",
-    "Vec",
-    "join",
-    "PyObject",
-    "py_eval",
-    "py_exec",
-    "py_eval_fn",
+    "SetLike",
+    "String",
+    "StringLike",
     "UnstableFn",
+    "Vec",
+    "VecLike",
+    "f64",
+    "f64Like",
+    "i64",
+    "i64Like",
+    "join",
+    "py_eval",
+    "py_eval_fn",
+    "py_exec",
 ]
 
 
@@ -210,6 +213,9 @@ class f64(Expr, builtin=True):  # noqa: N801
     @method(egg_fn="%")
     def __mod__(self, other: f64Like) -> f64: ...
 
+    @method(egg_fn="^")
+    def __pow__(self, other: f64Like) -> f64: ...
+
     def __radd__(self, other: f64Like) -> f64: ...
 
     def __rsub__(self, other: f64Like) -> f64: ...
@@ -282,6 +288,22 @@ class Map(Expr, Generic[T, V], builtin=True):
     def rebuild(self) -> Map[T, V]: ...
 
 
+TO = TypeVar("TO")
+VO = TypeVar("VO")
+
+converter(
+    dict,
+    Map,
+    lambda t: reduce(
+        (lambda acc, kv: acc.insert(convert(kv[0], get_type_args()[0]), convert(kv[1], get_type_args()[1]))),
+        t.items(),
+        Map[get_type_args()].empty(),  # type: ignore[misc]
+    ),
+)
+
+MapLike: TypeAlias = Map[T, V] | dict[TO, VO]
+
+
 class Set(Expr, Generic[T], builtin=True):
     @method(egg_fn="set-of")
     def __init__(self, *args: T) -> None: ...
@@ -313,6 +335,17 @@ class Set(Expr, Generic[T], builtin=True):
 
     @method(egg_fn="rebuild")
     def rebuild(self) -> Set[T]: ...
+
+
+converter(
+    set,
+    Set,
+    lambda t: Set[get_type_args()[0]](  # type: ignore[misc,operator]
+        *(convert(x, get_type_args()[0]) for x in t)
+    ),
+)
+
+SetLike: TypeAlias = Set[T] | set[TO]
 
 
 class Rational(Expr, builtin=True):
@@ -413,6 +446,18 @@ class Vec(Expr, Generic[T], builtin=True):
 
     @method(egg_fn="vec-set")
     def set(self, index: i64Like, value: T) -> Vec[T]: ...
+
+
+for sequence_type in (list, tuple):
+    converter(
+        sequence_type,
+        Vec,
+        lambda t: Vec[get_type_args()[0]](  # type: ignore[misc,operator]
+            *(convert(x, get_type_args()[0]) for x in t)
+        ),
+    )
+
+VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
 
 
 class PyObject(Expr, builtin=True):

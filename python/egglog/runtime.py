@@ -29,12 +29,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "LIT_CLASS_NAMES",
-    "resolve_callable",
-    "resolve_type_annotation",
+    "REFLECTED_BINARY_METHODS",
     "RuntimeClass",
     "RuntimeExpr",
     "RuntimeFunction",
-    "REFLECTED_BINARY_METHODS",
+    "resolve_callable",
+    "resolve_type_annotation",
 ]
 
 
@@ -67,32 +67,50 @@ _UNSTABLE_FN_CLASS: RuntimeClass | None = None
 T = TypeVar("T")
 
 
-def resolve_type_annotation(decls: Declarations, tp: object) -> TypeOrVarRef:
+def resolve_type_annotation_mutate(decls: Declarations, tp: object) -> TypeOrVarRef:
+    """
+    Wrap resolve_type_annotation to mutate decls, as a helper for internal use in sitations where that is more ergonomic.
+    """
+    new_decls, tp = resolve_type_annotation(tp)
+    decls |= new_decls
+    return tp
+
+
+def resolve_type_annotation(tp: object) -> tuple[DeclerationsLike, TypeOrVarRef]:
     """
     Resolves a type object into a type reference.
 
-    Any runtime type object decls will be add to those passed in.
+    Any runtime type object decls will be returned as well. We do this so we can use this without having to
+    resolve the decls if need be.
     """
     if isinstance(tp, TypeVar):
-        return ClassTypeVarRef(tp.__name__)
+        return None, ClassTypeVarRef.from_type_var(tp)
     # If there is a union, then we assume the first item is the type we want, and the others are types that can be converted to that type.
     if get_origin(tp) == Union:
         first, *_rest = get_args(tp)
-        return resolve_type_annotation(decls, first)
+        return resolve_type_annotation(first)
 
     # If the type is `object` then this is assumed to be a PyObjectLike, i.e. converted into a PyObject
     if tp is object:
         assert _PY_OBJECT_CLASS
-        return resolve_type_annotation(decls, _PY_OBJECT_CLASS)
+        return resolve_type_annotation(_PY_OBJECT_CLASS)
     # If the type is a `Callable` then convert it into a UnstableFn
     if get_origin(tp) == Callable:
         assert _UNSTABLE_FN_CLASS
         args, ret = get_args(tp)
-        return resolve_type_annotation(decls, _UNSTABLE_FN_CLASS[(ret, *args)])
+        return resolve_type_annotation(_UNSTABLE_FN_CLASS[(ret, *args)])
     if isinstance(tp, RuntimeClass):
-        decls |= tp
-        return tp.__egg_tp__
+        return tp, tp.__egg_tp__
     raise TypeError(f"Unexpected type annotation {tp}")
+
+
+def inverse_resolve_type_annotation(decls_thunk: Callable[[], Declarations], tp: TypeOrVarRef) -> object:
+    """
+    Inverse of resolve_type_annotation
+    """
+    if isinstance(tp, ClassTypeVarRef):
+        return tp.to_type_var()
+    return RuntimeClass(decls_thunk, tp)
 
 
 ##
@@ -177,13 +195,26 @@ class RuntimeClass(DelayedDeclerations):
         return possible_methods
 
     def __getitem__(self, args: object) -> RuntimeClass:
-        if self.__egg_tp__.args:
-            raise TypeError(f"Cannot index into a paramaterized class {self}")
         if not isinstance(args, tuple):
             args = (args,)
-        decls = self.__egg_decls__.copy()
-        tp = TypeRefWithVars(self.__egg_tp__.name, tuple(resolve_type_annotation(decls, arg) for arg in args))
-        return RuntimeClass(Thunk.value(decls), tp)
+        # defer resolving decls so that we can do generic instantiation for converters before all
+        # method types are defined.
+        decls_like, new_args = cast(
+            tuple[tuple[DeclerationsLike, ...], tuple[TypeOrVarRef, ...]],
+            zip(*(resolve_type_annotation(arg) for arg in args), strict=False),
+        )
+        # if we already have some args bound and some not, then we shold replace all existing args of typevars with new
+        # args
+        if old_args := self.__egg_tp__.args:
+            is_typevar = [isinstance(arg, ClassTypeVarRef) for arg in old_args]
+            if sum(is_typevar) != len(new_args):
+                raise TypeError(f"Expected {sum(is_typevar)} typevars, got {len(new_args)}")
+            new_args_list = list(new_args)
+            final_args = tuple(new_args_list.pop(0) if is_typevar[i] else old_args[i] for i in range(len(old_args)))
+        else:
+            final_args = new_args
+        tp = TypeRefWithVars(self.__egg_tp__.name, final_args)
+        return RuntimeClass(Thunk.fn(Declarations.create, self, *decls_like), tp)
 
     def __getattr__(self, name: str) -> RuntimeFunction | RuntimeExpr | Callable:
         if name == "__origin__" and self.__egg_tp__.args:
@@ -196,10 +227,15 @@ class RuntimeClass(DelayedDeclerations):
             "__parameters__",
             # Origin is used in get_type_hints which is used when resolving the class itself
             "__origin__",
+            "__typing_unpacked_tuple_args__",
         }:
             raise AttributeError
 
-        cls_decl = self.__egg_decls__._classes[self.__egg_tp__.name]
+        try:
+            cls_decl = self.__egg_decls__._classes[self.__egg_tp__.name]
+        except Exception as e:
+            e.add_note(f"Error processing class {self.__egg_tp__.name}")
+            raise
 
         preserved_methods = cls_decl.preserved_methods
         if name in preserved_methods:
@@ -240,6 +276,13 @@ class RuntimeClass(DelayedDeclerations):
     def __or__(self, __value: type) -> object:
         return Union[self, __value]  # noqa: UP007
 
+    @property
+    def __parameters__(self) -> tuple[object, ...]:
+        """
+        Emit a number of typevar params so that when using generic type aliases, we know how to resolve these properly.
+        """
+        return tuple(inverse_resolve_type_annotation(self.__egg_decls_thunk__, tp) for tp in self.__egg_tp__.args)
+
 
 @dataclass
 class RuntimeFunction(DelayedDeclerations):
@@ -259,7 +302,8 @@ class RuntimeFunction(DelayedDeclerations):
         try:
             signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl().signature
         except Exception as e:
-            raise TypeError(f"Failed to find callable {self}") from e
+            e.add_note(f"Failed to find callable {self}")
+            raise
         decls = self.__egg_decls__.copy()
         # Special case function application bc we dont support variadic generics yet generally
         if signature == "fn-app":
@@ -528,9 +572,9 @@ def call_method_min_conversion(slf: object, other: object, name: str) -> Runtime
 
     # find a minimum type that both can be converted to
     # This is so so that calls like `-0.1 * Int("x")` work by upcasting both to floats.
-    min_tp = min_convertable_tp(slf, other, name)
-    slf = resolve_literal(TypeRefWithVars(min_tp), slf)
-    other = resolve_literal(TypeRefWithVars(min_tp), other)
+    min_tp = min_convertable_tp(slf, other, name).to_var()
+    slf = resolve_literal(min_tp, slf)
+    other = resolve_literal(min_tp, other)
     method = RuntimeFunction(slf.__egg_decls_thunk__, Thunk.value(MethodRef(slf.__egg_class_name__, name)), slf)
     return method(other)
 
@@ -557,8 +601,10 @@ def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
         case RuntimeClass(thunk, tp):
             return InitRef(tp.name), thunk()
         case RuntimeExpr(decl_thunk, expr_thunk):
-            if not isinstance((expr := expr_thunk().expr), CallDecl) or not isinstance(expr.callable, ConstantRef):
-                raise NotImplementedError(f"Can only turn constants into callable refs, not {expr}")
+            if not isinstance((expr := expr_thunk().expr), CallDecl) or not isinstance(
+                expr.callable, ConstantRef | ClassVariableRef
+            ):
+                raise NotImplementedError(f"Can only turn constants or classvars into callable refs, not {expr}")
             return expr.callable, decl_thunk()
         case _:
             raise NotImplementedError(f"Cannot turn {callable} of type {type(callable)} into a callable ref")

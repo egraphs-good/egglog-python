@@ -28,6 +28,13 @@ def jit(fn: X) -> X:
     fn_program = ndarray_function_two(res_optimized, NDArray.var(arg1), NDArray.var(arg2))
     egraph.register(fn_program)
     egraph.run(array_api_program_gen_schedule)
-    fn = cast(X, egraph.eval(egraph.extract(fn_program.py_object)))
+    # egraph.display(split_primitive_outputs=True, n_inline_leaves=3)
+    try:
+        fn = cast(X, egraph.eval(egraph.extract(fn_program.py_object)))
+    except Exception as err:
+        err.add_note(f"Failed to compile the program into a string: \n\n{egraph.extract(fn_program)}")
+        egraph.display()
+        raise
     fn.expr = res_optimized  # type: ignore[attr-defined]
+    fn.statements = egraph.eval(fn_program.statements)  # type: ignore[attr-defined]
     return fn

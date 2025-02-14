@@ -1,3 +1,43 @@
+"""
+
+
+## Lists
+
+Lists have two main constructors:
+
+- `List(length, idx_fn)`
+- `List.EMPTY` / `initial.append(last)`
+
+This is so that they can be defined either with a known fixed integer length (the cons list type) or a symbolic
+length that could not be resolved to an integer.
+
+There are rewrites to convert between these constructors in both directions. The only limitation however is that
+`length` has to a real i64 in order to be converted to a cons list.
+
+When you are writing a function that uses ints, feel free to the `__getitem__` or `length()` methods or match
+directly on `List()` constructor. If you can write your function using that interface please do. But for some other
+methods whether the resulting length/index function is dependent on the rest of it, you can only define it with a known
+length, so you can then use the const list constructors.
+
+We also support creating lists from vectors. These can be converted one to one to the snoc list representation.
+
+It is troublesome to have to redefine lists for every type. It would be nice to have generic types, but they are not implemented yet.
+
+We are gauranteed that all lists with known lengths will be represented as cons/empty. To safely use lists, use
+the `.length` and `.__getitem__` methods, unles you want to to depend on it having known length, in which
+case you can match directly on the cons list.
+
+
+* Functional --partial--> cons/empty
+* cons/empty <--> vec
+
+Q: Why are they implented as SNOC lists instead of CONS lists?
+A: So that when converting from functional to lists we can use the same index function by starting at the end and folding
+   that way recursively.
+
+
+"""
+
 # mypy: disable-error-code="empty-body"
 
 from __future__ import annotations
@@ -5,11 +45,11 @@ from __future__ import annotations
 import itertools
 import math
 import numbers
+import os
 import sys
 from copy import copy
-from functools import partial
 from types import EllipsisType
-from typing import TYPE_CHECKING, ClassVar, TypeAlias, overload
+from typing import TYPE_CHECKING, ClassVar, TypeAlias, cast, overload
 
 import numpy as np
 
@@ -25,11 +65,14 @@ if TYPE_CHECKING:
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
 
+# Set this to 1 before scipy is ever imported
+# https://docs.scipy.org/doc/scipy/dev/api-dev/array_api.html#using-array-api-standard-support
+os.environ["SCIPY_ARRAY_API"] = "1"
+
 array_api_ruleset = ruleset(name="array_api_ruleset")
-array_api_schedule = array_api_ruleset.saturate()
 
 
-class Boolean(Expr):
+class Boolean(Expr, ruleset=array_api_ruleset):
     @method(preserve=True)
     def __bool__(self) -> bool:
         return try_evaling(self, self.bool)
@@ -41,9 +84,9 @@ class Boolean(Expr):
 
     def __and__(self, other: BooleanLike) -> Boolean: ...
 
-    def if_int(self, true_value: Int, false_value: Int) -> Int: ...
-
     def __invert__(self) -> Boolean: ...
+
+    def __eq__(self, other: BooleanLike) -> Boolean: ...  # type: ignore[override]
 
 
 BooleanLike = Boolean | bool
@@ -62,14 +105,23 @@ def _bool(x: Boolean, i: Int, j: Int):
         rewrite(FALSE | x).to(x),
         rewrite(TRUE & x).to(x),
         rewrite(FALSE & x).to(FALSE),
-        rewrite(TRUE.if_int(i, j)).to(i),
-        rewrite(FALSE.if_int(i, j)).to(j),
         rewrite(~TRUE).to(FALSE),
         rewrite(~FALSE).to(TRUE),
+        rule(eq(FALSE).to(TRUE)).then(panic("False cannot equal True")),
+        rewrite(x == x).to(TRUE),  # noqa: PLR0124
+        rewrite(FALSE == TRUE).to(FALSE),
+        rewrite(TRUE == FALSE).to(FALSE),
     ]
 
 
-class Int(Expr):
+class Int(Expr, ruleset=array_api_ruleset):
+    # a never int is that should not exist. It could represent for example indexing into an array a value that is out of bounds
+    # https://en.wikipedia.org/wiki/Bottom_type
+    NEVER: ClassVar[Int]
+
+    @classmethod
+    def var(cls, name: StringLike) -> Int: ...
+
     def __init__(self, value: i64Like) -> None: ...
 
     def __invert__(self) -> Int: ...
@@ -164,7 +216,7 @@ class Int(Expr):
         return bool(int(self))
 
     @classmethod
-    def if_(cls, b: Boolean, i: Int, j: Int) -> Int: ...
+    def if_(cls, b: BooleanLike, i: IntLike, j: IntLike) -> Int: ...
 
 
 @array_api_ruleset.register
@@ -186,10 +238,12 @@ def _int(i: i64, j: i64, r: Boolean, o: Int, b: Int):
 
     yield rule(eq(o).to(Int(j))).then(set_(o.i64).to(j))
 
+    yield rule(eq(Int(i)).to(Int(j)), ne(i).to(j)).then(panic("Real ints cannot be equal to different ints"))
+
     yield rewrite(Int(i) + Int(j)).to(Int(i + j))
     yield rewrite(Int(i) - Int(j)).to(Int(i - j))
     yield rewrite(Int(i) * Int(j)).to(Int(i * j))
-    yield rewrite(Int(i) / Int(j)).to(Int(i / j))
+    yield rewrite(Int(i) // Int(j)).to(Int(i / j))
     yield rewrite(Int(i) % Int(j)).to(Int(i % j))
     yield rewrite(Int(i) & Int(j)).to(Int(i & j))
     yield rewrite(Int(i) | Int(j)).to(Int(i | j))
@@ -198,8 +252,11 @@ def _int(i: i64, j: i64, r: Boolean, o: Int, b: Int):
     yield rewrite(Int(i) >> Int(j)).to(Int(i >> j))
     yield rewrite(~Int(i)).to(Int(~i))
 
-    yield rewrite(Int.if_(TRUE, o, b)).to(o)
-    yield rewrite(Int.if_(FALSE, o, b)).to(b)
+    yield rewrite(Int.if_(TRUE, o, b), subsume=True).to(o)
+    yield rewrite(Int.if_(FALSE, o, b), subsume=True).to(b)
+
+    # Never cannot be equal to anything real
+    yield rule(eq(Int.NEVER).to(Int(i))).then(panic("Int.NEVER cannot be equal to any real int"))
 
 
 converter(i64, Int, lambda x: Int(x))
@@ -207,7 +264,42 @@ converter(i64, Int, lambda x: Int(x))
 IntLike: TypeAlias = Int | i64Like
 
 
-class Float(Expr):
+@function(ruleset=array_api_ruleset)
+def check_index(length: IntLike, idx: IntLike) -> Int:
+    """
+    Returns the index if 0 <= idx < length, otherwise returns Int.NEVER
+    """
+    length = cast(Int, length)
+    idx = cast(Int, idx)
+    return Int.if_(((idx >= 0) & (idx < length)), idx, Int.NEVER)
+
+
+# @array_api_ruleset.register
+# def _check_index(i: i64, j: i64, x: Int):
+#     yield rewrite(
+#         check_index(Int(i), Int(j)),
+#     ).to(
+#         Int(j),
+#         i >= 0,
+#         i < j,
+#     )
+
+#     yield rewrite(
+#         check_index(x, Int(i)),
+#     ).to(
+#         Int.NEVER,
+#         i < 0,
+#     )
+
+#     yield rewrite(
+#         check_index(Int(i), Int(j)),
+#     ).to(
+#         Int.NEVER,
+#         i >= j,
+#     )
+
+
+class Float(Expr, ruleset=array_api_ruleset):
     # Differentiate costs of three constructors so extraction is deterministic if all three are present
     @method(cost=3)
     def __init__(self, value: f64Like) -> None: ...
@@ -219,15 +311,19 @@ class Float(Expr):
     def rational(cls, r: Rational) -> Float: ...
 
     @classmethod
-    def from_int(cls, i: Int) -> Float: ...
+    def from_int(cls, i: IntLike) -> Float: ...
 
-    def __truediv__(self, other: Float) -> Float: ...
+    def __truediv__(self, other: FloatLike) -> Float: ...
 
-    def __mul__(self, other: Float) -> Float: ...
+    def __mul__(self, other: FloatLike) -> Float: ...
 
-    def __add__(self, other: Float) -> Float: ...
+    def __add__(self, other: FloatLike) -> Float: ...
 
-    def __sub__(self, other: Float) -> Float: ...
+    def __sub__(self, other: FloatLike) -> Float: ...
+
+    def __pow__(self, other: FloatLike) -> Float: ...
+
+    def __eq__(self, other: FloatLike) -> Boolean: ...  # type: ignore[override]
 
 
 converter(float, Float, lambda x: Float(x))
@@ -242,8 +338,9 @@ def _float(f: f64, f2: f64, i: i64, r: Rational, r1: Rational):
     return [
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
         rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
-        # Convert from float to rationl, if its a whole number i.e. can ve converted to int
+        # Convert from float to rationl, if its a whole number i.e. can be converted to int
         rewrite(Float(f)).to(Float.rational(Rational(f.to_i64(), 1)), eq(f64.from_i64(f.to_i64())).to(f)),
+        # always convert from int to rational
         rewrite(Float.from_int(Int(i))).to(Float.rational(Rational(i, 1))),
         rewrite(Float(f) + Float(f2)).to(Float(f + f2)),
         rewrite(Float(f) - Float(f2)).to(Float(f - f2)),
@@ -252,11 +349,13 @@ def _float(f: f64, f2: f64, i: i64, r: Rational, r1: Rational):
         rewrite(Float.rational(r) + Float.rational(r1)).to(Float.rational(r + r1)),
         rewrite(Float.rational(r) - Float.rational(r1)).to(Float.rational(r - r1)),
         rewrite(Float.rational(r) * Float.rational(r1)).to(Float.rational(r * r1)),
+        rewrite(Float(f) ** Float(f2)).to(Float(f**f2)),
+        # ==
+        rewrite(Float(f) == Float(f)).to(TRUE),
+        rewrite(Float(f) == Float(f2)).to(FALSE, ne(f).to(f2)),
+        rewrite(Float.rational(r) == Float.rational(r)).to(TRUE),
+        rewrite(Float.rational(r) == Float.rational(r1)).to(FALSE, ne(r).to(r1)),
     ]
-
-
-@function
-def index_vec_int(xs: Vec[Int], i: Int) -> Int: ...
 
 
 class TupleInt(Expr, ruleset=array_api_ruleset):
@@ -269,27 +368,29 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
     @classmethod
     def var(cls, name: StringLike) -> TupleInt: ...
 
-    EMPTY: ClassVar[TupleInt]
-
     def __init__(self, length: IntLike, idx_fn: Callable[[Int], Int]) -> None: ...
+
+    EMPTY: ClassVar[TupleInt]
+    NEVER: ClassVar[TupleInt]
+
+    def append(self, i: IntLike) -> TupleInt: ...
 
     @classmethod
     def single(cls, i: Int) -> TupleInt:
         return TupleInt(Int(1), lambda _: i)
 
+    @method(subsume=True)
     @classmethod
     def range(cls, stop: IntLike) -> TupleInt:
         return TupleInt(stop, lambda i: i)
 
     @classmethod
-    def from_vec(cls, vec: Vec[Int]) -> TupleInt:
-        return TupleInt(vec.length(), partial(index_vec_int, vec))
+    def from_vec(cls, vec: VecLike[Int, IntLike]) -> TupleInt: ...
 
-    @method(subsume=True)
-    def __add__(self, other: TupleInt) -> TupleInt:
+    def __add__(self, other: TupleIntLike) -> TupleInt:
+        other = cast(TupleInt, other)
         return TupleInt(
-            self.length() + other.length(),
-            lambda i: Int.if_(i < self.length(), self[i], other[i - self.length()]),
+            self.length() + other.length(), lambda i: Int.if_(i < self.length(), self[i], other[i - self.length()])
         )
 
     def length(self) -> Int: ...
@@ -301,83 +402,112 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[Int]:
+        # TODO: Change to use as_vec when we have supported execing vecs
         return iter(self[i] for i in range(len(self)))
 
-    def fold(self, init: Int, f: Callable[[Int, Int], Int]) -> Int: ...
-
-    def fold_boolean(self, init: Boolean, f: Callable[[Boolean, Int], Boolean]) -> Boolean: ...
+    def foldl(self, f: Callable[[Int, Int], Int], init: Int) -> Int: ...
+    def foldl_boolean(self, f: Callable[[Boolean, Int], Boolean], init: Boolean) -> Boolean: ...
+    def foldl_tuple_int(self, f: Callable[[TupleInt, Int], TupleInt], init: TupleIntLike) -> TupleInt: ...
 
     @method(subsume=True)
     def contains(self, i: Int) -> Boolean:
-        return self.fold_boolean(FALSE, lambda acc, j: acc | (i == j))
+        return self.foldl_boolean(lambda acc, j: acc | (i == j), FALSE)
 
-    def filter(self, f: Callable[[Int], Boolean]) -> TupleInt: ...
+    @method(subsume=True)
+    def filter(self, f: Callable[[Int], Boolean]) -> TupleInt:
+        return self.foldl_tuple_int(
+            lambda acc, v: TupleInt.if_(f(v), acc.append(v), acc),
+            TupleInt.EMPTY,
+        )
 
     @method(subsume=True)
     def map(self, f: Callable[[Int], Int]) -> TupleInt:
         return TupleInt(self.length(), lambda i: f(self[i]))
 
     @classmethod
-    def if_(cls, b: Boolean, i: TupleInt, j: TupleInt) -> TupleInt: ...
+    def if_(cls, b: BooleanLike, i: TupleIntLike, j: TupleIntLike) -> TupleInt: ...
 
     @method(preserve=True)
     def to_py(self) -> tuple[int, ...]:
         return tuple(int(i) for i in self)
 
+    def drop(self, n: Int) -> TupleInt:
+        return TupleInt(self.length() - n, lambda i: self[i + n])
 
-# TODO: Upcast args for Vec[Int] constructor
-converter(tuple, TupleInt, lambda x: TupleInt.from_vec(Vec(*(convert(i, Int) for i in x))))
+    def product(self) -> Int:
+        return self.foldl(lambda acc, i: acc * i, Int(1))
 
-TupleIntLike: TypeAlias = TupleInt | tuple[IntLike, ...]
+    def map_tuple_int(self, f: Callable[[Int], TupleInt]) -> TupleTupleInt:
+        return TupleTupleInt(self.length(), lambda i: f(self[i]))
+
+    def select(self, indices: TupleIntLike) -> TupleInt:
+        """
+        Return a new tuple with the elements at the given indices
+        """
+        indices = cast(TupleInt, indices)
+        return indices.map(lambda i: self[i])
+
+    def deselect(self, indices: TupleIntLike) -> TupleInt:
+        """
+        Return a new tuple with the elements not at the given indices
+        """
+        indices = cast(TupleInt, indices)
+        return TupleInt.range(self.length()).filter(lambda i: ~indices.contains(i)).map(lambda i: self[i])
+
+
+converter(Vec[Int], TupleInt, lambda x: TupleInt.from_vec(x))
+
+TupleIntLike: TypeAlias = TupleInt | VecLike[Int, IntLike]
 
 
 @array_api_ruleset.register
 def _tuple_int(
     i: Int,
     i2: Int,
-    k: i64,
     f: Callable[[Int, Int], Int],
     bool_f: Callable[[Boolean, Int], Boolean],
     idx_fn: Callable[[Int], Int],
-    map_fn: Callable[[Int], Int],
-    filter_f: Callable[[Int], Boolean],
+    tuple_int_f: Callable[[TupleInt, Int], TupleInt],
     vs: Vec[Int],
     b: Boolean,
     ti: TupleInt,
     ti2: TupleInt,
+    k: i64,
 ):
     return [
+        # Functional access
         rewrite(TupleInt(i, idx_fn).length()).to(i),
-        rewrite(TupleInt(i, idx_fn)[i2]).to(idx_fn(i2)),
-        # index_vec_int
-        rewrite(index_vec_int(vs, Int(k))).to(vs[k], vs.length() > k),
+        rewrite(TupleInt(i, idx_fn)[i2]).to(idx_fn(check_index(i, i2))),
+        # cons access
+        rewrite(TupleInt.EMPTY.length()).to(Int(0)),
+        rewrite(TupleInt.EMPTY[i]).to(Int.NEVER),
+        rewrite(ti.append(i).length()).to(ti.length() + 1),
+        rewrite(ti.append(i)[i2]).to(Int.if_(i2 == ti.length(), i, ti[i2])),
+        # cons to functional (removed this so that there is not infinite replacements between the,)
+        # rewrite(TupleInt.EMPTY).to(TupleInt(0, lambda _: Int.NEVER)),
+        # rewrite(TupleInt(i, idx_fn).append(i2)).to(TupleInt(i + 1, lambda j: Int.if_(j == i, i2, idx_fn(j)))),
+        # functional to cons
+        rewrite(TupleInt(0, idx_fn), subsume=True).to(TupleInt.EMPTY),
+        rewrite(TupleInt(Int(k), idx_fn), subsume=True).to(TupleInt(k - 1, idx_fn).append(idx_fn(Int(k - 1))), k > 0),
+        # cons to vec
+        rewrite(TupleInt.EMPTY).to(TupleInt.from_vec(Vec[Int]())),
+        rewrite(TupleInt.from_vec(vs).append(i)).to(TupleInt.from_vec(vs.append(Vec(i)))),
         # fold
-        rewrite(TupleInt(0, idx_fn).fold(i, f)).to(i),
-        rewrite(TupleInt(Int(k), idx_fn).fold(i, f)).to(
-            f(TupleInt(k - 1, lambda i: idx_fn(i + 1)).fold(i, f), idx_fn(Int(0))),
-            ne(k).to(i64(0)),
-        ),
+        rewrite(TupleInt.EMPTY.foldl(f, i), subsume=True).to(i),
+        rewrite(ti.append(i2).foldl(f, i), subsume=True).to(f(ti.foldl(f, i), i2)),
         # fold boolean
-        rewrite(TupleInt(0, idx_fn).fold_boolean(b, bool_f)).to(b),
-        rewrite(TupleInt(Int(k), idx_fn).fold_boolean(b, bool_f)).to(
-            bool_f(TupleInt(k - 1, lambda i: idx_fn(i + 1)).fold_boolean(b, bool_f), idx_fn(Int(0))),
-            ne(k).to(i64(0)),
+        rewrite(TupleInt.EMPTY.foldl_boolean(bool_f, b), subsume=True).to(b),
+        rewrite(ti.append(i2).foldl_boolean(bool_f, b), subsume=True).to(bool_f(ti.foldl_boolean(bool_f, b), i2)),
+        # fold tuple_int
+        rewrite(TupleInt.EMPTY.foldl_tuple_int(tuple_int_f, ti), subsume=True).to(ti),
+        rewrite(ti.append(i2).foldl_tuple_int(tuple_int_f, ti2), subsume=True).to(
+            tuple_int_f(ti.foldl_tuple_int(tuple_int_f, ti2), i2)
         ),
-        # filter TODO: could be written as fold w/ generic types
-        rewrite(TupleInt(0, idx_fn).filter(filter_f)).to(TupleInt(0, idx_fn)),
-        rewrite(TupleInt(Int(k), idx_fn).filter(filter_f)).to(
-            TupleInt.if_(
-                filter_f(value := idx_fn(Int(k - 1))),
-                (remaining := TupleInt(k - 1, idx_fn).filter(filter_f)) + TupleInt.single(value),
-                remaining,
-            ),
-            ne(k).to(i64(0)),
-        ),
-        # Empty
-        rewrite(TupleInt.EMPTY, subsume=True).to(TupleInt(0, bottom_indexing)),
         # if_
-        rewrite(TupleInt.if_(TRUE, ti, ti2)).to(ti),
-        rewrite(TupleInt.if_(FALSE, ti, ti2)).to(ti2),
+        rewrite(TupleInt.if_(TRUE, ti, ti2), subsume=True).to(ti),
+        rewrite(TupleInt.if_(FALSE, ti, ti2), subsume=True).to(ti2),
+        # unify append
+        rule(eq(ti.append(i)).to(ti2.append(i2))).then(union(ti).with_(ti2), union(i).with_(i2)),
     ]
 
 
@@ -391,16 +521,18 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
 
     @method(subsume=True)
     @classmethod
-    def single(cls, i: TupleInt) -> TupleTupleInt:
-        return TupleTupleInt(Int(1), lambda _: i)
+    def single(cls, i: TupleIntLike) -> TupleTupleInt:
+        i = cast(TupleInt, i)
+        return TupleTupleInt(1, lambda _: i)
 
     @method(subsume=True)
     @classmethod
-    def from_vec(cls, vec: Vec[Int]) -> TupleInt:
-        return TupleInt(vec.length(), partial(index_vec_int, vec))
+    def from_vec(cls, vec: Vec[TupleInt]) -> TupleTupleInt: ...
 
-    @method(subsume=True)
-    def __add__(self, other: TupleTupleInt) -> TupleTupleInt:
+    def append(self, i: TupleIntLike) -> TupleTupleInt: ...
+
+    def __add__(self, other: TupleTupleIntLike) -> TupleTupleInt:
+        other = cast(TupleTupleInt, other)
         return TupleTupleInt(
             self.length() + other.length(),
             lambda i: TupleInt.if_(i < self.length(), self[i], other[i - self.length()]),
@@ -417,12 +549,78 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
     def __iter__(self) -> Iterator[TupleInt]:
         return iter(self[i] for i in range(len(self)))
 
+    def drop(self, n: Int) -> TupleTupleInt:
+        return TupleTupleInt(self.length() - n, lambda i: self[i + n])
 
-@function
-def bottom_indexing(i: Int) -> Int: ...
+    def map_int(self, f: Callable[[TupleInt], Int]) -> TupleInt:
+        return TupleInt(self.length(), lambda i: f(self[i]))
+
+    def foldl_value(self, f: Callable[[Value, TupleInt], Value], init: ValueLike) -> Value: ...
+
+    @method(subsume=True)
+    def product(self) -> TupleTupleInt:
+        """
+        Cartesian product of inputs
+
+        https://docs.python.org/3/library/itertools.html#itertools.product
+
+        https://github.com/saulshanabrook/saulshanabrook/discussions/39
+        """
+        return TupleTupleInt(
+            self.map_int(lambda x: x.length()).product(),
+            lambda i: TupleInt(
+                self.length(),
+                lambda j: self[j][(i // self.drop(j + 1).map_int(lambda x: x.length()).product()) % self[j].length()],
+            ),
+        )
 
 
-class OptionalInt(Expr):
+converter(Vec[TupleInt], TupleTupleInt, lambda x: TupleTupleInt.from_vec(x))
+
+TupleTupleIntLike: TypeAlias = TupleTupleInt | VecLike[TupleInt, TupleIntLike]
+
+
+@array_api_ruleset.register
+def _tuple_tuple_int(
+    length: Int,
+    fn: Callable[[TupleInt], Int],
+    idx_fn: Callable[[Int], TupleInt],
+    f: Callable[[Value, TupleInt], Value],
+    i: Value,
+    k: i64,
+    idx: Int,
+    vs: Vec[TupleInt],
+    ti: TupleInt,
+    ti1: TupleInt,
+    tti: TupleTupleInt,
+    tti1: TupleTupleInt,
+):
+    yield rewrite(TupleTupleInt(length, idx_fn).length()).to(length)
+    yield rewrite(TupleTupleInt(length, idx_fn)[idx]).to(idx_fn(check_index(idx, length)))
+
+    # cons access
+    yield rewrite(TupleTupleInt.EMPTY.length()).to(Int(0))
+    yield rewrite(TupleTupleInt.EMPTY[idx]).to(TupleInt.NEVER)
+    yield rewrite(tti.append(ti).length()).to(tti.length() + 1)
+    yield rewrite(tti.append(ti)[idx]).to(TupleInt.if_(idx == tti.length(), ti, tti[idx]))
+
+    # functional to cons
+    yield rewrite(TupleTupleInt(0, idx_fn), subsume=True).to(TupleTupleInt.EMPTY)
+    yield rewrite(TupleTupleInt(Int(k), idx_fn), subsume=True).to(
+        TupleTupleInt(k - 1, idx_fn).append(idx_fn(Int(k - 1))), k > 0
+    )
+    # cons to vec
+    yield rewrite(TupleTupleInt.EMPTY).to(TupleTupleInt.from_vec(Vec[TupleInt]()))
+    yield rewrite(TupleTupleInt.from_vec(vs).append(ti)).to(TupleTupleInt.from_vec(vs.append(Vec(ti))))
+    # fold value
+    yield rewrite(TupleTupleInt.EMPTY.foldl_value(f, i), subsume=True).to(i)
+    yield rewrite(tti.append(ti).foldl_value(f, i), subsume=True).to(f(tti.foldl_value(f, i), ti))
+
+    # unify append
+    yield rule(eq(tti.append(ti)).to(tti1.append(ti1))).then(union(tti).with_(tti1), union(ti).with_(ti1))
+
+
+class OptionalInt(Expr, ruleset=array_api_ruleset):
     none: ClassVar[OptionalInt]
 
     @classmethod
@@ -433,7 +631,7 @@ converter(type(None), OptionalInt, lambda _: OptionalInt.none)
 converter(Int, OptionalInt, OptionalInt.some)
 
 
-class DType(Expr):
+class DType(Expr, ruleset=array_api_ruleset):
     float64: ClassVar[DType]
     float32: ClassVar[DType]
     int64: ClassVar[DType]
@@ -462,7 +660,7 @@ def _():
         yield rewrite(l == r).to(TRUE if l is r else FALSE)
 
 
-class IsDtypeKind(Expr):
+class IsDtypeKind(Expr, ruleset=array_api_ruleset):
     NULL: ClassVar[IsDtypeKind]
 
     @classmethod
@@ -512,7 +710,196 @@ def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
     ]
 
 
-class Slice(Expr):
+# TODO: Add pushdown for math on scalars to values
+# and add replacements
+
+
+class Value(Expr, ruleset=array_api_ruleset):
+    NEVER: ClassVar[Value]
+
+    @classmethod
+    def int(cls, i: IntLike) -> Value: ...
+
+    @classmethod
+    def float(cls, f: FloatLike) -> Value: ...
+
+    @classmethod
+    def bool(cls, b: BooleanLike) -> Value: ...
+
+    def isfinite(self) -> Boolean: ...
+
+    def __lt__(self, other: ValueLike) -> Value: ...
+
+    def __truediv__(self, other: ValueLike) -> Value: ...
+
+    def __mul__(self, other: ValueLike) -> Value: ...
+
+    def __add__(self, other: ValueLike) -> Value: ...
+
+    def astype(self, dtype: DType) -> Value: ...
+
+    # TODO: Add all operations
+
+    @property
+    def dtype(self) -> DType:
+        """
+        Default dtype for this scalar value
+        """
+
+    @property
+    def to_bool(self) -> Boolean: ...
+
+    @property
+    def to_int(self) -> Int: ...
+
+    @property
+    def to_truthy_value(self) -> Value:
+        """
+        Converts the value to a bool, based on if its truthy.
+
+        https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.any.html
+        """
+
+    def conj(self) -> Value: ...
+    def real(self) -> Value: ...
+    def sqrt(self) -> Value: ...
+
+    @classmethod
+    def if_(cls, b: BooleanLike, i: ValueLike, j: ValueLike) -> Value: ...
+
+    def __eq__(self, other: ValueLike) -> Boolean: ...  # type: ignore[override]
+
+
+ValueLike: TypeAlias = Value | IntLike | FloatLike | BooleanLike
+
+
+converter(Int, Value, Value.int)
+converter(Float, Value, Value.float)
+converter(Boolean, Value, Value.bool)
+converter(Value, Int, lambda x: x.to_int, 10)
+
+
+@array_api_ruleset.register
+def _value(i: Int, f: Float, b: Boolean, v: Value, v1: Value, i1: Int, f1: Float, b1: Boolean):
+    # Default dtypes
+    # https://data-apis.org/array-api/latest/API_specification/data_types.html?highlight=dtype#default-data-types
+    yield rewrite(Value.int(i).dtype).to(DType.int64)
+    yield rewrite(Value.float(f).dtype).to(DType.float64)
+    yield rewrite(Value.bool(b).dtype).to(DType.bool)
+
+    yield rewrite(Value.bool(b).to_bool).to(b)
+    yield rewrite(Value.int(i).to_int).to(i)
+
+    yield rewrite(Value.bool(b).to_truthy_value).to(Value.bool(b))
+    # TODO: Add more rules for to_bool_value
+
+    yield rewrite(Value.float(f).conj()).to(Value.float(f))
+    yield rewrite(Value.float(f).real()).to(Value.float(f))
+    yield rewrite(Value.int(i).real()).to(Value.int(i))
+    yield rewrite(Value.int(i).conj()).to(Value.int(i))
+
+    yield rewrite(Value.float(f).sqrt()).to(Value.float(f ** (0.5)))
+
+    yield rewrite(Value.float(Float.rational(Rational(0, 1))) + v).to(v)
+
+    yield rewrite(Value.if_(TRUE, v, v1)).to(v)
+    yield rewrite(Value.if_(FALSE, v, v1)).to(v1)
+
+    # ==
+    yield rewrite(Value.int(i) == Value.int(i1)).to(i == i1)
+    yield rewrite(Value.float(f) == Value.float(f1)).to(f == f1)
+    yield rewrite(Value.bool(b) == Value.bool(b1)).to(b == b1)
+
+
+class TupleValue(Expr, ruleset=array_api_ruleset):
+    EMPTY: ClassVar[TupleValue]
+
+    def __init__(self, length: IntLike, idx_fn: Callable[[Int], Value]) -> None: ...
+
+    def append(self, i: ValueLike) -> TupleValue: ...
+
+    @classmethod
+    def from_vec(cls, vec: Vec[Value]) -> TupleValue: ...
+
+    def __add__(self, other: TupleValueLike) -> TupleValue:
+        other = cast(TupleValue, other)
+        return TupleValue(
+            self.length() + other.length(),
+            lambda i: Value.if_(i < self.length(), self[i], other[i - self.length()]),
+        )
+
+    def length(self) -> Int: ...
+
+    def __getitem__(self, i: Int) -> Value: ...
+
+    def foldl_boolean(self, f: Callable[[Boolean, Value], Boolean], init: BooleanLike) -> Boolean: ...
+
+    def contains(self, value: ValueLike) -> Boolean:
+        value = cast(Value, value)
+        return self.foldl_boolean(lambda acc, j: acc | (value == j), FALSE)
+
+    @method(subsume=True)
+    @classmethod
+    def from_tuple_int(cls, ti: TupleIntLike) -> TupleValue:
+        ti = cast(TupleInt, ti)
+        return TupleValue(ti.length(), lambda i: Value.int(ti[i]))
+
+
+converter(Vec[Value], TupleValue, lambda x: TupleValue.from_vec(x))
+converter(TupleInt, TupleValue, lambda x: TupleValue.from_tuple_int(x))
+
+TupleValueLike: TypeAlias = TupleValue | VecLike[Value, ValueLike] | TupleIntLike
+
+
+@array_api_ruleset.register
+def _tuple_value(
+    length: Int,
+    idx_fn: Callable[[Int], Value],
+    k: i64,
+    idx: Int,
+    vs: Vec[Value],
+    v: Value,
+    v1: Value,
+    tv: TupleValue,
+    tv1: TupleValue,
+    bool_f: Callable[[Boolean, Value], Boolean],
+    b: Boolean,
+):
+    yield rewrite(TupleValue(length, idx_fn).length()).to(length)
+    yield rewrite(TupleValue(length, idx_fn)[idx]).to(idx_fn(check_index(idx, length)))
+
+    # cons access
+    yield rewrite(TupleValue.EMPTY.length()).to(Int(0))
+    yield rewrite(TupleValue.EMPTY[idx]).to(Value.NEVER)
+    yield rewrite(tv.append(v).length()).to(tv.length() + 1)
+    yield rewrite(tv.append(v)[idx]).to(Value.if_(idx == tv.length(), v, tv[idx]))
+
+    # functional to cons
+    yield rewrite(TupleValue(0, idx_fn), subsume=True).to(TupleValue.EMPTY)
+    yield rewrite(TupleValue(Int(k), idx_fn), subsume=True).to(
+        TupleValue(k - 1, idx_fn).append(idx_fn(Int(k - 1))), k > 0
+    )
+
+    # cons to vec
+    yield rewrite(TupleValue.EMPTY).to(TupleValue.from_vec(Vec[Value]()))
+    yield rewrite(TupleValue.from_vec(vs).append(v)).to(TupleValue.from_vec(vs.append(Vec(v))))
+
+    # fold boolean
+    yield rewrite(TupleValue.EMPTY.foldl_boolean(bool_f, b), subsume=True).to(b)
+    yield rewrite(tv.append(v).foldl_boolean(bool_f, b), subsume=True).to(bool_f(tv.foldl_boolean(bool_f, b), v))
+
+    # unify append
+    yield rule(eq(tv.append(v)).to(tv1.append(v1))).then(union(tv).with_(tv1), union(v).with_(v1))
+
+
+@function
+def possible_values(values: Value) -> TupleValue:
+    """
+    All possible values in the input value.
+    """
+
+
+class Slice(Expr, ruleset=array_api_ruleset):
     def __init__(
         self,
         start: OptionalInt = OptionalInt.none,
@@ -530,7 +917,7 @@ converter(
 SliceLike: TypeAlias = Slice | slice
 
 
-class MultiAxisIndexKeyItem(Expr):
+class MultiAxisIndexKeyItem(Expr, ruleset=array_api_ruleset):
     ELLIPSIS: ClassVar[MultiAxisIndexKeyItem]
     NONE: ClassVar[MultiAxisIndexKeyItem]
 
@@ -571,7 +958,7 @@ converter(
 )
 
 
-class IndexKey(Expr):
+class IndexKey(Expr, ruleset=array_api_ruleset):
     """
     A key for indexing into an array
 
@@ -614,142 +1001,16 @@ converter(Slice, IndexKey, lambda s: IndexKey.slice(s))
 converter(MultiAxisIndexKey, IndexKey, lambda m: IndexKey.multi_axis(m))
 
 
-class Device(Expr): ...
+class Device(Expr, ruleset=array_api_ruleset): ...
 
 
 ALL_INDICES: TupleInt = constant("ALL_INDICES", TupleInt)
 
 
-# TODO: Add pushdown for math on scalars to values
-# and add replacements
+class NDArray(Expr, ruleset=array_api_ruleset):
+    def __init__(self, shape: TupleIntLike, dtype: DType, idx_fn: Callable[[TupleInt], Value]) -> None: ...
 
-
-class Value(Expr):
-    @classmethod
-    def int(cls, i: Int) -> Value: ...
-
-    @classmethod
-    def float(cls, f: Float) -> Value: ...
-
-    @classmethod
-    def bool(cls, b: Boolean) -> Value: ...
-
-    def isfinite(self) -> Boolean: ...
-
-    def __lt__(self, other: Value) -> Value: ...
-
-    def __truediv__(self, other: Value) -> Value: ...
-
-    def astype(self, dtype: DType) -> Value: ...
-
-    # TODO: Add all operations
-
-    @property
-    def dtype(self) -> DType:
-        """
-        Default dtype for this scalar value
-        """
-
-    @property
-    def to_bool(self) -> Boolean: ...
-
-    @property
-    def to_int(self) -> Int: ...
-
-    @property
-    def to_truthy_value(self) -> Value:
-        """
-        Converts the value to a bool, based on if its truthy.
-
-        https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.any.html
-        """
-
-
-converter(Int, Value, Value.int)
-converter(Float, Value, Value.float)
-converter(Boolean, Value, Value.bool)
-converter(Value, Int, lambda x: x.to_int, 10)
-
-ValueLike: TypeAlias = Value | IntLike | FloatLike | BooleanLike
-
-
-@array_api_ruleset.register
-def _value(i: Int, f: Float, b: Boolean):
-    # Default dtypes
-    # https://data-apis.org/array-api/latest/API_specification/data_types.html?highlight=dtype#default-data-types
-    yield rewrite(Value.int(i).dtype).to(DType.int64)
-    yield rewrite(Value.float(f).dtype).to(DType.float64)
-    yield rewrite(Value.bool(b).dtype).to(DType.bool)
-
-    yield rewrite(Value.bool(b).to_bool).to(b)
-    yield rewrite(Value.int(i).to_int).to(i)
-
-    yield rewrite(Value.bool(b).to_truthy_value).to(Value.bool(b))
-    # TODO: Add more rules for to_bool_value
-
-
-class TupleValue(Expr):
-    EMPTY: ClassVar[TupleValue]
-
-    def __init__(self, head: Value) -> None: ...
-
-    def __add__(self, other: TupleValue) -> TupleValue: ...
-
-    def length(self) -> Int: ...
-
-    def __getitem__(self, i: Int) -> Value: ...
-
-    def includes(self, value: Value) -> Boolean: ...
-
-
-converter(
-    tuple,
-    TupleValue,
-    lambda x: TupleValue(convert(x[0], Value)) + convert(x[1:], TupleValue)
-    if len(x) > 1
-    else TupleValue(convert(x[0], Value))
-    if x
-    else TupleValue.EMPTY,
-)
-
-TupleValueLike: TypeAlias = TupleValue | tuple[ValueLike, ...]
-
-
-@array_api_ruleset.register
-def _tuple_value(
-    ti: TupleValue,
-    ti2: TupleValue,
-    v: Value,
-    i: Int,
-    v2: Value,
-    k: i64,
-):
-    return [
-        rewrite(ti + TupleValue.EMPTY).to(ti),
-        rewrite(TupleValue.EMPTY.length()).to(Int(0)),
-        rewrite(TupleValue(v).length()).to(Int(1)),
-        rewrite((ti + ti2).length()).to(ti.length() + ti2.length()),
-        rewrite(TupleValue(v)[Int(0)]).to(v),
-        rewrite((TupleValue(v) + ti)[Int(0)]).to(v),
-        # Rule for indexing > 0
-        rule(eq(v).to((TupleValue(v2) + ti)[Int(k)]), k > 0).then(union(v).with_(ti[Int(k - 1)])),
-        # Includes
-        rewrite(TupleValue.EMPTY.includes(v)).to(FALSE),
-        rewrite(TupleValue(v).includes(v)).to(TRUE),
-        rewrite(TupleValue(v).includes(v2)).to(FALSE, ne(v).to(v2)),
-        rewrite((ti + ti2).includes(v), subsume=True).to(ti.includes(v) | ti2.includes(v)),
-    ]
-
-
-@function
-def possible_values(values: Value) -> TupleValue:
-    """
-    A value that is one of the values in the tuple.
-    """
-
-
-class NDArray(Expr):
-    def __init__(self, shape: TupleInt, dtype: DType, idx_fn: Callable[[TupleInt], Value]) -> None: ...
+    NEVER: ClassVar[NDArray]
 
     @method(cost=200)
     @classmethod
@@ -791,48 +1052,48 @@ class NDArray(Expr):
 
     def __setitem__(self, key: IndexKeyLike, value: NDArray) -> None: ...
 
-    def __lt__(self, other: NDArray) -> NDArray: ...
+    def __lt__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __le__(self, other: NDArray) -> NDArray: ...
+    def __le__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __eq__(self, other: NDArray) -> NDArray:  # type: ignore[override]
+    def __eq__(self, other: NDArrayLike) -> NDArray:  # type: ignore[override]
         ...
 
     # TODO: Add support for overloaded __ne__
-    # def __ne__(self, other: NDArray) -> NDArray:  # type: ignore[override]
+    # def __ne__(self, other: NDArrayLike) -> NDArray:  # type: ignore[override]
     #     ...
 
-    def __gt__(self, other: NDArray) -> NDArray: ...
+    def __gt__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __ge__(self, other: NDArray) -> NDArray: ...
+    def __ge__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __add__(self, other: NDArray) -> NDArray: ...
+    def __add__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __sub__(self, other: NDArray) -> NDArray: ...
+    def __sub__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __mul__(self, other: NDArray) -> NDArray: ...
+    def __mul__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __matmul__(self, other: NDArray) -> NDArray: ...
+    def __matmul__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __truediv__(self, other: NDArray) -> NDArray: ...
+    def __truediv__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __floordiv__(self, other: NDArray) -> NDArray: ...
+    def __floordiv__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __mod__(self, other: NDArray) -> NDArray: ...
+    def __mod__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __divmod__(self, other: NDArray) -> NDArray: ...
+    def __divmod__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __pow__(self, other: NDArray) -> NDArray: ...
+    def __pow__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __lshift__(self, other: NDArray) -> NDArray: ...
+    def __lshift__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __rshift__(self, other: NDArray) -> NDArray: ...
+    def __rshift__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __and__(self, other: NDArray) -> NDArray: ...
+    def __and__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __xor__(self, other: NDArray) -> NDArray: ...
+    def __xor__(self, other: NDArrayLike) -> NDArray: ...
 
-    def __or__(self, other: NDArray) -> NDArray: ...
+    def __or__(self, other: NDArrayLike) -> NDArray: ...
 
     def __radd__(self, other: NDArray) -> NDArray: ...
 
@@ -861,9 +1122,18 @@ class NDArray(Expr):
     def __ror__(self, other: NDArray) -> NDArray: ...
 
     @classmethod
-    def scalar(cls, value: Value) -> NDArray: ...
+    def scalar(cls, value: Value) -> NDArray:
+        return NDArray(TupleInt.EMPTY, value.dtype, lambda _: value)
 
-    def to_value(self) -> Value: ...
+    def to_value(self) -> Value:
+        """
+        Returns the value if this is a scalar.
+        """
+
+    def to_values(self) -> TupleValue:
+        """
+        Returns the value if this is a vector.
+        """
 
     @property
     def T(self) -> NDArray:
@@ -872,12 +1142,15 @@ class NDArray(Expr):
         """
 
     @classmethod
-    def vector(cls, values: TupleValue) -> NDArray: ...
+    def vector(cls, values: TupleValueLike) -> NDArray: ...
 
     def index(self, indices: TupleIntLike) -> Value:
         """
         Return the value at the given indices.
         """
+
+    @classmethod
+    def if_(cls, b: BooleanLike, i: NDArrayLike, j: NDArrayLike) -> NDArray: ...
 
 
 NDArrayLike: TypeAlias = NDArray | ValueLike | TupleValueLike
@@ -885,14 +1158,16 @@ NDArrayLike: TypeAlias = NDArray | ValueLike | TupleValueLike
 converter(NDArray, IndexKey, IndexKey.ndarray)
 converter(Value, NDArray, NDArray.scalar)
 # Need this if we want to use ints in slices of arrays coming from 1d arrays, but make it more expensive
-# to prefer upcasting in the other direction when we can, which is safter at runtime
+# to prefer upcasting in the other direction when we can, which is safer at runtime
 converter(NDArray, Value, lambda n: n.to_value(), 100)
 converter(TupleValue, NDArray, NDArray.vector)
+converter(TupleInt, TupleValue, TupleValue.from_tuple_int)
 
 
 @array_api_ruleset.register
 def _ndarray(
     x: NDArray,
+    x1: NDArray,
     b: Boolean,
     f: Float,
     fi1: f64,
@@ -900,14 +1175,18 @@ def _ndarray(
     shape: TupleInt,
     dtype: DType,
     idx_fn: Callable[[TupleInt], Value],
+    idx: TupleInt,
+    tv: TupleValue,
 ):
     return [
         rewrite(NDArray(shape, dtype, idx_fn).shape).to(shape),
         rewrite(NDArray(shape, dtype, idx_fn).dtype).to(dtype),
+        rewrite(NDArray(shape, dtype, idx_fn).index(idx), subsume=True).to(idx_fn(idx)),
         rewrite(x.ndim).to(x.shape.length()),
         # rewrite(NDArray.scalar(Value.bool(b)).to_bool()).to(b),
         # Converting to a value requires a scalar bool value
         rewrite(x.to_value()).to(x.index(TupleInt.EMPTY)),
+        rewrite(NDArray.vector(tv).to_values()).to(tv),
         # TODO: Push these down to float
         rewrite(NDArray.scalar(Value.float(f)) / NDArray.scalar(Value.float(f))).to(
             NDArray.scalar(Value.float(Float(1.0)))
@@ -923,17 +1202,32 @@ def _ndarray(
         ),
         # Transpose of tranpose is the original array
         rewrite(x.T.T).to(x),
+        # if_
+        rewrite(NDArray.if_(TRUE, x, x1)).to(x),
+        rewrite(NDArray.if_(FALSE, x, x1)).to(x1),
     ]
 
 
-class TupleNDArray(Expr):
+class TupleNDArray(Expr, ruleset=array_api_ruleset):
     EMPTY: ClassVar[TupleNDArray]
 
-    def __init__(self, head: NDArray) -> None: ...
+    def __init__(self, length: IntLike, idx_fn: Callable[[Int], NDArray]) -> None: ...
 
-    def __add__(self, other: TupleNDArray) -> TupleNDArray: ...
+    def append(self, i: NDArrayLike) -> TupleNDArray: ...
+
+    @classmethod
+    def from_vec(cls, vec: Vec[NDArray]) -> TupleNDArray: ...
+
+    def __add__(self, other: TupleNDArrayLike) -> TupleNDArray:
+        other = cast(TupleNDArray, other)
+        return TupleNDArray(
+            self.length() + other.length(),
+            lambda i: NDArray.if_(i < self.length(), self[i], other[i - self.length()]),
+        )
 
     def length(self) -> Int: ...
+
+    def __getitem__(self, i: IntLike) -> NDArray: ...
 
     @method(preserve=True)
     def __len__(self) -> int:
@@ -941,37 +1235,50 @@ class TupleNDArray(Expr):
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[NDArray]:
-        return iter(self[Int(i)] for i in range(len(self)))
-
-    def __getitem__(self, i: Int) -> NDArray: ...
+        return iter(self[i] for i in range(len(self)))
 
 
-converter(
-    tuple,
-    TupleNDArray,
-    lambda x: TupleNDArray(convert(x[0], NDArray)) + convert(x[1:], TupleNDArray)
-    if len(x) > 1
-    else TupleNDArray(convert(x[0], NDArray))
-    if x
-    else TupleNDArray.EMPTY,
-)
-converter(list, TupleNDArray, lambda x: convert(tuple(x), TupleNDArray))
+converter(Vec[NDArray], TupleNDArray, lambda x: TupleNDArray.from_vec(x))
+
+TupleNDArrayLike: TypeAlias = TupleNDArray | VecLike[NDArray, NDArrayLike]
 
 
 @array_api_ruleset.register
-def _tuple_ndarray(ti: TupleNDArray, ti2: TupleNDArray, n: NDArray, i: Int, i2: Int, k: i64):
-    return [
-        rewrite(ti + TupleNDArray.EMPTY).to(ti),
-        rewrite(TupleNDArray(n).length()).to(Int(1)),
-        rewrite((ti + ti2).length()).to(ti.length() + ti2.length()),
-        # rewrite(TupleNDArray(n)[Int(0)]).to(n),
-        # rewrite((TupleNDArray(n) + ti)[Int(0)]).to(n),
-        # Rule for indexing > 0
-        # rule(eq(i).to((TupleInt(i2) + ti)[Int(k)]), k > 0).then(union(i).with_(ti[Int(k - 1)])),
-    ]
+def _tuple_ndarray(
+    length: Int,
+    idx_fn: Callable[[Int], NDArray],
+    k: i64,
+    idx: Int,
+    vs: Vec[NDArray],
+    v: NDArray,
+    v1: NDArray,
+    tv: TupleNDArray,
+    tv1: TupleNDArray,
+    b: Boolean,
+):
+    yield rewrite(TupleNDArray(length, idx_fn).length()).to(length)
+    yield rewrite(TupleNDArray(length, idx_fn)[idx]).to(idx_fn(check_index(idx, length)))
+
+    # cons access
+    yield rewrite(TupleNDArray.EMPTY.length()).to(Int(0))
+    yield rewrite(TupleNDArray.EMPTY[idx]).to(NDArray.NEVER)
+    yield rewrite(tv.append(v).length()).to(tv.length() + 1)
+    yield rewrite(tv.append(v)[idx]).to(NDArray.if_(idx == tv.length(), v, tv[idx]))
+    # functional to cons
+    yield rewrite(TupleNDArray(0, idx_fn), subsume=True).to(TupleNDArray.EMPTY)
+    yield rewrite(TupleNDArray(Int(k), idx_fn), subsume=True).to(
+        TupleNDArray(k - 1, idx_fn).append(idx_fn(Int(k - 1))), k > 0
+    )
+
+    # cons to vec
+    yield rewrite(TupleNDArray.EMPTY).to(TupleNDArray.from_vec(Vec[NDArray]()))
+    yield rewrite(TupleNDArray.from_vec(vs).append(v)).to(TupleNDArray.from_vec(vs.append(Vec(v))))
+
+    # unify append
+    yield rule(eq(tv.append(v)).to(tv1.append(v1))).then(union(tv).with_(tv1), union(v).with_(v1))
 
 
-class OptionalBool(Expr):
+class OptionalBool(Expr, ruleset=array_api_ruleset):
     none: ClassVar[OptionalBool]
 
     @classmethod
@@ -982,7 +1289,7 @@ converter(type(None), OptionalBool, lambda _: OptionalBool.none)
 converter(Boolean, OptionalBool, lambda x: OptionalBool.some(x))
 
 
-class OptionalDType(Expr):
+class OptionalDType(Expr, ruleset=array_api_ruleset):
     none: ClassVar[OptionalDType]
 
     @classmethod
@@ -993,7 +1300,7 @@ converter(type(None), OptionalDType, lambda _: OptionalDType.none)
 converter(DType, OptionalDType, lambda x: OptionalDType.some(x))
 
 
-class OptionalDevice(Expr):
+class OptionalDevice(Expr, ruleset=array_api_ruleset):
     none: ClassVar[OptionalDevice]
 
     @classmethod
@@ -1004,32 +1311,32 @@ converter(type(None), OptionalDevice, lambda _: OptionalDevice.none)
 converter(Device, OptionalDevice, lambda x: OptionalDevice.some(x))
 
 
-class OptionalTupleInt(Expr):
+class OptionalTupleInt(Expr, ruleset=array_api_ruleset):
     none: ClassVar[OptionalTupleInt]
 
     @classmethod
-    def some(cls, value: TupleInt) -> OptionalTupleInt: ...
+    def some(cls, value: TupleIntLike) -> OptionalTupleInt: ...
 
 
 converter(type(None), OptionalTupleInt, lambda _: OptionalTupleInt.none)
 converter(TupleInt, OptionalTupleInt, lambda x: OptionalTupleInt.some(x))
 
 
-class IntOrTuple(Expr):
+class IntOrTuple(Expr, ruleset=array_api_ruleset):
     none: ClassVar[IntOrTuple]
 
     @classmethod
     def int(cls, value: Int) -> IntOrTuple: ...
 
     @classmethod
-    def tuple(cls, value: TupleInt) -> IntOrTuple: ...
+    def tuple(cls, value: TupleIntLike) -> IntOrTuple: ...
 
 
 converter(Int, IntOrTuple, IntOrTuple.int)
 converter(TupleInt, IntOrTuple, IntOrTuple.tuple)
 
 
-class OptionalIntOrTuple(Expr):
+class OptionalIntOrTuple(Expr, ruleset=array_api_ruleset):
     none: ClassVar[OptionalIntOrTuple]
 
     @classmethod
@@ -1075,7 +1382,7 @@ def _sum(x: NDArray, y: NDArray, v: Value, dtype: DType):
 
 
 @function
-def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none) -> NDArray: ...
+def reshape(x: NDArray, shape: TupleIntLike, copy: OptionalBool = OptionalBool.none) -> NDArray: ...
 
 
 # @function
@@ -1117,7 +1424,12 @@ def reshape(x: NDArray, shape: TupleInt, copy: OptionalBool = OptionalBool.none)
 
 
 @function
-def unique_values(x: NDArray) -> NDArray: ...
+def unique_values(x: NDArrayLike) -> NDArray:
+    """
+    Returns the unique elements of an input array x flattened with arbitrary ordering.
+
+    https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.unique_values.html
+    """
 
 
 @array_api_ruleset.register
@@ -1128,13 +1440,14 @@ def _unique_values(x: NDArray):
 
 
 @function
-def concat(arrays: TupleNDArray, axis: OptionalInt = OptionalInt.none) -> NDArray: ...
+def concat(arrays: TupleNDArrayLike, axis: OptionalInt = OptionalInt.none) -> NDArray: ...
 
 
 @array_api_ruleset.register
 def _concat(x: NDArray):
     return [
-        rewrite(concat(TupleNDArray(x))).to(x),
+        # only support no-op concat for now
+        rewrite(concat(TupleNDArray.EMPTY.append(x))).to(x),
     ]
 
 
@@ -1153,7 +1466,13 @@ def _astype(x: NDArray, dtype: DType, i: i64):
 
 
 @function
-def unique_counts(x: NDArray) -> TupleNDArray: ...
+def unique_counts(x: NDArray) -> TupleNDArray:
+    """
+    Returns the unique elements of an input array x and the corresponding counts for each unique element in x.
+
+
+    https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.unique_counts.html
+    """
 
 
 @array_api_ruleset.register
@@ -1192,7 +1511,12 @@ def _abs(f: Float):
 
 
 @function
-def unique_inverse(x: NDArray) -> TupleNDArray: ...
+def unique_inverse(x: NDArray) -> TupleNDArray:
+    """
+    Returns the unique elements of an input array x and the indices from the set of unique elements that reconstruct x.
+
+    https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.unique_inverse.html
+    """
 
 
 @array_api_ruleset.register
@@ -1206,7 +1530,7 @@ def _unique_inverse(x: NDArray, i: Int):
 
 @function
 def zeros(
-    shape: TupleInt, dtype: OptionalDType = OptionalDType.none, device: OptionalDevice = OptionalDevice.none
+    shape: TupleIntLike, dtype: OptionalDType = OptionalDType.none, device: OptionalDevice = OptionalDevice.none
 ) -> NDArray: ...
 
 
@@ -1252,6 +1576,15 @@ def _linalg(x: NDArray, full_matrices: Boolean):
     ]
 
 
+@function(ruleset=array_api_ruleset)
+def ndindex(shape: TupleIntLike) -> TupleTupleInt:
+    """
+    https://numpy.org/doc/stable/reference/generated/numpy.ndindex.html
+    """
+    shape = cast(TupleInt, shape)
+    return shape.map_tuple_int(TupleInt.range).product()
+
+
 ##
 # Interval analysis
 #
@@ -1285,14 +1618,14 @@ greater_zero = relation("greater_zero", Value)
 
 
 @function
-def broadcast_index(from_shape: TupleInt, to_shape: TupleInt, index: TupleInt) -> TupleInt:
+def broadcast_index(from_shape: TupleIntLike, to_shape: TupleIntLike, index: TupleIntLike) -> TupleInt:
     """
     Returns the index in the original array of the given index in the broadcasted array.
     """
 
 
 @function
-def broadcast_shapes(shape1: TupleInt, shape2: TupleInt) -> TupleInt:
+def broadcast_shapes(shape1: TupleIntLike, shape2: TupleIntLike) -> TupleInt:
     """
     Returns the shape of the broadcasted array.
     """
@@ -1320,7 +1653,7 @@ def _interval_analaysis(
     return [
         # Calling any on an array gives back a sclar, which is true if any of the values are truthy
         rewrite(any(x)).to(
-            NDArray.scalar(Value.bool(possible_values(x.index(ALL_INDICES).to_truthy_value).includes(Value.bool(TRUE))))
+            NDArray.scalar(Value.bool(possible_values(x.index(ALL_INDICES).to_truthy_value).contains(Value.bool(TRUE))))
         ),
         # Indexing x < y is the same as broadcasting the index and then indexing both and then comparing
         rewrite((x < y).index(idx)).to(x_value < y_value),
@@ -1362,7 +1695,7 @@ def _interval_analaysis(
             union(v1).with_(Value.bool(FALSE)),
         ),
         # possible values of bool is bool
-        rewrite(possible_values(Value.bool(b))).to(TupleValue(Value.bool(b))),
+        rewrite(possible_values(Value.bool(b))).to(TupleValue.EMPTY.append(Value.bool(b))),
         # casting to a type preserves if > 0
         rule(
             eq(v1).to(v.astype(dtype)),
@@ -1484,7 +1817,7 @@ def _isfinite(x: NDArray, ti: TupleInt):
 
 
 @function(mutates_first_arg=True)
-def assume_value_one_of(x: NDArray, values: TupleValue) -> None:
+def assume_value_one_of(x: NDArray, values: TupleValueLike) -> None:
     """
     A value that is one of the values in the tuple.
     """
@@ -1524,7 +1857,7 @@ def _unique(xs: TupleValue, a: NDArray, shape: TupleInt, copy: OptionalBool):
 
 @array_api_ruleset.register
 def _size(x: NDArray):
-    yield rewrite(x.size).to(x.shape.fold(Int(1), Int.__mul__))
+    yield rewrite(x.size).to(x.shape.foldl(Int.__mul__, Int(1)))
 
 
 @overload
@@ -1551,9 +1884,10 @@ def try_evaling(expr: Expr, prim_expr: i64 | Bool) -> int | bool:
         try:
             expr_extracted = egraph.extract(expr)
         except BaseException as inner_exc:
-            raise ValueError(f"Cannot simplify {expr}") from inner_exc
-        msg = f"Cannot simplify to primitive {expr_extracted}"
-        raise ValueError(msg) from exc
+            inner_exc.add_note(f"Cannot simplify {expr}")
+            raise
+        exc.add_note(f"Cannot simplify to primitive {expr_extracted}")
+        raise
     return egraph.eval(extracted)
 
     # string = (
@@ -1564,3 +1898,35 @@ def try_evaling(expr: Expr, prim_expr: i64 | Bool) -> int | bool:
     # # save to "tmp.egg"
     # with open("tmp.egg", "w") as f:
     #     f.write(string)
+
+
+# Seperate rulseset so we can use it in program gen
+@ruleset
+def array_api_vec_to_cons_ruleset(
+    vs: Vec[Int],
+    vv: Vec[Value],
+    vn: Vec[NDArray],
+    vt: Vec[TupleInt],
+):
+    yield rewrite(TupleInt.from_vec(vs)).to(TupleInt.EMPTY, eq(vs.length()).to(i64(0)))
+    yield rewrite(TupleInt.from_vec(vs)).to(
+        TupleInt.from_vec(vs.remove(vs.length() - 1)).append(vs[vs.length() - 1]), ne(vs.length()).to(i64(0))
+    )
+
+    yield rewrite(TupleValue.from_vec(vv)).to(TupleValue.EMPTY, eq(vv.length()).to(i64(0)))
+    yield rewrite(TupleValue.from_vec(vv)).to(
+        TupleValue.from_vec(vv.remove(vv.length() - 1)).append(vv[vv.length() - 1]), ne(vv.length()).to(i64(0))
+    )
+
+    yield rewrite(TupleTupleInt.from_vec(vt)).to(TupleTupleInt.EMPTY, eq(vt.length()).to(i64(0)))
+    yield rewrite(TupleTupleInt.from_vec(vt)).to(
+        TupleTupleInt.from_vec(vt.remove(vt.length() - 1)).append(vt[vt.length() - 1]), ne(vt.length()).to(i64(0))
+    )
+    yield rewrite(TupleNDArray.from_vec(vn)).to(TupleNDArray.EMPTY, eq(vn.length()).to(i64(0)))
+    yield rewrite(TupleNDArray.from_vec(vn)).to(
+        TupleNDArray.from_vec(vn.remove(vn.length() - 1)).append(vn[vn.length() - 1]), ne(vn.length()).to(i64(0))
+    )
+
+
+array_api_combined_ruleset = array_api_ruleset | array_api_vec_to_cons_ruleset
+array_api_schedule = array_api_combined_ruleset.saturate()

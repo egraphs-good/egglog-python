@@ -8,6 +8,7 @@ from abc import abstractmethod
 from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field
+from functools import partial
 from inspect import Parameter, currentframe, signature
 from types import FrameType, FunctionType
 from typing import (
@@ -35,6 +36,7 @@ from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_decl
 from .runtime import *
+from .runtime import resolve_type_annotation_mutate
 from .thunk import *
 
 if TYPE_CHECKING:
@@ -42,53 +44,53 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "EGraph",
-    "Module",
-    "function",
-    "ruleset",
-    "method",
-    "relation",
-    "Expr",
-    "Unit",
-    "rewrite",
-    "birewrite",
-    "eq",
-    "ne",
-    "panic",
-    "let",
-    "constant",
-    "delete",
-    "subsume",
-    "union",
-    "set_",
-    "rule",
-    "var",
-    "vars_",
-    "Fact",
-    "expr_parts",
-    "expr_action",
-    "expr_fact",
-    "action_command",
-    "Schedule",
-    "run",
-    "seq",
+    "Action",
     "Command",
-    "simplify",
-    "unstable_combine_rulesets",
-    "check",
+    "Command",
+    "EGraph",
+    "Expr",
+    "Fact",
+    "Fact",
     "GraphvizKwargs",
+    "Module",
+    "RewriteOrRule",
     "Ruleset",
-    "_RewriteBuilder",
+    "Schedule",
+    "Unit",
     "_BirewriteBuilder",
     "_EqBuilder",
     "_NeBuilder",
+    "_RewriteBuilder",
     "_SetBuilder",
     "_UnionBuilder",
-    "RewriteOrRule",
-    "Fact",
-    "Action",
-    "Command",
+    "action_command",
+    "birewrite",
+    "check",
     "check_eq",
+    "constant",
+    "delete",
+    "eq",
+    "expr_action",
+    "expr_fact",
+    "expr_parts",
+    "function",
+    "let",
+    "method",
+    "ne",
+    "panic",
+    "relation",
+    "rewrite",
+    "rule",
+    "ruleset",
+    "run",
+    "seq",
+    "set_",
+    "simplify",
+    "subsume",
+    "union",
+    "unstable_combine_rulesets",
+    "var",
+    "vars_",
 ]
 
 T = TypeVar("T")
@@ -146,20 +148,29 @@ def simplify(x: EXPR, schedule: Schedule | None = None) -> EXPR:
     return EGraph().extract(x)
 
 
-def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None) -> EGraph:
+def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None, *, add_second=True, display=False) -> EGraph:
     """
     Verifies that two expressions are equal after running the schedule.
+
+    If add_second is true, then the second expression is added to the egraph before running the schedule.
     """
     egraph = EGraph()
     x_var = egraph.let("__check_eq_x", x)
-    y_var = egraph.let("__check_eq_y", y)
+    y_var: EXPR = egraph.let("__check_eq_y", y) if add_second else y
     if schedule:
-        egraph.run(schedule)
+        try:
+            egraph.run(schedule)
+        finally:
+            if display:
+                egraph.display()
     fact = eq(x_var).to(y_var)
     try:
         egraph.check(fact)
     except bindings.EggSmolError as err:
-        raise AssertionError(f"Failed {eq(x).to(y)}\n -> {ne(egraph.extract(x)).to(egraph.extract(y))})") from err
+        if display:
+            egraph.display()
+        err.add_note(f"Failed:\n{eq(x).to(y)}\n\nExtracted:\n {eq(egraph.extract(x)).to(egraph.extract(y))})")
+        raise
     return egraph
 
 
@@ -507,7 +518,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         # Get the generic params from the orig bases generic class
         namespace["__orig_bases__"][1].__parameters__ if "__orig_bases__" in namespace else []
     )
-    type_vars = tuple(p.__name__ for p in parameters)
+    type_vars = tuple(ClassTypeVarRef.from_type_var(p) for p in parameters)
     del parameters
     cls_decl = ClassDecl(egg_sort, type_vars, builtin)
     decls = Declarations(_classes={cls_name: cls_decl})
@@ -522,7 +533,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     for k, v in get_type_hints(_Dummytype, globalns=frame.f_globals, localns=frame.f_locals).items():
         if getattr(v, "__origin__", None) == ClassVar:
             (inner_tp,) = v.__args__
-            type_ref = resolve_type_annotation(decls, inner_tp)
+            type_ref = resolve_type_annotation_mutate(decls, inner_tp)
             cls_decl.class_variables[k] = ConstantDecl(type_ref.to_just())
             _add_default_rewrite(
                 decls, ClassVariableRef(cls_name, k), type_ref, namespace.pop(k, None), ruleset, subsume=False
@@ -598,8 +609,9 @@ def _generate_class_decls(  # noqa: C901,PLR0912
                 unextractable=unextractable,
                 subsume=subsume,
             )
-        except ValueError as e:
-            raise ValueError(f"Error processing {cls_name}.{method_name}: {e}") from e
+        except Exception as e:
+            e.add_note(f"Error processing {cls_name}.{method_name}")
+            raise
 
         if not builtin and not isinstance(ref, InitRef) and not mutates:
             add_default_funcs.append(add_rewrite)
@@ -754,13 +766,13 @@ def _fn_decl(
     if _last_param_variable(params):
         *params, var_arg_param = params
         # For now, we don't use the variable arg name
-        var_arg_type = resolve_type_annotation(decls, hints[var_arg_param.name])
+        var_arg_type = resolve_type_annotation_mutate(decls, hints[var_arg_param.name])
     else:
         var_arg_type = None
     arg_types = tuple(
         decls.get_paramaterized_class(ref.class_name)
         if i == 0 and isinstance(ref, MethodRef | PropertyRef)
-        else resolve_type_annotation(decls, hints[t.name])
+        else resolve_type_annotation_mutate(decls, hints[t.name])
         for i, t in enumerate(params)
     )
 
@@ -777,7 +789,7 @@ def _fn_decl(
         if isinstance(ref, InitRef)
         else arg_types[0]
         if mutates_first_arg
-        else resolve_type_annotation(decls, hints["return"])
+        else resolve_type_annotation_mutate(decls, hints["return"])
     )
 
     arg_names = tuple(t.name for t in params)
@@ -875,7 +887,7 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
 def _relation_decls(name: str, tps: tuple[type, ...], egg_fn: str | None) -> Declarations:
     decls = Declarations()
     decls |= cast(RuntimeClass, Unit)
-    arg_types = tuple(resolve_type_annotation(decls, tp).to_just() for tp in tps)
+    arg_types = tuple(resolve_type_annotation_mutate(decls, tp).to_just() for tp in tps)
     decls._functions[name] = RelationDecl(arg_types, tuple(None for _ in tps), egg_fn)
     return decls
 
@@ -902,7 +914,7 @@ def _constant_thunk(
     name: str, tp: type, egg_name: str | None, default_replacement: object, ruleset: Ruleset | None
 ) -> tuple[Declarations, TypedExprDecl]:
     decls = Declarations()
-    type_ref = resolve_type_annotation(decls, tp)
+    type_ref = resolve_type_annotation_mutate(decls, tp)
     callable_ref = ConstantRef(name)
     decls._constants[name] = ConstantDecl(type_ref.to_just(), egg_name)
     _add_default_rewrite(decls, callable_ref, type_ref, default_replacement, ruleset, subsume=False)
@@ -1389,10 +1401,16 @@ class EGraph(_BaseModule):
 
         egraphs = [to_json()]
         i = 0
-        while self.run(schedule or 1).updated and i < max:
-            i += 1
+        # Always visualize, even if we encounter an error
+        try:
+            while (self.run(schedule or 1).updated) and i < max:
+                i += 1
+                egraphs.append(to_json())
+        except:
             egraphs.append(to_json())
-        VisualizerWidget(egraphs=egraphs).display_or_open()
+            raise
+        finally:
+            VisualizerWidget(egraphs=egraphs).display_or_open()
 
     @classmethod
     def current(cls) -> EGraph:
@@ -1617,7 +1635,9 @@ class UnstableCombinedRuleset(Schedule):
 
     def __post_init__(self, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
         self.schedule = RunDecl(self.__egg_name__, ())
-        self.__egg_decls_thunk__ = Thunk.fn(self._create_egg_decls, *rulesets)
+        # Don't use thunk so that this is re-evaluated each time its requsted, so that additions inside will
+        # be added after its been evaluated once.
+        self.__egg_decls_thunk__ = partial(self._create_egg_decls, *rulesets)
 
     @property
     def __egg_name__(self) -> str:
@@ -1803,9 +1823,10 @@ def var(name: str, bound: type[T]) -> T:
 
 def _var(name: str, bound: object) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
-    decls = Declarations()
-    type_ref = resolve_type_annotation(decls, bound)
-    return RuntimeExpr.__from_values__(decls, TypedExprDecl(type_ref.to_just(), VarDecl(name, False)))
+    decls_like, type_ref = resolve_type_annotation(bound)
+    return RuntimeExpr(
+        Thunk.fn(Declarations.create, decls_like), Thunk.value(TypedExprDecl(type_ref.to_just(), VarDecl(name, False)))
+    )
 
 
 def vars_(names: str, bound: type[EXPR]) -> Iterable[EXPR]:

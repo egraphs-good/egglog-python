@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, Union, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypeVar, Union, runtime_checkable
 
 from typing_extensions import Self, assert_never
 
@@ -17,71 +17,71 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "replace_typed_expr",
+    "ActionCommandDecl",
+    "ActionDecl",
+    "BiRewriteDecl",
+    "CallDecl",
+    "CallableDecl",
+    "CallableRef",
+    "ChangeDecl",
+    "ClassDecl",
+    "ClassMethodRef",
+    "ClassTypeVarRef",
+    "ClassVariableRef",
+    "CombinedRulesetDecl",
+    "CommandDecl",
+    "ConstantDecl",
+    "ConstantRef",
+    "Declarations",
     "Declarations",
     "DeclerationsLike",
+    "DefaultRewriteDecl",
     "DelayedDeclerations",
-    "upcast_declerations",
-    "Declarations",
-    "JustTypeRef",
-    "ClassTypeVarRef",
-    "TypeRefWithVars",
-    "TypeOrVarRef",
-    "MethodRef",
-    "ClassMethodRef",
-    "FunctionRef",
-    "UnnamedFunctionRef",
-    "ConstantRef",
-    "ClassVariableRef",
-    "PropertyRef",
-    "CallableRef",
-    "FunctionDecl",
-    "RelationDecl",
-    "ConstantDecl",
-    "CallableDecl",
-    "VarDecl",
-    "PyObjectDecl",
-    "PartialCallDecl",
-    "LitType",
-    "LitDecl",
-    "CallDecl",
-    "ExprDecl",
-    "TypedExprDecl",
-    "ClassDecl",
-    "RulesetDecl",
-    "CombinedRulesetDecl",
-    "SaturateDecl",
-    "RepeatDecl",
-    "SequenceDecl",
-    "RunDecl",
-    "ScheduleDecl",
     "EqDecl",
+    "ExprActionDecl",
+    "ExprDecl",
     "ExprFactDecl",
     "FactDecl",
-    "LetDecl",
-    "SetDecl",
-    "ExprActionDecl",
-    "ChangeDecl",
-    "UnionDecl",
-    "PanicDecl",
-    "ActionDecl",
-    "RewriteDecl",
-    "BiRewriteDecl",
-    "RuleDecl",
-    "RewriteOrRuleDecl",
-    "ActionCommandDecl",
-    "CommandDecl",
-    "SpecialFunctions",
+    "FunctionDecl",
+    "FunctionRef",
     "FunctionSignature",
-    "DefaultRewriteDecl",
-    "InitRef",
     "HasDeclerations",
+    "InitRef",
+    "JustTypeRef",
+    "LetDecl",
+    "LitDecl",
+    "LitType",
+    "MethodRef",
+    "PanicDecl",
+    "PartialCallDecl",
+    "PropertyRef",
+    "PyObjectDecl",
+    "RelationDecl",
+    "RepeatDecl",
+    "RewriteDecl",
+    "RewriteOrRuleDecl",
+    "RuleDecl",
+    "RulesetDecl",
+    "RunDecl",
+    "SaturateDecl",
+    "ScheduleDecl",
+    "SequenceDecl",
+    "SetDecl",
+    "SpecialFunctions",
+    "TypeOrVarRef",
+    "TypeRefWithVars",
+    "TypedExprDecl",
+    "UnionDecl",
+    "UnnamedFunctionRef",
+    "VarDecl",
+    "replace_typed_expr",
+    "upcast_declerations",
 ]
 
 
 @dataclass
 class DelayedDeclerations:
-    __egg_decls_thunk__: Callable[[], Declarations]
+    __egg_decls_thunk__: Callable[[], Declarations] = field(repr=False)
 
     @property
     def __egg_decls__(self) -> Declarations:
@@ -234,13 +234,13 @@ class Declarations:
         Returns a class reference with type parameters, if the class is paramaterized.
         """
         type_vars = self._classes[name].type_vars
-        return TypeRefWithVars(name, tuple(map(ClassTypeVarRef, type_vars)))
+        return TypeRefWithVars(name, type_vars)
 
 
 @dataclass
 class ClassDecl:
     egg_name: str | None = None
-    type_vars: tuple[str, ...] = ()
+    type_vars: tuple[ClassTypeVarRef, ...] = ()
     builtin: bool = False
     init: FunctionDecl | None = None
     class_methods: dict[str, FunctionDecl] = field(default_factory=dict)
@@ -287,6 +287,11 @@ class JustTypeRef:
 # Type references with vars
 ##
 
+# mapping of name and module of resolved typevars to runtime values
+# so that when spitting them back out again can use same instance
+# since equality is based on identity not value
+_RESOLVED_TYPEVARS: dict[ClassTypeVarRef, TypeVar] = {}
+
 
 @dataclass(frozen=True)
 class ClassTypeVarRef:
@@ -295,13 +300,23 @@ class ClassTypeVarRef:
     """
 
     name: str
+    module: str
 
     def to_just(self) -> JustTypeRef:
         msg = "egglog does not support generic classes yet."
         raise NotImplementedError(msg)
 
     def __str__(self) -> str:
-        return self.name
+        return f"{self.module}.{self.name}"
+
+    @classmethod
+    def from_type_var(cls, typevar: TypeVar) -> ClassTypeVarRef:
+        res = cls(typevar.__name__, typevar.__module__)
+        _RESOLVED_TYPEVARS[res] = typevar
+        return res
+
+    def to_type_var(self) -> TypeVar:
+        return _RESOLVED_TYPEVARS[self]
 
 
 @dataclass(frozen=True)

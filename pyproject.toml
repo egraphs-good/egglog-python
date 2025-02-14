@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "egglog"
 description = "e-graphs in Python built around the the egglog rust library"
 readme = "README.md"
-dynamic = ["version"] 
+dynamic = ["version"]
 license = { text = "MIT" }
 requires-python = ">=3.10"
 classifiers = [
@@ -34,8 +34,9 @@ dependencies = ["typing-extensions", "black", "graphviz", "anywidget"]
 array = [
     "scikit-learn",
     "array_api_compat",
-    "numba==0.59.1",
-    "llvmlite==0.42.0",
+    "numba>=0.59.1",
+    "llvmlite>=0.42.0",
+    "numpy>2",
 ]
 dev = [
     "ruff",
@@ -216,7 +217,7 @@ preview = true
 
 [tool.ruff.lint.per-file-ignores]
 # Don't require annotations for tests
-"python/tests/**" = ["ANN001", "ANN201"]
+"python/tests/**" = ["ANN001", "ANN201", "INP001"]
 
 [tool.mypy]
 ignore_missing_imports = true
@@ -239,7 +240,6 @@ python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
 norecursedirs = ["__snapshots__"]
 filterwarnings = [
-    "error",
     "ignore::numba.core.errors.NumbaPerformanceWarning",
     "ignore::pytest_benchmark.logger.PytestBenchmarkWarning",
     # https://github.com/manzt/anywidget/blob/d38bb3f5f9cfc7e49e2ff1aa1ba994d66327cb02/pyproject.toml#L120

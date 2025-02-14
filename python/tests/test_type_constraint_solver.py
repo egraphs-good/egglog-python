@@ -7,10 +7,10 @@ from egglog.type_constraint_solver import *
 
 i64 = JustTypeRef("i64")
 unit = JustTypeRef("Unit")
-K, V = ClassTypeVarRef("K"), ClassTypeVarRef("V")
+K, V = ClassTypeVarRef("K", __name__), ClassTypeVarRef("V", __name__)
 map = TypeRefWithVars("Map", (K, V))
 map_i64_unit = JustTypeRef("Map", (i64, unit))
-decls = Declarations(_classes={"Map": ClassDecl(type_vars=("K", "V"))})
+decls = Declarations(_classes={"Map": ClassDecl(type_vars=(K, V))})
 
 
 def test_simple() -> None:

@@ -61,6 +61,20 @@ def test_to_string(snapshot_py) -> None:
     assert egraph.eval(fn.statements) == snapshot_py
 
 
+def test_to_string_function_three(snapshot_py) -> None:
+    first = assume_pos(-Math.var("x")) + Math.var("y") + Math.var("z")
+    fn = (first + Math(2) + first).program.function_three(
+        Math.var("x").program, Math.var("y").program, Math.var("z").program, "my_fn"
+    )
+    egraph = EGraph()
+    egraph.register(fn)
+    egraph.register(fn.compile())
+    egraph.run((to_program_ruleset | program_gen_ruleset).saturate())
+    # egraph.display(n_inline_leaves=1)
+    assert egraph.eval(fn.expr) == "my_fn"
+    assert egraph.eval(fn.statements) == snapshot_py
+
+
 def test_py_object():
     x = Math.var("x")
     y = Math.var("y")

@@ -30,7 +30,7 @@ class TypeConstraintSolver:
 
     _decls: Declarations
     # Mapping of class name to mapping of bound class typevar to type
-    _cls_typevar_index_to_type: defaultdict[str, dict[str, JustTypeRef]] = field(
+    _cls_typevar_index_to_type: defaultdict[str, dict[ClassTypeVarRef, JustTypeRef]] = field(
         default_factory=lambda: defaultdict(dict)
     )
 
@@ -116,26 +116,26 @@ class TypeConstraintSolver:
                 if cls_name != arg.name:
                     raise TypeConstraintError(f"Expected {cls_name}, got {arg.name}")
                 self._infer_typevars_zip(fn_args, None, arg.args, cls_name)
-            case ClassTypeVarRef(typevar):
+            case ClassTypeVarRef():
                 if cls_name is None:
                     msg = "Cannot infer typevar without class name"
                     raise RuntimeError(msg)
 
                 class_typevars = self._cls_typevar_index_to_type[cls_name]
-                if typevar in class_typevars:
-                    if class_typevars[typevar] != arg:
-                        raise TypeConstraintError(f"Expected {class_typevars[typevar]}, got {arg}")
+                if fn_arg in class_typevars:
+                    if class_typevars[fn_arg] != arg:
+                        raise TypeConstraintError(f"Expected {class_typevars[fn_arg]}, got {arg}")
                 else:
-                    class_typevars[typevar] = arg
+                    class_typevars[fn_arg] = arg
             case _:
                 assert_never(fn_arg)
 
     def _subtitute_typevars(self, tp: TypeOrVarRef, cls_name: str | None) -> JustTypeRef:
         match tp:
-            case ClassTypeVarRef(name):
+            case ClassTypeVarRef():
                 assert cls_name is not None
                 try:
-                    return self._cls_typevar_index_to_type[cls_name][name]
+                    return self._cls_typevar_index_to_type[cls_name][tp]
                 except KeyError as e:
                     raise TypeConstraintError(f"Not enough bound typevars for {tp}") from e
             case TypeRefWithVars(name, args):

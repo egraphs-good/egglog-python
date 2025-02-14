@@ -12,7 +12,7 @@ def test_type_str():
     decls = Declarations(
         _classes={
             "i64": ClassDecl(),
-            "Map": ClassDecl(type_vars=("K", "V")),
+            "Map": ClassDecl(type_vars=(ClassTypeVarRef("K", __name__), ClassTypeVarRef("V", __name__))),
         }
     )
     i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars("i64"))
@@ -38,13 +38,13 @@ def test_function_call():
 
 
 def test_classmethod_call():
-    K, V = ClassTypeVarRef("K"), ClassTypeVarRef("V")
+    K, V = ClassTypeVarRef("K", __name__), ClassTypeVarRef("V", __name__)
     decls = Declarations(
         _classes={
             "i64": ClassDecl(),
             "unit": ClassDecl(),
             "Map": ClassDecl(
-                type_vars=("K", "V"),
+                type_vars=(K, V),
                 class_methods={"create": FunctionDecl(FunctionSignature(return_type=TypeRefWithVars("Map", (K, V))))},
             ),
         },
