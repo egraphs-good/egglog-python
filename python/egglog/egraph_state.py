@@ -34,10 +34,11 @@ def span(frame_index: int = 0) -> bindings.RustSpan:
     If `frame_index` is passed, it will return the span for that frame in the stack, where 0 is the current frame
     this is called in and 1 is the parent.
     """
-    import inspect
+    # Currently disable this because it's too expensive.
+    # import inspect
 
-    frame = inspect.stack()[frame_index + 1]
-    return bindings.RustSpan(frame.filename, frame.lineno, 0)
+    # frame = inspect.stack()[frame_index + 1]
+    return bindings.RustSpan("", 0, 0)
 
 
 @dataclass
