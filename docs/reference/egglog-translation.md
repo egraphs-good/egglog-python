@@ -12,10 +12,7 @@ Any EGraph can also be converted to egglog with the `egraph.as_egglog_string` pr
 
 The currently unsupported features are:
 
-- Proof mode: Not currently tested, but could add support if needed.
-- Naive mode: Not currently exposed, but could add support
 - `(output ...)`: No examples in the tests, so not sure how this works.
-- `(calc ...)`: Could be implemented, but haven't yet.
 
 ## Builtin Types
 
@@ -123,6 +120,16 @@ def my_foo() -> i64:
 ```
 
 The static types on the decorator preserve the type of the underlying function, so that they can all be checked statically.
+
+### Functions vs Constructors
+
+Egglog has changed how it handles functions, seperating them into two seperate commands:
+
+- `function` which can include a `merge` expression.
+- `constructor` which can include a cost and requires the result to be an "eqsort" aka a non builtin type.
+
+Since this was added after the Python API was first created, we added support to automatically choose between the two based on the return type of the function and whether a merge function is provided. If the return type is a builtin type, it will be a `function`, otherwise it will be a `constructor`, unless it has a merge function
+provided then it will always be a `function`.
 
 ### Datatype functions
 
