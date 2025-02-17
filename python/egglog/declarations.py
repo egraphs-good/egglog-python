@@ -32,6 +32,7 @@ __all__ = [
     "CommandDecl",
     "ConstantDecl",
     "ConstantRef",
+    "ConstructorDecl",
     "Declarations",
     "Declarations",
     "DeclerationsLike",
@@ -121,7 +122,7 @@ def upcast_declerations(declerations_like: Iterable[DeclerationsLike]) -> list[D
 @dataclass
 class Declarations:
     _unnamed_functions: set[UnnamedFunctionRef] = field(default_factory=set)
-    _functions: dict[str, FunctionDecl | RelationDecl] = field(default_factory=dict)
+    _functions: dict[str, FunctionDecl | RelationDecl | ConstructorDecl] = field(default_factory=dict)
     _constants: dict[str, ConstantDecl] = field(default_factory=dict)
     _classes: dict[str, ClassDecl] = field(default_factory=dict)
     _rulesets: dict[str, RulesetDecl | CombinedRulesetDecl] = field(default_factory=lambda: {"": RulesetDecl([])})
@@ -198,11 +199,14 @@ class Declarations:
                 assert init_fn
                 return init_fn
             case UnnamedFunctionRef():
-                return ref.to_function_decl()
+                return ConstructorDecl(ref.signature)
+
         assert_never(ref)
 
     def set_function_decl(
-        self, ref: FunctionRef | MethodRef | ClassMethodRef | PropertyRef | InitRef, decl: FunctionDecl
+        self,
+        ref: FunctionRef | MethodRef | ClassMethodRef | PropertyRef | InitRef,
+        decl: FunctionDecl | ConstructorDecl,
     ) -> None:
         match ref:
             case FunctionRef(name):
@@ -242,12 +246,12 @@ class ClassDecl:
     egg_name: str | None = None
     type_vars: tuple[ClassTypeVarRef, ...] = ()
     builtin: bool = False
-    init: FunctionDecl | None = None
-    class_methods: dict[str, FunctionDecl] = field(default_factory=dict)
+    init: ConstructorDecl | FunctionDecl | None = None
+    class_methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
     # These have to be seperate from class_methods so that printing them can be done easily
     class_variables: dict[str, ConstantDecl] = field(default_factory=dict)
-    methods: dict[str, FunctionDecl] = field(default_factory=dict)
-    properties: dict[str, FunctionDecl] = field(default_factory=dict)
+    methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
+    properties: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
 
 
@@ -350,20 +354,19 @@ class UnnamedFunctionRef:
     args: tuple[TypedExprDecl, ...]
     res: TypedExprDecl
 
-    def to_function_decl(self) -> FunctionDecl:
+    @property
+    def signature(self) -> FunctionSignature:
         arg_types = []
         arg_names = []
         for a in self.args:
             arg_types.append(a.tp.to_var())
             assert isinstance(a.expr, VarDecl)
             arg_names.append(a.expr.name)
-        return FunctionDecl(
-            FunctionSignature(
-                arg_types=tuple(arg_types),
-                arg_names=tuple(arg_names),
-                arg_defaults=(None,) * len(self.args),
-                return_type=self.res.tp.to_var(),
-            ),
+        return FunctionSignature(
+            arg_types=tuple(arg_types),
+            arg_names=tuple(arg_names),
+            arg_defaults=(None,) * len(self.args),
+            return_type=self.res.tp.to_var(),
         )
 
     @property
@@ -434,16 +437,13 @@ class RelationDecl:
     arg_defaults: tuple[ExprDecl | None, ...]
     egg_name: str | None
 
-    def to_function_decl(self) -> FunctionDecl:
-        return FunctionDecl(
-            FunctionSignature(
-                arg_types=tuple(a.to_var() for a in self.arg_types),
-                arg_names=tuple(f"__{i}" for i in range(len(self.arg_types))),
-                arg_defaults=self.arg_defaults,
-                return_type=TypeRefWithVars("Unit"),
-            ),
-            egg_name=self.egg_name,
-            default=LitDecl(None),
+    @property
+    def signature(self) -> FunctionSignature:
+        return FunctionSignature(
+            arg_types=tuple(a.to_var() for a in self.arg_types),
+            arg_names=tuple(f"__{i}" for i in range(len(self.arg_types))),
+            arg_defaults=self.arg_defaults,
+            return_type=TypeRefWithVars("Unit"),
         )
 
 
@@ -456,11 +456,9 @@ class ConstantDecl:
     type_ref: JustTypeRef
     egg_name: str | None = None
 
-    def to_function_decl(self) -> FunctionDecl:
-        return FunctionDecl(
-            FunctionSignature(return_type=self.type_ref.to_var()),
-            egg_name=self.egg_name,
-        )
+    @property
+    def signature(self) -> FunctionSignature:
+        return FunctionSignature(return_type=self.type_ref.to_var())
 
 
 # special cases for partial function creation and application, which cannot use the normal python rules
@@ -492,20 +490,20 @@ class FunctionSignature:
 @dataclass(frozen=True)
 class FunctionDecl:
     signature: FunctionSignature | SpecialFunctions = field(default_factory=FunctionSignature)
-    # Egg params
     builtin: bool = False
     egg_name: str | None = None
-    cost: int | None = None
-    default: ExprDecl | None = None
-    on_merge: tuple[ActionDecl, ...] = ()
     merge: ExprDecl | None = None
+
+
+@dataclass(frozen=True)
+class ConstructorDecl:
+    signature: FunctionSignature = field(default_factory=FunctionSignature)
+    egg_name: str | None = None
+    cost: int | None = None
     unextractable: bool = False
 
-    def to_function_decl(self) -> FunctionDecl:
-        return self
 
-
-CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl
+CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl | ConstructorDecl
 
 ##
 # Expressions
@@ -697,7 +695,8 @@ ScheduleDecl: TypeAlias = SaturateDecl | RepeatDecl | SequenceDecl | RunDecl
 @dataclass(frozen=True)
 class EqDecl:
     tp: JustTypeRef
-    exprs: tuple[ExprDecl, ...]
+    left: ExprDecl
+    right: ExprDecl
 
 
 @dataclass(frozen=True)

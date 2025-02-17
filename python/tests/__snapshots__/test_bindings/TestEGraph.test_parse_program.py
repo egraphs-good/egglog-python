@@ -1,6 +1,6 @@
 [
     Datatype(
-        Span(
+        EgglogSpan(
             SrcFile(
                 "test.egg",
                 '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -11,7 +11,7 @@
         "Math",
         [
             Variant(
-                Span(
+                EgglogSpan(
                     SrcFile(
                         "test.egg",
                         '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -24,7 +24,7 @@
                 None,
             ),
             Variant(
-                Span(
+                EgglogSpan(
                     SrcFile(
                         "test.egg",
                         '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -37,7 +37,7 @@
                 None,
             ),
             Variant(
-                Span(
+                EgglogSpan(
                     SrcFile(
                         "test.egg",
                         '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -50,7 +50,7 @@
                 None,
             ),
             Variant(
-                Span(
+                EgglogSpan(
                     SrcFile(
                         "test.egg",
                         '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -66,7 +66,7 @@
     ),
     ActionCommand(
         Let(
-            Span(
+            EgglogSpan(
                 SrcFile(
                     "test.egg",
                     '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -76,7 +76,7 @@
             ),
             "expr1",
             Call(
-                Span(
+                EgglogSpan(
                     SrcFile(
                         "test.egg",
                         '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -87,7 +87,7 @@
                 "Mul",
                 [
                     Call(
-                        Span(
+                        EgglogSpan(
                             SrcFile(
                                 "test.egg",
                                 '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -98,7 +98,7 @@
                         "Num",
                         [
                             Lit(
-                                Span(
+                                EgglogSpan(
                                     SrcFile(
                                         "test.egg",
                                         '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -111,7 +111,7 @@
                         ],
                     ),
                     Call(
-                        Span(
+                        EgglogSpan(
                             SrcFile(
                                 "test.egg",
                                 '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -122,7 +122,7 @@
                         "Add",
                         [
                             Call(
-                                Span(
+                                EgglogSpan(
                                     SrcFile(
                                         "test.egg",
                                         '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -133,7 +133,7 @@
                                 "Var",
                                 [
                                     Lit(
-                                        Span(
+                                        EgglogSpan(
                                             SrcFile(
                                                 "test.egg",
                                                 '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -146,7 +146,7 @@
                                 ],
                             ),
                             Call(
-                                Span(
+                                EgglogSpan(
                                     SrcFile(
                                         "test.egg",
                                         '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',
@@ -157,7 +157,7 @@
                                 "Num",
                                 [
                                     Lit(
-                                        Span(
+                                        EgglogSpan(
                                             SrcFile(
                                                 "test.egg",
                                                 '(datatype Math\n          (Num i64)\n          (Var String)\n          (Add Math Math)\n          (Mul Math Math))\n\n        ;; expr1 = 2 * (x + 3)\n        (let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))',

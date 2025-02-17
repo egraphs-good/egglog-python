@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union, 
 from typing_extensions import TypeVarTuple, Unpack
 
 from .conversion import convert, converter, get_type_args
-from .egraph import Expr, Unit, function, get_current_ruleset, method
+from .egraph import BaseExpr, BuiltinExpr, Unit, function, get_current_ruleset, method
 from .functionalize import functionalize
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
 from .thunk import Thunk
@@ -46,7 +46,7 @@ __all__ = [
 ]
 
 
-class String(Expr, builtin=True):
+class String(BuiltinExpr):
     def __init__(self, value: str) -> None: ...
 
     @method(egg_fn="replace")
@@ -65,7 +65,7 @@ converter(str, String, String)
 BoolLike = Union["Bool", bool]
 
 
-class Bool(Expr, egg_sort="bool", builtin=True):
+class Bool(BuiltinExpr, egg_sort="bool"):
     def __init__(self, value: bool) -> None: ...
 
     @method(egg_fn="not")
@@ -90,7 +90,7 @@ converter(bool, Bool, Bool)
 i64Like: TypeAlias = Union["i64", int]  # noqa: N816, PYI042
 
 
-class i64(Expr, builtin=True):  # noqa: N801
+class i64(BuiltinExpr):  # noqa: N801
     def __init__(self, value: int) -> None: ...
 
     @method(egg_fn="+")
@@ -192,7 +192,7 @@ def count_matches(s: StringLike, pattern: StringLike) -> i64: ...
 f64Like: TypeAlias = Union["f64", float]  # noqa: N816, PYI042
 
 
-class f64(Expr, builtin=True):  # noqa: N801
+class f64(BuiltinExpr):  # noqa: N801
     def __init__(self, value: float) -> None: ...
 
     @method(egg_fn="neg")
@@ -260,11 +260,11 @@ class f64(Expr, builtin=True):  # noqa: N801
 converter(float, f64, f64)
 
 
-T = TypeVar("T", bound=Expr)
-V = TypeVar("V", bound=Expr)
+T = TypeVar("T", bound=BaseExpr)
+V = TypeVar("V", bound=BaseExpr)
 
 
-class Map(Expr, Generic[T, V], builtin=True):
+class Map(BuiltinExpr, Generic[T, V]):
     @method(egg_fn="map-empty")
     @classmethod
     def empty(cls) -> Map[T, V]: ...
@@ -304,7 +304,7 @@ converter(
 MapLike: TypeAlias = Map[T, V] | dict[TO, VO]
 
 
-class Set(Expr, Generic[T], builtin=True):
+class Set(BuiltinExpr, Generic[T]):
     @method(egg_fn="set-of")
     def __init__(self, *args: T) -> None: ...
 
@@ -348,7 +348,7 @@ converter(
 SetLike: TypeAlias = Set[T] | set[TO]
 
 
-class Rational(Expr, builtin=True):
+class Rational(BuiltinExpr):
     @method(egg_fn="rational")
     def __init__(self, num: i64Like, den: i64Like) -> None: ...
 
@@ -409,7 +409,7 @@ class Rational(Expr, builtin=True):
     def denom(self) -> i64: ...
 
 
-class Vec(Expr, Generic[T], builtin=True):
+class Vec(BuiltinExpr, Generic[T]):
     @method(egg_fn="vec-of")
     def __init__(self, *args: T) -> None: ...
 
@@ -460,7 +460,7 @@ for sequence_type in (list, tuple):
 VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
 
 
-class PyObject(Expr, builtin=True):
+class PyObject(BuiltinExpr):
     def __init__(self, value: object) -> None: ...
 
     @method(egg_fn="py-from-string")
@@ -530,7 +530,7 @@ T2 = TypeVar("T2")
 T3 = TypeVar("T3")
 
 
-class UnstableFn(Expr, Generic[T, Unpack[TS]], builtin=True):
+class UnstableFn(BuiltinExpr, Generic[T, Unpack[TS]]):
     @overload
     def __init__(self, f: Callable[[Unpack[TS]], T]) -> None: ...
 

@@ -82,7 +82,7 @@ def test_conversion_transitive_cycle():
     assert expr_parts(convert(MyType(), MyTypeExpr)) == expr_parts(MyTypeExpr())
 
 
-T = TypeVar("T", bound=Expr)
+T = TypeVar("T", bound=BaseExpr)
 
 
 def test_convert_to_generic():
@@ -91,7 +91,7 @@ def test_convert_to_generic():
     particular instance of that generic even if the general instance is registered
     """
 
-    class G(Expr, Generic[T], builtin=True):
+    class G(BuiltinExpr, Generic[T]):
         def __init__(self, x: T) -> None: ...
 
     converter(i64, G[i64], lambda x: G(x))
@@ -110,7 +110,7 @@ def test_convert_to_unbound_generic():
     particular instance of that generic even if the general instance is registered
     """
 
-    class G(Expr, Generic[T], builtin=True):
+    class G(BuiltinExpr, Generic[T]):
         def __init__(self, x: i64) -> None: ...
 
     converter(i64, G, lambda x: G[get_type_args()[0]](x))  # type: ignore[misc, operator]
@@ -126,7 +126,7 @@ def test_convert_generic_transitive():
     class A(Expr):
         def __init__(self) -> None: ...
 
-    class B(Expr, Generic[T], builtin=True):
+    class B(BuiltinExpr, Generic[T]):
         def __init__(
             self,
         ) -> None: ...

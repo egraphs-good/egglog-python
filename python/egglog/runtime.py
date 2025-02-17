@@ -35,6 +35,7 @@ __all__ = [
     "RuntimeFunction",
     "resolve_callable",
     "resolve_type_annotation",
+    "resolve_type_annotation_mutate",
 ]
 
 
@@ -300,7 +301,7 @@ class RuntimeFunction(DelayedDeclerations):
         if isinstance(self.__egg_bound__, RuntimeExpr):
             args = (self.__egg_bound__, *args)
         try:
-            signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).to_function_decl().signature
+            signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).signature
         except Exception as e:
             e.add_note(f"Failed to find callable {self}")
             raise

@@ -4,3 +4,5 @@
 .*egglog.bindings.PyObjectSort.__init__.*
 .*egglog.bindings.Delete.__init__.*
 .*egglog.bindings.Subsume.__init__.*
+.*egglog.bindings.TermDag.__init__.*
+.*egglog.bindings.PanicSpan.__init__.*

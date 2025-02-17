@@ -1,14 +1,13 @@
 use crate::error::EggResult;
 use egglog::{
-    ast::{Expr, Literal, Span, Symbol, DUMMY_SPAN},
+    ast::{Expr, Literal, Span, Symbol},
+    call,
     constraint::{AllEqualTypeConstraint, SimpleTypeConstraint, TypeConstraint},
-    // core::AtomTerm,
+    extract::{Cost, Extractor},
+    lit,
     sort::{BoolSort, FromSort, I64Sort, IntoSort as _, Sort, StringSort},
     util::IndexMap,
-    EGraph,
-    PrimitiveLike,
-    TypeInfo,
-    Value,
+    ArcSort, EGraph, PrimitiveLike, Term, TermDag, TypeInfo, Value,
 };
 use pyo3::{
     ffi, intern, prelude::*, types::PyDict, AsPyPointer, IntoPy, PyAny, PyErr, PyObject, PyResult,
@@ -29,6 +28,7 @@ const NAME: &str = "PyObject";
 
 fn value(i: usize) -> Value {
     Value {
+        #[cfg(debug_assertions)]
         tag: NAME.into(),
         bits: i as u64,
     }
@@ -55,16 +55,16 @@ impl PyObjectIdent {
     pub fn to_expr(self) -> Expr {
         let children = match self {
             PyObjectIdent::Unhashable(id) => {
-                vec![Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(id as i64))]
+                vec![lit!(Literal::Int(id as i64))]
             }
             PyObjectIdent::Hashable(type_hash, hash) => {
                 vec![
-                    Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(type_hash as i64)),
-                    Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(hash as i64)),
+                    lit!(Literal::Int(type_hash as i64)),
+                    lit!(Literal::Int(hash as i64)),
                 ]
             }
         };
-        Expr::call_no_span("py-object", children)
+        call!("py-object", children)
     }
 }
 
@@ -227,20 +227,27 @@ impl Sort for PyObjectSort {
             int: typeinfo.get_sort_nofail(),
         });
     }
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (usize, Expr) {
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        _extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
+        #[cfg(debug_assertions)]
         assert!(value.tag == self.name());
         let children = match self.load_ident(&value) {
             PyObjectIdent::Unhashable(id) => {
-                vec![Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(id as i64))]
+                vec![termdag.lit(Literal::Int(id as i64))]
             }
             PyObjectIdent::Hashable(type_hash, hash) => {
                 vec![
-                    Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(type_hash as i64)),
-                    Expr::Lit(DUMMY_SPAN.clone(), Literal::Int(hash as i64)),
+                    termdag.lit(Literal::Int(type_hash as i64)),
+                    termdag.lit(Literal::Int(hash as i64)),
                 ]
             }
         };
-        (1, Expr::call_no_span("py-object", children))
+        Some((1, termdag.app("py-object".into(), children)))
     }
 }
 
@@ -263,7 +270,12 @@ impl PrimitiveLike for Ctor {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let ident = match values {
             [id] => PyObjectIdent::Unhashable(i64::load(self.i64.as_ref(), id) as usize),
             [type_hash, hash] => PyObjectIdent::Hashable(
@@ -302,7 +314,12 @@ impl PrimitiveLike for Eval {
         .into_box();
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
         let res_obj: PyObject = Python::with_gil(|py| {
             let globals = self.py_object.load(py, values[1]);
@@ -344,7 +361,12 @@ impl PrimitiveLike for Exec {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
         let code: &str = code.into();
         let locals: PyObject = Python::with_gil(|py| {
@@ -386,7 +408,12 @@ impl PrimitiveLike for Dict {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let dict: PyObject = Python::with_gil(|py| {
             let dict = PyDict::new_bound(py);
             // Update the dict with the key-value pairs
@@ -419,7 +446,12 @@ impl PrimitiveLike for DictUpdate {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let dict: PyObject = Python::with_gil(|py| {
             let dict = self.py_object.load(py, values[0]);
             // Copy the dict so we can mutate it and return it
@@ -456,7 +488,12 @@ impl PrimitiveLike for ToString {
         )
         .into_box()
     }
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let obj: String =
             Python::with_gil(|py| self.py_object.load(py, values[0]).extract(py).unwrap());
         let symbol: Symbol = obj.into();
@@ -485,7 +522,12 @@ impl PrimitiveLike for ToBool {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let obj: bool =
             Python::with_gil(|py| self.py_object.load(py, values[0]).extract(py).unwrap());
         obj.store(self.bool_.as_ref())
@@ -513,7 +555,12 @@ impl PrimitiveLike for FromString {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let str = Symbol::load(self.string.as_ref(), &values[0]).to_string();
         let obj: PyObject = Python::with_gil(|py| str.into_py(py));
         Some(self.py_object.store(obj))
@@ -541,7 +588,12 @@ impl PrimitiveLike for FromInt {
         .into_box();
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let int = i64::load(self.int.as_ref(), &values[0]);
         let obj: PyObject = Python::with_gil(|py| int.into_py(py));
         Some(self.py_object.store(obj))
