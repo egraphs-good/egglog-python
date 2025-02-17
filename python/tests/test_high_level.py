@@ -548,7 +548,7 @@ def test_functions_seperate_pop():
     with egraph:
 
         @function
-        def f(x: T, y: T) -> T: ...
+        def f(x: T, y: T) -> T: ...  # type: ignore[misc]
 
         egraph.register(f(T(1), T(2)))  # type: ignore[call-arg]
 
