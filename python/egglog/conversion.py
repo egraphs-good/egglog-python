@@ -14,7 +14,7 @@ from .thunk import *
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-    from .egraph import Expr
+    from .egraph import BaseExpr
 
 __all__ = ["convert", "convert_to_same_type", "converter", "resolve_literal", "ConvertError"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
@@ -33,7 +33,7 @@ def _retrieve_conversion_decls() -> Declarations:
 
 
 T = TypeVar("T")
-V = TypeVar("V", bound="Expr")
+V = TypeVar("V", bound="BaseExpr")
 
 
 class ConvertError(Exception):

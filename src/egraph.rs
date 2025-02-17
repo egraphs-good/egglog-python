@@ -5,9 +5,8 @@ use crate::error::{EggResult, WrappedError};
 use crate::py_object_sort::{ArcPyObjectSort, MyPyObject, PyObjectSort};
 use crate::serialize::SerializedEGraph;
 
-use egglog::ast::DUMMY_SPAN;
 use egglog::sort::{BoolSort, F64Sort, I64Sort, StringSort};
-use egglog::SerializeConfig;
+use egglog::{span, SerializeConfig};
 use log::info;
 use pyo3::prelude::*;
 use std::path::PathBuf;
@@ -37,11 +36,13 @@ impl EGraph {
         seminaive: bool,
         record: bool,
     ) -> Self {
-        let mut egraph = egglog::EGraph::default();
+        let mut egraph = egglog_experimental::new_experimental_egraph();
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
         let py_object_arcsort = if let Some(py_object_sort) = py_object_sort {
-            egraph.add_arcsort(py_object_sort.0.clone()).unwrap();
+            egraph
+                .add_arcsort(py_object_sort.0.clone(), span!())
+                .unwrap();
             Some(py_object_sort.0)
         } else {
             None
@@ -51,6 +52,16 @@ impl EGraph {
             py_object_arcsort,
             cmds: if record { Some(String::new()) } else { None },
         }
+    }
+
+    /// Parse a program into a list of commands.
+    #[pyo3(signature = (input, /, filename=None))]
+    fn parse_program(&mut self, input: &str, filename: Option<String>) -> EggResult<Vec<Command>> {
+        let commands = self
+            .egraph
+            .parser
+            .get_program_from_string(filename, input)?;
+        Ok(commands.into_iter().map(|x| x.into()).collect())
     }
 
     /// Run a series of commands on the EGraph.
@@ -113,14 +124,9 @@ impl EGraph {
         max_calls_per_function: Option<usize>,
         include_temporary_functions: bool,
     ) -> SerializedEGraph {
-        let root_eclasses: Vec<egglog::Value> = root_eclasses
+        let root_eclasses: Vec<_> = root_eclasses
             .into_iter()
-            .map(|x| {
-                self.egraph
-                    .eval_expr(&egglog::ast::Expr::from(x))
-                    .unwrap()
-                    .1
-            })
+            .map(|x| self.egraph.eval_expr(&egglog::ast::Expr::from(x)).unwrap())
             .collect();
         SerializedEGraph {
             egraph: self.egraph.serialize(SerializeConfig {
@@ -156,40 +162,6 @@ impl EGraph {
     #[pyo3(signature = (expr, /))]
     fn eval_bool(&mut self, expr: Expr) -> EggResult<bool> {
         self.eval_sort(expr, Arc::new(BoolSort))
-    }
-
-    #[pyo3(signature = (expr, /))]
-    fn eval_rational(&mut self, _py: Python<'_>, expr: Expr) -> EggResult<PyObject> {
-        // Need to get actual sort for rational, this hack doesnt work.
-        // todo!();
-        // For rational we need the actual sort on the e-graph, because it contains state
-        // There isn't a public way to get a sort right now, so until there is, we use a hack where we create
-        // a dummy expression of that sort, and use eval_expr to get the sort
-        let _one = egglog::ast::Expr::Lit(DUMMY_SPAN.clone(), egglog::ast::Literal::Int(1));
-        // let arcsort = self
-        //     .egraph
-        //     .eval_expr(&egglog::ast::Expr::Call(
-        //         (),
-        //         "rational".into(),
-        //         vec![one.clone(), one],
-        //     ))
-        //     .unwrap()
-        //     .0;
-        let expr: egglog::ast::Expr = expr.into();
-        let (_, _value) = self.egraph.eval_expr(&expr)?;
-        // Need to get actual sort for rational, this hack doesnt work.
-        todo!();
-        // let r = num_rational::Rational64::load(&arcsort, &value);
-
-        // // let r: num_rational::Rational64 =
-        // //     self.eval_sort(expr, Arc::downcast::<RationalSort>(arcsort).unwrap())?;
-        // let frac = py.import("fractions")?;
-        // let f = frac.call_method(
-        //     "Fraction",
-        //     (r.numer().into_py(py), r.denom().into_py(py)),
-        //     None,
-        // )?;
-        // Ok(f.into())
     }
 }
 

@@ -159,7 +159,7 @@ class TraverseContext:
                     self(action)
                 for fact in body:
                     self(fact)
-            case SetDecl(_, lhs, rhs) | UnionDecl(_, lhs, rhs):
+            case SetDecl(_, lhs, rhs) | UnionDecl(_, lhs, rhs) | EqDecl(_, lhs, rhs):
                 self(lhs)
                 self(rhs)
             case LetDecl(_, d) | ExprActionDecl(d) | ExprFactDecl(d):
@@ -168,7 +168,7 @@ class TraverseContext:
                 self(d)
             case PanicDecl(_) | VarDecl(_) | LitDecl(_) | PyObjectDecl(_):
                 pass
-            case EqDecl(_, decls) | SequenceDecl(decls) | RulesetDecl(decls):
+            case SequenceDecl(decls) | RulesetDecl(decls):
                 for de in decls:
                     if isinstance(de, DefaultRewriteDecl):
                         continue
@@ -281,9 +281,8 @@ class PrettyContext:
                 return f"{change}({self(expr)})", "action"
             case PanicDecl(s):
                 return f"panic({s!r})", "action"
-            case EqDecl(_, exprs):
-                first, *rest = exprs
-                return f"eq({self(first)}).to({', '.join(map(self, rest))})", "fact"
+            case EqDecl(_, left, right):
+                return f"eq({self(left)}).to({self(right)})", "fact"
             case RulesetDecl(rules):
                 if ruleset_name:
                     return f"ruleset(name={ruleset_name!r})", f"ruleset_{ruleset_name}"
@@ -330,8 +329,7 @@ class PrettyContext:
         if decl.callable == FunctionRef("!="):
             l, r = self(args[0]), self(args[1])
             return f"ne({l}).to({r})", "Unit"
-        function_decl = self.decls.get_callable_decl(ref).to_function_decl()
-        signature = function_decl.signature
+        signature = self.decls.get_callable_decl(ref).signature
 
         # Determine how many of the last arguments are defaults, by iterating from the end and comparing the arg with the default
         n_defaults = 0

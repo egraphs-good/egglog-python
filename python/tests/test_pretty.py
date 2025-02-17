@@ -139,7 +139,7 @@ _A_2 + _A_3""",
     pytest.param(panic("oh no"), 'panic("oh no")', id="panic"),
     # Fact
     pytest.param(expr_fact(A()), "A()", id="expr fact"),
-    pytest.param(eq(g()).to(h(), A()), "eq(g()).to(h(), A())", id="eq"),
+    pytest.param(eq(g()).to(h()), "eq(g()).to(h())", id="eq"),
     # Ruleset
     pytest.param(ruleset(rewrite(g()).to(h())), "ruleset(rewrite(g()).to(h()))", id="ruleset"),
     # Schedules

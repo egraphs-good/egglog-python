@@ -6,6 +6,8 @@ import pytest
 
 from egglog.bindings import *
 
+DUMMY_SPAN = RustSpan(__name__, 0, 0)
+
 
 @dataclasses.dataclass(frozen=True)
 class MyObject:
