@@ -236,7 +236,7 @@ checksum = "675e35c02a51bb4d4618cb4885b3839ce6d1787c97b664474d9208d074742e20"
 [[package]]
 name = "egglog"
 version = "0.4.0"
-source = "git+https://github.com/saulshanabrook/egg-smol?rev=56fce297#56fce297e7b436855cdfa3700f7c7022b85369f0"
+source = "git+https://github.com/saulshanabrook/egg-smol?rev=889ca7635368d7e382e16a93b2883aba82f1078f#889ca7635368d7e382e16a93b2883aba82f1078f"
 dependencies = [
  "chrono",
  "clap",
