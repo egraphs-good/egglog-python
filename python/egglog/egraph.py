@@ -1188,6 +1188,7 @@ class EGraph:
         *,
         expr: Expr | None = None,
         max: int = 1000,
+        visualize: bool = True,
         **kwargs: Unpack[GraphvizKwargs],
     ) -> None:
         """
@@ -1203,18 +1204,22 @@ class EGraph:
                 print(self.extract(expr), "\n")
             return self._serialize(**kwargs).to_json()
 
-        egraphs = [to_json()]
+        if visualize:
+            egraphs = [to_json()]
         i = 0
         # Always visualize, even if we encounter an error
         try:
             while (self.run(schedule or 1).updated) and i < max:
                 i += 1
-                egraphs.append(to_json())
+                if visualize:
+                    egraphs.append(to_json())
         except:
-            egraphs.append(to_json())
+            if visualize:
+                egraphs.append(to_json())
             raise
         finally:
-            VisualizerWidget(egraphs=egraphs).display_or_open()
+            if visualize:
+                VisualizerWidget(egraphs=egraphs).display_or_open()
 
     @classmethod
     def current(cls) -> EGraph:
