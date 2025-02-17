@@ -355,7 +355,7 @@ class UnnamedFunctionRef:
     res: TypedExprDecl
 
     @property
-    def signature(self) -> FunctionSignature | SpecialFunctions:
+    def signature(self) -> FunctionSignature:
         arg_types = []
         arg_names = []
         for a in self.args:
