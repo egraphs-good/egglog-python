@@ -25,7 +25,7 @@ pub fn data_repr<T: pyo3::PyClass>(
 // Macro to create a wrapper around rust enums.
 // We create Python classes for each variant of the enum
 // and create a wrapper enum around all variants to enable conversion to/from Python
-// and to/from egg_smol
+// and to/from egglog
 #[macro_export]
 macro_rules! convert_enums {
     ($(
@@ -38,7 +38,7 @@ macro_rules! convert_enums {
         }
     );*) => {
         $($(
-            #[pyclass(frozen, module="egg_smol.bindings"$(, name=$py_name)?)]
+            #[pyclass(frozen$(, name=$py_name)?)]
             #[derive(Clone, PartialEq, Eq$(, $trait_inner)?)]
             pub struct $variant {
                 $(
@@ -178,7 +178,7 @@ macro_rules! convert_struct {
             $to_ident:ident -> $to:expr
     );*) => {
         $(
-            #[pyclass(frozen, module="egg_smol.bindings")]
+            #[pyclass(frozen)]
             #[derive(Clone, PartialEq, Eq$(, $struct_trait)?)]
             pub struct $to_type {
                 $(

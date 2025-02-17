@@ -23,6 +23,7 @@ impl EggSmolError {
 pub enum WrappedError {
     // Add additional context for egglog error
     Egglog(egglog::Error, String),
+    ParseError(egglog::ast::ParseError),
     Py(PyErr),
 }
 
@@ -34,6 +35,7 @@ impl From<WrappedError> for PyErr {
                 PyErr::new::<EggSmolError, _>(error.to_string() + &str)
             }
             WrappedError::Py(error) => error,
+            WrappedError::ParseError(error) => PyErr::new::<EggSmolError, _>(error.to_string()),
         }
     }
 }
@@ -42,6 +44,12 @@ impl From<WrappedError> for PyErr {
 impl From<egglog::Error> for WrappedError {
     fn from(other: egglog::Error) -> Self {
         Self::Egglog(other, String::new())
+    }
+}
+
+impl From<egglog::ast::ParseError> for WrappedError {
+    fn from(other: egglog::ast::ParseError) -> Self {
+        Self::ParseError(other)
     }
 }
 

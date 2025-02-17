@@ -1,9 +1,83 @@
 from datetime import timedelta
-from fractions import Fraction
 from pathlib import Path
 from typing import TypeAlias
 
 from typing_extensions import final
+
+__all__ = [
+    "ActionCommand",
+    "AddRuleset",
+    "Best",
+    "BiRewriteCommand",
+    "Bool",
+    "Call",
+    "Change",
+    "Check",
+    "Constructor",
+    "Datatype",
+    "Datatypes",
+    "Delete",
+    "EGraph",
+    "EggSmolError",
+    "EgglogSpan",
+    "Eq",
+    "Expr_",
+    "Extract",
+    "Fact",
+    "Fail",
+    "Float",
+    "Function",
+    "IdentSort",
+    "Include",
+    "Input",
+    "Int",
+    "Let",
+    "Lit",
+    "NewSort",
+    "Output",
+    "Panic",
+    "PanicSpan",
+    "Pop",
+    "PrintFunction",
+    "PrintOverallStatistics",
+    "PrintSize",
+    "Push",
+    "PyObjectSort",
+    "QueryExtract",
+    "Relation",
+    "Repeat",
+    "Rewrite",
+    "RewriteCommand",
+    "Rule",
+    "RuleCommand",
+    "Run",
+    "RunConfig",
+    "RunReport",
+    "RunSchedule",
+    "RustSpan",
+    "Saturate",
+    "Schema",
+    "Sequence",
+    "SerializedEGraph",
+    "Set",
+    "SetOption",
+    "Simplify",
+    "Sort",
+    "SrcFile",
+    "String",
+    "SubVariants",
+    "Subsume",
+    "TermApp",
+    "TermDag",
+    "TermLit",
+    "TermVar",
+    "Union",
+    "Unit",
+    "UnstableCombinedRuleset",
+    "Var",
+    "Variant",
+    "Variants",
+]
 
 @final
 class SerializedEGraph:
@@ -19,7 +93,6 @@ class PyObjectSort:
     def __init__(self) -> None: ...
     def store(self, __o: object, /) -> _Expr: ...
 
-def parse_program(__input: str, /, filename: str | None = None) -> list[_Command]: ...
 @final
 class EGraph:
     def __init__(
@@ -30,6 +103,7 @@ class EGraph:
         seminaive: bool = True,
         record: bool = False,
     ) -> None: ...
+    def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
     def commands(self) -> str | None: ...
     def run_program(self, *commands: _Command) -> list[str]: ...
     def extract_report(self) -> _ExtractReport | None: ...
@@ -47,7 +121,6 @@ class EGraph:
     def eval_f64(self, __expr: _Expr) -> float: ...
     def eval_string(self, __expr: _Expr) -> str: ...
     def eval_bool(self, __expr: _Expr) -> bool: ...
-    def eval_rational(self, __expr: _Expr) -> Fraction: ...
 
 @final
 class EggSmolError(Exception):
@@ -58,19 +131,30 @@ class EggSmolError(Exception):
 ##
 
 @final
-class SrcFile:
-    def __init__(self, name: str, contents: str | None = None) -> None: ...
-    name: str
-    contents: str | None
+class PanicSpan:
+    def __init__(self) -> None: ...
 
 @final
-class Span:
-    def __init__(self, file: SrcFile, start: int, end: int) -> None: ...
-    file: SrcFile
-    start: int
-    end: int
+class SrcFile:
+    name: str | None
+    contents: str
+    def __init__(self, name: str | None, contents: str) -> None: ...
 
-DUMMY_SPAN: Span = ...
+@final
+class EgglogSpan:
+    file: SrcFile
+    i: int
+    j: int
+    def __init__(self, file: SrcFile, i: int, j: int) -> None: ...
+
+@final
+class RustSpan:
+    file: str
+    line: int
+    column: int
+    def __init__(self, file: str, line: int, column: int) -> None: ...
+
+_Span: TypeAlias = PanicSpan | EgglogSpan | RustSpan
 
 ##
 # Literals
@@ -82,7 +166,7 @@ class Int:
     value: int
 
 @final
-class F64:
+class Float:
     value: float
     def __init__(self, value: float) -> None: ...
 
@@ -100,7 +184,7 @@ class Bool:
     def __init__(self, b: bool) -> None: ...
     value: bool
 
-_Literal: TypeAlias = Int | F64 | String | Bool | Unit
+_Literal: TypeAlias = Int | Float | String | Bool | Unit
 
 ##
 # Expressions
@@ -108,20 +192,20 @@ _Literal: TypeAlias = Int | F64 | String | Bool | Unit
 
 @final
 class Lit:
-    def __init__(self, span: Span, value: _Literal) -> None: ...
-    span: Span
+    def __init__(self, span: _Span, value: _Literal) -> None: ...
+    span: _Span
     value: _Literal
 
 @final
 class Var:
-    def __init__(self, span: Span, name: str) -> None: ...
-    span: Span
+    def __init__(self, span: _Span, name: str) -> None: ...
+    span: _Span
     name: str
 
 @final
 class Call:
-    def __init__(self, span: Span, name: str, args: list[_Expr]) -> None: ...
-    span: Span
+    def __init__(self, span: _Span, name: str, args: list[_Expr]) -> None: ...
+    span: _Span
     name: str
     args: list[_Expr]
 
@@ -150,20 +234,16 @@ class TermApp:
 
 _Term: TypeAlias = TermLit | TermVar | TermApp
 
-@final
-class TermDag:
-    nodes: list[_Term]
-    hashcons: dict[_Term, int]
-
 ##
 # Facts
 ##
 
 @final
 class Eq:
-    def __init__(self, span: Span, exprs: list[_Expr]) -> None: ...
-    span: Span
-    exprs: list[_Expr]
+    def __init__(self, span: _Span, left: _Expr, right: _Expr) -> None: ...
+    span: _Span
+    left: _Expr
+    right: _Expr
 
 @final
 class Fact:
@@ -192,50 +272,50 @@ _Change: TypeAlias = Delete | Subsume
 
 @final
 class Let:
-    def __init__(self, span: Span, lhs: str, rhs: _Expr) -> None: ...
-    span: Span
+    def __init__(self, span: _Span, lhs: str, rhs: _Expr) -> None: ...
+    span: _Span
     lhs: str
     rhs: _Expr
 
 @final
 class Set:
-    def __init__(self, span: Span, lhs: str, args: list[_Expr], rhs: _Expr) -> None: ...
-    span: Span
+    def __init__(self, span: _Span, lhs: str, args: list[_Expr], rhs: _Expr) -> None: ...
+    span: _Span
     lhs: str
     args: list[_Expr]
     rhs: _Expr
 
 @final
 class Change:
-    span: Span
+    span: _Span
     change: _Change
     sym: str
     args: list[_Expr]
-    def __init__(self, span: Span, change: _Change, sym: str, args: list[_Expr]) -> None: ...
+    def __init__(self, span: _Span, change: _Change, sym: str, args: list[_Expr]) -> None: ...
 
 @final
 class Union:
-    def __init__(self, span: Span, lhs: _Expr, rhs: _Expr) -> None: ...
-    span: Span
+    def __init__(self, span: _Span, lhs: _Expr, rhs: _Expr) -> None: ...
+    span: _Span
     lhs: _Expr
     rhs: _Expr
 
 @final
 class Panic:
-    def __init__(self, span: Span, msg: str) -> None: ...
-    span: Span
+    def __init__(self, span: _Span, msg: str) -> None: ...
+    span: _Span
     msg: str
 
 @final
 class Expr_:  # noqa: N801
-    def __init__(self, span: Span, expr: _Expr) -> None: ...
-    span: Span
+    def __init__(self, span: _Span, expr: _Expr) -> None: ...
+    span: _Span
     expr: _Expr
 
 @final
 class Extract:
-    def __init__(self, span: Span, expr: _Expr, variants: _Expr) -> None: ...
-    span: Span
+    def __init__(self, span: _Span, expr: _Expr, variants: _Expr) -> None: ...
+    span: _Span
     expr: _Expr
     variants: _Expr
 
@@ -246,34 +326,9 @@ _Action: TypeAlias = Let | Set | Change | Union | Panic | Expr_ | Extract
 ##
 
 @final
-class FunctionDecl:
-    span: Span
-    name: str
-    schema: Schema
-    default: _Expr | None
-    merge: _Expr | None
-    merge_action: list[_Action]
-    cost: int | None
-    unextractable: bool
-    ignore_viz: bool
-
-    def __init__(
-        self,
-        span: Span,
-        name: str,
-        schema: Schema,
-        default: _Expr | None = None,
-        merge: _Expr | None = None,
-        merge_action: list[_Action] = [],
-        cost: int | None = None,
-        unextractable: bool = False,
-        ignore_viz: bool = False,
-    ) -> None: ...
-
-@final
 class Variant:
-    def __init__(self, span: Span, name: str, types: list[str], cost: int | None = None) -> None: ...
-    span: Span
+    def __init__(self, span: _Span, name: str, types: list[str], cost: int | None = None) -> None: ...
+    span: _Span
     name: str
     types: list[str]
     cost: int | None
@@ -286,19 +341,19 @@ class Schema:
 
 @final
 class Rule:
-    span: Span
+    span: _Span
     head: list[_Action]
     body: list[_Fact]
-    def __init__(self, span: Span, head: list[_Action], body: list[_Fact]) -> None: ...
+    def __init__(self, span: _Span, head: list[_Action], body: list[_Fact]) -> None: ...
 
 @final
 class Rewrite:
-    span: Span
+    span: _Span
     lhs: _Expr
     rhs: _Expr
     conditions: list[_Fact]
 
-    def __init__(self, span: Span, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []) -> None: ...
+    def __init__(self, span: _Span, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []) -> None: ...
 
 @final
 class RunConfig:
@@ -354,28 +409,28 @@ _ExtractReport: TypeAlias = Variants | Best
 
 @final
 class Saturate:
-    span: Span
+    span: _Span
     schedule: _Schedule
-    def __init__(self, span: Span, schedule: _Schedule) -> None: ...
+    def __init__(self, span: _Span, schedule: _Schedule) -> None: ...
 
 @final
 class Repeat:
-    span: Span
+    span: _Span
     length: int
     schedule: _Schedule
-    def __init__(self, span: Span, length: int, schedule: _Schedule) -> None: ...
+    def __init__(self, span: _Span, length: int, schedule: _Schedule) -> None: ...
 
 @final
 class Run:
-    span: Span
+    span: _Span
     config: RunConfig
-    def __init__(self, span: Span, config: RunConfig) -> None: ...
+    def __init__(self, span: _Span, config: RunConfig) -> None: ...
 
 @final
 class Sequence:
-    span: Span
+    span: _Span
     schedules: list[_Schedule]
-    def __init__(self, span: Span, schedules: list[_Schedule]) -> None: ...
+    def __init__(self, span: _Span, schedules: list[_Schedule]) -> None: ...
 
 _Schedule: TypeAlias = Saturate | Repeat | Run | Sequence
 
@@ -408,28 +463,31 @@ class SetOption:
 
 @final
 class Datatype:
-    span: Span
+    span: _Span
     name: str
     variants: list[Variant]
-    def __init__(self, span: Span, name: str, variants: list[Variant]) -> None: ...
+    def __init__(self, span: _Span, name: str, variants: list[Variant]) -> None: ...
 
 @final
 class Datatypes:
-    span: Span
-    datatypes: list[tuple[Span, str, _Subdatatypes]]
-    def __init__(self, span: Span, datatypes: list[tuple[Span, str, _Subdatatypes]]) -> None: ...
+    span: _Span
+    datatypes: list[tuple[_Span, str, _Subdatatypes]]
+    def __init__(self, span: _Span, datatypes: list[tuple[_Span, str, _Subdatatypes]]) -> None: ...
 
 @final
 class Sort:
-    span: Span
+    span: _Span
     name: str
     presort_and_args: tuple[str, list[_Expr]] | None
-    def __init__(self, span: Span, name: str, presort_and_args: tuple[str, list[_Expr]] | None = None) -> None: ...
+    def __init__(self, span: _Span, name: str, presort_and_args: tuple[str, list[_Expr]] | None = None) -> None: ...
 
 @final
 class Function:
-    decl: FunctionDecl
-    def __init__(self, decl: FunctionDecl) -> None: ...
+    span: _Span
+    name: str
+    schema: Schema
+    merge: _Expr | None
+    def __init__(self, span: _Span, name: str, schema: Schema, merge: _Expr | None) -> None: ...
 
 @final
 class AddRuleset:
@@ -470,50 +528,50 @@ class RunSchedule:
 
 @final
 class Simplify:
-    span: Span
+    span: _Span
     expr: _Expr
     schedule: _Schedule
-    def __init__(self, span: Span, expr: _Expr, schedule: _Schedule) -> None: ...
+    def __init__(self, span: _Span, expr: _Expr, schedule: _Schedule) -> None: ...
 
 @final
 class QueryExtract:
-    span: Span
+    span: _Span
     variants: int
     expr: _Expr
-    def __init__(self, span: Span, variants: int, expr: _Expr) -> None: ...
+    def __init__(self, span: _Span, variants: int, expr: _Expr) -> None: ...
 
 @final
 class Check:
-    span: Span
+    span: _Span
     facts: list[_Fact]
-    def __init__(self, span: Span, facts: list[_Fact]) -> None: ...
+    def __init__(self, span: _Span, facts: list[_Fact]) -> None: ...
 
 @final
 class PrintFunction:
-    span: Span
+    span: _Span
     name: str
     length: int
-    def __init__(self, span: Span, name: str, length: int) -> None: ...
+    def __init__(self, span: _Span, name: str, length: int) -> None: ...
 
 @final
 class PrintSize:
-    span: Span
+    span: _Span
     name: str | None
-    def __init__(self, span: Span, name: str | None) -> None: ...
+    def __init__(self, span: _Span, name: str | None) -> None: ...
 
 @final
 class Output:
-    span: Span
+    span: _Span
     file: str
     exprs: list[_Expr]
-    def __init__(self, span: Span, file: str, exprs: list[_Expr]) -> None: ...
+    def __init__(self, span: _Span, file: str, exprs: list[_Expr]) -> None: ...
 
 @final
 class Input:
-    span: Span
+    span: _Span
     name: str
     file: str
-    def __init__(self, span: Span, name: str, file: str) -> None: ...
+    def __init__(self, span: _Span, name: str, file: str) -> None: ...
 
 @final
 class Push:
@@ -522,29 +580,38 @@ class Push:
 
 @final
 class Pop:
-    span: Span
+    span: _Span
     length: int
-    def __init__(self, span: Span, length: int) -> None: ...
+    def __init__(self, span: _Span, length: int) -> None: ...
 
 @final
 class Fail:
-    span: Span
+    span: _Span
     command: _Command
-    def __init__(self, span: Span, command: _Command) -> None: ...
+    def __init__(self, span: _Span, command: _Command) -> None: ...
 
 @final
 class Include:
-    span: Span
+    span: _Span
     path: str
-    def __init__(self, span: Span, path: str) -> None: ...
+    def __init__(self, span: _Span, path: str) -> None: ...
 
 @final
 class Relation:
-    span: Span
-    constructor: str
+    span: _Span
+    name: str
     inputs: list[str]
 
-    def __init__(self, span: Span, constructor: str, inputs: list[str]) -> None: ...
+    def __init__(self, span: _Span, name: str, inputs: list[str]) -> None: ...
+
+@final
+class Constructor:
+    span: _Span
+    name: str
+    schema: Schema
+    cost: int | None
+    unextractable: bool
+    def __init__(self, span: _Span, name: str, schema: Schema, cost: int | None, unextractable: bool) -> None: ...
 
 @final
 class PrintOverallStatistics:
@@ -582,6 +649,22 @@ _Command: TypeAlias = (
     | Relation
     | PrintOverallStatistics
     | UnstableCombinedRuleset
+    | Constructor
 )
 
-def termdag_term_to_expr(termdag: TermDag, term: _Term) -> _Expr: ...
+##
+# TermDag
+##
+
+@final
+class TermDag:
+    def __init__(self) -> None: ...
+    def size(self) -> int: ...
+    def lookup(self, node: _Term) -> int: ...
+    def get(self, id: int) -> _Term: ...
+    def app(self, sym: str, children: list[int]) -> _Term: ...
+    def lit(self, lit: _Literal) -> _Term: ...
+    def var(self, sym: str) -> _Term: ...
+    def expr_to_term(self, expr: _Expr) -> _Term: ...
+    def term_to_expr(self, term: _Term, span: _Span) -> _Expr: ...
+    def to_string(self, term: _Term) -> str: ...

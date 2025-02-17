@@ -8,14 +8,16 @@ use pyo3::types::PyDeltaAccess;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::termdag::TermDag;
+
 convert_enums!(
     egglog::ast::Literal: "{:}" Hash => Literal {
         Int[trait=Hash](value: i64)
             i -> egglog::ast::Literal::Int(i.value),
             egglog::ast::Literal::Int(i) => Int { value: *i };
-        F64[trait=Hash](value: WrappedOrderedF64)
-            f -> egglog::ast::Literal::F64(f.value.0),
-            egglog::ast::Literal::F64(f) => F64 { value: WrappedOrderedF64(*f) };
+        Float[trait=Hash](value: WrappedOrderedF64)
+            f -> egglog::ast::Literal::Float(f.value.0),
+            egglog::ast::Literal::Float(f) => Float { value: WrappedOrderedF64(*f) };
         String_[name="String"][trait=Hash](value: String)
             s -> egglog::ast::Literal::String((&s.value).into()),
             egglog::ast::Literal::String(s) => String_ { value: s.to_string() };
@@ -42,9 +44,9 @@ convert_enums!(
             }
     };
     egglog::ast::Fact: "{}" => Fact_ {
-        Eq(span: Span, exprs: Vec<Expr>)
-           eq -> egglog::ast::Fact::Eq(eq.span.clone().into(), eq.exprs.iter().map(|e| e.into()).collect()),
-           egglog::ast::Fact::Eq(span, e) => Eq { span: span.into(), exprs: e.iter().map(|e| e.into()).collect() };
+        Eq(span: Span, left: Expr, right: Expr)
+           eq -> egglog::ast::Fact::Eq(eq.span.clone().into(), eq.left.clone().into(), eq.right.clone().into()),
+           egglog::ast::Fact::Eq(span, left, right) => Eq { span: span.into(), left: left.into(), right: right.into() };
         Fact(expr: Expr)
             f -> egglog::ast::Fact::Fact((&f.expr).into()),
             egglog::ast::Fact::Fact(e) => Fact { expr: e.into() }
@@ -154,9 +156,19 @@ convert_enums!(
                 presort_and_args: presort_and_args.as_ref().map(|(p, a)| (p.to_string(), a.iter().map(|e| e.into()).collect())),
                 span: span.into()
             };
-        Function(decl: FunctionDecl)
-            f -> egglog::ast::Command::Function((&f.decl).into()),
-            egglog::ast::Command::Function(f) => Function { decl: f.into() };
+        Function(span: Span, name: String, schema: Schema, merge: Option<Expr>)
+            f -> egglog::ast::Command::Function{
+                span: f.span.clone().into(),
+                name: (&f.name).into(),
+                schema: (&f.schema).into(),
+                merge: f.merge.as_ref().map(|e| e.into())
+            },
+            egglog::ast::Command::Function {span, name, schema, merge} => Function {
+                span: span.into(),
+                name: name.to_string(),
+                schema: schema.into(),
+                merge: merge.as_ref().map(|e| e.into())
+            };
         AddRuleset(name: String)
             a -> egglog::ast::Command::AddRuleset((&a.name).into()),
             egglog::ast::Command::AddRuleset(n) => AddRuleset { name: n.to_string() };
@@ -259,15 +271,30 @@ convert_enums!(
         Include(span: Span, path: String)
             i -> egglog::ast::Command::Include(i.span.clone().into(), (&i.path).into()),
             egglog::ast::Command::Include(span, p) => Include { span: span.into(), path: p.to_string() };
-        Relation(span: Span, constructor: String, inputs: Vec<String>)
+        Constructor(span: Span, name: String, schema: Schema, cost: Option<usize>, unextractable: bool)
+            c -> egglog::ast::Command::Constructor {
+                span: c.span.clone().into(),
+                name: (&c.name).into(),
+                schema: (&c.schema).into(),
+                cost: c.cost,
+                unextractable: c.unextractable
+            },
+            egglog::ast::Command::Constructor {span, name, schema, cost, unextractable} => Constructor {
+                span: span.into(),
+                name: name.to_string(),
+                schema: schema.into(),
+                cost: *cost,
+                unextractable: *unextractable
+            };
+        Relation(span: Span, name: String, inputs: Vec<String>)
             r -> egglog::ast::Command::Relation {
                 span: r.span.clone().into(),
-                constructor: (&r.constructor).into(),
+                name: (&r.name).into(),
                 inputs: r.inputs.iter().map(|i| i.into()).collect()
             },
-            egglog::ast::Command::Relation {span, constructor, inputs} => Relation {
+            egglog::ast::Command::Relation {span, name, inputs} => Relation {
                 span: span.into(),
-                constructor: constructor.to_string(),
+                name: name.to_string(),
                 inputs: inputs.iter().map(|i| i.to_string()).collect()
             };
         PrintOverallStatistics()
@@ -322,62 +349,41 @@ convert_enums!(
                 termdag: termdag.into(),
                 terms: terms.iter().map(|v| v.into()).collect()
             }
+    };
+    egglog::ast::Span: "{:?}" => Span {
+        PanicSpan()
+            _p -> egglog::ast::Span::Panic,
+            egglog::ast::Span::Panic => PanicSpan {};
+        EgglogSpan(file: SrcFile, i: usize, j: usize)
+            e -> egglog::ast::Span::Egglog(Arc::new({
+                egglog::ast::EgglogSpan {
+                    file: Arc::new(e.file.clone().into()),
+                    i: e.i,
+                    j: e.j
+                }
+            })),
+            egglog::ast::Span::Egglog(e) => EgglogSpan {
+                file: (*e.file.clone()).clone().into(),
+                i: e.i,
+                j: e.j
+            };
+        RustSpan(file: String, line: u32, column: u32)
+            r -> egglog::ast::Span::Rust(Arc::new(egglog::ast::RustSpan {
+                file: Box::leak(r.file.clone().into_boxed_str()),
+                line: r.line,
+                column: r.column
+            })),
+            egglog::ast::Span::Rust(r) => RustSpan {file: r.file.to_string(), line: r.line, column: r.column}
     }
 );
 
 convert_struct!(
     egglog::ast::SrcFile: "{:?}" => SrcFile(
-        name: String,
-        contents: Option<String>
+        name: Option<String>,
+        contents: String
     )
-        s -> egglog::ast::SrcFile {name: s.name.to_string(), contents: s.contents.clone()},
-        s -> SrcFile {name: s.name.to_string(), contents: s.contents.clone()};
-    egglog::ast::Span: "{:?}" => Span(
-        file: SrcFile,
-        start: usize,
-        end: usize
-    )
-        s -> egglog::ast::Span(Arc::new(s.file.clone().into()), s.start, s.end),
-        s -> Span {file: (*s.0.clone()).clone().into(), start: s.1, end: s.2};
-    egglog::TermDag: "{:?}" => TermDag(
-        nodes: Vec<Term>,
-        hashcons: HashMap<Term, usize>
-    )
-        t -> egglog::TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), *v)).collect()},
-        t -> TermDag {nodes: t.nodes.iter().map(|v| v.into()).collect(), hashcons: t.hashcons.iter().map(|(k, v)| (k.clone().into(), *v)).collect()};
-    egglog::ast::FunctionDecl: "{:?}" => FunctionDecl(
-        span: Span,
-        name: String,
-        schema: Schema,
-        default: Option<Expr> = None,
-        merge: Option<Expr> = None,
-        merge_action: Vec<Action> = Vec::new(),
-        cost: Option<usize> = None,
-        unextractable: bool = false,
-        ignore_viz: bool = false
-    )
-        f -> egglog::ast::FunctionDecl {
-            span: f.span.clone().into(),
-            name: (&f.name).into(),
-            schema: (&f.schema).into(),
-            default: f.default.as_ref().map(|e| e.into()),
-            merge: f.merge.as_ref().map(|e| e.into()),
-            merge_action: egglog::ast::GenericActions(f.merge_action.iter().map(|a| a.into()).collect()),
-            cost: f.cost,
-            unextractable: f.unextractable,
-            ignore_viz: f.ignore_viz
-        },
-        f -> FunctionDecl {
-            span: f.span.clone().into(),
-            name: f.name.to_string(),
-            schema: (&f.schema).into(),
-            default: f.default.as_ref().map(|e| e.into()),
-            merge: f.merge.as_ref().map(|e| e.into()),
-            merge_action: f.merge_action.0.iter().map(|a| a.into()).collect(),
-            cost: f.cost,
-            unextractable: f.unextractable,
-            ignore_viz: f.ignore_viz
-        };
+        s -> egglog::ast::SrcFile {name: s.name.clone(), contents: s.contents.clone()},
+        s -> SrcFile {name: s.name.clone(), contents: s.contents.clone()};
     egglog::ast::Variant: "{:?}" => Variant(
         span: Span,
         name: String,
@@ -392,7 +398,7 @@ convert_struct!(
     )
         s -> egglog::ast::Schema {input: s.input.iter().map(|v| v.into()).collect(), output: (&s.output).into()},
         s -> Schema {input: s.input.iter().map(|v| v.to_string()).collect(), output: s.output.to_string()};
-    egglog::ast::GenericRule<Symbol, Symbol>: "{}" => Rule(
+    egglog::ast::GenericRule<Symbol, Symbol>: "{:?}" => Rule(
         span: Span,
         head: Vec<Action>,
         body: Vec<Fact_>

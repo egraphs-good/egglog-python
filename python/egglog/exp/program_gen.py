@@ -75,13 +75,13 @@ class Program(Expr):
         Returns the next gensym to use. This is set after calling `compile(i)` on a program.
         """
 
-    @method(default=Unit())
+    # TODO: Replace w/ def next_sym(self) -> i64: ... ?
     def compile(self, next_sym: i64 = i64(0)) -> Unit:
         """
         Triggers compilation of the program.
         """
 
-    @method(merge=lambda old, _new: old, unextractable=True)  # type: ignore[misc]
+    @method(merge=lambda old, _new: old)  # type: ignore[misc]
     @property
     def parent(self) -> Program:
         """

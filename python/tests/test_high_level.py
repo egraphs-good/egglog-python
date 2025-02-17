@@ -17,14 +17,6 @@ from egglog.declarations import (
     TypedExprDecl,
 )
 
-EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))
-
-
-# Test all files in the `examples` directory by importing them in this parametrized test
-@pytest.mark.parametrize("name", [f.stem for f in EXAMPLE_FILES if f.stem != "__init__"])
-def test_example(name):
-    importlib.import_module(f"egglog.examples.{name}")
-
 
 class TestExprStr:
     def test_unwrap_lit(self):
@@ -223,33 +215,6 @@ def test_keyword_args_init():
     assert expr_parts(Foo(1)) == expr_parts(Foo(x=1))
 
 
-def test_modules() -> None:
-    with pytest.deprecated_call():
-        m = Module()
-
-    @m.class_
-    class Numeric(Expr):
-        ONE: ClassVar[Numeric]
-
-    with pytest.deprecated_call():
-        m2 = Module()
-
-    with pytest.deprecated_call():
-
-        @m2.class_
-        class OtherNumeric(Expr):
-            @m2.method(cost=10)
-            def __init__(self, v: i64Like) -> None: ...
-
-    egraph = EGraph([m, m2])
-
-    @function
-    def from_numeric(n: Numeric) -> OtherNumeric: ...
-
-    egraph.register(rewrite(OtherNumeric(1)).to(from_numeric(Numeric.ONE)))
-    assert expr_parts(egraph.simplify(OtherNumeric(i64(1)), 10)) == expr_parts(from_numeric(Numeric.ONE))
-
-
 def test_property():
     egraph = EGraph()
 
@@ -280,7 +245,10 @@ class TestPyObject:
         assert EGraph().eval(PyObject.from_string("foo")) == "foo"
 
     def test_to_string(self):
-        assert EGraph().eval(PyObject("foo").to_string()) == "foo"
+        x: String = PyObject("foo").to_string()
+        # reveal_type(cast(Bool, x)))
+        # reveal_type(EGraph().eval(x))
+        assert EGraph().eval(x) == "foo"
 
     def test_dict_update(self):
         original_d = {"foo": "bar"}
@@ -462,12 +430,14 @@ def test_upcast_args():
 
 
 def test_rewrite_upcasts():
-    rewrite(i64(1)).to(0)  # type: ignore[arg-type]
+    class X(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    converter(i64, X, X)
+    rewrite(X(1)).to(0)  # type: ignore[arg-type]
 
 
 def test_function_default_upcasts():
-    EGraph()
-
     @function
     def f(x: i64Like) -> i64: ...
 
@@ -578,7 +548,7 @@ def test_functions_seperate_pop():
     with egraph:
 
         @function
-        def f(x: T, y: T) -> T: ...
+        def f(x: T, y: T) -> T: ...  # type: ignore[misc]
 
         egraph.register(f(T(1), T(2)))  # type: ignore[call-arg]
 
@@ -802,3 +772,12 @@ def test_map_like_conversion():
 
     assert expr_parts(my_fn({1: "hi"})) == expr_parts(my_fn(Map[i64, String].empty().insert(i64(1), String("hi"))))
     assert expr_parts(my_fn({})) == expr_parts(my_fn(Map[i64, String].empty()))
+
+
+EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))
+
+
+# Test all files in the `examples` directory by importing them in this parametrized test
+@pytest.mark.parametrize("name", [f.stem for f in EXAMPLE_FILES if f.stem != "__init__"])
+def test_example(name):
+    importlib.import_module(f"egglog.examples.{name}")
