@@ -229,6 +229,7 @@ class RuntimeClass(DelayedDeclerations):
             # Origin is used in get_type_hints which is used when resolving the class itself
             "__origin__",
             "__typing_unpacked_tuple_args__",
+            "__typing_is_unpacked_typevartuple__",
         }:
             raise AttributeError
 
