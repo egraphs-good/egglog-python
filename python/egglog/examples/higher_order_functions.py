@@ -37,7 +37,7 @@ def incr_list(xs: MathList) -> MathList:
     return xs.map(lambda x: x + Math(1))
 
 
-egraph = EGraph(save_egglog_string=True)
+egraph = EGraph()
 y = egraph.let("y", incr_list(MathList().append(Math(1)).append(Math(2))))
 egraph.run(math_ruleset.saturate())
 egraph.check(eq(y).to(MathList().append(Math(2)).append(Math(3))))
