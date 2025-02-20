@@ -114,6 +114,8 @@ IGNORED_ATTRIBUTES = {
     "__annotations__",
     "__hash__",
     "__qualname__",
+    "__firstlineno__",
+    "__static_attributes__",
     # Ignore all reflected binary method
     *REFLECTED_BINARY_METHODS.keys(),
 }
