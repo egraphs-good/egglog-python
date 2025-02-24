@@ -20,7 +20,7 @@ from .type_constraint_solver import TypeConstraintError, TypeConstraintSolver
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["EGraphState", "GLOBAL_PY_OBJECT_SORT", "span"]
+__all__ = ["GLOBAL_PY_OBJECT_SORT", "EGraphState", "span"]
 
 # Create a global sort for python objects, so we can store them without an e-graph instance
 # Needed when serializing commands to egg commands when creating modules
