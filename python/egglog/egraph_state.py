@@ -20,7 +20,7 @@ from .type_constraint_solver import TypeConstraintError, TypeConstraintSolver
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["EGraphState", "GLOBAL_PY_OBJECT_SORT", "span"]
+__all__ = ["GLOBAL_PY_OBJECT_SORT", "EGraphState", "span"]
 
 # Create a global sort for python objects, so we can store them without an e-graph instance
 # Needed when serializing commands to egg commands when creating modules
@@ -519,7 +519,7 @@ class FromEggState:
         elif isinstance(term, bindings.TermApp):
             if term.name == "py-object":
                 call = self.termdag.term_to_expr(term, span())
-                expr_decl = PyObjectDecl(self.state.egraph.eval_py_object(call))
+                expr_decl = PyObjectDecl(GLOBAL_PY_OBJECT_SORT.load(call))
             elif term.name == "unstable-fn":
                 # Get function name
                 fn_term, *arg_terms = term.args
@@ -528,7 +528,7 @@ class FromEggState:
                 fn_name = fn_value.expr.value
                 assert isinstance(fn_name, str)
 
-                # Resolve what types the partiallied applied args are
+                # Resolve what types the partially applied args are
                 assert tp.name == "UnstableFn"
                 call_decl = self.from_call(tp.args[0], bindings.TermApp(fn_name, arg_terms))
                 expr_decl = PartialCallDecl(call_decl)

@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from inspect import Parameter, Signature
 from itertools import zip_longest
-from typing import TYPE_CHECKING, NoReturn, TypeVar, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, TypeVar, Union, cast, get_args, get_origin
 
 from .declarations import *
 from .pretty import *
@@ -25,7 +25,8 @@ from .type_constraint_solver import *
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from .egraph import Expr
+    from .egraph import Fact
+
 
 __all__ = [
     "LIT_CLASS_NAMES",
@@ -58,6 +59,19 @@ REFLECTED_BINARY_METHODS = {
     "__rxor__": "__xor__",
     "__ror__": "__or__",
 }
+
+# Methods that need to return real Python values not expressions
+PRESERVED_METHODS = [
+    "__bool__",
+    "__len__",
+    "__complex__",
+    "__int__",
+    "__float__",
+    "__iter__",
+    "__index__",
+    "__float__",
+    "__int__",
+]
 
 # Set this globally so we can get access to PyObject when we have a type annotation of just object.
 # This is the only time a type annotation doesn't need to include the egglog type b/c object is top so that would be redundant statically.
@@ -155,12 +169,10 @@ class RuntimeClass(DelayedDeclerations):
             del args
             # Assumes we don't have types set for UnstableFn w/ generics, that they have to be inferred
 
-            # 1. Create a runtime function for the first arg
-            assert isinstance(fn_arg, RuntimeFunction)
-            # 2. Call it with the partial args, and use untyped vars for the rest of the args
-            res = fn_arg(*partial_args, _egg_partial_function=True)
+            # 1. Call it with the partial args, and use untyped vars for the rest of the args
+            res = cast(Callable, fn_arg)(*partial_args, _egg_partial_function=True)
             assert res is not None, "Mutable partial functions not supported"
-            # 3. Use the inferred return type and inferred rest arg types as the types of the function, and
+            # 2. Use the inferred return type and inferred rest arg types as the types of the function, and
             #    the partially applied args as the args.
             call = (res_typed_expr := res.__egg_typed_expr__).expr
             return_tp = res_typed_expr.tp
@@ -262,8 +274,6 @@ class RuntimeClass(DelayedDeclerations):
             return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(self.__egg_tp__.name, name)))
 
         msg = f"Class {self.__egg_tp__.name} has no method {name}"
-        if name == "__ne__":
-            msg += ". Did you mean to use the ne(...).to(...)?"
         raise AttributeError(msg) from None
 
     def __str__(self) -> str:
@@ -451,6 +461,9 @@ class RuntimeExpr(DelayedDeclerations):
     def __from_values__(cls, d: Declarations, e: TypedExprDecl) -> RuntimeExpr:
         return cls(Thunk.value(d), Thunk.value(e))
 
+    def __with_expr__(self, e: TypedExprDecl) -> RuntimeExpr:
+        return RuntimeExpr(self.__egg_decls_thunk__, Thunk.value(e))
+
     @property
     def __egg_typed_expr__(self) -> TypedExprDecl:
         return self.__egg_typed_expr_thunk__()
@@ -497,12 +510,12 @@ class RuntimeExpr(DelayedDeclerations):
     def __egg_class_decl__(self) -> ClassDecl:
         return self.__egg_decls__.get_class_decl(self.__egg_class_name__)
 
-    # Have __eq__ take no NoReturn (aka Never https://docs.python.org/3/library/typing.html#typing.Never) because
-    # we don't wany any type that MyPy thinks is an expr to be used with __eq__.
-    # That's because we want to reserve __eq__ for domain specific equality checks, overloading this method.
-    # To check if two exprs are equal, use the expr_eq method.
-    # At runtime, this will resolve if there is a defined egg function for `__eq__`
-    def __eq__(self, other: NoReturn) -> Expr: ...  # type: ignore[override, empty-body]
+    # These both will be overriden below in the special methods section, but add these here for type hinting purposes
+    def __eq__(self, other: object) -> Fact:  # type: ignore[override, empty-body]
+        ...
+
+    def __ne__(self, other: object) -> RuntimeExpr:  # type: ignore[override, empty-body]
+        ...
 
     # Implement these so that copy() works on this object
     # otherwise copy will try to call `__getstate__` before object is initialized with properties which will cause inifinite recursion
@@ -526,7 +539,7 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
         *args: object,
         __name: str = name,
         **kwargs: object,
-    ) -> RuntimeExpr | None:
+    ) -> RuntimeExpr | Fact | None:
         from .conversion import ConvertError
 
         class_name = self.__egg_class_name__
@@ -552,6 +565,16 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
         if __name in class_decl.methods:
             fn = RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(class_name, __name)), self)
             return fn(*args, **kwargs)  # type: ignore[arg-type]
+        # Handle == and != fallbacks to eq and ne helpers if the methods aren't defined on the class explicitly.
+        if __name == "__eq__":
+            from .egraph import BaseExpr, eq
+
+            return eq(cast(BaseExpr, self)).to(cast(BaseExpr, args[0]))
+        if __name == "__ne__":
+            from .egraph import BaseExpr, ne
+
+            return cast(RuntimeExpr, ne(cast(BaseExpr, self)).to(cast(BaseExpr, args[0])))
+
         if __name in PARTIAL_METHODS:
             return NotImplemented
         raise TypeError(f"{class_name!r} object does not support {__name}")
@@ -580,7 +603,7 @@ def call_method_min_conversion(slf: object, other: object, name: str) -> Runtime
     return method(other)
 
 
-for name in ["__bool__", "__len__", "__complex__", "__int__", "__float__", "__iter__", "__index__"]:
+for name in PRESERVED_METHODS:
 
     def _preserved_method(self: RuntimeExpr, __name: str = name):
         try:

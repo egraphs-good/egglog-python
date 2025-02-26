@@ -196,7 +196,7 @@ class Declarations:
                 return self._classes[class_name].properties[property_name]
             case InitRef(class_name):
                 init_fn = self._classes[class_name].init
-                assert init_fn
+                assert init_fn, f"Class {class_name} does not have an init function."
                 return init_fn
             case UnnamedFunctionRef():
                 return ConstructorDecl(ref.signature)

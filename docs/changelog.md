@@ -24,6 +24,9 @@ _This project uses semantic versioning_
   - Updates function constructor to remove `default` and `on_merge`. You also can't set a `cost` when you use a `merge`
     function or return a primitive.
   - `eq` now only takes two args, instead of being able to compare any number of values.
+- Removes `eval` method from `EGraph` and moves primitive evaluation to methods on each builtin and support `int(...)` type conversions on primitives.
+- Change how to set global EGraph context with `with egraph.set_current()` and `EGraph.current` and add support for setting global schedule as well with `with schedule.set_current()` and `Schedule.current`.
+- Adds support for using `==` and `!=` directly on values instead of `eq` and `ne` functions.
 
 ## 8.0.1 (2024-10-24)
 

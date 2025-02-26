@@ -1,10 +1,10 @@
-[case eqNotAllowed]
+[case eqAllowed]
 from egglog import *
-_ = i64(0) == i64(0)  # E: Unsupported operand types for == ("i64" and "i64")
+_ = i64(0) == i64(0)
 
-[case notEqNotAllowed]
+[case notEqAllowed]
 from egglog import *
-_ = i64(0) != i64(0)  # E: Unsupported operand types for != ("i64" and "i64")
+_ = i64(0) != i64(0)
 
 [case eqToAllowed]
 from egglog import *

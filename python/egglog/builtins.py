@@ -5,20 +5,24 @@ Builtin sorts and function to egg.
 
 from __future__ import annotations
 
+from fractions import Fraction
 from functools import partial, reduce
-from types import FunctionType
+from types import FunctionType, MethodType
 from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union, cast, overload
 
 from typing_extensions import TypeVarTuple, Unpack
 
+from . import bindings
 from .conversion import convert, converter, get_type_args
-from .egraph import BaseExpr, BuiltinExpr, Unit, function, get_current_ruleset, method
+from .declarations import *
+from .egraph import BaseExpr, BuiltinExpr, EGraph, expr_fact, function, get_current_ruleset, method
+from .egraph_state import GLOBAL_PY_OBJECT_SORT
 from .functionalize import functionalize
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
 from .thunk import Thunk
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 
 __all__ = [
@@ -32,6 +36,7 @@ __all__ = [
     "SetLike",
     "String",
     "StringLike",
+    "Unit",
     "UnstableFn",
     "Vec",
     "VecLike",
@@ -46,7 +51,25 @@ __all__ = [
 ]
 
 
+class Unit(BuiltinExpr, egg_sort="Unit"):
+    """
+    The unit type. This is used to reprsent if a value exists in the e-graph or not.
+    """
+
+    def __init__(self) -> None: ...
+
+    @method(preserve=True)
+    def __bool__(self) -> bool:
+        return bool(expr_fact(self))
+
+
 class String(BuiltinExpr):
+    @method(preserve=True)
+    def eval(self) -> str:
+        value = _extract_lit(self)
+        assert isinstance(value, bindings.String)
+        return value.value
+
     def __init__(self, value: str) -> None: ...
 
     @method(egg_fn="replace")
@@ -62,10 +85,20 @@ def join(*strings: StringLike) -> String: ...
 
 converter(str, String, String)
 
-BoolLike = Union["Bool", bool]
+BoolLike: TypeAlias = Union["Bool", bool]
 
 
 class Bool(BuiltinExpr, egg_sort="bool"):
+    @method(preserve=True)
+    def eval(self) -> bool:
+        value = _extract_lit(self)
+        assert isinstance(value, bindings.Bool)
+        return value.value
+
+    @method(preserve=True)
+    def __bool__(self) -> bool:
+        return self.eval()
+
     def __init__(self, value: bool) -> None: ...
 
     @method(egg_fn="not")
@@ -91,6 +124,20 @@ i64Like: TypeAlias = Union["i64", int]  # noqa: N816, PYI042
 
 
 class i64(BuiltinExpr):  # noqa: N801
+    @method(preserve=True)
+    def eval(self) -> int:
+        value = _extract_lit(self)
+        assert isinstance(value, bindings.Int)
+        return value.value
+
+    @method(preserve=True)
+    def __index__(self) -> int:
+        return self.eval()
+
+    @method(preserve=True)
+    def __int__(self) -> int:
+        return self.eval()
+
     def __init__(self, value: int) -> None: ...
 
     @method(egg_fn="+")
@@ -193,6 +240,20 @@ f64Like: TypeAlias = Union["f64", float]  # noqa: N816, PYI042
 
 
 class f64(BuiltinExpr):  # noqa: N801
+    @method(preserve=True)
+    def eval(self) -> float:
+        value = _extract_lit(self)
+        assert isinstance(value, bindings.Float)
+        return value.value
+
+    @method(preserve=True)
+    def __float__(self) -> float:
+        return self.eval()
+
+    @method(preserve=True)
+    def __int__(self) -> int:
+        return int(self.eval())
+
     def __init__(self, value: float) -> None: ...
 
     @method(egg_fn="neg")
@@ -265,6 +326,33 @@ V = TypeVar("V", bound=BaseExpr)
 
 
 class Map(BuiltinExpr, Generic[T, V]):
+    @method(preserve=True)
+    def eval(self) -> dict[T, V]:
+        call = _extract_call(self)
+        expr = cast(RuntimeExpr, self)
+        d = {}
+        while call.callable != ClassMethodRef("Map", "empty"):
+            assert call.callable == MethodRef("Map", "insert")
+            call_typed, k_typed, v_typed = call.args
+            assert isinstance(call_typed.expr, CallDecl)
+            k = cast(T, expr.__with_expr__(k_typed))
+            v = cast(V, expr.__with_expr__(v_typed))
+            d[k] = v
+            call = call_typed.expr
+        return d
+
+    @method(preserve=True)
+    def __iter__(self) -> Iterator[T]:
+        return iter(self.eval())
+
+    @method(preserve=True)
+    def __len__(self) -> int:
+        return len(self.eval())
+
+    @method(preserve=True)
+    def __contains__(self, key: T) -> bool:
+        return key in self.eval()
+
     @method(egg_fn="map-empty")
     @classmethod
     def empty(cls) -> Map[T, V]: ...
@@ -305,6 +393,24 @@ MapLike: TypeAlias = Map[T, V] | dict[TO, VO]
 
 
 class Set(BuiltinExpr, Generic[T]):
+    @method(preserve=True)
+    def eval(self) -> set[T]:
+        call = _extract_call(self)
+        assert call.callable == InitRef("Set")
+        return {cast(T, cast(RuntimeExpr, self).__with_expr__(x)) for x in call.args}
+
+    @method(preserve=True)
+    def __iter__(self) -> Iterator[T]:
+        return iter(self.eval())
+
+    @method(preserve=True)
+    def __len__(self) -> int:
+        return len(self.eval())
+
+    @method(preserve=True)
+    def __contains__(self, key: T) -> bool:
+        return key in self.eval()
+
     @method(egg_fn="set-of")
     def __init__(self, *args: T) -> None: ...
 
@@ -349,6 +455,28 @@ SetLike: TypeAlias = Set[T] | set[TO]
 
 
 class Rational(BuiltinExpr):
+    @method(preserve=True)
+    def eval(self) -> Fraction:
+        call = _extract_call(self)
+        assert call.callable == InitRef("Rational")
+
+        def _to_int(e: TypedExprDecl) -> int:
+            expr = e.expr
+            assert isinstance(expr, LitDecl)
+            assert isinstance(expr.value, int)
+            return expr.value
+
+        num, den = call.args
+        return Fraction(_to_int(num), _to_int(den))
+
+    @method(preserve=True)
+    def __float__(self) -> float:
+        return float(self.eval())
+
+    @method(preserve=True)
+    def __int__(self) -> int:
+        return int(self.eval())
+
     @method(egg_fn="rational")
     def __init__(self, num: i64Like, den: i64Like) -> None: ...
 
@@ -410,6 +538,26 @@ class Rational(BuiltinExpr):
 
 
 class Vec(BuiltinExpr, Generic[T]):
+    @method(preserve=True)
+    def eval(self) -> tuple[T, ...]:
+        call = _extract_call(self)
+        if call.callable == ClassMethodRef("Vec", "empty"):
+            return ()
+        assert call.callable == InitRef("Vec")
+        return tuple(cast(T, cast(RuntimeExpr, self).__with_expr__(x)) for x in call.args)
+
+    @method(preserve=True)
+    def __iter__(self) -> Iterator[T]:
+        return iter(self.eval())
+
+    @method(preserve=True)
+    def __len__(self) -> int:
+        return len(self.eval())
+
+    @method(preserve=True)
+    def __contains__(self, key: T) -> bool:
+        return key in self.eval()
+
     @method(egg_fn="vec-of")
     def __init__(self, *args: T) -> None: ...
 
@@ -461,6 +609,13 @@ VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
 
 
 class PyObject(BuiltinExpr):
+    @method(preserve=True)
+    def eval(self) -> object:
+        report = (EGraph.current or EGraph())._run_extract(cast(RuntimeExpr, self), 0)
+        assert isinstance(report, bindings.Best)
+        expr = report.termdag.term_to_expr(report.term, bindings.PanicSpan())
+        return GLOBAL_PY_OBJECT_SORT.load(expr)
+
     def __init__(self, value: object) -> None: ...
 
     @method(egg_fn="py-from-string")
@@ -554,6 +709,8 @@ class UnstableFn(BuiltinExpr, Generic[T, Unpack[TS]]):
     def __call__(self, *args: Unpack[TS]) -> T: ...
 
 
+# Method Type is for builtins like __getitem__
+converter(MethodType, UnstableFn, lambda m: UnstableFn(m.__func__, m.__self__))
 converter(RuntimeFunction, UnstableFn, UnstableFn)
 converter(partial, UnstableFn, lambda p: UnstableFn(p.func, *p.args))
 
@@ -590,3 +747,24 @@ def value_to_annotation(a: object) -> type | None:
 
 
 converter(FunctionType, UnstableFn, _convert_function)
+
+
+def _extract_lit(e: BaseExpr) -> bindings._Literal:
+    """
+    Special case extracting literals to make this faster by using termdag directly.
+    """
+    report = (EGraph.current or EGraph())._run_extract(cast(RuntimeExpr, e), 0)
+    assert isinstance(report, bindings.Best)
+    term = report.term
+    assert isinstance(term, bindings.TermLit)
+    return term.value
+
+
+def _extract_call(e: BaseExpr) -> CallDecl:
+    """
+    Extracts the call form of an expression
+    """
+    extracted = cast(RuntimeExpr, (EGraph.current or EGraph()).extract(e))
+    expr = extracted.__egg_typed_expr__.expr
+    assert isinstance(expr, CallDecl)
+    return expr

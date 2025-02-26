@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import pathlib
 from copy import copy
+from fractions import Fraction
 from typing import ClassVar, TypeAlias, Union
 
 import pytest
@@ -242,33 +243,30 @@ def test_default_args():
 
 class TestPyObject:
     def test_from_string(self):
-        assert EGraph().eval(PyObject.from_string("foo")) == "foo"
+        assert PyObject.from_string("foo").eval() == "foo"
 
     def test_to_string(self):
-        x: String = PyObject("foo").to_string()
-        # reveal_type(cast(Bool, x)))
-        # reveal_type(EGraph().eval(x))
-        assert EGraph().eval(x) == "foo"
+        assert PyObject("foo").to_string().eval() == "foo"
 
     def test_dict_update(self):
         original_d = {"foo": "bar"}
-        res = EGraph().eval(PyObject(original_d).dict_update("foo", "baz"))
+        res = PyObject(original_d).dict_update("foo", "baz").eval()
         assert res == {"foo": "baz"}
         assert original_d == {"foo": "bar"}
 
     def test_eval(self):
-        assert EGraph().eval(py_eval("x + y", {"x": 10, "y": 20}, {})) == 30
+        assert py_eval("x + y", {"x": 10, "y": 20}, {}).eval() == 30
 
     def test_eval_local(self):
         x = "hi"
         res = py_eval("my_add(x, y)", PyObject(locals()).dict_update("y", "there"), globals())
-        assert EGraph().eval(res) == "hithere"
+        assert res.eval() == "hithere"  # Updated to call eval() directly on res
 
     def test_exec(self):
-        assert EGraph().eval(py_exec("x = 10")) == {"x": 10}
+        assert py_exec("x = 10").eval() == {"x": 10}  # Updated to call eval() directly on res
 
     def test_exec_globals(self):
-        assert EGraph().eval(py_exec("x = y + 1", {"y": 10})) == {"x": 11}
+        assert py_exec("x = y + 1", {"y": 10}).eval() == {"x": 11}
 
 
 def my_add(a, b):
@@ -474,13 +472,64 @@ def test_upcast_self_lower_cost():
     assert expr_parts(r) == expr_parts(NDArray.from_int(Int("x")) + NDArray("y"))
 
 
-def test_eval():
-    egraph = EGraph()
-    assert egraph.eval(String("hi")) == "hi"
-    assert egraph.eval(i64(10)) == 10
-    assert egraph.eval(f64(10.0)) == 10.0
-    assert egraph.eval(Bool(True)) is True
-    assert egraph.eval(PyObject((1, 2))) == (1, 2)
+class TestEval:
+    def test_string(self):
+        assert String("hi").eval() == "hi"
+
+    def test_bool(self):
+        assert Bool(True).eval() is True
+        assert bool(Bool(True)) is True
+
+    def test_i64(self):
+        assert i64(10).eval() == 10
+        assert int(i64(10)) == 10
+        assert [10][i64(0)] == 10
+
+    def test_f64(self):
+        assert f64(10.0).eval() == 10.0
+        assert int(f64(10.0)) == 10
+        assert float(f64(10.0)) == 10.0
+
+    def test_map(self):
+        assert Map[String, i64].empty().eval() == {}
+        m = Map[String, i64].empty().insert(String("a"), i64(1)).insert(String("b"), i64(2))
+        # TODO: Add __eq__ with eq() that evals to True on boolean comparison? And same with ne?
+        assert m.eval() == {String("a"): i64(1), String("b"): i64(2)}
+
+        assert set(m) == {String("a"), String("b")}
+        assert len(m) == 2
+        assert String("a") in m
+        assert String("c") not in m
+
+    def test_set(self):
+        assert Set[i64].empty().eval() == set()
+        s = Set(i64(1), i64(2))
+        assert s.eval() == {i64(1), i64(2)}
+
+        assert set(s) == {i64(1), i64(2)}
+        assert len(s) == 2
+        assert i64(1) in s
+        assert i64(3) not in s
+
+    def test_rational(self):
+        assert Rational(1, 2).eval() == Fraction(1, 2)
+        assert float(Rational(1, 2)) == 0.5
+        assert int(Rational(1, 1)) == 1
+
+    def test_vec(self):
+        assert Vec[i64].empty().eval() == ()
+        s = Vec(i64(1), i64(2))
+        assert s.eval() == (i64(1), i64(2))
+
+        assert list(s) == [i64(1), i64(2)]
+        assert len(s) == 2
+        assert i64(1) in s
+        assert i64(3) not in s
+
+    def test_py_object(self):
+        assert PyObject(10).eval() == 10
+        o = object()
+        assert PyObject(o).eval() is o
 
 
 # def test_egglog_string():
@@ -496,9 +545,7 @@ def test_eval():
 
 
 def test_eval_fn():
-    egraph = EGraph()
-
-    assert egraph.eval(py_eval_fn(lambda x: (x,))(PyObject.from_int(1))) == (1,)
+    assert py_eval_fn(lambda x: (x,))(PyObject.from_int(1)).eval() == (1,)
 
 
 def _global_make_tuple(x):
@@ -506,18 +553,16 @@ def _global_make_tuple(x):
 
 
 def test_eval_fn_globals():
-    egraph = EGraph()
-
-    assert egraph.eval(py_eval_fn(lambda x: _global_make_tuple(x))(PyObject.from_int(1))) == (1,)
+    assert py_eval_fn(lambda x: _global_make_tuple(x))(PyObject.from_int(1)).eval() == (1,)
 
 
 def test_eval_fn_locals():
-    egraph = EGraph()
+    EGraph()
 
     def _locals_make_tuple(x):
         return (x,)
 
-    assert egraph.eval(py_eval_fn(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))) == (1,)
+    assert py_eval_fn(lambda x: _locals_make_tuple(x))(PyObject.from_int(1)).eval() == (1,)
 
 
 def test_lazy_types():
@@ -772,6 +817,20 @@ def test_map_like_conversion():
 
     assert expr_parts(my_fn({1: "hi"})) == expr_parts(my_fn(Map[i64, String].empty().insert(i64(1), String("hi"))))
     assert expr_parts(my_fn({})) == expr_parts(my_fn(Map[i64, String].empty()))
+
+
+class TestEqNE:
+    def test_eq(self):
+        assert (i64(1) + 2) == 3
+
+    def test_ne(self):
+        assert (i64(1) + 2) != 4
+
+    def test_eq_false(self):
+        assert not ((i64(1) + 2) == 4)  # noqa: SIM201
+
+    def test_ne_false(self):
+        assert not ((i64(1) + 2) != 3)  # noqa: SIM202
 
 
 EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))

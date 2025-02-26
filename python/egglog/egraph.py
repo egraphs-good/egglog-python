@@ -4,8 +4,8 @@ import contextlib
 import inspect
 import pathlib
 import tempfile
-from collections.abc import Callable, Generator, Iterable
-from contextvars import ContextVar, Token
+from collections.abc import Callable, Generator, Iterable, Iterator
+from contextvars import ContextVar
 from dataclasses import InitVar, dataclass, field
 from functools import partial
 from inspect import Parameter, currentframe, signature
@@ -17,7 +17,7 @@ from typing import (
     Generic,
     Literal,
     Never,
-    NoReturn,
+    Protocol,
     TypeAlias,
     TypedDict,
     TypeVar,
@@ -39,16 +39,16 @@ from .runtime import *
 from .thunk import *
 
 if TYPE_CHECKING:
-    from .builtins import Bool, PyObject, String, f64, i64
+    from .builtins import String, Unit
 
 
 __all__ = [
     "Action",
+    "BaseExpr",
+    "BuiltinExpr",
     "Command",
     "Command",
     "EGraph",
-    "BuiltinExpr",
-    "BaseExpr",
     "Expr",
     "Fact",
     "Fact",
@@ -56,7 +56,6 @@ __all__ = [
     "RewriteOrRule",
     "Ruleset",
     "Schedule",
-    "Unit",
     "_BirewriteBuilder",
     "_EqBuilder",
     "_NeBuilder",
@@ -86,6 +85,7 @@ __all__ = [
     "set_",
     "simplify",
     "subsume",
+    "try_evaling",
     "union",
     "unstable_combine_rulesets",
     "var",
@@ -373,11 +373,9 @@ class BaseExpr(metaclass=_ExprMetaclass):
     Either a builtin or a user defined expression type.
     """
 
-    def __ne__(self, other: NoReturn) -> NoReturn:  # type: ignore[override, empty-body]
-        ...
+    def __ne__(self, other: Self) -> Unit: ...  # type: ignore[override, empty-body]
 
-    def __eq__(self, other: NoReturn) -> NoReturn:  # type: ignore[override, empty-body]
-        ...
+    def __eq__(self, other: Self) -> Fact: ...  # type: ignore[override, empty-body]
 
 
 class BuiltinExpr(BaseExpr, metaclass=_ExprMetaclass):
@@ -435,7 +433,6 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     ##
     # Register methods, classmethods, preserved methods, and properties
     ##
-
     # Get all the methods from the class
     filtered_namespace: list[tuple[str, Any]] = [
         (k, v) for k, v in namespace.items() if k not in IGNORED_ATTRIBUTES or isinstance(v, _WrappedMethod)
@@ -508,7 +505,6 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     # in the bodies
     for add_rewrite in add_default_funcs:
         add_rewrite()
-
     return decls
 
 
@@ -713,10 +709,12 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
     Creates a function whose return type is `Unit` and has a default value.
     """
     decls_thunk = Thunk.fn(_relation_decls, name, tps, egg_fn)
-    return cast(Callable[..., Unit], RuntimeFunction(decls_thunk, Thunk.value(FunctionRef(name))))
+    return cast(Callable[..., "Unit"], RuntimeFunction(decls_thunk, Thunk.value(FunctionRef(name))))
 
 
 def _relation_decls(name: str, tps: tuple[type, ...], egg_fn: str | None) -> Declarations:
+    from .builtins import Unit
+
     decls = Declarations()
     decls |= cast(RuntimeClass, Unit)
     arg_types = tuple(resolve_type_annotation_mutate(decls, tp).to_just() for tp in tps)
@@ -848,6 +846,7 @@ class EGraph:
     Can run actions, check facts, run schedules, or extract minimal cost expressions.
     """
 
+    current: ClassVar[EGraph | None] = None
     seminaive: InitVar[bool] = True
     save_egglog_string: InitVar[bool] = False
 
@@ -855,7 +854,7 @@ class EGraph:
     # For pushing/popping with egglog
     _state_stack: list[EGraphState] = field(default_factory=list, repr=False)
     # For storing the global "current" egraph
-    _token_stack: list[Token[EGraph]] = field(default_factory=list, repr=False)
+    _token_stack: list[EGraph] = field(default_factory=list, repr=False)
 
     def __post_init__(self, seminaive: bool, save_egglog_string: bool) -> None:
         egraph = bindings.EGraph(GLOBAL_PY_OBJECT_SORT, seminaive=seminaive, record=save_egglog_string)
@@ -970,6 +969,19 @@ class EGraph:
             raise ValueError(msg)
         return run_report
 
+    def check_bool(self, *facts: FactLike) -> bool:
+        """
+        Returns true if the facts are true in the egraph.
+        """
+        try:
+            self.check(*facts)
+        # TODO: Make a separate exception class for this
+        except Exception as e:
+            if "Check failed" in str(e):
+                return False
+            raise
+        return True
+
     def check(self, *facts: FactLike) -> None:
         """
         Check if a fact is true in the egraph.
@@ -999,14 +1011,14 @@ class EGraph:
         Extract the lowest cost expression from the egraph.
         """
         runtime_expr = to_runtime_expr(expr)
-        self._add_decls(runtime_expr)
-        typed_expr = runtime_expr.__egg_typed_expr__
-        extract_report = self._run_extract(typed_expr, 0)
+        extract_report = self._run_extract(runtime_expr, 0)
 
         if not isinstance(extract_report, bindings.Best):
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
-        (new_typed_expr,) = self._state.exprs_from_egg(extract_report.termdag, [extract_report.term], typed_expr.tp)
+        (new_typed_expr,) = self._state.exprs_from_egg(
+            extract_report.termdag, [extract_report.term], runtime_expr.__egg_typed_expr__.tp
+        )
 
         res = cast(BASE_EXPR, RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr))
         if include_cost:
@@ -1018,21 +1030,25 @@ class EGraph:
         Extract multiple expressions from the egraph.
         """
         runtime_expr = to_runtime_expr(expr)
-        self._add_decls(runtime_expr)
-        typed_expr = runtime_expr.__egg_typed_expr__
-
-        extract_report = self._run_extract(typed_expr, n)
+        extract_report = self._run_extract(runtime_expr, n)
         if not isinstance(extract_report, bindings.Variants):
             msg = "Wrong extract report type"
             raise ValueError(msg)  # noqa: TRY004
-        new_exprs = self._state.exprs_from_egg(extract_report.termdag, extract_report.terms, typed_expr.tp)
+        new_exprs = self._state.exprs_from_egg(
+            extract_report.termdag, extract_report.terms, runtime_expr.__egg_typed_expr__.tp
+        )
         return [cast(BASE_EXPR, RuntimeExpr.__from_values__(self.__egg_decls__, expr)) for expr in new_exprs]
 
-    def _run_extract(self, typed_expr: TypedExprDecl, n: int) -> bindings._ExtractReport:
-        expr = self._state.typed_expr_to_egg(typed_expr)
-        self._egraph.run_program(
-            bindings.ActionCommand(bindings.Extract(span(2), expr, bindings.Lit(span(2), bindings.Int(n))))
-        )
+    def _run_extract(self, expr: RuntimeExpr, n: int) -> bindings._ExtractReport:
+        self._add_decls(expr)
+        expr = self._state.typed_expr_to_egg(expr.__egg_typed_expr__)
+        try:
+            self._egraph.run_program(
+                bindings.ActionCommand(bindings.Extract(span(2), expr, bindings.Lit(span(2), bindings.Int(n))))
+            )
+        except BaseException as e:
+            e.add_note("Extracting: " + str(expr))
+            raise
         extract_report = self._egraph.extract_report()
         if not extract_report:
             msg = "No extract report saved"
@@ -1060,49 +1076,11 @@ class EGraph:
 
         Also sets the current egraph to this one.
         """
-        self._token_stack.append(CURRENT_EGRAPH.set(self))
         self.push()
         return self
 
     def __exit__(self, exc_type, exc, exc_tb) -> None:
-        CURRENT_EGRAPH.reset(self._token_stack.pop())
         self.pop()
-
-    @overload
-    def eval(self, expr: Bool) -> bool: ...
-
-    @overload
-    def eval(self, expr: i64) -> int: ...
-
-    @overload
-    def eval(self, expr: f64) -> float: ...
-
-    @overload
-    def eval(self, expr: String) -> str: ...
-
-    @overload
-    def eval(self, expr: PyObject) -> object: ...
-
-    def eval(self, expr: BuiltinExpr) -> object:
-        """
-        Evaluates the given expression (which must be a primitive type), returning the result.
-        """
-        runtime_expr = to_runtime_expr(expr)
-        self._add_decls(runtime_expr)
-        typed_expr = runtime_expr.__egg_typed_expr__
-        egg_expr = self._state.typed_expr_to_egg(typed_expr)
-        match typed_expr.tp:
-            case JustTypeRef("i64"):
-                return self._egraph.eval_i64(egg_expr)
-            case JustTypeRef("f64"):
-                return self._egraph.eval_f64(egg_expr)
-            case JustTypeRef("Bool"):
-                return self._egraph.eval_bool(egg_expr)
-            case JustTypeRef("String"):
-                return self._egraph.eval_string(egg_expr)
-            case JustTypeRef("PyObject"):
-                return self._egraph.eval_py_object(egg_expr)
-        raise TypeError(f"Eval not implemented for {typed_expr.tp}")
 
     def _serialize(
         self,
@@ -1221,15 +1199,15 @@ class EGraph:
             if visualize:
                 VisualizerWidget(egraphs=egraphs).display_or_open()
 
-    @classmethod
-    def current(cls) -> EGraph:
+    @contextlib.contextmanager
+    def set_current(self) -> Iterator[None]:
         """
-        Returns the current egraph, which is the one in the context.
+        Context manager that will set the current egraph. It will be set back after.
         """
-        try:
-            return CURRENT_EGRAPH.get()
-        except LookupError:
-            return cls(save_egglog_string=True)
+        prev_current = EGraph.current
+        EGraph.current = self
+        yield
+        EGraph.current = prev_current
 
     @property
     def _egraph(self) -> bindings.EGraph:
@@ -1279,9 +1257,6 @@ class EGraph:
         return self._state.command_to_egg(cmd_decl, ruleset_name)
 
 
-CURRENT_EGRAPH = ContextVar[EGraph]("CURRENT_EGRAPH")
-
-
 @dataclass(frozen=True)
 class _WrappedMethod:
     """
@@ -1300,14 +1275,6 @@ class _WrappedMethod:
     def __call__(self, *args, **kwargs) -> Never:
         msg = "We should never call a wrapped method. Did you forget to wrap the class?"
         raise NotImplementedError(msg)
-
-
-class Unit(BuiltinExpr, egg_sort="Unit"):
-    """
-    The unit type. This is also used to reprsent if a value exists, if it is resolved or not.
-    """
-
-    def __init__(self) -> None: ...
 
 
 def ruleset(
@@ -1333,6 +1300,8 @@ class Schedule(DelayedDeclerations):
     """
     A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
     """
+
+    current: ClassVar[Schedule | None] = None
 
     # Defer declerations so that we can have rule generators that used not yet defined yet
     schedule: ScheduleDecl
@@ -1360,6 +1329,16 @@ class Schedule(DelayedDeclerations):
         Run two schedules in sequence.
         """
         return Schedule(Thunk.fn(Declarations.create, self, other), SequenceDecl((self.schedule, other.schedule)))
+
+    @contextlib.contextmanager
+    def set_current(self) -> Iterator[None]:
+        """
+        Context manager that will set the current schedule. It will be set back after
+        """
+        prev_current = Schedule.current
+        Schedule.current = self
+        yield
+        Schedule.current = prev_current
 
 
 @dataclass
@@ -1505,11 +1484,17 @@ class Fact:
     def __repr__(self) -> str:
         return str(self)
 
+    def __bool__(self) -> bool:
+        """
+        Returns True if the two sides of an equality are equal in the egraph or the expression is in the egraph.
+        """
+        return (EGraph.current or EGraph()).check_bool(self)
+
 
 @dataclass
 class Action:
     """
-    A change to an EGraph, either unioning multiple expressing, setting the value of a function call, deleting an expression, or panicking.
+    A change to an EGraph, either unioning multiple expressions, setting the value of a function call, deleting an expression, or panicing.
     """
 
     __egg_decls__: Declarations
@@ -1700,11 +1685,12 @@ class _NeBuilder(Generic[BASE_EXPR]):
     lhs: BASE_EXPR
 
     def to(self, rhs: BASE_EXPR) -> Unit:
+        from .builtins import Unit
+
         lhs = to_runtime_expr(self.lhs)
         rhs = convert_to_same_type(rhs, lhs)
-        assert isinstance(Unit, RuntimeClass)
         res = RuntimeExpr.__from_values__(
-            Declarations.create(Unit, lhs, rhs),
+            Declarations.create(cast(RuntimeClass, Unit), lhs, rhs),
             TypedExprDecl(
                 JustTypeRef("Unit"), CallDecl(FunctionRef("!="), (lhs.__egg_typed_expr__, rhs.__egg_typed_expr__))
             ),
@@ -1888,3 +1874,27 @@ def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
         yield
     finally:
         _CURRENT_RULESET.reset(token)
+
+
+T_co = TypeVar("T_co", covariant=True)
+
+
+class _EvalsTo(Protocol, Generic[T_co]):
+    def eval(self) -> T_co: ...
+
+
+def try_evaling(schedule: Schedule, expr: Expr, prim_expr: _EvalsTo[T]) -> T:
+    """
+    Try evaling the expression that will result in a primitive expression being fill.
+    if it fails, display the egraph and raise an error.
+    """
+    egraph = EGraph.current or EGraph()
+    egraph.register(expr)
+    egraph.run(Schedule.current or schedule)
+    try:
+        with egraph.set_current():
+            return prim_expr.eval()
+    except BaseException as e:
+        # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
+        e.add_note(f"Cannot evaluate {egraph.extract(expr)}")
+        raise

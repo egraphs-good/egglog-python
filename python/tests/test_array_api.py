@@ -1,8 +1,10 @@
 # mypy: disable-error-code="empty-body"
 import ast
+import inspect
 from collections.abc import Callable
 from itertools import product
 from pathlib import Path
+from types import FunctionType
 from typing import Any
 
 import numba
@@ -279,23 +281,15 @@ class TestLoopNest:
             value_program(simplified_index).function_three(ndarray_program(X), int_program(i), int_program(j)),
             {"np": np},
         )
-        egraph = EGraph()
-        egraph.register(res)
-        egraph.run(array_api_program_gen_schedule)
-        print(
-            egraph.extract(
-                value_program(simplified_index).function_three(ndarray_program(X), int_program(i), int_program(j))
-            )
-        )
-        # egraph.display(split_primitive_outputs=True, n_inline_leaves=3, split_functions=[TupleInt.EMPTY, TupleInt.append, Int])
-        assert egraph.eval(res.statements) == snapshot_py(name="code")
+        fn = cast(FunctionType, try_evaling(array_api_program_gen_schedule, res, res.as_py_object))
 
-        fn_value = cast(Callable, egraph.eval(res.py_object))
+        assert inspect.getsource(fn) == snapshot_py(name="code")
+
         X = np.random.random((3, 2, 3, 4))
         expect = np.linalg.norm(X, axis=(0, 1))
 
         for idxs in np.ndindex(*expect.shape):
-            assert np.allclose(fn_value(X, *idxs), expect[idxs], rtol=1e-03)
+            assert np.allclose(fn(X, *idxs), expect[idxs], rtol=1e-03)
 
 
 # This test happens in different steps. Each will be benchmarked and saved as a snapshot.
@@ -338,7 +332,7 @@ def load_source(fn_program: EvalProgram, egraph: EGraph):
     egraph.run(array_api_program_gen_schedule)
     # dp the needed pieces in here for benchmarking
     try:
-        return egraph.eval(egraph.extract(fn_program.py_object))
+        return egraph.extract(fn_program.as_py_object).eval()
     except Exception as err:
         err.add_note(f"Failed to compile the program into a string: \n\n{egraph.extract(fn_program)}")
         egraph.display(split_primitive_outputs=True, n_inline_leaves=3, split_functions=[Program])
@@ -378,8 +372,9 @@ def test_program_compile(program: Program, snapshot_py):
     egraph = EGraph()
     egraph.register(simplified_program.compile())
     egraph.run(array_api_program_gen_schedule)
-    statements = egraph.eval(simplified_program.statements)
-    expr = egraph.eval(simplified_program.expr)
+    with egraph.set_current():
+        statements = simplified_program.statements.eval()
+        expr = simplified_program.expr.eval()
     assert "\n".join([*statements.split("\n"), expr]) == snapshot_py(name="code")
 
 
@@ -393,7 +388,7 @@ def test_program_compile(program: Program, snapshot_py):
 def test_jit(program, snapshot_py):
     jitted = jit(program)
     assert str(jitted.expr) == snapshot_py(name="expr")
-    assert jitted.statements == snapshot_py(name="code")
+    assert inspect.getsource(jitted) == snapshot_py(name="code")
 
 
 @pytest.mark.benchmark(min_rounds=3)
@@ -405,15 +400,17 @@ class TestLDA:
     def test_trace(self, snapshot_py, benchmark):
         X = NDArray.var("X")
         y = NDArray.var("y")
-        with EGraph():
+        with EGraph().set_current():
             X_r2 = benchmark(lda, X, y)
-        assert str(X_r2) == snapshot_py
+        res = str(X_r2)
+        print(res)
+        assert res == snapshot_py
 
     def test_optimize(self, snapshot_py, benchmark):
         egraph = EGraph()
         X = NDArray.var("X")
         y = NDArray.var("y")
-        with egraph:
+        with egraph.set_current():
             expr = lda(X, y)
             simplified = benchmark(simplify_lda, egraph, expr)
         assert str(simplified) == snapshot_py
@@ -428,13 +425,16 @@ class TestLDA:
         egraph = EGraph()
         X = NDArray.var("X")
         y = NDArray.var("y")
-        with egraph:
+        with egraph.set_current():
             expr = lda(X, y)
             optimized_expr = simplify_lda(egraph, expr)
+        egraph = EGraph()
         fn_program = ndarray_function_two(optimized_expr, NDArray.var("X"), NDArray.var("y"))
         py_object = benchmark(load_source, fn_program, egraph)
         assert np.allclose(py_object(X_np, y_np), run_lda(X_np, y_np))
-        assert egraph.eval(fn_program.statements) == snapshot_py
+        with egraph.set_current():
+            fn_object = cast(FunctionType, fn_program.as_py_object.eval())
+        assert inspect.getsource(fn_object) == snapshot_py
 
     @pytest.mark.parametrize(
         "fn_thunk",
