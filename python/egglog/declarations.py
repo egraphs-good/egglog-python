@@ -7,7 +7,6 @@ We seperate it it into two pieces, the references the declerations, so that we c
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from functools import cached_property
 from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypeVar, Union, runtime_checkable
 
 from typing_extensions import Self, assert_never
@@ -575,24 +574,24 @@ class CallDecl:
             msg = "Cannot bind type parameters to a non-class method callable."
             raise ValueError(msg)
 
-    def __hash__(self) -> int:
-        return self._cached_hash
+    # def __hash__(self) -> int:
+    #     return self._cached_hash
 
-    @cached_property
-    def _cached_hash(self) -> int:
-        return hash((self.callable, self.args, self.bound_tp_params))
+    # @cached_property
+    # def _cached_hash(self) -> int:
+    #     return hash((self.callable, self.args, self.bound_tp_params))
 
-    def __eq__(self, other: object) -> bool:
-        # Override eq to use cached hash for perf
-        if not isinstance(other, CallDecl):
-            return False
-        if hash(self) != hash(other):
-            return False
-        return (
-            self.callable == other.callable
-            and self.args == other.args
-            and self.bound_tp_params == other.bound_tp_params
-        )
+    # def __eq__(self, other: object) -> bool:
+    #     # Override eq to use cached hash for perf
+    #     if not isinstance(other, CallDecl):
+    #         return False
+    #     if hash(self) != hash(other):
+    #         return False
+    #     return (
+    #         self.callable == other.callable
+    #         and self.args == other.args
+    #         and self.bound_tp_params == other.bound_tp_params
+    #     )
 
 
 @dataclass(frozen=True)
