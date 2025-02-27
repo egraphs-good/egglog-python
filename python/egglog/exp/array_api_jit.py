@@ -23,5 +23,6 @@ def jit(fn: X) -> X:
 
     fn_program = ndarray_function_two(res_optimized, NDArray.var(arg1), NDArray.var(arg2))
     fn = try_evaling(array_api_program_gen_schedule, fn_program, fn_program.as_py_object)
+    fn.initial_expr = res  # type: ignore[attr-defined]
     fn.expr = res_optimized  # type: ignore[attr-defined]
     return cast(X, fn)
