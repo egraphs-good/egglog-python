@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import inspect
+from types import FunctionType
+from typing import cast
 
 from egglog import *
 from egglog.exp.program_gen import *
@@ -53,12 +55,11 @@ def test_to_string(snapshot_py) -> None:
     first = assume_pos(-Math.var("x")) + Math.var("y")
     fn = (first + Math(2) + first).program.function_two(Math.var("x").program, Math.var("y").program, "my_fn")
     egraph = EGraph()
-    egraph.register(fn)
     egraph.register(fn.compile())
     egraph.run((to_program_ruleset | program_gen_ruleset).saturate())
-    # egraph.display(n_inline_leaves=1)
-    assert egraph.eval(fn.expr) == "my_fn"
-    assert egraph.eval(fn.statements) == snapshot_py
+    with egraph.set_current():
+        assert fn.expr.eval() == "my_fn"
+        assert fn.statements.eval() == snapshot_py
 
 
 def test_to_string_function_three(snapshot_py) -> None:
@@ -67,12 +68,11 @@ def test_to_string_function_three(snapshot_py) -> None:
         Math.var("x").program, Math.var("y").program, Math.var("z").program, "my_fn"
     )
     egraph = EGraph()
-    egraph.register(fn)
     egraph.register(fn.compile())
     egraph.run((to_program_ruleset | program_gen_ruleset).saturate())
-    # egraph.display(n_inline_leaves=1)
-    assert egraph.eval(fn.expr) == "my_fn"
-    assert egraph.eval(fn.statements) == snapshot_py
+    with egraph.set_current():
+        assert fn.expr.eval() == "my_fn"
+        assert fn.statements.eval() == snapshot_py
 
 
 def test_py_object():
@@ -80,10 +80,11 @@ def test_py_object():
     y = Math.var("y")
     z = Math.var("z")
     fn = (x + y + z).program.function_two(x.program, y.program)
-    egraph = EGraph()
     evalled = EvalProgram(fn, {"z": 10})
+    egraph = EGraph()
     egraph.register(evalled)
     egraph.run((to_program_ruleset | eval_program_rulseset | program_gen_ruleset).saturate())
-    res = egraph.eval(evalled.py_object)
-    assert res(1, 2) == 13  # type: ignore[operator]
-    assert inspect.getsource(res)  # type: ignore[arg-type]
+    with egraph.set_current():
+        res = cast(FunctionType, evalled.as_py_object.eval())
+    assert res(1, 2) == 13
+    assert inspect.getsource(res)

@@ -109,15 +109,9 @@ class EvalProgram(Expr):
     # Only allow it to be set once, b/c hash of functions not stable
     @method(merge=lambda old, _new: old)  # type: ignore[misc]
     @property
-    def py_object(self) -> PyObject:
+    def as_py_object(self) -> PyObject:
         """
         Returns the python object of the program, if it's been evaluated.
-        """
-
-    @property
-    def statements(self) -> String:
-        """
-        Returns the statements of the program, if it's been compiled
         """
 
 
@@ -131,13 +125,12 @@ def eval_program_rulseset(ep: EvalProgram, p: Program, expr: String, statements:
         eq(p.statements).to(statements),
         eq(p.expr).to(expr),
     ).then(
-        set_(ep.py_object).to(
+        set_(ep.as_py_object).to(
             py_eval(
                 "l['___res']",
                 PyObject.dict(PyObject.from_string("l"), py_exec(join(statements, "\n", "___res = ", expr), g)),
             )
         ),
-        set_(ep.statements).to(statements),
     )
 
 

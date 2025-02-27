@@ -52,6 +52,22 @@ impl PyObjectIdent {
             }
         })
     }
+
+    pub fn from_expr(expr: &Expr) -> Self {
+        match expr {
+            Expr::Call(_, head, args) => match head.as_str() {
+                "py-object" => match args.as_slice() {
+                    [Expr::Lit(_, Literal::Int(type_hash)), Expr::Lit(_, Literal::Int(hash))] => {
+                        PyObjectIdent::Hashable(*type_hash as isize, *hash as isize)
+                    }
+                    [Expr::Lit(_, Literal::Int(id))] => PyObjectIdent::Unhashable(*id as usize),
+                    _ => panic!("Unexpected children when loading PyObjectIdent"),
+                },
+                _ => panic!("Unexpected head when loading PyObjectIdent"),
+            },
+            _ => panic!("Unexpected expr when loading PyObjectIdent"),
+        }
+    }
     pub fn to_expr(self) -> Expr {
         let children = match self {
             PyObjectIdent::Unhashable(id) => {
@@ -84,10 +100,16 @@ impl PyObjectSort {
         self.0.lock().unwrap().insert_full(key, value).0
     }
 
-    // /// Retrives the Python object at the given index.
-    // pub fn get_index(&self, index: usize) -> PyObject {
-    //     self.0.lock().unwrap().get_index(index).unwrap().1.clone()
-    // }
+    /// Retrieves the Python object at the given index.
+    pub fn get_index(&self, py: Python<'_>, index: usize) -> PyObject {
+        self.0
+            .lock()
+            .unwrap()
+            .get_index(index)
+            .unwrap()
+            .1
+            .clone_ref(py)
+    }
 
     /// Retrieves the index of the given key.
     pub fn get_index_of(&self, key: &PyObjectIdent) -> usize {
@@ -109,10 +131,8 @@ impl PyObjectSort {
     }
 
     pub fn load(&self, py: Python<'_>, value: Value) -> PyObject {
-        let objects = self.0.lock().unwrap();
         let i = value.bits as usize;
-        let (_ident, obj) = objects.get_index(i).unwrap();
-        obj.clone_ref(py)
+        self.get_index(py, i)
     }
 }
 
@@ -153,6 +173,15 @@ impl ArcPyObjectSort {
         let ident = PyObjectIdent::from_pyobject(&obj);
         self.0.insert_full(ident, obj);
         Ok(ident.to_expr().into())
+    }
+
+    // Retrieve the Python object from an expression
+    #[pyo3(name="load", signature = (expr, /))]
+    fn load_py(&self, expr: crate::conversions::Expr) -> PyObject {
+        let expr: Expr = expr.into();
+        let ident = PyObjectIdent::from_expr(&expr);
+        let index = self.0.get_index_of(&ident);
+        Python::with_gil(|py| self.0.get_index(py, index))
     }
 
     // Integrate with Python garbage collector

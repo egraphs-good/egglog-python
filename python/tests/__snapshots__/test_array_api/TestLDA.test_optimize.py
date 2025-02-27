@@ -37,7 +37,7 @@ _NDArray_9 = square(_NDArray_8 - expand_dims(sum(_NDArray_8, _OptionalIntOrTuple
 _NDArray_10 = sqrt(sum(_NDArray_9, _OptionalIntOrTuple_1) / NDArray.scalar(Value.int(_NDArray_9.shape[Int(0)])))
 _NDArray_11 = copy(_NDArray_10)
 _NDArray_11[IndexKey.ndarray(_NDArray_10 == NDArray.scalar(Value.int(Int(0))))] = NDArray.scalar(Value.float(Float.rational(Rational(1, 1))))
-_TupleNDArray_1 = svd(sqrt(asarray(NDArray.scalar(Value.float(Float.rational(Rational(1, 147)))), OptionalDType.some(DType.float64))) * (_NDArray_8 / _NDArray_11), FALSE)
+_TupleNDArray_1 = svd(sqrt(asarray(NDArray.scalar(Value.float(Float.rational(Rational(1, 147)))), OptionalDType.some(DType.float64))) * (_NDArray_8 / _NDArray_11), Boolean(False))
 _Slice_1 = Slice(OptionalInt.none, OptionalInt.some(sum(astype(_TupleNDArray_1[Int(1)] > NDArray.scalar(Value.float(Float(0.0001))), DType.int32)).to_value().to_int))
 _NDArray_12 = (
     _TupleNDArray_1[Int(2)][IndexKey.multi_axis(MultiAxisIndexKey.from_vec(Vec[MultiAxisIndexKeyItem](MultiAxisIndexKeyItem.slice(_Slice_1), _MultiAxisIndexKeyItem_1)))]
@@ -46,7 +46,7 @@ _NDArray_12 = (
 _TupleNDArray_2 = svd(
     (sqrt((NDArray.scalar(Value.int(Int(150))) * _NDArray_3) * NDArray.scalar(Value.float(Float.rational(Rational(1, 2))))) * (_NDArray_4 - (_NDArray_3 @ _NDArray_4)).T).T
     @ _NDArray_12,
-    FALSE,
+    Boolean(False),
 )
 (
     (_NDArray_1 - (_NDArray_3 @ _NDArray_4))

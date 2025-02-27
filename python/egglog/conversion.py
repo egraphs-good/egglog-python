@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     from .egraph import BaseExpr
 
-__all__ = ["convert", "convert_to_same_type", "converter", "resolve_literal", "ConvertError"]
+__all__ = ["ConvertError", "convert", "convert_to_same_type", "converter", "resolve_literal"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
 CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable]] = {}
 # Global declerations to store all convertable types so we can query if they have certain methods or not
@@ -153,9 +153,9 @@ def min_convertable_tp(a: object, b: object, name: str) -> JustTypeRef:
     b_converts_to = {
         to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == b_tp and decls.has_method(to.name, name)
     }
-    if isinstance(a_tp, JustTypeRef):
+    if isinstance(a_tp, JustTypeRef) and decls.has_method(a_tp.name, name):
         a_converts_to[a_tp] = 0
-    if isinstance(b_tp, JustTypeRef):
+    if isinstance(b_tp, JustTypeRef) and decls.has_method(b_tp.name, name):
         b_converts_to[b_tp] = 0
     common = set(a_converts_to) & set(b_converts_to)
     if not common:

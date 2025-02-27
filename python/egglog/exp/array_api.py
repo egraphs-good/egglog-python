@@ -27,11 +27,23 @@ We are gauranteed that all lists with known lengths will be represented as cons/
 the `.length` and `.__getitem__` methods, unles you want to to depend on it having known length, in which
 case you can match directly on the cons list.
 
+To be a list, you must implement two methods:
 
-* Functional --partial--> cons/empty
-* cons/empty <--> vec
+* `l.length() -> Int`
+* `l.__getitem__(i: Int) -> T`
 
-Q: Why are they implented as SNOC lists instead of CONS lists?
+There are three main types of constructors for lists which all implement these methods:
+
+* Functional `List(length, idx_fn)`
+* cons (well reversed cons) lists `List.EMPTY` and `l.append(x)`
+* Vectors `List.from_vec(vec)`
+
+Also all lists constructors must be converted to the functional representation, so that we can match on it
+and convert lists with known lengths into cons lists and into vectors.
+
+This is neccessary so that known length lists are properly materialized during extraction.
+
+Q: Why are they implemented as SNOC lists instead of CONS lists?
 A: So that when converting from functional to lists we can use the same index function by starting at the end and folding
    that way recursively.
 
@@ -49,7 +61,7 @@ import os
 import sys
 from copy import copy
 from types import EllipsisType
-from typing import TYPE_CHECKING, ClassVar, TypeAlias, cast, overload
+from typing import TYPE_CHECKING, ClassVar, TypeAlias, cast
 
 import numpy as np
 
@@ -73,12 +85,18 @@ array_api_ruleset = ruleset(name="array_api_ruleset")
 
 
 class Boolean(Expr, ruleset=array_api_ruleset):
+    def __init__(self, value: BoolLike) -> None: ...
+
     @method(preserve=True)
     def __bool__(self) -> bool:
-        return try_evaling(self, self.bool)
+        return self.eval()
+
+    @method(preserve=True)
+    def eval(self) -> bool:
+        return try_evaling(array_api_schedule, self, self.to_bool)
 
     @property
-    def bool(self) -> Bool: ...
+    def to_bool(self) -> Bool: ...
 
     def __or__(self, other: BooleanLike) -> Boolean: ...
 
@@ -89,18 +107,17 @@ class Boolean(Expr, ruleset=array_api_ruleset):
     def __eq__(self, other: BooleanLike) -> Boolean: ...  # type: ignore[override]
 
 
-BooleanLike = Boolean | bool
+BooleanLike = Boolean | BoolLike
 
-TRUE = constant("TRUE", Boolean)
-FALSE = constant("FALSE", Boolean)
-converter(bool, Boolean, lambda x: TRUE if x else FALSE)
+TRUE = Boolean(True)
+FALSE = Boolean(False)
+converter(Bool, Boolean, Boolean)
 
 
 @array_api_ruleset.register
-def _bool(x: Boolean, i: Int, j: Int):
+def _bool(x: Boolean, i: Int, j: Int, b: Bool):
     return [
-        rule(eq(x).to(TRUE)).then(set_(x.bool).to(Bool(True))),
-        rule(eq(x).to(FALSE)).then(set_(x.bool).to(Bool(False))),
+        rule(eq(x).to(Boolean(b))).then(set_(x.to_bool).to(b)),
         rewrite(TRUE | x).to(TRUE),
         rewrite(FALSE | x).to(x),
         rewrite(TRUE & x).to(x),
@@ -197,23 +214,27 @@ class Int(Expr, ruleset=array_api_ruleset):
     def __ror__(self, other: IntLike) -> Int: ...
 
     @property
-    def i64(self) -> i64: ...
+    def to_i64(self) -> i64: ...
 
     @method(preserve=True)
-    def __int__(self) -> int:
-        return try_evaling(self, self.i64)
+    def eval(self) -> int:
+        return try_evaling(array_api_schedule, self, self.to_i64)
 
     @method(preserve=True)
     def __index__(self) -> int:
-        return int(self)
+        return self.eval()
+
+    @method(preserve=True)
+    def __int__(self) -> int:
+        return self.eval()
 
     @method(preserve=True)
     def __float__(self) -> float:
-        return float(int(self))
+        return float(self.eval())
 
     @method(preserve=True)
     def __bool__(self) -> bool:
-        return bool(int(self))
+        return bool(self.eval())
 
     @classmethod
     def if_(cls, b: BooleanLike, i: IntLike, j: IntLike) -> Int: ...
@@ -236,7 +257,7 @@ def _int(i: i64, j: i64, r: Boolean, o: Int, b: Int):
     yield rule(eq(r).to(Int(i) > Int(j)), i > j).then(union(r).with_(TRUE))
     yield rule(eq(r).to(Int(i) > Int(j)), i < j).then(union(r).with_(FALSE))
 
-    yield rule(eq(o).to(Int(j))).then(set_(o.i64).to(j))
+    yield rule(eq(o).to(Int(j))).then(set_(o.to_i64).to(j))
 
     yield rule(eq(Int(i)).to(Int(j)), ne(i).to(j)).then(panic("Real ints cannot be equal to different ints"))
 
@@ -304,6 +325,13 @@ class Float(Expr, ruleset=array_api_ruleset):
     @method(cost=3)
     def __init__(self, value: f64Like) -> None: ...
 
+    @property
+    def to_f64(self) -> f64: ...
+
+    @method(preserve=True)
+    def eval(self) -> float:
+        return try_evaling(array_api_schedule, self, self.to_f64)
+
     def abs(self) -> Float: ...
 
     @method(cost=2)
@@ -334,8 +362,9 @@ FloatLike: TypeAlias = Float | float | IntLike
 
 
 @array_api_ruleset.register
-def _float(f: f64, f2: f64, i: i64, r: Rational, r1: Rational):
+def _float(fl: Float, f: f64, f2: f64, i: i64, r: Rational, r1: Rational):
     return [
+        rule(eq(fl).to(Float(f))).then(set_(fl.to_f64).to(f)),
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
         rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
         # Convert from float to rationl, if its a whole number i.e. can be converted to int
@@ -398,12 +427,18 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def __len__(self) -> int:
-        return int(self.length())
+        return self.length().eval()
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[Int]:
-        # TODO: Change to use as_vec when we have supported execing vecs
-        return iter(self[i] for i in range(len(self)))
+        return iter(self.eval())
+
+    @property
+    def to_vec(self) -> Vec[Int]: ...
+
+    @method(preserve=True)
+    def eval(self) -> tuple[Int, ...]:
+        return try_evaling(array_api_schedule, self, self.to_vec)
 
     def foldl(self, f: Callable[[Int, Int], Int], init: Int) -> Int: ...
     def foldl_boolean(self, f: Callable[[Boolean, Int], Boolean], init: Boolean) -> Boolean: ...
@@ -426,10 +461,6 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
     @classmethod
     def if_(cls, b: BooleanLike, i: TupleIntLike, j: TupleIntLike) -> TupleInt: ...
-
-    @method(preserve=True)
-    def to_py(self) -> tuple[int, ...]:
-        return tuple(int(i) for i in self)
 
     def drop(self, n: Int) -> TupleInt:
         return TupleInt(self.length() - n, lambda i: self[i + n])
@@ -475,6 +506,7 @@ def _tuple_int(
     k: i64,
 ):
     return [
+        rule(eq(ti).to(TupleInt.from_vec(vs))).then(set_(ti.to_vec).to(vs)),
         # Functional access
         rewrite(TupleInt(i, idx_fn).length()).to(i),
         rewrite(TupleInt(i, idx_fn)[i2]).to(idx_fn(check_index(i, i2))),
@@ -543,11 +575,18 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def __len__(self) -> int:
-        return int(self.length())
+        return self.length().eval()
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[TupleInt]:
-        return iter(self[i] for i in range(len(self)))
+        return iter(self.eval())
+
+    @property
+    def to_vec(self) -> Vec[TupleInt]: ...
+
+    @method(preserve=True)
+    def eval(self) -> tuple[TupleInt, ...]:
+        return try_evaling(array_api_schedule, self, self.to_vec)
 
     def drop(self, n: Int) -> TupleTupleInt:
         return TupleTupleInt(self.length() - n, lambda i: self[i + n])
@@ -595,6 +634,7 @@ def _tuple_tuple_int(
     tti: TupleTupleInt,
     tti1: TupleTupleInt,
 ):
+    yield rule(eq(tti).to(TupleTupleInt.from_vec(vs))).then(set_(tti.to_vec).to(vs))
     yield rewrite(TupleTupleInt(length, idx_fn).length()).to(length)
     yield rewrite(TupleTupleInt(length, idx_fn)[idx]).to(idx_fn(check_index(idx, length)))
 
@@ -1034,14 +1074,14 @@ class NDArray(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def __bool__(self) -> bool:
-        return bool(self.to_value().to_bool)
+        return self.to_value().to_bool.eval()
 
     @property
     def size(self) -> Int: ...
 
     @method(preserve=True)
     def __len__(self) -> int:
-        return int(self.size)
+        return self.size.eval()
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[NDArray]:
@@ -1231,11 +1271,18 @@ class TupleNDArray(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def __len__(self) -> int:
-        return int(self.length())
+        return self.length().eval()
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[NDArray]:
-        return iter(self[i] for i in range(len(self)))
+        return iter(self.eval())
+
+    @property
+    def to_vec(self) -> Vec[NDArray]: ...
+
+    @method(preserve=True)
+    def eval(self) -> tuple[NDArray, ...]:
+        return try_evaling(array_api_schedule, self, self.to_vec)
 
 
 converter(Vec[NDArray], TupleNDArray, lambda x: TupleNDArray.from_vec(x))
@@ -1256,6 +1303,7 @@ def _tuple_ndarray(
     tv1: TupleNDArray,
     b: Boolean,
 ):
+    yield rule(eq(tv).to(TupleNDArray.from_vec(vs))).then(set_(tv.to_vec).to(vs))
     yield rewrite(TupleNDArray(length, idx_fn).length()).to(length)
     yield rewrite(TupleNDArray(length, idx_fn)[idx]).to(idx_fn(check_index(idx, length)))
 
@@ -1478,7 +1526,8 @@ def unique_counts(x: NDArray) -> TupleNDArray:
 @array_api_ruleset.register
 def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value, dtype: DType):
     return [
-        rewrite(unique_counts(x).length()).to(Int(2)),
+        # rewrite(unique_counts(x).length()).to(Int(2)),
+        rewrite(unique_counts(x)).to(TupleNDArray(2, unique_counts(x).__getitem__)),
         # Sum of all unique counts is the size of the array
         rewrite(sum(unique_counts(x)[Int(1)])).to(NDArray.scalar(Value.int(x.size))),
         # Same but with astype in the middle
@@ -1522,7 +1571,8 @@ def unique_inverse(x: NDArray) -> TupleNDArray:
 @array_api_ruleset.register
 def _unique_inverse(x: NDArray, i: Int):
     return [
-        rewrite(unique_inverse(x).length()).to(Int(2)),
+        # rewrite(unique_inverse(x).length()).to(Int(2)),
+        rewrite(unique_inverse(x)).to(TupleNDArray(2, unique_inverse(x).__getitem__)),
         # Shape of unique_inverse first element is same as shape of unique_values
         rewrite(unique_inverse(x)[Int(0)]).to(unique_values(x)),
     ]
@@ -1572,7 +1622,8 @@ def svd(x: NDArray, full_matrices: Boolean = TRUE) -> TupleNDArray:
 @array_api_ruleset.register
 def _linalg(x: NDArray, full_matrices: Boolean):
     return [
-        rewrite(svd(x, full_matrices).length()).to(Int(3)),
+        # rewrite(svd(x, full_matrices).length()).to(Int(3)),
+        rewrite(svd(x, full_matrices)).to(TupleNDArray(3, svd(x, full_matrices).__getitem__)),
     ]
 
 
@@ -1858,46 +1909,6 @@ def _unique(xs: TupleValue, a: NDArray, shape: TupleInt, copy: OptionalBool):
 @array_api_ruleset.register
 def _size(x: NDArray):
     yield rewrite(x.size).to(x.shape.foldl(Int.__mul__, Int(1)))
-
-
-@overload
-def try_evaling(expr: Expr, prim_expr: i64) -> int: ...
-
-
-@overload
-def try_evaling(expr: Expr, prim_expr: Bool) -> bool: ...
-
-
-def try_evaling(expr: Expr, prim_expr: i64 | Bool) -> int | bool:
-    """
-    Try evaling the expression, and if it fails, display the egraph and raise an error.
-    """
-    egraph = EGraph.current()
-    egraph.register(expr)
-    egraph.run(array_api_schedule)
-    try:
-        extracted = egraph.extract(prim_expr)
-    # Catch base exceptions so that we catch rust panics which happen when trying to extract subsumed nodes
-    except BaseException as exc:
-        egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
-        # Try giving some context, by showing the smallest version of the larger expression
-        try:
-            expr_extracted = egraph.extract(expr)
-        except BaseException as inner_exc:
-            inner_exc.add_note(f"Cannot simplify {expr}")
-            raise
-        exc.add_note(f"Cannot simplify to primitive {expr_extracted}")
-        raise
-    return egraph.eval(extracted)
-
-    # string = (
-    #     egraph.as_egglog_string
-    #     + "\n"
-    #     + str(egraph._state.typed_expr_to_egg(cast(RuntimeExpr, prim_expr).__egg_typed_expr__))
-    # )
-    # # save to "tmp.egg"
-    # with open("tmp.egg", "w") as f:
-    #     f.write(string)
 
 
 # Seperate rulseset so we can use it in program gen

@@ -218,20 +218,6 @@ class TestVariant:
         assert Variant(DUMMY_SPAN, "name", []) != 10  # type: ignore[comparison-overlap]
 
 
-class TestEval:
-    def test_i64(self):
-        assert EGraph().eval_i64(Lit(DUMMY_SPAN, Int(1))) == 1
-
-    def test_f64(self):
-        assert EGraph().eval_f64(Lit(DUMMY_SPAN, Float(1.0))) == 1.0
-
-    def test_string(self):
-        assert EGraph().eval_string(Lit(DUMMY_SPAN, String("hi"))) == "hi"
-
-    def test_bool(self):
-        assert EGraph().eval_bool(Lit(DUMMY_SPAN, Bool(True))) is True
-
-
 class TestThreads:
     """
     Verify that objects can be accessed from multiple threads at the same time.
