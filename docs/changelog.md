@@ -15,7 +15,7 @@ _This project uses semantic versioning_
 - Add conversions from generic types to be supported at runtime and typing level (so can go from `(1, 2, 3)` to `TupleInt`)
 - Open files with webbrowser instead of internal graphviz util for better support
 - Add support for not visualizing when using `.saturate()` method [#254](https://github.com/egraphs-good/egglog-python/pull/254)
-- Upgrade [egglog](https://github.com/egraphs-good/egglog/compare/b0db06832264c9b22694bd3de2bdacd55bbe9e32...saulshanabrook:egg-smol:889ca7635368d7e382e16a93b2883aba82f1078f)
+- Upgrade [egglog](https://github.com/egraphs-good/egglog/compare/b0d b06832264c9b22694bd3de2bdacd55bbe9e32...saulshanabrook:egg-smol:889ca7635368d7e382e16a93b2883aba82f1078f) [#258](https://github.com/egraphs-good/egglog-python/pull/258)
   - This includes a few big changes to the underlying bindings, which I won't go over in full detail here. See the [pyi diff](https://github.com/egraphs-good/egglog-python/pull/258/files#diff-f34a5dd5d6568cd258ed9f786e5abce03df5ee95d356ea9e1b1b39e3505e5d62) for all public changes.
   - Creates seperate parent classes for `BuiltinExpr` vs `Expr` (aka eqsort aka user defined expressions). This is to
     allow us statically to differentiate between the two, to be more precise about what behavior is allowed. For example,
@@ -24,9 +24,9 @@ _This project uses semantic versioning_
   - Updates function constructor to remove `default` and `on_merge`. You also can't set a `cost` when you use a `merge`
     function or return a primitive.
   - `eq` now only takes two args, instead of being able to compare any number of values.
-- Removes `eval` method from `EGraph` and moves primitive evaluation to methods on each builtin and support `int(...)` type conversions on primitives.
-- Change how to set global EGraph context with `with egraph.set_current()` and `EGraph.current` and add support for setting global schedule as well with `with schedule.set_current()` and `Schedule.current`.
-- Adds support for using `==` and `!=` directly on values instead of `eq` and `ne` functions.
+- Removes `eval` method from `EGraph` and moves primitive evaluation to methods on each builtin and support `int(...)` type conversions on primitives. [#265](https://github.com/egraphs-good/egglog-python/pull/265)
+- Change how to set global EGraph context with `with egraph.set_current()` and `EGraph.current` and add support for setting global schedule as well with `with schedule.set_current()` and `Schedule.current`. [#265](https://github.com/egraphs-good/egglog-python/pull/265)
+- Adds support for using `==` and `!=` directly on values instead of `eq` and `ne` functions. [#265](https://github.com/egraphs-good/egglog-python/pull/265)
 
 ## 8.0.1 (2024-10-24)
 
