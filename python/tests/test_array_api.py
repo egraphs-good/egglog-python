@@ -412,7 +412,7 @@ class TestLDA:
         y = NDArray.var("y")
         with egraph.set_current():
             expr = lda(X, y)
-            simplified = benchmark(simplify_lda, egraph, expr)
+            simplified = benchmark.pendatic(simplify_lda, args=(egraph, expr))
         assert str(simplified) == snapshot_py
 
     # @pytest.mark.xfail(reason="Original source is not working")
