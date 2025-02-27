@@ -1889,6 +1889,13 @@ def try_evaling(schedule: Schedule, expr: Expr, prim_expr: _EvalsTo[T]) -> T:
     if it fails, display the egraph and raise an error.
     """
     egraph = EGraph.current or EGraph()
+    with egraph.set_current():
+        try:
+            return prim_expr.eval()
+        except BaseException:  # noqa: S110
+            pass
+    # If this primitive doesn't exist in the egraph, we need to try to create it by
+    # registering the expression and running the schedule
     egraph.register(expr)
     egraph.run(Schedule.current or schedule)
     try:
