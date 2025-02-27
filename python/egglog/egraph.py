@@ -44,11 +44,11 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Action",
+    "BaseExpr",
+    "BuiltinExpr",
     "Command",
     "Command",
     "EGraph",
-    "BuiltinExpr",
-    "BaseExpr",
     "Expr",
     "Fact",
     "Fact",
