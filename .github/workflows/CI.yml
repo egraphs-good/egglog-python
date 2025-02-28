@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: ${{ matrix.py }}
       - run: uv sync --extra test --locked
-      - run: uv run pytest --benchmark-disable -vvv
+      - run: uv run pytest --benchmark-disable -vvv --durations=10
 
   mypy:
     runs-on: ubuntu-latest
