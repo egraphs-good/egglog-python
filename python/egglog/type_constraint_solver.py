@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from collections.abc import Collection, Iterable
 
 
-__all__ = ["TypeConstraintSolver", "TypeConstraintError"]
+__all__ = ["TypeConstraintError", "TypeConstraintSolver"]
 
 
 class TypeConstraintError(RuntimeError):
