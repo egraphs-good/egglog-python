@@ -588,7 +588,7 @@ class CallDecl:
 
         normalized_args = (callable, args_, bound_tp_params)
         try:
-            return cast(Self, cls._args_to_value[normalized_args])
+            return cast("Self", cls._args_to_value[normalized_args])
         except KeyError:
             res = super().__new__(cls)
             cls._args_to_value[normalized_args] = res

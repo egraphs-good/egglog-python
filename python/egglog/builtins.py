@@ -329,14 +329,14 @@ class Map(BuiltinExpr, Generic[T, V]):
     @method(preserve=True)
     def eval(self) -> dict[T, V]:
         call = _extract_call(self)
-        expr = cast(RuntimeExpr, self)
+        expr = cast("RuntimeExpr", self)
         d = {}
         while call.callable != ClassMethodRef("Map", "empty"):
             assert call.callable == MethodRef("Map", "insert")
             call_typed, k_typed, v_typed = call.args
             assert isinstance(call_typed.expr, CallDecl)
-            k = cast(T, expr.__with_expr__(k_typed))
-            v = cast(V, expr.__with_expr__(v_typed))
+            k = cast("T", expr.__with_expr__(k_typed))
+            v = cast("V", expr.__with_expr__(v_typed))
             d[k] = v
             call = call_typed.expr
         return d
@@ -397,7 +397,7 @@ class Set(BuiltinExpr, Generic[T]):
     def eval(self) -> set[T]:
         call = _extract_call(self)
         assert call.callable == InitRef("Set")
-        return {cast(T, cast(RuntimeExpr, self).__with_expr__(x)) for x in call.args}
+        return {cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args}
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[T]:
@@ -544,7 +544,7 @@ class Vec(BuiltinExpr, Generic[T]):
         if call.callable == ClassMethodRef("Vec", "empty"):
             return ()
         assert call.callable == InitRef("Vec")
-        return tuple(cast(T, cast(RuntimeExpr, self).__with_expr__(x)) for x in call.args)
+        return tuple(cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args)
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[T]:
@@ -611,7 +611,7 @@ VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
 class PyObject(BuiltinExpr):
     @method(preserve=True)
     def eval(self) -> object:
-        report = (EGraph.current or EGraph())._run_extract(cast(RuntimeExpr, self), 0)
+        report = (EGraph.current or EGraph())._run_extract(cast("RuntimeExpr", self), 0)
         assert isinstance(report, bindings.Best)
         expr = report.termdag.term_to_expr(report.term, bindings.PanicSpan())
         return GLOBAL_PY_OBJECT_SORT.load(expr)
@@ -743,7 +743,7 @@ def value_to_annotation(a: object) -> type | None:
     # only lift runtime expressions (which could contain vars) not any other nonlocals/globals we use in the function
     if not isinstance(a, RuntimeExpr):
         return None
-    return cast(type, RuntimeClass(Thunk.value(a.__egg_decls__), a.__egg_typed_expr__.tp.to_var()))
+    return cast("type", RuntimeClass(Thunk.value(a.__egg_decls__), a.__egg_typed_expr__.tp.to_var()))
 
 
 converter(FunctionType, UnstableFn, _convert_function)
@@ -753,7 +753,7 @@ def _extract_lit(e: BaseExpr) -> bindings._Literal:
     """
     Special case extracting literals to make this faster by using termdag directly.
     """
-    report = (EGraph.current or EGraph())._run_extract(cast(RuntimeExpr, e), 0)
+    report = (EGraph.current or EGraph())._run_extract(cast("RuntimeExpr", e), 0)
     assert isinstance(report, bindings.Best)
     term = report.term
     assert isinstance(term, bindings.TermLit)
@@ -764,7 +764,7 @@ def _extract_call(e: BaseExpr) -> CallDecl:
     """
     Extracts the call form of an expression
     """
-    extracted = cast(RuntimeExpr, (EGraph.current or EGraph()).extract(e))
+    extracted = cast("RuntimeExpr", (EGraph.current or EGraph()).extract(e))
     expr = extracted.__egg_typed_expr__.expr
     assert isinstance(expr, CallDecl)
     return expr

@@ -118,7 +118,7 @@ def convert(source: object, target: type[V]) -> V:
     Convert a source object to a target type.
     """
     assert isinstance(target, RuntimeClass)
-    return cast(V, resolve_literal(target.__egg_tp__, source, target.__egg_decls_thunk__))
+    return cast("V", resolve_literal(target.__egg_tp__, source, target.__egg_decls_thunk__))
 
 
 def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
@@ -174,7 +174,7 @@ def get_type_args() -> tuple[type, ...]:
     """
     Get the type args for the type being converted.
     """
-    return cast(tuple[type, ...], TYPE_ARGS.get())
+    return cast("tuple[type, ...]", TYPE_ARGS.get())
 
 
 @contextmanager
