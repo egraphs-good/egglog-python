@@ -25,4 +25,4 @@ def jit(fn: X) -> X:
     fn = try_evaling(array_api_program_gen_schedule, fn_program, fn_program.as_py_object)
     fn.initial_expr = res  # type: ignore[attr-defined]
     fn.expr = res_optimized  # type: ignore[attr-defined]
-    return cast(X, fn)
+    return cast("X", fn)

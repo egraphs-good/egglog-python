@@ -88,4 +88,4 @@ def functionalize(f: T, get_annotation: Callable[[object], type | None]) -> T:
     wrapper.__name__ = f.__name__
 
     # Partially apply the wrapper function with the current values of the free vars
-    return cast(T, partial(wrapper, *(v for _, _, v, _ in additional_arg_filtered)))
+    return cast("T", partial(wrapper, *(v for _, _, v, _ in additional_arg_filtered)))
