@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 from typing_extensions import assert_never
 
@@ -116,7 +116,8 @@ class EGraphState:
                     if rule in added_rules:
                         continue
                     cmd = self.command_to_egg(rule, name)
-                    self.egraph.run_program(cmd)
+                    if cmd is not None:
+                        self.egraph.run_program(cmd)
                     added_rules.add(rule)
             case CombinedRulesetDecl(rulesets):
                 if name in self.rulesets:
@@ -126,10 +127,13 @@ class EGraphState:
                     self.ruleset_to_egg(ruleset)
                 self.egraph.run_program(bindings.UnstableCombinedRuleset(name, list(rulesets)))
 
-    def command_to_egg(self, cmd: CommandDecl, ruleset: str) -> bindings._Command:
+    def command_to_egg(self, cmd: CommandDecl, ruleset: str) -> bindings._Command | None:
         match cmd:
             case ActionCommandDecl(action):
-                return bindings.ActionCommand(self.action_to_egg(action, expr_to_let=True))
+                action_egg = self.action_to_egg(action, expr_to_let=True)
+                if not action_egg:
+                    return None
+                return bindings.ActionCommand(action_egg)
             case RewriteDecl(tp, lhs, rhs, conditions) | BiRewriteDecl(tp, lhs, rhs, conditions):
                 self.type_ref_to_egg(tp)
                 rewrite = bindings.Rewrite(
@@ -166,7 +170,13 @@ class EGraphState:
             case _:
                 assert_never(cmd)
 
-    def action_to_egg(self, action: ActionDecl, expr_to_let: bool = False) -> bindings._Action:
+    @overload
+    def action_to_egg(self, action: ActionDecl) -> bindings._Action: ...
+
+    @overload
+    def action_to_egg(self, action: ActionDecl, expr_to_let: Literal[True] = ...) -> bindings._Action | None: ...
+
+    def action_to_egg(self, action: ActionDecl, expr_to_let: bool = False) -> bindings._Action | None:  # noqa: C901, PLR0911, PLR0912
         match action:
             case LetDecl(name, typed_expr):
                 var_decl = VarDecl(name, True)
@@ -179,7 +189,11 @@ class EGraphState:
                 return bindings.Set(span(), call_.name, call_.args, self._expr_to_egg(rhs))
             case ExprActionDecl(typed_expr):
                 if expr_to_let:
-                    typed_expr = self._transform_let(typed_expr)
+                    maybe_typed_expr = self._transform_let(typed_expr)
+                    if maybe_typed_expr:
+                        typed_expr = maybe_typed_expr
+                    else:
+                        return None
                 return bindings.Expr_(span(), self.typed_expr_to_egg(typed_expr))
             case ChangeDecl(tp, call, change):
                 self.type_ref_to_egg(tp)
@@ -351,13 +365,13 @@ class EGraphState:
         self.type_ref_to_egg(typed_expr_decl.tp)
         return self._expr_to_egg(typed_expr_decl.expr)
 
-    def _transform_let(self, typed_expr: TypedExprDecl) -> TypedExprDecl:
+    def _transform_let(self, typed_expr: TypedExprDecl) -> TypedExprDecl | None:
         """
         Rewrites this expression as a let binding if it's not already a let binding.
         """
         var_decl = VarDecl(f"__expr_{hash(typed_expr)}", True)
         if var_decl in self.expr_to_egg_cache:
-            return TypedExprDecl(typed_expr.tp, var_decl)
+            return None
         var_egg = self._expr_to_egg(var_decl)
         cmd = bindings.ActionCommand(bindings.Let(span(), var_egg.name, self.typed_expr_to_egg(typed_expr)))
         try:
@@ -367,7 +381,7 @@ class EGraphState:
             return typed_expr
         self.expr_to_egg_cache[typed_expr.expr] = var_egg
         self.expr_to_egg_cache[var_decl] = var_egg
-        return TypedExprDecl(typed_expr.tp, var_decl)
+        return None
 
     @overload
     def _expr_to_egg(self, expr_decl: CallDecl) -> bindings.Call: ...

@@ -14,13 +14,13 @@ from .program_gen import *
 array_api_program_gen_ruleset = ruleset(name="array_api_program_gen_ruleset")
 array_api_program_gen_eval_ruleset = ruleset(name="array_api_program_gen_eval_ruleset")
 
-array_api_program_gen_schedule = (
+array_api_program_gen_combined_ruleset = (
     array_api_program_gen_ruleset
     | program_gen_ruleset
     | array_api_program_gen_eval_ruleset
-    | eval_program_rulseset
     | array_api_vec_to_cons_ruleset
-).saturate()
+)
+array_api_program_gen_schedule = (array_api_program_gen_combined_ruleset | eval_program_rulseset).saturate()
 
 
 @function
@@ -116,7 +116,7 @@ def float_program(x: Float) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _float_program(f: Float, g: Float, f64_: f64, i: Int, r: Rational):
+def _float_program(f: Float, g: Float, f64_: f64, i: Int, r: BigRat):
     yield rewrite(float_program(Float(f64_))).to(Program(f64_.to_string()))
     yield rewrite(float_program(f.abs())).to(Program("np.abs(") + float_program(f) + ")")
     yield rewrite(float_program(Float.from_int(i))).to(int_program(i))
@@ -126,10 +126,10 @@ def _float_program(f: Float, g: Float, f64_: f64, i: Int, r: Rational):
     yield rewrite(float_program(f / g)).to(Program("(") + float_program(f) + " / " + float_program(g) + ")")
     yield rewrite(float_program(Float.rational(r))).to(
         Program("float(") + Program(r.numer.to_string()) + " / " + Program(r.denom.to_string()) + ")",
-        ne(r.denom).to(i64(1)),
+        ne(r.denom).to(BigInt(1)),
     )
     yield rewrite(float_program(Float.rational(r))).to(
-        Program("float(") + Program(r.numer.to_string()) + ")", eq(r.denom).to(i64(1))
+        Program("float(") + Program(r.numer.to_string()) + ")", eq(r.denom).to(BigInt(1))
     )
 
 

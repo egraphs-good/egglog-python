@@ -290,8 +290,8 @@ def check_index(length: IntLike, idx: IntLike) -> Int:
     """
     Returns the index if 0 <= idx < length, otherwise returns Int.NEVER
     """
-    length = cast(Int, length)
-    idx = cast(Int, idx)
+    length = cast("Int", length)
+    idx = cast("Int", idx)
     return Int.if_(((idx >= 0) & (idx < length)), idx, Int.NEVER)
 
 
@@ -336,7 +336,7 @@ class Float(Expr, ruleset=array_api_ruleset):
 
     @method(cost=2)
     @classmethod
-    def rational(cls, r: Rational) -> Float: ...
+    def rational(cls, r: BigRat) -> Float: ...
 
     @classmethod
     def from_int(cls, i: IntLike) -> Float: ...
@@ -362,15 +362,15 @@ FloatLike: TypeAlias = Float | float | IntLike
 
 
 @array_api_ruleset.register
-def _float(fl: Float, f: f64, f2: f64, i: i64, r: Rational, r1: Rational):
+def _float(fl: Float, f: f64, f2: f64, i: i64, r: BigRat, r1: BigRat):
     return [
         rule(eq(fl).to(Float(f))).then(set_(fl.to_f64).to(f)),
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
         rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
         # Convert from float to rationl, if its a whole number i.e. can be converted to int
-        rewrite(Float(f)).to(Float.rational(Rational(f.to_i64(), 1)), eq(f64.from_i64(f.to_i64())).to(f)),
+        rewrite(Float(f)).to(Float.rational(BigRat(f.to_i64(), 1)), eq(f64.from_i64(f.to_i64())).to(f)),
         # always convert from int to rational
-        rewrite(Float.from_int(Int(i))).to(Float.rational(Rational(i, 1))),
+        rewrite(Float.from_int(Int(i))).to(Float.rational(BigRat(i, 1))),
         rewrite(Float(f) + Float(f2)).to(Float(f + f2)),
         rewrite(Float(f) - Float(f2)).to(Float(f - f2)),
         rewrite(Float(f) * Float(f2)).to(Float(f * f2)),
@@ -417,7 +417,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
     def from_vec(cls, vec: VecLike[Int, IntLike]) -> TupleInt: ...
 
     def __add__(self, other: TupleIntLike) -> TupleInt:
-        other = cast(TupleInt, other)
+        other = cast("TupleInt", other)
         return TupleInt(
             self.length() + other.length(), lambda i: Int.if_(i < self.length(), self[i], other[i - self.length()])
         )
@@ -475,14 +475,14 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         """
         Return a new tuple with the elements at the given indices
         """
-        indices = cast(TupleInt, indices)
+        indices = cast("TupleInt", indices)
         return indices.map(lambda i: self[i])
 
     def deselect(self, indices: TupleIntLike) -> TupleInt:
         """
         Return a new tuple with the elements not at the given indices
         """
-        indices = cast(TupleInt, indices)
+        indices = cast("TupleInt", indices)
         return TupleInt.range(self.length()).filter(lambda i: ~indices.contains(i)).map(lambda i: self[i])
 
 
@@ -554,7 +554,7 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
     @method(subsume=True)
     @classmethod
     def single(cls, i: TupleIntLike) -> TupleTupleInt:
-        i = cast(TupleInt, i)
+        i = cast("TupleInt", i)
         return TupleTupleInt(1, lambda _: i)
 
     @method(subsume=True)
@@ -564,7 +564,7 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
     def append(self, i: TupleIntLike) -> TupleTupleInt: ...
 
     def __add__(self, other: TupleTupleIntLike) -> TupleTupleInt:
-        other = cast(TupleTupleInt, other)
+        other = cast("TupleTupleInt", other)
         return TupleTupleInt(
             self.length() + other.length(),
             lambda i: TupleInt.if_(i < self.length(), self[i], other[i - self.length()]),
@@ -840,7 +840,7 @@ def _value(i: Int, f: Float, b: Boolean, v: Value, v1: Value, i1: Int, f1: Float
 
     yield rewrite(Value.float(f).sqrt()).to(Value.float(f ** (0.5)))
 
-    yield rewrite(Value.float(Float.rational(Rational(0, 1))) + v).to(v)
+    yield rewrite(Value.float(Float.rational(BigRat(0, 1))) + v).to(v)
 
     yield rewrite(Value.if_(TRUE, v, v1)).to(v)
     yield rewrite(Value.if_(FALSE, v, v1)).to(v1)
@@ -862,7 +862,7 @@ class TupleValue(Expr, ruleset=array_api_ruleset):
     def from_vec(cls, vec: Vec[Value]) -> TupleValue: ...
 
     def __add__(self, other: TupleValueLike) -> TupleValue:
-        other = cast(TupleValue, other)
+        other = cast("TupleValue", other)
         return TupleValue(
             self.length() + other.length(),
             lambda i: Value.if_(i < self.length(), self[i], other[i - self.length()]),
@@ -875,13 +875,13 @@ class TupleValue(Expr, ruleset=array_api_ruleset):
     def foldl_boolean(self, f: Callable[[Boolean, Value], Boolean], init: BooleanLike) -> Boolean: ...
 
     def contains(self, value: ValueLike) -> Boolean:
-        value = cast(Value, value)
+        value = cast("Value", value)
         return self.foldl_boolean(lambda acc, j: acc | (value == j), FALSE)
 
     @method(subsume=True)
     @classmethod
     def from_tuple_int(cls, ti: TupleIntLike) -> TupleValue:
-        ti = cast(TupleInt, ti)
+        ti = cast("TupleInt", ti)
         return TupleValue(ti.length(), lambda i: Value.int(ti[i]))
 
 
@@ -1259,7 +1259,7 @@ class TupleNDArray(Expr, ruleset=array_api_ruleset):
     def from_vec(cls, vec: Vec[NDArray]) -> TupleNDArray: ...
 
     def __add__(self, other: TupleNDArrayLike) -> TupleNDArray:
-        other = cast(TupleNDArray, other)
+        other = cast("TupleNDArray", other)
         return TupleNDArray(
             self.length() + other.length(),
             lambda i: NDArray.if_(i < self.length(), self[i], other[i - self.length()]),
@@ -1632,7 +1632,7 @@ def ndindex(shape: TupleIntLike) -> TupleTupleInt:
     """
     https://numpy.org/doc/stable/reference/generated/numpy.ndindex.html
     """
-    shape = cast(TupleInt, shape)
+    shape = cast("TupleInt", shape)
     return shape.map_tuple_int(TupleInt.range).product()
 
 

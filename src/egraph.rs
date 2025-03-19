@@ -68,13 +68,16 @@ impl EGraph {
             cmds_str = cmds_str + &cmd.to_string() + "\n";
         }
         info!("Running commands:\n{}", cmds_str);
-        if let Some(cmds) = &mut self.cmds {
-            cmds.push_str(&cmds_str);
-        }
 
-        self.egraph.run_program(commands).map_err(|e| {
+        let res = self.egraph.run_program(commands).map_err(|e| {
             WrappedError::Egglog(e, "\nWhen running commands:\n".to_string() + &cmds_str)
-        })
+        });
+        if res.is_ok() {
+            if let Some(cmds) = &mut self.cmds {
+                cmds.push_str(&cmds_str);
+            }
+        }
+        res
     }
 
     /// Returns the text of the commands that have been run so far, if `record` was passed.
