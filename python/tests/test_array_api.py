@@ -13,7 +13,7 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from egglog.egraph import set_current_ruleset
 from egglog.exp.array_api import *
 from egglog.exp.array_api import NDArray
-from egglog.exp.array_api_jit import jit
+from egglog.exp.array_api_jit import function_to_program, jit
 from egglog.exp.array_api_loopnest import *
 from egglog.exp.array_api_numba import array_api_numba_schedule
 from egglog.exp.array_api_program_gen import *
@@ -372,16 +372,10 @@ def test_run_lda(fn_thunk, benchmark):
 # similar to jit, but don't include pyobject parts so it works in vanilla egglog
 if __name__ == "__main__":
     print("Generating egglog source for test")
-    egraph = EGraph(save_egglog_string=True)
-    X_ = NDArray.var("X")
-    y_ = NDArray.var("y")
-    with egraph:
-        expr = lda(X_, y_)
-    optimized_expr = egraph.simplify(expr, array_api_numba_schedule)
-    fn_program = ndarray_function_two_program(optimized_expr, X_, y_)
-    egraph.register(fn_program.compile())
-    egraph.run(array_api_program_gen_ruleset.saturate() + program_gen_ruleset.saturate())
-    egraph.extract(fn_program.statements)
+    egraph, _, _, program = function_to_program(lda, True)
+    egraph.register(program.compile())
+    with egraph.set_current():
+        try_evaling(array_api_program_gen_combined_ruleset.saturate(), program, program.statements)
     name = "python.egg"
     print("Saving to", name)
     Path(name).write_text(egraph.as_egglog_string)

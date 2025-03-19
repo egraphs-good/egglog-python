@@ -1241,10 +1241,10 @@ class EGraph:
 
     def _register_commands(self, cmds: list[Command]) -> None:
         self._add_decls(*cmds)
-        egg_cmds = list(map(self._command_to_egg, cmds))
+        egg_cmds = [egg_cmd for cmd in cmds if (egg_cmd := self._command_to_egg(cmd)) is not None]
         self._egraph.run_program(*egg_cmds)
 
-    def _command_to_egg(self, cmd: Command) -> bindings._Command:
+    def _command_to_egg(self, cmd: Command) -> bindings._Command | None:
         ruleset_name = ""
         cmd_decl: CommandDecl
         match cmd:
