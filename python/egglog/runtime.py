@@ -11,6 +11,7 @@ so they are not mangled by Python and can be accessed by the user.
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from inspect import Parameter, Signature
@@ -170,7 +171,7 @@ class RuntimeClass(DelayedDeclerations):
             # Assumes we don't have types set for UnstableFn w/ generics, that they have to be inferred
 
             # 1. Call it with the partial args, and use untyped vars for the rest of the args
-            res = cast(Callable, fn_arg)(*partial_args, _egg_partial_function=True)
+            res = cast("Callable", fn_arg)(*partial_args, _egg_partial_function=True)
             assert res is not None, "Mutable partial functions not supported"
             # 2. Use the inferred return type and inferred rest arg types as the types of the function, and
             #    the partially applied args as the args.
@@ -213,7 +214,7 @@ class RuntimeClass(DelayedDeclerations):
         # defer resolving decls so that we can do generic instantiation for converters before all
         # method types are defined.
         decls_like, new_args = cast(
-            tuple[tuple[DeclerationsLike, ...], tuple[TypeOrVarRef, ...]],
+            "tuple[tuple[DeclerationsLike, ...], tuple[TypeOrVarRef, ...]]",
             zip(*(resolve_type_annotation(arg) for arg in args), strict=False),
         )
         # if we already have some args bound and some not, then we shold replace all existing args of typevars with new
@@ -349,12 +350,6 @@ class RuntimeFunction(DelayedDeclerations):
         assert not bound.kwargs
         args = bound.args
 
-        upcasted_args = [
-            resolve_literal(cast(TypeOrVarRef, tp), arg, Thunk.value(decls))
-            for arg, tp in zip_longest(args, signature.arg_types, fillvalue=signature.var_arg_type)
-        ]
-        decls.update(*upcasted_args)
-
         tcs = TypeConstraintSolver(decls)
         bound_tp = (
             None
@@ -370,14 +365,17 @@ class RuntimeFunction(DelayedDeclerations):
             and not function_value
         ):
             tcs.bind_class(bound_tp)
-        arg_exprs = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
-        arg_types = [expr.tp for expr in arg_exprs]
+        assert (operator.ge if signature.var_arg_type else operator.eq)(len(args), len(signature.arg_types))
         cls_name = bound_tp.name if bound_tp else None
-        return_tp = tcs.infer_return_type(
-            signature.arg_types, signature.semantic_return_type, signature.var_arg_type, arg_types, cls_name
-        )
+        upcasted_args = [
+            resolve_literal(cast("TypeOrVarRef", tp), arg, Thunk.value(decls), tcs=tcs, cls_name=cls_name)
+            for arg, tp in zip_longest(args, signature.arg_types, fillvalue=signature.var_arg_type)
+        ]
+        decls.update(*upcasted_args)
+        arg_exprs = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
+        return_tp = tcs.substitute_typevars(signature.semantic_return_type, cls_name)
         bound_params = (
-            cast(JustTypeRef, bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef | InitRef) else None
+            cast("JustTypeRef", bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef | InitRef) else None
         )
         # If we were using unstable-app to call a funciton, add that function back as the first arg.
         if function_value:
@@ -570,11 +568,11 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
         if __name == "__eq__":
             from .egraph import BaseExpr, eq
 
-            return eq(cast(BaseExpr, self)).to(cast(BaseExpr, args[0]))
+            return eq(cast("BaseExpr", self)).to(cast("BaseExpr", args[0]))
         if __name == "__ne__":
             from .egraph import BaseExpr, ne
 
-            return cast(RuntimeExpr, ne(cast(BaseExpr, self)).to(cast(BaseExpr, args[0])))
+            return cast("RuntimeExpr", ne(cast("BaseExpr", self)).to(cast("BaseExpr", args[0])))
 
         if __name in PARTIAL_METHODS:
             return NotImplemented

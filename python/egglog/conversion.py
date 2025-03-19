@@ -10,11 +10,13 @@ from .declarations import *
 from .pretty import *
 from .runtime import *
 from .thunk import *
+from .type_constraint_solver import TypeConstraintError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
     from .egraph import BaseExpr
+    from .type_constraint_solver import TypeConstraintSolver
 
 __all__ = ["ConvertError", "convert", "convert_to_same_type", "converter", "resolve_literal"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
@@ -118,7 +120,7 @@ def convert(source: object, target: type[V]) -> V:
     Convert a source object to a target type.
     """
     assert isinstance(target, RuntimeClass)
-    return cast(V, resolve_literal(target.__egg_tp__, source, target.__egg_decls_thunk__))
+    return cast("V", resolve_literal(target.__egg_tp__, source, target.__egg_decls_thunk__))
 
 
 def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
@@ -174,7 +176,7 @@ def get_type_args() -> tuple[type, ...]:
     """
     Get the type args for the type being converted.
     """
-    return cast(tuple[type, ...], TYPE_ARGS.get())
+    return cast("tuple[type, ...]", TYPE_ARGS.get())
 
 
 @contextmanager
@@ -187,17 +189,40 @@ def with_type_args(args: tuple[JustTypeRef, ...], decls: Callable[[], Declaratio
 
 
 def resolve_literal(
-    tp: TypeOrVarRef, arg: object, decls: Callable[[], Declarations] = _retrieve_conversion_decls
+    tp: TypeOrVarRef,
+    arg: object,
+    decls: Callable[[], Declarations] = _retrieve_conversion_decls,
+    tcs: TypeConstraintSolver | None = None,
+    cls_name: str | None = None,
 ) -> RuntimeExpr:
+    """
+    Try to convert an object to a type, raising a ConvertError if it is not possible.
+
+    If the type has vars in it, they will be tried to be resolved into concrete vars based on the type constraint solver.
+
+    If it cannot be resolved, we assume that the value passed in will resolve it.
+    """
     arg_type = _get_tp(arg)
 
     # If we have any type variables, dont bother trying to resolve the literal, just return the arg
     try:
         tp_just = tp.to_just()
     except NotImplementedError:
-        # If this is a var, it has to be a runtime expession
-        assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
-        return arg
+        # If this is a generic arg but passed in a non runtime expression, try to resolve the generic
+        # args first based on the existing type constraint solver
+        if tcs:
+            try:
+                tp_just = tcs.substitute_typevars(tp, cls_name)
+            # If we can't resolve the type var yet, then just assume it is the right value
+            except TypeConstraintError:
+                assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
+                tp_just = arg.__egg_typed_expr__.tp
+        else:
+            # If this is a var, it has to be a runtime expession
+            assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
+            return arg
+    if tcs:
+        tcs.infer_typevars(tp, tp_just, cls_name)
     if arg_type == tp_just:
         # If the type is an egg type, it has to be a runtime expr
         assert isinstance(arg, RuntimeExpr)
