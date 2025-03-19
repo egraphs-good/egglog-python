@@ -475,6 +475,8 @@ class FunctionSignature:
     # If None, then the first arg is mutated and returned
     return_type: TypeOrVarRef | None = None
     var_arg_type: TypeOrVarRef | None = None
+    # Whether to reverse args when emitting to egglog
+    reverse_args: bool = False
 
     @property
     def semantic_return_type(self) -> TypeOrVarRef:
@@ -588,7 +590,7 @@ class CallDecl:
 
         normalized_args = (callable, args_, bound_tp_params)
         try:
-            return cast(Self, cls._args_to_value[normalized_args])
+            return cast("Self", cls._args_to_value[normalized_args])
         except KeyError:
             res = super().__new__(cls)
             cls._args_to_value[normalized_args] = res

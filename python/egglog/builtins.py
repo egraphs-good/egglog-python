@@ -26,10 +26,15 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "BigInt",
+    "BigIntLike",
+    "BigRat",
+    "BigRatLike",
     "Bool",
     "BoolLike",
     "Map",
     "MapLike",
+    "MultiSet",
     "PyObject",
     "Rational",
     "Set",
@@ -329,14 +334,14 @@ class Map(BuiltinExpr, Generic[T, V]):
     @method(preserve=True)
     def eval(self) -> dict[T, V]:
         call = _extract_call(self)
-        expr = cast(RuntimeExpr, self)
+        expr = cast("RuntimeExpr", self)
         d = {}
         while call.callable != ClassMethodRef("Map", "empty"):
             assert call.callable == MethodRef("Map", "insert")
             call_typed, k_typed, v_typed = call.args
             assert isinstance(call_typed.expr, CallDecl)
-            k = cast(T, expr.__with_expr__(k_typed))
-            v = cast(V, expr.__with_expr__(v_typed))
+            k = cast("T", expr.__with_expr__(k_typed))
+            v = cast("V", expr.__with_expr__(v_typed))
             d[k] = v
             call = call_typed.expr
         return d
@@ -397,7 +402,7 @@ class Set(BuiltinExpr, Generic[T]):
     def eval(self) -> set[T]:
         call = _extract_call(self)
         assert call.callable == InitRef("Set")
-        return {cast(T, cast(RuntimeExpr, self).__with_expr__(x)) for x in call.args}
+        return {cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args}
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[T]:
@@ -452,6 +457,53 @@ converter(
 )
 
 SetLike: TypeAlias = Set[T] | set[TO]
+
+
+class MultiSet(BuiltinExpr, Generic[T]):
+    @method(preserve=True)
+    def eval(self) -> list[T]:
+        call = _extract_call(self)
+        assert call.callable == InitRef("MultiSet")
+        return [cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args]
+
+    @method(preserve=True)
+    def __iter__(self) -> Iterator[T]:
+        return iter(self.eval())
+
+    @method(preserve=True)
+    def __len__(self) -> int:
+        return len(self.eval())
+
+    @method(preserve=True)
+    def __contains__(self, key: T) -> bool:
+        return key in self.eval()
+
+    @method(egg_fn="multiset-of")
+    def __init__(self, *args: T) -> None: ...
+
+    @method(egg_fn="multiset-insert")
+    def insert(self, value: T) -> MultiSet[T]: ...
+
+    @method(egg_fn="multiset-not-contains")
+    def not_contains(self, value: T) -> Unit: ...
+
+    @method(egg_fn="multiset-contains")
+    def contains(self, value: T) -> Unit: ...
+
+    @method(egg_fn="multiset-remove")
+    def remove(self, value: T) -> MultiSet[T]: ...
+
+    @method(egg_fn="multiset-length")
+    def length(self) -> i64: ...
+
+    @method(egg_fn="multiset-pick")
+    def pick(self) -> T: ...
+
+    @method(egg_fn="multiset-sum")
+    def __add__(self, other: MultiSet[T]) -> MultiSet[T]: ...
+
+    @method(egg_fn="unstable-multiset-map", reverse_args=True)
+    def map(self, f: Callable[[T], T]) -> MultiSet[T]: ...
 
 
 class Rational(BuiltinExpr):
@@ -537,6 +589,229 @@ class Rational(BuiltinExpr):
     def denom(self) -> i64: ...
 
 
+class BigInt(BuiltinExpr):
+    @method(preserve=True)
+    def eval(self) -> int:
+        call = _extract_call(self)
+        assert call.callable == ClassMethodRef("BigInt", "from_string")
+        (s,) = call.args
+        assert isinstance(s.expr, LitDecl)
+        assert isinstance(s.expr.value, str)
+        return int(s.expr.value)
+
+    @method(preserve=True)
+    def __index__(self) -> int:
+        return self.eval()
+
+    @method(preserve=True)
+    def __int__(self) -> int:
+        return self.eval()
+
+    @method(egg_fn="from-string")
+    @classmethod
+    def from_string(cls, s: StringLike) -> BigInt: ...
+
+    @method(egg_fn="bigint")
+    def __init__(self, value: i64Like) -> None: ...
+
+    @method(egg_fn="+")
+    def __add__(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="-")
+    def __sub__(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="*")
+    def __mul__(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="/")
+    def __truediv__(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="%")
+    def __mod__(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="&")
+    def __and__(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="|")
+    def __or__(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="^")
+    def __xor__(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="<<")
+    def __lshift__(self, other: i64Like) -> BigInt: ...
+
+    @method(egg_fn=">>")
+    def __rshift__(self, other: i64Like) -> BigInt: ...
+
+    def __radd__(self, other: BigIntLike) -> BigInt: ...
+
+    def __rsub__(self, other: BigIntLike) -> BigInt: ...
+
+    def __rmul__(self, other: BigIntLike) -> BigInt: ...
+
+    def __rtruediv__(self, other: BigIntLike) -> BigInt: ...
+
+    def __rmod__(self, other: BigIntLike) -> BigInt: ...
+
+    def __rand__(self, other: BigIntLike) -> BigInt: ...
+
+    def __ror__(self, other: BigIntLike) -> BigInt: ...
+
+    def __rxor__(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="not-Z")
+    def __invert__(self) -> BigInt: ...
+
+    @method(egg_fn="bits")
+    def bits(self) -> BigInt: ...
+
+    @method(egg_fn="<")
+    def __lt__(self, other: BigIntLike) -> Unit:  # type: ignore[empty-body,has-type]
+        ...
+
+    @method(egg_fn=">")
+    def __gt__(self, other: BigIntLike) -> Unit: ...
+
+    @method(egg_fn="<=")
+    def __le__(self, other: BigIntLike) -> Unit:  # type: ignore[empty-body,has-type]
+        ...
+
+    @method(egg_fn=">=")
+    def __ge__(self, other: BigIntLike) -> Unit: ...
+
+    @method(egg_fn="min")
+    def min(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="max")
+    def max(self, other: BigIntLike) -> BigInt: ...
+
+    @method(egg_fn="to-string")
+    def to_string(self) -> String: ...
+
+    @method(egg_fn="bool-=")
+    def bool_eq(self, other: BigIntLike) -> Bool: ...
+
+    @method(egg_fn="bool-<")
+    def bool_lt(self, other: BigIntLike) -> Bool: ...
+
+    @method(egg_fn="bool->")
+    def bool_gt(self, other: BigIntLike) -> Bool: ...
+
+    @method(egg_fn="bool-<=")
+    def bool_le(self, other: BigIntLike) -> Bool: ...
+
+    @method(egg_fn="bool->=")
+    def bool_ge(self, other: BigIntLike) -> Bool: ...
+
+
+converter(i64, BigInt, lambda i: BigInt(i))
+
+BigIntLike: TypeAlias = BigInt | i64Like
+
+
+class BigRat(BuiltinExpr):
+    @method(preserve=True)
+    def eval(self) -> Fraction:
+        call = _extract_call(self)
+        assert call.callable == InitRef("BigRat")
+
+        def _to_fraction(e: TypedExprDecl) -> Fraction:
+            expr = e.expr
+            assert isinstance(expr, CallDecl)
+            assert expr.callable == ClassMethodRef("BigInt", "from_string")
+            (s,) = expr.args
+            assert isinstance(s.expr, LitDecl)
+            assert isinstance(s.expr.value, str)
+            return Fraction(s.expr.value)
+
+        num, den = call.args
+        return Fraction(_to_fraction(num), _to_fraction(den))
+
+    @method(preserve=True)
+    def __float__(self) -> float:
+        return float(self.eval())
+
+    @method(preserve=True)
+    def __int__(self) -> int:
+        return int(self.eval())
+
+    @method(egg_fn="bigrat")
+    def __init__(self, num: BigIntLike, den: BigIntLike) -> None: ...
+
+    @method(egg_fn="to-f64")
+    def to_f64(self) -> f64: ...
+
+    @method(egg_fn="+")
+    def __add__(self, other: BigRatLike) -> BigRat: ...
+
+    @method(egg_fn="-")
+    def __sub__(self, other: BigRatLike) -> BigRat: ...
+
+    @method(egg_fn="*")
+    def __mul__(self, other: BigRatLike) -> BigRat: ...
+
+    @method(egg_fn="/")
+    def __truediv__(self, other: BigRatLike) -> BigRat: ...
+
+    @method(egg_fn="min")
+    def min(self, other: BigRatLike) -> BigRat: ...
+
+    @method(egg_fn="max")
+    def max(self, other: BigRatLike) -> BigRat: ...
+
+    @method(egg_fn="neg")
+    def __neg__(self) -> BigRat: ...
+
+    @method(egg_fn="abs")
+    def __abs__(self) -> BigRat: ...
+
+    @method(egg_fn="floor")
+    def floor(self) -> BigRat: ...
+
+    @method(egg_fn="ceil")
+    def ceil(self) -> BigRat: ...
+
+    @method(egg_fn="round")
+    def round(self) -> BigRat: ...
+
+    @method(egg_fn="pow")
+    def __pow__(self, other: BigRatLike) -> BigRat: ...
+
+    @method(egg_fn="log")
+    def log(self) -> BigRat: ...
+
+    @method(egg_fn="sqrt")
+    def sqrt(self) -> BigRat: ...
+
+    @method(egg_fn="cbrt")
+    def cbrt(self) -> BigRat: ...
+
+    @method(egg_fn="numer")  # type: ignore[misc]
+    @property
+    def numer(self) -> BigInt: ...
+
+    @method(egg_fn="denom")  # type: ignore[misc]
+    @property
+    def denom(self) -> BigInt: ...
+
+    @method(egg_fn="<")
+    def __lt__(self, other: BigRatLike) -> Unit: ...  # type: ignore[has-type]
+
+    @method(egg_fn=">")
+    def __gt__(self, other: BigRatLike) -> Unit: ...
+
+    @method(egg_fn=">=")
+    def __ge__(self, other: BigRatLike) -> Unit: ...  # type: ignore[has-type]
+
+    @method(egg_fn="<=")
+    def __le__(self, other: BigRatLike) -> Unit: ...
+
+
+converter(Fraction, BigRat, lambda f: BigRat(f.numerator, f.denominator))
+BigRatLike: TypeAlias = BigRat | Fraction
+
+
 class Vec(BuiltinExpr, Generic[T]):
     @method(preserve=True)
     def eval(self) -> tuple[T, ...]:
@@ -544,7 +819,7 @@ class Vec(BuiltinExpr, Generic[T]):
         if call.callable == ClassMethodRef("Vec", "empty"):
             return ()
         assert call.callable == InitRef("Vec")
-        return tuple(cast(T, cast(RuntimeExpr, self).__with_expr__(x)) for x in call.args)
+        return tuple(cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args)
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[T]:
@@ -611,7 +886,7 @@ VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
 class PyObject(BuiltinExpr):
     @method(preserve=True)
     def eval(self) -> object:
-        report = (EGraph.current or EGraph())._run_extract(cast(RuntimeExpr, self), 0)
+        report = (EGraph.current or EGraph())._run_extract(cast("RuntimeExpr", self), 0)
         assert isinstance(report, bindings.Best)
         expr = report.termdag.term_to_expr(report.term, bindings.PanicSpan())
         return GLOBAL_PY_OBJECT_SORT.load(expr)
@@ -743,7 +1018,7 @@ def value_to_annotation(a: object) -> type | None:
     # only lift runtime expressions (which could contain vars) not any other nonlocals/globals we use in the function
     if not isinstance(a, RuntimeExpr):
         return None
-    return cast(type, RuntimeClass(Thunk.value(a.__egg_decls__), a.__egg_typed_expr__.tp.to_var()))
+    return cast("type", RuntimeClass(Thunk.value(a.__egg_decls__), a.__egg_typed_expr__.tp.to_var()))
 
 
 converter(FunctionType, UnstableFn, _convert_function)
@@ -753,7 +1028,7 @@ def _extract_lit(e: BaseExpr) -> bindings._Literal:
     """
     Special case extracting literals to make this faster by using termdag directly.
     """
-    report = (EGraph.current or EGraph())._run_extract(cast(RuntimeExpr, e), 0)
+    report = (EGraph.current or EGraph())._run_extract(cast("RuntimeExpr", e), 0)
     assert isinstance(report, bindings.Best)
     term = report.term
     assert isinstance(term, bindings.TermLit)
@@ -764,7 +1039,7 @@ def _extract_call(e: BaseExpr) -> CallDecl:
     """
     Extracts the call form of an expression
     """
-    extracted = cast(RuntimeExpr, (EGraph.current or EGraph()).extract(e))
+    extracted = cast("RuntimeExpr", (EGraph.current or EGraph()).extract(e))
     expr = extracted.__egg_typed_expr__.expr
     assert isinstance(expr, CallDecl)
     return expr

@@ -150,7 +150,7 @@ def simplify(x: EXPR, schedule: Schedule | None = None) -> EXPR:
     return EGraph().extract(x)
 
 
-def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None, *, add_second=True, display=False) -> EGraph:
+def check_eq(x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *, add_second=True, display=False) -> EGraph:
     """
     Verifies that two expressions are equal after running the schedule.
 
@@ -158,7 +158,7 @@ def check_eq(x: EXPR, y: EXPR, schedule: Schedule | None = None, *, add_second=T
     """
     egraph = EGraph()
     x_var = egraph.let("__check_eq_x", x)
-    y_var: EXPR = egraph.let("__check_eq_y", y) if add_second else y
+    y_var: BASE_EXPR = egraph.let("__check_eq_y", y) if add_second else y
     if schedule:
         try:
             egraph.run(schedule)
@@ -211,6 +211,7 @@ def method(
 def method(
     *,
     egg_fn: str | None = ...,
+    reverse_args: bool = ...,
     mutates_self: bool = ...,
 ) -> Callable[[CALLABLE], CALLABLE]: ...
 
@@ -246,20 +247,14 @@ def method(
     mutates_self: bool = False,
     unextractable: bool = False,
     subsume: bool = False,
+    reverse_args: bool = False,
 ) -> Callable[[Callable[P, BASE_EXPR_NONE]], Callable[P, BASE_EXPR_NONE]]:
     """
     Any method can be decorated with this to customize it's behavior. This is only supported in classes which subclass :class:`Expr`.
     """
-    merge = cast(Callable[[object, object], object], merge)
+    merge = cast("Callable[[object, object], object]", merge)
     return lambda fn: _WrappedMethod(
-        egg_fn,
-        cost,
-        merge,
-        fn,
-        preserve,
-        mutates_self,
-        unextractable,
-        subsume,
+        egg_fn, cost, merge, fn, preserve, mutates_self, unextractable, subsume, reverse_args
     )
 
 
@@ -449,13 +444,14 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         if is_init and cls_name in LIT_CLASS_NAMES:
             continue
         match method:
-            case _WrappedMethod(egg_fn, cost, merge, fn, preserve, mutates, unextractable, subsume):
+            case _WrappedMethod(egg_fn, cost, merge, fn, preserve, mutates, unextractable, subsume, reverse_args):
                 pass
             case _:
                 egg_fn, cost, merge = None, None, None
                 fn = method
                 unextractable, preserve, subsume = False, False, False
                 mutates = method_name in ALWAYS_MUTATES_SELF
+                reverse_args = False
         if preserve:
             cls_decl.preserved_methods[method_name] = fn
             continue
@@ -495,6 +491,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
                 ruleset=ruleset,
                 unextractable=unextractable,
                 subsume=subsume,
+                reverse_args=reverse_args,
             )
         except Exception as e:
             e.add_note(f"Error processing {cls_name}.{method_name}")
@@ -563,6 +560,7 @@ def _fn_decl(
     subsume: bool,
     ruleset: Ruleset | None = None,
     unextractable: bool = False,
+    reverse_args: bool = False,
 ) -> tuple[CallableRef, Callable[[], None]]:
     """
     Sets the function decl for the function object and returns the ref as well as a thunk that sets the default callable.
@@ -660,6 +658,7 @@ def _fn_decl(
             arg_types=arg_types,
             arg_names=arg_names,
             arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
+            reverse_args=reverse_args,
         )
         decl: ConstructorDecl | FunctionDecl
         if is_constructor:
@@ -711,14 +710,14 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
     Creates a function whose return type is `Unit` and has a default value.
     """
     decls_thunk = Thunk.fn(_relation_decls, name, tps, egg_fn)
-    return cast(Callable[..., "Unit"], RuntimeFunction(decls_thunk, Thunk.value(FunctionRef(name))))
+    return cast("Callable[..., Unit]", RuntimeFunction(decls_thunk, Thunk.value(FunctionRef(name))))
 
 
 def _relation_decls(name: str, tps: tuple[type, ...], egg_fn: str | None) -> Declarations:
     from .builtins import Unit
 
     decls = Declarations()
-    decls |= cast(RuntimeClass, Unit)
+    decls |= cast("RuntimeClass", Unit)
     arg_types = tuple(resolve_type_annotation_mutate(decls, tp).to_just() for tp in tps)
     decls._functions[name] = RelationDecl(arg_types, tuple(None for _ in tps), egg_fn)
     return decls
@@ -738,7 +737,7 @@ def constant(
     This creates a function with `name` and return type `tp` and returns a value of it being called.
     """
     return cast(
-        BASE_EXPR,
+        "BASE_EXPR",
         RuntimeExpr(*split_thunk(Thunk.fn(_constant_thunk, name, tp, egg_name, default_replacement, ruleset))),
     )
 
@@ -889,7 +888,7 @@ class EGraph:
     def _callable_to_egg(self, fn: object) -> str:
         ref, decls = resolve_callable(fn)
         self._add_decls(decls)
-        return self._state.callable_ref_to_egg(ref)
+        return self._state.callable_ref_to_egg(ref)[0]
 
     def let(self, name: str, expr: BASE_EXPR) -> BASE_EXPR:
         """
@@ -900,7 +899,7 @@ class EGraph:
         runtime_expr = to_runtime_expr(expr)
         self._add_decls(runtime_expr)
         return cast(
-            BASE_EXPR,
+            "BASE_EXPR",
             RuntimeExpr.__from_values__(
                 self.__egg_decls__, TypedExprDecl(runtime_expr.__egg_typed_expr__.tp, VarDecl(name, True))
             ),
@@ -932,7 +931,7 @@ class EGraph:
             msg = "No extract report saved"
             raise ValueError(msg)  # noqa: TRY004
         (new_typed_expr,) = self._state.exprs_from_egg(extract_report.termdag, [extract_report.term], typed_expr.tp)
-        return cast(BASE_EXPR, RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr))
+        return cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr))
 
     def include(self, path: str) -> None:
         """
@@ -1022,7 +1021,7 @@ class EGraph:
             extract_report.termdag, [extract_report.term], runtime_expr.__egg_typed_expr__.tp
         )
 
-        res = cast(BASE_EXPR, RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr))
+        res = cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr))
         if include_cost:
             return res, extract_report.cost
         return res
@@ -1039,7 +1038,7 @@ class EGraph:
         new_exprs = self._state.exprs_from_egg(
             extract_report.termdag, extract_report.terms, runtime_expr.__egg_typed_expr__.tp
         )
-        return [cast(BASE_EXPR, RuntimeExpr.__from_values__(self.__egg_decls__, expr)) for expr in new_exprs]
+        return [cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, expr)) for expr in new_exprs]
 
     def _run_extract(self, expr: RuntimeExpr, n: int) -> bindings._ExtractReport:
         self._add_decls(expr)
@@ -1236,7 +1235,7 @@ class EGraph:
             assert original_frame
             command_likes = tuple(_rewrite_or_rule_generator(command_or_generator, original_frame))
         else:
-            command_likes = (cast(CommandLike, command_or_generator), *command_likes)
+            command_likes = (cast("CommandLike", command_or_generator), *command_likes)
         commands = [_command_like(c) for c in command_likes]
         self._register_commands(commands)
 
@@ -1273,6 +1272,7 @@ class _WrappedMethod:
     mutates_self: bool
     unextractable: bool
     subsume: bool
+    reverse_args: bool
 
     def __call__(self, *args, **kwargs) -> Never:
         msg = "We should never call a wrapped method. Did you forget to wrap the class?"
@@ -1589,7 +1589,7 @@ def rule(*facts: FactLike, ruleset: None = None, name: str | None = None) -> _Ru
 
 def var(name: str, bound: type[T]) -> T:
     """Create a new variable with the given name and type."""
-    return cast(T, _var(name, bound))
+    return cast("T", _var(name, bound))
 
 
 def _var(name: str, bound: object) -> RuntimeExpr:
@@ -1692,12 +1692,12 @@ class _NeBuilder(Generic[BASE_EXPR]):
         lhs = to_runtime_expr(self.lhs)
         rhs = convert_to_same_type(rhs, lhs)
         res = RuntimeExpr.__from_values__(
-            Declarations.create(cast(RuntimeClass, Unit), lhs, rhs),
+            Declarations.create(cast("RuntimeClass", Unit), lhs, rhs),
             TypedExprDecl(
                 JustTypeRef("Unit"), CallDecl(FunctionRef("!="), (lhs.__egg_typed_expr__, rhs.__egg_typed_expr__))
             ),
         )
-        return cast(Unit, res)
+        return cast("Unit", res)
 
     def __repr__(self) -> str:
         return str(self)

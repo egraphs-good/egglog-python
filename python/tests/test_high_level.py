@@ -531,6 +531,16 @@ class TestEval:
         o = object()
         assert PyObject(o).eval() is o
 
+    def test_big_int(self):
+        assert int(BigInt(10)) == 10
+
+    def test_big_rat(self):
+        assert float(BigRat(1, 2)) == 1 / 2
+        assert BigRat(1, 2).eval() == Fraction(1, 2)
+
+    def test_multiset(self):
+        assert list(MultiSet(i64(1), i64(1))) == [i64(1), i64(1)]
+
 
 # def test_egglog_string():
 #     egraph = EGraph(save_egglog_string=True)
