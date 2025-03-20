@@ -19,7 +19,7 @@ updates:
     groups:
       actions:
         applies-to: version-updates
-- package-ecosystem: "uv"
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "daily"
