@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 9.0.0 (2025-03-20)
+
 ### Evaluating Primitives
 
 Previously, if you had an egglog primitive object like an `i64`, you would have to call
