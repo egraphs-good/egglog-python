@@ -4,6 +4,160 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+### Evaluating Primitives
+
+Previously, if you had an egglog primitive object like an `i64`, you would have to call
+`egraph.eval(i)` to get back an `int`. Now you can just call `int(i)`. This will implicitly create an e-graph and use it to extract the int value of the expression. This also means you can use this to evaluate compound expressions, like `int(i64(1) + 10)`.
+
+This is also supported for container types, like vecs and sets. You can also use the `.eval()` method on any primitive to get the Python object.
+
+For example:
+
+````python
+>>> from egglog import *
+>>> Vec(i64(1), i64(2))[0]
+Vec(1, 2)[0]
+>>> int(Vec(i64(1), i64(2))[0])
+1
+>>> list(Vec(i64(1), i64(2)))
+[i64(1), i64(2)]
+>>> Rational(1, 2).eval()
+Fraction(1, 2)
+>>>
+
+
+You can also manually set the e-graph to use, instead of it having to create a new one, with the `egraph.set_current` context manager:
+
+```python
+>>> egraph = EGraph()
+>>> x = egraph.let("x", i64(1))
+>>> x + 2
+x + 2
+>>> (x + 2).eval()
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/Users/saul/p/egg-smol-python/python/egglog/builtins.py", line 134, in eval
+    value = _extract_lit(self)
+            ^^^^^^^^^^^^^^^^^^
+  File "/Users/saul/p/egg-smol-python/python/egglog/builtins.py", line 1031, in _extract_lit
+    report = (EGraph.current or EGraph())._run_extract(cast("RuntimeExpr", e), 0)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/saul/p/egg-smol-python/python/egglog/egraph.py", line 1047, in _run_extract
+    self._egraph.run_program(
+EggSmolError: At 0:0 of
+Unbound symbol %x
+When running commands:
+(extract (+ %x 2) 0)
+
+Extracting: (+ %x 2)
+>>> with egraph.set_current():
+...     print((x + 2).eval())
+...
+3
+````
+
+There is a tradeoff here for more ease of use at the expense of some added implicit behavior using global state.
+
+### Equal and Not Equal operators
+
+Previously, if you wanted to create an equality fact, you would have to do `eq(x).to(y)`. And similarly, if you wanted to create a not equal expression, you would have to do `ne(x).to(y)`. I had set it up this way so that you could implement `__eq__` and `__ne__` on your custom data types to provide other functions (for monkeytyping purposes) and still be able to use the equality operators from egglog.
+
+However, ergonmically this was a bit painful, so with this release, the `==` and `!=` methods are now supported on all egglog expressions. If you override them for your types, you can still use the functions:
+
+```python
+>>> i64(1) == i64(2)
+eq(i64(1)).to(i64(2))
+>>> i64(1) != i64(2)
+ne(i64(1)).to(i64(2))
+>>> class A(Expr):
+...     def __init__(self) -> None: ...
+...     def __eq__(self, other: "A") -> "A": ...
+...
+>>> A() == A()
+A() == A()
+>>> eq(A()).to(A())
+eq(A()).to(A())
+```
+
+### Evaluating Facts
+
+Similar to the above with primitives, you can now evaluate facts and see if they are true. This will implicitly create and run them on the e-graph. For example:
+
+```python
+>>> i64(10) == i64(9) + 1
+eq(i64(10)).to(i64(9) + 1)
+>>> bool(i64(10) == i64(9) + 1)
+True
+```
+
+Again, you can set the current e-graph with the context manager to use that instead:
+
+```python
+>>> egraph = EGraph()
+>>> s = egraph.let("s", MultiSet(i64(1), 2))
+>>> with egraph.set_current():
+...     assert s.contains(1)
+```
+
+### Experimental Array API Support
+
+This release also continues to experiment with a proof of concept array API implementation
+that allows deferred optimization and analysis. It is still very much a work in progress, but open to collaboration and feedback. The goal is to see egglog might be possible to be used as an end to end array compiler.
+
+The changes in this release allow more functional programming constructrs to be used to create arrays, and then allow their properties to be optimized. For example, we can create
+a linalg function (in [an example inspired by Siu](https://gist.github.com/sklam/5e5737137d48d6e5b816d14a90076f1d)):
+
+```python
+from egglog.exp.array_api import *
+
+@function(ruleset=array_api_ruleset, subsume=True)
+def linalg_norm(X: NDArrayLike, axis: TupleIntLike) -> NDArray:
+    X = cast(NDArray, X)
+    return NDArray(
+        X.shape.deselect(axis),
+        X.dtype,
+        lambda k: ndindex(X.shape.select(axis))
+        .foldl_value(lambda carry, i: carry + ((x := X.index(i + k)).conj() * x).real(), init=0.0)
+        .sqrt(),
+    )
+```
+
+Then we are able to check the shape of the output based on the input:
+
+```python
+>>> X = constant("X", NDArray)
+>>> assume_shape(X, (3, 2, 3, 4))
+>>> res = linalg_norm(X, (0, 1))
+>>> assert res.shape.eval() == (Int(3), Int(4))
+```
+
+As well as see the symbolic form of it's output:
+
+```python
+>>> i = constant("i", Int)
+>>> j = constant("j", Int)
+>>> idxed = res.index((i, j))
+>>> EGraph().simplify(idxed, array_api_schedule)
+(
+    (
+        (
+            (
+                (
+                    (X.index(TupleInt.from_vec(Vec[Int](Int(0), Int(0), i, j))).conj() * X.index(TupleInt.from_vec(Vec[Int](Int(0), Int(0), i, j)))).real()
+                    + (X.index(TupleInt.from_vec(Vec[Int](Int(0), Int(1), i, j))).conj() * X.index(TupleInt.from_vec(Vec[Int](Int(0), Int(1), i, j)))).real()
+                )
+                + (X.index(TupleInt.from_vec(Vec[Int](Int(1), Int(0), i, j))).conj() * X.index(TupleInt.from_vec(Vec[Int](Int(1), Int(0), i, j)))).real()
+            )
+            + (X.index(TupleInt.from_vec(Vec[Int](Int(1), Int(1), i, j))).conj() * X.index(TupleInt.from_vec(Vec[Int](Int(1), Int(1), i, j)))).real()
+        )
+        + (X.index(TupleInt.from_vec(Vec[Int](Int(2), Int(0), i, j))).conj() * X.index(TupleInt.from_vec(Vec[Int](Int(2), Int(0), i, j)))).real()
+    )
+    + (X.index(TupleInt.from_vec(Vec[Int](Int(2), Int(1), i, j))).conj() * X.index(TupleInt.from_vec(Vec[Int](Int(2), Int(1), i, j)))).real()
+).sqrt()
+```
+
+### All changes
+
 - Fix pretty printing of lambda functions
 - Add support for subsuming rewrite generated by default function and method definitions
 - Add better error message when using @function in class (thanks @shinawy)
