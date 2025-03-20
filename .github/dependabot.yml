@@ -8,27 +8,21 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     groups:
-      rust-production:
-        dependency-type: "production"
-      rust-development:
-        dependency-type: "development"
+      rust:
+        applies-to: version-updates
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     groups:
-      actions-production:
-        dependency-type: "production"
-      actions-development:
-        dependency-type: "development"
-  - package-ecosystem: "pip"
+      actions:
+        applies-to: version-updates
+- package-ecosystem: "uv"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     groups:
-      python-production:
-        dependency-type: "production"
-      python-development:
-        dependency-type: "development"
+      python:
+        applies-to: version-updates
