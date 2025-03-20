@@ -11,18 +11,21 @@ updates:
       interval: "daily"
     groups:
       rust:
-        applies-to: version-updates
+        patterns:
+          - "*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "daily"
     groups:
       actions:
-        applies-to: version-updates
+        patterns:
+          - "*"
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "daily"
     groups:
       python:
-        applies-to: version-updates
+        patterns:
+          - "*"
