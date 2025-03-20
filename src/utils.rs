@@ -7,16 +7,14 @@ pub fn data_repr<T: pyo3::PyClass>(
     slf: PyRef<T>,
     field_names: Vec<&str>,
 ) -> PyResult<String> {
-    let obj = slf.into_py(py);
-    let class_name: String = obj
-        .getattr(py, "__class__")?
-        .getattr(py, "__name__")?
-        .extract(py)?;
+    let binding = slf.into_pyobject(py)?;
+    let obj = binding.as_any();
+    let class_name: String = obj.getattr("__class__")?.getattr("__name__")?.extract()?;
     let field_strings: PyResult<Vec<String>> = field_names
         .iter()
         .map(|name| {
-            obj.getattr(py, *name)
-                .and_then(|x| x.call_method_bound(py, "__repr__", (), None)?.extract(py))
+            obj.getattr(*name)
+                .and_then(|x| x.call_method("__repr__", (), None)?.extract())
         })
         .collect();
     Ok(format!("{}({})", class_name, field_strings?.join(", ")))
@@ -64,11 +62,11 @@ macro_rules! convert_enums {
                 fn __str__(&self) -> String {
                     format!($str, <$from_type>::from(self.clone()))
                 }
-                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyObject {
+                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyResult<PyObject> {
                     match op {
-                        pyo3::basic::CompareOp::Eq => (self == other).into_py(py),
-                        pyo3::basic::CompareOp::Ne => (self != other).into_py(py),
-                        _ => py.NotImplemented(),
+                        pyo3::basic::CompareOp::Eq => Ok((self == other).into_pyobject(py)?.as_any().clone().unbind()),
+                        pyo3::basic::CompareOp::Ne => Ok((self != other).into_pyobject(py)?.as_any().clone().unbind()),
+                        _ => Ok(py.NotImplemented()),
                     }
                 }
             }
@@ -91,13 +89,17 @@ macro_rules! convert_enums {
                 $variant($variant),
             )*
         }
-        impl IntoPy<PyObject> for $to_type {
-            fn into_py(self, py: Python<'_>) -> PyObject {
-                match self {
+        impl<'py> IntoPyObject<'py> for $to_type {
+            type Target = PyAny; // the Python type
+            type Output = Bound<'py, Self::Target>; // in most cases this will be `Bound`
+            type Error = pyo3::PyErr;
+
+            fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, Self::Target>, Self::Error> {
+                Ok(match self {
                     $(
-                        $to_type::$variant(v) => v.into_py(py),
+                        $to_type::$variant(v) => v.into_pyobject(py)?.as_any().clone(),
                     )*
-                }
+                })
             }
         }
         impl From<$to_type> for $from_type {
@@ -203,12 +205,12 @@ macro_rules! convert_struct {
                 fn __str__(&self) -> String {
                     format!($str, <$from_type>::from(self.clone()))
                 }
-                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyObject {
-                    match op {
-                        pyo3::basic::CompareOp::Eq => (self == other).into_py(py),
-                        pyo3::basic::CompareOp::Ne => (self != other).into_py(py),
+                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyResult<PyObject> {
+                    Ok(match op {
+                        pyo3::basic::CompareOp::Eq => (self == other).into_pyobject(py)?.as_any().clone().unbind(),
+                        pyo3::basic::CompareOp::Ne => (self != other).into_pyobject(py)?.as_any().clone().unbind(),
                         _ => py.NotImplemented(),
-                    }
+                    })
                 }
             }
 

@@ -10,7 +10,7 @@ use egglog::{
     ArcSort, EGraph, PrimitiveLike, Term, TermDag, TypeInfo, Value,
 };
 use pyo3::{
-    ffi, intern, prelude::*, types::PyDict, AsPyPointer, IntoPy, PyAny, PyErr, PyObject, PyResult,
+    ffi, intern, prelude::*, types::PyDict, AsPyPointer, PyAny, PyErr, PyObject, PyResult,
     PyTraverseError, PyVisit, Python,
 };
 
@@ -137,6 +137,7 @@ impl PyObjectSort {
 }
 
 /// Implement wrapper struct so can implement foreign sort on it
+#[derive(IntoPyObject, IntoPyObjectRef)]
 pub struct MyPyObject(pub PyObject);
 
 impl FromSort for MyPyObject {
@@ -144,12 +145,6 @@ impl FromSort for MyPyObject {
     fn load(sort: &Self::Sort, value: &Value) -> Self {
         let obj = Python::with_gil(|py| sort.load(py, *value));
         MyPyObject(obj)
-    }
-}
-
-impl IntoPy<PyObject> for MyPyObject {
-    fn into_py(self, _py: Python<'_>) -> PyObject {
-        self.0
     }
 }
 
@@ -355,9 +350,13 @@ impl PrimitiveLike for Eval {
             let globals = globals.downcast_bound::<PyDict>(py).unwrap();
             let locals = self.py_object.load(py, values[2]);
             let locals = locals.downcast_bound::<PyDict>(py).unwrap();
-            py.eval_bound(code.into(), Some(globals), Some(locals))
-                .unwrap()
-                .into()
+            py.eval(
+                CString::new(code.to_string()).unwrap().as_c_str(),
+                Some(globals),
+                Some(locals),
+            )
+            .unwrap()
+            .into()
         });
         Some(self.py_object.store(res_obj))
     }
@@ -444,7 +443,7 @@ impl PrimitiveLike for Dict {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let dict: PyObject = Python::with_gil(|py| {
-            let dict = PyDict::new_bound(py);
+            let dict = PyDict::new(py);
             // Update the dict with the key-value pairs
             for i in values.chunks_exact(2) {
                 let key = self.py_object.load(py, i[0]);
@@ -591,7 +590,8 @@ impl PrimitiveLike for FromString {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let str = Symbol::load(self.string.as_ref(), &values[0]).to_string();
-        let obj: PyObject = Python::with_gil(|py| str.into_py(py));
+        let obj: PyObject =
+            Python::with_gil(|py| str.into_pyobject(py).unwrap().as_any().clone().unbind());
         Some(self.py_object.store(obj))
     }
 }
@@ -624,7 +624,8 @@ impl PrimitiveLike for FromInt {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let int = i64::load(self.int.as_ref(), &values[0]);
-        let obj: PyObject = Python::with_gil(|py| int.into_py(py));
+        let obj: PyObject =
+            Python::with_gil(|py| int.into_pyobject(py).unwrap().as_any().clone().unbind());
         Some(self.py_object.store(obj))
     }
 }

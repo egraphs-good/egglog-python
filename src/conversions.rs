@@ -4,7 +4,7 @@ use crate::utils::*;
 use egglog::ast::Symbol;
 use ordered_float::OrderedFloat;
 use pyo3::prelude::*;
-use pyo3::types::PyDeltaAccess;
+use pyo3::types::{PyDelta, PyDeltaAccess};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -460,9 +460,13 @@ impl FromPyObject<'_> for Box<Schedule> {
     }
 }
 
-impl IntoPy<PyObject> for Box<Schedule> {
-    fn into_py(self, py: Python<'_>) -> PyObject {
-        (*self).into_py(py)
+impl<'py> IntoPyObject<'py> for Box<Schedule> {
+    type Target = PyAny; // the Python type
+    type Output = Bound<'py, Self::Target>; // in most cases this will be `Bound`
+    type Error = pyo3::PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        Ok((*self).into_pyobject(py)?.as_any().clone())
     }
 }
 
@@ -472,9 +476,13 @@ impl FromPyObject<'_> for Box<Command> {
     }
 }
 
-impl IntoPy<PyObject> for Box<Command> {
-    fn into_py(self, py: Python<'_>) -> PyObject {
-        (*self).into_py(py)
+impl<'py> IntoPyObject<'py> for Box<Command> {
+    type Target = PyAny; // the Python type
+    type Output = Bound<'py, Self::Target>; // in most cases this will be `Bound`
+    type Error = pyo3::PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        Ok((*self).into_pyobject(py)?.as_any().clone())
     }
 }
 
@@ -495,9 +503,13 @@ impl FromPyObject<'_> for WrappedOrderedF64 {
     }
 }
 
-impl IntoPy<PyObject> for WrappedOrderedF64 {
-    fn into_py(self, py: Python<'_>) -> PyObject {
-        self.0.into_inner().into_py(py)
+impl<'py> IntoPyObject<'py> for WrappedOrderedF64 {
+    type Target = PyAny; // the Python type
+    type Output = Bound<'py, Self::Target>; // in most cases this will be `Bound`
+    type Error = pyo3::PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        Ok((self.0.into_inner()).into_pyobject(py)?.as_any().clone())
     }
 }
 
@@ -522,11 +534,14 @@ impl FromPyObject<'_> for WrappedDuration {
         )))
     }
 }
+impl<'py> IntoPyObject<'py> for WrappedDuration {
+    type Target = PyDelta; // the Python type
+    type Output = Bound<'py, Self::Target>; // in most cases this will be `Bound`
+    type Error = pyo3::PyErr;
 
-impl IntoPy<PyObject> for WrappedDuration {
-    fn into_py(self, py: Python<'_>) -> PyObject {
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let d = self.0;
-        pyo3::types::PyDelta::new_bound(
+        Ok(pyo3::types::PyDelta::new(
             py,
             0,
             0,
@@ -534,8 +549,7 @@ impl IntoPy<PyObject> for WrappedDuration {
                 .try_into()
                 .expect("Failed to convert miliseconds to int32 when converting duration"),
             true,
-        )
-        .expect("Failed to contruct timedelta")
-        .into()
+        )?
+        .clone())
     }
 }
