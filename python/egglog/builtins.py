@@ -195,6 +195,9 @@ class i64(BuiltinExpr):  # noqa: N801
 
     def __rrshift__(self, other: i64Like) -> i64: ...
 
+    @method(egg_fn="log2")
+    def log2(self) -> i64: ...
+
     @method(egg_fn="not-i64")
     def __invert__(self) -> i64: ...
 

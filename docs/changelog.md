@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Add missing i64.log2 method to the bindings
+
 ## 9.0.0 (2025-03-20)
 
 ### Evaluating Primitives
