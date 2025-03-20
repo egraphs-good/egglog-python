@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 9.0.1 (2025-03-20)
+
 - Add missing i64.log2 method to the bindings
 
 ## 9.0.0 (2025-03-20)
