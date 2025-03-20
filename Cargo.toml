@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.23.0", features = ["extension-module"] }
 
-egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "889ca7635368d7e382e16a93b2883aba82f1078f" }
+egglog = { git = "https://github.com/egraphs-good/egglog", rev = "6f494282442803201b512e9d0828007b52a0b29c" }
 egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", rev = "8a1b3d6ad2723a8438f51f05027161e51f37917c" }
 egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
 serde_json = "1.0.140"
@@ -25,7 +25,7 @@ uuid = { version = "1.16.0", features = ["v4"] }
 # Use unreleased version of egglog in experimental
 [patch.'https://github.com/egraphs-good/egglog']
 # https://github.com/rust-lang/cargo/issues/5478#issuecomment-522719793
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "889ca7635368d7e382e16a93b2883aba82f1078f" }
+egglog = { git = "https://github.com/egraphs-good//egglog.git", rev = "6f494282442803201b512e9d0828007b52a0b29c" }
 
 # [replace]
 # 'https://github.com/egraphs-good/egglog.git#egglog@0.3.0' = { git = "https://github.com/egraphs-good/egglog.git", rev = "215714e1cbb13ae9e21bed2f2e1bf95804571512" }
