@@ -286,8 +286,8 @@ class RuntimeClass(DelayedDeclerations):
         return hash((id(self.__egg_decls_thunk__), self.__egg_tp__))
 
     # Support unioning like types
-    def __or__(self, __value: type) -> object:
-        return Union[self, __value]  # noqa: UP007
+    def __or__(self, value: type) -> object:
+        return Union[self, value]  # noqa: UP007
 
     @property
     def __parameters__(self) -> tuple[object, ...]:

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import inspect
-from types import FunctionType
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from egglog import *
 from egglog.exp.program_gen import *
+
+if TYPE_CHECKING:
+    from types import FunctionType
 
 
 class Math(Expr):
@@ -85,6 +87,6 @@ def test_py_object():
     egraph.register(evalled)
     egraph.run((to_program_ruleset | eval_program_rulseset | program_gen_ruleset).saturate())
     with egraph.set_current():
-        res = cast(FunctionType, evalled.as_py_object.eval())
+        res = cast("FunctionType", evalled.as_py_object.eval())
     assert res(1, 2) == 13
     assert inspect.getsource(res)

@@ -89,10 +89,8 @@ ignore = [
     # allow star imports
     "F405",
     "F403",
-    # Dont care if cls isnt typed explicitly in classmethod
-    "ANN102",
-    # Same for self
-    "ANN101",
+    # allow shadow builtin import
+    "A004",
     # Allow single line docstrings on multiple lines
     "D200",
     "D212",
