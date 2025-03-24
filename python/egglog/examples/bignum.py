@@ -12,14 +12,15 @@ x = BigInt(-1234)
 y = BigInt.from_string("2")
 z = BigRat(x, y)
 
-assert z.numer.to_string() == "-617"
+egraph = EGraph()
+
+assert egraph.extract(z.numer.to_string()).eval() == "-617"
 
 
 @function
 def bignums(x: BigInt, y: BigInt) -> BigRat: ...
 
 
-egraph = EGraph()
 egraph.register(set_(bignums(x, y)).to(z))
 
 c = var("c", BigRat)

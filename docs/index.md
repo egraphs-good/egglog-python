@@ -45,7 +45,7 @@ def _num_rule(a: Num, b: Num, c: Num, i: i64, j: i64):
     yield rewrite(Num(i) * Num(j)).to(Num(i * j))
 
 egraph.saturate()
-egraph.check(eq(expr1).to(expr2))
+egraph.check(expr1 == expr2)
 egraph.extract(expr1)
 ```
 

@@ -279,7 +279,7 @@ class TestLoopNest:
             value_program(simplified_index).function_three(ndarray_program(X), int_program(i), int_program(j)),
             {"np": np},
         )
-        fn = cast(FunctionType, try_evaling(array_api_program_gen_schedule, res, res.as_py_object))
+        fn = cast(FunctionType, try_evaling(EGraph(), array_api_program_gen_schedule, res, res.as_py_object))
 
         assert inspect.getsource(fn) == snapshot_py(name="code")
 
@@ -320,9 +320,8 @@ def test_program_compile(program: Program, snapshot_py):
     egraph = EGraph()
     egraph.register(simplified_program.compile())
     egraph.run(array_api_program_gen_schedule)
-    with egraph.set_current():
-        statements = simplified_program.statements.eval()
-        expr = simplified_program.expr.eval()
+    statements = egraph.extract(simplified_program.statements).eval()
+    expr = egraph.extract(simplified_program.expr).eval()
     assert "\n".join([*statements.split("\n"), expr]) == snapshot_py(name="code")
 
 
@@ -374,8 +373,7 @@ if __name__ == "__main__":
     print("Generating egglog source for test")
     egraph, _, _, program = function_to_program(lda, True)
     egraph.register(program.compile())
-    with egraph.set_current():
-        try_evaling(array_api_program_gen_combined_ruleset.saturate(), program, program.statements)
+    try_evaling(egraph, array_api_program_gen_combined_ruleset.saturate(), program, program.statements)
     name = "python.egg"
     print("Saving to", name)
     Path(name).write_text(egraph.as_egglog_string)

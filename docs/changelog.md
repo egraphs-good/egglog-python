@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Change builtins to not evaluate values in egraph and changes facts to compare structural equality instead of using an egraph when converting to a boolean, removing magic context (`EGraph.current` and `Schedule.current`) that was added in release 9.0.0.
+
 ## 9.0.1 (2025-03-20)
 
 - Add missing i64.log2 method to the bindings
