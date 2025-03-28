@@ -848,7 +848,7 @@ class EGraph:
     seminaive: InitVar[bool] = True
     save_egglog_string: InitVar[bool] = False
 
-    _state: EGraphState = field(init=False)
+    _state: EGraphState = field(init=False, repr=False)
     # For pushing/popping with egglog
     _state_stack: list[EGraphState] = field(default_factory=list, repr=False)
     # For storing the global "current" egraph
