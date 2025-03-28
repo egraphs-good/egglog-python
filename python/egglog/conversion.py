@@ -149,6 +149,12 @@ def min_convertable_tp(a: object, b: object, name: str) -> JustTypeRef:
     decls = _retrieve_conversion_decls()
     a_tp = _get_tp(a)
     b_tp = _get_tp(b)
+    # Make sure at least one of the types has the method, to avoid issue with == upcasting improperly
+    if not (
+        (isinstance(a_tp, JustTypeRef) and decls.has_method(a_tp.name, name))
+        or (isinstance(b_tp, JustTypeRef) and decls.has_method(b_tp.name, name))
+    ):
+        raise ConvertError(f"Neither {a_tp} nor {b_tp} has method {name}")
     a_converts_to = {
         to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == a_tp and decls.has_method(to.name, name)
     }

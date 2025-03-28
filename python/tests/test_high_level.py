@@ -839,6 +839,25 @@ class TestEqNE:
         assert not (i64(3) == 4)  # noqa: SIM201
 
 
+def test_no_upcast_eq():
+    """
+    Verifies that if two items can be upcast to something, calling == on them won't use
+    equality
+    """
+
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+    class B(Expr):
+        def __init__(self) -> None: ...
+        def __eq__(self, other: B) -> B: ...  # type: ignore[override]
+
+    converter(A, B, lambda a: B())
+
+    assert isinstance(A() == A(), Fact)
+    assert not isinstance(B() == B(), Fact)
+
+
 EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))
 
 
