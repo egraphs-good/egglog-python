@@ -243,30 +243,30 @@ def test_default_args():
 
 class TestPyObject:
     def test_from_string(self):
-        assert PyObject.from_string("foo").eval() == "foo"
+        assert EGraph().extract(PyObject.from_string("foo")).eval() == "foo"
 
     def test_to_string(self):
-        assert PyObject("foo").to_string().eval() == "foo"
+        EGraph().check(PyObject("foo").to_string() == String("foo"))
 
     def test_dict_update(self):
         original_d = {"foo": "bar"}
-        res = PyObject(original_d).dict_update("foo", "baz").eval()
+        res = EGraph().extract(PyObject(original_d).dict_update("foo", "baz")).eval()
         assert res == {"foo": "baz"}
         assert original_d == {"foo": "bar"}
 
     def test_eval(self):
-        assert py_eval("x + y", {"x": 10, "y": 20}, {}).eval() == 30
+        assert EGraph().extract(py_eval("x + y", {"x": 10, "y": 20}, {})).eval() == 30
 
     def test_eval_local(self):
         x = "hi"
         res = py_eval("my_add(x, y)", PyObject(locals()).dict_update("y", "there"), globals())
-        assert res.eval() == "hithere"  # Updated to call eval() directly on res
+        assert EGraph().extract(res).eval() == "hithere"
 
     def test_exec(self):
-        assert py_exec("x = 10").eval() == {"x": 10}  # Updated to call eval() directly on res
+        assert EGraph().extract(py_exec("x = 10")).eval() == {"x": 10}
 
     def test_exec_globals(self):
-        assert py_exec("x = y + 1", {"y": 10}).eval() == {"x": 11}
+        assert EGraph().extract(py_exec("x = y + 1", {"y": 10})).eval() == {"x": 11}
 
 
 def my_add(a, b):
@@ -502,7 +502,7 @@ class TestEval:
         assert String("c") not in m
 
     def test_set(self):
-        assert Set[i64].empty().eval() == set()
+        assert EGraph().extract(Set[i64].empty()).eval() == set()
         s = Set(i64(1), i64(2))
         assert s.eval() == {i64(1), i64(2)}
 
@@ -532,11 +532,12 @@ class TestEval:
         assert PyObject(o).eval() is o
 
     def test_big_int(self):
-        assert int(BigInt(10)) == 10
+        assert int(EGraph().extract(BigInt(10))) == 10
 
     def test_big_rat(self):
-        assert float(BigRat(1, 2)) == 1 / 2
-        assert BigRat(1, 2).eval() == Fraction(1, 2)
+        br = EGraph().extract(BigRat(1, 2))
+        assert float(br) == 1 / 2
+        assert br.eval() == Fraction(1, 2)
 
     def test_multiset(self):
         assert list(MultiSet(i64(1), i64(1))) == [i64(1), i64(1)]
@@ -555,7 +556,7 @@ class TestEval:
 
 
 def test_eval_fn():
-    assert py_eval_fn(lambda x: (x,))(PyObject.from_int(1)).eval() == (1,)
+    assert EGraph().extract(py_eval_fn(lambda x: (x,))(PyObject.from_int(1))).eval() == (1,)
 
 
 def _global_make_tuple(x):
@@ -563,16 +564,14 @@ def _global_make_tuple(x):
 
 
 def test_eval_fn_globals():
-    assert py_eval_fn(lambda x: _global_make_tuple(x))(PyObject.from_int(1)).eval() == (1,)
+    assert EGraph().extract(py_eval_fn(lambda x: _global_make_tuple(x))(PyObject.from_int(1))).eval() == (1,)
 
 
 def test_eval_fn_locals():
-    EGraph()
-
     def _locals_make_tuple(x):
         return (x,)
 
-    assert py_eval_fn(lambda x: _locals_make_tuple(x))(PyObject.from_int(1)).eval() == (1,)
+    assert EGraph().extract(py_eval_fn(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))).eval() == (1,)
 
 
 def test_lazy_types():
@@ -831,16 +830,32 @@ def test_map_like_conversion():
 
 class TestEqNE:
     def test_eq(self):
-        assert (i64(1) + 2) == 3
+        assert i64(3) == i64(3)
 
     def test_ne(self):
-        assert (i64(1) + 2) != 4
+        EGraph().check(i64(3) != i64(4))
 
     def test_eq_false(self):
-        assert not ((i64(1) + 2) == 4)  # noqa: SIM201
+        assert not (i64(3) == 4)  # noqa: SIM201
 
-    def test_ne_false(self):
-        assert not ((i64(1) + 2) != 3)  # noqa: SIM202
+
+def test_no_upcast_eq():
+    """
+    Verifies that if two items can be upcast to something, calling == on them won't use
+    equality
+    """
+
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+    class B(Expr):
+        def __init__(self) -> None: ...
+        def __eq__(self, other: B) -> B: ...  # type: ignore[override]
+
+    converter(A, B, lambda a: B())
+
+    assert isinstance(A() == A(), Fact)
+    assert not isinstance(B() == B(), Fact)
 
 
 EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))

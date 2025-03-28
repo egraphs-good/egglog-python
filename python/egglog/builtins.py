@@ -12,11 +12,9 @@ from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union, 
 
 from typing_extensions import TypeVarTuple, Unpack
 
-from . import bindings
 from .conversion import convert, converter, get_type_args
 from .declarations import *
-from .egraph import BaseExpr, BuiltinExpr, EGraph, expr_fact, function, get_current_ruleset, method
-from .egraph_state import GLOBAL_PY_OBJECT_SORT
+from .egraph import BaseExpr, BuiltinExpr, expr_fact, function, get_current_ruleset, method
 from .functionalize import functionalize
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
 from .thunk import Thunk
@@ -32,6 +30,7 @@ __all__ = [
     "BigRatLike",
     "Bool",
     "BoolLike",
+    "BuiltinEvalError",
     "Map",
     "MapLike",
     "MultiSet",
@@ -56,6 +55,17 @@ __all__ = [
 ]
 
 
+class BuiltinEvalError(Exception):
+    """
+    Raised when an builtin cannot be evaluated into a Python primitive because it is complex.
+
+    Try extracting this expression first.
+    """
+
+    def __str__(self) -> str:
+        return f"Cannot evaluate builtin expression into a Python primitive. Try extracting this expression first: {super().__str__()}"
+
+
 class Unit(BuiltinExpr, egg_sort="Unit"):
     """
     The unit type. This is used to reprsent if a value exists in the e-graph or not.
@@ -72,8 +82,8 @@ class String(BuiltinExpr):
     @method(preserve=True)
     def eval(self) -> str:
         value = _extract_lit(self)
-        assert isinstance(value, bindings.String)
-        return value.value
+        assert isinstance(value, str)
+        return value
 
     def __init__(self, value: str) -> None: ...
 
@@ -97,8 +107,8 @@ class Bool(BuiltinExpr, egg_sort="bool"):
     @method(preserve=True)
     def eval(self) -> bool:
         value = _extract_lit(self)
-        assert isinstance(value, bindings.Bool)
-        return value.value
+        assert isinstance(value, bool)
+        return value
 
     @method(preserve=True)
     def __bool__(self) -> bool:
@@ -132,8 +142,8 @@ class i64(BuiltinExpr):  # noqa: N801
     @method(preserve=True)
     def eval(self) -> int:
         value = _extract_lit(self)
-        assert isinstance(value, bindings.Int)
-        return value.value
+        assert isinstance(value, int)
+        return value
 
     @method(preserve=True)
     def __index__(self) -> int:
@@ -251,8 +261,8 @@ class f64(BuiltinExpr):  # noqa: N801
     @method(preserve=True)
     def eval(self) -> float:
         value = _extract_lit(self)
-        assert isinstance(value, bindings.Float)
-        return value.value
+        assert isinstance(value, float)
+        return value
 
     @method(preserve=True)
     def __float__(self) -> float:
@@ -340,9 +350,12 @@ class Map(BuiltinExpr, Generic[T, V]):
         expr = cast("RuntimeExpr", self)
         d = {}
         while call.callable != ClassMethodRef("Map", "empty"):
-            assert call.callable == MethodRef("Map", "insert")
+            msg = "Map can only be evaluated if it is empty or a series of inserts."
+            if call.callable != MethodRef("Map", "insert"):
+                raise BuiltinEvalError(msg)
             call_typed, k_typed, v_typed = call.args
-            assert isinstance(call_typed.expr, CallDecl)
+            if not isinstance(call_typed.expr, CallDecl):
+                raise BuiltinEvalError(msg)
             k = cast("T", expr.__with_expr__(k_typed))
             v = cast("V", expr.__with_expr__(v_typed))
             d[k] = v
@@ -404,7 +417,9 @@ class Set(BuiltinExpr, Generic[T]):
     @method(preserve=True)
     def eval(self) -> set[T]:
         call = _extract_call(self)
-        assert call.callable == InitRef("Set")
+        if call.callable != InitRef("Set"):
+            msg = "Set can only be initialized with the Set constructor."
+            raise BuiltinEvalError(msg)
         return {cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args}
 
     @method(preserve=True)
@@ -466,7 +481,9 @@ class MultiSet(BuiltinExpr, Generic[T]):
     @method(preserve=True)
     def eval(self) -> list[T]:
         call = _extract_call(self)
-        assert call.callable == InitRef("MultiSet")
+        if call.callable != InitRef("MultiSet"):
+            msg = "MultiSet can only be initialized with the MultiSet constructor."
+            raise BuiltinEvalError(msg)
         return [cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args]
 
     @method(preserve=True)
@@ -513,11 +530,15 @@ class Rational(BuiltinExpr):
     @method(preserve=True)
     def eval(self) -> Fraction:
         call = _extract_call(self)
-        assert call.callable == InitRef("Rational")
+        if call.callable != InitRef("Rational"):
+            msg = "Rational can only be initialized with the Rational constructor."
+            raise BuiltinEvalError(msg)
 
         def _to_int(e: TypedExprDecl) -> int:
             expr = e.expr
-            assert isinstance(expr, LitDecl)
+            if not isinstance(expr, LitDecl):
+                msg = "Rational can only be initialized with literals"
+                raise BuiltinEvalError(msg)
             assert isinstance(expr.value, int)
             return expr.value
 
@@ -596,9 +617,13 @@ class BigInt(BuiltinExpr):
     @method(preserve=True)
     def eval(self) -> int:
         call = _extract_call(self)
-        assert call.callable == ClassMethodRef("BigInt", "from_string")
+        if call.callable != ClassMethodRef("BigInt", "from_string"):
+            msg = "BigInt can only be initialized with the BigInt constructor."
+            raise BuiltinEvalError(msg)
         (s,) = call.args
-        assert isinstance(s.expr, LitDecl)
+        if not isinstance(s.expr, LitDecl):
+            msg = "BigInt can only be initialized with literals"
+            raise BuiltinEvalError(msg)
         assert isinstance(s.expr.value, str)
         return int(s.expr.value)
 
@@ -717,14 +742,19 @@ class BigRat(BuiltinExpr):
     @method(preserve=True)
     def eval(self) -> Fraction:
         call = _extract_call(self)
-        assert call.callable == InitRef("BigRat")
+        if call.callable != InitRef("BigRat"):
+            msg = "BigRat can only be initialized with the BigRat constructor."
+            raise BuiltinEvalError(msg)
 
         def _to_fraction(e: TypedExprDecl) -> Fraction:
             expr = e.expr
-            assert isinstance(expr, CallDecl)
-            assert expr.callable == ClassMethodRef("BigInt", "from_string")
+            if not isinstance(expr, CallDecl) or expr.callable != ClassMethodRef("BigInt", "from_string"):
+                msg = "BigRat can only be initialized BigInt strings"
+                raise BuiltinEvalError(msg)
             (s,) = expr.args
-            assert isinstance(s.expr, LitDecl)
+            if not isinstance(s.expr, LitDecl):
+                msg = "BigInt can only be initialized with literals"
+                raise BuiltinEvalError(msg)
             assert isinstance(s.expr.value, str)
             return Fraction(s.expr.value)
 
@@ -821,7 +851,10 @@ class Vec(BuiltinExpr, Generic[T]):
         call = _extract_call(self)
         if call.callable == ClassMethodRef("Vec", "empty"):
             return ()
-        assert call.callable == InitRef("Vec")
+
+        if call.callable != InitRef("Vec"):
+            msg = "Vec can only be initialized with the Vec constructor."
+            raise BuiltinEvalError(msg)
         return tuple(cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args)
 
     @method(preserve=True)
@@ -889,10 +922,11 @@ VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
 class PyObject(BuiltinExpr):
     @method(preserve=True)
     def eval(self) -> object:
-        report = (EGraph.current or EGraph())._run_extract(cast("RuntimeExpr", self), 0)
-        assert isinstance(report, bindings.Best)
-        expr = report.termdag.term_to_expr(report.term, bindings.PanicSpan())
-        return GLOBAL_PY_OBJECT_SORT.load(expr)
+        expr = cast("RuntimeExpr", self).__egg_typed_expr__.expr
+        if not isinstance(expr, PyObjectDecl):
+            msg = "PyObject can only be evaluated if it is a PyObject literal"
+            raise BuiltinEvalError(msg)
+        return expr.value
 
     def __init__(self, value: object) -> None: ...
 
@@ -1027,22 +1061,23 @@ def value_to_annotation(a: object) -> type | None:
 converter(FunctionType, UnstableFn, _convert_function)
 
 
-def _extract_lit(e: BaseExpr) -> bindings._Literal:
+def _extract_lit(e: BaseExpr) -> LitType:
     """
     Special case extracting literals to make this faster by using termdag directly.
     """
-    report = (EGraph.current or EGraph())._run_extract(cast("RuntimeExpr", e), 0)
-    assert isinstance(report, bindings.Best)
-    term = report.term
-    assert isinstance(term, bindings.TermLit)
-    return term.value
+    expr = cast("RuntimeExpr", e).__egg_typed_expr__.expr
+    if not isinstance(expr, LitDecl):
+        msg = "Expected a literal"
+        raise BuiltinEvalError(msg)
+    return expr.value
 
 
 def _extract_call(e: BaseExpr) -> CallDecl:
     """
     Extracts the call form of an expression
     """
-    extracted = cast("RuntimeExpr", (EGraph.current or EGraph()).extract(e))
-    expr = extracted.__egg_typed_expr__.expr
-    assert isinstance(expr, CallDecl)
+    expr = cast("RuntimeExpr", e).__egg_typed_expr__.expr
+    if not isinstance(expr, CallDecl):
+        msg = "Expected a call expression"
+        raise BuiltinEvalError(msg)
     return expr

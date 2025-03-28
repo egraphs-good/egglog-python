@@ -54,6 +54,7 @@ A: So that when converting from functional to lists we can use the same index fu
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import math
 import numbers
@@ -61,7 +62,7 @@ import os
 import sys
 from copy import copy
 from types import EllipsisType
-from typing import TYPE_CHECKING, ClassVar, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypeAlias, cast
 
 import numpy as np
 
@@ -93,7 +94,7 @@ class Boolean(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def eval(self) -> bool:
-        return try_evaling(array_api_schedule, self, self.to_bool)
+        return try_evaling(_get_current_egraph(), array_api_schedule, self, self.to_bool)
 
     @property
     def to_bool(self) -> Bool: ...
@@ -218,7 +219,7 @@ class Int(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def eval(self) -> int:
-        return try_evaling(array_api_schedule, self, self.to_i64)
+        return try_evaling(_get_current_egraph(), array_api_schedule, self, self.to_i64)
 
     @method(preserve=True)
     def __index__(self) -> int:
@@ -330,7 +331,7 @@ class Float(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def eval(self) -> float:
-        return try_evaling(array_api_schedule, self, self.to_f64)
+        return try_evaling(_get_current_egraph(), array_api_schedule, self, self.to_f64)
 
     def abs(self) -> Float: ...
 
@@ -438,7 +439,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def eval(self) -> tuple[Int, ...]:
-        return try_evaling(array_api_schedule, self, self.to_vec)
+        return try_evaling(_get_current_egraph(), array_api_schedule, self, self.to_vec)
 
     def foldl(self, f: Callable[[Int, Int], Int], init: Int) -> Int: ...
     def foldl_boolean(self, f: Callable[[Boolean, Int], Boolean], init: Boolean) -> Boolean: ...
@@ -586,7 +587,7 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def eval(self) -> tuple[TupleInt, ...]:
-        return try_evaling(array_api_schedule, self, self.to_vec)
+        return try_evaling(_get_current_egraph(), array_api_schedule, self, self.to_vec)
 
     def drop(self, n: Int) -> TupleTupleInt:
         return TupleTupleInt(self.length() - n, lambda i: self[i + n])
@@ -1282,7 +1283,7 @@ class TupleNDArray(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def eval(self) -> tuple[NDArray, ...]:
-        return try_evaling(array_api_schedule, self, self.to_vec)
+        return try_evaling(_get_current_egraph(), array_api_schedule, self, self.to_vec)
 
 
 converter(Vec[NDArray], TupleNDArray, lambda x: TupleNDArray.from_vec(x))
@@ -1941,3 +1942,42 @@ def array_api_vec_to_cons_ruleset(
 
 array_api_combined_ruleset = array_api_ruleset | array_api_vec_to_cons_ruleset
 array_api_schedule = array_api_combined_ruleset.saturate()
+
+_CURRENT_EGRAPH: None | EGraph = None
+
+
+@contextlib.contextmanager
+def set_array_api_egraph(egraph: EGraph) -> Iterator[None]:
+    """
+    Context manager that will set the current egraph. It will be set back after.
+    """
+    global _CURRENT_EGRAPH
+    assert _CURRENT_EGRAPH is None
+    _CURRENT_EGRAPH = egraph
+    yield
+    _CURRENT_EGRAPH = None
+
+
+def _get_current_egraph() -> EGraph:
+    return _CURRENT_EGRAPH or EGraph()
+
+
+def try_evaling(egraph: EGraph, schedule: Schedule, expr: Expr, prim_expr: BuiltinExpr) -> Any:
+    """
+    Try evaling the expression that will result in a primitive expression being fill.
+    if it fails, display the egraph and raise an error.
+    """
+    try:
+        extracted = egraph.extract(prim_expr)
+    except EggSmolError:
+        # If this primitive doesn't exist in the egraph, we need to try to create it by
+        # registering the expression and running the schedule
+        egraph.register(expr)
+        egraph.run(schedule)
+        try:
+            extracted = egraph.extract(prim_expr)
+        except BaseException as e:
+            # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
+            e.add_note(f"Cannot evaluate {egraph.extract(expr)}")
+            raise
+    return extracted.eval()  # type: ignore[attr-defined]

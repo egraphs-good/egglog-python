@@ -4,7 +4,7 @@ import contextlib
 import inspect
 import pathlib
 import tempfile
-from collections.abc import Callable, Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar
 from dataclasses import InitVar, dataclass, field
 from functools import partial
@@ -17,7 +17,6 @@ from typing import (
     Generic,
     Literal,
     Never,
-    Protocol,
     TypeAlias,
     TypedDict,
     TypeVar,
@@ -85,7 +84,6 @@ __all__ = [
     "set_",
     "simplify",
     "subsume",
-    "try_evaling",
     "union",
     "unstable_combine_rulesets",
     "var",
@@ -847,11 +845,10 @@ class EGraph:
     Can run actions, check facts, run schedules, or extract minimal cost expressions.
     """
 
-    current: ClassVar[EGraph | None] = None
     seminaive: InitVar[bool] = True
     save_egglog_string: InitVar[bool] = False
 
-    _state: EGraphState = field(init=False)
+    _state: EGraphState = field(init=False, repr=False)
     # For pushing/popping with egglog
     _state_stack: list[EGraphState] = field(default_factory=list, repr=False)
     # For storing the global "current" egraph
@@ -1200,16 +1197,6 @@ class EGraph:
             if visualize:
                 VisualizerWidget(egraphs=egraphs).display_or_open()
 
-    @contextlib.contextmanager
-    def set_current(self) -> Iterator[None]:
-        """
-        Context manager that will set the current egraph. It will be set back after.
-        """
-        prev_current = EGraph.current
-        EGraph.current = self
-        yield
-        EGraph.current = prev_current
-
     @property
     def _egraph(self) -> bindings.EGraph:
         return self._state.egraph
@@ -1303,8 +1290,6 @@ class Schedule(DelayedDeclerations):
     A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
     """
 
-    current: ClassVar[Schedule | None] = None
-
     # Defer declerations so that we can have rule generators that used not yet defined yet
     schedule: ScheduleDecl
 
@@ -1331,16 +1316,6 @@ class Schedule(DelayedDeclerations):
         Run two schedules in sequence.
         """
         return Schedule(Thunk.fn(Declarations.create, self, other), SequenceDecl((self.schedule, other.schedule)))
-
-    @contextlib.contextmanager
-    def set_current(self) -> Iterator[None]:
-        """
-        Context manager that will set the current schedule. It will be set back after
-        """
-        prev_current = Schedule.current
-        Schedule.current = self
-        yield
-        Schedule.current = prev_current
 
 
 @dataclass
@@ -1488,9 +1463,12 @@ class Fact:
 
     def __bool__(self) -> bool:
         """
-        Returns True if the two sides of an equality are equal in the egraph or the expression is in the egraph.
+        Returns True if the two sides of an equality are structurally equal.
         """
-        return (EGraph.current or EGraph()).check_bool(self)
+        if not isinstance(self.fact, EqDecl):
+            msg = "Can only check equality facts"
+            raise TypeError(msg)
+        return self.fact.left == self.fact.right
 
 
 @dataclass
@@ -1876,34 +1854,3 @@ def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
         yield
     finally:
         _CURRENT_RULESET.reset(token)
-
-
-T_co = TypeVar("T_co", covariant=True)
-
-
-class _EvalsTo(Protocol, Generic[T_co]):
-    def eval(self) -> T_co: ...
-
-
-def try_evaling(schedule: Schedule, expr: Expr, prim_expr: _EvalsTo[T]) -> T:
-    """
-    Try evaling the expression that will result in a primitive expression being fill.
-    if it fails, display the egraph and raise an error.
-    """
-    egraph = EGraph.current or EGraph()
-    with egraph.set_current():
-        try:
-            return prim_expr.eval()
-        except BaseException:  # noqa: S110
-            pass
-    # If this primitive doesn't exist in the egraph, we need to try to create it by
-    # registering the expression and running the schedule
-    egraph.register(expr)
-    egraph.run(Schedule.current or schedule)
-    try:
-        with egraph.set_current():
-            return prim_expr.eval()
-    except BaseException as e:
-        # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
-        e.add_note(f"Cannot evaluate {egraph.extract(expr)}")
-        raise
