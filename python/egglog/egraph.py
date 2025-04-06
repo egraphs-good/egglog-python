@@ -1817,12 +1817,13 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     """
     Returns a thunk which will call the function with variables of the type and name of the arguments.
     """
-    # Get the local scope from where the function is defined, so that we can get any type hints that are in the scope
-    # but not in the globals
-    globals = gen.__globals__.copy()
-    if "Callable" not in globals:
-        globals["Callable"] = Callable
-    hints = get_type_hints(gen, globals, frame.f_locals)
+    # Need to manually pass in the frame locals from the generator, because otherwise classes defined within function
+    # will not be available in the annotations
+    # combine locals and globals so that they are the same dict. Otherwise get_type_hints will go through the wrong
+    # path and give an error for the test
+    # python/tests/test_no_import_star.py::test_no_import_star_rulesset
+    combined = {**gen.__globals__, **frame.f_locals}
+    hints = get_type_hints(gen, combined, combined)
     args = [_var(p.name, hints[p.name]) for p in signature(gen).parameters.values()]
     return list(gen(*args))  # type: ignore[misc]
 

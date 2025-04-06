@@ -1,6 +1,7 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import copy
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar
@@ -10,8 +11,6 @@ import pytest
 from egglog import *
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from egglog.runtime import RuntimeExpr
 
 

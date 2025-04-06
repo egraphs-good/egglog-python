@@ -5,6 +5,7 @@ Builtin sorts and function to egg.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from fractions import Fraction
 from functools import partial, reduce
 from types import FunctionType, MethodType
@@ -20,7 +21,7 @@ from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
 from .thunk import Thunk
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Iterator
 
 
 __all__ = [

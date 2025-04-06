@@ -4,6 +4,10 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Fix bug on resolving types if not all imported to your module [#286](https://github.com/egraphs-good/egglog-python/pull/286)
+  - Also stops special casing including `Callable` as a global. So if you previously included this in a `TYPE_CHECKING` block so it wasn
+    available at runtime you will have to move this to a runtime import if used in a type alias.
+
 ## 10.0.0 (2025-03-28)
 
 - Change builtins to not evaluate values in egraph and changes facts to compare structural equality instead of using an egraph when converting to a boolean, removing magic context (`EGraph.current` and `Schedule.current`) that was added in release 9.0.0.

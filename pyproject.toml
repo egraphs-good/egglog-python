@@ -198,6 +198,10 @@ ignore = [
     "SLF001",
     # allow blind exception to add context
     "BLE001",
+    # Don't move type checking around so that can be accessed at runtime
+    "TCH001",
+    "TCH002",
+    "TCH003",
 ]
 select = ["ALL"]
 
@@ -216,6 +220,15 @@ preview = true
 [tool.ruff.lint.per-file-ignores]
 # Don't require annotations for tests
 "python/tests/**" = ["ANN001", "ANN201", "INP001"]
+
+# Disable these tests instead for now since ruff doesn't support including all method annotations of decorated class
+# [tool.ruff.lint.flake8-type-checking]
+# runtime-evaluated-decorators = [
+#     "egglog.function",
+#     "egglog.method",
+#     "egglog.ruleset",
+# ]
+# runtime-evaluated-base-classes = ["egglog.Expr"]
 
 [tool.mypy]
 ignore_missing_imports = true

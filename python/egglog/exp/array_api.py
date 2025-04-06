@@ -60,6 +60,7 @@ import math
 import numbers
 import os
 import sys
+from collections.abc import Callable
 from copy import copy
 from types import EllipsisType
 from typing import TYPE_CHECKING, Any, ClassVar, TypeAlias, cast
@@ -72,8 +73,9 @@ from egglog.runtime import RuntimeExpr
 from .program_gen import *
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Iterator
     from types import ModuleType
+
 
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
 numbers.Integral.register(RuntimeExpr)
