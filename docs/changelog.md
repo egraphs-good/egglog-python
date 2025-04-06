@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 10.0.1 (2025-04-06)
+
 - Fix bug on resolving types if not all imported to your module [#286](https://github.com/egraphs-good/egglog-python/pull/286)
   - Also stops special casing including `Callable` as a global. So if you previously included this in a `TYPE_CHECKING` block so it wasn
     available at runtime you will have to move this to a runtime import if used in a type alias.
