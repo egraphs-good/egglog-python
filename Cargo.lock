@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "egglog_python"
-version = "9.0.1"
+version = "10.0.0"
 dependencies = [
  "egglog",
  "egglog-experimental",

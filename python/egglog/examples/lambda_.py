@@ -7,12 +7,11 @@ Lambda Calculus
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from collections.abc import Callable
+from typing import ClassVar
 
 from egglog import *
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from egglog import Expr
 
 
 class Val(Expr):
