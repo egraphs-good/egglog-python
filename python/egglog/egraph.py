@@ -1817,7 +1817,7 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     """
     Returns a thunk which will call the function with variables of the type and name of the arguments.
     """
-    # Need to manually pass in the frame locals from the generator, because otherwise classes defined within funciton
+    # Need to manually pass in the frame locals from the generator, because otherwise classes defined within function
     # will not be available in the annotations
     # combine locals and globals so that they are the same dict. Otherwise get_type_hints will go through the wrong
     # path and give an error for the test
