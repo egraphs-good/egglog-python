@@ -221,6 +221,7 @@ preview = true
 # Don't require annotations for tests
 "python/tests/**" = ["ANN001", "ANN201", "INP001"]
 
+# Disable these tests instead for now since ruff doesn't support including all method annotations of decorated class
 # [tool.ruff.lint.flake8-type-checking]
 # runtime-evaluated-decorators = [
 #     "egglog.function",

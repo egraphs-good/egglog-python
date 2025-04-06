@@ -4,7 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-- Fix bug on resolving types if not all imported to your module
+- Fix bug on resolving types if not all imported to your module [#286](https://github.com/egraphs-good/egglog-python/pull/286)
 
 ## 10.0.0 (2025-03-28)
 
