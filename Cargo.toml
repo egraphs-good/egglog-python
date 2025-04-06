@@ -16,8 +16,8 @@ egglog = { git = "https://github.com/egraphs-good/egglog", rev = "6f494282442803
 egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", rev = "8a1b3d6ad2723a8438f51f05027161e51f37917c" }
 egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
 serde_json = "1.0.140"
-pyo3-log = "0.12.1"
-log = "0.4.26"
+pyo3-log = "0.12.3"
+log = "0.4.27"
 lalrpop-util = { version = "0.22", features = ["lexer"] }
 ordered-float = "3.7.0"
 uuid = { version = "1.16.0", features = ["v4"] }
