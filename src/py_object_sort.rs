@@ -1,13 +1,14 @@
 use crate::error::EggResult;
+use egglog::sort::IntoSort;
 use egglog::{
+    add_primitive,
     ast::{Expr, Literal, Span, Symbol},
     call,
-    constraint::{AllEqualTypeConstraint, SimpleTypeConstraint, TypeConstraint},
     extract::{Cost, Extractor},
     lit,
-    sort::{BoolSort, FromSort, I64Sort, IntoSort as _, Sort, StringSort},
+    sort::{ColumnTy, FromSort, Sort},
     util::IndexMap,
-    ArcSort, EGraph, PrimitiveLike, Term, TermDag, TypeInfo, Value,
+    EGraph, Term, TermDag, Value,
 };
 use pyo3::{
     ffi, intern, prelude::*, types::PyDict, AsPyPointer, PyAny, PyErr, PyObject, PyResult,
@@ -26,6 +27,9 @@ use uuid::Uuid;
 
 const NAME: &str = "PyObject";
 
+// TODO: Use a vec of objects with the index as the identifier instead of the hash or ID
+// Then store two mappings: One from object ID to index and one from hash to list of indices
+// When retrieving, try checking ID. If missing, try hash if hashable.
 fn value(i: usize) -> Value {
     Value {
         #[cfg(debug_assertions)]
@@ -136,9 +140,40 @@ impl PyObjectSort {
     }
 }
 
+// Clone + Hash + Eq + Any + Debug + Send + Sync
+
 /// Implement wrapper struct so can implement foreign sort on it
-#[derive(IntoPyObject, IntoPyObjectRef)]
+#[derive(IntoPyObject, IntoPyObjectRef, Debug)]
 pub struct MyPyObject(pub PyObject);
+
+impl Clone for MyPyObject {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| MyPyObject(self.0.clone_ref(py)))
+    }
+}
+
+impl PartialEq for MyPyObject {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.is(&other.0)
+    }
+}
+
+impl Eq for MyPyObject {}
+
+impl std::hash::Hash for MyPyObject {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Hash the pointer to the object
+        let ptr = self.0.as_ptr();
+        state.write_usize(ptr as usize);
+    }
+}
+
+impl IntoSort for MyPyObject {
+    type Sort = PyObjectSort;
+    fn store(self, sort: &Self::Sort) -> Value {
+        sort.store(self.0)
+    }
+}
 
 impl FromSort for MyPyObject {
     type Sort = PyObjectSort;
@@ -205,51 +240,160 @@ impl Sort for PyObjectSort {
         self
     }
 
-    #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-        typeinfo.add_primitive(Ctor {
-            name: "py-object".into(),
-            py_object: self.clone(),
-            i64:typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(Eval {
-            name: "py-eval".into(),
-            py_object: self.clone(),
-            string: typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(Exec {
-            name: "py-exec".into(),
-            py_object: self.clone(),
-            string: typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(Dict {
-            name: "py-dict".into(),
-            py_object: self.clone(),
-        });
-        typeinfo.add_primitive(DictUpdate {
-            name: "py-dict-update".into(),
-            py_object: self.clone(),
-        });
-        typeinfo.add_primitive(ToString {
-            name: "py-to-string".into(),
-            py_object: self.clone(),
-            string: typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(ToBool {
-            name: "py-to-bool".into(),
-            py_object: self.clone(),
-            bool_: typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(FromString {
-            name: "py-from-string".into(),
-            py_object: self.clone(),
-            string: typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(FromInt {
-            name: "py-from-int".into(),
-            py_object: self,
-            int: typeinfo.get_sort_nofail(),
-        });
+    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Primitive(backend.primitives().get_ty::<PyObjectIdent>())
+    }
+
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.primitives_mut().register_type::<PyObjectIdent>();
+    }
+
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        // (py-object <i64> | <i64> <i64>)
+        add_primitive!(eg, "py-object" = [xs: i64] -?> MyPyObject {{
+            let ident = match xs.collect::<Vec<_>>().as_slice() {
+                [id] => Some(PyObjectIdent::Unhashable(*id as usize)),
+                [type_hash, hash] => Some(PyObjectIdent::Hashable(
+                    *type_hash as isize,
+                    *hash as isize,
+                )),
+                _ => None,
+            };
+            ident.map(|ident| {
+                let index = self.__y.get_index_of(&ident);
+                Python::with_gil(|py| {
+                    MyPyObject(self.__y.get_index(py, index))
+                })
+            })
+        }});
+        // Supports calling (py-eval <str-obj> <globals-obj> <locals-obj>)
+        add_primitive!(
+            eg,
+            "py-eval" = |code: Symbol, globals: MyPyObject, locals: MyPyObject| -> MyPyObject {
+                {
+                    let res_obj: PyObject = Python::with_gil(|py| {
+                        let globals = globals.0.downcast_bound::<PyDict>(py).unwrap();
+                        let locals = locals.0.downcast_bound::<PyDict>(py).unwrap();
+                        py.eval(
+                            CString::new(code.to_string()).unwrap().as_c_str(),
+                            Some(globals),
+                            Some(locals),
+                        )
+                        .unwrap()
+                        .into()
+                    });
+                    MyPyObject(res_obj)
+                }
+            }
+        );
+        // Copies the locals, execs the Python string, then returns the copied version of the locals with any updates
+        // (py-exec <str-obj> <globals-obj> <locals-obj>)
+        add_primitive!(
+            eg,
+            "py-exec" = |code: Symbol, globals: MyPyObject, locals: MyPyObject| -> MyPyObject {
+                {
+                    let code: &str = code.into();
+                    let res_obj: PyObject = Python::with_gil(|py| {
+                        let globals = globals.0.downcast_bound::<PyDict>(py).unwrap();
+                        // Copy the locals so we can mutate them and return them
+                        let locals = locals
+                            .0
+                            .downcast_bound::<PyDict>(py)
+                            .unwrap()
+                            .copy()
+                            .unwrap();
+                        // Copy code into temporary file
+                        // Keep it around so that if errors occur we can debug them after the program exits
+                        let mut path = temp_dir();
+                        let file_name = format!("egglog-{}.py", Uuid::new_v4());
+                        path.push(file_name);
+                        let mut file = File::create(path.clone()).unwrap();
+                        file.write_all(code.as_bytes()).unwrap();
+                        let path = path.to_str().unwrap();
+                        run_code_path(py, code, Some(globals), Some(&locals), path).unwrap();
+                        locals.into()
+                    });
+                    MyPyObject(res_obj)
+                }
+            }
+        );
+
+        // (py-dict [<key-object> <value-object>]*)
+        add_primitive!(eg, "py-dict" = [xs: MyPyObject] -> MyPyObject {{
+            let dict: PyObject = Python::with_gil(|py| {
+                let dict = PyDict::new(py);
+                // Update the dict with the key-value pairs
+                for i in xs.collect::<Vec<_>>().chunks_exact(2) {
+                    dict.set_item(&i[0].0, &i[1].0).unwrap();
+                }
+                dict.into()
+            });
+            MyPyObject(dict)
+        }});
+        // Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
+        add_primitive!(eg, "py-dict-update" = [xs: MyPyObject] -> MyPyObject {{
+            let dict: PyObject = Python::with_gil(|py| {
+                let xs = xs.collect::<Vec<_>>();
+                // Copy the dict so we can mutate it and return it
+                let dict = xs[0].0.downcast_bound::<PyDict>(py).unwrap().copy().unwrap();
+                // Update the dict with the key-value pairs
+                for i in xs[1..].chunks_exact(2) {
+                    dict.set_item(&i[0].0, &i[1].0).unwrap();
+                }
+                dict.into()
+            });
+            MyPyObject(dict)
+        }});
+        // (py-to-string <obj>)
+        add_primitive!(
+            eg,
+            "py-to-string" = |x: MyPyObject| -> Symbol {
+                {
+                    let obj: String = Python::with_gil(|py| x.0.extract(py).unwrap());
+                    let symbol: Symbol = obj.into();
+                    symbol
+                }
+            }
+        );
+        // (py-to-bool <obj>)
+        add_primitive!(
+            eg,
+            "py-to-bool" = |x: MyPyObject| -> bool {
+                {
+                    let obj: bool = Python::with_gil(|py| x.0.extract(py).unwrap());
+                    obj
+                }
+            }
+        );
+        // (py-from-string <str>)
+        add_primitive!(
+            eg,
+            "py-from-string" = |x: Symbol| -> MyPyObject {
+                {
+                    let obj: PyObject = Python::with_gil(|py| {
+                        x.to_string()
+                            .into_pyobject(py)
+                            .unwrap()
+                            .as_any()
+                            .clone()
+                            .unbind()
+                    });
+                    MyPyObject(obj)
+                }
+            }
+        );
+        // (py-from-int <int>)
+        add_primitive!(
+            eg,
+            "py-from-int" = |x: i64| -> MyPyObject {
+                {
+                    let obj: PyObject = Python::with_gil(|py| {
+                        x.into_pyobject(py).unwrap().as_any().clone().unbind()
+                    });
+                    MyPyObject(obj)
+                }
+            }
+        );
     }
     fn extract_term(
         &self,
@@ -272,361 +416,6 @@ impl Sort for PyObjectSort {
             }
         };
         Some((1, termdag.app("py-object".into(), children)))
-    }
-}
-
-/// (py-object <i64> | <i64> <i64>)
-struct Ctor {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    i64: Arc<I64Sort>,
-}
-
-impl PrimitiveLike for Ctor {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_all_arguments_sort(self.i64.clone())
-            .with_output_sort(self.py_object.clone())
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let ident = match values {
-            [id] => PyObjectIdent::Unhashable(i64::load(self.i64.as_ref(), id) as usize),
-            [type_hash, hash] => PyObjectIdent::Hashable(
-                i64::load(self.i64.as_ref(), type_hash) as isize,
-                i64::load(self.i64.as_ref(), hash) as isize,
-            ),
-            _ => unreachable!(),
-        };
-        Some(value(self.py_object.get_index_of(&ident)))
-    }
-}
-
-/// Supports calling (py-eval <str-obj> <globals-obj> <locals-obj>)
-struct Eval {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    string: Arc<StringSort>,
-}
-
-impl PrimitiveLike for Eval {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        return SimpleTypeConstraint::new(
-            self.name(),
-            vec![
-                self.string.clone(),
-                self.py_object.clone(),
-                self.py_object.clone(),
-                self.py_object.clone(),
-            ],
-            span.clone(),
-        )
-        .into_box();
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
-        let res_obj: PyObject = Python::with_gil(|py| {
-            let globals = self.py_object.load(py, values[1]);
-            let globals = globals.downcast_bound::<PyDict>(py).unwrap();
-            let locals = self.py_object.load(py, values[2]);
-            let locals = locals.downcast_bound::<PyDict>(py).unwrap();
-            py.eval(
-                CString::new(code.to_string()).unwrap().as_c_str(),
-                Some(globals),
-                Some(locals),
-            )
-            .unwrap()
-            .into()
-        });
-        Some(self.py_object.store(res_obj))
-    }
-}
-
-/// Copies the locals, execs the Python string, then returns the copied version of the locals with any updates
-/// (py-exec <str-obj> <globals-obj> <locals-obj>)
-struct Exec {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    string: Arc<StringSort>,
-}
-
-impl PrimitiveLike for Exec {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![
-                self.string.clone(),
-                self.py_object.clone(),
-                self.py_object.clone(),
-                self.py_object.clone(),
-            ],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
-        let code: &str = code.into();
-        let locals: PyObject = Python::with_gil(|py| {
-            let globals = self.py_object.load(py, values[1]);
-            let globals = globals.downcast_bound::<PyDict>(py).unwrap();
-            let locals = self.py_object.load(py, values[2]);
-            // Copy the locals so we can mutate them and return them
-            let locals = locals.downcast_bound::<PyDict>(py).unwrap().copy().unwrap();
-            // Copy code into temporary file
-            // Keep it around so that if errors occur we can debug them after the program exits
-            let mut path = temp_dir();
-            let file_name = format!("egglog-{}.py", Uuid::new_v4());
-            path.push(file_name);
-            let mut file = File::create(path.clone()).unwrap();
-            file.write_all(code.as_bytes()).unwrap();
-            let path = path.to_str().unwrap();
-            run_code_path(py, code, Some(globals), Some(&locals), path).unwrap();
-            locals.into()
-        });
-        Some(self.py_object.store(locals))
-    }
-}
-
-/// (py-dict [<key-object> <value-object>]*)
-struct Dict {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-}
-
-impl PrimitiveLike for Dict {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_all_arguments_sort(self.py_object.clone())
-            .with_output_sort(self.py_object.clone())
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let dict: PyObject = Python::with_gil(|py| {
-            let dict = PyDict::new(py);
-            // Update the dict with the key-value pairs
-            for i in values.chunks_exact(2) {
-                let key = self.py_object.load(py, i[0]);
-                let value = self.py_object.load(py, i[1]);
-                dict.set_item(key, value).unwrap();
-            }
-            dict.into()
-        });
-        Some(self.py_object.store(dict))
-    }
-}
-
-/// Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
-struct DictUpdate {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-}
-
-impl PrimitiveLike for DictUpdate {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_all_arguments_sort(self.py_object.clone())
-            .with_output_sort(self.py_object.clone())
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let dict: PyObject = Python::with_gil(|py| {
-            let dict = self.py_object.load(py, values[0]);
-            // Copy the dict so we can mutate it and return it
-            let dict = dict.downcast_bound::<PyDict>(py).unwrap().copy().unwrap();
-            // Update the dict with the key-value pairs
-            for i in values[1..].chunks_exact(2) {
-                let key = self.py_object.load(py, i[0]);
-                let value = self.py_object.load(py, i[1]);
-                dict.set_item(key, value).unwrap();
-            }
-            dict.into()
-        });
-        Some(self.py_object.store(dict))
-    }
-}
-
-/// (py-to-string <obj>)
-struct ToString {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    string: Arc<StringSort>,
-}
-
-impl PrimitiveLike for ToString {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.py_object.clone(), self.string.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let obj: String =
-            Python::with_gil(|py| self.py_object.load(py, values[0]).extract(py).unwrap());
-        let symbol: Symbol = obj.into();
-        symbol.store(self.string.as_ref())
-    }
-}
-
-/// (py-to-bool <obj>)
-struct ToBool {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    bool_: Arc<BoolSort>,
-}
-
-impl PrimitiveLike for ToBool {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.py_object.clone(), self.bool_.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let obj: bool =
-            Python::with_gil(|py| self.py_object.load(py, values[0]).extract(py).unwrap());
-        obj.store(self.bool_.as_ref())
-    }
-}
-
-/// (py-from-string <str>)
-struct FromString {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    string: Arc<StringSort>,
-}
-
-impl PrimitiveLike for FromString {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.string.clone(), self.py_object.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let str = Symbol::load(self.string.as_ref(), &values[0]).to_string();
-        let obj: PyObject =
-            Python::with_gil(|py| str.into_pyobject(py).unwrap().as_any().clone().unbind());
-        Some(self.py_object.store(obj))
-    }
-}
-
-// (py-from-int <int>)
-struct FromInt {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    int: Arc<I64Sort>,
-}
-
-impl PrimitiveLike for FromInt {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        return SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.int.clone(), self.py_object.clone()],
-            span.clone(),
-        )
-        .into_box();
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let int = i64::load(self.int.as_ref(), &values[0]);
-        let obj: PyObject =
-            Python::with_gil(|py| int.into_pyobject(py).unwrap().as_any().clone().unbind());
-        Some(self.py_object.store(obj))
     }
 }
 
