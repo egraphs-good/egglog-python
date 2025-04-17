@@ -36,7 +36,6 @@ __all__ = [
     "MapLike",
     "MultiSet",
     "PyObject",
-    "Rational",
     "Set",
     "SetLike",
     "String",
@@ -527,91 +526,92 @@ class MultiSet(BuiltinExpr, Generic[T]):
     def map(self, f: Callable[[T], T]) -> MultiSet[T]: ...
 
 
-class Rational(BuiltinExpr):
-    @method(preserve=True)
-    def eval(self) -> Fraction:
-        call = _extract_call(self)
-        if call.callable != InitRef("Rational"):
-            msg = "Rational can only be initialized with the Rational constructor."
-            raise BuiltinEvalError(msg)
+# Removed until egglog experimental supports new backend
+# class Rational(BuiltinExpr):
+#     @method(preserve=True)
+#     def eval(self) -> Fraction:
+#         call = _extract_call(self)
+#         if call.callable != InitRef("Rational"):
+#             msg = "Rational can only be initialized with the Rational constructor."
+#             raise BuiltinEvalError(msg)
 
-        def _to_int(e: TypedExprDecl) -> int:
-            expr = e.expr
-            if not isinstance(expr, LitDecl):
-                msg = "Rational can only be initialized with literals"
-                raise BuiltinEvalError(msg)
-            assert isinstance(expr.value, int)
-            return expr.value
+#         def _to_int(e: TypedExprDecl) -> int:
+#             expr = e.expr
+#             if not isinstance(expr, LitDecl):
+#                 msg = "Rational can only be initialized with literals"
+#                 raise BuiltinEvalError(msg)
+#             assert isinstance(expr.value, int)
+#             return expr.value
 
-        num, den = call.args
-        return Fraction(_to_int(num), _to_int(den))
+#         num, den = call.args
+#         return Fraction(_to_int(num), _to_int(den))
 
-    @method(preserve=True)
-    def __float__(self) -> float:
-        return float(self.eval())
+#     @method(preserve=True)
+#     def __float__(self) -> float:
+#         return float(self.eval())
 
-    @method(preserve=True)
-    def __int__(self) -> int:
-        return int(self.eval())
+#     @method(preserve=True)
+#     def __int__(self) -> int:
+#         return int(self.eval())
 
-    @method(egg_fn="rational")
-    def __init__(self, num: i64Like, den: i64Like) -> None: ...
+#     @method(egg_fn="rational")
+#     def __init__(self, num: i64Like, den: i64Like) -> None: ...
 
-    @method(egg_fn="to-f64")
-    def to_f64(self) -> f64: ...
+#     @method(egg_fn="to-f64")
+#     def to_f64(self) -> f64: ...
 
-    @method(egg_fn="+")
-    def __add__(self, other: Rational) -> Rational: ...
+#     @method(egg_fn="+")
+#     def __add__(self, other: Rational) -> Rational: ...
 
-    @method(egg_fn="-")
-    def __sub__(self, other: Rational) -> Rational: ...
+#     @method(egg_fn="-")
+#     def __sub__(self, other: Rational) -> Rational: ...
 
-    @method(egg_fn="*")
-    def __mul__(self, other: Rational) -> Rational: ...
+#     @method(egg_fn="*")
+#     def __mul__(self, other: Rational) -> Rational: ...
 
-    @method(egg_fn="/")
-    def __truediv__(self, other: Rational) -> Rational: ...
+#     @method(egg_fn="/")
+#     def __truediv__(self, other: Rational) -> Rational: ...
 
-    @method(egg_fn="min")
-    def min(self, other: Rational) -> Rational: ...
+#     @method(egg_fn="min")
+#     def min(self, other: Rational) -> Rational: ...
 
-    @method(egg_fn="max")
-    def max(self, other: Rational) -> Rational: ...
+#     @method(egg_fn="max")
+#     def max(self, other: Rational) -> Rational: ...
 
-    @method(egg_fn="neg")
-    def __neg__(self) -> Rational: ...
+#     @method(egg_fn="neg")
+#     def __neg__(self) -> Rational: ...
 
-    @method(egg_fn="abs")
-    def __abs__(self) -> Rational: ...
+#     @method(egg_fn="abs")
+#     def __abs__(self) -> Rational: ...
 
-    @method(egg_fn="floor")
-    def floor(self) -> Rational: ...
+#     @method(egg_fn="floor")
+#     def floor(self) -> Rational: ...
 
-    @method(egg_fn="ceil")
-    def ceil(self) -> Rational: ...
+#     @method(egg_fn="ceil")
+#     def ceil(self) -> Rational: ...
 
-    @method(egg_fn="round")
-    def round(self) -> Rational: ...
+#     @method(egg_fn="round")
+#     def round(self) -> Rational: ...
 
-    @method(egg_fn="pow")
-    def __pow__(self, other: Rational) -> Rational: ...
+#     @method(egg_fn="pow")
+#     def __pow__(self, other: Rational) -> Rational: ...
 
-    @method(egg_fn="log")
-    def log(self) -> Rational: ...
+#     @method(egg_fn="log")
+#     def log(self) -> Rational: ...
 
-    @method(egg_fn="sqrt")
-    def sqrt(self) -> Rational: ...
+#     @method(egg_fn="sqrt")
+#     def sqrt(self) -> Rational: ...
 
-    @method(egg_fn="cbrt")
-    def cbrt(self) -> Rational: ...
+#     @method(egg_fn="cbrt")
+#     def cbrt(self) -> Rational: ...
 
-    @method(egg_fn="numer")  # type: ignore[misc]
-    @property
-    def numer(self) -> i64: ...
+#     @method(egg_fn="numer")  # type: ignore[misc]
+#     @property
+#     def numer(self) -> i64: ...
 
-    @method(egg_fn="denom")  # type: ignore[misc]
-    @property
-    def denom(self) -> i64: ...
+#     @method(egg_fn="denom")  # type: ignore[misc]
+#     @property
+#     def denom(self) -> i64: ...
 
 
 class BigInt(BuiltinExpr):
