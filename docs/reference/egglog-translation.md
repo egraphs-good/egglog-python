@@ -108,13 +108,11 @@ The `function` decorator supports a number of options as well, which can be pass
 
 - `egg_fn`: The name of the function in egglog. By default, this is the same as the Python function name.
 - `cost`: The cost of the function. By default, this is 1.
-- `default`: A default value for the function. This must be the same type as the return type of the function.
 - `merge`: A function to merge the results of the function. This must be a function that takes two arguments of the return type, the old and the new, and returns a single value of the return type.
-- `on_merge`: A function to call when the function is merged. This must be a function that takes two arguments of the return type, the old and the new, and a number of actions to take.
 
 ```{code-cell} python
-# egg: (function foo () i64 :cost 10 :default 0 :merge (max old new))
-@function(egg_fn="foo", default=i64(0), cost=10, merge=lambda old, new: old.max(new))
+# egg: (function foo () i64 :cost 10 :merge (max old new))
+@function(egg_fn="foo", cost=10, merge=lambda old, new: old.max(new))
 def my_foo() -> i64:
     pass
 ```
