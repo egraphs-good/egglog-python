@@ -12,10 +12,10 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.23.0", features = ["extension-module"] }
 
-# egglog = { git = "https://github.com/egraphs-good/egglog", rev = "dd8e8cfa1f8851d32c8b7a0d1f4165e2164a7313" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "8cd7c0e77a27c271cbaef09ab23514675d646937" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "e8fb003" }
-core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "e8fb003" }
+egglog = { git = "https://github.com/egraphs-good/egglog", rev = "367a9143be7cb5354a54a9c5660d117440db77a6" }
+# egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "8cd7c0e77a27c271cbaef09ab23514675d646937" }
+egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "12e23e1" }
+core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "12e23e1" }
 # egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", rev = "8a1b3d6ad2723a8438f51f05027161e51f37917c" }
 egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
 serde_json = "1.0.140"
