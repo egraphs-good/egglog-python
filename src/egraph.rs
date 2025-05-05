@@ -5,7 +5,7 @@ use crate::error::{EggResult, WrappedError};
 use crate::py_object_sort::ArcPyObjectSort;
 use crate::serialize::SerializedEGraph;
 
-use egglog::{span, SerializeConfig};
+use egglog::{span, EGraph as EgglogEGraph, SerializeConfig};
 use log::info;
 use pyo3::prelude::*;
 use std::path::PathBuf;
@@ -33,7 +33,7 @@ impl EGraph {
         seminaive: bool,
         record: bool,
     ) -> Self {
-        let mut egraph = egglog_experimental::new_experimental_egraph();
+        let mut egraph = EgglogEGraph::default();
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
         if let Some(py_object_sort) = py_object_sort {
@@ -61,16 +61,17 @@ impl EGraph {
     /// Returns a list of strings representing the output.
     /// An EggSmolError is raised if there is problem parsing or executing.
     #[pyo3(signature=(*commands))]
-    fn run_program(&mut self, commands: Vec<Command>) -> EggResult<Vec<String>> {
+    fn run_program(&mut self, py: Python<'_>, commands: Vec<Command>) -> EggResult<Vec<String>> {
         let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
         let mut cmds_str = String::new();
         for cmd in &commands {
             cmds_str = cmds_str + &cmd.to_string() + "\n";
         }
         info!("Running commands:\n{}", cmds_str);
-
-        let res = self.egraph.run_program(commands).map_err(|e| {
-            WrappedError::Egglog(e, "\nWhen running commands:\n".to_string() + &cmds_str)
+        let res = py.allow_threads(|| {
+            self.egraph.run_program(commands).map_err(|e| {
+                WrappedError::Egglog(e, "\nWhen running commands:\n".to_string() + &cmds_str)
+            })
         });
         if res.is_ok() {
             if let Some(cmds) = &mut self.cmds {
@@ -115,22 +116,25 @@ impl EGraph {
     )]
     fn serialize(
         &mut self,
+        py: Python<'_>,
         root_eclasses: Vec<Expr>,
         max_functions: Option<usize>,
         max_calls_per_function: Option<usize>,
         include_temporary_functions: bool,
     ) -> SerializedEGraph {
-        let root_eclasses: Vec<_> = root_eclasses
-            .into_iter()
-            .map(|x| self.egraph.eval_expr(&egglog::ast::Expr::from(x)).unwrap())
-            .collect();
-        SerializedEGraph {
-            egraph: self.egraph.serialize(SerializeConfig {
-                max_functions,
-                max_calls_per_function,
-                include_temporary_functions,
-                root_eclasses,
-            }),
-        }
+        py.allow_threads(|| {
+            let root_eclasses: Vec<_> = root_eclasses
+                .into_iter()
+                .map(|x| self.egraph.eval_expr(&egglog::ast::Expr::from(x)).unwrap())
+                .collect();
+            SerializedEGraph {
+                egraph: self.egraph.serialize(SerializeConfig {
+                    max_functions,
+                    max_calls_per_function,
+                    include_temporary_functions,
+                    root_eclasses,
+                }),
+            }
+        })
     }
 }

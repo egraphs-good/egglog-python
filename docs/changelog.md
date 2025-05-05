@@ -4,6 +4,9 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Upgrade egglog which includes new backend. Removes support for egglog experimental including `Rational` since it
+  is not compatible with new backend yet.
+
 ## 10.0.1 (2025-04-06)
 
 - Fix bug on resolving types if not all imported to your module [#286](https://github.com/egraphs-good/egglog-python/pull/286)
