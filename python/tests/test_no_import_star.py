@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import egglog as el
+from egglog import f64Like
 
 
 def test_no_import_star():
@@ -11,7 +12,18 @@ def test_no_import_star():
     class Num(el.Expr):
         def __init__(self, value: el.i64Like) -> None: ...
 
-    Num(1)  # gets an error "NameError: name 'i64' is not defined"
+    Num(1)
+
+
+def test_f64_import():
+    """
+    For some reason this wasn't working until we moved the union definition below the class
+    """
+
+    class Num(el.Expr):
+        def __init__(self, value: f64Like) -> None: ...
+
+    Num(1.0)
 
 
 def test_no_import_star_rulesset():

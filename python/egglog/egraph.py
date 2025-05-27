@@ -569,16 +569,11 @@ def _fn_decl(
     if not isinstance(fn, FunctionType):
         raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
 
-    hint_globals = fn.__globals__.copy()
-    # Copy Callable into global if not present bc sometimes it gets automatically removed by ruff to type only block
-    # https://docs.astral.sh/ruff/rules/typing-only-standard-library-import/
-    if "Callable" not in hint_globals:
-        hint_globals["Callable"] = Callable
     # Instead of passing both globals and locals, just pass the globals. Otherwise, for some reason forward references
     # won't be resolved correctly
     # We need this to be false so it returns "__forward_value__" https://github.com/python/cpython/blob/440ed18e08887b958ad50db1b823e692a747b671/Lib/typing.py#L919
     # https://github.com/egraphs-good/egglog-python/issues/210
-    hint_globals.update(hint_locals)
+    hint_globals = {**fn.__globals__, **hint_locals}
     hints = get_type_hints(fn, hint_globals)
 
     params = list(signature(fn).parameters.values())

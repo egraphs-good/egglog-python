@@ -5,11 +5,9 @@ Builds up imperative string expressions from a functional expression.
 
 from __future__ import annotations
 
-from typing import TypeAlias, Union
+from typing import TypeAlias
 
 from egglog import *
-
-ProgramLike: TypeAlias = Union["Program", StringLike]
 
 
 class Program(Expr):
@@ -95,6 +93,9 @@ class Program(Expr):
         """
         Returns whether the expression is an identifier. Used so that we don't re-assign any identifiers.
         """
+
+
+ProgramLike: TypeAlias = Program | StringLike
 
 
 converter(String, Program, Program)
