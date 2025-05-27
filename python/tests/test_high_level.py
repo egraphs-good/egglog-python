@@ -5,7 +5,7 @@ import importlib
 import pathlib
 from copy import copy
 from fractions import Fraction
-from typing import ClassVar, TypeAlias, Union
+from typing import ClassVar, TypeAlias
 
 import pytest
 
@@ -451,8 +451,6 @@ def test_upcast_self_lower_cost():
 
         def __add__(self, other: Int) -> Int: ...
 
-    NDArrayLike: TypeAlias = Union[Int, "NDArray"]
-
     class NDArray(Expr):
         def __init__(self, name: StringLike) -> None: ...
 
@@ -464,6 +462,8 @@ def test_upcast_self_lower_cost():
 
         @classmethod
         def from_int(cls, other: Int) -> NDArray: ...
+
+    NDArrayLike: TypeAlias = NDArray | Int
 
     converter(Int, NDArray, NDArray.from_int)
     converter(NDArray, Int, lambda a: a.to_int(), 100)

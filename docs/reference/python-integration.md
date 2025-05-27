@@ -157,8 +157,7 @@ If you want to have this work with the static type checker, you can define your 
 the `Expr` class as the first item in the union. For example, in this case you could then define:
 
 ```{code-cell} python
-from typing import Union
-MathLike = Union[Math, i64Like, StringLike]
+MathLike = Math | i64Like | StringLike
 
 @function
 def some_math_fn(x: MathLike) -> MathLike:
