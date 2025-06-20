@@ -312,7 +312,7 @@ class ClassTypeVarRef:
         raise NotImplementedError(msg)
 
     def __str__(self) -> str:
-        return f"{self.module}.{self.name}"
+        return str(self.to_type_var())
 
     @classmethod
     def from_type_var(cls, typevar: TypeVar) -> ClassTypeVarRef:
