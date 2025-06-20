@@ -627,7 +627,7 @@ def _fn_decl(
     )
     decls |= merged
 
-    # defer this in generator so it doesnt resolve for builtins eagerly
+    # defer this in generator so it doesn't resolve for builtins eagerly
     args = (TypedExprDecl(tp.to_just(), VarDecl(name, False)) for name, tp in zip(arg_names, arg_types, strict=True))
     res_ref: FunctionRef | MethodRef | ClassMethodRef | PropertyRef | InitRef | UnnamedFunctionRef
     res_thunk: Callable[[], object]
