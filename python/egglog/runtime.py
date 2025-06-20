@@ -281,6 +281,9 @@ class RuntimeClass(DelayedDeclerations):
     def __str__(self) -> str:
         return str(self.__egg_tp__)
 
+    def __repr__(self) -> str:
+        return str(self)
+
     # Make hashable so can go in Union
     def __hash__(self) -> int:
         return hash((id(self.__egg_decls_thunk__), self.__egg_tp__))
