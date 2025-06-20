@@ -308,7 +308,7 @@ class ClassTypeVarRef:
     module: str
 
     def to_just(self) -> JustTypeRef:
-        msg = "egglog does not support generic classes yet."
+        msg = f"{self}: egglog does not support generic classes yet."
         raise NotImplementedError(msg)
 
     def __str__(self) -> str:
