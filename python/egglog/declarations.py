@@ -93,7 +93,7 @@ class DelayedDeclerations:
         # Catch attribute error, so that it isn't bubbled up as a missing attribute and fallbacks on `__getattr__`
         # instead raise explicitly
         except AttributeError as err:
-            msg = f"Cannot resolve declerations for {self}"
+            msg = f"Cannot resolve declarations for {self}"
             raise RuntimeError(msg) from err
 
 
