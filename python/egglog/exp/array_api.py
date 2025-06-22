@@ -69,6 +69,7 @@ import numpy as np
 
 from egglog import *
 from egglog.runtime import RuntimeExpr
+from egglog.version_compat import add_note
 
 from .program_gen import *
 
@@ -1198,13 +1199,13 @@ class NDArray(Expr, ruleset=array_api_ruleset):
 
 NDArrayLike: TypeAlias = NDArray | ValueLike | TupleValueLike
 
-converter(NDArray, IndexKey, IndexKey.ndarray)
-converter(Value, NDArray, NDArray.scalar)
+converter(NDArray, IndexKey, lambda v: IndexKey.ndarray(v))
+converter(Value, NDArray, lambda v: NDArray.scalar(v))
 # Need this if we want to use ints in slices of arrays coming from 1d arrays, but make it more expensive
 # to prefer upcasting in the other direction when we can, which is safer at runtime
 converter(NDArray, Value, lambda n: n.to_value(), 100)
-converter(TupleValue, NDArray, NDArray.vector)
-converter(TupleInt, TupleValue, TupleValue.from_tuple_int)
+converter(TupleValue, NDArray, lambda v: NDArray.vector(v))
+converter(TupleInt, TupleValue, lambda v: TupleValue.from_tuple_int(v))
 
 
 @array_api_ruleset.register
@@ -1383,8 +1384,8 @@ class IntOrTuple(Expr, ruleset=array_api_ruleset):
     def tuple(cls, value: TupleIntLike) -> IntOrTuple: ...
 
 
-converter(Int, IntOrTuple, IntOrTuple.int)
-converter(TupleInt, IntOrTuple, IntOrTuple.tuple)
+converter(Int, IntOrTuple, lambda v: IntOrTuple.int(v))
+converter(TupleInt, IntOrTuple, lambda v: IntOrTuple.tuple(v))
 
 
 class OptionalIntOrTuple(Expr, ruleset=array_api_ruleset):
@@ -1395,7 +1396,7 @@ class OptionalIntOrTuple(Expr, ruleset=array_api_ruleset):
 
 
 converter(type(None), OptionalIntOrTuple, lambda _: OptionalIntOrTuple.none)
-converter(IntOrTuple, OptionalIntOrTuple, OptionalIntOrTuple.some)
+converter(IntOrTuple, OptionalIntOrTuple, lambda v: OptionalIntOrTuple.some(v))
 
 
 @function
@@ -1980,6 +1981,5 @@ def try_evaling(egraph: EGraph, schedule: Schedule, expr: Expr, prim_expr: Built
             extracted = egraph.extract(prim_expr)
         except BaseException as e:
             # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
-            e.add_note(f"Cannot evaluate {egraph.extract(expr)}")
-            raise
+            raise add_note(f"Cannot evaluate {egraph.extract(expr)}", e)  # noqa: B904
     return extracted.eval()  # type: ignore[attr-defined]

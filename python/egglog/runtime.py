@@ -22,6 +22,7 @@ from .declarations import *
 from .pretty import *
 from .thunk import Thunk
 from .type_constraint_solver import *
+from .version_compat import *
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -249,8 +250,7 @@ class RuntimeClass(DelayedDeclerations):
         try:
             cls_decl = self.__egg_decls__._classes[self.__egg_tp__.name]
         except Exception as e:
-            e.add_note(f"Error processing class {self.__egg_tp__.name}")
-            raise
+            raise add_note(f"Error processing class {self.__egg_tp__.name}", e) from None
 
         preserved_methods = cls_decl.preserved_methods
         if name in preserved_methods:
@@ -318,8 +318,7 @@ class RuntimeFunction(DelayedDeclerations):
         try:
             signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).signature
         except Exception as e:
-            e.add_note(f"Failed to find callable {self}")
-            raise
+            raise add_note(f"Failed to find callable {self}", e)  # noqa: B904
         decls = self.__egg_decls__.copy()
         # Special case function application bc we dont support variadic generics yet generally
         if signature == "fn-app":

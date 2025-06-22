@@ -4,7 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-- fix using `f64Like` when not importing star (also properly includes removal of `Callable` special case from previous release).
+- Fix using `f64Like` when not importing star (also properly includes removal of `Callable` special case from previous release).
+- Fix Python 3.10 compatibility
 
 ## 10.0.1 (2025-04-06)
 

@@ -5,7 +5,7 @@ import importlib
 import pathlib
 from copy import copy
 from fractions import Fraction
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, TypeVar
 
 import pytest
 
@@ -17,6 +17,7 @@ from egglog.declarations import (
     MethodRef,
     TypedExprDecl,
 )
+from egglog.version_compat import BEFORE_3_11
 
 
 class TestExprStr:
@@ -793,10 +794,11 @@ def test_helpful_error_function_class():
         @function(cost=10)
         def __init__(self) -> None: ...
 
-    with pytest.raises(
-        ValueError,
-        match="Inside of classes, wrap methods with the `method` decorator, not `function`\nError processing E.__init__",
-    ):
+    match = "Inside of classes, wrap methods with the `method` decorator, not `function`"
+    # If we are after 3 11 we have context included
+    if not BEFORE_3_11:
+        match += "\nError processing E.__init__"
+    with pytest.raises(ValueError, match=match):
         E()
 
 
@@ -856,6 +858,19 @@ def test_no_upcast_eq():
 
     assert isinstance(A() == A(), Fact)
     assert not isinstance(B() == B(), Fact)
+
+
+T = TypeVar("T")
+
+
+def test_type_param_sub():
+    """
+    Verify that type substituion works properly, by comparing string version.
+
+    Comparing actual versions is always false if they are no the same object for unions
+    """
+    V = Vec[T] | int
+    assert str(V[Unit]) == str(Vec[Unit] | int)  # type: ignore[misc]
 
 
 EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))
