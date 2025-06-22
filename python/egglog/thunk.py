@@ -41,13 +41,13 @@ class Thunk(Generic[T, Unpack[TS]]):
     state: Resolved[T] | Unresolved[T, Unpack[TS]] | Resolving | Error
 
     @classmethod
-    def fn(cls, fn: Callable[[Unpack[TS]], T], *args: Unpack[TS]) -> Thunk[T, Unpack[TS]]:
+    def fn(cls, fn: Callable[[Unpack[TS]], T], *args: Unpack[TS], context: str | None = None) -> Thunk[T, Unpack[TS]]:
         """
         Create a thunk based on some functions and some partial args.
 
         If the function is called while it is being resolved recursively it will raise an exception.
         """
-        return cls(Unresolved(fn, args))
+        return cls(Unresolved(fn, args, context))
 
     @classmethod
     def value(cls, value: T) -> Thunk[T]:
@@ -57,12 +57,12 @@ class Thunk(Generic[T, Unpack[TS]]):
         match self.state:
             case Resolved(value):
                 return value
-            case Unresolved(fn, args):
+            case Unresolved(fn, args, context):
                 self.state = Resolving()
                 try:
                     res = fn(*args)
                 except Exception as e:
-                    self.state = Error(e)
+                    self.state = Error(e, context)
                     raise e from None
                 else:
                     self.state = Resolved(res)
@@ -83,6 +83,7 @@ class Resolved(Generic[T]):
 class Unresolved(Generic[T, Unpack[TS]]):
     fn: Callable[[Unpack[TS]], T]
     args: tuple[Unpack[TS]]
+    context: str | None
 
 
 @dataclass
@@ -93,3 +94,4 @@ class Resolving:
 @dataclass
 class Error:
     e: Exception
+    context: str | None

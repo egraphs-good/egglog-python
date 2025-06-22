@@ -671,7 +671,7 @@ def _fn_decl(
             )
         res_ref = ref
         decls.set_function_decl(ref, decl)
-        res_thunk = Thunk.fn(_create_default_value, decls, ref, fn, args, ruleset)
+        res_thunk = Thunk.fn(_create_default_value, decls, ref, fn, args, ruleset, context=f"creating {ref}")
     return res_ref, Thunk.fn(_add_default_rewrite_function, decls, res_ref, return_type, ruleset, res_thunk, subsume)
 
 
