@@ -4,13 +4,17 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-- Upgrade egglog which includes new backend. Removes support for egglog experimental including `Rational` since it
-  is not compatible with new backend yet.
+- Upgrade egglog which includes new backend.
+
+## 10.0.2 (2025-06-22)
+
+- Fix using `f64Like` when not importing star (also properly includes removal of `Callable` special case from previous release).
+- Fix Python 3.10 compatibility
 
 ## 10.0.1 (2025-04-06)
 
 - Fix bug on resolving types if not all imported to your module [#286](https://github.com/egraphs-good/egglog-python/pull/286)
-  - Also stops special casing including `Callable` as a global. So if you previously included this in a `TYPE_CHECKING` block so it wasn
+  - Also stops special casing including `Callable` as a global. So if you previously included this in a `TYPE_CHECKING` block so it wasn't
     available at runtime you will have to move this to a runtime import if used in a type alias.
 
 ## 10.0.0 (2025-03-28)

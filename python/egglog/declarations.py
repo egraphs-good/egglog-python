@@ -93,7 +93,7 @@ class DelayedDeclerations:
         # Catch attribute error, so that it isn't bubbled up as a missing attribute and fallbacks on `__getattr__`
         # instead raise explicitly
         except AttributeError as err:
-            msg = f"Cannot resolve declerations for {self}"
+            msg = f"Cannot resolve declarations for {self}"
             raise RuntimeError(msg) from err
 
 
@@ -308,11 +308,11 @@ class ClassTypeVarRef:
     module: str
 
     def to_just(self) -> JustTypeRef:
-        msg = "egglog does not support generic classes yet."
+        msg = f"{self}: egglog does not support generic classes yet."
         raise NotImplementedError(msg)
 
     def __str__(self) -> str:
-        return f"{self.module}.{self.name}"
+        return str(self.to_type_var())
 
     @classmethod
     def from_type_var(cls, typevar: TypeVar) -> ClassTypeVarRef:

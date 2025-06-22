@@ -16,7 +16,6 @@ from typing import (
     ClassVar,
     Generic,
     Literal,
-    Never,
     TypeAlias,
     TypedDict,
     TypeVar,
@@ -26,7 +25,7 @@ from typing import (
 )
 
 import graphviz
-from typing_extensions import ParamSpec, Self, Unpack, assert_never
+from typing_extensions import Never, ParamSpec, Self, Unpack, assert_never
 
 from . import bindings
 from .conversion import *
@@ -36,6 +35,7 @@ from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_decl
 from .runtime import *
 from .thunk import *
+from .version_compat import *
 
 if TYPE_CHECKING:
     from .builtins import String, Unit
@@ -169,8 +169,9 @@ def check_eq(x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *, ad
     except bindings.EggSmolError as err:
         if display:
             egraph.display()
-        err.add_note(f"Failed:\n{eq(x).to(y)}\n\nExtracted:\n {eq(egraph.extract(x)).to(egraph.extract(y))})")
-        raise
+        raise add_note(
+            f"Failed:\n{eq(x).to(y)}\n\nExtracted:\n {eq(egraph.extract(x)).to(egraph.extract(y))})", err
+        ) from None
     return egraph
 
 
@@ -492,8 +493,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
                 reverse_args=reverse_args,
             )
         except Exception as e:
-            e.add_note(f"Error processing {cls_name}.{method_name}")
-            raise
+            raise add_note(f"Error processing {cls_name}.{method_name}", e) from None
 
         if not builtin and not isinstance(ref, InitRef) and not mutates:
             add_default_funcs.append(add_rewrite)
@@ -569,16 +569,11 @@ def _fn_decl(
     if not isinstance(fn, FunctionType):
         raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
 
-    hint_globals = fn.__globals__.copy()
-    # Copy Callable into global if not present bc sometimes it gets automatically removed by ruff to type only block
-    # https://docs.astral.sh/ruff/rules/typing-only-standard-library-import/
-    if "Callable" not in hint_globals:
-        hint_globals["Callable"] = Callable
     # Instead of passing both globals and locals, just pass the globals. Otherwise, for some reason forward references
     # won't be resolved correctly
     # We need this to be false so it returns "__forward_value__" https://github.com/python/cpython/blob/440ed18e08887b958ad50db1b823e692a747b671/Lib/typing.py#L919
     # https://github.com/egraphs-good/egglog-python/issues/210
-    hint_globals.update(hint_locals)
+    hint_globals = {**fn.__globals__, **hint_locals}
     hints = get_type_hints(fn, hint_globals)
 
     params = list(signature(fn).parameters.values())
@@ -632,7 +627,7 @@ def _fn_decl(
     )
     decls |= merged
 
-    # defer this in generator so it doesnt resolve for builtins eagerly
+    # defer this in generator so it doesn't resolve for builtins eagerly
     args = (TypedExprDecl(tp.to_just(), VarDecl(name, False)) for name, tp in zip(arg_names, arg_types, strict=True))
     res_ref: FunctionRef | MethodRef | ClassMethodRef | PropertyRef | InitRef | UnnamedFunctionRef
     res_thunk: Callable[[], object]
@@ -676,7 +671,7 @@ def _fn_decl(
             )
         res_ref = ref
         decls.set_function_decl(ref, decl)
-        res_thunk = Thunk.fn(_create_default_value, decls, ref, fn, args, ruleset)
+        res_thunk = Thunk.fn(_create_default_value, decls, ref, fn, args, ruleset, context=f"creating {ref}")
     return res_ref, Thunk.fn(_add_default_rewrite_function, decls, res_ref, return_type, ruleset, res_thunk, subsume)
 
 
@@ -1045,8 +1040,7 @@ class EGraph:
                 bindings.ActionCommand(bindings.Extract(span(2), expr, bindings.Lit(span(2), bindings.Int(n))))
             )
         except BaseException as e:
-            e.add_note("Extracting: " + str(expr))
-            raise
+            raise add_note("Extracting: " + str(expr), e)  # noqa: B904
         extract_report = self._egraph.extract_report()
         if not extract_report:
             msg = "No extract report saved"

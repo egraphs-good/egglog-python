@@ -9,7 +9,7 @@ from collections.abc import Callable
 from fractions import Fraction
 from functools import partial, reduce
 from types import FunctionType, MethodType
-from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Union, cast, overload
+from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, cast, overload
 
 from typing_extensions import TypeVarTuple, Unpack
 
@@ -100,8 +100,6 @@ def join(*strings: StringLike) -> String: ...
 
 converter(str, String, String)
 
-BoolLike: TypeAlias = Union["Bool", bool]
-
 
 class Bool(BuiltinExpr, egg_sort="bool"):
     @method(preserve=True)
@@ -132,10 +130,10 @@ class Bool(BuiltinExpr, egg_sort="bool"):
     def implies(self, other: BoolLike) -> Bool: ...
 
 
-converter(bool, Bool, Bool)
+BoolLike: TypeAlias = Bool | bool
 
-# The types which can be convertered into an i64
-i64Like: TypeAlias = Union["i64", int]  # noqa: N816, PYI042
+
+converter(bool, Bool, Bool)
 
 
 class i64(BuiltinExpr):  # noqa: N801
@@ -247,14 +245,14 @@ class i64(BuiltinExpr):  # noqa: N801
     def bool_ge(self, other: i64Like) -> Bool: ...
 
 
+# The types which can be convertered into an i64
+i64Like: TypeAlias = i64 | int  # noqa: N816, PYI042
+
 converter(int, i64, i64)
 
 
 @function(builtin=True, egg_fn="count-matches")
 def count_matches(s: StringLike, pattern: StringLike) -> i64: ...
-
-
-f64Like: TypeAlias = Union["f64", float]  # noqa: N816, PYI042
 
 
 class f64(BuiltinExpr):  # noqa: N801
@@ -334,6 +332,9 @@ class f64(BuiltinExpr):  # noqa: N801
 
     @method(egg_fn="to-string")
     def to_string(self) -> String: ...
+
+
+f64Like: TypeAlias = f64 | float  # noqa: N816, PYI042
 
 
 converter(float, f64, f64)
