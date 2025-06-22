@@ -107,7 +107,7 @@ class TypeConstraintSolver:
                 try:
                     return self._cls_typevar_index_to_type[cls_name][tp]
                 except KeyError as e:
-                    raise TypeConstraintError(f"Not enough bound typevars for {tp} in class {cls_name}") from e
+                    raise TypeConstraintError(f"Not enough bound typevars for {tp!r} in class {cls_name}") from e
             case TypeRefWithVars(name, args):
                 return JustTypeRef(name, tuple(self.substitute_typevars(arg, cls_name) for arg in args))
         assert_never(tp)
