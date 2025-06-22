@@ -512,10 +512,10 @@ class TestEval:
         assert i64(1) in s
         assert i64(3) not in s
 
-    # def test_rational(self):
-    #     assert Rational(1, 2).eval() == Fraction(1, 2)
-    #     assert float(Rational(1, 2)) == 0.5
-    #     assert int(Rational(1, 1)) == 1
+    def test_rational(self):
+        assert Rational(1, 2).eval() == Fraction(1, 2)
+        assert float(Rational(1, 2)) == 0.5
+        assert int(Rational(1, 1)) == 1
 
     def test_vec(self):
         assert Vec[i64].empty().eval() == ()
