@@ -1970,9 +1970,9 @@ def try_evaling(egraph: EGraph, schedule: Schedule, expr: Expr, prim_expr: Built
     Try evaling the expression that will result in a primitive expression being fill.
     if it fails, display the egraph and raise an error.
     """
-    try:
+    if egraph.check_bool(expr):
         extracted = egraph.extract(prim_expr)
-    except EggSmolError:
+    else:
         # If this primitive doesn't exist in the egraph, we need to try to create it by
         # registering the expression and running the schedule
         egraph.register(expr)

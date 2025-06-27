@@ -36,6 +36,7 @@ __all__ = [
     "MapLike",
     "MultiSet",
     "PyObject",
+    "Rational",
     "Set",
     "SetLike",
     "String",

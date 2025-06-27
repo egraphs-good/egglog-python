@@ -43,7 +43,6 @@ __all__ = [
     "PrintSize",
     "Push",
     "PyObjectSort",
-    "QueryExtract",
     "Relation",
     "Repeat",
     "Rewrite",
@@ -61,7 +60,6 @@ __all__ = [
     "SerializedEGraph",
     "Set",
     "SetOption",
-    "Simplify",
     "Sort",
     "SrcFile",
     "String",
@@ -74,6 +72,7 @@ __all__ = [
     "Union",
     "Unit",
     "UnstableCombinedRuleset",
+    "UserDefined",
     "Var",
     "Variant",
     "Variants",
@@ -309,14 +308,7 @@ class Expr_:  # noqa: N801
     span: _Span
     expr: _Expr
 
-@final
-class Extract:
-    def __init__(self, span: _Span, expr: _Expr, variants: _Expr) -> None: ...
-    span: _Span
-    expr: _Expr
-    variants: _Expr
-
-_Action: TypeAlias = Let | Set | Change | Union | Panic | Expr_ | Extract
+_Action: TypeAlias = Let | Set | Change | Union | Panic | Expr_
 
 ##
 # Other Structs
@@ -367,22 +359,20 @@ class IdentSort:
 @final
 class RunReport:
     updated: bool
-    search_time_per_rule: dict[str, timedelta]
-    apply_time_per_rule: dict[str, timedelta]
-    search_time_per_ruleset: dict[str, timedelta]
-    apply_time_per_ruleset: dict[str, timedelta]
-    rebuild_time_per_ruleset: dict[str, timedelta]
+    search_and_apply_time_per_rule: dict[str, timedelta]
     num_matches_per_rule: dict[str, int]
+    search_and_apply_time_per_ruleset: dict[str, timedelta]
+    merge_time_per_ruleset: dict[str, timedelta]
+    rebuild_time_per_ruleset: dict[str, timedelta]
 
     def __init__(
         self,
         updated: bool,
-        search_time_per_rule: dict[str, timedelta],
-        apply_time_per_rule: dict[str, timedelta],
-        search_time_per_ruleset: dict[str, timedelta],
-        apply_time_per_ruleset: dict[str, timedelta],
-        rebuild_time_per_ruleset: dict[str, timedelta],
+        search_and_apply_time_per_rule: dict[str, timedelta],
         num_matches_per_rule: dict[str, int],
+        search_and_apply_time_per_ruleset: dict[str, timedelta],
+        merge_time_per_ruleset: dict[str, timedelta],
+        rebuild_time_per_ruleset: dict[str, timedelta],
     ) -> None: ...
 
 @final
@@ -488,8 +478,9 @@ class Function:
 
 @final
 class AddRuleset:
+    span: _Span
     name: str
-    def __init__(self, name: str) -> None: ...
+    def __init__(self, span: _Span, name: str) -> None: ...
 
 @final
 class RuleCommand:
@@ -531,11 +522,11 @@ class Simplify:
     def __init__(self, span: _Span, expr: _Expr, schedule: _Schedule) -> None: ...
 
 @final
-class QueryExtract:
+class Extract:
     span: _Span
-    variants: int
     expr: _Expr
-    def __init__(self, span: _Span, variants: int, expr: _Expr) -> None: ...
+    variants: _Expr
+    def __init__(self, span: _Span, expr: _Expr, variants: _Expr) -> None: ...
 
 @final
 class Check:
@@ -615,10 +606,18 @@ class PrintOverallStatistics:
     def __init__(self) -> None: ...
 
 @final
+class UserDefined:
+    span: _Span
+    name: str
+    args: list[_Expr]
+    def __init__(self, span: _Span, name: str, args: list[_Expr]) -> None: ...
+
+@final
 class UnstableCombinedRuleset:
+    span: _Span
     name: str
     rulesets: list[str]
-    def __init__(self, name: str, rulesets: list[str]) -> None: ...
+    def __init__(self, span: _Span, name: str, rulesets: list[str]) -> None: ...
 
 _Command: TypeAlias = (
     SetOption
@@ -632,8 +631,7 @@ _Command: TypeAlias = (
     | BiRewriteCommand
     | ActionCommand
     | RunSchedule
-    | Simplify
-    | QueryExtract
+    | Extract
     | Check
     | PrintFunction
     | PrintSize
@@ -647,6 +645,7 @@ _Command: TypeAlias = (
     | PrintOverallStatistics
     | UnstableCombinedRuleset
     | Constructor
+    | UserDefined
 )
 
 ##

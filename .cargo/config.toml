@@ -1,0 +1,4 @@
+# https://doc.rust-lang.org/cargo/reference/config.html
+[build]
+# debug symbols https://pyo3.rs/main/debugging#common-setup
+rustflags = ["-g"]

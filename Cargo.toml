@@ -1,7 +1,7 @@
 [package]
 name = "egglog_python"
 version = "10.0.2"
-edition = "2021"
+edition = "2024"
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -12,11 +12,11 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.23.0", features = ["extension-module"] }
 
-egglog = { git = "https://github.com/egraphs-good/egglog", rev = "367a9143be7cb5354a54a9c5660d117440db77a6" }
-# egglog = { git = "https://github.com/saulshanabrook/egg-smol", rev = "8cd7c0e77a27c271cbaef09ab23514675d646937" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "12e23e1" }
-core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "12e23e1" }
-# egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", rev = "8a1b3d6ad2723a8438f51f05027161e51f37917c" }
+# include this bugfix https://github.com/egraphs-good/egglog/pull/625
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "051e523136270c05d2fb07253568441c0f4fd078" }
+egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "a0b98d3" }
+core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "a0b98d3" }
+egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", rev = "2cf9d94" }
 egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
 serde_json = "1.0.140"
 pyo3-log = "0.12.3"
@@ -25,13 +25,9 @@ lalrpop-util = { version = "0.22", features = ["lexer"] }
 ordered-float = "3.7.0"
 uuid = { version = "1.16.0", features = ["v4"] }
 
-# Use unreleased version of egglog in experimental
-# [patch.'https://github.com/egraphs-good/egglog']
-# https://github.com/rust-lang/cargo/issues/5478#issuecomment-522719793
-# egglog = { git = "https://github.com/egraphs-good//egglog.git", rev = "6f494282442803201b512e9d0828007b52a0b29c" }
-
-# [replace]
-# 'https://github.com/egraphs-good/egglog.git#egglog@0.3.0' = { git = "https://github.com/egraphs-good/egglog.git", rev = "215714e1cbb13ae9e21bed2f2e1bf95804571512" }
+# Use patched version of egglog in experimental
+[patch.'https://github.com/egraphs-good/egglog']
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "051e523136270c05d2fb07253568441c0f4fd078" }
 
 # enable debug symbols for easier profiling
 # [profile.release]

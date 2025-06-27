@@ -2,10 +2,11 @@
 
 use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
-use crate::py_object_sort::ArcPyObjectSort;
+use crate::py_object_sort::PyObjectSort;
 use crate::serialize::SerializedEGraph;
 
-use egglog::{span, EGraph as EgglogEGraph, SerializeConfig};
+use egglog::prelude::add_leaf_sort;
+use egglog::{span, SerializeConfig};
 use log::info;
 use pyo3::prelude::*;
 use std::path::PathBuf;
@@ -28,18 +29,16 @@ impl EGraph {
         text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, record=False)"
     )]
     fn new(
-        py_object_sort: Option<ArcPyObjectSort>,
+        py_object_sort: Option<PyObjectSort>,
         fact_directory: Option<PathBuf>,
         seminaive: bool,
         record: bool,
     ) -> Self {
-        let mut egraph = EgglogEGraph::default();
+        let mut egraph = egglog_experimental::new_experimental_egraph();
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
         if let Some(py_object_sort) = py_object_sort {
-            egraph
-                .add_arcsort(py_object_sort.0.clone(), span!())
-                .unwrap();
+            add_leaf_sort(&mut egraph, py_object_sort, span!()).unwrap();
         }
         Self {
             egraph,

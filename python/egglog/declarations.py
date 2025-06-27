@@ -51,6 +51,7 @@ __all__ = [
     "InitRef",
     "JustTypeRef",
     "LetDecl",
+    "LetRefDecl",
     "LitDecl",
     "LitType",
     "MethodRef",
@@ -73,9 +74,9 @@ __all__ = [
     "TypeOrVarRef",
     "TypeRefWithVars",
     "TypedExprDecl",
+    "UnboundVarDecl",
     "UnionDecl",
     "UnnamedFunctionRef",
-    "VarDecl",
     "replace_typed_expr",
     "upcast_declerations",
 ]
@@ -361,7 +362,7 @@ class UnnamedFunctionRef:
         arg_names = []
         for a in self.args:
             arg_types.append(a.tp.to_var())
-            assert isinstance(a.expr, VarDecl)
+            assert isinstance(a.expr, UnboundVarDecl)
             arg_names.append(a.expr.name)
         return FunctionSignature(
             arg_types=tuple(arg_types),
@@ -514,10 +515,13 @@ CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl | Construct
 
 
 @dataclass(frozen=True)
-class VarDecl:
+class UnboundVarDecl:
     name: str
-    # Differentiate between let bound vars and vars created in rules so that they won't shadow in egglog, by adding a prefix
-    is_let: bool
+
+
+@dataclass(frozen=True)
+class LetRefDecl:
+    name: str
 
 
 @dataclass(frozen=True)
@@ -628,7 +632,7 @@ class PartialCallDecl:
     call: CallDecl
 
 
-ExprDecl: TypeAlias = VarDecl | LitDecl | CallDecl | PyObjectDecl | PartialCallDecl
+ExprDecl: TypeAlias = UnboundVarDecl | LetRefDecl | LitDecl | CallDecl | PyObjectDecl | PartialCallDecl
 
 
 @dataclass(frozen=True)

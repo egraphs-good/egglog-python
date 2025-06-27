@@ -497,15 +497,6 @@ egraph.run(10)
 egraph
 ```
 
-### Simplify
-
-The `(simplify ...)` command in egglog translates to the `egraph.simplify` method, which combines running a schedule and extracting:
-
-```{code-cell} python
-# egg: (simplify (Mul (Num 6) (Add (Num 2) (Mul (Var "x") (Num 2)))) 20)
-egraph.simplify(Math(6) * (Math(2) + Math.var("x") * Math(2)), 20)
-```
-
 ## Push/Pop
 
 The `(push)` and `(pop)` commands in egglog can be translated to the context manager on the `egraph` object:
