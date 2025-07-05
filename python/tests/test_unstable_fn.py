@@ -226,14 +226,14 @@ class TestNormalFns:
             return f(A())
 
         @function
-        def f(x: A) -> C:
+        def fn(x: A) -> C:
             # Verify that inner variable is lifted to partial application in a rewrite like this
             def inner(_: A) -> C:
                 return b_to_c(a_to_b(x))
 
             return call(inner)
 
-        assert check_eq(f(A()), b_to_c(a_to_b(A())), run() * 10)
+        assert check_eq(fn(A()), b_to_c(a_to_b(A())), run() * 10)
 
     def test_rewrite_ruleset_used(self):
         """
@@ -312,10 +312,13 @@ class TestNormalFns:
 
         alt_a = constant("alt_a", A)
 
-        egraph = EGraph()
+        egraph = EGraph(save_egglog_string=True)
         x = egraph.let("x", apply_f(lambda x: A(), A()))
         y = egraph.let("y", apply_f(lambda x: alt_a, A()))
-        egraph.run(10)
+        print(egraph.run(10))
+        print(egraph.extract(x))
+        print(egraph.as_egglog_string)
+        egraph.display(n_inline_leaves=0)
         egraph.check(eq(x).to(A()))
         egraph.check(eq(y).to(alt_a))
 
