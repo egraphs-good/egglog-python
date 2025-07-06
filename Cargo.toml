@@ -31,5 +31,5 @@ egglog = { git = "https://github.com/egraphs-good//egglog.git", rev = "6f4942824
 # 'https://github.com/egraphs-good/egglog.git#egglog@0.3.0' = { git = "https://github.com/egraphs-good/egglog.git", rev = "215714e1cbb13ae9e21bed2f2e1bf95804571512" }
 
 # enable debug symbols for easier profiling
-# [profile.release]
-# debug = 1
+[profile.release]
+debug = true
