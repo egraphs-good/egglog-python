@@ -515,13 +515,6 @@ class RunSchedule:
     def __init__(self, schedule: _Schedule) -> None: ...
 
 @final
-class Simplify:
-    span: _Span
-    expr: _Expr
-    schedule: _Schedule
-    def __init__(self, span: _Span, expr: _Expr, schedule: _Schedule) -> None: ...
-
-@final
 class Extract:
     span: _Span
     expr: _Expr
