@@ -517,6 +517,7 @@ CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl | Construct
 @dataclass(frozen=True)
 class UnboundVarDecl:
     name: str
+    egg_name: str | None = None
 
 
 @dataclass(frozen=True)
