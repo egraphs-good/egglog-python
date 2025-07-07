@@ -49,7 +49,11 @@ jobs:
       - run: make stubtest
 
   benchmark:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        # Run on codspeed for walltime and ubuntu for instrumenentation
+        runner: [ codspeed-macro, ubuntu-latest ]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

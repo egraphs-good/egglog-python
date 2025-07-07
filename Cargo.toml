@@ -30,5 +30,5 @@ uuid = { version = "1.16.0", features = ["v4"] }
 egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "051e523136270c05d2fb07253568441c0f4fd078" }
 
 # enable debug symbols for easier profiling
-# [profile.release]
-# debug = 1
+[profile.release]
+debug = true
