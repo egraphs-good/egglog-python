@@ -315,6 +315,7 @@ class TestNormalFns:
         egraph = EGraph(save_egglog_string=True)
         x = egraph.let("x", apply_f(lambda x: A(), A()))
         y = egraph.let("y", apply_f(lambda x: alt_a, A()))
+        egraph.run(10)
         egraph.check(eq(x).to(A()))
         egraph.check(eq(y).to(alt_a))
 

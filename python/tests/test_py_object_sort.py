@@ -69,7 +69,7 @@ class TestDictUpdate:
                     Call(DUMMY_SPAN, "py-dict-update", [dict_expr, a_expr, new_value_expr, b_expr, new_value_expr]),
                 )
             ),
-            Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "new_dict"), Lit(DUMMY_SPAN, Int(1))),
+            Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "new_dict"), Lit(DUMMY_SPAN, Int(0))),
         )
         report = egraph.extract_report()
         assert isinstance(report, Best)
