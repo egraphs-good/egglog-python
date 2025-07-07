@@ -406,7 +406,8 @@ class EGraphState:
             case LetRefDecl(name):
                 res = bindings.Var(span(), f"{name}")
             case UnboundVarDecl(name):
-                res = bindings.Var(span(), name)
+                # Prefix vars with an _ to avoid name conflicts
+                res = bindings.Var(span(), f"_{name}")
             case LitDecl(value):
                 l: bindings._Literal
                 match value:

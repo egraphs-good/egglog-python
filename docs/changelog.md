@@ -7,7 +7,7 @@ _This project uses semantic versioning_
 - Upgrade egglog which includes new backend.
   - Fixes implementation of the Python Object sort to work with objects with dupliating hashes but the same value.
     Also changes the representation to be an index into a list instead of the ID, making egglog programs more deterministic.
-  - Prefix constant declerations to not shadow local variables
+  - Prefix constant declerations and unbound variables to not shadow let variables
   - BREAKING: Remove `simplify` since it was removed upstream. You can manually replace it with an insert, run, then extract.
 
 ## 10.0.2 (2025-06-22)
