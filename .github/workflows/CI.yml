@@ -56,13 +56,14 @@ jobs:
         runner: [ codspeed-macro, ubuntu-latest ]
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version-file: "pyproject.toml"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-preference: "only-system"
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
       - run: uv sync --extra test --locked
@@ -70,7 +71,7 @@ jobs:
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           # allow updating snapshots due to indeterministic benchmarks
-          run: uv run pytest -vvv -n auto  --snapshot-update
+          run: uv run pytest -vvv  --snapshot-update --benchmark-only
 
   docs:
     runs-on: ubuntu-latest
