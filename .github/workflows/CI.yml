@@ -63,15 +63,16 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          python-preference: "only-system"
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
-      - run: uv sync --extra test --locked
+      - run: |
+          export UV_PROJECT_ENVIRONMENT="${pythonLocation}"
+          uv sync --extra test --locked
       - uses: CodSpeedHQ/action@v3.6.1
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           # allow updating snapshots due to indeterministic benchmarks
-          run: uv run pytest -vvv  --snapshot-update --benchmark-only
+          run: pytest -vvv --snapshot-update --benchmark-only -p no:xdist
 
   docs:
     runs-on: ubuntu-latest
