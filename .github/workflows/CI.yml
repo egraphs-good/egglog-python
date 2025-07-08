@@ -56,17 +56,23 @@ jobs:
         runner: [ codspeed-macro, ubuntu-latest ]
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
-      - run: uv sync --extra test --locked
-      - uses: CodSpeedHQ/action@v3
+      - run: |
+          export UV_PROJECT_ENVIRONMENT="${pythonLocation}"
+          uv sync --extra test --locked
+      - uses: CodSpeedHQ/action@v3.6.1
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           # allow updating snapshots due to indeterministic benchmarks
-          run: uv run pytest -vvv -n auto  --snapshot-update
+          run: pytest -vvv --snapshot-update --durations=10
 
   docs:
     runs-on: ubuntu-latest
