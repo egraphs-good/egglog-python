@@ -12,8 +12,9 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.23.0", features = ["extension-module"] }
 
-# include this bugfix https://github.com/egraphs-good/egglog/pull/625
-egglog = { git = "https://github.com/egraphs-good/egglog.git", rev = "d2fa5b733de0796fb187dc5a27e570d5644aa75a" }
+# include this bugfix https://github.com/egraphs-good/egglog/pull/629
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1e638e6" }
+# egglog = { path = "../egg-smol" }
 egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "1a1f913" }
 core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "1a1f913" }
 egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", rev = "202078f" }
@@ -27,7 +28,9 @@ uuid = { version = "1.16.0", features = ["v4"] }
 
 # Use patched version of egglog in experimental
 [patch.'https://github.com/egraphs-good/egglog']
-egglog = { git = "https://github.com/egraphs-good//egglog.git", rev = "d2fa5b733de0796fb187dc5a27e570d5644aa75a" }
+# egglog = { git = "https://github.com/egraphs-good//egglog.git", rev = "d2fa5b733de0796fb187dc5a27e570d5644aa75a" }
+# egglog = { path = "../egg-smol" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1e638e6" }
 
 # enable debug symbols for easier profiling
 [profile.release]
