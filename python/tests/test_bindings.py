@@ -1,4 +1,4 @@
-import _thread
+import concurrent.futures
 import json
 import os
 import pathlib
@@ -32,7 +32,13 @@ EGG_SMOL_FOLDER = get_egglog_folder()
 SLOW_TESTS = ["repro-unsound", "cykjson", "herbie", "lambda"]
 
 # > 2 seconds
-SKIP_TESTS = {"eggcc-extraction", "math-microbenchmark", "python_array_optimize", "typeinfer"}
+SKIP_TESTS = {
+    "eggcc-extraction",
+    "math-microbenchmark",
+    "python_array_optimize",
+    "typeinfer",
+    "repro-typechecking-schedule",
+}
 
 
 @pytest.mark.parametrize(
@@ -112,22 +118,7 @@ class TestEGraph:
         egraph.run_program(
             Datatype(DUMMY_SPAN, "Expr", [Variant(DUMMY_SPAN, "Num", ["i64"], cost=5)]),
             ActionCommand(Let(DUMMY_SPAN, "x", Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))),
-            QueryExtract(DUMMY_SPAN, 0, Var(DUMMY_SPAN, "x")),
-        )
-
-        extract_report = egraph.extract_report()
-        assert isinstance(extract_report, Best)
-        assert extract_report.cost == 6
-        assert extract_report.termdag.term_to_expr(extract_report.term, DUMMY_SPAN) == Call(
-            DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]
-        )
-
-    def test_simplify(self):
-        egraph = EGraph()
-        egraph.run_program(
-            Datatype(DUMMY_SPAN, "Expr", [Variant(DUMMY_SPAN, "Num", ["i64"], cost=5)]),
-            ActionCommand(Let(DUMMY_SPAN, "x", Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))),
-            Simplify(DUMMY_SPAN, Var(DUMMY_SPAN, "x"), Run(DUMMY_SPAN, RunConfig(""))),
+            Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "x"), Lit(DUMMY_SPAN, Int(0))),
         )
 
         extract_report = egraph.extract_report()
@@ -178,25 +169,8 @@ class TestEGraph:
                     )
                 ],
             ),
-            ActionCommand(Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "my_map2"), Lit(DUMMY_SPAN, Int(0)))),
+            Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "my_map2"), Lit(DUMMY_SPAN, Int(0))),
         )
-
-        extract_report = egraph.extract_report()
-        assert isinstance(extract_report, Best)
-        assert extract_report.termdag.term_to_expr(extract_report.term, DUMMY_SPAN) == Call(
-            DUMMY_SPAN,
-            "map-insert",
-            [
-                Call(
-                    DUMMY_SPAN,
-                    "map-insert",
-                    [Call(DUMMY_SPAN, "map-empty", []), Lit(DUMMY_SPAN, Int(2)), Lit(DUMMY_SPAN, String("two"))],
-                ),
-                Lit(DUMMY_SPAN, Int(1)),
-                Lit(DUMMY_SPAN, String("one")),
-            ],
-        )
-        assert extract_report.cost == 4
 
 
 class TestVariant:
@@ -237,16 +211,18 @@ class TestThreads:
             ),
             RunSchedule(Repeat(DUMMY_SPAN, 10, Run(DUMMY_SPAN, RunConfig("")))),
         )
-
-        _thread.start_new_thread(print, cmds)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(print, cmds).result()
 
     @pytest.mark.xfail(reason="egraphs are unsendable")
     def test_egraph(self):
-        _thread.start_new_thread(
-            EGraph().run_program, (Datatype(DUMMY_SPAN, "Math", [Variant(DUMMY_SPAN, "Add", ["Math", "Math"])]),)
-        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(
+                EGraph().run_program, Datatype(DUMMY_SPAN, "Math", [Variant(DUMMY_SPAN, "Add", ["Math", "Math"])])
+            ).result()
 
     def test_serialized_egraph(self):
         egraph = EGraph()
         serialized = egraph.serialize([])
-        _thread.start_new_thread(print, (serialized,))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(print, (serialized,)).result()

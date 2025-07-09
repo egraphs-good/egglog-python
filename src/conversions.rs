@@ -1,7 +1,6 @@
 // Create wrappers around input types so that convert from pyobjects to them
 // and then from them to the egg_smol types
 use crate::utils::*;
-use egglog::ast::Symbol;
 use ordered_float::OrderedFloat;
 use pyo3::prelude::*;
 use pyo3::types::{PyDelta, PyDeltaAccess};
@@ -87,14 +86,7 @@ convert_enums!(
             egglog::ast::Action::Panic(span, msg) => Panic { span: span.into(), msg: msg.to_string()  };
         Expr_(span: Span, expr: Expr)
             e -> egglog::ast::Action::Expr(e.span.clone().into(), (&e.expr).into()),
-            egglog::ast::Action::Expr(span, e) => Expr_ {span: span.into(), expr: e.into() };
-        Extract(span: Span, expr: Expr, variants: Expr)
-            e -> egglog::ast::Action::Extract(e.span.clone().into(), (&e.expr).into(), (&e.variants).into()),
-            egglog::ast::Action::Extract(span, e, v) => Extract {
-                span: span.into(),
-                expr: e.into(),
-                variants: v.into()
-            }
+            egglog::ast::Action::Expr(span, e) => Expr_ {span: span.into(), expr: e.into() }
     };
     egglog::ast::Schedule: "{}" => Schedule {
         Saturate(span: Span, schedule: Box<Schedule>)
@@ -169,9 +161,15 @@ convert_enums!(
                 schema: schema.into(),
                 merge: merge.as_ref().map(|e| e.into())
             };
-        AddRuleset(name: String)
-            a -> egglog::ast::Command::AddRuleset((&a.name).into()),
-            egglog::ast::Command::AddRuleset(n) => AddRuleset { name: n.to_string() };
+        AddRuleset(span: Span, name: String)
+            a -> egglog::ast::Command::AddRuleset(
+                a.span.clone().into(),
+                (&a.name).into()
+            ),
+            egglog::ast::Command::AddRuleset(span, n) => AddRuleset {
+                span: span.into(),
+                name: n.to_string()
+            };
         RuleCommand(name: String, ruleset: String, rule: Rule)
             r -> egglog::ast::Command::Rule {
                 name: (&r.name).into(),
@@ -202,27 +200,16 @@ convert_enums!(
         RunSchedule(schedule: Schedule)
             r -> egglog::ast::Command::RunSchedule((&r.schedule).into()),
             egglog::ast::Command::RunSchedule(s) => RunSchedule { schedule: s.into() };
-        Simplify(span: Span, expr: Expr, schedule: Schedule)
-            s -> egglog::ast::Command::Simplify {
-                span: s.span.clone().into(),
-                expr: (&s.expr).into(),
-                schedule: (&s.schedule).into()
-            },
-            egglog::ast::Command::Simplify {span, expr, schedule} => Simplify {
-                span: span.clone().into(),
-                expr: expr.into(),
-                schedule: schedule.into()
-            };
-        QueryExtract(span: Span, variants: usize, expr: Expr)
-            e -> egglog::ast::Command::QueryExtract {
-                span: e.span.clone().into(),
-                variants: e.variants,
-                expr: (&e.expr).into()
-            },
-            egglog::ast::Command::QueryExtract {span, variants, expr} => QueryExtract {
+        Extract(span: Span, expr: Expr, variants: Expr)
+            e -> egglog::ast::Command::Extract(
+                e.span.clone().into(),
+                (&e.expr).into(),
+                (&e.variants).into()
+            ),
+            egglog::ast::Command::Extract(span, expr, variants) => Extract {
                 span: span.into(),
-                variants: *variants,
-                expr: expr.into()
+                expr: expr.into(),
+                variants: variants.into()
             };
         Check(span: Span, facts: Vec<Fact_>)
             c -> egglog::ast::Command::Check(c.span.clone().into(), c.facts.iter().map(|f| f.into()).collect()),
@@ -236,7 +223,7 @@ convert_enums!(
             };
         PrintSize(span: Span, name: Option<String>)
             p -> egglog::ast::Command::PrintSize(p.span.clone().into(), p.name.as_ref().map(|n| n.into())),
-            egglog::ast::Command::PrintSize(span, n) => PrintSize { span: span.into(), name: n.map(|n| n.to_string()) };
+            egglog::ast::Command::PrintSize(span, n) => PrintSize { span: span.into(), name: n.clone().map(|n| n.to_string()) };
         Output(span: Span, file: String, exprs: Vec<Expr>)
             o -> egglog::ast::Command::Output {
                 span: o.span.clone().into(),
@@ -309,12 +296,21 @@ convert_enums!(
                 span: span.into(),
                 datatypes: datatypes.iter().map(|(s, n, d)| (s.into(), n.to_string(), d.into())).collect()
             };
-        UnstableCombinedRuleset(name: String, rulesets: Vec<String>)
+        UserDefined(span: Span, name: String, args: Vec<Expr>)
+            u -> egglog::ast::Command::UserDefined(u.span.clone().into(), (&u.name).into(), u.args.iter().map(|e| e.into()).collect()),
+            egglog::ast::Command::UserDefined(span, n, a) => UserDefined {
+                span: span.into(),
+                name: n.to_string(),
+                args: a.iter().map(|e| e.into()).collect()
+            };
+        UnstableCombinedRuleset(span: Span, name: String, rulesets: Vec<String>)
             r -> egglog::ast::Command::UnstableCombinedRuleset(
+                r.span.clone().into(),
                 (&r.name).into(),
                 r.rulesets.iter().map(|i| i.into()).collect()
             ),
-            egglog::ast::Command::UnstableCombinedRuleset(name, rulesets) => UnstableCombinedRuleset {
+            egglog::ast::Command::UnstableCombinedRuleset(span, name, rulesets) => UnstableCombinedRuleset {
+                span: span.into(),
                 name: name.to_string(),
                 rulesets: rulesets.iter().map(|i| i.to_string()).collect()
             }
@@ -398,14 +394,14 @@ convert_struct!(
     )
         s -> egglog::ast::Schema {input: s.input.iter().map(|v| v.into()).collect(), output: (&s.output).into()},
         s -> Schema {input: s.input.iter().map(|v| v.to_string()).collect(), output: s.output.to_string()};
-    egglog::ast::GenericRule<Symbol, Symbol>: "{:?}" => Rule(
+    egglog::ast::GenericRule<String, String>: "{:?}" => Rule(
         span: Span,
         head: Vec<Action>,
         body: Vec<Fact_>
     )
         r -> egglog::ast::GenericRule {span: r.span.clone().into(), head: egglog::ast::GenericActions(r.head.iter().map(|v| v.into()).collect()), body: r.body.iter().map(|v| v.into()).collect()},
         r -> Rule {span: r.span.clone().into(), head: r.head.0.iter().map(|v| v.into()).collect(), body: r.body.iter().map(|v| v.into()).collect()};
-    egglog::ast::GenericRewrite<Symbol, Symbol>: "{:?}" => Rewrite(
+    egglog::ast::GenericRewrite<String, String>: "{:?}" => Rewrite(
         span: Span,
         lhs: Expr,
         rhs: Expr,
@@ -427,30 +423,27 @@ convert_struct!(
         i -> IdentSort {ident: i.ident.to_string(), sort: i.sort.to_string()};
     egglog::RunReport: "{:?}" => RunReport(
         updated: bool,
-        search_time_per_rule: HashMap<String, WrappedDuration>,
-        apply_time_per_rule: HashMap<String, WrappedDuration>,
-        search_time_per_ruleset: HashMap<String, WrappedDuration>,
-        apply_time_per_ruleset: HashMap<String, WrappedDuration>,
-        rebuild_time_per_ruleset: HashMap<String, WrappedDuration>,
-        num_matches_per_rule: HashMap<String, usize>
+        search_and_apply_time_per_rule: HashMap<String, WrappedDuration>,
+        num_matches_per_rule: HashMap<String, usize>,
+        search_and_apply_time_per_ruleset: HashMap<String, WrappedDuration>,
+        merge_time_per_ruleset: HashMap<String, WrappedDuration>,
+        rebuild_time_per_ruleset: HashMap<String, WrappedDuration>
     )
         r -> egglog::RunReport {
             updated: r.updated,
-            search_time_per_rule: r.search_time_per_rule.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            apply_time_per_rule: r.apply_time_per_rule.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            search_time_per_ruleset: r.search_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            apply_time_per_ruleset: r.apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
+            search_and_apply_time_per_rule: r.search_and_apply_time_per_rule.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
+            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone().into(), *v)).collect(),
+            search_and_apply_time_per_ruleset: r.search_and_apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
+            merge_time_per_ruleset: r.merge_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
             rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone().into(), *v)).collect()
         },
         r -> RunReport {
             updated: r.updated,
-            search_time_per_rule: r.search_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
-            apply_time_per_rule: r.apply_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
-            search_time_per_ruleset: r.search_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
-            apply_time_per_ruleset: r.apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
+            search_and_apply_time_per_rule: r.search_and_apply_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
+            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone().to_string(), *v)).collect(),
+            search_and_apply_time_per_ruleset: r.search_and_apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
+            merge_time_per_ruleset: r.merge_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
             rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
-            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone().to_string(), *v)).collect()
         }
 );
 

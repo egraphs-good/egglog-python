@@ -108,7 +108,7 @@ class EGraphState:
             case RulesetDecl(rules):
                 if name not in self.rulesets:
                     if name:
-                        self.egraph.run_program(bindings.AddRuleset(name))
+                        self.egraph.run_program(bindings.AddRuleset(span(), name))
                     added_rules = self.rulesets[name] = set()
                 else:
                     added_rules = self.rulesets[name]
@@ -125,7 +125,7 @@ class EGraphState:
                 self.rulesets[name] = set()
                 for ruleset in rulesets:
                     self.ruleset_to_egg(ruleset)
-                self.egraph.run_program(bindings.UnstableCombinedRuleset(name, list(rulesets)))
+                self.egraph.run_program(bindings.UnstableCombinedRuleset(span(), name, list(rulesets)))
 
     def command_to_egg(self, cmd: CommandDecl, ruleset: str) -> bindings._Command | None:
         match cmd:
@@ -160,7 +160,7 @@ class EGraphState:
                 assert isinstance(sig, FunctionSignature)
                 # Replace args with rule_var_name mapping
                 arg_mapping = tuple(
-                    TypedExprDecl(tp.to_just(), VarDecl(name, False))
+                    TypedExprDecl(tp.to_just(), UnboundVarDecl(name))
                     for name, tp in zip(sig.arg_names, sig.arg_types, strict=False)
                 )
                 rewrite_decl = RewriteDecl(
@@ -179,7 +179,7 @@ class EGraphState:
     def action_to_egg(self, action: ActionDecl, expr_to_let: bool = False) -> bindings._Action | None:  # noqa: C901, PLR0911, PLR0912
         match action:
             case LetDecl(name, typed_expr):
-                var_decl = VarDecl(name, True)
+                var_decl = LetRefDecl(name)
                 var_egg = self._expr_to_egg(var_decl)
                 self.expr_to_egg_cache[var_decl] = var_egg
                 return bindings.Let(span(), var_egg.name, self.typed_expr_to_egg(typed_expr))
@@ -369,7 +369,8 @@ class EGraphState:
         """
         Rewrites this expression as a let binding if it's not already a let binding.
         """
-        var_decl = VarDecl(f"__expr_{hash(typed_expr)}", True)
+        # TODO: Replace with counter so that it works with hash collisions and is more stable
+        var_decl = LetRefDecl(f"__expr_{hash(typed_expr)}")
         if var_decl in self.expr_to_egg_cache:
             return None
         var_egg = self._expr_to_egg(var_decl)
@@ -387,7 +388,7 @@ class EGraphState:
     def _expr_to_egg(self, expr_decl: CallDecl) -> bindings.Call: ...
 
     @overload
-    def _expr_to_egg(self, expr_decl: VarDecl) -> bindings.Var: ...
+    def _expr_to_egg(self, expr_decl: UnboundVarDecl | LetRefDecl) -> bindings.Var: ...
 
     @overload
     def _expr_to_egg(self, expr_decl: ExprDecl) -> bindings._Expr: ...
@@ -402,11 +403,10 @@ class EGraphState:
             pass
         res: bindings._Expr
         match expr_decl:
-            case VarDecl(name, is_let):
-                # prefix let bindings with % to avoid name conflicts with rewrites
-                if is_let:
-                    name = f"%{name}"
-                res = bindings.Var(span(), name)
+            case LetRefDecl(name):
+                res = bindings.Var(span(), f"{name}")
+            case UnboundVarDecl(name, egg_name):
+                res = bindings.Var(span(), egg_name or f"_{name}")
             case LitDecl(value):
                 l: bindings._Literal
                 match value:
@@ -467,7 +467,8 @@ class EGraphState:
                 return name
 
             case ConstantRef(name):
-                return name
+                # Prefix to avoid name collisions with local vars
+                return f"%{name}"
             case (
                 MethodRef(cls_name, name)
                 | ClassMethodRef(cls_name, name)
@@ -549,7 +550,7 @@ class FromEggState:
         """
         expr_decl: ExprDecl
         if isinstance(term, bindings.TermVar):
-            expr_decl = VarDecl(term.name, True)
+            expr_decl = LetRefDecl(term.name)
         elif isinstance(term, bindings.TermLit):
             value = term.value
             expr_decl = LitDecl(None if isinstance(value, bindings.Unit) else value.value)
@@ -624,7 +625,9 @@ class FromEggState:
                     # but dont need to store them
                     bound_tp_params if isinstance(callable_ref, ClassMethodRef | InitRef) else None,
                 )
-        raise ValueError(f"Could not find callable ref for call {term}")
+        raise ValueError(
+            f"Could not find callable ref for call {term}. None of these refs matched the types: {self.state.egg_fn_to_callable_refs[term.name]}"
+        )
 
     def resolve_term(self, term_id: int, tp: JustTypeRef) -> TypedExprDecl:
         try:

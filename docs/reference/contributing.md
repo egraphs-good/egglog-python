@@ -72,7 +72,12 @@ Finally, to build the docs locally and test that they work, you can run:
 make docs
 ```
 
-## Making changes
+## Debugging
+
+To debug the Rust parts of this project, follow the [PyO3 debugging guide](https://pyo3.rs/main/debugging.html#debugger-specific-setup).
+Debug symbols are turned on by default.
+
+### Making changes
 
 All changes that impact users should be documented in the `docs/changelog.md` file. Please also add tests for any new features
 or bug fixes.

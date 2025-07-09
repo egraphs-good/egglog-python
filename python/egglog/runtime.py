@@ -415,9 +415,7 @@ def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: 
         Parameter(
             n,
             Parameter.POSITIONAL_OR_KEYWORD,
-            default=RuntimeExpr.__from_values__(
-                decls, TypedExprDecl(t.to_just(), d if d is not None else VarDecl(n, True))
-            )
+            default=RuntimeExpr.__from_values__(decls, TypedExprDecl(t.to_just(), d or LetRefDecl(n)))
             if d is not None or optional_args
             else Parameter.empty,
         )

@@ -107,7 +107,7 @@ def pretty_callable_ref(
     """
     # Pass in three dummy args, which are the max used for any operation that
     # is not a generic function call
-    args: list[ExprDecl] = [VarDecl(ARG_STR, False)] * 3
+    args: list[ExprDecl] = [UnboundVarDecl(ARG_STR)] * 3
     if first_arg:
         args.insert(0, first_arg)
     context = PrettyContext(decls, defaultdict(lambda: 0))
@@ -166,7 +166,7 @@ class TraverseContext:
                 self(d.expr)
             case ChangeDecl(_, d, _) | SaturateDecl(d) | RepeatDecl(d, _) | ActionCommandDecl(d):
                 self(d)
-            case PanicDecl(_) | VarDecl(_) | LitDecl(_) | PyObjectDecl(_):
+            case PanicDecl(_) | UnboundVarDecl(_) | LetRefDecl(_) | LitDecl(_) | PyObjectDecl(_):
                 pass
             case SequenceDecl(decls) | RulesetDecl(decls):
                 for de in decls:
@@ -233,6 +233,10 @@ class PrettyContext:
         return expr
 
     def uncached(self, decl: AllDecls, *, unwrap_lit: bool, parens: bool, ruleset_name: str | None) -> tuple[str, str]:  # noqa: C901, PLR0911, PLR0912
+        """
+        Returns a tuple of a string value of the decleration and the "type" to use when create a memoized cached version
+        for de-duplication.
+        """
         match decl:
             case LitDecl(value):
                 match value:
@@ -247,7 +251,7 @@ class PrettyContext:
                     case str(s):
                         return repr(s) if unwrap_lit else f"String({s!r})", "String"
                 assert_never(value)
-            case VarDecl(name):
+            case UnboundVarDecl(name) | LetRefDecl(name):
                 return name, name
             case CallDecl(_, _, _):
                 return self._call(decl, parens)
@@ -357,7 +361,7 @@ class PrettyContext:
             has_multiple_parents = self.parents[first_arg] > 1
             self.names[decl] = expr_name = self._name_expr(tp_name, expr_str, copy_identifier=has_multiple_parents)
             # Set the first arg to be the name of the mutated arg and return the name
-            args[0] = VarDecl(expr_name, True)
+            args[0] = LetRefDecl(expr_name)
         else:
             expr_name = None
         res = self._call_inner(ref, args, decl.bound_tp_params, parens)

@@ -69,7 +69,7 @@ class TestDictUpdate:
                     Call(DUMMY_SPAN, "py-dict-update", [dict_expr, a_expr, new_value_expr, b_expr, new_value_expr]),
                 )
             ),
-            ActionCommand(Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "new_dict"), Lit(DUMMY_SPAN, Int(0)))),
+            Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "new_dict"), Lit(DUMMY_SPAN, Int(0))),
         )
         report = egraph.extract_report()
         assert isinstance(report, Best)
@@ -111,7 +111,7 @@ class TestEval:
                     ),
                 )
             ),
-            ActionCommand(Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "res"), Lit(DUMMY_SPAN, Int(0)))),
+            Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "res"), Lit(DUMMY_SPAN, Int(0))),
         )
         report = egraph.extract_report()
         assert isinstance(report, Best)
