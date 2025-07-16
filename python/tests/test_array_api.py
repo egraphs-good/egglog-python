@@ -12,7 +12,7 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 from egglog.egraph import set_current_ruleset
 from egglog.exp.array_api import *
-from egglog.exp.array_api import NDArray
+from egglog.exp.array_api import NDArray, Value
 from egglog.exp.array_api_jit import function_to_program, jit
 from egglog.exp.array_api_loopnest import *
 from egglog.exp.array_api_numba import array_api_numba_schedule
@@ -272,7 +272,10 @@ class TestLoopNest:
         i = Int.var("i")
         j = Int.var("j")
         idxed = linalg_val(X, linalg_norm_v2).index((i, j))
-        simplified_index = simplify(idxed, array_api_schedule)
+        egraph = EGraph()
+        egraph.register(idxed)
+        egraph.run(array_api_schedule)
+        simplified_index: Value = egraph.extract(idxed)
         assert str(simplified_index) == snapshot_py(name="expr")
 
         res = EvalProgram(

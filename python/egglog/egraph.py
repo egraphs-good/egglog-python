@@ -82,7 +82,6 @@ __all__ = [
     "run",
     "seq",
     "set_",
-    "simplify",
     "subsume",
     "union",
     "unstable_combine_rulesets",
@@ -137,15 +136,6 @@ ALWAYS_PRESERVED = {
     "__index__",
     "__bufer__",
 }
-
-
-def simplify(x: EXPR, schedule: Schedule | None = None) -> EXPR:
-    """
-    Simplify an expression by running the schedule.
-    """
-    if schedule:
-        return EGraph().simplify(x, schedule)
-    return EGraph().extract(x)
 
 
 def check_eq(x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *, add_second=True, display=False) -> EGraph:
@@ -619,8 +609,8 @@ def _fn_decl(
         else resolve_literal(
             return_type,
             merge(
-                RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), VarDecl("old", False))),
-                RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), VarDecl("new", False))),
+                RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), UnboundVarDecl("old", "old"))),
+                RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), UnboundVarDecl("new", "new"))),
             ),
             lambda: decls,
         )
@@ -628,7 +618,7 @@ def _fn_decl(
     decls |= merged
 
     # defer this in generator so it doesn't resolve for builtins eagerly
-    args = (TypedExprDecl(tp.to_just(), VarDecl(name, False)) for name, tp in zip(arg_names, arg_types, strict=True))
+    args = (TypedExprDecl(tp.to_just(), UnboundVarDecl(name)) for name, tp in zip(arg_names, arg_types, strict=True))
     res_ref: FunctionRef | MethodRef | ClassMethodRef | PropertyRef | InitRef | UnnamedFunctionRef
     res_thunk: Callable[[], object]
     # If we were not passed in a ref, this is an unnamed funciton, so eagerly compute the value and use that to refer to it
@@ -893,37 +883,9 @@ class EGraph:
         return cast(
             "BASE_EXPR",
             RuntimeExpr.__from_values__(
-                self.__egg_decls__, TypedExprDecl(runtime_expr.__egg_typed_expr__.tp, VarDecl(name, True))
+                self.__egg_decls__, TypedExprDecl(runtime_expr.__egg_typed_expr__.tp, LetRefDecl(name))
             ),
         )
-
-    @overload
-    def simplify(self, expr: BASE_EXPR, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> BASE_EXPR: ...
-
-    @overload
-    def simplify(self, expr: BASE_EXPR, schedule: Schedule, /) -> BASE_EXPR: ...
-
-    def simplify(
-        self, expr: BASE_EXPR, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
-    ) -> BASE_EXPR:
-        """
-        Simplifies the given expression.
-        """
-        schedule = run(ruleset, *until) * limit_or_schedule if isinstance(limit_or_schedule, int) else limit_or_schedule
-        del limit_or_schedule, until, ruleset
-        runtime_expr = to_runtime_expr(expr)
-        self._add_decls(runtime_expr, schedule)
-        egg_schedule = self._state.schedule_to_egg(schedule.schedule)
-        typed_expr = runtime_expr.__egg_typed_expr__
-        # Must also register type
-        egg_expr = self._state.typed_expr_to_egg(typed_expr)
-        self._egraph.run_program(bindings.Simplify(span(1), egg_expr, egg_schedule))
-        extract_report = self._egraph.extract_report()
-        if not isinstance(extract_report, bindings.Best):
-            msg = "No extract report saved"
-            raise ValueError(msg)  # noqa: TRY004
-        (new_typed_expr,) = self._state.exprs_from_egg(extract_report.termdag, [extract_report.term], typed_expr.tp)
-        return cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr))
 
     def include(self, path: str) -> None:
         """
@@ -1036,9 +998,7 @@ class EGraph:
         self._add_decls(expr)
         expr = self._state.typed_expr_to_egg(expr.__egg_typed_expr__)
         try:
-            self._egraph.run_program(
-                bindings.ActionCommand(bindings.Extract(span(2), expr, bindings.Lit(span(2), bindings.Int(n))))
-            )
+            self._egraph.run_program(bindings.Extract(span(2), expr, bindings.Lit(span(2), bindings.Int(n))))
         except BaseException as e:
             raise add_note("Extracting: " + str(expr), e)  # noqa: B904
         extract_report = self._egraph.extract_report()
@@ -1568,7 +1528,7 @@ def _var(name: str, bound: object) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
     decls_like, type_ref = resolve_type_annotation(bound)
     return RuntimeExpr(
-        Thunk.fn(Declarations.create, decls_like), Thunk.value(TypedExprDecl(type_ref.to_just(), VarDecl(name, False)))
+        Thunk.fn(Declarations.create, decls_like), Thunk.value(TypedExprDecl(type_ref.to_just(), UnboundVarDecl(name)))
     )
 
 

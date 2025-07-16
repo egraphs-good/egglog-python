@@ -147,22 +147,6 @@ def test_class_vars():
     egraph.check(eq(A.ONE).to(two))
 
 
-def test_simplify_constant():
-    egraph = EGraph()
-
-    class Numeric(Expr):
-        ONE: ClassVar[Numeric]
-
-        def __init__(self, v: i64) -> None:
-            pass
-
-    assert expr_parts(egraph.simplify(Numeric.ONE, 10)) == expr_parts(Numeric.ONE)
-
-    egraph.register(union(Numeric.ONE).with_(Numeric(i64(1))))
-    egraph.run(10)
-    egraph.check(eq(Numeric.ONE).to(Numeric(i64(1))))
-
-
 def test_extract_constant_twice():
     # Sometimes extracting a constant twice will give an error
     egraph = EGraph()
@@ -191,7 +175,6 @@ def test_variable_args():
     egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
 
 
-@pytest.mark.xfail(reason="We have to manually register sorts before using them")
 def test_generic_sort():
     egraph = EGraph()
     egraph.check(Set(i64(1), i64(2)).contains(i64(1)))
@@ -583,7 +566,7 @@ def test_lazy_types():
 
     class B(Expr): ...
 
-    simplify(A().b())
+    EGraph().register(A().b())
 
 
 # https://github.com/egraphs-good/egglog-python/issues/100
@@ -783,10 +766,14 @@ class TestIssue166:
     def test_inserting_map(self):
         egraph = EGraph()
         m = egraph.let("map", Map[String, i64].empty().insert(String("a"), i64(42)))
-        egraph.simplify(m, 5)
+        egraph.run(5)
+        egraph.extract(m)
 
     def test_creating_map(self):
-        EGraph().simplify(Map[String, i64].empty(), 1)
+        m = Map[String, i64].empty()
+        egraph = EGraph()
+        egraph.register(m)
+        egraph.extract(m)
 
 
 def test_helpful_error_function_class():

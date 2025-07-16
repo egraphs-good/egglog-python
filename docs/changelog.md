@@ -4,6 +4,12 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Upgrade egglog which includes new backend.
+  - Fixes implementation of the Python Object sort to work with objects with dupliating hashes but the same value.
+    Also changes the representation to be an index into a list instead of the ID, making egglog programs more deterministic.
+  - Prefix constant declerations and unbound variables to not shadow let variables
+  - BREAKING: Remove `simplify` since it was removed upstream. You can manually replace it with an insert, run, then extract.
+
 ## 10.0.2 (2025-06-22)
 
 - Fix using `f64Like` when not importing star (also properly includes removal of `Callable` special case from previous release).
@@ -76,7 +82,7 @@ Extracting: (+ %x 2)
 ...     print((x + 2).eval())
 ...
 3
-````
+```
 
 There is a tradeoff here for more ease of use at the expense of some added implicit behavior using global state.
 
@@ -506,3 +512,4 @@ We also change the `PyObject` primitive to behave similarly. Instead of calling 
 This release adds support for a high level API for e-graphs.
 
 There is an examples of the high level API in the [tutorials](tutorials/getting-started).
+````

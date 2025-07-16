@@ -29,8 +29,8 @@ i64(10) + i64(2)
 ```
 
 ```{code-cell} python
-# egg: (+ (rational 1 2)  (rational 2 1))
-Rational(i64(1), i64(2)) / Rational(i64(2), i64(1))
+# egg: (+ (bigrat (bigint 1)  (bigint 2))  (big-rat (bigint 2)  (bigint 1)))
+BigRat(1, 2) / BigRat(2, 1)
 ```
 
 These types are also all checked statically with MyPy, so for example, if you try to add a `String` and a `i64`, you will get a type error.
@@ -44,7 +44,7 @@ i64(10) + 2
 ```
 
 ```{code-cell} python
-Rational(1, 2) / Rational(2, 1)
+BigRat(1, 2) / BigRat(2, 1)
 ```
 
 ### `!=` Operator
@@ -495,15 +495,6 @@ egraph.run(10)
 # TODO: For some reason this is extracting temp vars
 # egraph.extract_multiple(y, 2)
 egraph
-```
-
-### Simplify
-
-The `(simplify ...)` command in egglog translates to the `egraph.simplify` method, which combines running a schedule and extracting:
-
-```{code-cell} python
-# egg: (simplify (Mul (Num 6) (Add (Num 2) (Mul (Var "x") (Num 2)))) 20)
-egraph.simplify(Math(6) * (Math(2) + Math.var("x") * Math(2)), 20)
 ```
 
 ## Push/Pop

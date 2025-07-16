@@ -1,632 +1,314 @@
-use crate::error::EggResult;
+/// This module defines a sort for Python objects in the Egglog framework.
+///
+/// Python objects are stored in a vec and referenced by their index.
+///
+/// We also keep two lookups, matching hashes and IDs to their indexes, so that when we add a new Python object, if
+/// it's hashable, we can look it up by its hash, and if it's unhashable, we can look it up by its ID.
+///
+///
 use egglog::{
-    ast::{Expr, Literal, Span, Symbol},
-    call,
-    constraint::{AllEqualTypeConstraint, SimpleTypeConstraint, TypeConstraint},
-    extract::{Cost, Extractor},
-    lit,
-    sort::{BoolSort, FromSort, I64Sort, IntoSort as _, Sort, StringSort},
-    util::IndexMap,
-    ArcSort, EGraph, PrimitiveLike, Term, TermDag, TypeInfo, Value,
+    Term, TermDag, Value, add_primitive,
+    ast::{Expr, Literal},
+    call, lit,
+    prelude::{BaseSort, EGraph},
+    sort::{BaseValues, S},
 };
-use pyo3::{
-    ffi, intern, prelude::*, types::PyDict, AsPyPointer, PyAny, PyErr, PyObject, PyResult,
-    PyTraverseError, PyVisit, Python,
-};
-
 use std::{
-    any::Any,
+    collections::HashMap,
     env::temp_dir,
     ffi::CString,
+    fmt::Debug,
     fs::File,
     io::Write,
     sync::{Arc, Mutex},
 };
 use uuid::Uuid;
 
-const NAME: &str = "PyObject";
+use pyo3::{
+    AsPyPointer, PyAny, PyErr, PyObject, PyResult, PyTraverseError, PyVisit, Python, ffi, intern,
+    prelude::*, types::PyDict,
+};
 
-fn value(i: usize) -> Value {
-    Value {
-        #[cfg(debug_assertions)]
-        tag: NAME.into(),
-        bits: i as u64,
-    }
-}
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub enum PyObjectIdent {
-    // Unhashable objects use the object ID as the key
-    Unhashable(usize),
-    // Hashable objects use the hash of the type as well as the hash of the object as the key
-    // (need type hash as well, b/c different objects can have the same hash https://docs.python.org/3/library/functions.html#hash)
-    Hashable(isize, isize),
-}
+type PyObjectIdent = usize;
 
-impl PyObjectIdent {
-    pub fn from_pyobject(obj: &PyObject) -> Self {
-        Python::with_gil(|py| {
-            let o = obj.bind(py);
-            match o.hash() {
-                Ok(hash) => PyObjectIdent::Hashable(o.get_type().hash().unwrap(), hash),
-                Err(_) => PyObjectIdent::Unhashable(obj.as_ptr() as usize),
-            }
-        })
-    }
-
-    pub fn from_expr(expr: &Expr) -> Self {
-        match expr {
-            Expr::Call(_, head, args) => match head.as_str() {
-                "py-object" => match args.as_slice() {
-                    [Expr::Lit(_, Literal::Int(type_hash)), Expr::Lit(_, Literal::Int(hash))] => {
-                        PyObjectIdent::Hashable(*type_hash as isize, *hash as isize)
-                    }
-                    [Expr::Lit(_, Literal::Int(id))] => PyObjectIdent::Unhashable(*id as usize),
-                    _ => panic!("Unexpected children when loading PyObjectIdent"),
-                },
-                _ => panic!("Unexpected head when loading PyObjectIdent"),
-            },
-            _ => panic!("Unexpected expr when loading PyObjectIdent"),
-        }
-    }
-    pub fn to_expr(self) -> Expr {
-        let children = match self {
-            PyObjectIdent::Unhashable(id) => {
-                vec![lit!(Literal::Int(id as i64))]
-            }
-            PyObjectIdent::Hashable(type_hash, hash) => {
-                vec![
-                    lit!(Literal::Int(type_hash as i64)),
-                    lit!(Literal::Int(hash as i64)),
-                ]
-            }
-        };
-        call!("py-object", children)
-    }
-}
-
+#[derive(Clone)]
 #[pyclass]
-#[derive(Debug)]
-pub struct PyObjectSort(
-    // Use an index map so that we can point to a value with an index we can store in the value
-    Mutex<IndexMap<PyObjectIdent, PyObject>>,
-);
+pub struct PyObjectSort {
+    /// All the Python objects stored in this sort.
+    /// All objects with the same ID are only stored once.
+    /// Also, for hashable objects, equal objects are only stored once.
+    objects: Arc<Mutex<Vec<Py<PyAny>>>>,
+    /// Maps from IDs to their index
+    id_to_index: Arc<Mutex<HashMap<usize, PyObjectIdent>>>,
+    /// Maps from all hashable objects to their index
+    hashable_to_index: Arc<Py<PyDict>>,
+}
+
+impl Debug for PyObjectSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hashable_to_index =
+            Python::with_gil(|py| self.hashable_to_index.bind(py).str().map_or_else(|_| "<error>".to_string(), |s| s.to_string()));
+        f.debug_struct("PyObjectSort")
+            .field("objects", &self.objects)
+            .field("id_to_index", &self.id_to_index)
+            .field("hashable_to_index", &hashable_to_index)
+            .finish()
+    }
+}
 
 impl PyObjectSort {
-    fn new() -> Self {
-        Self(Mutex::new(IndexMap::default()))
-    }
-    /// Store a Python object with its hash and return its index in the registry.
-    pub fn insert_full(&self, key: PyObjectIdent, value: PyObject) -> usize {
-        self.0.lock().unwrap().insert_full(key, value).0
+    /// Stores a Python object and return the index.
+    ///
+    /// If it has already been stored, it returns the existing index.
+    /// If it is hashable, it will be stored in the `hashable_to_index` dictionary.
+    pub fn store<'py>(&self, py: Python<'py>, obj: PyObject) -> PyResult<PyObjectIdent> {
+        // 1. Check if the object is already stored
+        let id = obj.as_ptr() as usize;
+        let mut id_to_index = self.id_to_index.lock().unwrap();
+        if let Some(index) = id_to_index.get(&id) {
+            return Ok(*index);
+        }
+        // 2. If not, try looking the object up by its hash
+        let hashable_to_index = self.hashable_to_index.bind(py);
+        let mut objects = self.objects.lock().unwrap();
+        match hashable_to_index.get_item(obj.clone_ref(py)) {
+            // An error means it's not hashable, so we store it by ID
+            Err(_) => {
+                let index = objects.len();
+                objects.push(obj);
+                id_to_index.insert(id, index);
+                Ok(index)
+            }
+            // OK means it's hashable
+            Ok(result) => {
+                match result {
+                    // If the object is already stored, return its index
+                    Some(index) => index.extract(),
+                    // If not, store it in the hashable_to_index dictionary
+                    None => {
+                        let index = objects.len();
+                        objects.push(obj.clone_ref(py));
+                        id_to_index.insert(id, index);
+                        hashable_to_index.set_item(obj, index)?;
+                        Ok(index)
+                    }
+                }
+            }
+        }
     }
 
-    /// Retrieves the Python object at the given index.
-    pub fn get_index(&self, py: Python<'_>, index: usize) -> PyObject {
-        self.0
-            .lock()
-            .unwrap()
-            .get_index(index)
-            .unwrap()
-            .1
-            .clone_ref(py)
-    }
-
-    /// Retrieves the index of the given key.
-    pub fn get_index_of(&self, key: &PyObjectIdent) -> usize {
-        self.0.lock().unwrap().get_index_of(key).unwrap()
-    }
-
-    pub fn load_ident(&self, value: &Value) -> PyObjectIdent {
-        let objects = self.0.lock().unwrap();
-        let i = value.bits as usize;
-        let (ident, _) = objects.get_index(i).unwrap();
-        ident.clone()
-    }
-
-    pub fn store(&self, obj: PyObject) -> Value {
-        // Try hashing the object, if it fails, then it's unhashable, and store with ID
-        let ident = PyObjectIdent::from_pyobject(&obj);
-        let i = self.insert_full(ident, obj);
-        value(i)
-    }
-
-    pub fn load(&self, py: Python<'_>, value: Value) -> PyObject {
-        let i = value.bits as usize;
-        self.get_index(py, i)
-    }
-}
-
-/// Implement wrapper struct so can implement foreign sort on it
-#[derive(IntoPyObject, IntoPyObjectRef)]
-pub struct MyPyObject(pub PyObject);
-
-impl FromSort for MyPyObject {
-    type Sort = PyObjectSort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self {
-        let obj = Python::with_gil(|py| sort.load(py, *value));
-        MyPyObject(obj)
+    /// Loads a Python object based on it's index
+    pub fn load<'py>(&self, py: Python<'py>, ident: PyObjectIdent) -> Bound<'py, PyAny> {
+        self.objects.lock().unwrap()[ident].bind(py).clone()
     }
 }
-
-#[pyclass(name = "PyObjectSort")]
-#[derive(Debug, Clone)]
-pub struct ArcPyObjectSort(
-    // Use an index map so that we can point to a value with an index we can store in the value
-    pub Arc<PyObjectSort>,
-);
 
 #[pymethods]
-impl ArcPyObjectSort {
+impl PyObjectSort {
     #[new]
-    fn new() -> Self {
-        Self(Arc::new(PyObjectSort::new()))
+    fn new<'py>(py: Python<'py>) -> Self {
+        Self {
+            objects: Arc::new(Mutex::new(Vec::new())),
+            id_to_index: Arc::new(Mutex::new(HashMap::new())),
+            hashable_to_index: Arc::new(PyDict::new(py).into()),
+        }
     }
 
     /// Store a Python object and return an Expr that points to it.
     #[pyo3(name="store", signature = (obj, /))]
-    fn store_py(&mut self, obj: PyObject) -> EggResult<crate::conversions::Expr> {
-        let ident = PyObjectIdent::from_pyobject(&obj);
-        self.0.insert_full(ident, obj);
-        Ok(ident.to_expr().into())
+    fn store_py<'py>(
+        &mut self,
+        py: Python<'py>,
+        obj: PyObject,
+    ) -> PyResult<crate::conversions::Expr> {
+        let ident = self.store(py, obj)?;
+        let arg = lit!(Literal::Int(ident as i64));
+        Ok(call!("py-object", vec![arg]).into())
     }
 
-    // Retrieve the Python object from an expression
+    /// Retrieve the Python object from an expression
     #[pyo3(name="load", signature = (expr, /))]
-    fn load_py(&self, expr: crate::conversions::Expr) -> PyObject {
+    fn load_py<'py>(
+        &self,
+        py: Python<'py>,
+        expr: crate::conversions::Expr,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let expr: Expr = expr.into();
-        let ident = PyObjectIdent::from_expr(&expr);
-        let index = self.0.get_index_of(&ident);
-        Python::with_gil(|py| self.0.get_index(py, index))
+        let err = Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Expected a py-object call with a single integer literal argument",
+        ));
+        let Expr::Call(_, name, args) = &expr else {
+            return err;
+        };
+        if name != "py-object" {
+            return err;
+        }
+        let [Expr::Lit(_, Literal::Int(i))] = &args[..] else {
+            return err;
+        };
+
+        Ok(self.load(py, *i as usize))
     }
 
     // Integrate with Python garbage collector
     // https://pyo3.rs/main/class/protocols#garbage-collector-integration
 
-    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.0
-             .0
+    fn __traverse__<'py>(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(self.hashable_to_index.as_ref())?;
+        self.objects
             .lock()
             .unwrap()
-            .values()
+            .iter()
             .try_for_each(|obj| visit.call(obj))
     }
 
-    fn __clear__(&mut self) {
-        self.0 .0.lock().unwrap().clear();
+    fn __clear__<'py>(&mut self, py: Python<'py>) {
+        self.hashable_to_index.bind(py).clear();
+        self.objects.lock().unwrap().clear();
+        self.id_to_index.lock().unwrap().clear();
     }
 }
 
-impl Sort for PyObjectSort {
-    fn name(&self) -> Symbol {
-        NAME.into()
+impl BaseSort for PyObjectSort {
+    type Base = PyObjectIdent;
+
+    fn name(&self) -> &str {
+        "PyObject"
     }
 
-    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-        self
+    fn register_primitives(&self, eg: &mut EGraph) {
+        // (py-object <i64>)
+        add_primitive!(
+            eg,
+            "py-object" = |ident: i64| -> PyObjectIdent { ident as usize }
+        );
+        // Supports calling (py-eval <str-obj> <globals-obj> <locals-obj>)
+        add_primitive!(
+            eg,
+            "py-eval" = {self.clone(): PyObjectSort}
+                |code: S, globals: PyObjectIdent, locals: PyObjectIdent| -> PyObjectIdent {
+                    {
+                        Python::with_gil(|py| {
+                            let globals = self.ctx.load(py, globals);
+                            let locals = self.ctx.load(py, locals);
+                            let res = py
+                                .eval(
+                                    CString::new(code.to_string()).unwrap().as_c_str(),
+                                    Some(globals.downcast::<PyDict>().unwrap()),
+                                    Some(locals.downcast::<PyDict>().unwrap()),
+                                )
+                                .unwrap();
+                            self.ctx.store(py, res.unbind()).unwrap()
+                        })
+                    }
+                }
+        );
+        // Copies the locals, execs the Python string, then returns the copied version of the locals with any updates
+        // (py-exec <str-obj> <globals-obj> <locals-obj>)
+        add_primitive!(
+            eg,
+            "py-exec" = {self.clone(): PyObjectSort}
+                |code: S, globals: PyObjectIdent, locals: PyObjectIdent| -> PyObjectIdent {
+                    Python::with_gil(|py| {
+                        let globals = self.ctx.load(py, globals);
+                        let locals = self.ctx.load(py, locals);
+
+                        // Copy the locals so we can mutate them and return them
+                        let locals = locals.downcast::<PyDict>().unwrap().copy().unwrap();
+                        // Copy code into temporary file
+                        // Keep it around so that if errors occur we can debug them after the program exits
+                        let mut path = temp_dir();
+                        let file_name = format!("egglog-{}.py", Uuid::new_v4());
+                        path.push(file_name);
+                        let mut file = File::create(path.clone()).unwrap();
+                        file.write_all(code.as_bytes()).unwrap();
+                        let path = path.to_str().unwrap();
+                        run_code_path(
+                            py,
+                            &code,
+                            Some(globals.downcast::<PyDict>().unwrap()),
+                            Some(&locals),
+                            path,
+                        )
+                        .unwrap();
+                        self.ctx.store(py, locals.unbind().into()).unwrap()
+                    })
+                }
+        );
+
+        // (py-dict [<key-object> <value-object>]*)
+        add_primitive!(eg, "py-dict" = {self.clone(): PyObjectSort} [xs: PyObjectIdent] -> PyObjectIdent {
+            Python::with_gil(|py| {
+                let dict = PyDict::new(py);
+                for i in xs.map(|x| self.ctx.load(py, x)).collect::<Vec<_>>().chunks_exact(2) {
+                    dict.set_item(i[0].clone(), i[1].clone()).unwrap();
+                }
+                self.ctx.store(py, dict.unbind().into()).unwrap()
+            })
+        });
+        // Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
+        add_primitive!(eg, "py-dict-update" = {self.clone(): PyObjectSort} [xs: PyObjectIdent] -> PyObjectIdent {{
+            Python::with_gil(|py| {
+                let xs = xs.map(|x| self.ctx.load(py, x)).collect::<Vec<_>>();
+                // Copy the dict so we can mutate it and return it
+                let dict = xs[0].downcast::<PyDict>().unwrap().copy().unwrap();
+                // Update the dict with the key-value pairs
+                for i in xs[1..].chunks_exact(2) {
+                    dict.set_item(i[0].clone(), i[1].clone()).unwrap();
+                }
+                self.ctx.store(py, dict.unbind().into()).unwrap()
+            })
+        }});
+        // (py-to-string <obj>)
+        add_primitive!(
+            eg,
+            "py-to-string" = {self.clone(): PyObjectSort} |x: PyObjectIdent| -> S {
+                {
+                    let s: String = Python::with_gil(move |py| self.ctx.load(py, x).extract().unwrap());
+                    s.into()
+                }
+            }
+        );
+        // (py-to-bool <obj>)
+        add_primitive!(
+            eg,
+            "py-to-bool" = {self.clone(): PyObjectSort} |x: PyObjectIdent| -> bool {
+                {
+                    Python::with_gil(move |py| self.ctx.load(py, x).extract().unwrap())
+                }
+            }
+        );
+        // (py-from-string <str>)
+        add_primitive!(
+            eg,
+            "py-from-string" = {self.clone(): PyObjectSort} |x: S| -> PyObjectIdent {
+                Python::with_gil(|py| {
+                    let obj = x.to_string().into_pyobject(py).unwrap();
+                    self.ctx.store(py, obj.unbind().into()).unwrap()
+                })
+            }
+        );
+        // (py-from-int <int>)
+        add_primitive!(
+            eg,
+            "py-from-int" = {self.clone(): PyObjectSort} |x: i64| -> PyObjectIdent {
+                Python::with_gil(|py| {
+                    let obj = x.into_pyobject(py).unwrap();
+                    self.ctx.store(py, obj.unbind().into()).unwrap()
+                })
+            }
+        );
     }
 
-    #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-        typeinfo.add_primitive(Ctor {
-            name: "py-object".into(),
-            py_object: self.clone(),
-            i64:typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(Eval {
-            name: "py-eval".into(),
-            py_object: self.clone(),
-            string: typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(Exec {
-            name: "py-exec".into(),
-            py_object: self.clone(),
-            string: typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(Dict {
-            name: "py-dict".into(),
-            py_object: self.clone(),
-        });
-        typeinfo.add_primitive(DictUpdate {
-            name: "py-dict-update".into(),
-            py_object: self.clone(),
-        });
-        typeinfo.add_primitive(ToString {
-            name: "py-to-string".into(),
-            py_object: self.clone(),
-            string: typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(ToBool {
-            name: "py-to-bool".into(),
-            py_object: self.clone(),
-            bool_: typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(FromString {
-            name: "py-from-string".into(),
-            py_object: self.clone(),
-            string: typeinfo.get_sort_nofail(),
-        });
-        typeinfo.add_primitive(FromInt {
-            name: "py-from-int".into(),
-            py_object: self,
-            int: typeinfo.get_sort_nofail(),
-        });
-    }
-    fn extract_term(
+    fn reconstruct_termdag(
         &self,
-        _egraph: &EGraph,
+        base_values: &BaseValues,
         value: Value,
-        _extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        #[cfg(debug_assertions)]
-        assert!(value.tag == self.name());
-        let children = match self.load_ident(&value) {
-            PyObjectIdent::Unhashable(id) => {
-                vec![termdag.lit(Literal::Int(id as i64))]
-            }
-            PyObjectIdent::Hashable(type_hash, hash) => {
-                vec![
-                    termdag.lit(Literal::Int(type_hash as i64)),
-                    termdag.lit(Literal::Int(hash as i64)),
-                ]
-            }
-        };
-        Some((1, termdag.app("py-object".into(), children)))
-    }
-}
-
-/// (py-object <i64> | <i64> <i64>)
-struct Ctor {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    i64: Arc<I64Sort>,
-}
-
-impl PrimitiveLike for Ctor {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_all_arguments_sort(self.i64.clone())
-            .with_output_sort(self.py_object.clone())
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let ident = match values {
-            [id] => PyObjectIdent::Unhashable(i64::load(self.i64.as_ref(), id) as usize),
-            [type_hash, hash] => PyObjectIdent::Hashable(
-                i64::load(self.i64.as_ref(), type_hash) as isize,
-                i64::load(self.i64.as_ref(), hash) as isize,
-            ),
-            _ => unreachable!(),
-        };
-        Some(value(self.py_object.get_index_of(&ident)))
-    }
-}
-
-/// Supports calling (py-eval <str-obj> <globals-obj> <locals-obj>)
-struct Eval {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    string: Arc<StringSort>,
-}
-
-impl PrimitiveLike for Eval {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        return SimpleTypeConstraint::new(
-            self.name(),
-            vec![
-                self.string.clone(),
-                self.py_object.clone(),
-                self.py_object.clone(),
-                self.py_object.clone(),
-            ],
-            span.clone(),
-        )
-        .into_box();
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
-        let res_obj: PyObject = Python::with_gil(|py| {
-            let globals = self.py_object.load(py, values[1]);
-            let globals = globals.downcast_bound::<PyDict>(py).unwrap();
-            let locals = self.py_object.load(py, values[2]);
-            let locals = locals.downcast_bound::<PyDict>(py).unwrap();
-            py.eval(
-                CString::new(code.to_string()).unwrap().as_c_str(),
-                Some(globals),
-                Some(locals),
-            )
-            .unwrap()
-            .into()
-        });
-        Some(self.py_object.store(res_obj))
-    }
-}
-
-/// Copies the locals, execs the Python string, then returns the copied version of the locals with any updates
-/// (py-exec <str-obj> <globals-obj> <locals-obj>)
-struct Exec {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    string: Arc<StringSort>,
-}
-
-impl PrimitiveLike for Exec {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![
-                self.string.clone(),
-                self.py_object.clone(),
-                self.py_object.clone(),
-                self.py_object.clone(),
-            ],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let code: Symbol = Symbol::load(self.string.as_ref(), &values[0]);
-        let code: &str = code.into();
-        let locals: PyObject = Python::with_gil(|py| {
-            let globals = self.py_object.load(py, values[1]);
-            let globals = globals.downcast_bound::<PyDict>(py).unwrap();
-            let locals = self.py_object.load(py, values[2]);
-            // Copy the locals so we can mutate them and return them
-            let locals = locals.downcast_bound::<PyDict>(py).unwrap().copy().unwrap();
-            // Copy code into temporary file
-            // Keep it around so that if errors occur we can debug them after the program exits
-            let mut path = temp_dir();
-            let file_name = format!("egglog-{}.py", Uuid::new_v4());
-            path.push(file_name);
-            let mut file = File::create(path.clone()).unwrap();
-            file.write_all(code.as_bytes()).unwrap();
-            let path = path.to_str().unwrap();
-            run_code_path(py, code, Some(globals), Some(&locals), path).unwrap();
-            locals.into()
-        });
-        Some(self.py_object.store(locals))
-    }
-}
-
-/// (py-dict [<key-object> <value-object>]*)
-struct Dict {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-}
-
-impl PrimitiveLike for Dict {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_all_arguments_sort(self.py_object.clone())
-            .with_output_sort(self.py_object.clone())
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let dict: PyObject = Python::with_gil(|py| {
-            let dict = PyDict::new(py);
-            // Update the dict with the key-value pairs
-            for i in values.chunks_exact(2) {
-                let key = self.py_object.load(py, i[0]);
-                let value = self.py_object.load(py, i[1]);
-                dict.set_item(key, value).unwrap();
-            }
-            dict.into()
-        });
-        Some(self.py_object.store(dict))
-    }
-}
-
-/// Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
-struct DictUpdate {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-}
-
-impl PrimitiveLike for DictUpdate {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_all_arguments_sort(self.py_object.clone())
-            .with_output_sort(self.py_object.clone())
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let dict: PyObject = Python::with_gil(|py| {
-            let dict = self.py_object.load(py, values[0]);
-            // Copy the dict so we can mutate it and return it
-            let dict = dict.downcast_bound::<PyDict>(py).unwrap().copy().unwrap();
-            // Update the dict with the key-value pairs
-            for i in values[1..].chunks_exact(2) {
-                let key = self.py_object.load(py, i[0]);
-                let value = self.py_object.load(py, i[1]);
-                dict.set_item(key, value).unwrap();
-            }
-            dict.into()
-        });
-        Some(self.py_object.store(dict))
-    }
-}
-
-/// (py-to-string <obj>)
-struct ToString {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    string: Arc<StringSort>,
-}
-
-impl PrimitiveLike for ToString {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.py_object.clone(), self.string.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let obj: String =
-            Python::with_gil(|py| self.py_object.load(py, values[0]).extract(py).unwrap());
-        let symbol: Symbol = obj.into();
-        symbol.store(self.string.as_ref())
-    }
-}
-
-/// (py-to-bool <obj>)
-struct ToBool {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    bool_: Arc<BoolSort>,
-}
-
-impl PrimitiveLike for ToBool {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.py_object.clone(), self.bool_.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let obj: bool =
-            Python::with_gil(|py| self.py_object.load(py, values[0]).extract(py).unwrap());
-        obj.store(self.bool_.as_ref())
-    }
-}
-
-/// (py-from-string <str>)
-struct FromString {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    string: Arc<StringSort>,
-}
-
-impl PrimitiveLike for FromString {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.string.clone(), self.py_object.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let str = Symbol::load(self.string.as_ref(), &values[0]).to_string();
-        let obj: PyObject =
-            Python::with_gil(|py| str.into_pyobject(py).unwrap().as_any().clone().unbind());
-        Some(self.py_object.store(obj))
-    }
-}
-
-// (py-from-int <int>)
-struct FromInt {
-    name: Symbol,
-    py_object: Arc<PyObjectSort>,
-    int: Arc<I64Sort>,
-}
-
-impl PrimitiveLike for FromInt {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        return SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.int.clone(), self.py_object.clone()],
-            span.clone(),
-        )
-        .into_box();
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let int = i64::load(self.int.as_ref(), &values[0]);
-        let obj: PyObject =
-            Python::with_gil(|py| int.into_pyobject(py).unwrap().as_any().clone().unbind());
-        Some(self.py_object.store(obj))
+    ) -> Term {
+        let ident = base_values.unwrap::<PyObjectIdent>(value);
+        let arg = termdag.lit(Literal::Int(ident as i64));
+        termdag.app("py-object".into(), vec![arg])
     }
 }
 
