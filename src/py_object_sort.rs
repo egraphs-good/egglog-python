@@ -47,7 +47,7 @@ pub struct PyObjectSort {
 impl Debug for PyObjectSort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let hashable_to_index =
-            Python::with_gil(|py| self.hashable_to_index.bind(py).str().unwrap().to_string());
+            Python::with_gil(|py| self.hashable_to_index.bind(py).str().map_or_else(|_| "<error>".to_string(), |s| s.to_string()));
         f.debug_struct("PyObjectSort")
             .field("objects", &self.objects)
             .field("id_to_index", &self.id_to_index)
@@ -165,6 +165,7 @@ impl PyObjectSort {
     fn __clear__<'py>(&mut self, py: Python<'py>) {
         self.hashable_to_index.bind(py).clear();
         self.objects.lock().unwrap().clear();
+        self.id_to_index.lock().unwrap().clear();
     }
 }
 
