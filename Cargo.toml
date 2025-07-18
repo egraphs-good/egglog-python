@@ -10,7 +10,7 @@ name = "egglog"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.24.2", features = ["extension-module"] }
+pyo3 = { version = "0.25.1", features = ["extension-module"] }
 
 # include this bugfix https://github.com/egraphs-good/egglog/pull/629
 egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1e638e6" }
