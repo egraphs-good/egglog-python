@@ -5,8 +5,8 @@ use crate::error::{EggResult, WrappedError};
 use crate::py_object_sort::PyObjectSort;
 use crate::serialize::SerializedEGraph;
 
-use egglog::prelude::add_leaf_sort;
-use egglog::{span, SerializeConfig};
+use egglog::prelude::add_base_sort;
+use egglog::{SerializeConfig, span};
 use log::info;
 use pyo3::prelude::*;
 use std::path::PathBuf;
@@ -38,7 +38,7 @@ impl EGraph {
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
         if let Some(py_object_sort) = py_object_sort {
-            add_leaf_sort(&mut egraph, py_object_sort, span!()).unwrap();
+            add_base_sort(&mut egraph, py_object_sort, span!()).unwrap();
         }
         Self {
             egraph,

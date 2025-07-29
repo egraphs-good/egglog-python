@@ -12,12 +12,11 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.24.2", features = ["extension-module"] }
 
-# include this bugfix https://github.com/egraphs-good/egglog/pull/629
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1e638e6" }
+egglog = { git = "https://github.com/egraphs-good/egglog.git", rev = "5542549" }
 # egglog = { path = "../egg-smol" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "1a1f913" }
-core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "1a1f913" }
-egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", rev = "202078f" }
+egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
+core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
+egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", rev = "255b67a" }
 egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
 serde_json = "1.0.140"
 pyo3-log = "0.12.4"
@@ -25,12 +24,14 @@ log = "0.4.27"
 lalrpop-util = { version = "0.22", features = ["lexer"] }
 ordered-float = "3.7.0"
 uuid = { version = "1.17.0", features = ["v4"] }
+rayon = "1.10.0"
+mimalloc = "0.1.46"
 
 # Use patched version of egglog in experimental
 [patch.'https://github.com/egraphs-good/egglog']
 # egglog = { git = "https://github.com/egraphs-good//egglog.git", rev = "d2fa5b733de0796fb187dc5a27e570d5644aa75a" }
 # egglog = { path = "../egg-smol" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1e638e6" }
+# egglog = { git = "https://github.com/egraphs-good//egglog.git", rev = "5542549" }
 
 # enable debug symbols for easier profiling
 [profile.release]
