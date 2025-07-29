@@ -11,6 +11,11 @@ use pyo3::prelude::*;
 /// Bindings for egglog rust library
 #[pymodule]
 fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build_global()
+        .unwrap();
+
     pyo3_log::init();
 
     m.add_class::<crate::py_object_sort::PyObjectSort>()?;

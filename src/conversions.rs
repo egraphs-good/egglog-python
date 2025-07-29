@@ -1,6 +1,7 @@
 // Create wrappers around input types so that convert from pyobjects to them
 // and then from them to the egg_smol types
 use crate::utils::*;
+use egglog::extract::DefaultCost;
 use ordered_float::OrderedFloat;
 use pyo3::prelude::*;
 use pyo3::types::{PyDelta, PyDeltaAccess};
@@ -258,7 +259,7 @@ convert_enums!(
         Include(span: Span, path: String)
             i -> egglog::ast::Command::Include(i.span.clone().into(), (&i.path).into()),
             egglog::ast::Command::Include(span, p) => Include { span: span.into(), path: p.to_string() };
-        Constructor(span: Span, name: String, schema: Schema, cost: Option<usize>, unextractable: bool)
+        Constructor(span: Span, name: String, schema: Schema, cost: Option<DefaultCost>, unextractable: bool)
             c -> egglog::ast::Command::Constructor {
                 span: c.span.clone().into(),
                 name: (&c.name).into(),
@@ -325,7 +326,7 @@ convert_enums!(
             egglog::ast::Subdatatypes::NewSort(name, args) => NewSort { name: name.to_string(), args: args.iter().map(|e| e.into()).collect() }
     };
     egglog::ExtractReport: "{:?}" => ExtractReport {
-        Best(termdag: TermDag, cost: usize, term: Term)
+        Best(termdag: TermDag, cost: DefaultCost, term: Term)
             b -> egglog::ExtractReport::Best {
                 termdag: (&b.termdag).into(),
                 cost: b.cost,
@@ -384,7 +385,7 @@ convert_struct!(
         span: Span,
         name: String,
         types: Vec<String>,
-        cost: Option<usize> = None
+        cost: Option<DefaultCost> = None
     )
         v -> egglog::ast::Variant {span: v.span.clone().into(), name: (&v.name).into(), types: v.types.iter().map(|v| v.into()).collect(), cost: v.cost},
         v -> Variant {span: v.span.clone().into(), name: v.name.to_string(), types: v.types.iter().map(|v| v.to_string()).collect(), cost: v.cost};
