@@ -6,9 +6,6 @@ mod serialize;
 mod termdag;
 mod utils;
 
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 use pyo3::prelude::*;
 
 /// Bindings for egglog rust library
