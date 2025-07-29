@@ -59,6 +59,7 @@ jobs:
     needs: [bump]
     if: ${{ always() }}
     steps:
+      - run: sudo apt install -y gcc-X g++-X
       - uses: actions/checkout@v4
         if: ${{ needs.bump.result == 'success' }}
         with:
