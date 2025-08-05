@@ -39,7 +39,7 @@ jobs:
       - run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          VERSION=$(python increment_version.py $TYPE)
+          VERSION=$(python modify_changelog.py bump_version $TYPE)
           git checkout -b "version-$VERSION"
           git commit -am "Version $VERSION"
           git push -u origin HEAD
