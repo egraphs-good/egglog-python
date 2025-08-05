@@ -4,7 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-- [WIP] Automatically Generate Changelog Entries for PRs [#313](https://github.com/egraphs-good/egglog-python/pull/313)
+- Automatically Create Changelog Entry for PRs [#313](https://github.com/egraphs-good/egglog-python/pull/313)
 - Automatically Generate Changelog Entries for PRs [#312](https://github.com/egraphs-good/egglog-python/pull/312)
 - Upgrade egglog which includes new backend.
   - Fixes implementation of the Python Object sort to work with objects with dupliating hashes but the same value.
