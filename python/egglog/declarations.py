@@ -96,7 +96,7 @@ class DelayedDeclerations:
         # Catch attribute error, so that it isn't bubbled up as a missing attribute and fallbacks on `__getattr__`
         # instead raise explicitly
         except AttributeError as err:
-            msg = f"Cannot resolve declarations {err}"
+            msg = f"Cannot resolve declarations for {self}: {err}"
             raise RuntimeError(msg) from err
 
 
@@ -345,7 +345,7 @@ class ClassTypeVarRef:
 
     def to_just(self, vars: dict[ClassTypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
         if vars is None or self not in vars:
-            raise TypeVarError(f"Cannot convert {self} to just type")
+            raise TypeVarError(f"Cannot convert type variable {self} to concrete type without variable bindings")
         return vars[self]
 
     def __str__(self) -> str:

@@ -380,7 +380,7 @@ class RuntimeFunction(DelayedDeclerations):
         try:
             bound = py_signature.bind(*args, **kwargs)
         except TypeError as err:
-            raise TypeError(f"Wrong number of arguments for {self} with args {args} and kwargs {kwargs}") from err
+            raise TypeError(f"Failed to bind arguments for {self} with args {args} and kwargs {kwargs}: {err}") from err
         del kwargs
         bound.apply_defaults()
         assert not bound.kwargs
