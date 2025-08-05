@@ -27,12 +27,9 @@ jobs:
         with:
           python-version: '3.12'
       
-      - name: Test changelog script
-        run: python .github/scripts/test_update_changelog.py
-      
       - name: Update changelog
         run: |
-          python .github/scripts/update_changelog.py \
+          python increment_version.py --add-pr \
             --pr-number="${{ github.event.pull_request.number }}" \
             --pr-title="${{ github.event.pull_request.title }}" \
             --pr-url="${{ github.event.pull_request.html_url }}"
