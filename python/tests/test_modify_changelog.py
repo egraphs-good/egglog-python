@@ -37,26 +37,31 @@ def test_update_changelog_subcommand_help():
     assert "Pull request title" in result.stdout
 
 
-def test_bump_version_patch():
-    """Test version bumping with patch increment."""
+@pytest.mark.parametrize("start_version,bump_type,expected_version", [
+    pytest.param("1.2.3", "patch", "1.2.4", id="patch_bump"),
+    pytest.param("1.2.3", "minor", "1.3.0", id="minor_bump"),
+    pytest.param("1.2.3", "major", "2.0.0", id="major_bump"),
+])
+def test_bump_version(start_version, bump_type, expected_version):
+    """Test version bumping with different increment types."""
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         
         # Create mock Cargo.toml
-        cargo_content = '''[package]
+        cargo_content = f'''[package]
 name = "test-package"
-version = "1.2.3"
+version = "{start_version}"
 edition = "2021"
 '''
         cargo_path = temp_path / "Cargo.toml"
         cargo_path.write_text(cargo_content)
         
         # Create mock changelog
-        changelog_content = '''# Changelog
+        changelog_content = f'''# Changelog
 
 ## UNRELEASED
 
-## 1.2.3 (2024-01-01)
+## {start_version} (2024-01-01)
 
 - Some old change
 '''
@@ -68,104 +73,20 @@ edition = "2021"
         # Run the script
         result = subprocess.run([sys.executable, 
                                str(Path(__file__).parent.parent.parent / "modify_changelog.py"), 
-                               "bump_version", "patch"], 
+                               "bump_version", bump_type], 
                               capture_output=True, text=True, cwd=temp_path)
         
         assert result.returncode == 0
-        assert result.stdout.strip() == "1.2.4"
+        assert result.stdout.strip() == expected_version
         
         # Check Cargo.toml was updated
         updated_cargo = cargo_path.read_text()
-        assert 'version = "1.2.4"' in updated_cargo
+        assert f'version = "{expected_version}"' in updated_cargo
         
         # Check changelog was updated
         updated_changelog = changelog_path.read_text()
         assert "## UNRELEASED" in updated_changelog
-        assert "## 1.2.4 (" in updated_changelog
-
-
-def test_bump_version_minor():
-    """Test version bumping with minor increment."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-        
-        # Create mock Cargo.toml
-        cargo_content = '''[package]
-name = "test-package"
-version = "1.2.3"
-edition = "2021"
-'''
-        cargo_path = temp_path / "Cargo.toml"
-        cargo_path.write_text(cargo_content)
-        
-        # Create mock changelog
-        changelog_content = '''# Changelog
-
-## UNRELEASED
-
-## 1.2.3 (2024-01-01)
-
-- Some old change
-'''
-        docs_dir = temp_path / "docs"
-        docs_dir.mkdir()
-        changelog_path = docs_dir / "changelog.md"
-        changelog_path.write_text(changelog_content)
-        
-        # Run the script
-        result = subprocess.run([sys.executable, 
-                               str(Path(__file__).parent.parent.parent / "modify_changelog.py"), 
-                               "bump_version", "minor"], 
-                              capture_output=True, text=True, cwd=temp_path)
-        
-        assert result.returncode == 0
-        assert result.stdout.strip() == "1.3.0"
-        
-        # Check Cargo.toml was updated
-        updated_cargo = cargo_path.read_text()
-        assert 'version = "1.3.0"' in updated_cargo
-
-
-def test_bump_version_major():
-    """Test version bumping with major increment."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-        
-        # Create mock Cargo.toml
-        cargo_content = '''[package]
-name = "test-package"
-version = "1.2.3"
-edition = "2021"
-'''
-        cargo_path = temp_path / "Cargo.toml"
-        cargo_path.write_text(cargo_content)
-        
-        # Create mock changelog
-        changelog_content = '''# Changelog
-
-## UNRELEASED
-
-## 1.2.3 (2024-01-01)
-
-- Some old change
-'''
-        docs_dir = temp_path / "docs"
-        docs_dir.mkdir()
-        changelog_path = docs_dir / "changelog.md"
-        changelog_path.write_text(changelog_content)
-        
-        # Run the script
-        result = subprocess.run([sys.executable, 
-                               str(Path(__file__).parent.parent.parent / "modify_changelog.py"), 
-                               "bump_version", "major"], 
-                              capture_output=True, text=True, cwd=temp_path)
-        
-        assert result.returncode == 0
-        assert result.stdout.strip() == "2.0.0"
-        
-        # Check Cargo.toml was updated
-        updated_cargo = cargo_path.read_text()
-        assert 'version = "2.0.0"' in updated_cargo
+        assert f"## {expected_version} (" in updated_changelog
 
 
 def test_update_changelog_new_entry():
@@ -202,7 +123,7 @@ def test_update_changelog_new_entry():
 
 
 def test_update_changelog_duplicate_entry():
-    """Test that duplicate PR entries are not added."""
+    """Test that modifying PR title updates the existing changelog entry instead of making a new one."""
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         
@@ -222,14 +143,20 @@ def test_update_changelog_duplicate_entry():
         changelog_path = docs_dir / "changelog.md"
         changelog_path.write_text(changelog_content)
         
-        # Run the script
+        # Run the script with updated title for same PR
         result = subprocess.run([sys.executable, 
                                str(Path(__file__).parent.parent.parent / "modify_changelog.py"), 
-                               "update_changelog", "123", "Fix important bug"], 
+                               "update_changelog", "123", "Fix critical security bug"], 
                               capture_output=True, text=True, cwd=temp_path)
         
-        assert result.returncode == 1
-        assert "Changelog entry for PR #123 already exists" in result.stdout
+        assert result.returncode == 0
+        assert "Updated changelog entry for PR #123: Fix critical security bug" in result.stdout
+        
+        # Check that the changelog was updated, not duplicated
+        updated_changelog = changelog_path.read_text()
+        assert "- Fix critical security bug [#123](https://github.com/egraphs-good/egglog-python/pull/123)" in updated_changelog
+        assert "- Fix important bug [#123]" not in updated_changelog  # Old entry should be gone
+        assert updated_changelog.count("[#123]") == 1  # Should only have one entry for PR 123
 
 
 def test_update_changelog_missing_file():

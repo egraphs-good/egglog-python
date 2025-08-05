@@ -86,7 +86,7 @@ def update_changelog_version(file_path: Path, new_version: str) -> None:
 
 
 def update_changelog_pr(file_path: Path, pr_number: str, pr_title: str, pr_url: str) -> bool:
-    """Update the changelog with the new PR entry. Returns True if successful, False if entry already exists."""
+    """Update the changelog with the new PR entry. If entry exists, update it; otherwise add new entry."""
     
     # Read the current changelog
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -106,23 +106,29 @@ def update_changelog_pr(file_path: Path, pr_number: str, pr_title: str, pr_url: 
     # Create the new entry
     new_entry = f"- {pr_title} [#{pr_number}]({pr_url})\n"
     
-    # Check if this PR entry already exists to avoid duplicates
-    for line in lines[content_start:]:
+    # Check if this PR entry already exists and update it if so
+    existing_entry_index = None
+    for i, line in enumerate(lines[content_start:], start=content_start):
         if f"[#{pr_number}]" in line:
-            print(f"Changelog entry for PR #{pr_number} already exists")
-            return False
+            existing_entry_index = i
+            break
         # Stop checking when we reach the next section
         if line.startswith("## ") and not line.strip() == "## UNRELEASED":
             break
     
-    # Insert the new entry at the beginning of the unreleased content
-    lines.insert(content_start, new_entry)
+    if existing_entry_index is not None:
+        # Update existing entry
+        lines[existing_entry_index] = new_entry
+        print(f"Updated changelog entry for PR #{pr_number}: {pr_title}")
+    else:
+        # Insert the new entry at the beginning of the unreleased content
+        lines.insert(content_start, new_entry)
+        print(f"Added changelog entry for PR #{pr_number}: {pr_title}")
     
     # Write the updated changelog
     with open(file_path, 'w', encoding='utf-8') as f:
         f.writelines(lines)
     
-    print(f"Added changelog entry for PR #{pr_number}: {pr_title}")
     return True
 
 
