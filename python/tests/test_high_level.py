@@ -5,6 +5,7 @@ import importlib
 import pathlib
 from copy import copy
 from fractions import Fraction
+from functools import partial
 from typing import ClassVar, TypeAlias, TypeVar
 
 import pytest
@@ -525,6 +526,21 @@ class TestEval:
 
     def test_multiset(self):
         assert list(MultiSet(i64(1), i64(1))) == [i64(1), i64(1)]
+
+    def test_unstable_fn(self):
+        class Math(Expr):
+            def __init__(self) -> None: ...
+
+        @function
+        def f(x: Math) -> Math: ...
+
+        u_f = UnstableFn(f)
+        assert u_f.eval() == f
+        p_u_f = UnstableFn(f, Math())
+        value = p_u_f.eval()
+        assert isinstance(value, partial)
+        assert value.func == f
+        assert value.args == (Math(),)
 
 
 # def test_egglog_string():

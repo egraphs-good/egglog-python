@@ -77,6 +77,7 @@ __all__ = [
     "UnboundVarDecl",
     "UnionDecl",
     "UnnamedFunctionRef",
+    "collect_unbound_vars",
     "replace_typed_expr",
     "upcast_declerations",
 ]
@@ -681,6 +682,28 @@ def replace_typed_expr(typed_expr: TypedExprDecl, replacements: Mapping[TypedExp
         return res
 
     return _inner(typed_expr)
+
+
+def collect_unbound_vars(typed_expr: TypedExprDecl) -> set[TypedExprDecl]:
+    """
+    Returns the set of all unbound vars
+    """
+    seen = set[TypedExprDecl]()
+    unbound_vars = set[TypedExprDecl]()
+
+    def visit(typed_expr: TypedExprDecl) -> None:
+        if typed_expr in seen:
+            return
+        seen.add(typed_expr)
+        match typed_expr.expr:
+            case CallDecl(_, args) | PartialCallDecl(CallDecl(_, args)):
+                for arg in args:
+                    visit(arg)
+            case UnboundVarDecl(_):
+                unbound_vars.add(typed_expr)
+
+    visit(typed_expr)
+    return unbound_vars
 
 
 ##

@@ -9,6 +9,8 @@ _This project uses semantic versioning_
     Also changes the representation to be an index into a list instead of the ID, making egglog programs more deterministic.
   - Prefix constant declerations and unbound variables to not shadow let variables
   - BREAKING: Remove `simplify` since it was removed upstream. You can manually replace it with an insert, run, then extract.
+- Change how anonymous functions are converted to remove metaprogramming and lift only the unbound variables as args
+- Add support for getting the "value" of a function type with `.eval()`, i.e. `assert UnstableFn(f).eval() == f`.
 
 ## 10.0.2 (2025-06-22)
 
