@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- [WIP] Fix automatic generic of changelog entries with markdown [#317](https://github.com/egraphs-good/egglog-python/pull/317)
 - Automatically Create Changelog Entry for PRs [#313](https://github.com/egraphs-good/egglog-python/pull/313)
 - Upgrade egglog which includes new backend.
   - Fixes implementation of the Python Object sort to work with objects with dupliating hashes but the same value.
