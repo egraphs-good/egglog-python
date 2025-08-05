@@ -303,6 +303,11 @@ Note that the following list of methods are only supported as "preserved" since 
 - `__iter_`
 - `__index__`
 
+If you want to register additional methods as always preserved and defined on the `Expr` class itself, if needed
+instead of the normal mechanism which relies on `__getattr__`, you can call `egglog.define_expr_method(name: str)`,
+with the name of a method. This is only needed for third party code that inspects the type object itself to see if a
+method is defined instead of just attempting to call it.
+
 ### Reflected methods
 
 Note that reflected methods (i.e. `__radd__`) are handled as a special case. If defined, they won't create their own egglog functions.

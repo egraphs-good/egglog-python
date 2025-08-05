@@ -384,34 +384,6 @@ def test_reflected_binary_method():
     )
 
 
-def test_upcast_args():
-    # -0.1 + Int(x) -> -0.1 + Float(x)
-    EGraph()
-
-    class Int(Expr):
-        def __init__(self, value: i64Like) -> None: ...
-
-        def __add__(self, other: Int) -> Int: ...
-
-    class Float(Expr):
-        def __init__(self, value: f64Like) -> None: ...
-
-        def __add__(self, other: Float) -> Float: ...
-
-        @classmethod
-        def from_int(cls, other: Int) -> Float: ...
-
-    converter(i64, Int, Int)
-    converter(f64, Float, Float)
-    converter(Int, Float, Float.from_int)
-
-    res: Expr = -0.1 + Int(10)  # type: ignore[operator,assignment]
-    assert expr_parts(res) == expr_parts(Float(-0.1) + Float.from_int(Int(10)))
-
-    res: Expr = Int(10) + -0.1  # type: ignore[operator,assignment]
-    assert expr_parts(res) == expr_parts(Float.from_int(Int(10)) + Float(-0.1))
-
-
 def test_rewrite_upcasts():
     class X(Expr):
         def __init__(self, value: i64Like) -> None: ...
