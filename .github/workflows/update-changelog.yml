@@ -31,7 +31,7 @@ jobs:
         run: |
           python modify_changelog.py update_changelog \
             "${{ github.event.pull_request.number }}" \
-            "${{ github.event.pull_request.title }}"
+            '${{ github.event.pull_request.title }}'
       
       - name: Check for changes
         id: changes
