@@ -1,33 +1,31 @@
 """
-Version Bumper for Cargo.toml and Changelog.md
+Changelog Modifier and Version Bumper for Cargo.toml and Changelog.md
 
-This script automates the process of version bumping for Rust projects managed with Cargo. It reads the version
-from the cargo.toml file, increments it based on the specified component (major, minor, or patch), and updates
-both the cargo.toml and changelog.md files accordingly.
+This script automates the process of version bumping and changelog updates for Rust projects managed with Cargo. 
+It reads the version from the cargo.toml file, increments it based on the specified component (major, minor, or patch), 
+and updates both the cargo.toml and changelog.md files accordingly.
 
-It will also print out the new version number.
-
-Additionally, this script can add PR entries to the UNRELEASED section of the changelog.
+It can also add PR entries to the UNRELEASED section of the changelog.
 
 Usage:
     Version bumping:
-    $ python increment_version.py [major|minor|patch]
+    $ python modify_changelog.py bump_version [major|minor|patch]
     
     Adding PR entry:
-    $ python increment_version.py --add-pr --pr-number=123 --pr-title="Fix bug" --pr-url="https://github.com/..."
+    $ python modify_changelog.py update_changelog <number> <title>
 
-Arguments:
----------
-    major - Increments the major component of the version, sets minor and patch to 0
-    minor - Increments the minor component of the version, sets patch to 0
-    patch - Increments the patch component of the version
-    --add-pr - Add a PR entry to the UNRELEASED section
-    --pr-number - PR number (required with --add-pr)
-    --pr-title - PR title (required with --add-pr)
-    --pr-url - PR URL (required with --add-pr)
+Subcommands:
+-----------
+    bump_version - Increments version and updates changelog
+        major - Increments the major component of the version, sets minor and patch to 0
+        minor - Increments the minor component of the version, sets patch to 0
+        patch - Increments the patch component of the version
+    
+    update_changelog - Add a PR entry to the UNRELEASED section
+        number - PR number
+        title - PR title
 
 From https://chat.openai.com/share/6b08906d-23a3-4193-9f4e-87076ce56ddb
-
 
 """
 
@@ -128,47 +126,19 @@ def update_changelog_pr(file_path: Path, pr_number: str, pr_title: str, pr_url: 
     return True
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Version bumper and changelog updater')
-    
-    # Create mutually exclusive group for version bump vs PR add
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('bump_type', nargs='?', choices=['major', 'minor', 'patch'], 
-                      help='Type of version bump')
-    group.add_argument('--add-pr', action='store_true', help='Add PR entry to changelog')
-    
-    # PR-specific arguments
-    parser.add_argument('--pr-number', help='Pull request number (required with --add-pr)')
-    parser.add_argument('--pr-title', help='Pull request title (required with --add-pr)')
-    parser.add_argument('--pr-url', help='Pull request URL (required with --add-pr)')
-    parser.add_argument('--changelog-path', default='docs/changelog.md', help='Path to changelog file')
-    
-    args = parser.parse_args()
-    
-    # Handle PR addition
-    if args.add_pr:
-        if not all([args.pr_number, args.pr_title, args.pr_url]):
-            print("ERROR: --pr-number, --pr-title, and --pr-url are required with --add-pr")
-            sys.exit(1)
-        
-        changelog_path = Path(args.changelog_path)
-        if not changelog_path.exists():
-            print(f"ERROR: Changelog file not found: {changelog_path}")
-            sys.exit(1)
-        
-        success = update_changelog_pr(changelog_path, args.pr_number, args.pr_title, args.pr_url)
-        if not success:
-            sys.exit(1)
-        return
-    
-    # Handle version bump (existing functionality)
-    if not args.bump_type:
-        print("ERROR: Either specify bump type (major|minor|patch) or use --add-pr")
-        sys.exit(1)
-    
+def handle_bump_version(args):
+    """Handle version bump subcommand."""
     part = args.bump_type
     cargo_path = Path("Cargo.toml")
     changelog_path = Path("docs/changelog.md")
+
+    if not cargo_path.exists():
+        print("ERROR: Cargo.toml not found.")
+        sys.exit(1)
+    
+    if not changelog_path.exists():
+        print("ERROR: Changelog file not found.")
+        sys.exit(1)
 
     cargo_content = cargo_path.read_text()
     version_match = re.search(r'version = "(\d+)\.(\d+)\.(\d+)"', cargo_content)
@@ -179,31 +149,58 @@ def main():
         sys.exit(1)
 
     new_version = bump_version(major, minor, patch, part)
-    old_version = f"{major}.{minor}.{patch}"
     update_cargo_toml(cargo_path, new_version)
     update_changelog_version(changelog_path, new_version)
     print(new_version)
 
 
+def handle_update_changelog(args):
+    """Handle update changelog subcommand."""
+    pr_number = args.number
+    pr_title = args.title
+    
+    # Construct PR URL from repository info and PR number
+    # Default to the egglog-python repository
+    pr_url = f"https://github.com/egraphs-good/egglog-python/pull/{pr_number}"
+    
+    changelog_path = Path(getattr(args, 'changelog_path', 'docs/changelog.md'))
+    
+    if not changelog_path.exists():
+        print(f"ERROR: Changelog file not found: {changelog_path}")
+        sys.exit(1)
+    
+    success = update_changelog_pr(changelog_path, pr_number, pr_title, pr_url)
+    if not success:
+        sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Changelog modifier and version bumper')
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Bump version subcommand
+    bump_parser = subparsers.add_parser('bump_version', help='Bump version and update changelog')
+    bump_parser.add_argument('bump_type', choices=['major', 'minor', 'patch'], 
+                            help='Type of version bump')
+    
+    # Update changelog subcommand
+    changelog_parser = subparsers.add_parser('update_changelog', help='Add PR entry to changelog')
+    changelog_parser.add_argument('number', help='Pull request number')
+    changelog_parser.add_argument('title', help='Pull request title')
+    changelog_parser.add_argument('--changelog-path', default='docs/changelog.md', 
+                                 help='Path to changelog file')
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+    
+    if args.command == 'bump_version':
+        handle_bump_version(args)
+    elif args.command == 'update_changelog':
+        handle_update_changelog(args)
+
+
 if __name__ == "__main__":
-    # For backward compatibility, support old command line format
-    if len(sys.argv) == 2 and sys.argv[1] in ("major", "minor", "patch"):
-        part = sys.argv[1]
-        cargo_path = Path("Cargo.toml")
-        changelog_path = Path("docs/changelog.md")
-
-        cargo_content = cargo_path.read_text()
-        version_match = re.search(r'version = "(\d+)\.(\d+)\.(\d+)"', cargo_content)
-        if version_match:
-            major, minor, patch = map(int, version_match.groups())
-        else:
-            print("Current version not found in cargo.toml.")
-            sys.exit(1)
-
-        new_version = bump_version(major, minor, patch, part)
-        old_version = f"{major}.{minor}.{patch}"
-        update_cargo_toml(cargo_path, new_version)
-        update_changelog_version(changelog_path, new_version)
-        print(new_version)
-    else:
-        main()
+    main()

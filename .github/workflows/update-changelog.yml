@@ -29,10 +29,9 @@ jobs:
       
       - name: Update changelog
         run: |
-          python increment_version.py --add-pr \
-            --pr-number="${{ github.event.pull_request.number }}" \
-            --pr-title="${{ github.event.pull_request.title }}" \
-            --pr-url="${{ github.event.pull_request.html_url }}"
+          python modify_changelog.py update_changelog \
+            "${{ github.event.pull_request.number }}" \
+            "${{ github.event.pull_request.title }}"
       
       - name: Check for changes
         id: changes
