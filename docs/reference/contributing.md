@@ -84,6 +84,10 @@ or bug fixes.
 
 When you are ready to submit your changes, please open a pull request. The CI will run the tests and check the code style.
 
+#### Changelog Automation
+
+When you open a pull request, a GitHub Action automatically adds an entry to the UNRELEASED section of the changelog using your PR title and number. This ensures the changelog stays up-to-date without manual intervention.
+
 ## Documentation
 
 We use the [Diátaxis framework](https://diataxis.fr/) to organize our documentation. The "explanation" section has
