@@ -115,7 +115,7 @@ IGNORED_ATTRIBUTES = {
     "__firstlineno__",
     "__static_attributes__",
     # Ignore all reflected binary method
-    *REFLECTED_BINARY_METHODS.keys(),
+    *(f"__r{m[2:]}" for m in NUMERIC_BINARY_METHODS),
 }
 
 
