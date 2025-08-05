@@ -306,6 +306,17 @@ class RuntimeFunction(DelayedDeclerations):
     # bound methods need to store RuntimeExpr not just TypedExprDecl, so they can mutate the expr if required on self
     __egg_bound__: JustTypeRef | RuntimeExpr | None = None
 
+    def __eq__(self, other: object) -> bool:
+        """
+        Support equality for runtime comparison of egglog functions.
+        """
+        if not isinstance(other, RuntimeFunction):
+            return NotImplemented
+        return self.__egg_ref__ == other.__egg_ref__ and bool(self.__egg_bound__ == other.__egg_bound__)
+
+    def __hash__(self) -> int:
+        return hash((self.__egg_ref__, self.__egg_bound__))
+
     @property
     def __egg_ref__(self) -> CallableRef:
         return self.__egg_ref_thunk__()

@@ -8,16 +8,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from fractions import Fraction
 from functools import partial, reduce
+from inspect import signature
 from types import FunctionType, MethodType
 from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, cast, overload
 
 from typing_extensions import TypeVarTuple, Unpack
 
-from .conversion import convert, converter, get_type_args
+from egglog.declarations import TypedExprDecl
+
+from .conversion import convert, converter, get_type_args, resolve_literal
 from .declarations import *
-from .egraph import BaseExpr, BuiltinExpr, expr_fact, function, get_current_ruleset, method
-from .functionalize import functionalize
-from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
+from .egraph import BaseExpr, BuiltinExpr, _add_default_rewrite_inner, expr_fact, function, get_current_ruleset, method
+from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, resolve_type_annotation_mutate
 from .thunk import Thunk
 
 if TYPE_CHECKING:
@@ -1022,6 +1024,44 @@ class UnstableFn(BuiltinExpr, Generic[T, Unpack[TS]]):
     @method(egg_fn="unstable-app")
     def __call__(self, *args: Unpack[TS]) -> T: ...
 
+    @method(preserve=True)
+    def eval(self) -> Callable[[Unpack[TS]], T]:
+        """
+        If this is a constructor, returns either the callable directly or a `functools.partial` function if args are provided.
+        """
+        assert isinstance(self, RuntimeExpr)
+        match self.__egg_typed_expr__.expr:
+            case PartialCallDecl(CallDecl() as call):
+                fn, args = _deconstruct_call_decl(self.__egg_decls_thunk__, call)
+                if not args:
+                    return fn
+                return partial(fn, *args)
+        msg = "UnstableFn can only be evaluated if it is a function or a partial application of a function."
+        raise BuiltinEvalError(msg)
+
+
+def _deconstruct_call_decl(
+    decls_thunk: Callable[[], Declarations], call: CallDecl
+) -> tuple[Callable, tuple[object, ...]]:
+    """
+    Deconstructs a CallDecl into a runtime callable and its arguments.
+    """
+    args = call.args
+    arg_exprs = tuple(RuntimeExpr(decls_thunk, Thunk.value(a)) for a in args)
+    egg_bound = (
+        JustTypeRef(call.callable.class_name, call.bound_tp_params or ())
+        if isinstance(call.callable, (ClassMethodRef, InitRef, ClassVariableRef))
+        else None
+    )
+    if isinstance(call.callable, InitRef):
+        return RuntimeClass(
+            decls_thunk,
+            TypeRefWithVars(
+                call.callable.class_name,
+            ),
+        ), arg_exprs
+    return RuntimeFunction(decls_thunk, Thunk.value(call.callable), egg_bound), arg_exprs
+
 
 # Method Type is for builtins like __getitem__
 converter(MethodType, UnstableFn, lambda m: UnstableFn(m.__func__, m.__self__))
@@ -1029,38 +1069,43 @@ converter(RuntimeFunction, UnstableFn, UnstableFn)
 converter(partial, UnstableFn, lambda p: UnstableFn(p.func, *p.args))
 
 
-def _convert_function(a: FunctionType) -> UnstableFn:
+def _convert_function(fn: FunctionType) -> UnstableFn:
     """
-    Converts a function type to an unstable function
+    Converts a function type to an unstable function. This function will be an anon function in egglog.
 
-    Would just be UnstableFn(function(a)) but we have to look for any nonlocals and globals
-    which are runtime expressions with `var`s in them and add them as args to the function
+    Would just be UnstableFn(function(a)) but we have to account for unbound vars within the body.
+
+    This means that we have to turn all of those unbound vars into args to the function, and then
+    partially apply them, alongside creating a default rewrite for the function.
     """
-    # Update annotations of a to be the type we are trying to convert to
-    return_tp, *arg_tps = get_type_args()
-    a.__annotations__ = {
-        "return": return_tp,
-        # The first varnames should always be the arg names
-        **dict(zip(a.__code__.co_varnames, arg_tps, strict=False)),
-    }
-    # Modify name to make it unique
-    # a.__name__ = f"{a.__name__} {hash(a.__code__)}"
-    transformed_fn = functionalize(a, value_to_annotation)
-    assert isinstance(transformed_fn, partial)
-    return UnstableFn(
-        function(ruleset=get_current_ruleset(), use_body_as_name=True, subsume=True)(transformed_fn.func),
-        *transformed_fn.args,
+    decls = Declarations()
+    return_type, *arg_types = [resolve_type_annotation_mutate(decls, tp) for tp in get_type_args()]
+    arg_names = [p.name for p in signature(fn).parameters.values()]
+    arg_decls = [
+        TypedExprDecl(tp.to_just(), UnboundVarDecl(name)) for name, tp in zip(arg_names, arg_types, strict=True)
+    ]
+    res = resolve_literal(
+        return_type, fn(*(RuntimeExpr.__from_values__(decls, a) for a in arg_decls)), Thunk.value(decls)
     )
+    res_expr = res.__egg_typed_expr__
+    decls |= res
+    # these are all the args that appear in the body that are not bound by the args of the function
+    unbound_vars = list(collect_unbound_vars(res_expr) - set(arg_decls))
+    # prefix the args with them
+    fn_ref = UnnamedFunctionRef(tuple(unbound_vars + arg_decls), res_expr)
+    rewrite_decl = DefaultRewriteDecl(fn_ref, res_expr.expr, subsume=True)
+    ruleset_decls = _add_default_rewrite_inner(decls, rewrite_decl, get_current_ruleset())
+    ruleset_decls |= res
 
-
-def value_to_annotation(a: object) -> type | None:
-    # only lift runtime expressions (which could contain vars) not any other nonlocals/globals we use in the function
-    if not isinstance(a, RuntimeExpr):
-        return None
-    return cast("type", RuntimeClass(Thunk.value(a.__egg_decls__), a.__egg_typed_expr__.tp.to_var()))
+    fn = RuntimeFunction(Thunk.value(decls), Thunk.value(fn_ref))
+    return UnstableFn(fn, *(RuntimeExpr.__from_values__(decls, v) for v in unbound_vars))
 
 
 converter(FunctionType, UnstableFn, _convert_function)
+
+##
+# Utility Functions
+##
 
 
 def _extract_lit(e: BaseExpr) -> LitType:
