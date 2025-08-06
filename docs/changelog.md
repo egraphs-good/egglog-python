@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Bump the rust group across 1 directory with 2 updates [#309](https://github.com/egraphs-good/egglog-python/pull/309)
 - Support methods like  on expressions [#315](https://github.com/egraphs-good/egglog-python/pull/315)
 - Automatically Create Changelog Entry for PRs [#313](https://github.com/egraphs-good/egglog-python/pull/313)
 - Upgrade egglog which includes new backend.
