@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Add ability to parse egglog expressions into Python values [#319](https://github.com/egraphs-good/egglog-python/pull/319)
 - Support methods like  on expressions [#315](https://github.com/egraphs-good/egglog-python/pull/315)
 - Automatically Create Changelog Entry for PRs [#313](https://github.com/egraphs-good/egglog-python/pull/313)
 - Upgrade egglog which includes new backend.
