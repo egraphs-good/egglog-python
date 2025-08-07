@@ -14,7 +14,7 @@ z = BigRat(x, y)
 
 egraph = EGraph()
 
-assert egraph.extract(z.numer.to_string()).eval() == "-617"
+assert egraph.extract(z.numer.to_string()).value == "-617"
 
 
 @function

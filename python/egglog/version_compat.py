@@ -30,7 +30,7 @@ if BEFORE_3_11:
 
             _collect_type_vars((T, List[S, T])) == (T, S)
         """
-        from .runtime import RuntimeClass
+        from .runtime import RuntimeClass  # noqa: PLC0415
 
         if typevar_types is None:
             typevar_types = typing.TypeVar
@@ -48,7 +48,7 @@ if BEFORE_3_11:
     @typing.no_type_check
     @typing._tp_cache
     def __getitem__monkeypatch(self, params):  # noqa: C901, PLR0912
-        from .runtime import RuntimeClass
+        from .runtime import RuntimeClass  # noqa: PLC0415
 
         if self.__origin__ in (typing.Generic, typing.Protocol):
             # Can't subscript Generic[...] or Protocol[...].
