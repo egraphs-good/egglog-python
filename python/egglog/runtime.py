@@ -583,17 +583,17 @@ for name in TYPE_DEFINED_METHODS:
     define_expr_method(name)
 
 
-for name, reversed in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
+for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
 
-    def _numeric_binary_method(self: object, other: object, name: str = name, reversed: bool = reversed) -> object:
+    def _numeric_binary_method(self: object, other: object, name: str = name, r_method: bool = r_method) -> object:
         """
         Implements numeric binary operations.
 
         Tries to find the minimum cost conversion of either the LHS or the RHS, by finding all methods with either
         the LHS or the RHS as exactly the right type and then upcasting the other to that type.
         """
-        # 1. switch if reversed
-        if reversed:
+        # 1. switch if reversed method
+        if r_method:
             self, other = other, self
         # If the types don't exactly match to start, then we need to try converting one of them, by finding the cheapest conversion
         if not (
@@ -646,7 +646,7 @@ for name, reversed in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
         fn = RuntimeFunction(Thunk.value(self.__egg_decls__), Thunk.value(method_ref), self)
         return fn(other)
 
-    method_name = f"__r{name[2:]}" if reversed else name
+    method_name = f"__r{name[2:]}" if r_method else name
     setattr(RuntimeExpr, method_name, _numeric_binary_method)
 
 
