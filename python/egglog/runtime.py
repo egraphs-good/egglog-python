@@ -311,7 +311,7 @@ class RuntimeFunction(DelayedDeclerations):
         return self.__egg_ref_thunk__()
 
     def __call__(self, *args: object, _egg_partial_function: bool = False, **kwargs: object) -> RuntimeExpr | None:
-        from .conversion import resolve_literal
+        from .conversion import resolve_literal  # noqa: PLC0415
 
         if isinstance(self.__egg_bound__, RuntimeExpr):
             args = (self.__egg_bound__, *args)
@@ -493,7 +493,7 @@ class RuntimeExpr(DelayedDeclerations):
         return pretty_decl(self.__egg_decls__, self.__egg_typed_expr__.expr, wrapping_fn=wrapping_fn)
 
     def _ipython_display_(self) -> None:
-        from IPython.display import Code, display
+        from IPython.display import Code, display  # noqa: PLC0415
 
         display(Code(str(self), language="python"))
 
@@ -539,7 +539,7 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
         __name: str = name,
         **kwargs: object,
     ) -> RuntimeExpr | Fact | None:
-        from .conversion import ConvertError
+        from .conversion import ConvertError  # noqa: PLC0415
 
         class_name = self.__egg_class_name__
         class_decl = self.__egg_class_decl__
@@ -566,11 +566,11 @@ for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call
             return fn(*args, **kwargs)  # type: ignore[arg-type]
         # Handle == and != fallbacks to eq and ne helpers if the methods aren't defined on the class explicitly.
         if __name == "__eq__":
-            from .egraph import BaseExpr, eq
+            from .egraph import BaseExpr, eq  # noqa: PLC0415
 
             return eq(cast("BaseExpr", self)).to(cast("BaseExpr", args[0]))
         if __name == "__ne__":
-            from .egraph import BaseExpr, ne
+            from .egraph import BaseExpr, ne  # noqa: PLC0415
 
             return cast("RuntimeExpr", ne(cast("BaseExpr", self)).to(cast("BaseExpr", args[0])))
 
@@ -591,7 +591,7 @@ for reflected, non_reflected in REFLECTED_BINARY_METHODS.items():
 
 
 def call_method_min_conversion(slf: object, other: object, name: str) -> RuntimeExpr | None:
-    from .conversion import min_convertable_tp, resolve_literal
+    from .conversion import min_convertable_tp, resolve_literal  # noqa: PLC0415
 
     # find a minimum type that both can be converted to
     # This is so so that calls like `-0.1 * Int("x")` work by upcasting both to floats.

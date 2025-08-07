@@ -199,9 +199,11 @@ ignore = [
     # allow blind exception to add context
     "BLE001",
     # Don't move type checking around so that can be accessed at runtime
-    "TCH001",
-    "TCH002",
-    "TCH003",
+    "TC001",
+    "TC002",
+    "TC003",
+    # allow eq without hash
+    "PLW1641",
 ]
 select = ["ALL"]
 
