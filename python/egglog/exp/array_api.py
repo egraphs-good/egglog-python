@@ -492,7 +492,6 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
 converter(Vec[Int], TupleInt, lambda x: TupleInt.from_vec(x))
 
-print(type(VecLike))
 TupleIntLike: TypeAlias = TupleInt | VecLike[Int, IntLike]
 
 
