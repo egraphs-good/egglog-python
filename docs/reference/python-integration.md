@@ -639,7 +639,3 @@ r = ruleset(
 )
 egraph.saturate(r)
 ```
-
-```
-
-```
