@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import ClassVar, reveal_type
+from typing import ClassVar
 
 import pytest
 
@@ -30,12 +30,6 @@ def f(x: X) -> X: ...
 @function
 def y(x: X, i: i64) -> X: ...
 
-
-reveal_type(get_callable_args(X(), y))
-match get_callable_args(X(), y):
-    case (x, i):
-        reveal_type(x)
-        reveal_type(i)
 
 c = constant("c", X)
 
