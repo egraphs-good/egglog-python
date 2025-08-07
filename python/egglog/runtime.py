@@ -577,7 +577,7 @@ class RuntimeExpr(DelayedDeclerations):
 
         # TODO: Check if two objects can be upcasted to be the same. If not, then return NotImplemented so other
         # expr gets a chance to resolve __eq__ which could be a preserved method.
-        from .egraph import BaseExpr, eq
+        from .egraph import BaseExpr, eq  # noqa: PLC0415
 
         return eq(cast("BaseExpr", self)).to(cast("BaseExpr", other))
 
@@ -585,7 +585,7 @@ class RuntimeExpr(DelayedDeclerations):
         if (method := _get_expr_method(self, "__ne__")) is not None:
             return method(other)
 
-        from .egraph import BaseExpr, ne
+        from .egraph import BaseExpr, ne  # noqa: PLC0415
 
         return ne(cast("BaseExpr", self)).to(cast("BaseExpr", other))
 
@@ -647,7 +647,7 @@ for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
                 )
             )
         ):
-            from .conversion import CONVERSIONS, resolve_type, retrieve_conversion_decls
+            from .conversion import CONVERSIONS, resolve_type, retrieve_conversion_decls  # noqa: PLC0415
 
             # tuple of (cost, convert_self)
             best_method: (
