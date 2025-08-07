@@ -6,20 +6,20 @@ Builtin sorts and function to egg.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial, reduce
 from inspect import signature
 from types import FunctionType, MethodType
 from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, cast, overload
 
-from typing_extensions import TypeVarTuple, Unpack
-
-from egglog.declarations import TypedExprDecl
+from typing_extensions import TypeVarTuple, Unpack, deprecated
 
 from .conversion import convert, converter, get_type_args, resolve_literal
 from .declarations import *
+from .deconstruct import get_callable_args, get_literal_value
 from .egraph import BaseExpr, BuiltinExpr, _add_default_rewrite_inner, expr_fact, function, get_current_ruleset, method
-from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, resolve_type_annotation_mutate
+from .runtime import RuntimeExpr, RuntimeFunction, resolve_type_annotation_mutate
 from .thunk import Thunk
 
 if TYPE_CHECKING:
@@ -33,7 +33,7 @@ __all__ = [
     "BigRatLike",
     "Bool",
     "BoolLike",
-    "BuiltinEvalError",
+    "ExprValueError",
     "Map",
     "MapLike",
     "MultiSet",
@@ -58,15 +58,17 @@ __all__ = [
 ]
 
 
-class BuiltinEvalError(Exception):
+@dataclass
+class ExprValueError(AttributeError):
     """
-    Raised when an builtin cannot be evaluated into a Python primitive because it is complex.
+    Raised when an expression cannot be converted to a Python value because the value is not a constructor.
+    """
 
-    Try extracting this expression first.
-    """
+    expr: BaseExpr
+    allowed: str
 
     def __str__(self) -> str:
-        return f"Cannot evaluate builtin expression into a Python primitive. Try extracting this expression first: {super().__str__()}"
+        return f"Cannot get Python value of {self.expr}, must be of form {self.allowed}. Try calling `extract` on it to get the underlying value."
 
 
 class Unit(BuiltinExpr, egg_sort="Unit"):
@@ -82,13 +84,21 @@ class Unit(BuiltinExpr, egg_sort="Unit"):
 
 
 class String(BuiltinExpr):
-    @method(preserve=True)
-    def eval(self) -> str:
-        value = _extract_lit(self)
-        assert isinstance(value, str)
-        return value
-
     def __init__(self, value: str) -> None: ...
+
+    @method(preserve=True)
+    @deprecated("use .value")
+    def eval(self) -> str:
+        return self.value
+
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> str:
+        if (value := get_literal_value(self)) is not None:
+            return value
+        raise ExprValueError(self, "String")
+
+    __match_args__ = ("value",)
 
     @method(egg_fn="replace")
     def replace(self, old: StringLike, new: StringLike) -> String: ...
@@ -105,17 +115,25 @@ converter(str, String, String)
 
 
 class Bool(BuiltinExpr, egg_sort="bool"):
+    def __init__(self, value: bool) -> None: ...
+
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> bool:
-        value = _extract_lit(self)
-        assert isinstance(value, bool)
-        return value
+        return self.value
+
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> bool:
+        if (value := get_literal_value(self)) is not None:
+            return value
+        raise ExprValueError(self, "Bool")
+
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def __bool__(self) -> bool:
-        return self.eval()
-
-    def __init__(self, value: bool) -> None: ...
+        return self.value
 
     @method(egg_fn="not")
     def __invert__(self) -> Bool: ...
@@ -140,21 +158,29 @@ converter(bool, Bool, Bool)
 
 
 class i64(BuiltinExpr):  # noqa: N801
+    def __init__(self, value: int) -> None: ...
+
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> int:
-        value = _extract_lit(self)
-        assert isinstance(value, int)
-        return value
+        return self.value
+
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> int:
+        if (value := get_literal_value(self)) is not None:
+            return value
+        raise ExprValueError(self, "i64")
+
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def __index__(self) -> int:
-        return self.eval()
+        return self.value
 
     @method(preserve=True)
     def __int__(self) -> int:
-        return self.eval()
-
-    def __init__(self, value: int) -> None: ...
+        return self.value
 
     @method(egg_fn="+")
     def __add__(self, other: i64Like) -> i64: ...
@@ -259,21 +285,29 @@ def count_matches(s: StringLike, pattern: StringLike) -> i64: ...
 
 
 class f64(BuiltinExpr):  # noqa: N801
+    def __init__(self, value: float) -> None: ...
+
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> float:
-        value = _extract_lit(self)
-        assert isinstance(value, float)
-        return value
+        return self.value
+
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> float:
+        if (value := get_literal_value(self)) is not None:
+            return value
+        raise ExprValueError(self, "f64")
+
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def __float__(self) -> float:
-        return self.eval()
+        return self.value
 
     @method(preserve=True)
     def __int__(self) -> int:
-        return int(self.eval())
-
-    def __init__(self, value: float) -> None: ...
+        return int(self.value)
 
     @method(egg_fn="neg")
     def __neg__(self) -> f64: ...
@@ -349,34 +383,34 @@ V = TypeVar("V", bound=BaseExpr)
 
 class Map(BuiltinExpr, Generic[T, V]):
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> dict[T, V]:
-        call = _extract_call(self)
-        expr = cast("RuntimeExpr", self)
+        return self.value
+
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> dict[T, V]:
         d = {}
-        while call.callable != ClassMethodRef("Map", "empty"):
-            msg = "Map can only be evaluated if it is empty or a series of inserts."
-            if call.callable != MethodRef("Map", "insert"):
-                raise BuiltinEvalError(msg)
-            call_typed, k_typed, v_typed = call.args
-            if not isinstance(call_typed.expr, CallDecl):
-                raise BuiltinEvalError(msg)
-            k = cast("T", expr.__with_expr__(k_typed))
-            v = cast("V", expr.__with_expr__(v_typed))
+        while args := get_callable_args(self, Map[T, V].insert):
+            self, k, v = args  # noqa: PLW0642
             d[k] = v
-            call = call_typed.expr
+        if get_callable_args(self, Map.empty) is None:
+            raise ExprValueError(self, "Map.empty or Map.insert")
         return d
+
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[T]:
-        return iter(self.eval())
+        return iter(self.value)
 
     @method(preserve=True)
     def __len__(self) -> int:
-        return len(self.eval())
+        return len(self.value)
 
     @method(preserve=True)
     def __contains__(self, key: T) -> bool:
-        return key in self.eval()
+        return key in self.value
 
     @method(egg_fn="map-empty")
     @classmethod
@@ -419,24 +453,30 @@ MapLike: TypeAlias = Map[T, V] | dict[TO, VO]
 
 class Set(BuiltinExpr, Generic[T]):
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> set[T]:
-        call = _extract_call(self)
-        if call.callable != InitRef("Set"):
-            msg = "Set can only be initialized with the Set constructor."
-            raise BuiltinEvalError(msg)
-        return {cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args}
+        return self.value
+
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> set[T]:
+        if (args := get_callable_args(self, Set[T])) is not None:
+            return set(args)
+        raise ExprValueError(self, "Set(*xs)")
+
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[T]:
-        return iter(self.eval())
+        return iter(self.value)
 
     @method(preserve=True)
     def __len__(self) -> int:
-        return len(self.eval())
+        return len(self.value)
 
     @method(preserve=True)
     def __contains__(self, key: T) -> bool:
-        return key in self.eval()
+        return key in self.value
 
     @method(egg_fn="set-of")
     def __init__(self, *args: T) -> None: ...
@@ -483,24 +523,30 @@ SetLike: TypeAlias = Set[T] | set[TO]
 
 class MultiSet(BuiltinExpr, Generic[T]):
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> list[T]:
-        call = _extract_call(self)
-        if call.callable != InitRef("MultiSet"):
-            msg = "MultiSet can only be initialized with the MultiSet constructor."
-            raise BuiltinEvalError(msg)
-        return [cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args]
+        return self.value
+
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> list[T]:
+        if (args := get_callable_args(self, MultiSet[T])) is not None:
+            return list(args)
+        raise ExprValueError(self, "MultiSet")
+
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[T]:
-        return iter(self.eval())
+        return iter(self.value)
 
     @method(preserve=True)
     def __len__(self) -> int:
-        return len(self.eval())
+        return len(self.value)
 
     @method(preserve=True)
     def __contains__(self, key: T) -> bool:
-        return key in self.eval()
+        return key in self.value
 
     @method(egg_fn="multiset-of")
     def __init__(self, *args: T) -> None: ...
@@ -532,30 +578,27 @@ class MultiSet(BuiltinExpr, Generic[T]):
 
 class Rational(BuiltinExpr):
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> Fraction:
-        call = _extract_call(self)
-        if call.callable != InitRef("Rational"):
-            msg = "Rational can only be initialized with the Rational constructor."
-            raise BuiltinEvalError(msg)
+        return self.value
 
-        def _to_int(e: TypedExprDecl) -> int:
-            expr = e.expr
-            if not isinstance(expr, LitDecl):
-                msg = "Rational can only be initialized with literals"
-                raise BuiltinEvalError(msg)
-            assert isinstance(expr.value, int)
-            return expr.value
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> Fraction:
+        match get_callable_args(self, Rational):
+            case (i64(num), i64(den)):
+                return Fraction(num, den)
+        raise ExprValueError(self, "Rational(i64(num), i64(den))")
 
-        num, den = call.args
-        return Fraction(_to_int(num), _to_int(den))
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def __float__(self) -> float:
-        return float(self.eval())
+        return float(self.value)
 
     @method(preserve=True)
     def __int__(self) -> int:
-        return int(self.eval())
+        return int(self.value)
 
     @method(egg_fn="rational")
     def __init__(self, num: i64Like, den: i64Like) -> None: ...
@@ -619,25 +662,27 @@ class Rational(BuiltinExpr):
 
 class BigInt(BuiltinExpr):
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> int:
-        call = _extract_call(self)
-        if call.callable != ClassMethodRef("BigInt", "from_string"):
-            msg = "BigInt can only be initialized with the BigInt constructor."
-            raise BuiltinEvalError(msg)
-        (s,) = call.args
-        if not isinstance(s.expr, LitDecl):
-            msg = "BigInt can only be initialized with literals"
-            raise BuiltinEvalError(msg)
-        assert isinstance(s.expr.value, str)
-        return int(s.expr.value)
+        return self.value
+
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> int:
+        match get_callable_args(self, BigInt.from_string):
+            case (String(s),):
+                return int(s)
+        raise ExprValueError(self, "BigInt.from_string(String(s))")
+
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def __index__(self) -> int:
-        return self.eval()
+        return self.value
 
     @method(preserve=True)
     def __int__(self) -> int:
-        return self.eval()
+        return self.value
 
     @method(egg_fn="from-string")
     @classmethod
@@ -744,34 +789,27 @@ BigIntLike: TypeAlias = BigInt | i64Like
 
 class BigRat(BuiltinExpr):
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> Fraction:
-        call = _extract_call(self)
-        if call.callable != InitRef("BigRat"):
-            msg = "BigRat can only be initialized with the BigRat constructor."
-            raise BuiltinEvalError(msg)
+        return self.value
 
-        def _to_fraction(e: TypedExprDecl) -> Fraction:
-            expr = e.expr
-            if not isinstance(expr, CallDecl) or expr.callable != ClassMethodRef("BigInt", "from_string"):
-                msg = "BigRat can only be initialized BigInt strings"
-                raise BuiltinEvalError(msg)
-            (s,) = expr.args
-            if not isinstance(s.expr, LitDecl):
-                msg = "BigInt can only be initialized with literals"
-                raise BuiltinEvalError(msg)
-            assert isinstance(s.expr.value, str)
-            return Fraction(s.expr.value)
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> Fraction:
+        match get_callable_args(self, BigRat):
+            case (BigInt(num), BigInt(den)):
+                return Fraction(num, den)
+        raise ExprValueError(self, "BigRat(BigInt(num), BigInt(den))")
 
-        num, den = call.args
-        return Fraction(_to_fraction(num), _to_fraction(den))
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def __float__(self) -> float:
-        return float(self.eval())
+        return float(self.value)
 
     @method(preserve=True)
     def __int__(self) -> int:
-        return int(self.eval())
+        return int(self.value)
 
     @method(egg_fn="bigrat")
     def __init__(self, num: BigIntLike, den: BigIntLike) -> None: ...
@@ -851,27 +889,32 @@ BigRatLike: TypeAlias = BigRat | Fraction
 
 class Vec(BuiltinExpr, Generic[T]):
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> tuple[T, ...]:
-        call = _extract_call(self)
-        if call.callable == ClassMethodRef("Vec", "empty"):
-            return ()
+        return self.value
 
-        if call.callable != InitRef("Vec"):
-            msg = "Vec can only be initialized with the Vec constructor."
-            raise BuiltinEvalError(msg)
-        return tuple(cast("T", cast("RuntimeExpr", self).__with_expr__(x)) for x in call.args)
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> tuple[T, ...]:
+        if get_callable_args(self, Vec.empty) is not None:
+            return ()
+        if (args := get_callable_args(self, Vec[T])) is not None:
+            return args
+        raise ExprValueError(self, "Vec(*xs) or Vec.empty()")
+
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[T]:
-        return iter(self.eval())
+        return iter(self.value)
 
     @method(preserve=True)
     def __len__(self) -> int:
-        return len(self.eval())
+        return len(self.value)
 
     @method(preserve=True)
     def __contains__(self, key: T) -> bool:
-        return key in self.eval()
+        return key in self.value
 
     @method(egg_fn="vec-of")
     def __init__(self, *args: T) -> None: ...
@@ -925,12 +968,19 @@ VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
 
 class PyObject(BuiltinExpr):
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> object:
+        return self.value
+
+    @method(preserve=True)  # type: ignore[misc]
+    @property
+    def value(self) -> object:
         expr = cast("RuntimeExpr", self).__egg_typed_expr__.expr
         if not isinstance(expr, PyObjectDecl):
-            msg = "PyObject can only be evaluated if it is a PyObject literal"
-            raise BuiltinEvalError(msg)
+            raise ExprValueError(self, "PyObject(x)")
         return expr.value
+
+    __match_args__ = ("value",)
 
     def __init__(self, value: object) -> None: ...
 
@@ -1021,46 +1071,25 @@ class UnstableFn(BuiltinExpr, Generic[T, Unpack[TS]]):
     @method(egg_fn="unstable-fn")
     def __init__(self, f, *partial) -> None: ...
 
-    @method(egg_fn="unstable-app")
-    def __call__(self, *args: Unpack[TS]) -> T: ...
-
     @method(preserve=True)
+    @deprecated("use .value")
     def eval(self) -> Callable[[Unpack[TS]], T]:
+        return self.value
+
+    @method(preserve=True)  # type: ignore[prop-decorator]
+    @property
+    def value(self) -> Callable[[Unpack[TS]], T]:
         """
         If this is a constructor, returns either the callable directly or a `functools.partial` function if args are provided.
         """
-        assert isinstance(self, RuntimeExpr)
-        match self.__egg_typed_expr__.expr:
-            case PartialCallDecl(CallDecl() as call):
-                fn, args = _deconstruct_call_decl(self.__egg_decls_thunk__, call)
-                if not args:
-                    return fn
-                return partial(fn, *args)
-        msg = "UnstableFn can only be evaluated if it is a function or a partial application of a function."
-        raise BuiltinEvalError(msg)
+        if (fn := get_literal_value(self)) is not None:
+            return fn
+        raise ExprValueError(self, "UnstableFn(f, *args)")
 
+    __match_args__ = ("value",)
 
-def _deconstruct_call_decl(
-    decls_thunk: Callable[[], Declarations], call: CallDecl
-) -> tuple[Callable, tuple[object, ...]]:
-    """
-    Deconstructs a CallDecl into a runtime callable and its arguments.
-    """
-    args = call.args
-    arg_exprs = tuple(RuntimeExpr(decls_thunk, Thunk.value(a)) for a in args)
-    egg_bound = (
-        JustTypeRef(call.callable.class_name, call.bound_tp_params or ())
-        if isinstance(call.callable, (ClassMethodRef, InitRef, ClassVariableRef))
-        else None
-    )
-    if isinstance(call.callable, InitRef):
-        return RuntimeClass(
-            decls_thunk,
-            TypeRefWithVars(
-                call.callable.class_name,
-            ),
-        ), arg_exprs
-    return RuntimeFunction(decls_thunk, Thunk.value(call.callable), egg_bound), arg_exprs
+    @method(egg_fn="unstable-app")
+    def __call__(self, *args: Unpack[TS]) -> T: ...
 
 
 # Method Type is for builtins like __getitem__
@@ -1102,29 +1131,3 @@ def _convert_function(fn: FunctionType) -> UnstableFn:
 
 
 converter(FunctionType, UnstableFn, _convert_function)
-
-##
-# Utility Functions
-##
-
-
-def _extract_lit(e: BaseExpr) -> LitType:
-    """
-    Special case extracting literals to make this faster by using termdag directly.
-    """
-    expr = cast("RuntimeExpr", e).__egg_typed_expr__.expr
-    if not isinstance(expr, LitDecl):
-        msg = "Expected a literal"
-        raise BuiltinEvalError(msg)
-    return expr.value
-
-
-def _extract_call(e: BaseExpr) -> CallDecl:
-    """
-    Extracts the call form of an expression
-    """
-    expr = cast("RuntimeExpr", e).__egg_typed_expr__.expr
-    if not isinstance(expr, CallDecl):
-        msg = "Expected a call expression"
-        raise BuiltinEvalError(msg)
-    return expr

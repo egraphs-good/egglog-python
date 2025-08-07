@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import itertools
 import operator
+import types
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import InitVar, dataclass, replace
 from inspect import Parameter, Signature
 from itertools import zip_longest
 from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, get_args, get_origin
@@ -150,11 +151,48 @@ def inverse_resolve_type_annotation(decls_thunk: Callable[[], Declarations], tp:
 ##
 
 
-@dataclass
-class RuntimeClass(DelayedDeclerations):
-    __egg_tp__: TypeRefWithVars
+class BaseClassFactoryMeta(type):
+    """
+    Base metaclass for all runtime classes created by ClassFactory
+    """
 
-    def __post_init__(self) -> None:
+    def __instancecheck__(cls, instance: object) -> bool:
+        assert isinstance(cls, RuntimeClass)
+        return isinstance(instance, RuntimeExpr) and cls.__egg_tp__.name == instance.__egg_typed_expr__.tp.name
+
+
+class ClassFactory(type):
+    """
+    A metaclass for types which should create `type` objects when instantiated.
+
+    That's so that they work with `isinstance` and can be placed in `match ClassName()`.
+    """
+
+    def __call__(cls, *args, **kwargs) -> type:
+        # If we have params, don't inherit from `type` because we don't need to match against this and also
+        # this won't work with `Union[X]` because it won't look at `__parameters__` for instances of `type`.
+        if kwargs.pop("_egg_has_params", False):
+            return super().__call__(*args, **kwargs)
+        namespace: dict[str, Any] = {}
+        for m in reversed(cls.__mro__):
+            namespace.update(m.__dict__)
+        init = namespace.pop("__init__")
+        meta = types.new_class("type(RuntimeClass)", (BaseClassFactoryMeta,), {}, lambda ns: ns.update(**namespace))
+        tp = types.new_class("RuntimeClass", (), {"metaclass": meta})
+        init(tp, *args, **kwargs)
+        return tp
+
+    def __instancecheck__(cls, instance: object) -> bool:
+        return isinstance(instance, BaseClassFactoryMeta)
+
+
+@dataclass(match_args=False)
+class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
+    __egg_tp__: TypeRefWithVars
+    # True if we want `__parameters__` to be recognized by `Union`, which means we can't inherit from `type` directly.
+    _egg_has_params: InitVar[bool] = False
+
+    def __post_init__(self, _egg_has_params: bool) -> None:
         global _PY_OBJECT_CLASS, _UNSTABLE_FN_CLASS
         if (name := self.__egg_tp__.name) == "PyObject":
             _PY_OBJECT_CLASS = self
@@ -244,7 +282,7 @@ class RuntimeClass(DelayedDeclerations):
         else:
             final_args = new_args
         tp = TypeRefWithVars(self.__egg_tp__.name, final_args)
-        return RuntimeClass(Thunk.fn(Declarations.create, self, *decls_like), tp)
+        return RuntimeClass(Thunk.fn(Declarations.create, self, *decls_like), tp, _egg_has_params=True)
 
     def __getattr__(self, name: str) -> RuntimeFunction | RuntimeExpr | Callable:
         if name == "__origin__" and self.__egg_tp__.args:
@@ -321,6 +359,10 @@ class RuntimeClass(DelayedDeclerations):
         Emit a number of typevar params so that when using generic type aliases, we know how to resolve these properly.
         """
         return tuple(inverse_resolve_type_annotation(self.__egg_decls_thunk__, tp) for tp in self.__egg_tp__.args)
+
+    @property
+    def __match_args__(self) -> tuple[str, ...]:
+        return self.__egg_decls__._classes[self.__egg_tp__.name].match_args
 
 
 @dataclass
@@ -583,17 +625,17 @@ for name in TYPE_DEFINED_METHODS:
     define_expr_method(name)
 
 
-for name, reversed in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
+for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
 
-    def _numeric_binary_method(self: object, other: object, name: str = name, reversed: bool = reversed) -> object:
+    def _numeric_binary_method(self: object, other: object, name: str = name, r_method: bool = r_method) -> object:
         """
         Implements numeric binary operations.
 
         Tries to find the minimum cost conversion of either the LHS or the RHS, by finding all methods with either
         the LHS or the RHS as exactly the right type and then upcasting the other to that type.
         """
-        # 1. switch if reversed
-        if reversed:
+        # 1. switch if reversed method
+        if r_method:
             self, other = other, self
         # If the types don't exactly match to start, then we need to try converting one of them, by finding the cheapest conversion
         if not (
@@ -646,7 +688,7 @@ for name, reversed in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
         fn = RuntimeFunction(Thunk.value(self.__egg_decls__), Thunk.value(method_ref), self)
         return fn(other)
 
-    method_name = f"__r{name[2:]}" if reversed else name
+    method_name = f"__r{name[2:]}" if r_method else name
     setattr(RuntimeExpr, method_name, _numeric_binary_method)
 
 
