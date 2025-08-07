@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from .declarations import *
 from .pretty import *
@@ -13,14 +14,14 @@ from .thunk import *
 from .type_constraint_solver import TypeConstraintError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Generator
 
     from .egraph import BaseExpr
     from .type_constraint_solver import TypeConstraintSolver
 
-__all__ = ["ConvertError", "convert", "convert_to_same_type", "converter", "resolve_literal"]
+__all__ = ["ConvertError", "convert", "converter", "get_type_args"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
-CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable]] = {}
+CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable[[Any], RuntimeExpr]]] = {}
 # Global declerations to store all convertable types so we can query if they have certain methods or not
 _CONVERSION_DECLS = Declarations.create()
 # Defer a list of declerations to be added to the global declerations, so that we can not trigger them procesing
@@ -28,7 +29,7 @@ _CONVERSION_DECLS = Declarations.create()
 _TO_PROCESS_DECLS: list[DeclerationsLike] = []
 
 
-def _retrieve_conversion_decls() -> Declarations:
+def retrieve_conversion_decls() -> Declarations:
     _CONVERSION_DECLS.update(*_TO_PROCESS_DECLS)
     _TO_PROCESS_DECLS.clear()
     return _CONVERSION_DECLS
@@ -49,10 +50,10 @@ def converter(from_type: type[T], to_type: type[V], fn: Callable[[T], V], cost: 
     to_type_name = process_tp(to_type)
     if not isinstance(to_type_name, JustTypeRef):
         raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
-    _register_converter(process_tp(from_type), to_type_name, fn, cost)
+    _register_converter(process_tp(from_type), to_type_name, cast("Callable[[Any], RuntimeExpr]", fn), cost)
 
 
-def _register_converter(a: type | JustTypeRef, b: JustTypeRef, a_b: Callable, cost: int) -> None:
+def _register_converter(a: type | JustTypeRef, b: JustTypeRef, a_b: Callable[[Any], RuntimeExpr], cost: int) -> None:
     """
     Registers a converter from some type to an egglog type, if not already registered.
 
@@ -97,15 +98,15 @@ class _ComposedConverter:
     We use the dataclass instead of the lambda to make it easier to debug.
     """
 
-    a_b: Callable
-    b_c: Callable
+    a_b: Callable[[Any], RuntimeExpr]
+    b_c: Callable[[Any], RuntimeExpr]
     b_args: tuple[JustTypeRef, ...]
 
-    def __call__(self, x: object) -> object:
+    def __call__(self, x: Any) -> RuntimeExpr:
         # if we have A -> B and B[C] -> D then we should use (C,) as the type args
         # when converting from A -> B
         if self.b_args:
-            with with_type_args(self.b_args, _retrieve_conversion_decls):
+            with with_type_args(self.b_args, retrieve_conversion_decls):
                 first_res = self.a_b(x)
         else:
             first_res = self.a_b(x)
@@ -142,33 +143,38 @@ def process_tp(tp: type | RuntimeClass) -> JustTypeRef | type:
     return tp
 
 
-def min_convertable_tp(a: object, b: object, name: str) -> JustTypeRef:
-    """
-    Returns the minimum convertable type between a and b, that has a method `name`, raising a ConvertError if no such type exists.
-    """
-    decls = _retrieve_conversion_decls()
-    a_tp = _get_tp(a)
-    b_tp = _get_tp(b)
-    # Make sure at least one of the types has the method, to avoid issue with == upcasting improperly
-    if not (
-        (isinstance(a_tp, JustTypeRef) and decls.has_method(a_tp.name, name))
-        or (isinstance(b_tp, JustTypeRef) and decls.has_method(b_tp.name, name))
-    ):
-        raise ConvertError(f"Neither {a_tp} nor {b_tp} has method {name}")
-    a_converts_to = {
-        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == a_tp and decls.has_method(to.name, name)
-    }
-    b_converts_to = {
-        to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == b_tp and decls.has_method(to.name, name)
-    }
-    if isinstance(a_tp, JustTypeRef) and decls.has_method(a_tp.name, name):
-        a_converts_to[a_tp] = 0
-    if isinstance(b_tp, JustTypeRef) and decls.has_method(b_tp.name, name):
-        b_converts_to[b_tp] = 0
-    common = set(a_converts_to) & set(b_converts_to)
-    if not common:
-        raise ConvertError(f"Cannot convert {a_tp} and {b_tp} to a common type")
-    return min(common, key=lambda tp: a_converts_to[tp] + b_converts_to[tp])
+# def min_convertable_tp(a: object, b: object, name: str) -> JustTypeRef:
+#     """
+#     Returns the minimum convertable type between a and b, that has a method `name`, raising a ConvertError if no such type exists.
+#     """
+#     decls = _retrieve_conversion_decls().copy()
+#     if isinstance(a, RuntimeExpr):
+#         decls |= a
+#     if isinstance(b, RuntimeExpr):
+#         decls |= b
+
+#     a_tp = _get_tp(a)
+#     b_tp = _get_tp(b)
+#     # Make sure at least one of the types has the method, to avoid issue with == upcasting improperly
+#     if not (
+#         (isinstance(a_tp, JustTypeRef) and decls.has_method(a_tp.name, name))
+#         or (isinstance(b_tp, JustTypeRef) and decls.has_method(b_tp.name, name))
+#     ):
+#         raise ConvertError(f"Neither {a_tp} nor {b_tp} has method {name}")
+#     a_converts_to = {
+#         to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == a_tp and decls.has_method(to.name, name)
+#     }
+#     b_converts_to = {
+#         to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == b_tp and decls.has_method(to.name, name)
+#     }
+#     if isinstance(a_tp, JustTypeRef) and decls.has_method(a_tp.name, name):
+#         a_converts_to[a_tp] = 0
+#     if isinstance(b_tp, JustTypeRef) and decls.has_method(b_tp.name, name):
+#         b_converts_to[b_tp] = 0
+#     common = set(a_converts_to) & set(b_converts_to)
+#     if not common:
+#         raise ConvertError(f"Cannot convert {a_tp} and {b_tp} to a common type")
+#     return min(common, key=lambda tp: a_converts_to[tp] + b_converts_to[tp])
 
 
 def identity(x: object) -> object:
@@ -197,7 +203,7 @@ def with_type_args(args: tuple[JustTypeRef, ...], decls: Callable[[], Declaratio
 def resolve_literal(
     tp: TypeOrVarRef,
     arg: object,
-    decls: Callable[[], Declarations] = _retrieve_conversion_decls,
+    decls: Callable[[], Declarations] = retrieve_conversion_decls,
     tcs: TypeConstraintSolver | None = None,
     cls_name: str | None = None,
 ) -> RuntimeExpr:
@@ -208,12 +214,12 @@ def resolve_literal(
 
     If it cannot be resolved, we assume that the value passed in will resolve it.
     """
-    arg_type = _get_tp(arg)
+    arg_type = resolve_type(arg)
 
     # If we have any type variables, dont bother trying to resolve the literal, just return the arg
     try:
         tp_just = tp.to_just()
-    except NotImplementedError:
+    except TypeVarError:
         # If this is a generic arg but passed in a non runtime expression, try to resolve the generic
         # args first based on the existing type constraint solver
         if tcs:
@@ -258,7 +264,7 @@ def _debug_print_converers():
         source_to_targets[source].append(target)
 
 
-def _get_tp(x: object) -> JustTypeRef | type:
+def resolve_type(x: object) -> JustTypeRef | type:
     if isinstance(x, RuntimeExpr):
         return x.__egg_typed_expr__.tp
     tp = type(x)

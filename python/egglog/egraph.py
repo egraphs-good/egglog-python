@@ -5,7 +5,7 @@ import inspect
 import pathlib
 import tempfile
 from collections.abc import Callable, Generator, Iterable
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field
 from functools import partial
 from inspect import Parameter, currentframe, signature
@@ -29,6 +29,7 @@ from typing_extensions import Never, ParamSpec, Self, Unpack, assert_never
 
 from . import bindings
 from .conversion import *
+from .conversion import convert_to_same_type, resolve_literal
 from .declarations import *
 from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
@@ -113,8 +114,9 @@ IGNORED_ATTRIBUTES = {
     "__qualname__",
     "__firstlineno__",
     "__static_attributes__",
+    "__match_args__",
     # Ignore all reflected binary method
-    *REFLECTED_BINARY_METHODS.keys(),
+    *(f"__r{m[2:]}" for m in NUMERIC_BINARY_METHODS),
 }
 
 
@@ -281,7 +283,6 @@ def function(
     mutates_first_arg: bool = ...,
     unextractable: bool = ...,
     ruleset: Ruleset | None = ...,
-    use_body_as_name: bool = ...,
     subsume: bool = ...,
 ) -> Callable[[CONSTRUCTOR_CALLABLE], CONSTRUCTOR_CALLABLE]: ...
 
@@ -361,6 +362,7 @@ class BaseExpr(metaclass=_ExprMetaclass):
 
     def __ne__(self, other: Self) -> Unit: ...  # type: ignore[override, empty-body]
 
+    # not currently dissalowing other types of equality https://github.com/python/typeshed/issues/8217#issuecomment-3140873292
     def __eq__(self, other: Self) -> Fact: ...  # type: ignore[override, empty-body]
 
 
@@ -394,7 +396,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     )
     type_vars = tuple(ClassTypeVarRef.from_type_var(p) for p in parameters)
     del parameters
-    cls_decl = ClassDecl(egg_sort, type_vars, builtin)
+    cls_decl = ClassDecl(egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()))
     decls = Declarations(_classes={cls_name: cls_decl})
     # Update class think eagerly when resolving so that lookups work in methods
     runtime_cls.__egg_decls_thunk__ = Thunk.value(decls)
@@ -446,6 +448,9 @@ def _generate_class_decls(  # noqa: C901,PLR0912
             continue
         locals = frame.f_locals
         ref: ClassMethodRef | MethodRef | PropertyRef | InitRef
+        # TODO: Store deprecated message so we can print at runtime
+        if (getattr(fn, "__deprecated__", None)) is not None:
+            fn = fn.__wrapped__  # type: ignore[attr-defined]
         match fn:
             case classmethod():
                 ref = ClassMethodRef(cls_name, method_name)
@@ -467,7 +472,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
             decls.set_function_decl(ref, decl)
             continue
         try:
-            _, add_rewrite = _fn_decl(
+            add_rewrite = _fn_decl(
                 decls,
                 egg_fn,
                 ref,
@@ -505,7 +510,6 @@ class _FunctionConstructor:
     merge: Callable[[object, object], object] | None = None
     unextractable: bool = False
     ruleset: Ruleset | None = None
-    use_body_as_name: bool = False
     subsume: bool = False
 
     def __call__(self, fn: Callable) -> RuntimeFunction:
@@ -513,11 +517,10 @@ class _FunctionConstructor:
 
     def create_decls(self, fn: Callable) -> tuple[Declarations, CallableRef]:
         decls = Declarations()
-        ref = None if self.use_body_as_name else FunctionRef(fn.__name__)
-        ref, add_rewrite = _fn_decl(
+        add_rewrite = _fn_decl(
             decls,
             self.egg_fn,
-            ref,
+            ref := FunctionRef(fn.__name__),
             fn,
             self.hint_locals,
             self.cost,
@@ -535,8 +538,7 @@ class _FunctionConstructor:
 def _fn_decl(
     decls: Declarations,
     egg_name: str | None,
-    # If ref is Callable, then generate the ref from the function name
-    ref: FunctionRef | MethodRef | PropertyRef | ClassMethodRef | InitRef | None,
+    ref: FunctionRef | MethodRef | PropertyRef | ClassMethodRef | InitRef,
     fn: object,
     # Pass in the locals, retrieved from the frame when wrapping,
     # so that we support classes and function defined inside of other functions (which won't show up in the globals)
@@ -549,7 +551,7 @@ def _fn_decl(
     ruleset: Ruleset | None = None,
     unextractable: bool = False,
     reverse_args: bool = False,
-) -> tuple[CallableRef, Callable[[], None]]:
+) -> Callable[[], None]:
     """
     Sets the function decl for the function object and returns the ref as well as a thunk that sets the default callable.
     """
@@ -619,50 +621,39 @@ def _fn_decl(
 
     # defer this in generator so it doesn't resolve for builtins eagerly
     args = (TypedExprDecl(tp.to_just(), UnboundVarDecl(name)) for name, tp in zip(arg_names, arg_types, strict=True))
-    res_ref: FunctionRef | MethodRef | ClassMethodRef | PropertyRef | InitRef | UnnamedFunctionRef
-    res_thunk: Callable[[], object]
-    # If we were not passed in a ref, this is an unnamed funciton, so eagerly compute the value and use that to refer to it
-    if not ref:
-        tuple_args = tuple(args)
-        res = _create_default_value(decls, ref, fn, tuple_args, ruleset)
-        assert isinstance(res, RuntimeExpr)
-        res_ref = UnnamedFunctionRef(tuple_args, res.__egg_typed_expr__)
-        decls._unnamed_functions.add(res_ref)
-        res_thunk = Thunk.value(res)
 
+    return_type_is_eqsort = (
+        not decls._classes[return_type.name].builtin if isinstance(return_type, TypeRefWithVars) else False
+    )
+    is_constructor = not is_builtin and return_type_is_eqsort and merged is None
+    signature_ = FunctionSignature(
+        return_type=None if mutates_first_arg else return_type,
+        var_arg_type=var_arg_type,
+        arg_types=arg_types,
+        arg_names=arg_names,
+        arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
+        reverse_args=reverse_args,
+    )
+    decl: ConstructorDecl | FunctionDecl
+    if is_constructor:
+        decl = ConstructorDecl(signature_, egg_name, cost, unextractable)
     else:
-        return_type_is_eqsort = (
-            not decls._classes[return_type.name].builtin if isinstance(return_type, TypeRefWithVars) else False
+        if cost is not None:
+            msg = "Cost can only be set for constructors"
+            raise ValueError(msg)
+        if unextractable:
+            msg = "Unextractable can only be set for constructors"
+            raise ValueError(msg)
+        decl = FunctionDecl(
+            signature=signature_,
+            egg_name=egg_name,
+            merge=merged.__egg_typed_expr__.expr if merged is not None else None,
+            builtin=is_builtin,
         )
-        is_constructor = not is_builtin and return_type_is_eqsort and merged is None
-        signature_ = FunctionSignature(
-            return_type=None if mutates_first_arg else return_type,
-            var_arg_type=var_arg_type,
-            arg_types=arg_types,
-            arg_names=arg_names,
-            arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
-            reverse_args=reverse_args,
-        )
-        decl: ConstructorDecl | FunctionDecl
-        if is_constructor:
-            decl = ConstructorDecl(signature_, egg_name, cost, unextractable)
-        else:
-            if cost is not None:
-                msg = "Cost can only be set for constructors"
-                raise ValueError(msg)
-            if unextractable:
-                msg = "Unextractable can only be set for constructors"
-                raise ValueError(msg)
-            decl = FunctionDecl(
-                signature=signature_,
-                egg_name=egg_name,
-                merge=merged.__egg_typed_expr__.expr if merged is not None else None,
-                builtin=is_builtin,
-            )
-        res_ref = ref
-        decls.set_function_decl(ref, decl)
-        res_thunk = Thunk.fn(_create_default_value, decls, ref, fn, args, ruleset, context=f"creating {ref}")
-    return res_ref, Thunk.fn(_add_default_rewrite_function, decls, res_ref, return_type, ruleset, res_thunk, subsume)
+    decls.set_function_decl(ref, decl)
+    return Thunk.fn(
+        _add_default_rewrite_function, decls, ref, fn, args, ruleset, subsume, return_type, context=f"creating {ref}"
+    )
 
 
 # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
@@ -736,13 +727,15 @@ def _constant_thunk(
     return decls, TypedExprDecl(type_ref.to_just(), CallDecl(callable_ref))
 
 
-def _create_default_value(
+def _add_default_rewrite_function(
     decls: Declarations,
-    ref: CallableRef | None,
+    ref: FunctionRef | MethodRef | PropertyRef | ClassMethodRef | InitRef,
     fn: Callable,
     args: Iterable[TypedExprDecl],
     ruleset: Ruleset | None,
-) -> object:
+    subsume: bool,
+    res_type: TypeOrVarRef,
+) -> None:
     args: list[object] = [RuntimeExpr.__from_values__(decls, a) for a in args]
 
     # If this is a classmethod, add the class as the first arg
@@ -750,21 +743,8 @@ def _create_default_value(
         tp = decls.get_paramaterized_class(ref.class_name)
         args.insert(0, RuntimeClass(Thunk.value(decls), tp))
     with set_current_ruleset(ruleset):
-        return fn(*args)
-
-
-def _add_default_rewrite_function(
-    decls: Declarations,
-    ref: CallableRef,
-    res_type: TypeOrVarRef,
-    ruleset: Ruleset | None,
-    value_thunk: Callable[[], object],
-    subsume: bool,
-) -> None:
-    """
-    Helper functions that resolves a value thunk to create the default value.
-    """
-    _add_default_rewrite(decls, ref, res_type, value_thunk(), ruleset, subsume)
+        res = fn(*args)
+    _add_default_rewrite(decls, ref, res_type, res, ruleset, subsume)
 
 
 def _add_default_rewrite(
@@ -784,6 +764,13 @@ def _add_default_rewrite(
         return
     resolved_value = resolve_literal(type_ref, default_rewrite, Thunk.value(decls))
     rewrite_decl = DefaultRewriteDecl(ref, resolved_value.__egg_typed_expr__.expr, subsume)
+    ruleset_decls = _add_default_rewrite_inner(decls, rewrite_decl, ruleset)
+    ruleset_decls |= resolved_value
+
+
+def _add_default_rewrite_inner(
+    decls: Declarations, rewrite_decl: DefaultRewriteDecl, ruleset: Ruleset | None
+) -> Declarations:
     if ruleset:
         ruleset_decls = ruleset._current_egg_decls
         ruleset_decl = ruleset.__egg_ruleset__
@@ -791,7 +778,7 @@ def _add_default_rewrite(
         ruleset_decls = decls
         ruleset_decl = decls.default_ruleset
     ruleset_decl.rules.append(rewrite_decl)
-    ruleset_decls |= resolved_value
+    return ruleset_decls
 
 
 def _last_param_variable(params: list[Parameter]) -> bool:
@@ -872,6 +859,7 @@ class EGraph:
         self._add_decls(decls)
         return self._state.callable_ref_to_egg(ref)[0]
 
+    # TODO: Change let to be action...
     def let(self, name: str, expr: BASE_EXPR) -> BASE_EXPR:
         """
         Define a new expression in the egraph and return a reference to it.
@@ -1519,16 +1507,17 @@ def rule(*facts: FactLike, ruleset: None = None, name: str | None = None) -> _Ru
     return _RuleBuilder(facts=_fact_likes(facts), name=name, ruleset=ruleset)
 
 
-def var(name: str, bound: type[T]) -> T:
+def var(name: str, bound: type[T], egg_name: str | None = None) -> T:
     """Create a new variable with the given name and type."""
-    return cast("T", _var(name, bound))
+    return cast("T", _var(name, bound, egg_name=egg_name))
 
 
-def _var(name: str, bound: object) -> RuntimeExpr:
+def _var(name: str, bound: object, egg_name: str | None) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
     decls_like, type_ref = resolve_type_annotation(bound)
     return RuntimeExpr(
-        Thunk.fn(Declarations.create, decls_like), Thunk.value(TypedExprDecl(type_ref.to_just(), UnboundVarDecl(name)))
+        Thunk.fn(Declarations.create, decls_like),
+        Thunk.value(TypedExprDecl(type_ref.to_just(), UnboundVarDecl(name, egg_name))),
     )
 
 
@@ -1778,7 +1767,7 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     # python/tests/test_no_import_star.py::test_no_import_star_rulesset
     combined = {**gen.__globals__, **frame.f_locals}
     hints = get_type_hints(gen, combined, combined)
-    args = [_var(p.name, hints[p.name]) for p in signature(gen).parameters.values()]
+    args = [_var(p.name, hints[p.name], egg_name=None) for p in signature(gen).parameters.values()]
     return list(gen(*args))  # type: ignore[misc]
 
 
@@ -1804,7 +1793,7 @@ def get_current_ruleset() -> Ruleset | None:
 
 @contextlib.contextmanager
 def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
-    token = _CURRENT_RULESET.set(r)
+    token: Token[Ruleset | None] = _CURRENT_RULESET.set(r)
     try:
         yield
     finally:

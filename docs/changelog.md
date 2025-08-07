@@ -4,11 +4,17 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Add ability to parse egglog expressions into Python values [#319](https://github.com/egraphs-good/egglog-python/pull/319)
+  - Deprecates `.eval()` method on primitives in favor of `.value` which can be used with pattern matching.
+- Support methods like on expressions [#315](https://github.com/egraphs-good/egglog-python/pull/315)
+- Automatically Create Changelog Entry for PRs [#313](https://github.com/egraphs-good/egglog-python/pull/313)
 - Upgrade egglog which includes new backend.
   - Fixes implementation of the Python Object sort to work with objects with dupliating hashes but the same value.
     Also changes the representation to be an index into a list instead of the ID, making egglog programs more deterministic.
   - Prefix constant declerations and unbound variables to not shadow let variables
   - BREAKING: Remove `simplify` since it was removed upstream. You can manually replace it with an insert, run, then extract.
+- Change how anonymous functions are converted to remove metaprogramming and lift only the unbound variables as args
+- Add support for getting the "value" of a function type with `.eval()`, i.e. `assert UnstableFn(f).eval() == f`.
 
 ## 10.0.2 (2025-06-22)
 

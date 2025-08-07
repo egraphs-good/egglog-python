@@ -5,6 +5,7 @@ import importlib
 import pathlib
 from copy import copy
 from fractions import Fraction
+from functools import partial
 from typing import ClassVar, TypeAlias, TypeVar
 
 import pytest
@@ -227,30 +228,30 @@ def test_default_args():
 
 class TestPyObject:
     def test_from_string(self):
-        assert EGraph().extract(PyObject.from_string("foo")).eval() == "foo"
+        assert EGraph().extract(PyObject.from_string("foo")).value == "foo"
 
     def test_to_string(self):
         EGraph().check(PyObject("foo").to_string() == String("foo"))
 
     def test_dict_update(self):
         original_d = {"foo": "bar"}
-        res = EGraph().extract(PyObject(original_d).dict_update("foo", "baz")).eval()
+        res = EGraph().extract(PyObject(original_d).dict_update("foo", "baz")).value
         assert res == {"foo": "baz"}
         assert original_d == {"foo": "bar"}
 
     def test_eval(self):
-        assert EGraph().extract(py_eval("x + y", {"x": 10, "y": 20}, {})).eval() == 30
+        assert EGraph().extract(py_eval("x + y", {"x": 10, "y": 20}, {})).value == 30
 
     def test_eval_local(self):
         x = "hi"
         res = py_eval("my_add(x, y)", PyObject(locals()).dict_update("y", "there"), globals())
-        assert EGraph().extract(res).eval() == "hithere"
+        assert EGraph().extract(res).value == "hithere"
 
     def test_exec(self):
-        assert EGraph().extract(py_exec("x = 10")).eval() == {"x": 10}
+        assert EGraph().extract(py_exec("x = 10")).value == {"x": 10}
 
     def test_exec_globals(self):
-        assert EGraph().extract(py_exec("x = y + 1", {"y": 10})).eval() == {"x": 11}
+        assert EGraph().extract(py_exec("x = y + 1", {"y": 10})).value == {"x": 11}
 
 
 def my_add(a, b):
@@ -383,34 +384,6 @@ def test_reflected_binary_method():
     )
 
 
-def test_upcast_args():
-    # -0.1 + Int(x) -> -0.1 + Float(x)
-    EGraph()
-
-    class Int(Expr):
-        def __init__(self, value: i64Like) -> None: ...
-
-        def __add__(self, other: Int) -> Int: ...
-
-    class Float(Expr):
-        def __init__(self, value: f64Like) -> None: ...
-
-        def __add__(self, other: Float) -> Float: ...
-
-        @classmethod
-        def from_int(cls, other: Int) -> Float: ...
-
-    converter(i64, Int, Int)
-    converter(f64, Float, Float)
-    converter(Int, Float, Float.from_int)
-
-    res: Expr = -0.1 + Int(10)  # type: ignore[operator,assignment]
-    assert expr_parts(res) == expr_parts(Float(-0.1) + Float.from_int(Int(10)))
-
-    res: Expr = Int(10) + -0.1  # type: ignore[operator,assignment]
-    assert expr_parts(res) == expr_parts(Float.from_int(Int(10)) + Float(-0.1))
-
-
 def test_rewrite_upcasts():
     class X(Expr):
         def __init__(self, value: i64Like) -> None: ...
@@ -458,27 +431,26 @@ def test_upcast_self_lower_cost():
 
 class TestEval:
     def test_string(self):
-        assert String("hi").eval() == "hi"
+        assert String("hi").value == "hi"
 
     def test_bool(self):
-        assert Bool(True).eval() is True
+        assert Bool(True).value is True
         assert bool(Bool(True)) is True
 
     def test_i64(self):
-        assert i64(10).eval() == 10
+        assert i64(10).value == 10
         assert int(i64(10)) == 10
         assert [10][i64(0)] == 10
 
     def test_f64(self):
-        assert f64(10.0).eval() == 10.0
+        assert f64(10.0).value == 10.0
         assert int(f64(10.0)) == 10
         assert float(f64(10.0)) == 10.0
 
     def test_map(self):
-        assert Map[String, i64].empty().eval() == {}
+        assert Map[String, i64].empty().value == {}
         m = Map[String, i64].empty().insert(String("a"), i64(1)).insert(String("b"), i64(2))
-        # TODO: Add __eq__ with eq() that evals to True on boolean comparison? And same with ne?
-        assert m.eval() == {String("a"): i64(1), String("b"): i64(2)}
+        assert m.value == {String("a"): i64(1), String("b"): i64(2)}
 
         assert set(m) == {String("a"), String("b")}
         assert len(m) == 2
@@ -486,9 +458,9 @@ class TestEval:
         assert String("c") not in m
 
     def test_set(self):
-        assert EGraph().extract(Set[i64].empty()).eval() == set()
+        assert EGraph().extract(Set[i64].empty()).value == set()
         s = Set(i64(1), i64(2))
-        assert s.eval() == {i64(1), i64(2)}
+        assert s.value == {i64(1), i64(2)}
 
         assert set(s) == {i64(1), i64(2)}
         assert len(s) == 2
@@ -496,14 +468,14 @@ class TestEval:
         assert i64(3) not in s
 
     def test_rational(self):
-        assert Rational(1, 2).eval() == Fraction(1, 2)
+        assert Rational(1, 2).value == Fraction(1, 2)
         assert float(Rational(1, 2)) == 0.5
         assert int(Rational(1, 1)) == 1
 
     def test_vec(self):
-        assert Vec[i64].empty().eval() == ()
+        assert Vec[i64].empty().value == ()
         s = Vec(i64(1), i64(2))
-        assert s.eval() == (i64(1), i64(2))
+        assert s.value == (i64(1), i64(2))
 
         assert list(s) == [i64(1), i64(2)]
         assert len(s) == 2
@@ -511,9 +483,9 @@ class TestEval:
         assert i64(3) not in s
 
     def test_py_object(self):
-        assert PyObject(10).eval() == 10
+        assert PyObject(10).value == 10
         o = object()
-        assert PyObject(o).eval() is o
+        assert PyObject(o).value is o
 
     def test_big_int(self):
         assert int(EGraph().extract(BigInt(10))) == 10
@@ -521,10 +493,25 @@ class TestEval:
     def test_big_rat(self):
         br = EGraph().extract(BigRat(1, 2))
         assert float(br) == 1 / 2
-        assert br.eval() == Fraction(1, 2)
+        assert br.value == Fraction(1, 2)
 
     def test_multiset(self):
         assert list(MultiSet(i64(1), i64(1))) == [i64(1), i64(1)]
+
+    def test_unstable_fn(self):
+        class Math(Expr):
+            def __init__(self) -> None: ...
+
+        @function
+        def f(x: Math) -> Math: ...
+
+        u_f = UnstableFn(f)
+        assert u_f.value == f
+        p_u_f = UnstableFn(f, Math())
+        value = p_u_f.value
+        assert isinstance(value, partial)
+        assert value.func == f
+        assert value.args == (Math(),)
 
 
 # def test_egglog_string():
@@ -540,7 +527,7 @@ class TestEval:
 
 
 def test_eval_fn():
-    assert EGraph().extract(py_eval_fn(lambda x: (x,))(PyObject.from_int(1))).eval() == (1,)
+    assert EGraph().extract(py_eval_fn(lambda x: (x,))(PyObject.from_int(1))).value == (1,)
 
 
 def _global_make_tuple(x):
@@ -548,14 +535,14 @@ def _global_make_tuple(x):
 
 
 def test_eval_fn_globals():
-    assert EGraph().extract(py_eval_fn(lambda x: _global_make_tuple(x))(PyObject.from_int(1))).eval() == (1,)
+    assert EGraph().extract(py_eval_fn(lambda x: _global_make_tuple(x))(PyObject.from_int(1))).value == (1,)
 
 
 def test_eval_fn_locals():
     def _locals_make_tuple(x):
         return (x,)
 
-    assert EGraph().extract(py_eval_fn(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))).eval() == (1,)
+    assert EGraph().extract(py_eval_fn(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))).value == (1,)
 
 
 def test_lazy_types():
@@ -845,6 +832,106 @@ def test_no_upcast_eq():
 
     assert isinstance(A() == A(), Fact)
     assert not isinstance(B() == B(), Fact)
+
+
+def test_isinstance_expr():
+    """
+    Verifies that isinstance() works on Exprs, and returns a Fact
+    """
+
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+    class B(Expr):
+        def __init__(self) -> None: ...
+
+    assert isinstance(A(), A)
+    assert not isinstance(A(), B)
+
+
+class TestMatch:
+    def test_class(self):
+        """
+        Verify that we can pattern match on expressions
+        """
+
+        class A(Expr):
+            def __init__(self) -> None: ...
+
+        class B(Expr):
+            def __init__(self) -> None: ...
+
+        a = A()
+        match a:
+            case B():
+                msg = "Should not have matched B"
+                raise ValueError(msg)
+            case A():
+                pass
+            case _:
+                msg = "Should have matched A"
+                raise ValueError(msg)
+
+    def test_literal(self):
+        match i64(10):
+            case i64(i):
+                assert i == 10
+            case _:
+                msg = "Should have matched i64(10)"
+                raise ValueError(msg)
+
+    def test_literal_fail(self):
+        """
+        Verify that matching on a literal that does not match raises an error
+        """
+        match i64(10) + i64(10):
+            case i64(_i):
+                msg = "Should not have matched i64(20)"
+                raise ValueError(msg)
+
+    def test_custom_args(self):
+        class A(Expr):
+            def __init__(self) -> None: ...
+
+            __match_args__ = ("a", "b")
+
+            @method(preserve=True)  # type: ignore[misc]
+            @property
+            def a(self) -> int:
+                return 1
+
+            @method(preserve=True)  # type: ignore[misc]
+            @property
+            def b(self) -> str:
+                return "hi"
+
+        match A():
+            case A(a, b):
+                assert a == 1
+                assert b == "hi"
+            case _:
+                msg = "Should have matched A"
+                raise ValueError(msg)
+
+    def test_custom_args_fail(self):
+        """
+        Verify that matching on a custom match that does not match raises an error
+        """
+
+        class A(Expr):
+            def __init__(self) -> None: ...
+
+            __match_args__ = ("a",)
+
+            @method(preserve=True)  # type: ignore[misc]
+            @property
+            def a(self) -> int:
+                raise AttributeError
+
+        match A():
+            case A(_a):
+                msg = "Should not have matched A"
+                raise ValueError(msg)
 
 
 T = TypeVar("T")

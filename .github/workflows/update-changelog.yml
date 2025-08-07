@@ -1,0 +1,52 @@
+name: Update Changelog
+
+on:
+  pull_request:
+    types: [opened, edited]
+
+jobs:
+  update-changelog:
+    # Only run if this is not a PR from a fork to avoid permission issues
+    # and not a commit made by GitHub Action to avoid infinite loops
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Checkout the PR head ref
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Update changelog
+        run: |
+          python modify_changelog.py update_changelog \
+            "${{ github.event.pull_request.number }}" \
+            "${{ github.event.pull_request.title }}"
+      
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet docs/changelog.md; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Commit and push changes
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add docs/changelog.md
+          git commit -m "Add changelog entry for PR #${{ github.event.pull_request.number }}"
+          git push

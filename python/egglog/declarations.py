@@ -73,16 +73,18 @@ __all__ = [
     "SpecialFunctions",
     "TypeOrVarRef",
     "TypeRefWithVars",
+    "TypeVarError",
     "TypedExprDecl",
     "UnboundVarDecl",
     "UnionDecl",
     "UnnamedFunctionRef",
+    "collect_unbound_vars",
     "replace_typed_expr",
     "upcast_declerations",
 ]
 
 
-@dataclass
+@dataclass(match_args=False)
 class DelayedDeclerations:
     __egg_decls_thunk__: Callable[[], Declarations] = field(repr=False)
 
@@ -94,7 +96,7 @@ class DelayedDeclerations:
         # Catch attribute error, so that it isn't bubbled up as a missing attribute and fallbacks on `__getattr__`
         # instead raise explicitly
         except AttributeError as err:
-            msg = f"Cannot resolve declarations for {self}"
+            msg = f"Cannot resolve declarations for {self}: {err}"
             raise RuntimeError(msg) from err
 
 
@@ -224,13 +226,42 @@ class Declarations:
             case _:
                 assert_never(ref)
 
-    def has_method(self, class_name: str, method_name: str) -> bool | None:
+    def check_binary_method_with_types(self, method_name: str, self_type: JustTypeRef, other_type: JustTypeRef) -> bool:
         """
-        Returns whether the given class has the given method, or None if we cant find the class.
+        Checks if the class has a binary method compatible with the given types.
         """
-        if class_name in self._classes:
-            return method_name in self._classes[class_name].methods
+        vars: dict[ClassTypeVarRef, JustTypeRef] = {}
+        if callable_decl := self._classes[self_type.name].methods.get(method_name):
+            match callable_decl.signature:
+                case FunctionSignature((self_arg_type, other_arg_type)) if self_arg_type.matches_just(
+                    vars, self_type
+                ) and other_arg_type.matches_just(vars, other_type):
+                    return True
+        return False
+
+    def check_binary_method_with_self_type(self, method_name: str, self_type: JustTypeRef) -> JustTypeRef | None:
+        """
+        Checks if the class has a binary method with the given name and self type. Returns the other type if it exists.
+        """
+        vars: dict[ClassTypeVarRef, JustTypeRef] = {}
+        if callable_decl := self._classes[self_type.name].methods.get(method_name):
+            match callable_decl.signature:
+                case FunctionSignature((self_arg_type, other_arg_type)) if self_arg_type.matches_just(vars, self_type):
+                    return other_arg_type.to_just(vars)
         return None
+
+    def check_binary_method_with_other_type(self, method_name: str, other_type: JustTypeRef) -> Iterable[JustTypeRef]:
+        """
+        Returns the types which are compatible with the given binary method name and other type.
+        """
+        for class_decl in self._classes.values():
+            vars: dict[ClassTypeVarRef, JustTypeRef] = {}
+            if callable_decl := class_decl.methods.get(method_name):
+                match callable_decl.signature:
+                    case FunctionSignature((self_arg_type, other_arg_type)) if other_arg_type.matches_just(
+                        vars, other_type
+                    ):
+                        yield self_arg_type.to_just(vars)
 
     def get_class_decl(self, name: str) -> ClassDecl:
         return self._classes[name]
@@ -255,6 +286,7 @@ class ClassDecl:
     methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
     properties: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
+    match_args: tuple[str, ...] = field(default=())
 
 
 @dataclass(frozen=True)
@@ -299,6 +331,10 @@ class JustTypeRef:
 _RESOLVED_TYPEVARS: dict[ClassTypeVarRef, TypeVar] = {}
 
 
+class TypeVarError(RuntimeError):
+    """Error when trying to resolve a type variable that doesn't exist."""
+
+
 @dataclass(frozen=True)
 class ClassTypeVarRef:
     """
@@ -308,9 +344,10 @@ class ClassTypeVarRef:
     name: str
     module: str
 
-    def to_just(self) -> JustTypeRef:
-        msg = f"{self}: egglog does not support generic classes yet."
-        raise NotImplementedError(msg)
+    def to_just(self, vars: dict[ClassTypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
+        if vars is None or self not in vars:
+            raise TypeVarError(f"Cannot convert type variable {self} to concrete type without variable bindings")
+        return vars[self]
 
     def __str__(self) -> str:
         return str(self.to_type_var())
@@ -324,19 +361,38 @@ class ClassTypeVarRef:
     def to_type_var(self) -> TypeVar:
         return _RESOLVED_TYPEVARS[self]
 
+    def matches_just(self, vars: dict[ClassTypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
+        """
+        Checks if this type variable matches the given JustTypeRef, including type variables.
+        """
+        if self in vars:
+            return vars[self] == other
+        vars[self] = other
+        return True
+
 
 @dataclass(frozen=True)
 class TypeRefWithVars:
     name: str
     args: tuple[TypeOrVarRef, ...] = ()
 
-    def to_just(self) -> JustTypeRef:
-        return JustTypeRef(self.name, tuple(a.to_just() for a in self.args))
+    def to_just(self, vars: dict[ClassTypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
+        return JustTypeRef(self.name, tuple(a.to_just(vars) for a in self.args))
 
     def __str__(self) -> str:
         if self.args:
             return f"{self.name}[{', '.join(str(a) for a in self.args)}]"
         return self.name
+
+    def matches_just(self, vars: dict[ClassTypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
+        """
+        Checks if this type reference matches the given JustTypeRef, including type variables.
+        """
+        return (
+            self.name == other.name
+            and len(self.args) == len(other.args)
+            and all(a.matches_just(vars, b) for a, b in zip(self.args, other.args, strict=True))
+        )
 
 
 TypeOrVarRef: TypeAlias = ClassTypeVarRef | TypeRefWithVars
@@ -681,6 +737,28 @@ def replace_typed_expr(typed_expr: TypedExprDecl, replacements: Mapping[TypedExp
         return res
 
     return _inner(typed_expr)
+
+
+def collect_unbound_vars(typed_expr: TypedExprDecl) -> set[TypedExprDecl]:
+    """
+    Returns the set of all unbound vars
+    """
+    seen = set[TypedExprDecl]()
+    unbound_vars = set[TypedExprDecl]()
+
+    def visit(typed_expr: TypedExprDecl) -> None:
+        if typed_expr in seen:
+            return
+        seen.add(typed_expr)
+        match typed_expr.expr:
+            case CallDecl(_, args) | PartialCallDecl(CallDecl(_, args)):
+                for arg in args:
+                    visit(arg)
+            case UnboundVarDecl(_):
+                unbound_vars.add(typed_expr)
+
+    visit(typed_expr)
+    return unbound_vars
 
 
 ##

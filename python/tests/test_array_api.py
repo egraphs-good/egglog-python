@@ -323,8 +323,8 @@ def test_program_compile(program: Program, snapshot_py):
     egraph = EGraph()
     egraph.register(simplified_program.compile())
     egraph.run(array_api_program_gen_schedule)
-    statements = egraph.extract(simplified_program.statements).eval()
-    expr = egraph.extract(simplified_program.expr).eval()
+    statements = egraph.extract(simplified_program.statements).value
+    expr = egraph.extract(simplified_program.expr).value
     assert "\n".join([*statements.split("\n"), expr]) == snapshot_py(name="code")
 
 
