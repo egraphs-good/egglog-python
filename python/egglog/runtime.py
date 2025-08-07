@@ -387,7 +387,7 @@ class RuntimeFunction(DelayedDeclerations):
         return self.__egg_ref_thunk__()
 
     def __call__(self, *args: object, _egg_partial_function: bool = False, **kwargs: object) -> RuntimeExpr | None:
-        from .conversion import resolve_literal
+        from .conversion import resolve_literal  # noqa: PLC0415
 
         if isinstance(self.__egg_bound__, RuntimeExpr):
             args = (self.__egg_bound__, *args)
@@ -540,7 +540,7 @@ class RuntimeExpr(DelayedDeclerations):
         return pretty_decl(self.__egg_decls__, self.__egg_typed_expr__.expr, wrapping_fn=wrapping_fn)
 
     def _ipython_display_(self) -> None:
-        from IPython.display import Code, display
+        from IPython.display import Code, display  # noqa: PLC0415
 
         display(Code(str(self), language="python"))
 
@@ -577,7 +577,7 @@ class RuntimeExpr(DelayedDeclerations):
 
         # TODO: Check if two objects can be upcasted to be the same. If not, then return NotImplemented so other
         # expr gets a chance to resolve __eq__ which could be a preserved method.
-        from .egraph import BaseExpr, eq
+        from .egraph import BaseExpr, eq  # noqa: PLC0415
 
         return eq(cast("BaseExpr", self)).to(cast("BaseExpr", other))
 
@@ -585,7 +585,7 @@ class RuntimeExpr(DelayedDeclerations):
         if (method := _get_expr_method(self, "__ne__")) is not None:
             return method(other)
 
-        from .egraph import BaseExpr, ne
+        from .egraph import BaseExpr, ne  # noqa: PLC0415
 
         return ne(cast("BaseExpr", self)).to(cast("BaseExpr", other))
 
@@ -647,7 +647,7 @@ for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
                 )
             )
         ):
-            from .conversion import CONVERSIONS, resolve_type, retrieve_conversion_decls
+            from .conversion import CONVERSIONS, resolve_type, retrieve_conversion_decls  # noqa: PLC0415
 
             # tuple of (cost, convert_self)
             best_method: (

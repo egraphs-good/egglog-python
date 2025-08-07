@@ -10,6 +10,7 @@ from functools import partial
 from typing import ClassVar, TypeAlias
 
 from egglog import *
+from egglog.runtime import RuntimeFunction
 
 
 class Math(Expr):
@@ -167,8 +168,6 @@ class C(Expr):
 
 
 def test_callable_accepted_as_type():
-    from egglog.runtime import RuntimeFunction
-
     @function
     def func(f: UnstableFn[C, A, B]) -> C: ...
 

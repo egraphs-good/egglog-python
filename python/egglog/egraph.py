@@ -688,7 +688,7 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
 
 
 def _relation_decls(name: str, tps: tuple[type, ...], egg_fn: str | None) -> Declarations:
-    from .builtins import Unit
+    from .builtins import Unit  # noqa: PLC0415
 
     decls = Declarations()
     decls |= cast("RuntimeClass", Unit)
@@ -1086,9 +1086,9 @@ class EGraph:
 
         If in IPython it will display it inline, otherwise it will write it to a file and open it.
         """
-        from IPython.display import SVG, display
+        from IPython.display import SVG, display  # noqa: PLC0415
 
-        from .visualizer_widget import VisualizerWidget
+        from .visualizer_widget import VisualizerWidget  # noqa: PLC0415
 
         if graphviz:
             if IN_IPYTHON:
@@ -1115,7 +1115,7 @@ class EGraph:
 
         If an `expr` is passed, it's also extracted after each run and printed
         """
-        from .visualizer_widget import VisualizerWidget
+        from .visualizer_widget import VisualizerWidget  # noqa: PLC0415
 
         def to_json() -> str:
             if expr is not None:
@@ -1608,7 +1608,7 @@ class _NeBuilder(Generic[BASE_EXPR]):
     lhs: BASE_EXPR
 
     def to(self, rhs: BASE_EXPR) -> Unit:
-        from .builtins import Unit
+        from .builtins import Unit  # noqa: PLC0415
 
         lhs = to_runtime_expr(self.lhs)
         rhs = convert_to_same_type(rhs, lhs)
