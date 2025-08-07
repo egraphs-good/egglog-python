@@ -84,7 +84,7 @@ __all__ = [
 ]
 
 
-@dataclass
+@dataclass(match_args=False)
 class DelayedDeclerations:
     __egg_decls_thunk__: Callable[[], Declarations] = field(repr=False)
 
@@ -286,6 +286,7 @@ class ClassDecl:
     methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
     properties: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
+    match_args: tuple[str, ...] = field(default=())
 
 
 @dataclass(frozen=True)

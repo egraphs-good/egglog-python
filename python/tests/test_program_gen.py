@@ -60,7 +60,7 @@ def test_to_string(snapshot_py) -> None:
     egraph.register(fn.compile())
     egraph.run((to_program_ruleset | program_gen_ruleset).saturate())
     egraph.check(fn.expr == String("my_fn"))
-    assert egraph.extract(fn.statements).eval() == snapshot_py
+    assert egraph.extract(fn.statements).value == snapshot_py
 
 
 def test_to_string_function_three(snapshot_py) -> None:
@@ -71,8 +71,8 @@ def test_to_string_function_three(snapshot_py) -> None:
     egraph = EGraph()
     egraph.register(fn.compile())
     egraph.run((to_program_ruleset | program_gen_ruleset).saturate())
-    assert egraph.extract(fn.expr).eval() == "my_fn"
-    assert egraph.extract(fn.statements).eval() == snapshot_py
+    assert egraph.extract(fn.expr).value == "my_fn"
+    assert egraph.extract(fn.statements).value == snapshot_py
 
 
 def test_py_object():
@@ -84,6 +84,6 @@ def test_py_object():
     egraph = EGraph()
     egraph.register(evalled)
     egraph.run((to_program_ruleset | eval_program_rulseset | program_gen_ruleset).saturate())
-    res = cast("FunctionType", egraph.extract(evalled.as_py_object).eval())
+    res = cast("FunctionType", egraph.extract(evalled.as_py_object).value)
     assert res(1, 2) == 13
     assert inspect.getsource(res)
