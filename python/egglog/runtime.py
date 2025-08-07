@@ -177,8 +177,8 @@ class ClassFactory(type):
         for m in reversed(cls.__mro__):
             namespace.update(m.__dict__)
         init = namespace.pop("__init__")
-        meta = types.new_class(f"type(type[{args}])", (BaseClassFactoryMeta,), {}, lambda ns: ns.update(**namespace))
-        tp = types.new_class(f"type[{args}]", (), {"metaclass": meta})
+        meta = types.new_class("type(RuntimeClass)", (BaseClassFactoryMeta,), {}, lambda ns: ns.update(**namespace))
+        tp = types.new_class("RuntimeClass", (), {"metaclass": meta})
         init(tp, *args, **kwargs)
         return tp
 
