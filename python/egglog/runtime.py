@@ -189,7 +189,7 @@ class ClassFactory(type):
 @dataclass(match_args=False)
 class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
     __egg_tp__: TypeRefWithVars
-    # True if we want `__paramaters__` to be recongized by `Union`, which means we can't inherit from `type` directly.
+    # True if we want `__parameters__` to be recognized by `Union`, which means we can't inherit from `type` directly.
     _egg_has_params: InitVar[bool] = False
 
     def __post_init__(self, _egg_has_params: bool) -> None:
