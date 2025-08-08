@@ -394,6 +394,7 @@ class PrettyContext:
                 return f"{tp_ref}.{method_name}", args
             case MethodRef(_class_name, method_name):
                 slf, *args = args
+                non_str_slf = slf
                 slf = self(slf, parens=True)
                 match method_name:
                     case _ if method_name in UNARY_METHODS:
@@ -410,6 +411,8 @@ class PrettyContext:
                         return f"del {slf}[{self(args[0], unwrap_lit=True)}]"
                     case "__setitem__":
                         return f"{slf}[{self(args[0], unwrap_lit=True)}] = {self(args[1], unwrap_lit=True)}"
+                    case "__round__":
+                        return "round", [non_str_slf, *args]
                     case _:
                         return f"{slf}.{method_name}", args
             case ConstantRef(name):

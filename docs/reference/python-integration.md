@@ -379,13 +379,13 @@ instead of the normal mechanism which relies on `__getattr__`, you can call `egg
 with the name of a method. This is only needed for third party code that inspects the type object itself to see if a
 method is defined instead of just attempting to call it.
 
-### Reflected methods
+### Binary Method Conversions
 
-Note that reflected methods (i.e. `__radd__`) are handled as a special case. If defined, they won't create their own egglog functions.
+For [rich comparison methods](https://docs.python.org/3/reference/datamodel.html#object.__lt__) (like `__lt__`, `__le__`, `__eq__`, etc.) and [binary numeric methods](https://docs.python.org/3/reference/datamodel.html#object.__add__) (like `__add__`, `__sub__`, etc.), some more advanced conversion logic is needed to ensure they are converted properly. We add the `__r<name>__` methods for all expressions so that we can handle either position they are placed in.
 
-Instead, whenever a reflected method is called, we will try to find the corresponding non-reflected method and call that instead.
-
-Also, if a normal method fails because the arguments cannot be converted to the right types, the reflected version of the second arg will be tried.
+If we have two values `lhs` and `rhs`, we will try to find the minimum cost conversion for both of them, and then call the method on the converted values.
+If both are expression instances, we will convert at most one of them. However, if one is an expression and the other
+is a different Python value (like an `int`), we will consider all possible conversions of both arguments to find the minimum.
 
 ```{code-cell} python
 class Int(Expr):
@@ -422,11 +422,6 @@ converter(Int, Float, Float.from_int)
 
 assert str(-1.0 + Int.var("x")) == "Float(-1.0) + Float.from_int(Int.var(\"x\"))"
 ```
-
-For methods which allow returning `NotImplemented`, i.e. the comparison + binary math methods, we will also try upcasting both
-types to the type which is lowest cost to convert both to.
-
-For example, if you have `Float` and `Int` wrapper types and you have write the expr `-1.0 + Int.var("x")` you might want the result to be `Float(-1.0) + Float.from_int(Int.var("x"))`:
 
 ### Mutating arguments
 

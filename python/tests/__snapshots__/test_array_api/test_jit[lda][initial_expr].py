@@ -23,7 +23,6 @@ _NDArray_3[_IndexKey_3] = mean(asarray(_NDArray_1)[_IndexKey_4], _OptionalIntOrT
 _IndexKey_5 = IndexKey.multi_axis(MultiAxisIndexKey.from_vec(Vec(MultiAxisIndexKeyItem.int(Int(2)), _MultiAxisIndexKeyItem_1)))
 _IndexKey_6 = IndexKey.ndarray(unique_inverse(_NDArray_2)[Int(1)] == NDArray.scalar(Value.int(Int(2))))
 _NDArray_3[_IndexKey_5] = mean(asarray(_NDArray_1)[_IndexKey_6], _OptionalIntOrTuple_1)
-_Value_1 = Value.float(Float.rational(BigRat(BigInt.from_string("1"), BigInt.from_string("1"))))
 _NDArray_4 = zeros(TupleInt.from_vec(Vec[Int](Int(3), Int(4))), OptionalDType.some(DType.float64), OptionalDevice.some(_NDArray_1.device))
 _IndexKey_7 = IndexKey.multi_axis(MultiAxisIndexKey.from_vec(Vec[MultiAxisIndexKeyItem](MultiAxisIndexKeyItem.int(Int(0)), _MultiAxisIndexKeyItem_1)))
 _NDArray_4[_IndexKey_7] = mean(_NDArray_1[_IndexKey_2], _OptionalIntOrTuple_1)
@@ -42,8 +41,21 @@ _NDArray_5 = concat(
     OptionalInt.some(Int(0)),
 )
 _NDArray_6 = std(_NDArray_5, _OptionalIntOrTuple_1)
-_NDArray_6[IndexKey.ndarray(std(_NDArray_5, _OptionalIntOrTuple_1) == NDArray.scalar(Value.int(Int(0))))] = NDArray.scalar(_Value_1)
-_TupleNDArray_1 = svd(sqrt(asarray(NDArray.scalar(Value.int(_Value_1.to_int / Int(147))), OptionalDType.some(DType.float64))) * (_NDArray_5 / _NDArray_6), Boolean(False))
+_NDArray_6[IndexKey.ndarray(std(_NDArray_5, _OptionalIntOrTuple_1) == NDArray.scalar(Value.int(Int(0))))] = NDArray.scalar(
+    Value.float(Float.rational(BigRat(BigInt.from_string("1"), BigInt.from_string("1"))))
+)
+_TupleNDArray_1 = svd(
+    sqrt(
+        asarray(
+            NDArray.scalar(Value.float(Float.rational(BigRat(BigInt.from_string("1"), BigInt.from_string("147"))))),
+            OptionalDType.some(DType.float64),
+            OptionalBool.none,
+            OptionalDevice.some(_NDArray_1.device),
+        )
+    )
+    * (_NDArray_5 / _NDArray_6),
+    Boolean(False),
+)
 _Slice_1 = Slice(OptionalInt.none, OptionalInt.some(sum(astype(_TupleNDArray_1[Int(1)] > NDArray.scalar(Value.float(Float(0.0001))), DType.int32)).to_value().to_int))
 _NDArray_7 = asarray(reshape(asarray(_NDArray_2), TupleInt.from_vec(Vec[Int](Int(-1)))))
 _NDArray_8 = unique_values(concat(TupleNDArray.from_vec(Vec[NDArray](unique_values(asarray(_NDArray_7))))))
@@ -64,7 +76,10 @@ _NDArray_10 = copy(_NDArray_9)
 _NDArray_10[IndexKey.ndarray(_NDArray_9 == NDArray.scalar(Value.int(Int(0))))] = NDArray.scalar(Value.float(Float(1.0)))
 _NDArray_11 = astype(unique_counts(_NDArray_2)[Int(1)], DType.float64) / NDArray.scalar(Value.float(Float.rational(BigRat(BigInt.from_string("150"), BigInt.from_string("1")))))
 _TupleNDArray_2 = svd(
-    (sqrt((NDArray.scalar(Value.int(Int(150))) * _NDArray_11) * NDArray.scalar(Value.int(_Value_1.to_int / Int(2)))) * (_NDArray_4 - (_NDArray_11 @ _NDArray_4)).T).T
+    (
+        sqrt((NDArray.scalar(Value.int(Int(150))) * _NDArray_11) * NDArray.scalar(Value.float(Float.rational(BigRat(BigInt.from_string("1"), BigInt.from_string("2"))))))
+        * (_NDArray_4 - (_NDArray_11 @ _NDArray_4)).T
+    ).T
     @ (
         (
             _TupleNDArray_1[Int(2)][IndexKey.multi_axis(MultiAxisIndexKey.from_vec(Vec[MultiAxisIndexKeyItem](MultiAxisIndexKeyItem.slice(_Slice_1), _MultiAxisIndexKeyItem_1)))]
