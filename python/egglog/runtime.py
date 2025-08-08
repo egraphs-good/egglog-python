@@ -65,6 +65,10 @@ NUMERIC_BINARY_METHODS = {
     "__and__",
     "__xor__",
     "__or__",
+    "__lt__",
+    "__le__",
+    "__gt__",
+    "__ge__",
 }
 
 
@@ -85,10 +89,6 @@ TYPE_DEFINED_METHODS = {
     "__pos__",
     "__neg__",
     "__invert__",
-    "__lt__",
-    "__le__",
-    "__gt__",
-    "__ge__",
     "__round__",
 }
 
@@ -656,7 +656,7 @@ for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
 
             if not best_method:
                 raise RuntimeError(f"Cannot resolve {name} for {self} and {other}, no conversion found")
-            self = best_method[0](self)
+            self, other = best_method[0](self), best_method[1](other)
 
         method_ref = MethodRef(self.__egg_class_name__, name)
         fn = RuntimeFunction(Thunk.value(self.__egg_decls__), Thunk.value(method_ref), self)

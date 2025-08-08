@@ -25,7 +25,7 @@ def __fn(X, y):
     _8[2, :,] = _14
     _15 = _7 @ _8
     _16 = X - _15
-    _17 = np.sqrt(np.asarray(np.array((float(1) / 147)), np.dtype(np.float64)))
+    _17 = np.sqrt(np.asarray(np.array(float(1 / 147)), np.dtype(np.float64)))
     _18 = X[_0] - _8[0, :,]
     _19 = X[_2] - _8[1, :,]
     _20 = X[_4] - _8[2, :,]
@@ -49,7 +49,7 @@ def __fn(X, y):
     _37 = _33[2][:_36, :,] / _29
     _38 = _37.T / _33[1][:_36]
     _39 = np.array(150) * _7
-    _40 = _39 * np.array((float(1) / 2))
+    _40 = _39 * np.array(float(1 / 2))
     _41 = np.sqrt(_40)
     _42 = _8 - _15
     _43 = _41 * _42.T

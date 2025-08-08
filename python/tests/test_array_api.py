@@ -28,8 +28,7 @@ some_int_index = constant("some_int_index", Int)
 
 
 def test_upcast_order():
-    # verify that the following works by upcasting properly to floats
-    assert Int(2) > round(0.5 * Int(2))
+    assert Int(2) > round(0.5 * Int(2))  # type: ignore[operator]
 
 
 @function(ruleset=array_api_ruleset)

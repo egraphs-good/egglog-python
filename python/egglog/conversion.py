@@ -154,30 +154,42 @@ def min_binary_conversion(
     both of them can be converted. However, if both are egglog types, then only one of them can be converted.
     """
     decls = retrieve_conversion_decls()
-    # tuple of (cost, convert_self)
-    best_method: tuple[int, Callable[[Any], RuntimeExpr]] | None = None
-    # Start by checking if we have a LHS that matches exactly and a RHS which can be converted
-    if (
-        isinstance(lhs, JustTypeRef)
-        and (desired_other_type := decls.check_binary_method_with_self_type(method_name, lhs))
-        and (converter := CONVERSIONS.get((rhs, desired_other_type)))
-    ):
-        best_method = (converter[0], lambda x: x)
+    # tuple of (cost, convert lhs, convert rhs)
+    best_method: tuple[int, Callable[[Any], RuntimeExpr], Callable[[Any], RuntimeExpr]] | None = None
 
-    # Next see if it's possible to convert the LHS and keep the RHS as is
-    if isinstance(rhs, JustTypeRef):
-        decls = retrieve_conversion_decls()
-        for desired_self_type in decls.check_binary_method_with_other_type(method_name, rhs):
+    possible_lhs = _all_conversions_from(lhs) if isinstance(lhs, type) else [(0, lhs, identity)]
+    possible_rhs = _all_conversions_from(rhs) if isinstance(rhs, type) else [(0, rhs, identity)]
+    for lhs_cost, lhs_converted_type, lhs_convert in possible_lhs:
+        # Start by checking if we have a LHS that matches exactly and a RHS which can be converted
+        if (desired_other_type := decls.check_binary_method_with_self_type(method_name, lhs_converted_type)) and (
+            converter := CONVERSIONS.get((rhs, desired_other_type))
+        ):
+            cost = lhs_cost + converter[0]
+            if best_method is None or best_method[0] > cost:
+                best_method = (cost, lhs_convert, converter[1])
+
+    for rhs_cost, rhs_converted_type, rhs_convert in possible_rhs:
+        # Next see if it's possible to convert the LHS and keep the RHS as is
+        for desired_self_type in decls.check_binary_method_with_other_type(method_name, rhs_converted_type):
             if converter := CONVERSIONS.get((lhs, desired_self_type)):
-                cost, convert_self = converter
+                cost = rhs_cost + converter[0]
                 if best_method is None or best_method[0] > cost:
-                    best_method = (cost, convert_self)
+                    best_method = (cost, converter[1], rhs_convert)
     if best_method is None:
         return None
-    return best_method[1], best_method[1]
+    return best_method[1], best_method[2]
 
 
-def identity(x: object) -> object:
+def _all_conversions_from(tp: JustTypeRef | type) -> list[tuple[int, JustTypeRef, Callable[[Any], RuntimeExpr]]]:
+    """
+    Get all conversions from a type to other types.
+
+    Returns a list of tuples of (cost, target type, conversion function).
+    """
+    return [(cost, target, fn) for (source, target), (cost, fn) in CONVERSIONS.items() if source == tp]
+
+
+def identity(x: Any) -> Any:
     return x
 
 

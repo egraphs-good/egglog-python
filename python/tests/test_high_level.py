@@ -947,7 +947,7 @@ def test_type_param_sub():
     assert str(V[Unit]) == str(Vec[Unit] | int)  # type: ignore[misc]
 
 
-def test_override_hash(self):
+def test_override_hash():
     class A(Expr):
         def __init__(self) -> None: ...
 

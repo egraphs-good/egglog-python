@@ -368,8 +368,14 @@ class Float(Expr, ruleset=array_api_ruleset):
     def __sub__(self, other: FloatLike) -> Float: ...
 
     def __pow__(self, other: FloatLike) -> Float: ...
+    def __round__(self, ndigits: OptionalIntLike = None) -> Float: ...
 
     def __eq__(self, other: FloatLike) -> Boolean: ...  # type: ignore[override]
+    def __ne__(self, other: FloatLike) -> Boolean: ...  # type: ignore[override]
+    def __lt__(self, other: FloatLike) -> Boolean: ...
+    def __le__(self, other: FloatLike) -> Boolean: ...
+    def __gt__(self, other: FloatLike) -> Boolean: ...
+    def __ge__(self, other: FloatLike) -> Boolean: ...
 
 
 converter(float, Float, lambda x: Float(x))
@@ -380,9 +386,10 @@ FloatLike: TypeAlias = Float | float | IntLike
 
 
 @array_api_ruleset.register
-def _float(fl: Float, f: f64, f2: f64, i: i64, r: BigRat, r1: BigRat):
+def _float(fl: Float, f: f64, f2: f64, i: i64, r: BigRat, r1: BigRat, i_: Int):
     return [
         rule(eq(fl).to(Float(f))).then(set_(fl.to_f64).to(f)),
+        rewrite(Float.from_int(Int(i))).to(Float(f64.from_i64(i))),
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
         rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
         # Convert from float to rationl, if its a whole number i.e. can be converted to int
@@ -397,11 +404,22 @@ def _float(fl: Float, f: f64, f2: f64, i: i64, r: BigRat, r1: BigRat):
         rewrite(Float.rational(r) - Float.rational(r1)).to(Float.rational(r - r1)),
         rewrite(Float.rational(r) * Float.rational(r1)).to(Float.rational(r * r1)),
         rewrite(Float(f) ** Float(f2)).to(Float(f**f2)),
-        # ==
+        # comparisons
         rewrite(Float(f) == Float(f)).to(TRUE),
         rewrite(Float(f) == Float(f2)).to(FALSE, ne(f).to(f2)),
+        rewrite(Float(f) != Float(f2)).to(TRUE, f != f2),
+        rewrite(Float(f) != Float(f)).to(FALSE),
+        rewrite(Float(f) >= Float(f2)).to(TRUE, f >= f2),
+        rewrite(Float(f) >= Float(f2)).to(FALSE, f < f2),
+        rewrite(Float(f) <= Float(f2)).to(TRUE, f <= f2),
+        rewrite(Float(f) <= Float(f2)).to(FALSE, f > f2),
+        rewrite(Float(f) > Float(f2)).to(TRUE, f > f2),
+        rewrite(Float(f) > Float(f2)).to(FALSE, f <= f2),
+        rewrite(Float(f) < Float(f2)).to(TRUE, f < f2),
         rewrite(Float.rational(r) == Float.rational(r)).to(TRUE),
         rewrite(Float.rational(r) == Float.rational(r1)).to(FALSE, ne(r).to(r1)),
+        # round
+        rewrite(Float.rational(r).__round__()).to(Float.rational(r.round())),
     ]
 
 
