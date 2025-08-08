@@ -505,6 +505,6 @@ def _ndarray_program(
     yield rewrite(ndarray_program(abs(x))).to((Program("np.abs(") + ndarray_program(x) + ")").assign())
 
     # asarray
-    yield rewrite(ndarray_program(asarray(x, odtype))).to(
+    yield rewrite(ndarray_program(asarray(x, odtype, OptionalBool.none, optional_device_))).to(
         Program("np.asarray(") + ndarray_program(x) + ", " + optional_dtype_program(odtype) + ")"
     )
