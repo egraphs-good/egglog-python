@@ -89,6 +89,7 @@ TYPE_DEFINED_METHODS = {
     "__le__",
     "__gt__",
     "__ge__",
+    "__round__",
 }
 
 # Set this globally so we can get access to PyObject when we have a type annotation of just object.

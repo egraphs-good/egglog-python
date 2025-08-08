@@ -164,6 +164,8 @@ class Int(Expr, ruleset=array_api_ruleset):
         simplified = egraph.extract(self)
         return hash(cast("RuntimeExpr", simplified).__egg_typed_expr__)
 
+    def __round__(self, ndigits: OptionalIntLike = None) -> Int: ...
+
     # TODO: Fix this?
     # Make != always return a Bool, so that numpy.unique works on a tuple of ints
     # In _unique1d
@@ -289,6 +291,8 @@ def _int(i: i64, j: i64, r: Boolean, o: Int, b: Int):
 
     yield rewrite(Int.if_(TRUE, o, b), subsume=True).to(o)
     yield rewrite(Int.if_(FALSE, o, b), subsume=True).to(b)
+
+    yield rewrite(o.__round__(OptionalInt.none)).to(o)
 
     # Never cannot be equal to anything real
     yield rule(eq(Int.NEVER).to(Int(i))).then(panic("Int.NEVER cannot be equal to any real int"))
@@ -680,6 +684,8 @@ class OptionalInt(Expr, ruleset=array_api_ruleset):
     @classmethod
     def some(cls, value: Int) -> OptionalInt: ...
 
+
+OptionalIntLike: TypeAlias = OptionalInt | IntLike | None
 
 converter(type(None), OptionalInt, lambda _: OptionalInt.none)
 converter(Int, OptionalInt, OptionalInt.some)
