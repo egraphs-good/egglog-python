@@ -143,38 +143,38 @@ def process_tp(tp: type | RuntimeClass) -> JustTypeRef | type:
     return tp
 
 
-# def min_convertable_tp(a: object, b: object, name: str) -> JustTypeRef:
-#     """
-#     Returns the minimum convertable type between a and b, that has a method `name`, raising a ConvertError if no such type exists.
-#     """
-#     decls = _retrieve_conversion_decls().copy()
-#     if isinstance(a, RuntimeExpr):
-#         decls |= a
-#     if isinstance(b, RuntimeExpr):
-#         decls |= b
+def min_binary_conversion(
+    method_name: str, lhs: type | JustTypeRef, rhs: type | JustTypeRef
+) -> tuple[Callable[[Any], RuntimeExpr], Callable[[Any], RuntimeExpr]] | None:
+    """
+    Given a binary method and two starting types for the LHS and RHS, return a pair of callable which will convert
+    the LHS and RHS to appropriate types which support this method. If no such conversion is possible, return None.
 
-#     a_tp = _get_tp(a)
-#     b_tp = _get_tp(b)
-#     # Make sure at least one of the types has the method, to avoid issue with == upcasting improperly
-#     if not (
-#         (isinstance(a_tp, JustTypeRef) and decls.has_method(a_tp.name, name))
-#         or (isinstance(b_tp, JustTypeRef) and decls.has_method(b_tp.name, name))
-#     ):
-#         raise ConvertError(f"Neither {a_tp} nor {b_tp} has method {name}")
-#     a_converts_to = {
-#         to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == a_tp and decls.has_method(to.name, name)
-#     }
-#     b_converts_to = {
-#         to: c for ((from_, to), (c, _)) in CONVERSIONS.items() if from_ == b_tp and decls.has_method(to.name, name)
-#     }
-#     if isinstance(a_tp, JustTypeRef) and decls.has_method(a_tp.name, name):
-#         a_converts_to[a_tp] = 0
-#     if isinstance(b_tp, JustTypeRef) and decls.has_method(b_tp.name, name):
-#         b_converts_to[b_tp] = 0
-#     common = set(a_converts_to) & set(b_converts_to)
-#     if not common:
-#         raise ConvertError(f"Cannot convert {a_tp} and {b_tp} to a common type")
-#     return min(common, key=lambda tp: a_converts_to[tp] + b_converts_to[tp])
+    It should return the types which minimize the total conversion cost. If one of the types is a Python type, then
+    both of them can be converted. However, if both are egglog types, then only one of them can be converted.
+    """
+    decls = retrieve_conversion_decls()
+    # tuple of (cost, convert_self)
+    best_method: tuple[int, Callable[[Any], RuntimeExpr]] | None = None
+    # Start by checking if we have a LHS that matches exactly and a RHS which can be converted
+    if (
+        isinstance(lhs, JustTypeRef)
+        and (desired_other_type := decls.check_binary_method_with_self_type(method_name, lhs))
+        and (converter := CONVERSIONS.get((rhs, desired_other_type)))
+    ):
+        best_method = (converter[0], lambda x: x)
+
+    # Next see if it's possible to convert the LHS and keep the RHS as is
+    if isinstance(rhs, JustTypeRef):
+        decls = retrieve_conversion_decls()
+        for desired_self_type in decls.check_binary_method_with_other_type(method_name, rhs):
+            if converter := CONVERSIONS.get((lhs, desired_self_type)):
+                cost, convert_self = converter
+                if best_method is None or best_method[0] > cost:
+                    best_method = (cost, convert_self)
+    if best_method is None:
+        return None
+    return best_method[1], best_method[1]
 
 
 def identity(x: object) -> object:

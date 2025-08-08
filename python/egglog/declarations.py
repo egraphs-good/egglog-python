@@ -244,7 +244,10 @@ class Declarations:
         Checks if the class has a binary method with the given name and self type. Returns the other type if it exists.
         """
         vars: dict[ClassTypeVarRef, JustTypeRef] = {}
-        if callable_decl := self._classes[self_type.name].methods.get(method_name):
+        class_decl = self._classes.get(self_type.name)
+        if class_decl is None:
+            return None
+        if callable_decl := class_decl.methods.get(method_name):
             match callable_decl.signature:
                 case FunctionSignature((self_arg_type, other_arg_type)) if self_arg_type.matches_just(vars, self_type):
                     return other_arg_type.to_just(vars)

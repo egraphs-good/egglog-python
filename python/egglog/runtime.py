@@ -649,42 +649,13 @@ for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
                 )
             )
         ):
-            from .conversion import CONVERSIONS, resolve_type, retrieve_conversion_decls  # noqa: PLC0415
+            from .conversion import min_binary_conversion, resolve_type  # noqa: PLC0415
 
-            # tuple of (cost, convert_self)
-            best_method: (
-                tuple[
-                    int,
-                    Callable[[Any], RuntimeExpr],
-                ]
-                | None
-            ) = None
-            # Start by checking if we have a LHS that matches exactly and a RHS which can be converted
-            if (
-                isinstance(self, RuntimeExpr)
-                and (
-                    desired_other_type := self.__egg_decls__.check_binary_method_with_self_type(
-                        name, self.__egg_typed_expr__.tp
-                    )
-                )
-                and (converter := CONVERSIONS.get((resolve_type(other), desired_other_type)))
-            ):
-                best_method = (converter[0], lambda x: x)
-
-            # Next see if it's possible to convert the LHS and keep the RHS as is
-            if isinstance(other, RuntimeExpr):
-                decls = retrieve_conversion_decls()
-                other_type = other.__egg_typed_expr__.tp
-                resolved_self_type = resolve_type(self)
-                for desired_self_type in decls.check_binary_method_with_other_type(name, other_type):
-                    if converter := CONVERSIONS.get((resolved_self_type, desired_self_type)):
-                        cost, convert_self = converter
-                        if best_method is None or best_method[0] > cost:
-                            best_method = (cost, convert_self)
+            best_method = min_binary_conversion(name, resolve_type(self), resolve_type(other))
 
             if not best_method:
                 raise RuntimeError(f"Cannot resolve {name} for {self} and {other}, no conversion found")
-            self = best_method[1](self)
+            self = best_method[0](self)
 
         method_ref = MethodRef(self.__egg_class_name__, name)
         fn = RuntimeFunction(Thunk.value(self.__egg_decls__), Thunk.value(method_ref), self)
