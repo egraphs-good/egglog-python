@@ -154,6 +154,16 @@ class Int(Expr, ruleset=array_api_ruleset):
     def __eq__(self, other: IntLike) -> Boolean:  # type: ignore[override]
         ...
 
+    # add a hash so that this test can pass
+    # https://github.com/scikit-learn/scikit-learn/blob/6fd23fca53845b32b249f2b36051c081b65e2fab/sklearn/utils/validation.py#L486-L487
+    @method(preserve=True)
+    def __hash__(self) -> int:
+        egraph = _get_current_egraph()
+        egraph.register(self)
+        egraph.run(array_api_schedule)
+        simplified = egraph.extract(self)
+        return hash(cast("RuntimeExpr", simplified).__egg_typed_expr__)
+
     # TODO: Fix this?
     # Make != always return a Bool, so that numpy.unique works on a tuple of ints
     # In _unique1d

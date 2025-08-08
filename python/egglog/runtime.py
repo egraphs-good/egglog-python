@@ -567,6 +567,8 @@ class RuntimeExpr(DelayedDeclerations):
         self.__egg_typed_expr_thunk__ = Thunk.value(d[1])
 
     def __hash__(self) -> int:
+        if (method := _get_expr_method(self, "__hash__")) is not None:
+            return cast("int", cast("Any", method()))
         return hash(self.__egg_typed_expr__)
 
     # Implement this directly to special case behavior where it transforms to an egraph equality, if it is not a

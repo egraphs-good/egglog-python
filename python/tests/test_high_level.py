@@ -947,6 +947,17 @@ def test_type_param_sub():
     assert str(V[Unit]) == str(Vec[Unit] | int)  # type: ignore[misc]
 
 
+def test_override_hash(self):
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+        @method(preserve=True)
+        def __hash__(self) -> int:
+            return 42
+
+    assert hash(A()) == 42
+
+
 EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))
 
 

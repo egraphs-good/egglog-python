@@ -110,7 +110,6 @@ IGNORED_ATTRIBUTES = {
     "__weakref__",
     "__orig_bases__",
     "__annotations__",
-    "__hash__",
     "__qualname__",
     "__firstlineno__",
     "__static_attributes__",
