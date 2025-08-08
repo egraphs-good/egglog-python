@@ -27,6 +27,11 @@ some_value = constant("some_value", Value)
 some_int_index = constant("some_int_index", Int)
 
 
+def test_upcast_order():
+    # verify that the following works by upcasting properly to floats
+    assert Int(2) > round(0.5 * Int(2))
+
+
 @function(ruleset=array_api_ruleset)
 def is_even(x: Int) -> Boolean:
     return x % 2 == 0
