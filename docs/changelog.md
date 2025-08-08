@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Change conversion between binary operators to consider converting both types [#320](https://github.com/egraphs-good/egglog-python/pull/320)
 - Add ability to parse egglog expressions into Python values [#319](https://github.com/egraphs-good/egglog-python/pull/319)
   - Deprecates `.eval()` method on primitives in favor of `.value` which can be used with pattern matching.
 - Support methods like on expressions [#315](https://github.com/egraphs-good/egglog-python/pull/315)
