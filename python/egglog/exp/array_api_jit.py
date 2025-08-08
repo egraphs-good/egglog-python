@@ -14,16 +14,22 @@ from .program_gen import Program
 X = TypeVar("X", bound=Callable)
 
 
-def jit(fn: X) -> X:
+def jit(
+    fn: X,
+    *,
+    handle_expr: Callable[[NDArray], None] | None = None,
+    handle_optimized_expr: Callable[[NDArray], None] | None = None,
+) -> X:
     """
     Jit compiles a function
     """
     egraph, res, res_optimized, program = function_to_program(fn, save_egglog_string=False)
+    if handle_expr:
+        handle_expr(res)
+    if handle_optimized_expr:
+        handle_optimized_expr(res_optimized)
     fn_program = EvalProgram(program, {"np": np})
-    fn = cast("X", try_evaling(egraph, array_api_program_gen_schedule, fn_program, fn_program.as_py_object))
-    fn.initial_expr = res  # type: ignore[attr-defined]
-    fn.expr = res_optimized  # type: ignore[attr-defined]
-    return fn
+    return cast("X", try_evaling(egraph, array_api_program_gen_schedule, fn_program, fn_program.as_py_object))
 
 
 def function_to_program(fn: Callable, save_egglog_string: bool) -> tuple[EGraph, NDArray, NDArray, Program]:

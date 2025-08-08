@@ -1,6 +1,7 @@
 # mypy: disable-error-code="empty-body"
 import inspect
 from collections.abc import Callable
+from functools import partial
 from itertools import product
 from pathlib import Path
 from types import FunctionType
@@ -352,9 +353,12 @@ def lda(X: NDArray, y: NDArray):
     ],
 )
 def test_jit(program, snapshot_py, benchmark):
-    jitted = benchmark(jit, program)
-    assert str(jitted.initial_expr) == snapshot_py(name="initial_expr")
-    assert str(jitted.expr) == snapshot_py(name="expr")
+    def save_expr(name, expr):
+        assert str(expr) == snapshot_py(name=name)
+
+    jitted = benchmark(
+        jit, program, handle_expr=partial(save_expr, "initial_expr"), handle_optimized_expr=partial(save_expr, "expr")
+    )
     assert inspect.getsource(jitted) == snapshot_py(name="code")
 
 
