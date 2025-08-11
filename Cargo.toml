@@ -10,7 +10,7 @@ name = "egglog"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.24.2", features = ["extension-module"] }
+pyo3 = { version = "0.25.1", features = ["extension-module"] }
 
 egglog = { git = "https://github.com/egraphs-good/egglog.git", rev = "5542549" }
 # egglog = { path = "../egg-smol" }
@@ -18,12 +18,12 @@ egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", re
 core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "cd51d04" }
 egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", rev = "255b67a" }
 egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
-serde_json = "1.0.140"
+serde_json = "1.0.142"
 pyo3-log = "0.12.4"
 log = "0.4.27"
 lalrpop-util = { version = "0.22", features = ["lexer"] }
 ordered-float = "3.7.0"
-uuid = { version = "1.17.0", features = ["v4"] }
+uuid = { version = "1.18.0", features = ["v4"] }
 rayon = "1.10.0"
 
 # Use patched version of egglog in experimental
