@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- [pre-commit.ci] pre-commit autoupdate [#322](https://github.com/egraphs-good/egglog-python/pull/322)
 ## 11.0.0 (2025-08-08)
 
 - Change conversion between binary operators to consider converting both types [#320](https://github.com/egraphs-good/egglog-python/pull/320)
