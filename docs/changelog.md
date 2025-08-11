@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Bump the rust group across 1 directory with 3 updates [#324](https://github.com/egraphs-good/egglog-python/pull/324)
 ## 11.0.0 (2025-08-08)
 
 - Change conversion between binary operators to consider converting both types [#320](https://github.com/egraphs-good/egglog-python/pull/320)
