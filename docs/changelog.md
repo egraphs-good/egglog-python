@@ -4,13 +4,11 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-## 11.0.0 (2025-08-08)
-
 - Change conversion between binary operators to consider converting both types [#320](https://github.com/egraphs-good/egglog-python/pull/320)
 - Add ability to parse egglog expressions into Python values [#319](https://github.com/egraphs-good/egglog-python/pull/319)
   - Deprecates `.eval()` method on primitives in favor of `.value` which can be used with pattern matching.
 - Support methods like on expressions [#315](https://github.com/egraphs-good/egglog-python/pull/315)
-- Automatically Create Changelog Entry for PRs [#313](https://github.com/egraphs-good/egglog-python/pull/313)
+- Automatically Create Changelog Entry for PRs [#313](https://github.com/egraphs-good/egglog-python/pull/313) [#317](https://github.com/egraphs-good/egglog-python/pull/317)
 - Upgrade egglog which includes new backend.
   - Fixes implementation of the Python Object sort to work with objects with dupliating hashes but the same value.
     Also changes the representation to be an index into a list instead of the ID, making egglog programs more deterministic.
