@@ -11,12 +11,14 @@ so they are not mangled by Python and can be accessed by the user.
 
 from __future__ import annotations
 
+import itertools
 import operator
+import types
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import InitVar, dataclass, replace
 from inspect import Parameter, Signature
 from itertools import zip_longest
-from typing import TYPE_CHECKING, TypeVar, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, get_args, get_origin
 
 from .declarations import *
 from .pretty import *
@@ -27,15 +29,14 @@ from .version_compat import *
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from .egraph import Fact
-
 
 __all__ = [
     "LIT_CLASS_NAMES",
-    "REFLECTED_BINARY_METHODS",
+    "NUMERIC_BINARY_METHODS",
     "RuntimeClass",
     "RuntimeExpr",
     "RuntimeFunction",
+    "define_expr_method",
     "resolve_callable",
     "resolve_type_annotation",
     "resolve_type_annotation_mutate",
@@ -46,24 +47,34 @@ UNIT_CLASS_NAME = "Unit"
 UNARY_LIT_CLASS_NAMES = {"i64", "f64", "Bool", "String"}
 LIT_CLASS_NAMES = UNARY_LIT_CLASS_NAMES | {UNIT_CLASS_NAME, "PyObject"}
 
-REFLECTED_BINARY_METHODS = {
-    "__radd__": "__add__",
-    "__rsub__": "__sub__",
-    "__rmul__": "__mul__",
-    "__rmatmul__": "__matmul__",
-    "__rtruediv__": "__truediv__",
-    "__rfloordiv__": "__floordiv__",
-    "__rmod__": "__mod__",
-    "__rpow__": "__pow__",
-    "__rlshift__": "__lshift__",
-    "__rrshift__": "__rshift__",
-    "__rand__": "__and__",
-    "__rxor__": "__xor__",
-    "__ror__": "__or__",
+# All methods which should return NotImplemented if they fail to resolve and are reflected as well
+# From https://docs.python.org/3/reference/datamodel.html#emulating-numeric-types
+
+NUMERIC_BINARY_METHODS = {
+    "__add__",
+    "__sub__",
+    "__mul__",
+    "__matmul__",
+    "__truediv__",
+    "__floordiv__",
+    "__mod__",
+    "__divmod__",
+    "__pow__",
+    "__lshift__",
+    "__rshift__",
+    "__and__",
+    "__xor__",
+    "__or__",
+    "__lt__",
+    "__le__",
+    "__gt__",
+    "__ge__",
 }
 
-# Methods that need to return real Python values not expressions
-PRESERVED_METHODS = [
+
+# Methods that need to be defined on the runtime type that holds `Expr` objects, so that they can be used as methods.
+
+TYPE_DEFINED_METHODS = {
     "__bool__",
     "__len__",
     "__complex__",
@@ -71,9 +82,15 @@ PRESERVED_METHODS = [
     "__float__",
     "__iter__",
     "__index__",
-    "__float__",
-    "__int__",
-]
+    "__call__",
+    "__getitem__",
+    "__setitem__",
+    "__delitem__",
+    "__pos__",
+    "__neg__",
+    "__invert__",
+    "__round__",
+}
 
 # Set this globally so we can get access to PyObject when we have a type annotation of just object.
 # This is the only time a type annotation doesn't need to include the egglog type b/c object is top so that would be redundant statically.
@@ -135,11 +152,48 @@ def inverse_resolve_type_annotation(decls_thunk: Callable[[], Declarations], tp:
 ##
 
 
-@dataclass
-class RuntimeClass(DelayedDeclerations):
-    __egg_tp__: TypeRefWithVars
+class BaseClassFactoryMeta(type):
+    """
+    Base metaclass for all runtime classes created by ClassFactory
+    """
 
-    def __post_init__(self) -> None:
+    def __instancecheck__(cls, instance: object) -> bool:
+        assert isinstance(cls, RuntimeClass)
+        return isinstance(instance, RuntimeExpr) and cls.__egg_tp__.name == instance.__egg_typed_expr__.tp.name
+
+
+class ClassFactory(type):
+    """
+    A metaclass for types which should create `type` objects when instantiated.
+
+    That's so that they work with `isinstance` and can be placed in `match ClassName()`.
+    """
+
+    def __call__(cls, *args, **kwargs) -> type:
+        # If we have params, don't inherit from `type` because we don't need to match against this and also
+        # this won't work with `Union[X]` because it won't look at `__parameters__` for instances of `type`.
+        if kwargs.pop("_egg_has_params", False):
+            return super().__call__(*args, **kwargs)
+        namespace: dict[str, Any] = {}
+        for m in reversed(cls.__mro__):
+            namespace.update(m.__dict__)
+        init = namespace.pop("__init__")
+        meta = types.new_class("type(RuntimeClass)", (BaseClassFactoryMeta,), {}, lambda ns: ns.update(**namespace))
+        tp = types.new_class("RuntimeClass", (), {"metaclass": meta})
+        init(tp, *args, **kwargs)
+        return tp
+
+    def __instancecheck__(cls, instance: object) -> bool:
+        return isinstance(instance, BaseClassFactoryMeta)
+
+
+@dataclass(match_args=False)
+class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
+    __egg_tp__: TypeRefWithVars
+    # True if we want `__parameters__` to be recognized by `Union`, which means we can't inherit from `type` directly.
+    _egg_has_params: InitVar[bool] = False
+
+    def __post_init__(self, _egg_has_params: bool) -> None:
         global _PY_OBJECT_CLASS, _UNSTABLE_FN_CLASS
         if (name := self.__egg_tp__.name) == "PyObject":
             _PY_OBJECT_CLASS = self
@@ -229,7 +283,7 @@ class RuntimeClass(DelayedDeclerations):
         else:
             final_args = new_args
         tp = TypeRefWithVars(self.__egg_tp__.name, final_args)
-        return RuntimeClass(Thunk.fn(Declarations.create, self, *decls_like), tp)
+        return RuntimeClass(Thunk.fn(Declarations.create, self, *decls_like), tp, _egg_has_params=True)
 
     def __getattr__(self, name: str) -> RuntimeFunction | RuntimeExpr | Callable:
         if name == "__origin__" and self.__egg_tp__.args:
@@ -288,6 +342,14 @@ class RuntimeClass(DelayedDeclerations):
     def __hash__(self) -> int:
         return hash((id(self.__egg_decls_thunk__), self.__egg_tp__))
 
+    def __eq__(self, other: object) -> bool:
+        """
+        Support equality for runtime comparison of egglog classes.
+        """
+        if not isinstance(other, RuntimeClass):
+            return NotImplemented
+        return self.__egg_tp__ == other.__egg_tp__
+
     # Support unioning like types
     def __or__(self, value: type) -> object:
         return Union[self, value]  # noqa: UP007
@@ -298,6 +360,10 @@ class RuntimeClass(DelayedDeclerations):
         Emit a number of typevar params so that when using generic type aliases, we know how to resolve these properly.
         """
         return tuple(inverse_resolve_type_annotation(self.__egg_decls_thunk__, tp) for tp in self.__egg_tp__.args)
+
+    @property
+    def __match_args__(self) -> tuple[str, ...]:
+        return self.__egg_decls__._classes[self.__egg_tp__.name].match_args
 
 
 @dataclass
@@ -322,7 +388,7 @@ class RuntimeFunction(DelayedDeclerations):
         return self.__egg_ref_thunk__()
 
     def __call__(self, *args: object, _egg_partial_function: bool = False, **kwargs: object) -> RuntimeExpr | None:
-        from .conversion import resolve_literal
+        from .conversion import resolve_literal  # noqa: PLC0415
 
         if isinstance(self.__egg_bound__, RuntimeExpr):
             args = (self.__egg_bound__, *args)
@@ -357,7 +423,7 @@ class RuntimeFunction(DelayedDeclerations):
         try:
             bound = py_signature.bind(*args, **kwargs)
         except TypeError as err:
-            raise TypeError(f"Failed to call {self} with args {args} and kwargs {kwargs}") from err
+            raise TypeError(f"Failed to bind arguments for {self} with args {args} and kwargs {kwargs}: {err}") from err
         del kwargs
         bound.apply_defaults()
         assert not bound.kwargs
@@ -437,32 +503,6 @@ def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: 
     return Signature(parameters)
 
 
-# All methods which should return NotImplemented if they fail to resolve
-# From https://docs.python.org/3/reference/datamodel.html
-PARTIAL_METHODS = {
-    "__lt__",
-    "__le__",
-    "__eq__",
-    "__ne__",
-    "__gt__",
-    "__ge__",
-    "__add__",
-    "__sub__",
-    "__mul__",
-    "__matmul__",
-    "__truediv__",
-    "__floordiv__",
-    "__mod__",
-    "__divmod__",
-    "__pow__",
-    "__lshift__",
-    "__rshift__",
-    "__and__",
-    "__xor__",
-    "__or__",
-}
-
-
 @dataclass
 class RuntimeExpr(DelayedDeclerations):
     __egg_typed_expr_thunk__: Callable[[], TypedExprDecl]
@@ -479,17 +519,14 @@ class RuntimeExpr(DelayedDeclerations):
         return self.__egg_typed_expr_thunk__()
 
     def __getattr__(self, name: str) -> RuntimeFunction | RuntimeExpr | Callable | None:
-        cls_name = self.__egg_class_name__
-        class_decl = self.__egg_class_decl__
-
-        if name in (preserved_methods := class_decl.preserved_methods):
-            return preserved_methods[name].__get__(self)
-
-        if name in class_decl.methods:
-            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(cls_name, name)), self)
-        if name in class_decl.properties:
-            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(PropertyRef(cls_name, name)), self)()
-        raise AttributeError(f"{cls_name} has no method {name}") from None
+        if (method := _get_expr_method(self, name)) is not None:
+            return method
+        if name in self.__egg_class_decl__.properties:
+            fn = RuntimeFunction(
+                self.__egg_decls_thunk__, Thunk.value(PropertyRef(self.__egg_class_name__, name)), self
+            )
+            return fn()
+        raise AttributeError(f"{self.__egg_class_name__} has no method {name}") from None
 
     def __repr__(self) -> str:
         """
@@ -504,7 +541,7 @@ class RuntimeExpr(DelayedDeclerations):
         return pretty_decl(self.__egg_decls__, self.__egg_typed_expr__.expr, wrapping_fn=wrapping_fn)
 
     def _ipython_display_(self) -> None:
-        from IPython.display import Code, display
+        from IPython.display import Code, display  # noqa: PLC0415
 
         display(Code(str(self), language="python"))
 
@@ -520,13 +557,6 @@ class RuntimeExpr(DelayedDeclerations):
     def __egg_class_decl__(self) -> ClassDecl:
         return self.__egg_decls__.get_class_decl(self.__egg_class_name__)
 
-    # These both will be overriden below in the special methods section, but add these here for type hinting purposes
-    def __eq__(self, other: object) -> Fact:  # type: ignore[override, empty-body]
-        ...
-
-    def __ne__(self, other: object) -> RuntimeExpr:  # type: ignore[override, empty-body]
-        ...
-
     # Implement these so that copy() works on this object
     # otherwise copy will try to call `__getstate__` before object is initialized with properties which will cause inifinite recursion
 
@@ -538,91 +568,102 @@ class RuntimeExpr(DelayedDeclerations):
         self.__egg_typed_expr_thunk__ = Thunk.value(d[1])
 
     def __hash__(self) -> int:
+        if (method := _get_expr_method(self, "__hash__")) is not None:
+            return cast("int", cast("Any", method()))
         return hash(self.__egg_typed_expr__)
 
+    # Implement this directly to special case behavior where it transforms to an egraph equality, if it is not a
+    # preserved method or defined on the class
+    def __eq__(self, other: object) -> object:  # type: ignore[override]
+        if (method := _get_expr_method(self, "__eq__")) is not None:
+            return method(other)
 
-# Define each of the special methods, since we have already declared them for pretty printing
-for name in list(BINARY_METHODS) + list(UNARY_METHODS) + ["__getitem__", "__call__", "__setitem__", "__delitem__"]:
+        # TODO: Check if two objects can be upcasted to be the same. If not, then return NotImplemented so other
+        # expr gets a chance to resolve __eq__ which could be a preserved method.
+        from .egraph import BaseExpr, eq  # noqa: PLC0415
 
-    def _special_method(
-        self: RuntimeExpr,
-        *args: object,
-        __name: str = name,
-        **kwargs: object,
-    ) -> RuntimeExpr | Fact | None:
-        from .conversion import ConvertError
+        return eq(cast("BaseExpr", self)).to(cast("BaseExpr", other))
 
-        class_name = self.__egg_class_name__
-        class_decl = self.__egg_class_decl__
-        # First, try to resolve as preserved method
-        try:
-            method = class_decl.preserved_methods[__name]
-        except KeyError:
-            pass
-        else:
-            return method(self, *args, **kwargs)
-        # If this is a "partial" method meaning that it can return NotImplemented,
-        # we want to find the "best" superparent (lowest cost) of the arg types to call with it, instead of just
-        # using the arg type of the self arg.
-        # This is neccesary so if we add like an int to a ndarray, it will upcast the int to an ndarray, instead of vice versa.
-        if __name in PARTIAL_METHODS:
-            try:
-                return call_method_min_conversion(self, args[0], __name)
-            except ConvertError:
-                # Defer raising not imeplemented in case the dunder method is not symmetrical, then
-                # we use the standard process
-                pass
-        if __name in class_decl.methods:
-            fn = RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(class_name, __name)), self)
-            return fn(*args, **kwargs)  # type: ignore[arg-type]
-        # Handle == and != fallbacks to eq and ne helpers if the methods aren't defined on the class explicitly.
-        if __name == "__eq__":
-            from .egraph import BaseExpr, eq
+    def __ne__(self, other: object) -> object:  # type: ignore[override]
+        if (method := _get_expr_method(self, "__ne__")) is not None:
+            return method(other)
 
-            return eq(cast("BaseExpr", self)).to(cast("BaseExpr", args[0]))
-        if __name == "__ne__":
-            from .egraph import BaseExpr, ne
+        from .egraph import BaseExpr, ne  # noqa: PLC0415
 
-            return cast("RuntimeExpr", ne(cast("BaseExpr", self)).to(cast("BaseExpr", args[0])))
+        return ne(cast("BaseExpr", self)).to(cast("BaseExpr", other))
 
-        if __name in PARTIAL_METHODS:
-            return NotImplemented
-        raise TypeError(f"{class_name!r} object does not support {__name}")
-
-    setattr(RuntimeExpr, name, _special_method)
-
-# For each of the reflected binary methods, translate to the corresponding non-reflected method
-for reflected, non_reflected in REFLECTED_BINARY_METHODS.items():
-
-    def _reflected_method(self: RuntimeExpr, other: object, __non_reflected: str = non_reflected) -> RuntimeExpr | None:
-        # All binary methods are also "partial" meaning we should try to upcast first.
-        return call_method_min_conversion(other, self, __non_reflected)
-
-    setattr(RuntimeExpr, reflected, _reflected_method)
+    def __call__(
+        self, *args: object, **kwargs: object
+    ) -> object:  # define it here only for type checking, it will be overriden below
+        ...
 
 
-def call_method_min_conversion(slf: object, other: object, name: str) -> RuntimeExpr | None:
-    from .conversion import min_convertable_tp, resolve_literal
+def _get_expr_method(expr: RuntimeExpr, name: str) -> RuntimeFunction | RuntimeExpr | Callable | None:
+    if name in (preserved_methods := expr.__egg_class_decl__.preserved_methods):
+        return preserved_methods[name].__get__(expr)
 
-    # find a minimum type that both can be converted to
-    # This is so so that calls like `-0.1 * Int("x")` work by upcasting both to floats.
-    min_tp = min_convertable_tp(slf, other, name).to_var()
-    slf = resolve_literal(min_tp, slf)
-    other = resolve_literal(min_tp, other)
-    method = RuntimeFunction(slf.__egg_decls_thunk__, Thunk.value(MethodRef(slf.__egg_class_name__, name)), slf)
-    return method(other)
+    if name in expr.__egg_class_decl__.methods:
+        return RuntimeFunction(expr.__egg_decls_thunk__, Thunk.value(MethodRef(expr.__egg_class_name__, name)), expr)
+    return None
 
 
-for name in PRESERVED_METHODS:
+def define_expr_method(name: str) -> None:
+    """
+    Given the name of a method, explicitly defines it on the runtime type that holds `Expr` objects as a method.
 
-    def _preserved_method(self: RuntimeExpr, __name: str = name):
-        try:
-            method = self.__egg_decls__.get_class_decl(self.__egg_typed_expr__.tp.name).preserved_methods[__name]
-        except KeyError as e:
-            raise TypeError(f"{self.__egg_typed_expr__.tp.name} has no method {__name}") from e
-        return method(self)
+    Call this if you need a method to be defined on the type itself where overrindg with `__getattr__` does not suffice,
+    like for NumPy's `__array_ufunc__`.
+    """
 
-    setattr(RuntimeExpr, name, _preserved_method)
+    def _defined_method(self: RuntimeExpr, *args, __name: str = name, **kwargs):
+        fn = _get_expr_method(self, __name)
+        if fn is None:
+            raise TypeError(f"{self.__egg_class_name__} expression has no method {__name}")
+        return fn(*args, **kwargs)
+
+    setattr(RuntimeExpr, name, _defined_method)
+
+
+for name in TYPE_DEFINED_METHODS:
+    define_expr_method(name)
+
+
+for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
+
+    def _numeric_binary_method(self: object, other: object, name: str = name, r_method: bool = r_method) -> object:
+        """
+        Implements numeric binary operations.
+
+        Tries to find the minimum cost conversion of either the LHS or the RHS, by finding all methods with either
+        the LHS or the RHS as exactly the right type and then upcasting the other to that type.
+        """
+        # 1. switch if reversed method
+        if r_method:
+            self, other = other, self
+        # If the types don't exactly match to start, then we need to try converting one of them, by finding the cheapest conversion
+        if not (
+            isinstance(self, RuntimeExpr)
+            and isinstance(other, RuntimeExpr)
+            and (
+                self.__egg_decls__.check_binary_method_with_types(
+                    name, self.__egg_typed_expr__.tp, other.__egg_typed_expr__.tp
+                )
+            )
+        ):
+            from .conversion import min_binary_conversion, resolve_type  # noqa: PLC0415
+
+            best_method = min_binary_conversion(name, resolve_type(self), resolve_type(other))
+
+            if not best_method:
+                raise RuntimeError(f"Cannot resolve {name} for {self} and {other}, no conversion found")
+            self, other = best_method[0](self), best_method[1](other)
+
+        method_ref = MethodRef(self.__egg_class_name__, name)
+        fn = RuntimeFunction(Thunk.value(self.__egg_decls__), Thunk.value(method_ref), self)
+        return fn(other)
+
+    method_name = f"__r{name[2:]}" if r_method else name
+    setattr(RuntimeExpr, method_name, _numeric_binary_method)
 
 
 def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:

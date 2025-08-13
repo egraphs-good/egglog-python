@@ -1,6 +1,7 @@
 # mypy: disable-error-code="empty-body"
 import inspect
 from collections.abc import Callable
+from functools import partial
 from itertools import product
 from pathlib import Path
 from types import FunctionType
@@ -25,6 +26,10 @@ some_index = constant("some_index", TupleInt)
 some_length = constant("some_length", Int)
 some_value = constant("some_value", Value)
 some_int_index = constant("some_int_index", Int)
+
+
+def test_upcast_order():
+    assert Int(2) > round(0.5 * Int(2))  # type: ignore[operator]
 
 
 @function(ruleset=array_api_ruleset)
@@ -323,8 +328,8 @@ def test_program_compile(program: Program, snapshot_py):
     egraph = EGraph()
     egraph.register(simplified_program.compile())
     egraph.run(array_api_program_gen_schedule)
-    statements = egraph.extract(simplified_program.statements).eval()
-    expr = egraph.extract(simplified_program.expr).eval()
+    statements = egraph.extract(simplified_program.statements).value
+    expr = egraph.extract(simplified_program.expr).value
     assert "\n".join([*statements.split("\n"), expr]) == snapshot_py(name="code")
 
 
@@ -348,9 +353,12 @@ def lda(X: NDArray, y: NDArray):
     ],
 )
 def test_jit(program, snapshot_py, benchmark):
-    jitted = benchmark(jit, program)
-    assert str(jitted.initial_expr) == snapshot_py(name="initial_expr")
-    assert str(jitted.expr) == snapshot_py(name="expr")
+    def save_expr(name, expr):
+        assert str(expr) == snapshot_py(name=name)
+
+    jitted = benchmark(
+        jit, program, handle_expr=partial(save_expr, "initial_expr"), handle_optimized_expr=partial(save_expr, "expr")
+    )
     assert inspect.getsource(jitted) == snapshot_py(name="code")
 
 

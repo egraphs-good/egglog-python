@@ -5,7 +5,7 @@ import inspect
 import pathlib
 import tempfile
 from collections.abc import Callable, Generator, Iterable
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field
 from functools import partial
 from inspect import Parameter, currentframe, signature
@@ -110,12 +110,12 @@ IGNORED_ATTRIBUTES = {
     "__weakref__",
     "__orig_bases__",
     "__annotations__",
-    "__hash__",
     "__qualname__",
     "__firstlineno__",
     "__static_attributes__",
+    "__match_args__",
     # Ignore all reflected binary method
-    *REFLECTED_BINARY_METHODS.keys(),
+    *(f"__r{m[2:]}" for m in NUMERIC_BINARY_METHODS),
 }
 
 
@@ -361,6 +361,7 @@ class BaseExpr(metaclass=_ExprMetaclass):
 
     def __ne__(self, other: Self) -> Unit: ...  # type: ignore[override, empty-body]
 
+    # not currently dissalowing other types of equality https://github.com/python/typeshed/issues/8217#issuecomment-3140873292
     def __eq__(self, other: Self) -> Fact: ...  # type: ignore[override, empty-body]
 
 
@@ -394,7 +395,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     )
     type_vars = tuple(ClassTypeVarRef.from_type_var(p) for p in parameters)
     del parameters
-    cls_decl = ClassDecl(egg_sort, type_vars, builtin)
+    cls_decl = ClassDecl(egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()))
     decls = Declarations(_classes={cls_name: cls_decl})
     # Update class think eagerly when resolving so that lookups work in methods
     runtime_cls.__egg_decls_thunk__ = Thunk.value(decls)
@@ -446,6 +447,9 @@ def _generate_class_decls(  # noqa: C901,PLR0912
             continue
         locals = frame.f_locals
         ref: ClassMethodRef | MethodRef | PropertyRef | InitRef
+        # TODO: Store deprecated message so we can print at runtime
+        if (getattr(fn, "__deprecated__", None)) is not None:
+            fn = fn.__wrapped__  # type: ignore[attr-defined]
         match fn:
             case classmethod():
                 ref = ClassMethodRef(cls_name, method_name)
@@ -683,7 +687,7 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
 
 
 def _relation_decls(name: str, tps: tuple[type, ...], egg_fn: str | None) -> Declarations:
-    from .builtins import Unit
+    from .builtins import Unit  # noqa: PLC0415
 
     decls = Declarations()
     decls |= cast("RuntimeClass", Unit)
@@ -854,6 +858,7 @@ class EGraph:
         self._add_decls(decls)
         return self._state.callable_ref_to_egg(ref)[0]
 
+    # TODO: Change let to be action...
     def let(self, name: str, expr: BASE_EXPR) -> BASE_EXPR:
         """
         Define a new expression in the egraph and return a reference to it.
@@ -1080,9 +1085,9 @@ class EGraph:
 
         If in IPython it will display it inline, otherwise it will write it to a file and open it.
         """
-        from IPython.display import SVG, display
+        from IPython.display import SVG, display  # noqa: PLC0415
 
-        from .visualizer_widget import VisualizerWidget
+        from .visualizer_widget import VisualizerWidget  # noqa: PLC0415
 
         if graphviz:
             if IN_IPYTHON:
@@ -1109,7 +1114,7 @@ class EGraph:
 
         If an `expr` is passed, it's also extracted after each run and printed
         """
-        from .visualizer_widget import VisualizerWidget
+        from .visualizer_widget import VisualizerWidget  # noqa: PLC0415
 
         def to_json() -> str:
             if expr is not None:
@@ -1501,16 +1506,17 @@ def rule(*facts: FactLike, ruleset: None = None, name: str | None = None) -> _Ru
     return _RuleBuilder(facts=_fact_likes(facts), name=name, ruleset=ruleset)
 
 
-def var(name: str, bound: type[T]) -> T:
+def var(name: str, bound: type[T], egg_name: str | None = None) -> T:
     """Create a new variable with the given name and type."""
-    return cast("T", _var(name, bound))
+    return cast("T", _var(name, bound, egg_name=egg_name))
 
 
-def _var(name: str, bound: object) -> RuntimeExpr:
+def _var(name: str, bound: object, egg_name: str | None) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
     decls_like, type_ref = resolve_type_annotation(bound)
     return RuntimeExpr(
-        Thunk.fn(Declarations.create, decls_like), Thunk.value(TypedExprDecl(type_ref.to_just(), UnboundVarDecl(name)))
+        Thunk.fn(Declarations.create, decls_like),
+        Thunk.value(TypedExprDecl(type_ref.to_just(), UnboundVarDecl(name, egg_name))),
     )
 
 
@@ -1601,7 +1607,7 @@ class _NeBuilder(Generic[BASE_EXPR]):
     lhs: BASE_EXPR
 
     def to(self, rhs: BASE_EXPR) -> Unit:
-        from .builtins import Unit
+        from .builtins import Unit  # noqa: PLC0415
 
         lhs = to_runtime_expr(self.lhs)
         rhs = convert_to_same_type(rhs, lhs)
@@ -1760,7 +1766,7 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     # python/tests/test_no_import_star.py::test_no_import_star_rulesset
     combined = {**gen.__globals__, **frame.f_locals}
     hints = get_type_hints(gen, combined, combined)
-    args = [_var(p.name, hints[p.name]) for p in signature(gen).parameters.values()]
+    args = [_var(p.name, hints[p.name], egg_name=None) for p in signature(gen).parameters.values()]
     return list(gen(*args))  # type: ignore[misc]
 
 
@@ -1786,7 +1792,7 @@ def get_current_ruleset() -> Ruleset | None:
 
 @contextlib.contextmanager
 def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
-    token = _CURRENT_RULESET.set(r)
+    token: Token[Ruleset | None] = _CURRENT_RULESET.set(r)
     try:
         yield
     finally:

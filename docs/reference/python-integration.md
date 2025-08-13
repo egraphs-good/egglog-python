@@ -6,17 +6,88 @@ file_format: mystnb
 
 Alongside [the support for builtin `egglog` functionality](./egglog-translation.md), `egglog` also provides functionality to more easily integrate with the Python ecosystem.
 
-## Retrieving Primitive Values
+## Retrieving Values
 
-If you have a egglog primitive, you can turn it into a Python object by using `egraph.eval(...)` method:
+If you have an egglog value, you might want to convert it from an expression to a native Python object. This is done through a number of helper functions:
+
+For a primitive value (like `i64`, `f64`, `Bool`, `String`, or `PyObject`), use `get_literal_value(expr)` or the `.value` property:
 
 ```{code-cell} python
 from __future__ import annotations
 
 from egglog import *
 
-egraph = EGraph()
-assert egraph.eval(i64(1) + 20) == 21
+assert get_literal_value(i64(42)) == 42
+assert get_literal_value(i64(42) + i64(1)) == None # This is because i64(42) + i64(1) is a call expression, not a literal
+assert i64(42).value == 42
+assert get_literal_value(f64(3.14)) == 3.14
+assert Bool(True).value is True
+assert String("hello").value == "hello"
+assert PyObject([1,2,3]).value == [1,2,3]
+```
+
+To check if an expression is a let value and get its name, use `get_let_name(expr)`:
+
+```{code-cell} python
+x = EGraph().let("my_var", i64(1))
+assert get_let_name(x) == "my_var"
+```
+
+To check if an expression is a variable and get its name, use `get_var_name(expr)`:
+
+```{code-cell} python
+from egglog import var, get_var_name
+v = var("x", i64)
+assert get_var_name(v) == "x"
+```
+
+For a callable (method, function, classmethod, or constructor), use `get_callable_fn(expr)` to get the underlying Python function:
+
+```{code-cell} python
+expr = i64(1) + i64(2)
+fn = get_callable_fn(expr)
+assert fn == i64.__add__
+```
+
+To get the arguments to a callable, use `get_callable_args(expr)`. If you want to match against a specific callable, use `get_callable_args(expr, fn)`, where `fn` is the Python function you want to match against. This will return `None` if the callable does not match the function, and if it does match, the args will be properly typed:
+
+```{code-cell} python
+assert get_callable_args(expr) == (i64(1), i64(2))
+
+assert get_callable_args(expr, i64.__add__) == (i64(1), i64(2))
+assert get_callable_args(expr, i64.__sub__) == None
+```
+
+### Pattern Matching
+
+You can use Python's structural pattern matching (`match`/`case`) to destructure egglog primitives:
+
+```{code-cell} python
+x = i64(5)
+match i64(5):
+    case i64(i):
+        print(f"Integer literal: {i}")
+```
+
+You can add custom support for pattern matching against your classes by adding `__match_args__` to your class:
+
+```python
+class MyExpr(Expr):
+    def __init__(self, value: StringLike): ...
+
+    __match_args__ = ("value",)
+
+    @method(preserve=True)
+    @property
+    def value(self) -> str:
+        match get_callable_args(self, MyExpr):
+            case (String(value),):
+                return value
+        raise ExprValueError(self, "MyExpr")
+
+match MyExpr("hello"):
+    case MyExpr(value):
+        print(f"Matched MyExpr with value: {value}")
 ```
 
 ## Python Object Sort
@@ -53,10 +124,10 @@ Creating hashable objects is safer, since while the rule might create new Python
 
 ### Retrieving Python Objects
 
-Like other primitives, we can retrieve the Python object from the e-graph by using the `egraph.eval(...)` method:
+Like other primitives, we can retrieve the Python object from the e-graph by using the `.value` property:
 
 ```{code-cell} python
-assert egraph.eval(lst) == [1, 2, 3]
+assert lst.value == [1, 2, 3]
 ```
 
 ### Builtin methods
@@ -66,29 +137,29 @@ Currently, we only support a few methods on `PyObject`s, but we plan to add more
 Conversion to/from a string:
 
 ```{code-cell} python
-egraph.eval(PyObject('hi').to_string())
+EGraph().extract(PyObject('hi').to_string())
 ```
 
 ```{code-cell} python
-egraph.eval(PyObject.from_string("1"))
+EGraph().extract(PyObject.from_string("1"))
 ```
 
 Conversion from an int:
 
 ```{code-cell} python
-egraph.eval(PyObject.from_int(1))
+EGraph().extract(PyObject.from_int(1))
 ```
 
 We also support evaluating arbitrary Python code, given some locals and globals. This technically allows us to implement any Python method:
 
 ```{code-cell} python
-egraph.eval(py_eval("1 + 2"))
+EGraph().extract(py_eval("1 + 2"))
 ```
 
 Executing Python code is also supported. In this case, the return value will be the updated globals dict, which will be copied first before using.
 
 ```{code-cell} python
-egraph.eval(py_exec("x = 1 + 2"))
+EGraph().extract(py_exec("x = 1 + 2"))
 ```
 
 Alongside this, we support a function `dict_update` method, which can allow you to combine some local egglog expressions alongside, say, the locals and globals of the Python code you are evaluating.
@@ -100,7 +171,7 @@ def my_add(a, b):
 
 amended_globals = PyObject(globals()).dict_update("one", 1)
 evalled = py_eval("my_add(one,  2)", locals(), amended_globals)
-assert egraph.eval(evalled) == 3
+assert EGraph().extract(evalled).value == 3
 ```
 
 ### Simpler Eval
@@ -116,7 +187,7 @@ def my_add(a, b):
     return a + b
 
 evalled = py_eval_fn(lambda a: my_add(a, 2))(1)
-assert egraph.eval(evalled) == 3
+assert EGraph().extract(evalled).value == 3
 ```
 
 ## Functions
@@ -263,10 +334,12 @@ class Boolean(Expr):
         # Run until the e-graph saturates
         egraph.run(10)
         # Extract the Python object from the e-graph
-        return egraph.eval(self.to_py())
-
-    def to_py(self) -> PyObject:
-        ...
+        value = EGraph().extract(self)
+        if value == TRUE:
+            return True
+        elif value == FALSE:
+            return False
+        raise ExprValueError(self, "Boolean expression must be TRUE or FALSE")
 
     def __or__(self, other: Boolean) -> Boolean:
         ...
@@ -278,8 +351,6 @@ FALSE = egraph.constant("FALSE", Boolean)
 @egraph.register
 def _bool(x: Boolean):
     return [
-        set_(TRUE.to_py()).to(PyObject(True)),
-        set_(FALSE.to_py()).to(PyObject(False)),
         rewrite(TRUE | x).to(TRUE),
         rewrite(FALSE | x).to(x),
     ]
@@ -303,13 +374,18 @@ Note that the following list of methods are only supported as "preserved" since 
 - `__iter_`
 - `__index__`
 
-### Reflected methods
+If you want to register additional methods as always preserved and defined on the `Expr` class itself, if needed
+instead of the normal mechanism which relies on `__getattr__`, you can call `egglog.define_expr_method(name: str)`,
+with the name of a method. This is only needed for third party code that inspects the type object itself to see if a
+method is defined instead of just attempting to call it.
 
-Note that reflected methods (i.e. `__radd__`) are handled as a special case. If defined, they won't create their own egglog functions.
+### Binary Method Conversions
 
-Instead, whenever a reflected method is called, we will try to find the corresponding non-reflected method and call that instead.
+For [rich comparison methods](https://docs.python.org/3/reference/datamodel.html#object.__lt__) (like `__lt__`, `__le__`, `__eq__`, etc.) and [binary numeric methods](https://docs.python.org/3/reference/datamodel.html#object.__add__) (like `__add__`, `__sub__`, etc.), some more advanced conversion logic is needed to ensure they are converted properly. We add the `__r<name>__` methods for all expressions so that we can handle either position they are placed in.
 
-Also, if a normal method fails because the arguments cannot be converted to the right types, the reflected version of the second arg will be tried.
+If we have two values `lhs` and `rhs`, we will try to find the minimum cost conversion for both of them, and then call the method on the converted values.
+If both are expression instances, we will convert at most one of them. However, if one is an expression and the other
+is a different Python value (like an `int`), we will consider all possible conversions of both arguments to find the minimum.
 
 ```{code-cell} python
 class Int(Expr):
@@ -346,11 +422,6 @@ converter(Int, Float, Float.from_int)
 
 assert str(-1.0 + Int.var("x")) == "Float(-1.0) + Float.from_int(Int.var(\"x\"))"
 ```
-
-For methods which allow returning `NotImplemented`, i.e. the comparison + binary math methods, we will also try upcasting both
-types to the type which is lowest cost to convert both to.
-
-For example, if you have `Float` and `Int` wrapper types and you have write the expr `-1.0 + Int.var("x")` you might want the result to be `Float(-1.0) + Float.from_int(Int.var("x"))`:
 
 ### Mutating arguments
 

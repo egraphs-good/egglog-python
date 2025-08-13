@@ -45,7 +45,14 @@ _NDArray_6[IndexKey.ndarray(std(_NDArray_5, _OptionalIntOrTuple_1) == NDArray.sc
     Value.float(Float.rational(BigRat(BigInt.from_string("1"), BigInt.from_string("1"))))
 )
 _TupleNDArray_1 = svd(
-    sqrt(asarray(NDArray.scalar(Value.float(Float.rational(BigRat(BigInt.from_string("1"), BigInt.from_string("147"))))), OptionalDType.some(DType.float64)))
+    sqrt(
+        asarray(
+            NDArray.scalar(Value.float(Float.rational(BigRat(BigInt.from_string("1"), BigInt.from_string("147"))))),
+            OptionalDType.some(DType.float64),
+            OptionalBool.none,
+            OptionalDevice.some(_NDArray_1.device),
+        )
+    )
     * (_NDArray_5 / _NDArray_6),
     Boolean(False),
 )
