@@ -53,7 +53,7 @@ jobs:
     strategy:
       matrix:
         # Run on codspeed for walltime and ubuntu for instrumenentation
-        runner: [ codspeed-macro, ubuntu-latest ]
+        runner: [ ubuntu-latest ] # codspeed-macro,  disable for now till we set up custom runner for more minutes
     steps:
       - uses: actions/checkout@v5
       - name: Set up Python
