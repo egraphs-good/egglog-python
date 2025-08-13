@@ -30,7 +30,7 @@ jobs:
             core.setOutput('head_ref', pullRequest.head.ref);
       
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # Checkout the PR head ref
           ref: ${{ steps.pr-details.outputs.head_ref }}
