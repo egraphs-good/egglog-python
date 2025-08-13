@@ -77,6 +77,15 @@ make docs
 To debug the Rust parts of this project, follow the [PyO3 debugging guide](https://pyo3.rs/main/debugging.html#debugger-specific-setup).
 Debug symbols are turned on by default.
 
+### Performance
+
+[`py-spy`](https://github.com/benfred/py-spy) is installed as a development dependency and can be used to profile Python code.
+If there is a performance sensitive piece of code, you could isolate it in a file and profile it locally with:
+
+```bash
+uv run py-spy record  --format speedscope  --  python tmp.py
+```
+
 ### Making changes
 
 All changes that impact users should be documented in the `docs/changelog.md` file. Please also add tests for any new features

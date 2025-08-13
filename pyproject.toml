@@ -274,3 +274,8 @@ exclude_also = [
 
 [tool.uv.workspace]
 members = ["egglog"]
+
+[dependency-groups]
+dev = [
+    "py-spy>=0.4.1",
+]
