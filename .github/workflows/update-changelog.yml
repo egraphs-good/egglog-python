@@ -1,25 +1,39 @@
 name: Update Changelog
 
 on:
-  pull_request:
-    types: [opened, edited]
+  issue_comment:
+    types: [created]
 
 jobs:
   update-changelog:
-    # Only run if this is not a PR from a fork to avoid permission issues
-    # and not a commit made by GitHub Action to avoid infinite loops
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    # Only run if this is a comment on a PR containing "@actions-user changelog"
+    # and not a comment made by GitHub Action to avoid infinite loops
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '@actions-user changelog') && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     
     steps:
+      - name: Get PR details
+        id: pr-details
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            core.setOutput('number', pullRequest.number);
+            core.setOutput('title', pullRequest.title);
+            core.setOutput('head_ref', pullRequest.head.ref);
+      
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           # Checkout the PR head ref
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ steps.pr-details.outputs.head_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Set up Python
@@ -30,8 +44,8 @@ jobs:
       - name: Update changelog
         run: |
           python modify_changelog.py update_changelog \
-            "${{ github.event.pull_request.number }}" \
-            '${{ github.event.pull_request.title }}'
+            "${{ steps.pr-details.outputs.number }}" \
+            '${{ steps.pr-details.outputs.title }}'
       
       - name: Check for changes
         id: changes
@@ -48,5 +62,5 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add docs/changelog.md
-          git commit -m "Add changelog entry for PR #${{ github.event.pull_request.number }}"
+          git commit -m "Add changelog entry for PR #${{ steps.pr-details.outputs.number }}"
           git push
