@@ -35,7 +35,7 @@ jobs:
     outputs:
       version: ${{ steps.bump.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
@@ -59,11 +59,11 @@ jobs:
     needs: [bump]
     if: ${{ always() }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: ${{ needs.bump.result == 'success' }}
         with:
           ref: version-${{ needs.bump.outputs.version }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: ${{ needs.bump.result == 'skipped' }}
       - uses: PyO3/maturin-action@v1.49.3
         with:
@@ -83,11 +83,11 @@ jobs:
     needs: [bump]
     if: ${{ always() }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: ${{ needs.bump.result == 'success' }}
         with:
           ref: version-${{ needs.bump.outputs.version }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: ${{ needs.bump.result == 'skipped' }}
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
@@ -108,11 +108,11 @@ jobs:
     needs: [bump]
     if: ${{ always() }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: ${{ needs.bump.result == 'success' }}
         with:
           ref: version-${{ needs.bump.outputs.version }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: ${{ needs.bump.result == 'skipped' }}
       - uses: PyO3/maturin-action@v1.49.3
         with:
@@ -130,11 +130,11 @@ jobs:
     needs: [bump]
     if: ${{ always() }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: ${{ needs.bump.result == 'success' }}
         with:
           ref: version-${{ needs.bump.outputs.version }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: ${{ needs.bump.result == 'skipped' }}
       - uses: PyO3/maturin-action@v1.49.3
         with:
@@ -169,7 +169,7 @@ jobs:
     permissions: write-all
     needs: [release, bump]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: version-${{ needs.bump.outputs.version }}
       - run: |
