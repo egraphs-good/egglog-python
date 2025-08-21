@@ -11,8 +11,13 @@ use pyo3::prelude::*;
 /// Bindings for egglog rust library
 #[pymodule]
 fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Configure Rayon thread pool from env var, defaulting to 1 if unset/invalid.
+    let num_threads = std::env::var("RAYON_NUM_THREADS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1);
     rayon::ThreadPoolBuilder::new()
-        .num_threads(1)
+        .num_threads(num_threads)
         .build_global()
         .unwrap();
 
