@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Allow changing number of threads with env variable [#330](https://github.com/egraphs-good/egglog-python/pull/330)
 ## 11.0.0 (2025-08-08)
 - Change conversion between binary operators to consider converting both types [#320](https://github.com/egraphs-good/egglog-python/pull/320)
 - Add ability to parse egglog expressions into Python values [#319](https://github.com/egraphs-good/egglog-python/pull/319)
