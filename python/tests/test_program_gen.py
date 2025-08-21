@@ -23,7 +23,7 @@ class Math(Expr):
 
     def __neg__(self) -> Math: ...
 
-    @method(cost=1000)  # type: ignore[misc]
+    @method(cost=1000)  # type: ignore[prop-decorator]
     @property
     def program(self) -> Program: ...
 

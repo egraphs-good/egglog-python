@@ -39,7 +39,7 @@ if BEFORE_3_11:
             if isinstance(t, typevar_types) and t not in tvars:
                 tvars.append(t)
             # **MONKEYPATCH CHANGE HERE TO ADD RuntimeClass**
-            if isinstance(t, (typing._GenericAlias, typing.GenericAlias, types.UnionType, RuntimeClass)):  # type: ignore[name-defined]
+            if isinstance(t, (typing._GenericAlias, typing.GenericAlias, types.UnionType, RuntimeClass)):
                 tvars.extend([t for t in t.__parameters__ if t not in tvars])
         return tuple(tvars)
 

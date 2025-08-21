@@ -1767,7 +1767,7 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     combined = {**gen.__globals__, **frame.f_locals}
     hints = get_type_hints(gen, combined, combined)
     args = [_var(p.name, hints[p.name], egg_name=None) for p in signature(gen).parameters.values()]
-    return list(gen(*args))  # type: ignore[misc]
+    return list(gen(*args))
 
 
 FactLike = Fact | BaseExpr

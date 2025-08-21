@@ -234,15 +234,15 @@ preview = true
 
 [tool.mypy]
 ignore_missing_imports = true
-warn_redundant_casts = true
-check_untyped_defs = true
-strict_equality = true
-warn_unused_configs = true
 allow_redefinition = true
 exclude = ["__snapshots__", "_build", "^conftest.py$"]
-# mypy_path = "python"
-# explicit_package_bases = true
-# namespace_packages = true
+warn_unused_configs = true
+disallow_subclassing_any = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_equality = true
+extra_checks = true
 
 [tool.maturin]
 python-source = "python"
