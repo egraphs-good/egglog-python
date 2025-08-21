@@ -22,6 +22,14 @@ pip install anywidget
 
 It follows [SPEC 0](https://scientific-python.org/specs/spec-0000/) in terms of what Python versions are supported.
 
+## Parallelism and threads
+
+The underlying Rust library uses Rayon for parallelism. You can control the worker thread count via the environment variable `RAYON_NUM_THREADS`. If this variable is not set or is invalid, the Python bindings default to using a single thread (`1`).
+
+```shell
+export RAYON_NUM_THREADS=4  # use 4 threads
+```
+
 (community)=
 
 ## Community
