@@ -51,11 +51,11 @@ def test_classmethod_call():
     )
     Map = RuntimeClass(Thunk.value(decls), TypeRefWithVars("Map"))
     with pytest.raises(TypeConstraintError):
-        Map.create()  # type: ignore[operator]
+        Map.create()
     i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars("i64"))
     unit = RuntimeClass(Thunk.value(decls), TypeRefWithVars("unit"))
     assert (
-        Map[i64, unit].create().__egg_typed_expr__  # type: ignore[union-attr, operator]
+        Map[i64, unit].create().__egg_typed_expr__  # type: ignore[union-attr]
         == TypedExprDecl(
             JustTypeRef("Map", (JustTypeRef("i64"), JustTypeRef("unit"))),
             CallDecl(ClassMethodRef("Map", "create"), (), (JustTypeRef("i64"), JustTypeRef("unit"))),

@@ -895,12 +895,12 @@ class TestMatch:
 
             __match_args__ = ("a", "b")
 
-            @method(preserve=True)  # type: ignore[misc]
+            @method(preserve=True)  # type: ignore[prop-decorator]
             @property
             def a(self) -> int:
                 return 1
 
-            @method(preserve=True)  # type: ignore[misc]
+            @method(preserve=True)  # type: ignore[prop-decorator]
             @property
             def b(self) -> str:
                 return "hi"
@@ -923,7 +923,7 @@ class TestMatch:
 
             __match_args__ = ("a",)
 
-            @method(preserve=True)  # type: ignore[misc]
+            @method(preserve=True)  # type: ignore[prop-decorator]
             @property
             def a(self) -> int:
                 raise AttributeError

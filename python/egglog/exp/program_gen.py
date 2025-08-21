@@ -79,7 +79,7 @@ class Program(Expr):
         Triggers compilation of the program.
         """
 
-    @method(merge=lambda old, _new: old)  # type: ignore[misc]
+    @method(merge=lambda old, _new: old)  # type: ignore[prop-decorator]
     @property
     def parent(self) -> Program:
         """
@@ -108,7 +108,7 @@ class EvalProgram(Expr):
         """
 
     # Only allow it to be set once, b/c hash of functions not stable
-    @method(merge=lambda old, _new: old)  # type: ignore[misc]
+    @method(merge=lambda old, _new: old)  # type: ignore[prop-decorator]
     @property
     def as_py_object(self) -> PyObject:
         """

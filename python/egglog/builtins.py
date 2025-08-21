@@ -91,7 +91,7 @@ class String(BuiltinExpr):
     def eval(self) -> str:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> str:
         if (value := get_literal_value(self)) is not None:
@@ -122,7 +122,7 @@ class Bool(BuiltinExpr, egg_sort="bool"):
     def eval(self) -> bool:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> bool:
         if (value := get_literal_value(self)) is not None:
@@ -165,7 +165,7 @@ class i64(BuiltinExpr):  # noqa: N801
     def eval(self) -> int:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> int:
         if (value := get_literal_value(self)) is not None:
@@ -239,14 +239,14 @@ class i64(BuiltinExpr):  # noqa: N801
     def __invert__(self) -> i64: ...
 
     @method(egg_fn="<")
-    def __lt__(self, other: i64Like) -> Unit:  # type: ignore[empty-body,has-type]
+    def __lt__(self, other: i64Like) -> Unit:  # type: ignore[has-type]
         ...
 
     @method(egg_fn=">")
     def __gt__(self, other: i64Like) -> Unit: ...
 
     @method(egg_fn="<=")
-    def __le__(self, other: i64Like) -> Unit:  # type: ignore[empty-body,has-type]
+    def __le__(self, other: i64Like) -> Unit:  # type: ignore[has-type]
         ...
 
     @method(egg_fn=">=")
@@ -292,7 +292,7 @@ class f64(BuiltinExpr):  # noqa: N801
     def eval(self) -> float:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> float:
         if (value := get_literal_value(self)) is not None:
@@ -341,14 +341,14 @@ class f64(BuiltinExpr):  # noqa: N801
     def __rmod__(self, other: f64Like) -> f64: ...
 
     @method(egg_fn="<")
-    def __lt__(self, other: f64Like) -> Unit:  # type: ignore[empty-body,has-type]
+    def __lt__(self, other: f64Like) -> Unit:  # type: ignore[has-type]
         ...
 
     @method(egg_fn=">")
     def __gt__(self, other: f64Like) -> Unit: ...
 
     @method(egg_fn="<=")
-    def __le__(self, other: f64Like) -> Unit:  # type: ignore[empty-body,has-type]
+    def __le__(self, other: f64Like) -> Unit:  # type: ignore[has-type]
         ...
 
     @method(egg_fn=">=")
@@ -387,7 +387,7 @@ class Map(BuiltinExpr, Generic[T, V]):
     def eval(self) -> dict[T, V]:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> dict[T, V]:
         d = {}
@@ -457,7 +457,7 @@ class Set(BuiltinExpr, Generic[T]):
     def eval(self) -> set[T]:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> set[T]:
         if (args := get_callable_args(self, Set[T])) is not None:
@@ -527,7 +527,7 @@ class MultiSet(BuiltinExpr, Generic[T]):
     def eval(self) -> list[T]:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> list[T]:
         if (args := get_callable_args(self, MultiSet[T])) is not None:
@@ -582,7 +582,7 @@ class Rational(BuiltinExpr):
     def eval(self) -> Fraction:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> Fraction:
         match get_callable_args(self, Rational):
@@ -651,11 +651,11 @@ class Rational(BuiltinExpr):
     @method(egg_fn="cbrt")
     def cbrt(self) -> Rational: ...
 
-    @method(egg_fn="numer")  # type: ignore[misc]
+    @method(egg_fn="numer")  # type: ignore[prop-decorator]
     @property
     def numer(self) -> i64: ...
 
-    @method(egg_fn="denom")  # type: ignore[misc]
+    @method(egg_fn="denom")  # type: ignore[prop-decorator]
     @property
     def denom(self) -> i64: ...
 
@@ -666,7 +666,7 @@ class BigInt(BuiltinExpr):
     def eval(self) -> int:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> int:
         match get_callable_args(self, BigInt.from_string):
@@ -744,14 +744,14 @@ class BigInt(BuiltinExpr):
     def bits(self) -> BigInt: ...
 
     @method(egg_fn="<")
-    def __lt__(self, other: BigIntLike) -> Unit:  # type: ignore[empty-body,has-type]
+    def __lt__(self, other: BigIntLike) -> Unit:  # type: ignore[has-type]
         ...
 
     @method(egg_fn=">")
     def __gt__(self, other: BigIntLike) -> Unit: ...
 
     @method(egg_fn="<=")
-    def __le__(self, other: BigIntLike) -> Unit:  # type: ignore[empty-body,has-type]
+    def __le__(self, other: BigIntLike) -> Unit:  # type: ignore[has-type]
         ...
 
     @method(egg_fn=">=")
@@ -793,7 +793,7 @@ class BigRat(BuiltinExpr):
     def eval(self) -> Fraction:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> Fraction:
         match get_callable_args(self, BigRat):
@@ -862,11 +862,11 @@ class BigRat(BuiltinExpr):
     @method(egg_fn="cbrt")
     def cbrt(self) -> BigRat: ...
 
-    @method(egg_fn="numer")  # type: ignore[misc]
+    @method(egg_fn="numer")  # type: ignore[prop-decorator]
     @property
     def numer(self) -> BigInt: ...
 
-    @method(egg_fn="denom")  # type: ignore[misc]
+    @method(egg_fn="denom")  # type: ignore[prop-decorator]
     @property
     def denom(self) -> BigInt: ...
 
@@ -893,7 +893,7 @@ class Vec(BuiltinExpr, Generic[T]):
     def eval(self) -> tuple[T, ...]:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> tuple[T, ...]:
         if get_callable_args(self, Vec.empty) is not None:
@@ -972,7 +972,7 @@ class PyObject(BuiltinExpr):
     def eval(self) -> object:
         return self.value
 
-    @method(preserve=True)  # type: ignore[misc]
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> object:
         expr = cast("RuntimeExpr", self).__egg_typed_expr__.expr
