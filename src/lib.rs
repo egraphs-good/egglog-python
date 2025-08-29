@@ -28,7 +28,8 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::egraph::EGraph>()?;
     m.add_class::<crate::error::EggSmolError>()?;
     m.add_class::<crate::termdag::TermDag>()?;
-
+    m.add_class::<crate::conversions::UserDefinedCommandOutput>()?;
+    m.add_class::<crate::conversions::Function>()?;
     crate::conversions::add_structs_to_module(m)?;
     crate::conversions::add_enums_to_module(m)?;
 
