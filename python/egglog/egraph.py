@@ -23,6 +23,7 @@ from typing import (
     get_type_hints,
     overload,
 )
+from warnings import warn
 
 import graphviz
 from typing_extensions import Never, ParamSpec, Self, Unpack, assert_never
@@ -1024,6 +1025,12 @@ class EGraph:
             max_calls_per_function=max_calls_per_function,
             include_temporary_functions=include_temporary_functions,
         )
+        if serialized.discarded_functions:
+            msg = ", ".join(set(self._state.possible_egglog_functions(serialized.discarded_functions)))
+            warn(f"Ommitted: {msg}", stacklevel=3)
+        if serialized.truncated_functions:
+            msg = ", ".join(set(self._state.possible_egglog_functions(serialized.truncated_functions)))
+            warn(f"Truncated: {msg}", stacklevel=3)
         if split_primitive_outputs or split_functions:
             additional_ops = set(map(self._callable_to_egg, split_functions))
             serialized.split_classes(self._egraph, additional_ops)

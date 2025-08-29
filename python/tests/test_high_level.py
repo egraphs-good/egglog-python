@@ -958,6 +958,28 @@ def test_override_hash():
     assert hash(A()) == 42
 
 
+def test_serialize_warning_max_functions():
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+    egraph = EGraph()
+    egraph.register(A())
+    with pytest.warns(UserWarning, match="A"):
+        egraph._serialize(max_functions=0)
+
+
+def test_serialize_warning_max_calls():
+    class A(Expr): ...
+
+    @function
+    def f(x: StringLike) -> A: ...
+
+    egraph = EGraph()
+    egraph.register(f("a"), f("b"))
+    with pytest.warns(UserWarning, match="f"):
+        egraph._serialize(max_calls_per_function=1)
+
+
 EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))
 
 
