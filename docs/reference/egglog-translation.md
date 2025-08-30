@@ -507,6 +507,21 @@ with egraph:
 egraph.check_fail(eq(Math(0)).to(Math(1)))
 ```
 
+## Function Sizes
+
+The `(print-size <functon name>?)` command is translated into either `egraph.function_size(fn)` to get the number of
+rows of one function or `egraph.all_function_sizes()` to get a list of all the function sizes:
+
+```{code-cell} python
+# (function-size Math)
+egraph.function_size(Math)
+```
+
+```{code-cell} python
+# (function-size)
+egraph.all_function_sizes()
+```
+
 ## Include
 
 The `(include <path>)` command is used to add modularity, by allowing you to pull in the source from another egglog file into the current file.

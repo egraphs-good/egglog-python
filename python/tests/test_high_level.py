@@ -987,3 +987,64 @@ EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob
 @pytest.mark.parametrize("name", [f.stem for f in EXAMPLE_FILES if f.stem != "__init__"])
 def test_example(name):
     importlib.import_module(f"egglog.examples.{name}")
+
+
+@function
+def f() -> i64: ...
+
+
+class E(Expr):
+    X: ClassVar[i64]
+
+    def __init__(self) -> None: ...
+    def m(self) -> i64: ...
+
+    @property
+    def p(self) -> i64: ...
+
+    @classmethod
+    def cm(cls) -> i64: ...
+
+
+egraph = EGraph()
+
+C = constant("C", i64)
+
+zero = i64(0)
+egraph.register(
+    set_(f()).to(zero),
+    set_(E().m()).to(zero),
+    set_(E.X).to(zero),
+    set_(E().p).to(zero),
+    set_(C).to(zero),
+    set_(E.cm()).to(zero),
+)
+
+
+@pytest.mark.parametrize(
+    "c",
+    [
+        pytest.param(E, id="init"),
+        pytest.param(f, id="function"),
+        pytest.param(E.m, id="method"),
+        pytest.param(E.X, id="class var"),
+        pytest.param(E.p, id="property"),
+        pytest.param(C, id="constant"),
+        pytest.param(E.cm, id="class method"),
+    ],
+)
+def test_function_size(c):
+    assert egraph.function_size(c) == 1
+
+
+def test_all_function_size():
+    res = egraph.all_function_sizes()
+    assert set(res) == {
+        (E, 1),
+        (f, 1),
+        (E.m, 1),
+        (E.X, 1),
+        (E.p, 1),
+        (C, 1),
+        (E.cm, 1),
+    }

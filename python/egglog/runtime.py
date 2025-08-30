@@ -36,6 +36,7 @@ __all__ = [
     "RuntimeClass",
     "RuntimeExpr",
     "RuntimeFunction",
+    "create_callable",
     "define_expr_method",
     "resolve_callable",
     "resolve_type_annotation",
@@ -340,7 +341,7 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
 
     # Make hashable so can go in Union
     def __hash__(self) -> int:
-        return hash((id(self.__egg_decls_thunk__), self.__egg_tp__))
+        return hash(self.__egg_tp__)
 
     def __eq__(self, other: object) -> bool:
         """
@@ -477,6 +478,9 @@ class RuntimeFunction(DelayedDeclerations):
             case JustTypeRef(_, args):
                 bound_tp_params = args
         return pretty_callable_ref(self.__egg_decls__, self.__egg_ref__, first_arg, bound_tp_params)
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
 def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: bool) -> Signature:
@@ -670,11 +674,12 @@ def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
     """
     Resolves a runtime callable into a ref
     """
+    # TODO: Make runtime class work with __match_args__
+    if isinstance(callable, RuntimeClass):
+        return InitRef(callable.__egg_tp__.name), callable.__egg_decls__
     match callable:
         case RuntimeFunction(decls, ref, _):
             return ref(), decls()
-        case RuntimeClass(thunk, tp):
-            return InitRef(tp.name), thunk()
         case RuntimeExpr(decl_thunk, expr_thunk):
             if not isinstance((expr := expr_thunk().expr), CallDecl) or not isinstance(
                 expr.callable, ConstantRef | ClassVariableRef
@@ -683,3 +688,21 @@ def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
             return expr.callable, decl_thunk()
         case _:
             raise NotImplementedError(f"Cannot turn {callable} of type {type(callable)} into a callable ref")
+
+
+def create_callable(decls: Declarations, ref: CallableRef) -> RuntimeFunction | RuntimeExpr:
+    """
+    Creates a callable object from a callable ref. This might not actually be callable, if the ref is a constant
+    or classvar then it is a value
+    """
+    match ref:
+        case InitRef(name):
+            return RuntimeClass(Thunk.value(decls), TypeRefWithVars(name))
+        case FunctionRef() | MethodRef() | ClassMethodRef() | PropertyRef() | UnnamedFunctionRef():
+            bound = JustTypeRef(ref.class_name) if isinstance(ref, ClassMethodRef) else None
+            return RuntimeFunction(Thunk.value(decls), Thunk.value(ref), bound)
+        case ConstantRef(name):
+            tp = decls._constants[name].type_ref
+        case ClassVariableRef(cls_name, var_name):
+            tp = decls._classes[cls_name].class_variables[var_name].type_ref
+    return RuntimeExpr.__from_values__(decls, TypedExprDecl(tp, CallDecl(ref)))

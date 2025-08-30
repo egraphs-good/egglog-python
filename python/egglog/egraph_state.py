@@ -225,7 +225,7 @@ class EGraphState:
             case _:
                 assert_never(fact)
 
-    def callable_ref_to_egg(self, ref: CallableRef) -> tuple[str, bool]:
+    def callable_ref_to_egg(self, ref: CallableRef) -> tuple[str, bool]:  # noqa: C901, PLR0912
         """
         Returns the egg function name for a callable reference, registering it if it is not already registered.
 
@@ -245,9 +245,12 @@ class EGraphState:
             case ConstantDecl(tp, _):
                 # Use constructor decleration instead of constant b/c constants cannot be extracted
                 # https://github.com/egraphs-good/egglog/issues/334
-                self.egraph.run_program(
-                    bindings.Constructor(span(), egg_name, bindings.Schema([], self.type_ref_to_egg(tp)), None, False)
-                )
+                is_function = self.__egg_decls__._classes[tp.name].builtin
+                schema = bindings.Schema([], self.type_ref_to_egg(tp))
+                if is_function:
+                    self.egraph.run_program(bindings.FunctionCommand(span(), egg_name, schema, None))
+                else:
+                    self.egraph.run_program(bindings.Constructor(span(), egg_name, schema, None, False))
             case FunctionDecl(signature, builtin, _, merge):
                 if isinstance(signature, FunctionSignature):
                     reverse_args = signature.reverse_args
