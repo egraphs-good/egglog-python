@@ -8,12 +8,6 @@ The high level bindings available at the top module (`egglog`) expose most of th
 
 Any EGraph can also be converted to egglog with the `egraph.as_egglog_string` property, as long as it was created with `Egraph(save_egglog_string=True)`.
 
-## Unsupported features
-
-The currently unsupported features are:
-
-- `(output ...)`: No examples in the tests, so not sure how this works.
-
 ## Builtin Types
 
 The builtin types of Unit, String, Int, Map, and Rational are all exposed as Python classes.
@@ -314,7 +308,7 @@ edge = relation("edge", i64, i64)
 # (rule ((edge x y))
 #       ((path x y)) :ruleset path)
 x, y = vars_("x y", i64)
-path_ruleset = ruleset(rule(edge(x, y)).then(path(x, y)), name="path")
+path_ruleset = ruleset(rule(edge(x, y)).then(path(x, y)), name="path_ruleset")
 ```
 
 ### Rewrites
@@ -358,8 +352,8 @@ egraph.run(5)
 Facts can be passed after the timeout to only run until those facts are reached:
 
 ```{code-cell} python
-# egg: (run 10000 :until (fib 10))
-egraph.run(10000, eq(fib(7)).to(i64(13)))
+# egg: (run 10000 :until (fib 7))
+egraph.run(10000, fib(7))
 ```
 
 Rulesets can be run as well, by calling the `run` method on them:
@@ -478,8 +472,6 @@ Multiple items can also be extracted, returning a list of the lowest cost expres
 a, b, c = vars_("a b c", Math)
 i, j = vars_("i j", i64)
 egraph.register(
-    rewrite(a * b).to(b * a),
-    rewrite(a + b).to(b + a),
     rewrite(a * (b * c)).to((a * b) * c),
     rewrite(a * (b + c)).to((a * b) + (a * c)),
     rewrite(Math(i) + Math(j)).to(Math(i + j)),
