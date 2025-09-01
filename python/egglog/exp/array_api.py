@@ -729,7 +729,7 @@ int64 = DType.int64
 _DTYPES = [float64, float32, int32, int64, DType.object]
 
 converter(type, DType, lambda x: convert(np.dtype(x), DType))
-converter(type(np.dtype), DType, lambda x: getattr(DType, x.name))
+converter(type(np.dtype), DType, lambda x: getattr(DType, x.name))  # type:ignore[call-overload]
 
 
 @array_api_ruleset.register
