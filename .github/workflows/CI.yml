@@ -68,7 +68,7 @@ jobs:
       - run: |
           export UV_PROJECT_ENVIRONMENT="${pythonLocation}"
           uv sync --extra test --locked
-      - uses: CodSpeedHQ/action@v3.8.0
+      - uses: CodSpeedHQ/action@v3.8.1
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           # allow updating snapshots due to indeterministic benchmarks
