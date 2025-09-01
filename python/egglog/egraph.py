@@ -1027,7 +1027,7 @@ class EGraph:
         )
         if serialized.discarded_functions:
             msg = ", ".join(set(self._state.possible_egglog_functions(serialized.discarded_functions)))
-            warn(f"Ommitted: {msg}", stacklevel=3)
+            warn(f"Omitted: {msg}", stacklevel=3)
         if serialized.truncated_functions:
             msg = ", ".join(set(self._state.possible_egglog_functions(serialized.truncated_functions)))
             warn(f"Truncated: {msg}", stacklevel=3)
