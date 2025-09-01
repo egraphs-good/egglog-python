@@ -354,6 +354,14 @@ class EGraphState:
             if len(v) == 1
         }
 
+    def possible_egglog_functions(self, names: list[str]) -> Iterable[str]:
+        """
+        Given a list of egglog functions, returns all the possible Python function strings
+        """
+        for name in names:
+            for c in self.egg_fn_to_callable_refs[name]:
+                yield pretty_callable_ref(self.__egg_decls__, c)
+
     def typed_expr_to_egg(self, typed_expr_decl: TypedExprDecl, transform_let: bool = True) -> bindings._Expr:
         # transform all expressions with multiple parents into a let binding, so that less expressions
         # are sent to egglog. Only for performance reasons.
