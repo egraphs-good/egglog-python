@@ -326,6 +326,7 @@ However, there are times in Python when you need the return type of a method to 
 For example, let's say you are implementing a `Bool` expression, but you want to be able to use it in `if` statements in Python. That means it needs to define a `__bool__` methods which returns a Python `bool`, based on evaluating the expression.
 
 ```{code-cell} python
+egraph = EGraph()
 class Boolean(Expr):
     @method(preserve=True)
     def __bool__(self) -> bool:
@@ -334,7 +335,7 @@ class Boolean(Expr):
         # Run until the e-graph saturates
         egraph.run(10)
         # Extract the Python object from the e-graph
-        value = EGraph().extract(self)
+        value = egraph.extract(self)
         if value == TRUE:
             return True
         elif value == FALSE:
@@ -344,8 +345,8 @@ class Boolean(Expr):
     def __or__(self, other: Boolean) -> Boolean:
         ...
 
-TRUE = egraph.constant("TRUE", Boolean)
-FALSE = egraph.constant("FALSE", Boolean)
+TRUE = constant("TRUE", Boolean)
+FALSE = constant("FALSE", Boolean)
 
 
 @egraph.register
