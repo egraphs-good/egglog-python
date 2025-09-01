@@ -117,16 +117,15 @@ convert_enums!(
                 args: a.to_vec()
             }
     };
+    egglog::ast::PrintFunctionMode: "{}" => PrintFunctionMode {
+        DefaultPrintFunctionMode()
+            _d -> egglog::ast::PrintFunctionMode::Default,
+            egglog::ast::PrintFunctionMode::Default => DefaultPrintFunctionMode {};
+        CSVPrintFunctionMode()
+            _d -> egglog::ast::PrintFunctionMode::CSV,
+            egglog::ast::PrintFunctionMode::CSV => CSVPrintFunctionMode {}
+    };
     egglog::ast::Command: "{}" => Command {
-        SetOption(name: String, value: Expr)
-            s -> egglog::ast::Command::SetOption{
-                name: (&s.name).into(),
-                value: (&s.value).into()
-            },
-            egglog::ast::Command::SetOption {name, value} => SetOption {
-                name: name.to_string(),
-                value: value.into()
-            };
         Datatype(span: Span, name: String, variants: Vec<Variant>)
             d -> egglog::ast::Command::Datatype {
                 span: d.span.clone().into(),
@@ -149,14 +148,14 @@ convert_enums!(
                 presort_and_args: presort_and_args.as_ref().map(|(p, a)| (p.to_string(), a.iter().map(|e| e.into()).collect())),
                 span: span.into()
             };
-        Function(span: Span, name: String, schema: Schema, merge: Option<Expr>)
+        FunctionCommand(span: Span, name: String, schema: Schema, merge: Option<Expr>)
             f -> egglog::ast::Command::Function{
                 span: f.span.clone().into(),
                 name: (&f.name).into(),
                 schema: (&f.schema).into(),
                 merge: f.merge.as_ref().map(|e| e.into())
             },
-            egglog::ast::Command::Function {span, name, schema, merge} => Function {
+            egglog::ast::Command::Function {span, name, schema, merge} => FunctionCommand {
                 span: span.into(),
                 name: name.to_string(),
                 schema: schema.into(),
@@ -215,12 +214,14 @@ convert_enums!(
         Check(span: Span, facts: Vec<Fact_>)
             c -> egglog::ast::Command::Check(c.span.clone().into(), c.facts.iter().map(|f| f.into()).collect()),
             egglog::ast::Command::Check(span, facts) => Check { span: span.into(), facts: facts.iter().map(|f| f.into()).collect() };
-        PrintFunction(span: Span, name: String, length: usize)
-            p -> egglog::ast::Command::PrintFunction(p.span.clone().into(), (&p.name).into(), p.length),
-            egglog::ast::Command::PrintFunction(span, n, l) => PrintFunction {
+        PrintFunction(span: Span, name: String, length: Option<usize>, filename: Option<String>, mode: PrintFunctionMode)
+            p -> egglog::ast::Command::PrintFunction(p.span.clone().into(), (&p.name).into(), p.length, p.filename.clone(), p.mode.clone().into()),
+            egglog::ast::Command::PrintFunction(span, n, l, f, m) => PrintFunction {
                 span: span.into(),
                 name: n.to_string(),
-                length: *l
+                length: *l,
+                filename: f.clone(),
+                mode: m.into()
             };
         PrintSize(span: Span, name: Option<String>)
             p -> egglog::ast::Command::PrintSize(p.span.clone().into(), p.name.as_ref().map(|n| n.into())),
@@ -325,27 +326,55 @@ convert_enums!(
             n -> egglog::ast::Subdatatypes::NewSort((&n.name).into(), n.args.iter().map(|e| e.into()).collect()),
             egglog::ast::Subdatatypes::NewSort(name, args) => NewSort { name: name.to_string(), args: args.iter().map(|e| e.into()).collect() }
     };
-    egglog::ExtractReport: "{:?}" => ExtractReport {
-        Best(termdag: TermDag, cost: DefaultCost, term: Term)
-            b -> egglog::ExtractReport::Best {
-                termdag: (&b.termdag).into(),
-                cost: b.cost,
-                term: (&b.term).into()
-            },
-            egglog::ExtractReport::Best {termdag, cost, term} => Best {
+    egglog::CommandOutput: "{}" => CommandOutput {
+        PrintFunctionSize(size: usize)
+            b -> egglog::CommandOutput::PrintFunctionSize(b.size),
+            egglog::CommandOutput::PrintFunctionSize(size) => PrintFunctionSize {size: *size};
+        PrintAllFunctionsSize(sizes: Vec<(String, usize)>)
+            b -> egglog::CommandOutput::PrintAllFunctionsSize(b.sizes.clone()),
+            egglog::CommandOutput::PrintAllFunctionsSize(sizes) => PrintAllFunctionsSize {sizes: sizes.clone()};
+        ExtractBest(termdag: TermDag, cost: DefaultCost, term: Term)
+            b -> egglog::CommandOutput::ExtractBest(
+                (&b.termdag).into(),
+                b.cost,
+                (&b.term).into()
+            ),
+            egglog::CommandOutput::ExtractBest(termdag, cost, term) => ExtractBest {
                 termdag: termdag.into(),
                 cost: *cost,
                 term: term.into()
             };
-        Variants(termdag: TermDag, terms: Vec<Term>)
-            v -> egglog::ExtractReport::Variants {
-                termdag: (&v.termdag).into(),
-                terms: v.terms.iter().map(|v| v.into()).collect()
-            },
-            egglog::ExtractReport::Variants {termdag, terms} => Variants {
+        ExtractVariants(termdag: TermDag, terms: Vec<Term>)
+            v -> egglog::CommandOutput::ExtractVariants(
+                (&v.termdag).into(),
+                v.terms.iter().map(|v| v.into()).collect()
+            ),
+            egglog::CommandOutput::ExtractVariants(termdag, terms) => ExtractVariants {
                 termdag: termdag.into(),
                 terms: terms.iter().map(|v| v.into()).collect()
-            }
+            };
+        OverallStatistics(report: RunReport)
+            b -> egglog::CommandOutput::OverallStatistics(b.report.clone().into()),
+            egglog::CommandOutput::OverallStatistics(report) => OverallStatistics {report: report.into()};
+        RunScheduleOutput(report: RunReport)
+            b -> egglog::CommandOutput::RunSchedule(b.report.clone().into()),
+            egglog::CommandOutput::RunSchedule(report) => RunScheduleOutput {report: report.into()};
+        PrintFunctionOutput(function: Function, termdag: TermDag, terms: Vec<(Term, Term)>, mode: PrintFunctionMode)
+            v -> egglog::CommandOutput::PrintFunction(
+                v.function.0.clone(),
+                (&v.termdag).into(),
+                v.terms.iter().map(|(l, r)| (l.into(), r.into())).collect(),
+                v.mode.clone().into()
+            ),
+            egglog::CommandOutput::PrintFunction(function, termdag, terms, mode) => PrintFunctionOutput {
+                function: Function(function.clone()),
+                termdag: termdag.into(),
+                terms: terms.iter().map(|(l, r)| (l.into(), r.into())).collect(),
+                mode: mode.into()
+            };
+        UserDefinedOutput(output: UserDefinedCommandOutput)
+            b -> egglog::CommandOutput::UserDefined(b.output.0.clone()),
+            egglog::CommandOutput::UserDefined(output) => UserDefinedOutput {output: UserDefinedCommandOutput(output.clone())}
     };
     egglog::ast::Span: "{:?}" => Span {
         PanicSpan()
@@ -547,3 +576,48 @@ impl<'py> IntoPyObject<'py> for WrappedDuration {
         .clone())
     }
 }
+
+#[pyclass()]
+#[derive(Clone)]
+pub struct UserDefinedCommandOutput(Arc<dyn egglog::UserDefinedCommandOutput>);
+
+#[pymethods]
+impl UserDefinedCommandOutput {
+    fn __str__(&self) -> String {
+        format!("{}", self.0)
+    }
+    fn __repr__(&self) -> String {
+        format!("{:}", self.0)
+    }
+}
+
+impl PartialEq for UserDefinedCommandOutput {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::cmp::Eq for UserDefinedCommandOutput {}
+
+#[pyclass()]
+#[derive(Clone)]
+pub struct Function(egglog::Function);
+
+#[pymethods]
+impl Function {
+    fn __str__(&self) -> String {
+        format!("Function(name={})", self.0.name())
+    }
+
+    fn name(&self) -> String {
+        self.0.name().to_string()
+    }
+}
+
+impl PartialEq for Function {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.name() == other.0.name()
+    }
+}
+
+impl std::cmp::Eq for Function {}

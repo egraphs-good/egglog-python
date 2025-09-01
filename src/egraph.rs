@@ -60,7 +60,11 @@ impl EGraph {
     /// Returns a list of strings representing the output.
     /// An EggSmolError is raised if there is problem parsing or executing.
     #[pyo3(signature=(*commands))]
-    fn run_program(&mut self, py: Python<'_>, commands: Vec<Command>) -> EggResult<Vec<String>> {
+    fn run_program(
+        &mut self,
+        py: Python<'_>,
+        commands: Vec<Command>,
+    ) -> EggResult<Vec<CommandOutput>> {
         let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
         let mut cmds_str = String::new();
         for cmd in &commands {
@@ -77,35 +81,13 @@ impl EGraph {
                 cmds.push_str(&cmds_str);
             }
         }
-        res
+        res.map(|xs| xs.iter().map(|o| o.into()).collect())
     }
 
     /// Returns the text of the commands that have been run so far, if `record` was passed.
     #[pyo3(signature = ())]
     fn commands(&self) -> Option<String> {
         self.cmds.clone()
-    }
-
-    /// Gets the last expressions extracted from the EGraph, if the last command
-    /// was a Simplify or Extract command.
-    #[pyo3(signature = ())]
-    fn extract_report(&mut self) -> Option<ExtractReport> {
-        info!("Getting last extract report");
-        self.egraph
-            .get_extract_report()
-            .as_ref()
-            .map(|report| report.into())
-    }
-
-    /// Gets the last run report from the EGraph, if the last command
-    /// was a run or simplify command.
-    #[pyo3(signature = ())]
-    fn run_report(&mut self) -> Option<RunReport> {
-        info!("Getting last run report");
-        self.egraph
-            .get_run_report()
-            .as_ref()
-            .map(|report| report.into())
     }
 
     /// Serialize the EGraph to a SerializedEGraph object.
@@ -126,13 +108,16 @@ impl EGraph {
                 .into_iter()
                 .map(|x| self.egraph.eval_expr(&egglog::ast::Expr::from(x)).unwrap())
                 .collect();
+            let res = self.egraph.serialize(SerializeConfig {
+                max_functions,
+                max_calls_per_function,
+                include_temporary_functions,
+                root_eclasses,
+            });
             SerializedEGraph {
-                egraph: self.egraph.serialize(SerializeConfig {
-                    max_functions,
-                    max_calls_per_function,
-                    include_temporary_functions,
-                    root_eclasses,
-                }),
+                egraph: res.egraph,
+                truncated_functions: res.truncated_functions,
+                discarded_functions: res.discarded_functions,
             }
         })
     }

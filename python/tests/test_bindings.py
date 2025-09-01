@@ -95,7 +95,7 @@ class TestEGraph:
 
     def test_run_rules(self):
         egraph = EGraph()
-        egraph.run_program(
+        res = egraph.run_program(
             Datatype(DUMMY_SPAN, "Math", [Variant(DUMMY_SPAN, "Add", ["Math", "Math"])]),
             RewriteCommand(
                 "",
@@ -109,20 +109,21 @@ class TestEGraph:
             RunSchedule(Repeat(DUMMY_SPAN, 10, Run(DUMMY_SPAN, RunConfig("")))),
         )
 
-        run_report = egraph.run_report()
-        assert isinstance(run_report, RunReport)
+        assert len(res) == 1
+        assert isinstance(res[0], RunScheduleOutput)
 
     def test_extract(self):
         # Example from extraction-cost
         egraph = EGraph()
-        egraph.run_program(
+        res = egraph.run_program(
             Datatype(DUMMY_SPAN, "Expr", [Variant(DUMMY_SPAN, "Num", ["i64"], cost=5)]),
             ActionCommand(Let(DUMMY_SPAN, "x", Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))),
             Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "x"), Lit(DUMMY_SPAN, Int(0))),
         )
 
-        extract_report = egraph.extract_report()
-        assert isinstance(extract_report, Best)
+        assert len(res) == 1
+        extract_report = res[0]
+        assert isinstance(extract_report, ExtractBest)
         assert extract_report.cost == 6
         assert extract_report.termdag.term_to_expr(extract_report.term, DUMMY_SPAN) == Call(
             DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]

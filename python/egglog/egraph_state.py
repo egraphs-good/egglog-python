@@ -263,7 +263,7 @@ class EGraphState:
                         self.egraph.run_program(bindings.Relation(span(), egg_name, schema.input))
                     else:
                         self.egraph.run_program(
-                            bindings.Function(
+                            bindings.FunctionCommand(
                                 span(),
                                 egg_name,
                                 self._signature_to_egg_schema(signature),

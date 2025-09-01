@@ -61,7 +61,7 @@ class TestDictUpdate:
         new_value_expr = sort.store(2)
         a_expr = sort.store("a")
         b_expr = sort.store("b")
-        egraph.run_program(
+        res = egraph.run_program(
             ActionCommand(
                 Let(
                     DUMMY_SPAN,
@@ -71,8 +71,9 @@ class TestDictUpdate:
             ),
             Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "new_dict"), Lit(DUMMY_SPAN, Int(0))),
         )
-        report = egraph.extract_report()
-        assert isinstance(report, Best)
+        assert len(res) == 1
+        report = res[0]
+        assert isinstance(report, ExtractBest)
         expr = report.termdag.term_to_expr(report.term, DUMMY_SPAN)
         assert sort.load(expr) == {"a": 2, "b": 2}
 
@@ -95,7 +96,7 @@ class TestEval:
         locals_ = sort.store(locals())
         x_expr = sort.store("x")
         y_expr = sort.store("y")
-        egraph.run_program(
+        res = egraph.run_program(
             ActionCommand(
                 Let(
                     DUMMY_SPAN,
@@ -113,8 +114,9 @@ class TestEval:
             ),
             Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "res"), Lit(DUMMY_SPAN, Int(0))),
         )
-        report = egraph.extract_report()
-        assert isinstance(report, Best)
+        assert len(res) == 1
+        report = res[0]
+        assert isinstance(report, ExtractBest)
         expr = report.termdag.term_to_expr(report.term, DUMMY_SPAN)
         assert sort.load(expr) == 3
 

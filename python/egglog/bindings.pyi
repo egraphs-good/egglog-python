@@ -7,15 +7,16 @@ from typing_extensions import final
 __all__ = [
     "ActionCommand",
     "AddRuleset",
-    "Best",
     "BiRewriteCommand",
     "Bool",
+    "CSVPrintFunctionMode",
     "Call",
     "Change",
     "Check",
     "Constructor",
     "Datatype",
     "Datatypes",
+    "DefaultPrintFunctionMode",
     "Delete",
     "EGraph",
     "EggSmolError",
@@ -23,10 +24,13 @@ __all__ = [
     "Eq",
     "Expr_",
     "Extract",
+    "ExtractBest",
+    "ExtractVariants",
     "Fact",
     "Fail",
     "Float",
     "Function",
+    "FunctionCommand",
     "IdentSort",
     "Include",
     "Input",
@@ -35,10 +39,14 @@ __all__ = [
     "Lit",
     "NewSort",
     "Output",
+    "OverallStatistics",
     "Panic",
     "PanicSpan",
     "Pop",
+    "PrintAllFunctionsSize",
     "PrintFunction",
+    "PrintFunctionOutput",
+    "PrintFunctionSize",
     "PrintOverallStatistics",
     "PrintSize",
     "Push",
@@ -53,13 +61,13 @@ __all__ = [
     "RunConfig",
     "RunReport",
     "RunSchedule",
+    "RunScheduleOutput",
     "RustSpan",
     "Saturate",
     "Schema",
     "Sequence",
     "SerializedEGraph",
     "Set",
-    "SetOption",
     "Sort",
     "SrcFile",
     "String",
@@ -73,13 +81,18 @@ __all__ = [
     "Unit",
     "UnstableCombinedRuleset",
     "UserDefined",
+    "UserDefinedCommandOutput",
+    "UserDefinedOutput",
     "Var",
     "Variant",
-    "Variants",
 ]
 
 @final
 class SerializedEGraph:
+    @property
+    def truncated_functions(self) -> list[str]: ...
+    @property
+    def discarded_functions(self) -> list[str]: ...
     def inline_leaves(self) -> None: ...
     def saturate_inline_leaves(self) -> None: ...
     def to_dot(self) -> str: ...
@@ -106,9 +119,7 @@ class EGraph:
     ) -> None: ...
     def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
     def commands(self) -> str | None: ...
-    def run_program(self, *commands: _Command) -> list[str]: ...
-    def extract_report(self) -> _ExtractReport | None: ...
-    def run_report(self) -> RunReport | None: ...
+    def run_program(self, *commands: _Command) -> list[_CommandOutput]: ...
     def serialize(
         self,
         root_eclasses: list[_Expr],
@@ -357,6 +368,13 @@ class IdentSort:
     def __init__(self, ident: str, sort: str) -> None: ...
 
 @final
+class UserDefinedCommandOutput: ...
+
+@final
+class Function:
+    name: str
+
+@final
 class RunReport:
     updated: bool
     search_and_apply_time_per_rule: dict[str, timedelta]
@@ -375,20 +393,80 @@ class RunReport:
         rebuild_time_per_ruleset: dict[str, timedelta],
     ) -> None: ...
 
+##
+# Command Outputs
+##
+
 @final
-class Variants:
+class PrintFunctionSize:
+    size: int
+    def __init__(self, size: int) -> None: ...
+
+@final
+class PrintAllFunctionsSize:
+    sizes: list[tuple[str, int]]
+    def __init__(self, sizes: list[tuple[str, int]]) -> None: ...
+
+@final
+class ExtractVariants:
     termdag: TermDag
     terms: list[_Term]
     def __init__(self, termdag: TermDag, terms: list[_Term]) -> None: ...
 
 @final
-class Best:
+class ExtractBest:
     termdag: TermDag
     cost: int
     term: _Term
     def __init__(self, termdag: TermDag, cost: int, term: _Term) -> None: ...
 
-_ExtractReport: TypeAlias = Variants | Best
+@final
+class OverallStatistics:
+    report: RunReport
+    def __init__(self, report: RunReport) -> None: ...
+
+@final
+class RunScheduleOutput:
+    report: RunReport
+    def __init__(self, report: RunReport) -> None: ...
+
+@final
+class PrintFunctionOutput:
+    function: Function
+    termdag: TermDag
+    terms: list[tuple[_Term, _Term]]
+    mode: _PrintFunctionMode
+    def __init__(
+        self, function: Function, termdag: TermDag, terms: list[tuple[_Term, _Term]], mode: _PrintFunctionMode
+    ) -> None: ...
+
+@final
+class UserDefinedOutput:
+    output: UserDefinedCommandOutput
+    def __init__(self, output: UserDefinedCommandOutput) -> None: ...
+
+_CommandOutput: TypeAlias = (
+    PrintFunctionSize
+    | PrintAllFunctionsSize
+    | ExtractVariants
+    | ExtractBest
+    | OverallStatistics
+    | RunScheduleOutput
+    | PrintFunctionOutput
+    | UserDefinedOutput
+)
+
+##
+# Print Function Modes
+##
+
+@final
+class DefaultPrintFunctionMode: ...
+
+@final
+class CSVPrintFunctionMode: ...
+
+_PrintFunctionMode: TypeAlias = DefaultPrintFunctionMode | CSVPrintFunctionMode
 
 ##
 # Schedules
@@ -443,12 +521,6 @@ _Subdatatypes: TypeAlias = SubVariants | NewSort
 ##
 
 @final
-class SetOption:
-    name: str
-    value: _Expr
-    def __init__(self, name: str, value: _Expr) -> None: ...
-
-@final
 class Datatype:
     span: _Span
     name: str
@@ -469,7 +541,7 @@ class Sort:
     def __init__(self, span: _Span, name: str, presort_and_args: tuple[str, list[_Expr]] | None = None) -> None: ...
 
 @final
-class Function:
+class FunctionCommand:
     span: _Span
     name: str
     schema: Schema
@@ -531,8 +603,12 @@ class Check:
 class PrintFunction:
     span: _Span
     name: str
-    length: int
-    def __init__(self, span: _Span, name: str, length: int) -> None: ...
+    length: int | None
+    filename: str | None
+    mode: _PrintFunctionMode
+    def __init__(
+        self, span: _Span, name: str, length: int | None, filename: str | None, mode: _PrintFunctionMode
+    ) -> None: ...
 
 @final
 class PrintSize:
@@ -613,11 +689,10 @@ class UnstableCombinedRuleset:
     def __init__(self, span: _Span, name: str, rulesets: list[str]) -> None: ...
 
 _Command: TypeAlias = (
-    SetOption
-    | Datatype
+    Datatype
     | Datatypes
     | Sort
-    | Function
+    | FunctionCommand
     | AddRuleset
     | RuleCommand
     | RewriteCommand

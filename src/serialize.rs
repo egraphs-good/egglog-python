@@ -7,6 +7,10 @@ use crate::egraph::EGraph;
 #[pyclass()]
 pub struct SerializedEGraph {
     pub egraph: egraph_serialize::EGraph,
+    #[pyo3(get)]
+    pub truncated_functions: Vec<String>,
+    #[pyo3(get)]
+    pub discarded_functions: Vec<String>,
 }
 
 #[pymethods]

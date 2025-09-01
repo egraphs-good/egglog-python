@@ -904,12 +904,9 @@ class EGraph:
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
         self._add_decls(schedule)
         egg_schedule = self._state.schedule_to_egg(schedule.schedule)
-        self._egraph.run_program(bindings.RunSchedule(egg_schedule))
-        run_report = self._egraph.run_report()
-        if not run_report:
-            msg = "No run report saved"
-            raise ValueError(msg)
-        return run_report
+        (command_output,) = self._egraph.run_program(bindings.RunSchedule(egg_schedule))
+        assert isinstance(command_output, bindings.RunScheduleOutput)
+        return command_output.report
 
     def check_bool(self, *facts: FactLike) -> bool:
         """
@@ -954,10 +951,7 @@ class EGraph:
         """
         runtime_expr = to_runtime_expr(expr)
         extract_report = self._run_extract(runtime_expr, 0)
-
-        if not isinstance(extract_report, bindings.Best):
-            msg = "No extract report saved"
-            raise ValueError(msg)  # noqa: TRY004
+        assert isinstance(extract_report, bindings.ExtractBest)
         (new_typed_expr,) = self._state.exprs_from_egg(
             extract_report.termdag, [extract_report.term], runtime_expr.__egg_typed_expr__.tp
         )
@@ -973,26 +967,19 @@ class EGraph:
         """
         runtime_expr = to_runtime_expr(expr)
         extract_report = self._run_extract(runtime_expr, n)
-        if not isinstance(extract_report, bindings.Variants):
-            msg = "Wrong extract report type"
-            raise ValueError(msg)  # noqa: TRY004
+        assert isinstance(extract_report, bindings.ExtractVariants)
         new_exprs = self._state.exprs_from_egg(
             extract_report.termdag, extract_report.terms, runtime_expr.__egg_typed_expr__.tp
         )
         return [cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, expr)) for expr in new_exprs]
 
-    def _run_extract(self, expr: RuntimeExpr, n: int) -> bindings._ExtractReport:
+    def _run_extract(self, expr: RuntimeExpr, n: int) -> bindings._CommandOutput:
         self._add_decls(expr)
         expr = self._state.typed_expr_to_egg(expr.__egg_typed_expr__)
         try:
-            self._egraph.run_program(bindings.Extract(span(2), expr, bindings.Lit(span(2), bindings.Int(n))))
+            return self._egraph.run_program(bindings.Extract(span(2), expr, bindings.Lit(span(2), bindings.Int(n))))[0]
         except BaseException as e:
             raise add_note("Extracting: " + str(expr), e)  # noqa: B904
-        extract_report = self._egraph.extract_report()
-        if not extract_report:
-            msg = "No extract report saved"
-            raise ValueError(msg)
-        return extract_report
 
     def push(self) -> None:
         """
