@@ -45,7 +45,7 @@ __all__ = [
     "Pop",
     "PrintAllFunctionsSize",
     "PrintFunction",
-    "PrintFunctionOuput",
+    "PrintFunctionOutput",
     "PrintFunctionSize",
     "PrintOverallStatistics",
     "PrintSize",
@@ -431,7 +431,7 @@ class RunScheduleOutput:
     def __init__(self, report: RunReport) -> None: ...
 
 @final
-class PrintFunctionOuput:
+class PrintFunctionOutput:
     function: Function
     termdag: TermDag
     terms: list[tuple[_Term, _Term]]
@@ -452,7 +452,7 @@ _CommandOutput: TypeAlias = (
     | ExtractBest
     | OverallStatistics
     | RunScheduleOutput
-    | PrintFunctionOuput
+    | PrintFunctionOutput
     | UserDefinedOutput
 )
 

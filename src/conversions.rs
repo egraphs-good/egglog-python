@@ -359,14 +359,14 @@ convert_enums!(
         RunScheduleOutput(report: RunReport)
             b -> egglog::CommandOutput::RunSchedule(b.report.clone().into()),
             egglog::CommandOutput::RunSchedule(report) => RunScheduleOutput {report: report.into()};
-        PrintFunctionOuput(function: Function, termdag: TermDag, terms: Vec<(Term, Term)>, mode: PrintFunctionMode)
+        PrintFunctionOutput(function: Function, termdag: TermDag, terms: Vec<(Term, Term)>, mode: PrintFunctionMode)
             v -> egglog::CommandOutput::PrintFunction(
                 v.function.0.clone(),
                 (&v.termdag).into(),
                 v.terms.iter().map(|(l, r)| (l.into(), r.into())).collect(),
                 v.mode.clone().into()
             ),
-            egglog::CommandOutput::PrintFunction(function, termdag, terms, mode) => PrintFunctionOuput {
+            egglog::CommandOutput::PrintFunction(function, termdag, terms, mode) => PrintFunctionOutput {
                 function: Function(function.clone()),
                 termdag: termdag.into(),
                 terms: terms.iter().map(|(l, r)| (l.into(), r.into())).collect(),

@@ -5,9 +5,13 @@ _This project uses semantic versioning_
 ## UNRELEASED
 
 - Fix execution of docs [#337](https://github.com/egraphs-good/egglog-python/pull/337)
+- Emit warnings when functions omitted when visualizing [#336](https://github.com/egraphs-good/egglog-python/pull/336)
+- Bump Egglog version [#335](https://github.com/egraphs-good/egglog-python/pull/335)
+
 ## 11.1.0 (2025-08-21)
 
 - Allow changing number of threads with env variable [#330](https://github.com/egraphs-good/egglog-python/pull/330)
+
 ## 11.0.0 (2025-08-08)
 - Change conversion between binary operators to consider converting both types [#320](https://github.com/egraphs-good/egglog-python/pull/320)
 - Add ability to parse egglog expressions into Python values [#319](https://github.com/egraphs-good/egglog-python/pull/319)
