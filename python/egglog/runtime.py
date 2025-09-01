@@ -18,7 +18,9 @@ from collections.abc import Callable
 from dataclasses import InitVar, dataclass, replace
 from inspect import Parameter, Signature
 from itertools import zip_longest
-from typing import TYPE_CHECKING, Any, TypeVar, Union, assert_never, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, get_args, get_origin
+
+from typing_extensions import assert_never
 
 from .declarations import *
 from .pretty import *
