@@ -509,7 +509,7 @@ egraph.check_fail(eq(Math(0)).to(Math(1)))
 
 ## Function Sizes
 
-The `(print-size <functon name>?)` command is translated into either `egraph.function_size(fn)` to get the number of
+The `(print-size <function name>?)` command is translated into either `egraph.function_size(fn)` to get the number of
 rows of one function or `egraph.all_function_sizes()` to get a list of all the function sizes:
 
 ```{code-cell} python
