@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Fix execution of docs [#337](https://github.com/egraphs-good/egglog-python/pull/337)
 ## 11.1.0 (2025-08-21)
 
 - Allow changing number of threads with env variable [#330](https://github.com/egraphs-good/egglog-python/pull/330)
