@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Emit warnings when functions omitted when visualizing [#336](https://github.com/egraphs-good/egglog-python/pull/336)
 ## 11.1.0 (2025-08-21)
 
 - Allow changing number of threads with env variable [#330](https://github.com/egraphs-good/egglog-python/pull/330)
