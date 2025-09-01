@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import InitVar, dataclass, replace
 from inspect import Parameter, Signature
 from itertools import zip_longest
-from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, TypeVar, Union, assert_never, cast, get_args, get_origin
 
 from .declarations import *
 from .pretty import *
@@ -690,7 +690,7 @@ def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
             raise NotImplementedError(f"Cannot turn {callable} of type {type(callable)} into a callable ref")
 
 
-def create_callable(decls: Declarations, ref: CallableRef) -> RuntimeFunction | RuntimeExpr:
+def create_callable(decls: Declarations, ref: CallableRef) -> RuntimeClass | RuntimeFunction | RuntimeExpr:
     """
     Creates a callable object from a callable ref. This might not actually be callable, if the ref is a constant
     or classvar then it is a value
@@ -705,4 +705,6 @@ def create_callable(decls: Declarations, ref: CallableRef) -> RuntimeFunction | 
             tp = decls._constants[name].type_ref
         case ClassVariableRef(cls_name, var_name):
             tp = decls._classes[cls_name].class_variables[var_name].type_ref
+        case _:
+            assert_never(ref)
     return RuntimeExpr.__from_values__(decls, TypedExprDecl(tp, CallDecl(ref)))
