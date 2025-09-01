@@ -12,11 +12,11 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.24.2", features = ["extension-module"] }
 
-egglog = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+egglog = { git = "https://github.com/egraphs-good/egglog.git", branch = "main", default-features = false }
 # egglog = { path = "../egg-smol" }
 egglog-bridge = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
 core-relations = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
-egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", branch = "python" }
+egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", branch = "cli", default-features = false }
 egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
 serde_json = "1.0.140"
 pyo3-log = "0.12.4"
