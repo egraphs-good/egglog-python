@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Add `all_function_sizes` and `function_size` EGraph methods [#338](https://github.com/egraphs-good/egglog-python/pull/338)
 - Fix execution of docs [#337](https://github.com/egraphs-good/egglog-python/pull/337)
 - Emit warnings when functions omitted when visualizing [#336](https://github.com/egraphs-good/egglog-python/pull/336)
 - Bump Egglog version [#335](https://github.com/egraphs-good/egglog-python/pull/335)
