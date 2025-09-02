@@ -139,13 +139,13 @@ def test_constants():
 def test_class_vars():
     egraph = EGraph()
 
-    class A(Expr):
-        ONE: ClassVar[A]
+    class B(Expr):
+        ONE: ClassVar[B]
 
-    two = constant("two", A)
+    two = constant("two", B)
 
-    egraph.register(union(A.ONE).with_(two))
-    egraph.check(eq(A.ONE).to(two))
+    egraph.register(union(B.ONE).with_(two))
+    egraph.check(eq(B.ONE).to(two))
 
 
 def test_extract_constant_twice():
