@@ -71,7 +71,7 @@ impl EGraph {
             cmds_str = cmds_str + &cmd.to_string() + "\n";
         }
         info!("Running commands:\n{}", cmds_str);
-        let res = py.allow_threads(|| {
+        let res = py.detach(|| {
             self.egraph.run_program(commands).map_err(|e| {
                 WrappedError::Egglog(e, "\nWhen running commands:\n".to_string() + &cmds_str)
             })
@@ -103,7 +103,7 @@ impl EGraph {
         max_calls_per_function: Option<usize>,
         include_temporary_functions: bool,
     ) -> SerializedEGraph {
-        py.allow_threads(|| {
+        py.detach(|| {
             let root_eclasses: Vec<_> = root_eclasses
                 .into_iter()
                 .map(|x| self.egraph.eval_expr(&egglog::ast::Expr::from(x)).unwrap())
