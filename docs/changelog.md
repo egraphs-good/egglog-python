@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Add `egraph.run_report()` method to print overall stats [#339](https://github.com/egraphs-good/egglog-python/pull/339)
 - Add `all_function_sizes` and `function_size` EGraph methods [#338](https://github.com/egraphs-good/egglog-python/pull/338)
 - Fix execution of docs [#337](https://github.com/egraphs-good/egglog-python/pull/337)
 - Emit warnings when functions omitted when visualizing [#336](https://github.com/egraphs-good/egglog-python/pull/336)
