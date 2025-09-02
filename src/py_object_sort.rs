@@ -16,7 +16,7 @@ use egglog::{
 use std::{
     collections::HashMap,
     env::temp_dir,
-    ffi::CString,
+    ffi::{CStr, CString},
     fmt::Debug,
     fs::File,
     io::Write,
@@ -25,8 +25,9 @@ use std::{
 use uuid::Uuid;
 
 use pyo3::{
-    AsPyPointer, PyAny, PyErr, PyObject, PyResult, PyTraverseError, PyVisit, Python, ffi, intern,
-    prelude::*, types::PyDict,
+    PyAny, PyErr, PyResult, PyTraverseError, PyVisit, Python,
+    prelude::*,
+    types::{PyCode, PyCodeMethods as _, PyDict},
 };
 
 type PyObjectIdent = usize;
@@ -46,8 +47,12 @@ pub struct PyObjectSort {
 
 impl Debug for PyObjectSort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let hashable_to_index =
-            Python::with_gil(|py| self.hashable_to_index.bind(py).str().map_or_else(|_| "<error>".to_string(), |s| s.to_string()));
+        let hashable_to_index = Python::attach(|py| {
+            self.hashable_to_index
+                .bind(py)
+                .str()
+                .map_or_else(|_| "<error>".to_string(), |s| s.to_string())
+        });
         f.debug_struct("PyObjectSort")
             .field("objects", &self.objects)
             .field("id_to_index", &self.id_to_index)
@@ -61,7 +66,7 @@ impl PyObjectSort {
     ///
     /// If it has already been stored, it returns the existing index.
     /// If it is hashable, it will be stored in the `hashable_to_index` dictionary.
-    pub fn store<'py>(&self, py: Python<'py>, obj: PyObject) -> PyResult<PyObjectIdent> {
+    pub fn store<'py>(&self, py: Python<'py>, obj: Py<PyAny>) -> PyResult<PyObjectIdent> {
         // 1. Check if the object is already stored
         let id = obj.as_ptr() as usize;
         let mut id_to_index = self.id_to_index.lock().unwrap();
@@ -119,7 +124,7 @@ impl PyObjectSort {
     fn store_py<'py>(
         &mut self,
         py: Python<'py>,
-        obj: PyObject,
+        obj: Py<PyAny>,
     ) -> PyResult<crate::conversions::Expr> {
         let ident = self.store(py, obj)?;
         let arg = lit!(Literal::Int(ident as i64));
@@ -188,7 +193,7 @@ impl BaseSort for PyObjectSort {
             "py-eval" = {self.clone(): PyObjectSort}
                 |code: S, globals: PyObjectIdent, locals: PyObjectIdent| -> PyObjectIdent {
                     {
-                        Python::with_gil(|py| {
+                        Python::attach(|py| {
                             let globals = self.ctx.load(py, globals);
                             let locals = self.ctx.load(py, locals);
                             let res = py
@@ -209,7 +214,7 @@ impl BaseSort for PyObjectSort {
             eg,
             "py-exec" = {self.clone(): PyObjectSort}
                 |code: S, globals: PyObjectIdent, locals: PyObjectIdent| -> PyObjectIdent {
-                    Python::with_gil(|py| {
+                    Python::attach(|py| {
                         let globals = self.ctx.load(py, globals);
                         let locals = self.ctx.load(py, locals);
 
@@ -223,12 +228,12 @@ impl BaseSort for PyObjectSort {
                         let mut file = File::create(path.clone()).unwrap();
                         file.write_all(code.as_bytes()).unwrap();
                         let path = path.to_str().unwrap();
-                        run_code_path(
+                        run_path(
                             py,
-                            &code,
+                            CString::new(code.into_inner()).unwrap().as_c_str(),
                             Some(globals.downcast::<PyDict>().unwrap()),
                             Some(&locals),
-                            path,
+                            CString::new(path).unwrap().as_c_str(),
                         )
                         .unwrap();
                         self.ctx.store(py, locals.unbind().into()).unwrap()
@@ -238,7 +243,7 @@ impl BaseSort for PyObjectSort {
 
         // (py-dict [<key-object> <value-object>]*)
         add_primitive!(eg, "py-dict" = {self.clone(): PyObjectSort} [xs: PyObjectIdent] -> PyObjectIdent {
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let dict = PyDict::new(py);
                 for i in xs.map(|x| self.ctx.load(py, x)).collect::<Vec<_>>().chunks_exact(2) {
                     dict.set_item(i[0].clone(), i[1].clone()).unwrap();
@@ -248,7 +253,7 @@ impl BaseSort for PyObjectSort {
         });
         // Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
         add_primitive!(eg, "py-dict-update" = {self.clone(): PyObjectSort} [xs: PyObjectIdent] -> PyObjectIdent {{
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let xs = xs.map(|x| self.ctx.load(py, x)).collect::<Vec<_>>();
                 // Copy the dict so we can mutate it and return it
                 let dict = xs[0].downcast::<PyDict>().unwrap().copy().unwrap();
@@ -264,7 +269,7 @@ impl BaseSort for PyObjectSort {
             eg,
             "py-to-string" = {self.clone(): PyObjectSort} |x: PyObjectIdent| -> S {
                 {
-                    let s: String = Python::with_gil(move |py| self.ctx.load(py, x).extract().unwrap());
+                    let s: String = Python::attach(move |py| self.ctx.load(py, x).extract().unwrap());
                     s.into()
                 }
             }
@@ -274,7 +279,7 @@ impl BaseSort for PyObjectSort {
             eg,
             "py-to-bool" = {self.clone(): PyObjectSort} |x: PyObjectIdent| -> bool {
                 {
-                    Python::with_gil(move |py| self.ctx.load(py, x).extract().unwrap())
+                    Python::attach(move |py| self.ctx.load(py, x).extract().unwrap())
                 }
             }
         );
@@ -282,7 +287,7 @@ impl BaseSort for PyObjectSort {
         add_primitive!(
             eg,
             "py-from-string" = {self.clone(): PyObjectSort} |x: S| -> PyObjectIdent {
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     let obj = x.to_string().into_pyobject(py).unwrap();
                     self.ctx.store(py, obj.unbind().into()).unwrap()
                 })
@@ -292,7 +297,7 @@ impl BaseSort for PyObjectSort {
         add_primitive!(
             eg,
             "py-from-int" = {self.clone(): PyObjectSort} |x: i64| -> PyObjectIdent {
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     let obj = x.into_pyobject(py).unwrap();
                     self.ctx.store(py, obj.unbind().into()).unwrap()
                 })
@@ -313,58 +318,17 @@ impl BaseSort for PyObjectSort {
 }
 
 /// Runs the code in the given context with a certain path.
-/// Copied from `run_code`, but allows specifying the path.
-/// https://github.com/PyO3/pyo3/blob/5d2f5b5702319150d41258de77f589119134ee74/src/marker.rs#L678
-fn run_code_path<'py>(
+/// Copied from `run`, but allows specifying the path.
+/// https://github.com/PyO3/pyo3/blob/55d379cff8e4157024ffe22215715bd04a5fb1a1/src/marker.rs#L667-L682
+fn run_path<'py>(
     py: Python<'py>,
-    code: &str,
+    code: &CStr,
     globals: Option<&Bound<'py, PyDict>>,
     locals: Option<&Bound<'py, PyDict>>,
-    path: &str,
-) -> PyResult<Bound<'py, PyAny>> {
-    let code = CString::new(code)?;
-    let path = CString::new(path)?;
-    unsafe {
-        let mptr = ffi::PyImport_AddModule("__main__\0".as_ptr() as *const _);
-        if mptr.is_null() {
-            return Err(PyErr::fetch(py));
-        }
-
-        let globals = globals
-            .map(AsPyPointer::as_ptr)
-            .unwrap_or_else(|| ffi::PyModule_GetDict(mptr));
-        let locals = locals.map(AsPyPointer::as_ptr).unwrap_or(globals);
-
-        // If `globals` don't provide `__builtins__`, most of the code will fail if Python
-        // version is <3.10. That's probably not what user intended, so insert `__builtins__`
-        // for them.
-        //
-        // See also:
-        // - https://github.com/python/cpython/pull/24564 (the same fix in CPython 3.10)
-        // - https://github.com/PyO3/pyo3/issues/3370
-        let builtins_s = intern!(py, "__builtins__").as_ptr();
-        let has_builtins = ffi::PyDict_Contains(globals, builtins_s);
-        if has_builtins == -1 {
-            return Err(PyErr::fetch(py));
-        }
-        if has_builtins == 0 {
-            // Inherit current builtins.
-            let builtins = ffi::PyEval_GetBuiltins();
-
-            // `PyDict_SetItem` doesn't take ownership of `builtins`, but `PyEval_GetBuiltins`
-            // seems to return a borrowed reference, so no leak here.
-            if ffi::PyDict_SetItem(globals, builtins_s, builtins) == -1 {
-                return Err(PyErr::fetch(py));
-            }
-        }
-
-        let code_obj = ffi::Py_CompileString(code.as_ptr(), path.as_ptr() as _, ffi::Py_file_input);
-        if code_obj.is_null() {
-            return Err(PyErr::fetch(py));
-        }
-        let res_ptr = ffi::PyEval_EvalCode(code_obj, globals, locals);
-        ffi::Py_DECREF(code_obj);
-
-        Bound::from_owned_ptr_or_err(py, res_ptr).map(|instance| instance.downcast_into_unchecked())
-    }
+    path: &CStr,
+) -> PyResult<()> {
+    let code = PyCode::compile(py, code, path, pyo3::types::PyCodeInput::File)?;
+    code.run(globals, locals).map(|obj| {
+        debug_assert!(obj.is_none());
+    })
 }

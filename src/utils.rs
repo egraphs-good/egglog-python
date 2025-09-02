@@ -62,7 +62,7 @@ macro_rules! convert_enums {
                 fn __str__(&self) -> String {
                     format!($str, <$from_type>::from(self.clone()))
                 }
-                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyResult<PyObject> {
+                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyResult<Py<PyAny>> {
                     match op {
                         pyo3::basic::CompareOp::Eq => Ok((self == other).into_pyobject(py)?.as_any().clone().unbind()),
                         pyo3::basic::CompareOp::Ne => Ok((self != other).into_pyobject(py)?.as_any().clone().unbind()),
@@ -205,7 +205,7 @@ macro_rules! convert_struct {
                 fn __str__(&self) -> String {
                     format!($str, <$from_type>::from(self.clone()))
                 }
-                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyResult<PyObject> {
+                fn __richcmp__(&self, other: &Self, op: pyo3::basic::CompareOp, py: Python<'_>) -> PyResult<Py<PyAny>> {
                     Ok(match op {
                         pyo3::basic::CompareOp::Eq => (self == other).into_pyobject(py)?.as_any().clone().unbind(),
                         pyo3::basic::CompareOp::Ne => (self != other).into_pyobject(py)?.as_any().clone().unbind(),
