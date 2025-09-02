@@ -805,7 +805,7 @@ class GraphvizKwargs(TypedDict, total=False):
     max_calls_per_function: int | None
     n_inline_leaves: int
     split_primitive_outputs: bool
-    split_functions: list[object]
+    split_functions: list[ExprCallable]
     include_temporary_functions: bool
 
 
@@ -854,7 +854,7 @@ class EGraph:
         """
         self._egraph.run_program(bindings.Input(span(1), self._callable_to_egg(fn), path))
 
-    def _callable_to_egg(self, fn: object) -> str:
+    def _callable_to_egg(self, fn: ExprCallable) -> str:
         ref, decls = resolve_callable(fn)
         self._add_decls(decls)
         return self._state.callable_ref_to_egg(ref)[0]
@@ -1178,6 +1178,37 @@ class EGraph:
             case _:
                 assert_never(cmd)
         return self._state.command_to_egg(cmd_decl, ruleset_name)
+
+    def function_size(self, fn: ExprCallable) -> int:
+        """
+        Returns the number of rows in a certain function
+        """
+        egg_name = self._callable_to_egg(fn)
+        (output,) = self._egraph.run_program(bindings.PrintSize(span(1), egg_name))
+        assert isinstance(output, bindings.PrintFunctionSize)
+        return output.size
+
+    def all_function_sizes(self) -> list[tuple[ExprCallable, int]]:
+        """
+        Returns a list of all functions and their sizes.
+        """
+        (output,) = self._egraph.run_program(bindings.PrintSize(span(1), None))
+        assert isinstance(output, bindings.PrintAllFunctionsSize)
+        return [
+            (
+                cast(
+                    "ExprCallable",
+                    create_callable(self._state.__egg_decls__, next(iter(refs))),
+                ),
+                size,
+            )
+            for (name, size) in output.sizes
+            if (refs := self._state.egg_fn_to_callable_refs[name])
+        ]
+
+
+# Either a constant or a function.
+ExprCallable: TypeAlias = Callable[..., BaseExpr] | BaseExpr
 
 
 @dataclass(frozen=True)
