@@ -1048,3 +1048,7 @@ def test_all_function_size():
         (C, 1),
         (E.cm, 1),
     }
+
+
+def test_overall_run_report():
+    assert EGraph().stats()
