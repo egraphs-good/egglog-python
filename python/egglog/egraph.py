@@ -909,6 +909,14 @@ class EGraph:
         assert isinstance(command_output, bindings.RunScheduleOutput)
         return command_output.report
 
+    def run_report(self) -> RunReport:
+        """
+        Returns the overall run report for the egraph.
+        """
+        (output,) = self._egraph.run_program(bindings.PrintOverallStatistics())
+        assert isinstance(output, bindings.OverallStatistics)
+        return output.report
+
     def check_bool(self, *facts: FactLike) -> bool:
         """
         Returns true if the facts are true in the egraph.

@@ -522,6 +522,15 @@ egraph.function_size(Math)
 egraph.all_function_sizes()
 ```
 
+## Overall Statistics
+
+The `(print-stats)` command is translated into `egraph.run_report()` to get overall statistics about the EGraph.
+
+```{code-cell} python
+# (print-stats)
+egraph.run_report()
+```
+
 ## Include
 
 The `(include <path>)` command is used to add modularity, by allowing you to pull in the source from another egglog file into the current file.
