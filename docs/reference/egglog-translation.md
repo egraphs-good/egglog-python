@@ -531,6 +531,15 @@ The `(print-stats)` command is translated into `egraph.stats()` to get overall s
 egraph.stats()
 ```
 
+## Function Values
+
+The `print-function` command is translated into `egraph.function_values(fn, [length]?)` to get the values of a specific function. Note that the function provided must either return a primitive or be created with a merge function.
+
+```{code-cell} python
+# (print-function fib 3)
+egraph.function_values(fib, length=3)
+```
+
 ## Include
 
 The `(include <path>)` command is used to add modularity, by allowing you to pull in the source from another egglog file into the current file.

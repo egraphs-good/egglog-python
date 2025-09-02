@@ -852,12 +852,12 @@ class EGraph:
         """
         Loads a CSV file and sets it as *input, output of the function.
         """
-        self._egraph.run_program(bindings.Input(span(1), self._callable_to_egg(fn), path))
+        self._egraph.run_program(bindings.Input(span(1), self._callable_to_egg(fn)[1], path))
 
-    def _callable_to_egg(self, fn: ExprCallable) -> str:
+    def _callable_to_egg(self, fn: ExprCallable) -> tuple[CallableRef, str]:
         ref, decls = resolve_callable(fn)
         self._add_decls(decls)
-        return self._state.callable_ref_to_egg(ref)[0]
+        return ref, self._state.callable_ref_to_egg(ref)[0]
 
     # TODO: Change let to be action...
     def let(self, name: str, expr: BASE_EXPR) -> BASE_EXPR:
@@ -961,14 +961,14 @@ class EGraph:
         runtime_expr = to_runtime_expr(expr)
         extract_report = self._run_extract(runtime_expr, 0)
         assert isinstance(extract_report, bindings.ExtractBest)
-        (new_typed_expr,) = self._state.exprs_from_egg(
-            extract_report.termdag, [extract_report.term], runtime_expr.__egg_typed_expr__.tp
-        )
-
-        res = cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr))
+        res = self._from_termdag(extract_report.termdag, extract_report.term, runtime_expr.__egg_typed_expr__.tp)
         if include_cost:
             return res, extract_report.cost
         return res
+
+    def _from_termdag(self, termdag: bindings.TermDag, term: bindings._Term, tp: JustTypeRef) -> Any:
+        (new_typed_expr,) = self._state.exprs_from_egg(termdag, [term], tp)
+        return RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr)
 
     def extract_multiple(self, expr: BASE_EXPR, n: int) -> list[BASE_EXPR]:
         """
@@ -1040,7 +1040,7 @@ class EGraph:
             msg = ", ".join(set(self._state.possible_egglog_functions(serialized.truncated_functions)))
             warn(f"Truncated: {msg}", stacklevel=3)
         if split_primitive_outputs or split_functions:
-            additional_ops = set(map(self._callable_to_egg, split_functions))
+            additional_ops = {self._callable_to_egg(f)[1] for f in split_functions}
             serialized.split_classes(self._egraph, additional_ops)
         serialized.map_ops(self._state.op_mapping())
 
@@ -1191,7 +1191,7 @@ class EGraph:
         """
         Returns the number of rows in a certain function
         """
-        egg_name = self._callable_to_egg(fn)
+        egg_name = self._callable_to_egg(fn)[1]
         (output,) = self._egraph.run_program(bindings.PrintSize(span(1), egg_name))
         assert isinstance(output, bindings.PrintFunctionSize)
         return output.size
@@ -1213,6 +1213,27 @@ class EGraph:
             for (name, size) in output.sizes
             if (refs := self._state.egg_fn_to_callable_refs[name])
         ]
+
+    def function_values(
+        self, fn: Callable[..., BASE_EXPR] | BASE_EXPR, length: int | None = None
+    ) -> dict[BASE_EXPR, BASE_EXPR]:
+        """
+        Given a callable that is a "function", meaning it returns a primitive or has a merge set,
+        returns a mapping of the function applied with its arguments to its values
+
+        If length is specified, only the first `length` values will be returned.
+        """
+        ref, egg_name = self._callable_to_egg(fn)
+        cmd = bindings.PrintFunction(span(1), egg_name, length, None, bindings.DefaultPrintFunctionMode())
+        (output,) = self._egraph.run_program(cmd)
+        assert isinstance(output, bindings.PrintFunctionOutput)
+        signature = self.__egg_decls__.get_callable_decl(ref).signature
+        assert isinstance(signature, FunctionSignature)
+        tp = signature.semantic_return_type.to_just()
+        return {
+            self._from_termdag(output.termdag, call, tp): self._from_termdag(output.termdag, res, tp)
+            for (call, res) in output.terms
+        }
 
 
 # Either a constant or a function.

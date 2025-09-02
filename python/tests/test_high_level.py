@@ -1052,3 +1052,14 @@ def test_all_function_size():
 
 def test_overall_run_report():
     assert EGraph().stats()
+
+
+def test_function_values():
+    egraph = EGraph()
+
+    @function
+    def f(x: i64Like) -> i64: ...
+
+    egraph.register(set_(f(i64(1))).to(i64(2)))
+    values = egraph.function_values(f)
+    assert values == {f(i64(1)): i64(2)}
