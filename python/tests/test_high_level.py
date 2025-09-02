@@ -1051,4 +1051,4 @@ def test_all_function_size():
 
 
 def test_overall_run_report():
-    assert EGraph().run_report()
+    assert EGraph().stats()

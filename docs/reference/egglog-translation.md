@@ -524,11 +524,11 @@ egraph.all_function_sizes()
 
 ## Overall Statistics
 
-The `(print-stats)` command is translated into `egraph.run_report()` to get overall statistics about the EGraph.
+The `(print-stats)` command is translated into `egraph.stats()` to get overall statistics about the EGraph.
 
 ```{code-cell} python
 # (print-stats)
-egraph.run_report()
+egraph.stats()
 ```
 
 ## Include

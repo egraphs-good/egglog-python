@@ -4,7 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-- Add `egraph.run_report()` method to print overall stats [#339](https://github.com/egraphs-good/egglog-python/pull/339)
+- Add `egraph.stats()` method to print overall stats [#339](https://github.com/egraphs-good/egglog-python/pull/339)
 - Add `all_function_sizes` and `function_size` EGraph methods [#338](https://github.com/egraphs-good/egglog-python/pull/338)
 - Fix execution of docs [#337](https://github.com/egraphs-good/egglog-python/pull/337)
 - Emit warnings when functions omitted when visualizing [#336](https://github.com/egraphs-good/egglog-python/pull/336)
@@ -15,6 +15,7 @@ _This project uses semantic versioning_
 - Allow changing number of threads with env variable [#330](https://github.com/egraphs-good/egglog-python/pull/330)
 
 ## 11.0.0 (2025-08-08)
+
 - Change conversion between binary operators to consider converting both types [#320](https://github.com/egraphs-good/egglog-python/pull/320)
 - Add ability to parse egglog expressions into Python values [#319](https://github.com/egraphs-good/egglog-python/pull/319)
   - Deprecates `.eval()` method on primitives in favor of `.value` which can be used with pattern matching.

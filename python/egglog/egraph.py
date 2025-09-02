@@ -909,7 +909,7 @@ class EGraph:
         assert isinstance(command_output, bindings.RunScheduleOutput)
         return command_output.report
 
-    def run_report(self) -> bindings.RunReport:
+    def stats(self) -> bindings.RunReport:
         """
         Returns the overall run report for the egraph.
         """
