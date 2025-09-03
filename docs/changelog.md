@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 11.2.0 (2025-09-03)
+
 - Add support for `set_cost` action to have row level costs for extraction [#343](https://github.com/egraphs-good/egglog-python/pull/343)
 - Add `egraph.function_values(fn)` to export all function values like `print-function` [#340](https://github.com/egraphs-good/egglog-python/pull/340)
 - Add `egraph.stats()` method to print overall stats [#339](https://github.com/egraphs-good/egglog-python/pull/339)
