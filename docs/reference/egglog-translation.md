@@ -283,7 +283,7 @@ so dynamic costs can be created in rules.
 It does this by creating a new table for each function you set the cost for that maps the arguments to an i64.
 
 _Note: Unlike in egglog, where you have to declare which functions support custom costs, in Python all functions
-are automatically regeistered to create a custom cost table when they are constructed_
+are automatically registered to create a custom cost table when they are constructed_
 
 ## Defining Rules
 
