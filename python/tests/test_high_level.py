@@ -1063,3 +1063,33 @@ def test_function_values():
     egraph.register(set_(f(i64(1))).to(i64(2)))
     values = egraph.function_values(f)
     assert values == {f(i64(1)): i64(2)}
+
+
+def test_dynamic_cost():
+    """
+    https://github.com/egraphs-good/egglog-experimental/blob/6d07a34ac76deec751f86f70d9b9358cd3e236ca/tests/integration_test.rs#L5-L35
+    """
+
+    class E(Expr):
+        def __init__(self, x: i64Like) -> None: ...
+        def __add__(self, other: E) -> E: ...
+        @method(cost=200)
+        def __sub__(self, other: E) -> E: ...
+
+    egraph = EGraph()
+    egraph.register(
+        union(E(2)).with_(E(1) + E(1)),
+        set_cost(E(2), 1000),
+        set_cost(E(1), 100),
+    )
+    assert egraph.extract(E(2), include_cost=True) == (E(1) + E(1), 203)
+    with egraph:
+        egraph.register(set_cost(E(1) + E(1), 800))
+        assert egraph.extract(E(2), include_cost=True) == (E(2), 1001)
+    with egraph:
+        egraph.register(set_cost(E(1) + E(1), 798))
+        assert egraph.extract(E(2), include_cost=True) == (E(1) + E(1), 1000)
+    egraph.register(union(E(2)).with_(E(5) - E(3)))
+    assert egraph.extract(E(2), include_cost=True) == (E(1) + E(1), 203)
+    egraph.register(set_cost(E(5) - E(3), 198))
+    assert egraph.extract(E(2), include_cost=True) == (E(5) - E(3), 202)

@@ -268,6 +268,23 @@ except BaseException as e:
     print(e)
 ```
 
+### Set Cost
+
+You can also set the cost of individual values, like the egglog experimental feature, to override the default cost from constructing a function:
+
+```{code-cell} python
+# egg: (set-cost (fib 0) 1)
+egraph.register(set_cost(fib(0), 1))
+```
+
+This will be taken into account when extracting. Any value that can be converted to an `i64` is supported as a cost,
+so dynamic costs can be created in rules.
+
+It does this by creating a new table for each function you set the cost for that maps the arguments to an i64.
+
+_Note: Unlike in egglog, where you have to declare which functions support custom costs, in Python all functions
+are automatically registered to create a custom cost table when they are constructed_
+
 ## Defining Rules
 
 To define rules in Python, we create a rule with the `rule(*facts).then(*actions) (rule ...)` command in egglog.

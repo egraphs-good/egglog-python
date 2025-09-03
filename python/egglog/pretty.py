@@ -98,6 +98,7 @@ def pretty_callable_ref(
     ref: CallableRef,
     first_arg: ExprDecl | None = None,
     bound_tp_params: tuple[JustTypeRef, ...] | None = None,
+    include_all_args: bool = False,
 ) -> str:
     """
     Pretty print a callable reference, using a dummy value for
@@ -115,6 +116,13 @@ def pretty_callable_ref(
     # Either returns a function or a function with args. If args are provided, they would just be called,
     # on the function, so return them, because they are dummies
     if isinstance(res, tuple):
+        # If we want to include all args as ARG_STR, then we need to figure out how many to use
+        # used for set_cost so that `cost(E(...))` will show up as a call
+        if include_all_args:
+            signature = decls.get_callable_decl(ref).signature
+            assert isinstance(signature, FunctionSignature)
+            correct_args: list[ExprDecl] = [UnboundVarDecl(ARG_STR)] * len(signature.arg_types)
+            return f"{res[0]}({', '.join(context(a, parens=False, unwrap_lit=True) for a in correct_args)})"
         return res[0]
     return res
 
@@ -190,6 +198,9 @@ class TraverseContext:
                 pass
             case DefaultRewriteDecl():
                 pass
+            case SetCostDecl(_, e, c):
+                self(e)
+                self(c)
             case _:
                 assert_never(decl)
 
@@ -285,6 +296,8 @@ class PrettyContext:
                 return f"{change}({self(expr)})", "action"
             case PanicDecl(s):
                 return f"panic({s!r})", "action"
+            case SetCostDecl(_, expr, cost):
+                return f"set_cost({self(expr)}, {self(cost, unwrap_lit=True)})", "action"
             case EqDecl(_, left, right):
                 return f"eq({self(left)}).to({self(right)})", "fact"
             case RulesetDecl(rules):

@@ -84,3 +84,4 @@ Source.*
 inlined
 visualizer.tgz
 package
+.mypy_cache/
