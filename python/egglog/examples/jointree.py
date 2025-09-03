@@ -19,7 +19,7 @@ class JoinTree(Expr):
 
     def join(self, other: JoinTree) -> JoinTree: ...
 
-    @method(merge=lambda old, new: old.min(new))
+    @method(merge=lambda old, new: old.min(new))  # type:ignore[prop-decorator]
     @property
     def size(self) -> i64: ...
 

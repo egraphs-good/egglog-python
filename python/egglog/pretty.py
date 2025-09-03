@@ -121,8 +121,8 @@ def pretty_callable_ref(
         if include_all_args:
             signature = decls.get_callable_decl(ref).signature
             assert isinstance(signature, FunctionSignature)
-            args: list[ExprDecl] = [UnboundVarDecl(ARG_STR)] * len(signature.arg_types)
-            return f"{res[0]}({', '.join(context(a, parens=False, unwrap_lit=True) for a in args)})"
+            correct_args: list[ExprDecl] = [UnboundVarDecl(ARG_STR)] * len(signature.arg_types)
+            return f"{res[0]}({', '.join(context(a, parens=False, unwrap_lit=True) for a in correct_args)})"
         return res[0]
     return res
 
