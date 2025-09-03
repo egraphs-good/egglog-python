@@ -69,6 +69,7 @@ __all__ = [
     "SaturateDecl",
     "ScheduleDecl",
     "SequenceDecl",
+    "SetCostDecl",
     "SetDecl",
     "SpecialFunctions",
     "TypeOrVarRef",
@@ -854,7 +855,14 @@ class PanicDecl:
     msg: str
 
 
-ActionDecl: TypeAlias = LetDecl | SetDecl | ExprActionDecl | ChangeDecl | UnionDecl | PanicDecl
+@dataclass(frozen=True)
+class SetCostDecl:
+    tp: JustTypeRef
+    expr: CallDecl
+    cost: ExprDecl
+
+
+ActionDecl: TypeAlias = LetDecl | SetDecl | ExprActionDecl | ChangeDecl | UnionDecl | PanicDecl | SetCostDecl
 
 
 ##

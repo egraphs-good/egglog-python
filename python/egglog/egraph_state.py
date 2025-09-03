@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, overload
 
 from typing_extensions import assert_never
@@ -71,6 +71,9 @@ class EGraphState:
     # Cache of egg expressions for converting to egg
     expr_to_egg_cache: dict[ExprDecl, bindings._Expr] = field(default_factory=dict)
 
+    # Callables which have cost tables associated with them
+    cost_callables: set[CallableRef] = field(default_factory=set)
+
     def copy(self) -> EGraphState:
         """
         Returns a copy of the state. Th egraph reference is kept the same. Used for pushing/popping.
@@ -83,6 +86,7 @@ class EGraphState:
             callable_ref_to_egg_fn=self.callable_ref_to_egg_fn.copy(),
             type_ref_to_egg_sort=self.type_ref_to_egg_sort.copy(),
             expr_to_egg_cache=self.expr_to_egg_cache.copy(),
+            cost_callables=self.cost_callables.copy(),
         )
 
     def schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Schedule:
@@ -212,8 +216,31 @@ class EGraphState:
                 return bindings.Union(span(), self._expr_to_egg(lhs), self._expr_to_egg(rhs))
             case PanicDecl(name):
                 return bindings.Panic(span(), name)
+            case SetCostDecl(tp, expr, cost):
+                self.type_ref_to_egg(tp)
+                cost_table = self.create_cost_table(expr.callable)
+                args_egg = [self.typed_expr_to_egg(x, False) for x in expr.args]
+                return bindings.Set(span(), cost_table, args_egg, self._expr_to_egg(cost))
             case _:
                 assert_never(action)
+
+    def create_cost_table(self, ref: CallableRef) -> str:
+        """
+        Creates the egg cost table if needed and gets the name of the table.
+        """
+        name = self.cost_table_name(ref)
+        if ref not in self.cost_callables:
+            self.cost_callables.add(ref)
+            signature = self.__egg_decls__.get_callable_decl(ref).signature
+            assert isinstance(signature, FunctionSignature), "Can only add cost tables for functions"
+            signature = replace(signature, return_type=TypeRefWithVars("i64"))
+            self.egraph.run_program(
+                bindings.FunctionCommand(span(), name, self._signature_to_egg_schema(signature), None)
+            )
+        return name
+
+    def cost_table_name(self, ref: CallableRef) -> str:
+        return f"cost_table_{self.callable_ref_to_egg(ref)[0]}"
 
     def fact_to_egg(self, fact: FactDecl) -> bindings._Fact:
         match fact:
@@ -350,11 +377,16 @@ class EGraphState:
         """
         Create a mapping of egglog function name to Python function name, for use in the serialized format
         for better visualization.
+
+        Includes cost tables
         """
         return {
             k: pretty_callable_ref(self.__egg_decls__, next(iter(v)))
             for k, v in self.egg_fn_to_callable_refs.items()
             if len(v) == 1
+        } | {
+            self.cost_table_name(ref): f"cost({pretty_callable_ref(self.__egg_decls__, ref, include_all_args=True)})"
+            for ref in self.cost_callables
         }
 
     def possible_egglog_functions(self, names: list[str]) -> Iterable[str]:

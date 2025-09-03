@@ -40,7 +40,7 @@ from .thunk import *
 from .version_compat import *
 
 if TYPE_CHECKING:
-    from .builtins import String, Unit
+    from .builtins import String, Unit, i64Like
 
 
 __all__ = [
@@ -84,6 +84,7 @@ __all__ = [
     "run",
     "seq",
     "set_",
+    "set_cost",
     "subsume",
     "union",
     "unstable_combine_rulesets",
@@ -985,8 +986,14 @@ class EGraph:
     def _run_extract(self, expr: RuntimeExpr, n: int) -> bindings._CommandOutput:
         self._add_decls(expr)
         expr = self._state.typed_expr_to_egg(expr.__egg_typed_expr__)
+        # If we have defined any cost tables use the custom extraction
+        args = (expr, bindings.Lit(span(2), bindings.Int(n)))
+        if self._state.cost_callables:
+            cmd: bindings._Command = bindings.UserDefined(span(2), "extract", list(args))
+        else:
+            cmd = bindings.Extract(span(2), *args)
         try:
-            return self._egraph.run_program(bindings.Extract(span(2), expr, bindings.Lit(span(2), bindings.Int(n))))[0]
+            return self._egraph.run_program(cmd)[0]
         except BaseException as e:
             raise add_note("Extracting: " + str(expr), e)  # noqa: B904
 
@@ -1460,10 +1467,13 @@ class Fact:
         """
         Returns True if the two sides of an equality are structurally equal.
         """
-        if not isinstance(self.fact, EqDecl):
-            msg = "Can only check equality facts"
-            raise TypeError(msg)
-        return self.fact.left == self.fact.right
+        match self.fact:
+            case EqDecl(_, left, right):
+                return left == right
+            case ExprFactDecl(TypedExprDecl(_, CallDecl(FunctionRef("!="), (left_tp, right_tp)))):
+                return left_tp != right_tp
+        msg = f"Can only check equality for == or != not {self}"
+        raise ValueError(msg)
 
 
 @dataclass
@@ -1509,6 +1519,18 @@ def ne(expr: BASE_EXPR) -> _NeBuilder[BASE_EXPR]:
 def panic(message: str) -> Action:
     """Raise an error with the given message."""
     return Action(Declarations(), PanicDecl(message))
+
+
+def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
+    """Set the cost of the given expression."""
+    from .builtins import i64  # noqa: PLC0415
+
+    expr_runtime = to_runtime_expr(expr)
+    typed_expr_decl = expr_runtime.__egg_typed_expr__
+    expr_decl = typed_expr_decl.expr
+    assert isinstance(expr_decl, CallDecl), "Can only set cost of calls, not literals or vars"
+    cost_decl = to_runtime_expr(convert(cost, i64)).__egg_typed_expr__.expr
+    return Action(expr_runtime.__egg_decls__, SetCostDecl(typed_expr_decl.tp, expr_decl, cost_decl))
 
 
 def let(name: str, expr: BaseExpr) -> Action:
