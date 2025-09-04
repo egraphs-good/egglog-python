@@ -49,6 +49,23 @@ egraph.check(expr1 == expr2)
 egraph.extract(expr1)
 ```
 
+## How to cite
+
+If you use **egglog-python** in academic work, please cite the paper:
+
+```bibtex
+@misc{Shanabrook2023EgglogPython,
+  title         = {Egglog Python: A Pythonic Library for E-graphs},
+  author        = {Saul Shanabrook},
+  year          = {2023},
+  eprint        = {2305.04311},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.PL},
+  doi           = {10.48550/arXiv.2305.04311},
+  url           = {https://arxiv.org/abs/2305.04311},
+  note          = {Presented at EGRAPHS@PLDI 2023}
+}
+
 ```{toctree}
 :maxdepth: 2
 tutorials
