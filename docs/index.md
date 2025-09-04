@@ -13,6 +13,21 @@ See the ["Better Together: Unifying Datalog and Equality Saturation"](https://ar
 
 > We present egglog, a fixpoint reasoning system that unifies Datalog and equality saturation (EqSat). Like Datalog, it supports efficient incremental execution, cooperating analyses, and lattice-based reasoning. Like EqSat, it supports term rewriting, efficient congruence closure, and extraction of optimized terms.
 
+```bibtex
+@misc{Shanabrook2023EgglogPython,
+  title         = {Egglog Python: A Pythonic Library for E-graphs},
+  author        = {Saul Shanabrook},
+  year          = {2023},
+  eprint        = {2305.04311},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.PL},
+  doi           = {10.48550/arXiv.2305.04311},
+  url           = {https://arxiv.org/abs/2305.04311},
+  note          = {Presented at EGRAPHS@PLDI 2023}
+}
+```
+
+
 ```shell
 pip install egglog
 ```
@@ -48,23 +63,6 @@ egraph.saturate()
 egraph.check(expr1 == expr2)
 egraph.extract(expr1)
 ```
-
-## How to cite
-
-If you use **egglog-python** in academic work, please cite the paper:
-
-```bibtex
-@misc{Shanabrook2023EgglogPython,
-  title         = {Egglog Python: A Pythonic Library for E-graphs},
-  author        = {Saul Shanabrook},
-  year          = {2023},
-  eprint        = {2305.04311},
-  archivePrefix = {arXiv},
-  primaryClass  = {cs.PL},
-  doi           = {10.48550/arXiv.2305.04311},
-  url           = {https://arxiv.org/abs/2305.04311},
-  note          = {Presented at EGRAPHS@PLDI 2023}
-}
 
 ```{toctree}
 :maxdepth: 2
