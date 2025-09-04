@@ -21,7 +21,7 @@ egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
 serde_json = "1.0.143"
 # https://github.com/vorner/pyo3-log/pull/66
 pyo3-log = { git = "https://github.com/alex/pyo3-log.git", branch = "pyo3-bump" }
-log = "0.4.27"
+log = "0.4.28"
 lalrpop-util = { version = "0.22", features = ["lexer"] }
 ordered-float = "3.7.0"
 uuid = { version = "1.18.1", features = ["v4"] }
