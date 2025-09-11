@@ -62,6 +62,3 @@ egraph.register(query)
 egraph.run(1000)
 print(egraph.extract(query))
 print(egraph.extract(query.size))
-
-
-egraph

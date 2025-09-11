@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Add `back_off` scheduler [#350](https://github.com/egraphs-good/egglog-python/pull/350)
 ## 11.2.0 (2025-09-03)
 
 - Add support for `set_cost` action to have row level costs for extraction [#343](https://github.com/egraphs-good/egglog-python/pull/343)
