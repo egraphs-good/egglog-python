@@ -67,7 +67,9 @@ UNARY_METHODS = {
     "__invert__": "~",
 }
 
-AllDecls: TypeAlias = RulesetDecl | CombinedRulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl
+AllDecls: TypeAlias = (
+    RulesetDecl | CombinedRulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl | BackOffDecl
+)
 
 
 def pretty_decl(
@@ -188,10 +190,12 @@ class TraverseContext:
                     case _:
                         for e in exprs:
                             self(e.expr)
-            case RunDecl(_, until):
+            case RunDecl(_, until, scheduler):
                 if until:
                     for f in until:
                         self(f)
+                if scheduler:
+                    self(scheduler)
             case PartialCallDecl(c):
                 self(c)
             case CombinedRulesetDecl(_):
@@ -201,6 +205,12 @@ class TraverseContext:
             case SetCostDecl(_, e, c):
                 self(e)
                 self(c)
+            case BackOffDecl():
+                pass
+            case LetSchedulerDecl(scheduler, schedule):
+                self(scheduler)
+                self(schedule)
+
             case _:
                 assert_never(decl)
 
@@ -238,7 +248,11 @@ class PrettyContext:
         # it would take up is > than some constant (~ line length).
         line_diff: int = len(expr) - LINE_DIFFERENCE
         n_parents = self.parents[decl]
-        if n_parents > 1 and n_parents * line_diff > MAX_LINE_LENGTH:
+        if n_parents > 1 and (
+            n_parents * line_diff > MAX_LINE_LENGTH
+            # Schedulers with multiple parents need to be the same object, b/c are created with hidden UUIDs
+            or tp_name == "scheduler"
+        ):
             self.names[decl] = expr_name = self._name_expr(tp_name, expr, copy_identifier=False)
             return expr_name
         return expr
@@ -318,16 +332,27 @@ class PrettyContext:
                     return f"{self(schedules[0], parens=True)} + {self(schedules[1], parens=True)}", "schedule"
                 args = ", ".join(map(self, schedules))
                 return f"seq({args})", "schedule"
-            case RunDecl(ruleset_name, until):
+            case LetSchedulerDecl(scheduler, schedule):
+                return f"{self(scheduler, parens=True)}.scope({self(schedule, parens=True)})", "schedule"
+            case RunDecl(ruleset_name, until, scheduler):
                 ruleset = self.decls._rulesets[ruleset_name]
                 ruleset_str = self(ruleset, ruleset_name=ruleset_name)
-                if not until:
+                if not until and not scheduler:
                     return ruleset_str, "schedule"
-                args = ", ".join(map(self, until))
-                return f"run({ruleset_str}, {args})", "schedule"
+                arg_lst = list(map(self, until or []))
+                if scheduler:
+                    arg_lst.append(f"scheduler={self(scheduler)}")
+                return f"run({ruleset_str}, {', '.join(arg_lst)})", "schedule"
             case DefaultRewriteDecl():
                 msg = "default rewrites should not be pretty printed"
                 raise TypeError(msg)
+            case BackOffDecl(_, match_limit, ban_length):
+                list_args: list[str] = []
+                if match_limit is not None:
+                    list_args.append(f"match_limit={match_limit}")
+                if ban_length is not None:
+                    list_args.append(f"ban_length={ban_length}")
+                return f"back_off({', '.join(list_args)})", "scheduler"
         assert_never(decl)
 
     def _call(

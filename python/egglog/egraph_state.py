@@ -8,6 +8,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, overload
+from uuid import UUID
 
 from typing_extensions import assert_never
 
@@ -89,18 +90,140 @@ class EGraphState:
             cost_callables=self.cost_callables.copy(),
         )
 
-    def schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Schedule:
+    def run_schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Command:
+        """
+        Turn a run schedule into an egg command.
+
+        If there exists any custom schedulers in the schedule, it will be turned into a custom extract command otherwise
+        will be a normal run command.
+        """
+        processed_schedule = self._process_schedule(schedule)
+        if processed_schedule is None:
+            return bindings.RunSchedule(self._schedule_to_egg(schedule))
+        top_level_schedules = self._schedule_with_scheduler_to_egg(processed_schedule, [])
+        if len(top_level_schedules) == 1:
+            schedule_expr = top_level_schedules[0]
+        else:
+            schedule_expr = bindings.Call(span(), "seq", top_level_schedules)
+        return bindings.UserDefined(span(), "run-schedule", [schedule_expr])
+
+    def _process_schedule(self, schedule: ScheduleDecl) -> ScheduleDecl | None:
+        """
+        Processes a schedule to determine if it contains any custom schedulers.
+
+        If it does, it returns a new schedule with all the required let bindings added to the other scope.
+        If not, returns none.
+
+        Also processes all rulesets in the schedule to make sure they are registered.
+        """
+        bound_schedulers: list[UUID] = []
+        unbound_schedulers: list[BackOffDecl] = []
+
+        def helper(s: ScheduleDecl) -> None:
+            match s:
+                case LetSchedulerDecl(scheduler, inner):
+                    bound_schedulers.append(scheduler.id)
+                    return helper(inner)
+                case RunDecl(ruleset_name, _, scheduler):
+                    self.ruleset_to_egg(ruleset_name)
+                    if scheduler and scheduler.id not in bound_schedulers:
+                        unbound_schedulers.append(scheduler)
+                case SaturateDecl(inner) | RepeatDecl(inner, _):
+                    return helper(inner)
+                case SequenceDecl(schedules):
+                    for sc in schedules:
+                        helper(sc)
+                case _:
+                    assert_never(s)
+            return None
+
+        helper(schedule)
+        if not bound_schedulers and not unbound_schedulers:
+            return None
+        for scheduler in unbound_schedulers:
+            schedule = LetSchedulerDecl(scheduler, schedule)
+        return schedule
+
+    def _schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Schedule:
+        msg = "Should never reach this, let schedulers should be handled by custom scheduler"
         match schedule:
             case SaturateDecl(schedule):
-                return bindings.Saturate(span(), self.schedule_to_egg(schedule))
+                return bindings.Saturate(span(), self._schedule_to_egg(schedule))
             case RepeatDecl(schedule, times):
-                return bindings.Repeat(span(), times, self.schedule_to_egg(schedule))
+                return bindings.Repeat(span(), times, self._schedule_to_egg(schedule))
             case SequenceDecl(schedules):
-                return bindings.Sequence(span(), [self.schedule_to_egg(s) for s in schedules])
-            case RunDecl(ruleset_name, until):
-                self.ruleset_to_egg(ruleset_name)
+                return bindings.Sequence(span(), [self._schedule_to_egg(s) for s in schedules])
+            case RunDecl(ruleset_name, until, scheduler):
+                if scheduler is not None:
+                    raise ValueError(msg)
                 config = bindings.RunConfig(ruleset_name, None if not until else list(map(self.fact_to_egg, until)))
                 return bindings.Run(span(), config)
+            case LetSchedulerDecl():
+                raise ValueError(msg)
+            case _:
+                assert_never(schedule)
+
+    def _schedule_with_scheduler_to_egg(  # noqa: C901, PLR0912
+        self, schedule: ScheduleDecl, bound_schedulers: list[UUID]
+    ) -> list[bindings._Expr]:
+        """
+        Turns a scheduler into an egg expression, to be used with a custom extract command.
+
+        The bound_schedulers is a list of all the schedulers that have been bound. We can lookup their name as `_scheduler_{index}`.
+        """
+        match schedule:
+            case LetSchedulerDecl(BackOffDecl(id, match_limit, ban_length), inner):
+                name = f"_scheduler_{len(bound_schedulers)}"
+                bound_schedulers.append(id)
+                args: list[bindings._Expr] = []
+                if match_limit is not None:
+                    args.append(bindings.Var(span(), ":match-limit"))
+                    args.append(bindings.Lit(span(), bindings.Int(match_limit)))
+                if ban_length is not None:
+                    args.append(bindings.Var(span(), ":ban-length"))
+                    args.append(bindings.Lit(span(), bindings.Int(ban_length)))
+                back_off_decl = bindings.Call(span(), "back-off", args)
+                let_decl = bindings.Call(span(), "let-scheduler", [bindings.Var(span(), name), back_off_decl])
+                return [let_decl, *self._schedule_with_scheduler_to_egg(inner, bound_schedulers)]
+            case RunDecl(ruleset_name, until, scheduler):
+                args = [bindings.Var(span(), ruleset_name)]
+                if scheduler:
+                    name = "run-with"
+                    scheduler_name = f"_scheduler_{bound_schedulers.index(scheduler.id)}"
+                    args.insert(0, bindings.Var(span(), scheduler_name))
+                else:
+                    name = "run"
+                if until:
+                    if len(until) > 1:
+                        msg = "Can only have one until fact with custom scheduler"
+                        raise ValueError(msg)
+                    args.append(bindings.Var(span(), ":until"))
+                    fact_egg = self.fact_to_egg(until[0])
+                    if isinstance(fact_egg, bindings.Eq):
+                        msg = "Cannot use equality fact with custom scheduler"
+                        raise ValueError(msg)
+                    args.append(fact_egg.expr)
+                return [bindings.Call(span(), name, args)]
+            case SaturateDecl(inner):
+                return [
+                    bindings.Call(span(), "saturate", self._schedule_with_scheduler_to_egg(inner, bound_schedulers))
+                ]
+            case RepeatDecl(inner, times):
+                return [
+                    bindings.Call(
+                        span(),
+                        "repeat",
+                        [
+                            bindings.Lit(span(), bindings.Int(times)),
+                            *self._schedule_with_scheduler_to_egg(inner, bound_schedulers),
+                        ],
+                    )
+                ]
+            case SequenceDecl(schedules):
+                res = []
+                for s in schedules:
+                    res.extend(self._schedule_with_scheduler_to_egg(s, bound_schedulers))
+                return res
             case _:
                 assert_never(schedule)
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, TypeAlias, TypeVar, Union, cast, runtime_checkable
+from uuid import UUID
 from weakref import WeakValueDictionary
 
 from typing_extensions import Self, assert_never
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ActionCommandDecl",
     "ActionDecl",
+    "BackOffDecl",
     "BiRewriteDecl",
     "CallDecl",
     "CallableDecl",
@@ -52,6 +54,7 @@ __all__ = [
     "JustTypeRef",
     "LetDecl",
     "LetRefDecl",
+    "LetSchedulerDecl",
     "LitDecl",
     "LitType",
     "MethodRef",
@@ -790,9 +793,24 @@ class SequenceDecl:
 class RunDecl:
     ruleset: str
     until: tuple[FactDecl, ...] | None
+    scheduler: BackOffDecl | None = None
 
 
-ScheduleDecl: TypeAlias = SaturateDecl | RepeatDecl | SequenceDecl | RunDecl
+@dataclass(frozen=True)
+class LetSchedulerDecl:
+    scheduler: BackOffDecl
+    inner: ScheduleDecl
+
+
+ScheduleDecl: TypeAlias = SaturateDecl | RepeatDecl | SequenceDecl | RunDecl | LetSchedulerDecl
+
+
+@dataclass(frozen=True)
+class BackOffDecl:
+    id: UUID
+    match_limit: int | None
+    ban_length: int | None
+
 
 ##
 # Facts

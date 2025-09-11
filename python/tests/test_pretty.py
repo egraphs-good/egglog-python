@@ -82,6 +82,8 @@ long_line = my_very_long_function_name() + my_very_long_function_name() + my_ver
 
 r = ruleset(name="r")
 
+bo = back_off(ban_length=5)
+
 PARAMS = [
     # expression function calls
     pytest.param(A(), "A()", id="init"),
@@ -148,6 +150,16 @@ _A_2 + _A_3""",
     pytest.param(r + r, 'ruleset(name="r") + ruleset(name="r")', id="sequence"),
     pytest.param(seq(r, r, r), 'seq(ruleset(name="r"), ruleset(name="r"), ruleset(name="r"))', id="seq"),
     pytest.param(run(r, h()), 'run(ruleset(name="r"), h())', id="run"),
+    pytest.param(
+        run(r, h(), scheduler=bo),
+        'run(ruleset(name="r"), h(), scheduler=back_off(ban_length=5))',
+        id="run with scheduler",
+    ),
+    pytest.param(
+        bo.scope(run(r, scheduler=bo)),
+        '_scheduler_1 = back_off(ban_length=5)\n_scheduler_1.scope(run(ruleset(name="r"), scheduler=_scheduler_1))',
+        id="scoped scheduler",
+    ),
     # Functions
     pytest.param(f, "f", id="function"),
     pytest.param(A().method, "A().method", id="method"),

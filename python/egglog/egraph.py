@@ -23,6 +23,7 @@ from typing import (
     get_type_hints,
     overload,
 )
+from uuid import uuid4
 from warnings import warn
 
 import graphviz
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Action",
+    "BackOff",
     "BaseExpr",
     "BuiltinExpr",
     "Command",
@@ -63,6 +65,7 @@ __all__ = [
     "_RewriteBuilder",
     "_SetBuilder",
     "_UnionBuilder",
+    "back_off",
     "birewrite",
     "check",
     "check_eq",
@@ -905,8 +908,8 @@ class EGraph:
 
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
         self._add_decls(schedule)
-        egg_schedule = self._state.schedule_to_egg(schedule.schedule)
-        (command_output,) = self._egraph.run_program(bindings.RunSchedule(egg_schedule))
+        cmd = self._state.run_schedule_to_egg(schedule.schedule)
+        (command_output,) = self._egraph.run_program(cmd)
         assert isinstance(command_output, bindings.RunScheduleOutput)
         return command_output.report
 
@@ -1786,15 +1789,49 @@ def to_runtime_expr(expr: BaseExpr) -> RuntimeExpr:
     return expr
 
 
-def run(ruleset: Ruleset | None = None, *until: FactLike) -> Schedule:
+def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | None = None) -> Schedule:
     """
     Create a run configuration.
     """
     facts = _fact_likes(until)
     return Schedule(
         Thunk.fn(Declarations.create, ruleset, *facts),
-        RunDecl(ruleset.__egg_name__ if ruleset else "", tuple(f.fact for f in facts) or None),
+        RunDecl(
+            ruleset.__egg_name__ if ruleset else "",
+            tuple(f.fact for f in facts) or None,
+            scheduler.scheduler if scheduler else None,
+        ),
     )
+
+
+def back_off(match_limit: None | int = None, ban_length: None | int = None) -> BackOff:
+    """
+    Create a backoff scheduler configuration.
+
+    ```python
+    schedule = run(analysis_ruleset).saturate() + run(ruleset, scheduler=back_off(match_limit=1000, ban_length=5)) * 10
+    ```
+    This will run the `analysis_ruleset` until saturation, then run `ruleset` 10 times, using a backoff scheduler.
+    """
+    return BackOff(BackOffDecl(id=uuid4(), match_limit=match_limit, ban_length=ban_length))
+
+
+@dataclass(frozen=True)
+class BackOff:
+    scheduler: BackOffDecl
+
+    def scope(self, schedule: Schedule) -> Schedule:
+        """
+        Defines the scheduler to be created directly before the inner schedule, instead of the default which is at the
+        most outer scope.
+        """
+        return Schedule(schedule.__egg_decls_thunk__, LetSchedulerDecl(self.scheduler, schedule.schedule))
+
+    def __str__(self) -> str:
+        return pretty_decl(Declarations(), self.scheduler)
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
 def seq(*schedules: Schedule) -> Schedule:

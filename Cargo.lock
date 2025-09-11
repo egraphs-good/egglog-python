@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "egglog_python"
-version = "11.1.0"
+version = "11.2.0"
 dependencies = [
  "core-relations 1.0.0 (git+https://github.com/egraphs-good/egglog.git?branch=main)",
  "egglog",

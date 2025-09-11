@@ -1093,3 +1093,94 @@ def test_dynamic_cost():
     assert egraph.extract(E(2), include_cost=True) == (E(1) + E(1), 203)
     egraph.register(set_cost(E(5) - E(3), 198))
     assert egraph.extract(E(2), include_cost=True) == (E(5) - E(3), 202)
+
+
+class TestScheduler:
+    def test_sequence_repeat_saturate(self):
+        """
+        Mirrors the scheduling example: alternate step-right and step-left,
+        saturating each, repeated 10 times. Verifies final facts.
+        """
+        egraph = EGraph()
+
+        left = relation("left", i64)
+        right = relation("right", i64)
+
+        x, y = vars_("x y", i64)
+
+        # Name rulesets to make schedule translation stable and explicit
+        step_left = ruleset(
+            rule(
+                left(x),
+                right(x),
+            ).then(left(x + 1)),
+            name="step-left",
+        )
+        step_right = ruleset(
+            rule(
+                left(x),
+                right(y),
+                eq(x).to(y + 1),
+            ).then(right(x)),
+            name="step-right",
+        )
+
+        # Initial facts
+        egraph.register(left(i64(0)), right(i64(0)))
+
+        # (repeat 10 (seq (run step-right) (saturate step-left)))
+        egraph.run(seq(step_right, step_left) * 10)
+
+        # We took 10 left steps, but only 9 right steps (first can't move)
+        egraph.check(left(i64(10)), right(i64(9)))
+        egraph.check_fail(left(i64(11)), right(i64(10)))
+
+    def test_backoff_scheduler(self):
+        """
+        Passing `scheduler=...` to run(...) hoists the scheduler to the
+        outer scope. This is equivalent to an explicit outer `bo.scope(...)`.
+
+        https://egraphs.zulipchat.com/#narrow/channel/375765-egg.2Fegglog/topic/.E2.9C.94.20Backoff.20Scheduler.20Example/with/538745863
+        """
+        includes = relation("includes", i64)
+        x = var("x", i64)
+        grow = ruleset(rule(includes(x)).then(includes(x + 1)))
+        shrink = ruleset(rule(includes(x)).then(includes(x - 1)))
+
+        e1 = EGraph()
+        e1.register(includes(i64(0)))
+        # default scheduler
+        with e1:
+            e1.run((grow + shrink) * 3)
+            e1.check(includes(i64(3)), includes(i64(-3)))
+        # back-off implicit outer hoisting
+        bo = back_off(match_limit=1)
+        with e1:
+            e1.run((run(grow, scheduler=bo) + shrink) * 3)
+            e1.check(includes(i64(2)), includes(i64(-3)))
+            e1.check_fail(includes(i64(3)))
+        # back off inner hoisting
+        with e1:
+            e1.run(bo.scope(run(grow, scheduler=bo) + shrink) * 3)
+            e1.check(includes(i64(1)), includes(i64(-3)))
+            e1.check_fail(includes(i64(2)))
+
+    def test_custom_scheduler_invalid_until(self):
+        """
+        Custom schedulers do not support equality facts in :until,
+        and only allow a single non-equality fact.
+        """
+        egraph = EGraph()
+
+        rel = relation("rel", i64)
+        x = var("x", i64)
+        r = ruleset(name="r")
+        bo = back_off(match_limit=1)
+
+        # Equality in until should error via high-level run
+        with pytest.raises(ValueError, match="Cannot use equality fact with custom scheduler"):
+            egraph.run(run(r, eq(x).to(i64(1)), scheduler=bo))
+
+        # Multiple until facts should error via high-level run
+        with pytest.raises(ValueError, match="Can only have one until fact with custom scheduler"):
+            egraph.run(run(r, rel(i64(0)), rel(i64(1)), scheduler=bo))

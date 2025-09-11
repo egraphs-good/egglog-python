@@ -459,6 +459,62 @@ step_egraph.check(left(i64(10)), right(i64(9)))
 step_egraph.check_fail(left(i64(11)), right(i64(10)))
 ```
 
+#### Custom Schedulers
+
+Custom backoff scheduler from egglog-experimental is supported. Create a custom backoff scheduler with `bo = BackOff(match_limit: None | int=None, ban_length: None | int=None)`, then run using `run(ruleset, *facts, scheduler=bo)`:
+
+- `match_limit`: per-rule threshold of matches allowed in a single scheduler iteration. If a rule produces more matches than the threshold, that rule is temporarily banned.
+- `ban_length`: initial ban duration (in scheduler iterations). While banned, that rule is skipped.
+- Exponential backoff: each time a rule is banned, both the threshold and ban length double for that rule (threshold = match_limit << times_banned; ban = ban_length << times_banned).
+- Fast-forwarding: when any rule is banned, the scheduler fast-forwards by the minimum remaining ban to unban at least one rule before checking for termination again.
+- Defaults: match_limit defaults to 1000; ban_length defaults to 5.
+
+For example, this egglog code:
+
+```
+(run-schedule
+    (let-scheduler bo (back-off :match-limit 10))
+    (repeat 10 (run-with bo step_right)))
+```
+
+Is translated as:
+
+```{code-cell} python
+step_egraph.run(
+    run(step_right, scheduler=back_off(match_limit=10)) * 10
+)
+```
+
+By default the scheduler will be created before any other schedules are run.
+To control where is instantiated explicitly, use `bo.scope(<schedule>)`, where it will be created before everything in `<schedule>`.
+
+So the previous is equivalent to:
+
+```{code-cell} python
+bo = back_off(match_limit=10)
+step_egraph.run(
+    bo.scope(run(step_right, scheduler=bo) * 10)
+)
+```
+
+If you wanted to create the scheduler inside the repeated schedule, you can do:
+
+```{code-cell} python
+bo = back_off(match_limit=10)
+step_egraph.run(
+    bo.scope(run(step_right, scheduler=bo)) * 10
+)
+```
+
+This would be equivalent to this egglog:
+
+```
+(run-schedule
+    (repeat 10
+        (let-scheduler bo (back-off :match-limit 10))
+        (run-with bo step_right)))
+```
+
 ## Check
 
 The `(check ...)` command to verify that some facts are true, can be translated to Python with the `egraph.check` function:
