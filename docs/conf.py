@@ -146,8 +146,8 @@ html_context = {
 # myst_nb default settings
 
 # Custom formats for reading notebook; suffix -> reader
-# nb_custom_formats = {}
-
+# https://github.com/mwouts/jupytext/blob/main/docs/formats-scripts.md#the-light-format
+nb_custom_formats = {".py": ["jupytext.reads", {"fmt": "py:light"}]}
 # Notebook level metadata key for config overrides
 # nb_metadata_key = 'mystnb'
 
