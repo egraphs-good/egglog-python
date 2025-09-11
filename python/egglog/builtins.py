@@ -103,6 +103,10 @@ class String(BuiltinExpr):
     @method(egg_fn="replace")
     def replace(self, old: StringLike, new: StringLike) -> String: ...
 
+    @method(preserve=True)
+    def __add__(self, other: StringLike) -> String:
+        return join(self, other)
+
 
 StringLike: TypeAlias = String | str
 
