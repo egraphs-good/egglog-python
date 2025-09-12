@@ -695,6 +695,8 @@ def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
             ):
                 raise NotImplementedError(f"Can only turn constants or classvars into callable refs, not {expr}")
             return expr.callable, decl_thunk()
+        case types.MethodWrapperType() if isinstance((slf := callable.__self__), RuntimeClass):
+            return MethodRef(slf.__egg_tp__.name, callable.__name__), slf.__egg_decls__
         case _:
             raise NotImplementedError(f"Cannot turn {callable} of type {type(callable)} into a callable ref")
 
