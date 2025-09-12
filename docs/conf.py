@@ -13,15 +13,15 @@ post_date_format = "%Y-%m-%d"
 post_auto_image = 1
 
 
-html_sidebars = {
-    "**": [
-        "sidebar-nav-bs",
-        "ablog/postcard.html",
-        "ablog/recentposts.html",
-        "ablog/tagcloud.html",
-        "ablog/categories.html",
-    ]
-}
+# html_sidebars = {
+#     "**": [
+#         "sidebar-nav-bs",
+#         "ablog/postcard.html",
+#         "ablog/recentposts.html",
+#         "ablog/tagcloud.html",
+#         "ablog/categories.html",
+#     ]
+# }
 ##
 # Myst
 ##
