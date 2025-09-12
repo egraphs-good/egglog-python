@@ -635,14 +635,22 @@ for name in TYPE_DEFINED_METHODS:
 
 
 for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
+    method_name = f"__r{name[2:]}" if r_method else name
 
-    def _numeric_binary_method(self: object, other: object, name: str = name, r_method: bool = r_method) -> object:
+    def _numeric_binary_method(
+        self: object, other: object, name: str = name, r_method: bool = r_method, method_name: str = method_name
+    ) -> object:
         """
         Implements numeric binary operations.
 
         Tries to find the minimum cost conversion of either the LHS or the RHS, by finding all methods with either
         the LHS or the RHS as exactly the right type and then upcasting the other to that type.
         """
+        # First check if we have a preserved method for this:
+        if isinstance(self, RuntimeExpr) and (
+            (preserved_method := self.__egg_class_decl__.preserved_methods.get(method_name)) is not None
+        ):
+            return preserved_method.__get__(self)(other)
         # 1. switch if reversed method
         if r_method:
             self, other = other, self
@@ -668,7 +676,6 @@ for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
         fn = RuntimeFunction(Thunk.value(self.__egg_decls__), Thunk.value(method_ref), self)
         return fn(other)
 
-    method_name = f"__r{name[2:]}" if r_method else name
     setattr(RuntimeExpr, method_name, _numeric_binary_method)
 
 
@@ -688,6 +695,8 @@ def resolve_callable(callable: object) -> tuple[CallableRef, Declarations]:
             ):
                 raise NotImplementedError(f"Can only turn constants or classvars into callable refs, not {expr}")
             return expr.callable, decl_thunk()
+        case types.MethodWrapperType() if isinstance((slf := callable.__self__), RuntimeClass):
+            return MethodRef(slf.__egg_tp__.name, callable.__name__), slf.__egg_decls__
         case _:
             raise NotImplementedError(f"Cannot turn {callable} of type {type(callable)} into a callable ref")
 

@@ -1036,7 +1036,7 @@ class EGraph:
         split_primitive_outputs = kwargs.pop("split_primitive_outputs", True)
         split_functions = kwargs.pop("split_functions", [])
         include_temporary_functions = kwargs.pop("include_temporary_functions", False)
-        n_inline_leaves = kwargs.pop("n_inline_leaves", 1)
+        n_inline_leaves = kwargs.pop("n_inline_leaves", 0)
         serialized = self._egraph.serialize(
             [],
             max_functions=max_functions,

@@ -13,15 +13,15 @@ post_date_format = "%Y-%m-%d"
 post_auto_image = 1
 
 
-html_sidebars = {
-    "**": [
-        "sidebar-nav-bs",
-        "ablog/postcard.html",
-        "ablog/recentposts.html",
-        "ablog/tagcloud.html",
-        "ablog/categories.html",
-    ]
-}
+# html_sidebars = {
+#     "**": [
+#         "sidebar-nav-bs",
+#         "ablog/postcard.html",
+#         "ablog/recentposts.html",
+#         "ablog/tagcloud.html",
+#         "ablog/categories.html",
+#     ]
+# }
 ##
 # Myst
 ##
@@ -146,8 +146,8 @@ html_context = {
 # myst_nb default settings
 
 # Custom formats for reading notebook; suffix -> reader
-# nb_custom_formats = {}
-
+# https://github.com/mwouts/jupytext/blob/main/docs/formats-scripts.md#the-light-format
+nb_custom_formats = {".py": ["jupytext.reads", {"fmt": "py:light"}]}
 # Notebook level metadata key for config overrides
 # nb_metadata_key = 'mystnb'
 
