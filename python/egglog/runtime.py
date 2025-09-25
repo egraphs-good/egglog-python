@@ -457,7 +457,7 @@ class RuntimeFunction(DelayedDeclerations):
         arg_exprs = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
         return_tp = tcs.substitute_typevars(signature.semantic_return_type, cls_name)
         bound_params = (
-            cast("JustTypeRef", bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef | InitRef) else None
+            cast("JustTypeRef", bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef | InitRef) else ()
         )
         # If we were using unstable-app to call a funciton, add that function back as the first arg.
         if function_value:

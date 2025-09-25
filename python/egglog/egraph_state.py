@@ -793,7 +793,7 @@ class FromEggState:
                     args,
                     # Don't include bound type params if this is just a method, we only needed them for type resolution
                     # but dont need to store them
-                    bound_tp_params if isinstance(callable_ref, ClassMethodRef | InitRef) else None,
+                    bound_tp_params if isinstance(callable_ref, ClassMethodRef | InitRef) else (),
                 )
         raise ValueError(
             f"Could not find callable ref for call {term}. None of these refs matched the types: {self.state.egg_fn_to_callable_refs[term.name]}"
