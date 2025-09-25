@@ -31,7 +31,7 @@ from-local:
 # remove once https://github.com/astral-sh/uv/issues/5903
 
 mypy:
-	uv run dmypy run -- python/
+	uv run dmypy run -- python/ docs/
 
 stubtest:
 	uv run python -m mypy.stubtest egglog.bindings --allowlist stubtest_allow
