@@ -23,7 +23,7 @@ impl TermDag {
     ///
     /// Panics if the term does not already exist in this [TermDag].
     pub fn lookup(&self, node: Term) -> TermId {
-        self.0.lookup(&node.into()).into()
+        self.0.lookup(&node.into())
     }
 
     /// Convert the given id to the corresponding term.
@@ -38,7 +38,7 @@ impl TermDag {
     /// Panics if any of the children are not already in the DAG.
     pub fn app(&mut self, sym: String, children: Vec<Term>) -> Term {
         self.0
-            .app(sym.into(), children.into_iter().map(|c| c.into()).collect())
+            .app(sym, children.into_iter().map(|c| c.into()).collect())
             .into()
     }
 
@@ -51,7 +51,7 @@ impl TermDag {
     /// Make and return a [`Term::Var`] with the given symbol, and insert into
     /// the DAG if it is not already present.
     pub fn var(&mut self, sym: String) -> Term {
-        self.0.var(sym.into()).into()
+        self.0.var(sym).into()
     }
 
     /// Recursively converts the given expression to a term.

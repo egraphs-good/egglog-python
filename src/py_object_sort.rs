@@ -158,7 +158,7 @@ impl PyObjectSort {
     // Integrate with Python garbage collector
     // https://pyo3.rs/main/class/protocols#garbage-collector-integration
 
-    fn __traverse__<'py>(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(self.hashable_to_index.as_ref())?;
         self.objects
             .lock()

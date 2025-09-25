@@ -111,7 +111,7 @@ convert_enums!(
             v -> egglog::Term::Var((&v.name).into()),
             egglog::Term::Var(v) => TermVar { name: v.to_string() };
         TermApp[trait=Hash](name: String, args: Vec<usize>)
-            a -> egglog::Term::App(a.name.clone().into(), a.args.to_vec()),
+            a -> egglog::Term::App(a.name.clone(), a.args.to_vec()),
             egglog::Term::App(s, a) => TermApp {
                 name: s.to_string(),
                 args: a.to_vec()
@@ -461,11 +461,11 @@ convert_struct!(
     )
         r -> egglog::RunReport {
             updated: r.updated,
-            search_and_apply_time_per_rule: r.search_and_apply_time_per_rule.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone().into(), *v)).collect(),
-            search_and_apply_time_per_ruleset: r.search_and_apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            merge_time_per_ruleset: r.merge_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
+            search_and_apply_time_per_rule: r.search_and_apply_time_per_rule.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
+            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+            search_and_apply_time_per_ruleset: r.search_and_apply_time_per_ruleset.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
+            merge_time_per_ruleset: r.merge_time_per_ruleset.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
+            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
         },
         r -> RunReport {
             updated: r.updated,

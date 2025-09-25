@@ -117,11 +117,7 @@ impl egglog::extract::CostModel<Cost> for CostModel {
     ) -> Cost {
         Cost(Arc::new(Python::attach(|py| match &self.enode_cost {
             Some(enode_cost) => {
-                let mut values = row
-                    .vals
-                    .iter()
-                    .map(|v| Value(v.clone()))
-                    .collect::<Vec<_>>();
+                let mut values = row.vals.iter().map(|v| Value(*v)).collect::<Vec<_>>();
                 // Remove last element which is the output
                 // this is not needed because the only thing we can do with the output is look up an analysis
                 // which we can also do with the original function
@@ -238,7 +234,7 @@ impl Extractor {
         let (cost, term) = self
             .0
             .extract_best_with_sort(&egraph.egraph, &mut termdag.0, value.0, sort.clone())
-            .ok_or(PyValueError::new_err(format!("Unextractable root")))?;
+            .ok_or(PyValueError::new_err("Unextractable root".to_string()))?;
         Ok((cost.0.clone_ref(py), term.into()))
     }
 

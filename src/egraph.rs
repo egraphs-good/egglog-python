@@ -79,10 +79,10 @@ impl EGraph {
                 WrappedError::Egglog(e, "\nWhen running commands:\n".to_string() + &cmds_str)
             })
         });
-        if res.is_ok() {
-            if let Some(cmds) = &mut self.cmds {
-                cmds.push_str(&cmds_str);
-            }
+        if res.is_ok()
+            && let Some(cmds) = &mut self.cmds
+        {
+            cmds.push_str(&cmds_str);
         }
         res.map(|xs| xs.iter().map(|o| o.into()).collect())
     }
@@ -131,7 +131,7 @@ impl EGraph {
                 name,
                 key.into_iter().map(|v| v.0).collect::<Vec<_>>().as_slice(),
             )
-            .map(|v| Value(v))
+            .map(Value)
     }
 
     fn eval_expr(&mut self, expr: Expr) -> EggResult<(String, Value)> {
@@ -216,7 +216,7 @@ impl EGraph {
             .egraph
             .value_to_container::<egglog::sort::VecContainer>(v.0)
             .unwrap();
-        return vc.data.iter().map(|x| Value(*x)).collect();
+        vc.data.iter().map(|x| Value(*x)).collect()
     }
 
     fn value_to_function(&self, v: Value) -> (String, Vec<Value>) {
