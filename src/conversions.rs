@@ -335,22 +335,22 @@ convert_enums!(
             egglog::CommandOutput::PrintAllFunctionsSize(sizes) => PrintAllFunctionsSize {sizes: sizes.clone()};
         ExtractBest(termdag: TermDag, cost: DefaultCost, term: Term)
             b -> egglog::CommandOutput::ExtractBest(
-                (&b.termdag).into(),
+                b.termdag.0.clone(),
                 b.cost,
                 (&b.term).into()
             ),
             egglog::CommandOutput::ExtractBest(termdag, cost, term) => ExtractBest {
-                termdag: termdag.into(),
+                termdag: TermDag(termdag.clone()),
                 cost: *cost,
                 term: term.into()
             };
         ExtractVariants(termdag: TermDag, terms: Vec<Term>)
             v -> egglog::CommandOutput::ExtractVariants(
-                (&v.termdag).into(),
+                v.termdag.0.clone(),
                 v.terms.iter().map(|v| v.into()).collect()
             ),
             egglog::CommandOutput::ExtractVariants(termdag, terms) => ExtractVariants {
-                termdag: termdag.into(),
+                termdag: TermDag(termdag.clone()),
                 terms: terms.iter().map(|v| v.into()).collect()
             };
         OverallStatistics(report: RunReport)
@@ -362,13 +362,13 @@ convert_enums!(
         PrintFunctionOutput(function: Function, termdag: TermDag, terms: Vec<(Term, Term)>, mode: PrintFunctionMode)
             v -> egglog::CommandOutput::PrintFunction(
                 v.function.0.clone(),
-                (&v.termdag).into(),
+                v.termdag.0.clone(),
                 v.terms.iter().map(|(l, r)| (l.into(), r.into())).collect(),
                 v.mode.clone().into()
             ),
             egglog::CommandOutput::PrintFunction(function, termdag, terms, mode) => PrintFunctionOutput {
                 function: Function(function.clone()),
-                termdag: termdag.into(),
+                termdag:  TermDag(termdag.clone()),
                 terms: terms.iter().map(|(l, r)| (l.into(), r.into())).collect(),
                 mode: mode.into()
             };
