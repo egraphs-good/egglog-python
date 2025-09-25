@@ -55,6 +55,7 @@ test = [
     "pytest-codspeed",
     "pytest-benchmark",
     "pytest-xdist",
+    "pytest-mock",
 ]
 
 docs = [

@@ -9,6 +9,7 @@ from functools import partial
 from typing import ClassVar, TypeAlias, TypeVar
 
 import pytest
+from pytest_mock import MockerFixture
 
 from egglog import *
 from egglog.declarations import (
@@ -344,7 +345,7 @@ class TestMutate:
         assert str(x) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1"
         assert str(x + Math(10)) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1 + Math(10)"
 
-        i, j = vars_("i j", Math)
+        i, _j = vars_("i j", Math)
         incr_i = copy(i)
         incr(incr_i)
         egraph.register(rewrite(incr_i).to(i + Math(1)), x)
@@ -1184,3 +1185,129 @@ class TestScheduler:
         # Multiple until facts should error via high-level run
         with pytest.raises(ValueError, match="Can only have one until fact with custom scheduler"):
             egraph.run(run(r, rel(i64(0)), rel(i64(1)), scheduler=bo))
+
+
+@function
+def ff(x: i64Like, y: i64Like) -> E: ...
+
+
+@function
+def gg() -> E: ...
+
+
+class TestCustomExtract:
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            pytest.param(i64(10), id="i64"),
+            pytest.param(f64(10.0), id="f64"),
+            pytest.param(String("hi"), id="String"),
+            pytest.param(Bool(True), id="Bool"),
+            pytest.param(Rational(1, 2), id="Rational"),
+            pytest.param(BigInt(10), id="BigInt"),
+            pytest.param(BigRat(1, 2), id="BigRat"),
+            pytest.param(PyObject("hi"), id="PyObject"),
+            pytest.param(Vec(i64(1), i64(2)), id="Vec"),
+            pytest.param(Set(i64(1), i64(2)), id="Set"),
+            pytest.param(Map[i64, String].empty().insert(i64(1), String("hi")), id="Map"),
+            pytest.param(MultiSet(i64(1), i64(1)), id="MultiSet"),
+            pytest.param(Unit(), id="Unit"),
+            pytest.param(UnstableFn[E, i64, i64](ff), id="fn"),
+            pytest.param(UnstableFn[E, i64](ff, i64(1)), id="fn partial"),
+        ],
+    )
+    def test_to_from_value(self, expr):
+        egraph = EGraph()
+        expr = egraph.extract(expr)
+        assert expr == self._to_from_value(egraph, expr)
+
+    def _to_from_value(self, egraph, expr):
+        typed_expr = expr.__egg_typed_expr__
+        value = egraph._state.typed_expr_to_value(typed_expr)
+        res_val = egraph._state.value_to_expr(typed_expr.tp, value)
+        return expr.__with_expr__(TypedExprDecl(typed_expr.tp, res_val))
+
+    def test_compare_values(self):
+        egraph = EGraph()
+        egraph.register(E(), gg())
+        e_value = self._to_from_value(egraph, E())
+        gg_value = self._to_from_value(egraph, gg())
+        assert e_value != gg_value
+        assert hash(e_value) != hash(gg_value)
+        assert str(e_value) != str(gg_value)
+
+    def test_no_changes(self):
+        egraph = EGraph()
+        assert egraph.extract(E(), include_cost=True) == egraph.extract(
+            E(), include_cost=True, cost_model=DefaultCostModel()
+        )
+
+    def test_works_with_subclasses(self):
+        class MyCostModel(DefaultCostModel):
+            def container_cost(self, egraph, expr, element_costs):
+                return super().container_cost(egraph, expr, element_costs)
+
+            def primitive_cost(self, egraph, expr):
+                return super().primitive_cost(egraph, expr)
+
+            def call_cost(self, egraph, expr):
+                return super().call_cost(egraph, expr)
+
+            def fold(self, callable, child_costs, head_cost):
+                return super().fold(callable, child_costs, head_cost)
+
+        egraph = EGraph()
+        assert egraph.extract(E(), include_cost=True) == egraph.extract(
+            E(), include_cost=True, cost_model=MyCostModel()
+        )
+
+        egraph.register(set_cost(E(), 10))
+        assert egraph.extract(E(), include_cost=True) == egraph.extract(
+            E(), include_cost=True, cost_model=MyCostModel()
+        )
+
+    def test_calls_methods(self, mocker: MockerFixture):
+        @function
+        def my_f(xs: Vec[i64]) -> E: ...
+
+        # cost = 2
+        x = i64(10)
+        # cost = 3 + 2 = 5
+        xs = Vec[i64](x)
+        # cost = 100
+        res = E()
+        # cost = 1 + 5  = 6
+        call = my_f(xs)
+        egraph = EGraph()
+        egraph.register(union(call).with_(res))
+
+        class MyCostModel(DefaultCostModel):
+            def container_cost(self, egraph, expr, element_costs):
+                return 3 + sum(element_costs)
+
+            def primitive_cost(self, egraph, expr):
+                return 2
+
+            def call_cost(self, egraph, expr):
+                if expr == E():
+                    return 100
+                return 1
+
+            def fold(self, callable, child_costs, head_cost):
+                return super().fold(callable, child_costs, head_cost)
+
+        cost_model = MyCostModel()
+
+        container_cost_spy = mocker.spy(cost_model, "container_cost")
+        base_value_cost_spy = mocker.spy(cost_model, "primitive_cost")
+        enode_cost_spy = mocker.spy(cost_model, "call_cost")
+        fold_spy = mocker.spy(cost_model, "fold")
+
+        assert egraph.extract(call, include_cost=True, cost_model=cost_model) == (call, 6)
+
+        container_cost_spy.assert_called_with(egraph, xs, [2])
+        base_value_cost_spy.assert_called_with(egraph, x)
+        fold_spy.assert_any_call(E, [], 100)
+        fold_spy.assert_any_call(my_f, [5], 1)
+        enode_cost_spy.assert_any_call(egraph, E())
+        enode_cost_spy.assert_any_call(egraph, call)

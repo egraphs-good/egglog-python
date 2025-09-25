@@ -14,6 +14,8 @@ from weakref import WeakValueDictionary
 
 from typing_extensions import Self, assert_never
 
+from .bindings import Value
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping
 
@@ -49,6 +51,7 @@ __all__ = [
     "FunctionDecl",
     "FunctionRef",
     "FunctionSignature",
+    "GetCostDecl",
     "HasDeclerations",
     "InitRef",
     "JustTypeRef",
@@ -82,6 +85,7 @@ __all__ = [
     "UnboundVarDecl",
     "UnionDecl",
     "UnnamedFunctionRef",
+    "ValueDecl",
     "collect_unbound_vars",
     "replace_typed_expr",
     "upcast_declerations",
@@ -696,7 +700,20 @@ class PartialCallDecl:
     call: CallDecl
 
 
-ExprDecl: TypeAlias = UnboundVarDecl | LetRefDecl | LitDecl | CallDecl | PyObjectDecl | PartialCallDecl
+@dataclass(frozen=True)
+class GetCostDecl:
+    callable: CallableRef
+    args: tuple[TypedExprDecl, ...]
+
+
+@dataclass(frozen=True)
+class ValueDecl:
+    value: Value
+
+
+ExprDecl: TypeAlias = (
+    UnboundVarDecl | LetRefDecl | LitDecl | CallDecl | PyObjectDecl | PartialCallDecl | ValueDecl | GetCostDecl
+)
 
 
 @dataclass(frozen=True)

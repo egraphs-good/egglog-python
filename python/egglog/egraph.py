@@ -4,6 +4,7 @@ import contextlib
 import inspect
 import pathlib
 import tempfile
+from abc import abstractmethod
 from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field
@@ -16,6 +17,7 @@ from typing import (
     ClassVar,
     Generic,
     Literal,
+    Protocol,
     TypeAlias,
     TypedDict,
     TypeVar,
@@ -41,7 +43,7 @@ from .thunk import *
 from .version_compat import *
 
 if TYPE_CHECKING:
-    from .builtins import String, Unit, i64Like
+    from .builtins import Container, Primitive, String, Unit, i64, i64Like
 
 
 __all__ = [
@@ -51,6 +53,8 @@ __all__ = [
     "BuiltinExpr",
     "Command",
     "Command",
+    "CostModel",
+    "DefaultCostModel",
     "EGraph",
     "Expr",
     "Fact",
@@ -453,7 +457,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
             continue
         locals = frame.f_locals
         ref: ClassMethodRef | MethodRef | PropertyRef | InitRef
-        # TODO: Store deprecated message so we can print at runtime
+        # TODO: Store deprecated message so we can get at runtime
         if (getattr(fn, "__deprecated__", None)) is not None:
             fn = fn.__wrapped__  # type: ignore[attr-defined]
         match fn:
@@ -954,22 +958,45 @@ class EGraph:
         return bindings.Check(span(2), egg_facts)
 
     @overload
-    def extract(self, expr: BASE_EXPR, /, include_cost: Literal[False] = False) -> BASE_EXPR: ...
+    def extract(
+        self, expr: BASE_EXPR, /, include_cost: Literal[False] = False, cost_model: CostModel[Cost] | None = None
+    ) -> BASE_EXPR: ...
 
     @overload
-    def extract(self, expr: BASE_EXPR, /, include_cost: Literal[True]) -> tuple[BASE_EXPR, int]: ...
+    def extract(
+        self, expr: BASE_EXPR, /, include_cost: Literal[True], cost_model: None = None
+    ) -> tuple[BASE_EXPR, int]: ...
 
-    def extract(self, expr: BASE_EXPR, include_cost: bool = False) -> BASE_EXPR | tuple[BASE_EXPR, int]:
+    @overload
+    def extract(
+        self, expr: BASE_EXPR, /, include_cost: Literal[True], cost_model: CostModel[COST]
+    ) -> tuple[BASE_EXPR, COST]: ...
+
+    def extract(
+        self, expr: BASE_EXPR, /, include_cost: bool = False, cost_model: CostModel[COST] | None = None
+    ) -> BASE_EXPR | tuple[BASE_EXPR, COST]:
         """
         Extract the lowest cost expression from the egraph.
         """
         runtime_expr = to_runtime_expr(expr)
-        extract_report = self._run_extract(runtime_expr, 0)
-        assert isinstance(extract_report, bindings.ExtractBest)
-        res = self._from_termdag(extract_report.termdag, extract_report.term, runtime_expr.__egg_typed_expr__.tp)
-        if include_cost:
-            return res, extract_report.cost
-        return res
+        self._add_decls(runtime_expr)
+        tp = runtime_expr.__egg_typed_expr__.tp
+        if cost_model is None:
+            extract_report = self._run_extract(runtime_expr, 0)
+            assert isinstance(extract_report, bindings.ExtractBest)
+            res = self._from_termdag(extract_report.termdag, extract_report.term, tp)
+            cost = cast("COST", extract_report.cost)
+        else:
+            # TODO: For some reason we need this or else it wont be registered. Not sure why
+            self.register(expr)
+            egg_cost_model = _CostModel(cost_model, self).to_bindings_cost_model()
+            egg_sort = self._state.type_ref_to_egg(tp)
+            extractor = bindings.Extractor([egg_sort], self._state.egraph, egg_cost_model)
+            termdag = bindings.TermDag()
+            value = self._state.typed_expr_to_value(runtime_expr.__egg_typed_expr__)
+            cost, term = extractor.extract_best(self._state.egraph, termdag, value, egg_sort)
+            res = self._from_termdag(termdag, term, tp)
+        return (res, cost) if include_cost else res
 
     def _from_termdag(self, termdag: bindings.TermDag, term: bindings._Term, tp: JustTypeRef) -> Any:
         (new_typed_expr,) = self._state.exprs_from_egg(termdag, [term], tp)
@@ -980,6 +1007,7 @@ class EGraph:
         Extract multiple expressions from the egraph.
         """
         runtime_expr = to_runtime_expr(expr)
+        self._add_decls(runtime_expr)
         extract_report = self._run_extract(runtime_expr, n)
         assert isinstance(extract_report, bindings.ExtractVariants)
         new_exprs = self._state.exprs_from_egg(
@@ -988,7 +1016,6 @@ class EGraph:
         return [cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, expr)) for expr in new_exprs]
 
     def _run_extract(self, expr: RuntimeExpr, n: int) -> bindings._CommandOutput:
-        self._add_decls(expr)
         expr = self._state.typed_expr_to_egg(expr.__egg_typed_expr__)
         # If we have defined any cost tables use the custom extraction
         args = (expr, bindings.Lit(span(2), bindings.Int(n)))
@@ -1213,16 +1240,12 @@ class EGraph:
         """
         (output,) = self._egraph.run_program(bindings.PrintSize(span(1), None))
         assert isinstance(output, bindings.PrintAllFunctionsSize)
+        return [(callables[0], size) for (name, size) in output.sizes if (callables := self._egg_fn_to_callables(name))]
+
+    def _egg_fn_to_callables(self, egg_fn: str) -> list[ExprCallable]:
         return [
-            (
-                cast(
-                    "ExprCallable",
-                    create_callable(self._state.__egg_decls__, next(iter(refs))),
-                ),
-                size,
-            )
-            for (name, size) in output.sizes
-            if (refs := self._state.egg_fn_to_callable_refs[name])
+            cast("ExprCallable", create_callable(self._state.__egg_decls__, ref))
+            for ref in self._state.egg_fn_to_callable_refs[egg_fn]
         ]
 
     def function_values(
@@ -1245,6 +1268,33 @@ class EGraph:
             self._from_termdag(output.termdag, call, tp): self._from_termdag(output.termdag, res, tp)
             for (call, res) in output.terms
         }
+
+    def lookup_function_value(self, expr: BASE_EXPR) -> BASE_EXPR | None:
+        """
+        Given an expression that is a function call, looks up the value of the function call if it exists.
+        """
+        runtime_expr = to_runtime_expr(expr)
+        typed_expr = runtime_expr.__egg_typed_expr__
+        assert isinstance(typed_expr.expr, CallDecl | GetCostDecl)
+        egg_fn, typed_args = self._state.translate_call(typed_expr.expr)
+        values_args = [self._state.typed_expr_to_value(a) for a in typed_args]
+        possible_value = self._egraph.lookup_function(egg_fn, values_args)
+        if possible_value is None:
+            return None
+        return cast(
+            "BASE_EXPR",
+            RuntimeExpr.__from_values__(
+                self.__egg_decls__,
+                TypedExprDecl(typed_expr.tp, self._state.value_to_expr(typed_expr.tp, possible_value)),
+            ),
+        )
+
+    def has_custom_cost(self, fn: ExprCallable) -> bool:
+        """
+        Checks if the any custom costs have been set for this expression callable.
+        """
+        resolved, _ = resolve_callable(fn)
+        return resolved in self._state.cost_callables
 
 
 # Either a constant or a function.
@@ -1926,3 +1976,155 @@ def get_cost(expr: BaseExpr) -> i64:
         expr.__egg_decls__,
         TypedExprDecl(JustTypeRef("i64"), GetCostDecl(expr_decl.callable, expr_decl.args)),
     )
+
+
+class Cost(Protocol):
+    def __lt__(self, other: Self) -> bool: ...
+    def __le__(self, other: Self) -> bool: ...
+    def __gt__(self, other: Self) -> bool: ...
+    def __ge__(self, other: Self) -> bool: ...
+
+
+COST = TypeVar("COST", bound=Cost)
+
+
+class CostModel(Protocol[COST]):
+    """
+    A cost model for an e-graph. Used to determine the cost of an expression based on its structure and the costs of its sub-expressions.
+
+    Subclass this and implement the methods to create a custom cost model.
+    """
+
+    @abstractmethod
+    def fold(self, callable: ExprCallable, children_costs: list[COST], head_cost: COST) -> COST:
+        """
+        The total cost of a term given the cost of the root e-node and its immediate children's total costs.
+        """
+
+    @abstractmethod
+    def call_cost(self, egraph: EGraph, expr: Expr) -> COST:
+        """
+        The cost of an function call (without the cost of children).
+        """
+
+    @abstractmethod
+    def container_cost(self, egraph: EGraph, expr: Container, element_costs: list[COST]) -> COST:
+        """
+        The cost of a container value given the costs of its elements.
+        """
+
+    @abstractmethod
+    def primitive_cost(self, egraph: EGraph, expr: Primitive) -> COST:
+        """
+        The cost of a base value (like a literal or variable).
+        """
+
+
+class DefaultCostModel(CostModel[int]):
+    """
+    A default cost model for an e-graph.
+
+    Subclass this to extend the default integer cost model.
+    """
+
+    def fold(self, callable: ExprCallable, children_costs: list[int], head_cost: int) -> int:
+        """
+        The total cost of a term given the cost of the root e-node and its immediate children's total costs.
+        """
+        return sum(children_costs, start=head_cost)
+
+    def container_cost(self, egraph: EGraph, expr: Container, element_costs: list[int]) -> int:
+        """
+        The cost of a container value given the costs of its elements.
+
+        The default cost for containers is just the sum of all the elements inside
+        """
+        return sum(element_costs)
+
+    def primitive_cost(self, egraph: EGraph, expr: Primitive) -> int:
+        """
+        The cost of a base value (like a literal or variable).
+        """
+        return 1
+
+    def call_cost(self, egraph: EGraph, expr: Expr) -> int:
+        """
+        The cost of an enode is either the cost set on it, or the cost of the callable, or 1 if neither are set.
+        """
+        from .builtins import i64  # noqa: PLC0415
+        from .deconstruct import get_callable_fn  # noqa: PLC0415
+
+        callable_fn = get_callable_fn(expr)
+        assert callable_fn is not None
+
+        # If we have a cost set, use that
+        if egraph.has_custom_cost(callable_fn):
+            match egraph.lookup_function_value(get_cost(expr)):
+                case i64(i):
+                    return i
+        return get_callable_cost(callable_fn) or 1
+
+
+def get_callable_cost(fn: ExprCallable) -> int | None:
+    """
+    Returns the cost of a callable, if it has one set. Otherwise returns None.
+    """
+    callable_ref, decls = resolve_callable(fn)
+    callable_decl = decls.get_callable_decl(callable_ref)
+    return callable_decl.cost if isinstance(callable_decl, ConstructorDecl) else 1
+
+
+@dataclass
+class _CostModel(Generic[COST]):
+    """
+    Implements the methods compatible with the bindings for the cost model.
+    """
+
+    model: CostModel[COST]
+    egraph: EGraph
+
+    def fold(self, fn: str, head_cost: COST, children_costs: list[COST]) -> COST:
+        (expr_callable,) = self.egraph._egg_fn_to_callables(fn)
+        return self.model.fold(expr_callable, children_costs, head_cost)
+
+    def enode_cost(self, name: str, args: list[bindings.Value]) -> COST:
+        (callable_ref,) = self.egraph._state.egg_fn_to_callable_refs[name]
+        signature = self.egraph.__egg_decls__.get_callable_decl(callable_ref).signature
+        assert isinstance(signature, FunctionSignature)
+        arg_exprs = [
+            TypedExprDecl(tp.to_just(), self.egraph._state.value_to_expr(tp.to_just(), arg))
+            for (arg, tp) in zip(args, signature.arg_types, strict=True)
+        ]
+        res_type = signature.semantic_return_type.to_just()
+        expr = RuntimeExpr.__from_values__(
+            self.egraph.__egg_decls__,
+            TypedExprDecl(res_type, CallDecl(callable_ref, tuple(arg_exprs))),
+        )
+        return self.model.call_cost(self.egraph, cast("Expr", expr))
+
+    def base_value_cost(self, tp: str, value: bindings.Value) -> COST:
+        type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
+        expr = RuntimeExpr.__from_values__(
+            self.egraph.__egg_decls__,
+            TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
+        )
+        return self.model.primitive_cost(self.egraph, cast("Primitive", expr))
+
+    def container_cost(self, tp: str, value: bindings.Value, element_costs: list[COST]) -> COST:
+        type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
+        expr = RuntimeExpr.__from_values__(
+            self.egraph.__egg_decls__,
+            TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
+        )
+        return self.model.container_cost(self.egraph, cast("Container", expr), element_costs)
+
+    def to_bindings_cost_model(self) -> bindings.CostModel:
+        model_tp = type(self.model)
+        # Use custom costs if we have overriden them, otherwise use None to use the default in Rust for faster performance
+        fold = self.fold if model_tp.fold is not DefaultCostModel.fold else None
+        enode_cost = self.enode_cost if model_tp.call_cost is not DefaultCostModel.call_cost else None
+        container_cost = self.container_cost if model_tp.container_cost is not DefaultCostModel.container_cost else None
+        base_value_cost = (
+            self.base_value_cost if model_tp.primitive_cost is not DefaultCostModel.primitive_cost else None
+        )
+        return bindings.CostModel(fold, enode_cost, container_cost, base_value_cost)

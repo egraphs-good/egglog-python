@@ -205,7 +205,7 @@ class TraverseContext:
             case SetCostDecl(_, e, c):
                 self(e)
                 self(c)
-            case BackOffDecl():
+            case BackOffDecl() | ValueDecl():
                 pass
             case LetSchedulerDecl(scheduler, schedule):
                 self(scheduler)
@@ -354,6 +354,8 @@ class PrettyContext:
                 if ban_length is not None:
                     list_args.append(f"ban_length={ban_length}")
                 return f"back_off({', '.join(list_args)})", "scheduler"
+            case ValueDecl(value):
+                return str(value), "value"
             case GetCostDecl(ref, args):
                 return f"get_cost({self(CallDecl(ref, args))})", "get_cost"
         assert_never(decl)

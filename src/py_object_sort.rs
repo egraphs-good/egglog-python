@@ -30,7 +30,7 @@ use pyo3::{
     types::{PyCode, PyCodeMethods as _, PyDict},
 };
 
-type PyObjectIdent = usize;
+pub type PyObjectIdent = usize;
 
 #[derive(Clone)]
 #[pyclass]

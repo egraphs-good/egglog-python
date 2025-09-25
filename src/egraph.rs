@@ -2,13 +2,16 @@
 
 use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
-use crate::py_object_sort::PyObjectSort;
+use crate::py_object_sort::{PyObjectIdent, PyObjectSort};
 use crate::serialize::SerializedEGraph;
 
 use egglog::prelude::add_base_sort;
 use egglog::{SerializeConfig, span};
 use log::info;
+use num_bigint::BigInt;
+use num_rational::{BigRational, Rational64};
 use pyo3::prelude::*;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 /// EGraph()
@@ -121,4 +124,130 @@ impl EGraph {
             }
         })
     }
+
+    fn lookup_function(&self, name: &str, key: Vec<Value>) -> Option<Value> {
+        self.egraph
+            .lookup_function(
+                name,
+                key.into_iter().map(|v| v.0).collect::<Vec<_>>().as_slice(),
+            )
+            .map(|v| Value(v))
+    }
+
+    fn eval_expr(&mut self, expr: Expr) -> EggResult<(String, Value)> {
+        let expr: egglog::ast::Expr = expr.into();
+        self.egraph
+            .eval_expr(&expr)
+            .map(|(s, v)| (s.name().to_string(), Value(v)))
+            .map_err(|e| WrappedError::Egglog(e, format!("\nWhen evaluating expr: {expr}")))
+    }
+
+    fn value_to_i64(&self, v: Value) -> i64 {
+        self.egraph.value_to_base(v.0)
+    }
+
+    fn value_to_bigint(&self, v: Value) -> BigInt {
+        let bi: egglog::sort::Z = self.egraph.value_to_base(v.0);
+        bi.0
+    }
+
+    fn value_to_bigrat(&self, v: Value) -> BigRational {
+        let bi: egglog::sort::Q = self.egraph.value_to_base(v.0);
+        bi.0
+    }
+
+    fn value_to_f64(&self, v: Value) -> f64 {
+        let f: egglog::sort::F = self.egraph.value_to_base(v.0);
+        f.0.into_inner()
+    }
+
+    fn value_to_string(&self, v: Value) -> String {
+        let s: egglog::sort::S = self.egraph.value_to_base(v.0);
+        s.0
+    }
+
+    fn value_to_bool(&self, v: Value) -> bool {
+        self.egraph.value_to_base(v.0)
+    }
+    fn value_to_rational(&self, v: Value) -> Rational64 {
+        let r: egglog_experimental::R = self.egraph.value_to_base(v.0);
+        r.0
+    }
+
+    fn value_to_pyobject(
+        &self,
+        py: Python<'_>,
+        py_object_sort: PyObjectSort,
+        v: Value,
+    ) -> Py<PyAny> {
+        let ident = self.egraph.value_to_base::<PyObjectIdent>(v.0);
+        py_object_sort.load(py, ident).unbind()
+    }
+
+    fn value_to_map(&self, v: Value) -> BTreeMap<Value, Value> {
+        let mc = self
+            .egraph
+            .value_to_container::<egglog::sort::MapContainer>(v.0)
+            .unwrap();
+        mc.data
+            .iter()
+            .map(|(k, v)| (Value(*k), Value(*v)))
+            .collect()
+    }
+
+    fn value_to_multiset(&self, v: Value) -> Vec<Value> {
+        let mc = self
+            .egraph
+            .value_to_container::<egglog::sort::MultiSetContainer>(v.0)
+            .unwrap();
+        mc.data.iter().map(|k| Value(*k)).collect()
+    }
+
+    fn value_to_set(&self, v: Value) -> BTreeSet<Value> {
+        let sc = self
+            .egraph
+            .value_to_container::<egglog::sort::SetContainer>(v.0)
+            .unwrap();
+        sc.data.iter().map(|k| Value(*k)).collect()
+    }
+
+    fn value_to_vec(&self, v: Value) -> Vec<Value> {
+        let vc = self
+            .egraph
+            .value_to_container::<egglog::sort::VecContainer>(v.0)
+            .unwrap();
+        return vc.data.iter().map(|x| Value(*x)).collect();
+    }
+
+    fn value_to_function(&self, v: Value) -> (String, Vec<Value>) {
+        let fc = self
+            .egraph
+            .value_to_container::<egglog::sort::FunctionContainer>(v.0)
+            .unwrap();
+        (
+            fc.2.clone(),
+            fc.1.iter().map(|(_, v)| Value(*v)).collect::<Vec<_>>(),
+        )
+    }
+
+    // fn dynamic_cost_model_enode_cost(
+    //     &self,
+    //     func: String,
+    //     args: Vec<Value>,
+    // ) -> EggResult<DefaultCost> {
+    //     let func = self.egraph.get_function(&func).ok_or_else(|| {
+    //         WrappedError::Py(PyRuntimeError::new_err(format!("No such function: {func}")))
+    //     })?;
+    //     let vals: Vec<egglog::Value> = args.into_iter().map(|v| v.0).collect();
+    //     let row = FunctionRow {
+    //         vals: &vals,
+    //         subsumed: false,
+    //     };
+    //     Ok(egglog_experimental::DynamicCostModel {}.enode_cost(&self.egraph, &func, &row))
+    // }
 }
+
+/// Wrapper around Egglog Value. Represents either a primitive base value or a reference to an e-class.
+#[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Clone)]
+#[pyclass(eq, frozen, hash, str = "{0:?}")]
+pub struct Value(pub egglog::Value);

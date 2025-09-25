@@ -33,10 +33,12 @@ __all__ = [
     "BigRatLike",
     "Bool",
     "BoolLike",
+    "Container",
     "ExprValueError",
     "Map",
     "MapLike",
     "MultiSet",
+    "Primitive",
     "PyObject",
     "Rational",
     "Set",
@@ -56,6 +58,9 @@ __all__ = [
     "py_eval_fn",
     "py_exec",
 ]
+
+Container: TypeAlias = "Map | Set | MultiSet | Vec | UnstableFn"
+Primitive: TypeAlias = "String | Bool | i64 | f64 | Rational | BigInt | BigRat | PyObject | Unit"
 
 
 @dataclass

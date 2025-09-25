@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import subprocess
+from fractions import Fraction
 
 import black
 import pytest
@@ -227,3 +228,156 @@ class TestThreads:
         serialized = egraph.serialize([])
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             executor.submit(print, (serialized,)).result()
+
+
+egraph = EGraph()
+
+
+class TestValues:
+    def test_i64(self):
+        sort, value = egraph.eval_expr(Lit(DUMMY_SPAN, Int(42)))
+        assert sort == "i64"
+        assert egraph.value_to_i64(value) == 42
+
+    def test_bigint(self):
+        sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "bigint", [Lit(DUMMY_SPAN, Int(100))]))
+        assert sort == "BigInt"
+        assert egraph.value_to_bigint(value) == 100
+
+    def test_bigrat(self):
+        sort, value = egraph.eval_expr(
+            Call(
+                DUMMY_SPAN,
+                "bigrat",
+                [
+                    Call(DUMMY_SPAN, "bigint", [Lit(DUMMY_SPAN, Int(100))]),
+                    Call(DUMMY_SPAN, "bigint", [Lit(DUMMY_SPAN, Int(21))]),
+                ],
+            )
+        )
+        assert sort == "BigRat"
+        assert egraph.value_to_bigrat(value) == Fraction(100, 21)
+
+    def test_f64(self):
+        sort, value = egraph.eval_expr(Lit(DUMMY_SPAN, Float(3.14)))
+        assert sort == "f64"
+        assert egraph.value_to_f64(value) == 3.14
+
+    def test_string(self):
+        sort, value = egraph.eval_expr(Lit(DUMMY_SPAN, String("hello")))
+        assert sort == "String"
+        assert egraph.value_to_string(value) == "hello"
+
+    def test_rational(self):
+        sort, value = egraph.eval_expr(
+            Call(
+                DUMMY_SPAN,
+                "rational",
+                [Lit(DUMMY_SPAN, Int(22)), Lit(DUMMY_SPAN, Int(7))],
+            )
+        )
+        assert sort == "Rational"
+        assert egraph.value_to_rational(value) == Fraction(22, 7)
+
+    def test_bool(self):
+        sort, value = egraph.eval_expr(Lit(DUMMY_SPAN, Bool(True)))
+        assert sort == "bool"
+        assert egraph.value_to_bool(value) is True
+
+    def test_py_object(self):
+        py_object_sort = PyObjectSort()
+        egraph = EGraph(py_object_sort)
+        expr = py_object_sort.store("my object")
+        sort, value = egraph.eval_expr(expr)
+        assert sort == "PyObject"
+        assert egraph.value_to_pyobject(py_object_sort, value) == "my object"
+
+    def test_map(self):
+        k = Lit(DUMMY_SPAN, Int(1))
+        v = Lit(DUMMY_SPAN, String("one"))
+        egraph.run_program(Sort(DUMMY_SPAN, "MyMap", ("Map", [Var(DUMMY_SPAN, "i64"), Var(DUMMY_SPAN, "String")])))
+        sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "map-insert", [Call(DUMMY_SPAN, "map-empty", []), k, v]))
+        assert sort == "MyMap"
+        m = egraph.value_to_map(value)
+        assert m == {egraph.eval_expr(k)[1]: egraph.eval_expr(v)[1]}
+
+    def test_multiset(self):
+        egraph.run_program(Sort(DUMMY_SPAN, "MyMultiSet", ("MultiSet", [Var(DUMMY_SPAN, "i64")])))
+        sort, value = egraph.eval_expr(
+            Call(
+                DUMMY_SPAN,
+                "multiset-of",
+                [
+                    Lit(DUMMY_SPAN, Int(1)),
+                    Lit(DUMMY_SPAN, Int(2)),
+                    Lit(DUMMY_SPAN, Int(1)),
+                ],
+            )
+        )
+        assert sort == "MyMultiSet"
+        ms = egraph.value_to_multiset(value)
+        assert sorted(egraph.value_to_i64(v) for v in ms) == [1, 1, 2]
+
+    def test_set(self):
+        egraph.run_program(Sort(DUMMY_SPAN, "MySet", ("Set", [Var(DUMMY_SPAN, "i64")])))
+        sort, value = egraph.eval_expr(
+            Call(
+                DUMMY_SPAN,
+                "set-of",
+                [
+                    Lit(DUMMY_SPAN, Int(1)),
+                    Lit(DUMMY_SPAN, Int(2)),
+                ],
+            )
+        )
+        assert sort == "MySet"
+        s = egraph.value_to_set(value)
+        assert isinstance(s, set)
+        assert {egraph.value_to_i64(v) for v in s} == {1, 2}
+
+    def test_vec(self):
+        egraph.run_program(Sort(DUMMY_SPAN, "MyVec", ("Vec", [Var(DUMMY_SPAN, "i64")])))
+        sort, value = egraph.eval_expr(
+            Call(
+                DUMMY_SPAN,
+                "vec-of",
+                [
+                    Lit(DUMMY_SPAN, Int(1)),
+                    Lit(DUMMY_SPAN, Int(2)),
+                    Lit(DUMMY_SPAN, Int(3)),
+                ],
+            )
+        )
+        assert sort == "MyVec"
+        v = egraph.value_to_vec(value)
+        assert isinstance(v, list)
+        assert [egraph.value_to_i64(vi) for vi in v] == [1, 2, 3]
+
+    def test_fn(self):
+        egraph.run_program(
+            Sort(DUMMY_SPAN, "MyFn", ("UnstableFn", [Call(DUMMY_SPAN, "i64", []), Var(DUMMY_SPAN, "i64")]))
+        )
+        sort, value = egraph.eval_expr(
+            Call(
+                DUMMY_SPAN,
+                "unstable-fn",
+                [
+                    Lit(DUMMY_SPAN, String("+")),
+                    Lit(DUMMY_SPAN, Int(1)),
+                ],
+            )
+        )
+        assert sort == "MyFn"
+        f, args = egraph.value_to_function(value)
+        assert f == "+"
+        assert len(args) == 1
+        assert egraph.value_to_i64(args[0]) == 1
+
+
+def test_lookup_function():
+    egraph = EGraph()
+    egraph.run_program(*egraph.parse_program("(function hi (i64) i64 :no-merge)\n(set (hi 1) 2)"))
+    assert (
+        egraph.lookup_function("hi", [egraph.eval_expr(Lit(DUMMY_SPAN, Int(1)))[1]])
+        == egraph.eval_expr(Lit(DUMMY_SPAN, Int(2)))[1]
+    )
