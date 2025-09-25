@@ -604,6 +604,10 @@ class EGraphState:
                     "unstable-fn",
                     [bindings.Lit(span(), bindings.String(egg_fn_call.name)), *egg_fn_call.args],
                 )
+            case GetCostDecl(ref, args):
+                cost_table = self.create_cost_table(ref)
+                args_egg = [self.typed_expr_to_egg(x, False) for x in args]
+                res = bindings.Call(span(), cost_table, args_egg)
             case _:
                 assert_never(expr_decl.expr)
         self.expr_to_egg_cache[expr_decl] = res

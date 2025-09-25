@@ -76,6 +76,7 @@ __all__ = [
     "expr_fact",
     "expr_parts",
     "function",
+    "get_cost",
     "let",
     "method",
     "ne",
@@ -1910,3 +1911,18 @@ def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
         yield
     finally:
         _CURRENT_RULESET.reset(token)
+
+
+def get_cost(expr: BaseExpr) -> i64:
+    """
+    Return a lookup of the cost of an expression. If not set, won't match.
+    """
+    assert isinstance(expr, RuntimeExpr)
+    expr_decl = expr.__egg_typed_expr__.expr
+    if not isinstance(expr_decl, CallDecl):
+        msg = "Can only get cost of function calls, not literals or variables"
+        raise TypeError(msg)
+    return RuntimeExpr.__from_values__(
+        expr.__egg_decls__,
+        TypedExprDecl(JustTypeRef("i64"), GetCostDecl(expr_decl.callable, expr_decl.args)),
+    )

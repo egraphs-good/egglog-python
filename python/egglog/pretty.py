@@ -183,7 +183,7 @@ class TraverseContext:
                     if isinstance(de, DefaultRewriteDecl):
                         continue
                     self(de)
-            case CallDecl(ref, exprs, _):
+            case CallDecl(ref, exprs, _) | GetCostDecl(ref, exprs):
                 match ref:
                     case FunctionRef(UnnamedFunctionRef(_, res)):
                         self(res.expr)
@@ -210,7 +210,8 @@ class TraverseContext:
             case LetSchedulerDecl(scheduler, schedule):
                 self(scheduler)
                 self(schedule)
-
+            case GetCostDecl(ref, args):
+                self(CallDecl(ref, args))
             case _:
                 assert_never(decl)
 
@@ -353,6 +354,8 @@ class PrettyContext:
                 if ban_length is not None:
                     list_args.append(f"ban_length={ban_length}")
                 return f"back_off({', '.join(list_args)})", "scheduler"
+            case GetCostDecl(ref, args):
+                return f"get_cost({self(CallDecl(ref, args))})", "get_cost"
         assert_never(decl)
 
     def _call(
