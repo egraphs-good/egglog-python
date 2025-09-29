@@ -344,7 +344,7 @@ class TestMutate:
         assert str(x) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1"
         assert str(x + Math(10)) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1 + Math(10)"
 
-        i, j = vars_("i j", Math)
+        i, _j = vars_("i j", Math)
         incr_i = copy(i)
         incr(incr_i)
         egraph.register(rewrite(incr_i).to(i + Math(1)), x)
