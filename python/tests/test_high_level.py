@@ -1311,3 +1311,14 @@ class TestCustomExtract:
         fold_spy.assert_any_call(my_f, [5], 1)
         enode_cost_spy.assert_any_call(egraph, E())
         enode_cost_spy.assert_any_call(egraph, call)
+
+    def test_errors_bubble(self):
+        class MyCostModel(DefaultCostModel):
+            def primitive_cost(self, egraph, expr):
+                msg = "bad"
+                raise ValueError(msg)
+
+        egraph = EGraph()
+
+        with pytest.raises(ValueError, match="bad"):
+            egraph.extract(i64(10), cost_model=MyCostModel())

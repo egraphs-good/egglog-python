@@ -771,7 +771,6 @@ class _Cost(Protocol):
     def __le__(self, other: _Cost) -> bool: ...
     def __gt__(self, other: _Cost) -> bool: ...
     def __ge__(self, other: _Cost) -> bool: ...
-    def __add__(self, other: _Cost) -> _Cost: ...
 
 _COST = TypeVar("_COST", bound=_Cost)
 
@@ -779,10 +778,10 @@ _COST = TypeVar("_COST", bound=_Cost)
 class CostModel(Generic[_COST]):
     def __init__(
         self,
-        fold: Callable[[str, _COST, list[_COST]], _COST] | None,
-        enode_cost: Callable[[str, list[Value]], _COST] | None,
-        container_cost: Callable[[str, Value, list[_COST]], _COST] | None,
-        base_value_cost: Callable[[str, Value], _COST] | None,
+        fold: Callable[[str, _COST, list[_COST]], _COST],
+        enode_cost: Callable[[str, list[Value]], _COST],
+        container_cost: Callable[[str, Value, list[_COST]], _COST],
+        base_value_cost: Callable[[str, Value], _COST],
     ) -> None: ...
 
 @final

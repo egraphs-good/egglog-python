@@ -4,14 +4,32 @@ use pyo3::{exceptions::PyValueError, prelude::*};
 
 use crate::{conversions::Term, egraph::EGraph, egraph::Value, termdag::TermDag};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 // Wrap in Arc so we can clone efficiently
 // https://pyo3.rs/main/migration.html#pyclone-is-now-gated-behind-the-py-clone-feature
-struct Cost(Arc<Py<PyAny>>);
+// We also have to store the result, since the cost model does not return errors
+struct Cost(PyResult<Py<PyAny>>);
+
+impl Clone for Cost {
+    fn clone(&self) -> Self {
+        Python::attach(|py| {
+            Cost(match &self.0 {
+                Ok(v) => Ok(v.clone_ref(py)),
+                Err(e) => Err(e.clone_ref(py)),
+            })
+        })
+    }
+}
 
 impl Ord for Cost {
     fn cmp(&self, other: &Self) -> Ordering {
-        Python::attach(|py| self.0.bind(py).compare(other.0.bind(py)).unwrap())
+        // Always order errors as smallest cost so they are prefered
+        match (&self.0, &other.0) {
+            (Err(_), Err(_)) => Ordering::Equal,
+            (Err(_), _) => Ordering::Less,
+            (_, Err(_)) => Ordering::Greater,
+            (Ok(l), Ok(r)) => Python::attach(|py| l.bind(py).compare(r.bind(py)).unwrap()),
+        }
     }
 }
 
@@ -23,7 +41,13 @@ impl PartialOrd for Cost {
 
 impl PartialEq for Cost {
     fn eq(&self, other: &Self) -> bool {
-        Python::attach(|py| self.0.bind(py).eq(other.0.bind(py))).unwrap()
+        // errors are equal
+        match (&self.0, &other.0) {
+            (Err(_), Err(_)) => true,
+            (Err(_), _) => false,
+            (_, Err(_)) => false,
+            (Ok(l), Ok(r)) => Python::attach(|py| l.bind(py).eq(r.bind(py))).unwrap(),
+        }
     }
 }
 
@@ -44,69 +68,66 @@ impl egglog::extract::Cost for Cost {
 }
 
 /// Cost model defined by Python functions.
-///
-/// If not provided, default to the same behavior as DynamicCostModel so that fast paths can be used when possible.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[pyclass(
     frozen,
     str = "CostModel({fold:?}, {enode_cost:?}, {container_cost:?}, {base_value_cost:?}"
 )]
 pub struct CostModel {
     /// Function mapping from a term's head and its children's costs to the term's total cost.
-    /// If None, simply sums the children's costs and the head cost.
-    /// (head: str, head_cost: COST, children_costs: list[COST]) -> COST | None
-    fold: Option<Arc<Py<PyAny>>>,
+    /// (head: str, head_cost: COST, children_costs: list[COST]) -> COST
+    fold: Py<PyAny>,
     /// Function mapping from an expression node to its cost.
-    /// If None, defaults to the the set cost of of the value, or the cost of the function if it is known, or 1 otherwise.
-    /// (func_name: str, args: list[Value]) -> COST | None
-    enode_cost: Option<Arc<Py<PyAny>>>,
+    /// (func_name: str, args: list[Value]) -> COST
+    enode_cost: Py<PyAny>,
     /// Function mapping from a container value to its cost given the costs of its elements.
-    /// If none, sums the element costs starting at 0 for an empty container.
-    /// (sort_name: str, value: Value, element_costs: list[COST]) -> COST | None
-    container_cost: Option<Arc<Py<PyAny>>>,
+    /// (sort_name: str, value: Value, element_costs: list[COST]) -> COST
+    container_cost: Py<PyAny>,
     /// Function mapping from a base value to its cost.
-    /// If none, defaults to 1.
-    /// (sort_name: str, value: Value) -> COST | None
-    base_value_cost: Option<Arc<Py<PyAny>>>,
+    /// (sort_name: str, value: Value) -> COST
+    base_value_cost: Py<PyAny>,
 }
 
 #[pymethods]
 impl CostModel {
     #[new]
     fn new(
-        fold: Option<Py<PyAny>>,
-        enode_cost: Option<Py<PyAny>>,
-        container_cost: Option<Py<PyAny>>,
-        base_value_cost: Option<Py<PyAny>>,
+        fold: Py<PyAny>,
+        enode_cost: Py<PyAny>,
+        container_cost: Py<PyAny>,
+        base_value_cost: Py<PyAny>,
     ) -> Self {
         CostModel {
-            fold: fold.map(Arc::new),
-            enode_cost: enode_cost.map(Arc::new),
-            container_cost: container_cost.map(Arc::new),
-            base_value_cost: base_value_cost.map(Arc::new),
+            fold,
+            enode_cost,
+            container_cost,
+            base_value_cost,
         }
+    }
+}
+
+impl Clone for CostModel {
+    fn clone(&self) -> Self {
+        Python::attach(|py| CostModel {
+            fold: self.fold.clone_ref(py),
+            enode_cost: self.enode_cost.clone_ref(py),
+            container_cost: self.container_cost.clone_ref(py),
+            base_value_cost: self.base_value_cost.clone_ref(py),
+        })
     }
 }
 
 impl egglog::extract::CostModel<Cost> for CostModel {
     fn fold(&self, head: &str, children_cost: &[Cost], head_cost: Cost) -> Cost {
-        Cost(Arc::new(Python::attach(|py| match &self.fold {
-            Some(fold) => {
-                let children_cost = children_cost
-                    .iter()
-                    .map(|c| c.0.clone_ref(py))
-                    .collect::<Vec<_>>();
-                let res = fold.call1(py, (head, head_cost.0.clone_ref(py), children_cost));
-                res.unwrap()
-            }
-            // copied from TreeAdditiveCostModel but changed type of cost
-            None => children_cost
-                .iter()
-                .fold(head_cost.0.bind(py).clone(), |s, c| {
-                    s.add(c.0.clone_ref(py)).unwrap()
-                })
-                .unbind(),
-        })))
+        Cost(Python::attach(|py| {
+            let head_cost = head_cost.0.map(|v| v.clone_ref(py))?;
+            let children_cost = children_cost
+                .into_iter()
+                .cloned()
+                .map(|c| c.0.map(|v| v.clone_ref(py)))
+                .collect::<PyResult<Vec<_>>>()?;
+            self.fold.call1(py, (head, head_cost, children_cost))
+        }))
     }
 
     fn enode_cost(
@@ -115,23 +136,14 @@ impl egglog::extract::CostModel<Cost> for CostModel {
         func: &egglog::Function,
         row: &egglog::FunctionRow<'_>,
     ) -> Cost {
-        Cost(Arc::new(Python::attach(|py| match &self.enode_cost {
-            Some(enode_cost) => {
-                let mut values = row.vals.iter().map(|v| Value(*v)).collect::<Vec<_>>();
-                // Remove last element which is the output
-                // this is not needed because the only thing we can do with the output is look up an analysis
-                // which we can also do with the original function
-                values.pop().unwrap();
-                let res = enode_cost.call1(py, (func.name(), values));
-                res.unwrap()
-            }
-            None => egglog_experimental::DynamicCostModel {}
-                .enode_cost(egraph, func, row)
-                .into_pyobject(py)
-                .unwrap()
-                .into_any()
-                .unbind(),
-        })))
+        Python::attach(|py| {
+            let mut values = row.vals.iter().map(|v| Value(*v)).collect::<Vec<_>>();
+            // Remove last element which is the output
+            // this is not needed because the only thing we can do with the output is look up an analysis
+            // which we can also do with the original function
+            values.pop().unwrap();
+            Cost(self.enode_cost.call1(py, (func.name(), values)))
+        })
     }
 
     fn container_cost(
@@ -141,22 +153,15 @@ impl egglog::extract::CostModel<Cost> for CostModel {
         value: egglog::Value,
         element_costs: &[Cost],
     ) -> Cost {
-        Cost(Arc::new(Python::attach(|py| match &self.container_cost {
-            Some(container_cost) => {
-                let element_costs = element_costs
-                    .iter()
-                    .map(|c| c.0.clone_ref(py))
-                    .collect::<Vec<_>>();
-                let res = container_cost.call1(py, (sort.name(), Value(value), element_costs));
-                res.unwrap()
-            }
-            None => element_costs
-                .iter()
-                .fold(0i64.into_pyobject(py).unwrap().as_any().clone(), |s, c| {
-                    s.add(c.0.clone_ref(py)).unwrap()
-                })
-                .unbind(),
-        })))
+        Cost(Python::attach(|py| {
+            let element_costs = element_costs
+                .into_iter()
+                .cloned()
+                .map(|c| c.0.map(|v| v.clone_ref(py)))
+                .collect::<PyResult<Vec<_>>>()?;
+            self.container_cost
+                .call1(py, (sort.name(), Value(value), element_costs))
+        }))
     }
 
     // https://github.com/PyO3/pyo3/issues/1190
@@ -166,16 +171,10 @@ impl egglog::extract::CostModel<Cost> for CostModel {
         sort: &egglog::ArcSort,
         value: egglog::Value,
     ) -> Cost {
-        Cost(Arc::new(Python::attach(|py| match &self.base_value_cost {
-            Some(base_value_cost) => base_value_cost
-                .call1(py, (sort.name(), Value(value)))
-                .unwrap(),
-            None => 1i64.into_pyobject(py).unwrap().as_any().clone().unbind(),
-        })))
+        Python::attach(|py| Cost(self.base_value_cost.call1(py, (sort.name(), Value(value)))))
     }
 }
 
-// TODO: Don't progress just return an error if there was an exception?
 
 #[pyclass(unsendable)]
 pub struct Extractor(egglog::extract::Extractor<Cost>);
@@ -235,7 +234,7 @@ impl Extractor {
             .0
             .extract_best_with_sort(&egraph.egraph, &mut termdag.0, value.0, sort.clone())
             .ok_or(PyValueError::new_err("Unextractable root".to_string()))?;
-        Ok((cost.0.clone_ref(py), term.into()))
+        Ok((cost.0?.clone_ref(py), term.into()))
     }
 
     /// Extract variants of an e-class.
@@ -262,9 +261,9 @@ impl Extractor {
             nvariants,
             sort.clone(),
         );
-        Ok(variants
+        variants
             .into_iter()
-            .map(|(cost, term)| (cost.0.clone_ref(py), term.into()))
-            .collect())
+            .map(|(cost, term)| (cost.0.map(|c| (c.clone_ref(py), term.into()))))
+            .collect()
     }
 }
