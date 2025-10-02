@@ -1,25 +1,12 @@
-use std::{cmp::Ordering, sync::Arc};
+use std::cmp::Ordering;
 
 use pyo3::{exceptions::PyValueError, prelude::*};
 
 use crate::{conversions::Term, egraph::EGraph, egraph::Value, termdag::TermDag};
 
 #[derive(Debug)]
-// Wrap in Arc so we can clone efficiently
-// https://pyo3.rs/main/migration.html#pyclone-is-now-gated-behind-the-py-clone-feature
-// We also have to store the result, since the cost model does not return errors
+// We have to store the result, since the cost model does not return errors
 struct Cost(PyResult<Py<PyAny>>);
-
-impl Clone for Cost {
-    fn clone(&self) -> Self {
-        Python::attach(|py| {
-            Cost(match &self.0 {
-                Ok(v) => Ok(v.clone_ref(py)),
-                Err(e) => Err(e.clone_ref(py)),
-            })
-        })
-    }
-}
 
 impl Ord for Cost {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -52,6 +39,17 @@ impl PartialEq for Cost {
 }
 
 impl Eq for Cost {}
+
+impl Clone for Cost {
+    fn clone(&self) -> Self {
+        Python::attach(|py| {
+            Cost(match &self.0 {
+                Ok(v) => Ok(v.clone_ref(py)),
+                Err(e) => Err(e.clone_ref(py)),
+            })
+        })
+    }
+}
 
 impl egglog::extract::Cost for Cost {
     fn identity() -> Self {
@@ -175,6 +173,7 @@ impl egglog::extract::CostModel<Cost> for CostModel {
     }
 }
 
+// TODO: Don't progress just return an error if there was an exception?
 
 #[pyclass(unsendable)]
 pub struct Extractor(egglog::extract::Extractor<Cost>);
