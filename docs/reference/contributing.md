@@ -83,7 +83,7 @@ Debug symbols are turned on by default.
 If there is a performance sensitive piece of code, you could isolate it in a file and profile it locally with:
 
 ```bash
-uv run py-spy record  --format speedscope  --  python tmp.py
+uv run py-spy record  --format speedscope  --  python -O tmp.py
 ```
 
 ### Making changes
