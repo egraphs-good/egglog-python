@@ -54,8 +54,7 @@ test = [
     "egglog[array]",
     "pytest-codspeed",
     "pytest-benchmark",
-    "pytest-xdist",
-    "pytest-mock",
+    "pytest-xdist"
 ]
 
 docs = [

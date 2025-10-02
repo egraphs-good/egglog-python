@@ -4,11 +4,10 @@ import contextlib
 import inspect
 import pathlib
 import tempfile
-from abc import abstractmethod
 from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field
-from functools import cached_property, partial, total_ordering
+from functools import partial
 from inspect import Parameter, currentframe, signature
 from types import FrameType, FunctionType
 from typing import (
@@ -43,7 +42,7 @@ from .thunk import *
 from .version_compat import *
 
 if TYPE_CHECKING:
-    from .builtins import Container, Primitive, String, Unit, i64, i64Like
+    from .builtins import String, Unit, i64, i64Like
 
 
 __all__ = [
@@ -54,7 +53,6 @@ __all__ = [
     "Command",
     "Command",
     "CostModel",
-    "DefaultCostModel",
     "EGraph",
     "Expr",
     "ExprCallable",
@@ -62,7 +60,6 @@ __all__ = [
     "Fact",
     "GraphvizKwargs",
     "GreedyDagCost",
-    "GreedyDagCostModel",
     "RewriteOrRule",
     "Ruleset",
     "Schedule",
@@ -77,6 +74,7 @@ __all__ = [
     "check",
     "check_eq",
     "constant",
+    "default_cost_model",
     "delete",
     "eq",
     "expr_action",
@@ -84,6 +82,7 @@ __all__ = [
     "expr_parts",
     "function",
     "get_cost",
+    "greedy_dag_cost_model",
     "let",
     "method",
     "ne",
@@ -96,6 +95,7 @@ __all__ = [
     "seq",
     "set_",
     "set_cost",
+    "set_current_ruleset",
     "subsume",
     "union",
     "unstable_combine_rulesets",
@@ -1991,11 +1991,11 @@ class Comparable(Protocol):
 COST = TypeVar("COST", bound=Comparable)
 
 
-class CostModel(Protocol[COST]):
+class CostModel(Protocol, Generic[COST]):
     """
     A cost model for an e-graph. Used to determine the cost of an expression based on its structure and the costs of its sub-expressions.
 
-    Subclass this and implement the methods to create a custom cost model.
+    Called with an expression and the costs of its children, returns the total cost of the expression.
 
     Additionally, the cost model should guarantee that a term has a no-smaller cost
     than its subterms to avoid cycles in the extracted terms for common case usages.
@@ -2004,176 +2004,69 @@ class CostModel(Protocol[COST]):
     However, the user needs to be careful to guarantee acyclicity in the extracted terms.
     """
 
-    @abstractmethod
-    def fold(self, callable: ExprCallable, children_costs: list[COST], head_cost: COST) -> COST:
+    def __call__(self, egraph: EGraph, expr: BaseExpr, children_costs: list[COST]) -> COST:
         """
         The total cost of a term given the cost of the root e-node and its immediate children's total costs.
         """
         raise NotImplementedError
 
-    @abstractmethod
-    def call_cost(self, egraph: EGraph, expr: Expr) -> COST:
-        """
-        The cost of an function call (without the cost of children).
-        """
-        raise NotImplementedError
 
-    @abstractmethod
-    def container_cost(self, egraph: EGraph, expr: Container, element_costs: list[COST]) -> COST:
-        """
-        The cost of a container value given the costs of its elements.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def primitive_cost(self, egraph: EGraph, expr: Primitive) -> COST:
-        """
-        The cost of a base value (like a literal or variable).
-        """
-        raise NotImplementedError
-
-
-class ComparableAdd(Comparable, Protocol):
-    def __add__(self, other: Self) -> Self: ...
-
-
-BASE_COST = TypeVar("BASE_COST", bound=ComparableAdd)
-
-
-class BaseCostModel(CostModel[BASE_COST]):
-    """
-    Base cost model which provides default implementations for some methods, if the cost can be added and a 0 and 1 exist.
-    """
-
-    @property
-    @abstractmethod
-    def identity(self) -> BASE_COST:
-        """
-        Identity element, such that COST + identity = COST.
-
-        Usually zero.
-        """
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def unit(self) -> BASE_COST:
-        """
-        Unit element, default cost for node with no children, such that COST + unit > COST
-        """
-        raise NotImplementedError
-
-    def fold(self, callable: ExprCallable, children_costs: list[BASE_COST], head_cost: BASE_COST) -> BASE_COST:
-        """
-        The total cost of a term given the cost of the root e-node and its immediate children's total costs.
-        """
-        return sum(children_costs, start=head_cost)
-
-    def call_cost(self, egraph: EGraph, expr: Expr) -> BASE_COST:
-        """
-        The cost of an function call (without the cost of children).
-        """
-        return self.unit
-
-    def container_cost(self, egraph: EGraph, expr: Container, element_costs: list[BASE_COST]) -> BASE_COST:
-        """
-        The cost of a container value given the costs of its elements.
-        """
-        return sum(element_costs, start=self.identity)
-
-    def primitive_cost(self, egraph: EGraph, expr: Primitive) -> BASE_COST:
-        """
-        The cost of a base value (like a literal or variable).
-        """
-        return self.unit
-
-
-class DefaultCostModel(BaseCostModel[int]):
+def default_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
     """
     A default cost model for an e-graph, which looks up costs set on function calls, or uses 1 as the default cost.
-
-    Subclass this to extend the default integer cost model.
     """
+    from .builtins import Container, i64  # noqa: PLC0415
+    from .deconstruct import get_callable_fn  # noqa: PLC0415
 
-    # TODO: Make cost model take identity and unit as args
-    identity = 0
-    unit = 1
-
-    # TODO: rename expr cost?
-    def call_cost(self, egraph: EGraph, expr: Expr) -> int:
-        """
-        The cost of an enode is either the cost set on it, or the cost of the callable, or 1 if neither are set.
-        """
-        from .builtins import i64  # noqa: PLC0415
-        from .deconstruct import get_callable_fn  # noqa: PLC0415
-
-        callable_fn = get_callable_fn(expr)
-        assert callable_fn is not None
-
-        # If we have a cost set, use that
+    # By default, all nodes have a cost of 1 except for containers which have a cost of 0
+    self_cost = 0 if isinstance(expr, Container) else 1
+    if (callable_fn := get_callable_fn(expr)) is not None:
+        # If this is a callable function with a set cost override the self cost
+        match get_callable_cost(callable_fn):
+            case int(self_cost):
+                pass
+        # If we have set the cost manually for this experession, use that instead
         if egraph.has_custom_cost(callable_fn):
             match egraph.lookup_function_value(get_cost(expr)):
                 case i64(i):
-                    return i
-        return get_callable_cost(callable_fn) or 1
+                    self_cost = i
+    # Sum up the costs of the children and our own cost
+    return sum(children_costs, start=self_cost)
 
 
-class ComparableAddSub(ComparableAdd, Protocol):
+class ComparableAddSub(Comparable, Protocol):
+    def __add__(self, other: Self) -> Self: ...
     def __sub__(self, other: Self) -> Self: ...
 
 
 DAG_COST = TypeVar("DAG_COST", bound=ComparableAddSub)
 
 
-@total_ordering
 @dataclass
 class GreedyDagCost(Generic[DAG_COST]):
-    expr: BaseExpr
-    costs: dict[BaseExpr, DAG_COST]
-    identity: DAG_COST
+    """
+    Cost of a DAG, which stores children costs. Use `.total` to get the underlying cost.
+    """
+
+    total: DAG_COST
+    _costs: dict[TypedExprDecl, DAG_COST] = field(repr=False)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, GreedyDagCost):
             return NotImplemented
         return self.total == other.total
 
-    def __lt__(self, other: GreedyDagCost) -> bool:
+    def __lt__(self, other: Self) -> bool:
         return self.total < other.total
 
-    @cached_property
-    def total(self) -> DAG_COST:
-        return sum(self.costs.values(), start=self.identity)
+    def __le__(self, other: Self) -> bool:
+        return self.total <= other.total
 
-    @classmethod
-    def from_children(
-        cls,
-        expr: BaseExpr,
-        children: list[GreedyDagCost[DAG_COST]],
-        self_and_children: DAG_COST,
-        identity: DAG_COST,
-    ) -> GreedyDagCost[DAG_COST]:
-        """
-        Create a GreedyDagCost from the costs of its children and the cost of itself and its children.
+    def __gt__(self, other: Self) -> bool:
+        return self.total > other.total
 
-        Make sure to subtract the costs of the children from self_and_children to get the cost of the node itself.
-        """
-        costs: dict[BaseExpr, DAG_COST] = {}
-        for c in children:
-            for k, v in c.costs.items():
-                if k in costs:
-                    assert costs[k] == v, f"Conflicting costs for {k}: {costs[k]} and {v}"
-                else:
-                    costs[k] = v
-        for c in children:
-            self_and_children -= c.total
-        costs[expr] = self_and_children
-        return cls(expr, costs, identity)
-
-    def __str__(self) -> str:
-        return f"GreedyDagCost(total={self.total})"
-
-    def __repr__(self) -> str:
-        return str(self)
+    def __ge__(self, other: Self) -> bool:
+        return self.total >= other.total
 
 
 @dataclass
@@ -2185,39 +2078,35 @@ class GreedyDagCostModel(CostModel[GreedyDagCost[DAG_COST]]):
     but implemented as a cost model that will be used with the default extractor.
     """
 
-    base: BaseCostModel[DAG_COST]
+    base: CostModel[DAG_COST]
 
-    def fold(
-        self,
-        callable: ExprCallable,
-        children_costs: list[GreedyDagCost[DAG_COST]],
-        head_cost: GreedyDagCost[DAG_COST],
+    def __call__(
+        self, egraph: EGraph, expr: BaseExpr, children_costs: list[GreedyDagCost[DAG_COST]]
     ) -> GreedyDagCost[DAG_COST]:
-        # head cost.total is the same as head_cost.costs[head_cost.expr] because it come from call_cost which always has one cost
-        base_fold = self.base.fold(callable, [c.total for c in children_costs], head_cost.total)
-        return GreedyDagCost[DAG_COST].from_children(head_cost.expr, children_costs, base_fold, self.base.identity)
+        cost = self.base(egraph, expr, [c.total for c in children_costs])
+        for c in children_costs:
+            cost -= c.total
+        costs = {}
+        for c in children_costs:
+            costs.update(c._costs)
+        total = sum(costs.values(), start=cost)
+        costs[to_runtime_expr(expr).__egg_typed_expr__] = cost
+        return GreedyDagCost(total, costs)
 
-    def call_cost(self, egraph: EGraph, expr: Expr) -> GreedyDagCost[DAG_COST]:
-        """
-        The cost of an function call (without the cost of children).
-        """
-        return GreedyDagCost(expr, {expr: self.base.call_cost(egraph, expr)}, self.base.identity)
 
-    def container_cost(
-        self, egraph: EGraph, expr: Container, element_costs: list[GreedyDagCost[DAG_COST]]
-    ) -> GreedyDagCost[DAG_COST]:
-        """
-        The cost of a container value given the costs of its elements.
-        """
-        base_container_cost = self.base.container_cost(egraph, expr, [c.total for c in element_costs])
-        return GreedyDagCost[DAG_COST].from_children(expr, element_costs, base_container_cost, self.base.identity)
+@overload
+def greedy_dag_cost_model() -> CostModel[GreedyDagCost[int]]: ...
 
-    def primitive_cost(self, egraph: EGraph, expr: Primitive) -> GreedyDagCost[DAG_COST]:
-        """
-        The cost of a base value (like a literal or variable).
-        """
-        cost = self.base.primitive_cost(egraph, expr)
-        return GreedyDagCost(expr, {expr: cost}, self.base.identity)
+
+@overload
+def greedy_dag_cost_model(base: CostModel[DAG_COST]) -> CostModel[GreedyDagCost[DAG_COST]]: ...
+
+
+def greedy_dag_cost_model(base: CostModel[Any] = default_cost_model) -> CostModel[GreedyDagCost[Any]]:
+    """
+    Creates a greedy dag cost model from a base cost model.
+    """
+    return GreedyDagCostModel(base or default_cost_model)
 
 
 def get_callable_cost(fn: ExprCallable) -> int | None:
@@ -2238,11 +2127,20 @@ class _CostModel(Generic[COST]):
     model: CostModel[COST]
     egraph: EGraph
 
-    def fold(self, fn: str, head_cost: COST, children_costs: list[COST]) -> COST:
-        (expr_callable,) = self.egraph._egg_fn_to_callables(fn)
-        return self.model.fold(expr_callable, children_costs, head_cost)
+    def call_model(self, expr: RuntimeExpr, children_costs: list[COST]) -> COST:
+        res = self.model(self.egraph, cast("BaseExpr", expr), children_costs)
+        if __debug__:
+            for c in children_costs:
+                if res <= c:
+                    msg = f"Cost model {self.model} produced a cost {res} less than or equal to a child cost {c} for {expr}"
+                    raise ValueError(msg)
+        return res
 
-    def enode_cost(self, name: str, args: list[bindings.Value]) -> COST:
+    def fold(self, _fn: str, head_cost: RuntimeExpr, children_costs: list[COST]) -> COST:
+        return self.call_model(head_cost, children_costs)
+
+    # enode cost is only ever called right before fold, for the head_cost
+    def enode_cost(self, name: str, args: list[bindings.Value]) -> RuntimeExpr:
         (callable_ref,) = self.egraph._state.egg_fn_to_callable_refs[name]
         signature = self.egraph.__egg_decls__.get_callable_decl(callable_ref).signature
         assert isinstance(signature, FunctionSignature)
@@ -2251,11 +2149,10 @@ class _CostModel(Generic[COST]):
             for (arg, tp) in zip(args, signature.arg_types, strict=True)
         ]
         res_type = signature.semantic_return_type.to_just()
-        expr = RuntimeExpr.__from_values__(
+        return RuntimeExpr.__from_values__(
             self.egraph.__egg_decls__,
             TypedExprDecl(res_type, CallDecl(callable_ref, tuple(arg_exprs))),
         )
-        return self.model.call_cost(self.egraph, cast("Expr", expr))
 
     def base_value_cost(self, tp: str, value: bindings.Value) -> COST:
         type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
@@ -2263,7 +2160,7 @@ class _CostModel(Generic[COST]):
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        return self.model.primitive_cost(self.egraph, cast("Primitive", expr))
+        return self.call_model(expr, [])
 
     def container_cost(self, tp: str, value: bindings.Value, element_costs: list[COST]) -> COST:
         type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
@@ -2271,7 +2168,7 @@ class _CostModel(Generic[COST]):
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        return self.model.container_cost(self.egraph, cast("Container", expr), element_costs)
+        return self.call_model(expr, element_costs)
 
-    def to_bindings_cost_model(self) -> bindings.CostModel:
+    def to_bindings_cost_model(self) -> bindings.CostModel[COST, RuntimeExpr]:
         return bindings.CostModel(self.fold, self.enode_cost, self.container_cost, self.base_value_cost)

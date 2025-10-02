@@ -7,9 +7,9 @@ from copy import copy
 from fractions import Fraction
 from functools import partial
 from typing import ClassVar, TypeAlias, TypeVar
+from unittest.mock import MagicMock
 
 import pytest
-from pytest_mock import MockerFixture
 
 from egglog import *
 from egglog.declarations import (
@@ -1239,34 +1239,10 @@ class TestCustomExtract:
     def test_no_changes(self):
         egraph = EGraph()
         assert egraph.extract(E(), include_cost=True) == egraph.extract(
-            E(), include_cost=True, cost_model=DefaultCostModel()
+            E(), include_cost=True, cost_model=default_cost_model
         )
 
-    def test_works_with_subclasses(self):
-        class MyCostModel(DefaultCostModel):
-            def container_cost(self, egraph, expr, element_costs):
-                return super().container_cost(egraph, expr, element_costs)
-
-            def primitive_cost(self, egraph, expr):
-                return super().primitive_cost(egraph, expr)
-
-            def call_cost(self, egraph, expr):
-                return super().call_cost(egraph, expr)
-
-            def fold(self, callable, child_costs, head_cost):
-                return super().fold(callable, child_costs, head_cost)
-
-        egraph = EGraph()
-        assert egraph.extract(E(), include_cost=True) == egraph.extract(
-            E(), include_cost=True, cost_model=MyCostModel()
-        )
-
-        egraph.register(set_cost(E(), 10))
-        assert egraph.extract(E(), include_cost=True) == egraph.extract(
-            E(), include_cost=True, cost_model=MyCostModel()
-        )
-
-    def test_calls_methods(self, mocker: MockerFixture):
+    def test_calls_methods(self):
         @function
         def my_f(xs: Vec[i64]) -> E: ...
 
@@ -1277,48 +1253,57 @@ class TestCustomExtract:
         # cost = 100
         res = E()
         # cost = 1 + 5  = 6
-        call = my_f(xs)
+        called = my_f(xs)
         egraph = EGraph()
-        egraph.register(union(call).with_(res))
+        egraph.register(union(called).with_(res))
 
-        class MyCostModel(DefaultCostModel):
-            def container_cost(self, egraph, expr, element_costs):
-                return 3 + sum(element_costs)
+        def my_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            if get_callable_fn(expr) == E:
+                return 100
+            match expr:
+                case i64():
+                    return 2
+                case Vec():
+                    return 3 + sum(children_costs)
+            return default_cost_model(egraph, expr, children_costs)
 
-            def primitive_cost(self, egraph, expr):
-                return 2
+        my_cost_model = MagicMock(side_effect=my_cost_model)
+        assert egraph.extract(called, include_cost=True, cost_model=my_cost_model) == (called, 6)
 
-            def call_cost(self, egraph, expr):
-                if expr == E():
-                    return 100
-                return 1
-
-            def fold(self, callable, child_costs, head_cost):
-                return super().fold(callable, child_costs, head_cost)
-
-        cost_model = MyCostModel()
-
-        container_cost_spy = mocker.spy(cost_model, "container_cost")
-        base_value_cost_spy = mocker.spy(cost_model, "primitive_cost")
-        enode_cost_spy = mocker.spy(cost_model, "call_cost")
-        fold_spy = mocker.spy(cost_model, "fold")
-
-        assert egraph.extract(call, include_cost=True, cost_model=cost_model) == (call, 6)
-
-        container_cost_spy.assert_called_with(egraph, xs, [2])
-        base_value_cost_spy.assert_called_with(egraph, x)
-        fold_spy.assert_any_call(E, [], 100)
-        fold_spy.assert_any_call(my_f, [5], 1)
-        enode_cost_spy.assert_any_call(egraph, E())
-        enode_cost_spy.assert_any_call(egraph, call)
+        my_cost_model.assert_any_call(egraph, res, [])
+        my_cost_model.assert_any_call(egraph, xs, [2])
+        my_cost_model.assert_any_call(egraph, x, [])
+        my_cost_model.assert_any_call(egraph, called, [5])
 
     def test_errors_bubble(self):
-        class MyCostModel(DefaultCostModel):
-            def primitive_cost(self, egraph, expr):
-                msg = "bad"
-                raise ValueError(msg)
+        def my_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            msg = "bad"
+            raise ValueError(msg)
 
         egraph = EGraph()
 
         with pytest.raises(ValueError, match="bad"):
-            egraph.extract(i64(10), cost_model=MyCostModel())
+            egraph.extract(i64(10), cost_model=my_cost_model)
+
+    def test_dag_cost_model(self):
+        egraph = EGraph()
+        expr = ff(1, 2)
+        res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
+        assert cost.total == 3
+        assert expr == res
+
+        expr = ff(1, 1)
+        res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
+        assert cost.total == 2
+        assert expr == res
+
+        @function
+        def bin(l: E, r: E) -> E: ...
+
+        x = constant("x", E)
+        y = constant("y", E)
+        expr = bin(x, bin(x, y))
+        egraph.register(expr)
+        res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
+        assert cost.total == 4
+        assert expr == res
