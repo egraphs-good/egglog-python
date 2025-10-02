@@ -6,17 +6,11 @@ use crate::{conversions::Term, egraph::EGraph, egraph::Value, termdag::TermDag};
 
 #[derive(Debug)]
 // We have to store the result, since the cost model does not return errors
-struct Cost(PyResult<Py<PyAny>>);
+struct Cost(Py<PyAny>);
 
 impl Ord for Cost {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Always order errors as smallest cost so they are prefered
-        match (&self.0, &other.0) {
-            (Err(_), Err(_)) => Ordering::Equal,
-            (Err(_), _) => Ordering::Less,
-            (_, Err(_)) => Ordering::Greater,
-            (Ok(l), Ok(r)) => Python::attach(|py| l.bind(py).compare(r.bind(py)).unwrap()),
-        }
+        Python::attach(|py| self.0.bind(py).compare(other.0.bind(py)).unwrap())
     }
 }
 
@@ -28,13 +22,7 @@ impl PartialOrd for Cost {
 
 impl PartialEq for Cost {
     fn eq(&self, other: &Self) -> bool {
-        // errors are equal
-        match (&self.0, &other.0) {
-            (Err(_), Err(_)) => true,
-            (Err(_), _) => false,
-            (_, Err(_)) => false,
-            (Ok(l), Ok(r)) => Python::attach(|py| l.bind(py).eq(r.bind(py))).unwrap(),
-        }
+        Python::attach(|py| self.0.bind(py).eq(other.0.bind(py))).unwrap()
     }
 }
 
@@ -42,12 +30,7 @@ impl Eq for Cost {}
 
 impl Clone for Cost {
     fn clone(&self) -> Self {
-        Python::attach(|py| {
-            Cost(match &self.0 {
-                Ok(v) => Ok(v.clone_ref(py)),
-                Err(e) => Err(e.clone_ref(py)),
-            })
-        })
+        Python::attach(|py| Cost(self.0.clone_ref(py)))
     }
 }
 
@@ -118,13 +101,15 @@ impl Clone for CostModel {
 impl egglog::extract::CostModel<Cost> for CostModel {
     fn fold(&self, head: &str, children_cost: &[Cost], head_cost: Cost) -> Cost {
         Cost(Python::attach(|py| {
-            let head_cost = head_cost.0.map(|v| v.clone_ref(py))?;
+            let head_cost = head_cost.0.clone_ref(py);
             let children_cost = children_cost
                 .into_iter()
                 .cloned()
-                .map(|c| c.0.map(|v| v.clone_ref(py)))
-                .collect::<PyResult<Vec<_>>>()?;
-            self.fold.call1(py, (head, head_cost, children_cost))
+                .map(|c| c.0.clone_ref(py))
+                .collect::<Vec<_>>();
+            self.fold
+                .call1(py, (head, head_cost, children_cost))
+                .unwrap()
         }))
     }
 
@@ -140,7 +125,7 @@ impl egglog::extract::CostModel<Cost> for CostModel {
             // this is not needed because the only thing we can do with the output is look up an analysis
             // which we can also do with the original function
             values.pop().unwrap();
-            Cost(self.enode_cost.call1(py, (func.name(), values)))
+            Cost(self.enode_cost.call1(py, (func.name(), values)).unwrap())
         })
     }
 
@@ -155,10 +140,11 @@ impl egglog::extract::CostModel<Cost> for CostModel {
             let element_costs = element_costs
                 .into_iter()
                 .cloned()
-                .map(|c| c.0.map(|v| v.clone_ref(py)))
-                .collect::<PyResult<Vec<_>>>()?;
+                .map(|c| c.0.clone_ref(py))
+                .collect::<Vec<_>>();
             self.container_cost
                 .call1(py, (sort.name(), Value(value), element_costs))
+                .unwrap()
         }))
     }
 
@@ -169,7 +155,13 @@ impl egglog::extract::CostModel<Cost> for CostModel {
         sort: &egglog::ArcSort,
         value: egglog::Value,
     ) -> Cost {
-        Python::attach(|py| Cost(self.base_value_cost.call1(py, (sort.name(), Value(value)))))
+        Python::attach(|py| {
+            Cost(
+                self.base_value_cost
+                    .call1(py, (sort.name(), Value(value)))
+                    .unwrap(),
+            )
+        })
     }
 }
 
@@ -233,7 +225,7 @@ impl Extractor {
             .0
             .extract_best_with_sort(&egraph.egraph, &mut termdag.0, value.0, sort.clone())
             .ok_or(PyValueError::new_err("Unextractable root".to_string()))?;
-        Ok((cost.0?.clone_ref(py), term.into()))
+        Ok((cost.0.clone_ref(py), term.into()))
     }
 
     /// Extract variants of an e-class.
@@ -260,9 +252,9 @@ impl Extractor {
             nvariants,
             sort.clone(),
         );
-        variants
+        Ok(variants
             .into_iter()
-            .map(|(cost, term)| (cost.0.map(|c| (c.clone_ref(py), term.into()))))
-            .collect()
+            .map(|(cost, term)| (cost.0.clone_ref(py), term.into()))
+            .collect())
     }
 }
