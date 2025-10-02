@@ -111,7 +111,7 @@ convert_enums!(
             v -> egglog::Term::Var((&v.name).into()),
             egglog::Term::Var(v) => TermVar { name: v.to_string() };
         TermApp[trait=Hash](name: String, args: Vec<usize>)
-            a -> egglog::Term::App(a.name.clone().into(), a.args.to_vec()),
+            a -> egglog::Term::App(a.name.clone(), a.args.to_vec()),
             egglog::Term::App(s, a) => TermApp {
                 name: s.to_string(),
                 args: a.to_vec()
@@ -335,22 +335,22 @@ convert_enums!(
             egglog::CommandOutput::PrintAllFunctionsSize(sizes) => PrintAllFunctionsSize {sizes: sizes.clone()};
         ExtractBest(termdag: TermDag, cost: DefaultCost, term: Term)
             b -> egglog::CommandOutput::ExtractBest(
-                (&b.termdag).into(),
+                b.termdag.0.clone(),
                 b.cost,
                 (&b.term).into()
             ),
             egglog::CommandOutput::ExtractBest(termdag, cost, term) => ExtractBest {
-                termdag: termdag.into(),
+                termdag: TermDag(termdag.clone()),
                 cost: *cost,
                 term: term.into()
             };
         ExtractVariants(termdag: TermDag, terms: Vec<Term>)
             v -> egglog::CommandOutput::ExtractVariants(
-                (&v.termdag).into(),
+                v.termdag.0.clone(),
                 v.terms.iter().map(|v| v.into()).collect()
             ),
             egglog::CommandOutput::ExtractVariants(termdag, terms) => ExtractVariants {
-                termdag: termdag.into(),
+                termdag: TermDag(termdag.clone()),
                 terms: terms.iter().map(|v| v.into()).collect()
             };
         OverallStatistics(report: RunReport)
@@ -362,13 +362,13 @@ convert_enums!(
         PrintFunctionOutput(function: Function, termdag: TermDag, terms: Vec<(Term, Term)>, mode: PrintFunctionMode)
             v -> egglog::CommandOutput::PrintFunction(
                 v.function.0.clone(),
-                (&v.termdag).into(),
+                v.termdag.0.clone(),
                 v.terms.iter().map(|(l, r)| (l.into(), r.into())).collect(),
                 v.mode.clone().into()
             ),
             egglog::CommandOutput::PrintFunction(function, termdag, terms, mode) => PrintFunctionOutput {
                 function: Function(function.clone()),
-                termdag: termdag.into(),
+                termdag:  TermDag(termdag.clone()),
                 terms: terms.iter().map(|(l, r)| (l.into(), r.into())).collect(),
                 mode: mode.into()
             };
@@ -461,11 +461,11 @@ convert_struct!(
     )
         r -> egglog::RunReport {
             updated: r.updated,
-            search_and_apply_time_per_rule: r.search_and_apply_time_per_rule.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone().into(), *v)).collect(),
-            search_and_apply_time_per_ruleset: r.search_and_apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            merge_time_per_ruleset: r.merge_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
-            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().into(), v.clone().0)).collect(),
+            search_and_apply_time_per_rule: r.search_and_apply_time_per_rule.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
+            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+            search_and_apply_time_per_ruleset: r.search_and_apply_time_per_ruleset.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
+            merge_time_per_ruleset: r.merge_time_per_ruleset.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
+            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
         },
         r -> RunReport {
             updated: r.updated,

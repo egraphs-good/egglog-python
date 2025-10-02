@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, TypeVar, overload
 from typing_extensions import TypeVarTuple, Unpack
 
 from .declarations import *
-from .egraph import BaseExpr
+from .egraph import BaseExpr, Expr
 from .runtime import *
 from .thunk import *
 
@@ -49,7 +49,11 @@ def get_literal_value(x: PyObject) -> object: ...
 def get_literal_value(x: UnstableFn[T, Unpack[TS]]) -> Callable[[Unpack[TS]], T] | None: ...
 
 
-def get_literal_value(x: String | Bool | i64 | f64 | PyObject | UnstableFn) -> object:
+@overload
+def get_literal_value(x: Expr) -> None: ...
+
+
+def get_literal_value(x: object) -> object:
     """
     Returns the literal value of an expression if it is a literal.
     If it is not a literal, returns None.
@@ -95,12 +99,9 @@ def get_var_name(x: BaseExpr) -> str | None:
     return None
 
 
-def get_callable_fn(x: T) -> Callable[..., T] | None:
+def get_callable_fn(x: T) -> Callable[..., T] | T | None:
     """
-    Gets the function of an expression if it is a call expression.
-    If it is not a call expression (a property, a primitive value, constants, classvars, a let value), return None.
-    For those values, you can check them by comparing them directly with equality or for primitives calling `.eval()`
-    to return the Python value.
+    Gets the function of an expression, or if it's a constant or classvar, return that.
     """
     if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
@@ -159,6 +160,7 @@ def _deconstruct_call_decl(
     """
     args = call.args
     arg_exprs = tuple(RuntimeExpr(decls_thunk, Thunk.value(a)) for a in args)
+    # TODO: handle values? Like constants
     if isinstance(call.callable, InitRef):
         return RuntimeClass(
             decls_thunk,

@@ -14,6 +14,8 @@ from weakref import WeakValueDictionary
 
 from typing_extensions import Self, assert_never
 
+from .bindings import Value
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping
 
@@ -49,6 +51,7 @@ __all__ = [
     "FunctionDecl",
     "FunctionRef",
     "FunctionSignature",
+    "GetCostDecl",
     "HasDeclerations",
     "InitRef",
     "JustTypeRef",
@@ -82,6 +85,7 @@ __all__ = [
     "UnboundVarDecl",
     "UnionDecl",
     "UnnamedFunctionRef",
+    "ValueDecl",
     "collect_unbound_vars",
     "replace_typed_expr",
     "upcast_declerations",
@@ -639,7 +643,7 @@ class CallDecl:
     args: tuple[TypedExprDecl, ...] = ()
     # type parameters that were bound to the callable, if it is a classmethod
     # Used for pretty printing classmethod calls with type parameters
-    bound_tp_params: tuple[JustTypeRef, ...] | None = None
+    bound_tp_params: tuple[JustTypeRef, ...] = ()
 
     # pool objects for faster __eq__
     _args_to_value: ClassVar[WeakValueDictionary[tuple[object, ...], CallDecl]] = WeakValueDictionary({})
@@ -654,7 +658,7 @@ class CallDecl:
         # normalize the args/kwargs to a tuple so that they can be compared
         callable = args[0] if args else kwargs["callable"]
         args_ = args[1] if len(args) > 1 else kwargs.get("args", ())
-        bound_tp_params = args[2] if len(args) > 2 else kwargs.get("bound_tp_params")
+        bound_tp_params = args[2] if len(args) > 2 else kwargs.get("bound_tp_params", ())
 
         normalized_args = (callable, args_, bound_tp_params)
         try:
@@ -696,7 +700,20 @@ class PartialCallDecl:
     call: CallDecl
 
 
-ExprDecl: TypeAlias = UnboundVarDecl | LetRefDecl | LitDecl | CallDecl | PyObjectDecl | PartialCallDecl
+@dataclass(frozen=True)
+class GetCostDecl:
+    callable: CallableRef
+    args: tuple[TypedExprDecl, ...]
+
+
+@dataclass(frozen=True)
+class ValueDecl:
+    value: Value
+
+
+ExprDecl: TypeAlias = (
+    UnboundVarDecl | LetRefDecl | LitDecl | CallDecl | PyObjectDecl | PartialCallDecl | ValueDecl | GetCostDecl
+)
 
 
 @dataclass(frozen=True)

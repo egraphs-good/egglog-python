@@ -285,6 +285,8 @@ It does this by creating a new table for each function you set the cost for that
 _Note: Unlike in egglog, where you have to declare which functions support custom costs, in Python all functions
 are automatically registered to create a custom cost table when they are constructed_
 
+You can also get the cost of a function with `get_cost`, which will return an `i64` if one has already been set.
+
 ## Defining Rules
 
 To define rules in Python, we create a rule with the `rule(*facts).then(*actions) (rule ...)` command in egglog.

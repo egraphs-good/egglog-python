@@ -54,7 +54,7 @@ class TypeConstraintSolver:
         fn_var_args: TypeOrVarRef | None,
         return_: JustTypeRef,
         cls_name: str | None,
-    ) -> tuple[Iterable[JustTypeRef], tuple[JustTypeRef, ...] | None]:
+    ) -> tuple[Iterable[JustTypeRef], tuple[JustTypeRef, ...]]:
         """
         Given a return type, infer the argument types. If there is a variable arg, it returns an infinite iterable.
 
@@ -75,7 +75,7 @@ class TypeConstraintSolver:
                 )
             )
             if cls_name
-            else None
+            else ()
         )
         return arg_types, bound_typevars
 

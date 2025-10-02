@@ -33,10 +33,12 @@ __all__ = [
     "BigRatLike",
     "Bool",
     "BoolLike",
+    "Container",
     "ExprValueError",
     "Map",
     "MapLike",
     "MultiSet",
+    "Primitive",
     "PyObject",
     "Rational",
     "Set",
@@ -1135,3 +1137,7 @@ def _convert_function(fn: FunctionType) -> UnstableFn:
 
 
 converter(FunctionType, UnstableFn, _convert_function)
+
+
+Container: TypeAlias = Map | Set | MultiSet | Vec | UnstableFn
+Primitive: TypeAlias = String | Bool | i64 | f64 | Rational | BigInt | BigRat | PyObject | Unit

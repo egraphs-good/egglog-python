@@ -7,6 +7,7 @@ from copy import copy
 from fractions import Fraction
 from functools import partial
 from typing import ClassVar, TypeAlias, TypeVar
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -344,7 +345,7 @@ class TestMutate:
         assert str(x) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1"
         assert str(x + Math(10)) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1 + Math(10)"
 
-        i, j = vars_("i j", Math)
+        i, _j = vars_("i j", Math)
         incr_i = copy(i)
         incr(incr_i)
         egraph.register(rewrite(incr_i).to(i + Math(1)), x)
@@ -1184,3 +1185,126 @@ class TestScheduler:
         # Multiple until facts should error via high-level run
         with pytest.raises(ValueError, match="Can only have one until fact with custom scheduler"):
             egraph.run(run(r, rel(i64(0)), rel(i64(1)), scheduler=bo))
+
+
+@function
+def ff(x: i64Like, y: i64Like) -> E: ...
+
+
+@function
+def gg() -> E: ...
+
+
+class TestCustomExtract:
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            pytest.param(i64(10), id="i64"),
+            pytest.param(f64(10.0), id="f64"),
+            pytest.param(String("hi"), id="String"),
+            pytest.param(Bool(True), id="Bool"),
+            pytest.param(Rational(1, 2), id="Rational"),
+            pytest.param(BigInt(10), id="BigInt"),
+            pytest.param(BigRat(1, 2), id="BigRat"),
+            pytest.param(PyObject("hi"), id="PyObject"),
+            pytest.param(Vec(i64(1), i64(2)), id="Vec"),
+            pytest.param(Set(i64(1), i64(2)), id="Set"),
+            pytest.param(Map[i64, String].empty().insert(i64(1), String("hi")), id="Map"),
+            pytest.param(MultiSet(i64(1), i64(1)), id="MultiSet"),
+            pytest.param(Unit(), id="Unit"),
+            pytest.param(UnstableFn[E, i64, i64](ff), id="fn"),
+            pytest.param(UnstableFn[E, i64](ff, i64(1)), id="fn partial"),
+        ],
+    )
+    def test_to_from_value(self, expr):
+        egraph = EGraph()
+        expr = egraph.extract(expr)
+        assert expr == self._to_from_value(egraph, expr)
+
+    def _to_from_value(self, egraph, expr):
+        typed_expr = expr.__egg_typed_expr__
+        value = egraph._state.typed_expr_to_value(typed_expr)
+        res_val = egraph._state.value_to_expr(typed_expr.tp, value)
+        return expr.__with_expr__(TypedExprDecl(typed_expr.tp, res_val))
+
+    def test_compare_values(self):
+        egraph = EGraph()
+        egraph.register(E(), gg())
+        e_value = self._to_from_value(egraph, E())
+        gg_value = self._to_from_value(egraph, gg())
+        assert e_value != gg_value
+        assert hash(e_value) != hash(gg_value)
+        assert str(e_value) != str(gg_value)
+
+    def test_no_changes(self):
+        egraph = EGraph()
+        assert egraph.extract(E(), include_cost=True) == egraph.extract(
+            E(), include_cost=True, cost_model=default_cost_model
+        )
+
+    def test_calls_methods(self):
+        @function
+        def my_f(xs: Vec[i64]) -> E: ...
+
+        # cost = 2
+        x = i64(10)
+        # cost = 3 + 2 = 5
+        xs = Vec[i64](x)
+        # cost = 100
+        res = E()
+        # cost = 1 + 5  = 6
+        called = my_f(xs)
+        egraph = EGraph()
+        egraph.register(union(called).with_(res))
+
+        def my_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            if get_callable_fn(expr) == E:
+                return 100
+            match expr:
+                case i64():
+                    return 2
+                case Vec():
+                    return 3 + sum(children_costs)
+            return default_cost_model(egraph, expr, children_costs)
+
+        my_cost_model = MagicMock(side_effect=my_cost_model)
+        assert egraph.extract(called, include_cost=True, cost_model=my_cost_model) == (called, 6)
+
+        my_cost_model.assert_any_call(egraph, res, [])
+        my_cost_model.assert_any_call(egraph, xs, [2])
+        my_cost_model.assert_any_call(egraph, x, [])
+        my_cost_model.assert_any_call(egraph, called, [5])
+
+    @pytest.mark.xfail(reason="Errors dont bubble, just panic")
+    def test_errors_bubble(self):
+        def my_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            msg = "bad"
+            raise ValueError(msg)
+
+        egraph = EGraph()
+
+        with pytest.raises(ValueError, match="bad"):
+            egraph.extract(i64(10), cost_model=my_cost_model)
+
+    def test_dag_cost_model(self):
+        egraph = EGraph()
+        expr = ff(1, 2)
+        res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
+        assert cost.total == 3
+        assert expr == res
+
+        expr = ff(1, 1)
+        res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
+        assert cost.total == 2
+        assert expr == res
+
+        @function
+        def bin(l: E, r: E) -> E: ...
+
+        x = constant("x", E)
+        y = constant("y", E)
+        expr = bin(x, bin(x, y))
+        egraph.register(expr)
+        res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
+        assert cost.total == 4
+        assert expr == res

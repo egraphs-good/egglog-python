@@ -10,17 +10,19 @@ name = "egglog"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.26", features = ["extension-module"] }
-
-egglog = { git = "https://github.com/egraphs-good/egglog.git", branch = "main", default-features = false }
-# egglog = { path = "../egg-smol" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
-egglog-core-relations = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+pyo3 = { version = "0.26", features = ["extension-module", "num-bigint", "num-rational"] }
+num-bigint = "*"
+num-rational = "*"
+# egglog = { git = "https://github.com/egraphs-good/egglog.git", branch = "main", default-features = false }
+# egglog-bridge = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+# egglog-core-relations = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "clone-cost", default-features = false }
+egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "clone-cost" }
+egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "clone-cost" }
 egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", branch = "cli", default-features = false }
 egraph-serialize = { version = "0.2", features = ["serde", "graphviz"] }
 serde_json = "1"
-# https://github.com/vorner/pyo3-log/pull/66
-pyo3-log = { git = "https://github.com/alex/pyo3-log.git", branch = "pyo3-bump" }
+pyo3-log = "0.13"
 log = "0.4"
 lalrpop-util = { version = "0.22", features = ["lexer"] }
 ordered-float = "3.7"
@@ -29,7 +31,10 @@ rayon = "1.11"
 
 # Use patched version of egglog in experimental
 [patch.'https://github.com/egraphs-good/egglog']
-egglog = { git = "https://github.com/egraphs-good//egglog.git", branch = "main" }
+# egglog = { git = "https://github.com/egraphs-good//egglog.git", branch = "main" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "clone-cost" }
+egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "clone-cost" }
+egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "clone-cost" }
 # egglog = { path = "../egg-smol" }
 # egglog = { git = "https://github.com/egraphs-good//egglog.git", rev = "5542549" }
 

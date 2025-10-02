@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Add ability to create custom model and pass them in to extract [#357](https://github.com/egraphs-good/egglog-python/pull/357)
 ## 11.3.0 (2025-09-12)
 
 - Add egglog tutorials, change display to not inline by default, and fix bug looking up binary methods [#352](https://github.com/egraphs-good/egglog-python/pull/352)

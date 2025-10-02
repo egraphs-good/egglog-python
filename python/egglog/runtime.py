@@ -457,7 +457,7 @@ class RuntimeFunction(DelayedDeclerations):
         arg_exprs = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
         return_tp = tcs.substitute_typevars(signature.semantic_return_type, cls_name)
         bound_params = (
-            cast("JustTypeRef", bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef | InitRef) else None
+            cast("JustTypeRef", bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef | InitRef) else ()
         )
         # If we were using unstable-app to call a funciton, add that function back as the first arg.
         if function_value:
@@ -584,11 +584,17 @@ class RuntimeExpr(DelayedDeclerations):
         if (method := _get_expr_method(self, "__eq__")) is not None:
             return method(other)
 
-        # TODO: Check if two objects can be upcasted to be the same. If not, then return NotImplemented so other
-        # expr gets a chance to resolve __eq__ which could be a preserved method.
-        from .egraph import BaseExpr, eq  # noqa: PLC0415
+        if not (isinstance(self, RuntimeExpr) and isinstance(other, RuntimeExpr)):
+            return NotImplemented
+        if self.__egg_typed_expr__.tp != other.__egg_typed_expr__.tp:
+            return NotImplemented
 
-        return eq(cast("BaseExpr", self)).to(cast("BaseExpr", other))
+        from .egraph import Fact  # noqa: PLC0415
+
+        return Fact(
+            Declarations.create(self, other),
+            EqDecl(self.__egg_typed_expr__.tp, self.__egg_typed_expr__.expr, other.__egg_typed_expr__.expr),
+        )
 
     def __ne__(self, other: object) -> object:  # type: ignore[override]
         if (method := _get_expr_method(self, "__ne__")) is not None:

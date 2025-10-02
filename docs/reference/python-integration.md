@@ -635,3 +635,33 @@ r = ruleset(
 )
 egraph.saturate(r)
 ```
+
+## Custom Cost Models
+
+By default, when extracting from the e-graph, we use a simple cost model, that looks at the costs assigned to each
+function and any custom costs set with `set_cost`, and finds the lowest cost expression looking at the total tree size.
+
+Custom cost models are also supported, which can be passed into `extract` as the `cost_model` keyword argument. They
+are defined as functions followed the `CostModel` protocol, that take in an e-graph, an expression, and the costs of the children, and return the total cost of that expression. Costs don't have to be integers, they can be any type that supports comparison.
+
+There are a few builtin cost models:
+
+- `default_cost_model`: The default cost model, which uses integer costs and sums them up.
+- `greedy_dag_cost_model(inner_cost_model=default_cost_model)`: A cost model which uses a greedy DAG algorithm to find the lowest cost expression, allowing for shared sub-expressions. It takes in another cost model to use for the base costs of each expression.
+
+Note that when passed into your cost model, the expression won't be a full tree. Instead, only the top level call be present, and all of it's arguments will be opaque "value" expressions, representing e-classes in the e-graph. You can't do much with them except use them to construct other expression to pass into `egraph.lookup_function_value` to get the resulting value of a call with those arguments. The only exception is all builtin types, like ints, vecs, strings, etc. will be fully evaluated recursively, so they can be matched against.
+
+For example, here is a cost model that has a boolean cost if the value is even or not:
+
+```{code-cell} python
+def is_even_cost_model(egraph: EGraph, expr: Expr, children_costs: list[bool]) -> bool:
+    from egglog import i64  # noqa: PLC0415
+
+    match expr:
+        case i64(i):
+            return i % 2 == 0
+    return False
+assert EGraph().extract(i64(10), include_cost=True, cost_model=is_even_cost_model) == (i64(10), True)
+
+assert EGraph().extract(i64(5), include_cost=True, cost_model=is_even_cost_model) == (i64(5), False)
+```

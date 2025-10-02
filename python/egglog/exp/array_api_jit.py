@@ -4,7 +4,7 @@ from typing import TypeVar, cast
 
 import numpy as np
 
-from egglog import EGraph
+from egglog import EGraph, greedy_dag_cost_model
 from egglog.exp.array_api import NDArray, set_array_api_egraph, try_evaling
 from egglog.exp.array_api_numba import array_api_numba_schedule
 from egglog.exp.array_api_program_gen import EvalProgram, array_api_program_gen_schedule, ndarray_function_two_program
@@ -41,7 +41,7 @@ def function_to_program(fn: Callable, save_egglog_string: bool) -> tuple[EGraph,
             res = fn(NDArray.var(arg1), NDArray.var(arg2))
         egraph.register(res)
         egraph.run(array_api_numba_schedule)
-        res_optimized = egraph.extract(res)
+        res_optimized = egraph.extract(res, cost_model=greedy_dag_cost_model())
 
     return (
         egraph,
