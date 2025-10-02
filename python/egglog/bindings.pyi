@@ -2,7 +2,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from fractions import Fraction
 from pathlib import Path
-from typing import Generic, Protocol, TypeAlias, TypeVar
+from typing import Any, Generic, Protocol, TypeAlias, TypeVar
 
 from typing_extensions import final
 
@@ -774,19 +774,21 @@ class _Cost(Protocol):
 
 _COST = TypeVar("_COST", bound=_Cost)
 
+_ENODE_COST = TypeVar("_ENODE_COST")
+
 @final
-class CostModel(Generic[_COST]):
+class CostModel(Generic[_COST, _ENODE_COST]):
     def __init__(
         self,
-        fold: Callable[[str, _COST, list[_COST]], _COST],
-        enode_cost: Callable[[str, list[Value]], _COST],
+        fold: Callable[[str, _ENODE_COST, list[_COST]], _COST],
+        enode_cost: Callable[[str, list[Value]], _ENODE_COST],
         container_cost: Callable[[str, Value, list[_COST]], _COST],
         base_value_cost: Callable[[str, Value], _COST],
     ) -> None: ...
 
 @final
 class Extractor(Generic[_COST]):
-    def __init__(self, rootsorts: list[str] | None, egraph: EGraph, cost_model: CostModel[_COST]) -> None: ...
+    def __init__(self, rootsorts: list[str] | None, egraph: EGraph, cost_model: CostModel[_COST, Any]) -> None: ...
     def extract_best(self, egraph: EGraph, termdag: TermDag, value: Value, sort: str) -> tuple[_COST, _Term]: ...
     def extract_variants(
         self, egraph: EGraph, termdag: TermDag, value: Value, nvariants: int, sort: str
