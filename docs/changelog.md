@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 11.4.0 (2025-10-02)
+
 - Add ability to create custom model and pass them in to extract [#357](https://github.com/egraphs-good/egglog-python/pull/357)
 ## 11.3.0 (2025-09-12)
 
