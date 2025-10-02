@@ -59,9 +59,6 @@ __all__ = [
     "py_exec",
 ]
 
-Container: TypeAlias = "Map | Set | MultiSet | Vec | UnstableFn"
-Primitive: TypeAlias = "String | Bool | i64 | f64 | Rational | BigInt | BigRat | PyObject | Unit"
-
 
 @dataclass
 class ExprValueError(AttributeError):
@@ -1140,3 +1137,7 @@ def _convert_function(fn: FunctionType) -> UnstableFn:
 
 
 converter(FunctionType, UnstableFn, _convert_function)
+
+
+Container: TypeAlias = Map | Set | MultiSet | Vec | UnstableFn
+Primitive: TypeAlias = String | Bool | i64 | f64 | Rational | BigInt | BigRat | PyObject | Unit
