@@ -71,7 +71,7 @@ This is also supported for container types, like vecs and sets. You can also use
 
 For example:
 
-````python
+```python
 >>> from egglog import *
 >>> Vec(i64(1), i64(2))[0]
 Vec(1, 2)[0]
@@ -81,7 +81,7 @@ Vec(1, 2)[0]
 [i64(1), i64(2)]
 >>> Rational(1, 2).eval()
 Fraction(1, 2)
->>>
+```
 
 
 You can also manually set the e-graph to use, instead of it having to create a new one, with the `egraph.set_current` context manager:
@@ -542,4 +542,3 @@ We also change the `PyObject` primitive to behave similarly. Instead of calling 
 This release adds support for a high level API for e-graphs.
 
 There is an examples of the high level API in the [tutorials](tutorials/getting-started).
-````
