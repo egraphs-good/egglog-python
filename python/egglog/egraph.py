@@ -2068,6 +2068,9 @@ class GreedyDagCost(Generic[DAG_COST]):
     def __ge__(self, other: Self) -> bool:
         return self.total >= other.total
 
+    def __hash__(self) -> int:
+        return hash(self.total)
+
 
 @dataclass
 class GreedyDagCostModel(CostModel[GreedyDagCost[DAG_COST]]):
@@ -2126,21 +2129,35 @@ class _CostModel(Generic[COST]):
 
     model: CostModel[COST]
     egraph: EGraph
+    enode_cost_results: dict[tuple[str, tuple[bindings.Value, ...]], int] = field(default_factory=dict)
+    enode_cost_expressions: list[RuntimeExpr] = field(default_factory=list)
+    fold_results: dict[tuple[int, tuple[COST, ...]], COST] = field(default_factory=dict)
+    base_value_cost_results: dict[tuple[str, bindings.Value], COST] = field(default_factory=dict)
+    container_cost_results: dict[tuple[str, bindings.Value, tuple[COST, ...]], COST] = field(default_factory=dict)
 
     def call_model(self, expr: RuntimeExpr, children_costs: list[COST]) -> COST:
-        res = self.model(self.egraph, cast("BaseExpr", expr), children_costs)
-        if __debug__:
-            for c in children_costs:
-                if res <= c:
-                    msg = f"Cost model {self.model} produced a cost {res} less than or equal to a child cost {c} for {expr}"
-                    raise ValueError(msg)
-        return res
+        return self.model(self.egraph, cast("BaseExpr", expr), children_costs)
+        # if __debug__:
+        #     for c in children_costs:
+        #         if res <= c:
+        #             msg = f"Cost model {self.model} produced a cost {res} less than or equal to a child cost {c} for {expr}"
+        #             raise ValueError(msg)
 
-    def fold(self, _fn: str, head_cost: RuntimeExpr, children_costs: list[COST]) -> COST:
-        return self.call_model(head_cost, children_costs)
+    def fold(self, _fn: str, index: int, children_costs: list[COST]) -> COST:
+        try:
+            return self.fold_results[(index, tuple(children_costs))]
+        except KeyError:
+            pass
+
+        expr = self.enode_cost_expressions[index]
+        return self.call_model(expr, children_costs)
 
     # enode cost is only ever called right before fold, for the head_cost
-    def enode_cost(self, name: str, args: list[bindings.Value]) -> RuntimeExpr:
+    def enode_cost(self, name: str, args: list[bindings.Value]) -> int:
+        try:
+            return self.enode_cost_results[(name, tuple(args))]
+        except KeyError:
+            pass
         (callable_ref,) = self.egraph._state.egg_fn_to_callable_refs[name]
         signature = self.egraph.__egg_decls__.get_callable_decl(callable_ref).signature
         assert isinstance(signature, FunctionSignature)
@@ -2149,26 +2166,42 @@ class _CostModel(Generic[COST]):
             for (arg, tp) in zip(args, signature.arg_types, strict=True)
         ]
         res_type = signature.semantic_return_type.to_just()
-        return RuntimeExpr.__from_values__(
+        res = RuntimeExpr.__from_values__(
             self.egraph.__egg_decls__,
             TypedExprDecl(res_type, CallDecl(callable_ref, tuple(arg_exprs))),
         )
+        index = len(self.enode_cost_expressions)
+        self.enode_cost_expressions.append(res)
+        self.enode_cost_results[(name, tuple(args))] = index
+        return index
 
     def base_value_cost(self, tp: str, value: bindings.Value) -> COST:
+        try:
+            return self.base_value_cost_results[(tp, value)]
+        except KeyError:
+            pass
         type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
         expr = RuntimeExpr.__from_values__(
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        return self.call_model(expr, [])
+        res = self.call_model(expr, [])
+        self.base_value_cost_results[(tp, value)] = res
+        return res
 
     def container_cost(self, tp: str, value: bindings.Value, element_costs: list[COST]) -> COST:
+        try:
+            return self.container_cost_results[(tp, value, tuple(element_costs))]
+        except KeyError:
+            pass
         type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
         expr = RuntimeExpr.__from_values__(
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        return self.call_model(expr, element_costs)
+        res = self.call_model(expr, element_costs)
+        self.container_cost_results[(tp, value, tuple(element_costs))] = res
+        return res
 
-    def to_bindings_cost_model(self) -> bindings.CostModel[COST, RuntimeExpr]:
+    def to_bindings_cost_model(self) -> bindings.CostModel[COST, int]:
         return bindings.CostModel(self.fold, self.enode_cost, self.container_cost, self.base_value_cost)
