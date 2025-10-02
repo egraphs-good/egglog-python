@@ -2015,21 +2015,23 @@ def default_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]
     """
     A default cost model for an e-graph, which looks up costs set on function calls, or uses 1 as the default cost.
     """
-    from .builtins import Container, i64  # noqa: PLC0415
+    from .builtins import Container  # noqa: PLC0415
     from .deconstruct import get_callable_fn  # noqa: PLC0415
 
-    # By default, all nodes have a cost of 1 except for containers which have a cost of 0
-    self_cost = 0 if isinstance(expr, Container) else 1
-    if (callable_fn := get_callable_fn(expr)) is not None:
-        # If this is a callable function with a set cost override the self cost
-        match get_callable_cost(callable_fn):
-            case int(self_cost):
-                pass
-        # If we have set the cost manually for this experession, use that instead
-        if egraph.has_custom_cost(callable_fn):
-            match egraph.lookup_function_value(get_cost(expr)):
-                case i64(i):
-                    self_cost = i
+    # 1. First prefer if the expr has a custom cost set on it
+    if (
+        (callable_fn := get_callable_fn(expr)) is not None
+        and egraph.has_custom_cost(callable_fn)
+        and (i := egraph.lookup_function_value(get_cost(expr))) is not None
+    ):
+        self_cost = int(i)
+    # 2. Else, check if this is a callable and it has a cost set on its declaration
+    elif callable_fn is not None and (callable_cost := get_callable_cost(callable_fn)) is not None:
+        self_cost = callable_cost
+    # 3. Else, if this is a container, it has no cost, otherwise it has a cost of 1
+    else:
+        # By default, all nodes have a cost of 1 except for containers which have a cost of 0
+        self_cost = 0 if isinstance(expr, Container) else 1
     # Sum up the costs of the children and our own cost
     return sum(children_costs, start=self_cost)
 
