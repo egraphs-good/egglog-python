@@ -100,14 +100,14 @@ class TypeConstraintSolver:
             case _:
                 assert_never(fn_arg)
 
-    def substitute_typevars(self, tp: TypeOrVarRef, cls_name: str | None = None) -> JustTypeRef:
+    def substitute_typevars(self, tp: TypeOrVarRef, cls_ident: Ident | None = None) -> JustTypeRef:
         match tp:
             case ClassTypeVarRef():
-                assert cls_name is not None
+                assert cls_ident is not None
                 try:
-                    return self._cls_typevar_index_to_type[cls_name][tp]
+                    return self._cls_typevar_index_to_type[cls_ident][tp]
                 except KeyError as e:
-                    raise TypeConstraintError(f"Not enough bound typevars for {tp!r} in class {cls_name}") from e
+                    raise TypeConstraintError(f"Not enough bound typevars for {tp!r} in class {cls_ident}") from e
             case TypeRefWithVars(name, args):
-                return JustTypeRef(name, tuple(self.substitute_typevars(arg, cls_name) for arg in args))
+                return JustTypeRef(name, tuple(self.substitute_typevars(arg, cls_ident) for arg in args))
         assert_never(tp)

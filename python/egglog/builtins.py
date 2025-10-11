@@ -85,7 +85,7 @@ class Unit(BuiltinExpr, egg_sort="Unit"):
         return bool(expr_fact(self))
 
 
-class String(BuiltinExpr):
+class String(BuiltinExpr, egg_sort="String"):
     def __init__(self, value: str) -> None: ...
 
     @method(preserve=True)
@@ -163,7 +163,7 @@ BoolLike: TypeAlias = Bool | bool
 converter(bool, Bool, Bool)
 
 
-class i64(BuiltinExpr):  # noqa: N801
+class i64(BuiltinExpr, egg_sort="i64"):  # noqa: N801
     def __init__(self, value: int) -> None: ...
 
     @method(preserve=True)
@@ -290,7 +290,7 @@ converter(int, i64, i64)
 def count_matches(s: StringLike, pattern: StringLike) -> i64: ...
 
 
-class f64(BuiltinExpr):  # noqa: N801
+class f64(BuiltinExpr, egg_sort="f64"):  # noqa: N801
     def __init__(self, value: float) -> None: ...
 
     @method(preserve=True)
@@ -387,7 +387,7 @@ T = TypeVar("T", bound=BaseExpr)
 V = TypeVar("V", bound=BaseExpr)
 
 
-class Map(BuiltinExpr, Generic[T, V]):
+class Map(BuiltinExpr, Generic[T, V], egg_sort="Map"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> dict[T, V]:
@@ -457,7 +457,7 @@ converter(
 MapLike: TypeAlias = Map[T, V] | dict[TO, VO]
 
 
-class Set(BuiltinExpr, Generic[T]):
+class Set(BuiltinExpr, Generic[T], egg_sort="Set"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> set[T]:
@@ -527,7 +527,7 @@ converter(
 SetLike: TypeAlias = Set[T] | set[TO]
 
 
-class MultiSet(BuiltinExpr, Generic[T]):
+class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> list[T]:
@@ -582,7 +582,7 @@ class MultiSet(BuiltinExpr, Generic[T]):
     def map(self, f: Callable[[T], T]) -> MultiSet[T]: ...
 
 
-class Rational(BuiltinExpr):
+class Rational(BuiltinExpr, egg_sort="Rational"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> Fraction:
@@ -666,7 +666,7 @@ class Rational(BuiltinExpr):
     def denom(self) -> i64: ...
 
 
-class BigInt(BuiltinExpr):
+class BigInt(BuiltinExpr, egg_sort="BigInt"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> int:
@@ -793,7 +793,7 @@ converter(i64, BigInt, lambda i: BigInt(i))
 BigIntLike: TypeAlias = BigInt | i64Like
 
 
-class BigRat(BuiltinExpr):
+class BigRat(BuiltinExpr, egg_sort="BigRat"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> Fraction:
@@ -893,7 +893,7 @@ converter(Fraction, BigRat, lambda f: BigRat(f.numerator, f.denominator))
 BigRatLike: TypeAlias = BigRat | Fraction
 
 
-class Vec(BuiltinExpr, Generic[T]):
+class Vec(BuiltinExpr, Generic[T], egg_sort="Vec"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> tuple[T, ...]:
@@ -972,7 +972,7 @@ for sequence_type in (list, tuple):
 VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
 
 
-class PyObject(BuiltinExpr):
+class PyObject(BuiltinExpr, egg_sort="PyObject"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> object:
@@ -1057,7 +1057,7 @@ T2 = TypeVar("T2")
 T3 = TypeVar("T3")
 
 
-class UnstableFn(BuiltinExpr, Generic[T, Unpack[TS]]):
+class UnstableFn(BuiltinExpr, Generic[T, Unpack[TS]], egg_sort="UnstableFn"):
     @overload
     def __init__(self, f: Callable[[Unpack[TS]], T]) -> None: ...
 

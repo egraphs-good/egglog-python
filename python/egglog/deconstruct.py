@@ -146,7 +146,7 @@ def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T] | None = None) -> tupl
             if (
                 isinstance(actual_fn, RuntimeClass)
                 and isinstance(fn, RuntimeClass)
-                and actual_fn.__egg_tp__.name == fn.__egg_tp__.name
+                and actual_fn.__egg_tp__.ident == fn.__egg_tp__.ident
             ):
                 return args
     return None
@@ -164,10 +164,10 @@ def _deconstruct_call_decl(
     if isinstance(call.callable, InitRef):
         return RuntimeClass(
             decls_thunk,
-            TypeRefWithVars(call.callable.class_name, tuple(tp.to_var() for tp in (call.bound_tp_params or []))),
+            TypeRefWithVars(call.callable.ident, tuple(tp.to_var() for tp in (call.bound_tp_params or []))),
         ), arg_exprs
     egg_bound = (
-        JustTypeRef(call.callable.class_name, call.bound_tp_params or ())
+        JustTypeRef(call.callable.ident, call.bound_tp_params or ())
         if isinstance(call.callable, ClassMethodRef)
         else None
     )

@@ -12,13 +12,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from egglog import *
-from egglog.declarations import (
-    CallDecl,
-    FunctionRef,
-    JustTypeRef,
-    MethodRef,
-    TypedExprDecl,
-)
+from egglog.declarations import CallDecl, FunctionRef, Ident, JustTypeRef, MethodRef, TypedExprDecl
+from egglog.runtime import RuntimeExpr
 from egglog.version_compat import BEFORE_3_11
 
 
@@ -319,8 +314,11 @@ class TestMutate:
         foo[10] = 20
         assert str(foo) == "_Foo_1 = Foo()\n_Foo_1[10] = 20\n_Foo_1"
         assert expr_parts(foo) == TypedExprDecl(
-            JustTypeRef("Foo"),
-            CallDecl(MethodRef("Foo", "__setitem__"), (expr_parts(Foo()), expr_parts(i64(10)), expr_parts(i64(20)))),
+            JustTypeRef(Ident("Foo", __name__)),
+            CallDecl(
+                MethodRef(Ident("Foo", __name__), "__setitem__"),
+                (expr_parts(Foo()), expr_parts(i64(10)), expr_parts(i64(20))),
+            ),
         )
 
     def test_function(self):
@@ -339,8 +337,8 @@ class TestMutate:
         incr(x)
         assert expr_parts(x_copied) == expr_parts(Math(i64(10)))
         assert expr_parts(x) == TypedExprDecl(
-            JustTypeRef("Math"),
-            CallDecl(FunctionRef("incr"), (expr_parts(x_copied),)),
+            JustTypeRef(Ident("Math", __name__)),
+            CallDecl(FunctionRef(Ident("incr", __name__)), (expr_parts(x_copied),)),
         )
         assert str(x) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1"
         assert str(x + Math(10)) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1 + Math(10)"
@@ -380,8 +378,8 @@ def test_reflected_binary_method():
     expr = 10 + Math(5)  # type: ignore[operator]
     assert str(expr) == "Math(10) + Math(5)"
     assert expr_parts(expr) == TypedExprDecl(
-        JustTypeRef("Math"),
-        CallDecl(MethodRef("Math", "__add__"), (expr_parts(Math(i64(10))), expr_parts(Math(i64(5))))),
+        JustTypeRef(Ident("Math", __name__)),
+        CallDecl(MethodRef(Ident("Math", __name__), "__add__"), (expr_parts(Math(i64(10))), expr_parts(Math(i64(5))))),
     )
 
 
@@ -772,7 +770,7 @@ def test_helpful_error_function_class():
     match = "Inside of classes, wrap methods with the `method` decorator, not `function`"
     # If we are after 3 11 we have context included
     if not BEFORE_3_11:
-        match += "\nError processing E.__init__"
+        match += "\nError processing python.tests.test_high_level.E.__init__"
     with pytest.raises(ValueError, match=match):
         E()
 
@@ -1221,7 +1219,7 @@ class TestCustomExtract:
         expr = egraph.extract(expr)
         assert expr == self._to_from_value(egraph, expr)
 
-    def _to_from_value(self, egraph, expr):
+    def _to_from_value(self, egraph: EGraph, expr: RuntimeExpr):
         typed_expr = expr.__egg_typed_expr__
         value = egraph._state.typed_expr_to_value(typed_expr)
         res_val = egraph._state.value_to_expr(typed_expr.tp, value)
@@ -1308,3 +1306,24 @@ class TestCustomExtract:
         res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
         assert cost.total == 4
         assert expr == res
+
+
+def test_class_module():
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+    assert A.__module__ == __name__
+
+
+def test_function_module():
+    @function
+    def f() -> i64: ...
+
+    assert f.__module__ == __name__
+
+
+def test_method_module():
+    class A(Expr):
+        def m(self) -> i64: ...
+
+    assert A.m.__module__ == __name__

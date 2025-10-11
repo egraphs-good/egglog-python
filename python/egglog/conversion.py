@@ -83,7 +83,7 @@ def _is_type_compatible(source: type | JustTypeRef, target: type | JustTypeRef) 
     if source == target:
         return True
     if isinstance(source, JustTypeRef) and isinstance(target, JustTypeRef) and source.args and not target.args:
-        return source.name == target.name
+        return source.ident == target.ident
         # TODO: Support case where B[T] where T is typevar is mapped to B[C]
     return False
 
@@ -217,7 +217,7 @@ def resolve_literal(
     arg: object,
     decls: Callable[[], Declarations] = retrieve_conversion_decls,
     tcs: TypeConstraintSolver | None = None,
-    cls_name: str | None = None,
+    cls_ident: Ident | None = None,
 ) -> RuntimeExpr:
     """
     Try to convert an object to a type, raising a ConvertError if it is not possible.
@@ -236,7 +236,7 @@ def resolve_literal(
         # args first based on the existing type constraint solver
         if tcs:
             try:
-                tp_just = tcs.substitute_typevars(tp, cls_name)
+                tp_just = tcs.substitute_typevars(tp, cls_ident)
             # If we can't resolve the type var yet, then just assume it is the right value
             except TypeConstraintError:
                 assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
@@ -246,7 +246,7 @@ def resolve_literal(
             assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
             return arg
     if tcs:
-        tcs.infer_typevars(tp, tp_just, cls_name)
+        tcs.infer_typevars(tp, tp_just, cls_ident)
     if arg_type == tp_just:
         # If the type is an egg type, it has to be a runtime expr
         assert isinstance(arg, RuntimeExpr)

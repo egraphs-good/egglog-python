@@ -73,7 +73,7 @@ AllDecls: TypeAlias = (
 
 
 def pretty_decl(
-    decls: Declarations, decl: AllDecls, *, wrapping_fn: str | None = None, ruleset_name: str | None = None
+    decls: Declarations, decl: AllDecls, *, wrapping_fn: str | None = None, ruleset_ident: Ident | None = None
 ) -> str:
     """
     Pretty print a decleration.
@@ -83,7 +83,7 @@ def pretty_decl(
     traverse = TraverseContext(decls)
     traverse(decl, toplevel=True)
     pretty = traverse.pretty()
-    expr = pretty(decl, ruleset_name=ruleset_name)
+    expr = pretty(decl, ruleset_ident=ruleset_ident)
     if wrapping_fn:
         expr = f"{wrapping_fn}({expr})"
     program = "\n".join([*pretty.statements, expr])
@@ -238,11 +238,11 @@ class PrettyContext:
     _gen_name_types: dict[str, int] = field(default_factory=lambda: defaultdict(lambda: 0))
 
     def __call__(
-        self, decl: AllDecls, *, unwrap_lit: bool = False, parens: bool = False, ruleset_name: str | None = None
+        self, decl: AllDecls, *, unwrap_lit: bool = False, parens: bool = False, ruleset_ident: Ident | None = None
     ) -> str:
         if decl in self.names:
             return self.names[decl]
-        expr, tp_name = self.uncached(decl, unwrap_lit=unwrap_lit, parens=parens, ruleset_name=ruleset_name)
+        expr, tp_name = self.uncached(decl, unwrap_lit=unwrap_lit, parens=parens, ruleset_ident=ruleset_ident)
         # We use a heuristic to decide whether to name this sub-expression as a variable
         # The rough goal is to reduce the number of newlines, given our line length of ~180
         # We determine it's worth making a new line for this expression if the total characters
@@ -258,7 +258,9 @@ class PrettyContext:
             return expr_name
         return expr
 
-    def uncached(self, decl: AllDecls, *, unwrap_lit: bool, parens: bool, ruleset_name: str | None) -> tuple[str, str]:  # noqa: C901, PLR0911, PLR0912
+    def uncached(  # noqa: C901, PLR0911, PLR0912
+        self, decl: AllDecls, *, unwrap_lit: bool, parens: bool, ruleset_ident: Ident | None
+    ) -> tuple[str, str]:
         """
         Returns a tuple of a string value of the decleration and the "type" to use when create a memoized cached version
         for de-duplication.
@@ -316,14 +318,15 @@ class PrettyContext:
             case EqDecl(_, left, right):
                 return f"eq({self(left)}).to({self(right)})", "fact"
             case RulesetDecl(rules):
-                if ruleset_name:
-                    return f"ruleset(name={ruleset_name!r})", f"ruleset_{ruleset_name}"
+                if ruleset_ident:
+                    return f"ruleset(name={ruleset_ident.name!r})", f"ruleset_{ruleset_ident.name}"
                 args = ", ".join(self(r) for r in rules if not isinstance(r, DefaultRewriteDecl))
                 return f"ruleset({args})", "ruleset"
             case CombinedRulesetDecl(rulesets):
-                if ruleset_name:
-                    rulesets = (*rulesets, f"name={ruleset_name!r})")
-                return f"unstable_combine_rulesets({', '.join(rulesets)})", "combined_ruleset"
+                list_args = [r.name for r in rulesets]
+                if ruleset_ident:
+                    list_args.append(f"name={ruleset_ident.name!r})")
+                return (f"unstable_combine_rulesets({', '.join(list_args)})", "combined_ruleset")
             case SaturateDecl(schedule):
                 return f"{self(schedule, parens=True)}.saturate()", "schedule"
             case RepeatDecl(schedule, times):
@@ -335,9 +338,9 @@ class PrettyContext:
                 return f"seq({args})", "schedule"
             case LetSchedulerDecl(scheduler, schedule):
                 return f"{self(scheduler, parens=True)}.scope({self(schedule, parens=True)})", "schedule"
-            case RunDecl(ruleset_name, until, scheduler):
-                ruleset = self.decls._rulesets[ruleset_name]
-                ruleset_str = self(ruleset, ruleset_name=ruleset_name)
+            case RunDecl(ruleset_ident, until, scheduler):
+                ruleset = self.decls._rulesets[ruleset_ident]
+                ruleset_str = self(ruleset, ruleset_ident=ruleset_ident)
                 if not until and not scheduler:
                     return ruleset_str, "schedule"
                 arg_lst = list(map(self, until or []))
@@ -348,7 +351,7 @@ class PrettyContext:
                 msg = "default rewrites should not be pretty printed"
                 raise TypeError(msg)
             case BackOffDecl(_, match_limit, ban_length):
-                list_args: list[str] = []
+                list_args = []
                 if match_limit is not None:
                     list_args.append(f"match_limit={match_limit}")
                 if ban_length is not None:
@@ -373,7 +376,7 @@ class PrettyContext:
         args = [a.expr for a in decl.args]
         ref = decl.callable
         # Special case !=
-        if decl.callable == FunctionRef("!="):
+        if decl.callable == FunctionRef(Ident.builtin("!=")):
             l, r = self(args[0]), self(args[1])
             return f"ne({l}).to({r})", "Unit"
         signature = self.decls.get_callable_decl(ref).signature
@@ -393,10 +396,10 @@ class PrettyContext:
 
         # If this is a function application, the type is the first type arg of the function object
         if signature == "fn-app":
-            tp_name = decl.args[0].tp.args[0].name
+            tp_name = decl.args[0].tp.args[0].ident.name
         else:
             assert isinstance(signature, FunctionSignature)
-            tp_name = signature.semantic_return_type.name
+            tp_name = signature.semantic_return_type.ident.name
         if isinstance(signature, FunctionSignature) and signature.mutates:
             first_arg = args[0]
             expr_str = self(first_arg)
@@ -430,7 +433,7 @@ class PrettyContext:
         Pretty print the call, returning either the full function call or a tuple of the function and the args.
         """
         match ref:
-            case FunctionRef(name):
+            case FunctionRef(Ident(name)):
                 return name, args
             case ClassMethodRef(class_name, method_name):
                 tp_ref = JustTypeRef(class_name, bound_tp_params or ())
@@ -458,9 +461,9 @@ class PrettyContext:
                         return "round", [non_str_slf, *args]
                     case _:
                         return f"{slf}.{method_name}", args
-            case ConstantRef(name):
+            case ConstantRef(Ident(name)):
                 return name
-            case ClassVariableRef(class_name, variable_name):
+            case ClassVariableRef(Ident(class_name), variable_name):
                 return f"{class_name}.{variable_name}"
             case PropertyRef(_class_name, property_name):
                 return f"{self(args[0], parens=True)}.{property_name}"
@@ -495,18 +498,18 @@ class PrettyContext:
         Returns a partial function call as a string.
         """
         match ref:
-            case FunctionRef(name):
+            case FunctionRef(Ident(name)):
                 fn = name
             case UnnamedFunctionRef():
                 res = self._pretty_function_body(ref, args)
                 return f"({res})" if parens else res
             case (
-                ClassMethodRef(class_name, method_name)
-                | MethodRef(class_name, method_name)
-                | PropertyRef(class_name, method_name)
+                ClassMethodRef(Ident(class_name), method_name)
+                | MethodRef(Ident(class_name), method_name)
+                | PropertyRef(Ident(class_name), method_name)
             ):
                 fn = f"{class_name}.{method_name}"
-            case InitRef(class_name):
+            case InitRef(Ident(class_name)):
                 fn = class_name
             case ConstantRef(_):
                 msg = "Constants should not be callable"
