@@ -126,6 +126,7 @@ _A_2 + _A_3""",
     pytest.param(f64(42.1), "f64(42.1)", id="f64"),
     pytest.param(String("hello"), 'String("hello")', id="string"),
     pytest.param(PyObject("hi"), 'PyObject("hi")', id="pyobject"),
+    pytest.param(PyObject(o := object()), f'PyObject(eval("{o!r}"))', id="pyobject-invalid-str"),
     pytest.param(var("x", A), "x", id="variable"),
     # commands
     pytest.param(rewrite(g()).to(h(), A()), "rewrite(g()).to(h(), A())", id="rewrite"),

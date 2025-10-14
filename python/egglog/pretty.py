@@ -4,6 +4,7 @@ Pretty printing for declerations.
 
 from __future__ import annotations
 
+import ast
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias
@@ -286,7 +287,11 @@ class PrettyContext:
             case PartialCallDecl(CallDecl(ref, typed_args, _)):
                 return self._pretty_partial(ref, [a.expr for a in typed_args], parens), "fn"
             case PyObjectDecl(value):
-                return repr(value) if unwrap_lit else f"PyObject({value!r})", "PyObject"
+                value_str = repr(value)
+                if not is_valid_python_expr(value_str):
+                    # If this isn't a valid python expr, represent as string
+                    value_str = f"eval({value_str!r})"
+                return value_str if unwrap_lit else f"PyObject({value_str})", "PyObject"
             case ActionCommandDecl(action):
                 return self(action), "action"
             case RewriteDecl(_, lhs, rhs, conditions) | BiRewriteDecl(_, lhs, rhs, conditions):
@@ -540,3 +545,11 @@ class PrettyContext:
         if arg_names:
             prefix += f" {', '.join(self(a.expr) for a in arg_names)}"
         return f"{prefix}: {self(res.expr)}"
+
+
+def is_valid_python_expr(s: str) -> bool:
+    try:
+        ast.parse(s, mode="eval")
+    except SyntaxError:
+        return False
+    return True
