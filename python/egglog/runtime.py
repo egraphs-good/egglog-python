@@ -694,8 +694,8 @@ def define_expr_method(name: str) -> None:
     like for NumPy's `__array_ufunc__`.
     """
 
-    def _defined_method(self: RuntimeExpr, *args, __name: str = name, **kwargs):
-        fn = _get_expr_method(self, __name)
+    def _defined_method(self: RuntimeExpr, *args, __name: str = name, **kwargs) -> object:
+        fn = cast("Callable", _get_expr_method(self, __name))
         if fn is None:
             raise AttributeError(f"{self.__egg_class_ident__} expression has no method {__name}")
         return fn(*args, **kwargs)
