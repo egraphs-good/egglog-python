@@ -1369,3 +1369,18 @@ def test_match_none_pyobject():
             pass
         case _:
             raise AssertionError
+
+
+class MyInt(int):
+    pass
+
+def test_binary_convert_parent():
+    """
+    Verify that a binary method will convert an arg based on the parent type
+    """
+    class Math(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+        def __add__(self, other: Math | MyInt) -> Math: ...
+    converter(int, Math, lambda i: Math(int(i)))
+    assert Math(5) + MyInt(10) == Math(5) + Math(10)
