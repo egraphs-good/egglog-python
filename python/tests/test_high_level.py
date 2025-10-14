@@ -1360,3 +1360,12 @@ def test_get_class_method():
         def __eq__(self, other: A) -> A: ...  # type: ignore[override]
 
     assert eq(A() == A()).to(A.__eq__(A(), A()))
+
+
+def test_match_none_pyobject():
+    x = PyObject(None)
+    match x:
+        case PyObject(None):
+            pass
+        case _:
+            raise AssertionError

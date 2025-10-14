@@ -604,15 +604,15 @@ class RuntimeExpr(DelayedDeclerations):
         self.__egg_typed_expr_thunk__ = Thunk.value(d[1])
 
     def __hash__(self) -> int:
-        if (method := _get_expr_method(self, "__hash__")) is not None:
-            return cast("int", cast("Any", method()))
+        if (method := _get_expr_method(self, "__hash__")) is not _no_method_sentinel:
+            return cast("int", cast("Any", cast("Callable", method)()))
         return hash(self.__egg_typed_expr__)
 
     # Implement this directly to special case behavior where it transforms to an egraph equality, if it is not a
     # preserved method or defined on the class
     def __eq__(self, other: object) -> object:  # type: ignore[override]
-        if (method := _get_expr_method(self, "__eq__")) is not None:
-            return method(other)
+        if (method := _get_expr_method(self, "__eq__")) is not _no_method_sentinel:
+            return cast("Callable", method)(other)
 
         if not (isinstance(self, RuntimeExpr) and isinstance(other, RuntimeExpr)):
             return NotImplemented
@@ -627,8 +627,8 @@ class RuntimeExpr(DelayedDeclerations):
         )
 
     def __ne__(self, other: object) -> object:  # type: ignore[override]
-        if (method := _get_expr_method(self, "__ne__")) is not None:
-            return method(other)
+        if (method := _get_expr_method(self, "__ne__")) is not _no_method_sentinel:
+            return cast("Callable", method)(other)
 
         from .egraph import BaseExpr, ne  # noqa: PLC0415
 
@@ -640,13 +640,16 @@ class RuntimeExpr(DelayedDeclerations):
         ...
 
 
-def _get_expr_method(expr: RuntimeExpr, name: str) -> RuntimeFunction | RuntimeExpr | Callable | None:
+# Return a sentinel value to differentiate between no method and property that returns None
+_no_method_sentinel = object()
+
+
+def _get_expr_method(expr: RuntimeExpr, name: str) -> object:
     if name in (preserved_methods := expr.__egg_class_decl__.preserved_methods):
         return preserved_methods[name].__get__(expr)
-
     if name in expr.__egg_class_decl__.methods:
-        return RuntimeFunction(expr.__egg_decls_thunk__, Thunk.value(MethodRef(expr.__egg_class_name__, name)), expr)
-    return None
+        return RuntimeFunction(expr.__egg_decls_thunk__, Thunk.value(MethodRef(expr.__egg_class_ident__, name)), expr)
+    return _no_method_sentinel
 
 
 def define_expr_method(name: str) -> None:
