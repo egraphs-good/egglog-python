@@ -121,6 +121,17 @@ TYPE_DEFINED_METHODS = {
     *ALWAYS_MUTATES_SELF,
 } - {"__str__", "__repr__"}  # these are defined on RuntimeFunction
 
+# Methods that need to be defined as descriptors on the class so that they can be looked up on the class itself.
+CLASS_DESCRIPTOR_METHODS = {
+    "__eq__",
+    "__ne__",
+    "__str__",
+    "__repr__",
+    "__getattr__",
+    *NUMERIC_BINARY_METHODS,
+    *TYPE_DEFINED_METHODS,
+}
+
 # Set this globally so we can get access to PyObject when we have a type annotation of just object.
 # This is the only time a type annotation doesn't need to include the egglog type b/c object is top so that would be redundant statically.
 _PY_OBJECT_CLASS: RuntimeClass | None = None
@@ -206,14 +217,42 @@ class ClassFactory(type):
         namespace: dict[str, Any] = {}
         for m in reversed(cls.__mro__):
             namespace.update(m.__dict__)
+            if m is not object:
+                namespace.update(m.__dict__)
         init = namespace.pop("__init__")
         meta = types.new_class("type(RuntimeClass)", (BaseClassFactoryMeta,), {}, lambda ns: ns.update(**namespace))
-        tp = types.new_class("RuntimeClass", (), {"metaclass": meta})
+        tp = types.new_class("RuntimeClass", (), {"metaclass": meta}, lambda ns: ns.update(RUNTIME_CLASS_DESCRIPTORS))
         init(tp, *args, **kwargs)
         return tp
 
     def __instancecheck__(cls, instance: object) -> bool:
         return isinstance(instance, BaseClassFactoryMeta)
+
+
+# Add a custom descriptor for each method we want to support on the class itself, so that we can lookup things like __add__
+# on the expr class. This is used for things like running docstrings.
+
+
+@dataclass
+class RuntimeClassDescriptor:
+    name: str
+
+    def __get__(self, obj: object, owner: RuntimeClass | None = None) -> Callable:
+        if owner is None:
+            raise AttributeError(f"Can only access {self.name} on the class, not an instance")
+        cls_decl = owner.__egg_decls__._classes[owner.__egg_tp__.ident]
+        if self.name in cls_decl.class_methods:
+            return RuntimeFunction(
+                owner.__egg_decls_thunk__, Thunk.value(ClassMethodRef(owner.__egg_tp__.ident, self.name)), None
+            )
+        if self.name in cls_decl.preserved_methods:
+            return cls_decl.preserved_methods[self.name]
+        raise AttributeError(f"Class {owner.__egg_tp__.ident} has no method {self.name}") from None
+
+
+RUNTIME_CLASS_DESCRIPTORS: dict[str, RuntimeClassDescriptor] = {
+    method: RuntimeClassDescriptor(method) for method in CLASS_DESCRIPTOR_METHODS
+}
 
 
 @dataclass(match_args=False)
@@ -696,7 +735,7 @@ def define_expr_method(name: str) -> None:
 
     def _defined_method(self: RuntimeExpr, *args, __name: str = name, **kwargs) -> object:
         fn = cast("Callable", _get_expr_method(self, __name))
-        if fn is None:
+        if fn is _no_method_sentinel:
             raise AttributeError(f"{self.__egg_class_ident__} expression has no method {__name}")
         return fn(*args, **kwargs)
 

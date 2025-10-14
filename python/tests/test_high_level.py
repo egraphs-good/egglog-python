@@ -14,7 +14,7 @@ import pytest
 
 from egglog import *
 from egglog.declarations import CallDecl, FunctionRef, Ident, JustTypeRef, MethodRef, TypedExprDecl
-from egglog.runtime import RuntimeExpr
+from egglog.runtime import RuntimeExpr, RuntimeFunction
 from egglog.version_compat import BEFORE_3_11
 
 
@@ -1472,3 +1472,25 @@ m = MathPrim()
 )
 def test_always_preserved(expr, res):
     assert expr() == res
+
+
+def test_class_lookup_method():
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+        def m(self) -> i64: ...
+        def __eq__(self, other: A) -> A: ...  # type: ignore[override]
+        def __add__(self, other: A) -> A: ...  # type: ignore[override]
+
+        def __str__(self) -> str:
+            """Hi"""
+            return "hi"
+
+    assert A.m(A()) == A().m()
+    assert isinstance(A.m, RuntimeFunction)
+    assert eq(A.__eq__(A(), A())).to(A() == A())
+    assert isinstance(A.__eq__, RuntimeFunction)
+    assert eq(A.__add__(A(), A())).to(A() + A())
+    assert isinstance(A.__add__, RuntimeFunction)
+    assert A.__str__(A()) == "hi"
+    assert A.__str__.__doc__ == "Hi"
