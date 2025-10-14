@@ -325,15 +325,15 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
         fn = RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(InitRef(name)), self.__egg_tp__.to_just())
         return fn(*args, **kwargs)  # type: ignore[arg-type]
 
-    def __dir__(self) -> list[str]:
-        cls_decl = self.__egg_decls__.get_class_decl(self.__egg_tp__.name)
-        possible_methods = (
-            list(cls_decl.class_methods) + list(cls_decl.class_variables) + list(cls_decl.preserved_methods)
+    def __dir__(self) -> Iterable[str]:
+        cls_decl = self.__egg_decls__._classes[self.__egg_tp__.ident]
+        return (
+            list(cls_decl.class_methods)
+            + list(cls_decl.class_variables)
+            + list(cls_decl.preserved_methods)
+            + list(cls_decl.methods)
+            + list(cls_decl.properties)
         )
-        if "__init__" in possible_methods:
-            possible_methods.remove("__init__")
-            possible_methods.append("__call__")
-        return possible_methods
 
     def __getitem__(self, args: object) -> RuntimeClass:
         if not isinstance(args, tuple):
@@ -442,6 +442,15 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
     @property
     def __doc__(self) -> str | None:  # type: ignore[override]
         return self.__egg_decls__._classes[self.__egg_tp__.ident].doc
+
+    @property
+    def __dict__(self) -> dict[str, Any]:  # type: ignore[override]
+        """
+        Return the dict so that this works with things like `DocTestFinder`.
+        """
+        return {attr: getattr(self, attr) for attr in dir(self)}
+
+
 class RuntimeFunctionMeta(type):
     # Override getatribute on class so that it if we call RuntimeFunction.__module__ we get this module
     # but if we call it on an instance we get the module of the instance so that it works with doctest.
@@ -654,8 +663,14 @@ class RuntimeExpr(DelayedDeclerations):
         display(Code(str(self), language="python"))
 
     def __dir__(self) -> Iterable[str]:
-        class_decl = self.__egg_class_decl__
-        return list(class_decl.methods) + list(class_decl.properties) + list(class_decl.preserved_methods)
+        cls_decl = self.__egg_class_decl__
+        return (
+            list(cls_decl.class_methods)
+            + list(cls_decl.class_variables)
+            + list(cls_decl.preserved_methods)
+            + list(cls_decl.methods)
+            + list(cls_decl.properties)
+        )
 
     @property
     def __egg_class_ident__(self) -> Ident:
@@ -728,7 +743,7 @@ def define_expr_method(name: str) -> None:
     """
     Given the name of a method, explicitly defines it on the runtime type that holds `Expr` objects as a method.
 
-    Call this if you need a method to be defined on the type itself where overrindg with `__getattr__` does not suffice,
+    Call this if you need a method to be defined on the type itself where overrding with `__getattr__` does not suffice,
     like for NumPy's `__array_ufunc__`.
     """
 
