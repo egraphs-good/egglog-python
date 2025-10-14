@@ -457,8 +457,8 @@ class EGraphState:
             return self.type_ref_to_egg_sort[ref]
         except KeyError:
             pass
-        self.type_ref_to_egg_sort[ref] = egg_name = decl.egg_name or _generate_type_egg_name(ref)
         decl = self.__egg_decls__._classes[ref.ident]
+        self.type_ref_to_egg_sort[ref] = egg_name = (not ref.args and decl.egg_name) or _generate_type_egg_name(ref)
         self.egg_sort_to_type_ref[egg_name] = ref
         if not decl.builtin or ref.args:
             if ref.args:
