@@ -45,6 +45,7 @@ dev = [
     "anywidget[dev]",
     "egglog[docs,test]",
     "jupyterlab",
+    "ipykernel",
 ]
 
 test = [
