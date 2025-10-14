@@ -704,6 +704,7 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
     decls_thunk = Thunk.fn(_relation_decls, ident, tps, egg_fn)
     return cast("Callable[..., Unit]", RuntimeFunction(decls_thunk, Thunk.value(FunctionRef(ident))))
 
+
 def _get_module(frame: FrameType | None = None) -> str | None:
     if frame is None:
         frame = currentframe()
@@ -1550,7 +1551,9 @@ class Fact:
         match self.fact:
             case EqDecl(_, left, right):
                 return left == right
-            case ExprFactDecl(TypedExprDecl(_, CallDecl(FunctionRef(name), (left_tp, right_tp)))) if name == Ident.builtin("!="):
+            case ExprFactDecl(TypedExprDecl(_, CallDecl(FunctionRef(name), (left_tp, right_tp)))) if (
+                name == Ident.builtin("!=")
+            ):
                 return left_tp != right_tp
         msg = f"Can only check equality for == or != not {self}"
         raise ValueError(msg)
@@ -1770,7 +1773,8 @@ class _NeBuilder(Generic[BASE_EXPR]):
         res = RuntimeExpr.__from_values__(
             Declarations.create(cast("RuntimeClass", Unit), lhs, rhs),
             TypedExprDecl(
-                JustTypeRef(Ident.builtin("Unit")), CallDecl(FunctionRef(Ident.builtin("!=")), (lhs.__egg_typed_expr__, rhs.__egg_typed_expr__))
+                JustTypeRef(Ident.builtin("Unit")),
+                CallDecl(FunctionRef(Ident.builtin("!=")), (lhs.__egg_typed_expr__, rhs.__egg_typed_expr__)),
             ),
         )
         return cast("Unit", res)

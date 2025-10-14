@@ -12,7 +12,9 @@ def test_type_str():
     decls = Declarations(
         _classes={
             Ident.builtin("i64"): ClassDecl(),
-            Ident.builtin("Map"): ClassDecl(type_vars=(ClassTypeVarRef(Ident.builtin("K")), ClassTypeVarRef(Ident.builtin("V")))),
+            Ident.builtin("Map"): ClassDecl(
+                type_vars=(ClassTypeVarRef(Ident.builtin("K")), ClassTypeVarRef(Ident.builtin("V")))
+            ),
         }
     )
     i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars(Ident.builtin("i64")))
@@ -86,7 +88,10 @@ def test_expr_special():
                 class_methods={
                     "__init__": FunctionDecl(
                         FunctionSignature(
-                            (TypeRefWithVars(Ident.builtin("i64")),), ("self",), (None,), TypeRefWithVars(Ident.builtin("i64"))
+                            (TypeRefWithVars(Ident.builtin("i64")),),
+                            ("self",),
+                            (None,),
+                            TypeRefWithVars(Ident.builtin("i64")),
                         )
                     )
                 },
@@ -100,7 +105,10 @@ def test_expr_special():
         JustTypeRef(Ident.builtin("i64")),
         CallDecl(
             MethodRef(Ident.builtin("i64"), "__add__"),
-            (TypedExprDecl(JustTypeRef(Ident.builtin("i64")), LitDecl(1)), TypedExprDecl(JustTypeRef(Ident.builtin("i64")), LitDecl(1))),
+            (
+                TypedExprDecl(JustTypeRef(Ident.builtin("i64")), LitDecl(1)),
+                TypedExprDecl(JustTypeRef(Ident.builtin("i64")), LitDecl(1)),
+            ),
         ),
     )
 
@@ -108,10 +116,14 @@ def test_expr_special():
 def test_class_variable():
     decls = Declarations(
         _classes={
-            Ident.builtin("i64"): ClassDecl(class_variables={"one": ConstantDecl(JustTypeRef(Ident.builtin("i64")), None)}),
+            Ident.builtin("i64"): ClassDecl(
+                class_variables={"one": ConstantDecl(JustTypeRef(Ident.builtin("i64")), None)}
+            ),
         },
     )
     i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars(Ident.builtin("i64")))
     one = i64.one
     assert isinstance(one, RuntimeExpr)
-    assert one.__egg_typed_expr__ == TypedExprDecl(JustTypeRef(Ident.builtin("i64")), CallDecl(ClassVariableRef(Ident.builtin("i64"), "one")))
+    assert one.__egg_typed_expr__ == TypedExprDecl(
+        JustTypeRef(Ident.builtin("i64")), CallDecl(ClassVariableRef(Ident.builtin("i64"), "one"))
+    )

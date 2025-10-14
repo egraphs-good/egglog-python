@@ -356,7 +356,6 @@ class EGraphState:
         Creates the egg cost table if needed and gets the name of the table.
         """
         name = self.cost_table_name(ref)
-        print(name, self.cost_callables)
         if ref not in self.cost_callables:
             self.cost_callables.add(ref)
             signature = self.__egg_decls__.get_callable_decl(ref).signature
@@ -725,14 +724,22 @@ class EGraphState:
                             JustTypeRef(Ident.builtin("BigInt")),
                             CallDecl(
                                 ClassMethodRef(Ident.builtin("BigInt"), "from_string"),
-                                (TypedExprDecl(JustTypeRef(Ident.builtin("String")), LitDecl(str(fraction.numerator))),),
+                                (
+                                    TypedExprDecl(
+                                        JustTypeRef(Ident.builtin("String")), LitDecl(str(fraction.numerator))
+                                    ),
+                                ),
                             ),
                         ),
                         TypedExprDecl(
                             JustTypeRef(Ident.builtin("BigInt")),
                             CallDecl(
                                 ClassMethodRef(Ident.builtin("BigInt"), "from_string"),
-                                (TypedExprDecl(JustTypeRef(Ident.builtin("String")), LitDecl(str(fraction.denominator))),),
+                                (
+                                    TypedExprDecl(
+                                        JustTypeRef(Ident.builtin("String")), LitDecl(str(fraction.denominator))
+                                    ),
+                                ),
                             ),
                         ),
                     ),
@@ -754,19 +761,25 @@ class EGraphState:
                 xs_ = self.egraph.value_to_set(value)
                 (v_tp,) = tp.args
                 return CallDecl(
-                    InitRef(Ident.builtin("Set")), tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs_), (v_tp,)
+                    InitRef(Ident.builtin("Set")),
+                    tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs_),
+                    (v_tp,),
                 )
             case "Vec":
                 xs = self.egraph.value_to_vec(value)
                 (v_tp,) = tp.args
                 return CallDecl(
-                    InitRef(Ident.builtin("Vec")), tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs), (v_tp,)
+                    InitRef(Ident.builtin("Vec")),
+                    tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs),
+                    (v_tp,),
                 )
             case "MultiSet":
                 xs = self.egraph.value_to_multiset(value)
                 (v_tp,) = tp.args
                 return CallDecl(
-                    InitRef(Ident.builtin("MultiSet")), tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs), (v_tp,)
+                    InitRef(Ident.builtin("MultiSet")),
+                    tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs),
+                    (v_tp,),
                 )
             case "UnstableFn":
                 _names, _args = self.egraph.value_to_function(value)

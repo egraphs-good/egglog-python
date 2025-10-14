@@ -57,6 +57,7 @@ class TestSaveLoad:
         assert sort.load(one_expr) == 1
         assert sort.load(bool_expr) is True
 
+
 class TestDictUpdate:
     # Test that (py-dict-update dict key value key2 value2) works
     def test_dict_update(self):

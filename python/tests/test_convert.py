@@ -6,6 +6,7 @@ from egglog import *
 
 # TODO: Revert global conversion state after each test w/ fixture
 
+
 @pytest.mark.skip(reason="We dont support looking up by metaclass anymore")
 def test_conversion_custom_metaclass():
     class MyMeta(type):

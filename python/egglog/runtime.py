@@ -323,7 +323,7 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
             return_tp = cls_decl.class_variables[name]
             return RuntimeExpr(
                 self.__egg_decls_thunk__,
-                Thunk.value(TypedExprDecl(return_tp.type_ref, CallDecl(ClassVariableRef(self.__egg_tp__.name, name)))),
+                Thunk.value(TypedExprDecl(return_tp.type_ref, CallDecl(ClassVariableRef(self.__egg_tp__.ident, name)))),
             )
         if name in cls_decl.class_methods:
             return RuntimeFunction(
