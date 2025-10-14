@@ -216,7 +216,6 @@ class ClassFactory(type):
             return super().__call__(*args, **kwargs)
         namespace: dict[str, Any] = {}
         for m in reversed(cls.__mro__):
-            namespace.update(m.__dict__)
             if m is not object:
                 namespace.update(m.__dict__)
         init = namespace.pop("__init__")
