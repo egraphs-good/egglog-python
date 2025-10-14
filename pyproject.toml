@@ -252,7 +252,7 @@ module-name = "egglog.bindings"
 features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib"]
+addopts = ["--import-mode=importlib", "--doctest-modules"]
 testpaths = ["python"]
 python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
