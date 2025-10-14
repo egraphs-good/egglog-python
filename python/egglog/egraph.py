@@ -408,8 +408,10 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     )
     type_vars = tuple(ClassTypeVarRef.from_type_var(p) for p in parameters)
     del parameters
-    cls_decl = ClassDecl(egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()))
-    decls = Declarations(_classes={cls_name: cls_decl})
+    cls_decl = ClassDecl(
+        egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()), doc=namespace.pop("__doc__", None)
+    )
+    decls = Declarations(_classes={cls_ident: cls_decl})
     # Update class think eagerly when resolving so that lookups work in methods
     runtime_cls.__egg_decls_thunk__ = Thunk.value(decls)
 
@@ -646,9 +648,10 @@ def _fn_decl(
         arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
         reverse_args=reverse_args,
     )
+    doc = fn.__doc__
     decl: ConstructorDecl | FunctionDecl
     if is_constructor:
-        decl = ConstructorDecl(signature_, egg_name, cost, unextractable)
+        decl = ConstructorDecl(signature_, egg_name, cost, unextractable, doc)
     else:
         if cost is not None:
             msg = "Cost can only be set for constructors"
@@ -661,6 +664,7 @@ def _fn_decl(
             egg_name=egg_name,
             merge=merged.__egg_typed_expr__.expr if merged is not None else None,
             builtin=is_builtin,
+            doc=doc,
         )
     decls.set_function_decl(ref, decl)
     return Thunk.fn(

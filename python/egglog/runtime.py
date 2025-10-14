@@ -372,6 +372,10 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
     @property
     def __match_args__(self) -> tuple[str, ...]:
         return self.__egg_decls__._classes[self.__egg_tp__.ident].match_args
+
+    @property
+    def __doc__(self) -> str | None:  # type: ignore[override]
+        return self.__egg_decls__._classes[self.__egg_tp__.ident].doc
 class RuntimeFunctionMeta(type):
     # Override getatribute on class so that it if we call RuntimeFunction.__module__ we get this module
     # but if we call it on an instance we get the module of the instance so that it works with doctest.
@@ -502,6 +506,13 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
 
     def __repr__(self) -> str:
         return str(self)
+
+    @property
+    def __doc__(self) -> str | None:  # type: ignore[override]
+        decl = self.__egg_decls__.get_callable_decl(self.__egg_ref__)
+        if isinstance(decl, FunctionDecl | ConstructorDecl):
+            return decl.doc
+        return None
 
 
 def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: bool) -> Signature:

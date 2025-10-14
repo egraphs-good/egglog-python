@@ -1327,3 +1327,36 @@ def test_method_module():
         def m(self) -> i64: ...
 
     assert A.m.__module__ == __name__
+
+
+def test_class_doc():
+    class A(Expr):
+        """Docstring for A"""
+
+    assert A.__doc__ == "Docstring for A"
+
+
+def test_constructor_doc():
+    class A(Expr):
+        @classmethod
+        def create(cls) -> A:
+            """Docstring for A.create"""
+
+    assert A.create.__doc__ == "Docstring for A.create"
+
+
+def test_function_doc():
+    @function
+    def f() -> i64:
+        """Docstring for f"""
+
+    assert f.__doc__ == "Docstring for f"
+
+
+def test_get_class_method():
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+        def __eq__(self, other: A) -> A: ...  # type: ignore[override]
+
+    assert eq(A() == A()).to(A.__eq__(A(), A()))

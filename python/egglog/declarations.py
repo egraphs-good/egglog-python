@@ -319,6 +319,7 @@ class ClassDecl:
     properties: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
     match_args: tuple[str, ...] = field(default=())
+    doc: str | None = field(default=None)
 
 
 @dataclass(frozen=True)
@@ -584,6 +585,7 @@ class FunctionDecl:
     builtin: bool = False
     egg_name: str | None = None
     merge: ExprDecl | None = None
+    doc: str | None = None
 
 
 @dataclass(frozen=True)
@@ -592,6 +594,7 @@ class ConstructorDecl:
     egg_name: str | None = None
     cost: int | None = None
     unextractable: bool = False
+    doc: str | None = None
 
 
 CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl | ConstructorDecl
