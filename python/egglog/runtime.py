@@ -382,7 +382,7 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
 
         preserved_methods = cls_decl.preserved_methods
         if name in preserved_methods:
-            return preserved_methods[name].__get__(self)
+            return preserved_methods[name]
 
         # if this is a class variable, return an expr for it, otherwise, assume it's a method
         if name in cls_decl.class_variables:
