@@ -466,6 +466,8 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
     # bound methods need to store RuntimeExpr not just TypedExprDecl, so they can mutate the expr if required on self
     __egg_bound__: JustTypeRef | RuntimeExpr | None = None
 
+    __get__ = None
+
     @property
     def __module__(self) -> str | None:  # type: ignore[override]
         ref = self.__egg_ref__
