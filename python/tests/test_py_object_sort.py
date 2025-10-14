@@ -49,6 +49,13 @@ class TestSaveLoad:
         assert ref() is not None
         assert sort.load(expr) == MyObject()
 
+    def test_same_hash_different(self):
+        sort = PyObjectSort()
+        one_expr = sort.store(1)
+        bool_expr = sort.store(True)
+        assert one_expr != bool_expr
+        assert sort.load(one_expr) == 1
+        assert sort.load(bool_expr) is True
 
 class TestDictUpdate:
     # Test that (py-dict-update dict key value key2 value2) works

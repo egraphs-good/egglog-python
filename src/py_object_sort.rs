@@ -41,7 +41,7 @@ pub struct PyObjectSort {
     objects: Arc<Mutex<Vec<Py<PyAny>>>>,
     /// Maps from IDs to their index
     id_to_index: Arc<Mutex<HashMap<usize, PyObjectIdent>>>,
-    /// Maps from all hashable objects to their index
+    /// Maps from a tuple of all hashable objects and their type to their index
     hashable_to_index: Arc<Py<PyDict>>,
 }
 
@@ -76,7 +76,9 @@ impl PyObjectSort {
         // 2. If not, try looking the object up by its hash
         let hashable_to_index = self.hashable_to_index.bind(py);
         let mut objects = self.objects.lock().unwrap();
-        match hashable_to_index.get_item(obj.clone_ref(py)) {
+        let obj_type = obj.bind(py).get_type().unbind();
+        let key = (obj.clone_ref(py), obj_type.clone_ref(py));
+        match hashable_to_index.get_item(&key) {
             // An error means it's not hashable, so we store it by ID
             Err(_) => {
                 let index = objects.len();
@@ -94,7 +96,7 @@ impl PyObjectSort {
                         let index = objects.len();
                         objects.push(obj.clone_ref(py));
                         id_to_index.insert(id, index);
-                        hashable_to_index.set_item(obj, index)?;
+                        hashable_to_index.set_item(key, index)?;
                         Ok(index)
                     }
                 }
