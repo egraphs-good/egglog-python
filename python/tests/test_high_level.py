@@ -1384,3 +1384,10 @@ def test_binary_convert_parent():
         def __add__(self, other: Math | MyInt) -> Math: ...
     converter(int, Math, lambda i: Math(int(i)))
     assert Math(5) + MyInt(10) == Math(5) + Math(10)
+
+def test_py_eval_fn_no_globals():
+    """
+    Verify that py_eval_fn without globals still works
+    """
+    assert not hasattr(int, "__globals__")
+    assert EGraph().extract(py_eval_fn(int)(PyObject.from_int(10))).value == 10

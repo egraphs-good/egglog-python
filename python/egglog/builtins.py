@@ -1038,7 +1038,7 @@ def py_eval_fn(fn: Callable) -> PyObjectFunction:
             new_kvs.extend((f"__arg_{i}", arg))
             eval_str += f"__arg_{i}, "
         eval_str += ")"
-        return py_eval(eval_str, PyObject({"__fn": __fn}).dict_update(*new_kvs), __fn.__globals__)
+        return py_eval(eval_str, PyObject({"__fn": __fn}).dict_update(*new_kvs), getattr(__fn, "__globals__", {}))
 
     return inner
 
