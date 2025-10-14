@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import pathlib
+from collections.abc import Iterator
 from copy import copy
 from fractions import Fraction
 from functools import partial
@@ -1395,3 +1396,79 @@ def test_py_eval_fn_no_globals():
     """
     assert not hasattr(int, "__globals__")
     assert EGraph().extract(py_eval_fn(int)(PyObject.from_int(10))).value == 10
+
+
+class MathPrim(Expr):
+    def __init__(self) -> None: ...
+
+    def __bytes__(self) -> bytes:
+        return b"hi"
+
+    def __str__(self) -> str:
+        return "hi"
+
+    def __repr__(self) -> str:
+        return "hi"
+
+    def __format__(self, format_spec: str) -> str:
+        return "hi"
+
+    def __hash__(self) -> int:
+        return 42
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __int__(self) -> int:
+        return 1000
+
+    def __float__(self) -> float:
+        return 100.0
+
+    def __complex__(self) -> complex:
+        return 1 + 0j
+
+    def __index__(self) -> int:
+        return 20
+
+    def __len__(self) -> int:
+        return 10
+
+    def __length_hint__(self) -> int:
+        return 5
+
+    def __iter__(self) -> Iterator[int]:
+        yield 1
+
+    def __reversed__(self) -> Iterator[int]:
+        yield 10
+
+    def __contains__(self, item: int) -> bool:
+        return True
+
+
+m = MathPrim()
+
+
+@pytest.mark.parametrize(
+    ("expr", "res"),
+    [
+        pytest.param(lambda: bytes(m), b"hi", id="bytes"),
+        pytest.param(lambda: str(m), "hi", id="str"),
+        pytest.param(lambda: repr(m), "hi", id="repr"),
+        pytest.param(lambda: format(m, ""), "hi", id="format"),
+        pytest.param(lambda: hash(m), 42, id="hash"),
+        pytest.param(lambda: bool(m), False, id="bool"),
+        pytest.param(lambda: int(m), 1000, id="int"),
+        pytest.param(lambda: float(m), 100.0, id="float"),
+        pytest.param(lambda: complex(m), 1 + 0j, id="complex"),
+        pytest.param(lambda: m.__index__(), 20, id="index"),
+        pytest.param(lambda: len(m), 10, id="len"),
+        pytest.param(lambda: m.__length_hint__(), 5, id="length_hint"),
+        pytest.param(lambda: list(m), [1], id="iter"),
+        pytest.param(lambda: list(reversed(m)), [10], id="reversed"),
+        pytest.param(lambda: 1 in m, True, id="contains"),
+    ],
+)
+def test_always_preserved(expr, res):
+    assert expr() == res

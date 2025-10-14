@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "ALWAYS_MUTATES_SELF",
+    "ALWAYS_PRESERVED",
     "LIT_IDENTS",
     "NUMERIC_BINARY_METHODS",
     "RuntimeClass",
@@ -75,25 +77,49 @@ NUMERIC_BINARY_METHODS = {
 }
 
 
-# Methods that need to be defined on the runtime type that holds `Expr` objects, so that they can be used as methods.
+# special methods that return none and mutate self
+ALWAYS_MUTATES_SELF = {
+    "__setitem__",
+    "__delitem__",
+    # "__setattr__",
+}
 
-TYPE_DEFINED_METHODS = {
+# special methods which must return real python values instead of lazy expressions
+ALWAYS_PRESERVED = {
+    "__bytes__",
+    "__format__",
+    "__hash__",
     "__bool__",
     "__len__",
+    "__length_hint__",
+    "__iter__",
+    "__reversed__",
+    "__contains__",
+    "__index__",
+    "__buffer__",
     "__complex__",
     "__int__",
     "__float__",
-    "__iter__",
-    "__index__",
+    "__str__",
+    "__repr__",
+}
+
+# Methods that need to be defined on the runtime type that holds `Expr` objects, so that they can be used as methods.
+
+TYPE_DEFINED_METHODS = {
     "__call__",
     "__getitem__",
-    "__setitem__",
-    "__delitem__",
     "__pos__",
     "__neg__",
     "__invert__",
     "__round__",
-}
+    "__abs__",
+    "__trunc__",
+    "__floor__",
+    "__ceil__",
+    *ALWAYS_PRESERVED,
+    *ALWAYS_MUTATES_SELF,
+} - {"__str__", "__repr__"}  # these are defined on RuntimeFunction
 
 # Set this globally so we can get access to PyObject when we have a type annotation of just object.
 # This is the only time a type annotation doesn't need to include the egglog type b/c object is top so that would be redundant statically.
@@ -294,6 +320,8 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
         return RuntimeClass(Thunk.fn(Declarations.create, self, *decls_like), tp, _egg_has_params=True)
 
     def __getattr__(self, name: str) -> RuntimeFunction | RuntimeExpr | Callable:
+        if not isinstance(name, str):
+            raise TypeError(f"Attribute name must be a string, got {name!r}")
         if name == "__origin__" and self.__egg_tp__.args:
             return RuntimeClass(self.__egg_decls_thunk__, TypeRefWithVars(self.__egg_tp__.ident))
 
@@ -554,23 +582,29 @@ class RuntimeExpr(DelayedDeclerations):
     def __egg_typed_expr__(self) -> TypedExprDecl:
         return self.__egg_typed_expr_thunk__()
 
-    def __getattr__(self, name: str) -> RuntimeFunction | RuntimeExpr | Callable | None:
-        if (method := _get_expr_method(self, name)) is not None:
+    def __getattr__(self, name: str) -> object:
+        if (method := _get_expr_method(self, name)) is not _no_method_sentinel:
             return method
         if name in self.__egg_class_decl__.properties:
             fn = RuntimeFunction(
-                self.__egg_decls_thunk__, Thunk.value(PropertyRef(self.__egg_class_name__, name)), self
+                self.__egg_decls_thunk__, Thunk.value(PropertyRef(self.__egg_class_ident__, name)), self
             )
             return fn()
-        raise AttributeError(f"{self.__egg_class_name__} has no method {name}") from None
+        if (getattr_method := _get_expr_method(self, "__getattr__")) is not _no_method_sentinel:
+            return cast("Callable", getattr_method)(name)
+        raise AttributeError(f"{self.__egg_class_ident__} has no method {name}") from None
 
     def __repr__(self) -> str:
         """
         The repr of the expr is the pretty printed version of the expr.
         """
+        if (method := _get_expr_method(self, "__repr__")) is not _no_method_sentinel:
+            return cast("str", cast("Any", cast("Callable", method)()))
         return str(self)
 
     def __str__(self) -> str:
+        if (method := _get_expr_method(self, "__str__")) is not _no_method_sentinel:
+            return cast("str", cast("Any", cast("Callable", method)()))
         return self.__egg_pretty__(None)
 
     def __egg_pretty__(self, wrapping_fn: str | None) -> str:

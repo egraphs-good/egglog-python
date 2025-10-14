@@ -68,6 +68,14 @@ UNARY_METHODS = {
     "__invert__": "~",
 }
 
+NAMED_UNARY_METHODS = {
+    "__abs__": "abs",
+    "__round__": "round",
+    "__trunc__": "trunc",
+    "__floor__": "floor",
+    "__ceil__": "ceil",
+}
+
 AllDecls: TypeAlias = (
     RulesetDecl | CombinedRulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl | BackOffDecl
 )
@@ -462,8 +470,10 @@ class PrettyContext:
                         return f"del {slf}[{self(args[0], unwrap_lit=True)}]"
                     case "__setitem__":
                         return f"{slf}[{self(args[0], unwrap_lit=True)}] = {self(args[1], unwrap_lit=True)}"
-                    case "__round__":
-                        return "round", [non_str_slf, *args]
+                    case _ if method_name in NAMED_UNARY_METHODS:
+                        return NAMED_UNARY_METHODS[method_name], [non_str_slf, *args]
+                    case "__getattr__":
+                        return "getattr", [non_str_slf, *args]
                     case _:
                         return f"{slf}.{method_name}", args
             case ConstantRef(Ident(name)):

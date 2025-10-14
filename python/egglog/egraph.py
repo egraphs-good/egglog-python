@@ -132,26 +132,6 @@ IGNORED_ATTRIBUTES = {
 }
 
 
-# special methods that return none and mutate self
-ALWAYS_MUTATES_SELF = {"__setitem__", "__delitem__"}
-# special methods which must return real python values instead of lazy expressions
-ALWAYS_PRESERVED = {
-    "__repr__",
-    "__str__",
-    "__bytes__",
-    "__format__",
-    "__hash__",
-    "__bool__",
-    "__len__",
-    "__length_hint__",
-    "__iter__",
-    "__reversed__",
-    "__contains__",
-    "__index__",
-    "__bufer__",
-}
-
-
 def check_eq(x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *, add_second=True, display=False) -> EGraph:
     """
     Verifies that two expressions are equal after running the schedule.
@@ -457,7 +437,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
                 unextractable, preserve, subsume = False, False, False
                 mutates = method_name in ALWAYS_MUTATES_SELF
                 reverse_args = False
-        if preserve:
+        if preserve or method_name in ALWAYS_PRESERVED:
             cls_decl.preserved_methods[method_name] = fn
             continue
         locals = frame.f_locals
