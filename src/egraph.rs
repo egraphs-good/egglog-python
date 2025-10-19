@@ -5,7 +5,7 @@ use crate::error::{EggResult, WrappedError};
 use crate::py_object_sort::{PyObjectIdent, PyObjectSort};
 use crate::serialize::SerializedEGraph;
 
-use egglog::prelude::{add_base_sort, RustSpan, Span};
+use egglog::prelude::{RustSpan, Span, add_base_sort};
 use egglog::{SerializeConfig, span};
 use log::info;
 use num_bigint::BigInt;
@@ -84,6 +84,9 @@ impl EGraph {
         {
             cmds.push_str(&cmds_str);
         }
+        if let Some(err) = PyErr::take(py) {
+            return Err(WrappedError::Py(err));
+        }
         res.map(|xs| xs.iter().map(|o| o.into()).collect())
     }
 
@@ -134,12 +137,18 @@ impl EGraph {
             .map(Value)
     }
 
-    fn eval_expr(&mut self, expr: Expr) -> EggResult<(String, Value)> {
+    fn eval_expr(&mut self, py: Python<'_>, expr: Expr) -> EggResult<(String, Value)> {
         let expr: egglog::ast::Expr = expr.into();
-        self.egraph
-            .eval_expr(&expr)
-            .map(|(s, v)| (s.name().to_string(), Value(v)))
-            .map_err(|e| WrappedError::Egglog(e, format!("\nWhen evaluating expr: {expr}")))
+        let res = py.detach(|| {
+            self.egraph
+                .eval_expr(&expr)
+                .map(|(s, v)| (s.name().to_string(), Value(v)))
+                .map_err(|e| WrappedError::Egglog(e, format!("\nWhen evaluating expr: {expr}")))
+        });
+        if let Some(err) = PyErr::take(py) {
+            return Err(WrappedError::Py(err));
+        }
+        res
     }
 
     fn value_to_i64(&self, v: Value) -> i64 {

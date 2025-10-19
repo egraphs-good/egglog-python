@@ -193,19 +193,18 @@ impl BaseSort for PyObjectSort {
         add_primitive!(
             eg,
             "py-eval" = {self.clone(): PyObjectSort}
-                |code: S, globals: PyObjectIdent, locals: PyObjectIdent| -> PyObjectIdent {
+                |code: S, globals: PyObjectIdent, locals: PyObjectIdent| -?> PyObjectIdent {
                     {
-                        Python::attach(|py| {
+                        attach(|py| {
                             let globals = self.ctx.load(py, globals);
                             let locals = self.ctx.load(py, locals);
                             let res = py
                                 .eval(
                                     CString::new(code.to_string()).unwrap().as_c_str(),
-                                    Some(globals.downcast::<PyDict>().unwrap()),
-                                    Some(locals.downcast::<PyDict>().unwrap()),
-                                )
-                                .unwrap();
-                            self.ctx.store(py, res.unbind()).unwrap()
+                                    Some(globals.downcast::<PyDict>()?),
+                                    Some(locals.downcast::<PyDict>()?),
+                                )?;
+                            self.ctx.store(py, res.unbind())
                         })
                     }
                 }
@@ -215,13 +214,13 @@ impl BaseSort for PyObjectSort {
         add_primitive!(
             eg,
             "py-exec" = {self.clone(): PyObjectSort}
-                |code: S, globals: PyObjectIdent, locals: PyObjectIdent| -> PyObjectIdent {
-                    Python::attach(|py| {
+                |code: S, globals: PyObjectIdent, locals: PyObjectIdent| -?> PyObjectIdent {
+                    attach(|py| {
                         let globals = self.ctx.load(py, globals);
                         let locals = self.ctx.load(py, locals);
 
                         // Copy the locals so we can mutate them and return them
-                        let locals = locals.downcast::<PyDict>().unwrap().copy().unwrap();
+                        let locals = locals.downcast::<PyDict>()?.copy()?;
                         // Copy code into temporary file
                         // Keep it around so that if errors occur we can debug them after the program exits
                         let mut path = temp_dir();
@@ -233,75 +232,74 @@ impl BaseSort for PyObjectSort {
                         run_path(
                             py,
                             CString::new(code.into_inner()).unwrap().as_c_str(),
-                            Some(globals.downcast::<PyDict>().unwrap()),
+                            Some(globals.downcast::<PyDict>()?),
                             Some(&locals),
                             CString::new(path).unwrap().as_c_str(),
-                        )
-                        .unwrap();
-                        self.ctx.store(py, locals.unbind().into()).unwrap()
+                        )?;
+                        self.ctx.store(py, locals.unbind().into())
                     })
                 }
         );
 
         // (py-dict [<key-object> <value-object>]*)
-        add_primitive!(eg, "py-dict" = {self.clone(): PyObjectSort} [xs: PyObjectIdent] -> PyObjectIdent {
-            Python::attach(|py| {
+        add_primitive!(eg, "py-dict" = {self.clone(): PyObjectSort} [xs: PyObjectIdent] -?> PyObjectIdent {
+            attach(|py| {
                 let dict = PyDict::new(py);
                 for i in xs.map(|x| self.ctx.load(py, x)).collect::<Vec<_>>().chunks_exact(2) {
-                    dict.set_item(i[0].clone(), i[1].clone()).unwrap();
+                    dict.set_item(i[0].clone(), i[1].clone())?;
                 }
-                self.ctx.store(py, dict.unbind().into()).unwrap()
+                self.ctx.store(py, dict.unbind().into())
             })
         });
         // Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
-        add_primitive!(eg, "py-dict-update" = {self.clone(): PyObjectSort} [xs: PyObjectIdent] -> PyObjectIdent {{
-            Python::attach(|py| {
+        add_primitive!(eg, "py-dict-update" = {self.clone(): PyObjectSort} [xs: PyObjectIdent] -?> PyObjectIdent {{
+            attach(|py| {
                 let xs = xs.map(|x| self.ctx.load(py, x)).collect::<Vec<_>>();
                 // Copy the dict so we can mutate it and return it
-                let dict = xs[0].downcast::<PyDict>().unwrap().copy().unwrap();
+                let dict = xs[0].downcast::<PyDict>()?.copy()?;
                 // Update the dict with the key-value pairs
                 for i in xs[1..].chunks_exact(2) {
-                    dict.set_item(i[0].clone(), i[1].clone()).unwrap();
+                    dict.set_item(i[0].clone(), i[1].clone())?;
                 }
-                self.ctx.store(py, dict.unbind().into()).unwrap()
+                self.ctx.store(py, dict.unbind().into())
             })
         }});
         // (py-to-string <obj>)
         add_primitive!(
             eg,
-            "py-to-string" = {self.clone(): PyObjectSort} |x: PyObjectIdent| -> S {
+            "py-to-string" = {self.clone(): PyObjectSort} |x: PyObjectIdent| -?> S {
                 {
-                    let s: String = Python::attach(move |py| self.ctx.load(py, x).extract().unwrap());
-                    s.into()
+                    let s: String = attach(move |py| self.ctx.load(py, x).extract())?;
+                    Some(s.into())
                 }
             }
         );
         // (py-to-bool <obj>)
         add_primitive!(
             eg,
-            "py-to-bool" = {self.clone(): PyObjectSort} |x: PyObjectIdent| -> bool {
+            "py-to-bool" = {self.clone(): PyObjectSort} |x: PyObjectIdent| -?> bool {
                 {
-                    Python::attach(move |py| self.ctx.load(py, x).extract().unwrap())
+                    attach(move |py| self.ctx.load(py, x).extract())
                 }
             }
         );
         // (py-from-string <str>)
         add_primitive!(
             eg,
-            "py-from-string" = {self.clone(): PyObjectSort} |x: S| -> PyObjectIdent {
-                Python::attach(|py| {
-                    let obj = x.to_string().into_pyobject(py).unwrap();
-                    self.ctx.store(py, obj.unbind().into()).unwrap()
+            "py-from-string" = {self.clone(): PyObjectSort} |x: S| -?> PyObjectIdent {
+                attach(|py| {
+                    let obj = x.to_string().into_pyobject(py)?;
+                    self.ctx.store(py, obj.unbind().into())
                 })
             }
         );
         // (py-from-int <int>)
         add_primitive!(
             eg,
-            "py-from-int" = {self.clone(): PyObjectSort} |x: i64| -> PyObjectIdent {
-                Python::attach(|py| {
-                    let obj = x.into_pyobject(py).unwrap();
-                    self.ctx.store(py, obj.unbind().into()).unwrap()
+            "py-from-int" = {self.clone(): PyObjectSort} |x: i64| -?> PyObjectIdent {
+                attach(|py| {
+                    let obj = x.into_pyobject(py)?;
+                    self.ctx.store(py, obj.unbind().into())
                 })
             }
         );
@@ -319,6 +317,26 @@ impl BaseSort for PyObjectSort {
     }
 }
 
+/// Attaches to the Python interpreter and runs the given closure.
+///
+/// Also handles errors, by saving them on the interpreter and returning None.
+fn attach<F, R>(f: F) -> Option<R>
+where
+    F: for<'py> FnOnce(Python<'py>) -> PyResult<R>,
+{
+    Python::attach(|py| {
+        if PyErr::occurred(py) {
+            return None
+        };
+        match f(py) {
+            Ok(val) => Some(val),
+            Err(err) => {
+                err.restore(py);
+                None
+            }
+        }
+    })
+}
 /// Runs the code in the given context with a certain path.
 /// Copied from `run`, but allows specifying the path.
 /// https://github.com/PyO3/pyo3/blob/55d379cff8e4157024ffe22215715bd04a5fb1a1/src/marker.rs#L667-L682

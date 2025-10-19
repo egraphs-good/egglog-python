@@ -1494,3 +1494,17 @@ def test_class_lookup_method():
     assert isinstance(A.__add__, RuntimeFunction)
     assert A.__str__(A()) == "hi"
     assert A.__str__.__doc__ == "Hi"
+
+
+def test_py_object_raise_exception():
+    """
+    Verify that PyObject can raise exceptions properly
+    """
+    msg = "bad"
+
+    def raises(_val):
+        raise ValueError(msg)
+
+    egraph = EGraph()
+    with pytest.raises(ValueError, match=msg):
+        egraph.extract(py_eval_fn(raises)(PyObject(None)))
