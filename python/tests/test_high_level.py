@@ -1480,7 +1480,7 @@ def test_class_lookup_method():
 
         def m(self) -> i64: ...
         def __eq__(self, other: A) -> A: ...  # type: ignore[override]
-        def __add__(self, other: A) -> A: ...  # type: ignore[override]
+        def __add__(self, other: A) -> A: ...
 
         def __str__(self) -> str:
             """Hi"""
