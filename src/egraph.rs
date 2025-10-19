@@ -5,7 +5,7 @@ use crate::error::{EggResult, WrappedError};
 use crate::py_object_sort::{PyObjectIdent, PyObjectSort};
 use crate::serialize::SerializedEGraph;
 
-use egglog::prelude::add_base_sort;
+use egglog::prelude::{add_base_sort, RustSpan, Span};
 use egglog::{SerializeConfig, span};
 use log::info;
 use num_bigint::BigInt;

@@ -10,7 +10,7 @@ use egglog::{
     Term, TermDag, Value, add_primitive,
     ast::{Expr, Literal},
     call, lit,
-    prelude::{BaseSort, EGraph},
+    prelude::{BaseSort, EGraph, RustSpan, Span},
     sort::{BaseValues, S},
 };
 use std::{

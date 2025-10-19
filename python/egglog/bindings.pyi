@@ -357,11 +357,14 @@ _Action: TypeAlias = Let | Set | Change | Union | Panic | Expr_
 
 @final
 class Variant:
-    def __init__(self, span: _Span, name: str, types: list[str], cost: int | None = None) -> None: ...
+    def __init__(
+        self, span: _Span, name: str, types: list[str], cost: int | None = None, unextractable: bool = False
+    ) -> None: ...
     span: _Span
     name: str
     types: list[str]
     cost: int | None
+    unextractable: bool
 
 @final
 class Schema:
@@ -374,7 +377,9 @@ class Rule:
     span: _Span
     head: list[_Action]
     body: list[_Fact]
-    def __init__(self, span: _Span, head: list[_Action], body: list[_Fact]) -> None: ...
+    name: str
+    ruleset: str
+    def __init__(self, span: _Span, head: list[_Action], body: list[_Fact], name: str, ruleset: str) -> None: ...
 
 @final
 class Rewrite:
@@ -586,10 +591,8 @@ class AddRuleset:
 
 @final
 class RuleCommand:
-    name: str
-    ruleset: str
     rule: Rule
-    def __init__(self, name: str, ruleset: str, rule: Rule) -> None: ...
+    def __init__(self, rule: Rule) -> None: ...
 
 @final
 class RewriteCommand:

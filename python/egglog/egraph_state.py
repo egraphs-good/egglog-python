@@ -279,12 +279,15 @@ class EGraphState:
                     else bindings.BiRewriteCommand(str(ruleset), rewrite)
                 )
             case RuleDecl(head, body, name):
-                rule = bindings.Rule(
-                    span(),
-                    [self.action_to_egg(a) for a in head],
-                    [self.fact_to_egg(f) for f in body],
+                return bindings.RuleCommand(
+                    bindings.Rule(
+                        span(),
+                        [self.action_to_egg(a) for a in head],
+                        [self.fact_to_egg(f) for f in body],
+                        name or "",
+                        str(ruleset),
+                    )
                 )
-                return bindings.RuleCommand(name or "", str(ruleset), rule)
             # TODO: Replace with just constants value and looking at REF of function
             case DefaultRewriteDecl(ref, expr, subsume):
                 sig = self.__egg_decls__.get_callable_decl(ref).signature
