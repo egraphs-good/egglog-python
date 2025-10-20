@@ -20,7 +20,7 @@ egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "clo
 egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "clone-cost" }
 egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "clone-cost" }
 egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", branch = "cli", default-features = false }
-egraph-serialize = { version = "0.2", features = ["serde", "graphviz"] }
+egraph-serialize = { version = "0.3", features = ["serde", "graphviz"] }
 serde_json = "1"
 pyo3-log = "0.13"
 log = "0.4"
