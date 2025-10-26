@@ -27,10 +27,7 @@ pub struct EGraph {
 #[pymethods]
 impl EGraph {
     #[new]
-    #[pyo3(
-        signature = (*, fact_directory=None, seminaive=true, record=false),
-        text_signature = "(*, fact_directory=None, seminaive=True, record=False)"
-    )]
+    #[pyo3(signature = (*, fact_directory=None, seminaive=true, record=false))]
     fn new(fact_directory: Option<PathBuf>, seminaive: bool, record: bool) -> Self {
         let mut egraph = egglog_experimental::new_experimental_egraph();
         egraph.fact_directory = fact_directory;

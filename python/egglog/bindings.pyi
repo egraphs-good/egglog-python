@@ -107,12 +107,7 @@ class SerializedEGraph:
 @final
 class EGraph:
     def __init__(
-        self,
-        /,
-        *,
-        fact_directory: str | Path | None = None,
-        seminaive: bool = True,
-        record: bool = False,
+        self, *, fact_directory: str | Path | None = None, seminaive: bool = True, record: bool = False
     ) -> None: ...
     def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
     def commands(self) -> str | None: ...
