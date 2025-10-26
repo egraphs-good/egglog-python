@@ -4,6 +4,12 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- BREAKING: Store `PyObject` values as `cloudpickle` bytes instead of live references so duplicates merge by value; `.value` now returns a fresh copy and the sort accepts objects like `None` that previously failed.
+- Adds `__call__` method to `PyObject` to replace `py_eval_fn` which is now deprecated.
+- Improve doctest support, teaching expressions about their `__module__`, `__dir__`, and special methods.
+- Surface original Python exceptions from the runtime and tighten pretty-printing of values that cannot be re-parsed to make debugging e-graph executions easier.
+- Update the bundled Egglog crate, visualizer, and related dev dependencies (including `ipykernel`) to pick up the latest backend fixes.
+
 ## 11.4.0 (2025-10-02)
 
 - Add ability to create custom model and pass them in to extract [#357](https://github.com/egraphs-good/egglog-python/pull/357)
