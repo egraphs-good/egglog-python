@@ -29,6 +29,7 @@ lalrpop-util = { version = "0.22", features = ["lexer"] }
 ordered-float = "5"
 uuid = { version = "1.18", features = ["v4"] }
 rayon = "1.11"
+base64 = "0.22.1"
 
 # Use patched version of egglog in experimental
 [patch.'https://github.com/egraphs-good/egglog']

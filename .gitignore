@@ -85,3 +85,4 @@ inlined
 visualizer.tgz
 package
 .mypy_cache/
+*.json

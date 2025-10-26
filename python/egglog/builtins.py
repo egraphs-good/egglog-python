@@ -13,6 +13,7 @@ from inspect import signature
 from types import FunctionType, MethodType
 from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, cast, overload
 
+import cloudpickle
 from typing_extensions import TypeVarTuple, Unpack, deprecated
 
 from .conversion import convert, converter, get_type_args, resolve_literal
@@ -984,11 +985,14 @@ class PyObject(BuiltinExpr, egg_sort="PyObject"):
         expr = cast("RuntimeExpr", self).__egg_typed_expr__.expr
         if not isinstance(expr, PyObjectDecl):
             raise ExprValueError(self, "PyObject(x)")
-        return expr.value
+        return cloudpickle.loads(expr.pickled)
 
     __match_args__ = ("value",)
 
     def __init__(self, value: object) -> None: ...
+
+    @method(egg_fn="py-call")
+    def __call__(self, *args: object) -> PyObject: ...
 
     @method(egg_fn="py-from-string")
     @classmethod
@@ -1023,6 +1027,7 @@ class PyObjectFunction(Protocol):
     def __call__(self, *__args: PyObject) -> PyObject: ...
 
 
+@deprecated("use PyObject(fn) directly")
 def py_eval_fn(fn: Callable) -> PyObjectFunction:
     """
     Takes a python callable and maps it to a callable which takes and returns PyObjects.
@@ -1030,17 +1035,7 @@ def py_eval_fn(fn: Callable) -> PyObjectFunction:
     It translates it to a call which uses `py_eval` to call the function, passing in the
     args as locals, and using the globals from function.
     """
-
-    def inner(*__args: PyObject, __fn: Callable = fn) -> PyObject:
-        new_kvs: list[object] = []
-        eval_str = "__fn("
-        for i, arg in enumerate(__args):
-            new_kvs.extend((f"__arg_{i}", arg))
-            eval_str += f"__arg_{i}, "
-        eval_str += ")"
-        return py_eval(eval_str, PyObject({"__fn": __fn}).dict_update(*new_kvs), getattr(__fn, "__globals__", {}))
-
-    return inner
+    return PyObject(fn)
 
 
 @function(builtin=True, egg_fn="py-exec")

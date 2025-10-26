@@ -839,7 +839,7 @@ class EGraph:
     _token_stack: list[EGraph] = field(default_factory=list, repr=False)
 
     def __post_init__(self, seminaive: bool, save_egglog_string: bool) -> None:
-        egraph = bindings.EGraph(GLOBAL_PY_OBJECT_SORT, seminaive=seminaive, record=save_egglog_string)
+        egraph = bindings.EGraph(seminaive=seminaive, record=save_egglog_string)
         self._state = EGraphState(egraph)
 
     def _add_decls(self, *decls: DeclerationsLike) -> None:

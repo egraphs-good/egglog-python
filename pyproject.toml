@@ -37,6 +37,7 @@ array = [
     "numba>=0.59.1",
     "llvmlite>=0.42.0",
     "numpy>2",
+    "cloudpickle>=3",
 ]
 dev = [
     "ruff",

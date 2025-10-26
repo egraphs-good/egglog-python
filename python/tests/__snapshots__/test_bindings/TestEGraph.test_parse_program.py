@@ -22,6 +22,7 @@
                 "Num",
                 ["i64"],
                 None,
+                False,
             ),
             Variant(
                 EgglogSpan(
@@ -35,6 +36,7 @@
                 "Var",
                 ["String"],
                 None,
+                False,
             ),
             Variant(
                 EgglogSpan(
@@ -48,6 +50,7 @@
                 "Add",
                 ["Math", "Math"],
                 None,
+                False,
             ),
             Variant(
                 EgglogSpan(
@@ -61,6 +64,7 @@
                 "Mul",
                 ["Math", "Math"],
                 None,
+                False,
             ),
         ],
     ),

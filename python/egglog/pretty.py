@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias
 
 import black
+import cloudpickle
 from typing_extensions import assert_never
 
 from .declarations import *
@@ -294,7 +295,8 @@ class PrettyContext:
                 return self._call(decl, parens)
             case PartialCallDecl(CallDecl(ref, typed_args, _)):
                 return self._pretty_partial(ref, [a.expr for a in typed_args], parens), "fn"
-            case PyObjectDecl(value):
+            case PyObjectDecl(pickled):
+                value = cloudpickle.loads(pickled)
                 value_str = repr(value)
                 if not is_valid_python_expr(value_str):
                     # If this isn't a valid python expr, represent as string

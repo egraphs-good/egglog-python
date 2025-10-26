@@ -2,7 +2,7 @@
 
 use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
-use crate::py_object_sort::{PyObjectIdent, PyObjectSort};
+use crate::py_object_sort::{PyObjectSort, PyPickledValue, load};
 use crate::serialize::SerializedEGraph;
 
 use egglog::prelude::{RustSpan, Span, add_base_sort};
@@ -28,21 +28,14 @@ pub struct EGraph {
 impl EGraph {
     #[new]
     #[pyo3(
-        signature = (py_object_sort=None, *, fact_directory=None, seminaive=true, record=false),
-        text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, record=False)"
+        signature = (*, fact_directory=None, seminaive=true, record=false),
+        text_signature = "(*, fact_directory=None, seminaive=True, record=False)"
     )]
-    fn new(
-        py_object_sort: Option<PyObjectSort>,
-        fact_directory: Option<PathBuf>,
-        seminaive: bool,
-        record: bool,
-    ) -> Self {
+    fn new(fact_directory: Option<PathBuf>, seminaive: bool, record: bool) -> Self {
         let mut egraph = egglog_experimental::new_experimental_egraph();
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
-        if let Some(py_object_sort) = py_object_sort {
-            add_base_sort(&mut egraph, py_object_sort, span!()).unwrap();
-        }
+        add_base_sort(&mut egraph, PyObjectSort {}, span!()).unwrap();
         Self {
             egraph,
             cmds: if record { Some(String::new()) } else { None },
@@ -183,14 +176,9 @@ impl EGraph {
         r.0
     }
 
-    fn value_to_pyobject(
-        &self,
-        py: Python<'_>,
-        py_object_sort: PyObjectSort,
-        v: Value,
-    ) -> Py<PyAny> {
-        let ident = self.egraph.value_to_base::<PyObjectIdent>(v.0);
-        py_object_sort.load(py, ident).unbind()
+    fn value_to_pyobject<'a>(&self, py: Python<'a>, v: Value) -> PyResult<Bound<'a, PyAny>> {
+        let ident = self.egraph.value_to_base::<PyPickledValue>(v.0);
+        load(py, &ident)
     }
 
     fn value_to_map(&self, v: Value) -> BTreeMap<Value, Value> {

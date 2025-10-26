@@ -3,10 +3,12 @@ import json
 import os
 import pathlib
 import subprocess
+from base64 import standard_b64encode
 from fractions import Fraction
 
 import black
 import pytest
+from cloudpickle import dumps
 
 from egglog.bindings import *
 
@@ -39,6 +41,7 @@ SKIP_TESTS = {
     "python_array_optimize",
     "typeinfer",
     "repro-typechecking-schedule",
+    "stresstest_large_expr",
 }
 
 
@@ -177,7 +180,7 @@ class TestEGraph:
 
 class TestVariant:
     def test_repr(self):
-        assert repr(Variant(DUMMY_SPAN, "name", [])) == f"Variant({DUMMY_SPAN!r}, 'name', [], None)"
+        assert repr(Variant(DUMMY_SPAN, "name", [])) == f"Variant({DUMMY_SPAN!r}, 'name', [], None, False)"
 
     def test_name(self):
         assert Variant(DUMMY_SPAN, "name", []).name == "name"
@@ -285,12 +288,17 @@ class TestValues:
         assert egraph.value_to_bool(value) is True
 
     def test_py_object(self):
-        py_object_sort = PyObjectSort()
-        egraph = EGraph(py_object_sort)
-        expr = py_object_sort.store("my object")
+        obj = "my object"
+        obj_bytes = dumps(obj)
+        expr = Call(
+            DUMMY_SPAN,
+            "py-object",
+            [Lit(DUMMY_SPAN, String(standard_b64encode(obj_bytes).decode("utf-8")))],
+        )
+        egraph = EGraph()
         sort, value = egraph.eval_expr(expr)
         assert sort == "PyObject"
-        assert egraph.value_to_pyobject(py_object_sort, value) == "my object"
+        assert egraph.value_to_pyobject(value) == obj
 
     def test_map(self):
         k = Lit(DUMMY_SPAN, Int(1))

@@ -20,6 +20,7 @@ from inspect import Parameter, Signature
 from itertools import zip_longest
 from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, get_args, get_origin
 
+import cloudpickle
 from typing_extensions import assert_never
 
 from .declarations import *
@@ -87,7 +88,7 @@ ALWAYS_MUTATES_SELF = {
 # special methods which must return real python values instead of lazy expressions
 ALWAYS_PRESERVED = {
     "__bytes__",
-    "__format__",
+    # "__format__",
     "__hash__",
     "__bool__",
     "__len__",
@@ -288,8 +289,13 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
         # If this is a literal type, initializing it with a literal should return a literal
         if (name := self.__egg_tp__.ident) == Ident.builtin("PyObject"):
             assert len(args) == 1
+            try:
+                pickled = cloudpickle.dumps(args[0])
+            except Exception as e:
+                e.add_note(f"Failed to pickle object of type {type(args[0])}")
+                raise
             return RuntimeExpr(
-                self.__egg_decls_thunk__, Thunk.value(TypedExprDecl(self.__egg_tp__.to_just(), PyObjectDecl(args[0])))
+                self.__egg_decls_thunk__, Thunk.value(TypedExprDecl(self.__egg_tp__.to_just(), PyObjectDecl(pickled)))
             )
         if name == Ident.builtin("UnstableFn"):
             assert not kwargs
@@ -466,7 +472,7 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
     # bound methods need to store RuntimeExpr not just TypedExprDecl, so they can mutate the expr if required on self
     __egg_bound__: JustTypeRef | RuntimeExpr | None = None
 
-    __get__ = None
+    __get__: None = None
 
     @property
     def __module__(self) -> str | None:  # type: ignore[override]
@@ -752,6 +758,8 @@ def define_expr_method(name: str) -> None:
     def _defined_method(self: RuntimeExpr, *args, __name: str = name, **kwargs) -> object:
         fn = cast("Callable", _get_expr_method(self, __name))
         if fn is _no_method_sentinel:
+            if __name == "__hash__":
+                return hash(self.__egg_typed_expr__)
             raise AttributeError(f"{self.__egg_class_ident__} expression has no method {__name}")
         return fn(*args, **kwargs)
 

@@ -8,6 +8,7 @@ from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, TypeVar, overload
 
+import cloudpickle
 from typing_extensions import TypeVarTuple, Unpack
 
 from .declarations import *
@@ -64,7 +65,7 @@ def get_literal_value(x: object) -> object:
         case LitDecl(v):
             return v
         case PyObjectDecl(obj):
-            return obj
+            return cloudpickle.loads(obj)
         case PartialCallDecl(call):
             fn, args = _deconstruct_call_decl(x.__egg_decls_thunk__, call)
             if not args:

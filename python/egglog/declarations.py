@@ -617,23 +617,7 @@ class LetRefDecl:
 
 @dataclass(frozen=True)
 class PyObjectDecl:
-    value: object
-
-    def __hash__(self) -> int:
-        """Tries using the hash of the value, if unhashable use the ID."""
-        try:
-            return hash((type(self.value), self.value))
-        except TypeError:
-            return id(self.value)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, PyObjectDecl):
-            return False
-        return self.parts == other.parts
-
-    @property
-    def parts(self) -> tuple[type, object]:
-        return (type(self.value), self.value)
+    pickled: bytes
 
 
 LitType: TypeAlias = int | str | float | bool | None

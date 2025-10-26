@@ -5,11 +5,13 @@ Implement conversion to/from egglog.
 from __future__ import annotations
 
 import re
+from base64 import standard_b64decode, standard_b64encode
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, overload
 from uuid import UUID
 
+import cloudpickle
 from typing_extensions import assert_never
 
 from . import bindings
@@ -21,11 +23,7 @@ from .type_constraint_solver import *
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["GLOBAL_PY_OBJECT_SORT", "EGraphState", "span"]
-
-# Create a global sort for python objects, so we can store them without an e-graph instance
-# Needed when serializing commands to egg commands when creating modules
-GLOBAL_PY_OBJECT_SORT = bindings.PyObjectSort()
+__all__ = ["EGraphState", "span"]
 
 
 def span(frame_index: int = 0) -> bindings.RustSpan:
@@ -605,7 +603,11 @@ class EGraphState:
                 egg_args = [self.typed_expr_to_egg(a, False) for a in typed_args]
                 res = bindings.Call(span(), egg_fn, egg_args)
             case PyObjectDecl(value):
-                res = GLOBAL_PY_OBJECT_SORT.store(value)
+                res = bindings.Call(
+                    span(),
+                    "py-object",
+                    [bindings.Lit(span(), bindings.String(standard_b64encode(value).decode("utf-8")))],
+                )
             case PartialCallDecl(call_decl):
                 egg_fn_call = self._expr_to_egg(call_decl)
                 res = bindings.Call(
@@ -702,7 +704,8 @@ class EGraphState:
             case "Unit":
                 return LitDecl(None)
             case "PyObject":
-                return PyObjectDecl(self.egraph.value_to_pyobject(GLOBAL_PY_OBJECT_SORT, value))
+                val = self.egraph.value_to_pyobject(value)
+                return PyObjectDecl(cloudpickle.dumps(val))
             case "Rational":
                 fraction = self.egraph.value_to_rational(value)
                 return CallDecl(
@@ -892,8 +895,11 @@ class FromEggState:
             expr_decl = LitDecl(None if isinstance(value, bindings.Unit) else value.value)
         elif isinstance(term, bindings.TermApp):
             if term.name == "py-object":
-                call = self.termdag.term_to_expr(term, span())
-                expr_decl = PyObjectDecl(GLOBAL_PY_OBJECT_SORT.load(call))
+                (str_term,) = term.args
+                call = self.termdag.get(str_term)
+                assert isinstance(call, bindings.TermLit)
+                assert isinstance(call.value, bindings.String)
+                expr_decl = PyObjectDecl(standard_b64decode(call.value.value))
             elif term.name == "unstable-fn":
                 # Get function name
                 fn_term, *arg_terms = term.args

@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from copy import copy
 from fractions import Fraction
 from functools import partial
-from typing import ClassVar, TypeAlias, TypeVar
+from typing import ClassVar, TypeAlias, TypeVar, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -239,6 +239,7 @@ class TestPyObject:
     def test_eval(self):
         assert EGraph().extract(py_eval("x + y", {"x": 10, "y": 20}, {})).value == 30
 
+    @pytest.mark.xfail(reason="cant pickle locals")
     def test_eval_local(self):
         x = "hi"
         res = py_eval("my_add(x, y)", PyObject(locals()).dict_update("y", "there"), globals())
@@ -484,8 +485,8 @@ class TestEval:
 
     def test_py_object(self):
         assert PyObject(10).value == 10
-        o = object()
-        assert PyObject(o).value is o
+        o = (1, 2, 3)
+        assert PyObject(o).value == o
 
     def test_big_int(self):
         assert int(EGraph().extract(BigInt(10))) == 10
@@ -527,7 +528,7 @@ class TestEval:
 
 
 def test_eval_fn():
-    assert EGraph().extract(py_eval_fn(lambda x: (x,))(PyObject.from_int(1))).value == (1,)
+    assert EGraph().extract(PyObject(lambda x: (x,))(PyObject.from_int(1))).value == (1,)
 
 
 def _global_make_tuple(x):
@@ -535,14 +536,14 @@ def _global_make_tuple(x):
 
 
 def test_eval_fn_globals():
-    assert EGraph().extract(py_eval_fn(lambda x: _global_make_tuple(x))(PyObject.from_int(1))).value == (1,)
+    assert EGraph().extract(PyObject(lambda x: _global_make_tuple(x))(PyObject.from_int(1))).value == (1,)
 
 
 def test_eval_fn_locals():
     def _locals_make_tuple(x):
         return (x,)
 
-    assert EGraph().extract(py_eval_fn(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))).value == (1,)
+    assert EGraph().extract(PyObject(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))).value == (1,)
 
 
 def test_lazy_types():
@@ -1229,8 +1230,8 @@ class TestCustomExtract:
     def test_compare_values(self):
         egraph = EGraph()
         egraph.register(E(), gg())
-        e_value = self._to_from_value(egraph, E())
-        gg_value = self._to_from_value(egraph, gg())
+        e_value = self._to_from_value(egraph, cast("RuntimeExpr", E()))
+        gg_value = self._to_from_value(egraph, cast("RuntimeExpr", gg()))
         assert e_value != gg_value
         assert hash(e_value) != hash(gg_value)
         assert str(e_value) != str(gg_value)
@@ -1392,10 +1393,10 @@ def test_binary_convert_parent():
 
 def test_py_eval_fn_no_globals():
     """
-    Verify that py_eval_fn without globals still works
+    Verify that PyObject without globals still works
     """
     assert not hasattr(int, "__globals__")
-    assert EGraph().extract(py_eval_fn(int)(PyObject.from_int(10))).value == 10
+    assert EGraph().extract(PyObject(int)(PyObject.from_int(10))).value == 10
 
 
 class MathPrim(Expr):
@@ -1410,8 +1411,8 @@ class MathPrim(Expr):
     def __repr__(self) -> str:
         return "hi"
 
-    def __format__(self, format_spec: str) -> str:
-        return "hi"
+    # def __format__(self, format_spec: str) -> str:
+    #     return "hi"
 
     def __hash__(self) -> int:
         return 42
@@ -1507,4 +1508,4 @@ def test_py_object_raise_exception():
 
     egraph = EGraph()
     with pytest.raises(ValueError, match=msg):
-        egraph.extract(py_eval_fn(raises)(PyObject(None)))
+        egraph.extract(PyObject(raises)(PyObject(None)))

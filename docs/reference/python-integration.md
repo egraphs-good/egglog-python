@@ -96,43 +96,55 @@ We define a custom "primitive sort" (i.e. a builtin type) for `PyObject`s. This 
 
 ### Saving Python Objects
 
-To create an expression of type `PyObject`, we call the call the constructor with any Python object. It will
-save a reference to the object:
+To create an expression of type `PyObject`, call the constructor with any Python object. The value is immediately
+serialized with `cloudpickle.dumps`, and the serialized bytes (base64 encoded when printed) are what get stored
+inside the e-graph. This means the e-graph keeps a snapshot of the object rather than a live reference.
 
 ```{code-cell} python
-PyObject(1)
+from dataclasses import dataclass
+
+@dataclass
+class MyObject:
+    a: int = 10
+
+PyObject(MyObject())
 ```
 
-We see that this as saved internally as a pointer to the Python object. For hashable objects like `int` we store two integers, a hash of the type and a has of the value.
+The new serialization approach works for both hashable and unhashable Python values, and no longer depends on
+their `id()`. Subsequent inserts of equal values round-trip through `cloudpickle` so the e-graph can identify and
+merge them by value.
 
-We can also store unhashable objects in the e-graph like lists.
+```{admonition} Serialization requirements
+:class: note
 
-```{code-cell} python
-lst = PyObject([1, 2, 3])
-lst
-```
-
-We see that this is stored with one number, simply the `id` of the object.
-
-```{admonition} Mutable Objects
-:class: warning
-
-While it is possible to store unhashable objects in the e-graph, you have to be careful defining any rules which create new unhashable objects. If each time a rule is run, it creates a new object, then the e-graph will never saturate.
-
-Creating hashable objects is safer, since while the rule might create new Python objects each time it executes, they should have the same hash, i.e. be equal, so that the e-graph can saturate.
+`PyObject` relies on `cloudpickle`. Any object you store must be serializable by `cloudpickle.dumps`; objects such
+as open file handles, generators, or extension types that `cloudpickle` cannot handle will raise an error when you
+try to construct a `PyObject`.
 ```
 
 ### Retrieving Python Objects
 
-Like other primitives, we can retrieve the Python object from the e-graph by using the `.value` property:
+Like other primitives, we can retrieve a Python object by using the `.value` property. Deserialization happens on
+every access, so you receive a fresh copy each time rather than the original object.
 
 ```{code-cell} python
-assert lst.value == [1, 2, 3]
+original = {"count": 1}
+expr = PyObject(original)
+
+restored = expr.value
+assert restored == original
+assert restored is not original
+
+# Mutating the copy does not affect the stored value.
+restored["count"] = 2
+assert expr.value == {"count": 1}
 ```
 
 ### Builtin methods
 
-Currently, we only support a few methods on `PyObject`s, but we plan to add more in the future.
+Currently, we only support a few methods on `PyObject`s, but we plan to add more in the future. Each builtin
+deserializes its inputs, performs the operation in Python, and then serializes the result back into a new
+`PyObject`, so previously stored values remain unchanged.
 
 Conversion to/from a string:
 
