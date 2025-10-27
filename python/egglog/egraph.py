@@ -1852,7 +1852,7 @@ def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | N
         Thunk.fn(Declarations.create, ruleset, *facts),
         RunDecl(
             ruleset.__egg_name__ if ruleset else "",
-            tuple(f.fact for f in facts) or None,
+            tuple(f.fact for f in facts),
             scheduler.scheduler if scheduler else None,
         ),
     )
