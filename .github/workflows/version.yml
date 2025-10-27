@@ -72,7 +72,7 @@ jobs:
           command: build
           args: --release --sdist -o dist --find-interpreter
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist
@@ -97,7 +97,7 @@ jobs:
           command: build
           args: --release --sdist -o dist --find-interpreter
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: wheels-linux
           path: dist
@@ -119,7 +119,7 @@ jobs:
           command: build
           args: --release -o dist --find-interpreter
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: wheels-windows
           path: dist
@@ -142,7 +142,7 @@ jobs:
           target: universal2-apple-darwin
           args: --release -o dist --find-interpreter
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: wheels-macos
           path: dist
@@ -153,7 +153,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch')
     needs: [macos, windows, linux, linux-cross, bump]
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v6
         with:
           pattern: wheels-*
           merge-multiple: true
