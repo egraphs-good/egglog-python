@@ -352,10 +352,18 @@ class BaseExpr(metaclass=_ExprMetaclass):
     Either a builtin or a user defined expression type.
     """
 
+    # these methods are only provided for type checking
+    # The real implementations are in the runtime system
+
     def __ne__(self, other: Self) -> Unit: ...  # type: ignore[override, empty-body]
 
     # not currently dissalowing other types of equality https://github.com/python/typeshed/issues/8217#issuecomment-3140873292
     def __eq__(self, other: Self) -> Fact: ...  # type: ignore[override, empty-body]
+
+    def __replace_expr__(self, new_expr: Self) -> None:
+        """
+        Replace the current expression with the new expression in place.
+        """
 
 
 class BuiltinExpr(BaseExpr, metaclass=_ExprMetaclass):
@@ -484,7 +492,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         except Exception as e:
             raise add_note(f"Error processing {cls_ident}.{method_name}", e) from None
 
-        if not builtin and not isinstance(ref, InitRef) and not mutates:
+        if not builtin and not isinstance(ref, InitRef):
             add_default_funcs.append(add_rewrite)
 
     # Add all rewrite methods at the end so that all methods are registered first and can be accessed
@@ -648,7 +656,16 @@ def _fn_decl(
         )
     decls.set_function_decl(ref, decl)
     return Thunk.fn(
-        _add_default_rewrite_function, decls, ref, fn, args, ruleset, subsume, return_type, context=f"creating {ref}"
+        _add_default_rewrite_function,
+        decls,
+        ref,
+        fn,
+        args,
+        ruleset,
+        subsume,
+        return_type,
+        mutates_first_arg,
+        context=f"creating {ref}",
     )
 
 
@@ -747,6 +764,7 @@ def _add_default_rewrite_function(
     ruleset: Ruleset | None,
     subsume: bool,
     res_type: TypeOrVarRef,
+    mutates_first_arg: bool,
 ) -> None:
     args: list[object] = [RuntimeExpr.__from_values__(decls, a) for a in args]
 
@@ -756,6 +774,9 @@ def _add_default_rewrite_function(
         args.insert(0, RuntimeClass(Thunk.value(decls), tp))
     with set_current_ruleset(ruleset):
         res = fn(*args)
+    if mutates_first_arg:
+        res = args[0]
+        # print(res)
     _add_default_rewrite(decls, ref, res_type, res, ruleset, subsume)
 
 

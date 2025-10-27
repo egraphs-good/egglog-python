@@ -1509,3 +1509,36 @@ def test_py_object_raise_exception():
     egraph = EGraph()
     with pytest.raises(ValueError, match=msg):
         egraph.extract(PyObject(raises)(PyObject(None)))
+
+
+def test_mutates_self_rewrite():
+    mutates_ruleset = ruleset()
+
+    class MutateMethod(Expr, ruleset=mutates_ruleset):
+        def __init__(self) -> None: ...
+        def incr(self) -> MutateMethod: ...
+
+        @method(mutates_self=True)
+        def mutates(self) -> None:
+            self.__replace_expr__(self.incr())
+
+    x = MutateMethod()
+    x.mutates()
+    egraph = EGraph()
+    egraph.register(x)
+    egraph.run(mutates_ruleset)
+    egraph.check(x == MutateMethod().incr())
+
+
+def test_mutates_self_preserved():
+    class MutatePreserved(Expr):
+        def __init__(self) -> None: ...
+        def incr(self) -> MutatePreserved: ...
+
+        @method(preserve=True)
+        def mutates(self) -> None:
+            self.__replace_expr__(self.incr())
+
+    x = MutatePreserved()
+    x.mutates()
+    assert x == MutatePreserved().incr()

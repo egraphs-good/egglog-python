@@ -622,9 +622,16 @@ def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: 
     return Signature(parameters)
 
 
+ON_CREATE_EXPR: None | Callable[[Callable[[], TypedExprDecl]], None] = None
+
+
 @dataclass
 class RuntimeExpr(DelayedDeclerations):
     __egg_typed_expr_thunk__: Callable[[], TypedExprDecl]
+
+    def __post_init__(self) -> None:
+        if ON_CREATE_EXPR:
+            ON_CREATE_EXPR(self.__egg_typed_expr_thunk__)
 
     @classmethod
     def __from_values__(cls, d: Declarations, e: TypedExprDecl) -> RuntimeExpr:
@@ -733,6 +740,10 @@ class RuntimeExpr(DelayedDeclerations):
         self, *args: object, **kwargs: object
     ) -> object:  # define it here only for type checking, it will be overriden below
         ...
+
+    def __replace_expr__(self, new_expr: RuntimeExpr) -> None:
+        self.__egg_decls_thunk__ = new_expr.__egg_decls_thunk__
+        self.__egg_typed_expr_thunk__ = new_expr.__egg_typed_expr_thunk__
 
 
 # Return a sentinel value to differentiate between no method and property that returns None

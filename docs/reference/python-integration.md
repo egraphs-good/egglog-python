@@ -438,7 +438,12 @@ assert str(-1.0 + Int.var("x")) == "Float(-1.0) + Float.from_int(Int.var(\"x\"))
 
 ### Mutating arguments
 
-In order to support Python functions and methods which mutate their arguments, you can pass in the `mutate_first_arg` keyword argument to the `@function` decorator and the `mutates_self` argument to the `@method` decorator. This will cause the first argument to be mutated in place, instead of being copied.
+In order to support Python functions and methods which mutate their arguments, use the `mutates_first_arg` keyword argument on `@function` and the `mutates_self` keyword argument on `@method`. The runtime treats the mutated receiver as the return value of the egglog call, so the default rewrite points the call expression at the updated argument.
+
+Inside the Python implementation you can call `__replace_expr__` on an `Expr` instance to swap out its underlying egglog expression in-place. This keeps any existing Python references in sync while still allowing the e-graph to reason about the mutated value. The same helper works for methods that run immediately with `@method(preserve=True)`.
+
+Any function which mutates its first argument must return `None`. In egglog, this is translated into a function which
+returns the type of its first argument.
 
 ```{code-cell} python
 from copy import copy
@@ -465,11 +470,19 @@ mutate_egraph = EGraph()
 mutate_egraph.register(rewrite(incr_i).to(i + Int(1)), x)
 mutate_egraph.run(10)
 mutate_egraph.check(eq(x).to(Int(10) + Int(1)))
+
+# incr with the rewrite could also be written like this:
+@function(mutates_first_arg=True)
+def incr_other(x: Int) -> None:
+    self.__replace_expr__(x + Int(1))
+x = Int(10)
+incr_other(x)
+mutate_egraph = EGraph()
+mutate_egraph.register(x)
+mutate_egraph.run(10)
+mutate_egraph.check(eq(x).to(Int(10) + Int(1)))
 mutate_egraph
 ```
-
-Any function which mutates its first argument must return `None`. In egglog, this is translated into a function which
-returns the type of its first argument.
 
 Note that dunder methods such as `__setitem__` will automatically be marked as mutating their first argument.
 
