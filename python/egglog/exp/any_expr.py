@@ -808,7 +808,7 @@ def any_expr_program(x: AnyExpr) -> Program:
     Convert an AnyExpr to a Program.
 
     >>> any_expr_source(AnyExpr(42) == 10)
-    '(42 == 10)\n'
+    '(42 == 10)'
     """
 
 
