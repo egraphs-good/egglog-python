@@ -146,6 +146,29 @@ Currently, we only support a few methods on `PyObject`s, but we plan to add more
 deserializes its inputs, performs the operation in Python, and then serializes the result back into a new
 `PyObject`, so previously stored values remain unchanged.
 
+### Calling Stored Python Functions
+
+Any `PyObject` whose value is callable can now be invoked directly. Each positional or keyword argument is first
+converted into a `PyObject`, the call executes inside Python, and the result is serialized back into a new
+`PyObject` expression.
+
+```{code-cell} python
+scale = PyObject(lambda x, *, factor=1: x * factor)
+result = scale(21)
+
+assert EGraph().extract(result).value == 21
+```
+
+When you already have the arguments packaged up, use `call_extended` to forward explicit `*args`/`**kwargs`
+collections. This is needed when you want to call any keyword arguments as well which are not supported y the simple form:
+
+```{code-cell} python
+args = PyObject((10,))
+kwargs = PyObject({"factor": 3})
+
+assert EGraph().extract(scale.call_extended(args, kwargs)).value == 30
+```
+
 Conversion to/from a string:
 
 ```{code-cell} python
@@ -186,21 +209,12 @@ evalled = py_eval("my_add(one,  2)", locals(), amended_globals)
 assert EGraph().extract(evalled).value == 3
 ```
 
-### Simpler Eval
+### `py_eval_fn` (deprecated)
 
-Instead of using the above low level primitive for evaluating, there is a higher level wrapper function, `py_eval_fn`.
+The previous helper `py_eval_fn` is still available for backward compatibility, but it now simply returns
+`PyObject(fn)` and is deprecated. Prefer constructing a `PyObject` directly and calling it as shown above.
 
-It takes in a Python function and converts it to a function of PyObjects, by using `py_eval` under the hood.
-
-The above code code be re-written like this:
-
-```{code-cell} python
-def my_add(a, b):
-    return a + b
-
-evalled = py_eval_fn(lambda a: my_add(a, 2))(1)
-assert EGraph().extract(evalled).value == 3
-```
+`py_eval_fn` returns a callable that mirrors the old behaviour, so existing code continues to work while you migrate.
 
 ## Functions
 
@@ -376,6 +390,10 @@ if TRUE | FALSE:
     print("True!")
 ```
 
+Preserved methods now support binary operators as well. You can mark implementations like `__add__` or `__lt__` as
+preserved when you need their Python behaviour, and the runtime will call your preserved implementation for both the
+regular and reflected (`__r*__`) variants.
+
 Note that the following list of methods are only supported as "preserved" since they have to return a specific Python object type:
 
 - `__bool__`
@@ -474,7 +492,7 @@ mutate_egraph.check(eq(x).to(Int(10) + Int(1)))
 # incr with the rewrite could also be written like this:
 @function(mutates_first_arg=True)
 def incr_other(x: Int) -> None:
-    self.__replace_expr__(x + Int(1))
+    x.__replace_expr__(x + Int(1))
 x = Int(10)
 incr_other(x)
 mutate_egraph = EGraph()
