@@ -2,9 +2,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Generic, Protocol, TypeAlias, TypeVar
-
-from typing_extensions import final
+from typing import Any, Generic, Protocol, TypeAlias, TypeVar, final
 
 __all__ = [
     "ActionCommand",

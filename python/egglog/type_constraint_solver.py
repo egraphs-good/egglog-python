@@ -5,9 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 from itertools import chain, repeat
-from typing import TYPE_CHECKING
-
-from typing_extensions import assert_never
+from typing import TYPE_CHECKING, assert_never
 
 from .declarations import *
 

@@ -47,7 +47,7 @@ def get_literal_value(x: PyObject) -> object: ...
 
 
 @overload
-def get_literal_value(x: UnstableFn[T, Unpack[TS]]) -> Callable[[Unpack[TS]], T] | None: ...
+def get_literal_value(x: UnstableFn[T, *TS]) -> Callable[[Unpack[TS]], T] | None: ...
 
 
 @overload
@@ -118,10 +118,10 @@ def get_callable_args(x: T, fn: None = ...) -> tuple[BaseExpr, ...]: ...
 
 
 @overload
-def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T]) -> tuple[Unpack[TS]] | None: ...
+def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T]) -> tuple[*TS] | None: ...
 
 
-def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T] | None = None) -> tuple[Unpack[TS]] | None:
+def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T] | None = None) -> tuple[*TS] | None:
     """
     Gets all the arguments of an expression.
     If a function is provided, it will only return the arguments if the expression is a call

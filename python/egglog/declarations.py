@@ -8,11 +8,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, TypeAlias, TypeVar, Union, cast, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    ClassVar,
+    Literal,
+    Protocol,
+    Self,
+    TypeAlias,
+    TypeVar,
+    Union,
+    assert_never,
+    cast,
+    runtime_checkable,
+)
 from uuid import UUID
 from weakref import WeakValueDictionary
-
-from typing_extensions import Self, assert_never
 
 from .bindings import Value
 

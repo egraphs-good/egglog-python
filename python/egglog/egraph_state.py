@@ -8,11 +8,10 @@ import re
 from base64 import standard_b64decode, standard_b64encode
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Literal, overload
+from typing import TYPE_CHECKING, Literal, assert_never, overload
 from uuid import UUID
 
 import cloudpickle
-from typing_extensions import assert_never
 
 from . import bindings
 from .declarations import *
