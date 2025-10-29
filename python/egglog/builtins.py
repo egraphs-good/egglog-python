@@ -994,6 +994,12 @@ class PyObject(BuiltinExpr, egg_sort="PyObject"):
     @method(egg_fn="py-call")
     def __call__(self, *args: object) -> PyObject: ...
 
+    @method(egg_fn="py-call-extended")
+    def call_extended(self, args: PyObject, kwargs: PyObject) -> PyObject:
+        """
+        Call the PyObject with the given args and kwargs PyObjects.
+        """
+
     @method(egg_fn="py-from-string")
     @classmethod
     def from_string(cls, s: StringLike) -> PyObject: ...
@@ -1052,7 +1058,7 @@ T2 = TypeVar("T2")
 T3 = TypeVar("T3")
 
 
-class UnstableFn(BuiltinExpr, Generic[T, Unpack[TS]], egg_sort="UnstableFn"):
+class UnstableFn(BuiltinExpr, Generic[T, *TS], egg_sort="UnstableFn"):
     @overload
     def __init__(self, f: Callable[[Unpack[TS]], T]) -> None: ...
 
@@ -1090,7 +1096,7 @@ class UnstableFn(BuiltinExpr, Generic[T, Unpack[TS]], egg_sort="UnstableFn"):
     __match_args__ = ("value",)
 
     @method(egg_fn="unstable-app")
-    def __call__(self, *args: Unpack[TS]) -> T: ...
+    def __call__(self, *args: *TS) -> T: ...
 
 
 # Method Type is for builtins like __getitem__

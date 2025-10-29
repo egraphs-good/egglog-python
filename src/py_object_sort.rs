@@ -118,6 +118,13 @@ impl BaseSort for PyObjectSort {
             })
         });
 
+        // (py-call-extended <fn-obj> <args-obj> <kwargs-obj>)
+        add_primitive!(eg, "py-call-extended" = |fn_: PyPickledValue, args: PyPickledValue, kwargs: PyPickledValue| -?> PyPickledValue {
+            attach("py-call-extended", |py| {
+                let fn_ = load(py, &fn_)?;
+                let args = load(py, &args)?;
+                let kwargs = load(py, &kwargs)?;
+                dump(fn_.call(args.cast::<PyTuple>().map_err(|e| {e})?, Some(kwargs.cast::<PyDict>()?))?)
             })
         });
 
