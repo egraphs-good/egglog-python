@@ -52,7 +52,7 @@ jobs:
     strategy:
       matrix:
         # Run on codspeed for walltime and ubuntu for instrumenentation
-        runner: [ ubuntu-latest ] # codspeed-macro,  disable for now till we set up custom runner for more minutes
+        runner: [ ubuntu-latest, codspeed-macro ]
     steps:
       - uses: actions/checkout@v5
       - name: Set up Python
@@ -72,7 +72,7 @@ jobs:
           token: ${{ secrets.CODSPEED_TOKEN }}
           # allow updating snapshots due to indeterministic benchmarks
           run: pytest -vvv --snapshot-update --durations=10
-          mode: "instrumentation"
+          mode: ${{ matrix.runner == 'ubuntu-latest' && 'instrumentation' || 'walltime' }}
 
   docs:
     runs-on: ubuntu-latest
