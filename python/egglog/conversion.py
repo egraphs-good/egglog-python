@@ -186,7 +186,11 @@ def _all_conversions_from(tp: JustTypeRef | type) -> list[tuple[int, JustTypeRef
 
     Returns a list of tuples of (cost, target type, conversion function).
     """
-    return [(cost, target, fn) for (source, target), (cost, fn) in CONVERSIONS.items() if source == tp]
+    return [
+        (cost, target, fn)
+        for (source, target), (cost, fn) in CONVERSIONS.items()
+        if (issubclass(tp, source) if isinstance(tp, type) and isinstance(source, type) else source == tp)
+    ]
 
 
 def identity(x: Any) -> Any:

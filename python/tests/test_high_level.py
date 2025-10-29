@@ -1538,3 +1538,17 @@ def test_mutates_self_preserved():
     x = MutatePreserved()
     x.mutates()
     assert x == MutatePreserved().incr()
+
+
+def test_binary_conversion_lookup_parent_class():
+    class X(Expr):
+        def __init__(self, value: object) -> None: ...
+
+        def __add__(self, other: XLike) -> X: ...
+        def __radd__(self, other: XLike) -> X: ...
+
+    XLike: TypeAlias = X | object
+    converter(object, X, lambda x: X(PyObject(x)))
+
+    assert X(1) + 2 == X(1) + X(2)
+    assert 2 + X(1) == X(2) + X(1)
