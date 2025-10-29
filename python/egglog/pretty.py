@@ -473,10 +473,8 @@ class PrettyContext:
                         return f"{slf}[{self(args[0], unwrap_lit=True)}] = {self(args[1], unwrap_lit=True)}"
                     case _ if method_name in NAMED_UNARY_METHODS:
                         return NAMED_UNARY_METHODS[method_name], [non_str_slf, *args]
-                    case "__getattr__":
-                        if isinstance(args[0], LitDecl) and isinstance(args[0].value, str):
-                            return f"{slf}.{args[0].value}"
-                        return "getattr", [non_str_slf, *args]
+                    case "__getattr__" if isinstance(args[0], LitDecl) and isinstance(args[0].value, str):
+                        return f"{slf}.{args[0].value}"
                     case _:
                         return f"{slf}.{method_name}", args
             case ConstantRef(Ident(name)):
