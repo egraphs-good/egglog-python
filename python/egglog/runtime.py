@@ -816,7 +816,9 @@ for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
             best_method = min_binary_conversion(name, resolve_type(self), resolve_type(other))
 
             if not best_method:
-                raise RuntimeError(f"Cannot resolve {name} for {self} and {other}, no conversion found")
+                raise RuntimeError(
+                    f"Cannot resolve {name} for {resolve_type(self)} and {resolve_type(other)}, no conversion found"
+                )
             self, other = best_method[0](self), best_method[1](other)
 
         method_ref = MethodRef(self.__egg_class_ident__, name)
