@@ -69,7 +69,6 @@ import numpy as np
 
 from egglog import *
 from egglog.runtime import RuntimeExpr
-from egglog.version_compat import add_note
 
 from .program_gen import *
 
@@ -729,7 +728,7 @@ int64 = DType.int64
 _DTYPES = [float64, float32, int32, int64, DType.object]
 
 converter(type, DType, lambda x: convert(np.dtype(x), DType))
-converter(type(np.dtype), DType, lambda x: getattr(DType, x.name))  # type:ignore[call-overload]
+converter(np.dtype, DType, lambda x: getattr(DType, x.name))
 
 
 @array_api_ruleset.register
@@ -2015,5 +2014,6 @@ def try_evaling(egraph: EGraph, schedule: Schedule, expr: Expr, prim_expr: Built
             extracted = egraph.extract(prim_expr)
         except BaseException as e:
             # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
-            raise add_note(f"Cannot evaluate {egraph.extract(expr)}", e)  # noqa: B904
+            e.add_note(f"Cannot evaluate {egraph.extract(expr)}")
+            raise
     return extracted.value  # type: ignore[attr-defined]

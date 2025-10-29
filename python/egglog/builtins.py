@@ -13,6 +13,7 @@ from inspect import signature
 from types import FunctionType, MethodType
 from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, cast, overload
 
+import cloudpickle
 from typing_extensions import TypeVarTuple, Unpack, deprecated
 
 from .conversion import convert, converter, get_type_args, resolve_literal
@@ -85,7 +86,7 @@ class Unit(BuiltinExpr, egg_sort="Unit"):
         return bool(expr_fact(self))
 
 
-class String(BuiltinExpr):
+class String(BuiltinExpr, egg_sort="String"):
     def __init__(self, value: str) -> None: ...
 
     @method(preserve=True)
@@ -163,7 +164,7 @@ BoolLike: TypeAlias = Bool | bool
 converter(bool, Bool, Bool)
 
 
-class i64(BuiltinExpr):  # noqa: N801
+class i64(BuiltinExpr, egg_sort="i64"):  # noqa: N801
     def __init__(self, value: int) -> None: ...
 
     @method(preserve=True)
@@ -290,7 +291,7 @@ converter(int, i64, i64)
 def count_matches(s: StringLike, pattern: StringLike) -> i64: ...
 
 
-class f64(BuiltinExpr):  # noqa: N801
+class f64(BuiltinExpr, egg_sort="f64"):  # noqa: N801
     def __init__(self, value: float) -> None: ...
 
     @method(preserve=True)
@@ -387,7 +388,7 @@ T = TypeVar("T", bound=BaseExpr)
 V = TypeVar("V", bound=BaseExpr)
 
 
-class Map(BuiltinExpr, Generic[T, V]):
+class Map(BuiltinExpr, Generic[T, V], egg_sort="Map"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> dict[T, V]:
@@ -457,7 +458,7 @@ converter(
 MapLike: TypeAlias = Map[T, V] | dict[TO, VO]
 
 
-class Set(BuiltinExpr, Generic[T]):
+class Set(BuiltinExpr, Generic[T], egg_sort="Set"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> set[T]:
@@ -527,7 +528,7 @@ converter(
 SetLike: TypeAlias = Set[T] | set[TO]
 
 
-class MultiSet(BuiltinExpr, Generic[T]):
+class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> list[T]:
@@ -582,7 +583,7 @@ class MultiSet(BuiltinExpr, Generic[T]):
     def map(self, f: Callable[[T], T]) -> MultiSet[T]: ...
 
 
-class Rational(BuiltinExpr):
+class Rational(BuiltinExpr, egg_sort="Rational"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> Fraction:
@@ -666,7 +667,7 @@ class Rational(BuiltinExpr):
     def denom(self) -> i64: ...
 
 
-class BigInt(BuiltinExpr):
+class BigInt(BuiltinExpr, egg_sort="BigInt"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> int:
@@ -793,7 +794,7 @@ converter(i64, BigInt, lambda i: BigInt(i))
 BigIntLike: TypeAlias = BigInt | i64Like
 
 
-class BigRat(BuiltinExpr):
+class BigRat(BuiltinExpr, egg_sort="BigRat"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> Fraction:
@@ -893,7 +894,7 @@ converter(Fraction, BigRat, lambda f: BigRat(f.numerator, f.denominator))
 BigRatLike: TypeAlias = BigRat | Fraction
 
 
-class Vec(BuiltinExpr, Generic[T]):
+class Vec(BuiltinExpr, Generic[T], egg_sort="Vec"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> tuple[T, ...]:
@@ -972,7 +973,7 @@ for sequence_type in (list, tuple):
 VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
 
 
-class PyObject(BuiltinExpr):
+class PyObject(BuiltinExpr, egg_sort="PyObject"):
     @method(preserve=True)
     @deprecated("use .value")
     def eval(self) -> object:
@@ -984,11 +985,20 @@ class PyObject(BuiltinExpr):
         expr = cast("RuntimeExpr", self).__egg_typed_expr__.expr
         if not isinstance(expr, PyObjectDecl):
             raise ExprValueError(self, "PyObject(x)")
-        return expr.value
+        return cloudpickle.loads(expr.pickled)
 
     __match_args__ = ("value",)
 
     def __init__(self, value: object) -> None: ...
+
+    @method(egg_fn="py-call")
+    def __call__(self, *args: object) -> PyObject: ...
+
+    @method(egg_fn="py-call-extended")
+    def call_extended(self, args: PyObject, kwargs: PyObject) -> PyObject:
+        """
+        Call the PyObject with the given args and kwargs PyObjects.
+        """
 
     @method(egg_fn="py-from-string")
     @classmethod
@@ -1023,6 +1033,7 @@ class PyObjectFunction(Protocol):
     def __call__(self, *__args: PyObject) -> PyObject: ...
 
 
+@deprecated("use PyObject(fn) directly")
 def py_eval_fn(fn: Callable) -> PyObjectFunction:
     """
     Takes a python callable and maps it to a callable which takes and returns PyObjects.
@@ -1030,17 +1041,7 @@ def py_eval_fn(fn: Callable) -> PyObjectFunction:
     It translates it to a call which uses `py_eval` to call the function, passing in the
     args as locals, and using the globals from function.
     """
-
-    def inner(*__args: PyObject, __fn: Callable = fn) -> PyObject:
-        new_kvs: list[object] = []
-        eval_str = "__fn("
-        for i, arg in enumerate(__args):
-            new_kvs.extend((f"__arg_{i}", arg))
-            eval_str += f"__arg_{i}, "
-        eval_str += ")"
-        return py_eval(eval_str, PyObject({"__fn": __fn}).dict_update(*new_kvs), __fn.__globals__)
-
-    return inner
+    return PyObject(fn)
 
 
 @function(builtin=True, egg_fn="py-exec")
@@ -1057,7 +1058,7 @@ T2 = TypeVar("T2")
 T3 = TypeVar("T3")
 
 
-class UnstableFn(BuiltinExpr, Generic[T, Unpack[TS]]):
+class UnstableFn(BuiltinExpr, Generic[T, *TS], egg_sort="UnstableFn"):
     @overload
     def __init__(self, f: Callable[[Unpack[TS]], T]) -> None: ...
 
@@ -1095,7 +1096,7 @@ class UnstableFn(BuiltinExpr, Generic[T, Unpack[TS]]):
     __match_args__ = ("value",)
 
     @method(egg_fn="unstable-app")
-    def __call__(self, *args: Unpack[TS]) -> T: ...
+    def __call__(self, *args: *TS) -> T: ...
 
 
 # Method Type is for builtins like __getitem__

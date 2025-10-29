@@ -96,43 +96,78 @@ We define a custom "primitive sort" (i.e. a builtin type) for `PyObject`s. This 
 
 ### Saving Python Objects
 
-To create an expression of type `PyObject`, we call the call the constructor with any Python object. It will
-save a reference to the object:
+To create an expression of type `PyObject`, call the constructor with any Python object. The value is immediately
+serialized with `cloudpickle.dumps`, and the serialized bytes (base64 encoded when printed) are what get stored
+inside the e-graph. This means the e-graph keeps a snapshot of the object rather than a live reference.
 
 ```{code-cell} python
-PyObject(1)
+from dataclasses import dataclass
+
+@dataclass
+class MyObject:
+    a: int = 10
+
+PyObject(MyObject())
 ```
 
-We see that this as saved internally as a pointer to the Python object. For hashable objects like `int` we store two integers, a hash of the type and a has of the value.
+The new serialization approach works for both hashable and unhashable Python values, and no longer depends on
+their `id()`. Subsequent inserts of equal values round-trip through `cloudpickle` so the e-graph can identify and
+merge them by value.
 
-We can also store unhashable objects in the e-graph like lists.
+```{admonition} Serialization requirements
+:class: note
 
-```{code-cell} python
-lst = PyObject([1, 2, 3])
-lst
-```
-
-We see that this is stored with one number, simply the `id` of the object.
-
-```{admonition} Mutable Objects
-:class: warning
-
-While it is possible to store unhashable objects in the e-graph, you have to be careful defining any rules which create new unhashable objects. If each time a rule is run, it creates a new object, then the e-graph will never saturate.
-
-Creating hashable objects is safer, since while the rule might create new Python objects each time it executes, they should have the same hash, i.e. be equal, so that the e-graph can saturate.
+`PyObject` relies on `cloudpickle`. Any object you store must be serializable by `cloudpickle.dumps`; objects such
+as open file handles, generators, or extension types that `cloudpickle` cannot handle will raise an error when you
+try to construct a `PyObject`.
 ```
 
 ### Retrieving Python Objects
 
-Like other primitives, we can retrieve the Python object from the e-graph by using the `.value` property:
+Like other primitives, we can retrieve a Python object by using the `.value` property. Deserialization happens on
+every access, so you receive a fresh copy each time rather than the original object.
 
 ```{code-cell} python
-assert lst.value == [1, 2, 3]
+original = {"count": 1}
+expr = PyObject(original)
+
+restored = expr.value
+assert restored == original
+assert restored is not original
+
+# Mutating the copy does not affect the stored value.
+restored["count"] = 2
+assert expr.value == {"count": 1}
 ```
 
 ### Builtin methods
 
-Currently, we only support a few methods on `PyObject`s, but we plan to add more in the future.
+Currently, we only support a few methods on `PyObject`s, but we plan to add more in the future. Each builtin
+deserializes its inputs, performs the operation in Python, and then serializes the result back into a new
+`PyObject`, so previously stored values remain unchanged.
+
+### Calling Stored Python Functions
+
+Any `PyObject` whose value is callable can now be invoked directly. Each positional or keyword argument is first
+converted into a `PyObject`, the call executes inside Python, and the result is serialized back into a new
+`PyObject` expression.
+
+```{code-cell} python
+scale = PyObject(lambda x, *, factor=1: x * factor)
+result = scale(21)
+
+assert EGraph().extract(result).value == 21
+```
+
+When you already have the arguments packaged up, use `call_extended` to forward explicit `*args`/`**kwargs`
+collections. This is needed when you want to call any keyword arguments as well which are not supported y the simple form:
+
+```{code-cell} python
+args = PyObject((10,))
+kwargs = PyObject({"factor": 3})
+
+assert EGraph().extract(scale.call_extended(args, kwargs)).value == 30
+```
 
 Conversion to/from a string:
 
@@ -174,21 +209,12 @@ evalled = py_eval("my_add(one,  2)", locals(), amended_globals)
 assert EGraph().extract(evalled).value == 3
 ```
 
-### Simpler Eval
+### `py_eval_fn` (deprecated)
 
-Instead of using the above low level primitive for evaluating, there is a higher level wrapper function, `py_eval_fn`.
+The previous helper `py_eval_fn` is still available for backward compatibility, but it now simply returns
+`PyObject(fn)` and is deprecated. Prefer constructing a `PyObject` directly and calling it as shown above.
 
-It takes in a Python function and converts it to a function of PyObjects, by using `py_eval` under the hood.
-
-The above code code be re-written like this:
-
-```{code-cell} python
-def my_add(a, b):
-    return a + b
-
-evalled = py_eval_fn(lambda a: my_add(a, 2))(1)
-assert EGraph().extract(evalled).value == 3
-```
+`py_eval_fn` returns a callable that mirrors the old behaviour, so existing code continues to work while you migrate.
 
 ## Functions
 
@@ -364,6 +390,10 @@ if TRUE | FALSE:
     print("True!")
 ```
 
+Preserved methods now support binary operators as well. You can mark implementations like `__add__` or `__lt__` as
+preserved when you need their Python behaviour, and the runtime will call your preserved implementation for both the
+regular and reflected (`__r*__`) variants.
+
 Note that the following list of methods are only supported as "preserved" since they have to return a specific Python object type:
 
 - `__bool__`
@@ -426,7 +456,12 @@ assert str(-1.0 + Int.var("x")) == "Float(-1.0) + Float.from_int(Int.var(\"x\"))
 
 ### Mutating arguments
 
-In order to support Python functions and methods which mutate their arguments, you can pass in the `mutate_first_arg` keyword argument to the `@function` decorator and the `mutates_self` argument to the `@method` decorator. This will cause the first argument to be mutated in place, instead of being copied.
+In order to support Python functions and methods which mutate their arguments, use the `mutates_first_arg` keyword argument on `@function` and the `mutates_self` keyword argument on `@method`. The runtime treats the mutated receiver as the return value of the egglog call, so the default rewrite points the call expression at the updated argument.
+
+Inside the Python implementation you can call `__replace_expr__` on an `Expr` instance to swap out its underlying egglog expression in-place. This keeps any existing Python references in sync while still allowing the e-graph to reason about the mutated value. The same helper works for methods that run immediately with `@method(preserve=True)`.
+
+Any function which mutates its first argument must return `None`. In egglog, this is translated into a function which
+returns the type of its first argument.
 
 ```{code-cell} python
 from copy import copy
@@ -453,11 +488,19 @@ mutate_egraph = EGraph()
 mutate_egraph.register(rewrite(incr_i).to(i + Int(1)), x)
 mutate_egraph.run(10)
 mutate_egraph.check(eq(x).to(Int(10) + Int(1)))
+
+# incr with the rewrite could also be written like this:
+@function(mutates_first_arg=True)
+def incr_other(x: Int) -> None:
+    x.__replace_expr__(x + Int(1))
+x = Int(10)
+incr_other(x)
+mutate_egraph = EGraph()
+mutate_egraph.register(x)
+mutate_egraph.run(10)
+mutate_egraph.check(eq(x).to(Int(10) + Int(1)))
 mutate_egraph
 ```
-
-Any function which mutates its first argument must return `None`. In egglog, this is translated into a function which
-returns the type of its first argument.
 
 Note that dunder methods such as `__setitem__` will automatically be marked as mutating their first argument.
 

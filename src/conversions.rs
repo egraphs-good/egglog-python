@@ -170,15 +170,11 @@ convert_enums!(
                 span: span.into(),
                 name: n.to_string()
             };
-        RuleCommand(name: String, ruleset: String, rule: Rule)
+        RuleCommand(rule: Rule)
             r -> egglog::ast::Command::Rule {
-                name: (&r.name).into(),
-                ruleset: (&r.ruleset).into(),
                 rule: (&r.rule).into()
             },
-            egglog::ast::Command::Rule {name, ruleset, rule} => RuleCommand {
-                name: name.to_string(),
-                ruleset: ruleset.to_string(),
+            egglog::ast::Command::Rule {rule} => RuleCommand {
                 rule: rule.into()
             };
         RewriteCommand(name: String, rewrite: Rewrite, subsume: bool)
@@ -376,48 +372,49 @@ convert_enums!(
             b -> egglog::CommandOutput::UserDefined(b.output.0.clone()),
             egglog::CommandOutput::UserDefined(output) => UserDefinedOutput {output: UserDefinedCommandOutput(output.clone())}
     };
-    egglog::ast::Span: "{:?}" => Span {
+    egglog_ast::span::Span: "{:?}" => Span {
         PanicSpan()
-            _p -> egglog::ast::Span::Panic,
-            egglog::ast::Span::Panic => PanicSpan {};
+            _p -> egglog_ast::span::Span::Panic,
+            egglog_ast::span::Span::Panic => PanicSpan {};
         EgglogSpan(file: SrcFile, i: usize, j: usize)
-            e -> egglog::ast::Span::Egglog(Arc::new({
-                egglog::ast::EgglogSpan {
+            e -> egglog_ast::span::Span::Egglog(Arc::new({
+                egglog_ast::span::EgglogSpan {
                     file: Arc::new(e.file.clone().into()),
                     i: e.i,
                     j: e.j
                 }
             })),
-            egglog::ast::Span::Egglog(e) => EgglogSpan {
+            egglog_ast::span::Span::Egglog(e) => EgglogSpan {
                 file: (*e.file.clone()).clone().into(),
                 i: e.i,
                 j: e.j
             };
         RustSpan(file: String, line: u32, column: u32)
-            r -> egglog::ast::Span::Rust(Arc::new(egglog::ast::RustSpan {
+            r -> egglog_ast::span::Span::Rust(Arc::new(egglog::ast::RustSpan {
                 file: Box::leak(r.file.clone().into_boxed_str()),
                 line: r.line,
                 column: r.column
             })),
-            egglog::ast::Span::Rust(r) => RustSpan {file: r.file.to_string(), line: r.line, column: r.column}
+            egglog_ast::span::Span::Rust(r) => RustSpan {file: r.file.to_string(), line: r.line, column: r.column}
     }
 );
 
 convert_struct!(
-    egglog::ast::SrcFile: "{:?}" => SrcFile(
+    egglog_ast::span::SrcFile: "{:?}" => SrcFile(
         name: Option<String>,
         contents: String
     )
-        s -> egglog::ast::SrcFile {name: s.name.clone(), contents: s.contents.clone()},
+        s -> egglog_ast::span::SrcFile {name: s.name.clone(), contents: s.contents.clone()},
         s -> SrcFile {name: s.name.clone(), contents: s.contents.clone()};
     egglog::ast::Variant: "{:?}" => Variant(
         span: Span,
         name: String,
         types: Vec<String>,
-        cost: Option<DefaultCost> = None
+        cost: Option<DefaultCost> = None,
+        unextractable: bool = false
     )
-        v -> egglog::ast::Variant {span: v.span.clone().into(), name: (&v.name).into(), types: v.types.iter().map(|v| v.into()).collect(), cost: v.cost},
-        v -> Variant {span: v.span.clone().into(), name: v.name.to_string(), types: v.types.iter().map(|v| v.to_string()).collect(), cost: v.cost};
+        v -> egglog::ast::Variant {span: v.span.clone().into(), name: (&v.name).into(), types: v.types.iter().map(|v| v.into()).collect(), cost: v.cost, unextractable: v.unextractable},
+        v -> Variant {span: v.span.clone().into(), name: v.name.to_string(), types: v.types.iter().map(|v| v.to_string()).collect(), cost: v.cost, unextractable: v.unextractable};
     egglog::ast::Schema: "{:?}" => Schema(
         input: Vec<String>,
         output: String
@@ -427,10 +424,12 @@ convert_struct!(
     egglog::ast::GenericRule<String, String>: "{:?}" => Rule(
         span: Span,
         head: Vec<Action>,
-        body: Vec<Fact_>
+        body: Vec<Fact_>,
+        name: String,
+        ruleset: String
     )
-        r -> egglog::ast::GenericRule {span: r.span.clone().into(), head: egglog::ast::GenericActions(r.head.iter().map(|v| v.into()).collect()), body: r.body.iter().map(|v| v.into()).collect()},
-        r -> Rule {span: r.span.clone().into(), head: r.head.0.iter().map(|v| v.into()).collect(), body: r.body.iter().map(|v| v.into()).collect()};
+        r -> egglog::ast::GenericRule {span: r.span.clone().into(), head: egglog::ast::GenericActions(r.head.iter().map(|v| v.into()).collect()), body: r.body.iter().map(|v| v.into()).collect(), name: (&r.name).into(), ruleset: (&r.ruleset).into()},
+        r -> Rule {span: r.span.clone().into(), head: r.head.0.iter().map(|v| v.into()).collect(), body: r.body.iter().map(|v| v.into()).collect(), name: r.name.to_string(), ruleset: r.ruleset.to_string()};
     egglog::ast::GenericRewrite<String, String>: "{:?}" => Rewrite(
         span: Span,
         lhs: Expr,
@@ -477,9 +476,10 @@ convert_struct!(
         }
 );
 
-impl FromPyObject<'_> for Box<Schedule> {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        ob.extract::<Schedule>().map(Box::new)
+impl<'py> FromPyObject<'_, 'py> for Box<Schedule> {
+    type Error = PyErr;
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        obj.extract::<Schedule>().map(Box::new)
     }
 }
 
@@ -493,9 +493,10 @@ impl<'py> IntoPyObject<'py> for Box<Schedule> {
     }
 }
 
-impl FromPyObject<'_> for Box<Command> {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        ob.extract::<Command>().map(Box::new)
+impl<'py> FromPyObject<'_, 'py> for Box<Command> {
+    type Error = PyErr;
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        obj.extract::<Command>().map(Box::new)
     }
 }
 
@@ -519,9 +520,10 @@ impl From<ordered_float::OrderedFloat<f64>> for WrappedOrderedF64 {
     }
 }
 
-impl FromPyObject<'_> for WrappedOrderedF64 {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        ob.extract::<f64>()
+impl<'py> FromPyObject<'_, 'py> for WrappedOrderedF64 {
+    type Error = PyErr;
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        obj.extract::<f64>()
             .map(|f| WrappedOrderedF64(OrderedFloat(f)))
     }
 }
@@ -547,9 +549,10 @@ impl From<std::time::Duration> for WrappedDuration {
     }
 }
 
-impl FromPyObject<'_> for WrappedDuration {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let py_delta = ob.downcast::<pyo3::types::PyDelta>()?;
+impl<'py> FromPyObject<'_, 'py> for WrappedDuration {
+    type Error = PyErr;
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        let py_delta = obj.cast::<pyo3::types::PyDelta>()?;
 
         Ok(WrappedDuration(std::time::Duration::new(
             py_delta.get_days() as u64 * 24 * 60 * 60 + py_delta.get_seconds() as u64,

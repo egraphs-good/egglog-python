@@ -115,7 +115,7 @@ impl egglog::extract::CostModel<Cost> for CostModel {
 
     fn enode_cost(
         &self,
-        egraph: &egglog::EGraph,
+        _egraph: &egglog::EGraph,
         func: &egglog::Function,
         row: &egglog::FunctionRow<'_>,
     ) -> Cost {

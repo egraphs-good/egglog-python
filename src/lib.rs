@@ -24,7 +24,6 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     pyo3_log::init();
 
-    m.add_class::<crate::py_object_sort::PyObjectSort>()?;
     m.add_class::<crate::serialize::SerializedEGraph>()?;
     m.add_class::<crate::egraph::EGraph>()?;
     m.add_class::<crate::egraph::Value>()?;

@@ -2,9 +2,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Generic, Protocol, TypeAlias, TypeVar
-
-from typing_extensions import final
+from typing import Any, Generic, Protocol, TypeAlias, TypeVar, final
 
 __all__ = [
     "ActionCommand",
@@ -54,7 +52,6 @@ __all__ = [
     "PrintOverallStatistics",
     "PrintSize",
     "Push",
-    "PyObjectSort",
     "Relation",
     "Repeat",
     "Rewrite",
@@ -106,21 +103,9 @@ class SerializedEGraph:
     def split_classes(self, egraph: EGraph, ops: set[str]) -> None: ...
 
 @final
-class PyObjectSort:
-    def __init__(self) -> None: ...
-    def store(self, __o: object, /) -> _Expr: ...
-    def load(self, __e: _Expr, /) -> object: ...
-
-@final
 class EGraph:
     def __init__(
-        self,
-        py_object_sort: PyObjectSort | None = None,
-        /,
-        *,
-        fact_directory: str | Path | None = None,
-        seminaive: bool = True,
-        record: bool = False,
+        self, *, fact_directory: str | Path | None = None, seminaive: bool = True, record: bool = False
     ) -> None: ...
     def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
     def commands(self) -> str | None: ...
@@ -142,7 +127,7 @@ class EGraph:
     def value_to_rational(self, v: Value) -> Fraction: ...
     def value_to_bigint(self, v: Value) -> int: ...
     def value_to_bigrat(self, v: Value) -> Fraction: ...
-    def value_to_pyobject(self, py_object_sort: PyObjectSort, v: Value) -> object: ...
+    def value_to_pyobject(self, v: Value) -> object: ...
     def value_to_map(self, v: Value) -> dict[Value, Value]: ...
     def value_to_multiset(self, v: Value) -> list[Value]: ...
     def value_to_vec(self, v: Value) -> list[Value]: ...
@@ -357,11 +342,14 @@ _Action: TypeAlias = Let | Set | Change | Union | Panic | Expr_
 
 @final
 class Variant:
-    def __init__(self, span: _Span, name: str, types: list[str], cost: int | None = None) -> None: ...
+    def __init__(
+        self, span: _Span, name: str, types: list[str], cost: int | None = None, unextractable: bool = False
+    ) -> None: ...
     span: _Span
     name: str
     types: list[str]
     cost: int | None
+    unextractable: bool
 
 @final
 class Schema:
@@ -374,7 +362,9 @@ class Rule:
     span: _Span
     head: list[_Action]
     body: list[_Fact]
-    def __init__(self, span: _Span, head: list[_Action], body: list[_Fact]) -> None: ...
+    name: str
+    ruleset: str
+    def __init__(self, span: _Span, head: list[_Action], body: list[_Fact], name: str, ruleset: str) -> None: ...
 
 @final
 class Rewrite:
@@ -586,10 +576,8 @@ class AddRuleset:
 
 @final
 class RuleCommand:
-    name: str
-    ruleset: str
     rule: Rule
-    def __init__(self, name: str, ruleset: str, rule: Rule) -> None: ...
+    def __init__(self, rule: Rule) -> None: ...
 
 @final
 class RewriteCommand:

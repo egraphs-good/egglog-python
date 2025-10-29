@@ -5,12 +5,13 @@ Implement conversion to/from egglog.
 from __future__ import annotations
 
 import re
+from base64 import standard_b64decode, standard_b64encode
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Literal, overload
+from typing import TYPE_CHECKING, Literal, assert_never, overload
 from uuid import UUID
 
-from typing_extensions import assert_never
+import cloudpickle
 
 from . import bindings
 from .declarations import *
@@ -21,11 +22,7 @@ from .type_constraint_solver import *
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-__all__ = ["GLOBAL_PY_OBJECT_SORT", "EGraphState", "span"]
-
-# Create a global sort for python objects, so we can store them without an e-graph instance
-# Needed when serializing commands to egg commands when creating modules
-GLOBAL_PY_OBJECT_SORT = bindings.PyObjectSort()
+__all__ = ["EGraphState", "span"]
 
 
 def span(frame_index: int = 0) -> bindings.RustSpan:
@@ -54,16 +51,16 @@ class EGraphState:
     # The decleratons we have added.
     __egg_decls__: Declarations = field(default_factory=Declarations)
     # Mapping of added rulesets to the added rules
-    rulesets: dict[str, set[RewriteOrRuleDecl]] = field(default_factory=dict)
+    rulesets: dict[Ident, set[RewriteOrRuleDecl]] = field(default_factory=dict)
 
     # Bidirectional mapping between egg function names and python callable references.
     # Note that there are possibly mutliple callable references for a single egg function name, like `+`
     # for both int and rational classes.
     egg_fn_to_callable_refs: dict[str, set[CallableRef]] = field(
-        default_factory=lambda: defaultdict(set, {"!=": {FunctionRef("!=")}})
+        default_factory=lambda: defaultdict(set, {"!=": {FunctionRef(Ident.builtin("!="))}})
     )
     callable_ref_to_egg_fn: dict[CallableRef, tuple[str, bool]] = field(
-        default_factory=lambda: {FunctionRef("!="): ("!=", False)}
+        default_factory=lambda: {FunctionRef(Ident.builtin("!=")): ("!=", False)}
     )
 
     # Bidirectional mapping between egg sort names and python type references.
@@ -155,10 +152,12 @@ class EGraphState:
                 return bindings.Repeat(span(), times, self._schedule_to_egg(schedule))
             case SequenceDecl(schedules):
                 return bindings.Sequence(span(), [self._schedule_to_egg(s) for s in schedules])
-            case RunDecl(ruleset_name, until, scheduler):
+            case RunDecl(ruleset_ident, until, scheduler):
                 if scheduler is not None:
                     raise ValueError(msg)
-                config = bindings.RunConfig(ruleset_name, None if not until else list(map(self.fact_to_egg, until)))
+                config = bindings.RunConfig(
+                    str(ruleset_ident), None if not until else list(map(self.fact_to_egg, until))
+                )
                 return bindings.Run(span(), config)
             case LetSchedulerDecl():
                 raise ValueError(msg)
@@ -187,8 +186,8 @@ class EGraphState:
                 back_off_decl = bindings.Call(span(), "back-off", args)
                 let_decl = bindings.Call(span(), "let-scheduler", [bindings.Var(span(), name), back_off_decl])
                 return [let_decl, *self._schedule_with_scheduler_to_egg(inner, bound_schedulers)]
-            case RunDecl(ruleset_name, until, scheduler):
-                args = [bindings.Var(span(), ruleset_name)]
+            case RunDecl(ruleset_ident, until, scheduler):
+                args = [bindings.Var(span(), str(ruleset_ident))]
                 if scheduler:
                     name = "run-with"
                     scheduler_name = f"_scheduler_{bound_schedulers.index(scheduler.id)}"
@@ -229,34 +228,34 @@ class EGraphState:
             case _:
                 assert_never(schedule)
 
-    def ruleset_to_egg(self, name: str) -> None:
+    def ruleset_to_egg(self, ident: Ident) -> None:
         """
         Registers a ruleset if it's not already registered.
         """
-        match self.__egg_decls__._rulesets[name]:
+        match self.__egg_decls__._rulesets[ident]:
             case RulesetDecl(rules):
-                if name not in self.rulesets:
-                    if name:
-                        self.egraph.run_program(bindings.AddRuleset(span(), name))
-                    added_rules = self.rulesets[name] = set()
+                if ident not in self.rulesets:
+                    if str(ident):
+                        self.egraph.run_program(bindings.AddRuleset(span(), str(ident)))
+                    added_rules = self.rulesets[ident] = set()
                 else:
-                    added_rules = self.rulesets[name]
+                    added_rules = self.rulesets[ident]
                 for rule in rules:
                     if rule in added_rules:
                         continue
-                    cmd = self.command_to_egg(rule, name)
+                    cmd = self.command_to_egg(rule, ident)
                     if cmd is not None:
                         self.egraph.run_program(cmd)
                     added_rules.add(rule)
             case CombinedRulesetDecl(rulesets):
-                if name in self.rulesets:
+                if ident in self.rulesets:
                     return
-                self.rulesets[name] = set()
+                self.rulesets[ident] = set()
                 for ruleset in rulesets:
                     self.ruleset_to_egg(ruleset)
-                self.egraph.run_program(bindings.UnstableCombinedRuleset(span(), name, list(rulesets)))
+                self.egraph.run_program(bindings.UnstableCombinedRuleset(span(), str(ident), list(map(str, rulesets))))
 
-    def command_to_egg(self, cmd: CommandDecl, ruleset: str) -> bindings._Command | None:
+    def command_to_egg(self, cmd: CommandDecl, ruleset: Ident) -> bindings._Command | None:
         match cmd:
             case ActionCommandDecl(action):
                 action_egg = self.action_to_egg(action, expr_to_let=True)
@@ -272,17 +271,20 @@ class EGraphState:
                     [self.fact_to_egg(c) for c in conditions],
                 )
                 return (
-                    bindings.RewriteCommand(ruleset, rewrite, cmd.subsume)
+                    bindings.RewriteCommand(str(ruleset), rewrite, cmd.subsume)
                     if isinstance(cmd, RewriteDecl)
-                    else bindings.BiRewriteCommand(ruleset, rewrite)
+                    else bindings.BiRewriteCommand(str(ruleset), rewrite)
                 )
             case RuleDecl(head, body, name):
-                rule = bindings.Rule(
-                    span(),
-                    [self.action_to_egg(a) for a in head],
-                    [self.fact_to_egg(f) for f in body],
+                return bindings.RuleCommand(
+                    bindings.Rule(
+                        span(),
+                        [self.action_to_egg(a) for a in head],
+                        [self.fact_to_egg(f) for f in body],
+                        name or "",
+                        str(ruleset),
+                    )
                 )
-                return bindings.RuleCommand(name or "", ruleset, rule)
             # TODO: Replace with just constants value and looking at REF of function
             case DefaultRewriteDecl(ref, expr, subsume):
                 sig = self.__egg_decls__.get_callable_decl(ref).signature
@@ -354,12 +356,11 @@ class EGraphState:
         Creates the egg cost table if needed and gets the name of the table.
         """
         name = self.cost_table_name(ref)
-        print(name, self.cost_callables)
         if ref not in self.cost_callables:
             self.cost_callables.add(ref)
             signature = self.__egg_decls__.get_callable_decl(ref).signature
             assert isinstance(signature, FunctionSignature), "Can only add cost tables for functions"
-            signature = replace(signature, return_type=TypeRefWithVars("i64"))
+            signature = replace(signature, return_type=TypeRefWithVars(Ident.builtin("i64")))
             self.egraph.run_program(
                 bindings.FunctionCommand(span(), name, self._signature_to_egg_schema(signature), None)
             )
@@ -398,7 +399,7 @@ class EGraphState:
             case ConstantDecl(tp, _):
                 # Use constructor decleration instead of constant b/c constants cannot be extracted
                 # https://github.com/egraphs-good/egglog/issues/334
-                is_function = self.__egg_decls__._classes[tp.name].builtin
+                is_function = self.__egg_decls__._classes[tp.ident].builtin
                 schema = bindings.Schema([], self.type_ref_to_egg(tp))
                 if is_function:
                     self.egraph.run_program(bindings.FunctionCommand(span(), egg_name, schema, None))
@@ -412,7 +413,7 @@ class EGraphState:
                     # Compile functions that return unit to relations, because these show up in methods where you
                     # cant use the relation helper
                     schema = self._signature_to_egg_schema(signature)
-                    if signature.return_type == TypeRefWithVars("Unit"):
+                    if signature.return_type == TypeRefWithVars(Ident.builtin("Unit")):
                         if merge:
                             msg = "Cannot specify a merge function for a function that returns unit"
                             raise ValueError(msg)
@@ -456,12 +457,12 @@ class EGraphState:
             return self.type_ref_to_egg_sort[ref]
         except KeyError:
             pass
-        decl = self.__egg_decls__._classes[ref.name]
-        self.type_ref_to_egg_sort[ref] = egg_name = decl.egg_name or _generate_type_egg_name(ref)
+        decl = self.__egg_decls__._classes[ref.ident]
+        self.type_ref_to_egg_sort[ref] = egg_name = (not ref.args and decl.egg_name) or _generate_type_egg_name(ref)
         self.egg_sort_to_type_ref[egg_name] = ref
         if not decl.builtin or ref.args:
             if ref.args:
-                if ref.name == "UnstableFn":
+                if ref.ident == Ident.builtin("UnstableFn"):
                     # UnstableFn is a special case, where the rest of args are collected into a call
                     if len(ref.args) < 2:
                         msg = "Zero argument higher order functions not supported"
@@ -484,11 +485,11 @@ class EGraphState:
                         if not isinstance((signature := method.signature), FunctionSignature):
                             continue
                         for arg_tp in signature.arg_types:
-                            if isinstance(arg_tp, TypeRefWithVars) and arg_tp.args and arg_tp.name != ref.name:
-                                self.type_ref_to_egg(tcs.substitute_typevars(arg_tp, ref.name))
+                            if isinstance(arg_tp, TypeRefWithVars) and arg_tp.args and arg_tp.ident != ref.ident:
+                                self.type_ref_to_egg(tcs.substitute_typevars(arg_tp, ref.ident))
 
                     type_args = [bindings.Var(span(), self.type_ref_to_egg(a)) for a in ref.args]
-                args = (self.type_ref_to_egg(JustTypeRef(ref.name)), type_args)
+                args = (self.type_ref_to_egg(JustTypeRef(ref.ident)), type_args)
             else:
                 args = None
             self.egraph.run_program(bindings.Sort(span(), egg_name, args))
@@ -497,9 +498,9 @@ class EGraphState:
         # even if you never use that function.
         if decl.builtin:
             for method_name in decl.class_methods:
-                self.callable_ref_to_egg(ClassMethodRef(ref.name, method_name))
+                self.callable_ref_to_egg(ClassMethodRef(ref.ident, method_name))
             if decl.init:
-                self.callable_ref_to_egg(InitRef(ref.name))
+                self.callable_ref_to_egg(InitRef(ref.ident))
 
         return egg_name
 
@@ -601,7 +602,11 @@ class EGraphState:
                 egg_args = [self.typed_expr_to_egg(a, False) for a in typed_args]
                 res = bindings.Call(span(), egg_fn, egg_args)
             case PyObjectDecl(value):
-                res = GLOBAL_PY_OBJECT_SORT.store(value)
+                res = bindings.Call(
+                    span(),
+                    "py-object",
+                    [bindings.Lit(span(), bindings.String(standard_b64encode(value).decode("utf-8")))],
+                )
             case PartialCallDecl(call_decl):
                 egg_fn_call = self._expr_to_egg(call_decl)
                 res = bindings.Call(
@@ -643,32 +648,32 @@ class EGraphState:
         state = FromEggState(self, termdag)
         return [state.from_expr(tp, term) for term in terms]
 
-    def _get_possible_types(self, cls_name: str) -> frozenset[JustTypeRef]:
+    def _get_possible_types(self, cls_ident: Ident) -> frozenset[JustTypeRef]:
         """
         Given a class name, returns all possible registered types that it can be.
         """
-        return frozenset(tp for tp in self.type_ref_to_egg_sort if tp.name == cls_name)
+        return frozenset(tp for tp in self.type_ref_to_egg_sort if tp.ident == cls_ident)
 
     def _generate_callable_egg_name(self, ref: CallableRef) -> str:
         """
         Generates a valid egg function name for a callable reference.
         """
         match ref:
-            case FunctionRef(name):
-                return name
+            case FunctionRef(ident):
+                return str(ident)
 
-            case ConstantRef(name):
+            case ConstantRef(ident):
                 # Prefix to avoid name collisions with local vars
-                return f"%{name}"
+                return f"%{ident}"
             case (
-                MethodRef(cls_name, name)
-                | ClassMethodRef(cls_name, name)
-                | ClassVariableRef(cls_name, name)
-                | PropertyRef(cls_name, name)
+                MethodRef(cls_ident, name)
+                | ClassMethodRef(cls_ident, name)
+                | ClassVariableRef(cls_ident, name)
+                | PropertyRef(cls_ident, name)
             ):
-                return f"{cls_name}.{name}"
-            case InitRef(cls_name):
-                return f"{cls_name}.__init__"
+                return f"{cls_ident}.{name}"
+            case InitRef(cls_ident):
+                return f"{cls_ident}.__init__"
             case UnnamedFunctionRef(args, val):
                 parts = [str(self._expr_to_egg(a.expr)) + "-" + str(self.type_ref_to_egg(a.tp)) for a in args] + [
                     str(self.typed_expr_to_egg(val, False))
@@ -682,7 +687,10 @@ class EGraphState:
         return self.egraph.eval_expr(egg_expr)[1]
 
     def value_to_expr(self, tp: JustTypeRef, value: bindings.Value) -> ExprDecl:  # noqa: C901, PLR0911, PLR0912
-        match tp.name:
+        if tp.ident.module != Ident.builtin("").module:
+            return ValueDecl(value)
+
+        match tp.ident.name:
             # Should match list in egraph bindings
             case "i64":
                 return LitDecl(self.egraph.value_to_i64(value))
@@ -695,49 +703,58 @@ class EGraphState:
             case "Unit":
                 return LitDecl(None)
             case "PyObject":
-                return PyObjectDecl(self.egraph.value_to_pyobject(GLOBAL_PY_OBJECT_SORT, value))
+                val = self.egraph.value_to_pyobject(value)
+                return PyObjectDecl(cloudpickle.dumps(val))
             case "Rational":
                 fraction = self.egraph.value_to_rational(value)
                 return CallDecl(
-                    InitRef("Rational"),
+                    InitRef(Ident.builtin("Rational")),
                     (
-                        TypedExprDecl(JustTypeRef("i64"), LitDecl(fraction.numerator)),
-                        TypedExprDecl(JustTypeRef("i64"), LitDecl(fraction.denominator)),
+                        TypedExprDecl(JustTypeRef(Ident.builtin("i64")), LitDecl(fraction.numerator)),
+                        TypedExprDecl(JustTypeRef(Ident.builtin("i64")), LitDecl(fraction.denominator)),
                     ),
                 )
             case "BigInt":
                 i = self.egraph.value_to_bigint(value)
                 return CallDecl(
-                    ClassMethodRef("BigInt", "from_string"),
-                    (TypedExprDecl(JustTypeRef("String"), LitDecl(str(i))),),
+                    ClassMethodRef(Ident.builtin("BigInt"), "from_string"),
+                    (TypedExprDecl(JustTypeRef(Ident.builtin("String")), LitDecl(str(i))),),
                 )
             case "BigRat":
                 fraction = self.egraph.value_to_bigrat(value)
                 return CallDecl(
-                    InitRef("BigRat"),
+                    InitRef(Ident.builtin("BigRat")),
                     (
                         TypedExprDecl(
-                            JustTypeRef("BigInt"),
+                            JustTypeRef(Ident.builtin("BigInt")),
                             CallDecl(
-                                ClassMethodRef("BigInt", "from_string"),
-                                (TypedExprDecl(JustTypeRef("String"), LitDecl(str(fraction.numerator))),),
+                                ClassMethodRef(Ident.builtin("BigInt"), "from_string"),
+                                (
+                                    TypedExprDecl(
+                                        JustTypeRef(Ident.builtin("String")), LitDecl(str(fraction.numerator))
+                                    ),
+                                ),
                             ),
                         ),
                         TypedExprDecl(
-                            JustTypeRef("BigInt"),
+                            JustTypeRef(Ident.builtin("BigInt")),
                             CallDecl(
-                                ClassMethodRef("BigInt", "from_string"),
-                                (TypedExprDecl(JustTypeRef("String"), LitDecl(str(fraction.denominator))),),
+                                ClassMethodRef(Ident.builtin("BigInt"), "from_string"),
+                                (
+                                    TypedExprDecl(
+                                        JustTypeRef(Ident.builtin("String")), LitDecl(str(fraction.denominator))
+                                    ),
+                                ),
                             ),
                         ),
                     ),
                 )
             case "Map":
                 k_tp, v_tp = tp.args
-                expr = CallDecl(ClassMethodRef("Map", "empty"), (), (k_tp, v_tp))
+                expr = CallDecl(ClassMethodRef(Ident.builtin("Map"), "empty"), (), (k_tp, v_tp))
                 for k, v in self.egraph.value_to_map(value).items():
                     expr = CallDecl(
-                        MethodRef("Map", "insert"),
+                        MethodRef(Ident.builtin("Map"), "insert"),
                         (
                             TypedExprDecl(tp, expr),
                             TypedExprDecl(k_tp, self.value_to_expr(k_tp, k)),
@@ -749,25 +766,32 @@ class EGraphState:
                 xs_ = self.egraph.value_to_set(value)
                 (v_tp,) = tp.args
                 return CallDecl(
-                    InitRef("Set"), tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs_), (v_tp,)
+                    InitRef(Ident.builtin("Set")),
+                    tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs_),
+                    (v_tp,),
                 )
             case "Vec":
                 xs = self.egraph.value_to_vec(value)
                 (v_tp,) = tp.args
                 return CallDecl(
-                    InitRef("Vec"), tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs), (v_tp,)
+                    InitRef(Ident.builtin("Vec")),
+                    tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs),
+                    (v_tp,),
                 )
             case "MultiSet":
                 xs = self.egraph.value_to_multiset(value)
                 (v_tp,) = tp.args
                 return CallDecl(
-                    InitRef("MultiSet"), tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs), (v_tp,)
+                    InitRef(Ident.builtin("MultiSet")),
+                    tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs),
+                    (v_tp,),
                 )
             case "UnstableFn":
                 _names, _args = self.egraph.value_to_function(value)
                 return_tp, *arg_types = tp.args
                 return self._unstable_fn_value_to_expr(_names, _args, return_tp, arg_types)
-        return ValueDecl(value)
+            case _:
+                raise NotImplementedError(f"Value to expr not implemented for type {tp.ident}")
 
     def _unstable_fn_value_to_expr(
         self, name: str, partial_args: list[bindings.Value], return_tp: JustTypeRef, _arg_types: list[JustTypeRef]
@@ -778,7 +802,7 @@ class EGraphState:
             signature = self.__egg_decls__.get_callable_decl(callable_ref).signature
             if not isinstance(signature, FunctionSignature):
                 continue
-            if signature.semantic_return_type.name != return_tp.name:
+            if signature.semantic_return_type.ident != return_tp.ident:
                 continue
             tcs = TypeConstraintSolver(self.__egg_decls__)
 
@@ -837,10 +861,10 @@ def _generate_type_egg_name(ref: JustTypeRef) -> str:
     """
     Generates an egg sort name for this type reference by linearizing the type.
     """
-    name = ref.name
+    name = ref.ident
     if not ref.args:
-        return name
-    return f"{name}_{'_'.join(map(_generate_type_egg_name, ref.args))}"
+        return str(name)
+    return f"{name}[{','.join(map(_generate_type_egg_name, ref.args))}]"
 
 
 @dataclass
@@ -870,18 +894,21 @@ class FromEggState:
             expr_decl = LitDecl(None if isinstance(value, bindings.Unit) else value.value)
         elif isinstance(term, bindings.TermApp):
             if term.name == "py-object":
-                call = self.termdag.term_to_expr(term, span())
-                expr_decl = PyObjectDecl(GLOBAL_PY_OBJECT_SORT.load(call))
+                (str_term,) = term.args
+                call = self.termdag.get(str_term)
+                assert isinstance(call, bindings.TermLit)
+                assert isinstance(call.value, bindings.String)
+                expr_decl = PyObjectDecl(standard_b64decode(call.value.value))
             elif term.name == "unstable-fn":
                 # Get function name
                 fn_term, *arg_terms = term.args
-                fn_value = self.resolve_term(fn_term, JustTypeRef("String"))
+                fn_value = self.resolve_term(fn_term, JustTypeRef(Ident.builtin("String")))
                 assert isinstance(fn_value.expr, LitDecl)
                 fn_name = fn_value.expr.value
                 assert isinstance(fn_name, str)
 
                 # Resolve what types the partially applied args are
-                assert tp.name == "UnstableFn"
+                assert tp.ident == Ident.builtin("UnstableFn")
                 call_decl = self.from_call(tp.args[0], bindings.TermApp(fn_name, arg_terms))
                 expr_decl = PartialCallDecl(call_decl)
             else:
@@ -915,8 +942,8 @@ class FromEggState:
                 # Need OR in case we have class method whose class whas never added as a sort, which would happen
                 # if the class method didn't return that type and no other function did. In this case, we don't need
                 # to care about the type vars and we we don't need to bind any possible type.
-                possible_types = self.state._get_possible_types(callable_ref.class_name) or [None]
-                cls_name = callable_ref.class_name
+                possible_types = self.state._get_possible_types(callable_ref.ident) or [None]
+                cls_name = callable_ref.ident
             else:
                 possible_types = [None]
                 cls_name = None

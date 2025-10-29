@@ -33,15 +33,15 @@ class _Split(Generic[T, V]):
 
 
 @dataclass
-class Thunk(Generic[T, Unpack[TS]]):
+class Thunk(Generic[T, *TS]):
     """
     Cached delayed function call.
     """
 
-    state: Resolved[T] | Unresolved[T, Unpack[TS]] | Resolving | Error
+    state: Resolved[T] | Unresolved[T, *TS] | Resolving | Error
 
     @classmethod
-    def fn(cls, fn: Callable[[Unpack[TS]], T], *args: Unpack[TS], context: str | None = None) -> Thunk[T, Unpack[TS]]:
+    def fn(cls, fn: Callable[[Unpack[TS]], T], *args: *TS, context: str | None = None) -> Thunk[T, *TS]:
         """
         Create a thunk based on some functions and some partial args.
 
@@ -80,9 +80,9 @@ class Resolved(Generic[T]):
 
 
 @dataclass
-class Unresolved(Generic[T, Unpack[TS]]):
+class Unresolved(Generic[T, *TS]):
     fn: Callable[[Unpack[TS]], T]
-    args: tuple[Unpack[TS]]
+    args: tuple[*TS]
     context: str | None
 
 

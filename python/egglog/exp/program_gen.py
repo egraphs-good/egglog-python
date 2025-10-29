@@ -27,6 +27,8 @@ class Program(Expr):
         Concats the strings of the two expressions and also the statements.
         """
 
+    def __radd__(self, other: ProgramLike) -> Program: ...
+
     @method(unextractable=True)
     def statement(self, statement: ProgramLike) -> Program:
         """
