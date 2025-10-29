@@ -16,10 +16,13 @@ from typing import (
     ClassVar,
     Generic,
     Literal,
+    Never,
     Protocol,
+    Self,
     TypeAlias,
     TypedDict,
     TypeVar,
+    assert_never,
     cast,
     get_type_hints,
     overload,
@@ -28,7 +31,7 @@ from uuid import uuid4
 from warnings import warn
 
 import graphviz
-from typing_extensions import Never, ParamSpec, Self, Unpack, assert_never
+from typing_extensions import ParamSpec, Unpack
 
 from . import bindings
 from .conversion import *
@@ -39,7 +42,6 @@ from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_decl
 from .runtime import *
 from .thunk import *
-from .version_compat import *
 
 if TYPE_CHECKING:
     from .builtins import String, Unit, i64, i64Like
@@ -153,9 +155,8 @@ def check_eq(x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *, ad
     except bindings.EggSmolError as err:
         if display:
             egraph.display()
-        raise add_note(
-            f"Failed:\n{eq(x).to(y)}\n\nExtracted:\n {eq(egraph.extract(x)).to(egraph.extract(y))})", err
-        ) from None
+        err.add_note(f"Failed:\n{eq(x).to(y)}\n\nExtracted:\n {eq(egraph.extract(x)).to(egraph.extract(y))})")
+        raise
     return egraph
 
 
@@ -490,7 +491,8 @@ def _generate_class_decls(  # noqa: C901,PLR0912
                 reverse_args=reverse_args,
             )
         except Exception as e:
-            raise add_note(f"Error processing {cls_ident}.{method_name}", e) from None
+            e.add_note(f"Error processing {cls_ident}.{method_name}")
+            raise
 
         if not builtin and not isinstance(ref, InitRef):
             add_default_funcs.append(add_rewrite)
@@ -1050,7 +1052,8 @@ class EGraph:
         try:
             return self._egraph.run_program(cmd)[0]
         except BaseException as e:
-            raise add_note("Extracting: " + str(expr), e)  # noqa: B904
+            e.add_note("Extracting: " + str(expr))
+            raise
 
     def push(self) -> None:
         """

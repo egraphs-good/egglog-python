@@ -73,11 +73,11 @@ impl BaseSort for PyObjectSort {
         );
         // Supports calling (py-eval <str-obj> <globals-obj> <locals-obj>)
         add_primitive!(eg, "py-eval" = |code: S, globals: PyPickledValue, locals: PyPickledValue| -?> PyPickledValue {
-            attach(|py| {
+            attach("py-eval", |py| {
                 dump(py.eval(
                     CString::new(code.to_string()).unwrap().as_c_str(),
-                    Some(load(py, &globals)?.downcast::<PyDict>()?),
-                    Some(load(py, &locals)?.downcast::<PyDict>()?),
+                    Some(load(py, &globals)?.cast::<PyDict>()?),
+                    Some(load(py, &locals)?.cast::<PyDict>()?),
                 )?)
             })
         });
@@ -87,7 +87,7 @@ impl BaseSort for PyObjectSort {
             eg,
             "py-exec" =
                 |code: S, globals: PyPickledValue, locals: PyPickledValue| -?> PyPickledValue {
-                    attach(|py| {
+                    attach("py-exec", |py| {
                         let locals = load(py, &locals)?;
                         // Copy code into temporary file
                         // Keep it around so that if errors occur we can debug them after the program exits
@@ -100,8 +100,8 @@ impl BaseSort for PyObjectSort {
                         run_path(
                             py,
                             CString::new(code.into_inner()).unwrap().as_c_str(),
-                            Some(load(py, &globals)?.downcast::<PyDict>()?),
-                            Some(locals.downcast::<PyDict>()?),
+                            Some(load(py, &globals)?.cast::<PyDict>()?),
+                            Some(locals.cast::<PyDict>()?),
                             CString::new(path).unwrap().as_c_str(),
                         )?;
                         dump(locals)
@@ -110,17 +110,20 @@ impl BaseSort for PyObjectSort {
         );
         // (py-call <fn-obj> [<arg-object>]*)
         add_primitive!(eg, "py-call" = [xs: PyPickledValue] -?> PyPickledValue {
-            attach(|py| {
-                let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>()?;
+            attach("py-call", |py| {
+                let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>().map_err(|e| {e.add_note(py, "Loadng arguments").unwrap(); e})?;
                 let fn_obj = &xs[0];
-                let args = PyTuple::new(py, xs[1..].to_vec())?;
-                dump(fn_obj.call1(args)?)
+                let args = PyTuple::new(py, xs[1..].to_vec()).map_err(|e| {e.add_note(py, "Creating tuple").unwrap(); e})?;
+                dump(fn_obj.call1(args).map_err(|e| {e.add_note(py, format!("Calling function {}", fn_obj)).unwrap(); e})?)
+            })
+        });
+
             })
         });
 
         // (py-dict [<key-object> <value-object>]*)
         add_primitive!(eg, "py-dict" = [xs: PyPickledValue] -?> PyPickledValue {
-            attach(|py| {
+            attach("py-dict", |py| {
                 let dict = PyDict::new(py);
                 for i in xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>()?.chunks_exact(2) {
                     dict.set_item(i[0].clone(), i[1].clone())?;
@@ -130,10 +133,10 @@ impl BaseSort for PyObjectSort {
         });
         // Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
         add_primitive!(eg, "py-dict-update" = [xs: PyPickledValue] -?> PyPickledValue {{
-            attach(|py| {
+            attach("py-dict-update", |py| {
                 let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>()?;
                 // Copy the dict so we can mutate it and return it
-                let dict = xs[0].downcast::<PyDict>()?;
+                let dict = xs[0].cast::<PyDict>()?;
                 // Update the dict with the key-value pairs
                 for i in xs[1..].chunks_exact(2) {
                     dict.set_item(i[0].clone(), i[1].clone())?;
@@ -146,7 +149,7 @@ impl BaseSort for PyObjectSort {
             eg,
             "py-to-string" = |x: PyPickledValue| -?> S {
                 {
-                    let s: String = attach(move |py| load(py, &x)?.extract())?;
+                    let s: String = attach("py-to-string", move |py| load(py, &x)?.extract())?;
                     Some(s.into())
                 }
             }
@@ -156,7 +159,7 @@ impl BaseSort for PyObjectSort {
             eg,
             "py-to-bool" = |x: PyPickledValue| -?> bool {
                 {
-                    attach(move |py| load(py, &x)?.extract())
+                    attach("py-to-bool", move |py| load(py, &x)?.extract())
                 }
             }
         );
@@ -164,7 +167,7 @@ impl BaseSort for PyObjectSort {
         add_primitive!(
             eg,
             "py-from-string" = |x: S| -?> PyPickledValue {
-                attach(|py| {
+                attach("py-from-string", |py| {
                     dump(x.to_string().into_pyobject(py)?)
                 })
             }
@@ -173,7 +176,7 @@ impl BaseSort for PyObjectSort {
         add_primitive!(
             eg,
             "py-from-int" = |x: i64| -?> PyPickledValue {
-                attach(|py| {
+                attach("py-from-int", |py| {
                     dump(x.into_pyobject(py)?)
                 })
             }
@@ -195,7 +198,7 @@ impl BaseSort for PyObjectSort {
 /// Attaches to the Python interpreter and runs the given closure.
 ///
 /// Also handles errors, by saving them on the interpreter and returning None.
-fn attach<F, R>(f: F) -> Option<R>
+fn attach<F, R>(name: &str, f: F) -> Option<R>
 where
     F: for<'py> FnOnce(Python<'py>) -> PyResult<R>,
 {
@@ -206,6 +209,8 @@ where
         match f(py) {
             Ok(val) => Some(val),
             Err(err) => {
+                err.add_note(py, format!("While calling primitive '{}'", name))
+                    .unwrap();
                 err.restore(py);
                 None
             }

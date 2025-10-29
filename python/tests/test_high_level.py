@@ -15,7 +15,6 @@ import pytest
 from egglog import *
 from egglog.declarations import CallDecl, FunctionRef, Ident, JustTypeRef, MethodRef, TypedExprDecl
 from egglog.runtime import RuntimeExpr, RuntimeFunction
-from egglog.version_compat import BEFORE_3_11
 
 
 class TestExprStr:
@@ -770,9 +769,6 @@ def test_helpful_error_function_class():
         def __init__(self) -> None: ...
 
     match = "Inside of classes, wrap methods with the `method` decorator, not `function`"
-    # If we are after 3 11 we have context included
-    if not BEFORE_3_11:
-        match += "\nError processing python.tests.test_high_level.E.__init__"
     with pytest.raises(ValueError, match=match):
         E()
 

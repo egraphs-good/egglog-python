@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- BREAKING: Remove suport for Python 3.11 now that pyo3 has dropped support.
 - Allow mutating methods to update their underlying expression via `Expr.__replace_expr__`, and ensure default rewrites return the mutated receiver when using `mutates_self` or `mutates_first_arg`.
 - BREAKING: Store `PyObject` values as `cloudpickle` bytes instead of live references so duplicates merge by value; `.value` now returns a fresh copy and the sort accepts objects like `None` that previously failed.
 - Adds `__call__` method to `PyObject` to replace `py_eval_fn` which is now deprecated.

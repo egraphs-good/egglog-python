@@ -476,9 +476,10 @@ convert_struct!(
         }
 );
 
-impl FromPyObject<'_> for Box<Schedule> {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        ob.extract::<Schedule>().map(Box::new)
+impl<'py> FromPyObject<'_, 'py> for Box<Schedule> {
+    type Error = PyErr;
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        obj.extract::<Schedule>().map(Box::new)
     }
 }
 
@@ -492,9 +493,10 @@ impl<'py> IntoPyObject<'py> for Box<Schedule> {
     }
 }
 
-impl FromPyObject<'_> for Box<Command> {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        ob.extract::<Command>().map(Box::new)
+impl<'py> FromPyObject<'_, 'py> for Box<Command> {
+    type Error = PyErr;
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        obj.extract::<Command>().map(Box::new)
     }
 }
 
@@ -518,9 +520,10 @@ impl From<ordered_float::OrderedFloat<f64>> for WrappedOrderedF64 {
     }
 }
 
-impl FromPyObject<'_> for WrappedOrderedF64 {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        ob.extract::<f64>()
+impl<'py> FromPyObject<'_, 'py> for WrappedOrderedF64 {
+    type Error = PyErr;
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        obj.extract::<f64>()
             .map(|f| WrappedOrderedF64(OrderedFloat(f)))
     }
 }
@@ -546,9 +549,10 @@ impl From<std::time::Duration> for WrappedDuration {
     }
 }
 
-impl FromPyObject<'_> for WrappedDuration {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let py_delta = ob.downcast::<pyo3::types::PyDelta>()?;
+impl<'py> FromPyObject<'_, 'py> for WrappedDuration {
+    type Error = PyErr;
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
+        let py_delta = obj.cast::<pyo3::types::PyDelta>()?;
 
         Ok(WrappedDuration(std::time::Duration::new(
             py_delta.get_days() as u64 * 24 * 60 * 60 + py_delta.get_seconds() as u64,

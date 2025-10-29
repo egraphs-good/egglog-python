@@ -18,16 +18,14 @@ from collections.abc import Callable
 from dataclasses import InitVar, dataclass, replace
 from inspect import Parameter, Signature
 from itertools import zip_longest
-from typing import TYPE_CHECKING, Any, TypeVar, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, TypeVar, Union, assert_never, cast, get_args, get_origin
 
 import cloudpickle
-from typing_extensions import assert_never
 
 from .declarations import *
 from .pretty import *
 from .thunk import Thunk
 from .type_constraint_solver import *
-from .version_compat import *
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -384,7 +382,8 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
         try:
             cls_decl = self.__egg_decls__._classes[self.__egg_tp__.ident]
         except Exception as e:
-            raise add_note(f"Error processing class {self.__egg_tp__.ident}", e) from None
+            e.add_note(f"Error processing class {self.__egg_tp__.ident}")
+            raise
 
         preserved_methods = cls_decl.preserved_methods
         if name in preserved_methods:
@@ -504,7 +503,8 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
         try:
             signature = self.__egg_decls__.get_callable_decl(self.__egg_ref__).signature
         except Exception as e:
-            raise add_note(f"Failed to find callable {self}", e)  # noqa: B904
+            e.add_note(f"Failed to find callable {self}")
+            raise
         decls = self.__egg_decls__.copy()
         # Special case function application bc we dont support variadic generics yet generally
         if signature == "fn-app":
