@@ -793,14 +793,34 @@ for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
         Tries to find the minimum cost conversion of either the LHS or the RHS, by finding all methods with either
         the LHS or the RHS as exactly the right type and then upcasting the other to that type.
         """
-        # First check if we have a preserved method for this:
-        if isinstance(self, RuntimeExpr) and (
-            (preserved_method := self.__egg_class_decl__.preserved_methods.get(method_name)) is not None
-        ):
-            return preserved_method.__get__(self)(other)
+        from .conversion import (  # noqa: PLC0415
+            ConvertError,
+            convert_to_same_type,
+            min_binary_conversion,
+            resolve_type,
+        )
+
         # 1. switch if reversed method
         if r_method:
             self, other = other, self
+        # First check if we have a preserved method for this:
+        if isinstance(self, RuntimeExpr) and (
+            (preserved_method := self.__egg_class_decl__.preserved_methods.get(name)) is not None
+        ):
+            return preserved_method.__get__(self)(other)
+        # Then check if the self is a Python type and the other side has a preserved method
+        if (
+            not isinstance(self, RuntimeExpr)
+            and isinstance(other, RuntimeExpr)
+            and ((preserved_method := other.__egg_class_decl__.preserved_methods.get(name)) is not None)
+        ):
+            try:
+                new_self = convert_to_same_type(self, other)
+            except ConvertError:
+                pass
+            else:
+                return preserved_method.__get__(new_self)(other)
+
         # If the types don't exactly match to start, then we need to try converting one of them, by finding the cheapest conversion
         if not (
             isinstance(self, RuntimeExpr)
@@ -811,8 +831,6 @@ for name, r_method in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
                 )
             )
         ):
-            from .conversion import min_binary_conversion, resolve_type  # noqa: PLC0415
-
             best_method = min_binary_conversion(name, resolve_type(self), resolve_type(other))
 
             if not best_method:

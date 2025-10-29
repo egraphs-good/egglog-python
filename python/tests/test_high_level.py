@@ -1552,3 +1552,19 @@ def test_binary_conversion_lookup_parent_class():
 
     assert X(1) + 2 == X(1) + X(2)
     assert 2 + X(1) == X(2) + X(1)
+
+
+def test_binary_preserved():
+    class X(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+        @method(preserve=True)
+        def __add__(self, other: T) -> tuple[X, T]:
+            return (self, other)
+
+        def __radd__(self, other: object) -> tuple[X, X]: ...
+
+    converter(i64, X, X)
+
+    assert X(1) + 10 == (X(1), 10)
+    assert 10 + X(1) == (X(10), X(1))
