@@ -7,11 +7,10 @@ from __future__ import annotations
 import ast
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, TypeAlias, assert_never
 
 import black
 import cloudpickle
-from typing_extensions import assert_never
 
 from .declarations import *
 
@@ -475,6 +474,8 @@ class PrettyContext:
                     case _ if method_name in NAMED_UNARY_METHODS:
                         return NAMED_UNARY_METHODS[method_name], [non_str_slf, *args]
                     case "__getattr__":
+                        if isinstance(args[0], LitDecl) and isinstance(args[0].value, str):
+                            return f"{slf}.{args[0].value}"
                         return "getattr", [non_str_slf, *args]
                     case _:
                         return f"{slf}.{method_name}", args
