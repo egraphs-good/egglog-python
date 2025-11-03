@@ -115,7 +115,7 @@ exclude_patterns = [
     "**.ipynb_checkpoints",
     "auto_examples/*.ipynb",
     # "auto_examples/*.md5",
-    "conf.py",
+    "conf.py",  # Sphinx config file, not a notebook
 ]
 nitpicky = True
 
@@ -165,13 +165,10 @@ nb_execution_mode = "cache"
 # nb_execution_cache_path = ''
 
 # Exclude (POSIX) glob patterns for notebooks
-# These notebooks have errors that need to be fixed in future PRs:
-# - explanation/* and reference/* contain @egraph.class_ usage which is now deprecated
-# - tut_2_datalog.py uses incorrect check() syntax with ==
+# Temporarily exclude notebooks with unrelated errors (not @egraph.class_ issues)
 nb_execution_excludepatterns = (
-    "explanation/*",
-    "reference/*",
-    "tutorials/tut_2_datalog.py",
+    "explanation/2024_03_17_community_talk.ipynb",  # sklearn config error
+    "explanation/indexing_pushdown.ipynb",  # array_api_module NameError
 )
 
 # Execution timeout (seconds)

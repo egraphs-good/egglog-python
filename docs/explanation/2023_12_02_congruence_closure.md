@@ -120,7 +120,7 @@ def car(x: T) -> T: pass
 @function
 def cdr(x: T) -> T: pass
 
-@function(default=Unit())
+@function
 def not_atom(x: T) -> Unit: pass
 ```
 
