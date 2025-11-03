@@ -77,7 +77,7 @@ def find_unreleased_section(lines):
 
 def update_changelog_version(file_path: Path, new_version: str) -> None:
     """Update changelog for version bump - replaces UNRELEASED with versioned section."""
-    today = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.datetime.now(tz=datetime.UTC).strftime("%Y-%m-%d")
     content = file_path.read_text()
     new_section = f"## UNRELEASED\n\n## {new_version} ({today})"
     content = content.replace("## UNRELEASED", new_section, 1)

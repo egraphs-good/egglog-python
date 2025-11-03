@@ -2,10 +2,10 @@
 
 use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
-use crate::py_object_sort::{PyObjectIdent, PyObjectSort};
+use crate::py_object_sort::{PyObjectSort, PyPickledValue, load};
 use crate::serialize::SerializedEGraph;
 
-use egglog::prelude::add_base_sort;
+use egglog::prelude::{RustSpan, Span, add_base_sort};
 use egglog::{SerializeConfig, span};
 use log::info;
 use num_bigint::BigInt;
@@ -27,22 +27,12 @@ pub struct EGraph {
 #[pymethods]
 impl EGraph {
     #[new]
-    #[pyo3(
-        signature = (py_object_sort=None, *, fact_directory=None, seminaive=true, record=false),
-        text_signature = "(py_object_sort=None, *, fact_directory=None, seminaive=True, record=False)"
-    )]
-    fn new(
-        py_object_sort: Option<PyObjectSort>,
-        fact_directory: Option<PathBuf>,
-        seminaive: bool,
-        record: bool,
-    ) -> Self {
+    #[pyo3(signature = (*, fact_directory=None, seminaive=true, record=false))]
+    fn new(fact_directory: Option<PathBuf>, seminaive: bool, record: bool) -> Self {
         let mut egraph = egglog_experimental::new_experimental_egraph();
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
-        if let Some(py_object_sort) = py_object_sort {
-            add_base_sort(&mut egraph, py_object_sort, span!()).unwrap();
-        }
+        add_base_sort(&mut egraph, PyObjectSort {}, span!()).unwrap();
         Self {
             egraph,
             cmds: if record { Some(String::new()) } else { None },
@@ -77,6 +67,9 @@ impl EGraph {
         match py.detach(|| self.egraph.run_program(commands)) {
             Err(e) => Err(WrappedError::Egglog(e)),
             Ok(outputs) => {
+                if let Some(err) = PyErr::take(py) {
+                    return Err(WrappedError::Py(err));
+                }
                 if let Some(cmds) = &mut self.cmds {
                     cmds.push_str(&cmds_str);
                 }
@@ -132,12 +125,18 @@ impl EGraph {
             .map(Value)
     }
 
-    fn eval_expr(&mut self, expr: Expr) -> EggResult<(String, Value)> {
+    fn eval_expr(&mut self, py: Python<'_>, expr: Expr) -> EggResult<(String, Value)> {
         let expr: egglog::ast::Expr = expr.into();
-        self.egraph
-            .eval_expr(&expr)
-            .map(|(s, v)| (s.name().to_string(), Value(v)))
-            .map_err(|e| WrappedError::Egglog(e))
+        let res = py.detach(|| {
+            self.egraph
+                .eval_expr(&expr)
+                .map(|(s, v)| (s.name().to_string(), Value(v)))
+                .map_err(|e| WrappedError::Egglog(e))
+        });
+        if let Some(err) = PyErr::take(py) {
+            return Err(WrappedError::Py(err));
+        }
+        res
     }
 
     fn value_to_i64(&self, v: Value) -> i64 {
@@ -172,14 +171,9 @@ impl EGraph {
         r.0
     }
 
-    fn value_to_pyobject(
-        &self,
-        py: Python<'_>,
-        py_object_sort: PyObjectSort,
-        v: Value,
-    ) -> Py<PyAny> {
-        let ident = self.egraph.value_to_base::<PyObjectIdent>(v.0);
-        py_object_sort.load(py, ident).unbind()
+    fn value_to_pyobject<'a>(&self, py: Python<'a>, v: Value) -> PyResult<Bound<'a, PyAny>> {
+        let ident = self.egraph.value_to_base::<PyPickledValue>(v.0);
+        load(py, &ident)
     }
 
     fn value_to_map(&self, v: Value) -> BTreeMap<Value, Value> {

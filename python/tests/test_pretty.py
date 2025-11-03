@@ -1,6 +1,7 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from copy import copy
 from functools import partial
@@ -29,6 +30,33 @@ class A(Expr):
     def __setitem__(self, key: A, value: A) -> None: ...
     @property
     def prop(self) -> A: ...
+
+    def __sub__(self, other: A) -> A: ...
+    def __mul__(self, other: A) -> A: ...
+    def __truediv__(self, other: A) -> A: ...
+    def __floordiv__(self, other: A) -> A: ...
+    def __mod__(self, other: A) -> A: ...
+    def __pow__(self, other: A) -> A: ...
+    def __lshift__(self, other: A) -> A: ...
+    def __rshift__(self, other: A) -> A: ...
+
+    def __and__(self, other: A) -> A: ...
+    def __xor__(self, other: A) -> A: ...
+    def __lt__(self, other: A) -> A: ...
+    def __le__(self, other: A) -> A: ...
+    def __gt__(self, other: A) -> A: ...
+    def __ge__(self, other: A) -> A: ...
+    def __eq__(self, other: A) -> A: ...  # type: ignore[override]
+    def __ne__(self, other: A) -> A: ...  # type: ignore[override]
+    def __getattr__(self, name: StringLike) -> A: ...
+
+    def __pos__(self) -> A: ...
+    def __invert__(self) -> A: ...
+    def __round__(self) -> A: ...
+    def __abs__(self) -> A: ...
+    def __trunc__(self) -> A: ...
+    def __floor__(self) -> A: ...
+    def __ceil__(self) -> A: ...
 
 
 @function
@@ -84,6 +112,12 @@ r = ruleset(name="r")
 
 bo = back_off(ban_length=5)
 
+
+class BadRepr:
+    def __repr__(self) -> str:
+        return "&&&"
+
+
 PARAMS = [
     # expression function calls
     pytest.param(A(), "A()", id="init"),
@@ -119,6 +153,31 @@ _A_2 + _A_3""",
         "_A_1 = (my_very_long_function_name() + my_very_long_function_name()) + my_very_long_function_name()\nrewrite(_A_1).to(_A_1)",
         id="wrap long line",
     ),
+    pytest.param(A() - A(), "A() - A()", id="subtraction"),
+    pytest.param(A() * A(), "A() * A()", id="multiplication"),
+    pytest.param(A() / A(), "A() / A()", id="division"),
+    pytest.param(A() // A(), "A() // A()", id="floor division"),
+    pytest.param(A() % A(), "A() % A()", id="modulus"),
+    pytest.param(A() ** A(), "A() ** A()", id="exponentiation"),
+    pytest.param(A() << A(), "A() << A()", id="left shift"),
+    pytest.param(A() >> A(), "A() >> A()", id="right shift"),
+    pytest.param(A() & A(), "A() & A()", id="and"),
+    pytest.param(A() ^ A(), "A() ^ A()", id="xor"),
+    pytest.param(A() < A(), "A() < A()", id="less than"),
+    pytest.param(A() <= A(), "A() <= A()", id="less than or equal"),
+    pytest.param(A() > A(), "A() > A()", id="greater than"),
+    pytest.param(A() >= A(), "A() >= A()", id="greater than or equal"),
+    pytest.param(A() == A(), "A() == A()", id="equal"),
+    pytest.param(A() != A(), "A() != A()", id="not equal"),
+    pytest.param(A().foo, "A().foo", id="getattr"),
+    pytest.param(A().__getattr__(String("a") + "b"), 'A().__getattr__(join("a", "b"))', id="getattr expr"),
+    pytest.param(+A(), "+A()", id="pos"),
+    pytest.param(~A(), "~A()", id="invert"),
+    pytest.param(round(A()), "round(A())", id="round"),
+    pytest.param(abs(A()), "abs(A())", id="abs"),
+    pytest.param(math.trunc(A()), "trunc(A())", id="trunc"),
+    pytest.param(math.floor(A()), "floor(A())", id="floor"),
+    pytest.param(math.ceil(A()), "ceil(A())", id="ceil"),
     # primitives
     pytest.param(Unit(), "Unit()", id="unit"),
     pytest.param(Bool(True), "Bool(True)", id="bool"),
@@ -126,6 +185,7 @@ _A_2 + _A_3""",
     pytest.param(f64(42.1), "f64(42.1)", id="f64"),
     pytest.param(String("hello"), 'String("hello")', id="string"),
     pytest.param(PyObject("hi"), 'PyObject("hi")', id="pyobject"),
+    pytest.param(PyObject(BadRepr()), 'PyObject(eval("&&&"))', id="pyobject-invalid-str"),
     pytest.param(var("x", A), "x", id="variable"),
     # commands
     pytest.param(rewrite(g()).to(h(), A()), "rewrite(g()).to(h(), A())", id="rewrite"),

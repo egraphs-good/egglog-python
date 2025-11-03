@@ -8,6 +8,7 @@ from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, TypeVar, overload
 
+import cloudpickle
 from typing_extensions import TypeVarTuple, Unpack
 
 from .declarations import *
@@ -46,7 +47,7 @@ def get_literal_value(x: PyObject) -> object: ...
 
 
 @overload
-def get_literal_value(x: UnstableFn[T, Unpack[TS]]) -> Callable[[Unpack[TS]], T] | None: ...
+def get_literal_value(x: UnstableFn[T, *TS]) -> Callable[[Unpack[TS]], T] | None: ...
 
 
 @overload
@@ -64,7 +65,7 @@ def get_literal_value(x: object) -> object:
         case LitDecl(v):
             return v
         case PyObjectDecl(obj):
-            return obj
+            return cloudpickle.loads(obj)
         case PartialCallDecl(call):
             fn, args = _deconstruct_call_decl(x.__egg_decls_thunk__, call)
             if not args:
@@ -117,10 +118,10 @@ def get_callable_args(x: T, fn: None = ...) -> tuple[BaseExpr, ...]: ...
 
 
 @overload
-def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T]) -> tuple[Unpack[TS]] | None: ...
+def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T]) -> tuple[*TS] | None: ...
 
 
-def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T] | None = None) -> tuple[Unpack[TS]] | None:
+def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T] | None = None) -> tuple[*TS] | None:
     """
     Gets all the arguments of an expression.
     If a function is provided, it will only return the arguments if the expression is a call
@@ -146,7 +147,7 @@ def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T] | None = None) -> tupl
             if (
                 isinstance(actual_fn, RuntimeClass)
                 and isinstance(fn, RuntimeClass)
-                and actual_fn.__egg_tp__.name == fn.__egg_tp__.name
+                and actual_fn.__egg_tp__.ident == fn.__egg_tp__.ident
             ):
                 return args
     return None
@@ -164,10 +165,10 @@ def _deconstruct_call_decl(
     if isinstance(call.callable, InitRef):
         return RuntimeClass(
             decls_thunk,
-            TypeRefWithVars(call.callable.class_name, tuple(tp.to_var() for tp in (call.bound_tp_params or []))),
+            TypeRefWithVars(call.callable.ident, tuple(tp.to_var() for tp in (call.bound_tp_params or []))),
         ), arg_exprs
     egg_bound = (
-        JustTypeRef(call.callable.class_name, call.bound_tp_params or ())
+        JustTypeRef(call.callable.ident, call.bound_tp_params or ())
         if isinstance(call.callable, ClassMethodRef)
         else None
     )

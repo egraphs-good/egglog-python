@@ -3,23 +3,18 @@ from __future__ import annotations
 
 import importlib
 import pathlib
+from collections.abc import Iterator
 from copy import copy
 from fractions import Fraction
 from functools import partial
-from typing import ClassVar, TypeAlias, TypeVar
+from typing import ClassVar, TypeAlias, TypeVar, cast
 from unittest.mock import MagicMock
 
 import pytest
 
 from egglog import *
-from egglog.declarations import (
-    CallDecl,
-    FunctionRef,
-    JustTypeRef,
-    MethodRef,
-    TypedExprDecl,
-)
-from egglog.version_compat import BEFORE_3_11
+from egglog.declarations import CallDecl, FunctionRef, Ident, JustTypeRef, MethodRef, TypedExprDecl
+from egglog.runtime import RuntimeExpr, RuntimeFunction
 
 
 class TestExprStr:
@@ -243,6 +238,7 @@ class TestPyObject:
     def test_eval(self):
         assert EGraph().extract(py_eval("x + y", {"x": 10, "y": 20}, {})).value == 30
 
+    @pytest.mark.xfail(reason="cant pickle locals")
     def test_eval_local(self):
         x = "hi"
         res = py_eval("my_add(x, y)", PyObject(locals()).dict_update("y", "there"), globals())
@@ -319,8 +315,11 @@ class TestMutate:
         foo[10] = 20
         assert str(foo) == "_Foo_1 = Foo()\n_Foo_1[10] = 20\n_Foo_1"
         assert expr_parts(foo) == TypedExprDecl(
-            JustTypeRef("Foo"),
-            CallDecl(MethodRef("Foo", "__setitem__"), (expr_parts(Foo()), expr_parts(i64(10)), expr_parts(i64(20)))),
+            JustTypeRef(Ident("Foo", __name__)),
+            CallDecl(
+                MethodRef(Ident("Foo", __name__), "__setitem__"),
+                (expr_parts(Foo()), expr_parts(i64(10)), expr_parts(i64(20))),
+            ),
         )
 
     def test_function(self):
@@ -339,8 +338,8 @@ class TestMutate:
         incr(x)
         assert expr_parts(x_copied) == expr_parts(Math(i64(10)))
         assert expr_parts(x) == TypedExprDecl(
-            JustTypeRef("Math"),
-            CallDecl(FunctionRef("incr"), (expr_parts(x_copied),)),
+            JustTypeRef(Ident("Math", __name__)),
+            CallDecl(FunctionRef(Ident("incr", __name__)), (expr_parts(x_copied),)),
         )
         assert str(x) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1"
         assert str(x + Math(10)) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1 + Math(10)"
@@ -380,8 +379,8 @@ def test_reflected_binary_method():
     expr = 10 + Math(5)  # type: ignore[operator]
     assert str(expr) == "Math(10) + Math(5)"
     assert expr_parts(expr) == TypedExprDecl(
-        JustTypeRef("Math"),
-        CallDecl(MethodRef("Math", "__add__"), (expr_parts(Math(i64(10))), expr_parts(Math(i64(5))))),
+        JustTypeRef(Ident("Math", __name__)),
+        CallDecl(MethodRef(Ident("Math", __name__), "__add__"), (expr_parts(Math(i64(10))), expr_parts(Math(i64(5))))),
     )
 
 
@@ -485,8 +484,8 @@ class TestEval:
 
     def test_py_object(self):
         assert PyObject(10).value == 10
-        o = object()
-        assert PyObject(o).value is o
+        o = (1, 2, 3)
+        assert PyObject(o).value == o
 
     def test_big_int(self):
         assert int(EGraph().extract(BigInt(10))) == 10
@@ -528,7 +527,7 @@ class TestEval:
 
 
 def test_eval_fn():
-    assert EGraph().extract(py_eval_fn(lambda x: (x,))(PyObject.from_int(1))).value == (1,)
+    assert EGraph().extract(PyObject(lambda x: (x,))(PyObject.from_int(1))).value == (1,)
 
 
 def _global_make_tuple(x):
@@ -536,14 +535,14 @@ def _global_make_tuple(x):
 
 
 def test_eval_fn_globals():
-    assert EGraph().extract(py_eval_fn(lambda x: _global_make_tuple(x))(PyObject.from_int(1))).value == (1,)
+    assert EGraph().extract(PyObject(lambda x: _global_make_tuple(x))(PyObject.from_int(1))).value == (1,)
 
 
 def test_eval_fn_locals():
     def _locals_make_tuple(x):
         return (x,)
 
-    assert EGraph().extract(py_eval_fn(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))).value == (1,)
+    assert EGraph().extract(PyObject(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))).value == (1,)
 
 
 def test_lazy_types():
@@ -770,9 +769,6 @@ def test_helpful_error_function_class():
         def __init__(self) -> None: ...
 
     match = "Inside of classes, wrap methods with the `method` decorator, not `function`"
-    # If we are after 3 11 we have context included
-    if not BEFORE_3_11:
-        match += "\nError processing E.__init__"
     with pytest.raises(ValueError, match=match):
         E()
 
@@ -1221,7 +1217,7 @@ class TestCustomExtract:
         expr = egraph.extract(expr)
         assert expr == self._to_from_value(egraph, expr)
 
-    def _to_from_value(self, egraph, expr):
+    def _to_from_value(self, egraph: EGraph, expr: RuntimeExpr):
         typed_expr = expr.__egg_typed_expr__
         value = egraph._state.typed_expr_to_value(typed_expr)
         res_val = egraph._state.value_to_expr(typed_expr.tp, value)
@@ -1230,8 +1226,8 @@ class TestCustomExtract:
     def test_compare_values(self):
         egraph = EGraph()
         egraph.register(E(), gg())
-        e_value = self._to_from_value(egraph, E())
-        gg_value = self._to_from_value(egraph, gg())
+        e_value = self._to_from_value(egraph, cast("RuntimeExpr", E()))
+        gg_value = self._to_from_value(egraph, cast("RuntimeExpr", gg()))
         assert e_value != gg_value
         assert hash(e_value) != hash(gg_value)
         assert str(e_value) != str(gg_value)
@@ -1308,3 +1304,267 @@ class TestCustomExtract:
         res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
         assert cost.total == 4
         assert expr == res
+
+
+def test_class_module():
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+    assert A.__module__ == __name__
+
+
+def test_function_module():
+    @function
+    def f() -> i64: ...
+
+    assert f.__module__ == __name__
+
+
+def test_method_module():
+    class A(Expr):
+        def m(self) -> i64: ...
+
+    assert A.m.__module__ == __name__
+
+
+def test_class_doc():
+    class A(Expr):
+        """Docstring for A"""
+
+    assert A.__doc__ == "Docstring for A"
+
+
+def test_constructor_doc():
+    class A(Expr):
+        @classmethod
+        def create(cls) -> A:
+            """Docstring for A.create"""
+
+    assert A.create.__doc__ == "Docstring for A.create"
+
+
+def test_function_doc():
+    @function
+    def f() -> i64:
+        """Docstring for f"""
+
+    assert f.__doc__ == "Docstring for f"
+
+
+def test_get_class_method():
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+        def __eq__(self, other: A) -> A: ...  # type: ignore[override]
+
+    assert eq(A() == A()).to(A.__eq__(A(), A()))
+
+
+def test_match_none_pyobject():
+    x = PyObject(None)
+    match x:
+        case PyObject(None):
+            pass
+        case _:
+            raise AssertionError
+
+
+class MyInt(int):
+    pass
+
+
+def test_binary_convert_parent():
+    """
+    Verify that a binary method will convert an arg based on the parent type
+    """
+
+    class Math(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+        def __add__(self, other: Math | MyInt) -> Math: ...
+
+    converter(int, Math, lambda i: Math(int(i)))
+    assert Math(5) + MyInt(10) == Math(5) + Math(10)
+
+
+def test_py_eval_fn_no_globals():
+    """
+    Verify that PyObject without globals still works
+    """
+    assert not hasattr(int, "__globals__")
+    assert EGraph().extract(PyObject(int)(PyObject.from_int(10))).value == 10
+
+
+class MathPrim(Expr):
+    def __init__(self) -> None: ...
+
+    def __bytes__(self) -> bytes:
+        return b"hi"
+
+    def __str__(self) -> str:
+        return "hi"
+
+    def __repr__(self) -> str:
+        return "hi"
+
+    # def __format__(self, format_spec: str) -> str:
+    #     return "hi"
+
+    def __hash__(self) -> int:
+        return 42
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __int__(self) -> int:
+        return 1000
+
+    def __float__(self) -> float:
+        return 100.0
+
+    def __complex__(self) -> complex:
+        return 1 + 0j
+
+    def __index__(self) -> int:
+        return 20
+
+    def __len__(self) -> int:
+        return 10
+
+    def __length_hint__(self) -> int:
+        return 5
+
+    def __iter__(self) -> Iterator[int]:
+        yield 1
+
+    def __reversed__(self) -> Iterator[int]:
+        yield 10
+
+    def __contains__(self, item: int) -> bool:
+        return True
+
+
+m = MathPrim()
+
+
+@pytest.mark.parametrize(
+    ("expr", "res"),
+    [
+        pytest.param(lambda: bytes(m), b"hi", id="bytes"),
+        pytest.param(lambda: str(m), "hi", id="str"),
+        pytest.param(lambda: repr(m), "hi", id="repr"),
+        pytest.param(lambda: format(m, ""), "hi", id="format"),
+        pytest.param(lambda: hash(m), 42, id="hash"),
+        pytest.param(lambda: bool(m), False, id="bool"),
+        pytest.param(lambda: int(m), 1000, id="int"),
+        pytest.param(lambda: float(m), 100.0, id="float"),
+        pytest.param(lambda: complex(m), 1 + 0j, id="complex"),
+        pytest.param(lambda: m.__index__(), 20, id="index"),
+        pytest.param(lambda: len(m), 10, id="len"),
+        pytest.param(lambda: m.__length_hint__(), 5, id="length_hint"),
+        pytest.param(lambda: list(m), [1], id="iter"),
+        pytest.param(lambda: list(reversed(m)), [10], id="reversed"),
+        pytest.param(lambda: 1 in m, True, id="contains"),
+    ],
+)
+def test_always_preserved(expr, res):
+    assert expr() == res
+
+
+def test_class_lookup_method():
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+        def m(self) -> i64: ...
+        def __eq__(self, other: A) -> A: ...  # type: ignore[override]
+        def __add__(self, other: A) -> A: ...
+
+        def __str__(self) -> str:
+            """Hi"""
+            return "hi"
+
+    assert A.m(A()) == A().m()
+    assert isinstance(A.m, RuntimeFunction)
+    assert eq(A.__eq__(A(), A())).to(A() == A())
+    assert isinstance(A.__eq__, RuntimeFunction)
+    assert eq(A.__add__(A(), A())).to(A() + A())
+    assert isinstance(A.__add__, RuntimeFunction)
+    assert A.__str__(A()) == "hi"
+    assert A.__str__.__doc__ == "Hi"
+
+
+def test_py_object_raise_exception():
+    """
+    Verify that PyObject can raise exceptions properly
+    """
+    msg = "bad"
+
+    def raises(_val):
+        raise ValueError(msg)
+
+    egraph = EGraph()
+    with pytest.raises(ValueError, match=msg):
+        egraph.extract(PyObject(raises)(PyObject(None)))
+
+
+def test_mutates_self_rewrite():
+    mutates_ruleset = ruleset()
+
+    class MutateMethod(Expr, ruleset=mutates_ruleset):
+        def __init__(self) -> None: ...
+        def incr(self) -> MutateMethod: ...
+
+        @method(mutates_self=True)
+        def mutates(self) -> None:
+            self.__replace_expr__(self.incr())
+
+    x = MutateMethod()
+    x.mutates()
+    egraph = EGraph()
+    egraph.register(x)
+    egraph.run(mutates_ruleset)
+    egraph.check(x == MutateMethod().incr())
+
+
+def test_mutates_self_preserved():
+    class MutatePreserved(Expr):
+        def __init__(self) -> None: ...
+        def incr(self) -> MutatePreserved: ...
+
+        @method(preserve=True)
+        def mutates(self) -> None:
+            self.__replace_expr__(self.incr())
+
+    x = MutatePreserved()
+    x.mutates()
+    assert x == MutatePreserved().incr()
+
+
+def test_binary_conversion_lookup_parent_class():
+    class X(Expr):
+        def __init__(self, value: object) -> None: ...
+
+        def __add__(self, other: XLike) -> X: ...
+        def __radd__(self, other: XLike) -> X: ...
+
+    XLike: TypeAlias = X | object
+    converter(object, X, lambda x: X(PyObject(x)))
+
+    assert X(1) + 2 == X(1) + X(2)
+    assert 2 + X(1) == X(2) + X(1)
+
+
+def test_binary_preserved():
+    class X(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+        @method(preserve=True)
+        def __add__(self, other: T) -> tuple[X, T]:
+            return (self, other)
+
+        def __radd__(self, other: object) -> tuple[X, X]: ...
+
+    converter(i64, X, X)
+
+    assert X(1) + 10 == (X(1), 10)
+    assert 10 + X(1) == (X(10), X(1))

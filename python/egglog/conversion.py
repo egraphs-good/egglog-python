@@ -83,7 +83,7 @@ def _is_type_compatible(source: type | JustTypeRef, target: type | JustTypeRef) 
     if source == target:
         return True
     if isinstance(source, JustTypeRef) and isinstance(target, JustTypeRef) and source.args and not target.args:
-        return source.name == target.name
+        return source.ident == target.ident
         # TODO: Support case where B[T] where T is typevar is mapped to B[C]
     return False
 
@@ -162,7 +162,7 @@ def min_binary_conversion(
     for lhs_cost, lhs_converted_type, lhs_convert in possible_lhs:
         # Start by checking if we have a LHS that matches exactly and a RHS which can be converted
         if (desired_other_type := decls.check_binary_method_with_self_type(method_name, lhs_converted_type)) and (
-            converter := CONVERSIONS.get((rhs, desired_other_type))
+            converter := _lookup_conversion(rhs, desired_other_type)
         ):
             cost = lhs_cost + converter[0]
             if best_method is None or best_method[0] > cost:
@@ -171,7 +171,7 @@ def min_binary_conversion(
     for rhs_cost, rhs_converted_type, rhs_convert in possible_rhs:
         # Next see if it's possible to convert the LHS and keep the RHS as is
         for desired_self_type in decls.check_binary_method_with_other_type(method_name, rhs_converted_type):
-            if converter := CONVERSIONS.get((lhs, desired_self_type)):
+            if converter := _lookup_conversion(lhs, desired_self_type):
                 cost = rhs_cost + converter[0]
                 if best_method is None or best_method[0] > cost:
                     best_method = (cost, converter[1], rhs_convert)
@@ -186,7 +186,11 @@ def _all_conversions_from(tp: JustTypeRef | type) -> list[tuple[int, JustTypeRef
 
     Returns a list of tuples of (cost, target type, conversion function).
     """
-    return [(cost, target, fn) for (source, target), (cost, fn) in CONVERSIONS.items() if source == tp]
+    return [
+        (cost, target, fn)
+        for (source, target), (cost, fn) in CONVERSIONS.items()
+        if (issubclass(tp, source) if isinstance(tp, type) and isinstance(source, type) else source == tp)
+    ]
 
 
 def identity(x: Any) -> Any:
@@ -217,7 +221,7 @@ def resolve_literal(
     arg: object,
     decls: Callable[[], Declarations] = retrieve_conversion_decls,
     tcs: TypeConstraintSolver | None = None,
-    cls_name: str | None = None,
+    cls_ident: Ident | None = None,
 ) -> RuntimeExpr:
     """
     Try to convert an object to a type, raising a ConvertError if it is not possible.
@@ -236,7 +240,7 @@ def resolve_literal(
         # args first based on the existing type constraint solver
         if tcs:
             try:
-                tp_just = tcs.substitute_typevars(tp, cls_name)
+                tp_just = tcs.substitute_typevars(tp, cls_ident)
             # If we can't resolve the type var yet, then just assume it is the right value
             except TypeConstraintError:
                 assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
@@ -246,25 +250,29 @@ def resolve_literal(
             assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
             return arg
     if tcs:
-        tcs.infer_typevars(tp, tp_just, cls_name)
+        tcs.infer_typevars(tp, tp_just, cls_ident)
     if arg_type == tp_just:
         # If the type is an egg type, it has to be a runtime expr
         assert isinstance(arg, RuntimeExpr)
         return arg
-    # Try all parent types as well, if we are converting from a Python type
-    for arg_type_instance in arg_type.__mro__ if isinstance(arg_type, type) else [arg_type]:
-        if (key := (arg_type_instance, tp_just)) in CONVERSIONS:
-            fn = CONVERSIONS[key][1]
-            break
-        # Try broadening if we have a convert to the general type instead of the specific one too, for generics
-        if tp_just.args and (key := (arg_type_instance, JustTypeRef(tp_just.name))) in CONVERSIONS:
-            fn = CONVERSIONS[key][1]
-            break
-    # if we didn't find any raise an error
-    else:
-        raise ConvertError(f"Cannot convert {arg_type} to {tp_just}")
-    with with_type_args(tp_just.args, decls):
-        return fn(arg)
+    if (conversion := _lookup_conversion(arg_type, tp_just)) is not None:
+        with with_type_args(tp_just.args, decls):
+            return conversion[1](arg)
+    raise ConvertError(f"Cannot convert {arg} of type {arg_type} to {tp_just}")
+
+
+def _lookup_conversion(lhs: type | JustTypeRef, rhs: JustTypeRef) -> tuple[int, Callable[[Any], RuntimeExpr]] | None:
+    """
+    Looks up a conversion function for the given types.
+
+    Also looks up all parent types of the lhs if it is a Python type and looks up more general not paramtrized types for rhs.
+    """
+    for lhs_type in lhs.__mro__ if isinstance(lhs, type) else [lhs]:
+        if (key := (lhs_type, rhs)) in CONVERSIONS:
+            return CONVERSIONS[key]
+        if rhs.args and (key := (lhs_type, JustTypeRef(rhs.ident))) in CONVERSIONS:
+            return CONVERSIONS[key]
+    return None
 
 
 def _debug_print_converers():
@@ -279,8 +287,4 @@ def _debug_print_converers():
 def resolve_type(x: object) -> JustTypeRef | type:
     if isinstance(x, RuntimeExpr):
         return x.__egg_typed_expr__.tp
-    tp = type(x)
-    # If this value has a custom metaclass, let's use that as our index instead of the type
-    if type(tp) is not type:
-        return type(tp)
-    return tp
+    return type(x)
