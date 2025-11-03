@@ -166,11 +166,6 @@ nb_execution_mode = "cache"
 
 # Exclude (POSIX) glob patterns for notebooks
 # Temporarily exclude notebooks with unrelated errors (not @egraph.class_ issues)
-nb_execution_excludepatterns = (
-    "explanation/2024_03_17_community_talk.ipynb",  # sklearn config error
-    "explanation/indexing_pushdown.ipynb",  # array_api_module NameError
-)
-
 # Execution timeout (seconds)
 nb_execution_timeout = 60 * 10
 
