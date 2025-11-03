@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**00:00.519** total execution time for 12 files **from all galleries**:
+**00:00.402** total execution time for 12 files **from all galleries**:
 
 .. container::
 
@@ -32,20 +32,20 @@ Computation times
    * - Example
      - Time
      - Mem (MB)
-   * - :ref:`sphx_glr_auto_examples_fib.py` (``../python/egglog/examples/fib.py``)
-     - 00:00.224
-     - 0.0
    * - :ref:`sphx_glr_auto_examples_lambda_.py` (``../python/egglog/examples/lambda_.py``)
-     - 00:00.169
+     - 00:00.167
+     - 0.0
+   * - :ref:`sphx_glr_auto_examples_fib.py` (``../python/egglog/examples/fib.py``)
+     - 00:00.112
      - 0.0
    * - :ref:`sphx_glr_auto_examples_ndarrays.py` (``../python/egglog/examples/ndarrays.py``)
      - 00:00.044
      - 0.0
    * - :ref:`sphx_glr_auto_examples_matrix.py` (``../python/egglog/examples/matrix.py``)
-     - 00:00.019
+     - 00:00.018
      - 0.0
    * - :ref:`sphx_glr_auto_examples_jointree.py` (``../python/egglog/examples/jointree.py``)
-     - 00:00.015
+     - 00:00.014
      - 0.0
    * - :ref:`sphx_glr_auto_examples_multiset.py` (``../python/egglog/examples/multiset.py``)
      - 00:00.012
@@ -57,10 +57,10 @@ Computation times
      - 00:00.008
      - 0.0
    * - :ref:`sphx_glr_auto_examples_higher_order_functions.py` (``../python/egglog/examples/higher_order_functions.py``)
-     - 00:00.007
+     - 00:00.006
      - 0.0
    * - :ref:`sphx_glr_auto_examples_eqsat_basic.py` (``../python/egglog/examples/eqsat_basic.py``)
-     - 00:00.006
+     - 00:00.005
      - 0.0
    * - :ref:`sphx_glr_auto_examples_schedule_demo.py` (``../python/egglog/examples/schedule_demo.py``)
      - 00:00.004

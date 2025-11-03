@@ -115,6 +115,7 @@ exclude_patterns = [
     "**.ipynb_checkpoints",
     "auto_examples/*.ipynb",
     # "auto_examples/*.md5",
+    "conf.py",
 ]
 nitpicky = True
 
@@ -164,7 +165,7 @@ nb_execution_mode = "cache"
 # nb_execution_cache_path = ''
 
 # Exclude (POSIX) glob patterns for notebooks
-# nb_execution_excludepatterns = ()
+nb_execution_excludepatterns = ("explanation/*", "reference/*")
 
 # Execution timeout (seconds)
 nb_execution_timeout = 60 * 10
@@ -176,7 +177,7 @@ nb_execution_timeout = 60 * 10
 # nb_execution_allow_errors = False
 
 # Raise an exception on failed execution, rather than emitting a warning
-nb_execution_raise_on_error = False
+nb_execution_raise_on_error = True
 
 # Print traceback to stderr on execution error
 nb_execution_show_tb = True
