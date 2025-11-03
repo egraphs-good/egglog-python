@@ -23,7 +23,6 @@ from egglog import *
 
 egraph = EGraph()
 
-@egraph.class_
 class Math(Expr):
     def __init__(self, value: i64Like) -> None:
         ...

@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Make docs builds fail on notebook execution errors and fix all doc issues [#369](https://github.com/egraphs-good/egglog-python/pull/369)
 - Add WIP `egglog.exp.any_expr` code for tracing arbitrary expressions with Python fallback [#366](https://github.com/egraphs-good/egglog-python/pull/366)
   - BREAKING: Remove support for Python 3.11 now that pyo3 has dropped support.
   - Allow mutating methods to update their underlying expression via `Expr.__replace_expr__`, and ensure default rewrites return the mutated receiver when using `mutates_self` or `mutates_first_arg`.

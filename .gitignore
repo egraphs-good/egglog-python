@@ -61,6 +61,7 @@ coverage.xml
 
 # Sphinx documentation
 docs/_build/
+docs/sg_execution_times.rst
 
 # PyCharm
 .idea/
