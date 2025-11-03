@@ -204,8 +204,8 @@ Alongside this, we support a function `dict_update` method, which can allow you 
 def my_add(a, b):
     return a + b
 
-amended_globals = PyObject(globals()).dict_update("one", 1)
-evalled = py_eval("my_add(one,  2)", locals(), amended_globals)
+amended_globals = PyObject({"my_add": my_add}).dict_update("one", 1)
+evalled = py_eval("my_add(one,  2)", {}, amended_globals)
 assert EGraph().extract(evalled).value == 3
 ```
 
