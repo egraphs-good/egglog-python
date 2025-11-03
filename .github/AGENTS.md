@@ -1,4 +1,6 @@
-# GitHub Copilot Instructions for egglog-python
+# Agent Instructions for egglog-python
+
+This file provides instructions for AI coding agents (including GitHub Copilot) working on this repository.
 
 ## Project Overview
 
@@ -22,17 +24,14 @@ This repository provides Python bindings for the Rust library `egglog`, enabling
 
 ### Prerequisites
 - **uv** - Package manager (https://github.com/astral-sh/uv)
-- **Rust toolchain** - Version 1.89.0 (specified in rust-toolchain.toml)
-- **Python** - 3.10+ (see .python-version)
+- **Rust toolchain** - See rust-toolchain.toml for version
+- **Python** - See .python-version for version
 
 ### Common Commands
 
 ```bash
-# Install dependencies (for development)
-uv sync --extra dev --locked
-
-# Install dependencies (for testing)
-uv sync --extra test --locked
+# Install dependencies
+uv sync --all-extras
 
 # Run tests
 uv run pytest --benchmark-disable -vvv --durations=10
@@ -91,7 +90,7 @@ See `pyproject.toml` for complete Ruff configuration.
 - **FFI**: Uses PyO3 for Python bindings
 - **Main library**: Uses egglog from git (saulshanabrook/egg-smol, clone-cost branch)
 
-### File Organization
+### Rust File Organization
 - `src/lib.rs` - Main library entry point
 - `src/egraph.rs` - E-graph implementation
 - `src/conversions.rs` - Type conversions between Python and Rust
@@ -102,6 +101,31 @@ See `pyproject.toml` for complete Ruff configuration.
 - `src/termdag.rs` - Term DAG operations
 - `src/utils.rs` - Utility functions
 
+### Python File Organization
+
+#### Public Interface
+All public Python APIs are exported from the top-level `egglog` module. Anything that is public should be exported in `python/egglog/__init__.py` at the top level.
+
+#### Lower-Level Bindings
+The `egglog.bindings` module provides lower-level access to the Rust implementation for advanced use cases.
+
+#### Core Python Files
+- `python/egglog/__init__.py` - Top-level module exports, defines the public API
+- `python/egglog/egraph.py` - Main EGraph class and e-graph management
+- `python/egglog/egraph_state.py` - E-graph state and execution management
+- `python/egglog/runtime.py` - Runtime system for expression evaluation and method definitions
+- `python/egglog/builtins.py` - Built-in types (i64, f64, String, Vec, etc.) and operations
+- `python/egglog/declarations.py` - Class, function, and method declaration decorators
+- `python/egglog/conversion.py` - Type conversion between Python and egglog types
+- `python/egglog/pretty.py` - Pretty printing for expressions and e-graph visualization
+- `python/egglog/deconstruct.py` - Deconstruction of Python values into egglog expressions
+- `python/egglog/thunk.py` - Lazy evaluation support
+- `python/egglog/type_constraint_solver.py` - Type inference and constraint solving
+- `python/egglog/config.py` - Configuration settings
+- `python/egglog/ipython_magic.py` - IPython/Jupyter integration
+- `python/egglog/visualizer_widget.py` - Interactive visualization widget
+- `python/egglog/version_compat.py` - Python version compatibility utilities
+
 ## Code Style Preferences
 
 1. **Imports**: Follow Ruff's import sorting
@@ -110,30 +134,6 @@ See `pyproject.toml` for complete Ruff configuration.
    - Rust: Follow standard Rust conventions
 3. **Comments**: Use clear, explanatory comments for complex logic
 4. **Documentation**: Keep docs synchronized with code changes
-
-## Pre-commit Hooks
-
-The repository uses pre-commit with:
-- `ruff-check` with auto-fix
-- `ruff-format` for formatting
-- `uv-lock` to keep lockfile updated
-
-Run `pre-commit install` to enable automatic checking.
-
-## Dependencies
-
-### Python Dependencies
-- **Core**: typing-extensions, black, graphviz, anywidget
-- **Array support**: scikit-learn, array_api_compat, numba, numpy>2
-- **Dev tools**: ruff, pre-commit, mypy, jupyterlab
-- **Testing**: pytest, pytest-benchmark, pytest-codspeed, pytest-xdist, syrupy (snapshot testing)
-- **Docs**: sphinx and related packages
-
-### Rust Dependencies
-- **PyO3**: Python bindings framework
-- **egglog**: Core e-graph library
-- **egraph-serialize**: Serialization support
-- **serde_json**: JSON handling
 
 ## Contributing Guidelines
 
@@ -144,14 +144,26 @@ When making changes:
 4. Build documentation if changing public APIs
 5. Follow existing code patterns and style
 6. Keep changes minimal and focused
+7. Add a changelog entry in `docs/changelog.md` under the UNRELEASED section
 
 ## Common Patterns
 
 ### Python API Design
-- Use `@egraph.class_` decorator for e-graph classes
-- Use `@egraph.function` for functions
-- Use `@egraph.method` for methods
+- Define e-graph classes by inheriting from `egglog.Expr`
+- Use `@egraph.function` decorator for functions
+- Use `@egraph.method` decorator for methods
 - Leverage type annotations for better IDE support
+
+### Working with Values
+- Use `get_literal_value(expr)` or the `.value` property to get Python values from primitives
+- Use pattern matching with `match`/`case` for destructuring egglog primitives
+- Use `get_callable_fn(expr)` to get the underlying Python function from a callable expression
+- Use `get_callable_args(expr)` to get arguments to a callable
+
+### Parallelism
+- The underlying Rust library uses Rayon for parallelism
+- Control worker thread count via `RAYON_NUM_THREADS` environment variable
+- Defaults to single thread if not set
 
 ### Rust-Python Integration
 - Use PyO3's `#[pyclass]` and `#[pymethods]` macros
@@ -180,12 +192,3 @@ Documentation is built with Sphinx:
 - The library uses Rust for performance-critical operations
 - Benchmarking is done via CodSpeed for continuous performance monitoring
 - Profile with release builds (`cargo build --release`) when needed
-
-## Continuous Integration
-
-GitHub Actions workflows in `.github/workflows/`:
-- `CI.yml` - Main testing, type checking, benchmarks, and docs
-- `version.yml` - Version management
-- `update-changelog.yml` - Changelog automation
-
-Tests run on Python 3.10, 3.11, 3.12, and 3.13.
