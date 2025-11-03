@@ -4,13 +4,24 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Add WIP `egglog.exp.any_expr` code for tracing arbitrary expressions with Python fallback [#366](https://github.com/egraphs-good/egglog-python/pull/366)
+  - BREAKING: Remove support for Python 3.11 now that pyo3 has dropped support.
+  - Allow mutating methods to update their underlying expression via `Expr.__replace_expr__`, and ensure default rewrites return the mutated receiver when using `mutates_self` or `mutates_first_arg`.
+  - BREAKING: Store `PyObject` values as `cloudpickle` bytes instead of live references so duplicates merge by value; `.value` now returns a fresh copy and the sort accepts objects like `None` that previously failed.
+  - Adds a `__call__` method (and `call_extended` for kwargs) to `PyObject` to replace `py_eval_fn`, which is now deprecated.
+  - Improve doctest support, teaching expressions about their `__module__`, `__dir__`, and special methods.
+  - Surface original Python exceptions from the runtime and tighten pretty-printing of values that cannot be re-parsed to make debugging e-graph executions easier.
+  - Update the bundled Egglog crate, visualizer, and related dev dependencies (including `ipykernel`) to pick up the latest backend fixes.
+
 ## 11.4.0 (2025-10-02)
 
 - Add ability to create custom model and pass them in to extract [#357](https://github.com/egraphs-good/egglog-python/pull/357)
+
 ## 11.3.0 (2025-09-12)
 
 - Add egglog tutorials, change display to not inline by default, and fix bug looking up binary methods [#352](https://github.com/egraphs-good/egglog-python/pull/352)
 - Add `back_off` scheduler [#350](https://github.com/egraphs-good/egglog-python/pull/350)
+
 ## 11.2.0 (2025-09-03)
 
 - Add support for `set_cost` action to have row level costs for extraction [#343](https://github.com/egraphs-good/egglog-python/pull/343)
@@ -82,7 +93,6 @@ Vec(1, 2)[0]
 >>> Rational(1, 2).eval()
 Fraction(1, 2)
 ```
-
 
 You can also manually set the e-graph to use, instead of it having to create a new one, with the `egraph.set_current` context manager:
 

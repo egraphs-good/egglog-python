@@ -8,11 +8,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, TypeAlias, TypeVar, Union, cast, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    ClassVar,
+    Literal,
+    Protocol,
+    Self,
+    TypeAlias,
+    TypeVar,
+    Union,
+    assert_never,
+    cast,
+    runtime_checkable,
+)
 from uuid import UUID
 from weakref import WeakValueDictionary
-
-from typing_extensions import Self, assert_never
 
 from .bindings import Value
 
@@ -53,6 +63,7 @@ __all__ = [
     "FunctionSignature",
     "GetCostDecl",
     "HasDeclerations",
+    "Ident",
     "InitRef",
     "JustTypeRef",
     "LetDecl",
@@ -131,17 +142,37 @@ def upcast_declerations(declerations_like: Iterable[DeclerationsLike]) -> list[D
     return d
 
 
+@dataclass(frozen=True)
+class Ident:
+    name: str
+    module: str | None = None
+
+    def __str__(self) -> str:
+        if self.module:
+            return f"{self.module}.{self.name}"
+        return self.name
+
+    @classmethod
+    def builtin(cls, name: str) -> Ident:
+        return cls(name, "egglog.builtins")
+
+
+default_ruleset_identifier = Ident("")
+
+
 @dataclass
 class Declarations:
     _unnamed_functions: set[UnnamedFunctionRef] = field(default_factory=set)
-    _functions: dict[str, FunctionDecl | RelationDecl | ConstructorDecl] = field(default_factory=dict)
-    _constants: dict[str, ConstantDecl] = field(default_factory=dict)
-    _classes: dict[str, ClassDecl] = field(default_factory=dict)
-    _rulesets: dict[str, RulesetDecl | CombinedRulesetDecl] = field(default_factory=lambda: {"": RulesetDecl([])})
+    _functions: dict[Ident, FunctionDecl | RelationDecl | ConstructorDecl] = field(default_factory=dict)
+    _constants: dict[Ident, ConstantDecl] = field(default_factory=dict)
+    _classes: dict[Ident, ClassDecl] = field(default_factory=dict)
+    _rulesets: dict[Ident, RulesetDecl | CombinedRulesetDecl] = field(
+        default_factory=lambda: {default_ruleset_identifier: RulesetDecl([])}
+    )
 
     @property
     def default_ruleset(self) -> RulesetDecl:
-        ruleset = self._rulesets[""]
+        ruleset = self._rulesets[default_ruleset_identifier]
         assert isinstance(ruleset, RulesetDecl)
         return ruleset
 
@@ -190,7 +221,7 @@ class Declarations:
         # is added to functions.
         combined_default_rules: set[RewriteOrRuleDecl] = {*self.default_ruleset.rules, *other.default_ruleset.rules}
         other._rulesets |= self._rulesets
-        other._rulesets[""] = RulesetDecl(list(combined_default_rules))
+        other._rulesets[default_ruleset_identifier] = RulesetDecl(list(combined_default_rules))
 
     def get_callable_decl(self, ref: CallableRef) -> CallableDecl:  # noqa: PLR0911
         match ref:
@@ -239,7 +270,7 @@ class Declarations:
         Checks if the class has a binary method compatible with the given types.
         """
         vars: dict[ClassTypeVarRef, JustTypeRef] = {}
-        if callable_decl := self._classes[self_type.name].methods.get(method_name):
+        if callable_decl := self._classes[self_type.ident].methods.get(method_name):
             match callable_decl.signature:
                 case FunctionSignature((self_arg_type, other_arg_type)) if self_arg_type.matches_just(
                     vars, self_type
@@ -252,7 +283,7 @@ class Declarations:
         Checks if the class has a binary method with the given name and self type. Returns the other type if it exists.
         """
         vars: dict[ClassTypeVarRef, JustTypeRef] = {}
-        class_decl = self._classes.get(self_type.name)
+        class_decl = self._classes.get(self_type.ident)
         if class_decl is None:
             return None
         if callable_decl := class_decl.methods.get(method_name):
@@ -274,15 +305,15 @@ class Declarations:
                     ):
                         yield self_arg_type.to_just(vars)
 
-    def get_class_decl(self, name: str) -> ClassDecl:
-        return self._classes[name]
+    def get_class_decl(self, ident: Ident) -> ClassDecl:
+        return self._classes[ident]
 
-    def get_paramaterized_class(self, name: str) -> TypeRefWithVars:
+    def get_paramaterized_class(self, ident: Ident) -> TypeRefWithVars:
         """
         Returns a class reference with type parameters, if the class is paramaterized.
         """
-        type_vars = self._classes[name].type_vars
-        return TypeRefWithVars(name, type_vars)
+        type_vars = self._classes[ident].type_vars
+        return TypeRefWithVars(ident, type_vars)
 
 
 @dataclass
@@ -298,6 +329,7 @@ class ClassDecl:
     properties: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
     match_args: tuple[str, ...] = field(default=())
+    doc: str | None = field(default=None)
 
 
 @dataclass(frozen=True)
@@ -312,7 +344,7 @@ class RulesetDecl:
 
 @dataclass(frozen=True)
 class CombinedRulesetDecl:
-    rulesets: tuple[str, ...]
+    rulesets: tuple[Ident, ...]
 
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.
@@ -320,16 +352,16 @@ class CombinedRulesetDecl:
 # well as runtime values.
 @dataclass(frozen=True)
 class JustTypeRef:
-    name: str
+    ident: Ident
     args: tuple[JustTypeRef, ...] = ()
 
     def to_var(self) -> TypeRefWithVars:
-        return TypeRefWithVars(self.name, tuple(a.to_var() for a in self.args))
+        return TypeRefWithVars(self.ident, tuple(a.to_var() for a in self.args))
 
     def __str__(self) -> str:
         if self.args:
-            return f"{self.name}[{', '.join(str(a) for a in self.args)}]"
-        return self.name
+            return f"{self.ident.name}[{', '.join(str(a) for a in self.args)}]"
+        return str(self.ident.name)
 
 
 ##
@@ -352,8 +384,7 @@ class ClassTypeVarRef:
     A class type variable represents one of the types of the class, if it is a generic class.
     """
 
-    name: str
-    module: str
+    ident: Ident
 
     def to_just(self, vars: dict[ClassTypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
         if vars is None or self not in vars:
@@ -365,7 +396,7 @@ class ClassTypeVarRef:
 
     @classmethod
     def from_type_var(cls, typevar: TypeVar) -> ClassTypeVarRef:
-        res = cls(typevar.__name__, typevar.__module__)
+        res = cls(Ident(typevar.__name__, typevar.__module__))
         _RESOLVED_TYPEVARS[res] = typevar
         return res
 
@@ -384,23 +415,23 @@ class ClassTypeVarRef:
 
 @dataclass(frozen=True)
 class TypeRefWithVars:
-    name: str
+    ident: Ident
     args: tuple[TypeOrVarRef, ...] = ()
 
     def to_just(self, vars: dict[ClassTypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
-        return JustTypeRef(self.name, tuple(a.to_just(vars) for a in self.args))
+        return JustTypeRef(self.ident, tuple(a.to_just(vars) for a in self.args))
 
     def __str__(self) -> str:
         if self.args:
-            return f"{self.name}[{', '.join(str(a) for a in self.args)}]"
-        return self.name
+            return f"{self.ident.name}[{', '.join(str(a) for a in self.args)}]"
+        return str(self.ident.name)
 
     def matches_just(self, vars: dict[ClassTypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
         """
         Checks if this type reference matches the given JustTypeRef, including type variables.
         """
         return (
-            self.name == other.name
+            self.ident == other.ident
             and len(self.args) == len(other.args)
             and all(a.matches_just(vars, b) for a, b in zip(self.args, other.args, strict=True))
         )
@@ -445,40 +476,40 @@ class UnnamedFunctionRef:
 
 @dataclass(frozen=True)
 class FunctionRef:
-    name: str
+    ident: Ident
 
 
 @dataclass(frozen=True)
 class ConstantRef:
-    name: str
+    ident: Ident
 
 
 @dataclass(frozen=True)
 class MethodRef:
-    class_name: str
+    ident: Ident
     method_name: str
 
 
 @dataclass(frozen=True)
 class ClassMethodRef:
-    class_name: str
+    ident: Ident
     method_name: str
 
 
 @dataclass(frozen=True)
 class InitRef:
-    class_name: str
+    ident: Ident
 
 
 @dataclass(frozen=True)
 class ClassVariableRef:
-    class_name: str
+    ident: Ident
     var_name: str
 
 
 @dataclass(frozen=True)
 class PropertyRef:
-    class_name: str
+    ident: Ident
     property_name: str
 
 
@@ -512,7 +543,7 @@ class RelationDecl:
             arg_types=tuple(a.to_var() for a in self.arg_types),
             arg_names=tuple(f"__{i}" for i in range(len(self.arg_types))),
             arg_defaults=self.arg_defaults,
-            return_type=TypeRefWithVars("Unit"),
+            return_type=TypeRefWithVars(Ident.builtin("Unit")),
         )
 
 
@@ -564,6 +595,7 @@ class FunctionDecl:
     builtin: bool = False
     egg_name: str | None = None
     merge: ExprDecl | None = None
+    doc: str | None = None
 
 
 @dataclass(frozen=True)
@@ -572,6 +604,7 @@ class ConstructorDecl:
     egg_name: str | None = None
     cost: int | None = None
     unextractable: bool = False
+    doc: str | None = None
 
 
 CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl | ConstructorDecl
@@ -594,23 +627,7 @@ class LetRefDecl:
 
 @dataclass(frozen=True)
 class PyObjectDecl:
-    value: object
-
-    def __hash__(self) -> int:
-        """Tries using the hash of the value, if unhashable use the ID."""
-        try:
-            return hash((type(self.value), self.value))
-        except TypeError:
-            return id(self.value)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, PyObjectDecl):
-            return False
-        return self.parts == other.parts
-
-    @property
-    def parts(self) -> tuple[type, object]:
-        return (type(self.value), self.value)
+    pickled: bytes
 
 
 LitType: TypeAlias = int | str | float | bool | None
@@ -808,7 +825,7 @@ class SequenceDecl:
 
 @dataclass(frozen=True)
 class RunDecl:
-    ruleset: str
+    ruleset: Ident
     until: tuple[FactDecl, ...] | None
     scheduler: BackOffDecl | None = None
 

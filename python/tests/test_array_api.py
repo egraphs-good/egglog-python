@@ -374,7 +374,12 @@ def test_jit(program, snapshot_py, benchmark):
 def test_run_lda(fn_thunk, benchmark):
     fn = fn_thunk()
     # warmup once for numba
-    assert np.allclose(run_lda(X_np, y_np), fn(X_np, y_np), rtol=1e-03)
+    real_res = run_lda(X_np, y_np)
+
+    fn_res = fn(X_np, y_np)
+    assert real_res.shape == fn_res.shape
+    assert real_res.dtype == fn_res.dtype
+    assert np.allclose(real_res, fn_res, rtol=1e-03)
     benchmark(fn, X_np, y_np)
 
 
