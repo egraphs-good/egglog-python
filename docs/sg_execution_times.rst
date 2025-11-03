@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**00:00.401** total execution time for 12 files **from all galleries**:
+**00:00.407** total execution time for 12 files **from all galleries**:
 
 .. container::
 
@@ -33,13 +33,13 @@ Computation times
      - Time
      - Mem (MB)
    * - :ref:`sphx_glr_auto_examples_lambda_.py` (``../python/egglog/examples/lambda_.py``)
-     - 00:00.168
+     - 00:00.170
      - 0.0
    * - :ref:`sphx_glr_auto_examples_fib.py` (``../python/egglog/examples/fib.py``)
-     - 00:00.110
+     - 00:00.113
      - 0.0
    * - :ref:`sphx_glr_auto_examples_ndarrays.py` (``../python/egglog/examples/ndarrays.py``)
-     - 00:00.043
+     - 00:00.044
      - 0.0
    * - :ref:`sphx_glr_auto_examples_matrix.py` (``../python/egglog/examples/matrix.py``)
      - 00:00.018
@@ -60,7 +60,7 @@ Computation times
      - 00:00.006
      - 0.0
    * - :ref:`sphx_glr_auto_examples_eqsat_basic.py` (``../python/egglog/examples/eqsat_basic.py``)
-     - 00:00.005
+     - 00:00.006
      - 0.0
    * - :ref:`sphx_glr_auto_examples_schedule_demo.py` (``../python/egglog/examples/schedule_demo.py``)
      - 00:00.004
