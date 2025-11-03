@@ -768,17 +768,17 @@ def _add_default_rewrite_function(
     res_type: TypeOrVarRef,
     mutates_first_arg: bool,
 ) -> None:
-    args: list[object] = [RuntimeExpr.__from_values__(decls, a) for a in args]
-
+    args = list(args)
+    arg_exprs: list[RuntimeExpr | RuntimeClass] = [RuntimeExpr.__from_values__(decls, a) for a in args]
     # If this is a classmethod, add the class as the first arg
     if isinstance(ref, ClassMethodRef):
         tp = decls.get_paramaterized_class(ref.ident)
-        args.insert(0, RuntimeClass(Thunk.value(decls), tp))
+        arg_exprs.insert(0, RuntimeClass(Thunk.value(decls), tp))
     with set_current_ruleset(ruleset):
-        res = fn(*args)
-    if mutates_first_arg:
-        res = args[0]
-        # print(res)
+        res = fn(*arg_exprs)
+    # If the function mutates the first arg and we have overwritten it, then use that as the result
+    if mutates_first_arg and arg_exprs[0].__egg_typed_expr__ != args[0]:
+        res = arg_exprs[0]
     _add_default_rewrite(decls, ref, res_type, res, ruleset, subsume)
 
 
