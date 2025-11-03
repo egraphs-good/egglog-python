@@ -1854,7 +1854,7 @@ class _RuleBuilder:
         args = list(map(str, self.facts))
         if self.name is not None:
             args.append(f"name={self.name}")
-        if ruleset is not None:
+        if self.ruleset is not None:
             args.append(f"ruleset={self.ruleset}")
         return f"rule({', '.join(args)})"
 

@@ -51,7 +51,7 @@ dev = [
 test = [
     "pytest",
     "mypy",
-    "syrupy",
+    "syrupy>=5",
     "egglog[array]",
     "pytest-codspeed",
     "pytest-benchmark",
@@ -246,6 +246,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 strict_equality = true
 extra_checks = true
+strict_equality_for_none = true
 
 [tool.maturin]
 python-source = "python"

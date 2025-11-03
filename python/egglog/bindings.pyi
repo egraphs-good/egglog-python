@@ -104,9 +104,9 @@ class SerializedEGraph:
 
 @final
 class EGraph:
-    def __init__(
-        self, *, fact_directory: str | Path | None = None, seminaive: bool = True, record: bool = False
-    ) -> None: ...
+    def __new__(
+        cls, *, fact_directory: str | Path | None = None, seminaive: bool = True, record: bool = False
+    ) -> EGraph: ...
     def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
     def commands(self) -> str | None: ...
     def run_program(self, *commands: _Command) -> list[_CommandOutput]: ...
@@ -147,34 +147,35 @@ class Value:
 @final
 class EggSmolError(Exception):
     context: str
+    def __new__(cls, context: str) -> EggSmolError: ...
+    def __init__(self, /, *args: Any, **kwargs: Any) -> None: ...
 
 ##
 # Spans
 ##
 
 @final
-class PanicSpan:
-    def __init__(self) -> None: ...
+class PanicSpan: ...
 
 @final
 class SrcFile:
     name: str | None
     contents: str
-    def __init__(self, name: str | None, contents: str) -> None: ...
+    def __new__(cls, name: str | None, contents: str) -> SrcFile: ...
 
 @final
 class EgglogSpan:
     file: SrcFile
     i: int
     j: int
-    def __init__(self, file: SrcFile, i: int, j: int) -> None: ...
+    def __new__(cls, file: SrcFile, i: int, j: int) -> EgglogSpan: ...
 
 @final
 class RustSpan:
     file: str
     line: int
     column: int
-    def __init__(self, file: str, line: int, column: int) -> None: ...
+    def __new__(cls, file: str, line: int, column: int) -> RustSpan: ...
 
 _Span: TypeAlias = PanicSpan | EgglogSpan | RustSpan
 
@@ -184,27 +185,26 @@ _Span: TypeAlias = PanicSpan | EgglogSpan | RustSpan
 
 @final
 class Int:
-    def __init__(self, value: int) -> None: ...
     value: int
+    def __new__(cls, value: int) -> Int: ...
 
 @final
 class Float:
     value: float
-    def __init__(self, value: float) -> None: ...
+    def __new__(cls, value: float) -> Float: ...
 
 @final
 class String:
-    def __init__(self, value: str) -> None: ...
     value: str
+    def __new__(cls, value: str) -> String: ...
 
 @final
-class Unit:
-    def __init__(self) -> None: ...
+class Unit: ...
 
 @final
 class Bool:
-    def __init__(self, b: bool) -> None: ...
     value: bool
+    def __new__(cls, value: bool) -> Bool: ...
 
 _Literal: TypeAlias = Int | Float | String | Bool | Unit
 
@@ -214,22 +214,22 @@ _Literal: TypeAlias = Int | Float | String | Bool | Unit
 
 @final
 class Lit:
-    def __init__(self, span: _Span, value: _Literal) -> None: ...
     span: _Span
     value: _Literal
+    def __new__(cls, span: _Span, value: _Literal) -> Lit: ...
 
 @final
 class Var:
-    def __init__(self, span: _Span, name: str) -> None: ...
     span: _Span
     name: str
+    def __new__(cls, span: _Span, name: str) -> Var: ...
 
 @final
 class Call:
-    def __init__(self, span: _Span, name: str, args: list[_Expr]) -> None: ...
     span: _Span
     name: str
     args: list[_Expr]
+    def __new__(cls, span: _Span, name: str, args: list[_Expr]) -> Call: ...
 
 # Unions must be private becuase it is not actually exposed by the runtime library.
 _Expr: TypeAlias = Lit | Var | Call
@@ -240,19 +240,19 @@ _Expr: TypeAlias = Lit | Var | Call
 
 @final
 class TermLit:
-    def __init__(self, value: _Literal) -> None: ...
     value: _Literal
+    def __new__(cls, value: _Literal) -> TermLit: ...
 
 @final
 class TermVar:
-    def __init__(self, name: str) -> None: ...
     name: str
+    def __new__(cls, name: str) -> TermVar: ...
 
 @final
 class TermApp:
-    def __init__(self, name: str, args: list[int]) -> None: ...
     name: str
     args: list[int]
+    def __new__(cls, name: str, args: list[int]) -> TermApp: ...
 
 _Term: TypeAlias = TermLit | TermVar | TermApp
 
@@ -262,15 +262,15 @@ _Term: TypeAlias = TermLit | TermVar | TermApp
 
 @final
 class Eq:
-    def __init__(self, span: _Span, left: _Expr, right: _Expr) -> None: ...
     span: _Span
     left: _Expr
     right: _Expr
+    def __new__(cls, span: _Span, left: _Expr, right: _Expr) -> Eq: ...
 
 @final
 class Fact:
-    def __init__(self, expr: _Expr) -> None: ...
     expr: _Expr
+    def __new__(cls, expr: _Expr) -> Fact: ...
 
 _Fact: TypeAlias = Fact | Eq
 
@@ -279,12 +279,10 @@ _Fact: TypeAlias = Fact | Eq
 ##
 
 @final
-class Delete:
-    def __init__(self) -> None: ...
+class Delete: ...
 
 @final
-class Subsume:
-    def __init__(self) -> None: ...
+class Subsume: ...
 
 _Change: TypeAlias = Delete | Subsume
 
@@ -294,18 +292,18 @@ _Change: TypeAlias = Delete | Subsume
 
 @final
 class Let:
-    def __init__(self, span: _Span, lhs: str, rhs: _Expr) -> None: ...
     span: _Span
     lhs: str
     rhs: _Expr
+    def __new__(cls, span: _Span, lhs: str, rhs: _Expr) -> Let: ...
 
 @final
 class Set:
-    def __init__(self, span: _Span, lhs: str, args: list[_Expr], rhs: _Expr) -> None: ...
     span: _Span
     lhs: str
     args: list[_Expr]
     rhs: _Expr
+    def __new__(cls, span: _Span, lhs: str, args: list[_Expr], rhs: _Expr) -> Set: ...
 
 @final
 class Change:
@@ -313,26 +311,26 @@ class Change:
     change: _Change
     sym: str
     args: list[_Expr]
-    def __init__(self, span: _Span, change: _Change, sym: str, args: list[_Expr]) -> None: ...
+    def __new__(cls, span: _Span, change: _Change, sym: str, args: list[_Expr]) -> Change: ...
 
 @final
 class Union:
-    def __init__(self, span: _Span, lhs: _Expr, rhs: _Expr) -> None: ...
     span: _Span
     lhs: _Expr
     rhs: _Expr
+    def __new__(cls, span: _Span, lhs: _Expr, rhs: _Expr) -> Union: ...
 
 @final
 class Panic:
-    def __init__(self, span: _Span, msg: str) -> None: ...
     span: _Span
     msg: str
+    def __new__(cls, span: _Span, msg: str) -> Panic: ...
 
 @final
 class Expr_:  # noqa: N801
-    def __init__(self, span: _Span, expr: _Expr) -> None: ...
     span: _Span
     expr: _Expr
+    def __new__(cls, span: _Span, expr: _Expr) -> Expr_: ...
 
 _Action: TypeAlias = Let | Set | Change | Union | Panic | Expr_
 
@@ -342,9 +340,10 @@ _Action: TypeAlias = Let | Set | Change | Union | Panic | Expr_
 
 @final
 class Variant:
-    def __init__(
-        self, span: _Span, name: str, types: list[str], cost: int | None = None, unextractable: bool = False
-    ) -> None: ...
+    def __new__(
+        cls, span: _Span, name: str, types: list[str], cost: int | None = ..., unextractable: bool = ...
+    ) -> Variant: ...
+
     span: _Span
     name: str
     types: list[str]
@@ -355,7 +354,7 @@ class Variant:
 class Schema:
     input: list[str]
     output: str
-    def __init__(self, input: list[str], output: str) -> None: ...
+    def __new__(cls, input: list[str], output: str) -> Schema: ...
 
 @final
 class Rule:
@@ -364,7 +363,7 @@ class Rule:
     body: list[_Fact]
     name: str
     ruleset: str
-    def __init__(self, span: _Span, head: list[_Action], body: list[_Fact], name: str, ruleset: str) -> None: ...
+    def __new__(cls, span: _Span, head: list[_Action], body: list[_Fact], name: str, ruleset: str) -> Rule: ...
 
 @final
 class Rewrite:
@@ -373,19 +372,19 @@ class Rewrite:
     rhs: _Expr
     conditions: list[_Fact]
 
-    def __init__(self, span: _Span, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = []) -> None: ...
+    def __new__(cls, span: _Span, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = ...) -> Rewrite: ...
 
 @final
 class RunConfig:
     ruleset: str
     until: list[_Fact] | None
-    def __init__(self, ruleset: str, until: list[_Fact] | None = None) -> None: ...
+    def __new__(cls, ruleset: str, until: list[_Fact] | None = ...) -> RunConfig: ...
 
 @final
 class IdentSort:
     ident: str
     sort: str
-    def __init__(self, ident: str, sort: str) -> None: ...
+    def __new__(cls, ident: str, sort: str) -> IdentSort: ...
 
 @final
 class UserDefinedCommandOutput: ...
@@ -403,15 +402,15 @@ class RunReport:
     merge_time_per_ruleset: dict[str, timedelta]
     rebuild_time_per_ruleset: dict[str, timedelta]
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         updated: bool,
         search_and_apply_time_per_rule: dict[str, timedelta],
         num_matches_per_rule: dict[str, int],
         search_and_apply_time_per_ruleset: dict[str, timedelta],
         merge_time_per_ruleset: dict[str, timedelta],
         rebuild_time_per_ruleset: dict[str, timedelta],
-    ) -> None: ...
+    ) -> RunReport: ...
 
 ##
 # Command Outputs
@@ -420,35 +419,35 @@ class RunReport:
 @final
 class PrintFunctionSize:
     size: int
-    def __init__(self, size: int) -> None: ...
+    def __new__(cls, size: int) -> PrintFunctionSize: ...
 
 @final
 class PrintAllFunctionsSize:
     sizes: list[tuple[str, int]]
-    def __init__(self, sizes: list[tuple[str, int]]) -> None: ...
+    def __new__(cls, sizes: list[tuple[str, int]]) -> PrintAllFunctionsSize: ...
 
 @final
 class ExtractVariants:
     termdag: TermDag
     terms: list[_Term]
-    def __init__(self, termdag: TermDag, terms: list[_Term]) -> None: ...
+    def __new__(cls, termdag: TermDag, terms: list[_Term]) -> ExtractVariants: ...
 
 @final
 class ExtractBest:
     termdag: TermDag
     cost: int
     term: _Term
-    def __init__(self, termdag: TermDag, cost: int, term: _Term) -> None: ...
+    def __new__(cls, termdag: TermDag, cost: int, term: _Term) -> ExtractBest: ...
 
 @final
 class OverallStatistics:
     report: RunReport
-    def __init__(self, report: RunReport) -> None: ...
+    def __new__(cls, report: RunReport) -> OverallStatistics: ...
 
 @final
 class RunScheduleOutput:
     report: RunReport
-    def __init__(self, report: RunReport) -> None: ...
+    def __new__(cls, report: RunReport) -> RunScheduleOutput: ...
 
 @final
 class PrintFunctionOutput:
@@ -456,14 +455,14 @@ class PrintFunctionOutput:
     termdag: TermDag
     terms: list[tuple[_Term, _Term]]
     mode: _PrintFunctionMode
-    def __init__(
-        self, function: Function, termdag: TermDag, terms: list[tuple[_Term, _Term]], mode: _PrintFunctionMode
-    ) -> None: ...
+    def __new__(
+        cls, function: Function, termdag: TermDag, terms: list[tuple[_Term, _Term]], mode: _PrintFunctionMode
+    ) -> PrintFunctionOutput: ...
 
 @final
 class UserDefinedOutput:
     output: UserDefinedCommandOutput
-    def __init__(self, output: UserDefinedCommandOutput) -> None: ...
+    def __new__(cls, output: UserDefinedCommandOutput) -> UserDefinedOutput: ...
 
 _CommandOutput: TypeAlias = (
     PrintFunctionSize
@@ -496,26 +495,26 @@ _PrintFunctionMode: TypeAlias = DefaultPrintFunctionMode | CSVPrintFunctionMode
 class Saturate:
     span: _Span
     schedule: _Schedule
-    def __init__(self, span: _Span, schedule: _Schedule) -> None: ...
+    def __new__(cls, span: _Span, schedule: _Schedule) -> Saturate: ...
 
 @final
 class Repeat:
     span: _Span
     length: int
     schedule: _Schedule
-    def __init__(self, span: _Span, length: int, schedule: _Schedule) -> None: ...
+    def __new__(cls, span: _Span, length: int, schedule: _Schedule) -> Repeat: ...
 
 @final
 class Run:
     span: _Span
     config: RunConfig
-    def __init__(self, span: _Span, config: RunConfig) -> None: ...
+    def __new__(cls, span: _Span, config: RunConfig) -> Run: ...
 
 @final
 class Sequence:
     span: _Span
     schedules: list[_Schedule]
-    def __init__(self, span: _Span, schedules: list[_Schedule]) -> None: ...
+    def __new__(cls, span: _Span, schedules: list[_Schedule]) -> Sequence: ...
 
 _Schedule: TypeAlias = Saturate | Repeat | Run | Sequence
 
@@ -525,14 +524,14 @@ _Schedule: TypeAlias = Saturate | Repeat | Run | Sequence
 
 @final
 class SubVariants:
-    def __init__(self, variants: list[Variant]) -> None: ...
     variants: list[Variant]
+    def __new__(cls, variants: list[Variant]) -> SubVariants: ...
 
 @final
 class NewSort:
-    def __init__(self, name: str, args: list[_Expr]) -> None: ...
     name: str
     args: list[_Expr]
+    def __new__(cls, name: str, args: list[_Expr]) -> NewSort: ...
 
 _Subdatatypes: TypeAlias = SubVariants | NewSort
 
@@ -545,20 +544,20 @@ class Datatype:
     span: _Span
     name: str
     variants: list[Variant]
-    def __init__(self, span: _Span, name: str, variants: list[Variant]) -> None: ...
+    def __new__(cls, span: _Span, name: str, variants: list[Variant]) -> Datatype: ...
 
 @final
 class Datatypes:
     span: _Span
     datatypes: list[tuple[_Span, str, _Subdatatypes]]
-    def __init__(self, span: _Span, datatypes: list[tuple[_Span, str, _Subdatatypes]]) -> None: ...
+    def __new__(cls, span: _Span, datatypes: list[tuple[_Span, str, _Subdatatypes]]) -> Datatypes: ...
 
 @final
 class Sort:
     span: _Span
     name: str
     presort_and_args: tuple[str, list[_Expr]] | None
-    def __init__(self, span: _Span, name: str, presort_and_args: tuple[str, list[_Expr]] | None = None) -> None: ...
+    def __new__(cls, span: _Span, name: str, presort_and_args: tuple[str, list[_Expr]] | None) -> Sort: ...
 
 @final
 class FunctionCommand:
@@ -566,18 +565,18 @@ class FunctionCommand:
     name: str
     schema: Schema
     merge: _Expr | None
-    def __init__(self, span: _Span, name: str, schema: Schema, merge: _Expr | None) -> None: ...
+    def __new__(cls, span: _Span, name: str, schema: Schema, merge: _Expr | None) -> FunctionCommand: ...
 
 @final
 class AddRuleset:
     span: _Span
     name: str
-    def __init__(self, span: _Span, name: str) -> None: ...
+    def __new__(cls, span: _Span, name: str) -> AddRuleset: ...
 
 @final
 class RuleCommand:
     rule: Rule
-    def __init__(self, rule: Rule) -> None: ...
+    def __new__(cls, rule: Rule) -> RuleCommand: ...
 
 @final
 class RewriteCommand:
@@ -585,37 +584,37 @@ class RewriteCommand:
     name: str
     rewrite: Rewrite
     subsume: bool
-    def __init__(self, name: str, rewrite: Rewrite, subsume: bool) -> None: ...
+    def __new__(cls, name: str, rewrite: Rewrite, subsume: bool) -> RewriteCommand: ...
 
 @final
 class BiRewriteCommand:
     # TODO: Rename to ruleset
     name: str
     rewrite: Rewrite
-    def __init__(self, name: str, rewrite: Rewrite) -> None: ...
+    def __new__(cls, name: str, rewrite: Rewrite) -> BiRewriteCommand: ...
 
 @final
 class ActionCommand:
     action: _Action
-    def __init__(self, action: _Action) -> None: ...
+    def __new__(cls, action: _Action) -> ActionCommand: ...
 
 @final
 class RunSchedule:
     schedule: _Schedule
-    def __init__(self, schedule: _Schedule) -> None: ...
+    def __new__(cls, schedule: _Schedule) -> RunSchedule: ...
 
 @final
 class Extract:
     span: _Span
     expr: _Expr
     variants: _Expr
-    def __init__(self, span: _Span, expr: _Expr, variants: _Expr) -> None: ...
+    def __new__(cls, span: _Span, expr: _Expr, variants: _Expr) -> Extract: ...
 
 @final
 class Check:
     span: _Span
     facts: list[_Fact]
-    def __init__(self, span: _Span, facts: list[_Fact]) -> None: ...
+    def __new__(cls, span: _Span, facts: list[_Fact]) -> Check: ...
 
 @final
 class PrintFunction:
@@ -624,52 +623,52 @@ class PrintFunction:
     length: int | None
     filename: str | None
     mode: _PrintFunctionMode
-    def __init__(
-        self, span: _Span, name: str, length: int | None, filename: str | None, mode: _PrintFunctionMode
-    ) -> None: ...
+    def __new__(
+        cls, span: _Span, name: str, length: int | None, filename: str | None, mode: _PrintFunctionMode
+    ) -> PrintFunction: ...
 
 @final
 class PrintSize:
     span: _Span
     name: str | None
-    def __init__(self, span: _Span, name: str | None) -> None: ...
+    def __new__(cls, span: _Span, name: str | None) -> PrintSize: ...
 
 @final
 class Output:
     span: _Span
     file: str
     exprs: list[_Expr]
-    def __init__(self, span: _Span, file: str, exprs: list[_Expr]) -> None: ...
+    def __new__(cls, span: _Span, file: str, exprs: list[_Expr]) -> Output: ...
 
 @final
 class Input:
     span: _Span
     name: str
     file: str
-    def __init__(self, span: _Span, name: str, file: str) -> None: ...
+    def __new__(cls, span: _Span, name: str, file: str) -> Input: ...
 
 @final
 class Push:
     length: int
-    def __init__(self, length: int) -> None: ...
+    def __new__(cls, length: int) -> Push: ...
 
 @final
 class Pop:
     span: _Span
     length: int
-    def __init__(self, span: _Span, length: int) -> None: ...
+    def __new__(cls, span: _Span, length: int) -> Pop: ...
 
 @final
 class Fail:
     span: _Span
     command: _Command
-    def __init__(self, span: _Span, command: _Command) -> None: ...
+    def __new__(cls, span: _Span, command: _Command) -> Fail: ...
 
 @final
 class Include:
     span: _Span
     path: str
-    def __init__(self, span: _Span, path: str) -> None: ...
+    def __new__(cls, span: _Span, path: str) -> Include: ...
 
 @final
 class Relation:
@@ -677,7 +676,7 @@ class Relation:
     name: str
     inputs: list[str]
 
-    def __init__(self, span: _Span, name: str, inputs: list[str]) -> None: ...
+    def __new__(cls, span: _Span, name: str, inputs: list[str]) -> Relation: ...
 
 @final
 class Constructor:
@@ -686,25 +685,24 @@ class Constructor:
     schema: Schema
     cost: int | None
     unextractable: bool
-    def __init__(self, span: _Span, name: str, schema: Schema, cost: int | None, unextractable: bool) -> None: ...
+    def __new__(cls, span: _Span, name: str, schema: Schema, cost: int | None, unextractable: bool) -> Constructor: ...
 
 @final
-class PrintOverallStatistics:
-    def __init__(self) -> None: ...
+class PrintOverallStatistics: ...
 
 @final
 class UserDefined:
     span: _Span
     name: str
     args: list[_Expr]
-    def __init__(self, span: _Span, name: str, args: list[_Expr]) -> None: ...
+    def __new__(cls, span: _Span, name: str, args: list[_Expr]) -> UserDefined: ...
 
 @final
 class UnstableCombinedRuleset:
     span: _Span
     name: str
     rulesets: list[str]
-    def __init__(self, span: _Span, name: str, rulesets: list[str]) -> None: ...
+    def __new__(cls, span: _Span, name: str, rulesets: list[str]) -> UnstableCombinedRuleset: ...
 
 _Command: TypeAlias = (
     Datatype
@@ -740,7 +738,6 @@ _Command: TypeAlias = (
 
 @final
 class TermDag:
-    def __init__(self) -> None: ...
     def size(self) -> int: ...
     def lookup(self, node: _Term) -> int: ...
     def get(self, id: int) -> _Term: ...
@@ -766,17 +763,19 @@ _ENODE_COST = TypeVar("_ENODE_COST")
 
 @final
 class CostModel(Generic[_COST, _ENODE_COST]):
-    def __init__(
-        self,
+    def __new__(
+        cls,
         fold: Callable[[str, _ENODE_COST, list[_COST]], _COST],
         enode_cost: Callable[[str, list[Value]], _ENODE_COST],
         container_cost: Callable[[str, Value, list[_COST]], _COST],
         base_value_cost: Callable[[str, Value], _COST],
-    ) -> None: ...
+    ) -> CostModel[_COST, _ENODE_COST]: ...
 
 @final
 class Extractor(Generic[_COST]):
-    def __init__(self, rootsorts: list[str] | None, egraph: EGraph, cost_model: CostModel[_COST, Any]) -> None: ...
+    def __new__(
+        cls, rootsorts: list[str] | None, egraph: EGraph, cost_model: CostModel[_COST, Any]
+    ) -> Extractor[_COST]: ...
     def extract_best(self, egraph: EGraph, termdag: TermDag, value: Value, sort: str) -> tuple[_COST, _Term]: ...
     def extract_variants(
         self, egraph: EGraph, termdag: TermDag, value: Value, nvariants: int, sort: str
