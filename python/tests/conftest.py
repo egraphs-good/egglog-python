@@ -23,7 +23,7 @@ def _reset_current_egraph():
 
 
 class PythonSnapshotExtension(SingleFileSnapshotExtension):
-    _file_extension = "py"
+    file_extension = "py"
 
     def serialize(self, data, **kwargs) -> bytes:
         return str(data).encode()

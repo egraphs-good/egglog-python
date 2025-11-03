@@ -51,7 +51,7 @@ dev = [
 test = [
     "pytest",
     "mypy",
-    "syrupy",
+    "syrupy>=5",
     "egglog[array]",
     "pytest-codspeed",
     "pytest-benchmark",
