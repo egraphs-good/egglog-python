@@ -1019,9 +1019,9 @@ class EGraph:
         return [cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, expr)) for expr in new_exprs]
 
     def _run_extract(self, expr: RuntimeExpr, n: int) -> bindings._CommandOutput:
-        expr = self._state.typed_expr_to_egg(expr.__egg_typed_expr__)
+        egg_expr = self._state.typed_expr_to_egg(expr.__egg_typed_expr__)
         # If we have defined any cost tables use the custom extraction
-        args = (expr, bindings.Lit(span(2), bindings.Int(n)))
+        args = (egg_expr, bindings.Lit(span(2), bindings.Int(n)))
         if self._state.cost_callables:
             cmd: bindings._Command = bindings.UserDefined(span(2), "extract", list(args))
         else:
@@ -1029,7 +1029,7 @@ class EGraph:
         try:
             return self._egraph.run_program(cmd)[0]
         except BaseException as e:
-            raise add_note("Extracting: " + str(expr), e)  # noqa: B904
+            raise add_note("while extracting expr:\n" + str(expr), e)  # noqa: B904
 
     def push(self) -> None:
         """
