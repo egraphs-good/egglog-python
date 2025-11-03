@@ -111,7 +111,7 @@ impl BaseSort for PyObjectSort {
         // (py-call <fn-obj> [<arg-object>]*)
         add_primitive!(eg, "py-call" = [xs: PyPickledValue] -?> PyPickledValue {
             attach("py-call", |py| {
-                let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>().map_err(|e| {e.add_note(py, "Loadng arguments").unwrap(); e})?;
+                let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>().map_err(|e| {e.add_note(py, "Loading arguments").unwrap(); e})?;
                 let fn_obj = &xs[0];
                 let args = PyTuple::new(py, xs[1..].to_vec()).map_err(|e| {e.add_note(py, "Creating tuple").unwrap(); e})?;
                 dump(fn_obj.call1(args).map_err(|e| {e.add_note(py, format!("Calling function {}", fn_obj)).unwrap(); e})?)

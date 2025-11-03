@@ -178,6 +178,7 @@ class AnyExpr(Expr):
             return any_eval(res)
         return with_assert(res)
 
+    # TODO: Not working for now
     # @method(mutates_self=True)
     # def __setattr__(self, name: StringLike, value: object) -> None:
     #     """

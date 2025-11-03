@@ -288,6 +288,3 @@ def resolve_type(x: object) -> JustTypeRef | type:
     if isinstance(x, RuntimeExpr):
         return x.__egg_typed_expr__.tp
     return type(x)
-    # If this value has a custom metaclass, let's use that as our index instead of the type
-    # if type(tp) is not type:
-    #     return type(tp)
