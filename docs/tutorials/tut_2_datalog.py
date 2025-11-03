@@ -150,7 +150,7 @@ def _(a: i64, b: i64, c: i64, ab: i64, bc: i64) -> Iterable[RewriteOrRule]:
 # Let's run our rules and check we get the desired shortest path
 
 egraph.run(run().saturate())
-egraph.check(path_len(1, 3) == 20)
+egraph.check(eq(path_len(1, 3)).to(20))
 egraph
 
 

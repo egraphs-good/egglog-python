@@ -64,20 +64,19 @@ impl EGraph {
             cmds_str = cmds_str + &cmd.to_string() + "\n";
         }
         info!("Running commands:\n{}", cmds_str);
-        let res = py.detach(|| {
-            self.egraph.run_program(commands).map_err(|e| {
-                WrappedError::Egglog(e, "\nWhen running commands:\n".to_string() + &cmds_str)
-            })
-        });
-        if res.is_ok()
-            && let Some(cmds) = &mut self.cmds
-        {
-            cmds.push_str(&cmds_str);
-        }
+        let res = py.detach(|| self.egraph.run_program(commands));
         if let Some(err) = PyErr::take(py) {
             return Err(WrappedError::Py(err));
         }
-        res.map(|xs| xs.iter().map(|o| o.into()).collect())
+        match res {
+            Err(e) => Err(WrappedError::Egglog(e)),
+            Ok(outputs) => {
+                if let Some(cmds) = &mut self.cmds {
+                    cmds.push_str(&cmds_str);
+                }
+                Ok(outputs.into_iter().map(|o| o.into()).collect())
+            }
+        }
     }
 
     /// Returns the text of the commands that have been run so far, if `record` was passed.
@@ -133,7 +132,7 @@ impl EGraph {
             self.egraph
                 .eval_expr(&expr)
                 .map(|(s, v)| (s.name().to_string(), Value(v)))
-                .map_err(|e| WrappedError::Egglog(e, format!("\nWhen evaluating expr: {expr}")))
+                .map_err(|e| WrappedError::Egglog(e))
         });
         if let Some(err) = PyErr::take(py) {
             return Err(WrappedError::Py(err));
