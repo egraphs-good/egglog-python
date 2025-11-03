@@ -1,8 +1,1 @@
-# Add allows for all no arg classes because they somehow take all args at runtime
-.*egglog.bindings.Unit.__init__.*
-.*egglog.bindings.PrintOverallStatistics.__init__.*
-.*egglog.bindings.EGraph.__init__.*
-.*egglog.bindings.Delete.__init__.*
-.*egglog.bindings.Subsume.__init__.*
-.*egglog.bindings.TermDag.__init__.*
-.*egglog.bindings.PanicSpan.__init__.*
+# empty for now
