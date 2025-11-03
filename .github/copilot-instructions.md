@@ -22,14 +22,17 @@ This repository provides Python bindings for the Rust library `egglog`, enabling
 
 ### Prerequisites
 - **uv** - Package manager (https://github.com/astral-sh/uv)
-- **Rust toolchain** - Version 1.79.0 (specified in rust-toolchain.toml)
+- **Rust toolchain** - Version 1.89.0 (specified in rust-toolchain.toml)
 - **Python** - 3.10+ (see .python-version)
 
 ### Common Commands
 
 ```bash
-# Install dependencies
+# Install dependencies (for development)
 uv sync --extra dev --locked
+
+# Install dependencies (for testing)
+uv sync --extra test --locked
 
 # Run tests
 uv run pytest --benchmark-disable -vvv --durations=10
@@ -77,16 +80,16 @@ See `pyproject.toml` for complete Ruff configuration.
 
 ### Testing
 - Tests are located in `python/tests/`
-- Use pytest with snapshot testing (pytest-inline-snapshot)
+- Use pytest with snapshot testing (syrupy)
 - Benchmarks use pytest-benchmark and CodSpeed
 - Run tests with: `uv run pytest --benchmark-disable -vvv`
 
 ## Rust Code Standards
 
 ### General Guidelines
-- **Edition**: Rust 2024
+- **Edition**: Rust 2024 (experimental)
 - **FFI**: Uses PyO3 for Python bindings
-- **Main library**: Uses egglog from git (currently saulshanabrook/egg-smol branch)
+- **Main library**: Uses egglog from git (saulshanabrook/egg-smol, clone-cost branch)
 
 ### File Organization
 - `src/lib.rs` - Main library entry point
@@ -123,7 +126,7 @@ Run `pre-commit install` to enable automatic checking.
 - **Core**: typing-extensions, black, graphviz, anywidget
 - **Array support**: scikit-learn, array_api_compat, numba, numpy>2
 - **Dev tools**: ruff, pre-commit, mypy, jupyterlab
-- **Testing**: pytest, pytest-benchmark, syrupy (inline snapshots)
+- **Testing**: pytest, pytest-benchmark, pytest-codspeed, pytest-xdist, syrupy (snapshot testing)
 - **Docs**: sphinx and related packages
 
 ### Rust Dependencies
@@ -167,9 +170,10 @@ Documentation is built with Sphinx:
 
 1. **Unit tests**: Test individual functions and classes
 2. **Integration tests**: Test complete workflows
-3. **Snapshot tests**: Use inline snapshots for complex outputs
-4. **Benchmarks**: Performance testing with pytest-benchmark
-5. **Type checking**: Validate type stubs and annotations
+3. **Snapshot tests**: Use syrupy for snapshot testing of complex outputs
+4. **Benchmarks**: Performance testing with pytest-benchmark and pytest-codspeed
+5. **Parallel testing**: Use pytest-xdist for faster test runs
+6. **Type checking**: Validate type stubs and annotations
 
 ## Performance Considerations
 
