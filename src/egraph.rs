@@ -64,12 +64,13 @@ impl EGraph {
             cmds_str = cmds_str + &cmd.to_string() + "\n";
         }
         info!("Running commands:\n{}", cmds_str);
-        match py.detach(|| self.egraph.run_program(commands)) {
+        let res = py.detach(|| self.egraph.run_program(commands));
+        if let Some(err) = PyErr::take(py) {
+            return Err(WrappedError::Py(err));
+        }
+        match res {
             Err(e) => Err(WrappedError::Egglog(e)),
             Ok(outputs) => {
-                if let Some(err) = PyErr::take(py) {
-                    return Err(WrappedError::Py(err));
-                }
                 if let Some(cmds) = &mut self.cmds {
                     cmds.push_str(&cmds_str);
                 }
