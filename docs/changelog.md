@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Make docs builds fail on notebook execution errors and fix all doc issues [#369](https://github.com/egraphs-good/egglog-python/pull/369)
 ## 11.4.0 (2025-10-02)
 
 - Add ability to create custom model and pass them in to extract [#357](https://github.com/egraphs-good/egglog-python/pull/357)
