@@ -4,6 +4,7 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Add support for setting report level with `egraph.set_report_level` [#375](https://github.com/egraphs-good/egglog-python/pull/375)
 - Make docs builds fail on notebook execution errors and fix all doc issues [#369](https://github.com/egraphs-good/egglog-python/pull/369)
 - Add WIP `egglog.exp.any_expr` code for tracing arbitrary expressions with Python fallback [#366](https://github.com/egraphs-good/egglog-python/pull/366)
   - BREAKING: Remove support for Python 3.11 now that pyo3 has dropped support.

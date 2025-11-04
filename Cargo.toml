@@ -13,17 +13,15 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.27", features = ["extension-module", "num-bigint", "num-rational"] }
 num-bigint = "*"
 num-rational = "*"
-# egglog = { git = "https://github.com/egraphs-good/egglog.git", branch = "main", default-features = false }
-# egglog-bridge = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
-# egglog-core-relations = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "let-bindings-again", default-features = false }
-egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "let-bindings-again" }
-egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "let-bindings-again" }
-egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", branch = "update-egglog", default-features = false }
-egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "let-bindings-again" }
+egglog = { git = "https://github.com/egraphs-good/egglog.git", branch = "main", default-features = false }
+egglog-bridge = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+egglog-core-relations = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", branch = "main", default-features = false }
+egglog-ast = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+egglog-reports = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
 egraph-serialize = { version = "0.3", features = ["serde", "graphviz"] }
 serde_json = "1"
-pyo3-log =  { git = "https://github.com/a1phyr/pyo3-log.git", branch = "pyo3_0.27" }
+pyo3-log =  "*"
 log = "0.4"
 lalrpop-util = { version = "0.22", features = ["lexer"] }
 ordered-float = "5"
@@ -33,13 +31,10 @@ base64 = "0.22.1"
 
 # Use patched version of egglog in experimental
 [patch.'https://github.com/egraphs-good/egglog']
-# egglog = { git = "https://github.com/egraphs-good//egglog.git", branch = "main" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "let-bindings-again" }
-egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "let-bindings-again" }
-egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "let-bindings-again" }
-egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "let-bindings-again" }
-# egglog = { path = "../egg-smol" }
-# egglog = { git = "https://github.com/egraphs-good//egglog.git", rev = "5542549" }
+# egglog = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+# egglog-bridge = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+# egglog-core-relations = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+# egglog-ast = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
 
 # enable debug symbols for easier profiling
 [profile.release]
