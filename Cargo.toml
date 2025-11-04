@@ -39,6 +39,3 @@ base64 = "0.22.1"
 # enable debug symbols for easier profiling
 [profile.release]
 debug = true
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(Py_3_11)'] }
