@@ -282,9 +282,15 @@ convert_enums!(
                 name: name.to_string(),
                 inputs: inputs.iter().map(|i| i.to_string()).collect()
             };
-        PrintOverallStatistics()
-            _c -> egglog::ast::Command::PrintOverallStatistics,
-            egglog::ast::Command::PrintOverallStatistics => PrintOverallStatistics {};
+        PrintOverallStatistics(span: Span, file: Option<String>)
+            c -> egglog::ast::Command::PrintOverallStatistics(
+                c.span.clone().into(),
+                c.file.as_ref().map(|f| f.clone().into())
+            ),
+            egglog::ast::Command::PrintOverallStatistics(span, file) => PrintOverallStatistics {
+                span: span.into(),
+                file: file.clone()
+            };
         Datatypes(span: Span, datatypes: Vec<(Span, String, Subdatatypes)>)
             d -> egglog::ast::Command::Datatypes {
                 span: d.span.clone().into(),
@@ -321,6 +327,35 @@ convert_enums!(
         NewSort(name: String, args: Vec<Expr>)
             n -> egglog::ast::Subdatatypes::NewSort((&n.name).into(), n.args.iter().map(|e| e.into()).collect()),
             egglog::ast::Subdatatypes::NewSort(name, args) => NewSort { name: name.to_string(), args: args.iter().map(|e| e.into()).collect() }
+    };
+    egglog_reports::Stage: "{:?}" => Stage {
+        Intersect(scans: Vec<SingleScan>)
+            s -> egglog_reports::Stage::Intersect {
+                scans: s.scans.iter().map(|scan| scan.into()).collect()
+            },
+            egglog_reports::Stage::Intersect { scans } => Intersect {
+                scans: scans.iter().map(|scan| scan.into()).collect()
+            };
+        FusedIntersect(cover: Scan, to_intersect: Vec<Scan>)
+            f -> egglog_reports::Stage::FusedIntersect {
+                cover: (&f.cover).into(),
+                to_intersect: f.to_intersect.iter().map(|scan| scan.into()).collect()
+            },
+            egglog_reports::Stage::FusedIntersect { cover, to_intersect } => FusedIntersect {
+                cover: cover.clone().into(),
+                to_intersect: to_intersect.iter().map(|scan| scan.into()).collect()
+            }
+    };
+    egglog_reports::ReportLevel: "{:?}" => ReportLevel {
+        TimeOnly()
+            _r -> egglog_reports::ReportLevel::TimeOnly,
+            egglog_reports::ReportLevel::TimeOnly => TimeOnly {};
+        WithPlan()
+            _r -> egglog_reports::ReportLevel::WithPlan,
+            egglog_reports::ReportLevel::WithPlan => WithPlan {};
+        StageInfo()
+            _r -> egglog_reports::ReportLevel::StageInfo,
+            egglog_reports::ReportLevel::StageInfo => StageInfo {}
     };
     egglog::CommandOutput: "{}" => CommandOutput {
         PrintFunctionSize(size: usize)
@@ -450,7 +485,136 @@ convert_struct!(
     )
         i -> egglog::ast::IdentSort {ident: (&i.ident).into(), sort: (&i.sort).into()},
         i -> IdentSort {ident: i.ident.to_string(), sort: i.sort.to_string()};
-    egglog::RunReport: "{:?}" => RunReport(
+    egglog_reports::SingleScan: "{:?}" => SingleScan(
+        atom: String,
+        column: (String, i64)
+    )
+        s -> egglog_reports::SingleScan(
+            s.atom.clone(),
+            (s.column.0.clone(), s.column.1)
+        ),
+        s -> SingleScan {
+            atom: s.0.to_string(),
+            column: (s.1 .0.to_string(), s.1 .1)
+        };
+    egglog_reports::Scan: "{:?}" => Scan(
+        atom: String,
+        columns: Vec<(String, i64)>
+    )
+        s -> egglog_reports::Scan(
+            s.atom.clone(),
+            s.columns.iter().map(|(n, i)| (n.clone(), *i)).collect()
+        ),
+        s -> Scan {
+            atom: s.0.to_string(),
+            columns: s.1.iter().map(|(n, i)| (n.to_string(), *i)).collect()
+        };
+    egglog_reports::StageStats: "{:?}" => StageStats(
+        num_candidates: usize,
+        num_succeeded: usize
+    )
+        s -> egglog_reports::StageStats {
+            num_candidates: s.num_candidates,
+            num_succeeded: s.num_succeeded
+        },
+        s -> StageStats {
+            num_candidates: s.num_candidates,
+            num_succeeded: s.num_succeeded
+        };
+    egglog_reports::Plan: "{:?}" => Plan(
+        stages: Vec<(Stage, Option<StageStats>, Vec<usize>)>
+    )
+        p -> egglog_reports::Plan {
+            stages: p
+                .stages
+                .iter()
+                .map(|(s, ss, ts)| {
+                    (
+                        s.clone().into(),
+                        ss.as_ref().map(|st| st.clone().into()),
+                        ts.clone(),
+                    )
+                })
+                .collect()
+        },
+        p -> Plan {
+            stages: p
+                .stages
+                .iter()
+                .map(|(s, ss, ts)| {
+                    (
+                        s.clone().into(),
+                        ss.as_ref().map(|st| st.clone().into()),
+                        ts.clone(),
+                    )
+                })
+                .collect()
+        };
+    egglog_reports::RuleReport: "{:?}" => RuleReport(
+        plan: Option<Plan>,
+        search_and_apply_time: WrappedDuration,
+        num_matches: usize
+    )
+        r -> egglog_reports::RuleReport {
+            plan: r.plan.as_ref().map(|p| p.clone().into()),
+            search_and_apply_time: r.search_and_apply_time.clone().0,
+            num_matches: r.num_matches
+        },
+        r -> RuleReport {
+            plan: r.plan.as_ref().map(|p| p.clone().into()),
+            search_and_apply_time: r.search_and_apply_time.clone().into(),
+            num_matches: r.num_matches
+        };
+    egglog_reports::RuleSetReport: "{:?}" => RuleSetReport(
+        changed: bool,
+        rule_reports: HashMap<String, Vec<RuleReport>>,
+        search_and_apply_time: WrappedDuration,
+        merge_time: WrappedDuration
+    )
+        r -> egglog_reports::RuleSetReport {
+            changed: r.changed,
+            rule_reports: r
+                .rule_reports
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        Arc::<str>::from(k.clone()),
+                        v.iter().map(|rr| rr.clone().into()).collect(),
+                    )
+                })
+                .collect(),
+            search_and_apply_time: r.search_and_apply_time.clone().0,
+            merge_time: r.merge_time.clone().0,
+        },
+        r -> RuleSetReport {
+            changed: r.changed,
+            rule_reports: r
+                .rule_reports
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_string(),
+                        v.iter().map(|rr| rr.clone().into()).collect(),
+                    )
+                })
+                .collect(),
+            search_and_apply_time: r.search_and_apply_time.clone().into(),
+            merge_time: r.merge_time.clone().into(),
+        };
+    egglog_reports::IterationReport: "{:?}" => IterationReport(
+        rule_set_report: RuleSetReport,
+        rebuild_time: WrappedDuration
+    )
+        r -> egglog_reports::IterationReport {
+            rule_set_report: (&r.rule_set_report).into(),
+            rebuild_time: r.rebuild_time.clone().0
+        },
+        r -> IterationReport {
+            rule_set_report: (&r.rule_set_report).into(),
+            rebuild_time: r.rebuild_time.clone().into()
+        };
+    egglog_reports::RunReport: "{:?}" => RunReport(
+        iterations: Vec<IterationReport>,
         updated: bool,
         search_and_apply_time_per_rule: HashMap<String, WrappedDuration>,
         num_matches_per_rule: HashMap<String, usize>,
@@ -458,21 +622,67 @@ convert_struct!(
         merge_time_per_ruleset: HashMap<String, WrappedDuration>,
         rebuild_time_per_ruleset: HashMap<String, WrappedDuration>
     )
-        r -> egglog::RunReport {
+        r -> egglog_reports::RunReport {
+            iterations: r
+                .iterations
+                .iter()
+                .map(|i| Arc::new(i.clone().into()))
+                .collect(),
             updated: r.updated,
-            search_and_apply_time_per_rule: r.search_and_apply_time_per_rule.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
-            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone(), *v)).collect(),
-            search_and_apply_time_per_ruleset: r.search_and_apply_time_per_ruleset.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
-            merge_time_per_ruleset: r.merge_time_per_ruleset.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
-            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone(), v.clone().0)).collect(),
+            search_and_apply_time_per_rule: r
+                .search_and_apply_time_per_rule
+                .iter()
+                .map(|(k, v)| (Arc::<str>::from(k.clone()), v.clone().0))
+                .collect(),
+            num_matches_per_rule: r
+                .num_matches_per_rule
+                .iter()
+                .map(|(k, v)| (Arc::<str>::from(k.clone()), *v))
+                .collect(),
+            search_and_apply_time_per_ruleset: r
+                .search_and_apply_time_per_ruleset
+                .iter()
+                .map(|(k, v)| (Arc::<str>::from(k.clone()), v.clone().0))
+                .collect(),
+            merge_time_per_ruleset: r
+                .merge_time_per_ruleset
+                .iter()
+                .map(|(k, v)| (Arc::<str>::from(k.clone()), v.clone().0))
+                .collect(),
+            rebuild_time_per_ruleset: r
+                .rebuild_time_per_ruleset
+                .iter()
+                .map(|(k, v)| (Arc::<str>::from(k.clone()), v.clone().0))
+                .collect(),
         },
         r -> RunReport {
+            iterations: r.iterations.iter().map(|i| i.as_ref().into()).collect(),
             updated: r.updated,
-            search_and_apply_time_per_rule: r.search_and_apply_time_per_rule.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
-            num_matches_per_rule: r.num_matches_per_rule.iter().map(|(k, v)| (k.clone().to_string(), *v)).collect(),
-            search_and_apply_time_per_ruleset: r.search_and_apply_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
-            merge_time_per_ruleset: r.merge_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
-            rebuild_time_per_ruleset: r.rebuild_time_per_ruleset.iter().map(|(k, v)| (k.clone().to_string(), (*v).into())).collect(),
+            search_and_apply_time_per_rule: r
+                .search_and_apply_time_per_rule
+                .iter()
+                .map(|(k, v)| (k.to_string(), (*v).into()))
+                .collect(),
+            num_matches_per_rule: r
+                .num_matches_per_rule
+                .iter()
+                .map(|(k, v)| (k.to_string(), *v))
+                .collect(),
+            search_and_apply_time_per_ruleset: r
+                .search_and_apply_time_per_ruleset
+                .iter()
+                .map(|(k, v)| (k.to_string(), (*v).into()))
+                .collect(),
+            merge_time_per_ruleset: r
+                .merge_time_per_ruleset
+                .iter()
+                .map(|(k, v)| (k.to_string(), (*v).into()))
+                .collect(),
+            rebuild_time_per_ruleset: r
+                .rebuild_time_per_ruleset
+                .iter()
+                .map(|(k, v)| (k.to_string(), (*v).into()))
+                .collect(),
         }
 );
 

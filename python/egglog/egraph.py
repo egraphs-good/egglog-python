@@ -62,9 +62,13 @@ __all__ = [
     "Fact",
     "GraphvizKwargs",
     "GreedyDagCost",
+    "ReportLevel",
     "RewriteOrRule",
     "Ruleset",
     "Schedule",
+    "StageInfo",
+    "TimeOnly",
+    "WithPlan",
     "_BirewriteBuilder",
     "_EqBuilder",
     "_NeBuilder",
@@ -104,6 +108,7 @@ __all__ = [
     "var",
     "vars_",
 ]
+
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -869,6 +874,12 @@ class EGraph:
         for d in decls:
             self._state.__egg_decls__ |= d
 
+    def set_report_level(self, level: bindings._ReportLevel) -> None:
+        """
+        Set the level of detail recorded in subsequent run reports.
+        """
+        self._egraph.set_report_level(level)
+
     @property
     def as_egglog_string(self) -> str:
         """
@@ -948,7 +959,7 @@ class EGraph:
         """
         Returns the overall run report for the egraph.
         """
-        (output,) = self._egraph.run_program(bindings.PrintOverallStatistics())
+        (output,) = self._egraph.run_program(bindings.PrintOverallStatistics(span(1), None))
         assert isinstance(output, bindings.OverallStatistics)
         return output.report
 

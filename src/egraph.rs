@@ -117,6 +117,10 @@ impl EGraph {
         })
     }
 
+    fn set_report_level(&mut self, level: ReportLevel) {
+        self.egraph.set_report_level(level.into());
+    }
+
     fn lookup_function(&self, name: &str, key: Vec<Value>) -> Option<Value> {
         self.egraph
             .lookup_function(

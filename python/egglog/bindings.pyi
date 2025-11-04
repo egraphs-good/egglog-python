@@ -33,10 +33,13 @@ __all__ = [
     "Float",
     "Function",
     "FunctionCommand",
+    "FusedIntersect",
     "IdentSort",
     "Include",
     "Input",
     "Int",
+    "Intersect",
+    "IterationReport",
     "Let",
     "Lit",
     "NewSort",
@@ -44,6 +47,7 @@ __all__ = [
     "OverallStatistics",
     "Panic",
     "PanicSpan",
+    "Plan",
     "Pop",
     "PrintAllFunctionsSize",
     "PrintFunction",
@@ -58,6 +62,8 @@ __all__ = [
     "RewriteCommand",
     "Rule",
     "RuleCommand",
+    "RuleReport",
+    "RuleSetReport",
     "Run",
     "RunConfig",
     "RunReport",
@@ -65,12 +71,16 @@ __all__ = [
     "RunScheduleOutput",
     "RustSpan",
     "Saturate",
+    "Scan",
     "Schema",
     "Sequence",
     "SerializedEGraph",
     "Set",
+    "SingleScan",
     "Sort",
     "SrcFile",
+    "StageInfo",
+    "StageStats",
     "String",
     "SubVariants",
     "Subsume",
@@ -78,6 +88,7 @@ __all__ = [
     "TermDag",
     "TermLit",
     "TermVar",
+    "TimeOnly",
     "Union",
     "Unit",
     "UnstableCombinedRuleset",
@@ -87,6 +98,7 @@ __all__ = [
     "Value",
     "Var",
     "Variant",
+    "WithPlan",
 ]
 
 @final
@@ -118,6 +130,7 @@ class EGraph:
         max_calls_per_function: int | None = None,
         include_temporary_functions: bool = False,
     ) -> SerializedEGraph: ...
+    def set_report_level(self, level: _ReportLevel) -> None: ...
     def lookup_function(self, name: str, key: list[Value]) -> Value | None: ...
     def eval_expr(self, expr: _Expr) -> tuple[str, Value]: ...
     def value_to_i64(self, v: Value) -> int: ...
@@ -390,11 +403,98 @@ class IdentSort:
 class UserDefinedCommandOutput: ...
 
 @final
+class SingleScan:
+    atom: str
+    column: tuple[str, int]
+
+    def __new__(cls, atom: str, column: tuple[str, int]) -> SingleScan: ...
+
+@final
+class Scan:
+    atom: str
+    columns: list[tuple[str, int]]
+
+    def __new__(cls, atom: str, columns: list[tuple[str, int]]) -> Scan: ...
+
+@final
+class StageStats:
+    num_candidates: int
+    num_succeeded: int
+
+    def __new__(cls, num_candidates: int, num_succeeded: int) -> StageStats: ...
+
+@final
+class TimeOnly:
+    def __new__(cls) -> TimeOnly: ...
+
+@final
+class WithPlan:
+    def __new__(cls) -> WithPlan: ...
+
+@final
+class StageInfo:
+    def __new__(cls) -> StageInfo: ...
+
+_ReportLevel: TypeAlias = TimeOnly | WithPlan | StageInfo
+
+@final
+class Intersect:
+    scans: list[SingleScan]
+
+    def __new__(cls, scans: list[SingleScan]) -> Intersect: ...
+
+@final
+class FusedIntersect:
+    cover: Scan
+    to_intersect: list[Scan]
+
+    def __new__(cls, cover: Scan, to_intersect: list[Scan]) -> FusedIntersect: ...
+
+_Stage: TypeAlias = Intersect | FusedIntersect
+
+@final
+class Plan:
+    stages: list[tuple[_Stage, StageStats | None, list[int]]]
+
+    def __new__(cls, stages: list[tuple[_Stage, StageStats | None, list[int]]]) -> Plan: ...
+
+@final
+class RuleReport:
+    plan: Plan | None
+    search_and_apply_time: timedelta
+    num_matches: int
+
+    def __new__(cls, plan: Plan | None, search_and_apply_time: timedelta, num_matches: int) -> RuleReport: ...
+
+@final
+class RuleSetReport:
+    changed: bool
+    rule_reports: dict[str, list[RuleReport]]
+    search_and_apply_time: timedelta
+    merge_time: timedelta
+
+    def __new__(
+        cls,
+        changed: bool,
+        rule_reports: dict[str, list[RuleReport]],
+        search_and_apply_time: timedelta,
+        merge_time: timedelta,
+    ) -> RuleSetReport: ...
+
+@final
+class IterationReport:
+    rule_set_report: RuleSetReport
+    rebuild_time: timedelta
+
+    def __new__(cls, rule_set_report: RuleSetReport, rebuild_time: timedelta) -> IterationReport: ...
+
+@final
 class Function:
     name: str
 
 @final
 class RunReport:
+    iterations: list[IterationReport]
     updated: bool
     search_and_apply_time_per_rule: dict[str, timedelta]
     num_matches_per_rule: dict[str, int]
@@ -404,6 +504,7 @@ class RunReport:
 
     def __new__(
         cls,
+        iterations: list[IterationReport],
         updated: bool,
         search_and_apply_time_per_rule: dict[str, timedelta],
         num_matches_per_rule: dict[str, int],
@@ -688,7 +789,11 @@ class Constructor:
     def __new__(cls, span: _Span, name: str, schema: Schema, cost: int | None, unextractable: bool) -> Constructor: ...
 
 @final
-class PrintOverallStatistics: ...
+class PrintOverallStatistics:
+    span: _Span
+    file: str | None
+
+    def __new__(cls, span: _Span, file: str | None) -> PrintOverallStatistics: ...
 
 @final
 class UserDefined:
