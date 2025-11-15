@@ -13,12 +13,12 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.27", features = ["extension-module", "num-bigint", "num-rational"] }
 num-bigint = "*"
 num-rational = "*"
-egglog = { git = "https://github.com/egraphs-good/egglog.git", branch = "main", default-features = false }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
-egglog-core-relations = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-fn-bug", default-features = false }
+egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-fn-bug" }
+egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-fn-bug" }
 egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", branch = "main", default-features = false }
-egglog-ast = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
-egglog-reports = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-fn-bug" }
+egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-fn-bug" }
 egraph-serialize = { version = "0.3", features = ["serde", "graphviz"] }
 serde_json = "1"
 pyo3-log =  "*"
@@ -31,10 +31,11 @@ base64 = "0.22.1"
 
 # Use patched version of egglog in experimental
 [patch.'https://github.com/egraphs-good/egglog']
-# egglog = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
-# egglog-bridge = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
-# egglog-core-relations = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
-# egglog-ast = { git = "https://github.com/egraphs-good/egglog.git", branch = "main" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-fn-bug" }
+egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-fn-bug" }
+egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-fn-bug" }
+egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-fn-bug" }
+egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-fn-bug" }
 
 # enable debug symbols for easier profiling
 [profile.release]
