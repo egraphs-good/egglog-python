@@ -367,6 +367,8 @@ class BaseExpr(metaclass=_ExprMetaclass):
         Replace the current expression with the new expression in place.
         """
 
+    def __hash__(self) -> int: ...  # type: ignore[empty-body]
+
 
 class BuiltinExpr(BaseExpr, metaclass=_ExprMetaclass):
     """
@@ -1933,9 +1935,6 @@ def seq(*schedules: Schedule) -> Schedule:
     return Schedule(Thunk.fn(Declarations.create, *schedules), SequenceDecl(tuple(s.schedule for s in schedules)))
 
 
-ActionLike: TypeAlias = Action | BaseExpr
-
-
 def _action_likes(action_likes: Iterable[ActionLike]) -> tuple[Action, ...]:
     return tuple(map(_action_like, action_likes))
 
@@ -1943,12 +1942,24 @@ def _action_likes(action_likes: Iterable[ActionLike]) -> tuple[Action, ...]:
 def _action_like(action_like: ActionLike) -> Action:
     if isinstance(action_like, Action):
         return action_like
+    if isinstance(action_like, Fact):
+        match action_like.fact:
+            case EqDecl(tp, left, right):
+                return Action(
+                    action_like.__egg_decls__,
+                    UnionDecl(tp, left, right),
+                )
+            case ExprFactDecl(expr):
+                return Action(
+                    action_like.__egg_decls__,
+                    ExprActionDecl(expr),
+                )
+            case _:
+                assert_never(action_like.fact)
     return expr_action(action_like)
 
 
 Command: TypeAlias = Action | RewriteOrRule
-
-CommandLike: TypeAlias = ActionLike | RewriteOrRule
 
 
 def _command_like(command_like: CommandLike) -> Command:
@@ -1976,6 +1987,8 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
 
 
 FactLike = Fact | BaseExpr
+ActionLike: TypeAlias = Action | BaseExpr | Fact
+CommandLike: TypeAlias = ActionLike | RewriteOrRule
 
 
 def _fact_likes(fact_likes: Iterable[FactLike]) -> tuple[Fact, ...]:

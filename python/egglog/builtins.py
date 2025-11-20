@@ -39,6 +39,7 @@ __all__ = [
     "Map",
     "MapLike",
     "MultiSet",
+    "MultiSetLike",
     "Primitive",
     "PyObject",
     "Rational",
@@ -581,6 +582,17 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
 
     @method(egg_fn="unstable-multiset-map", reverse_args=True)
     def map(self, f: Callable[[T], T]) -> MultiSet[T]: ...
+
+
+converter(
+    tuple,
+    MultiSet,
+    lambda t: MultiSet[get_type_args()[0]](  # type: ignore[misc,operator]
+        *(convert(x, get_type_args()[0]) for x in t)
+    ),
+)
+
+MultiSetLike: TypeAlias = MultiSet[T] | tuple[TO, ...]
 
 
 class Rational(BuiltinExpr, egg_sort="Rational"):
