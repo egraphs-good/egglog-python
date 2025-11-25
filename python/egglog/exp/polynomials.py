@@ -137,8 +137,6 @@ res = (
 
 # 1. Convert to polynomial(MultiSet[MultiSet[Number]])
 
-MultiSet[MultiSet[Number]]
-
 
 n1 = constant("n1", Number)
 n2 = constant("n2", Number)
@@ -191,17 +189,8 @@ def to_polynomial(
     mss1: MultiSet[MultiSet[Number]],
     mss2: MultiSet[MultiSet[Number]],
 ):
-    yield rule(
-        n3 == n1 - n2,
-        name="subtract",
-    ).then(
-        union(n3).with_(polynomial(MultiSet(MultiSet(n1), MultiSet(n2, Number(-1))))),
-        set_(get_sole_polynomial(MultiSet(n3))).to(MultiSet(MultiSet(n1), MultiSet(n2, Number(-1)))),
-        subsume(n1 - n2),
-        # MultiSet(n1).fill_index(ms_index),
-        # MultiSet(n2, Number(-1)).fill_index(ms_index),
-        # MultiSet(MultiSet(n1), MultiSet(n2, Number(-1))).fill_index(mss_index),
-    )
+    yield rewrite(-n1, subsume=True).to(-1 * n1)
+    yield rewrite(n1 - n2, subsume=True).to(n1 + (-1 * n2))
     yield rule(
         n3 == n1 + n2,
         name="add",
