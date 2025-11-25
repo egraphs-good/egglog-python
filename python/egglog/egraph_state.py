@@ -449,9 +449,10 @@ class EGraphState:
             self.type_ref_to_egg(signature.semantic_return_type.to_just()),
         )
 
-    def type_ref_to_egg(self, ref: JustTypeRef) -> str:  # noqa: C901, PLR0912
+    def type_ref_to_egg(self, ref: JustTypeRef) -> str:
         """
-        Returns the egg sort name for a type reference, registering it if it is not already registered.
+        Returns the egg sort name for a type reference, registering it not already registered, and also recursively
+        any type args are registered.
         """
         try:
             return self.type_ref_to_egg_sort[ref]
@@ -476,18 +477,6 @@ class EGraphState:
                         bindings.Var(span(), self.type_ref_to_egg(ref.args[0])),
                     ]
                 else:
-                    # If any of methods have another type ref in them process all those first with substituted vars
-                    # so that things like multiset - mapp will be added. Function type must be added first.
-                    # Find all args of all methods and find any with type args themselves that are not this type and add them
-                    tcs = TypeConstraintSolver(self.__egg_decls__)
-                    tcs.bind_class(ref)
-                    for method in decl.methods.values():
-                        if not isinstance((signature := method.signature), FunctionSignature):
-                            continue
-                        for arg_tp in signature.arg_types:
-                            if isinstance(arg_tp, TypeRefWithVars) and arg_tp.args and arg_tp.ident != ref.ident:
-                                self.type_ref_to_egg(tcs.substitute_typevars(arg_tp, ref.ident))
-
                     type_args = [bindings.Var(span(), self.type_ref_to_egg(a)) for a in ref.args]
                 args = (self.type_ref_to_egg(JustTypeRef(ref.ident)), type_args)
             else:
@@ -964,7 +953,7 @@ class FromEggState:
                     args,
                     # Don't include bound type params if this is just a method, we only needed them for type resolution
                     # but dont need to store them
-                    bound_tp_params if isinstance(callable_ref, ClassMethodRef | InitRef) else (),
+                    bound_tp_params if isinstance(callable_ref, ClassMethodRef | InitRef) and not args else (),
                 )
         raise ValueError(
             f"Could not find callable ref for call {term}. None of these refs matched the types: {self.state.egg_fn_to_callable_refs[term.name]}"

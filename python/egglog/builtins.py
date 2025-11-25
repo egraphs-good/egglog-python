@@ -583,6 +583,12 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     @method(egg_fn="unstable-multiset-map", reverse_args=True)
     def map(self, f: Callable[[T], T]) -> MultiSet[T]: ...
 
+    @method(egg_fn="unstable-multiset-fill-index")
+    def fill_index(self, f: Callable[[MultiSet[T], T], i64]) -> Unit: ...
+
+    @method(egg_fn="unstable-multiset-clear-index")
+    def clear_index(self, f: Callable[[MultiSet[T], T], i64]) -> Unit: ...
+
 
 converter(
     tuple,
