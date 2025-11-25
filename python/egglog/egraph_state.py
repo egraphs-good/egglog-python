@@ -606,6 +606,9 @@ class EGraphState:
             case ValueDecl():
                 msg = "Cannot turn a Value into an expression"
                 raise ValueError(msg)
+            case DummyDecl():
+                msg = "Cannot turn a DummyDecl into an expression"
+                raise ValueError(msg)
             case _:
                 assert_never(expr_decl.expr)
         self.expr_to_egg_cache[expr_decl] = res

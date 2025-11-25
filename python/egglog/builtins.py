@@ -56,6 +56,7 @@ __all__ = [
     "i64",
     "i64Like",
     "join",
+    "multiset_flat_map",
     "py_eval",
     "py_eval_fn",
     "py_exec",
@@ -588,6 +589,11 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
 
     @method(egg_fn="unstable-multiset-clear-index")
     def clear_index(self, f: Callable[[MultiSet[T], T], i64]) -> Unit: ...
+
+
+# TODO: Move to method when partial suppors reverse_args
+@function(egg_fn="unstable-multiset-flat-map", builtin=True)
+def multiset_flat_map(f: Callable[[T], MultiSet[T]], xs: MultiSet[T]) -> MultiSet[T]: ...
 
 
 converter(

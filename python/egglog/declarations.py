@@ -53,6 +53,7 @@ __all__ = [
     "DeclerationsLike",
     "DefaultRewriteDecl",
     "DelayedDeclerations",
+    "DummyDecl",
     "EqDecl",
     "ExprActionDecl",
     "ExprDecl",
@@ -621,6 +622,11 @@ class UnboundVarDecl:
 
 
 @dataclass(frozen=True)
+class DummyDecl:
+    pass
+
+
+@dataclass(frozen=True)
 class LetRefDecl:
     name: str
 
@@ -729,7 +735,15 @@ class ValueDecl:
 
 
 ExprDecl: TypeAlias = (
-    UnboundVarDecl | LetRefDecl | LitDecl | CallDecl | PyObjectDecl | PartialCallDecl | ValueDecl | GetCostDecl
+    DummyDecl
+    | UnboundVarDecl
+    | LetRefDecl
+    | LitDecl
+    | CallDecl
+    | PyObjectDecl
+    | PartialCallDecl
+    | ValueDecl
+    | GetCostDecl
 )
 
 

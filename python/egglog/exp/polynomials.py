@@ -1,6 +1,7 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
+from functools import partial
 from typing import TypeAlias
 
 from egglog import *
@@ -148,6 +149,24 @@ n3 = constant("n3", Number)
 def monomial(x: MultiSetLike[Number, NumberLike]) -> Number: ...
 
 
+@function(merge=lambda old, new: new)
+def get_monomial(x: Number) -> MultiSet[Number]:
+    """
+    Only defined on monomials:
+
+        get_monomial(monomial(xs)) => xs
+    """
+
+
+@function(merge=lambda old, new: new)
+def get_sole_polynomial(xs: MultiSet[Number]) -> MultiSet[MultiSet[Number]]:
+    """
+    Only defined on monomials that contain a single polynomial:
+
+        get_sole_polynomial(MultiSet(polynomial(xs))) => xs
+    """
+
+
 @function
 def polynomial(x: MultiSetLike[MultiSet[Number], MultiSetLike[Number, NumberLike]]) -> Number: ...
 
@@ -177,60 +196,57 @@ def to_polynomial(
         name="subtract",
     ).then(
         union(n3).with_(polynomial(MultiSet(MultiSet(n1), MultiSet(n2, Number(-1))))),
+        set_(get_sole_polynomial(MultiSet(n3))).to(MultiSet(MultiSet(n1), MultiSet(n2, Number(-1)))),
         subsume(n1 - n2),
-        MultiSet(n1).fill_index(ms_index),
-        MultiSet(n2, Number(-1)).fill_index(ms_index),
-        MultiSet(MultiSet(n1), MultiSet(n2, Number(-1))).fill_index(mss_index),
+        # MultiSet(n1).fill_index(ms_index),
+        # MultiSet(n2, Number(-1)).fill_index(ms_index),
+        # MultiSet(MultiSet(n1), MultiSet(n2, Number(-1))).fill_index(mss_index),
     )
     yield rule(
         n3 == n1 + n2,
         name="add",
     ).then(
         union(n3).with_(polynomial(MultiSet(MultiSet(n1), MultiSet(n2)))),
+        set_(get_sole_polynomial(MultiSet(n3))).to(MultiSet(MultiSet(n1), MultiSet(n2))),
         subsume(n1 + n2),
-        MultiSet(MultiSet(n1), MultiSet(n2)).fill_index(mss_index),
-        MultiSet(n1).fill_index(ms_index),
-        MultiSet(n2).fill_index(ms_index),
+        # MultiSet(MultiSet(n1), MultiSet(n2)).fill_index(mss_index),
+        # MultiSet(n1).fill_index(ms_index),
+        # MultiSet(n2).fill_index(ms_index),
     )
     yield rule(
         n3 == n1 * n2,
         name="mul",
     ).then(
         union(n3).with_(monomial(MultiSet(n1, n2))),
+        set_(get_monomial(n3)).to(MultiSet(n1, n2)),
         subsume(n1 * n2),
-        monomial(MultiSet(n1, n2)),
-        MultiSet(n1, n2).fill_index(ms_index),
+        # MultiSet(n1, n2).fill_index(ms_index),
     )
     yield rule(
         n1 == polynomial(mss),
-        mss_index(mss, ms),
-        ms_index(ms, monomial(ms1)),
-        ms2 == ms.remove(monomial(ms1)) + ms1,
-        mss1 == mss.remove(ms).insert(ms2),
+        mss1 == mss.map(partial(multiset_flat_map, UnstableFn(get_monomial))),
+        mss != mss1,
         name="unwrap monomial",
     ).then(
         union(n1).with_(polynomial(mss1)),
         subsume(polynomial(mss)),
-        mss.clear_index(mss_index),
-        # ms.clear_index(ms_index),
-        ms2.fill_index(ms_index),
-        mss1.fill_index(mss_index),
+        set_(get_sole_polynomial(MultiSet(n1))).to(mss1),
+        # mss.clear_index(mss_index),
+        # mss1.fill_index(mss_index),
     )
-    # If polynomial inside polynomial, unwrap
     yield rule(
         n1 == polynomial(mss),
-        mss_index(mss, ms),
-        ms_index(ms, polynomial(mss1)),
-        ms2 == ms.remove(polynomial(mss1)),
-        mss2 == mss.remove(ms).insert(ms2) + mss1,
+        mss1 == multiset_flat_map(UnstableFn(get_sole_polynomial), mss),
+        mss != mss1,
         name="unwrap polynomial",
     ).then(
-        union(n1).with_(polynomial(mss2)),
+        union(n1).with_(polynomial(mss1)),
         subsume(polynomial(mss)),
-        mss.clear_index(mss_index),
+        set_(get_sole_polynomial(MultiSet(n1))).to(mss1),
+        # mss.clear_index(mss_index),
         # ms.clear_index(ms_index),
-        ms2.fill_index(ms_index),
-        mss2.fill_index(mss_index),
+        # ms2.fill_index(ms_index),
+        # mss2.fill_index(mss_index),
     )
 
 
@@ -239,35 +255,37 @@ def to_polynomial(
 #     MultiSet(_MultiSet_1, MultiSet(-bp4, bpp1, q12, q2), MultiSet(bp1, bpp4, q12, q2), MultiSet(bp4, bpp1, q11, q3))
 # ) - monomial(MultiSet(q3, monomial(MultiSet(q11, monomial(MultiSet(bp1, bpp4))))))
 
-res = (
-    -bp4 * bpp1 * q12 * q2 + bp1 * bpp4 * q12 * q2 + bp4 * bpp1 * q11 * q3
-    # - bp1 * bpp4 * q11 * q3
-    # - bp4 * bpp2 * q12 * q5
-    # + bp2 * bpp4 * q12 * q5
-    # + bp2 * bpp1 * q3 * q5
-    # - bp1 * bpp2 * q3 * q5
-    # + bp4 * bpp2 * q11 * q6
-    # - bp2 * bpp4 * q11 * q6
-    #     - bp2 * bpp1 * q2 * q6
-    #     + bp1 * bpp2 * q2 * q6
-    #     - bp4 * bpp3 * q12 * q8
-    #     + bp3 * bpp4 * q12 * q8
-    #     + bp3 * bpp1 * q3 * q8
-    #     - bp1 * bpp3 * q3 * q8
-    #     + bp3 * bpp2 * q6 * q8
-    #     - bp2 * bpp3 * q6 * q8
-    #     + bp4 * bpp3 * q11 * q9
-    #     - bp3 * bpp4 * q11 * q9
-    #     - bp3 * bpp1 * q2 * q9
-    #     + bp1 * bpp3 * q2 * q9
-    #     - bp3 * bpp2 * q5 * q9
-    #     + bp2 * bpp3 * q5 * q9
-)
+# res = (
+#     -bp4 * bpp1 * q12 * q2
+#     + bp1 * bpp4 * q12 * q2
+#     + bp4 * bpp1 * q11 * q3
+#     - bp1 * bpp4 * q11 * q3
+#     - bp4 * bpp2 * q12 * q5
+#     + bp2 * bpp4 * q12 * q5
+#     + bp2 * bpp1 * q3 * q5
+#     - bp1 * bpp2 * q3 * q5
+#     + bp4 * bpp2 * q11 * q6
+#     - bp2 * bpp4 * q11 * q6
+#         - bp2 * bpp1 * q2 * q6
+#         + bp1 * bpp2 * q2 * q6
+#         - bp4 * bpp3 * q12 * q8
+#         + bp3 * bpp4 * q12 * q8
+#         + bp3 * bpp1 * q3 * q8
+#         - bp1 * bpp3 * q3 * q8
+#         + bp3 * bpp2 * q6 * q8
+#         - bp2 * bpp3 * q6 * q8
+#         + bp4 * bpp3 * q11 * q9
+#         - bp3 * bpp4 * q11 * q9
+#         - bp3 * bpp1 * q2 * q9
+#         + bp1 * bpp3 * q2 * q9
+#         - bp3 * bpp2 * q5 * q9
+#         + bp2 * bpp3 * q5 * q9
+# )
 egraph = EGraph()
 print("Registering")
 egraph.register(res)
 print("Running")
-print(egraph.run(to_polynomial.saturate()))
+egraph.run(to_polynomial.saturate())
 print("Extracting")
 # egraph.display(n_inline_leaves=1)
 finished = egraph.extract(res)

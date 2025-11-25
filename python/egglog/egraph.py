@@ -660,6 +660,8 @@ def _fn_decl(
             doc=doc,
         )
     decls.set_function_decl(ref, decl)
+    if is_builtin:
+        return lambda: None
     return Thunk.fn(
         _add_default_rewrite_function,
         decls,

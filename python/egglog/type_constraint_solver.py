@@ -107,5 +107,5 @@ class TypeConstraintSolver:
                 except KeyError as e:
                     raise TypeConstraintError(f"Not enough bound typevars for {tp!r} in class {cls_ident}") from e
             case TypeRefWithVars(name, args):
-                return JustTypeRef(name, tuple(self.substitute_typevars(arg, cls_ident) for arg in args))
+                return JustTypeRef(name, tuple(self.substitute_typevars(arg, cls_ident or name) for arg in args))
         assert_never(tp)

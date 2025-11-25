@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ALWAYS_MUTATES_SELF",
     "ALWAYS_PRESERVED",
+    "DUMMY_VALUE",
     "LIT_IDENTS",
     "NUMERIC_BINARY_METHODS",
     "RuntimeClass",
@@ -309,6 +310,7 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
             call = (res_typed_expr := res.__egg_typed_expr__).expr
             return_tp = res_typed_expr.tp
             assert isinstance(call, CallDecl), "partial function must be a call"
+            # Clip off the remaining arguments
             n_args = len(partial_args)
             value = PartialCallDecl(replace(call, args=call.args[:n_args]))
             remaining_arg_types = [a.tp for a in call.args[n_args:]]
@@ -532,7 +534,8 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
         try:
             bound = py_signature.bind(*args, **kwargs)
         except TypeError as err:
-            raise TypeError(f"Failed to bind arguments for {self} with args {args} and kwargs {kwargs}: {err}") from err
+            err.add_note(f"when calling {self} with args {args} and kwargs {kwargs}")
+            raise
         del kwargs
         bound.apply_defaults()
         assert not bound.kwargs
@@ -598,12 +601,16 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
         return None
 
 
+# sentinel that will be upcasted to any type with a DummyDecl value
+DUMMY_VALUE = object()
+
+
 def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: bool) -> Signature:
     """
     Convert to a Python signature.
 
     If optional_args is true, then all args will be treated as optional, as if a default was provided that makes them
-    a var with that arg name as the value.
+    `DUMMY_VALUE`
 
     Used for partial application to try binding a function with only some of its args.
     """
@@ -611,9 +618,9 @@ def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: 
         Parameter(
             n,
             Parameter.POSITIONAL_OR_KEYWORD,
-            default=RuntimeExpr.__from_values__(decls, TypedExprDecl(t.to_just(), d or LetRefDecl(n)))
-            if d is not None or optional_args
-            else Parameter.empty,
+            default=RuntimeExpr.__from_values__(decls, TypedExprDecl(t.to_just(), d))
+            if d is not None
+            else (DUMMY_VALUE if optional_args else Parameter.empty),
         )
         for n, d, t in zip(sig.arg_names, sig.arg_defaults, sig.arg_types, strict=True)
     ]

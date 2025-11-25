@@ -243,7 +243,7 @@ def resolve_literal(
                 tp_just = tcs.substitute_typevars(tp, cls_ident)
             # If we can't resolve the type var yet, then just assume it is the right value
             except TypeConstraintError:
-                assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
+                assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {type(arg)}"
                 tp_just = arg.__egg_typed_expr__.tp
         else:
             # If this is a var, it has to be a runtime expession
@@ -255,6 +255,8 @@ def resolve_literal(
         # If the type is an egg type, it has to be a runtime expr
         assert isinstance(arg, RuntimeExpr)
         return arg
+    if arg is DUMMY_VALUE:
+        return RuntimeExpr.__from_values__(decls(), TypedExprDecl(tp_just, DummyDecl()))
     if (conversion := _lookup_conversion(arg_type, tp_just)) is not None:
         with with_type_args(tp_just.args, decls):
             return conversion[1](arg)

@@ -221,6 +221,8 @@ class TraverseContext:
                 self(schedule)
             case GetCostDecl(ref, args):
                 self(CallDecl(ref, args))
+            case DummyDecl():
+                pass
             case _:
                 assert_never(decl)
 
@@ -373,6 +375,8 @@ class PrettyContext:
                 return f"back_off({', '.join(list_args)})", "scheduler"
             case ValueDecl(value):
                 return str(value), "value"
+            case DummyDecl():
+                return "__InternalDummyValueShouldNotBeSeenOpenAnIssue()", "dummy"
             case GetCostDecl(ref, args):
                 return f"get_cost({self(CallDecl(ref, args))})", "get_cost"
         assert_never(decl)
