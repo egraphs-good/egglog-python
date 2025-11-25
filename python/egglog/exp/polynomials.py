@@ -169,25 +169,26 @@ def get_sole_polynomial(xs: MultiSet[Number]) -> MultiSet[MultiSet[Number]]:
 def polynomial(x: MultiSetLike[MultiSet[Number], MultiSetLike[Number, NumberLike]]) -> Number: ...
 
 
-@function(merge=i64.__add__)
-def ms_index(xs: MultiSet[Number], x: Number) -> i64: ...
+# TODO: simplify MultiSet(bp3, polynomial(MultiSet(MultiSet(q7, _Number_6))))
+# @function(merge=i64.__add__)
+# def ms_index(xs: MultiSet[Number], x: Number) -> i64: ...
 
 
-@function(merge=i64.__add__)
-def mss_index(xss: MultiSet[MultiSet[Number]], xs: MultiSet[Number]) -> i64: ...
+# @function(merge=i64.__add__)
+# def mss_index(xss: MultiSet[MultiSet[Number]], xs: MultiSet[Number]) -> i64: ...
 
 
 @ruleset
-def to_polynomial(
+def to_polynomial_ruleset(
     n1: Number,
     n2: Number,
     n3: Number,
-    ms: MultiSet[Number],
-    ms1: MultiSet[Number],
-    ms2: MultiSet[Number],
+    # ms: MultiSet[Number],
+    # ms1: MultiSet[Number],
+    # ms2: MultiSet[Number],
     mss: MultiSet[MultiSet[Number]],
     mss1: MultiSet[MultiSet[Number]],
-    mss2: MultiSet[MultiSet[Number]],
+    # mss2: MultiSet[MultiSet[Number]],
 ):
     yield rewrite(-n1, subsume=True).to(-1 * n1)
     yield rewrite(n1 - n2, subsume=True).to(n1 + (-1 * n2))
@@ -239,6 +240,31 @@ def to_polynomial(
     )
 
 
+@ruleset
+def factor_ruleset(
+    n: Number,
+    mss: MultiSet[MultiSet[Number]],
+    counts: MultiSet[Number],
+    factor: Number,
+    divided: MultiSet[MultiSet[Number]],
+    remainder: MultiSet[MultiSet[Number]],
+):
+    yield rule(
+        n == polynomial(mss),
+        # TODO: Could replace with to_set and them from _sets
+        counts == MultiSet.sum_multisets(mss.map(MultiSet[Number].reset_counts)),
+        factor == counts.pick_max(),
+        # Only factor out if it term appears in more than one monomial
+        counts.count(factor) > 1,
+        divided == mss.map(partial(multiset_remove_swapped, factor)),
+        remainder == mss.filter(partial(multiset_not_contains_swapped, factor)),
+        name="factor",
+    ).then(
+        union(n).with_(polynomial(MultiSet(MultiSet(factor, polynomial(divided))) + remainder)),
+        subsume(polynomial(mss)),
+    )
+
+
 # _MultiSet_1 = MultiSet[Number]()
 # res = polynomial(
 #     MultiSet(_MultiSet_1, MultiSet(-bp4, bpp1, q12, q2), MultiSet(bp1, bpp4, q12, q2), MultiSet(bp4, bpp1, q11, q3))
@@ -274,9 +300,27 @@ egraph = EGraph()
 print("Registering")
 egraph.register(res)
 print("Running")
-egraph.run(to_polynomial.saturate())
+egraph.run(to_polynomial_ruleset.saturate())
 print("Extracting")
 # egraph.display(n_inline_leaves=1)
 finished = egraph.extract(res)
 print("printing")
 print(finished)
+print("factoring")
+egraph.run(factor_ruleset.saturate())
+print("extracting factored")
+finished_factored = egraph.extract(finished)
+print("printing factored")
+print(finished_factored)
+# egraph.run(to_polynomial_ruleset.saturate())
+# print("extracting fully simplified")
+# finished_simplified = egraph.extract(finished_factored)
+# print("printing fully simplified")
+# print(finished_simplified)
+
+MultiSet(
+    bpp2,
+    polynomial(
+        MultiSet(MultiSet(q4, polynomial(MultiSet(MultiSet(bp4, q11), MultiSet(bp1, q2))))),
+    ),
+)

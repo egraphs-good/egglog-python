@@ -57,6 +57,8 @@ __all__ = [
     "i64Like",
     "join",
     "multiset_flat_map",
+    "multiset_not_contains_swapped",
+    "multiset_remove_swapped",
     "py_eval",
     "py_eval_fn",
     "py_exec",
@@ -560,6 +562,10 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     @method(egg_fn="multiset-of")
     def __init__(self, *args: T) -> None: ...
 
+    @method(egg_fn="multiset-sum-multisets")
+    @classmethod
+    def sum_multisets(cls, xs: MultiSet[MultiSet[T]]) -> MultiSet[T]: ...
+
     @method(egg_fn="multiset-insert")
     def insert(self, value: T) -> MultiSet[T]: ...
 
@@ -590,10 +596,30 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     @method(egg_fn="unstable-multiset-clear-index")
     def clear_index(self, f: Callable[[MultiSet[T], T], i64]) -> Unit: ...
 
+    @method(egg_fn="multiset-pick-max")
+    def pick_max(self) -> T: ...
+
+    @method(egg_fn="multiset-count")
+    def count(self, value: T) -> i64: ...
+
+    @method(egg_fn="unstable-multiset-filter", reverse_args=True)
+    def filter(self, f: Callable[[T], Unit]) -> MultiSet[T]: ...
+
+    @method(egg_fn="multiset-reset-counts")
+    def reset_counts(self) -> MultiSet[T]: ...
+
 
 # TODO: Move to method when partial suppors reverse_args
 @function(egg_fn="unstable-multiset-flat-map", builtin=True)
 def multiset_flat_map(f: Callable[[T], MultiSet[T]], xs: MultiSet[T]) -> MultiSet[T]: ...
+
+
+@function(egg_fn="multiset-remove-swapped", builtin=True)
+def multiset_remove_swapped(x: T, xs: MultiSet[T]) -> MultiSet[T]: ...
+
+
+@function(egg_fn="multiset-not-contains-swapped", builtin=True)
+def multiset_not_contains_swapped(x: T, xs: MultiSet[T]) -> Unit: ...
 
 
 converter(
@@ -1124,9 +1150,9 @@ class UnstableFn(BuiltinExpr, Generic[T, *TS], egg_sort="UnstableFn"):
 
 
 # Method Type is for builtins like __getitem__
-converter(MethodType, UnstableFn, lambda m: UnstableFn(m.__func__, m.__self__))
-converter(RuntimeFunction, UnstableFn, UnstableFn)
-converter(partial, UnstableFn, lambda p: UnstableFn(p.func, *p.args))
+converter(MethodType, UnstableFn, lambda m: UnstableFn[*get_type_args()](m.__func__, m.__self__))
+converter(RuntimeFunction, UnstableFn, lambda rf: UnstableFn[*get_type_args()](rf))
+converter(partial, UnstableFn, lambda p: UnstableFn[*get_type_args()](p.func, *p.args))
 
 
 def _convert_function(fn: FunctionType) -> UnstableFn:

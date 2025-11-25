@@ -303,7 +303,7 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
             # Assumes we don't have types set for UnstableFn w/ generics, that they have to be inferred
 
             # 1. Call it with the partial args, and use untyped vars for the rest of the args
-            res = cast("Callable", fn_arg)(*partial_args, _egg_partial_function=True)
+            res = cast("Callable", fn_arg)(*partial_args, _egg_function_types=self.__egg_tp__.args)
             assert res is not None, "Mutable partial functions not supported"
             # 2. Use the inferred return type and inferred rest arg types as the types of the function, and
             #    the partially applied args as the args.
@@ -406,9 +406,15 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
             )
         # allow referencing properties and methods as class variables as well
         if name in cls_decl.properties:
-            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(PropertyRef(self.__egg_tp__.ident, name)))
+            return RuntimeFunction(
+                self.__egg_decls_thunk__,
+                Thunk.value(PropertyRef(self.__egg_tp__.ident, name)),
+                self.__egg_tp__.to_just(),
+            )
         if name in cls_decl.methods:
-            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(self.__egg_tp__.ident, name)))
+            return RuntimeFunction(
+                self.__egg_decls_thunk__, Thunk.value(MethodRef(self.__egg_tp__.ident, name)), self.__egg_tp__.to_just()
+            )
 
         msg = f"Class {self.__egg_tp__.ident} has no method {name}"
         raise AttributeError(msg) from None
@@ -497,7 +503,9 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
     def __egg_ref__(self) -> CallableRef:
         return self.__egg_ref_thunk__()
 
-    def __call__(self, *args: object, _egg_partial_function: bool = False, **kwargs: object) -> RuntimeExpr | None:
+    def __call__(  # noqa: C901
+        self, *args: object, _egg_function_types: tuple[TypeOrVarRef, ...] | None = None, **kwargs: object
+    ) -> RuntimeExpr | None:
         from .conversion import resolve_literal  # noqa: PLC0415
 
         if isinstance(self.__egg_bound__, RuntimeExpr):
@@ -530,7 +538,7 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
             assert isinstance(signature, FunctionSignature)
 
         # Turn all keyword args into positional args
-        py_signature = to_py_signature(signature, self.__egg_decls__, _egg_partial_function)
+        py_signature = to_py_signature(signature, self.__egg_decls__, optional_args=_egg_function_types is not None)
         try:
             bound = py_signature.bind(*args, **kwargs)
         except TypeError as err:
@@ -557,7 +565,18 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
         ):
             tcs.bind_class(bound_tp)
         assert (operator.ge if signature.var_arg_type else operator.eq)(len(args), len(signature.arg_types))
+        # Hack to allow being explicit on function types when casting. # noqa: FIX004
+        # TODO: Replace type analysis class binding stuff
+        # with instead binders of location per call origination
         cls_ident = bound_tp.ident if bound_tp else None
+        for _fn_tp in _egg_function_types or ():
+            try:
+                _fn_tp_just = _fn_tp.to_just()
+            except TypeVarError:
+                continue
+            tcs.bind_class(_fn_tp_just)
+            if _fn_tp_just.args:
+                cls_ident = _fn_tp_just.ident
         upcasted_args = [
             resolve_literal(cast("TypeOrVarRef", tp), arg, Thunk.value(decls), tcs=tcs, cls_ident=cls_ident)
             for arg, tp in zip_longest(args, signature.arg_types, fillvalue=signature.var_arg_type)
