@@ -198,7 +198,7 @@ def to_polynomial_ruleset(
     ).then(
         union(n3).with_(polynomial(MultiSet(MultiSet(n1), MultiSet(n2)))),
         set_(get_sole_polynomial(MultiSet(n3))).to(MultiSet(MultiSet(n1), MultiSet(n2))),
-        subsume(n1 + n2),
+        delete(n1 + n2),
         # MultiSet(MultiSet(n1), MultiSet(n2)).fill_index(mss_index),
         # MultiSet(n1).fill_index(ms_index),
         # MultiSet(n2).fill_index(ms_index),
@@ -209,17 +209,17 @@ def to_polynomial_ruleset(
     ).then(
         union(n3).with_(monomial(MultiSet(n1, n2))),
         set_(get_monomial(n3)).to(MultiSet(n1, n2)),
-        subsume(n1 * n2),
+        delete(n1 * n2),
         # MultiSet(n1, n2).fill_index(ms_index),
     )
     yield rule(
         n1 == polynomial(mss),
-        mss1 == mss.map(partial(multiset_flat_map, UnstableFn(get_monomial))),
+        mss1 == mss.map(partial(multiset_flat_map, get_monomial)),
         mss != mss1,
         name="unwrap monomial",
     ).then(
         union(n1).with_(polynomial(mss1)),
-        subsume(polynomial(mss)),
+        delete(polynomial(mss)),
         set_(get_sole_polynomial(MultiSet(n1))).to(mss1),
         # mss.clear_index(mss_index),
         # mss1.fill_index(mss_index),
@@ -231,7 +231,7 @@ def to_polynomial_ruleset(
         name="unwrap polynomial",
     ).then(
         union(n1).with_(polynomial(mss1)),
-        subsume(polynomial(mss)),
+        delete(polynomial(mss)),
         set_(get_sole_polynomial(MultiSet(n1))).to(mss1),
         # mss.clear_index(mss_index),
         # ms.clear_index(ms_index),
@@ -251,18 +251,93 @@ def factor_ruleset(
 ):
     yield rule(
         n == polynomial(mss),
-        # TODO: Could replace with to_set and them from _sets
+        # Find factor that shows up in most monomials, at least two of them
         counts == MultiSet.sum_multisets(mss.map(MultiSet[Number].reset_counts)),
         factor == counts.pick_max(),
         # Only factor out if it term appears in more than one monomial
         counts.count(factor) > 1,
+        # map, including only those factor that contain the factor, removing them from that
+        # other items are omitted from the map
         divided == mss.map(partial(multiset_remove_swapped, factor)),
+        # remainder is those monomials that do not contain the factor
         remainder == mss.filter(partial(multiset_not_contains_swapped, factor)),
         name="factor",
     ).then(
         union(n).with_(polynomial(MultiSet(MultiSet(factor, polynomial(divided))) + remainder)),
+        delete(polynomial(mss)),
+    )
+
+
+@function(merge=lambda old, new: new)
+def get_polynomial_sole_monomial(x: Number) -> MultiSet[Number]:
+    """
+    Only defined on polynomials that contain a single monomial:
+
+        get_polynomial_sole_monomial(polynomial(MultiSet(xs))) => xs
+    """
+
+
+@ruleset
+def simplified_factor_ruleset(
+    n: Number,
+    mss: MultiSet[MultiSet[Number]],
+    mss1: MultiSet[MultiSet[Number]],
+    ms: MultiSet[Number],
+):
+    # replace all monomial with polyomials with one monomial with just monomials
+
+    # a = polynomial(
+    #     MultiSet(
+    #         MultiSet(bp1, bpp4, q12, q1),
+    #         MultiSet(q7, polynomial(MultiSet(MultiSet(bp3, _Number_10)))),
+    #         MultiSet(q9, polynomial(MultiSet(MultiSet(bpp3, _Number_8)))),
+    #     )
+    # )
+    # replace_with = polynomial(
+    #     MultiSet(
+    #         MultiSet(bp1, bpp4, q12, q1),
+    #         MultiSet(q7, bp3, _Number_10),
+    #         MultiSet(q9, bpp3, _Number_8),
+    #     )
+    # )
+
+    yield rule(
+        n == polynomial(mss),
+        mss.length() == i64(1),
+        ms == mss.pick(),
+        name="set polynomial sole monomial",
+    ).then(
+        set_(get_polynomial_sole_monomial(n)).to(ms),
+    )
+    yield rule(
+        n == polynomial(mss),
+        mss1 == mss.map(partial(multiset_flat_map, get_polynomial_sole_monomial)),
+        mss != mss1,
+        name="unwrap polynomial sole monomial",
+    ).then(
+        union(n).with_(polynomial(mss1)),
         subsume(polynomial(mss)),
     )
+
+
+# _Number_8 = polynomial(MultiSet(MultiSet(bp1, q1), MultiSet(bp4, q10), MultiSet(bp2, q4)))
+# _Number_10 = polynomial(MultiSet(MultiSet(bpp4, q12), MultiSet(bpp1, q3), MultiSet(bpp2, q6)))
+
+# a = polynomial(
+#     MultiSet(
+#         MultiSet(bp1, bpp4, q12, q1),
+#         MultiSet(q7, polynomial(MultiSet(MultiSet(bp3, _Number_10)))),
+#         MultiSet(q9, polynomial(MultiSet(MultiSet(bpp3, _Number_8)))),
+#     )
+# )
+# replace_with = polynomial(
+#     MultiSet(
+#         MultiSet(bp1, bpp4, q12, q1),
+#         MultiSet(q7, bp3, _Number_10),
+#         MultiSet(q9, bpp3, _Number_8),
+#     )
+# )
+# map then flatmap of get polynomial
 
 
 # _MultiSet_1 = MultiSet[Number]()
@@ -296,31 +371,36 @@ def factor_ruleset(
 #         - bp3 * bpp2 * q5 * q9
 #         + bp2 * bpp3 * q5 * q9
 # )
-egraph = EGraph()
-print("Registering")
-egraph.register(res)
+
+from pathlib import Path
+
+INITIAL_STR = "from egglog.exp.polynomials import *\n\n"
+
+print("saving initial expression to initial.py")
+Path("initial.py").write_text(INITIAL_STR + str(res))
+
+egraph = EGraph(save_egglog_string=True)
+res = egraph.let("res", res)
 print("Running")
 egraph.run(to_polynomial_ruleset.saturate())
 print("Extracting")
-# egraph.display(n_inline_leaves=1)
 finished = egraph.extract(res)
-print("printing")
-print(finished)
+print("saving polynomial expression to polynomial.py")
+Path("polynomial.py").write_text(INITIAL_STR + str(finished))
+
+
 print("factoring")
 egraph.run(factor_ruleset.saturate())
 print("extracting factored")
-finished_factored = egraph.extract(finished)
-print("printing factored")
-print(finished_factored)
-# egraph.run(to_polynomial_ruleset.saturate())
-# print("extracting fully simplified")
-# finished_simplified = egraph.extract(finished_factored)
-# print("printing fully simplified")
-# print(finished_simplified)
+finished_factored = egraph.extract(res)
+print("saving factored expression to factored.py")
+Path("factored.py").write_text(INITIAL_STR + str(finished_factored))
 
-MultiSet(
-    bpp2,
-    polynomial(
-        MultiSet(MultiSet(q4, polynomial(MultiSet(MultiSet(bp4, q11), MultiSet(bp1, q2))))),
-    ),
-)
+# print("simplifying factored")
+# egraph.run(simplified_factor_ruleset.saturate())
+# print("extracting simplified factored")
+# finished_simplified = egraph.extract(res)
+# print("saving simplified factored expression to simplified_factored.py")
+# Path("simplified_factored.py").write_text(INITIAL_STR + str(finished_simplified))
+
+Path("polynomials.egg").write_text(egraph.get_egglog_string)
