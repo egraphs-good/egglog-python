@@ -282,4 +282,5 @@ members = ["egglog"]
 [dependency-groups]
 dev = [
     "py-spy>=0.4.1",
+    "sympy>=1.14.0",
 ]
