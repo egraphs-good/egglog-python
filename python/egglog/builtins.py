@@ -1022,6 +1022,9 @@ class PyObject(BuiltinExpr, egg_sort="PyObject"):
     @method(egg_fn="py-to-bool")
     def to_bool(self) -> Bool: ...
 
+    @method(egg_fn="py-to-int")
+    def to_int(self) -> i64: ...
+
     @method(egg_fn="py-dict-update")
     def dict_update(self, *keys_and_values: object) -> PyObject: ...
 
