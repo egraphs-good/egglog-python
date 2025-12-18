@@ -229,6 +229,9 @@ class TestPyObject:
     def test_to_string(self):
         EGraph().check(PyObject("foo").to_string() == String("foo"))
 
+    def test_to_int(self):
+        EGraph().check(PyObject(42).to_int() == i64(42))
+
     def test_dict_update(self):
         original_d = {"foo": "bar"}
         res = EGraph().extract(PyObject(original_d).dict_update("foo", "baz")).value
