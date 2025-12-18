@@ -170,6 +170,15 @@ impl BaseSort for PyObjectSort {
                 }
             }
         );
+        // (py-to-int <obj>)
+        add_primitive!(
+            eg,
+            "py-to-int" = |x: PyPickledValue| -?> i64 {
+                {
+                    attach("py-to-int", move |py| load(py, &x)?.extract())
+                }
+            }
+        );
         // (py-from-string <str>)
         add_primitive!(
             eg,
