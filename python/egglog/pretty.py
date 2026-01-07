@@ -26,7 +26,7 @@ __all__ = [
 ]
 MAX_LINE_LENGTH = 110
 LINE_DIFFERENCE = 10
-BLACK_MODE = black.Mode(line_length=180)
+BLACK_MODE = black.Mode(line_length=88)
 
 # Use this special character in place of the args, so that if the args are inlined
 # in the viz, they will replace it
