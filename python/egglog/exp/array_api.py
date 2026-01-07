@@ -520,6 +520,15 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         indices = cast("TupleInt", indices)
         return TupleInt.range(self.length()).filter(lambda i: ~indices.contains(i)).map(lambda i: self[i])
 
+    def reverse(self) -> TupleInt:
+        return TupleInt(self.length(), lambda i: self[self.length() - i - 1])
+
+    def last(self) -> Int:
+        return self[self.length() - 1]
+
+    def drop_last(self) -> TupleInt:
+        return TupleInt(self.length() - 1, self.__getitem__)
+
 
 converter(Vec[Int], TupleInt, lambda x: TupleInt.from_vec(x))
 
@@ -1282,6 +1291,8 @@ def _ndarray(
         # if_
         rewrite(NDArray.if_(TRUE, x, x1)).to(x),
         rewrite(NDArray.if_(FALSE, x, x1)).to(x1),
+        # convert to scalar
+        rewrite(NDArray(TupleInt.EMPTY, dtype, idx_fn)).to(NDArray.scalar(idx_fn(TupleInt.EMPTY))),
     ]
 
 
@@ -1646,6 +1657,49 @@ def real(x: NDArray) -> NDArray: ...
 def conj(x: NDArray) -> NDArray: ...
 
 
+class IntOrPairTupleInts(Expr):
+    """
+    Either an integer or a pair of tuple of integers.
+
+    Used for the TensorDot axes argument.
+    """
+
+    @classmethod
+    def int(cls, value: IntLike) -> IntOrPairTupleInts: ...
+
+    @classmethod
+    def pair(cls, left: TupleIntLike, right: TupleIntLike) -> IntOrPairTupleInts: ...
+
+
+converter(Int, IntOrPairTupleInts, IntOrPairTupleInts.int)
+converter(
+    tuple, IntOrPairTupleInts, lambda x: IntOrPairTupleInts.pair(convert(x[0], TupleInt), convert(x[1], TupleInt))
+)
+
+
+@function
+def tensordot(x1: NDArrayLike, x2: NDArrayLike, axes: IntOrPairTupleInts) -> NDArray:
+    """
+    https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.tensordot.html
+    """
+
+
+@function
+def vector_norm(x: NDArrayLike) -> NDArray:
+    """
+    https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.vector_norm.html
+    TODO: support axis
+    """
+
+
+@function
+def cross(a: NDArrayLike, b: NDArrayLike) -> NDArray:
+    """
+    https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.cross.html
+    TODO: support axis
+    """
+
+
 linalg = sys.modules[__name__]
 
 
@@ -1976,7 +2030,73 @@ def array_api_vec_to_cons_ruleset(
     )
 
 
-array_api_combined_ruleset = array_api_ruleset | array_api_vec_to_cons_ruleset
+@function(ruleset=array_api_ruleset)
+def ravel_index(index: TupleIntLike, shape: TupleIntLike) -> Int:
+    """
+    Convert a multi-dimensional index to a flat index.
+
+    https://numpy.org/doc/stable/reference/generated/numpy.ravel_multi_index.html#numpy.ravel_multi_index
+
+    >>> int(ravel_index((3, 4), (7, 6)))
+    22
+    >>> int(ravel_index((6, 5), (7, 6)))
+    41
+    >>> int(ravel_index((6, 1), (7, 6)))
+    37
+    >>> int(ravel_index((3, 1, 4, 1), (6, 7, 8, 9)))
+    1621
+    """
+    index = cast("TupleInt", index)
+    shape = cast("TupleInt", shape)
+
+    return TupleInt.range(shape.length()).foldl(lambda res, i: res * shape[i] + index[i], Int(0))
+
+
+@function(ruleset=array_api_ruleset)
+def unravel_index(flat_index: IntLike, shape: TupleIntLike) -> TupleInt:
+    """
+    Convert a flat index to a multi-dimensional index.
+
+    https://numpy.org/doc/stable/reference/generated/numpy.unravel_index.html
+
+    >>> tuple(map(int, unravel_index(22, (7, 6))))
+    (3, 4)
+    >>> tuple(map(int, unravel_index(41, (7, 6))))
+    (6, 5)
+    >>> tuple(map(int, unravel_index(37, (7, 6))))
+    (6, 1)
+    >>> tuple(map(int, unravel_index(1621, (6, 7, 8, 9))))
+    (3, 1, 4, 1)
+    """
+    shape = cast("TupleInt", shape)
+
+    return (
+        shape.reverse()
+        .foldl_tuple_int(
+            # Store remainder as last item in accumulator
+            lambda acc, dim: acc.drop_last().append((r := acc.last()) % dim).append(r // dim),
+            TupleInt.EMPTY.append(flat_index),
+        )
+        .drop_last()
+        .reverse()
+    )
+
+
+@ruleset
+def array_api_functional_ruleset(
+    old_shape: TupleInt,
+    shape: TupleInt,
+    ob: OptionalBool,
+    dtype: DType,
+    idx_fn: Callable[[TupleInt], Value],
+):
+    # TODO: Support -1 in shape like numpy does
+    yield rewrite(reshape(NDArray(old_shape, dtype, idx_fn), shape, ob)).to(
+        NDArray(shape, dtype, lambda idx: idx_fn(unravel_index(ravel_index(idx, shape), old_shape)))
+    )
+
+
+array_api_combined_ruleset = array_api_ruleset | array_api_vec_to_cons_ruleset | array_api_functional_ruleset
 array_api_schedule = array_api_combined_ruleset.saturate()
 
 _CURRENT_EGRAPH: None | EGraph = None

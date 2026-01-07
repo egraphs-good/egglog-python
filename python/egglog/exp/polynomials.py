@@ -1,3 +1,11 @@
+# # Optimizing Polynomials
+#
+# This post explore a few different ways of optimizing polynomials in Egglog. This is mean to see if we can
+# represent addition and multiplication through built in multiset data structures in egglog if this can help
+# avoid some of the issues with associtativity/commutativity blowup.
+
+# +
+# First we can define a generic number type
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
@@ -21,6 +29,9 @@ class Number(Expr, egg_sort="Number"):
     def __pow__(self, power: NumberLike) -> Number: ...
     def __neg__(self) -> Number: ...
 
+
+# Then we can define a large polynomial, based on output from a paper on simulating cloths
+# -
 
 NumberLike: TypeAlias = Number | i64Like
 converter(i64, Number, Number)
@@ -133,6 +144,8 @@ res = (
     + (bp4 * q11 + bp1 * q2 + bp2 * q5 + bp3 * q8) ** 2
     + (bp4 * q12 + bp1 * q3 + bp2 * q6 + bp3 * q9) ** 2
 ) ** 3
+
+# -
 
 print("saving initial expression to initial.py")
 INITIAL_STR = "from egglog.exp.polynomials import *\n\n"
