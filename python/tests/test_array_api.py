@@ -389,7 +389,8 @@ if __name__ == "__main__":
     print("Generating egglog source for test")
     egraph, _, _, program = function_to_program(lda, True)
     egraph.register(program.compile())
-    try_evaling(egraph, array_api_program_gen_combined_ruleset.saturate(), program, program.statements)
+    egraph.run(array_api_program_gen_combined_ruleset.saturate())
+    egraph.extract(program.statements)
     name = "python.egg"
     print("Saving to", name)
     Path(name).write_text(egraph.as_egglog_string)

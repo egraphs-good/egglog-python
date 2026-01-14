@@ -345,9 +345,15 @@ class Float(Expr, ruleset=array_api_ruleset):
     @property
     def to_f64(self) -> f64: ...
 
+    @property
+    def to_big_rat(self) -> BigRat: ...
+
     @method(preserve=True)
     def eval(self) -> float:
-        return try_evaling(_get_current_egraph(), array_api_schedule, self, self.to_f64)
+        try:
+            return try_evaling(_get_current_egraph(), array_api_schedule, self, self.to_f64)
+        except EggSmolError:
+            return float(try_evaling(_get_current_egraph(), array_api_schedule, self, self.to_big_rat))
 
     def abs(self) -> Float: ...
 
@@ -388,6 +394,7 @@ FloatLike: TypeAlias = Float | float | IntLike
 def _float(fl: Float, f: f64, f2: f64, i: i64, r: BigRat, r1: BigRat, i_: Int):
     return [
         rule(eq(fl).to(Float(f))).then(set_(fl.to_f64).to(f)),
+        rule(eq(fl).to(Float.rational(r))).then(set_(fl.to_big_rat).to(r)),
         rewrite(Float.from_int(Int(i))).to(Float(f64.from_i64(i))),
         rewrite(Float(f).abs()).to(Float(f), f >= 0.0),
         rewrite(Float(f).abs()).to(Float(-f), f < 0.0),
@@ -505,6 +512,9 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
     def map_tuple_int(self, f: Callable[[Int], TupleInt]) -> TupleTupleInt:
         return TupleTupleInt(self.length(), lambda i: f(self[i]))
+
+    def map_value(self, f: Callable[[Int], Value]) -> TupleValue:
+        return TupleValue(self.length(), lambda i: f(self[i]))
 
     def select(self, indices: TupleIntLike) -> TupleInt:
         """
@@ -803,6 +813,7 @@ def _isdtype(d: DType, k1: IsDtypeKind, k2: IsDtypeKind):
 class Value(Expr, ruleset=array_api_ruleset):
     NEVER: ClassVar[Value]
 
+    # TODO: Rename to avoid name conflicts
     @classmethod
     def int(cls, i: IntLike) -> Value: ...
 
@@ -814,13 +825,16 @@ class Value(Expr, ruleset=array_api_ruleset):
 
     def isfinite(self) -> Boolean: ...
 
-    def __lt__(self, other: ValueLike) -> Value: ...
+    def __lt__(self, other: ValueLike) -> Boolean: ...
+    def __le__(self, other: ValueLike) -> Boolean: ...
+    def __gt__(self, other: ValueLike) -> Boolean: ...
+    def __ge__(self, other: ValueLike) -> Boolean: ...
+    def __eq__(self, other: ValueLike) -> Boolean: ...  # type: ignore[override]
 
     def __truediv__(self, other: ValueLike) -> Value: ...
-
     def __mul__(self, other: ValueLike) -> Value: ...
-
     def __add__(self, other: ValueLike) -> Value: ...
+    def __sub__(self, other: ValueLike) -> Value: ...
 
     def astype(self, dtype: DType) -> Value: ...
 
@@ -839,6 +853,9 @@ class Value(Expr, ruleset=array_api_ruleset):
     def to_int(self) -> Int: ...
 
     @property
+    def to_float(self) -> Float: ...
+
+    @property
     def to_truthy_value(self) -> Value:
         """
         Converts the value to a bool, based on if its truthy.
@@ -853,7 +870,11 @@ class Value(Expr, ruleset=array_api_ruleset):
     @classmethod
     def if_(cls, b: BooleanLike, i: ValueLike, j: ValueLike) -> Value: ...
 
-    def __eq__(self, other: ValueLike) -> Boolean: ...  # type: ignore[override]
+    def __int__(self) -> int:  # type: ignore[valid-type]
+        return self.to_int.eval()
+
+    def __float__(self) -> float:  # type: ignore[valid-type]
+        return self.to_float.eval()
 
 
 ValueLike: TypeAlias = Value | IntLike | FloatLike | BooleanLike
@@ -875,6 +896,7 @@ def _value(i: Int, f: Float, b: Boolean, v: Value, v1: Value, i1: Int, f1: Float
 
     yield rewrite(Value.bool(b).to_bool).to(b)
     yield rewrite(Value.int(i).to_int).to(i)
+    yield rewrite(Value.float(f).to_float).to(f)
 
     yield rewrite(Value.bool(b).to_truthy_value).to(Value.bool(b))
     # TODO: Add more rules for to_bool_value
@@ -895,10 +917,35 @@ def _value(i: Int, f: Float, b: Boolean, v: Value, v1: Value, i1: Int, f1: Float
     yield rewrite(Value.int(i) == Value.int(i1)).to(i == i1)
     yield rewrite(Value.float(f) == Value.float(f1)).to(f == f1)
     yield rewrite(Value.bool(b) == Value.bool(b1)).to(b == b1)
+    # >=
+    yield rewrite(Value.int(i) >= Value.int(i1)).to(i >= i1)
+    yield rewrite(Value.float(f) >= Value.float(f1)).to(f >= f1)
+    # <=
+    yield rewrite(Value.int(i) <= Value.int(i1)).to(i <= i1)
+    yield rewrite(Value.float(f) <= Value.float(f1)).to(f <= f1)
+    # >
+    yield rewrite(Value.int(i) > Value.int(i1)).to(i > i1)
+    yield rewrite(Value.float(f) > Value.float(f1)).to(f > f1)
+    # <
+    yield rewrite(Value.int(i) < Value.int(i1)).to(i < i1)
+    yield rewrite(Value.float(f) < Value.float(f1)).to(f < f1)
+
+    # /
+    yield rewrite(Value.float(f) / Value.float(f1)).to(Value.float(f / f1))
+    # *
+    yield rewrite(Value.float(f) * Value.float(f1)).to(Value.float(f * f1))
+    yield rewrite(Value.int(i) * Value.int(i1)).to(Value.int(i * i1))
+    # +
+    yield rewrite(Value.float(f) + Value.float(f1)).to(Value.float(f + f1))
+    yield rewrite(Value.int(i) + Value.int(i1)).to(Value.int(i + i1))
+    # -
+    yield rewrite(Value.float(f) - Value.float(f1)).to(Value.float(f - f1))
+    yield rewrite(Value.int(i) - Value.int(i1)).to(Value.int(i - i1))
 
 
 class TupleValue(Expr, ruleset=array_api_ruleset):
     EMPTY: ClassVar[TupleValue]
+    NEVER: ClassVar[TupleValue]
 
     def __init__(self, length: IntLike, idx_fn: Callable[[Int], Value]) -> None: ...
 
@@ -916,9 +963,10 @@ class TupleValue(Expr, ruleset=array_api_ruleset):
 
     def length(self) -> Int: ...
 
-    def __getitem__(self, i: Int) -> Value: ...
+    def __getitem__(self, i: IntLike) -> Value: ...
 
     def foldl_boolean(self, f: Callable[[Boolean, Value], Boolean], init: BooleanLike) -> Boolean: ...
+    def foldl_value(self, f: Callable[[Value, Value], Value], init: ValueLike) -> Value: ...
 
     def contains(self, value: ValueLike) -> Boolean:
         value = cast("Value", value)
@@ -929,6 +977,9 @@ class TupleValue(Expr, ruleset=array_api_ruleset):
     def from_tuple_int(cls, ti: TupleIntLike) -> TupleValue:
         ti = cast("TupleInt", ti)
         return TupleValue(ti.length(), lambda i: Value.int(ti[i]))
+
+    @classmethod
+    def if_(cls, b: BooleanLike, i: TupleValueLike, j: TupleValueLike) -> TupleValue: ...
 
 
 converter(Vec[Value], TupleValue, lambda x: TupleValue.from_vec(x))
@@ -949,6 +1000,7 @@ def _tuple_value(
     tv: TupleValue,
     tv1: TupleValue,
     bool_f: Callable[[Boolean, Value], Boolean],
+    value_f: Callable[[Value, Value], Value],
     b: Boolean,
 ):
     yield rewrite(TupleValue(length, idx_fn).length()).to(length)
@@ -973,6 +1025,73 @@ def _tuple_value(
     # fold boolean
     yield rewrite(TupleValue.EMPTY.foldl_boolean(bool_f, b), subsume=True).to(b)
     yield rewrite(tv.append(v).foldl_boolean(bool_f, b), subsume=True).to(bool_f(tv.foldl_boolean(bool_f, b), v))
+
+    # fold value
+    yield rewrite(TupleValue.EMPTY.foldl_value(value_f, v), subsume=True).to(v)
+    yield rewrite(tv.append(v).foldl_value(value_f, v1), subsume=True).to(value_f(tv.foldl_value(value_f, v1), v))
+
+    # unify append
+    yield rule(eq(tv.append(v)).to(tv1.append(v1))).then(union(tv).with_(tv1), union(v).with_(v1))
+
+    # if
+    yield rewrite(TupleValue.if_(TRUE, tv, tv1), subsume=True).to(tv)
+    yield rewrite(TupleValue.if_(FALSE, tv, tv1), subsume=True).to(tv1)
+
+
+class TupleTupleValue(Expr, ruleset=array_api_ruleset):
+    EMPTY: ClassVar[TupleTupleValue]
+
+    def __init__(self, length: IntLike, idx_fn: Callable[[Int], TupleValue]) -> None: ...
+
+    def append(self, i: TupleValueLike) -> TupleTupleValue: ...
+
+    @classmethod
+    def from_vec(cls, vec: Vec[TupleValue]) -> TupleTupleValue: ...
+
+    def length(self) -> Int: ...
+
+    def __getitem__(self, i: IntLike) -> TupleValue: ...
+
+
+converter(tuple, TupleTupleValue, lambda x: TupleTupleValue.from_vec(Vec(*(convert(i, TupleValue) for i in x))))
+converter(list, TupleTupleValue, lambda x: TupleTupleValue.from_vec(Vec(*(convert(i, TupleValue) for i in x))))
+TupleTupleValueLike: TypeAlias = TupleTupleValue | list[TupleValueLike] | tuple[TupleValueLike, ...]
+
+
+@array_api_ruleset.register
+def _tuple_tuple_value(
+    length: Int,
+    idx_fn: Callable[[Int], TupleValue],
+    k: i64,
+    idx: Int,
+    vs: Vec[TupleValue],
+    v: TupleValue,
+    v1: TupleValue,
+    tv: TupleTupleValue,
+    tv1: TupleTupleValue,
+):
+    yield rewrite(TupleTupleValue(length, idx_fn).length()).to(length)
+    yield rewrite(TupleTupleValue(length, idx_fn)[idx]).to(idx_fn(check_index(idx, length)))
+
+    # cons access
+    yield rewrite(TupleTupleValue.EMPTY.length()).to(Int(0))
+    yield rewrite(TupleTupleValue.EMPTY[idx]).to(TupleValue.NEVER)
+    yield rewrite(tv.append(v).length()).to(tv.length() + 1)
+    yield rewrite(tv.append(v)[idx]).to(TupleValue.if_(idx == tv.length(), v, tv[idx]))
+
+    # functional to cons
+    yield rewrite(TupleTupleValue(0, idx_fn), subsume=True).to(TupleTupleValue.EMPTY)
+    yield rewrite(TupleTupleValue(Int(k), idx_fn), subsume=True).to(
+        TupleTupleValue(k - 1, idx_fn).append(idx_fn(Int(k - 1))), k > 0
+    )
+
+    # cons to vec
+    yield rewrite(TupleTupleValue.EMPTY).to(TupleTupleValue.from_vec(Vec[TupleValue]()))
+    yield rewrite(TupleTupleValue.from_vec(vs).append(v)).to(TupleTupleValue.from_vec(vs.append(Vec(v))))
+
+    # from_vec support? Not sure why this isn't there on other vecs and how to do this best, if should convert to cons or what...
+    yield rewrite(TupleTupleValue.from_vec(vs).length()).to(Int(vs.length()))
+    yield rewrite(TupleTupleValue.from_vec(vs)[Int(k)]).to(vs[k])
 
     # unify append
     yield rule(eq(tv.append(v)).to(tv1.append(v1))).then(union(tv).with_(tv1), union(v).with_(v1))
@@ -1094,6 +1213,18 @@ ALL_INDICES: TupleInt = constant("ALL_INDICES", TupleInt)
 
 
 class NDArray(Expr, ruleset=array_api_ruleset):
+    """
+    NDArray implementation following the Array API Standard.
+
+    >>> NDArray.vector((1, 2, 3)).eval()
+    (Value.int(Int(1)), Value.int(Int(2)), Value.int(Int(3)))
+    >>> NDArray.vector((1, 2, 3)).eval_numpy("int64")
+    array([1, 2, 3])
+    >>> NDArray.matrix(((1, 2), (3, 4))).eval_numpy("int64")
+    array([[1, 2],
+           [3, 4]])
+    """
+
     def __init__(self, shape: TupleIntLike, dtype: DType, idx_fn: Callable[[TupleInt], Value]) -> None: ...
 
     NEVER: ClassVar[NDArray]
@@ -1208,7 +1339,8 @@ class NDArray(Expr, ruleset=array_api_ruleset):
     def __ror__(self, other: NDArray) -> NDArray: ...
 
     @classmethod
-    def scalar(cls, value: Value) -> NDArray:
+    def scalar(cls, value: ValueLike) -> NDArray:
+        value = cast("Value", value)
         return NDArray(TupleInt.EMPTY, value.dtype, lambda _: value)
 
     def to_value(self) -> Value:
@@ -1228,7 +1360,18 @@ class NDArray(Expr, ruleset=array_api_ruleset):
         """
 
     @classmethod
-    def vector(cls, values: TupleValueLike) -> NDArray: ...
+    def vector(cls, values: TupleValueLike) -> NDArray:
+        values = cast("TupleValue", values)
+        return NDArray((values.length(),), values[0].dtype, lambda idx: values[idx[0]])
+
+    @classmethod
+    def matrix(cls, values: TupleTupleValueLike) -> NDArray:
+        values = cast("TupleTupleValue", values)
+        return NDArray(
+            (values.length(), values[0].length()),
+            values[0][0].dtype,
+            lambda idx: values[idx[0]][idx[1]],
+        )
 
     def index(self, indices: TupleIntLike) -> Value:
         """
@@ -1238,6 +1381,56 @@ class NDArray(Expr, ruleset=array_api_ruleset):
     @classmethod
     def if_(cls, b: BooleanLike, i: NDArrayLike, j: NDArrayLike) -> NDArray: ...
 
+    @method(preserve=True)
+    def eval_vecs(self) -> VecValuesRecursive:
+        """
+        Evals to a nested Vec of values representing the array. It will be extracted and simplified by the e-graph.
+        """
+        # Share an e-graph for the computation of shape and eval
+        egraph = _get_current_egraph()
+        with set_array_api_egraph(egraph):
+            shape = self.shape.eval()
+
+        def _inner_values(current_index: tuple[int, ...], remaining_dims: tuple[Int, ...]) -> VecValuesRecursive:
+            if not remaining_dims:
+                return self.index(current_index)
+            return Vec(*(_inner_values((*current_index, i), remaining_dims[1:]) for i in range(remaining_dims[0])))
+
+        res = _inner_values((), shape)
+        egraph.register(res)
+        egraph.run(array_api_schedule)
+        return egraph.extract(res)
+
+    @method(preserve=True)
+    def eval(self) -> PyTupleValuesRecursive:
+        """
+        Evals to a nested tuple of values representing the array.
+        """
+
+        def _to_tuple(v: VecValuesRecursive) -> PyTupleValuesRecursive:
+            if isinstance(v, Value):
+                return v
+            return tuple(_to_tuple(i) for i in v)
+
+        return _to_tuple(self.eval_vecs())
+
+    @method(preserve=True)
+    def eval_numpy(self, dtype: np.dtype | None = None) -> np.ndarray:
+        """
+        Evals to a numpy ndarray.
+        """
+        return np.array(self.eval(), dtype=dtype)
+
+    @method(preserve=True)
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        if copy is False:
+            msg = "NDArray.__array__ with copy=False is not supported"
+            raise NotImplementedError(msg)
+        return self.eval_numpy(dtype=dtype)
+
+
+VecValuesRecursive: TypeAlias = "Value | Vec[VecValuesRecursive]"
+PyTupleValuesRecursive: TypeAlias = Value | tuple["PyTupleValuesRecursive", ...]
 
 NDArrayLike: TypeAlias = NDArray | ValueLike | TupleValueLike
 
@@ -1263,6 +1456,8 @@ def _ndarray(
     idx_fn: Callable[[TupleInt], Value],
     idx: TupleInt,
     tv: TupleValue,
+    v: Value,
+    v1: Value,
 ):
     return [
         rewrite(NDArray(shape, dtype, idx_fn).shape).to(shape),
@@ -1274,18 +1469,17 @@ def _ndarray(
         rewrite(x.to_value()).to(x.index(TupleInt.EMPTY)),
         rewrite(NDArray.vector(tv).to_values()).to(tv),
         # TODO: Push these down to float
-        rewrite(NDArray.scalar(Value.float(f)) / NDArray.scalar(Value.float(f))).to(
-            NDArray.scalar(Value.float(Float(1.0)))
-        ),
-        rewrite(NDArray.scalar(Value.float(f)) - NDArray.scalar(Value.float(f))).to(
-            NDArray.scalar(Value.float(Float(0.0)))
-        ),
-        rewrite(NDArray.scalar(Value.float(Float(fi1))) > NDArray.scalar(Value.float(Float(fi2)))).to(
-            NDArray.scalar(Value.bool(TRUE)), fi1 > fi2
-        ),
-        rewrite(NDArray.scalar(Value.float(Float(fi1))) > NDArray.scalar(Value.float(Float(fi2)))).to(
-            NDArray.scalar(Value.bool(FALSE)), fi1 <= fi2
-        ),
+        rewrite(NDArray.scalar(v) / NDArray.scalar(v)).to(NDArray.scalar(v / v)),
+        rewrite(NDArray.scalar(v) + NDArray.scalar(v)).to(NDArray.scalar(v + v)),
+        rewrite(NDArray.scalar(v) * NDArray.scalar(v)).to(NDArray.scalar(v * v)),
+        # -
+        rewrite(NDArray.scalar(v) - NDArray.scalar(v)).to(NDArray.scalar(v - v)),
+        # Comparisons
+        rewrite(NDArray.scalar(v) < NDArray.scalar(v1)).to(NDArray.scalar(v < v1)),
+        rewrite(NDArray.scalar(v) <= NDArray.scalar(v1)).to(NDArray.scalar(v <= v1)),
+        rewrite(NDArray.scalar(v) == NDArray.scalar(v1)).to(NDArray.scalar(v == v1)),
+        rewrite(NDArray.scalar(v) > NDArray.scalar(v1)).to(NDArray.scalar(v > v1)),
+        rewrite(NDArray.scalar(v) >= NDArray.scalar(v1)).to(NDArray.scalar(v >= v1)),
         # Transpose of tranpose is the original array
         rewrite(x.T.T).to(x),
         # if_
@@ -1657,31 +1851,29 @@ def real(x: NDArray) -> NDArray: ...
 def conj(x: NDArray) -> NDArray: ...
 
 
-class IntOrPairTupleInts(Expr):
+@function(ruleset=array_api_ruleset)
+def vecdot(x1: NDArrayLike, x2: NDArrayLike) -> NDArray:
     """
-    Either an integer or a pair of tuple of integers.
+    https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.vecdot.html
+    https://numpy.org/doc/stable/reference/generated/numpy.vecdot.html
 
-    Used for the TensorDot axes argument.
+    TODO: Support axis, complex numbers, and broadcasting
+
+    >>> v = NDArray.matrix([[0., 5., 0.], [0., 0., 10.], [0., 6., 8.]])
+    >>> n = NDArray.vector([0., 0.6, 0.8])
+    >>> vecdot(v, n).eval_numpy("float64")
+    array([ 3.,  8., 10.])
     """
+    x1 = cast("NDArray", x1)
+    x2 = cast("NDArray", x2)
 
-    @classmethod
-    def int(cls, value: IntLike) -> IntOrPairTupleInts: ...
-
-    @classmethod
-    def pair(cls, left: TupleIntLike, right: TupleIntLike) -> IntOrPairTupleInts: ...
-
-
-converter(Int, IntOrPairTupleInts, IntOrPairTupleInts.int)
-converter(
-    tuple, IntOrPairTupleInts, lambda x: IntOrPairTupleInts.pair(convert(x[0], TupleInt), convert(x[1], TupleInt))
-)
-
-
-@function
-def tensordot(x1: NDArrayLike, x2: NDArrayLike, axes: IntOrPairTupleInts) -> NDArray:
-    """
-    https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.tensordot.html
-    """
+    return NDArray(
+        x1.shape.drop_last(),
+        x1.dtype,
+        lambda idx: TupleInt.range(x1.shape.last())
+        .map_value(lambda i: x1.index(idx.append(i)) * x2.index(idx.append(i)))
+        .foldl_value(Value.__add__, Value.float(0)),
+    )
 
 
 @function
@@ -1798,7 +1990,7 @@ def _interval_analaysis(
             NDArray.scalar(Value.bool(possible_values(x.index(ALL_INDICES).to_truthy_value).contains(Value.bool(TRUE))))
         ),
         # Indexing x < y is the same as broadcasting the index and then indexing both and then comparing
-        rewrite((x < y).index(idx)).to(x_value < y_value),
+        rewrite((x < y).index(idx)).to(Value.bool(x_value < y_value)),
         # Same for x / y
         rewrite((x / y).index(idx)).to(x_value / y_value),
         # Indexing a scalar is the same as the scalar
@@ -1832,7 +2024,7 @@ def _interval_analaysis(
         # Define v < 0 to be false, if greater_zero(v)
         rule(
             greater_zero(v),
-            eq(v1).to(v < Value.int(Int(0))),
+            eq(v1).to(Value.bool(v < Value.int(Int(0)))),
         ).then(
             union(v1).with_(Value.bool(FALSE)),
         ),
