@@ -35,7 +35,7 @@ def test_duplicate_pyobjects_same_class_instance():
 
     # Define a simple class in the test module (acts like __main__)
     class MyClass:
-        def __init__(self, value):
+        def __init__(self, value) -> None:
             self.value = value
 
         def __eq__(self, other):
@@ -51,15 +51,15 @@ def test_duplicate_pyobjects_same_class_instance():
     pickled2 = cloudpickle.dumps(obj)
 
     # Report on pickle determinism
-    print(f"\nCloudpickle determinism check:")
+    print("\nCloudpickle determinism check:")
     print(f"  First pickle length: {len(pickled1)}")
     print(f"  Second pickle length: {len(pickled2)}")
     print(f"  Bytes are identical: {pickled1 == pickled2}")
 
     if pickled1 != pickled2:
-        print(f"  ⚠ Cloudpickle produced DIFFERENT bytes for the same object!")
+        print("  ⚠ Cloudpickle produced DIFFERENT bytes for the same object!")
     else:
-        print(f"  ✓ Cloudpickle is deterministic in this case")
+        print("  ✓ Cloudpickle is deterministic in this case")
 
     # Create PyObject expressions from the same object instance multiple times
     # In an ideal world, these should be recognized as equal
@@ -74,7 +74,7 @@ def test_duplicate_pyobjects_same_class_instance():
         egraph.check(eq(py_obj1).to(py_obj2))
         print("  ✓ E-graph correctly identifies objects as equal")
     except Exception as e:
-        print(f"  ✗ E-graph treats objects as DIFFERENT - duplicates detected!")
+        print("  ✗ E-graph treats objects as DIFFERENT - duplicates detected!")
         print(f"  Error: {e}")
         pytest.fail(
             f"Duplicate PyObject nodes detected for the same Python object.\n"
@@ -91,7 +91,7 @@ def test_duplicate_pyobjects_nested_class():
 
     class OuterClass:
         class InnerClass:
-            def __init__(self, x):
+            def __init__(self, x) -> None:
                 self.x = x
 
     egraph = EGraph()
@@ -109,7 +109,7 @@ def test_duplicate_pyobjects_nested_class():
         egraph.check(eq(py_obj1).to(py_obj2))
         print("✓ Nested objects are equal - no duplicates")
     except Exception as e:
-        print(f"✗ Nested objects are NOT equal - duplicates detected!")
+        print("✗ Nested objects are NOT equal - duplicates detected!")
         pytest.fail(f"Duplicate PyObject nodes for nested class: {e}")
 
 
@@ -122,6 +122,7 @@ def test_pyobject_with_closure():
     def make_adder(x):
         def adder(y):
             return x + y
+
         return adder
 
     egraph = EGraph()
@@ -138,7 +139,7 @@ def test_pyobject_with_closure():
         egraph.check(eq(py_fn1).to(py_fn2))
         print("✓ Closures are equal - no duplicates")
     except Exception as e:
-        print(f"✗ Closures are NOT equal - duplicates detected!")
+        print("✗ Closures are NOT equal - duplicates detected!")
         pytest.fail(f"Duplicate PyObject nodes for closure: {e}")
 
 
