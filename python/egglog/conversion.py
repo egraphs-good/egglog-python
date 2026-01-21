@@ -232,7 +232,7 @@ def resolve_literal(
     """
     arg_type = resolve_type(arg)
 
-    # If we have any type variables, dont bother trying to resolve the literal, just return the arg
+    # If we have any type variables, don't bother trying to resolve the literal, just return the arg
     try:
         tp_just = tp.to_just()
     except TypeVarError:

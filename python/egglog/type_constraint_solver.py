@@ -1,4 +1,12 @@
-"""Provides a class for solving type constraints."""
+"""
+Provides a class for solving type constraints.
+
+
+Usages:
+
+When trying to resolve a literal to a value
+
+"""
 
 from __future__ import annotations
 

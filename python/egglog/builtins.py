@@ -57,6 +57,7 @@ __all__ = [
     "i64Like",
     "join",
     "multiset_flat_map",
+    "multiset_fold",
     "multiset_not_contains_swapped",
     "multiset_remove_swapped",
     "py_eval",
@@ -284,8 +285,11 @@ class i64(BuiltinExpr, egg_sort="i64"):  # noqa: N801
     @method(egg_fn="bool->=")
     def bool_ge(self, other: i64Like) -> Bool: ...
 
+    @method(egg_fn="abs")
+    def __abs__(self) -> i64: ...
 
-# The types which can be convertered into an i64
+
+# The types which can be converted into an i64
 i64Like: TypeAlias = i64 | int  # noqa: N816, PYI042
 
 converter(int, i64, i64)
@@ -350,6 +354,9 @@ class f64(BuiltinExpr, egg_sort="f64"):  # noqa: N801
     def __rtruediv__(self, other: f64Like) -> f64: ...
 
     def __rmod__(self, other: f64Like) -> f64: ...
+
+    @method(egg_fn="abs")
+    def __abs__(self) -> f64: ...
 
     @method(egg_fn="<")
     def __lt__(self, other: f64Like) -> Unit:  # type: ignore[has-type]
@@ -588,7 +595,7 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     def __add__(self, other: MultiSet[T]) -> MultiSet[T]: ...
 
     @method(egg_fn="unstable-multiset-map", reverse_args=True)
-    def map(self, f: Callable[[T], T]) -> MultiSet[T]: ...
+    def map(self, f: Callable[[T], V]) -> MultiSet[V]: ...
 
     @method(egg_fn="unstable-multiset-fill-index")
     def fill_index(self, f: Callable[[MultiSet[T], T], i64]) -> Unit: ...
@@ -609,7 +616,7 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     def reset_counts(self) -> MultiSet[T]: ...
 
 
-# TODO: Move to method when partial suppors reverse_args
+# TODO: Move to method when partial supports reverse_args
 @function(egg_fn="unstable-multiset-flat-map", builtin=True)
 def multiset_flat_map(f: Callable[[T], MultiSet[T]], xs: MultiSet[T]) -> MultiSet[T]: ...
 
@@ -620,6 +627,10 @@ def multiset_remove_swapped(x: T, xs: MultiSet[T]) -> MultiSet[T]: ...
 
 @function(egg_fn="multiset-not-contains-swapped", builtin=True)
 def multiset_not_contains_swapped(x: T, xs: MultiSet[T]) -> Unit: ...
+
+
+@function(egg_fn="multiset-fold", builtin=True)
+def multiset_fold(f: Callable[[T, T], T], initial: T, xs: MultiSet[T]) -> T: ...
 
 
 converter(

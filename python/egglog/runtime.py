@@ -476,6 +476,7 @@ class RuntimeFunctionMeta(type):
 @dataclass
 class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
     __egg_ref_thunk__: Callable[[], CallableRef]
+    # Either they bound class for something like `Vec[Int].create` or a RuntimeExpr for bound methods
     # bound methods need to store RuntimeExpr not just TypedExprDecl, so they can mutate the expr if required on self
     __egg_bound__: JustTypeRef | RuntimeExpr | None = None
 
@@ -587,7 +588,7 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
         bound_params = (
             cast("JustTypeRef", bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef | InitRef) else ()
         )
-        # If we were using unstable-app to call a funciton, add that function back as the first arg.
+        # If we were using unstable-app to call a function, add that function back as the first arg.
         if function_value:
             arg_exprs = (function_value, *arg_exprs)
         expr_decl = CallDecl(self.__egg_ref__, arg_exprs, bound_params)

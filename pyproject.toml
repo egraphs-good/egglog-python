@@ -146,8 +146,6 @@ ignore = [
     "ANN201",
     # Allow uppercase args
     "N803",
-    # allow generic df name
-    "PD901",
     # Allow future anywhere in file
     "F404",
     # allow imports anywhere in cell
@@ -206,6 +204,8 @@ ignore = [
     "TC003",
     # allow eq without hash
     "PLW1641",
+    # allow non module file for docs
+    "INP001",
 ]
 select = ["ALL"]
 

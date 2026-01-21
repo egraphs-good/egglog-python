@@ -1,8 +1,8 @@
 # # Optimizing Polynomials
 #
 # This post explore a few different ways of optimizing polynomials in Egglog. This is mean to see if we can
-# represent addition and multiplication through built in multiset data structures in egglog if this can help
-# avoid some of the issues with associtativity/commutativity blowup.
+# represent addition and multiplication through built-in multiset data structures in egglog if this can help
+# avoid some of the issues with associativity/commutativity blowup.
 
 # +
 # First we can define a generic number type

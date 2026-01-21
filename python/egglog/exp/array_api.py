@@ -23,8 +23,8 @@ We also support creating lists from vectors. These can be converted one to one t
 
 It is troublesome to have to redefine lists for every type. It would be nice to have generic types, but they are not implemented yet.
 
-We are gauranteed that all lists with known lengths will be represented as cons/empty. To safely use lists, use
-the `.length` and `.__getitem__` methods, unles you want to to depend on it having known length, in which
+We are guaranteed that all lists with known lengths will be represented as cons/empty. To safely use lists, use
+the `.length` and `.__getitem__` methods, unless you want to depend on it having known length, in which
 case you can match directly on the cons list.
 
 To be a list, you must implement two methods:
@@ -41,7 +41,7 @@ There are three main types of constructors for lists which all implement these m
 Also all lists constructors must be converted to the functional representation, so that we can match on it
 and convert lists with known lengths into cons lists and into vectors.
 
-This is neccessary so that known length lists are properly materialized during extraction.
+This is necessary so that known length lists are properly materialized during extraction.
 
 Q: Why are they implemented as SNOC lists instead of CONS lists?
 A: So that when converting from functional to lists we can use the same index function by starting at the end and folding
@@ -62,6 +62,7 @@ import os
 import sys
 from collections.abc import Callable
 from copy import copy
+from functools import partial
 from types import EllipsisType
 from typing import TYPE_CHECKING, Any, ClassVar, TypeAlias, cast
 
@@ -149,6 +150,7 @@ class Int(Expr, ruleset=array_api_ruleset):
     def __lt__(self, other: IntLike) -> Boolean: ...
 
     def __le__(self, other: IntLike) -> Boolean: ...
+    def __abs__(self) -> Int: ...
 
     def __eq__(self, other: IntLike) -> Boolean:  # type: ignore[override]
         ...
@@ -287,6 +289,7 @@ def _int(i: i64, j: i64, r: Boolean, o: Int, b: Int):
     yield rewrite(Int(i) << Int(j)).to(Int(i << j))
     yield rewrite(Int(i) >> Int(j)).to(Int(i >> j))
     yield rewrite(~Int(i)).to(Int(~i))
+    yield rewrite(abs(Int(i))).to(Int(abs(i)))
 
     yield rewrite(Int.if_(TRUE, o, b), subsume=True).to(o)
     yield rewrite(Int.if_(FALSE, o, b), subsume=True).to(b)
@@ -371,6 +374,7 @@ class Float(Expr, ruleset=array_api_ruleset):
     def __add__(self, other: FloatLike) -> Float: ...
 
     def __sub__(self, other: FloatLike) -> Float: ...
+    def __abs__(self) -> Float: ...
 
     def __pow__(self, other: FloatLike) -> Float: ...
     def __round__(self, ndigits: OptionalIntLike = None) -> Float: ...
@@ -424,8 +428,8 @@ def _float(fl: Float, f: f64, f2: f64, i: i64, r: BigRat, r1: BigRat, i_: Int):
         rewrite(Float(f) < Float(f2)).to(TRUE, f < f2),
         rewrite(Float.rational(r) == Float.rational(r)).to(TRUE),
         rewrite(Float.rational(r) == Float.rational(r1)).to(FALSE, ne(r).to(r1)),
-        # round
         rewrite(Float.rational(r).__round__()).to(Float.rational(r.round())),
+        rewrite(abs(Float(f))).to(Float(abs(f))),
     ]
 
 
@@ -513,6 +517,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
     def map_tuple_int(self, f: Callable[[Int], TupleInt]) -> TupleTupleInt:
         return TupleTupleInt(self.length(), lambda i: f(self[i]))
 
+    @method(subsume=True)
     def map_value(self, f: Callable[[Int], Value]) -> TupleValue:
         return TupleValue(self.length(), lambda i: f(self[i]))
 
@@ -558,8 +563,14 @@ def _tuple_int(
     ti: TupleInt,
     ti2: TupleInt,
     k: i64,
+    vi: Vec[Int],
 ):
     return [
+        # TODO: Just remove tuple and instead use map on vec to materialize indices?
+        rewrite(TupleInt.from_vec(vi)).to(TupleInt.EMPTY, vi.length() == i64(0)),
+        rewrite(TupleInt.from_vec(vi)).to(
+            TupleInt.from_vec(vi.pop()).append(vi[vi.length() - 1]), vi.length() > i64(0)
+        ),
         rule(eq(ti).to(TupleInt.from_vec(vs))).then(set_(ti.to_vec).to(vs)),
         # Functional access
         rewrite(TupleInt(i, idx_fn).length()).to(i),
@@ -835,6 +846,9 @@ class Value(Expr, ruleset=array_api_ruleset):
     def __mul__(self, other: ValueLike) -> Value: ...
     def __add__(self, other: ValueLike) -> Value: ...
     def __sub__(self, other: ValueLike) -> Value: ...
+    def __pow__(self, other: ValueLike) -> Value: ...
+
+    def __abs__(self) -> Value: ...
 
     def astype(self, dtype: DType) -> Value: ...
 
@@ -887,7 +901,7 @@ converter(Value, Int, lambda x: x.to_int, 10)
 
 
 @array_api_ruleset.register
-def _value(i: Int, f: Float, b: Boolean, v: Value, v1: Value, i1: Int, f1: Float, b1: Boolean):
+def _value(i: Int, f: Float, b: Boolean, v: Value, v1: Value, v2: Value, i1: Int, f1: Float, b1: Boolean):
     # Default dtypes
     # https://data-apis.org/array-api/latest/API_specification/data_types.html?highlight=dtype#default-data-types
     yield rewrite(Value.int(i).dtype).to(DType.int64)
@@ -941,6 +955,24 @@ def _value(i: Int, f: Float, b: Boolean, v: Value, v1: Value, i1: Int, f1: Float
     # -
     yield rewrite(Value.float(f) - Value.float(f1)).to(Value.float(f - f1))
     yield rewrite(Value.int(i) - Value.int(i1)).to(Value.int(i - i1))
+    # **
+    yield rewrite(Value.float(f) ** Value.float(f1)).to(Value.float(f**f1))
+    yield rewrite(Value.int(i) ** Value.int(i1)).to(Value.int(i**i1))
+    yield rewrite(Value.int(i) ** Value.float(f1)).to(Value.float(Float.from_int(i) ** f1))
+
+    # abs
+    yield rewrite(abs(Value.int(i))).to(Value.int(abs(i)))
+    yield rewrite(abs(Value.float(f))).to(Value.float(abs(f)))
+    # abs(x) **2 = x**2
+    yield rewrite(abs(v) ** Value.float(Float.rational(BigRat(2, 1)))).to(v ** Value.float(2))
+
+    # ** distributes over division
+    yield rewrite((v1 / v) ** v2, subsume=True).to(v1**v2 / (v**v2))
+    # x ** y ** z = x ** (y * z)
+    yield rewrite((v**v1) ** v2, subsume=True).to(v ** (v1 * v2))
+    yield rewrite(Value.float(f) * Value.int(i)).to(Value.float(f * Float.from_int(i)))
+    yield rewrite(v ** Value.float(Float.rational(BigRat(1, 1)))).to(v)
+    yield rewrite(Value.float(Float.from_int(i))).to(Value.int(i))
 
 
 class TupleValue(Expr, ruleset=array_api_ruleset):
@@ -967,6 +999,8 @@ class TupleValue(Expr, ruleset=array_api_ruleset):
 
     def foldl_boolean(self, f: Callable[[Boolean, Value], Boolean], init: BooleanLike) -> Boolean: ...
     def foldl_value(self, f: Callable[[Value, Value], Value], init: ValueLike) -> Value: ...
+    def map_value(self, f: Callable[[Value], Value]) -> TupleValue:
+        return TupleValue(self.length(), lambda i: f(self[i]))
 
     def contains(self, value: ValueLike) -> Boolean:
         value = cast("Value", value)
@@ -1338,6 +1372,8 @@ class NDArray(Expr, ruleset=array_api_ruleset):
 
     def __ror__(self, other: NDArray) -> NDArray: ...
 
+    def __abs__(self) -> NDArray: ...
+
     @classmethod
     def scalar(cls, value: ValueLike) -> NDArray:
         value = cast("Value", value)
@@ -1358,6 +1394,12 @@ class NDArray(Expr, ruleset=array_api_ruleset):
         """
         https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.array.T.html#array_api.array.T
         """
+        # Only works on 2D arrays
+        return NDArray(
+            (self.shape[1], self.shape[0]),
+            self.dtype,
+            lambda idx: self.index((idx[1], idx[0])),
+        )
 
     @classmethod
     def vector(cls, values: TupleValueLike) -> NDArray:
@@ -1458,6 +1500,9 @@ def _ndarray(
     tv: TupleValue,
     v: Value,
     v1: Value,
+    l: Int,
+    vi: Vec[Int],
+    shape_idx_fn: Callable[[Int], Int],
 ):
     return [
         rewrite(NDArray(shape, dtype, idx_fn).shape).to(shape),
@@ -1468,6 +1513,10 @@ def _ndarray(
         # Converting to a value requires a scalar bool value
         rewrite(x.to_value()).to(x.index(TupleInt.EMPTY)),
         rewrite(NDArray.vector(tv).to_values()).to(tv),
+        rewrite(NDArray(TupleInt.from_vec(vi), dtype, idx_fn).to_values(), subsume=True).to(
+            TupleValue(vi[0], lambda i: idx_fn(TupleInt.EMPTY.append(i))),
+            vi.length() == i64(1),
+        ),
         # TODO: Push these down to float
         rewrite(NDArray.scalar(v) / NDArray.scalar(v)).to(NDArray.scalar(v / v)),
         rewrite(NDArray.scalar(v) + NDArray.scalar(v)).to(NDArray.scalar(v + v)),
@@ -1482,11 +1531,16 @@ def _ndarray(
         rewrite(NDArray.scalar(v) >= NDArray.scalar(v1)).to(NDArray.scalar(v >= v1)),
         # Transpose of tranpose is the original array
         rewrite(x.T.T).to(x),
+        # rewrite(reshape(x, shape).T, subsume=True).to(reshape(x, shape.reverse())),
+        # rewrite(reshape(x, shape).shape).to(shape),
         # if_
         rewrite(NDArray.if_(TRUE, x, x1)).to(x),
         rewrite(NDArray.if_(FALSE, x, x1)).to(x1),
         # convert to scalar
         rewrite(NDArray(TupleInt.EMPTY, dtype, idx_fn)).to(NDArray.scalar(idx_fn(TupleInt.EMPTY))),
+        # Scalars should push operators down
+        rewrite(NDArray.scalar(v) / NDArray.scalar(v1)).to(NDArray.scalar(v / v1)),
+        rewrite(NDArray.scalar(v) ** NDArray.scalar(v1)).to(NDArray.scalar(v**v1)),
     ]
 
 
@@ -1786,10 +1840,6 @@ def square(x: NDArray) -> NDArray: ...
 def any(x: NDArray) -> NDArray: ...
 
 
-@function(egg_fn="ndarray-abs")
-def abs(x: NDArray) -> NDArray: ...
-
-
 @function(egg_fn="ndarray-log")
 def log(x: NDArray) -> NDArray: ...
 
@@ -1851,13 +1901,13 @@ def real(x: NDArray) -> NDArray: ...
 def conj(x: NDArray) -> NDArray: ...
 
 
-@function(ruleset=array_api_ruleset)
+@function(ruleset=array_api_ruleset, subsume=True)
 def vecdot(x1: NDArrayLike, x2: NDArrayLike) -> NDArray:
     """
     https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.vecdot.html
     https://numpy.org/doc/stable/reference/generated/numpy.vecdot.html
 
-    TODO: Support axis, complex numbers, and broadcasting
+    TODO: Support axis, complex numbers, broadcasting, and more than matrix-vector
 
     >>> v = NDArray.matrix([[0., 5., 0.], [0., 0., 10.], [0., 6., 8.]])
     >>> n = NDArray.vector([0., 0.6, 0.8])
@@ -1870,26 +1920,54 @@ def vecdot(x1: NDArrayLike, x2: NDArrayLike) -> NDArray:
     return NDArray(
         x1.shape.drop_last(),
         x1.dtype,
-        lambda idx: TupleInt.range(x1.shape.last())
-        .map_value(lambda i: x1.index(idx.append(i)) * x2.index(idx.append(i)))
-        .foldl_value(Value.__add__, Value.float(0)),
+        lambda idx: (
+            TupleInt.range(x1.shape.last())
+            .map_value(lambda i: x1.index(idx.append(i)) * x2.index((i,)))
+            .foldl_value(Value.__add__, Value.float(0))
+        ),
     )
 
 
-@function
+@function(ruleset=array_api_ruleset, subsume=True)
 def vector_norm(x: NDArrayLike) -> NDArray:
     """
     https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.vector_norm.html
     TODO: support axis
+    >>> x = NDArray.vector([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    >>> vector_norm(x).eval_numpy("float64")
+    array(16.88194302)
     """
+    # https://numpy.org/doc/stable/reference/generated/numpy.linalg.norm.html#numpy.linalg.norm
+    # sum(abs(x)**ord)**(1./ord) where ord=2
+    x = cast("NDArray", x)
+    # Only works on vectors
+    return NDArray.scalar(
+        x.to_values().map_value(lambda v: abs(v) ** Value.float(Float(2.0))).foldl_value(Value.__add__, Value.float(0))
+        ** Value.float(Float(0.5))
+    )
 
 
-@function
+@function(ruleset=array_api_ruleset, subsume=True)
 def cross(a: NDArrayLike, b: NDArrayLike) -> NDArray:
     """
     https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.cross.html
-    TODO: support axis
+    TODO: support axis, and more than two vecs
+
+    >>> x = NDArray.vector([1, 2, 3])
+    >>> y = NDArray.vector([4, 5, 6])
+    >>> cross(x, y).eval_numpy("int64")
+    array([-3,  6, -3])
     """
+    a = cast("NDArray", a)
+    b = cast("NDArray", b)
+    return NDArray(
+        (3,),
+        a.dtype,
+        lambda idx: (
+            (a.index(((idx[0] + 1) % 3,)) * b.index(((idx[0] + 2) % 3,)))
+            - (a.index(((idx[0] + 2) % 3,)) * b.index(((idx[0] + 1) % 3,)))
+        ),
+    )
 
 
 linalg = sys.modules[__name__]
@@ -2283,7 +2361,7 @@ def array_api_functional_ruleset(
     idx_fn: Callable[[TupleInt], Value],
 ):
     # TODO: Support -1 in shape like numpy does
-    yield rewrite(reshape(NDArray(old_shape, dtype, idx_fn), shape, ob)).to(
+    yield rewrite(reshape(NDArray(old_shape, dtype, idx_fn), shape, ob), subsume=True).to(
         NDArray(shape, dtype, lambda idx: idx_fn(unravel_index(ravel_index(idx, shape), old_shape)))
     )
 
@@ -2329,3 +2407,127 @@ def try_evaling(egraph: EGraph, schedule: Schedule, expr: Expr, prim_expr: Built
             e.add_note(f"Cannot evaluate {egraph.extract(expr)}")
             raise
     return extracted.value  # type: ignore[attr-defined]
+
+
+##
+# Polynomials
+##
+
+
+@function
+def monomial(x: MultiSetLike[Value, ValueLike]) -> Value: ...
+
+
+@function(merge=lambda old, new: new)
+def get_monomial(x: Value) -> MultiSet[Value]:
+    """
+    Only defined on monomials:
+
+        get_monomial(monomial(xs)) => xs
+    """
+
+
+@function(merge=lambda old, new: new)
+def get_sole_polynomial(xs: MultiSet[Value]) -> MultiSet[MultiSet[Value]]:
+    """
+    Only defined on monomials that contain a single polynomial:
+
+        get_sole_polynomial(MultiSet(polynomial(xs))) => xs
+    """
+
+
+@function
+def polynomial(x: MultiSetLike[MultiSet[Value], MultiSetLike[Value, ValueLike]]) -> Value: ...
+
+
+@ruleset
+def to_polynomial_ruleset(
+    n1: Value,
+    n2: Value,
+    n3: Value,
+    mss: MultiSet[MultiSet[Value]],
+    mss1: MultiSet[MultiSet[Value]],
+):
+    yield rewrite(n1 - n2, subsume=True).to(n1 + (Value.int(-1) * n2))
+    yield rule(
+        eq(n3).to(n1 + n2),
+        name="add",
+    ).then(
+        union(n3).with_(polynomial(MultiSet(MultiSet(n1), MultiSet(n2)))),
+        set_(get_sole_polynomial(MultiSet(n3))).to(MultiSet(MultiSet(n1), MultiSet(n2))),
+        delete(n1 + n2),
+    )
+    yield rule(
+        eq(n3).to(n1 * n2),
+        name="mul",
+    ).then(
+        union(n3).with_(monomial(MultiSet(n1, n2))),
+        set_(get_monomial(n3)).to(MultiSet(n1, n2)),
+        delete(n1 * n2),
+        # MultiSet(n1, n2).fill_index(ms_index),
+    )
+    yield rule(
+        eq(n1).to(polynomial(mss)),
+        mss1 == mss.map(partial(multiset_flat_map, get_monomial)),
+        mss != mss1,
+        name="unwrap monomial",
+    ).then(
+        union(n1).with_(polynomial(mss1)),
+        delete(polynomial(mss)),
+        set_(get_sole_polynomial(MultiSet(n1))).to(mss1),
+    )
+    yield rule(
+        eq(n1).to(polynomial(mss)),
+        mss1 == multiset_flat_map(UnstableFn(get_sole_polynomial), mss),
+        mss != mss1,
+        name="unwrap polynomial",
+    ).then(
+        union(n1).with_(polynomial(mss1)),
+        delete(polynomial(mss)),
+        set_(get_sole_polynomial(MultiSet(n1))).to(mss1),
+    )
+
+
+@ruleset
+def factor_ruleset(
+    n: Value,
+    mss: MultiSet[MultiSet[Value]],
+    counts: MultiSet[Value],
+    factor: Value,
+    divided: MultiSet[MultiSet[Value]],
+    remainder: MultiSet[MultiSet[Value]],
+):
+    yield rule(
+        eq(n).to(polynomial(mss)),
+        # Find factor that shows up in most monomials, at least two of them
+        counts == MultiSet.sum_multisets(mss.map(MultiSet[Value].reset_counts)),
+        eq(factor).to(counts.pick_max()),
+        # Only factor out if it term appears in more than one monomial
+        counts.count(factor) > 1,
+        # map, including only those factor that contain the factor, removing them from that
+        # other items are omitted from the map
+        divided == mss.map(partial(multiset_remove_swapped, factor)),
+        # remainder is those monomials that do not contain the factor
+        remainder == mss.filter(partial(multiset_not_contains_swapped, factor)),
+        name="factor",
+    ).then(
+        union(n).with_(polynomial(MultiSet(MultiSet(factor, polynomial(divided))) + remainder)),
+        # delete(polynomial(mss)),
+    )
+
+
+@ruleset
+def from_polynomial_ruleset(mss: MultiSet[MultiSet[Value]]):
+    mul: Callable[[Value, Value], Value] = Value.__mul__
+    yield rewrite(polynomial(mss)).to(
+        multiset_fold(
+            Value.__add__,
+            Value.int(0),
+            mss.map(
+                partial(multiset_fold, mul, Value.int(1)),
+            ),
+        )
+    )
+
+
+polynomial_schedule = to_polynomial_ruleset.saturate() + factor_ruleset.saturate()

@@ -533,7 +533,7 @@ class EGraphState:
         Rewrites this expression as a let binding if it's not already a let binding.
         """
         # TODO: Replace with counter so that it works with hash collisions and is more stable
-        var_decl = LetRefDecl(f"__expr_{hash(typed_expr)}")
+        var_decl = LetRefDecl(f"$__expr_{hash(typed_expr)}")
         if var_decl in self.expr_to_egg_cache:
             return None
         var_egg = self._expr_to_egg(var_decl)
