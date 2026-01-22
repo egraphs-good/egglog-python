@@ -328,6 +328,7 @@ class _ExprMetaclass(type):
         cls_ident = Ident(name, _get_module(prev_frame))
         # Pass in an instance of the class so that when we are generating the decls
         # we can update them eagerly so that we can access the methods in the class body
+        # TODO: How should we normalize unparameterized classes? Should they have args of the typevars?
         runtime_cls = RuntimeClass(None, TypeRefWithVars(cls_ident))  # type: ignore[arg-type]
 
         # Store frame so that we can get live access to updated locals/globals

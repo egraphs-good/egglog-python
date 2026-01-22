@@ -58,11 +58,11 @@ class TypeConstraintSolver:
         Given a return type, infer the argument types. If there is a variable arg, it returns an infinite iterable.
         """
         self.infer_typevars(fn_return, return_)
-        for fn_arg in fn_args:
-            yield self.substitute_typevars(fn_arg)
-        if fn_var_args is not None:
-            var_arg_type = self.substitute_typevars(fn_var_args)
-            yield from chain(repeat(var_arg_type))
+        arg_types = [self.substitute_typevars(fn_arg) for fn_arg in fn_args]
+        if fn_var_args is None:
+            return arg_types
+        var_arg_type = self.substitute_typevars(fn_var_args)
+        return chain(arg_types, repeat(var_arg_type))
 
     def infer_typevars(self, fn_arg: TypeOrVarRef, arg: JustTypeRef) -> None:
         """
@@ -88,11 +88,11 @@ class TypeConstraintSolver:
         Substitute typevars in a type with their inferred types, raises TypeConstraintError if a typevar is unresolved.
         """
         match tp:
-            case TypeVarRef(tyepvar_ident):
+            case TypeVarRef(typevar_ident):
                 try:
-                    return self._typevar_to_type[tyepvar_ident]
+                    return self._typevar_to_type[typevar_ident]
                 except KeyError as e:
-                    raise TypeConstraintError(f"Unresolved type variable: {tyepvar_ident}") from e
+                    raise TypeConstraintError(f"Unresolved type variable: {typevar_ident}") from e
             case TypeRefWithVars(name, args):
                 return JustTypeRef(name, tuple(self.substitute_typevars(arg) for arg in args))
         assert_never(tp)

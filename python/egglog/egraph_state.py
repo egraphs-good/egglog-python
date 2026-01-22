@@ -796,23 +796,22 @@ class EGraphState:
                 continue
             if signature.semantic_return_type.ident != return_tp.ident:
                 continue
-            tcs = TypeConstraintSolver(self.__egg_decls__)
+            tcs = TypeConstraintSolver()
 
-            arg_types, bound_tp_params = tcs.infer_arg_types(
-                signature.arg_types, signature.semantic_return_type, signature.var_arg_type, return_tp, None
+            arg_types = tcs.infer_arg_types(
+                signature.arg_types, signature.semantic_return_type, signature.var_arg_type, return_tp
             )
 
             args = tuple(
                 TypedExprDecl(tp, self.value_to_expr(tp, v)) for tp, v in zip(arg_types, partial_args, strict=False)
             )
-
-            call_decl = CallDecl(
-                callable_ref,
-                args,
-                # Don't include bound type params if this is just a method, we only needed them for type resolution
-                # but dont need to store them
-                bound_tp_params if isinstance(callable_ref, ClassMethodRef | InitRef) else (),
-            )
+            if isinstance(callable_ref, ClassMethodRef | InitRef):
+                bound_tp_params = tuple(
+                    map(tcs.substitute_typevars, self.__egg_decls__.get_class_decl(callable_ref.ident).type_vars)
+                )
+            else:
+                bound_tp_params = ()
+            call_decl = CallDecl(callable_ref, args, bound_tp_params)
             return PartialCallDecl(call_decl)
         raise ValueError(f"Function '{name}' not found")
 
@@ -909,11 +908,7 @@ class FromEggState:
             assert_never(term)
         return TypedExprDecl(tp, expr_decl)
 
-    def from_call(
-        self,
-        tp: JustTypeRef,
-        term: bindings.TermApp,  # additional_arg_tps: tuple[JustTypeRef, ...]
-    ) -> CallDecl:
+    def from_call(self, tp: JustTypeRef, term: bindings.TermApp) -> CallDecl:
         """
         Convert a call to a CallDecl.
 
@@ -931,33 +926,32 @@ class FromEggState:
             signature = self.decls.get_callable_decl(callable_ref).signature
             assert isinstance(signature, FunctionSignature)
             if isinstance(callable_ref, ClassMethodRef | InitRef | MethodRef):
-                # Need OR in case we have class method whose class whas never added as a sort, which would happen
+                # Need OR in case we have class method whose class was never added as a sort, which would happen
                 # if the class method didn't return that type and no other function did. In this case, we don't need
-                # to care about the type vars and we we don't need to bind any possible type.
+                # to care about the type vars and we don't need to bind any possible type.
                 possible_types = self.state._get_possible_types(callable_ref.ident) or [None]
-                cls_name = callable_ref.ident
             else:
                 possible_types = [None]
-                cls_name = None
             for possible_type in possible_types:
-                tcs = TypeConstraintSolver(self.decls)
+                tcs = TypeConstraintSolver()
                 if possible_type and possible_type.args:
-                    tcs.bind_class(possible_type)
+                    tcs.bind_class(possible_type, self.decls)
                 try:
-                    arg_types, bound_tp_params = tcs.infer_arg_types(
-                        signature.arg_types, signature.semantic_return_type, signature.var_arg_type, tp, cls_name
+                    arg_types = tcs.infer_arg_types(
+                        signature.arg_types, signature.semantic_return_type, signature.var_arg_type, tp
                     )
+                    # Include this in try because of iterable
+                    a_tp = list(zip(term.args, arg_types, strict=False))
                 except TypeConstraintError:
                     continue
-                args = tuple(self.resolve_term(a, tp) for a, tp in zip(term.args, arg_types, strict=False))
-
-                return CallDecl(
-                    callable_ref,
-                    args,
-                    # Don't include bound type params if this is just a method, we only needed them for type resolution
-                    # but dont need to store them
-                    bound_tp_params if isinstance(callable_ref, ClassMethodRef | InitRef) and not args else (),
-                )
+                args = tuple(self.resolve_term(a, tp) for a, tp in a_tp)
+                if not args and isinstance(callable_ref, ClassMethodRef | InitRef):
+                    bound_tp_params = tuple(
+                        map(tcs.substitute_typevars, self.decls.get_class_decl(callable_ref.ident).type_vars)
+                    )
+                else:
+                    bound_tp_params = ()
+                return CallDecl(callable_ref, args, bound_tp_params)
         raise ValueError(
             f"Could not find callable ref for call {term}. None of these refs matched the types: {self.state.egg_fn_to_callable_refs[term.name]}"
         )

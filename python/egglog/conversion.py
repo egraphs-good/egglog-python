@@ -221,7 +221,6 @@ def resolve_literal(
     arg: object,
     decls: Callable[[], Declarations] = retrieve_conversion_decls,
     tcs: TypeConstraintSolver | None = None,
-    cls_ident: Ident | None = None,
 ) -> RuntimeExpr:
     """
     Try to convert an object to a type, raising a ConvertError if it is not possible.
@@ -240,7 +239,7 @@ def resolve_literal(
         # args first based on the existing type constraint solver
         if tcs:
             try:
-                tp_just = tcs.substitute_typevars(tp, cls_ident)
+                tp_just = tcs.substitute_typevars(tp)
             # If we can't resolve the type var yet, then just assume it is the right value
             except TypeConstraintError:
                 assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {type(arg)}"
@@ -250,7 +249,7 @@ def resolve_literal(
             assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
             return arg
     if tcs:
-        tcs.infer_typevars(tp, tp_just, cls_ident)
+        tcs.infer_typevars(tp, tp_just)
     if arg_type == tp_just:
         # If the type is an egg type, it has to be a runtime expr
         assert isinstance(arg, RuntimeExpr)

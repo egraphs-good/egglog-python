@@ -350,7 +350,7 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
             "tuple[tuple[DeclerationsLike, ...], tuple[TypeOrVarRef, ...]]",
             zip(*(resolve_type_annotation(arg) for arg in args), strict=False),
         )
-        # if we already have some args bound and some not, then we shold replace all existing args of typevars with new
+        # if we already have some args bound and some not, then we should replace all existing args of typevars with new
         # args
         if old_args := self.__egg_tp__.args:
             is_typevar = [isinstance(arg, TypeVarRef) for arg in old_args]
@@ -550,7 +550,7 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
         assert not bound.kwargs
         args = bound.args
 
-        tcs = TypeConstraintSolver(decls)
+        tcs = TypeConstraintSolver()
         bound_tp = (
             None
             if self.__egg_bound__ is None
@@ -564,27 +564,24 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
             # Don't  bind class if we have a first class function arg, b/c we don't support that yet
             and not function_value
         ):
-            tcs.bind_class(bound_tp)
+            tcs.bind_class(bound_tp, decls)
         assert (operator.ge if signature.var_arg_type else operator.eq)(len(args), len(signature.arg_types))
         # Hack to allow being explicit on function types when casting. # noqa: FIX004
-        # TODO: Replace type analysis class binding stuff
-        # with instead binders of location per call origination
-        cls_ident = bound_tp.ident if bound_tp else None
         for _fn_tp in _egg_function_types or ():
             try:
                 _fn_tp_just = _fn_tp.to_just()
             except TypeVarError:
                 continue
-            tcs.bind_class(_fn_tp_just)
+            tcs.bind_class(_fn_tp_just, decls)
             if _fn_tp_just.args:
-                cls_ident = _fn_tp_just.ident
+                pass
         upcasted_args = [
-            resolve_literal(cast("TypeOrVarRef", tp), arg, Thunk.value(decls), tcs=tcs, cls_ident=cls_ident)
+            resolve_literal(cast("TypeOrVarRef", tp), arg, Thunk.value(decls), tcs)
             for arg, tp in zip_longest(args, signature.arg_types, fillvalue=signature.var_arg_type)
         ]
         decls.update(*upcasted_args)
         arg_exprs = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
-        return_tp = tcs.substitute_typevars(signature.semantic_return_type, cls_ident)
+        return_tp = tcs.substitute_typevars(signature.semantic_return_type)
         bound_params = (
             cast("JustTypeRef", bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef | InitRef) else ()
         )

@@ -409,7 +409,7 @@ class Map(BuiltinExpr, Generic[T, V], egg_sort="Map"):
     @property
     def value(self) -> dict[T, V]:
         d = {}
-        while args := get_callable_args(self, Map[T, V].insert):
+        while args := get_callable_args(self, Map.insert):  # type: ignore[var-annotated]
             self, k, v = args  # noqa: PLW0642
             d[k] = v
         if get_callable_args(self, Map.empty) is None:
@@ -992,7 +992,7 @@ class Vec(BuiltinExpr, Generic[T], egg_sort="Vec"):
     def empty(cls) -> Vec[T]: ...
 
     @method(egg_fn="vec-append")
-    def append(self, *others: Vec[T]) -> Vec[T]: ...
+    def append(self, *others: VecLike[T, T]) -> Vec[T]: ...
 
     @method(egg_fn="vec-push")
     def push(self, value: T) -> Vec[T]: ...
@@ -1032,6 +1032,9 @@ for sequence_type in (list, tuple):
     )
 
 VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
+
+v = Vec(i64(10))
+v.append([i64(10)])
 
 
 class PyObject(BuiltinExpr, egg_sort="PyObject"):
