@@ -7,7 +7,7 @@ from egglog.type_constraint_solver import *
 
 i64 = JustTypeRef(Ident("i64"))
 unit = JustTypeRef(Ident("Unit"))
-K, V = ClassTypeVarRef(Ident("K")), ClassTypeVarRef(Ident("V"))
+K, V = TypeVarRef(Ident("K")), TypeVarRef(Ident("V"))
 map = TypeRefWithVars(Ident("Map"), (K, V))
 map_i64_unit = JustTypeRef(Ident("Map"), (i64, unit))
 decls = Declarations(_classes={Ident("Map"): ClassDecl(type_vars=(K, V))})

@@ -41,7 +41,6 @@ __all__ = [
     "ChangeDecl",
     "ClassDecl",
     "ClassMethodRef",
-    "ClassTypeVarRef",
     "ClassVariableRef",
     "CombinedRulesetDecl",
     "CommandDecl",
@@ -93,6 +92,7 @@ __all__ = [
     "TypeOrVarRef",
     "TypeRefWithVars",
     "TypeVarError",
+    "TypeVarRef",
     "TypedExprDecl",
     "UnboundVarDecl",
     "UnionDecl",
@@ -270,7 +270,7 @@ class Declarations:
         """
         Checks if the class has a binary method compatible with the given types.
         """
-        vars: dict[ClassTypeVarRef, JustTypeRef] = {}
+        vars: dict[TypeVarRef, JustTypeRef] = {}
         if callable_decl := self._classes[self_type.ident].methods.get(method_name):
             match callable_decl.signature:
                 case FunctionSignature((self_arg_type, other_arg_type)) if self_arg_type.matches_just(
@@ -283,7 +283,7 @@ class Declarations:
         """
         Checks if the class has a binary method with the given name and self type. Returns the other type if it exists.
         """
-        vars: dict[ClassTypeVarRef, JustTypeRef] = {}
+        vars: dict[TypeVarRef, JustTypeRef] = {}
         class_decl = self._classes.get(self_type.ident)
         if class_decl is None:
             return None
@@ -298,7 +298,7 @@ class Declarations:
         Returns the types which are compatible with the given binary method name and other type.
         """
         for class_decl in self._classes.values():
-            vars: dict[ClassTypeVarRef, JustTypeRef] = {}
+            vars: dict[TypeVarRef, JustTypeRef] = {}
             if callable_decl := class_decl.methods.get(method_name):
                 match callable_decl.signature:
                     case FunctionSignature((self_arg_type, other_arg_type)) if other_arg_type.matches_just(
@@ -320,7 +320,7 @@ class Declarations:
 @dataclass
 class ClassDecl:
     egg_name: str | None = None
-    type_vars: tuple[ClassTypeVarRef, ...] = ()
+    type_vars: tuple[TypeVarRef, ...] = ()
     builtin: bool = False
     init: ConstructorDecl | FunctionDecl | None = None
     class_methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
@@ -372,7 +372,7 @@ class JustTypeRef:
 # mapping of name and module of resolved typevars to runtime values
 # so that when spitting them back out again can use same instance
 # since equality is based on identity not value
-_RESOLVED_TYPEVARS: dict[ClassTypeVarRef, TypeVar] = {}
+_RESOLVED_TYPEVARS: dict[TypeVarRef, TypeVar] = {}
 
 
 class TypeVarError(RuntimeError):
@@ -380,14 +380,14 @@ class TypeVarError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class ClassTypeVarRef:
+class TypeVarRef:
     """
-    A class type variable represents one of the types of the class, if it is a generic class.
+    A generic type variable reference.
     """
 
     ident: Ident
 
-    def to_just(self, vars: dict[ClassTypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
+    def to_just(self, vars: dict[TypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
         if vars is None or self not in vars:
             raise TypeVarError(f"Cannot convert type variable {self} to concrete type without variable bindings")
         return vars[self]
@@ -396,7 +396,7 @@ class ClassTypeVarRef:
         return str(self.to_type_var())
 
     @classmethod
-    def from_type_var(cls, typevar: TypeVar) -> ClassTypeVarRef:
+    def from_type_var(cls, typevar: TypeVar) -> TypeVarRef:
         res = cls(Ident(typevar.__name__, typevar.__module__))
         _RESOLVED_TYPEVARS[res] = typevar
         return res
@@ -404,7 +404,7 @@ class ClassTypeVarRef:
     def to_type_var(self) -> TypeVar:
         return _RESOLVED_TYPEVARS[self]
 
-    def matches_just(self, vars: dict[ClassTypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
+    def matches_just(self, vars: dict[TypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
         """
         Checks if this type variable matches the given JustTypeRef, including type variables.
         """
@@ -419,7 +419,7 @@ class TypeRefWithVars:
     ident: Ident
     args: tuple[TypeOrVarRef, ...] = ()
 
-    def to_just(self, vars: dict[ClassTypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
+    def to_just(self, vars: dict[TypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
         return JustTypeRef(self.ident, tuple(a.to_just(vars) for a in self.args))
 
     def __str__(self) -> str:
@@ -427,7 +427,7 @@ class TypeRefWithVars:
             return f"{self.ident.name}[{', '.join(str(a) for a in self.args)}]"
         return str(self.ident.name)
 
-    def matches_just(self, vars: dict[ClassTypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
+    def matches_just(self, vars: dict[TypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
         """
         Checks if this type reference matches the given JustTypeRef, including type variables.
         """
@@ -438,7 +438,7 @@ class TypeRefWithVars:
         )
 
 
-TypeOrVarRef: TypeAlias = ClassTypeVarRef | TypeRefWithVars
+TypeOrVarRef: TypeAlias = TypeVarRef | TypeRefWithVars
 
 ##
 # Callables References

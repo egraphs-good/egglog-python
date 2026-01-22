@@ -398,7 +398,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         # Get the generic params from the orig bases generic class
         namespace["__orig_bases__"][1].__parameters__ if "__orig_bases__" in namespace else []
     )
-    type_vars = tuple(ClassTypeVarRef.from_type_var(p) for p in parameters)
+    type_vars = tuple(TypeVarRef.from_type_var(p) for p in parameters)
     del parameters
     cls_decl = ClassDecl(
         egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()), doc=namespace.pop("__doc__", None)

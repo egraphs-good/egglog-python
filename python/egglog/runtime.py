@@ -158,7 +158,7 @@ def resolve_type_annotation(tp: object) -> tuple[DeclerationsLike, TypeOrVarRef]
     resolve the decls if need be.
     """
     if isinstance(tp, TypeVar):
-        return None, ClassTypeVarRef.from_type_var(tp)
+        return None, TypeVarRef.from_type_var(tp)
     # If there is a union, then we assume the first item is the type we want, and the others are types that can be converted to that type.
     if get_origin(tp) == Union:
         first, *_rest = get_args(tp)
@@ -182,7 +182,7 @@ def inverse_resolve_type_annotation(decls_thunk: Callable[[], Declarations], tp:
     """
     Inverse of resolve_type_annotation
     """
-    if isinstance(tp, ClassTypeVarRef):
+    if isinstance(tp, TypeVarRef):
         return tp.to_type_var()
     return RuntimeClass(decls_thunk, tp)
 
@@ -353,7 +353,7 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
         # if we already have some args bound and some not, then we shold replace all existing args of typevars with new
         # args
         if old_args := self.__egg_tp__.args:
-            is_typevar = [isinstance(arg, ClassTypeVarRef) for arg in old_args]
+            is_typevar = [isinstance(arg, TypeVarRef) for arg in old_args]
             if sum(is_typevar) != len(new_args):
                 raise TypeError(f"Expected {sum(is_typevar)} typevars, got {len(new_args)}")
             new_args_list = list(new_args)

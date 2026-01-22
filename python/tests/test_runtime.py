@@ -12,9 +12,7 @@ def test_type_str():
     decls = Declarations(
         _classes={
             Ident.builtin("i64"): ClassDecl(),
-            Ident.builtin("Map"): ClassDecl(
-                type_vars=(ClassTypeVarRef(Ident.builtin("K")), ClassTypeVarRef(Ident.builtin("V")))
-            ),
+            Ident.builtin("Map"): ClassDecl(type_vars=(TypeVarRef(Ident.builtin("K")), TypeVarRef(Ident.builtin("V")))),
         }
     )
     i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars(Ident.builtin("i64")))
@@ -40,7 +38,7 @@ def test_function_call():
 
 
 def test_classmethod_call():
-    K, V = ClassTypeVarRef(Ident.builtin("K")), ClassTypeVarRef(Ident.builtin("V"))
+    K, V = TypeVarRef(Ident.builtin("K")), TypeVarRef(Ident.builtin("V"))
     decls = Declarations(
         _classes={
             Ident.builtin("i64"): ClassDecl(),
