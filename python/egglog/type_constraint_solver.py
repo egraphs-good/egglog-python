@@ -96,3 +96,36 @@ class TypeConstraintSolver:
             case TypeRefWithVars(name, args):
                 return JustTypeRef(name, tuple(self.substitute_typevars(arg) for arg in args))
         assert_never(tp)
+
+    def substitute_typevars_try_function(
+        self, tp: TypeOrVarRef, value: Callable, decls: Callable[[], Declarations]
+    ) -> JustTypeRef:
+        """
+        Try to substitute typevars in a type with their inferred types.
+
+        If this fails and we have an UnstableFn type and a function value, we can try to infer the typevars by calling
+        it with the input types, if we can resolve those
+        """
+        from .runtime import RuntimeExpr  # noqa: PLC0415
+
+        try:
+            return self.substitute_typevars(tp)
+        except TypeConstraintError:
+            if isinstance(tp, TypeVarRef) or tp.ident != Ident.builtin("UnstableFn") or not callable(value):
+                raise
+        dummy_args = [
+            RuntimeExpr.__from_values__(decls(), TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()))
+            for arg_tp in tp.args[1:]
+        ]
+        try:
+            result = value(*dummy_args)
+        except Exception as e:
+            raise TypeConstraintError(
+                f"Function {value} raised an exception when called with dummy args to infer return type: {e}"
+            ) from e
+        if not isinstance(result, RuntimeExpr):
+            raise TypeConstraintError(
+                f"Function {value} did not return a RuntimeExpr, got {type(result)}, so cannot infer return type"
+            )
+        self.infer_typevars(tp.args[0], result.__egg_typed_expr__.tp)
+        return self.substitute_typevars(tp)

@@ -239,13 +239,14 @@ def resolve_literal(
         # args first based on the existing type constraint solver
         if tcs:
             try:
-                tp_just = tcs.substitute_typevars(tp)
+                tp_just = tcs.substitute_typevars_try_function(tp, arg, decls)
             # If we can't resolve the type var yet, then just assume it is the right value
-            except TypeConstraintError:
-                assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {type(arg)}"
+            except TypeConstraintError as e:
+                if not isinstance(arg, RuntimeExpr):
+                    raise ConvertError(f"Cannot convert {arg} of type {arg_type} to {tp}") from e
                 tp_just = arg.__egg_typed_expr__.tp
         else:
-            # If this is a var, it has to be a runtime expession
+            # If this is a var, it has to be a runtime expression
             assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
             return arg
     if tcs:
