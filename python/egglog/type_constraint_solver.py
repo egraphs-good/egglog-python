@@ -10,6 +10,7 @@ When trying to resolve a literal to a value
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import chain, repeat
 from typing import TYPE_CHECKING, assert_never
@@ -120,9 +121,8 @@ class TypeConstraintSolver:
         try:
             result = value(*dummy_args)
         except Exception as e:
-            raise TypeConstraintError(
-                f"Function {value} raised an exception when called with dummy args to infer return type: {e}"
-            ) from e
+            e.add_note(f"While trying to infer return type of {value} by calling it")
+            raise
         if not isinstance(result, RuntimeExpr):
             raise TypeConstraintError(
                 f"Function {value} did not return a RuntimeExpr, got {type(result)}, so cannot infer return type"

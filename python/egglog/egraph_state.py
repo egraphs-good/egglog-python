@@ -461,7 +461,9 @@ class EGraphState:
         decl = self.__egg_decls__._classes[ref.ident]
         self.type_ref_to_egg_sort[ref] = egg_name = (not ref.args and decl.egg_name) or _generate_type_egg_name(ref)
         self.egg_sort_to_type_ref[egg_name] = ref
-        if not decl.builtin or ref.args:
+
+        if decl.builtin:
+            # If this has args, create a new parameterized version of the builtin class
             if ref.args:
                 if ref.ident == Ident.builtin("UnstableFn"):
                     # UnstableFn is a special case, where the rest of args are collected into a call
@@ -478,18 +480,18 @@ class EGraphState:
                     ]
                 else:
                     type_args = [bindings.Var(span(), self.type_ref_to_egg(a)) for a in ref.args]
-                args = (self.type_ref_to_egg(JustTypeRef(ref.ident)), type_args)
-            else:
-                args = None
-            self.egraph.run_program(bindings.Sort(span(), egg_name, args))
-        # For builtin classes, let's also make sure we have the mapping of all egg fn names for class methods, because
-        # these can be created even without adding them to the e-graph, like `vec-empty` which can be extracted
-        # even if you never use that function.
-        if decl.builtin:
+                assert decl.egg_name
+                self.egraph.run_program(bindings.Sort(span(), egg_name, (decl.egg_name, type_args)))
+
+            # For builtin classes, let's also make sure we have the mapping of all egg fn names for class methods.
+            # these can be created even without adding them to the e-graph, like `vec-empty` which can be extracted
+            # even if you never use that function.
             for method_name in decl.class_methods:
                 self.callable_ref_to_egg(ClassMethodRef(ref.ident, method_name))
             if decl.init:
                 self.callable_ref_to_egg(InitRef(ref.ident))
+        else:
+            self.egraph.run_program(bindings.Sort(span(), egg_name, None))
 
         return egg_name
 
@@ -760,7 +762,7 @@ class EGraphState:
                 return CallDecl(
                     InitRef(Ident.builtin("Set")),
                     tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs_),
-                    (v_tp,),
+                    (v_tp,) if not xs_ else (),
                 )
             case "Vec":
                 xs = self.egraph.value_to_vec(value)
@@ -768,7 +770,7 @@ class EGraphState:
                 return CallDecl(
                     InitRef(Ident.builtin("Vec")),
                     tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs),
-                    (v_tp,),
+                    (v_tp,) if not xs else (),
                 )
             case "MultiSet":
                 xs = self.egraph.value_to_multiset(value)
@@ -776,7 +778,7 @@ class EGraphState:
                 return CallDecl(
                     InitRef(Ident.builtin("MultiSet")),
                     tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs),
-                    (v_tp,),
+                    (v_tp,) if not xs else (),
                 )
             case "UnstableFn":
                 _names, _args = self.egraph.value_to_function(value)
@@ -796,22 +798,13 @@ class EGraphState:
                 continue
             if signature.semantic_return_type.ident != return_tp.ident:
                 continue
-            tcs = TypeConstraintSolver()
-
-            arg_types = tcs.infer_arg_types(
+            arg_types = TypeConstraintSolver().infer_arg_types(
                 signature.arg_types, signature.semantic_return_type, signature.var_arg_type, return_tp
             )
-
             args = tuple(
                 TypedExprDecl(tp, self.value_to_expr(tp, v)) for tp, v in zip(arg_types, partial_args, strict=False)
             )
-            if isinstance(callable_ref, ClassMethodRef | InitRef):
-                bound_tp_params = tuple(
-                    map(tcs.substitute_typevars, self.__egg_decls__.get_class_decl(callable_ref.ident).type_vars)
-                )
-            else:
-                bound_tp_params = ()
-            call_decl = CallDecl(callable_ref, args, bound_tp_params)
+            call_decl = CallDecl(callable_ref, args)
             return PartialCallDecl(call_decl)
         raise ValueError(f"Function '{name}' not found")
 
@@ -936,6 +929,9 @@ class FromEggState:
                 tcs = TypeConstraintSolver()
                 if possible_type and possible_type.args:
                     tcs.bind_class(possible_type, self.decls)
+                    bound_args = possible_type.args
+                else:
+                    bound_args = ()
                 try:
                     arg_types = tcs.infer_arg_types(
                         signature.arg_types, signature.semantic_return_type, signature.var_arg_type, tp
@@ -945,12 +941,9 @@ class FromEggState:
                 except TypeConstraintError:
                     continue
                 args = tuple(self.resolve_term(a, tp) for a, tp in a_tp)
-                if not args and isinstance(callable_ref, ClassMethodRef | InitRef):
-                    bound_tp_params = tuple(
-                        map(tcs.substitute_typevars, self.decls.get_class_decl(callable_ref.ident).type_vars)
-                    )
-                else:
-                    bound_tp_params = ()
+                # Only save bound tp params if needed for inferring return type
+                # this is true if the set of set of type vars in the return are not a subset of those in the args
+                bound_tp_params = () if signature.semantic_return_type.vars.issubset(signature.arg_vars) else bound_args
                 return CallDecl(callable_ref, args, bound_tp_params)
         raise ValueError(
             f"Could not find callable ref for call {term}. None of these refs matched the types: {self.state.egg_fn_to_callable_refs[term.name]}"

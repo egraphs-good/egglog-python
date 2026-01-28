@@ -11,13 +11,11 @@ from .declarations import *
 from .pretty import *
 from .runtime import *
 from .thunk import *
-from .type_constraint_solver import TypeConstraintError
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from .egraph import BaseExpr
-    from .type_constraint_solver import TypeConstraintSolver
 
 __all__ = ["ConvertError", "convert", "converter", "get_type_args"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
@@ -220,41 +218,17 @@ def resolve_literal(
     tp: TypeOrVarRef,
     arg: object,
     decls: Callable[[], Declarations] = retrieve_conversion_decls,
-    tcs: TypeConstraintSolver | None = None,
 ) -> RuntimeExpr:
     """
     Try to convert an object to a type, raising a ConvertError if it is not possible.
 
-    If the type has vars in it, they will be tried to be resolved into concrete vars based on the type constraint solver.
-
     If it cannot be resolved, we assume that the value passed in will resolve it.
     """
-    arg_type = resolve_type(arg)
-
-    # If we have any type variables, don't bother trying to resolve the literal, just return the arg
-    try:
-        tp_just = tp.to_just()
-    except TypeVarError:
-        # If this is a generic arg but passed in a non runtime expression, try to resolve the generic
-        # args first based on the existing type constraint solver
-        if tcs:
-            try:
-                tp_just = tcs.substitute_typevars_try_function(tp, arg, decls)
-            # If we can't resolve the type var yet, then just assume it is the right value
-            except TypeConstraintError as e:
-                if not isinstance(arg, RuntimeExpr):
-                    raise ConvertError(f"Cannot convert {arg} of type {arg_type} to {tp}") from e
-                tp_just = arg.__egg_typed_expr__.tp
-        else:
-            # If this is a var, it has to be a runtime expression
-            assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
-            return arg
-    if tcs:
-        tcs.infer_typevars(tp, tp_just)
-    if arg_type == tp_just:
-        # If the type is an egg type, it has to be a runtime expr
-        assert isinstance(arg, RuntimeExpr)
+    # If this is a runtime expression that could match the type already, just return it
+    if isinstance(arg, RuntimeExpr) and tp.matches_just({}, arg.__egg_typed_expr__.tp):
         return arg
+    tp_just = tp.to_just()
+    arg_type = resolve_type(arg)
     if arg is DUMMY_VALUE:
         return RuntimeExpr.__from_values__(decls(), TypedExprDecl(tp_just, DummyDecl()))
     if (conversion := _lookup_conversion(arg_type, tp_just)) is not None:

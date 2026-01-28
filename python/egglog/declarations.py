@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cached_property
+from itertools import chain, repeat
 from typing import (
     TYPE_CHECKING,
     ClassVar,
@@ -413,6 +414,13 @@ class TypeVarRef:
         vars[self] = other
         return True
 
+    @property
+    def vars(self) -> set[TypeVarRef]:
+        """
+        Returns all type variables in this type reference.
+        """
+        return {self}
+
 
 @dataclass(frozen=True)
 class TypeRefWithVars:
@@ -436,6 +444,16 @@ class TypeRefWithVars:
             and len(self.args) == len(other.args)
             and all(a.matches_just(vars, b) for a, b in zip(self.args, other.args, strict=True))
         )
+
+    @property
+    def vars(self) -> set[TypeVarRef]:
+        """
+        Returns all type variables in this type reference.
+        """
+        vars = set[TypeVarRef]()
+        for arg in self.args:
+            vars.update(arg.vars)
+        return vars
 
 
 TypeOrVarRef: TypeAlias = TypeVarRef | TypeRefWithVars
@@ -589,6 +607,25 @@ class FunctionSignature:
     def mutates(self) -> bool:
         return self.return_type is None
 
+    @property
+    def arg_vars(self) -> set[TypeVarRef]:
+        """
+        Returns all type variables in the argument types.
+        """
+        vars = set[TypeVarRef]()
+        for arg in self.arg_types:
+            vars.update(arg.vars)
+        if self.var_arg_type:
+            vars.update(self.var_arg_type.vars)
+        return vars
+
+    @property
+    def all_args(self) -> Iterable[TypeOrVarRef]:
+        """
+        Returns all argument types, including var args.
+        """
+        return chain(self.arg_types, (repeat(self.var_arg_type) if self.var_arg_type else []))
+
 
 @dataclass(frozen=True)
 class FunctionDecl:
@@ -675,7 +712,7 @@ class CallDecl:
         """
         Pool CallDecls so that they can be compared by identity more quickly.
 
-        Neccessary bc we search for common parents when serializing CallDecl trees to egglog to
+        Necessary bc we search for common parents when serializing CallDecl trees to egglog to
         only serialize each sub-tree once.
         """
         # normalize the args/kwargs to a tuple so that they can be compared

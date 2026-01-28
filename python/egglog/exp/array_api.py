@@ -2500,7 +2500,7 @@ def factor_ruleset(
     yield rule(
         eq(n).to(polynomial(mss)),
         # Find factor that shows up in most monomials, at least two of them
-        counts == MultiSet.sum_multisets(mss.map(MultiSet[Value].reset_counts)),
+        counts == MultiSet.sum_multisets(mss.map(MultiSet.reset_counts)),
         eq(factor).to(counts.pick_max()),
         # Only factor out if it term appears in more than one monomial
         counts.count(factor) > 1,
