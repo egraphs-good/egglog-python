@@ -939,10 +939,10 @@ def _value(i: Int, f: Float, b: Boolean, v: Value, v1: Value, v2: Value, i1: Int
     yield rewrite(Value.int(i) ** Value.float(f1)).to(Value.float(Float.from_int(i) ** f1))
 
     # abs
-    yield rewrite(abs(Value.int(i))).to(Value.int(abs(i)))
-    yield rewrite(abs(Value.float(f))).to(Value.float(abs(f)))
+    yield rewrite(Value.int(i).__abs__()).to(Value.int(i.__abs__()))
+    yield rewrite(Value.float(f).__abs__()).to(Value.float(f.__abs__()))
     # abs(x) **2 = x**2
-    yield rewrite(abs(v) ** Value.float(Float.rational(BigRat(2, 1)))).to(v ** Value.float(2))
+    yield rewrite(v.__abs__() ** Value.float(Float.rational(BigRat(2, 1)))).to(v ** Value.float(2))
 
     # ** distributes over division
     yield rewrite((v1 / v) ** v2, subsume=True).to(v1**v2 / (v**v2))
