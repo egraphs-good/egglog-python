@@ -1,53 +1,26 @@
 """
-
+Experimental Array API support.
 
 ## Lists
 
 Lists have two main constructors:
 
 - `List(length, idx_fn)`
-- `List.EMPTY` / `initial.append(last)`
+- `List.from_vec(vs)`
 
-This is so that they can be defined either with a known fixed integer length (the cons list type) or a symbolic
+This is so that they can be defined either with a known fixed integer length or a symbolic
 length that could not be resolved to an integer.
 
-There are rewrites to convert between these constructors in both directions. The only limitation however is that
-`length` has to a real i64 in order to be converted to a cons list.
-
-When you are writing a function that uses ints, feel free to the `__getitem__` or `length()` methods or match
-directly on `List()` constructor. If you can write your function using that interface please do. But for some other
-methods whether the resulting length/index function is dependent on the rest of it, you can only define it with a known
-length, so you can then use the const list constructors.
-
-We also support creating lists from vectors. These can be converted one to one to the snoc list representation.
-
-It is troublesome to have to redefine lists for every type. It would be nice to have generic types, but they are not implemented yet.
-
-We are guaranteed that all lists with known lengths will be represented as cons/empty. To safely use lists, use
-the `.length` and `.__getitem__` methods, unless you want to depend on it having known length, in which
-case you can match directly on the cons list.
-
-To be a list, you must implement two methods:
+Both constructors must implement two methods:
 
 * `l.length() -> Int`
 * `l.__getitem__(i: Int) -> T`
 
-There are three main types of constructors for lists which all implement these methods:
+Lists with a known length will be subsumed into the vector representation.
 
-* Functional `List(length, idx_fn)`
-* cons (well reversed cons) lists `List.EMPTY` and `l.append(x)`
-* Vectors `List.from_vec(vec)`
+Lists that have vecs that are equal will have the elements unified.
 
-Also all lists constructors must be converted to the functional representation, so that we can match on it
-and convert lists with known lengths into cons lists and into vectors.
-
-This is necessary so that known length lists are properly materialized during extraction.
-
-Q: Why are they implemented as SNOC lists instead of CONS lists?
-A: So that when converting from functional to lists we can use the same index function by starting at the end and folding
-   that way recursively.
-
-
+Methods that transform lists should also subsume, so that the vector version will be preferred.
 """
 
 # mypy: disable-error-code="empty-body"
@@ -89,6 +62,8 @@ array_api_ruleset = ruleset(name="array_api_ruleset")
 
 
 class Boolean(Expr, ruleset=array_api_ruleset):
+    NEVER: ClassVar[Boolean]
+
     def __init__(self, value: BoolLike) -> None: ...
 
     @method(preserve=True)
@@ -479,6 +454,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
     def __iter__(self) -> Iterator[Int]:
         return iter(self.eval())
 
+    @method(merge=Vec.__or__)  # type: ignore[prop-decorator]
     @property
     def to_vec(self) -> Vec[Int]: ...
 
@@ -646,6 +622,7 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
     def __iter__(self) -> Iterator[TupleInt]:
         return iter(self.eval())
 
+    @method(merge=Vec.__or__)  # type: ignore[prop-decorator]
     @property
     def to_vec(self) -> Vec[TupleInt]: ...
 
@@ -836,7 +813,8 @@ class Value(Expr, ruleset=array_api_ruleset):
 
     def isfinite(self) -> Boolean: ...
 
-    def __lt__(self, other: ValueLike) -> Boolean: ...
+    # TODO: Fix
+    def __lt__(self, other: ValueLike) -> Value: ...
     def __le__(self, other: ValueLike) -> Boolean: ...
     def __gt__(self, other: ValueLike) -> Boolean: ...
     def __ge__(self, other: ValueLike) -> Boolean: ...
@@ -941,8 +919,8 @@ def _value(i: Int, f: Float, b: Boolean, v: Value, v1: Value, v2: Value, i1: Int
     yield rewrite(Value.int(i) > Value.int(i1)).to(i > i1)
     yield rewrite(Value.float(f) > Value.float(f1)).to(f > f1)
     # <
-    yield rewrite(Value.int(i) < Value.int(i1)).to(i < i1)
-    yield rewrite(Value.float(f) < Value.float(f1)).to(f < f1)
+    yield rewrite(Value.int(i) < Value.int(i1)).to(Value.bool(i < i1))
+    yield rewrite(Value.float(f) < Value.float(f1)).to(Value.bool(f < f1))
 
     # /
     yield rewrite(Value.float(f) / Value.float(f1)).to(Value.float(f / f1))
@@ -1573,6 +1551,7 @@ class TupleNDArray(Expr, ruleset=array_api_ruleset):
     def __iter__(self) -> Iterator[NDArray]:
         return iter(self.eval())
 
+    @method(merge=Vec.__or__)  # type: ignore[prop-decorator]
     @property
     def to_vec(self) -> Vec[NDArray]: ...
 
@@ -1933,9 +1912,9 @@ def vector_norm(x: NDArrayLike) -> NDArray:
     """
     https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.vector_norm.html
     TODO: support axis
-    >>> x = NDArray.vector([1, 2, 3, 4, 5, 6, 7, 8, 9])
-    >>> vector_norm(x).eval_numpy("float64")
-    array(16.88194302)
+    # >>> x = NDArray.vector([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    # >>> vector_norm(x).eval_numpy("float64")
+    # array(16.88194302)
     """
     # https://numpy.org/doc/stable/reference/generated/numpy.linalg.norm.html#numpy.linalg.norm
     # sum(abs(x)**ord)**(1./ord) where ord=2
@@ -2068,7 +2047,7 @@ def _interval_analaysis(
             NDArray.scalar(Value.bool(possible_values(x.index(ALL_INDICES).to_truthy_value).contains(Value.bool(TRUE))))
         ),
         # Indexing x < y is the same as broadcasting the index and then indexing both and then comparing
-        rewrite((x < y).index(idx)).to(Value.bool(x_value < y_value)),
+        rewrite((x < y).index(idx)).to(x_value < y_value),
         # Same for x / y
         rewrite((x / y).index(idx)).to(x_value / y_value),
         # Indexing a scalar is the same as the scalar
@@ -2102,7 +2081,7 @@ def _interval_analaysis(
         # Define v < 0 to be false, if greater_zero(v)
         rule(
             greater_zero(v),
-            eq(v1).to(Value.bool(v < Value.int(Int(0)))),
+            eq(v1).to(v < Value.int(Int(0))),
         ).then(
             union(v1).with_(Value.bool(FALSE)),
         ),

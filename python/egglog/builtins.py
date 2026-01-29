@@ -1021,6 +1021,9 @@ class Vec(BuiltinExpr, Generic[T], egg_sort="Vec"):
     @method(egg_fn="vec-set")
     def set(self, index: i64Like, value: T) -> Vec[T]: ...
 
+    @method(egg_fn="vec-union")
+    def __or__(self, other: Vec[T]) -> Vec[T]: ...
+
 
 for sequence_type in (list, tuple):
     converter(

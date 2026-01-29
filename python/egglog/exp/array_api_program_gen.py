@@ -144,7 +144,7 @@ def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Valu
     yield rewrite(value_program(Value.float(f))).to(float_program(f))
     # Could add .item() but we usually dont need it.
     yield rewrite(value_program(x.to_value())).to(ndarray_program(x))
-    yield rewrite(bool_program(v1 < v2)).to(Program("(") + value_program(v1) + " < " + value_program(v2) + ")")
+    yield rewrite(value_program(v1 < v2)).to(Program("(") + value_program(v1) + " < " + value_program(v2) + ")")
     yield rewrite(value_program(v1 / v2)).to(Program("(") + value_program(v1) + " / " + value_program(v2) + ")")
     yield rewrite(value_program(v1 + v2)).to(Program("(") + value_program(v1) + " + " + value_program(v2) + ")")
     yield rewrite(value_program(v1 * v2)).to(Program("(") + value_program(v1) + " * " + value_program(v2) + ")")

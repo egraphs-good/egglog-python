@@ -26,7 +26,7 @@ __all__ = [
 ]
 MAX_LINE_LENGTH = 88
 LINE_DIFFERENCE = 10
-BLACK_MODE = black.Mode(line_length=88)
+BLACK_MODE = black.Mode(line_length=MAX_LINE_LENGTH)
 
 # Use this special character in place of the args, so that if the args are inlined
 # in the viz, they will replace it
@@ -97,7 +97,10 @@ def pretty_decl(
         expr = f"{wrapping_fn}({expr})"
     program = "\n".join([*pretty.statements, expr])
     # First unparse AST to get consistent formatting, then use black to format it nicely
-    ast_tree = ast.parse(program, mode="exec")
+    try:
+        ast_tree = ast.parse(program, mode="exec")
+    except SyntaxError:
+        return program
     program = ast.unparse(ast_tree)
     try:
         # TODO: Try replacing with ruff for speed

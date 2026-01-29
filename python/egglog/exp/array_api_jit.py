@@ -31,7 +31,7 @@ def jit(
     fn_program = EvalProgram(program, {"np": np})
     egraph.register(fn_program)
     egraph.run(array_api_program_gen_schedule)
-    return cast("X", fn_program.as_py_object.value)
+    return cast("X", egraph.extract(fn_program.as_py_object).value)
 
 
 def function_to_program(fn: Callable, save_egglog_string: bool) -> tuple[EGraph, NDArray, NDArray, Program]:
