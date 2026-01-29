@@ -589,7 +589,7 @@ def _fn_decl(
     else:
         var_arg_type = None
     arg_types = tuple(
-        decls.get_paramaterized_class(ref.ident)
+        decls.get_parameterized_class(ref.ident)
         if i == 0 and isinstance(ref, MethodRef | PropertyRef)
         else resolve_type_annotation_mutate(decls, hints[t.name])
         for i, t in enumerate(params)
@@ -604,7 +604,7 @@ def _fn_decl(
     decls.update(*arg_defaults)
 
     return_type = (
-        decls.get_paramaterized_class(ref.ident)
+        decls.get_parameterized_class(ref.ident)
         if isinstance(ref, InitRef)
         else arg_types[0]
         if mutates_first_arg
@@ -778,7 +778,7 @@ def _add_default_rewrite_function(
     arg_exprs: list[RuntimeExpr | RuntimeClass] = [RuntimeExpr.__from_values__(decls, a) for a in args]
     # If this is a classmethod, add the class as the first arg
     if isinstance(ref, ClassMethodRef):
-        tp = decls.get_paramaterized_class(ref.ident)
+        tp = decls.get_parameterized_class(ref.ident)
         arg_exprs.insert(0, RuntimeClass(Thunk.value(decls), tp))
     with set_current_ruleset(ruleset):
         res = fn(*arg_exprs)

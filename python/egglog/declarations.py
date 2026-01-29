@@ -1,7 +1,7 @@
 """
 Data only descriptions of the components of an egraph and the expressions.
 
-We seperate it it into two pieces, the references the declerations, so that we can report mutually recursive types.
+We separate it it into two pieces, the references the declarations, so that we can report mutually recursive types.
 """
 
 from __future__ import annotations
@@ -310,9 +310,9 @@ class Declarations:
     def get_class_decl(self, ident: Ident) -> ClassDecl:
         return self._classes[ident]
 
-    def get_paramaterized_class(self, ident: Ident) -> TypeRefWithVars:
+    def get_parameterized_class(self, ident: Ident) -> TypeRefWithVars:
         """
-        Returns a class reference with type parameters, if the class is paramaterized.
+        Returns a class reference with type parameters, if the class is parameterized.
         """
         type_vars = self._classes[ident].type_vars
         return TypeRefWithVars(ident, type_vars)
@@ -754,7 +754,7 @@ class PartialCallDecl:
 
     Note it does not need to have any args, in which case it's just a function pointer.
 
-    Seperated from the call decl so it's clear it is translated to a `unstable-fn` call.
+    Separated from the call decl so it's clear it is translated to a `unstable-fn` call.
     """
 
     call: CallDecl
