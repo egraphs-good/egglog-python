@@ -264,7 +264,7 @@ def _int(i: i64, j: i64, r: Boolean, o: Int, b: Int):
     yield rewrite(Int(i) << Int(j)).to(Int(i << j))
     yield rewrite(Int(i) >> Int(j)).to(Int(i >> j))
     yield rewrite(~Int(i)).to(Int(~i))
-    yield rewrite(abs(Int(i))).to(Int(abs(i)))
+    yield rewrite(Int(i).__abs__()).to(Int(i.__abs__()))
 
     yield rewrite(Int.if_(TRUE, o, b), subsume=True).to(o)
     yield rewrite(Int.if_(FALSE, o, b), subsume=True).to(b)
@@ -404,7 +404,7 @@ def _float(fl: Float, f: f64, f2: f64, i: i64, r: BigRat, r1: BigRat, i_: Int):
         rewrite(Float.rational(r) == Float.rational(r)).to(TRUE),
         rewrite(Float.rational(r) == Float.rational(r1)).to(FALSE, ne(r).to(r1)),
         rewrite(Float.rational(r).__round__()).to(Float.rational(r.round())),
-        rewrite(abs(Float(f))).to(Float(abs(f))),
+        rewrite(Float(f).__abs__()).to(Float(f.__abs__())),
     ]
 
 
@@ -1819,6 +1819,10 @@ def square(x: NDArray) -> NDArray: ...
 def any(x: NDArray) -> NDArray: ...
 
 
+@function(egg_fn="ndarray-abs")
+def abs(x: NDArray) -> NDArray: ...
+
+
 @function(egg_fn="ndarray-log")
 def log(x: NDArray) -> NDArray: ...
 
@@ -1921,7 +1925,9 @@ def vector_norm(x: NDArrayLike) -> NDArray:
     x = cast("NDArray", x)
     # Only works on vectors
     return NDArray.scalar(
-        x.to_values().map_value(lambda v: abs(v) ** Value.float(Float(2.0))).foldl_value(Value.__add__, Value.float(0))
+        x.to_values()
+        .map_value(lambda v: v.__abs__() ** Value.float(Float(2.0)))
+        .foldl_value(Value.__add__, Value.float(0))
         ** Value.float(Float(0.5))
     )
 
