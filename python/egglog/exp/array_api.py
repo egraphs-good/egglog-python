@@ -1272,6 +1272,9 @@ class NDArray(Expr, ruleset=array_api_ruleset):
     def __len__(self) -> int:
         return self.size.eval()
 
+    @method(egg_fn="sum")
+    def sum(self, axis: OptionalIntOrTuple = None) -> NDArray: ...
+
     @method(preserve=True)
     def __iter__(self) -> Iterator[NDArray]:
         for i in range(len(self)):
