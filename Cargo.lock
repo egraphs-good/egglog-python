@@ -317,7 +317,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "egglog"
 version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#fdc03716d3acc47d603a9797bb50330025db0269"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#0335fa1b662bfec7767c45b59c95f69ee46afa5c"
 dependencies = [
  "csv",
  "dyn-clone",
@@ -344,7 +344,7 @@ dependencies = [
 [[package]]
 name = "egglog-add-primitive"
 version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#fdc03716d3acc47d603a9797bb50330025db0269"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#0335fa1b662bfec7767c45b59c95f69ee46afa5c"
 dependencies = [
  "quote",
  "syn 2.0.107",
@@ -353,7 +353,7 @@ dependencies = [
 [[package]]
 name = "egglog-ast"
 version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#fdc03716d3acc47d603a9797bb50330025db0269"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#0335fa1b662bfec7767c45b59c95f69ee46afa5c"
 dependencies = [
  "ordered-float",
 ]
@@ -361,7 +361,7 @@ dependencies = [
 [[package]]
 name = "egglog-bridge"
 version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#fdc03716d3acc47d603a9797bb50330025db0269"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#0335fa1b662bfec7767c45b59c95f69ee46afa5c"
 dependencies = [
  "anyhow",
  "dyn-clone",
@@ -385,7 +385,7 @@ dependencies = [
 [[package]]
 name = "egglog-concurrency"
 version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#fdc03716d3acc47d603a9797bb50330025db0269"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#0335fa1b662bfec7767c45b59c95f69ee46afa5c"
 dependencies = [
  "arc-swap",
  "rayon",
@@ -394,7 +394,7 @@ dependencies = [
 [[package]]
 name = "egglog-core-relations"
 version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#fdc03716d3acc47d603a9797bb50330025db0269"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#0335fa1b662bfec7767c45b59c95f69ee46afa5c"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -424,7 +424,7 @@ dependencies = [
 [[package]]
 name = "egglog-experimental"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-experimental?branch=main#908c47d7046c840c8ff07caa0f7ff29a2e7adc82"
+source = "git+https://github.com/egraphs-good/egglog-experimental?branch=main#bab67a55eb7b92708e9a50d5782b808df09248a3"
 dependencies = [
  "egglog",
  "egglog-ast",
@@ -437,7 +437,7 @@ dependencies = [
 [[package]]
 name = "egglog-numeric-id"
 version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#fdc03716d3acc47d603a9797bb50330025db0269"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#0335fa1b662bfec7767c45b59c95f69ee46afa5c"
 dependencies = [
  "rayon",
 ]
@@ -445,7 +445,7 @@ dependencies = [
 [[package]]
 name = "egglog-reports"
 version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#fdc03716d3acc47d603a9797bb50330025db0269"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#0335fa1b662bfec7767c45b59c95f69ee46afa5c"
 dependencies = [
  "clap",
  "hashbrown 0.16.0",
@@ -459,7 +459,7 @@ dependencies = [
 [[package]]
 name = "egglog-union-find"
 version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#fdc03716d3acc47d603a9797bb50330025db0269"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-fn-bug#0335fa1b662bfec7767c45b59c95f69ee46afa5c"
 dependencies = [
  "crossbeam",
  "egglog-concurrency",
@@ -736,9 +736,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.28"
+version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
+checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "memchr"
@@ -945,9 +945,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.27.1"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37a6df7eab65fc7bee654a421404947e10a0f7085b6951bf2ea395f4659fb0cf"
+checksum = "ab53c047fcd1a1d2a8820fe84f05d6be69e9526be40cb03b73f86b6b03e6d87d"
 dependencies = [
  "indoc",
  "libc",
@@ -965,18 +965,18 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.27.1"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f77d387774f6f6eec64a004eac0ed525aab7fa1966d94b42f743797b3e395afb"
+checksum = "b455933107de8642b4487ed26d912c2d899dec6114884214a0b3bb3be9261ea6"
 dependencies = [
  "target-lexicon",
 ]
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.27.1"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2dd13844a4242793e02df3e2ec093f540d948299a6a77ea9ce7afd8623f542be"
+checksum = "1c85c9cbfaddf651b1221594209aed57e9e5cff63c4d11d1feead529b872a089"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -995,9 +995,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.27.1"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eaf8f9f1108270b90d3676b8679586385430e5c0bb78bb5f043f95499c821a71"
+checksum = "0a5b10c9bf9888125d917fb4d2ca2d25c8df94c7ab5a52e13313a07e050a3b02"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
@@ -1007,9 +1007,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.27.1"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70a3b2274450ba5288bc9b8c1b69ff569d1d61189d4bff38f8d22e03d17f932b"
+checksum = "03b51720d314836e53327f5871d4c0cfb4fb37cc2c4a11cc71907a86342c40f9"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -1205,16 +1205,16 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.145"
+version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
+checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
  "indexmap",
  "itoa",
  "memchr",
- "ryu",
  "serde",
  "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -1343,9 +1343,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.18.1"
+version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
+checksum = "ee48d38b119b0cd71fe4141b30f5ba9c7c5d9f4e7a3a8b4a674e4b6ef789976f"
 dependencies = [
  "getrandom",
  "js-sys",
@@ -1550,3 +1550,9 @@ dependencies = [
  "quote",
  "syn 2.0.107",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02aae0f83f69aafc94776e879363e9771d7ecbffe2c7fbb6c14c5e00dfe88439"
