@@ -140,7 +140,7 @@ The compiled extension artifact `python/egglog/bindings.cpython-*.so` is generat
 ## Code Style Preferences
 
 1. **Imports**: Follow Ruff's import sorting
-2. **Naming**: 
+2. **Naming**:
    - Python: snake_case for functions and variables, PascalCase for classes
    - Rust: Follow standard Rust conventions
 3. **Comments**: Use clear, explanatory comments for complex logic
