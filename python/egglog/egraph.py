@@ -871,7 +871,7 @@ class EGraph:
         egraph = bindings.EGraph(seminaive=seminaive, record=save_egglog_string)
         self._state = EGraphState(egraph)
 
-    def _add_decls(self, *decls: DeclerationsLike) -> None:
+    def _add_decls(self, *decls: DeclarationsLike) -> None:
         for d in decls:
             self._state.__egg_decls__ |= d
 
@@ -1064,7 +1064,7 @@ class EGraph:
         try:
             return self._egraph.run_program(cmd)[0]
         except BaseException as e:
-            e.add_note("while extracting expr:\n" + str(expr))
+            e.add_note("while extracting: " + str(expr))
             raise
 
     def push(self) -> None:
@@ -1384,7 +1384,7 @@ def ruleset(
 
 
 @dataclass
-class Schedule(DelayedDeclerations):
+class Schedule(DelayedDeclarations):
     """
     A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
     """

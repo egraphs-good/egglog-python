@@ -24,7 +24,7 @@ CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable[[A
 _CONVERSION_DECLS = Declarations.create()
 # Defer a list of declerations to be added to the global declerations, so that we can not trigger them procesing
 # until we need them
-_TO_PROCESS_DECLS: list[DeclerationsLike] = []
+_TO_PROCESS_DECLS: list[DeclarationsLike] = []
 
 
 def retrieve_conversion_decls() -> Declarations:

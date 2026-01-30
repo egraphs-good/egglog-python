@@ -4,6 +4,7 @@ use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
 use crate::py_object_sort::{PyObjectSort, PyPickledValue, load};
 use crate::serialize::SerializedEGraph;
+use std::io::Write;
 
 use egglog::prelude::{RustSpan, Span, add_base_sort};
 use egglog::{SerializeConfig, span};
@@ -11,6 +12,7 @@ use log::info;
 use num_bigint::BigInt;
 use num_rational::{BigRational, Rational64};
 use pyo3::prelude::*;
+use tempfile::NamedTempFile;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -60,11 +62,19 @@ impl EGraph {
     ) -> EggResult<Vec<CommandOutput>> {
         let mut commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
         let mut cmds_str = String::new();
+        // Write cmds to temporary file for better error messages
+        let mut file = NamedTempFile::new().unwrap();
+
         for cmd in &commands {
-            cmds_str = cmds_str + &cmd.to_string() + "\n";
+            let cmd_string = cmd.to_string();
+            writeln!(file, "{}", cmd_string).unwrap();
+            cmds_str = cmds_str + &cmd_string + "\n";
         }
+        // Keep so that we can lookup errors later
+        let path = Some(file.keep().unwrap().1.to_str().unwrap().to_string());
+
         // Parse all commands so that type analysis works properly
-        commands = self.egraph.parser.get_program_from_string(None, &cmds_str).unwrap();
+        commands = self.egraph.parser.get_program_from_string(path.clone(), &cmds_str).unwrap();
         if let Some(cmds) = &mut self.cmds {
             cmds.push_str(&cmds_str);
         }

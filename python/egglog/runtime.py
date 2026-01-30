@@ -142,14 +142,14 @@ T = TypeVar("T")
 
 def resolve_type_annotation_mutate(decls: Declarations, tp: object) -> TypeOrVarRef:
     """
-    Wrap resolve_type_annotation to mutate decls, as a helper for internal use in sitations where that is more ergonomic.
+    Wrap resolve_type_annotation to mutate decls, as a helper for internal use in situations where that is more ergonomic.
     """
     new_decls, tp = resolve_type_annotation(tp)
     decls |= new_decls
     return tp
 
 
-def resolve_type_annotation(tp: object) -> tuple[DeclerationsLike, TypeOrVarRef]:
+def resolve_type_annotation(tp: object) -> tuple[DeclarationsLike, TypeOrVarRef]:
     """
     Resolves a type object into a type reference.
 
@@ -254,7 +254,7 @@ RUNTIME_CLASS_DESCRIPTORS: dict[str, RuntimeClassDescriptor] = {
 
 
 @dataclass(match_args=False)
-class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
+class RuntimeClass(DelayedDeclarations, metaclass=ClassFactory):
     __egg_tp__: TypeRefWithVars
     # True if we want `__parameters__` to be recognized by `Union`, which means we can't inherit from `type` directly.
     _egg_has_params: InitVar[bool] = False
@@ -409,7 +409,6 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
             )
         if name in cls_decl.methods:
             return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(self.__egg_tp__.ident, name)), bound)
-
         msg = f"Class {self.__egg_tp__.ident} has no method {name}"
         raise AttributeError(msg) from None
 
@@ -468,7 +467,7 @@ class RuntimeFunctionMeta(type):
 
 
 @dataclass
-class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
+class RuntimeFunction(DelayedDeclarations, metaclass=RuntimeFunctionMeta):
     __egg_ref_thunk__: Callable[[], CallableRef]
     # Either they bound class for something like `Vec[Int].create` or a RuntimeExpr for bound methods
     # bound methods need to store RuntimeExpr not just TypedExprDecl, so they can mutate the expr if required on self
@@ -647,7 +646,7 @@ ON_CREATE_EXPR: None | Callable[[Callable[[], TypedExprDecl]], None] = None
 
 
 @dataclass
-class RuntimeExpr(DelayedDeclerations):
+class RuntimeExpr(DelayedDeclarations):
     __egg_typed_expr_thunk__: Callable[[], TypedExprDecl]
 
     def __post_init__(self) -> None:

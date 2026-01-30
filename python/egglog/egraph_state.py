@@ -42,13 +42,13 @@ def span(frame_index: int = 0) -> bindings.RustSpan:
 @dataclass
 class EGraphState:
     """
-    State of the EGraph declerations and rulesets, so when we pop/push the stack we know whats defined.
+    State of the EGraph declarations and rulesets, so when we pop/push the stack we know whats defined.
 
     Used for converting to/from egg and for pretty printing.
     """
 
     egraph: bindings.EGraph
-    # The decleratons we have added.
+    # The declarations we have added.
     __egg_decls__: Declarations = field(default_factory=Declarations)
     # Mapping of added rulesets to the added rules
     rulesets: dict[Ident, set[RewriteOrRuleDecl]] = field(default_factory=dict)
@@ -466,16 +466,14 @@ class EGraphState:
             # If this has args, create a new parameterized version of the builtin class
             if ref.args:
                 if ref.ident == Ident.builtin("UnstableFn"):
-                    # UnstableFn is a special case, where the rest of args are collected into a call
-                    if len(ref.args) < 2:
-                        msg = "Zero argument higher order functions not supported"
-                        raise NotImplementedError(msg)
                     type_args: list[bindings._Expr] = [
                         bindings.Call(
                             span(),
                             self.type_ref_to_egg(ref.args[1]),
                             [bindings.Var(span(), self.type_ref_to_egg(a)) for a in ref.args[2:]],
-                        ),
+                        )
+                        if len(ref.args) > 1
+                        else bindings.Lit(span(), bindings.Unit()),
                         bindings.Var(span(), self.type_ref_to_egg(ref.args[0])),
                     ]
                 else:

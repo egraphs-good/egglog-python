@@ -81,7 +81,7 @@ class ExprValueError(AttributeError):
 
 class Unit(BuiltinExpr, egg_sort="Unit"):
     """
-    The unit type. This is used to reprsent if a value exists in the e-graph or not.
+    The unit type. This is used to represent if a value exists in the e-graph or not.
     """
 
     def __init__(self) -> None: ...
@@ -287,6 +287,9 @@ class i64(BuiltinExpr, egg_sort="i64"):  # noqa: N801
 
     @method(egg_fn="abs")
     def __abs__(self) -> i64: ...
+
+    @method(egg_fn="vec-range")
+    def range(self) -> Vec[i64]: ...
 
 
 # The types which can be converted into an i64
@@ -1024,6 +1027,9 @@ class Vec(BuiltinExpr, Generic[T], egg_sort="Vec"):
     @method(egg_fn="vec-union")
     def __or__(self, other: Vec[T]) -> Vec[T]: ...
 
+    @method(egg_fn="unstable-vec-map", reverse_args=True)
+    def map(self, fn: Callable[[T], V]) -> Vec[V]: ...
+
 
 for sequence_type in (list, tuple):
     converter(
@@ -1036,8 +1042,94 @@ for sequence_type in (list, tuple):
 
 VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
 
-v = Vec(i64(10))
-v.append([i64(10)])
+
+TS = TypeVarTuple("TS")
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+
+
+class UnstableFn(BuiltinExpr, Generic[T, *TS], egg_sort="UnstableFn"):
+    @overload
+    def __init__(self, f: Callable[[Unpack[TS]], T]) -> None: ...
+
+    @overload
+    def __init__(self, f: Callable[[T1, Unpack[TS]], T], _a: T1, /) -> None: ...
+
+    @overload
+    def __init__(self, f: Callable[[T1, T2, Unpack[TS]], T], _a: T1, _b: T2, /) -> None: ...
+
+    # Removing due to bug in MyPy
+    # https://github.com/python/mypy/issues/17212
+    # @overload
+    # def __init__(self, f: Callable[[T1, T2, T3, Unpack[TS]], T], _a: T1, _b: T2, _c: T3, /) -> None: ...
+
+    # etc, for partial application
+
+    @method(egg_fn="unstable-fn")
+    def __init__(self, f, *partial) -> None: ...
+
+    @method(preserve=True)
+    @deprecated("use .value")
+    def eval(self) -> Callable[[Unpack[TS]], T]:
+        return self.value
+
+    @method(preserve=True)  # type: ignore[prop-decorator]
+    @property
+    def value(self) -> Callable[[Unpack[TS]], T]:
+        """
+        If this is a constructor, returns either the callable directly or a `functools.partial` function if args are provided.
+        """
+        if (fn := get_literal_value(self)) is not None:
+            return fn
+        raise ExprValueError(self, "UnstableFn(f, *args)")
+
+    __match_args__ = ("value",)
+
+    @method(egg_fn="unstable-app")
+    def __call__(self, *args: *TS) -> T: ...
+
+
+# Method Type is for builtins like __getitem__
+converter(MethodType, UnstableFn, lambda m: UnstableFn[*get_type_args()](m.__func__, m.__self__))  # type: ignore[operator, misc]
+converter(RuntimeFunction, UnstableFn, lambda rf: UnstableFn[*get_type_args()](rf))  # type: ignore[operator, misc]
+converter(partial, UnstableFn, lambda p: UnstableFn[*get_type_args()](p.func, *p.args))  # type: ignore[operator, misc]
+
+
+def _convert_function(fn: FunctionType) -> UnstableFn:
+    """
+    Converts a function type to an unstable function. This function will be an anon function in egglog.
+
+    Would just be UnstableFn(function(a)) but we have to account for unbound vars within the body.
+
+    This means that we have to turn all of those unbound vars into args to the function, and then
+    partially apply them, alongside creating a default rewrite for the function.
+    """
+    decls = Declarations()
+    return_type, *arg_types = [resolve_type_annotation_mutate(decls, tp) for tp in get_type_args()]
+    arg_names = [p.name for p in signature(fn).parameters.values()]
+    arg_decls = [
+        TypedExprDecl(tp.to_just(), UnboundVarDecl(name)) for name, tp in zip(arg_names, arg_types, strict=True)
+    ]
+    res = resolve_literal(
+        return_type, fn(*(RuntimeExpr.__from_values__(decls, a) for a in arg_decls)), Thunk.value(decls)
+    )
+    res_expr = res.__egg_typed_expr__
+    decls |= res
+    # these are all the args that appear in the body that are not bound by the args of the function
+    unbound_vars = list(collect_unbound_vars(res_expr) - set(arg_decls))
+    # prefix the args with them
+    fn_ref = UnnamedFunctionRef(tuple(unbound_vars + arg_decls), res_expr)
+    rewrite_decl = DefaultRewriteDecl(fn_ref, res_expr.expr, subsume=True)
+    ruleset_decls = _add_default_rewrite_inner(decls, rewrite_decl, get_current_ruleset())
+    ruleset_decls |= res
+
+    fn = RuntimeFunction(Thunk.value(decls), Thunk.value(fn_ref))
+    return UnstableFn(fn, *(RuntimeExpr.__from_values__(decls, v) for v in unbound_vars))
+
+
+converter(FunctionType, UnstableFn, _convert_function)
 
 
 class PyObject(BuiltinExpr, egg_sort="PyObject"):
@@ -1116,95 +1208,6 @@ def py_exec(code: StringLike, globals: object = PyObject.dict(), locals: object 
     """
     Copies the locals, execs the Python code, and returns the locals with any updates.
     """
-
-
-TS = TypeVarTuple("TS")
-
-T1 = TypeVar("T1")
-T2 = TypeVar("T2")
-T3 = TypeVar("T3")
-
-
-class UnstableFn(BuiltinExpr, Generic[T, *TS], egg_sort="UnstableFn"):
-    @overload
-    def __init__(self, f: Callable[[Unpack[TS]], T]) -> None: ...
-
-    @overload
-    def __init__(self, f: Callable[[T1, Unpack[TS]], T], _a: T1, /) -> None: ...
-
-    @overload
-    def __init__(self, f: Callable[[T1, T2, Unpack[TS]], T], _a: T1, _b: T2, /) -> None: ...
-
-    # Removing due to bug in MyPy
-    # https://github.com/python/mypy/issues/17212
-    # @overload
-    # def __init__(self, f: Callable[[T1, T2, T3, Unpack[TS]], T], _a: T1, _b: T2, _c: T3, /) -> None: ...
-
-    # etc, for partial application
-
-    @method(egg_fn="unstable-fn")
-    def __init__(self, f, *partial) -> None: ...
-
-    @method(preserve=True)
-    @deprecated("use .value")
-    def eval(self) -> Callable[[Unpack[TS]], T]:
-        return self.value
-
-    @method(preserve=True)  # type: ignore[prop-decorator]
-    @property
-    def value(self) -> Callable[[Unpack[TS]], T]:
-        """
-        If this is a constructor, returns either the callable directly or a `functools.partial` function if args are provided.
-        """
-        if (fn := get_literal_value(self)) is not None:
-            return fn
-        raise ExprValueError(self, "UnstableFn(f, *args)")
-
-    __match_args__ = ("value",)
-
-    @method(egg_fn="unstable-app")
-    def __call__(self, *args: *TS) -> T: ...
-
-
-# Method Type is for builtins like __getitem__
-converter(MethodType, UnstableFn, lambda m: UnstableFn[*get_type_args()](m.__func__, m.__self__))
-converter(RuntimeFunction, UnstableFn, lambda rf: UnstableFn[*get_type_args()](rf))
-converter(partial, UnstableFn, lambda p: UnstableFn[*get_type_args()](p.func, *p.args))
-
-
-def _convert_function(fn: FunctionType) -> UnstableFn:
-    """
-    Converts a function type to an unstable function. This function will be an anon function in egglog.
-
-    Would just be UnstableFn(function(a)) but we have to account for unbound vars within the body.
-
-    This means that we have to turn all of those unbound vars into args to the function, and then
-    partially apply them, alongside creating a default rewrite for the function.
-    """
-    decls = Declarations()
-    return_type, *arg_types = [resolve_type_annotation_mutate(decls, tp) for tp in get_type_args()]
-    arg_names = [p.name for p in signature(fn).parameters.values()]
-    arg_decls = [
-        TypedExprDecl(tp.to_just(), UnboundVarDecl(name)) for name, tp in zip(arg_names, arg_types, strict=True)
-    ]
-    res = resolve_literal(
-        return_type, fn(*(RuntimeExpr.__from_values__(decls, a) for a in arg_decls)), Thunk.value(decls)
-    )
-    res_expr = res.__egg_typed_expr__
-    decls |= res
-    # these are all the args that appear in the body that are not bound by the args of the function
-    unbound_vars = list(collect_unbound_vars(res_expr) - set(arg_decls))
-    # prefix the args with them
-    fn_ref = UnnamedFunctionRef(tuple(unbound_vars + arg_decls), res_expr)
-    rewrite_decl = DefaultRewriteDecl(fn_ref, res_expr.expr, subsume=True)
-    ruleset_decls = _add_default_rewrite_inner(decls, rewrite_decl, get_current_ruleset())
-    ruleset_decls |= res
-
-    fn = RuntimeFunction(Thunk.value(decls), Thunk.value(fn_ref))
-    return UnstableFn(fn, *(RuntimeExpr.__from_values__(decls, v) for v in unbound_vars))
-
-
-converter(FunctionType, UnstableFn, _convert_function)
 
 
 Container: TypeAlias = Map | Set | MultiSet | Vec | UnstableFn

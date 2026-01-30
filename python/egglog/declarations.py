@@ -50,9 +50,9 @@ __all__ = [
     "ConstructorDecl",
     "Declarations",
     "Declarations",
-    "DeclerationsLike",
+    "DeclarationsLike",
     "DefaultRewriteDecl",
-    "DelayedDeclerations",
+    "DelayedDeclarations",
     "DummyDecl",
     "EqDecl",
     "ExprActionDecl",
@@ -63,7 +63,7 @@ __all__ = [
     "FunctionRef",
     "FunctionSignature",
     "GetCostDecl",
-    "HasDeclerations",
+    "HasDeclarations",
     "Ident",
     "InitRef",
     "JustTypeRef",
@@ -101,12 +101,12 @@ __all__ = [
     "ValueDecl",
     "collect_unbound_vars",
     "replace_typed_expr",
-    "upcast_declerations",
+    "upcast_declarations",
 ]
 
 
 @dataclass(match_args=False)
-class DelayedDeclerations:
+class DelayedDeclarations:
     __egg_decls_thunk__: Callable[[], Declarations] = field(repr=False)
 
     @property
@@ -122,20 +122,20 @@ class DelayedDeclerations:
 
 
 @runtime_checkable
-class HasDeclerations(Protocol):
+class HasDeclarations(Protocol):
     @property
     def __egg_decls__(self) -> Declarations: ...
 
 
-DeclerationsLike: TypeAlias = Union[HasDeclerations, None, "Declarations"]
+DeclarationsLike: TypeAlias = Union[HasDeclarations, None, "Declarations"]
 
 
-def upcast_declerations(declerations_like: Iterable[DeclerationsLike]) -> list[Declarations]:
+def upcast_declarations(declarations_like: Iterable[DeclarationsLike]) -> list[Declarations]:
     d = []
-    for l in declerations_like:
+    for l in declarations_like:
         if l is None:
             continue
-        if isinstance(l, HasDeclerations):
+        if isinstance(l, HasDeclarations):
             d.append(l.__egg_decls__)
         elif isinstance(l, Declarations):
             d.append(l)
@@ -179,8 +179,8 @@ class Declarations:
         return ruleset
 
     @classmethod
-    def create(cls, *others: DeclerationsLike) -> Declarations:
-        others = upcast_declerations(others)
+    def create(cls, *others: DeclarationsLike) -> Declarations:
+        others = upcast_declarations(others)
         if not others:
             return Declarations()
         first, *rest = others
@@ -195,26 +195,26 @@ class Declarations:
         self.update_other(new)
         return new
 
-    def update(self, *others: DeclerationsLike) -> None:
+    def update(self, *others: DeclarationsLike) -> None:
         for other in others:
             self |= other
 
-    def __or__(self, other: DeclerationsLike) -> Declarations:
+    def __or__(self, other: DeclarationsLike) -> Declarations:
         result = self.copy()
         result |= other
         return result
 
-    def __ior__(self, other: DeclerationsLike) -> Self:
+    def __ior__(self, other: DeclarationsLike) -> Self:
         if other is None:
             return self
-        if isinstance(other, HasDeclerations):
+        if isinstance(other, HasDeclarations):
             other = other.__egg_decls__
         other.update_other(self)
         return self
 
     def update_other(self, other: Declarations) -> None:
         """
-        Updates the other decl with these values in palce.
+        Updates the other decl with these values in place.
         """
         other._functions |= self._functions
         other._classes |= self._classes
@@ -325,7 +325,7 @@ class ClassDecl:
     builtin: bool = False
     init: ConstructorDecl | FunctionDecl | None = None
     class_methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
-    # These have to be seperate from class_methods so that printing them can be done easily
+    # These have to be separate from class_methods so that printing them can be done easily
     class_variables: dict[str, ConstantDecl] = field(default_factory=dict)
     methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
     properties: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
