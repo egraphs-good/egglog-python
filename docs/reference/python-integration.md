@@ -679,6 +679,71 @@ r = ruleset(
 egraph.saturate(r)
 ```
 
+## Debugging and Inspection
+
+When a rewrite or rule causes an unexpected equality, these hooks are the fastest ways to
+figure out which rules fired and what the e-graph contains.
+
+### Run reports and rule counts
+
+`EGraph.run(...)` returns a `RunReport` that includes counts and timings per rule.
+
+```{code-cell} python
+egraph = EGraph()
+egraph.register(Math(2) + Math(100))
+report = egraph.run(3, ruleset=ruleset(rewrite(Math(2) + Math(100)).to(Math(102))))
+
+# How many times each rule matched in this run:
+report.num_matches_per_rule
+
+# Total time spent searching/applying each rule:
+report.search_and_apply_time_per_rule
+```
+
+You can also retrieve cumulative stats for the current e-graph:
+
+```{code-cell} python
+egraph = EGraph()
+egraph.register(Math(1) + Math(2))
+egraph.run(2)
+stats = egraph.stats()
+stats.num_matches_per_rule
+```
+
+### Serialize the e-graph
+
+If you create the e-graph with `save_egglog_string=True`, you can dump the program
+sent to egglog for offline inspection or minimization:
+
+```{code-cell} python
+egraph = EGraph(save_egglog_string=True)
+egraph.register(Math(1) + Math(2))
+egraph.run(2)
+egglog_program = egraph.as_egglog_string
+```
+
+For structural inspection, the internal serializer can be used to produce JSON or
+Graphviz output. These are especially useful when an unsound rewrite merges
+unexpected e-classes.
+
+```{code-cell} python
+egraph = EGraph()
+egraph.register(Math(1) + Math(2))
+egraph.run(2)
+serialized = egraph._serialize(split_primitive_outputs=True)  # internal helper
+json_blob = serialized.to_json()
+dot = serialized.to_dot()
+```
+
+### Common pitfalls (rule authoring)
+
+- Primitive container sorts like `Vec[...]` should not be merged or unioned. Avoid
+  using merge functions that combine Vec outputs, and prefer one-way `set_` rules.
+- Guard vector indexing rules with bounds checks (`0 <= k < vs.length()`) to avoid
+  `vec-get failed` panics and unsound conclusions.
+- Be careful with rules that build terms with negative lengths (e.g., `length - 1`);
+  ensure they only fire when the length is proven positive.
+
 ## Custom Cost Models
 
 By default, when extracting from the e-graph, we use a simple cost model, that looks at the costs assigned to each

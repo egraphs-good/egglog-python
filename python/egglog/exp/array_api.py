@@ -766,7 +766,7 @@ def _tuple_int(
     yield rewrite(TupleInt.fn(i2, idx_fn)[i]).to(idx_fn(check_index(i, i2)))
 
     yield rewrite(TupleInt(vs).length()).to(Int(vs.length()))
-    yield rewrite(TupleInt(vs)[Int(k)]).to(vs[k])
+    yield rewrite(TupleInt(vs)[Int(k)]).to(vs[k], k >= 0, k < vs.length())
 
     yield rewrite(TupleInt.fn(Int(k), idx_fn), subsume=True).to(TupleInt(k.range().map(lambda i: idx_fn(Int(i)))))
 
@@ -872,7 +872,7 @@ def _tuple_tuple_int(
     yield rewrite(TupleTupleInt.fn(i2, idx_fn)[i]).to(idx_fn(check_index(i, i2)))
 
     yield rewrite(TupleTupleInt(vs).length()).to(Int(vs.length()))
-    yield rewrite(TupleTupleInt(vs)[Int(k)]).to(vs[k])
+    yield rewrite(TupleTupleInt(vs)[Int(k)]).to(vs[k], k >= 0, k < vs.length())
 
     yield rewrite(TupleTupleInt.fn(Int(k), idx_fn), subsume=True).to(
         TupleTupleInt(k.range().map(lambda i: idx_fn(Int(i))))
@@ -1221,7 +1221,7 @@ def _tuple_value(
     yield rewrite(TupleValue.fn(i2, idx_fn)[i]).to(idx_fn(check_index(i, i2)))
 
     yield rewrite(TupleValue(vs).length()).to(Int(vs.length()))
-    yield rewrite(TupleValue(vs)[Int(k)]).to(vs[k])
+    yield rewrite(TupleValue(vs)[Int(k)]).to(vs[k], k >= 0, k < vs.length())
 
     yield rewrite(TupleValue.fn(Int(k), idx_fn), subsume=True).to(TupleValue(k.range().map(lambda i: idx_fn(Int(i)))))
 
@@ -1266,7 +1266,7 @@ def _tuple_tuple_value(
     yield rewrite(TupleTupleValue.fn(i2, idx_fn)[i]).to(idx_fn(check_index(i, i2)))
 
     yield rewrite(TupleTupleValue(vs).length()).to(Int(vs.length()))
-    yield rewrite(TupleTupleValue(vs)[Int(k)]).to(vs[k])
+    yield rewrite(TupleTupleValue(vs)[Int(k)]).to(vs[k], k >= 0, k < vs.length())
 
     yield rewrite(TupleTupleValue.fn(Int(k), idx_fn), subsume=True).to(
         TupleTupleValue(k.range().map(lambda i: idx_fn(Int(i))))
@@ -1741,7 +1741,7 @@ def _tuple_ndarray(
     yield rewrite(TupleNDArray.fn(i2, idx_fn)[i]).to(idx_fn(check_index(i, i2)))
 
     yield rewrite(TupleNDArray(vs).length()).to(Int(vs.length()))
-    yield rewrite(TupleNDArray(vs)[Int(k)]).to(vs[k])
+    yield rewrite(TupleNDArray(vs)[Int(k)]).to(vs[k], k >= 0, k < vs.length())
 
     yield rewrite(TupleNDArray.fn(Int(k), idx_fn), subsume=True).to(
         TupleNDArray(k.range().map(lambda i: idx_fn(Int(i))))
@@ -2486,8 +2486,11 @@ def _get_current_egraph() -> EGraph:
 
 def try_evaling(egraph: EGraph, schedule: Schedule, expr: Expr, prim_expr: BuiltinExpr) -> Any:
     """
-    Try evaling the expression that will result in a primitive expression being fill.
-    if it fails, display the egraph and raise an error.
+    Try evaluating an expression that should produce a primitive (e.g., Bool/i64).
+    If extraction fails, register the expr, run the schedule, and retry.
+    On egglog panics we dump the .egg program for debugging.
+    A common failure mode is that no rule ever sets the primitive output
+    (e.g., `Boolean.to_bool` / `Int.to_i64`), so extraction fails.
     """
     try:
         return egraph.extract(prim_expr).value  # type: ignore[attr-defined]
