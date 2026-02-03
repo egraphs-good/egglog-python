@@ -783,7 +783,8 @@ class EGraphState:
                 return_tp, *arg_types = tp.args
                 return self._unstable_fn_value_to_expr(_names, _args, return_tp, arg_types)
             case _:
-                raise NotImplementedError(f"Value to expr not implemented for type {tp.ident}")
+                # If this is not a builtin type, or we don't know how to convert it, just return as value
+                return ValueDecl(value)
 
     def _unstable_fn_value_to_expr(
         self, name: str, partial_args: list[bindings.Value], return_tp: JustTypeRef, _arg_types: list[JustTypeRef]

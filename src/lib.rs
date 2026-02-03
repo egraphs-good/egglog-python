@@ -6,6 +6,7 @@ mod py_object_sort;
 mod serialize;
 mod termdag;
 mod utils;
+mod freeze;
 
 use pyo3::prelude::*;
 

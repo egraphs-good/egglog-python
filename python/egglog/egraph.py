@@ -1335,6 +1335,48 @@ class EGraph:
         resolved, _ = resolve_callable(fn)
         return resolved in self._state.cost_callables
 
+    def debug_print(self) -> None:
+        """
+        Prints the internal state of the egraph for debugging purposes.
+        """
+        print("=== EGraph Debug Print ===")
+        print("Mapping from functions to their e-class")
+        for name, fn in self._egraph.freeze().functions.items():
+            for row in fn.rows:
+                call = self._values_to_expr(row.inputs, name)
+                # None for let calls we cant resolve
+                if call is None:
+                    continue
+                res = RuntimeExpr.__from_values__(
+                    self.__egg_decls__,
+                    TypedExprDecl(
+                        tp=call.__egg_typed_expr__.tp,
+                        expr=self._state.value_to_expr(tp=call.__egg_typed_expr__.tp, value=row.output),
+                    ),
+                )
+                equality = eq(call).to(res)
+                debug_str = str(equality)
+                if row.subsumed:
+                    debug_str += " # subsumed"
+                print(debug_str)
+        print("=== End EGraph Debug Print ===")
+
+    def _values_to_expr(self, args: list[bindings._Value], name: str) -> RuntimeExpr | None:
+        if name not in self._state.egg_fn_to_callable_refs:
+            return None
+        (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
+        signature = self.__egg_decls__.get_callable_decl(callable_ref).signature
+        assert isinstance(signature, FunctionSignature)
+        arg_exprs = [
+            TypedExprDecl(tp.to_just(), self._state.value_to_expr(tp.to_just(), arg))
+            for (arg, tp) in zip(args, signature.arg_types, strict=True)
+        ]
+        res_type = signature.semantic_return_type.to_just()
+        return RuntimeExpr.__from_values__(
+            self.__egg_decls__,
+            TypedExprDecl(res_type, CallDecl(callable_ref, tuple(arg_exprs))),
+        )
+
 
 # Either a constant or a function.
 ExprCallable: TypeAlias = Callable[..., BaseExpr] | BaseExpr
@@ -2214,18 +2256,7 @@ class _CostModel(Generic[COST]):
             return self.enode_cost_results[(name, tuple(args))]
         except KeyError:
             pass
-        (callable_ref,) = self.egraph._state.egg_fn_to_callable_refs[name]
-        signature = self.egraph.__egg_decls__.get_callable_decl(callable_ref).signature
-        assert isinstance(signature, FunctionSignature)
-        arg_exprs = [
-            TypedExprDecl(tp.to_just(), self.egraph._state.value_to_expr(tp.to_just(), arg))
-            for (arg, tp) in zip(args, signature.arg_types, strict=True)
-        ]
-        res_type = signature.semantic_return_type.to_just()
-        res = RuntimeExpr.__from_values__(
-            self.egraph.__egg_decls__,
-            TypedExprDecl(res_type, CallDecl(callable_ref, tuple(arg_exprs))),
-        )
+        res = self.egraph._values_to_expr(args, name)
         index = len(self.enode_cost_expressions)
         self.enode_cost_expressions.append(res)
         self.enode_cost_results[(name, tuple(args))] = index

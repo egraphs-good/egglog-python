@@ -2,6 +2,7 @@
 
 use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
+use crate::freeze::FrozenEGraph;
 use crate::py_object_sort::{PyObjectSort, PyPickledValue, load};
 use crate::serialize::SerializedEGraph;
 use std::io::Write;
@@ -237,6 +238,10 @@ impl EGraph {
             fc.2.clone(),
             fc.1.iter().map(|(_, v)| Value(*v)).collect::<Vec<_>>(),
         )
+    }
+
+    fn freeze(&self) -> FrozenEGraph {
+        FrozenEGraph::from_egraph(&self.egraph)
     }
 
     // fn dynamic_cost_model_enode_cost(
