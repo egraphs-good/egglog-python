@@ -1480,12 +1480,12 @@ class RecursiveValue(Expr):
     @classmethod
     def vec(cls, vec: VecLike[RecursiveValue, RecursiveValueLike]) -> RecursiveValue: ...
 
-    def __getitem__(self, index: TupleIntLike) -> Value:
+    def __getitem__(self, index: VecLike[Int, IntLike]) -> Value:
         """
         Index into the RecursiveValue with the given indices. It should match the shape.
 
         >>> rv = convert(((1, 2), (3, 4)), RecursiveValue)
-        >>> int(rv[TupleInt([0, 1])])
+        >>> int(rv[[0, 1]])
         2
         """
 
@@ -1538,7 +1538,6 @@ def _recursive_value(
     i2: Int,
     v: Value,
     vs: Vec[RecursiveValue],
-    ti: TupleInt,
     k: i64,
     lt: Callable[[], RecursiveValue],
     lf: Callable[[], RecursiveValue],
@@ -1549,14 +1548,14 @@ def _recursive_value(
     yield rewrite(RecursiveValue.vec(vs).shape).to(TupleInt((vs.length(),)) + vs[0].shape, vs.length() > 0)
     yield rewrite(RecursiveValue.vec(vs).shape).to(TupleInt((0,)), vs.length() == i64(0))
 
-    yield rewrite(RecursiveValue(v)[ti], subsume=True).to(v)  # Assume ti is empty
+    yield rewrite(RecursiveValue(v)[vi], subsume=True).to(v)  # Assume ti is empty
 
     yield rule(
-        eq(v).to(RecursiveValue.vec(vs)[TupleInt(vi)]),
+        eq(v).to(RecursiveValue.vec(vs)[vi]),
         vi.length() > 0,
         eq(vi[0]).to(Int(k)),
     ).then(
-        union(v).with_(vs[k][TupleInt(vi.remove(0))]),
+        union(v).with_(vs[k][vi.remove(0)]),
     )
 
 
@@ -1843,7 +1842,7 @@ def _ndarray(
         rewrite(NDArray.fn(shape, dtype, idx_fn).dtype, subsume=True).to(dtype),
         rewrite(NDArray.fn(shape, dtype, idx_fn).index(idx), subsume=True).to(idx_fn(idx)),
         rewrite(NDArray(rv).shape, subsume=True).to(rv.shape),
-        rewrite(NDArray(rv).index(idx), subsume=True).to(rv[idx]),
+        rewrite(NDArray(rv).index(TupleInt(vi)), subsume=True).to(rv[vi]),
         # TODO: Special case scalar ops for now
         rewrite(NDArray(v) / NDArray(v), subsume=True).to(NDArray(v / v)),
         rewrite(NDArray(v) + NDArray(v), subsume=True).to(NDArray(v + v)),

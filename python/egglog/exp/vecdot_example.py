@@ -7,23 +7,6 @@ egraph = EGraph()
 egraph.register(res.to_recursive_value())
 egraph.run(array_api_schedule)
 
-_RecursiveValue_1 = RecursiveValue.vec(
-    Vec(
-        RecursiveValue.vec(
-            Vec(
-                RecursiveValue(Value.from_int(Int(1))),
-                RecursiveValue(Value.from_int(Int(2))),
-            )
-        ),
-        RecursiveValue.vec(
-            Vec(
-                RecursiveValue(Value.from_int(Int(3))),
-                RecursiveValue(Value.from_int(Int(4))),
-            )
-        ),
-    )
-)
-egraph.let("im_value", _RecursiveValue_1[TupleInt(Vec(Int(0), Int(0)))])
 new_res = egraph.extract(res.to_recursive_value())
 
 
