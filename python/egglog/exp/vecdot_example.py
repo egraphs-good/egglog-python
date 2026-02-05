@@ -1,17 +1,52 @@
 from egglog.exp.array_api import *
 
-v = NDArray([[1, 2], [3, 4]])
-n = NDArray([3, 4])
+v = NDArray([[1], [3]])
+n = NDArray([3])
 res = vecdot(v, n)
-egraph = EGraph()
+egraph = EGraph(save_egglog_string=True)
 egraph.register(res.to_recursive_value())
 egraph.run(array_api_schedule)
+print(egraph.run(array_api_ruleset).updated)
+print(egraph.run(array_api_ruleset).updated)
 
-new_res = egraph.extract(res.to_recursive_value())
+print(egraph.extract(res.to_recursive_value()))
+
+
+@egraph.run
+@ruleset
+def _recursive_value(
+    i: Int,
+    i2: Int,
+    v: Value,
+    v1: Value,
+    vs: Vec[RecursiveValue],
+    k: i64,
+    lt: Callable[[], RecursiveValue],
+    lf: Callable[[], RecursiveValue],
+    vi: Vec[Int],
+    vi1: Vec[Int],
+    rv: RecursiveValue,
+    rv1: RecursiveValue,
+):
+    yield rule(
+        eq(rv).to(RecursiveValue.vec(vs)),
+        eq(v).to(rv[vi]),
+        vi.length() > 0,
+        eq(vi[0]).to(Int(k)),
+        eq(rv1).to(vs[k]),
+        eq(vi1).to(vi.remove(0)),
+    ).then(
+        union(v).with_(rv1[vi1]),
+        subsume(rv[vi]),
+    )
 
 
 egraph.debug_print()
+new_res = egraph.extract(res.to_recursive_value())
 print(new_res)
+# print(egraph.as_egglog_string)
+# egraph.debug_print()
+# print(new_res)
 
 # new_egraph = EGraph()
 # new_egraph.register(new_res)

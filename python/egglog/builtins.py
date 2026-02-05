@@ -115,6 +115,9 @@ class String(BuiltinExpr, egg_sort="String"):
     def __add__(self, other: StringLike) -> String:
         return join(self, other)
 
+    @method(egg_fn="log")
+    def log(self) -> Unit: ...
+
 
 StringLike: TypeAlias = String | str
 

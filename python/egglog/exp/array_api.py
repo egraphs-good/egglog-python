@@ -1534,15 +1534,7 @@ converter(Value, RecursiveValue, lambda x: RecursiveValue(x))
 
 @array_api_ruleset.register
 def _recursive_value(
-    i: Int,
-    i2: Int,
-    v: Value,
-    vs: Vec[RecursiveValue],
-    k: i64,
-    lt: Callable[[], RecursiveValue],
-    lf: Callable[[], RecursiveValue],
-    vi: Vec[Int],
-    rv: RecursiveValue,
+    v: Value, vs: Vec[RecursiveValue], k: i64, vi: Vec[Int], vi1: Vec[Int], rv: RecursiveValue, rv1: RecursiveValue
 ):
     yield rewrite(RecursiveValue(v).shape).to(TupleInt(()))
     yield rewrite(RecursiveValue.vec(vs).shape).to(TupleInt((vs.length(),)) + vs[0].shape, vs.length() > 0)
@@ -1551,11 +1543,15 @@ def _recursive_value(
     yield rewrite(RecursiveValue(v)[vi], subsume=True).to(v)  # Assume ti is empty
 
     yield rule(
-        eq(v).to(RecursiveValue.vec(vs)[vi]),
+        eq(rv).to(RecursiveValue.vec(vs)),
+        eq(v).to(rv[vi]),
         vi.length() > 0,
         eq(vi[0]).to(Int(k)),
+        eq(rv1).to(vs[k]),
+        eq(vi1).to(vi.remove(0)),
     ).then(
-        union(v).with_(vs[k][vi.remove(0)]),
+        union(v).with_(rv1[vi1]),
+        subsume(rv[vi]),
     )
 
 
