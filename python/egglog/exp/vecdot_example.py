@@ -1,11 +1,45 @@
 from egglog.exp.array_api import *
 
-# smaller example
 v = NDArray([[1, 2], [3, 4]])
 n = NDArray([3, 4])
 res = vecdot(v, n)
+egraph = EGraph()
+egraph.register(res.to_recursive_value())
+egraph.run(array_api_schedule)
 
-print(res.eval_numpy("int64"))
+_RecursiveValue_1 = RecursiveValue.vec(
+    Vec(
+        RecursiveValue.vec(
+            Vec(
+                RecursiveValue(Value.from_int(Int(1))),
+                RecursiveValue(Value.from_int(Int(2))),
+            )
+        ),
+        RecursiveValue.vec(
+            Vec(
+                RecursiveValue(Value.from_int(Int(3))),
+                RecursiveValue(Value.from_int(Int(4))),
+            )
+        ),
+    )
+)
+egraph.let("im_value", _RecursiveValue_1[TupleInt(Vec(Int(0), Int(0)))])
+new_res = egraph.extract(res.to_recursive_value())
+
+
+egraph.debug_print()
+print(new_res)
+
+# new_egraph = EGraph()
+# new_egraph.register(new_res)
+# new_egraph.run(array_api_schedule)
+# print(new_egraph.extract(new_res))
+
+
+# smaller example
+
+
+# print(res.eval_numpy("int64"))
 # This fails with EggSmolError: Panic: Illegal merge attempted for function egglog_exp_array_api_Int_to_i64
 # assert str(res.eval_numpy("float64")) == "array([ 3.,  8., 10.])"
 

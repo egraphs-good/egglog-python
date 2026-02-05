@@ -54,7 +54,7 @@ class EGraphState:
     rulesets: dict[Ident, set[RewriteOrRuleDecl]] = field(default_factory=dict)
 
     # Bidirectional mapping between egg function names and python callable references.
-    # Note that there are possibly mutliple callable references for a single egg function name, like `+`
+    # Note that there are possibly multiple callable references for a single egg function name, like `+`
     # for both int and rational classes.
     egg_fn_to_callable_refs: dict[str, set[CallableRef]] = field(
         default_factory=lambda: defaultdict(set, {"!=": {FunctionRef(Ident.builtin("!="))}})

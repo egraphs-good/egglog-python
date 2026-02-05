@@ -545,11 +545,22 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         >>> ti = TupleInt.range(3)
         >>> ti2 = ti.append(3)
         >>> list(ti2)
-        [i64(0), i64(1), i64(2), i64(3)]
+        [Int(0), Int(1), Int(2), Int(3)]
         """
         return TupleInt.fn(
             self.length() + 1, lambda j: Int.if_(j == self.length(), lambda: cast("Int", i), lambda: self[j])
         )
+
+    @method(unextractable=True)
+    def append_start(self, i: IntLike) -> TupleInt:
+        """
+        Prepend an integer to the start of the tuple.
+        >>> ti = TupleInt.range(3)
+        >>> ti2 = ti.append_start( -1)
+        >>> list(ti2)
+        [Int(-1), Int(0), Int(1), Int(2)]
+        """
+        return TupleInt.fn(self.length() + 1, lambda j: Int.if_(j == 0, lambda: cast("Int", i), lambda: self[j - 1]))
 
     @method(unextractable=True)
     def __add__(self, other: TupleIntLike) -> TupleInt:
@@ -826,8 +837,8 @@ def _tuple_int(
     yield rewrite(TupleInt.fn(i2, idx_fn).length(), subsume=True).to(i2)
     yield rewrite(TupleInt.fn(i2, idx_fn)[i], subsume=True).to(idx_fn(check_index(i2, i)))
 
-    yield rewrite(TupleInt(vs).length(), subsume=True).to(Int(vs.length()))
-    yield rewrite(TupleInt(vs)[Int(k)], subsume=True).to(vs[k])
+    yield rewrite(TupleInt(vs).length()).to(Int(vs.length()))
+    yield rewrite(TupleInt(vs)[Int(k)]).to(vs[k])
 
     yield rewrite(TupleInt.if_(TRUE, lt, lf), subsume=True).to(lt())
     yield rewrite(TupleInt.if_(FALSE, lt, lf), subsume=True).to(lf())
@@ -1488,22 +1499,29 @@ class RecursiveValue(Expr):
         [Int(2), Int(1)]
         """
 
-    # @method(preserve=True)  # type: ignore[prop-decorator]
-    # @property
-    # def value(self) -> PyTupleValuesRecursive:
-    #     """
-    #     Unwraps the RecursiveValue into either a Value or a nested tuple of Values.
+    @method(preserve=True)  # type: ignore[prop-decorator]
+    @property
+    def value(self) -> PyTupleValuesRecursive:
+        """
+        Unwraps the RecursiveValue into either a Value or a nested tuple of Values.
 
-    #     >>> convert(((1, 2), (3, 4)), RecursiveValue).value
-    #     ((Value.from_int(Int(1)), Value.from_int(Int(2))), (Value.from_int(Int(3)), Value.from_int(Int(4))))
-    #     """
-    #     match get_callable_args(self, RecursiveValue):
-    #         case (value,):
-    #             return cast("Value", value)
-    #     match get_callable_args(self, RecursiveValue.vec):
-    #         case (vec,):
-    #             return tuple(v.value for v in cast("Vec[RecursiveValue]", vec))
-    #     raise ExprValueError(self, "RecursiveValue or RecursiveValue.vec")
+        >>> convert(((1, 2), (3, 4)), RecursiveValue).value
+        ((Value.from_int(Int(1)), Value.from_int(Int(2))), (Value.from_int(Int(3)), Value.from_int(Int(4))))
+        """
+        match get_callable_args(self, RecursiveValue):
+            case (value,):
+                return cast("Value", value)
+        match get_callable_args(self, RecursiveValue.vec):
+            case (vec,):
+                return tuple(v.value for v in cast("Vec[RecursiveValue]", vec))
+        raise ExprValueError(self, "RecursiveValue or RecursiveValue.vec")
+
+    @method(preserve=True)
+    def eval(self) -> PyTupleValuesRecursive:
+        """
+        Evals to a nested tuple of values representing the RecursiveValue.
+        """
+        return try_evaling(self)
 
 
 PyTupleValuesRecursive: TypeAlias = Value | tuple["PyTupleValuesRecursive", ...]
@@ -1525,15 +1543,20 @@ def _recursive_value(
     lt: Callable[[], RecursiveValue],
     lf: Callable[[], RecursiveValue],
     vi: Vec[Int],
+    rv: RecursiveValue,
 ):
     yield rewrite(RecursiveValue(v).shape).to(TupleInt(()))
     yield rewrite(RecursiveValue.vec(vs).shape).to(TupleInt((vs.length(),)) + vs[0].shape, vs.length() > 0)
     yield rewrite(RecursiveValue.vec(vs).shape).to(TupleInt((0,)), vs.length() == i64(0))
 
     yield rewrite(RecursiveValue(v)[ti], subsume=True).to(v)  # Assume ti is empty
-    yield rewrite(RecursiveValue.vec(vs)[TupleInt(vi)], subsume=True).to(
-        vs[k][TupleInt(vi.remove(0))],
+
+    yield rule(
+        eq(v).to(RecursiveValue.vec(vs)[TupleInt(vi)]),
+        vi.length() > 0,
         eq(vi[0]).to(Int(k)),
+    ).then(
+        union(v).with_(vs[k][TupleInt(vi.remove(0))]),
     )
 
 
@@ -1572,45 +1595,47 @@ class NDArray(Expr, ruleset=array_api_ruleset):
             lambda idx: tv[idx[0]],
         )
 
-    @method(preserve=True)
-    def eval_vecs(self) -> VecValuesRecursive:
-        """
-        Evals to a nested Vec of values representing the array. It will be extracted and simplified by the e-graph.
-        """
-        # Share an e-graph for the computation of shape and eval
-        egraph = _get_current_egraph()
-        with set_array_api_egraph(egraph):
-            shape = self.shape.eval()
+    def to_recursive_value(self) -> RecursiveValue: ...
 
-        def _inner_values(current_index: tuple[int, ...], remaining_dims: tuple[Int, ...]) -> VecValuesRecursive:
-            if not remaining_dims:
-                return self.index(current_index)
-            return Vec(*(_inner_values((*current_index, i), remaining_dims[1:]) for i in range(remaining_dims[0])))
+    # @method(preserve=True)
+    # def eval_vecs(self) -> VecValuesRecursive:
+    #     """
+    #     Evals to a nested Vec of values representing the array. It will be extracted and simplified by the e-graph.
+    #     """
+    #     # Share an e-graph for the computation of shape and eval
+    #     egraph = _get_current_egraph()
+    #     with set_array_api_egraph(egraph):
+    #         shape = self.shape.eval()
 
-        res = _inner_values((), shape)
-        egraph.register(res)
-        egraph.run(array_api_schedule)
-        return egraph.extract(res)
+    #     def _inner_values(current_index: tuple[int, ...], remaining_dims: tuple[Int, ...]) -> VecValuesRecursive:
+    #         if not remaining_dims:
+    #             return self.index(current_index)
+    #         return Vec(*(_inner_values((*current_index, i), remaining_dims[1:]) for i in range(remaining_dims[0])))
+
+    #     res = _inner_values((), shape)
+    #     egraph.register(res)
+    #     egraph.run(array_api_schedule)
+    #     return egraph.extract(res)
 
     @method(preserve=True)
     def eval(self) -> PyTupleValuesRecursive:
         """
         Evals to a nested tuple of values representing the array.
         """
+        return self.to_recursive_value().eval()
 
-        def _to_tuple(v: VecValuesRecursive) -> PyTupleValuesRecursive:
-            if isinstance(v, Value):
-                return v
-            return tuple(_to_tuple(i) for i in v)
+        # def _to_tuple(v: VecValuesRecursive) -> PyTupleValuesRecursive:
+        #     if isinstance(v, Value):
+        #         return v
+        #     return tuple(_to_tuple(i) for i in v)
 
-        return _to_tuple(self.eval_vecs())
+        # return _to_tuple(self.eval_vecs())
 
     @method(preserve=True)
     def eval_numpy(self, dtype: np.dtype | None = None) -> np.ndarray:
         """
         Evals to a numpy ndarray.
         """
-        print(self.eval()[0])
         return np.array(self.eval(), dtype=dtype)
 
     @method(preserve=True)
@@ -1775,6 +1800,17 @@ class NDArray(Expr, ruleset=array_api_ruleset):
     @classmethod
     def if_(cls, b: BooleanLike, i: Callable[[], NDArray], j: Callable[[], NDArray]) -> NDArray: ...
 
+    def partial_index(self, i: IntLike) -> NDArray:
+        """
+        Partially index into the array, returning a sub-array.
+
+        >>> NDArray(((1, 2), (3, 4))).partial_index(0).eval_numpy("int64")
+        array([1, 2])
+        """
+        return NDArray.fn(
+            self.shape.drop(1), self.dtype, lambda idx: self.index(idx.append_start(check_index(self.shape[0], i)))
+        )
+
 
 VecValuesRecursive: TypeAlias = "Value | Vec[VecValuesRecursive]"
 
@@ -1825,6 +1861,22 @@ def _ndarray(
         # if_
         rewrite(NDArray.if_(TRUE, xt, x1t), subsume=True).to(xt()),
         rewrite(NDArray.if_(FALSE, xt, x1t), subsume=True).to(x1t()),
+        # to RecursiveValue
+        rewrite(NDArray(rv).to_recursive_value(), subsume=True).to(rv),
+        rewrite(NDArray.fn((), dtype, idx_fn).to_recursive_value(), subsume=True).to(
+            RecursiveValue(idx_fn(TupleInt(())))
+        ),
+        rule(
+            eq(x).to(NDArray.fn(TupleInt(vi), dtype, idx_fn)),
+            x.to_recursive_value(),
+            vi.length() > i64(0),
+            eq(vi[0]).to(Int(i)),
+        ).then(
+            union(x.to_recursive_value()).with_(
+                RecursiveValue.vec(i.range().map(lambda j: x.partial_index(j).to_recursive_value()))
+            ),
+            subsume(x.to_recursive_value()),
+        ),
     ]
 
 

@@ -899,6 +899,7 @@ class FrozenEGraph:
 class FrozenFunction:
     input_sorts: list[str]
     output_sort: str
+    is_let_binding: bool
     rows: list[FrozenRow]
 
 @final

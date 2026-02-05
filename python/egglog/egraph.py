@@ -1341,29 +1341,42 @@ class EGraph:
         """
         print("=== EGraph Debug Print ===")
         print("Mapping from functions to their e-class")
-        for name, fn in self._egraph.freeze().functions.items():
-            for row in fn.rows:
-                call = self._values_to_expr(row.inputs, name)
-                # None for let calls we cant resolve
-                if call is None:
-                    continue
-                res = RuntimeExpr.__from_values__(
-                    self.__egg_decls__,
-                    TypedExprDecl(
-                        tp=call.__egg_typed_expr__.tp,
-                        expr=self._state.value_to_expr(tp=call.__egg_typed_expr__.tp, value=row.output),
-                    ),
-                )
-                equality = eq(call).to(res)
-                debug_str = str(equality)
+        # printed_output_sorts = set()
+        frozen = self._egraph.freeze()
+        for name, fn in sorted(frozen.functions.items(), key=lambda kv: kv[1].output_sort):
+            printed_output_values = set()
+            for row in sorted(fn.rows, key=lambda r: r.output):
+                if fn.is_let_binding:
+                    call = RuntimeExpr.__from_values__(
+                        self.__egg_decls__,
+                        TypedExprDecl(self._state.egg_sort_to_type_ref[fn.output_sort], LetRefDecl(name)),
+                    )
+                else:
+                    call = self._values_to_expr(row.inputs, name)
+
+                # if call.__egg_typed_expr__.tp not in printed_output_sorts:
+                #     printed_output_sorts.add(call.__egg_typed_expr__.tp)
+                #     print(f"\n# {call.__egg_typed_expr__.tp}\n")
+
+                if row.output not in printed_output_values:
+                    printed_output_values.add(row.output)
+
+                    res = RuntimeExpr.__from_values__(
+                        self.__egg_decls__,
+                        TypedExprDecl(
+                            tp=call.__egg_typed_expr__.tp,
+                            expr=self._state.value_to_expr(tp=call.__egg_typed_expr__.tp, value=row.output),
+                        ),
+                    )
+                    print(f"\n## {res}: {call.__egg_typed_expr__.tp}\n")
+
                 if row.subsumed:
-                    debug_str += " # subsumed"
-                print(debug_str)
+                    print(subsume(cast("Expr", call)))
+                else:
+                    print(call)
         print("=== End EGraph Debug Print ===")
 
-    def _values_to_expr(self, args: list[bindings._Value], name: str) -> RuntimeExpr | None:
-        if name not in self._state.egg_fn_to_callable_refs:
-            return None
+    def _values_to_expr(self, args: list[bindings._Value], name: str) -> RuntimeExpr:
         (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
         signature = self.__egg_decls__.get_callable_decl(callable_ref).signature
         assert isinstance(signature, FunctionSignature)

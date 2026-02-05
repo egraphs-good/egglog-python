@@ -20,6 +20,7 @@ pub struct FrozenRow {
 pub struct FrozenFunction {
     input_sorts: Vec<String>,
     output_sort: String,
+    is_let_binding: bool,
     rows: Vec<FrozenRow>,
 }
 
@@ -56,6 +57,7 @@ impl FrozenEGraph {
                     .collect(),
                 output_sort: func.schema().output.name().to_string(),
                 rows,
+                is_let_binding: func.is_let_binding(),
             };
             functions.insert(fname.clone(), frozen_function);
         }
