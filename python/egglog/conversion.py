@@ -118,7 +118,8 @@ def convert(source: object, target: type[V]) -> V:
     """
     Convert a source object to a target type.
     """
-    assert isinstance(target, RuntimeClass)
+    # if not issubclass(target, RuntimeClass):
+    #     raise TypeError(f"Expected target type to be a egglog type, got {target} of type {type(target)}")
     return cast("V", resolve_literal(target.__egg_tp__, source, target.__egg_decls_thunk__))
 
 
@@ -132,7 +133,7 @@ def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
 
 def process_tp(tp: type | RuntimeClass) -> JustTypeRef | type:
     """
-    Process a type before converting it, to add it to the global declerations and resolve to a ref.
+    Process a type before converting it, to add it to the global declarations and resolve to a ref.
     """
     if isinstance(tp, RuntimeClass):
         _TO_PROCESS_DECLS.append(tp)

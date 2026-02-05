@@ -534,9 +534,7 @@ class Set(BuiltinExpr, Generic[T], egg_sort="Set"):
 converter(
     set,
     Set,
-    lambda t: Set[get_type_args()[0]](  # type: ignore[misc,operator]
-        *(convert(x, get_type_args()[0]) for x in t)
-    ),
+    lambda t: Set(*(convert(x, get_type_args()[0]) for x in t)) if t else Set[get_type_args()[0]].empty(),  # type: ignore[misc]
 )
 
 SetLike: TypeAlias = Set[T] | set[TO]
@@ -639,9 +637,7 @@ def multiset_fold(f: Callable[[T, T], T], initial: T, xs: MultiSet[T]) -> T: ...
 converter(
     tuple,
     MultiSet,
-    lambda t: MultiSet[get_type_args()[0]](  # type: ignore[misc,operator]
-        *(convert(x, get_type_args()[0]) for x in t)
-    ),
+    lambda t: MultiSet(*(convert(x, get_type_args()[0]) for x in t)) if t else MultiSet[get_type_args()[0]](),  # type: ignore[operator,misc]
 )
 
 MultiSetLike: TypeAlias = MultiSet[T] | tuple[TO, ...]
@@ -1035,9 +1031,7 @@ for sequence_type in (list, tuple):
     converter(
         sequence_type,
         Vec,
-        lambda t: Vec[get_type_args()[0]](  # type: ignore[misc,operator]
-            *(convert(x, get_type_args()[0]) for x in t)
-        ),
+        lambda t: Vec(*(convert(x, get_type_args()[0]) for x in t)) if t else Vec[get_type_args()[0]].empty(),  # type: ignore[misc]
     )
 
 VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]

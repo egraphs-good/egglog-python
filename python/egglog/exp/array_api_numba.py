@@ -19,7 +19,7 @@ array_api_numba_schedule = (array_api_combined_ruleset | array_api_numba_ruleset
 @array_api_numba_ruleset.register
 def _mean(y: NDArray, x: NDArray, i: Int):
     axis = OptionalIntOrTuple.some(IntOrTuple.int(i))
-    res = sum(x, axis) / NDArray.scalar(Value.int(x.shape[i]))
+    res = sum(x, axis) / NDArray.scalar(Value.from_int(x.shape[i]))
 
     yield rewrite(mean(x, axis, FALSE), subsume=True).to(res)
     yield rewrite(mean(x, axis, TRUE), subsume=True).to(expand_dims(res, i))
@@ -63,7 +63,7 @@ def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
 def _unique_inverse(x: NDArray, i: Int):
     return [
         # Creating a mask array of when the unique inverse is a value is the same as a mask array for when the value is that index of the unique values
-        rewrite(unique_inverse(x)[Int(1)] == NDArray.scalar(Value.int(i)), subsume=True).to(
+        rewrite(unique_inverse(x)[Int(1)] == NDArray.scalar(Value.from_int(i)), subsume=True).to(
             x == NDArray.scalar(unique_values(x).index((i,)))
         ),
     ]

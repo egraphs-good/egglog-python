@@ -15,10 +15,7 @@ array_api_program_gen_ruleset = ruleset(name="array_api_program_gen_ruleset")
 array_api_program_gen_eval_ruleset = ruleset(name="array_api_program_gen_eval_ruleset")
 
 array_api_program_gen_combined_ruleset = (
-    array_api_program_gen_ruleset
-    | program_gen_ruleset
-    | array_api_program_gen_eval_ruleset
-    | array_api_vec_to_cons_ruleset
+    array_api_program_gen_ruleset | program_gen_ruleset | array_api_program_gen_eval_ruleset
 )
 array_api_program_gen_schedule = (array_api_program_gen_combined_ruleset | eval_program_rulseset).saturate()
 
@@ -139,9 +136,9 @@ def value_program(x: Value) -> Program: ...
 
 @array_api_program_gen_ruleset.register
 def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Value, xs: NDArray, ti: TupleInt):
-    yield rewrite(value_program(Value.int(i))).to(int_program(i))
-    yield rewrite(value_program(Value.bool(b))).to(bool_program(b))
-    yield rewrite(value_program(Value.float(f))).to(float_program(f))
+    yield rewrite(value_program(Value.from_int(i))).to(int_program(i))
+    yield rewrite(value_program(Value.from_bool(b))).to(bool_program(b))
+    yield rewrite(value_program(Value.from_float(f))).to(float_program(f))
     # Could add .item() but we usually dont need it.
     yield rewrite(value_program(x.to_value())).to(ndarray_program(x))
     yield rewrite(value_program(v1 < v2)).to(Program("(") + value_program(v1) + " < " + value_program(v2) + ")")

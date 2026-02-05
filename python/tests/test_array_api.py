@@ -39,9 +39,9 @@ def is_even(x: Int) -> Boolean:
 
 class TestTupleValue:
     def test_includes(self):
-        x = TupleValue.EMPTY.append(Value.bool(FALSE))
-        check_eq(x.contains(Value.bool(FALSE)), TRUE, array_api_schedule)
-        check_eq(x.contains(Value.bool(TRUE)), FALSE, array_api_schedule)
+        x = TupleValue.EMPTY.append(Value.from_bool(FALSE))
+        check_eq(x.contains(Value.from_bool(FALSE)), TRUE, array_api_schedule)
+        check_eq(x.contains(Value.from_bool(TRUE)), FALSE, array_api_schedule)
 
 
 class TestTupleInt:
@@ -126,9 +126,9 @@ class TestNDArray:
             any(
                 (
                     astype(unique_counts(NDArray.var("X"))[Int(1)], DType.float64)
-                    / NDArray.scalar(Value.float(Float(150.0)))
+                    / NDArray.scalar(Value.from_float(Float(150.0)))
                 )
-                < NDArray.scalar(Value.int(Int(0)))
+                < NDArray.scalar(Value.from_int(Int(0)))
             )
             .to_value()
             .to_bool
