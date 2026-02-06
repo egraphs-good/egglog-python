@@ -65,7 +65,7 @@ def _loopnest_api_ruleset(lna: LoopNestAPI, dim: Int, ti: TupleInt, idx_fn: Call
     # from_tuple
     yield rewrite(LoopNestAPI.from_tuple(TupleInt(())), subsume=True).to(OptionalLoopNestAPI.NONE)
     yield rewrite(LoopNestAPI.from_tuple(TupleInt(vs)), subsume=True).to(
-        OptionalLoopNestAPI(LoopNestAPI(vs[0], LoopNestAPI.from_tuple(TupleInt(vs.remove(0))))),
+        OptionalLoopNestAPI(LoopNestAPI(vs[vs.length() - 1], LoopNestAPI.from_tuple(TupleInt(vs.pop())))),
         vs.length() > 0,
     )
     # get_dims

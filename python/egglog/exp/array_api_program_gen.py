@@ -97,7 +97,7 @@ def _tuple_int_program(
 
     yield rewrite(tuple_int_foldl_program(TupleInt(()), f, init)).to(init)
     yield rewrite(tuple_int_foldl_program(TupleInt(vi), f, init)).to(
-        f(tuple_int_foldl_program(vi.remove(0), f, init), vi[vi.length() - 1]), vi.length() > 0
+        f(tuple_int_foldl_program(vi.pop(), f, init), vi[vi.length() - 1]), vi.length() > 0
     )
 
 
@@ -196,7 +196,7 @@ def _tuple_value_program(
 
     yield rewrite(tuple_value_foldl_program(TupleValue(()), f, init)).to(init)
     yield rewrite(tuple_value_foldl_program(TupleValue(vv), f, init)).to(
-        f(tuple_value_foldl_program(vv.remove(0), f, init), vv[vv.length() - 1]), vv.length() > 0
+        f(tuple_value_foldl_program(vv.pop(), f, init), vv[vv.length() - 1]), vv.length() > 0
     )
 
 
@@ -220,7 +220,7 @@ def _tuple_ndarray_program(
 
     yield rewrite(tuple_ndarray_foldl_program(TupleNDArray(()), f, init)).to(init)
     yield rewrite(tuple_ndarray_foldl_program(TupleNDArray(vn), f, init)).to(
-        f(tuple_ndarray_foldl_program(vn.remove(0), f, init), vn[vn.length() - 1]), vn.length() > 0
+        f(tuple_ndarray_foldl_program(vn.pop(), f, init), vn[vn.length() - 1]), vn.length() > 0
     )
 
 
@@ -561,7 +561,7 @@ def vec_recursive_value_program(x: Vec[RecursiveValue]) -> Program: ...
 
 @array_api_program_gen_ruleset.register
 def _vec_recursive_value_program(v: Value, vv: Vec[RecursiveValue]):
-    yield rewrite(vec_recursive_value_program(Vec.empty())).to(Program(""))
+    yield rewrite(vec_recursive_value_program(Vec[RecursiveValue].empty())).to(Program(""))
     yield rewrite(vec_recursive_value_program(vv)).to(
         recursive_value_program(vv[0]) + ", " + vec_recursive_value_program(vv.remove(0)),
     )

@@ -112,8 +112,8 @@ def _bool(
         rewrite(x == x).to(TRUE),  # noqa: PLR0124
         rewrite(FALSE == TRUE).to(FALSE),
         rewrite(TRUE == FALSE).to(FALSE),
-        rewrite(Boolean.if_(TRUE, bt, bf), subsume=False).to(bt()),
-        rewrite(Boolean.if_(FALSE, bt, bf), subsume=False).to(bf()),
+        rewrite(Boolean.if_(TRUE, bt, bf), subsume=True).to(bt()),
+        rewrite(Boolean.if_(FALSE, bt, bf), subsume=True).to(bf()),
         rule(eq(Boolean(b)).to(Boolean(b1)), ne(b).to(b1)).then(panic("Different booleans cannot be equal")),
     ]
 
@@ -283,8 +283,8 @@ def _int(i: i64, j: i64, r: Boolean, o: Int, b: Int, ot: Callable[[], Int], bt: 
     yield rewrite(~Int(i)).to(Int(~i))
     yield rewrite(Int(i).__abs__()).to(Int(i.__abs__()))
 
-    yield rewrite(Int.if_(TRUE, ot, bt), subsume=False).to(ot())
-    yield rewrite(Int.if_(FALSE, ot, bt), subsume=False).to(bt())
+    yield rewrite(Int.if_(TRUE, ot, bt), subsume=True).to(ot())
+    yield rewrite(Int.if_(FALSE, ot, bt), subsume=True).to(bt())
 
     yield rewrite(o.__round__(OptionalInt.none)).to(o)
 
@@ -841,8 +841,8 @@ def _tuple_int(
     yield rewrite(TupleInt(vs).length()).to(Int(vs.length()))
     yield rewrite(TupleInt(vs)[Int(k)]).to(vs[k])
 
-    yield rewrite(TupleInt.if_(TRUE, lt, lf), subsume=False).to(lt())
-    yield rewrite(TupleInt.if_(FALSE, lt, lf), subsume=False).to(lf())
+    yield rewrite(TupleInt.if_(TRUE, lt, lf), subsume=True).to(lt())
+    yield rewrite(TupleInt.if_(FALSE, lt, lf), subsume=True).to(lf())
 
     yield rewrite(TupleInt.fn(Int(k), idx_fn), subsume=True).to(TupleInt(k.range().map(lambda i: idx_fn(Int(i)))))
 
@@ -964,8 +964,8 @@ def _tuple_tuple_int(
         TupleTupleInt(k.range().map(lambda i: idx_fn(Int(i))))
     )
 
-    yield rewrite(TupleTupleInt.if_(TRUE, lt, lf), subsume=False).to(lt())
-    yield rewrite(TupleTupleInt.if_(FALSE, lt, lf), subsume=False).to(lf())
+    yield rewrite(TupleTupleInt.if_(TRUE, lt, lf), subsume=True).to(lt())
+    yield rewrite(TupleTupleInt.if_(FALSE, lt, lf), subsume=True).to(lf())
 
 
 class DType(Expr, ruleset=array_api_ruleset):
@@ -1172,8 +1172,8 @@ def _value(
 
     yield rewrite(Value.from_float(Float.rational(BigRat(0, 1))) + v).to(v)
 
-    yield rewrite(Value.if_(TRUE, vt, v1t)).to(vt())
-    yield rewrite(Value.if_(FALSE, vt, v1t)).to(v1t())
+    yield rewrite(Value.if_(TRUE, vt, v1t), subsume=True).to(vt())
+    yield rewrite(Value.if_(FALSE, vt, v1t), subsume=True).to(v1t())
 
     # ==
     yield rewrite(Value.from_int(i) == Value.from_int(i1)).to(i == i1)
@@ -1337,8 +1337,8 @@ def _tuple_value(
 
     yield rewrite(TupleValue.fn(Int(k), idx_fn), subsume=True).to(TupleValue(k.range().map(lambda i: idx_fn(Int(i)))))
 
-    yield rewrite(TupleValue.if_(TRUE, lt, lf), subsume=False).to(lt())
-    yield rewrite(TupleValue.if_(FALSE, lt, lf), subsume=False).to(lf())
+    yield rewrite(TupleValue.if_(TRUE, lt, lf), subsume=True).to(lt())
+    yield rewrite(TupleValue.if_(FALSE, lt, lf), subsume=True).to(lf())
 
 
 @function
@@ -1857,7 +1857,7 @@ def _ndarray(
     return [
         rewrite(NDArray.fn(shape, dtype, idx_fn).shape, subsume=False).to(shape),
         rewrite(NDArray.fn(shape, dtype, idx_fn).dtype, subsume=False).to(dtype),
-        rewrite(NDArray.fn(shape, dtype, idx_fn).index(idx), subsume=False).to(idx_fn(idx)),
+        rewrite(NDArray.fn(shape, dtype, idx_fn).index(idx), subsume=True).to(idx_fn(idx)),
         rewrite(NDArray(rv).shape, subsume=False).to(rv.shape),
         rewrite(NDArray(rv).index(TupleInt(vi)), subsume=False).to(rv[vi]),
         # TODO: Special case scalar ops for now
@@ -1875,8 +1875,8 @@ def _ndarray(
         # Transpose of transpose is the original array
         rewrite(x.T.T, subsume=False).to(x),
         # if_
-        rewrite(NDArray.if_(TRUE, xt, x1t), subsume=False).to(xt()),
-        rewrite(NDArray.if_(FALSE, xt, x1t), subsume=False).to(x1t()),
+        rewrite(NDArray.if_(TRUE, xt, x1t), subsume=True).to(xt()),
+        rewrite(NDArray.if_(FALSE, xt, x1t), subsume=True).to(x1t()),
         # to RecursiveValue,
         # only trigger if size smaller than 10 to avoid blowing up
         rule(
