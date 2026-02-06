@@ -346,7 +346,7 @@ class RuntimeClass(DelayedDeclarations, metaclass=ClassFactory):
         # defer resolving decls so that we can do generic instantiation for converters before all
         # method types are defined.
         decls_like, new_args = cast(
-            "tuple[tuple[DeclerationsLike, ...], tuple[TypeOrVarRef, ...]]",
+            "tuple[tuple[DeclarationsLike, ...], tuple[TypeOrVarRef, ...]]",
             zip(*(resolve_type_annotation(arg) for arg in args), strict=False),
         )
         # if we already have some args bound and some not, then we should replace all existing args of typevars with new

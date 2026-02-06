@@ -41,7 +41,6 @@ def _recursive_value(
     )
 
 
-egraph.debug_print()
 new_res = egraph.extract(res.to_recursive_value())
 print(new_res)
 # print(egraph.as_egglog_string)

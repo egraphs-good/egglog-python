@@ -12,7 +12,7 @@ from egglog import *
 
 class Program(Expr):
     """
-    Semanticallly represents an expression with a number of ordered statements that it depends on to run.
+    Semantically represents an expression with a number of ordered statements that it depends on to run.
 
     The expression and statements are all represented as strings.
     """
@@ -91,7 +91,7 @@ class Program(Expr):
         """
 
     @property
-    def is_identifer(self) -> Bool:
+    def is_identifier(self) -> Bool:
         """
         Returns whether the expression is an identifier. Used so that we don't re-assign any identifiers.
         """
@@ -119,7 +119,7 @@ class EvalProgram(Expr):
 
 
 @ruleset
-def eval_program_rulseset(ep: EvalProgram, p: Program, expr: String, statements: String, g: PyObject):
+def eval_program_ruleset(ep: EvalProgram, p: Program, expr: String, statements: String, g: PyObject):
     # When we evaluate a program, we first want to compile to a string
     yield rule(EvalProgram(p, g)).then(p.compile())
     # Then we want to evaluate the statements/expr
@@ -164,7 +164,7 @@ def program_gen_ruleset(
         set_(p.expr).to(s),
         set_(p.statements).to(String("")),
         set_(p.next_sym).to(i),
-        set_(p.is_identifer).to(b),
+        set_(p.is_identifier).to(b),
     )
 
     ##
@@ -178,7 +178,7 @@ def program_gen_ruleset(
     ##
     stmt = eq(p).to(p1.expr_to_statement())
     # 1. Set parent and is_identifier to false, since its empty
-    yield rule(stmt, p.compile(i)).then(set_(p1.parent).to(p), set_(p.is_identifer).to(Bool(False)))
+    yield rule(stmt, p.compile(i)).then(set_(p1.parent).to(p), set_(p.is_identifier).to(Bool(False)))
     # 2. Compile p1 if parent set
     yield rule(stmt, p.compile(i), eq(p1.parent).to(p)).then(p1.compile(i))
     # 3.a. If parent not set, set statements to expr
@@ -215,9 +215,9 @@ def program_gen_ruleset(
 
     # If the resulting expression is either of the inputs, then its an identifer if those are
     # Otherwise, if its not equal to either input, its not an identifier
-    yield rule(program_add, eq(p.expr).to(p1.expr), eq(b).to(p1.is_identifer)).then(set_(p.is_identifer).to(b))
-    yield rule(program_add, eq(p.expr).to(p2.expr), eq(b).to(p2.is_identifer)).then(set_(p.is_identifer).to(b))
-    yield rule(program_add, ne(p.expr).to(p1.expr), ne(p.expr).to(p2.expr)).then(set_(p.is_identifer).to(Bool(False)))
+    yield rule(program_add, eq(p.expr).to(p1.expr), eq(b).to(p1.is_identifier)).then(set_(p.is_identifier).to(b))
+    yield rule(program_add, eq(p.expr).to(p2.expr), eq(b).to(p2.is_identifier)).then(set_(p.is_identifier).to(b))
+    yield rule(program_add, ne(p.expr).to(p1.expr), ne(p.expr).to(p2.expr)).then(set_(p.is_identifier).to(Bool(False)))
 
     # Set parent of p1
     yield rule(program_add, p.compile(i)).then(
@@ -299,7 +299,7 @@ def program_gen_ruleset(
     # expression as the gensym, and setting is_identifier to true
     program_assign = eq(p).to(p1.assign())
     # Set parent
-    yield rule(program_assign, p.compile(i)).then(set_(p1.parent).to(p), set_(p.is_identifer).to(Bool(True)))
+    yield rule(program_assign, p.compile(i)).then(set_(p1.parent).to(p), set_(p.is_identifier).to(Bool(True)))
     # If parent set, compile the expression
     yield rule(program_assign, p.compile(i), eq(p1.parent).to(p)).then(p1.compile(i))
 
@@ -313,7 +313,7 @@ def program_gen_ruleset(
         eq(s1).to(p1.statements),
         eq(i).to(p1.next_sym),
         eq(s2).to(p1.expr),
-        eq(p1.is_identifer).to(Bool(False)),
+        eq(p1.is_identifier).to(Bool(False)),
     ).then(
         set_(p.statements).to(join(s1, symbol, " = ", s2, "\n")),
         set_(p.expr).to(symbol),
@@ -325,7 +325,7 @@ def program_gen_ruleset(
         ne(p1.parent).to(p),
         p.compile(i),
         eq(s2).to(p1.expr),
-        eq(p1.is_identifer).to(Bool(False)),
+        eq(p1.is_identifier).to(Bool(False)),
     ).then(
         set_(p.statements).to(join(symbol, " = ", s2, "\n")),
         set_(p.expr).to(symbol),
@@ -341,7 +341,7 @@ def program_gen_ruleset(
         eq(s1).to(p1.statements),
         eq(i).to(p1.next_sym),
         eq(s2).to(p1.expr),
-        eq(p1.is_identifer).to(Bool(True)),
+        eq(p1.is_identifier).to(Bool(True)),
     ).then(
         set_(p.statements).to(s1),
         set_(p.expr).to(s2),
@@ -353,7 +353,7 @@ def program_gen_ruleset(
         ne(p1.parent).to(p),
         p.compile(i),
         eq(s2).to(p1.expr),
-        eq(p1.is_identifer).to(Bool(True)),
+        eq(p1.is_identifier).to(Bool(True)),
     ).then(
         set_(p.statements).to(String("")),
         set_(p.expr).to(s2),
@@ -376,7 +376,7 @@ def program_gen_ruleset(
         p2.compile(i),
         p3.compile(i),
         p1.compile(i),
-        set_(p.is_identifer).to(Bool(True)),
+        set_(p.is_identifier).to(Bool(True)),
     )
     # 2. Set statements to function body and the next sym to i
     yield rule(
@@ -408,7 +408,7 @@ def program_gen_ruleset(
         p3.compile(i),
         p1.compile(i),
         p4.compile(i),
-        set_(p.is_identifer).to(Bool(True)),
+        set_(p.is_identifier).to(Bool(True)),
     )
     yield rule(
         fn_three,

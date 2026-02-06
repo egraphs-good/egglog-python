@@ -90,7 +90,7 @@ class Boolean(Expr, ruleset=array_api_ruleset):
         """
 
 
-BooleanLike = Boolean | BoolLike
+BooleanLike: TypeAlias = Boolean | BoolLike
 
 TRUE = Boolean(True)
 FALSE = Boolean(False)
@@ -416,6 +416,7 @@ def _float(fl: Float, f: f64, f2: f64, i: i64, r: BigRat, r1: BigRat, i_: Int):
         rewrite(Float(f)).to(Float.rational(BigRat(f.to_i64(), 1)), eq(f64.from_i64(f.to_i64())).to(f)),
         # always convert from int to rational
         rewrite(Float.from_int(Int(i))).to(Float.rational(BigRat(i, 1))),
+        rewrite(Float.rational(r)).to(Float(r.to_f64())),
         rewrite(Float(f) + Float(f2)).to(Float(f + f2)),
         rewrite(Float(f) - Float(f2)).to(Float(f - f2)),
         rewrite(Float(f) * Float(f2)).to(Float(f * f2)),
@@ -1221,6 +1222,9 @@ def _value(
     yield rewrite(v ** Value.from_float(Float.rational(BigRat(1, 1)))).to(v)
     yield rewrite(Value.from_float(Float.from_int(i))).to(Value.from_int(i))
 
+    # Upcast binary op
+    yield rewrite(Value.from_int(i) * Value.from_float(f)).to(Value.from_float(Float.from_int(i)) * Value.from_float(f))
+
 
 class TupleValue(Expr, ruleset=array_api_ruleset):
     def __init__(self, vec: VecLike[Value, ValueLike] = ()) -> None: ...
@@ -1575,6 +1579,7 @@ class NDArray(Expr, ruleset=array_api_ruleset):
 
     NEVER: ClassVar[NDArray]
 
+    @method(unextractable=True)
     @classmethod
     def from_tuple_value(cls, tv: TupleValueLike) -> NDArray:
         """
@@ -1589,6 +1594,13 @@ class NDArray(Expr, ruleset=array_api_ruleset):
             tv[0].dtype,
             lambda idx: tv[idx[0]],
         )
+
+    @method(unextractable=True)
+    def to_tuple_values(self) -> TupleValue:
+        """
+        Turns a vector array into a tuple value.
+        """
+        return TupleValue.fn(self.shape[0], lambda i: self.index((i,)))
 
     def to_recursive_value(self) -> RecursiveValue: ...
 
@@ -2026,7 +2038,7 @@ def isfinite(x: NDArray) -> NDArray: ...
 
 
 @function
-def sum(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray:
+def sum(x: NDArray, axis: OptionalIntOrTupleLike = OptionalIntOrTuple.none) -> NDArray:
     """
     https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.sum.html?highlight=sum
     """
@@ -2198,7 +2210,7 @@ def expand_dims(x: NDArray, axis: Int = Int(0)) -> NDArray: ...
 
 
 @function
-def mean(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none, keepdims: Boolean = FALSE) -> NDArray: ...
+def mean(x: NDArray, axis: OptionalIntOrTupleLike = OptionalIntOrTuple.none, keepdims: Boolean = FALSE) -> NDArray: ...
 
 
 # TODO: Possibly change names to include modules.
@@ -2207,7 +2219,7 @@ def sqrt(x: NDArray) -> NDArray: ...
 
 
 @function
-def std(x: NDArray, axis: OptionalIntOrTuple = OptionalIntOrTuple.none) -> NDArray: ...
+def std(x: NDArray, axis: OptionalIntOrTupleLike = OptionalIntOrTuple.none) -> NDArray: ...
 
 
 @function
@@ -2684,7 +2696,15 @@ def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
     egraph = _get_current_egraph()
     egraph.register(expr)  # type: ignore[arg-type]
     egraph.run(array_api_schedule)
-    return egraph.extract(expr).value  # type: ignore[call-overload]
+    # run on another e-graph to get around bug
+    # https://github.com/egraphs-good/egglog/issues/801
+    # return egraph.extract(expr).value  # type: ignore[call-overload]
+    extracted_expr = egraph.extract(expr)  # type: ignore[call-overload]
+    new_egraph = EGraph()
+    new_egraph.register(extracted_expr)
+    new_egraph.run(array_api_schedule)
+    return new_egraph.extract(extracted_expr).value
+
     # try:
     #     return egraph.extract(prim_expr).value  # type: ignore[attr-defined]
     # except EggSmolError:

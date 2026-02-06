@@ -1376,7 +1376,7 @@ class EGraph:
                     print(call)
         print("=== End EGraph Debug Print ===")
 
-    def _values_to_expr(self, args: list[bindings._Value], name: str) -> RuntimeExpr:
+    def _values_to_expr(self, args: list[bindings.Value], name: str) -> RuntimeExpr:
         (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
         signature = self.__egg_decls__.get_callable_decl(callable_ref).signature
         assert isinstance(signature, FunctionSignature)
