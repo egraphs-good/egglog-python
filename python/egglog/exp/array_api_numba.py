@@ -49,7 +49,7 @@ def count_values(x: NDArrayLike, values: TupleValueLike) -> TupleValue:
 def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
     return [
         # The unique counts are the count of all the unique values
-        rewrite(unique_counts(x)[1], subsume=True).to(
+        rewrite(unique_counts_counts(x), subsume=True).to(
             NDArray.from_tuple_value(count_values(x, unique_values(x).to_tuple_values()))
         ),
     ]
@@ -60,5 +60,5 @@ def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
 def _unique_inverse(x: NDArray, i: Int):
     return [
         # Creating a mask array of when the unique inverse is a value is the same as a mask array for when the value is that index of the unique values
-        rewrite(unique_inverse(x)[1] == i, subsume=True).to(x == unique_values(x).index((i,))),
+        rewrite(unique_inverse_inverse_indices(x) == i, subsume=True).to(x == unique_values(x).index((i,))),
     ]

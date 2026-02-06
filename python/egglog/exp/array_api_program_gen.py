@@ -35,7 +35,7 @@ def int_program(x: Int) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _int_program(i64_: i64, i: Int, j: Int, s: String):
+def _int_program(i64_: i64, i: Int, j: Int, s: String, b: Boolean, ti: Callable[[], Int], ti1: Callable[[], Int]):
     yield rewrite(int_program(Int.var(s))).to(Program(s, True))
     yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
     yield rewrite(int_program(~i)).to(Program("~") + int_program(i))
@@ -56,6 +56,15 @@ def _int_program(i64_: i64, i: Int, j: Int, s: String):
     yield rewrite(int_program(i << j)).to(Program("(") + int_program(i) + " << " + int_program(j) + ")")
     yield rewrite(int_program(i >> j)).to(Program("(") + int_program(i) + " >> " + int_program(j) + ")")
     yield rewrite(int_program(i // j)).to(Program("(") + int_program(i) + " // " + int_program(j) + ")")
+
+    assigned = int_program(j).assign()
+    yield rewrite(int_program(check_index(i, j)), subsume=True).to(
+        assigned.statement(Program("assert ") + assigned + " < " + int_program(i))
+    )
+
+    yield rewrite(int_program(Int.if_(b, ti, ti1))).to(
+        int_program(ti()) + " if " + bool_program(b) + " else " + int_program(ti1())
+    )
 
 
 @function
@@ -168,7 +177,10 @@ def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Valu
     yield rewrite(value_program(v1 * v2)).to(Program("(") + value_program(v1) + " * " + value_program(v2) + ")")
     yield rewrite(bool_program(v1.to_bool)).to(value_program(v1))
     yield rewrite(int_program(v1.to_int)).to(value_program(v1))
-    yield rewrite(value_program(xs.index(ti))).to((ndarray_program(xs) + "[" + tuple_int_program(ti) + "]").assign())
+    yield rewrite(value_program(xs.index(ti))).to(
+        (ndarray_program(xs) + "[" + tuple_int_program(ti) + "]").assign(), ne(ti).to(TupleInt(()))
+    )
+    yield rewrite(value_program(xs.index(TupleInt(())))).to(ndarray_program(xs))
     yield rewrite(value_program(v1.sqrt())).to(Program("np.sqrt(") + value_program(v1) + ")")
     yield rewrite(value_program(v1.real())).to(Program("np.real(") + value_program(v1) + ")")
     yield rewrite(value_program(v1.conj())).to(Program("np.conj(") + value_program(v1) + ")")
@@ -516,8 +528,8 @@ def _ndarray_program(
         optional_int_or_tuple_ != OptionalIntOrTuple.none,
     )
     # svd
-    yield rewrite(tuple_ndarray_program(svd(x))).to((Program("np.linalg.svd(") + ndarray_program(x) + ")").assign())
-    yield rewrite(tuple_ndarray_program(svd(x, FALSE))).to(
+    yield rewrite(tuple_ndarray_program(svd_(x))).to((Program("np.linalg.svd(") + ndarray_program(x) + ")").assign())
+    yield rewrite(tuple_ndarray_program(svd_(x, FALSE))).to(
         (Program("np.linalg.svd(") + ndarray_program(x) + ", full_matrices=False)").assign()
     )
     # sqrt
@@ -564,4 +576,5 @@ def _vec_recursive_value_program(v: Value, vv: Vec[RecursiveValue]):
     yield rewrite(vec_recursive_value_program(Vec[RecursiveValue].empty())).to(Program(""))
     yield rewrite(vec_recursive_value_program(vv)).to(
         recursive_value_program(vv[0]) + ", " + vec_recursive_value_program(vv.remove(0)),
+        vv.length() > 0,
     )

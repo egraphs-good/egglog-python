@@ -836,7 +836,7 @@ def _tuple_int(
     yield rule(eq(ti).to(TupleInt(vs)), eq(ti).to(TupleInt(vs2)), vs != vs2).then(vs | vs2)
 
     yield rewrite(TupleInt.fn(i2, idx_fn).length(), subsume=False).to(i2)
-    yield rewrite(TupleInt.fn(i2, idx_fn)[i], subsume=False).to(idx_fn(check_index(i2, i)))
+    yield rewrite(TupleInt.fn(i2, idx_fn)[i], subsume=True).to(idx_fn(check_index(i2, i)))
 
     yield rewrite(TupleInt(vs).length()).to(Int(vs.length()))
     yield rewrite(TupleInt(vs)[Int(k)]).to(vs[k])
@@ -955,7 +955,7 @@ def _tuple_tuple_int(
     yield rule(eq(ti).to(TupleTupleInt(vs)), eq(ti).to(TupleTupleInt(vs2)), vs != vs2).then(vs | vs2)
 
     yield rewrite(TupleTupleInt.fn(i2, idx_fn).length(), subsume=False).to(i2)
-    yield rewrite(TupleTupleInt.fn(i2, idx_fn)[i], subsume=False).to(idx_fn(check_index(i2, i)))
+    yield rewrite(TupleTupleInt.fn(i2, idx_fn)[i], subsume=True).to(idx_fn(check_index(i2, i)))
 
     yield rewrite(TupleTupleInt(vs).length(), subsume=False).to(Int(vs.length()))
     yield rewrite(TupleTupleInt(vs)[Int(k)], subsume=False).to(vs[k])
@@ -1330,7 +1330,7 @@ def _tuple_value(
     yield rule(eq(ti).to(TupleValue(vs)), eq(ti).to(TupleValue(vs2)), vs != vs2).then(vs | vs2)
 
     yield rewrite(TupleValue.fn(i2, idx_fn).length(), subsume=False).to(i2)
-    yield rewrite(TupleValue.fn(i2, idx_fn)[i], subsume=False).to(idx_fn(check_index(i2, i)))
+    yield rewrite(TupleValue.fn(i2, idx_fn)[i], subsume=True).to(idx_fn(check_index(i2, i)))
 
     yield rewrite(TupleValue(vs).length(), subsume=False).to(Int(vs.length()))
     yield rewrite(TupleValue(vs)[Int(k)], subsume=False).to(vs[k], k >= 0, k < vs.length())
@@ -1961,7 +1961,7 @@ def _tuple_ndarray(
 ):
     yield rule(eq(ti).to(TupleNDArray(vs)), eq(ti).to(TupleNDArray(vs2)), vs != vs2).then(vs | vs2)
     yield rewrite(TupleNDArray.fn(i2, idx_fn).length(), subsume=False).to(i2)
-    yield rewrite(TupleNDArray.fn(i2, idx_fn)[i], subsume=False).to(idx_fn(check_index(i2, i)))
+    yield rewrite(TupleNDArray.fn(i2, idx_fn)[i], subsume=True).to(idx_fn(check_index(i2, i)))
 
     yield rewrite(TupleNDArray(vs).length(), subsume=False).to(Int(vs.length()))
     yield rewrite(TupleNDArray(vs)[Int(k)], subsume=False).to(vs[k], k >= 0, k < vs.length())
@@ -2148,7 +2148,7 @@ def _astype(x: NDArray, dtype: DType, i: i64):
     ]
 
 
-@function
+@function(unextractable=True, ruleset=array_api_ruleset)
 def unique_counts(x: NDArray) -> TupleNDArray:
     """
     Returns the unique elements of an input array x and the corresponding counts for each unique element in x.
@@ -2156,18 +2156,25 @@ def unique_counts(x: NDArray) -> TupleNDArray:
 
     https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.unique_counts.html
     """
+    return TupleNDArray((unique_counts_elements(x), unique_counts_counts(x)))
+
+
+@function
+def unique_counts_elements(x: NDArray) -> NDArray: ...
+
+
+@function
+def unique_counts_counts(x: NDArray) -> NDArray: ...
 
 
 @array_api_ruleset.register
 def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value, dtype: DType):
     return [
-        # rewrite(unique_counts(x).length()).to(Int(2)),
-        rewrite(unique_counts(x)).to(TupleNDArray.fn(2, unique_counts(x).__getitem__)),
         # Sum of all unique counts is the size of the array
-        rewrite(sum(unique_counts(x)[Int(1)])).to(NDArray(Value.from_int(x.size))),
+        rewrite(sum(unique_counts_counts(x))).to(NDArray(Value.from_int(x.size))),
         # Same but with astype in the middle
         # TODO: Replace
-        rewrite(sum(astype(unique_counts(x)[Int(1)], dtype))).to(astype(NDArray(Value.from_int(x.size)), dtype)),
+        rewrite(sum(astype(unique_counts_counts(x), dtype))).to(astype(NDArray(Value.from_int(x.size)), dtype)),
     ]
 
 
@@ -2194,22 +2201,25 @@ def _abs(f: Float):
     ]
 
 
-@function
+@function(ruleset=array_api_ruleset, unextractable=True)
 def unique_inverse(x: NDArray) -> TupleNDArray:
     """
     Returns the unique elements of an input array x and the indices from the set of unique elements that reconstruct x.
 
     https://data-apis.org/array-api/2022.12/API_specification/generated/array_api.unique_inverse.html
     """
+    return TupleNDArray((unique_values(x), unique_inverse_inverse_indices(x)))
+
+
+@function
+def unique_inverse_inverse_indices(x: NDArray) -> NDArray: ...
 
 
 @array_api_ruleset.register
 def _unique_inverse(x: NDArray, i: Int):
     return [
-        # rewrite(unique_inverse(x).length()).to(Int(2)),
-        rewrite(unique_inverse(x)).to(TupleNDArray.fn(2, unique_inverse(x).__getitem__)),
         # Shape of unique_inverse first element is same as shape of unique_values
-        rewrite(unique_inverse(x)[Int(0)]).to(unique_values(x)),
+        rewrite(unique_values(x)[Int(0)]).to(unique_values(x)),
     ]
 
 
@@ -2319,19 +2329,19 @@ def cross(a: NDArrayLike, b: NDArrayLike) -> NDArray:
 linalg = sys.modules[__name__]
 
 
-@function
-def svd(x: NDArray, full_matrices: Boolean = TRUE) -> TupleNDArray:
+def svd(x: NDArray, full_matrices: Boolean = TRUE) -> tuple[NDArray, NDArray, NDArray]:
     """
     https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.svd.html
     """
+    res = svd_(x, full_matrices)
+    return (res[0], res[1], res[2])
 
 
-@array_api_ruleset.register
-def _linalg(x: NDArray, full_matrices: Boolean):
-    return [
-        # rewrite(svd(x, full_matrices).length()).to(Int(3)),
-        rewrite(svd(x, full_matrices)).to(TupleNDArray.fn(3, svd(x, full_matrices).__getitem__)),
-    ]
+@function
+def svd_(x: NDArray, full_matrices: Boolean = TRUE) -> TupleNDArray:
+    """
+    https://data-apis.org/array-api/2022.12/extensions/generated/array_api.linalg.svd.html
+    """
 
 
 @function(ruleset=array_api_ruleset, unextractable=True)
@@ -2427,7 +2437,7 @@ def _interval_analaysis(
         # rule(eq(y).to(any(x)), ndarray_all_false(x)).then(union(y).with_(NDArray(Value.bool(FALSE)))),
         # Indexing into unique counts counts are all positive
         rule(
-            eq(v).to(unique_counts(x)[Int(1)].index(idx)),
+            eq(v).to(unique_counts_counts(x).index(idx)),
         ).then(greater_zero(v)),
         # Min value preserved over astype
         rule(
@@ -2710,15 +2720,20 @@ def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
     egraph = _get_current_egraph()
     egraph.register(expr)  # type: ignore[arg-type]
     egraph.run(array_api_schedule)
-    # run on another e-graph to get around bug
-    # https://github.com/egraphs-good/egglog/issues/801
-    # return egraph.extract(expr).value  # type: ignore[call-overload]
     # egraph.display(n_inline_leaves=2, split_primitive_outputs=True, split_functions=[Int])
     extracted_expr = egraph.extract(expr)  # type: ignore[call-overload]
+    with contextlib.suppress(ExprValueError):
+        extracted_expr.value
+    # run on another e-graph to get around bug
+    # https://github.com/egraphs-good/egglog/issues/801
+
     new_egraph = EGraph()
     new_egraph.register(extracted_expr)
     new_egraph.run(array_api_schedule)
     return new_egraph.extract(extracted_expr).value
+    # except EggSmolError as e:
+
+    #     raise e
 
     # try:
     #     return egraph.extract(prim_expr).value  # type: ignore[attr-defined]

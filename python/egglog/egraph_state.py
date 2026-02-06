@@ -397,7 +397,7 @@ class EGraphState:
                     bindings.Relation(span(), egg_name, [self.type_ref_to_egg(a) for a in arg_types])
                 )
             case ConstantDecl(tp, _):
-                # Use constructor decleration instead of constant b/c constants cannot be extracted
+                # Use constructor declaration instead of constant b/c constants cannot be extracted
                 # https://github.com/egraphs-good/egglog/issues/334
                 is_function = self.__egg_decls__._classes[tp.ident].builtin
                 schema = bindings.Schema([], self.type_ref_to_egg(tp))
