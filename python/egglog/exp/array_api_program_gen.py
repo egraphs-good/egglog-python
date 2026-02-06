@@ -62,19 +62,12 @@ def _int_program(i64_: i64, i: Int, j: Int, s: String):
 def program_if(b: BooleanLike, t: Callable[[], Program], f: Callable[[], Program]) -> Program: ...
 
 
-@function
-def tuple_int_foldl_program(xs: TupleIntLike, f: Callable[[Program, Int], Program], init: ProgramLike) -> Program:
-    xs = cast("TupleInt", xs)
-    return program_if(
-        xs.length() == 0,
-        lambda: cast("Program", init),
-        lambda: f(tuple_int_foldl_program(xs.drop_last(), f, init), xs.last()),
-    )
+@function(ruleset=array_api_program_gen_ruleset)
+def tuple_int_foldl_program(xs: TupleIntLike, f: Callable[[Program, Int], Program], init: ProgramLike) -> Program: ...
 
 
 @function(ruleset=array_api_program_gen_ruleset)
-def tuple_int_program(x: TupleIntLike) -> Program:
-    return tuple_int_foldl_program(x, lambda acc, i: acc + int_program(i) + ", ", "(") + ")"
+def tuple_int_program(x: TupleIntLike) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
@@ -87,6 +80,7 @@ def _tuple_int_program(
     b: Boolean,
     tt: Callable[[], Program],
     ft: Callable[[], Program],
+    vi: Vec[Int],
 ):
     yield rewrite(int_program(ti[i])).to(tuple_int_program(ti) + "[" + int_program(i) + "]")
     yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_int_program(ti) + ")")
@@ -96,6 +90,14 @@ def _tuple_int_program(
 
     yield rewrite(tuple_int_program(ti + ti2)).to(
         Program("(") + tuple_int_program(ti) + " + " + tuple_int_program(ti2) + ")"
+    )
+    yield rewrite(tuple_int_program(ti)).to(
+        tuple_int_foldl_program(ti, lambda acc, i: acc + int_program(i) + ", ", "(") + ")"
+    )
+
+    yield rewrite(tuple_int_foldl_program(TupleInt(()), f, init)).to(init)
+    yield rewrite(tuple_int_foldl_program(TupleInt(vi), f, init)).to(
+        f(tuple_int_foldl_program(vi.remove(0), f, init), vi[vi.length() - 1]), vi.length() > 0
     )
 
 
@@ -172,37 +174,36 @@ def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Valu
     yield rewrite(value_program(v1.conj())).to(Program("np.conj(") + value_program(v1) + ")")
 
 
-@function
-def tuple_value_foldl_program(xs: TupleValueLike, f: Callable[[Program, Value], Program], init: ProgramLike) -> Program:
-    xs = cast("TupleValue", xs)
-    return program_if(
-        xs.length() == 0,
-        lambda: cast("Program", init),
-        lambda: f(tuple_value_foldl_program(xs.drop_last(), f, init), xs.last()),
-    )
-
-
 @function(ruleset=array_api_program_gen_ruleset)
-def tuple_value_program(x: TupleValueLike) -> Program:
-    return tuple_value_foldl_program(x, lambda acc, i: acc + value_program(i) + ", ", "(") + ")"
+def tuple_value_foldl_program(
+    xs: TupleValueLike, f: Callable[[Program, Value], Program], init: ProgramLike
+) -> Program: ...
+
+
+@function
+def tuple_value_program(x: TupleValueLike) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _tuple_value_program(i: Int, ti: TupleValue, f: Callable[[Program, Value], Program], v: Value, init: Program):
+def _tuple_value_program(
+    i: Int, ti: TupleValue, f: Callable[[Program, Value], Program], v: Value, init: Program, vv: Vec[Value]
+):
     yield rewrite(value_program(ti[i])).to(tuple_value_program(ti) + "[" + int_program(i) + "]")
     yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_value_program(ti) + ")")
+    yield rewrite(tuple_value_program(ti)).to(
+        tuple_value_foldl_program(ti, lambda acc, i: acc + value_program(i) + ", ", "(") + ")"
+    )
+
+    yield rewrite(tuple_value_foldl_program(TupleValue(()), f, init)).to(init)
+    yield rewrite(tuple_value_foldl_program(TupleValue(vv), f, init)).to(
+        f(tuple_value_foldl_program(vv.remove(0), f, init), vv[vv.length() - 1]), vv.length() > 0
+    )
 
 
 @function
 def tuple_ndarray_foldl_program(
     xs: TupleNDArrayLike, f: Callable[[Program, NDArray], Program], init: ProgramLike
-) -> Program:
-    xs = cast("TupleNDarray", xs)
-    return program_if(
-        xs.length() == 0,
-        lambda: cast("Program", init),
-        lambda: f(tuple_value_foldl_program(xs.drop_last(), f, init), xs.last()),
-    )
+) -> Program: ...
 
 
 @function(ruleset=array_api_program_gen_ruleset)
@@ -212,10 +213,15 @@ def tuple_ndarray_program(x: TupleNDArrayLike) -> Program:
 
 @array_api_program_gen_ruleset.register
 def _tuple_ndarray_program(
-    i: Int, ti: TupleNDArray, f: Callable[[Program, NDArray], Program], v: NDArray, init: Program
+    i: Int, ti: TupleNDArray, f: Callable[[Program, NDArray], Program], v: NDArray, init: Program, vn: Vec[NDArray]
 ):
     yield rewrite(ndarray_program(ti[i])).to(tuple_ndarray_program(ti) + "[" + int_program(i) + "]")
     yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_ndarray_program(ti) + ")")
+
+    yield rewrite(tuple_ndarray_foldl_program(TupleNDArray(()), f, init)).to(init)
+    yield rewrite(tuple_ndarray_foldl_program(TupleNDArray(vn), f, init)).to(
+        f(tuple_ndarray_foldl_program(vn.remove(0), f, init), vn[vn.length() - 1]), vn.length() > 0
+    )
 
 
 @function
@@ -343,7 +349,7 @@ def _ndarray_program(
     ti: TupleInt,
     i: Int,
     tv: TupleValue,
-    v: Value,
+    rv: RecursiveValue,
     ob: OptionalBool,
     tnd: TupleNDArray,
     optional_device_: OptionalDevice,
@@ -406,10 +412,8 @@ def _ndarray_program(
     # Tuple ndarray indexing
     yield rewrite(ndarray_program(tnd[i])).to(tuple_ndarray_program(tnd) + "[" + int_program(i) + "]")
 
-    # ndarray scalar
-    # TODO: Use dtype and shape and indexing instead?
-    # TODO: SPecify dtype?
-    yield rewrite(ndarray_program(NDArray(v))).to(Program("np.array(") + value_program(v) + ")")
+    # literal array
+    yield rewrite(ndarray_program(NDArray(rv))).to(Program("np.array(") + recursive_value_program(rv) + ")")
 
     # zeros
     yield rewrite(ndarray_program(zeros(ti, OptionalDType.none, optional_device_))).to(
@@ -499,8 +503,6 @@ def _ndarray_program(
     yield rewrite(ndarray_program(concat(tnd, OptionalInt.some(i)))).to(
         (Program("np.concatenate(") + tuple_ndarray_program(tnd) + ", axis=" + int_program(i) + ")").assign()
     )
-    # Vector
-    yield rewrite(ndarray_program(NDArray.vector(tv))).to(Program("np.array(") + tuple_value_program(tv) + ")")
     # std
     yield rewrite(ndarray_program(std(x))).to((Program("np.std(") + ndarray_program(x) + ")").assign())
     yield rewrite(ndarray_program(std(x, optional_int_or_tuple_))).to(
@@ -547,5 +549,19 @@ def _ndarray_program(
 def recursive_value_program(x: RecursiveValue) -> Program: ...
 
 
-# @array_api_program_gen_ruleset.register
-# def _recursive_value_program(v: Value, f: Callable[[Program], Program]):
+@array_api_program_gen_ruleset.register
+def _recursive_value_program(v: Value, vv: Vec[RecursiveValue]):
+    yield rewrite(recursive_value_program(RecursiveValue(v))).to(value_program(v))
+    yield rewrite(recursive_value_program(RecursiveValue.vec(vv))).to("(" + vec_recursive_value_program(vv) + ")")
+
+
+@function
+def vec_recursive_value_program(x: Vec[RecursiveValue]) -> Program: ...
+
+
+@array_api_program_gen_ruleset.register
+def _vec_recursive_value_program(v: Value, vv: Vec[RecursiveValue]):
+    yield rewrite(vec_recursive_value_program(Vec.empty())).to(Program(""))
+    yield rewrite(vec_recursive_value_program(vv)).to(
+        recursive_value_program(vv[0]) + ", " + vec_recursive_value_program(vv.remove(0)),
+    )

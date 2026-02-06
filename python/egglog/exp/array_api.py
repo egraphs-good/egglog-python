@@ -112,8 +112,8 @@ def _bool(
         rewrite(x == x).to(TRUE),  # noqa: PLR0124
         rewrite(FALSE == TRUE).to(FALSE),
         rewrite(TRUE == FALSE).to(FALSE),
-        rewrite(Boolean.if_(TRUE, bt, bf), subsume=True).to(bt()),
-        rewrite(Boolean.if_(FALSE, bt, bf), subsume=True).to(bf()),
+        rewrite(Boolean.if_(TRUE, bt, bf), subsume=False).to(bt()),
+        rewrite(Boolean.if_(FALSE, bt, bf), subsume=False).to(bf()),
         rule(eq(Boolean(b)).to(Boolean(b1)), ne(b).to(b1)).then(panic("Different booleans cannot be equal")),
     ]
 
@@ -283,8 +283,8 @@ def _int(i: i64, j: i64, r: Boolean, o: Int, b: Int, ot: Callable[[], Int], bt: 
     yield rewrite(~Int(i)).to(Int(~i))
     yield rewrite(Int(i).__abs__()).to(Int(i.__abs__()))
 
-    yield rewrite(Int.if_(TRUE, ot, bt), subsume=True).to(ot())
-    yield rewrite(Int.if_(FALSE, ot, bt), subsume=True).to(bt())
+    yield rewrite(Int.if_(TRUE, ot, bt), subsume=False).to(ot())
+    yield rewrite(Int.if_(FALSE, ot, bt), subsume=False).to(bt())
 
     yield rewrite(o.__round__(OptionalInt.none)).to(o)
 
@@ -835,14 +835,14 @@ def _tuple_int(
     # Unify the elements of equal tuples
     yield rule(eq(ti).to(TupleInt(vs)), eq(ti).to(TupleInt(vs2)), vs != vs2).then(vs | vs2)
 
-    yield rewrite(TupleInt.fn(i2, idx_fn).length(), subsume=True).to(i2)
-    yield rewrite(TupleInt.fn(i2, idx_fn)[i], subsume=True).to(idx_fn(check_index(i2, i)))
+    yield rewrite(TupleInt.fn(i2, idx_fn).length(), subsume=False).to(i2)
+    yield rewrite(TupleInt.fn(i2, idx_fn)[i], subsume=False).to(idx_fn(check_index(i2, i)))
 
     yield rewrite(TupleInt(vs).length()).to(Int(vs.length()))
     yield rewrite(TupleInt(vs)[Int(k)]).to(vs[k])
 
-    yield rewrite(TupleInt.if_(TRUE, lt, lf), subsume=True).to(lt())
-    yield rewrite(TupleInt.if_(FALSE, lt, lf), subsume=True).to(lf())
+    yield rewrite(TupleInt.if_(TRUE, lt, lf), subsume=False).to(lt())
+    yield rewrite(TupleInt.if_(FALSE, lt, lf), subsume=False).to(lf())
 
     yield rewrite(TupleInt.fn(Int(k), idx_fn), subsume=True).to(TupleInt(k.range().map(lambda i: idx_fn(Int(i)))))
 
@@ -954,18 +954,18 @@ def _tuple_tuple_int(
 ):
     yield rule(eq(ti).to(TupleTupleInt(vs)), eq(ti).to(TupleTupleInt(vs2)), vs != vs2).then(vs | vs2)
 
-    yield rewrite(TupleTupleInt.fn(i2, idx_fn).length(), subsume=True).to(i2)
-    yield rewrite(TupleTupleInt.fn(i2, idx_fn)[i], subsume=True).to(idx_fn(check_index(i2, i)))
+    yield rewrite(TupleTupleInt.fn(i2, idx_fn).length(), subsume=False).to(i2)
+    yield rewrite(TupleTupleInt.fn(i2, idx_fn)[i], subsume=False).to(idx_fn(check_index(i2, i)))
 
-    yield rewrite(TupleTupleInt(vs).length(), subsume=True).to(Int(vs.length()))
-    yield rewrite(TupleTupleInt(vs)[Int(k)], subsume=True).to(vs[k])
+    yield rewrite(TupleTupleInt(vs).length(), subsume=False).to(Int(vs.length()))
+    yield rewrite(TupleTupleInt(vs)[Int(k)], subsume=False).to(vs[k])
 
     yield rewrite(TupleTupleInt.fn(Int(k), idx_fn), subsume=True).to(
         TupleTupleInt(k.range().map(lambda i: idx_fn(Int(i))))
     )
 
-    yield rewrite(TupleTupleInt.if_(TRUE, lt, lf), subsume=True).to(lt())
-    yield rewrite(TupleTupleInt.if_(FALSE, lt, lf), subsume=True).to(lf())
+    yield rewrite(TupleTupleInt.if_(TRUE, lt, lf), subsume=False).to(lt())
+    yield rewrite(TupleTupleInt.if_(FALSE, lt, lf), subsume=False).to(lf())
 
 
 class DType(Expr, ruleset=array_api_ruleset):
@@ -994,7 +994,7 @@ converter(np.dtype, DType, lambda x: getattr(DType, x.name))
 @array_api_ruleset.register
 def _():
     for l, r in itertools.product(_DTYPES, repeat=2):
-        yield rewrite(l == r, subsume=True).to(TRUE if l is r else FALSE)
+        yield rewrite(l == r, subsume=False).to(TRUE if l is r else FALSE)
 
 
 class IsDtypeKind(Expr, ruleset=array_api_ruleset):
@@ -1215,9 +1215,9 @@ def _value(
     yield rewrite(v.__abs__() ** Value.from_float(Float.rational(BigRat(2, 1)))).to(v ** Value.from_float(2))
 
     # ** distributes over division
-    yield rewrite((v1 / v) ** v2, subsume=True).to(v1**v2 / (v**v2))
+    yield rewrite((v1 / v) ** v2, subsume=False).to(v1**v2 / (v**v2))
     # x ** y ** z = x ** (y * z)
-    yield rewrite((v**v1) ** v2, subsume=True).to(v ** (v1 * v2))
+    yield rewrite((v**v1) ** v2, subsume=False).to(v ** (v1 * v2))
     yield rewrite(Value.from_float(f) * Value.from_int(i)).to(Value.from_float(f * Float.from_int(i)))
     yield rewrite(v ** Value.from_float(Float.rational(BigRat(1, 1)))).to(v)
     yield rewrite(Value.from_float(Float.from_int(i))).to(Value.from_int(i))
@@ -1282,7 +1282,7 @@ class TupleValue(Expr, ruleset=array_api_ruleset):
             lambda: f(self.drop_last().foldl_boolean(f, init), self.last()),
         )
 
-    @method(subsume=True)
+    @method(subsume=False)
     def foldl_value(self, f: Callable[[Value, Value], Value], init: ValueLike) -> Value:
         return Value.if_(
             self.length() == 0,
@@ -1329,16 +1329,16 @@ def _tuple_value(
 ):
     yield rule(eq(ti).to(TupleValue(vs)), eq(ti).to(TupleValue(vs2)), vs != vs2).then(vs | vs2)
 
-    yield rewrite(TupleValue.fn(i2, idx_fn).length(), subsume=True).to(i2)
-    yield rewrite(TupleValue.fn(i2, idx_fn)[i], subsume=True).to(idx_fn(check_index(i2, i)))
+    yield rewrite(TupleValue.fn(i2, idx_fn).length(), subsume=False).to(i2)
+    yield rewrite(TupleValue.fn(i2, idx_fn)[i], subsume=False).to(idx_fn(check_index(i2, i)))
 
-    yield rewrite(TupleValue(vs).length(), subsume=True).to(Int(vs.length()))
-    yield rewrite(TupleValue(vs)[Int(k)], subsume=True).to(vs[k], k >= 0, k < vs.length())
+    yield rewrite(TupleValue(vs).length(), subsume=False).to(Int(vs.length()))
+    yield rewrite(TupleValue(vs)[Int(k)], subsume=False).to(vs[k], k >= 0, k < vs.length())
 
     yield rewrite(TupleValue.fn(Int(k), idx_fn), subsume=True).to(TupleValue(k.range().map(lambda i: idx_fn(Int(i)))))
 
-    yield rewrite(TupleValue.if_(TRUE, lt, lf), subsume=True).to(lt())
-    yield rewrite(TupleValue.if_(FALSE, lt, lf), subsume=True).to(lf())
+    yield rewrite(TupleValue.if_(TRUE, lt, lf), subsume=False).to(lt())
+    yield rewrite(TupleValue.if_(FALSE, lt, lf), subsume=False).to(lf())
 
 
 @function
@@ -1520,12 +1520,17 @@ class RecursiveValue(Expr):
                 return tuple(v.value for v in cast("Vec[RecursiveValue]", vec))
         raise ExprValueError(self, "RecursiveValue or RecursiveValue.vec")
 
+    __match_args__ = ("value",)
+
     @method(preserve=True)
     def eval(self) -> PyTupleValuesRecursive:
         """
         Evals to a nested tuple of values representing the RecursiveValue.
         """
         return try_evaling(self)
+
+    @classmethod
+    def from_index_and_shape(cls, shape: Vec[Int], idx_fn: Callable[[TupleInt], Value]) -> RecursiveValue: ...
 
 
 PyTupleValuesRecursive: TypeAlias = Value | tuple["PyTupleValuesRecursive", ...]
@@ -1536,16 +1541,30 @@ converter(Vec[RecursiveValue], RecursiveValue, lambda x: RecursiveValue.vec(x))
 converter(Value, RecursiveValue, lambda x: RecursiveValue(x))
 
 
+# TODO: Fix bug in bindings so that we can write this as lambda instead
+@function(ruleset=array_api_ruleset, unextractable=True)
+def partially_apply_index_fn(idx_fn: Callable[[TupleInt], Value], first_dim: Int, rest_indices: TupleInt) -> Value:
+    return idx_fn(rest_indices.append_start(first_dim))
+
+
 @array_api_ruleset.register
 def _recursive_value(
-    v: Value, vs: Vec[RecursiveValue], k: i64, vi: Vec[Int], vi1: Vec[Int], rv: RecursiveValue, rv1: RecursiveValue
+    v: Value,
+    vs: Vec[RecursiveValue],
+    k: i64,
+    vi: Vec[Int],
+    vi1: Vec[Int],
+    rv: RecursiveValue,
+    rv1: RecursiveValue,
+    idx_fn: Callable[[TupleInt], Value],
 ):
     yield rewrite(RecursiveValue(v).shape).to(TupleInt(()))
     yield rewrite(RecursiveValue.vec(vs).shape).to(TupleInt((vs.length(),)) + vs[0].shape, vs.length() > 0)
     yield rewrite(RecursiveValue.vec(vs).shape).to(TupleInt((0,)), vs.length() == i64(0))
 
-    yield rewrite(RecursiveValue(v)[vi], subsume=True).to(v)  # Assume ti is empty
+    yield rewrite(RecursiveValue(v)[vi], subsume=False).to(v)  # Assume ti is empty
 
+    # indexing
     yield rule(
         eq(rv).to(RecursiveValue.vec(vs)),
         eq(v).to(rv[vi]),
@@ -1556,6 +1575,31 @@ def _recursive_value(
     ).then(
         union(v).with_(rv1[vi1]),
         subsume(rv[vi]),
+    )
+    # from idx fn
+    yield rule(
+        eq(rv).to(RecursiveValue.from_index_and_shape(vi, idx_fn)),
+        vi.length() > 0,
+        eq(vi[0]).to(Int(k)),
+        eq(vi1).to(vi.remove(0)),
+    ).then(
+        union(rv).with_(
+            RecursiveValue.vec(
+                k.range().map(
+                    lambda i: RecursiveValue.from_index_and_shape(
+                        vi1, partial(partially_apply_index_fn, idx_fn, Int(i))
+                    )
+                )
+            )
+        ),
+        subsume(RecursiveValue.from_index_and_shape(vi, idx_fn)),
+    )
+    yield rule(
+        eq(rv).to(RecursiveValue.from_index_and_shape(vi, idx_fn)),
+        vi.length() == i64(0),
+    ).then(
+        union(rv).with_(RecursiveValue(idx_fn(TupleInt(())))),
+        subsume(RecursiveValue.from_index_and_shape(vi, idx_fn)),
     )
 
 
@@ -1602,41 +1646,28 @@ class NDArray(Expr, ruleset=array_api_ruleset):
         """
         return TupleValue.fn(self.shape[0], lambda i: self.index((i,)))
 
-    def to_recursive_value(self) -> RecursiveValue: ...
+    @method(preserve=True)  # type: ignore[prop-decorator]
+    @property
+    def value(self) -> PyTupleValuesRecursive:
+        """
+        Unwraps the RecursiveValue into either a Value or a nested tuple of Values.
 
-    # @method(preserve=True)
-    # def eval_vecs(self) -> VecValuesRecursive:
-    #     """
-    #     Evals to a nested Vec of values representing the array. It will be extracted and simplified by the e-graph.
-    #     """
-    #     # Share an e-graph for the computation of shape and eval
-    #     egraph = _get_current_egraph()
-    #     with set_array_api_egraph(egraph):
-    #         shape = self.shape.eval()
+        >>> convert(((1, 2), (3, 4)), RecursiveValue).value
+        ((Value.from_int(Int(1)), Value.from_int(Int(2))), (Value.from_int(Int(3)), Value.from_int(Int(4))))
+        """
+        match get_callable_args(self, NDArray):
+            case (RecursiveValue(value),):
+                return value
+        raise ExprValueError(self, "NDArray(recursive_value)")
 
-    #     def _inner_values(current_index: tuple[int, ...], remaining_dims: tuple[Int, ...]) -> VecValuesRecursive:
-    #         if not remaining_dims:
-    #             return self.index(current_index)
-    #         return Vec(*(_inner_values((*current_index, i), remaining_dims[1:]) for i in range(remaining_dims[0])))
-
-    #     res = _inner_values((), shape)
-    #     egraph.register(res)
-    #     egraph.run(array_api_schedule)
-    #     return egraph.extract(res)
+    __match_args__ = ("value",)
 
     @method(preserve=True)
     def eval(self) -> PyTupleValuesRecursive:
         """
-        Evals to a nested tuple of values representing the array.
+        Evals to a nested tuple of values representing the RecursiveValue.
         """
-        return self.to_recursive_value().eval()
-
-        # def _to_tuple(v: VecValuesRecursive) -> PyTupleValuesRecursive:
-        #     if isinstance(v, Value):
-        #         return v
-        #     return tuple(_to_tuple(i) for i in v)
-
-        # return _to_tuple(self.eval_vecs())
+        return try_evaling(self)
 
     @method(preserve=True)
     def eval_numpy(self, dtype: np.dtype | None = None) -> np.ndarray:
@@ -1651,17 +1682,6 @@ class NDArray(Expr, ruleset=array_api_ruleset):
             msg = "NDArray.__array__ with copy=False is not supported"
             raise NotImplementedError(msg)
         return self.eval_numpy(dtype=dtype)
-
-    # @method(preserve=True)  # type: ignore[prop-decorator]
-    # @property
-    # def value(self) -> PyTupleValuesRecursive:
-    #     """
-    #     Evals to a nested tuple of values representing the array.
-    #     """
-    #     match get_callable_args(self, NDArray):
-    #         case (values,):
-    #             return cast("RecursiveValue", values).value
-    #     raise ExprValueError(self, "NDArray(values)")
 
     @method(cost=200)
     @classmethod
@@ -1807,17 +1827,6 @@ class NDArray(Expr, ruleset=array_api_ruleset):
     @classmethod
     def if_(cls, b: BooleanLike, i: Callable[[], NDArray], j: Callable[[], NDArray]) -> NDArray: ...
 
-    def partial_index(self, i: IntLike) -> NDArray:
-        """
-        Partially index into the array, returning a sub-array.
-
-        >>> NDArray(((1, 2), (3, 4))).partial_index(0).eval_numpy("int64")
-        array([1, 2])
-        """
-        return NDArray.fn(
-            self.shape.drop(1), self.dtype, lambda idx: self.index(idx.append_start(check_index(self.shape[0], i)))
-        )
-
 
 VecValuesRecursive: TypeAlias = "Value | Vec[VecValuesRecursive]"
 
@@ -1846,43 +1855,40 @@ def _ndarray(
     i: i64,
 ):
     return [
-        rewrite(NDArray.fn(shape, dtype, idx_fn).shape, subsume=True).to(shape),
-        rewrite(NDArray.fn(shape, dtype, idx_fn).dtype, subsume=True).to(dtype),
-        rewrite(NDArray.fn(shape, dtype, idx_fn).index(idx), subsume=True).to(idx_fn(idx)),
-        rewrite(NDArray(rv).shape, subsume=True).to(rv.shape),
-        rewrite(NDArray(rv).index(TupleInt(vi)), subsume=True).to(rv[vi]),
+        rewrite(NDArray.fn(shape, dtype, idx_fn).shape, subsume=False).to(shape),
+        rewrite(NDArray.fn(shape, dtype, idx_fn).dtype, subsume=False).to(dtype),
+        rewrite(NDArray.fn(shape, dtype, idx_fn).index(idx), subsume=False).to(idx_fn(idx)),
+        rewrite(NDArray(rv).shape, subsume=False).to(rv.shape),
+        rewrite(NDArray(rv).index(TupleInt(vi)), subsume=False).to(rv[vi]),
         # TODO: Special case scalar ops for now
-        rewrite(NDArray(v) / NDArray(v), subsume=True).to(NDArray(v / v)),
-        rewrite(NDArray(v) + NDArray(v), subsume=True).to(NDArray(v + v)),
-        rewrite(NDArray(v) * NDArray(v), subsume=True).to(NDArray(v * v)),
-        rewrite(NDArray(v) ** NDArray(v1), subsume=True).to(NDArray(v**v1)),
-        rewrite(NDArray(v) - NDArray(v), subsume=True).to(NDArray(v - v)),
+        rewrite(NDArray(v) / NDArray(v), subsume=False).to(NDArray(v / v)),
+        rewrite(NDArray(v) + NDArray(v), subsume=False).to(NDArray(v + v)),
+        rewrite(NDArray(v) * NDArray(v), subsume=False).to(NDArray(v * v)),
+        rewrite(NDArray(v) ** NDArray(v1), subsume=False).to(NDArray(v**v1)),
+        rewrite(NDArray(v) - NDArray(v), subsume=False).to(NDArray(v - v)),
         # Comparisons
-        rewrite(NDArray(v) < NDArray(v1), subsume=True).to(NDArray(v < v1)),
-        rewrite(NDArray(v) <= NDArray(v1), subsume=True).to(NDArray(v <= v1)),
-        rewrite(NDArray(v) == NDArray(v1), subsume=True).to(NDArray(v == v1)),
-        rewrite(NDArray(v) > NDArray(v1), subsume=True).to(NDArray(v > v1)),
-        rewrite(NDArray(v) >= NDArray(v1), subsume=True).to(NDArray(v >= v1)),
+        rewrite(NDArray(v) < NDArray(v1), subsume=False).to(NDArray(v < v1)),
+        rewrite(NDArray(v) <= NDArray(v1), subsume=False).to(NDArray(v <= v1)),
+        rewrite(NDArray(v) == NDArray(v1), subsume=False).to(NDArray(v == v1)),
+        rewrite(NDArray(v) > NDArray(v1), subsume=False).to(NDArray(v > v1)),
+        rewrite(NDArray(v) >= NDArray(v1), subsume=False).to(NDArray(v >= v1)),
         # Transpose of transpose is the original array
-        rewrite(x.T.T, subsume=True).to(x),
+        rewrite(x.T.T, subsume=False).to(x),
         # if_
-        rewrite(NDArray.if_(TRUE, xt, x1t), subsume=True).to(xt()),
-        rewrite(NDArray.if_(FALSE, xt, x1t), subsume=True).to(x1t()),
-        # to RecursiveValue
-        rewrite(NDArray(rv).to_recursive_value(), subsume=True).to(rv),
-        rewrite(NDArray.fn((), dtype, idx_fn).to_recursive_value(), subsume=True).to(
-            RecursiveValue(idx_fn(TupleInt(())))
-        ),
+        rewrite(NDArray.if_(TRUE, xt, x1t), subsume=False).to(xt()),
+        rewrite(NDArray.if_(FALSE, xt, x1t), subsume=False).to(x1t()),
+        # to RecursiveValue,
+        # only trigger if size smaller than 10 to avoid blowing up
         rule(
             eq(x).to(NDArray.fn(TupleInt(vi), dtype, idx_fn)),
-            x.to_recursive_value(),
-            vi.length() > i64(0),
-            eq(vi[0]).to(Int(i)),
+        ).then(TupleInt(vi).product()),
+        rule(
+            eq(x).to(NDArray.fn(TupleInt(vi), dtype, idx_fn)),
+            eq(TupleInt(vi).product()).to(Int(i)),
+            i <= 10,
         ).then(
-            union(x.to_recursive_value()).with_(
-                RecursiveValue.vec(i.range().map(lambda j: x.partial_index(j).to_recursive_value()))
-            ),
-            subsume(x.to_recursive_value()),
+            union(x).with_(NDArray(RecursiveValue.from_index_and_shape(vi, idx_fn))),
+            subsume(NDArray.fn(TupleInt(vi), dtype, idx_fn)),
         ),
     ]
 
@@ -1927,6 +1933,14 @@ class TupleNDArray(Expr, ruleset=array_api_ruleset):
             lambda i: NDArray.if_(i < self.length(), lambda: self[i], lambda: other[i - self.length()]),
         )
 
+    @method(unextractable=True)
+    def drop_last(self) -> TupleNDArray:
+        return TupleNDArray.fn(self.length() - 1, self.__getitem__)
+
+    @method(unextractable=True)
+    def last(self) -> NDArray:
+        return self[self.length() - 1]
+
 
 converter(Vec[NDArray], TupleNDArray, lambda x: TupleNDArray(x))
 
@@ -1946,11 +1960,11 @@ def _tuple_ndarray(
     lf: Callable[[], TupleNDArray],
 ):
     yield rule(eq(ti).to(TupleNDArray(vs)), eq(ti).to(TupleNDArray(vs2)), vs != vs2).then(vs | vs2)
-    yield rewrite(TupleNDArray.fn(i2, idx_fn).length(), subsume=True).to(i2)
-    yield rewrite(TupleNDArray.fn(i2, idx_fn)[i], subsume=True).to(idx_fn(check_index(i2, i)))
+    yield rewrite(TupleNDArray.fn(i2, idx_fn).length(), subsume=False).to(i2)
+    yield rewrite(TupleNDArray.fn(i2, idx_fn)[i], subsume=False).to(idx_fn(check_index(i2, i)))
 
-    yield rewrite(TupleNDArray(vs).length(), subsume=True).to(Int(vs.length()))
-    yield rewrite(TupleNDArray(vs)[Int(k)], subsume=True).to(vs[k], k >= 0, k < vs.length())
+    yield rewrite(TupleNDArray(vs).length(), subsume=False).to(Int(vs.length()))
+    yield rewrite(TupleNDArray(vs)[Int(k)], subsume=False).to(vs[k], k >= 0, k < vs.length())
 
     yield rewrite(TupleNDArray.fn(Int(k), idx_fn), subsume=True).to(
         TupleNDArray(k.range().map(lambda i: idx_fn(Int(i)))), k >= 0
@@ -2396,10 +2410,10 @@ def _interval_analaysis(
     y_value = y.index(broadcast_index(y.shape, res_shape, idx))
     return [
         # Calling any on an array gives back a scalar, which is true if any of the values are truthy
-        rewrite(any(x)).to(
+        rewrite(any(x), subsume=False).to(
             NDArray(
                 Value.from_bool(possible_values(x.index(ALL_INDICES).to_truthy_value).contains(Value.from_bool(TRUE)))
-            )
+            ),
         ),
         # Indexing x < y is the same as broadcasting the index and then indexing both and then comparing
         rewrite((x < y).index(idx)).to(x_value < y_value),
@@ -2653,7 +2667,7 @@ def array_api_functional_ruleset(
     idx_fn: Callable[[TupleInt], Value],
 ):
     # TODO: Support -1 in shape like numpy does
-    yield rewrite(reshape(NDArray.fn(old_shape, dtype, idx_fn), shape, ob), subsume=True).to(
+    yield rewrite(reshape(NDArray.fn(old_shape, dtype, idx_fn), shape, ob), subsume=False).to(
         NDArray.fn(shape, dtype, lambda idx: idx_fn(unravel_index(ravel_index(idx, shape), old_shape)))
     )
 
@@ -2699,6 +2713,7 @@ def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
     # run on another e-graph to get around bug
     # https://github.com/egraphs-good/egglog/issues/801
     # return egraph.extract(expr).value  # type: ignore[call-overload]
+    # egraph.display(n_inline_leaves=2, split_primitive_outputs=True, split_functions=[Int])
     extracted_expr = egraph.extract(expr)  # type: ignore[call-overload]
     new_egraph = EGraph()
     new_egraph.register(extracted_expr)
@@ -2773,7 +2788,7 @@ def to_polynomial_ruleset(
     mss: MultiSet[MultiSet[Value]],
     mss1: MultiSet[MultiSet[Value]],
 ):
-    yield rewrite(n1 - n2, subsume=True).to(n1 + (Value.from_int(-1) * n2))
+    yield rewrite(n1 - n2, subsume=False).to(n1 + (Value.from_int(-1) * n2))
     yield rule(
         eq(n3).to(n1 + n2),
         name="add",
