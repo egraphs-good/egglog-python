@@ -1861,11 +1861,11 @@ def _ndarray(
         rewrite(NDArray(rv).shape, subsume=False).to(rv.shape),
         rewrite(NDArray(rv).index(TupleInt(vi)), subsume=False).to(rv[vi]),
         # TODO: Special case scalar ops for now
-        rewrite(NDArray(v) / NDArray(v), subsume=False).to(NDArray(v / v)),
-        rewrite(NDArray(v) + NDArray(v), subsume=False).to(NDArray(v + v)),
-        rewrite(NDArray(v) * NDArray(v), subsume=False).to(NDArray(v * v)),
+        rewrite(NDArray(v) / NDArray(v1), subsume=False).to(NDArray(v / v1)),
+        rewrite(NDArray(v) + NDArray(v1), subsume=False).to(NDArray(v + v1)),
+        rewrite(NDArray(v) * NDArray(v1), subsume=False).to(NDArray(v * v1)),
         rewrite(NDArray(v) ** NDArray(v1), subsume=False).to(NDArray(v**v1)),
-        rewrite(NDArray(v) - NDArray(v), subsume=False).to(NDArray(v - v)),
+        rewrite(NDArray(v) - NDArray(v1), subsume=False).to(NDArray(v - v1)),
         # Comparisons
         rewrite(NDArray(v) < NDArray(v1), subsume=False).to(NDArray(v < v1)),
         rewrite(NDArray(v) <= NDArray(v1), subsume=False).to(NDArray(v <= v1)),
@@ -2495,6 +2495,7 @@ def _demand_shape(compound: NDArray, inner: NDArray) -> Command:
 def _reshape_math(x: NDArray, shape: TupleInt, copy: OptionalBool):
     res = reshape(x, shape, copy)
 
+    yield rewrite(res.shape).to(shape)
     yield _demand_shape(res, x)
     # Demand shape length and index
     yield rule(res).then(shape.length(), shape[0])
@@ -2670,15 +2671,15 @@ def unravel_index(flat_index: IntLike, shape: TupleIntLike) -> TupleInt:
 
 @ruleset
 def array_api_functional_ruleset(
-    old_shape: TupleInt,
     shape: TupleInt,
     ob: OptionalBool,
-    dtype: DType,
-    idx_fn: Callable[[TupleInt], Value],
+    ndarray: NDArray,
 ):
     # TODO: Support -1 in shape like numpy does
-    yield rewrite(reshape(NDArray.fn(old_shape, dtype, idx_fn), shape, ob), subsume=False).to(
-        NDArray.fn(shape, dtype, lambda idx: idx_fn(unravel_index(ravel_index(idx, shape), old_shape)))
+    yield rewrite(reshape(ndarray, shape, ob), subsume=False).to(
+        NDArray.fn(
+            shape, ndarray.dtype, lambda idx: ndarray.index(unravel_index(ravel_index(idx, shape), ndarray.shape))
+        )
     )
 
 
@@ -2769,7 +2770,7 @@ def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
 ##
 
 
-@function
+@function(unextractable=True)
 def monomial(x: MultiSetLike[Value, ValueLike]) -> Value: ...
 
 
@@ -2874,7 +2875,7 @@ def factor_ruleset(
 @ruleset
 def from_polynomial_ruleset(mss: MultiSet[MultiSet[Value]]):
     mul: Callable[[Value, Value], Value] = Value.__mul__
-    yield rewrite(polynomial(mss)).to(
+    yield rewrite(polynomial(mss), subsume=True).to(
         multiset_fold(
             Value.__add__,
             Value.from_int(0),
@@ -2885,4 +2886,4 @@ def from_polynomial_ruleset(mss: MultiSet[MultiSet[Value]]):
     )
 
 
-polynomial_schedule = to_polynomial_ruleset.saturate() + factor_ruleset.saturate()
+polynomial_schedule = to_polynomial_ruleset.saturate() + factor_ruleset.saturate() + from_polynomial_ruleset.saturate()
