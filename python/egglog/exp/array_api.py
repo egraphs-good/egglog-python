@@ -58,6 +58,17 @@ class Boolean(Expr, ruleset=array_api_ruleset):
         >>> bool(Boolean(False))
         False
         """
+        # Special case bool so it works when comparing to arrays outside of tracing, like when indexing
+        if (
+            not _CURRENT_EGRAPH
+            and (
+                args := get_callable_args(self, Int.__eq__)
+                or get_callable_args(self, Boolean.__eq__)
+                or get_callable_args(self, Value.__eq__)
+            )
+            is not None
+        ):
+            return bool(eq(args[0]).to(cast("Int", args[1])))
         return self.eval()
 
     @method(preserve=True)
@@ -142,7 +153,10 @@ class Int(Expr, ruleset=array_api_ruleset):
     # https://github.com/scikit-learn/scikit-learn/blob/6fd23fca53845b32b249f2b36051c081b65e2fab/sklearn/utils/validation.py#L486-L487
     @method(preserve=True)
     def __hash__(self) -> int:
-        egraph = _get_current_egraph()
+        # Only hash if we have a current e-graph saved, like in the middle of tracing
+        egraph = _CURRENT_EGRAPH
+        if egraph is None:
+            return hash(self.__egg_typed_expr__)  # type: ignore[attr-defined]
         egraph.register(self)
         egraph.run(array_api_schedule)
         simplified = egraph.extract(self)
@@ -401,7 +415,7 @@ class Float(Expr, ruleset=array_api_ruleset):
 
 converter(float, Float, lambda x: Float(x))
 converter(Int, Float, lambda x: Float.from_int(x))
-
+converter(BigRat, Float, lambda x: Float.rational(x))
 
 FloatLike: TypeAlias = Float | float | IntLike
 
@@ -589,6 +603,17 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         [Int(3), Int(4)]
         """
         return TupleInt.fn(self.length() - n, lambda i: self[i + n])
+
+    @method(unextractable=True)
+    def take(self, n: IntLike) -> TupleInt:
+        """
+        Return a new tuple with only the first n elements,
+
+        >>> ti = TupleInt([1, 2, 3, 4])
+        >>> list(ti.take(2))
+        [Int(1), Int(2)]
+        """
+        return TupleInt.fn(n, self.__getitem__)
 
     @method(unextractable=True)
     def rest(self) -> TupleInt:
@@ -1051,6 +1076,9 @@ class Value(Expr, ruleset=array_api_ruleset):
     NEVER: ClassVar[Value]
 
     @classmethod
+    def var(cls, name: StringLike) -> Value: ...
+
+    @classmethod
     def from_int(cls, i: IntLike) -> Value: ...
 
     @classmethod
@@ -1127,6 +1155,22 @@ class Value(Expr, ruleset=array_api_ruleset):
                 return cast("Boolean", b).value
         raise ExprValueError(self, "Value.int|float|bool(...)")
 
+    @method(cost=100000000)
+    def diff(self, v: Value) -> Value:
+        """
+        Differentiate self with respect to v.
+
+        >>> x = Value.var("x")
+        >>> x.diff(x).eval()
+        1
+        >>> x.diff(Value.var("y")).eval()
+        0
+        >>> (x + Value.from_int(2)).diff(x).eval()
+        1
+        >>> (x * x).diff(x).eval()
+        2 * x
+        """
+
 
 ValueLike: TypeAlias = Value | IntLike | FloatLike | BooleanLike
 
@@ -1145,11 +1189,15 @@ def _value(
     v: Value,
     v1: Value,
     v2: Value,
+    v3: Value,
     i1: Int,
     f1: Float,
     b1: Boolean,
     vt: Callable[[], Value],
     v1t: Callable[[], Value],
+    s: String,
+    s1: String,
+    i_: i64,
 ):
     # Default dtypes
     # https://data-apis.org/array-api/latest/API_specification/data_types.html?highlight=dtype#default-data-types
@@ -1224,6 +1272,26 @@ def _value(
 
     # Upcast binary op
     yield rewrite(Value.from_int(i) * Value.from_float(f)).to(Value.from_float(Float.from_int(i)) * Value.from_float(f))
+
+    # Integer identities / annihilators
+    yield rewrite(v + Value.from_int(0)).to(v)
+    yield rewrite(Value.from_int(0) + v).to(v)
+    yield rewrite(v * Value.from_int(1)).to(v)
+    yield rewrite(Value.from_int(1) * v).to(v)
+    yield rewrite(v * Value.from_int(0)).to(Value.from_int(0))
+    yield rewrite(Value.from_int(0) * v).to(Value.from_int(0))
+    yield rewrite(v - Value.from_int(0)).to(v)
+    yield rewrite(v**1).to(v)
+
+    # Differentiation rules
+    yield rewrite(v.diff(v)).to(Value.from_int(1))
+    yield rewrite((v1 + v2).diff(v3)).to(v1.diff(v3) + v2.diff(v3))
+    yield rewrite((v1 - v2).diff(v3)).to(v1.diff(v3) - v2.diff(v3))
+    yield rewrite((v1 * v2).diff(v3)).to(v1.diff(v3) * v2 + v1 * v2.diff(v3))
+    yield rewrite((v1 / v2).diff(v3)).to((v1.diff(v3) * v2 - v1 * v2.diff(v3)) / (v2 * v2))
+    yield rewrite((v1**i_).diff(v3)).to((v1 * v1 ** (i_ - 1)).diff(v3), i_ > 1)
+    yield rewrite(Value.var(s).diff(Value.var(s1))).to(Value.from_int(0), s != s1)
+    yield rewrite(Value.from_int(i_).diff(Value.var(s))).to(Value.from_int(0))
 
 
 class TupleValue(Expr, ruleset=array_api_ruleset):
@@ -1683,6 +1751,13 @@ class NDArray(Expr, ruleset=array_api_ruleset):
             raise NotImplementedError(msg)
         return self.eval_numpy(dtype=dtype)
 
+    def __int__(self) -> int:
+        res = self.eval()
+        if isinstance(res, tuple):
+            msg = "Cannot convert a non-scalar array to int"
+            raise TypeError(msg)
+        return int(res)
+
     @method(cost=200)
     @classmethod
     def var(cls, name: StringLike) -> NDArray: ...
@@ -1706,6 +1781,9 @@ class NDArray(Expr, ruleset=array_api_ruleset):
 
     @method(preserve=True)
     def __bool__(self) -> bool:
+        # Special case bool so it works when comparing to arrays outside of tracing, like when indexing
+        if not _CURRENT_EGRAPH and (args := get_callable_args(self, NDArray.__eq__)) is not None:
+            return bool(eq(args[0]).to(cast("NDArray", args[1])))
         return self.index(()).to_bool.eval()
 
     @property
@@ -1827,6 +1905,33 @@ class NDArray(Expr, ruleset=array_api_ruleset):
     @classmethod
     def if_(cls, b: BooleanLike, i: Callable[[], NDArray], j: Callable[[], NDArray]) -> NDArray: ...
 
+    @method(unextractable=True)
+    def diff(self, v: NDArrayLike) -> NDArray:
+        """
+        Differentiate self with respect to v.
+
+        It will have the shape of the concat of both input shapes. On the outside are the indices of the variable array
+        and on the inside the indices of the value array.
+
+        >>> v = Value.var("v")
+        >>> int(NDArray(v).diff(v))
+        1
+        >>> int(NDArray(v + v).diff(v))
+        2
+        >>> int(NDArray(v * 3).diff(v))
+        3
+        >>> tuple(map(int, NDArray((v, v * 2, v * 3)).diff(v)))
+        (1, 2, 3)
+        >>> tuple(map(int, NDArray(v * 2).diff(NDArray([v, Value.var("w")]))))
+        (2, 0)
+        """
+        v = cast("NDArray", v)
+        return NDArray.fn(
+            v.shape + self.shape,
+            self.dtype,
+            lambda idx: self.index(idx.drop(v.shape.length())).diff(v.index(idx.take(v.shape.length()))),
+        )
+
 
 VecValuesRecursive: TypeAlias = "Value | Vec[VecValuesRecursive]"
 
@@ -1878,14 +1983,14 @@ def _ndarray(
         rewrite(NDArray.if_(TRUE, xt, x1t), subsume=True).to(xt()),
         rewrite(NDArray.if_(FALSE, xt, x1t), subsume=True).to(x1t()),
         # to RecursiveValue,
-        # only trigger if size smaller than 10 to avoid blowing up
+        # only trigger if size smaller than 20 to avoid blowing up
         rule(
             eq(x).to(NDArray.fn(TupleInt(vi), dtype, idx_fn)),
         ).then(TupleInt(vi).product()),
         rule(
             eq(x).to(NDArray.fn(TupleInt(vi), dtype, idx_fn)),
             eq(TupleInt(vi).product()).to(Int(i)),
-            i <= 10,
+            i <= 20,
         ).then(
             union(x).with_(NDArray(RecursiveValue.from_index_and_shape(vi, idx_fn))),
             subsume(NDArray.fn(TupleInt(vi), dtype, idx_fn)),
@@ -2723,17 +2828,20 @@ def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
     egraph.run(array_api_schedule)
     # egraph.display(n_inline_leaves=2, split_primitive_outputs=True, split_functions=[Int])
     extracted_expr = egraph.extract(expr)  # type: ignore[call-overload]
-    with contextlib.suppress(ExprValueError):
-        extracted_expr.value
+    # with contextlib.suppress(ExprValueError):
+    #     extracted_expr.value
     # run on another e-graph to get around bug
     # https://github.com/egraphs-good/egglog/issues/801
 
     new_egraph = EGraph()
     new_egraph.register(extracted_expr)
     new_egraph.run(array_api_schedule)
+    # new_egraph.display()
+    # try:
     return new_egraph.extract(extracted_expr).value
-    # except EggSmolError as e:
 
+    # except EggSmolError as e:
+    #     new_egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
     #     raise e
 
     # try:
@@ -2770,16 +2878,12 @@ def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
 ##
 
 
-@function(unextractable=True)
-def monomial(x: MultiSetLike[Value, ValueLike]) -> Value: ...
-
-
 @function(merge=lambda old, new: new)
 def get_monomial(x: Value) -> MultiSet[Value]:
     """
     Only defined on monomials:
 
-        get_monomial(monomial(xs)) => xs
+        get_monomial(polynomial((xs,))) => xs
     """
 
 
@@ -2817,7 +2921,7 @@ def to_polynomial_ruleset(
         eq(n3).to(n1 * n2),
         name="mul",
     ).then(
-        union(n3).with_(monomial(MultiSet(n1, n2))),
+        union(n3).with_(polynomial(MultiSet(MultiSet(n1, n2)))),
         set_(get_monomial(n3)).to(MultiSet(n1, n2)),
         delete(n1 * n2),
         # MultiSet(n1, n2).fill_index(ms_index),
@@ -2868,21 +2972,36 @@ def factor_ruleset(
         name="factor",
     ).then(
         union(n).with_(polynomial(MultiSet(MultiSet(factor, polynomial(divided))) + remainder)),
-        # delete(polynomial(mss)),
+        delete(polynomial(mss)),
     )
 
 
 @ruleset
-def from_polynomial_ruleset(mss: MultiSet[MultiSet[Value]]):
+def from_polynomial_ruleset(mss: MultiSet[MultiSet[Value]], n1: Value, n: Value):
     mul: Callable[[Value, Value], Value] = Value.__mul__
-    yield rewrite(polynomial(mss), subsume=True).to(
-        multiset_fold(
-            Value.__add__,
-            Value.from_int(0),
-            mss.map(
-                partial(multiset_fold, mul, Value.from_int(1)),
-            ),
-        )
+    # yield rewrite(polynomial(mss), subsume=True).to(
+    #     multiset_fold(
+    #         Value.__add__,
+    #         Value.from_int(0),
+    #         mss.map(
+    #             partial(multiset_fold, mul, Value.from_int(1)),
+    #         ),
+    #     )
+    # )
+
+    yield rule(
+        eq(n).to(polynomial(mss)),
+    ).then(
+        union(n).with_(
+            multiset_fold(
+                Value.__add__,
+                Value.from_int(0),
+                mss.map(
+                    partial(multiset_fold, mul, Value.from_int(1)),
+                ),
+            )
+        ),
+        delete(polynomial(mss)),
     )
 
 

@@ -782,7 +782,7 @@ def define_expr_method(name: str) -> None:
     """
     Given the name of a method, explicitly defines it on the runtime type that holds `Expr` objects as a method.
 
-    Call this if you need a method to be defined on the type itself where overrding with `__getattr__` does not suffice,
+    Call this if you need a method to be defined on the type itself where overriding with `__getattr__` does not suffice,
     like for NumPy's `__array_ufunc__`.
     """
 

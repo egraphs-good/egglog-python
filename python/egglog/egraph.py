@@ -4,6 +4,7 @@ import contextlib
 import inspect
 import pathlib
 import tempfile
+from collections import defaultdict
 from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field
@@ -1335,46 +1336,28 @@ class EGraph:
         resolved, _ = resolve_callable(fn)
         return resolved in self._state.cost_callables
 
-    def debug_print(self) -> None:
+    def freeze(self) -> FrozenEGraph:
         """
-        Prints the internal state of the egraph for debugging purposes.
+        Freezes the egraph and returns a FrozenEGraph instance, that can be used for debugging.
         """
-        print("=== EGraph Debug Print ===")
-        print("Mapping from functions to their e-class")
-        # printed_output_sorts = set()
         frozen = self._egraph.freeze()
-        for name, fn in sorted(frozen.functions.items(), key=lambda kv: kv[1].output_sort):
-            printed_output_values = set()
-            for row in sorted(fn.rows, key=lambda r: r.output):
+        frozen_py = FrozenEGraph({}, defaultdict(list))
+        for name, fn in frozen.functions.items():
+            for row in fn.rows:
+                tp = self._state.egg_sort_to_type_ref[fn.output_sort]
+                res = RuntimeExpr.__from_values__(
+                    self.__egg_decls__,
+                    TypedExprDecl(
+                        tp=tp,
+                        expr=self._state.value_to_expr(tp=tp, value=row.output),
+                    ),
+                )
                 if fn.is_let_binding:
-                    call = RuntimeExpr.__from_values__(
-                        self.__egg_decls__,
-                        TypedExprDecl(self._state.egg_sort_to_type_ref[fn.output_sort], LetRefDecl(name)),
-                    )
-                else:
-                    call = self._values_to_expr(row.inputs, name)
-
-                # if call.__egg_typed_expr__.tp not in printed_output_sorts:
-                #     printed_output_sorts.add(call.__egg_typed_expr__.tp)
-                #     print(f"\n# {call.__egg_typed_expr__.tp}\n")
-
-                if row.output not in printed_output_values:
-                    printed_output_values.add(row.output)
-
-                    res = RuntimeExpr.__from_values__(
-                        self.__egg_decls__,
-                        TypedExprDecl(
-                            tp=call.__egg_typed_expr__.tp,
-                            expr=self._state.value_to_expr(tp=call.__egg_typed_expr__.tp, value=row.output),
-                        ),
-                    )
-                    print(f"\n## {res}: {call.__egg_typed_expr__.tp}\n")
-
-                if row.subsumed:
-                    print(subsume(cast("Expr", call)))
-                else:
-                    print(call)
-        print("=== End EGraph Debug Print ===")
+                    frozen_py.global_bindings[name] = cast("BaseExpr", res)
+                    continue
+                call = self._values_to_expr(row.inputs, name)
+                frozen_py.outputs[cast("BaseExpr", res)].append(FrozenRow(cast("BaseExpr", call), row.subsumed))
+        return frozen_py
 
     def _values_to_expr(self, args: list[bindings.Value], name: str) -> RuntimeExpr:
         (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
@@ -1389,6 +1372,32 @@ class EGraph:
             self.__egg_decls__,
             TypedExprDecl(res_type, CallDecl(callable_ref, tuple(arg_exprs))),
         )
+
+
+@dataclass(frozen=True)
+class FrozenRow:
+    output: BaseExpr
+    subsumed: bool
+
+
+@dataclass(frozen=True)
+class FrozenEGraph:
+    global_bindings: dict[str, BaseExpr]
+    outputs: dict[BaseExpr, list[FrozenRow]]
+
+    def __str__(self) -> str:
+        res = "Global Bindings:\n"
+        for name, value in self.global_bindings.items():
+            res += f"  {name}: {value}\n"
+        res += "Outputs:\n"
+        for output, rows in self.outputs.items():
+            res += f"  {output}:\n"
+            for row in rows:
+                res += f"    {row.output}"
+                if row.subsumed:
+                    res += " (subsumed)"
+                res += "\n"
+        return res
 
 
 # Either a constant or a function.
