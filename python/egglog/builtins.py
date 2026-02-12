@@ -573,6 +573,10 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     @method(egg_fn="multiset-of")
     def __init__(self, *args: T) -> None: ...
 
+    @method(egg_fn="multiset-single")
+    @classmethod
+    def single(cls, x: T, i: i64Like) -> MultiSet[T]: ...
+
     @method(egg_fn="multiset-sum-multisets")
     @classmethod
     def sum_multisets(cls, xs: MultiSet[MultiSet[T]]) -> MultiSet[T]: ...

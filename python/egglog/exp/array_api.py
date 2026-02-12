@@ -2905,6 +2905,7 @@ def to_polynomial_ruleset(
     n1: Value,
     n2: Value,
     n3: Value,
+    i: i64,
     mss: MultiSet[MultiSet[Value]],
     mss1: MultiSet[MultiSet[Value]],
 ):
@@ -2925,6 +2926,14 @@ def to_polynomial_ruleset(
         set_(get_monomial(n3)).to(MultiSet(n1, n2)),
         delete(n1 * n2),
         # MultiSet(n1, n2).fill_index(ms_index),
+    )
+    yield rule(
+        eq(n3).to(n1**i),
+        name="pow",
+    ).then(
+        eq(n3).to(polynomial(MultiSet(MultiSet.single(n1, i)))),
+        set_(get_monomial(n3)).to(MultiSet.single(n1, i)),
+        delete(n1**i),
     )
     yield rule(
         eq(n1).to(polynomial(mss)),
