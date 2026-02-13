@@ -56,10 +56,12 @@ __all__ = [
     "i64",
     "i64Like",
     "join",
+    "multiset_contains_swapped",
     "multiset_flat_map",
     "multiset_fold",
     "multiset_not_contains_swapped",
     "multiset_remove_swapped",
+    "multiset_subtract_swapped",
     "py_eval",
     "py_eval_fn",
     "py_exec",
@@ -573,6 +575,9 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     @method(egg_fn="multiset-of")
     def __init__(self, *args: T) -> None: ...
 
+    @method(egg_fn="multiset-intersection")
+    def __and__(self, other: MultiSet[T]) -> MultiSet[T]: ...
+
     @method(egg_fn="multiset-single")
     @classmethod
     def single(cls, x: T, i: i64Like) -> MultiSet[T]: ...
@@ -633,8 +638,16 @@ def multiset_flat_map(f: Callable[[T], MultiSet[T]], xs: MultiSet[T]) -> MultiSe
 def multiset_remove_swapped(x: T, xs: MultiSet[T]) -> MultiSet[T]: ...
 
 
+@function(egg_fn="multiset-subtract-swapped", builtin=True)
+def multiset_subtract_swapped(x: MultiSet[T], xs: MultiSet[T]) -> MultiSet[T]: ...
+
+
 @function(egg_fn="multiset-not-contains-swapped", builtin=True)
 def multiset_not_contains_swapped(x: T, xs: MultiSet[T]) -> Unit: ...
+
+
+@function(egg_fn="multiset-contains-swapped", builtin=True)
+def multiset_contains_swapped(x: T, xs: MultiSet[T]) -> Unit: ...
 
 
 @function(egg_fn="unstable-multiset-fold", builtin=True)

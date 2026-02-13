@@ -2,7 +2,7 @@
 import inspect
 from collections.abc import Callable
 from functools import partial
-from itertools import product
+from itertools import product, repeat
 from pathlib import Path
 from types import FunctionType
 
@@ -398,6 +398,34 @@ def test_run_lda(fn_thunk, benchmark):
     assert real_res.dtype == fn_res.dtype
     assert np.allclose(real_res, fn_res, rtol=1e-03)
     benchmark(fn, X_np, y_np)
+
+
+x, y, z, q, r = map(constant, ("x", "y", "z", "q", "r"), repeat(Value))
+
+
+@pytest.mark.parametrize(
+    ("input", "expected"),
+    [
+        pytest.param(x * x, x**2, id="exp"),
+        pytest.param(x * y + x * z, x * (y + z), id="factor"),
+        pytest.param(x * y + x * z * q + x * z * r, x * (y + z * (q + r)), id="factor most first"),
+        pytest.param(
+            x**2 * z * y + x**2 * q * z * y, x**2 * z * y * (q + Value.from_int(1)), id="factor out all terms equal"
+        ),
+    ],
+)
+def test_polynomial_factoring(input: Value, expected: Value):
+    egraph = EGraph()
+    x = egraph.let("x", input)
+    egraph.run(polynomial_schedule)
+    # egraph.run(to_polynomial_ruleset.saturate())
+    # egraph.display()
+    # egraph.run(factor_ruleset.saturate())
+    # egraph.display()
+    # egraph.run(from_polynomial_ruleset.saturate())
+    # egraph.display()
+    equiv_expr = egraph.extract(x)
+    assert eq(equiv_expr).to(expected), f"Expected {expected}, got {equiv_expr}"
 
 
 # if calling as script, print out egglog source for test

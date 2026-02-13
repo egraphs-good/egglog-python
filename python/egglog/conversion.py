@@ -20,9 +20,9 @@ if TYPE_CHECKING:
 __all__ = ["ConvertError", "convert", "converter", "get_type_args"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
 CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable[[Any], RuntimeExpr]]] = {}
-# Global declerations to store all convertable types so we can query if they have certain methods or not
+# Global declarations to store all convertible types so we can query if they have certain methods or not
 _CONVERSION_DECLS = Declarations.create()
-# Defer a list of declerations to be added to the global declerations, so that we can not trigger them procesing
+# Defer a list of declarations to be added to the global declarations, so that we can not trigger them processing
 # until we need them
 _TO_PROCESS_DECLS: list[DeclarationsLike] = []
 
@@ -244,7 +244,7 @@ def _lookup_conversion(lhs: type | JustTypeRef, rhs: JustTypeRef) -> tuple[int, 
     """
     Looks up a conversion function for the given types.
 
-    Also looks up all parent types of the lhs if it is a Python type and looks up more general not paramtrized types for rhs.
+    Also looks up all parent types of the lhs if it is a Python type and looks up more general not parametrized types for rhs.
     """
     for lhs_type in lhs.__mro__ if isinstance(lhs, type) else [lhs]:
         if (key := (lhs_type, rhs)) in CONVERSIONS:
@@ -254,7 +254,7 @@ def _lookup_conversion(lhs: type | JustTypeRef, rhs: JustTypeRef) -> tuple[int, 
     return None
 
 
-def _debug_print_converers():
+def _debug_print_converters():
     """
     Prints a mapping of all source types to target types that have a conversion function.
     """

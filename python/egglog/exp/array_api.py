@@ -2802,8 +2802,10 @@ def set_array_api_egraph(egraph: EGraph) -> Iterator[None]:
     global _CURRENT_EGRAPH
     assert _CURRENT_EGRAPH is None
     _CURRENT_EGRAPH = egraph
-    yield
-    _CURRENT_EGRAPH = None
+    try:
+        yield
+    finally:
+        _CURRENT_EGRAPH = None
 
 
 def _get_current_egraph() -> EGraph:
@@ -2962,31 +2964,34 @@ def factor_ruleset(
     n: Value,
     mss: MultiSet[MultiSet[Value]],
     counts: MultiSet[Value],
-    factor: Value,
+    picked_term: Value,
+    picked: MultiSet[MultiSet[Value]],
     divided: MultiSet[MultiSet[Value]],
+    factor: MultiSet[Value],
     remainder: MultiSet[MultiSet[Value]],
 ):
     yield rule(
         eq(n).to(polynomial(mss)),
         # Find factor that shows up in most monomials, at least two of them
         counts == MultiSet.sum_multisets(mss.map(MultiSet.reset_counts)),
-        eq(factor).to(counts.pick_max()),
+        eq(picked_term).to(counts.pick_max()),
         # Only factor out if it term appears in more than one monomial
-        counts.count(factor) > 1,
-        # map, including only those factor that contain the factor, removing them from that
-        # other items are omitted from the map
-        divided == mss.map(partial(multiset_remove_swapped, factor)),
+        counts.count(picked_term) > 1,
+        # The factor we choose is the largest intersection between all the monomials that have the picked term
+        picked == mss.filter(partial(multiset_contains_swapped, picked_term)),
+        factor == multiset_fold(MultiSet.__and__, picked.pick(), picked),
+        divided == picked.map(partial(multiset_subtract_swapped, factor)),
         # remainder is those monomials that do not contain the factor
-        remainder == mss.filter(partial(multiset_not_contains_swapped, factor)),
+        remainder == mss.filter(partial(multiset_not_contains_swapped, picked_term)),
         name="factor",
     ).then(
-        union(n).with_(polynomial(MultiSet(MultiSet(factor, polynomial(divided))) + remainder)),
+        union(n).with_(polynomial(MultiSet(factor.insert(polynomial(divided))) + remainder)),
         delete(polynomial(mss)),
     )
 
 
 @ruleset
-def from_polynomial_ruleset(mss: MultiSet[MultiSet[Value]], n1: Value, n: Value):
+def from_polynomial_ruleset(mss: MultiSet[MultiSet[Value]], n1: Value, n: Value, i: i64):
     mul: Callable[[Value, Value], Value] = Value.__mul__
     # yield rewrite(polynomial(mss), subsume=True).to(
     #     multiset_fold(
@@ -3012,6 +3017,58 @@ def from_polynomial_ruleset(mss: MultiSet[MultiSet[Value]], n1: Value, n: Value)
         ),
         delete(polynomial(mss)),
     )
+
+    # TODO: change this to emit more efficient form in the future
+
+    # Clean up exponents
+    yield rule(
+        eq(n1).to(n * n),
+    ).then(
+        union(n1).with_(n**2),
+        delete(n * n),
+    )
+    yield rule(
+        eq(n1).to(n**i * n),
+    ).then(
+        union(n1).with_(n ** (i + 1)),
+        delete(n**i * n),
+    )
+    yield rule(
+        eq(n1).to(n * n**i),
+    ).then(
+        union(n1).with_(n ** (i + 1)),
+        delete(n * n**i),
+    )
+    # clean up muls
+    yield rule(
+        eq(n1).to(n + n),
+    ).then(
+        union(n1).with_(Value.from_int(2) * n),
+        delete(n + n),
+    )
+    yield rule(
+        eq(n1).to(Value.from_int(i) * n + n),
+    ).then(
+        union(n1).with_(Value.from_int(i + 1) * n),
+        delete(Value.from_int(i) * n + n),
+    )
+    yield rule(
+        eq(n1).to(n + Value.from_int(i) * n),
+    ).then(
+        union(n1).with_(Value.from_int(i + 1) * n),
+        delete(n + Value.from_int(i) * n),
+    )
+
+
+# @ruleset
+# def to_exp_ruleset():
+#     """
+#     x * x => x**2
+#     x ** n * x => x ** (n + 1)
+#     x * x ** n => x ** (n + 1)
+#     x ** n * x **
+
+#     """
 
 
 polynomial_schedule = to_polynomial_ruleset.saturate() + factor_ruleset.saturate() + from_polynomial_ruleset.saturate()
