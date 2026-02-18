@@ -1,11 +1,11 @@
 // Freeze an egglog, turning it an immutable structure that can be printed, serialized, or added back to an e-graph.
 
-use std::{collections::HashMap, fmt::Display};
+use std::collections::HashMap;
 
 use egglog::EGraph;
 use pyo3::prelude::*;
 
-use crate::{conversions::Command, egraph::Value};
+use crate::egraph::Value;
 
 #[pyclass(eq, frozen, get_all)]
 #[derive(PartialEq, Eq, Clone, Hash)]

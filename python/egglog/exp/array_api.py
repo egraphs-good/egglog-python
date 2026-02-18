@@ -2911,7 +2911,6 @@ def to_polynomial_ruleset(
     mss: MultiSet[MultiSet[Value]],
     mss1: MultiSet[MultiSet[Value]],
 ):
-    yield rewrite(n1 - n2, subsume=False).to(n1 + (Value.from_int(-1) * n2))
     yield rule(
         eq(n3).to(n1 + n2),
         name="add",
@@ -2927,7 +2926,6 @@ def to_polynomial_ruleset(
         union(n3).with_(polynomial(MultiSet(MultiSet(n1, n2)))),
         set_(get_monomial(n3)).to(MultiSet(n1, n2)),
         delete(n1 * n2),
-        # MultiSet(n1, n2).fill_index(ms_index),
     )
     yield rule(
         eq(n3).to(n1**i),
