@@ -1,11 +1,26 @@
-# Containers in Egglog
+# Greedy Horner Factorization with Multisets as an Example of Containers in Egglog
 
-## Egglog
+[E-graphs](https://en.wikipedia.org/wiki/E-graph) are useful data structures for exploring equivalences between expressions, but
+their performance can struggle as the number of equivalent expressions explodes based on algebraic identities, such as
+associativity, commutativity, and distributivity.
+One response is to build e-graph systems that represent canonical forms more directly, such as Philip Zucker's explorations of
+[Gröbner basis](https://www.philipzucker.com/multiset_rw/) and [bottom up e-matching](https://www.semanticscholar.org/paper/Omelets-Need-Onions%3A-E-graphs-Modulo-Theories-via-Zucker/b07bdef17fdbb7cf927a5a844fc587335864e89a).
+However, building new e-graph systems is a large engineering lift and fragmentation in the ecosystem reduces the possibility
+to build collaboratively across domains.
+In this post, I explore how Egglog's containers (extensible host language primitives) and higher order functions can
+be used to build domain-specific canonical representations without changing the internals of the system.
 
-Egglog is a framework for computing with [e-graphs](https://en.wikipedia.org/wiki/E-graph).
-It is written in [Rust](https://github.com/egraphs-good/egglog) and also has [Python bindings](https://github.com/egraphs-good/egglog-python).
+I have started a case study based on polynomial factoring and present some preliminary performance results.
 
-Let me start with an example:
+I do not argue that my current implementation is the correct way to represent polynomials in e-graphs, but I hope to share
+some insight into how this sort of system could be implemented on top of egglog today and inspire future work.
+
+## Egglog Background
+
+Egglog is an e-graph framework written in [Rust](https://github.com/egraphs-good/egglog) with [Python bindings](https://github.com/egraphs-good/egglog-python),
+which I will use in this post.
+
+Starting with an example that shows how we can check that `2 * (x + 3) = 6 + 2 * x`:
 
 ```python
 from __future__ import annotations
@@ -28,11 +43,11 @@ class Num(Expr):
 # 2. Create an empty e-graph
 egraph = EGraph()
 
-# 3. Add two expression to this e-graph
+# 3. Add two expressions to this e-graph
 expr1 = egraph.let("expr1", Num(2) * (Num.var("x") + Num(3)))
 expr2 = egraph.let("expr2", Num(6) + Num(2) * Num.var("x"))
 
-# 4. Define a number of rules that add equivalences to our e-graph, by matching on the LHS and making the RHS equivalent
+# 4. Define rules that add equivalences to our e-graph, by matching on the LHS and adding the RHS as equivalent
 # to it
 @egraph.register
 def _num_rule(a: Num, b: Num, c: Num, i: i64, j: i64):
@@ -41,13 +56,12 @@ def _num_rule(a: Num, b: Num, c: Num, i: i64, j: i64):
     yield rewrite(Num(i) + Num(j)).to(Num(i + j))
     yield rewrite(Num(i) * Num(j)).to(Num(i * j))
 
-# 5. Run our ruleset until the e-graph is "saturated", meaning that any additional rule application will be no-ops
+# 5. Run our rules until the e-graph is "saturated" (further applications no-ops)
 egraph.saturate()
 # 6. Verify that after running our rules, our two expressions are now equivalent
 egraph.check(expr1 == expr2)
 ```
 
-<!-- cSpell:disable -->
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js" crossorigin="anonymous"></script>
@@ -142,14 +156,13 @@ egraph.check(expr1 == expr2)
 <script type="application/vnd.jupyter.widget-view+json">
 {"version_major": 2, "version_minor": 0, "model_id": "40bc2762624d46838c2af0777e4a6dfe"}
 </script>
-<!-- cSpell:enable -->
-
-If you click and drag above, you can see the state of the e-graph. All the way on the LHS you can see it starts out with
-the two expressions separate. Then as the rules are applied different values are unioned and finally they appear the same.
 
 
-Once you add a number of things to an e-graph and then running some rules, besides checking if two things are equal,
-you can also "extract" a term, which means trying to find the cost expression tree that is equivalent to the input.
+
+If you click and drag above, you can see the state of the e-graph. It starts out with the two expressions separate,
+then as the rules are applied e-classes are merged and they become equivalent.
+
+Once an e-graph contains a number of terms in equivalence classes, you can extract out a lowest cost expression equivalent to some target expression.
 
 For a more thorough introduction, check out the [egglog tutorial](https://egglog-python.readthedocs.io/latest/tutorials/tut_1_basics.html)
 and for an example of how it can be used inside of a larger system see the [Numba v2 mini book](https://numba.pydata.org/numba-prototypes/sealir_tutorials/index.html).
@@ -158,82 +171,52 @@ More examples are collected [here](https://github.com/philzook58/awesome-egraphs
 EGraphs also have [an active community](https://egraphs.org/) around them that [chat online](https://egraphs.zulipchat.com/) and
 [meet in person](https://egraphs.org/workshop/).
 
-A final, maybe more controversial, way to understand e-graphs would be through the language of paradigms from Kuhn's 1962
-book "The Structure of Scientific Revolutions". Under this framework, e-graphs could be in the stage of emergence as a new
-paradigm for compiler design and optimization. There are a core group of believers who believe to some degree that many
-problems can be formulated within this lens, or at least this community is a good place to have the discussion. This leads
-itself to lots of work to try to re-formalize existing work in this context, to demonstrate to others outside they have
-validity and try to convince them of a worldview. The space is actively shifting and much of the work of current researchers
-is to explore the boundaries of both the formalism and its applications.
+## Primitives and Containers in Egglog
 
-## Containers
+Along with being able to define your own types in Egglog, it also comes with a number of builtins like `i64` and `String`.
+These are written in Rust and can generally be defined however you want, as long as they support equality and hashing.
+Primitives are treated like opaque values, Egglog doesn't reason about their inner structure, the same is true with functions defined
+over primitives in Rust.
 
-One way to look at e-graphs is to see a data structure that can hold a set of function calls. Each of those arguments
-are either a primitive value (`i64`, `String`, etc) or an e-class. An e-class is a subset of those function call that
-we call equivalent.
+Containers are primitives that have one additional operation defined, rebuilding, including things like `Vec`, `MultiSet` and `UnstableFn`.
+When a container is rebuilt, any values inside that have become unified should become the same. Again, egglog doesn't
+know anything more about the structures of containers besides how to rebuild them and any primitive functions you define on them.
+This both makes them relatively easy to implement and add, but also limits our ability to performantly match on them, since
+container internals are not directly exposed to matching.
 
-So why in this example why is `a + b` different from `b + a`? What if we wanted them to be indistinguishable from the perspective
-of the e-graph, so instead of saying they belong in the same e-class, we want to just represent them the same?
-
-We might want to instead define an operator like `sum` which takes a multiset of numbers and returns a new number. That way,
-we wouldn't have to store different expressions for all variations of associativity and commutativity, but just one normalized form.
-
-To do this, we need some concept of a multiset. A multiset should be a primitive, written in rust, but unlike `i64` or `String`, it needs
-to refer to other values, either other primitives or e-classes. What properties does it need to hold? Well clearly it needs
-to be able to be compared and hashed against other multisets to see if they are equivalent. But it also needs to support
-"rebuilding". This means that if "a" becomes equal to "b" then a multiset of "a" and "b" should now become equivalent to
-that of "a" and "a". Once we define this operation, we can use any kind of rust data structure we want. In fact, multiset
-is implemented this way in egglog:
-
-```rust
-impl ContainerValue for MultiSetContainer {
-    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
-        // If the contents are an eq-sort then we want to rebuild
-        if self.do_rebuild {
-            let mut xs: Vec<_> = self.data.iter().copied().collect();
-            let changed = rebuilder.rebuild_slice(&mut xs);
-            self.data = xs.into_iter().collect();
-            changed
-        // if the contents are just a primitive then don't need to do anything.
-        } else {
-            false
-        }
-    }
-    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
-        self.data.iter().copied()
-    }
-}
-```
-
-So in fact we can write this in egglog and and see that it maintains equivalence, without having to do any rewrites:
+Here we will show how they can be used to build canonical forms of expressions, where some of the identities are built into
+their structure instead of through rewrite rules. This can reduce the overall size of the e-graph. Let's take addition
+as an example. In the above rules we rewrite `a + b` into `b + a`, what if instead we represent addition as the sum of
+some multiset of terms? This is how we would write this in egglog:
 
 ```python
 @function
 def sum(xs: MultiSet[Num]) -> Num: ...
-
-egraph = EGraph()
-egraph.register(
-    sum(MultiSet(Num.var("x"), MultiSet.var("y"))),
-    sum(MultiSet(Num.var("y"), MultiSet.var("x"))),
-    union(Num.var("x")).with_(MultiSet.var("y")),
-)
-egraph.check(sum(MultiSet(Num.var("x"), MultiSet.var("y"))) == sum(MultiSet(Num.var("x"), Num.var("x"))))
 ```
 
-This is related to Philip Zucker's paper ["Omelets Need Onions: E-graphs Modulo Theories via Bottom-up E-matching"](https://www.semanticscholar.org/paper/Omelets-Need-Onions%3A-E-graphs-Modulo-Theories-via-Zucker/b07bdef17fdbb7cf927a5a844fc587335864e89a),
-in that we are showing an alternative way to build custom theories in e-graphs. We can use containers in egglog.
+Now if we construct `sum(MultiSet(a, b))` this will be equal to `sum(MultiSet(b, a))` due to the implementation of MultiSets
+that are order insensitive. No additional terms need to be added to the e-graph. Additionally, since the multiset is aware of rebuilding,
+if we start with `sum(MultiSet(a, b))` and then union `a` and `b` we will end up with `sum(MultiSet(a, a))`:
 
-## Polynomial Example
+```python
+egraph = EGraph()
+x = Num.var("x"); y = Num.var("y")
+egraph.register(sum(MultiSet(x, y)), sum(MultiSet(y, x)))
+egraph.register(union(x).with_(y))
+egraph.check(sum(MultiSet(x, y)) == sum(MultiSet(x, x)))
+```
 
-My advisor [Gilbert Bernstein](http://www.gilbertbernstein.com/) has a background in graphics, so we have been working
-through some examples from that space that might hit issues with conventional associativity/commutativity rulesets, with
-e-graphs growing too large, and seeing if these kind of specialized data structure might help. One formula we have translated
-is from the paper ["Interactive design of periodic yarn-level cloth patterns"](https://www.semanticscholar.org/paper/Interactive-design-of-periodic-yarn-level-cloth-Leaf-Wu/6350d7feb2dfc37d434da2839eacd5e8b025edda).
-The original author of the paper used Mathematica to write up their equations and then compile them to C and then to CUDA.
-We are curious here what a computer algebra system like compiler could look like building on egglog.
+Next we will show how we use this primitive inside of a larger example.
 
-We start here with a function that computes the bending at a certain point:
+## Case Study: Factoring a Polynomial from a Cloth Simulation Workload
 
+
+Here we start with an expression from the paper ["Interactive design of periodic yarn-level cloth patterns"](https://www.semanticscholar.org/paper/Interactive-design-of-periodic-yarn-level-cloth-Leaf-Wu/6350d7feb2dfc37d434da2839eacd5e8b025edda)
+which is part of a larger program that does cloth simulation. It was recommended by my advisor, [Gilbert Bernstein](http://www.gilbertbernstein.com/),
+since we have access to their reference implementation in Mathematica we can use to verify our implementation matches.
+
+_Note that all code for this case study is reproducible in [this notebook](https://github.com/egraphs-good/egglog-python/blob/cb263b163150181d164db25fbbac6e8a1e2da719/docs/explanation/2026_02_containers_code.ipynb)._
+_It is currently based on a branch of the Python bindings and Rust source, that adds additional multiset operations_.
 
 ```python
 def bending_function(Q, Bp, Bpp):
@@ -247,8 +230,7 @@ def bending_function(Q, Bp, Bpp):
     return (num / den) ** 2
 ```
 
-It takes in a number of arrays and then returns a scalar. Although it does a number of tensor operations, in the end
-it can be compiled to a number of primitive operations on scalars.
+It takes in a number of 1D arrays and returns a 0D array:
 
 ```python
 import egglog
@@ -260,14 +242,20 @@ Q = enp.NDArray([enp.Value.var(f"q{i}") for i in range(1, 13)])
 FunctionBending = enp.NDArray(bending_function(Q, Bp, Bpp).eval())
 ```
 
-I also might want to compute its gradient:
+We can also compute its gradient with respect to `Q`, to give us an even larger expression.
 
 ```python
 GradientBending = enp.NDArray(FunctionBending.diff(Q).eval())
 ```
 
-Now lets imagine I want to optimize both it and its gradient.
-For the sake of this example, lets pretend that for some reason we are handed a totally distributed version of them first:
+By [implementing the definitions of these array operations as Egglog rewrites](https://github.com/egraphs-good/egglog-python/blob/cb263b163150181d164db25fbbac6e8a1e2da719/python/egglog/exp/array_api.py#L2362-L2431),
+we can transform it into an expression consisting
+entirely primitive scalar operations on the inputs variables, a rational expression with polynomial subexpressions.
+
+For the sake of this example, let's say that we are given a distributed version of these polynomials. This is meant
+to simulate a worst-case scenario. We are still working on expanding this use
+case to more closely represent a realistic graphics workload, but for now this suffices to give us a large enough example to stress test our system,
+and this worst case could show up depending on how the lowering emits expressions:
 
 ```python
 @egglog.ruleset
@@ -283,198 +271,15 @@ def distribute(a: enp.Value, b: enp.Value, c: enp.Value):
 egraph = EGraph()
 egraph.register(FunctionBending)
 egraph.run(remove_subtraction.saturate() + distribute.saturate())
-(FunctionBending_distributed := egraph.extract(FunctionBending))
+FunctionBending_distributed = egraph.extract(FunctionBending)
+# Do the same for GradientBending
 ```
 
-```python
-_Value_1 = Value.var("q2") * Value.var("bp1")
-_Value_2 = Value.var("q3") * Value.var("bpp1")
-_Value_3 = Value.var("q6") * Value.var("bpp2")
-_Value_4 = Value.var("q9") * Value.var("bpp3")
-_Value_5 = Value.var("q12") * Value.var("bpp4")
-_Value_6 = Value.var("q5") * Value.var("bp2")
-_Value_7 = Value.var("q8") * Value.var("bp3")
-_Value_8 = Value.var("q11") * Value.var("bp4")
-_Value_9 = Value.from_int(Int(-1))
-_Value_10 = Value.var("q3") * Value.var("bp1")
-_Value_11 = Value.var("q2") * Value.var("bpp1")
-_Value_12 = Value.var("q5") * Value.var("bpp2")
-_Value_13 = Value.var("q8") * Value.var("bpp3")
-_Value_14 = Value.var("q11") * Value.var("bpp4")
-_Value_15 = Value.var("q6") * Value.var("bp2")
-_Value_16 = Value.var("q9") * Value.var("bp3")
-_Value_17 = Value.var("q12") * Value.var("bp4")
-_Value_18 = Value.var("q1") * Value.var("bpp1")
-_Value_19 = Value.var("q4") * Value.var("bpp2")
-_Value_20 = Value.var("q7") * Value.var("bpp3")
-_Value_21 = Value.var("q10") * Value.var("bpp4")
-_Value_22 = Value.var("q1") * Value.var("bp1")
-_Value_23 = Value.var("q4") * Value.var("bp2")
-_Value_24 = Value.var("q7") * Value.var("bp3")
-_Value_25 = Value.var("q10") * Value.var("bp4")
-NDArray(
-    RecursiveValue(
-        (
-            (
-                _Value_1 * _Value_2
-                + _Value_1 * _Value_3
-                + _Value_1 * _Value_4
-                + _Value_1 * _Value_5
-                + (
-                    _Value_6 * _Value_2
-                    + _Value_6 * _Value_3
-                    + _Value_6 * _Value_4
-                    + _Value_6 * _Value_5
-                )
-                + (
-                    _Value_7 * _Value_2
-                    + _Value_7 * _Value_3
-                    + _Value_7 * _Value_4
-                    + _Value_7 * _Value_5
-                )
-                + (
-                    _Value_8 * _Value_2
-                    + _Value_8 * _Value_3
-                    + _Value_8 * _Value_4
-                    + _Value_8 * _Value_5
-                )
-                + (
-                    _Value_9 * (_Value_10 * _Value_11)
-                    + _Value_9 * (_Value_10 * _Value_12)
-                    + _Value_9 * (_Value_10 * _Value_13)
-                    + _Value_9 * (_Value_10 * _Value_14)
-                    + (
-                        _Value_9 * (_Value_15 * _Value_11)
-                        + _Value_9 * (_Value_15 * _Value_12)
-                        + _Value_9 * (_Value_15 * _Value_13)
-                        + _Value_9 * (_Value_15 * _Value_14)
-                    )
-                    + (
-                        _Value_9 * (_Value_16 * _Value_11)
-                        + _Value_9 * (_Value_16 * _Value_12)
-                        + _Value_9 * (_Value_16 * _Value_13)
-                        + _Value_9 * (_Value_16 * _Value_14)
-                    )
-                    + (
-                        _Value_9 * (_Value_17 * _Value_11)
-                        + _Value_9 * (_Value_17 * _Value_12)
-                        + _Value_9 * (_Value_17 * _Value_13)
-                        + _Value_9 * (_Value_17 * _Value_14)
-                    )
-                )
-            )
-            ** Value.from_int(Int(2))
-            + (
-                _Value_10 * _Value_18
-                + _Value_10 * _Value_19
-                + _Value_10 * _Value_20
-                + _Value_10 * _Value_21
-                + (
-                    _Value_15 * _Value_18
-                    + _Value_15 * _Value_19
-                    + _Value_15 * _Value_20
-                    + _Value_15 * _Value_21
-                )
-                + (
-                    _Value_16 * _Value_18
-                    + _Value_16 * _Value_19
-                    + _Value_16 * _Value_20
-                    + _Value_16 * _Value_21
-                )
-                + (
-                    _Value_17 * _Value_18
-                    + _Value_17 * _Value_19
-                    + _Value_17 * _Value_20
-                    + _Value_17 * _Value_21
-                )
-                + (
-                    _Value_9 * (_Value_22 * _Value_2)
-                    + _Value_9 * (_Value_22 * _Value_3)
-                    + _Value_9 * (_Value_22 * _Value_4)
-                    + _Value_9 * (_Value_22 * _Value_5)
-                    + (
-                        _Value_9 * (_Value_23 * _Value_2)
-                        + _Value_9 * (_Value_23 * _Value_3)
-                        + _Value_9 * (_Value_23 * _Value_4)
-                        + _Value_9 * (_Value_23 * _Value_5)
-                    )
-                    + (
-                        _Value_9 * (_Value_24 * _Value_2)
-                        + _Value_9 * (_Value_24 * _Value_3)
-                        + _Value_9 * (_Value_24 * _Value_4)
-                        + _Value_9 * (_Value_24 * _Value_5)
-                    )
-                    + (
-                        _Value_9 * (_Value_25 * _Value_2)
-                        + _Value_9 * (_Value_25 * _Value_3)
-                        + _Value_9 * (_Value_25 * _Value_4)
-                        + _Value_9 * (_Value_25 * _Value_5)
-                    )
-                )
-            )
-            ** Value.from_int(Int(2))
-            + (
-                _Value_22 * _Value_11
-                + _Value_22 * _Value_12
-                + _Value_22 * _Value_13
-                + _Value_22 * _Value_14
-                + (
-                    _Value_23 * _Value_11
-                    + _Value_23 * _Value_12
-                    + _Value_23 * _Value_13
-                    + _Value_23 * _Value_14
-                )
-                + (
-                    _Value_24 * _Value_11
-                    + _Value_24 * _Value_12
-                    + _Value_24 * _Value_13
-                    + _Value_24 * _Value_14
-                )
-                + (
-                    _Value_25 * _Value_11
-                    + _Value_25 * _Value_12
-                    + _Value_25 * _Value_13
-                    + _Value_25 * _Value_14
-                )
-                + (
-                    _Value_9 * (_Value_1 * _Value_18)
-                    + _Value_9 * (_Value_1 * _Value_19)
-                    + _Value_9 * (_Value_1 * _Value_20)
-                    + _Value_9 * (_Value_1 * _Value_21)
-                    + (
-                        _Value_9 * (_Value_6 * _Value_18)
-                        + _Value_9 * (_Value_6 * _Value_19)
-                        + _Value_9 * (_Value_6 * _Value_20)
-                        + _Value_9 * (_Value_6 * _Value_21)
-                    )
-                    + (
-                        _Value_9 * (_Value_7 * _Value_18)
-                        + _Value_9 * (_Value_7 * _Value_19)
-                        + _Value_9 * (_Value_7 * _Value_20)
-                        + _Value_9 * (_Value_7 * _Value_21)
-                    )
-                    + (
-                        _Value_9 * (_Value_8 * _Value_18)
-                        + _Value_9 * (_Value_8 * _Value_19)
-                        + _Value_9 * (_Value_8 * _Value_20)
-                        + _Value_9 * (_Value_8 * _Value_21)
-                    )
-                )
-            )
-            ** Value.from_int(Int(2))
-        )
-        / (
-            (_Value_22 + _Value_23 + _Value_24 + _Value_25) ** Value.from_int(Int(2))
-            + (_Value_1 + _Value_6 + _Value_7 + _Value_8) ** Value.from_int(Int(2))
-            + (_Value_10 + _Value_15 + _Value_16 + _Value_17) ** Value.from_int(Int(2))
-        )
-        ** Value.from_int(Int(3))
-    )
-)
-```
+For some sense of their size, the `FunctionBending` has initial cost of 401 and the `GradientBending` has 20,570.
+This cost is produced by the Egglog extractor, corresponding roughly to one node per op like `*` and one per variable as a tree.
 
-Now let's imagine that we want to try to re-factor it to an optimal factorization.
-The "normal" way to do this in egglog could be to add some associativity, commutativity, and distributivity rules and just let it go:
+Now let's imagine that we want to try to factor each to reduce the cost of computing it.
+The "normal" way to do this in Egglog could be to add some associativity, commutativity, and distributivity rules and just let it go:
 
 
 ```python
@@ -491,41 +296,57 @@ egraph.run(factoring.saturate())
 egraph.extract(factoring)
 ```
 
+For the smaller example, this works fine, taking about a tenth of a second to saturate and then extract out the smallest one.
 
-For this smaller example, not the gradient, this works OK. It gets to the optimal factoring and takes only a tenth of a second.
+However, if we use the `GradientBending`, it won't saturate (if cut it off after spending 10 seconds on an iteration).
+It will only get to run three iterations, after which it will have decreased the cost to 2,126,268 from the original of
+4,250,786. However, it will also have increased the number of nodes in the e-graph from 588,125 originally to
+2,583,064.
 
-However if we use the `GradientBending` it will totally stall. I can get through a couple of iterations before it takes longer than ten seconds to run another one.
+This is also only the first derivative. For the real workload we also need to compute the second derivative and ideally
+consider it as part of a larger expression. So clearly at least for this fully distributed case, trying to naively explore
+the entire search space of factorization through A/C/D rewrite rules blows up the size of the e-graph.
 
-So what if instead we tried our earlier strategy? We not only wanna represent additions as unordered sums but also multiplication as productions.
-We can represent the composition of them as polynomial, a multiset of multisets, where each inner one is a monomial term that are multiplied together and the outer terms are all added:
+
+## Representing Polynomials with Multisets
+
+Taking a step back, the main space we want to explore here is the different options for factoring the expression. We
+don't really care about which expression to pick due to associativity or commutativity since the cost will be the same (at this
+point we are not considering common sub expression elimination and constant folding doesn't apply in this example).
+We add those rules so that we can explore the space of factorizations through the distributivity rule.
+
+So what if instead we choose to represent a polynomial such that the normalized form is agnostic to ordering or association?
+In this case we can use a MultiSet of MultiSets, where each inner multiset is a monomial
+and the outer multiset is the sum of these monomials. This flattens additions and multiplications into bags.
+Coefficients like `-1` here are represented as separate terms in the monomial for simplicity:
 
 ```python
 @function
 def polynomial(x: MultiSet[MultiSet[Value]]) -> Value: ...
 ```
 
-Let's assume for a second that our array operations still emit binary operations, so then the first task is to convert
-the binary operations into a polynomial form. This is where things start to get interesting. The first couple of rule are relatively
-straightforward, just converting addition, multiplication, and exponentiation to the
-corresponding forms, along with saving some analysis on terms that we will use later:
+Our first task then is to translate between our binary operations and this multiset form.
+The first couple of rules are relatively straightforward, just converting addition, multiplication, and exponentiation to the
+corresponding forms, along with saving some analysis on terms that we will use later. This is a one way translation, so
+we can also delete the source terms once we match them, so extraction doesn't match them:
 
 
 ```python
 @function(merge=lambda old, new: new)
 def get_monomial(x: Value) -> MultiSet[Value]:
     """
-    Only defined on monomials:
+    Will be defined on all polynomials with exactly one monomial created in `to_polynomial_ruleset`:
 
-        get_monomial(polynomial((xs,))) => xs
+        get_monomial(polynomial(MultiSet(xs))) => xs
     """
 
 
 @function(merge=lambda old, new: new)
 def get_sole_polynomial(xs: MultiSet[Value]) -> MultiSet[MultiSet[Value]]:
     """
-    Only defined on monomials that contain a single polynomial:
+    Will be defined on all monomials that contain a single polynomial created in `to_polynomial_ruleset`:
 
-        get_sole_polynomial(MultiSet(polynomial(xs))) => xs
+        get_sole_polynomial(MultiSet(polynomial(xss))) => xss
     """
 
 @ruleset
@@ -534,251 +355,98 @@ def to_polynomial_ruleset(
     n2: Value,
     n3: Value,
     i: i64,
+    ms: MultiSet[Value],
     mss: MultiSet[MultiSet[Value]],
     mss1: MultiSet[MultiSet[Value]],
 ):
     yield rule(
         eq(n3).to(n1 + n2),
+        eq(mss).to(MultiSet(MultiSet(n1), MultiSet(n2))),
         name="add",
     ).then(
-        union(n3).with_(polynomial(MultiSet(MultiSet(n1), MultiSet(n2)))),
-        set_(get_sole_polynomial(MultiSet(n3))).to(MultiSet(MultiSet(n1), MultiSet(n2))),
+        union(n3).with_(polynomial(mss)),
+        set_(get_sole_polynomial(MultiSet(polynomial(mss)))).to(mss),
         delete(n1 + n2),
     )
     yield rule(
         eq(n3).to(n1 * n2),
+        eq(ms).to(MultiSet(n1, n2)),
         name="mul",
     ).then(
-        union(n3).with_(polynomial(MultiSet(MultiSet(n1, n2)))),
-        set_(get_monomial(n3)).to(MultiSet(n1, n2)),
+        union(n3).with_(polynomial(MultiSet(ms))),
+        set_(get_monomial(polynomial(MultiSet(ms)))).to(ms),
         delete(n1 * n2),
     )
     yield rule(
         eq(n3).to(n1**i),
+        i >= 0,
+        eq(ms).to(MultiSet.single(n1, i)),
         name="pow",
     ).then(
-        eq(n3).to(polynomial(MultiSet(MultiSet.single(n1, i)))),
-        set_(get_monomial(n3)).to(MultiSet.single(n1, i)),
+        union(n3).with_(polynomial(MultiSet(ms))),
+        set_(get_monomial(polynomial(MultiSet(ms)))).to(ms),
         delete(n1**i),
     )
 ```
 
-We also delete our initial terms because this is a one way analysis and we don't want to extract them later. Now however, what if we have a nested polynomial inside of another one? For example `polynomial(MultiSet(MultiSet(polynomial(MultiSet(a, b)))))`. If we ever have a monomial that only has a polynomial in it, then we should effectively pull that out into the outer polynomial. How would we encode this in a rewrite?
+When applying this ruleset we will replace binary operations with multiset values, but they will be unnecessarily
+nested. For example, if we have a polynomial that has a monomial with a single item which is another polynomial,
+like (using `*ys` as pseudocode to combine multisets) `polynomial(MultiSet(MultiSet(polynomial(xs)), *ys))` this should be replaced with one that flatten the inner polynomial to `polynomial(MultiSet(*xs, *ys))`.
+
+
+We define two additional rules to cover cases like this:
 
 ```python
     yield rule(
         eq(n1).to(polynomial(mss)),
+        # For each monomial, if any of its terms is a polynomial with a single monomial, flatten
+        # that into the monomial, otherwise keep it as is
         mss1 == mss.map(partial(multiset_flat_map, get_monomial)),
-        mss != mss1,
+        mss != mss1, # skip if this is a no-op
         name="unwrap monomial",
     ).then(
         union(n1).with_(polynomial(mss1)),
         delete(polynomial(mss)),
-        set_(get_sole_polynomial(MultiSet(n1))).to(mss1),
+        set_(get_sole_polynomial(MultiSet(polynomial(mss1)))).to(mss1),
     )
-```
-
-We do this effectively as a blockwise operation, all in one go. I had experimented instead with trying out something like matching on the first item in a multiset, or trying to do a join where we say something like find a value in a multiset with this structure and then replace it, but I found the this to be too slow. It required keeping an index table mapping all values in multisets to them, which blew up the database even on small examples. So instead what I do is use this higher order functional programming. I say, find some polynomial, then do a flatmap over all items. If the function exists for that value, in this case if `get_monomial` is set, then call that function and merge in the results. If it doesn't exist, if `get_monomial` is not set, then just preserve the existing value. Then I union it with the old one if it differs.
-
-I also have a similar rule for a slightly different unwrapping:
-
-```python
     yield rule(
         eq(n1).to(polynomial(mss)),
+        # If any of the monomials just has a single item which is a polynomial, then flatten that into the outer polynomial
         mss1 == multiset_flat_map(UnstableFn(get_sole_polynomial), mss),
         mss != mss1,
         name="unwrap polynomial",
     ).then(
         union(n1).with_(polynomial(mss1)),
         delete(polynomial(mss)),
-        set_(get_sole_polynomial(MultiSet(n1))).to(mss1),
+        set_(get_sole_polynomial(MultiSet(polynomial(mss1)))).to(mss1),
     )
 ```
 
-Now we let's see what our expression looking like after turning it into multisets:
+We have avoided the need to match inside of containers by instead using higher order functions to apply blockwise
+operations that are executed in Rust during rule matching. We had to create the above analysis for the same reason,
+we cannot create functions whose implementation is deferred until a later rewrite, they must be available at match time.
 
+After running these rulesets any subexpressions that contain only additions and multiplications will be turned into
+flattened multisets. What's nice here is also if there are any other operations defined like `/`, this will work transparently
+with them, making this type of analysis extensible as the system grows, since we only normalize polynomial subtrees. The
+contents of their terms don't have to be limited to integers and variables.
 
-```python
-egraph = EGraph()
-egraph.register(FunctionBending_distributed)
-egraph.run(to_polynomial_ruleset.saturate())
-egraph.extract(FunctionBending_distributed)
-```
+## Greedy Multivariate Horner Factorization
 
-```python
-_Value_1 = Value.var("bpp1")
-_Value_2 = Value.var("bp1")
-_Value_3 = Value.var("bpp2")
-_Value_4 = Value.var("bpp3")
-_Value_5 = Value.var("q12")
-_Value_6 = Value.var("bpp4")
-_Value_7 = Value.var("bp2")
-_Value_8 = Value.var("bp3")
-_Value_9 = Value.var("bp4")
-_Value_10 = Value.var("q11")
-_Value_11 = Value.from_int(Int(-1))
-_Value_12 = polynomial(
-    MultiSet(
-        MultiSet(_Value_1, Value.var("q2"), _Value_2, Value.var("q3")),
-        MultiSet(Value.var("q6"), _Value_3, Value.var("q2"), _Value_2),
-        MultiSet(_Value_4, Value.var("q2"), _Value_2, Value.var("q9")),
-        MultiSet(_Value_5, Value.var("q2"), _Value_2, _Value_6),
-        MultiSet(Value.var("q5"), _Value_7, _Value_1, Value.var("q3")),
-        MultiSet(Value.var("q5"), _Value_7, Value.var("q6"), _Value_3),
-        MultiSet(Value.var("q5"), _Value_7, _Value_4, Value.var("q9")),
-        MultiSet(_Value_5, Value.var("q5"), _Value_7, _Value_6),
-        MultiSet(_Value_1, _Value_8, Value.var("q8"), Value.var("q3")),
-        MultiSet(Value.var("q6"), _Value_3, _Value_8, Value.var("q8")),
-        MultiSet(_Value_4, _Value_8, Value.var("q8"), Value.var("q9")),
-        MultiSet(_Value_5, _Value_8, Value.var("q8"), _Value_6),
-        MultiSet(_Value_9, _Value_1, Value.var("q3"), _Value_10),
-        MultiSet(_Value_9, Value.var("q6"), _Value_3, _Value_10),
-        MultiSet(_Value_9, _Value_4, Value.var("q9"), _Value_10),
-        MultiSet(_Value_5, _Value_9, _Value_10, _Value_6),
-        MultiSet(_Value_11, _Value_1, Value.var("q2"), _Value_2, Value.var("q3")),
-        MultiSet(Value.var("q5"), _Value_11, _Value_3, _Value_2, Value.var("q3")),
-        MultiSet(_Value_4, _Value_11, Value.var("q8"), _Value_2, Value.var("q3")),
-        MultiSet(_Value_11, _Value_2, Value.var("q3"), _Value_10, _Value_6),
-        MultiSet(_Value_7, _Value_11, _Value_1, Value.var("q6"), Value.var("q2")),
-        MultiSet(Value.var("q5"), _Value_7, _Value_11, Value.var("q6"), _Value_3),
-        MultiSet(_Value_7, _Value_4, _Value_11, Value.var("q6"), Value.var("q8")),
-        MultiSet(_Value_7, _Value_11, Value.var("q6"), _Value_10, _Value_6),
-        MultiSet(_Value_11, _Value_1, Value.var("q2"), _Value_8, Value.var("q9")),
-        MultiSet(Value.var("q5"), _Value_11, _Value_3, _Value_8, Value.var("q9")),
-        MultiSet(_Value_4, _Value_11, _Value_8, Value.var("q8"), Value.var("q9")),
-        MultiSet(_Value_11, _Value_8, Value.var("q9"), _Value_10, _Value_6),
-        MultiSet(_Value_5, _Value_9, _Value_11, _Value_1, Value.var("q2")),
-        MultiSet(_Value_5, _Value_9, Value.var("q5"), _Value_11, _Value_3),
-        MultiSet(_Value_5, _Value_9, _Value_4, _Value_11, Value.var("q8")),
-        MultiSet(_Value_5, _Value_9, _Value_11, _Value_10, _Value_6),
-    )
-)
-_Value_13 = Value.var("q10")
-_Value_14 = polynomial(
-    MultiSet(
-        MultiSet(Value.var("q1"), _Value_1, _Value_2, Value.var("q3")),
-        MultiSet(_Value_3, _Value_2, Value.var("q3"), Value.var("q4")),
-        MultiSet(Value.var("q7"), _Value_4, _Value_2, Value.var("q3")),
-        MultiSet(_Value_2, Value.var("q3"), _Value_6, _Value_13),
-        MultiSet(_Value_7, Value.var("q1"), _Value_1, Value.var("q6")),
-        MultiSet(_Value_7, Value.var("q6"), _Value_3, Value.var("q4")),
-        MultiSet(_Value_7, Value.var("q7"), _Value_4, Value.var("q6")),
-        MultiSet(_Value_7, Value.var("q6"), _Value_6, _Value_13),
-        MultiSet(Value.var("q1"), _Value_1, _Value_8, Value.var("q9")),
-        MultiSet(_Value_3, _Value_8, Value.var("q4"), Value.var("q9")),
-        MultiSet(Value.var("q7"), _Value_4, _Value_8, Value.var("q9")),
-        MultiSet(_Value_8, Value.var("q9"), _Value_6, _Value_13),
-        MultiSet(_Value_5, _Value_9, Value.var("q1"), _Value_1),
-        MultiSet(_Value_5, _Value_9, _Value_3, Value.var("q4")),
-        MultiSet(_Value_5, _Value_9, Value.var("q7"), _Value_4),
-        MultiSet(_Value_5, _Value_9, _Value_6, _Value_13),
-        MultiSet(_Value_11, Value.var("q1"), _Value_1, _Value_2, Value.var("q3")),
-        MultiSet(_Value_11, Value.var("q1"), Value.var("q6"), _Value_3, _Value_2),
-        MultiSet(_Value_4, _Value_11, Value.var("q1"), _Value_2, Value.var("q9")),
-        MultiSet(_Value_5, _Value_11, Value.var("q1"), _Value_2, _Value_6),
-        MultiSet(_Value_7, _Value_11, _Value_1, Value.var("q3"), Value.var("q4")),
-        MultiSet(_Value_7, _Value_11, Value.var("q6"), _Value_3, Value.var("q4")),
-        MultiSet(_Value_7, _Value_4, _Value_11, Value.var("q4"), Value.var("q9")),
-        MultiSet(_Value_5, _Value_7, _Value_11, Value.var("q4"), _Value_6),
-        MultiSet(Value.var("q7"), _Value_11, _Value_1, _Value_8, Value.var("q3")),
-        MultiSet(Value.var("q7"), _Value_11, Value.var("q6"), _Value_3, _Value_8),
-        MultiSet(Value.var("q7"), _Value_4, _Value_11, _Value_8, Value.var("q9")),
-        MultiSet(_Value_5, Value.var("q7"), _Value_11, _Value_8, _Value_6),
-        MultiSet(_Value_9, _Value_11, _Value_1, Value.var("q3"), _Value_13),
-        MultiSet(_Value_9, _Value_11, Value.var("q6"), _Value_3, _Value_13),
-        MultiSet(_Value_9, _Value_4, _Value_11, Value.var("q9"), _Value_13),
-        MultiSet(_Value_5, _Value_9, _Value_11, _Value_6, _Value_13),
-    )
-)
-_Value_15 = polynomial(
-    MultiSet(
-        MultiSet(Value.var("q1"), _Value_1, Value.var("q2"), _Value_2),
-        MultiSet(Value.var("q5"), Value.var("q1"), _Value_3, _Value_2),
-        MultiSet(_Value_4, Value.var("q1"), Value.var("q8"), _Value_2),
-        MultiSet(Value.var("q1"), _Value_2, _Value_10, _Value_6),
-        MultiSet(_Value_7, _Value_1, Value.var("q2"), Value.var("q4")),
-        MultiSet(Value.var("q5"), _Value_7, _Value_3, Value.var("q4")),
-        MultiSet(_Value_7, _Value_4, Value.var("q8"), Value.var("q4")),
-        MultiSet(_Value_7, Value.var("q4"), _Value_10, _Value_6),
-        MultiSet(Value.var("q7"), _Value_1, Value.var("q2"), _Value_8),
-        MultiSet(Value.var("q5"), Value.var("q7"), _Value_3, _Value_8),
-        MultiSet(Value.var("q7"), _Value_4, _Value_8, Value.var("q8")),
-        MultiSet(Value.var("q7"), _Value_8, _Value_10, _Value_6),
-        MultiSet(_Value_9, _Value_1, Value.var("q2"), _Value_13),
-        MultiSet(_Value_9, Value.var("q5"), _Value_3, _Value_13),
-        MultiSet(_Value_9, _Value_4, Value.var("q8"), _Value_13),
-        MultiSet(_Value_9, _Value_10, _Value_6, _Value_13),
-        MultiSet(_Value_11, Value.var("q1"), _Value_1, Value.var("q2"), _Value_2),
-        MultiSet(_Value_11, _Value_3, Value.var("q2"), _Value_2, Value.var("q4")),
-        MultiSet(Value.var("q7"), _Value_4, _Value_11, Value.var("q2"), _Value_2),
-        MultiSet(_Value_11, Value.var("q2"), _Value_2, _Value_6, _Value_13),
-        MultiSet(Value.var("q5"), _Value_7, _Value_11, Value.var("q1"), _Value_1),
-        MultiSet(Value.var("q5"), _Value_7, _Value_11, _Value_3, Value.var("q4")),
-        MultiSet(Value.var("q5"), _Value_7, Value.var("q7"), _Value_4, _Value_11),
-        MultiSet(Value.var("q5"), _Value_7, _Value_11, _Value_6, _Value_13),
-        MultiSet(_Value_11, Value.var("q1"), _Value_1, _Value_8, Value.var("q8")),
-        MultiSet(_Value_11, _Value_3, _Value_8, Value.var("q8"), Value.var("q4")),
-        MultiSet(Value.var("q7"), _Value_4, _Value_11, _Value_8, Value.var("q8")),
-        MultiSet(_Value_11, _Value_8, Value.var("q8"), _Value_6, _Value_13),
-        MultiSet(_Value_9, _Value_11, Value.var("q1"), _Value_1, _Value_10),
-        MultiSet(_Value_9, _Value_11, _Value_3, Value.var("q4"), _Value_10),
-        MultiSet(_Value_9, Value.var("q7"), _Value_4, _Value_11, _Value_10),
-        MultiSet(_Value_9, _Value_11, _Value_10, _Value_6, _Value_13),
-    )
-)
-_Value_16 = polynomial(
-    MultiSet(
-        MultiSet(Value.var("q7"), _Value_8),
-        MultiSet(Value.var("q1"), _Value_2),
-        MultiSet(_Value_9, _Value_13),
-        MultiSet(_Value_7, Value.var("q4")),
-    )
-)
-_Value_17 = polynomial(
-    MultiSet(
-        MultiSet(Value.var("q5"), _Value_7),
-        MultiSet(_Value_8, Value.var("q8")),
-        MultiSet(Value.var("q2"), _Value_2),
-        MultiSet(_Value_9, _Value_10),
-    )
-)
-_Value_18 = polynomial(
-    MultiSet(
-        MultiSet(_Value_5, _Value_9),
-        MultiSet(_Value_7, Value.var("q6")),
-        MultiSet(_Value_2, Value.var("q3")),
-        MultiSet(_Value_8, Value.var("q9")),
-    )
-)
-_Value_19 = polynomial(
-    MultiSet(
-        MultiSet(_Value_16, _Value_16),
-        MultiSet(_Value_17, _Value_17),
-        MultiSet(_Value_18, _Value_18),
-    )
-)
-NDArray(
-    RecursiveValue(
-        polynomial(
-            MultiSet(
-                MultiSet(_Value_12, _Value_12),
-                MultiSet(_Value_14, _Value_14),
-                MultiSet(_Value_15, _Value_15),
-            )
-        )
-        / polynomial(MultiSet(MultiSet(_Value_19, _Value_19, _Value_19)))
-    )
-)
-```
+Now that we have our polynomial subterms represented as nested multisets, how can we factor our polynomial?
+While we could implement it similarly to the original but targeting multisets, since we have some additional structure
+present we have the ability to do something a bit more guided.
 
+The underlying idea is that if you have a multivariate polynomial and you want to factor it, if you look at what term
+shows up in the most monomials and try to factor that out first, that will often produce a good (and sometimes optimal) factorization depending on the workload.
+This algorithm is called a ["multivariate greedy horner factorization"](https://www.semanticscholar.org/paper/Greedy-algorithms-for-optimizing-multivariate-Ceberio-Kreinovich/96103f6f48bd15d40de43a716922d1177b2b5ea2),
+greedy in that it just chooses the factor that appears in the most monomials, and [horner](https://en.wikipedia.org/wiki/Horner%27s_method) because that's a method
+for factoring univariate polynomials to minimize multiplications.
 
-We can see that the binary operations have all been transformed into multiset operations.
-Now how do we implement factoring on this? Well we might try to implement a similar distributive law for these multisets,
-like we did with the binary terms. But one advantage of the added structure is that it can allow us to more easily do
-something a little bit more intentional.
-Pulling from [the literature on multivariate greedy horner factorization](https://paperpile.com/shared/Polynomials-fY6RER0k1RsSuHGOIQ6~NVQ),
-what if we try to look at each polynomial and find the term that appears in the the most monomials? Then we take out that term and any others that appear on all those monomials.
-The papers suggest that this greedy scheme may not always be optimal in terms of smallest number of total operations, but if often is close. This requires a number of other higher order functions:
+So we can try to implement this using our multisets, not producing every possible factorization, but just replacing greedily with this version.
+We find the factor with the shows up in the most monomials, then find the subset of monomials which contain it, take
+the intersection of all of those (to find the largest factor we can pull out of all of them), factor that out, and add it to the remainder
+that didn't include that factor:
 
 
 ```python
@@ -797,240 +465,81 @@ def factor_ruleset(
         eq(n).to(polynomial(mss)),
         # Find factor that shows up in most monomials, at least two of them
         counts == MultiSet.sum_multisets(mss.map(MultiSet.reset_counts)),
-        eq(picked_term).to(counts.pick_max()),
-        # Only factor out if it term appears in more than one monomial
+        eq(picked_term).to(counts.pick_max()), # on ties pick an arbitrary one
+        # Only factor out if it appears in more than one monomial
         counts.count(picked_term) > 1,
-        # The factor we choose is the largest intersection between all the monomials that have the picked term
+        # The factor we choose is the largest intersection between all the monomials that have that that factored term
         picked == mss.filter(partial(multiset_contains_swapped, picked_term)),
-        factor == multiset_fold(MultiSet.__and__, picked.pick(), picked),
+        factor == multiset_fold(MultiSet.__and__, picked.pick(), picked), # intersection
         divided == picked.map(partial(multiset_subtract_swapped, factor)),
         # remainder is those monomials that do not contain the factor
         remainder == mss.filter(partial(multiset_not_contains_swapped, picked_term)),
         name="factor",
     ).then(
+        # factor * polynomial(divided) + remainder
         union(n).with_(polynomial(MultiSet(factor.insert(polynomial(divided))) + remainder)),
         delete(polynomial(mss)),
     )
 ```
+If we apply this we now have a factored form! We can see this uses a similar technique to above where we use higher order functions
+to create a new polynomial based on the old one, and replace it.
 
-We replace a polynomial with the factored form, again by doing these blockwise operations.
+We can then turn this multiset form back into one with binary operations, and we have an end to end way to factor polynomials
+in Egglog without exploring the full A/C/D space, reducing the size blowup.
 
-```python
-egraph.run(factor_ruleset.saturate())
-egraph.extract(FunctionBending_distributed)
+For the smaller expression of the bending function, this produces a result of the same cost as the full factorization
+and takes half the time. It also produces many fewer nodes, while the full factored version has 13,040 in the e-graph,
+this one only has 927, which is only slightly more than the original size after distributing (904 nodes).
+
+For the larger expression, of the gradient, the difference is even starker. It is able to factor it to a cost of 79,974,
+whereas we stopped the full factorization after it reached 2,125,338. In terms of e-graph size we have 112,144 nodes at the end
+compared to the 2,582,934 of the full factorization.
+
+
+These numbers are not meant to be conclusive evidence that this scheme is always beneficial or that either result couldn't
+be improved with further tweaks, but just meant to show that this technique of first lowering to a canonical form using containers
+that contains more of the theory shows some promise in reducing e-graph blow up for larger expressions.
+
+
+## Other Examples
+
+Above I presented a large example that comes from my current line of research with my advisor. However, there are many
+smaller examples that could also be used to explore the usefulness of this kind of technique. Due to limitations in my time
+before publishing this post I haven't explored these deeply, but did want to mention them.
+
+[Yihong](https://effect.systems/) shared with me an example of how just having a simple associativity rule and a rule for multiplying by zero will lead
+to never saturating:
+
+
+```clojure
+(datatype Int (mul Int Int) (a) (zero))
+
+(birewrite (mul x (mul y z)) (mul (mul x y) z))
+(rewrite (mul (zero) x) (zero))
+
+(mul (zero) (a))
+(run-schedule (repeat 8 (run)))
 ```
 
-We can see the result is now factored:
+Instead, if we represented this as a product of a multiset, we could simply have a rule that looked for a zero element
+in the multiset and replaced that with zero, no associativity needed, and so no chance for this to blow up. A `product(Multiset(...))`
+operation can handle associativity and commutativity and the rebuilding handles merges.
+
+When I asked on the EGraph's Zulip for more examples, Sophia B also [shared another example with me](https://egraphs.zulipchat.com/#narrow/channel/328972-general/topic/A.2FC.20Blowup.20Example/near/573091425).
+If you have the rule `f(a + b) + 1 = f(a) + f(b)` plus A/C, you can derive equalities likes `f(x) + (f(y) + f(z)) = f(x + (y + z)) + 2`, but it can take a large number of nodes (see linked thread).
+Instead in this system, we would have to encode that rule over multisets and add constant propagation to the sum function, to see how it could be found more directly, through normalization.
 
 
-```python
-_Value_1 = polynomial(
-    MultiSet(
-        MultiSet(Value.var("q12"), Value.var("bp4")),
-        MultiSet(Value.var("bp2"), Value.var("q6")),
-        MultiSet(Value.var("bp1"), Value.var("q3")),
-        MultiSet(Value.var("bp3"), Value.var("q9")),
-    )
-)
-_Value_2 = polynomial(
-    MultiSet(
-        MultiSet(Value.var("q5"), Value.var("bpp2")),
-        MultiSet(Value.var("bpp1"), Value.var("q2")),
-        MultiSet(Value.var("bpp3"), Value.var("q8")),
-        MultiSet(Value.var("q11"), Value.var("bpp4")),
-    )
-)
-_Value_3 = polynomial(
-    MultiSet(
-        MultiSet(Value.var("q5"), Value.var("bp2")),
-        MultiSet(Value.var("bp3"), Value.var("q8")),
-        MultiSet(Value.var("q2"), Value.var("bp1")),
-        MultiSet(Value.var("bp4"), Value.var("q11")),
-    )
-)
-_Value_4 = polynomial(
-    MultiSet(
-        MultiSet(Value.var("q6"), Value.var("bpp2")),
-        MultiSet(Value.var("bpp1"), Value.var("q3")),
-        MultiSet(Value.var("bpp3"), Value.var("q9")),
-        MultiSet(Value.var("q12"), Value.var("bpp4")),
-    )
-)
-_Value_5 = polynomial(
-    MultiSet(
-        MultiSet(
-            Value.from_int(Int(-1)), polynomial(MultiSet(MultiSet(_Value_1, _Value_2)))
-        ),
-        MultiSet(_Value_3, _Value_4),
-    )
-)
-_Value_6 = polynomial(
-    MultiSet(
-        MultiSet(Value.var("q7"), Value.var("bp3")),
-        MultiSet(Value.var("q1"), Value.var("bp1")),
-        MultiSet(Value.var("bp4"), Value.var("q10")),
-        MultiSet(Value.var("bp2"), Value.var("q4")),
-    )
-)
-_Value_7 = polynomial(
-    MultiSet(
-        MultiSet(Value.var("q7"), Value.var("bpp3")),
-        MultiSet(Value.var("q1"), Value.var("bpp1")),
-        MultiSet(Value.var("bpp2"), Value.var("q4")),
-        MultiSet(Value.var("bpp4"), Value.var("q10")),
-    )
-)
-_Value_8 = polynomial(
-    MultiSet(
-        MultiSet(
-            Value.from_int(Int(-1)), polynomial(MultiSet(MultiSet(_Value_6, _Value_4)))
-        ),
-        MultiSet(_Value_1, _Value_7),
-    )
-)
-_Value_9 = polynomial(
-    MultiSet(
-        MultiSet(
-            Value.from_int(Int(-1)), polynomial(MultiSet(MultiSet(_Value_3, _Value_7)))
-        ),
-        MultiSet(_Value_6, _Value_2),
-    )
-)
-_Value_10 = polynomial(
-    MultiSet(
-        MultiSet(_Value_6, _Value_6),
-        MultiSet(_Value_3, _Value_3),
-        MultiSet(_Value_1, _Value_1),
-    )
-)
-NDArray(
-    RecursiveValue(
-        polynomial(
-            MultiSet(
-                MultiSet(_Value_5, _Value_5),
-                MultiSet(_Value_8, _Value_8),
-                MultiSet(_Value_9, _Value_9),
-            )
-        )
-        / polynomial(MultiSet(MultiSet(_Value_10, _Value_10, _Value_10)))
-    )
-)
-```
+## Takeaways
+
+These experiments have been interesting to me as a way to push the edges of what's possible to do today in Egglog without
+any major changes to the core.
+
+I appreciate how this approach also speaks to providing richer semantics options overall in Egglog, only choosing to care
+about order and associativity in the representation when they are relevant to your domain and omitting them otherwise.
 
 
-Finally we have to turn this back into binary ops (rules omitted) and we can see the final factored value:
-
-```python
-_Value_1 = (
-    Value.var("q12") * Value.var("bp4")
-    + Value.var("bp2") * Value.var("q6")
-    + Value.var("bp1") * Value.var("q3")
-    + Value.var("bp3") * Value.var("q9")
-)
-_Value_2 = (
-    Value.var("q5") * Value.var("bpp2")
-    + Value.var("bpp1") * Value.var("q2")
-    + Value.var("bpp3") * Value.var("q8")
-    + Value.var("q11") * Value.var("bpp4")
-)
-_Value_3 = (
-    Value.var("q5") * Value.var("bp2")
-    + Value.var("bp3") * Value.var("q8")
-    + Value.var("q2") * Value.var("bp1")
-    + Value.var("bp4") * Value.var("q11")
-)
-_Value_4 = (
-    Value.var("q6") * Value.var("bpp2")
-    + Value.var("bpp1") * Value.var("q3")
-    + Value.var("bpp3") * Value.var("q9")
-    + Value.var("q12") * Value.var("bpp4")
-)
-_Value_5 = (
-    Value.var("q7") * Value.var("bp3")
-    + Value.var("q1") * Value.var("bp1")
-    + Value.var("bp2") * Value.var("q4")
-    + Value.var("bp4") * Value.var("q10")
-)
-_Value_6 = (
-    Value.var("q7") * Value.var("bpp3")
-    + Value.var("q1") * Value.var("bpp1")
-    + Value.var("bpp2") * Value.var("q4")
-    + Value.var("bpp4") * Value.var("q10")
-)
-NDArray(
-    RecursiveValue(
-        (
-            (Value.from_int(Int(-1)) * (_Value_1 * _Value_2) + _Value_3 * _Value_4)
-            ** Value.from_int(Int(2))
-            + (Value.from_int(Int(-1)) * (_Value_5 * _Value_4) + _Value_1 * _Value_6)
-            ** Value.from_int(Int(2))
-            + (Value.from_int(Int(-1)) * (_Value_3 * _Value_6) + _Value_5 * _Value_2)
-            ** Value.from_int(Int(2))
-        )
-        / (
-            _Value_5 ** Value.from_int(Int(2))
-            + _Value_3 ** Value.from_int(Int(2))
-            + _Value_1 ** Value.from_int(Int(2))
-        )
-        ** Value.from_int(Int(3))
-    )
-)
-```
-
-
-If we take a step back, we can compare the cost of the output expression, the number of nodes in the e-graph and the time for each of the approaches for the smaller expression:
-
-```
-Costs:
-* original: 401
-* distributed: 1,445
-* factored: 401
-* horner multisets: 401
-
-
-Number of nodes:
-* original: 97
-* distributed: 904
-* factored: 13,040
-* horner multisets: 927
-
-Time:
-* original: 0.01s
-* distributed: 0.01s
-* factored: 0.09s
-* horner multisets: 0.04s
-```
-
-Here we see that the naive factorization and the horner multiset approach both come up with the original optimal factoring, but the factored one produces a lot more nodes and takes longer.
-
-For the larger expression, of the gradient, the difference is even more stark:
-
-```
-Costs:
-* original: 20,570
-* distributed: 4,250,786
-* factored: 2,125,338
-* horner multisets: 79,974
-
-
-Number of nodes:
-* original: 470
-* distributed: 588,125
-* factored: 2,582,934
-* horner multisets: 112,144
-
-Time:
-* original: 0.03s
-* distributed: 3.71s
-* factored: 13.43s
-* horner multisets: 7.79s
-```
-
-If I cut off the factored one after it runs for 5+ seconds an iteration, it only runs a few times, produces many nodes, and still has a total cost much higher than the greedy factorization.
-
-## Conclusions
-
-These experiments have been interesting to me, less so maybe for the particulars of performance numbers of different of factoring, but more so in re-orienting how we could think about certain classes of rewrites if we are are operating on expressions with more structures. For example, what if instead of going from binary operations into polynomials, we just constructed sums and products to begin with? Like our definition of `vecdot` is building up a polynomial, but just through binary ops:
+For example, the current implementation of `vecdot` does a map and then a fold in order to effectively build up a polynomial:
 
 
 ```python
@@ -1061,13 +570,34 @@ def vecdot(x1: NDArrayLike, x2: NDArrayLike) -> NDArray:
     )
 ```
 
-In some way, if I replaced that definition to instead build up a multiset, you can see how its closer to the semantics itself.
-The order of the operations is not important, its only that its a composition of addition and multiplication.
+In this case, the order of these operations are not a meaningful part of the operation.
+Instead, if we adjusted it to emit multiset representation directly, this would not only lead to less blow up later on, as we have seen,
+but also in some ways better reflects the semantics of the code.
 
-It's also interesting how this pushes the edges of what's possible in egglog today with containers and functions. Anyone can add add a custom container into egglog, the only requirement is that it has to support rebuilding. This means that if you union `a` and `b` and your container contains both, it needs to know what to do. Like for a multisets, it would have to combine the counts of those two items. So one way to think about containers is like a custom theory in an SMT solver, but the only required behavior is rebuilding (and of course equivalence). Otherwise, it doesn't allow or require any deeper introspection. This has its pros and cons. It means we can't easily match on values inside of containers, without building up separate index tables. But it does make it quite easy to add new ones, and this functional approach here shows that even without matching you can implement some things relatively efficiently as blockwise ops.
+This work also highlights some of the current limitations of egglog and I hope that continuing to push down this road
+can lead to motivating examples to improve the framework itself.
 
-It also pushes at the edges of the type system and the ability to define and use custom functions. The current implementation of these higher order functions is a bit brittle, since we don't really support generic types. Functions are registered when a sort is registered, so we have to do some slightly odd things to register functions like `multiset_flat_map` not only when when the required multiset is registered but also when the function sorts are registered.
+For example, composing functions of primitives is currently very limited. The only tool we have is currying, but
+it is not possible to reorder arguments or compose them in more complicated manners. This inevitably leads to
+creating more bespoke functions. For example, I had to add a `multiset_contains_swapped` function that swaps the order
+of the contains method, since I needed to partially apply it with the second argument. Assuming we keep our existing
+higher order function implementation the same, there would be multiple ways to resolve this, from supporting some form of lambda functions
+that JIT compile into their own primitives or some form of function composition, ala the [compiling to categories](http://conal.net/papers/compiling-to-categories/) work.
 
-Also even when using functions, its a bit awkward at the moment. I had to add things like `multiset_contains_swapped` because we can only partially apply functions left to right. Lambda functions that return eq-sorts are easy to emulate as a constructor with a rewrite, but those that returns primitives are not supported. They would either have to be jit compiled or we would need some kind of function composition operators, like the compiling to categories paper proposes.
+Implementing these higher order functional primitives on containers is also challenging, due to the lack of built-in
+generic type support in Egglog. Each container sort adds any number of primitive operations when it is defined. However,
+many of the operations here depend on multiple container sorts being defined, like map which not only requires a `MultiSet[T]`
+but also a function `T -> V` and a `MultiSet[V]`. Adding this function today requires careful analysis of when exactly to add a primitive
+instantiated with concrete types `T` and `V`. If we had generic types supported more completely, both for primitives and for user defined sorts,
+this would make adding operators like this easier.
 
-Overall I don't mean to show here that everything works great and is figured out, mainly just that egglog could be a suitable target for continuing to experiment with custom theories combined with e-graphs and that could help in turn drive future egglog development to support these use cases. This of course would ideally be driven by real world use cases like that presented my advisor.
+Overall, I hope that at least this work shows that there is a design space here in Egglog to try out different
+ways of representing new normalized forms of different domains and then designing algorithms over them. As opposed to
+creating a whole new e-graph implementation, adding them as custom containers to egglog supports reuse of the existing
+engineering work and compositionality within the ecosystem. If you want to extend this work in some way for your use
+case or in your research, please don't hesitate to reach out, I am happy to help as I can.
+
+
+_This post was drafted by me._
+_I [used an LLM](https://chatgpt.com/share/69969a20-26d4-8011-879a-62a04adfed31) to get feedback on the draft and revised based on its suggestions to improve readability, organization, and consistency_
+_Thank you to Oliver and Yihong also who gave feedback to me throughout this process and while drafting this post._

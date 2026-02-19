@@ -2880,26 +2880,26 @@ def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
 ##
 
 
+@function
+def polynomial(x: MultiSetLike[MultiSet[Value], MultiSetLike[Value, ValueLike]]) -> Value: ...
+
+
 @function(merge=lambda old, new: new)
 def get_monomial(x: Value) -> MultiSet[Value]:
     """
-    Only defined on monomials:
+    Should be defined on all polynomials with one monomial created in `to_polynomial_ruleset`:
 
-        get_monomial(polynomial((xs,))) => xs
+        get_monomial(polynomial(MultiSet(xs))) => xs
     """
 
 
 @function(merge=lambda old, new: new)
 def get_sole_polynomial(xs: MultiSet[Value]) -> MultiSet[MultiSet[Value]]:
     """
-    Only defined on monomials that contain a single polynomial:
+    Should be defined on all monomials that contain a single polynomial created in `to_polynomial_ruleset`:
 
-        get_sole_polynomial(MultiSet(polynomial(xs))) => xs
+        get_sole_polynomial(MultiSet(polynomial(xss))) => xss
     """
-
-
-@function
-def polynomial(x: MultiSetLike[MultiSet[Value], MultiSetLike[Value, ValueLike]]) -> Value: ...
 
 
 @ruleset
@@ -2908,37 +2908,45 @@ def to_polynomial_ruleset(
     n2: Value,
     n3: Value,
     i: i64,
+    ms: MultiSet[Value],
     mss: MultiSet[MultiSet[Value]],
     mss1: MultiSet[MultiSet[Value]],
 ):
     yield rule(
         eq(n3).to(n1 + n2),
+        eq(mss).to(MultiSet(MultiSet(n1), MultiSet(n2))),
         name="add",
     ).then(
-        union(n3).with_(polynomial(MultiSet(MultiSet(n1), MultiSet(n2)))),
-        set_(get_sole_polynomial(MultiSet(n3))).to(MultiSet(MultiSet(n1), MultiSet(n2))),
+        union(n3).with_(polynomial(mss)),
+        set_(get_sole_polynomial(MultiSet(polynomial(mss)))).to(mss),
         delete(n1 + n2),
     )
     yield rule(
         eq(n3).to(n1 * n2),
+        eq(ms).to(MultiSet(n1, n2)),
         name="mul",
     ).then(
-        union(n3).with_(polynomial(MultiSet(MultiSet(n1, n2)))),
-        set_(get_monomial(n3)).to(MultiSet(n1, n2)),
+        union(n3).with_(polynomial(MultiSet(ms))),
+        set_(get_monomial(polynomial(MultiSet(ms)))).to(ms),
         delete(n1 * n2),
     )
     yield rule(
         eq(n3).to(n1**i),
+        i >= 0,
+        eq(ms).to(MultiSet.single(n1, i)),
         name="pow",
     ).then(
-        eq(n3).to(polynomial(MultiSet(MultiSet.single(n1, i)))),
-        set_(get_monomial(n3)).to(MultiSet.single(n1, i)),
+        union(n3).with_(polynomial(MultiSet(ms))),
+        set_(get_monomial(polynomial(MultiSet(ms)))).to(ms),
         delete(n1**i),
     )
+
     yield rule(
         eq(n1).to(polynomial(mss)),
+        # For each monomial, if any of its terms is a polynomial with a single monomial, just flatten
+        # that into the monomial
         mss1 == mss.map(partial(multiset_flat_map, get_monomial)),
-        mss != mss1,
+        mss != mss1,  # skip if this is a no-op
         name="unwrap monomial",
     ).then(
         union(n1).with_(polynomial(mss1)),
@@ -2947,6 +2955,7 @@ def to_polynomial_ruleset(
     )
     yield rule(
         eq(n1).to(polynomial(mss)),
+        # If any of the monomials just has a single item which is a polynomial, then flatten that into the outer polynomial
         mss1 == multiset_flat_map(UnstableFn(get_sole_polynomial), mss),
         mss != mss1,
         name="unwrap polynomial",
