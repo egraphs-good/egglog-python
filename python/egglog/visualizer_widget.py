@@ -4,8 +4,8 @@ import webbrowser
 import anywidget
 import traitlets
 from IPython.display import display
-from ipywidgets.embed import embed_minimal_html
 
+# from ipywidgets.embed import embed_minimal_html
 from .ipython_magic import IN_IPYTHON
 
 CURRENT_DIR = pathlib.Path(__file__).parent
@@ -33,7 +33,21 @@ class VisualizerWidget(anywidget.AnyWidget):
         # 2. Write the widget to it with embed_minimal_html
         # 3. Open the file using the open function from graphviz
         file = pathlib.Path.cwd() / "tmp.html"
+        file.write_text(HTML.replace("MAGIC_STRING", str(self.egraphs)))
         # https://github.com/manzt/anywidget/issues/339#issuecomment-1755654547
-        embed_minimal_html(file, views=[self], drop_defaults=False)
+        # embed_minimal_html(file, views=[self], drop_defaults=False)
+        # Instead of embedding widget, just save
         print("Visualizer widget saved to", file)
         webbrowser.open(file.as_uri())
+
+
+HTML = """
+<div id="egraph-visualizer"></div>
+<link rel="stylesheet" href="https://esm.sh/egraph-visualizer/dist/style.css" />
+<script type="module">
+  import { mount } from "https://esm.sh/egraph-visualizer";
+  const egraphs = MAGIC_STRING;
+  const mounted = mount(document.getElementById("egraph-visualizer"));
+  mounted.render(egraphs);
+</script>
+"""
