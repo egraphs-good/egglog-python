@@ -607,6 +607,9 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     @method(egg_fn="multiset-sum")
     def __add__(self, other: MultiSet[T]) -> MultiSet[T]: ...
 
+    @method(egg_fn="multiset-subtract")
+    def __sub__(self, other: MultiSet[T]) -> MultiSet[T]: ...
+
     @method(egg_fn="unstable-multiset-map", reverse_args=True)
     def map(self, f: Callable[[T], V]) -> MultiSet[V]: ...
 
@@ -624,6 +627,9 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
 
     @method(egg_fn="unstable-multiset-filter", reverse_args=True)
     def filter(self, f: Callable[[T], Unit]) -> MultiSet[T]: ...
+
+    @method(egg_fn="unstable-multiset-filter-not", reverse_args=True)
+    def filter_not(self, f: Callable[[T], Unit]) -> MultiSet[T]: ...
 
     @method(egg_fn="multiset-reset-counts")
     def reset_counts(self) -> MultiSet[T]: ...
@@ -1108,6 +1114,7 @@ class UnstableFn(BuiltinExpr, Generic[T, *TS], egg_sort="UnstableFn"):
 # Method Type is for builtins like __getitem__
 converter(MethodType, UnstableFn, lambda m: UnstableFn[*get_type_args()](m.__func__, m.__self__))  # type: ignore[operator, misc]
 converter(RuntimeFunction, UnstableFn, lambda rf: UnstableFn[*get_type_args()](rf))  # type: ignore[operator, misc]
+# converter(RuntimeClass, UnstableFn, lambda rc: UnstableFn[*get_type_args()](rc))  # type: ignore[operator, misc]
 converter(partial, UnstableFn, lambda p: UnstableFn[*get_type_args()](p.func, *p.args))  # type: ignore[operator, misc]
 
 
