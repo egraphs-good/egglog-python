@@ -13,6 +13,7 @@ _This project uses semantic versioning_
   - Improve doctest support, teaching expressions about their `__module__`, `__dir__`, and special methods.
   - Surface original Python exceptions from the runtime and tighten pretty-printing of values that cannot be re-parsed to make debugging e-graph executions easier.
   - Update the bundled Egglog crate, visualizer, and related dev dependencies (including `ipykernel`) to pick up the latest backend fixes.
+- Fix lookup of cost model based on value (see [zulip for issue](https://egraphs.zulipchat.com/#narrow/channel/375765-egg.2Fegglog/topic/Cost.20function.3A.20using.20function.20values.20of.20subtrees/near/577062352))
 
 ## 11.4.0 (2025-10-02)
 
