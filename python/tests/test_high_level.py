@@ -1591,8 +1591,8 @@ def test_custom_cost_model_size():
     eg = EGraph()
     q0 = eg.let("q0", KAT.func(eps, emp))
 
-    eg.register(set_(eps.size()).to(1))
-    eg.register(set_(emp.size()).to(0))
+    eg.register(set_(eps.size()).to(i64(1)))
+    eg.register(set_(emp.size()).to(i64(0)))
 
     def conv_cost(eg, expr, child_costs):
         if isinstance(expr, KAT):
