@@ -4,6 +4,7 @@ import contextlib
 import inspect
 import pathlib
 import tempfile
+from collections import defaultdict
 from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field
@@ -328,6 +329,7 @@ class _ExprMetaclass(type):
         cls_ident = Ident(name, _get_module(prev_frame))
         # Pass in an instance of the class so that when we are generating the decls
         # we can update them eagerly so that we can access the methods in the class body
+        # TODO: How should we normalize unparameterized classes? Should they have args of the typevars?
         runtime_cls = RuntimeClass(None, TypeRefWithVars(cls_ident))  # type: ignore[arg-type]
 
         # Store frame so that we can get live access to updated locals/globals
@@ -398,7 +400,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         # Get the generic params from the orig bases generic class
         namespace["__orig_bases__"][1].__parameters__ if "__orig_bases__" in namespace else []
     )
-    type_vars = tuple(ClassTypeVarRef.from_type_var(p) for p in parameters)
+    type_vars = tuple(TypeVarRef.from_type_var(p) for p in parameters)
     del parameters
     cls_decl = ClassDecl(
         egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()), doc=namespace.pop("__doc__", None)
@@ -588,7 +590,7 @@ def _fn_decl(
     else:
         var_arg_type = None
     arg_types = tuple(
-        decls.get_paramaterized_class(ref.ident)
+        decls.get_parameterized_class(ref.ident)
         if i == 0 and isinstance(ref, MethodRef | PropertyRef)
         else resolve_type_annotation_mutate(decls, hints[t.name])
         for i, t in enumerate(params)
@@ -603,7 +605,7 @@ def _fn_decl(
     decls.update(*arg_defaults)
 
     return_type = (
-        decls.get_paramaterized_class(ref.ident)
+        decls.get_parameterized_class(ref.ident)
         if isinstance(ref, InitRef)
         else arg_types[0]
         if mutates_first_arg
@@ -660,6 +662,8 @@ def _fn_decl(
             doc=doc,
         )
     decls.set_function_decl(ref, decl)
+    if is_builtin:
+        return lambda: None
     return Thunk.fn(
         _add_default_rewrite_function,
         decls,
@@ -775,7 +779,7 @@ def _add_default_rewrite_function(
     arg_exprs: list[RuntimeExpr | RuntimeClass] = [RuntimeExpr.__from_values__(decls, a) for a in args]
     # If this is a classmethod, add the class as the first arg
     if isinstance(ref, ClassMethodRef):
-        tp = decls.get_paramaterized_class(ref.ident)
+        tp = decls.get_parameterized_class(ref.ident)
         arg_exprs.insert(0, RuntimeClass(Thunk.value(decls), tp))
     with set_current_ruleset(ruleset):
         res = fn(*arg_exprs)
@@ -868,7 +872,7 @@ class EGraph:
         egraph = bindings.EGraph(seminaive=seminaive, record=save_egglog_string)
         self._state = EGraphState(egraph)
 
-    def _add_decls(self, *decls: DeclerationsLike) -> None:
+    def _add_decls(self, *decls: DeclarationsLike) -> None:
         for d in decls:
             self._state.__egg_decls__ |= d
 
@@ -1061,7 +1065,7 @@ class EGraph:
         try:
             return self._egraph.run_program(cmd)[0]
         except BaseException as e:
-            e.add_note("while extracting expr:\n" + str(expr))
+            e.add_note("while extracting: " + str(expr))
             raise
 
     def push(self) -> None:
@@ -1332,6 +1336,69 @@ class EGraph:
         resolved, _ = resolve_callable(fn)
         return resolved in self._state.cost_callables
 
+    def freeze(self) -> FrozenEGraph:
+        """
+        Freezes the egraph and returns a FrozenEGraph instance, that can be used for debugging.
+        """
+        frozen = self._egraph.freeze()
+        frozen_py = FrozenEGraph({}, defaultdict(list))
+        for name, fn in frozen.functions.items():
+            for row in fn.rows:
+                tp = self._state.egg_sort_to_type_ref[fn.output_sort]
+                res = RuntimeExpr.__from_values__(
+                    self.__egg_decls__,
+                    TypedExprDecl(
+                        tp=tp,
+                        expr=self._state.value_to_expr(tp=tp, value=row.output),
+                    ),
+                )
+                if fn.is_let_binding:
+                    frozen_py.global_bindings[name] = cast("BaseExpr", res)
+                    continue
+                call = self._values_to_expr(row.inputs, name)
+                frozen_py.outputs[cast("BaseExpr", res)].append(FrozenRow(cast("BaseExpr", call), row.subsumed))
+        return frozen_py
+
+    def _values_to_expr(self, args: list[bindings.Value], name: str) -> RuntimeExpr:
+        (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
+        signature = self.__egg_decls__.get_callable_decl(callable_ref).signature
+        assert isinstance(signature, FunctionSignature)
+        arg_exprs = [
+            TypedExprDecl(tp.to_just(), self._state.value_to_expr(tp.to_just(), arg))
+            for (arg, tp) in zip(args, signature.arg_types, strict=True)
+        ]
+        res_type = signature.semantic_return_type.to_just()
+        return RuntimeExpr.__from_values__(
+            self.__egg_decls__,
+            TypedExprDecl(res_type, CallDecl(callable_ref, tuple(arg_exprs))),
+        )
+
+
+@dataclass(frozen=True)
+class FrozenRow:
+    output: BaseExpr
+    subsumed: bool
+
+
+@dataclass(frozen=True)
+class FrozenEGraph:
+    global_bindings: dict[str, BaseExpr]
+    outputs: dict[BaseExpr, list[FrozenRow]]
+
+    def __str__(self) -> str:
+        res = "Global Bindings:\n"
+        for name, value in self.global_bindings.items():
+            res += f"  {name}: {value}\n"
+        res += "Outputs:\n"
+        for output, rows in self.outputs.items():
+            res += f"  {output}:\n"
+            for row in rows:
+                res += f"    {row.output}"
+                if row.subsumed:
+                    res += " (subsumed)"
+                res += "\n"
+        return res
+
 
 # Either a constant or a function.
 ExprCallable: TypeAlias = Callable[..., BaseExpr] | BaseExpr
@@ -1381,7 +1448,7 @@ def ruleset(
 
 
 @dataclass
-class Schedule(DelayedDeclerations):
+class Schedule(DelayedDeclarations):
     """
     A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
     """
@@ -2211,18 +2278,7 @@ class _CostModel(Generic[COST]):
             return self.enode_cost_results[(name, tuple(args))]
         except KeyError:
             pass
-        (callable_ref,) = self.egraph._state.egg_fn_to_callable_refs[name]
-        signature = self.egraph.__egg_decls__.get_callable_decl(callable_ref).signature
-        assert isinstance(signature, FunctionSignature)
-        arg_exprs = [
-            TypedExprDecl(tp.to_just(), self.egraph._state.value_to_expr(tp.to_just(), arg))
-            for (arg, tp) in zip(args, signature.arg_types, strict=True)
-        ]
-        res_type = signature.semantic_return_type.to_just()
-        res = RuntimeExpr.__from_values__(
-            self.egraph.__egg_decls__,
-            TypedExprDecl(res_type, CallDecl(callable_ref, tuple(arg_exprs))),
-        )
+        res = self.egraph._values_to_expr(args, name)
         index = len(self.enode_cost_expressions)
         self.enode_cost_expressions.append(res)
         self.enode_cost_results[(name, tuple(args))] = index

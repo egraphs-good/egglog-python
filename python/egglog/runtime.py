@@ -17,7 +17,6 @@ import types
 from collections.abc import Callable
 from dataclasses import InitVar, dataclass, replace
 from inspect import Parameter, Signature
-from itertools import zip_longest
 from typing import TYPE_CHECKING, Any, TypeVar, Union, assert_never, cast, get_args, get_origin
 
 import cloudpickle
@@ -34,6 +33,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ALWAYS_MUTATES_SELF",
     "ALWAYS_PRESERVED",
+    "DUMMY_VALUE",
     "LIT_IDENTS",
     "NUMERIC_BINARY_METHODS",
     "RuntimeClass",
@@ -142,14 +142,14 @@ T = TypeVar("T")
 
 def resolve_type_annotation_mutate(decls: Declarations, tp: object) -> TypeOrVarRef:
     """
-    Wrap resolve_type_annotation to mutate decls, as a helper for internal use in sitations where that is more ergonomic.
+    Wrap resolve_type_annotation to mutate decls, as a helper for internal use in situations where that is more ergonomic.
     """
     new_decls, tp = resolve_type_annotation(tp)
     decls |= new_decls
     return tp
 
 
-def resolve_type_annotation(tp: object) -> tuple[DeclerationsLike, TypeOrVarRef]:
+def resolve_type_annotation(tp: object) -> tuple[DeclarationsLike, TypeOrVarRef]:
     """
     Resolves a type object into a type reference.
 
@@ -157,7 +157,7 @@ def resolve_type_annotation(tp: object) -> tuple[DeclerationsLike, TypeOrVarRef]
     resolve the decls if need be.
     """
     if isinstance(tp, TypeVar):
-        return None, ClassTypeVarRef.from_type_var(tp)
+        return None, TypeVarRef.from_type_var(tp)
     # If there is a union, then we assume the first item is the type we want, and the others are types that can be converted to that type.
     if get_origin(tp) == Union:
         first, *_rest = get_args(tp)
@@ -181,7 +181,7 @@ def inverse_resolve_type_annotation(decls_thunk: Callable[[], Declarations], tp:
     """
     Inverse of resolve_type_annotation
     """
-    if isinstance(tp, ClassTypeVarRef):
+    if isinstance(tp, TypeVarRef):
         return tp.to_type_var()
     return RuntimeClass(decls_thunk, tp)
 
@@ -254,7 +254,7 @@ RUNTIME_CLASS_DESCRIPTORS: dict[str, RuntimeClassDescriptor] = {
 
 
 @dataclass(match_args=False)
-class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
+class RuntimeClass(DelayedDeclarations, metaclass=ClassFactory):
     __egg_tp__: TypeRefWithVars
     # True if we want `__parameters__` to be recognized by `Union`, which means we can't inherit from `type` directly.
     _egg_has_params: InitVar[bool] = False
@@ -302,13 +302,14 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
             # Assumes we don't have types set for UnstableFn w/ generics, that they have to be inferred
 
             # 1. Call it with the partial args, and use untyped vars for the rest of the args
-            res = cast("Callable", fn_arg)(*partial_args, _egg_partial_function=True)
+            res = cast("Callable", fn_arg)(*partial_args, _egg_function_types=self.__egg_tp__.args)
             assert res is not None, "Mutable partial functions not supported"
             # 2. Use the inferred return type and inferred rest arg types as the types of the function, and
             #    the partially applied args as the args.
             call = (res_typed_expr := res.__egg_typed_expr__).expr
             return_tp = res_typed_expr.tp
             assert isinstance(call, CallDecl), "partial function must be a call"
+            # Clip off the remaining arguments
             n_args = len(partial_args)
             value = PartialCallDecl(replace(call, args=call.args[:n_args]))
             remaining_arg_types = [a.tp for a in call.args[n_args:]]
@@ -345,13 +346,13 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
         # defer resolving decls so that we can do generic instantiation for converters before all
         # method types are defined.
         decls_like, new_args = cast(
-            "tuple[tuple[DeclerationsLike, ...], tuple[TypeOrVarRef, ...]]",
+            "tuple[tuple[DeclarationsLike, ...], tuple[TypeOrVarRef, ...]]",
             zip(*(resolve_type_annotation(arg) for arg in args), strict=False),
         )
-        # if we already have some args bound and some not, then we shold replace all existing args of typevars with new
+        # if we already have some args bound and some not, then we should replace all existing args of typevars with new
         # args
         if old_args := self.__egg_tp__.args:
-            is_typevar = [isinstance(arg, ClassTypeVarRef) for arg in old_args]
+            is_typevar = [isinstance(arg, TypeVarRef) for arg in old_args]
             if sum(is_typevar) != len(new_args):
                 raise TypeError(f"Expected {sum(is_typevar)} typevars, got {len(new_args)}")
             new_args_list = list(new_args)
@@ -396,18 +397,18 @@ class RuntimeClass(DelayedDeclerations, metaclass=ClassFactory):
                 self.__egg_decls_thunk__,
                 Thunk.value(TypedExprDecl(return_tp.type_ref, CallDecl(ClassVariableRef(self.__egg_tp__.ident, name)))),
             )
+        bound = self.__egg_tp__.to_just() if self.__egg_tp__.args else None
         if name in cls_decl.class_methods:
             return RuntimeFunction(
-                self.__egg_decls_thunk__,
-                Thunk.value(ClassMethodRef(self.__egg_tp__.ident, name)),
-                self.__egg_tp__.to_just(),
+                self.__egg_decls_thunk__, Thunk.value(ClassMethodRef(self.__egg_tp__.ident, name)), bound
             )
         # allow referencing properties and methods as class variables as well
         if name in cls_decl.properties:
-            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(PropertyRef(self.__egg_tp__.ident, name)))
+            return RuntimeFunction(
+                self.__egg_decls_thunk__, Thunk.value(PropertyRef(self.__egg_tp__.ident, name)), bound
+            )
         if name in cls_decl.methods:
-            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(self.__egg_tp__.ident, name)))
-
+            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(self.__egg_tp__.ident, name)), bound)
         msg = f"Class {self.__egg_tp__.ident} has no method {name}"
         raise AttributeError(msg) from None
 
@@ -466,8 +467,9 @@ class RuntimeFunctionMeta(type):
 
 
 @dataclass
-class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
+class RuntimeFunction(DelayedDeclarations, metaclass=RuntimeFunctionMeta):
     __egg_ref_thunk__: Callable[[], CallableRef]
+    # Either they bound class for something like `Vec[Int].create` or a RuntimeExpr for bound methods
     # bound methods need to store RuntimeExpr not just TypedExprDecl, so they can mutate the expr if required on self
     __egg_bound__: JustTypeRef | RuntimeExpr | None = None
 
@@ -495,7 +497,9 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
     def __egg_ref__(self) -> CallableRef:
         return self.__egg_ref_thunk__()
 
-    def __call__(self, *args: object, _egg_partial_function: bool = False, **kwargs: object) -> RuntimeExpr | None:
+    def __call__(  # noqa: C901,PLR0912
+        self, *args: object, _egg_function_types: tuple[TypeOrVarRef, ...] | None = None, **kwargs: object
+    ) -> RuntimeExpr | None:
         from .conversion import resolve_literal  # noqa: PLC0415
 
         if isinstance(self.__egg_bound__, RuntimeExpr):
@@ -528,47 +532,59 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
             assert isinstance(signature, FunctionSignature)
 
         # Turn all keyword args into positional args
-        py_signature = to_py_signature(signature, self.__egg_decls__, _egg_partial_function)
+        py_signature = to_py_signature(signature, self.__egg_decls__, optional_args=_egg_function_types is not None)
         try:
             bound = py_signature.bind(*args, **kwargs)
         except TypeError as err:
-            raise TypeError(f"Failed to bind arguments for {self} with args {args} and kwargs {kwargs}: {err}") from err
+            err.add_note(f"when calling {self} with args {args} and kwargs {kwargs}")
+            raise
         del kwargs
         bound.apply_defaults()
         assert not bound.kwargs
         args = bound.args
 
-        tcs = TypeConstraintSolver(decls)
-        bound_tp = (
-            None
-            if self.__egg_bound__ is None
-            else self.__egg_bound__.__egg_typed_expr__.tp
-            if isinstance(self.__egg_bound__, RuntimeExpr)
-            else self.__egg_bound__
-        )
-        if (
-            bound_tp
-            and bound_tp.args
-            # Don't  bind class if we have a first class function arg, b/c we don't support that yet
-            and not function_value
-        ):
-            tcs.bind_class(bound_tp)
+        tcs = TypeConstraintSolver()
+        if isinstance(self.__egg_bound__, JustTypeRef) and self.__egg_bound__.args:
+            if function_value:
+                msg = "Cannot have both bound type params and function value"
+                raise ValueError(msg)
+            tcs.bind_class(self.__egg_bound__, decls)
+            bound_tp_params = self.__egg_bound__.args
+        else:
+            bound_tp_params = ()
         assert (operator.ge if signature.var_arg_type else operator.eq)(len(args), len(signature.arg_types))
-        cls_ident = bound_tp.ident if bound_tp else None
+        # Hack to allow being explicit on function types when casting. # noqa: FIX004
+        for _fn_tp in _egg_function_types or ():
+            try:
+                _fn_tp_just = _fn_tp.to_just()
+            except TypeVarError:
+                continue
+            tcs.bind_class(_fn_tp_just, decls)
+            if _fn_tp_just.args:
+                pass
+        # Try using any runtime expressions passed in to help infer typevars
+        for arg, tp in zip(args, signature.all_args, strict=False):
+            if not isinstance(arg, RuntimeExpr):
+                continue
+            try:
+                tcs.infer_typevars(tp, arg.__egg_typed_expr__.tp)
+            # If this leads to an incompatibility, just skip it, since it could need to be upcasted
+            except TypeConstraintError:
+                continue
+        # Now at this point we should be able to resolve all the typevars
         upcasted_args = [
-            resolve_literal(cast("TypeOrVarRef", tp), arg, Thunk.value(decls), tcs=tcs, cls_ident=cls_ident)
-            for arg, tp in zip_longest(args, signature.arg_types, fillvalue=signature.var_arg_type)
+            resolve_literal(
+                tcs.substitute_typevars_try_function(tp, arg, Thunk.value(decls)).to_var(), arg, Thunk.value(decls)
+            )
+            for arg, tp in zip(args, signature.all_args, strict=False)
         ]
         decls.update(*upcasted_args)
         arg_exprs = tuple(arg.__egg_typed_expr__ for arg in upcasted_args)
-        return_tp = tcs.substitute_typevars(signature.semantic_return_type, cls_ident)
-        bound_params = (
-            cast("JustTypeRef", bound_tp).args if isinstance(self.__egg_ref__, ClassMethodRef | InitRef) else ()
-        )
-        # If we were using unstable-app to call a funciton, add that function back as the first arg.
+        return_tp = tcs.substitute_typevars(signature.semantic_return_type)
+        # If we were using unstable-app to call a function, add that function back as the first arg.
         if function_value:
             arg_exprs = (function_value, *arg_exprs)
-        expr_decl = CallDecl(self.__egg_ref__, arg_exprs, bound_params)
+        expr_decl = CallDecl(self.__egg_ref__, arg_exprs, bound_tp_params)
         typed_expr_decl = TypedExprDecl(return_tp, expr_decl)
         # If there is not return type, we are mutating the first arg
         if not signature.return_type:
@@ -598,12 +614,16 @@ class RuntimeFunction(DelayedDeclerations, metaclass=RuntimeFunctionMeta):
         return None
 
 
+# sentinel that will be upcasted to any type with a DummyDecl value
+DUMMY_VALUE = object()
+
+
 def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: bool) -> Signature:
     """
     Convert to a Python signature.
 
     If optional_args is true, then all args will be treated as optional, as if a default was provided that makes them
-    a var with that arg name as the value.
+    `DUMMY_VALUE`
 
     Used for partial application to try binding a function with only some of its args.
     """
@@ -611,9 +631,9 @@ def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: 
         Parameter(
             n,
             Parameter.POSITIONAL_OR_KEYWORD,
-            default=RuntimeExpr.__from_values__(decls, TypedExprDecl(t.to_just(), d or LetRefDecl(n)))
-            if d is not None or optional_args
-            else Parameter.empty,
+            default=RuntimeExpr.__from_values__(decls, TypedExprDecl(t.to_just(), d))
+            if d is not None
+            else (DUMMY_VALUE if optional_args else Parameter.empty),
         )
         for n, d, t in zip(sig.arg_names, sig.arg_defaults, sig.arg_types, strict=True)
     ]
@@ -626,7 +646,7 @@ ON_CREATE_EXPR: None | Callable[[Callable[[], TypedExprDecl]], None] = None
 
 
 @dataclass
-class RuntimeExpr(DelayedDeclerations):
+class RuntimeExpr(DelayedDeclarations):
     __egg_typed_expr_thunk__: Callable[[], TypedExprDecl]
 
     def __post_init__(self) -> None:
@@ -762,7 +782,7 @@ def define_expr_method(name: str) -> None:
     """
     Given the name of a method, explicitly defines it on the runtime type that holds `Expr` objects as a method.
 
-    Call this if you need a method to be defined on the type itself where overrding with `__getattr__` does not suffice,
+    Call this if you need a method to be defined on the type itself where overriding with `__getattr__` does not suffice,
     like for NumPy's `__array_ufunc__`.
     """
 
@@ -877,8 +897,7 @@ def create_callable(decls: Declarations, ref: CallableRef) -> RuntimeClass | Run
         case InitRef(name):
             return RuntimeClass(Thunk.value(decls), TypeRefWithVars(name))
         case FunctionRef() | MethodRef() | ClassMethodRef() | PropertyRef() | UnnamedFunctionRef():
-            bound = JustTypeRef(ref.ident) if isinstance(ref, ClassMethodRef) else None
-            return RuntimeFunction(Thunk.value(decls), Thunk.value(ref), bound)
+            return RuntimeFunction(Thunk.value(decls), Thunk.value(ref), None)
         case ConstantRef(name):
             tp = decls._constants[name].type_ref
         case ClassVariableRef(cls_name, var_name):

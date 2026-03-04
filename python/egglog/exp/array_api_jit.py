@@ -4,8 +4,8 @@ from typing import TypeVar, cast
 
 import numpy as np
 
-from egglog import EGraph, greedy_dag_cost_model
-from egglog.exp.array_api import NDArray, set_array_api_egraph, try_evaling
+from egglog import EGraph, bindings, greedy_dag_cost_model
+from egglog.exp.array_api import NDArray, set_array_api_egraph
 from egglog.exp.array_api_numba import array_api_numba_schedule
 from egglog.exp.array_api_program_gen import EvalProgram, array_api_program_gen_schedule, ndarray_function_two_program
 
@@ -24,12 +24,21 @@ def jit(
     Jit compiles a function
     """
     egraph, res, res_optimized, program = function_to_program(fn, save_egglog_string=False)
+    egraph = EGraph()
     if handle_expr:
         handle_expr(res)
     if handle_optimized_expr:
         handle_optimized_expr(res_optimized)
     fn_program = EvalProgram(program, {"np": np})
-    return cast("X", try_evaling(egraph, array_api_program_gen_schedule, fn_program, fn_program.as_py_object))
+    egraph.register(fn_program)
+
+    egraph.run(array_api_program_gen_schedule)
+
+    try:
+        return cast("X", egraph.extract(fn_program.as_py_object).value)
+    except bindings.EggSmolError as e:
+        e.add_note(f"Failed to get py object from {egraph.extract(fn_program)}")
+        raise
 
 
 def function_to_program(fn: Callable, save_egglog_string: bool) -> tuple[EGraph, NDArray, NDArray, Program]:

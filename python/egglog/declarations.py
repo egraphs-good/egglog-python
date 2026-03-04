@@ -1,13 +1,14 @@
 """
 Data only descriptions of the components of an egraph and the expressions.
 
-We seperate it it into two pieces, the references the declerations, so that we can report mutually recursive types.
+We separate it it into two pieces, the references the declarations, so that we can report mutually recursive types.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cached_property
+from itertools import chain, repeat
 from typing import (
     TYPE_CHECKING,
     ClassVar,
@@ -41,7 +42,6 @@ __all__ = [
     "ChangeDecl",
     "ClassDecl",
     "ClassMethodRef",
-    "ClassTypeVarRef",
     "ClassVariableRef",
     "CombinedRulesetDecl",
     "CommandDecl",
@@ -50,9 +50,10 @@ __all__ = [
     "ConstructorDecl",
     "Declarations",
     "Declarations",
-    "DeclerationsLike",
+    "DeclarationsLike",
     "DefaultRewriteDecl",
-    "DelayedDeclerations",
+    "DelayedDeclarations",
+    "DummyDecl",
     "EqDecl",
     "ExprActionDecl",
     "ExprDecl",
@@ -62,7 +63,7 @@ __all__ = [
     "FunctionRef",
     "FunctionSignature",
     "GetCostDecl",
-    "HasDeclerations",
+    "HasDeclarations",
     "Ident",
     "InitRef",
     "JustTypeRef",
@@ -92,6 +93,7 @@ __all__ = [
     "TypeOrVarRef",
     "TypeRefWithVars",
     "TypeVarError",
+    "TypeVarRef",
     "TypedExprDecl",
     "UnboundVarDecl",
     "UnionDecl",
@@ -99,12 +101,12 @@ __all__ = [
     "ValueDecl",
     "collect_unbound_vars",
     "replace_typed_expr",
-    "upcast_declerations",
+    "upcast_declarations",
 ]
 
 
 @dataclass(match_args=False)
-class DelayedDeclerations:
+class DelayedDeclarations:
     __egg_decls_thunk__: Callable[[], Declarations] = field(repr=False)
 
     @property
@@ -120,20 +122,20 @@ class DelayedDeclerations:
 
 
 @runtime_checkable
-class HasDeclerations(Protocol):
+class HasDeclarations(Protocol):
     @property
     def __egg_decls__(self) -> Declarations: ...
 
 
-DeclerationsLike: TypeAlias = Union[HasDeclerations, None, "Declarations"]
+DeclarationsLike: TypeAlias = Union[HasDeclarations, None, "Declarations"]
 
 
-def upcast_declerations(declerations_like: Iterable[DeclerationsLike]) -> list[Declarations]:
+def upcast_declarations(declarations_like: Iterable[DeclarationsLike]) -> list[Declarations]:
     d = []
-    for l in declerations_like:
+    for l in declarations_like:
         if l is None:
             continue
-        if isinstance(l, HasDeclerations):
+        if isinstance(l, HasDeclarations):
             d.append(l.__egg_decls__)
         elif isinstance(l, Declarations):
             d.append(l)
@@ -177,8 +179,8 @@ class Declarations:
         return ruleset
 
     @classmethod
-    def create(cls, *others: DeclerationsLike) -> Declarations:
-        others = upcast_declerations(others)
+    def create(cls, *others: DeclarationsLike) -> Declarations:
+        others = upcast_declarations(others)
         if not others:
             return Declarations()
         first, *rest = others
@@ -193,26 +195,26 @@ class Declarations:
         self.update_other(new)
         return new
 
-    def update(self, *others: DeclerationsLike) -> None:
+    def update(self, *others: DeclarationsLike) -> None:
         for other in others:
             self |= other
 
-    def __or__(self, other: DeclerationsLike) -> Declarations:
+    def __or__(self, other: DeclarationsLike) -> Declarations:
         result = self.copy()
         result |= other
         return result
 
-    def __ior__(self, other: DeclerationsLike) -> Self:
+    def __ior__(self, other: DeclarationsLike) -> Self:
         if other is None:
             return self
-        if isinstance(other, HasDeclerations):
+        if isinstance(other, HasDeclarations):
             other = other.__egg_decls__
         other.update_other(self)
         return self
 
     def update_other(self, other: Declarations) -> None:
         """
-        Updates the other decl with these values in palce.
+        Updates the other decl with these values in place.
         """
         other._functions |= self._functions
         other._classes |= self._classes
@@ -269,7 +271,7 @@ class Declarations:
         """
         Checks if the class has a binary method compatible with the given types.
         """
-        vars: dict[ClassTypeVarRef, JustTypeRef] = {}
+        vars: dict[TypeVarRef, JustTypeRef] = {}
         if callable_decl := self._classes[self_type.ident].methods.get(method_name):
             match callable_decl.signature:
                 case FunctionSignature((self_arg_type, other_arg_type)) if self_arg_type.matches_just(
@@ -282,7 +284,7 @@ class Declarations:
         """
         Checks if the class has a binary method with the given name and self type. Returns the other type if it exists.
         """
-        vars: dict[ClassTypeVarRef, JustTypeRef] = {}
+        vars: dict[TypeVarRef, JustTypeRef] = {}
         class_decl = self._classes.get(self_type.ident)
         if class_decl is None:
             return None
@@ -297,7 +299,7 @@ class Declarations:
         Returns the types which are compatible with the given binary method name and other type.
         """
         for class_decl in self._classes.values():
-            vars: dict[ClassTypeVarRef, JustTypeRef] = {}
+            vars: dict[TypeVarRef, JustTypeRef] = {}
             if callable_decl := class_decl.methods.get(method_name):
                 match callable_decl.signature:
                     case FunctionSignature((self_arg_type, other_arg_type)) if other_arg_type.matches_just(
@@ -308,9 +310,9 @@ class Declarations:
     def get_class_decl(self, ident: Ident) -> ClassDecl:
         return self._classes[ident]
 
-    def get_paramaterized_class(self, ident: Ident) -> TypeRefWithVars:
+    def get_parameterized_class(self, ident: Ident) -> TypeRefWithVars:
         """
-        Returns a class reference with type parameters, if the class is paramaterized.
+        Returns a class reference with type parameters, if the class is parameterized.
         """
         type_vars = self._classes[ident].type_vars
         return TypeRefWithVars(ident, type_vars)
@@ -319,11 +321,11 @@ class Declarations:
 @dataclass
 class ClassDecl:
     egg_name: str | None = None
-    type_vars: tuple[ClassTypeVarRef, ...] = ()
+    type_vars: tuple[TypeVarRef, ...] = ()
     builtin: bool = False
     init: ConstructorDecl | FunctionDecl | None = None
     class_methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
-    # These have to be seperate from class_methods so that printing them can be done easily
+    # These have to be separate from class_methods so that printing them can be done easily
     class_variables: dict[str, ConstantDecl] = field(default_factory=dict)
     methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
     properties: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
@@ -371,7 +373,7 @@ class JustTypeRef:
 # mapping of name and module of resolved typevars to runtime values
 # so that when spitting them back out again can use same instance
 # since equality is based on identity not value
-_RESOLVED_TYPEVARS: dict[ClassTypeVarRef, TypeVar] = {}
+_RESOLVED_TYPEVARS: dict[TypeVarRef, TypeVar] = {}
 
 
 class TypeVarError(RuntimeError):
@@ -379,14 +381,14 @@ class TypeVarError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class ClassTypeVarRef:
+class TypeVarRef:
     """
-    A class type variable represents one of the types of the class, if it is a generic class.
+    A generic type variable reference.
     """
 
     ident: Ident
 
-    def to_just(self, vars: dict[ClassTypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
+    def to_just(self, vars: dict[TypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
         if vars is None or self not in vars:
             raise TypeVarError(f"Cannot convert type variable {self} to concrete type without variable bindings")
         return vars[self]
@@ -395,7 +397,7 @@ class ClassTypeVarRef:
         return str(self.to_type_var())
 
     @classmethod
-    def from_type_var(cls, typevar: TypeVar) -> ClassTypeVarRef:
+    def from_type_var(cls, typevar: TypeVar) -> TypeVarRef:
         res = cls(Ident(typevar.__name__, typevar.__module__))
         _RESOLVED_TYPEVARS[res] = typevar
         return res
@@ -403,7 +405,7 @@ class ClassTypeVarRef:
     def to_type_var(self) -> TypeVar:
         return _RESOLVED_TYPEVARS[self]
 
-    def matches_just(self, vars: dict[ClassTypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
+    def matches_just(self, vars: dict[TypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
         """
         Checks if this type variable matches the given JustTypeRef, including type variables.
         """
@@ -412,13 +414,20 @@ class ClassTypeVarRef:
         vars[self] = other
         return True
 
+    @property
+    def vars(self) -> set[TypeVarRef]:
+        """
+        Returns all type variables in this type reference.
+        """
+        return {self}
+
 
 @dataclass(frozen=True)
 class TypeRefWithVars:
     ident: Ident
     args: tuple[TypeOrVarRef, ...] = ()
 
-    def to_just(self, vars: dict[ClassTypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
+    def to_just(self, vars: dict[TypeVarRef, JustTypeRef] | None = None) -> JustTypeRef:
         return JustTypeRef(self.ident, tuple(a.to_just(vars) for a in self.args))
 
     def __str__(self) -> str:
@@ -426,7 +435,7 @@ class TypeRefWithVars:
             return f"{self.ident.name}[{', '.join(str(a) for a in self.args)}]"
         return str(self.ident.name)
 
-    def matches_just(self, vars: dict[ClassTypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
+    def matches_just(self, vars: dict[TypeVarRef, JustTypeRef], other: JustTypeRef) -> bool:
         """
         Checks if this type reference matches the given JustTypeRef, including type variables.
         """
@@ -436,8 +445,18 @@ class TypeRefWithVars:
             and all(a.matches_just(vars, b) for a, b in zip(self.args, other.args, strict=True))
         )
 
+    @property
+    def vars(self) -> set[TypeVarRef]:
+        """
+        Returns all type variables in this type reference.
+        """
+        vars = set[TypeVarRef]()
+        for arg in self.args:
+            vars.update(arg.vars)
+        return vars
 
-TypeOrVarRef: TypeAlias = ClassTypeVarRef | TypeRefWithVars
+
+TypeOrVarRef: TypeAlias = TypeVarRef | TypeRefWithVars
 
 ##
 # Callables References
@@ -588,6 +607,25 @@ class FunctionSignature:
     def mutates(self) -> bool:
         return self.return_type is None
 
+    @property
+    def arg_vars(self) -> set[TypeVarRef]:
+        """
+        Returns all type variables in the argument types.
+        """
+        vars = set[TypeVarRef]()
+        for arg in self.arg_types:
+            vars.update(arg.vars)
+        if self.var_arg_type:
+            vars.update(self.var_arg_type.vars)
+        return vars
+
+    @property
+    def all_args(self) -> Iterable[TypeOrVarRef]:
+        """
+        Returns all argument types, including var args.
+        """
+        return chain(self.arg_types, (repeat(self.var_arg_type) if self.var_arg_type else []))
+
 
 @dataclass(frozen=True)
 class FunctionDecl:
@@ -618,6 +656,11 @@ CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl | Construct
 class UnboundVarDecl:
     name: str
     egg_name: str | None = None
+
+
+@dataclass(frozen=True)
+class DummyDecl:
+    pass
 
 
 @dataclass(frozen=True)
@@ -669,7 +712,7 @@ class CallDecl:
         """
         Pool CallDecls so that they can be compared by identity more quickly.
 
-        Neccessary bc we search for common parents when serializing CallDecl trees to egglog to
+        Necessary bc we search for common parents when serializing CallDecl trees to egglog to
         only serialize each sub-tree once.
         """
         # normalize the args/kwargs to a tuple so that they can be compared
@@ -711,7 +754,7 @@ class PartialCallDecl:
 
     Note it does not need to have any args, in which case it's just a function pointer.
 
-    Seperated from the call decl so it's clear it is translated to a `unstable-fn` call.
+    Separated from the call decl so it's clear it is translated to a `unstable-fn` call.
     """
 
     call: CallDecl
@@ -729,7 +772,15 @@ class ValueDecl:
 
 
 ExprDecl: TypeAlias = (
-    UnboundVarDecl | LetRefDecl | LitDecl | CallDecl | PyObjectDecl | PartialCallDecl | ValueDecl | GetCostDecl
+    DummyDecl
+    | UnboundVarDecl
+    | LetRefDecl
+    | LitDecl
+    | CallDecl
+    | PyObjectDecl
+    | PartialCallDecl
+    | ValueDecl
+    | GetCostDecl
 )
 
 

@@ -1,4 +1,4 @@
-import pathlib  # noqa: INP001
+import pathlib
 import subprocess
 
 ##

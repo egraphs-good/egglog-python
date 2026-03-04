@@ -147,6 +147,7 @@ class EGraph:
     def value_to_function(self, v: Value) -> tuple[str, list[Value]]: ...
     def value_to_set(self, v: Value) -> set[Value]: ...
     # def dynamic_cost_model_enode_cost(self, func: str, args: list[Value]) -> int: ...
+    def freeze(self) -> FrozenEGraph: ...
 
 @final
 class Value:
@@ -885,3 +886,24 @@ class Extractor(Generic[_COST]):
     def extract_variants(
         self, egraph: EGraph, termdag: TermDag, value: Value, nvariants: int, sort: str
     ) -> list[tuple[_COST, _Term]]: ...
+
+##
+# Frozen
+##
+
+@final
+class FrozenEGraph:
+    functions: dict[str, FrozenFunction]
+
+@final
+class FrozenFunction:
+    input_sorts: list[str]
+    output_sort: str
+    is_let_binding: bool
+    rows: list[FrozenRow]
+
+@final
+class FrozenRow:
+    subsumed: bool
+    inputs: list[Value]
+    output: Value

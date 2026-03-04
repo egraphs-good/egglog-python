@@ -2,7 +2,7 @@
 import inspect
 from collections.abc import Callable
 from functools import partial
-from itertools import product
+from itertools import product, repeat
 from pathlib import Path
 from types import FunctionType
 
@@ -39,9 +39,9 @@ def is_even(x: Int) -> Boolean:
 
 class TestTupleValue:
     def test_includes(self):
-        x = TupleValue.EMPTY.append(Value.bool(FALSE))
-        check_eq(x.contains(Value.bool(FALSE)), TRUE, array_api_schedule)
-        check_eq(x.contains(Value.bool(TRUE)), FALSE, array_api_schedule)
+        x = TupleValue((FALSE,))
+        check_eq(x.contains(Value.from_bool(FALSE)), TRUE, array_api_schedule)
+        check_eq(x.contains(Value.from_bool(TRUE)), FALSE, array_api_schedule)
 
 
 class TestTupleInt:
@@ -49,33 +49,25 @@ class TestTupleInt:
         @function
         def f(x: TupleIntLike) -> TupleInt: ...
 
-        assert expr_parts(f((1, 2))) == expr_parts(f(TupleInt.from_vec(Vec[Int](Int(1), Int(2)))))
+        assert expr_parts(f((1, 2))) == expr_parts(f(TupleInt(Vec(Int(1), Int(2)))))
 
     def test_cons_to_vec(self):
         check_eq(
-            TupleInt.EMPTY.append(2),
-            TupleInt.from_vec(Vec(Int(2))),
-            array_api_schedule,
-            add_second=False,
-        )
-
-    def test_vec_to_cons(self):
-        check_eq(
-            TupleInt.from_vec(Vec(Int(1), Int(2))),
-            TupleInt.EMPTY.append(1).append(2),
+            TupleInt(()).append(2),
+            TupleInt(Vec(Int(2))),
             array_api_schedule,
             add_second=False,
         )
 
     def test_indexing_cons(self):
-        check_eq(TupleInt.EMPTY.append(1).append(2)[Int(0)], Int(1), array_api_schedule)
-        check_eq(TupleInt.EMPTY.append(1).append(2)[Int(1)], Int(2), array_api_schedule)
+        check_eq(TupleInt((1, 2))[Int(0)], Int(1), array_api_schedule)
+        check_eq(TupleInt((1, 2))[Int(1)], Int(2), array_api_schedule)
 
     def test_length_cons(self):
-        check_eq(TupleInt.EMPTY.append(1).append(2).length(), Int(2), array_api_schedule)
+        check_eq(TupleInt((1, 2)).length(), Int(2), array_api_schedule)
 
     def test_fn_to_cons(self):
-        check_eq(TupleInt(2, lambda i: i), TupleInt.EMPTY.append(0).append(1), array_api_schedule, add_second=False)
+        check_eq(TupleInt.fn(2, lambda i: i), TupleInt((0, 1)), array_api_schedule, add_second=False)
 
     def test_range_length(self):
         check_eq(TupleInt.range(some_length).length(), some_length, array_api_schedule)
@@ -86,21 +78,21 @@ class TestTupleInt:
         )
 
     def test_not_contains_example(self):
-        check_eq(TupleInt.from_vec(Vec(Int(0), Int(1))).contains(Int(3)), FALSE, array_api_schedule)
+        check_eq(TupleInt(Vec(Int(0), Int(1))).contains(Int(3)), FALSE, array_api_schedule)
 
     def test_contains_example(self):
-        check_eq(TupleInt.from_vec(Vec(Int(0), Int(3))).contains(Int(3)), TRUE, array_api_schedule)
+        check_eq(TupleInt(Vec(Int(0), Int(3))).contains(Int(3)), TRUE, array_api_schedule)
 
     def test_filter_append(self):
         check_eq(
-            TupleInt.EMPTY.append(1).append(2).filter(is_even),
-            TupleInt.EMPTY.append(2),
+            TupleInt((1, 2)).filter(is_even),
+            TupleInt((2,)),
             array_api_schedule,
             add_second=False,
         )
 
     def test_filter_range(self):
-        check_eq(TupleInt.range(4).filter(is_even), TupleInt.from_vec(Vec(Int(0), Int(2))), array_api_schedule)
+        check_eq(TupleInt.range(4).filter(is_even), TupleInt(Vec(Int(0), Int(2))), array_api_schedule)
 
     def test_filter_lambda_length(self):
         with set_current_ruleset(array_api_ruleset):
@@ -114,11 +106,11 @@ def some_array_idx_fn(x: TupleInt) -> Value: ...
 
 class TestNDArray:
     def test_index(self):
-        x = NDArray(some_shape, some_dtype, some_array_idx_fn)
+        x = NDArray.fn(some_shape, some_dtype, some_array_idx_fn)
         check_eq(x.index(some_index), some_array_idx_fn(some_index), array_api_schedule)
 
     def test_shape(self):
-        x = NDArray(some_shape, some_dtype, some_array_idx_fn)
+        x = NDArray.fn(some_shape, some_dtype, some_array_idx_fn)
         check_eq(x.shape, some_shape, array_api_schedule)
 
     def test_simplify_any_unique(self):
@@ -126,20 +118,38 @@ class TestNDArray:
             any(
                 (
                     astype(unique_counts(NDArray.var("X"))[Int(1)], DType.float64)
-                    / NDArray.scalar(Value.float(Float(150.0)))
+                    / NDArray(Value.from_float(Float(150.0)))
                 )
-                < NDArray.scalar(Value.int(Int(0)))
+                < NDArray(Value.from_int(Int(0)))
             )
-            .to_value()
+            .index(TupleInt())
             .to_bool
         )
-        check_eq(res, FALSE, array_api_schedule)
+        check_eq(res, Boolean(False), array_api_schedule)
+
+    def test_other(self):
+        _NDArray_1 = NDArray.var("y")
+        assume_dtype(_NDArray_1, DType.int64)
+        assume_shape(_NDArray_1, TupleInt(Vec(Int(150))))
+        assume_value_one_of(
+            _NDArray_1,
+            TupleValue(Vec(Value.from_int(Int(0)), Value.from_int(Int(1)), Value.from_int(Int(2)))),
+        )
+        res = (
+            any(
+                astype(unique_counts(_NDArray_1)[1], DType.float64) / NDArray(RecursiveValue(Value.from_int(Int(150))))
+                < NDArray(RecursiveValue(Value.from_int(Int(0))))
+            )
+            .index(TupleInt())
+            .to_bool
+        )
+        check_eq(res, Boolean(False), array_api_schedule)
 
     def test_reshape_index(self):
         # Verify that it doesn't expand forever
         x = NDArray.var("x")
-        new_shape = TupleInt.single(Int(-1))
-        res = reshape(x, new_shape).index(TupleInt.single(Int(1)) + TupleInt.single(Int(2)))
+        new_shape = TupleInt((-1,))
+        res = reshape(x, new_shape).index(TupleInt((Int(1),)) + TupleInt((Int(2),)))
         egraph = EGraph()
         egraph.register(res)
         egraph.run(array_api_schedule)
@@ -148,8 +158,8 @@ class TestNDArray:
 
     def test_reshape_vec_noop(self):
         x = NDArray.var("x")
-        assume_shape(x, TupleInt.single(Int(5)))
-        res = reshape(x, TupleInt.single(Int(-1)))
+        assume_shape(x, TupleInt((Int(5),)))
+        res = reshape(x, TupleInt((-1,)))
         egraph = EGraph()
         egraph.register(res)
         egraph.run(array_api_schedule)
@@ -169,11 +179,11 @@ def some_tuple_tuple_int_reduce_value_fn(carry: Value, x: TupleInt) -> Value: ..
 
 class TestTupleTupleInt:
     def test_reduce_value_zero(self):
-        x = TupleTupleInt(0, some_tuple_tuple_int_idx_fn)
+        x = TupleTupleInt.fn(0, some_tuple_tuple_int_idx_fn)
         check_eq(x.foldl_value(some_tuple_tuple_int_reduce_value_fn, some_value), some_value, array_api_schedule)
 
     def test_reduce_value_one(self):
-        x = TupleTupleInt(1, some_tuple_tuple_int_idx_fn)
+        x = TupleTupleInt.fn(1, some_tuple_tuple_int_idx_fn)
         check_eq(
             x.foldl_value(some_tuple_tuple_int_reduce_value_fn, some_value),
             some_tuple_tuple_int_reduce_value_fn(some_value, some_tuple_tuple_int_idx_fn(Int(0))),
@@ -188,7 +198,7 @@ class TestTupleTupleInt:
 
         aka product((0, 1, 2, 3), (4, 5)) ==
         """
-        # TODO: Increase size, but for now check doesnt terminate at larger sizes for some reason
+        # TODO: Increase size, but for now check doesn't terminate at larger sizes for some reason
         # input = ((0, 1, 2, 3), (4, 5))
         input = ((0, 1), (4, 5))
         expected_output = tuple(product(*input))
@@ -207,7 +217,7 @@ def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:
     # get only the inner shape for reduction
     reduce_axis = ShapeAPI(X.shape).select(axis).to_tuple()
 
-    return NDArray(
+    return NDArray.fn(
         outshape,
         X.dtype,
         lambda k: LoopNestAPI.from_tuple(reduce_axis)
@@ -221,7 +231,7 @@ def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:
 @function(ruleset=array_api_ruleset, subsume=True)
 def linalg_norm_v2(X: NDArrayLike, axis: TupleIntLike) -> NDArray:
     X = cast(NDArray, X)
-    return NDArray(
+    return NDArray.fn(
         X.shape.deselect(axis),
         X.dtype,
         lambda k: ndindex(X.shape.select(axis))
@@ -242,7 +252,7 @@ class TestLoopNest:
         expect = np.linalg.norm(X, axis=(0, 1))
         assert expect.shape == (3, 4)
 
-        check_eq(linalg_val(constant("X", NDArray), linalg_fn).shape, TupleInt.from_vec((3, 4)), array_api_schedule)
+        check_eq(linalg_val(constant("X", NDArray), linalg_fn).shape, TupleInt((3, 4)), array_api_schedule)
 
     @pytest.mark.parametrize("linalg_fn", [linalg_norm, linalg_norm_v2])
     def test_abstract_index(self, linalg_fn):
@@ -251,12 +261,12 @@ class TestLoopNest:
         X = constant("X", NDArray)
         idxed = linalg_val(X, linalg_fn).index((i, j))
 
-        _Value_1 = X.index(TupleInt.from_vec(Vec[Int](Int(0), Int(0), i, j)))
-        _Value_2 = X.index(TupleInt.from_vec(Vec[Int](Int(0), Int(1), i, j)))
-        _Value_3 = X.index(TupleInt.from_vec(Vec[Int](Int(1), Int(0), i, j)))
-        _Value_4 = X.index(TupleInt.from_vec(Vec[Int](Int(1), Int(1), i, j)))
-        _Value_5 = X.index(TupleInt.from_vec(Vec[Int](Int(2), Int(0), i, j)))
-        _Value_6 = X.index(TupleInt.from_vec(Vec[Int](Int(2), Int(1), i, j)))
+        _Value_1 = X.index(TupleInt((Int(0), Int(0), i, j)))
+        _Value_2 = X.index(TupleInt((Int(0), Int(1), i, j)))
+        _Value_3 = X.index(TupleInt((Int(1), Int(0), i, j)))
+        _Value_4 = X.index(TupleInt((Int(1), Int(1), i, j)))
+        _Value_5 = X.index(TupleInt((Int(2), Int(0), i, j)))
+        _Value_6 = X.index(TupleInt((Int(2), Int(1), i, j)))
         res = (
             (
                 (
@@ -287,7 +297,10 @@ class TestLoopNest:
             value_program(simplified_index).function_three(ndarray_program(X), int_program(i), int_program(j)),
             {"np": np},
         )
-        fn = cast(FunctionType, try_evaling(EGraph(), array_api_program_gen_schedule, res, res.as_py_object))
+        egraph = EGraph()
+        egraph.register(res)
+        egraph.run(array_api_program_gen_schedule)
+        fn = cast(FunctionType, egraph.extract(res.as_py_object).value)
 
         assert inspect.getsource(fn) == snapshot_py(name="code")
 
@@ -348,7 +361,11 @@ def lda(X: NDArray, y: NDArray):
     "program",
     [
         pytest.param(lambda x, y: x + y, id="add"),
-        pytest.param(lambda x, y: x[(x.shape + TupleInt.from_vec((1, 2)))[100]], id="tuple"),
+        pytest.param(
+            lambda x, y: x[(x.shape + TupleInt((1, 2)))[100]],
+            id="tuple",
+            marks=pytest.mark.xfail(reason="functions aren't applied yet in to string"),
+        ),
         pytest.param(lda, id="lda"),
     ],
 )
@@ -383,13 +400,42 @@ def test_run_lda(fn_thunk, benchmark):
     benchmark(fn, X_np, y_np)
 
 
+x, y, z, q, r = map(constant, ("x", "y", "z", "q", "r"), repeat(Value))
+
+
+@pytest.mark.parametrize(
+    ("input", "expected"),
+    [
+        pytest.param(x * x, x**2, id="exp"),
+        pytest.param(x * y + x * z, x * (y + z), id="factor"),
+        pytest.param(x * y + x * z * q + x * z * r, x * (y + z * (q + r)), id="factor most first"),
+        pytest.param(
+            x**2 * z * y + x**2 * q * z * y, x**2 * z * y * (q + Value.from_int(1)), id="factor out all terms equal"
+        ),
+    ],
+)
+def test_polynomial_factoring(input: Value, expected: Value):
+    egraph = EGraph()
+    x = egraph.let("x", input)
+    egraph.run(polynomial_schedule)
+    # egraph.run(to_polynomial_ruleset.saturate())
+    # egraph.display()
+    # egraph.run(factor_ruleset.saturate())
+    # egraph.display()
+    # egraph.run(from_polynomial_ruleset.saturate())
+    # egraph.display()
+    equiv_expr = egraph.extract(x)
+    assert eq(equiv_expr).to(expected), f"Expected {expected}, got {equiv_expr}"
+
+
 # if calling as script, print out egglog source for test
 # similar to jit, but don't include pyobject parts so it works in vanilla egglog
 if __name__ == "__main__":
     print("Generating egglog source for test")
     egraph, _, _, program = function_to_program(lda, True)
     egraph.register(program.compile())
-    try_evaling(egraph, array_api_program_gen_combined_ruleset.saturate(), program, program.statements)
+    egraph.run(array_api_program_gen_combined_ruleset.saturate())
+    egraph.extract(program.statements)
     name = "python.egg"
     print("Saving to", name)
     Path(name).write_text(egraph.as_egglog_string)

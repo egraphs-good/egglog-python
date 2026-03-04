@@ -1,8 +1,16 @@
-"""Provides a class for solving type constraints."""
+"""
+Provides a class for solving type constraints.
+
+
+Usages:
+
+When trying to resolve a literal to a value
+
+"""
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import chain, repeat
 from typing import TYPE_CHECKING, assert_never
@@ -26,24 +34,22 @@ class TypeConstraintSolver:
     Given some typevars and types, solves the constraints to resolve the typevars.
     """
 
-    _decls: Declarations = field(repr=False)
-    # Mapping of class ident to mapping of bound class typevar to type
-    _cls_typevar_index_to_type: defaultdict[Ident, dict[ClassTypeVarRef, JustTypeRef]] = field(
-        default_factory=lambda: defaultdict(dict)
-    )
+    # Mapping of typevar index to inferred type for each class
+    _typevar_to_type: dict[Ident, JustTypeRef] = field(default_factory=dict, init=False)
 
-    def bind_class(self, ref: JustTypeRef) -> None:
+    def bind_class(self, ref: JustTypeRef, decls: Declarations) -> None:
         """
         Bind the typevars of a class to the given types.
         Used for a situation like Map[int, str].create().
+
+        This is the same as binding the typevars of the class to the given types.
         """
-        name = ref.ident
-        cls_typevars = self._decls.get_class_decl(name).type_vars
-        if len(cls_typevars) != len(ref.args):
-            raise TypeConstraintError(f"Mismatch of typevars {cls_typevars} and {ref}")
-        bound_typevars = self._cls_typevar_index_to_type[name]
-        for i, arg in enumerate(ref.args):
-            bound_typevars[cls_typevars[i]] = arg
+        try:
+            cls_typevars = decls.get_class_decl(ref.ident).type_vars
+        except KeyError:
+            cls_typevars = []
+        for typevar, arg in zip(cls_typevars, ref.args, strict=True):
+            self.infer_typevars(typevar, arg)
 
     def infer_arg_types(
         self,
@@ -51,61 +57,78 @@ class TypeConstraintSolver:
         fn_return: TypeOrVarRef,
         fn_var_args: TypeOrVarRef | None,
         return_: JustTypeRef,
-        cls_ident: Ident | None,
-    ) -> tuple[Iterable[JustTypeRef], tuple[JustTypeRef, ...]]:
+    ) -> Iterable[JustTypeRef]:
         """
         Given a return type, infer the argument types. If there is a variable arg, it returns an infinite iterable.
-
-        Also returns the bound type params if the class name is passed in.
         """
-        self.infer_typevars(fn_return, return_, cls_ident)
-        arg_types: Iterable[JustTypeRef] = [self.substitute_typevars(a, cls_ident) for a in fn_args]
-        if fn_var_args:
-            # Need to be generator so it can be infinite for variable args
-            arg_types = chain(arg_types, repeat(self.substitute_typevars(fn_var_args, cls_ident)))
-        bound_typevars = (
-            tuple(
-                v
-                # Sort by the index of the typevar in the class
-                for _, v in sorted(
-                    self._cls_typevar_index_to_type[cls_ident].items(),
-                    key=lambda kv: self._decls.get_class_decl(cls_ident).type_vars.index(kv[0]),
-                )
-            )
-            if cls_ident
-            else ()
-        )
-        return arg_types, bound_typevars
+        self.infer_typevars(fn_return, return_)
+        arg_types = [self.substitute_typevars(fn_arg) for fn_arg in fn_args]
+        if fn_var_args is None:
+            return arg_types
+        var_arg_type = self.substitute_typevars(fn_var_args)
+        return chain(arg_types, repeat(var_arg_type))
 
-    def infer_typevars(self, fn_arg: TypeOrVarRef, arg: JustTypeRef, cls_ident: Ident | None = None) -> None:
+    def infer_typevars(self, fn_arg: TypeOrVarRef, arg: JustTypeRef) -> None:
+        """
+        Infer typevars from a function argument and a given type, raises TypeConstraintError if they are incompatible.
+        """
         match fn_arg:
             case TypeRefWithVars(cls_ident, fn_args):
                 if cls_ident != arg.ident:
                     raise TypeConstraintError(f"Expected {cls_ident}, got {arg.ident}")
                 for inner_fn_arg, inner_arg in zip(fn_args, arg.args, strict=True):
-                    self.infer_typevars(inner_fn_arg, inner_arg, cls_ident)
-            case ClassTypeVarRef():
-                if cls_ident is None:
-                    msg = "Cannot infer typevar without class name"
-                    raise RuntimeError(msg)
-
-                class_typevars = self._cls_typevar_index_to_type[cls_ident]
-                if fn_arg in class_typevars:
-                    if class_typevars[fn_arg] != arg:
-                        raise TypeConstraintError(f"Expected {class_typevars[fn_arg]}, got {arg}")
+                    self.infer_typevars(inner_fn_arg, inner_arg)
+            case TypeVarRef(typevar_ident):
+                if typevar_ident in self._typevar_to_type:
+                    if self._typevar_to_type[typevar_ident] != arg:
+                        raise TypeConstraintError(f"Expected {self._typevar_to_type[typevar_ident]}, got {arg}")
                 else:
-                    class_typevars[fn_arg] = arg
+                    self._typevar_to_type[typevar_ident] = arg
             case _:
                 assert_never(fn_arg)
 
-    def substitute_typevars(self, tp: TypeOrVarRef, cls_ident: Ident | None = None) -> JustTypeRef:
+    def substitute_typevars(self, tp: TypeOrVarRef) -> JustTypeRef:
+        """
+        Substitute typevars in a type with their inferred types, raises TypeConstraintError if a typevar is unresolved.
+        """
         match tp:
-            case ClassTypeVarRef():
-                assert cls_ident is not None
+            case TypeVarRef(typevar_ident):
                 try:
-                    return self._cls_typevar_index_to_type[cls_ident][tp]
+                    return self._typevar_to_type[typevar_ident]
                 except KeyError as e:
-                    raise TypeConstraintError(f"Not enough bound typevars for {tp!r} in class {cls_ident}") from e
+                    raise TypeConstraintError(f"Unresolved type variable: {typevar_ident}") from e
             case TypeRefWithVars(name, args):
-                return JustTypeRef(name, tuple(self.substitute_typevars(arg, cls_ident) for arg in args))
+                return JustTypeRef(name, tuple(self.substitute_typevars(arg) for arg in args))
         assert_never(tp)
+
+    def substitute_typevars_try_function(
+        self, tp: TypeOrVarRef, value: Callable, decls: Callable[[], Declarations]
+    ) -> JustTypeRef:
+        """
+        Try to substitute typevars in a type with their inferred types.
+
+        If this fails and we have an UnstableFn type and a function value, we can try to infer the typevars by calling
+        it with the input types, if we can resolve those
+        """
+        from .runtime import RuntimeExpr  # noqa: PLC0415
+
+        try:
+            return self.substitute_typevars(tp)
+        except TypeConstraintError:
+            if isinstance(tp, TypeVarRef) or tp.ident != Ident.builtin("UnstableFn") or not callable(value):
+                raise
+        dummy_args = [
+            RuntimeExpr.__from_values__(decls(), TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()))
+            for arg_tp in tp.args[1:]
+        ]
+        try:
+            result = value(*dummy_args)
+        except Exception as e:
+            e.add_note(f"While trying to infer return type of {value} by calling it")
+            raise
+        if not isinstance(result, RuntimeExpr):
+            raise TypeConstraintError(
+                f"Function {value} did not return a RuntimeExpr, got {type(result)}, so cannot infer return type"
+            )
+        self.infer_typevars(tp.args[0], result.__egg_typed_expr__.tp)
+        return self.substitute_typevars(tp)

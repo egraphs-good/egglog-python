@@ -42,19 +42,19 @@ def span(frame_index: int = 0) -> bindings.RustSpan:
 @dataclass
 class EGraphState:
     """
-    State of the EGraph declerations and rulesets, so when we pop/push the stack we know whats defined.
+    State of the EGraph declarations and rulesets, so when we pop/push the stack we know whats defined.
 
     Used for converting to/from egg and for pretty printing.
     """
 
     egraph: bindings.EGraph
-    # The decleratons we have added.
+    # The declarations we have added.
     __egg_decls__: Declarations = field(default_factory=Declarations)
     # Mapping of added rulesets to the added rules
     rulesets: dict[Ident, set[RewriteOrRuleDecl]] = field(default_factory=dict)
 
     # Bidirectional mapping between egg function names and python callable references.
-    # Note that there are possibly mutliple callable references for a single egg function name, like `+`
+    # Note that there are possibly multiple callable references for a single egg function name, like `+`
     # for both int and rational classes.
     egg_fn_to_callable_refs: dict[str, set[CallableRef]] = field(
         default_factory=lambda: defaultdict(set, {"!=": {FunctionRef(Ident.builtin("!="))}})
@@ -397,7 +397,7 @@ class EGraphState:
                     bindings.Relation(span(), egg_name, [self.type_ref_to_egg(a) for a in arg_types])
                 )
             case ConstantDecl(tp, _):
-                # Use constructor decleration instead of constant b/c constants cannot be extracted
+                # Use constructor declaration instead of constant b/c constants cannot be extracted
                 # https://github.com/egraphs-good/egglog/issues/334
                 is_function = self.__egg_decls__._classes[tp.ident].builtin
                 schema = bindings.Schema([], self.type_ref_to_egg(tp))
@@ -449,9 +449,10 @@ class EGraphState:
             self.type_ref_to_egg(signature.semantic_return_type.to_just()),
         )
 
-    def type_ref_to_egg(self, ref: JustTypeRef) -> str:  # noqa: C901, PLR0912
+    def type_ref_to_egg(self, ref: JustTypeRef) -> str:
         """
-        Returns the egg sort name for a type reference, registering it if it is not already registered.
+        Returns the egg sort name for a type reference, registering it not already registered, and also recursively
+        any type args are registered.
         """
         try:
             return self.type_ref_to_egg_sort[ref]
@@ -460,47 +461,35 @@ class EGraphState:
         decl = self.__egg_decls__._classes[ref.ident]
         self.type_ref_to_egg_sort[ref] = egg_name = (not ref.args and decl.egg_name) or _generate_type_egg_name(ref)
         self.egg_sort_to_type_ref[egg_name] = ref
-        if not decl.builtin or ref.args:
+
+        if decl.builtin:
+            # If this has args, create a new parameterized version of the builtin class
             if ref.args:
                 if ref.ident == Ident.builtin("UnstableFn"):
-                    # UnstableFn is a special case, where the rest of args are collected into a call
-                    if len(ref.args) < 2:
-                        msg = "Zero argument higher order functions not supported"
-                        raise NotImplementedError(msg)
                     type_args: list[bindings._Expr] = [
                         bindings.Call(
                             span(),
                             self.type_ref_to_egg(ref.args[1]),
                             [bindings.Var(span(), self.type_ref_to_egg(a)) for a in ref.args[2:]],
-                        ),
+                        )
+                        if len(ref.args) > 1
+                        else bindings.Lit(span(), bindings.Unit()),
                         bindings.Var(span(), self.type_ref_to_egg(ref.args[0])),
                     ]
                 else:
-                    # If any of methods have another type ref in them process all those first with substituted vars
-                    # so that things like multiset - mapp will be added. Function type must be added first.
-                    # Find all args of all methods and find any with type args themselves that are not this type and add them
-                    tcs = TypeConstraintSolver(self.__egg_decls__)
-                    tcs.bind_class(ref)
-                    for method in decl.methods.values():
-                        if not isinstance((signature := method.signature), FunctionSignature):
-                            continue
-                        for arg_tp in signature.arg_types:
-                            if isinstance(arg_tp, TypeRefWithVars) and arg_tp.args and arg_tp.ident != ref.ident:
-                                self.type_ref_to_egg(tcs.substitute_typevars(arg_tp, ref.ident))
-
                     type_args = [bindings.Var(span(), self.type_ref_to_egg(a)) for a in ref.args]
-                args = (self.type_ref_to_egg(JustTypeRef(ref.ident)), type_args)
-            else:
-                args = None
-            self.egraph.run_program(bindings.Sort(span(), egg_name, args))
-        # For builtin classes, let's also make sure we have the mapping of all egg fn names for class methods, because
-        # these can be created even without adding them to the e-graph, like `vec-empty` which can be extracted
-        # even if you never use that function.
-        if decl.builtin:
+                assert decl.egg_name
+                self.egraph.run_program(bindings.Sort(span(), egg_name, (decl.egg_name, type_args)))
+
+            # For builtin classes, let's also make sure we have the mapping of all egg fn names for class methods.
+            # these can be created even without adding them to the e-graph, like `vec-empty` which can be extracted
+            # even if you never use that function.
             for method_name in decl.class_methods:
                 self.callable_ref_to_egg(ClassMethodRef(ref.ident, method_name))
             if decl.init:
                 self.callable_ref_to_egg(InitRef(ref.ident))
+        else:
+            self.egraph.run_program(bindings.Sort(span(), egg_name, None))
 
         return egg_name
 
@@ -544,7 +533,7 @@ class EGraphState:
         Rewrites this expression as a let binding if it's not already a let binding.
         """
         # TODO: Replace with counter so that it works with hash collisions and is more stable
-        var_decl = LetRefDecl(f"__expr_{hash(typed_expr)}")
+        var_decl = LetRefDecl(f"$__expr_{hash(typed_expr)}")
         if var_decl in self.expr_to_egg_cache:
             return None
         var_egg = self._expr_to_egg(var_decl)
@@ -616,6 +605,9 @@ class EGraphState:
                 )
             case ValueDecl():
                 msg = "Cannot turn a Value into an expression"
+                raise ValueError(msg)
+            case DummyDecl():
+                msg = "Cannot turn a DummyDecl into an expression"
                 raise ValueError(msg)
             case _:
                 assert_never(expr_decl.expr)
@@ -770,7 +762,7 @@ class EGraphState:
                 return CallDecl(
                     InitRef(Ident.builtin("Set")),
                     tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs_),
-                    (v_tp,),
+                    (v_tp,) if not xs_ else (),
                 )
             case "Vec":
                 xs = self.egraph.value_to_vec(value)
@@ -778,7 +770,7 @@ class EGraphState:
                 return CallDecl(
                     InitRef(Ident.builtin("Vec")),
                     tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs),
-                    (v_tp,),
+                    (v_tp,) if not xs else (),
                 )
             case "MultiSet":
                 xs = self.egraph.value_to_multiset(value)
@@ -786,14 +778,15 @@ class EGraphState:
                 return CallDecl(
                     InitRef(Ident.builtin("MultiSet")),
                     tuple(TypedExprDecl(v_tp, self.value_to_expr(v_tp, x)) for x in xs),
-                    (v_tp,),
+                    (v_tp,) if not xs else (),
                 )
             case "UnstableFn":
                 _names, _args = self.egraph.value_to_function(value)
                 return_tp, *arg_types = tp.args
                 return self._unstable_fn_value_to_expr(_names, _args, return_tp, arg_types)
             case _:
-                raise NotImplementedError(f"Value to expr not implemented for type {tp.ident}")
+                # If this is not a builtin type, or we don't know how to convert it, just return as value
+                return ValueDecl(value)
 
     def _unstable_fn_value_to_expr(
         self, name: str, partial_args: list[bindings.Value], return_tp: JustTypeRef, _arg_types: list[JustTypeRef]
@@ -806,23 +799,13 @@ class EGraphState:
                 continue
             if signature.semantic_return_type.ident != return_tp.ident:
                 continue
-            tcs = TypeConstraintSolver(self.__egg_decls__)
-
-            arg_types, bound_tp_params = tcs.infer_arg_types(
-                signature.arg_types, signature.semantic_return_type, signature.var_arg_type, return_tp, None
+            arg_types = TypeConstraintSolver().infer_arg_types(
+                signature.arg_types, signature.semantic_return_type, signature.var_arg_type, return_tp
             )
-
             args = tuple(
                 TypedExprDecl(tp, self.value_to_expr(tp, v)) for tp, v in zip(arg_types, partial_args, strict=False)
             )
-
-            call_decl = CallDecl(
-                callable_ref,
-                args,
-                # Don't include bound type params if this is just a method, we only needed them for type resolution
-                # but dont need to store them
-                bound_tp_params if isinstance(callable_ref, ClassMethodRef | InitRef) else (),
-            )
+            call_decl = CallDecl(callable_ref, args)
             return PartialCallDecl(call_decl)
         raise ValueError(f"Function '{name}' not found")
 
@@ -919,11 +902,7 @@ class FromEggState:
             assert_never(term)
         return TypedExprDecl(tp, expr_decl)
 
-    def from_call(
-        self,
-        tp: JustTypeRef,
-        term: bindings.TermApp,  # additional_arg_tps: tuple[JustTypeRef, ...]
-    ) -> CallDecl:
+    def from_call(self, tp: JustTypeRef, term: bindings.TermApp) -> CallDecl:
         """
         Convert a call to a CallDecl.
 
@@ -941,33 +920,32 @@ class FromEggState:
             signature = self.decls.get_callable_decl(callable_ref).signature
             assert isinstance(signature, FunctionSignature)
             if isinstance(callable_ref, ClassMethodRef | InitRef | MethodRef):
-                # Need OR in case we have class method whose class whas never added as a sort, which would happen
+                # Need OR in case we have class method whose class was never added as a sort, which would happen
                 # if the class method didn't return that type and no other function did. In this case, we don't need
-                # to care about the type vars and we we don't need to bind any possible type.
+                # to care about the type vars and we don't need to bind any possible type.
                 possible_types = self.state._get_possible_types(callable_ref.ident) or [None]
-                cls_name = callable_ref.ident
             else:
                 possible_types = [None]
-                cls_name = None
             for possible_type in possible_types:
-                tcs = TypeConstraintSolver(self.decls)
+                tcs = TypeConstraintSolver()
                 if possible_type and possible_type.args:
-                    tcs.bind_class(possible_type)
+                    tcs.bind_class(possible_type, self.decls)
+                    bound_args = possible_type.args
+                else:
+                    bound_args = ()
                 try:
-                    arg_types, bound_tp_params = tcs.infer_arg_types(
-                        signature.arg_types, signature.semantic_return_type, signature.var_arg_type, tp, cls_name
+                    arg_types = tcs.infer_arg_types(
+                        signature.arg_types, signature.semantic_return_type, signature.var_arg_type, tp
                     )
+                    # Include this in try because of iterable
+                    a_tp = list(zip(term.args, arg_types, strict=False))
                 except TypeConstraintError:
                     continue
-                args = tuple(self.resolve_term(a, tp) for a, tp in zip(term.args, arg_types, strict=False))
-
-                return CallDecl(
-                    callable_ref,
-                    args,
-                    # Don't include bound type params if this is just a method, we only needed them for type resolution
-                    # but dont need to store them
-                    bound_tp_params if isinstance(callable_ref, ClassMethodRef | InitRef) else (),
-                )
+                args = tuple(self.resolve_term(a, tp) for a, tp in a_tp)
+                # Only save bound tp params if needed for inferring return type
+                # this is true if the set of set of type vars in the return are not a subset of those in the args
+                bound_tp_params = () if signature.semantic_return_type.vars.issubset(signature.arg_vars) else bound_args
+                return CallDecl(callable_ref, args, bound_tp_params)
         raise ValueError(
             f"Could not find callable ref for call {term}. None of these refs matched the types: {self.state.egg_fn_to_callable_refs[term.name]}"
         )

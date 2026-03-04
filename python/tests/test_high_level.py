@@ -1245,7 +1245,7 @@ class TestCustomExtract:
         # cost = 2
         x = i64(10)
         # cost = 3 + 2 = 5
-        xs = Vec[i64](x)
+        xs = Vec(x)
         # cost = 100
         res = E()
         # cost = 1 + 5  = 6

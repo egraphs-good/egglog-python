@@ -106,7 +106,12 @@ b = constant("b", A)
 def my_very_long_function_name() -> A: ...
 
 
-long_line = my_very_long_function_name() + my_very_long_function_name() + my_very_long_function_name()
+long_line = (
+    my_very_long_function_name()
+    + my_very_long_function_name()
+    + my_very_long_function_name()
+    + my_very_long_function_name()
+)
 
 r = ruleset(name="r")
 
@@ -150,7 +155,7 @@ _A_2 + _A_3""",
     pytest.param(has_default(A()), "has_default()", id="has default"),
     pytest.param(
         rewrite(long_line).to(long_line),
-        "_A_1 = (my_very_long_function_name() + my_very_long_function_name()) + my_very_long_function_name()\nrewrite(_A_1).to(_A_1)",
+        "_A_1 = (\n    my_very_long_function_name()\n    + my_very_long_function_name()\n    + my_very_long_function_name()\n    + my_very_long_function_name()\n)\nrewrite(_A_1).to(_A_1)",
         id="wrap long line",
     ),
     pytest.param(A() - A(), "A() - A()", id="subtraction"),
