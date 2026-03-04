@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 13.0.0 (2026-03-03)
+
 - Support using facts as union actions, add conversions to multisets, and update multiset examlpe [#382](https://github.com/egraphs-good/egglog-python/pull/382)
 
 ## 12.0.0 (2025-11-16)
