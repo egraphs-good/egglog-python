@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 13.0.1 (2026-03-04)
+
 - Fix install by adding cloudpickle as required dependency [#405](https://github.com/egraphs-good/egglog-python/pull/405)
 - Add __classdictcell__ to ignored attributes (Python 3.14 support) [#403](https://github.com/egraphs-good/egglog-python/pull/403)
 ## 13.0.0 (2026-03-03)
