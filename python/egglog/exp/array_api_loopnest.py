@@ -31,7 +31,7 @@ def shape_api_ruleset(dims: TupleInt, axis: TupleInt):
         ShapeAPI(TupleInt.range(dims.length()).filter(lambda i: ~axis.contains(i)).map(lambda i: dims[i]))
     )
     yield rewrite(s.select(axis), subsume=True).to(
-        ShapeAPI(TupleInt.range(dims.length()).filter(lambda i: axis.contains(i)).map(lambda i: dims[i]))
+        ShapeAPI(TupleInt.range(dims.length()).filter(axis.contains).map(lambda i: dims[i]))
     )
     yield rewrite(s.to_tuple(), subsume=True).to(dims)
 

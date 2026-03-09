@@ -535,14 +535,14 @@ def _global_make_tuple(x):
 
 
 def test_eval_fn_globals():
-    assert EGraph().extract(PyObject(lambda x: _global_make_tuple(x))(PyObject.from_int(1))).value == (1,)
+    assert EGraph().extract(PyObject(_global_make_tuple)(PyObject.from_int(1))).value == (1,)
 
 
 def test_eval_fn_locals():
     def _locals_make_tuple(x):
         return (x,)
 
-    assert EGraph().extract(PyObject(lambda x: _locals_make_tuple(x))(PyObject.from_int(1))).value == (1,)
+    assert EGraph().extract(PyObject(_locals_make_tuple)(PyObject.from_int(1))).value == (1,)
 
 
 def test_lazy_types():
@@ -1459,9 +1459,9 @@ m = MathPrim()
         pytest.param(lambda: int(m), 1000, id="int"),
         pytest.param(lambda: float(m), 100.0, id="float"),
         pytest.param(lambda: complex(m), 1 + 0j, id="complex"),
-        pytest.param(lambda: m.__index__(), 20, id="index"),
+        pytest.param(m.__index__, 20, id="index"),
         pytest.param(lambda: len(m), 10, id="len"),
-        pytest.param(lambda: m.__length_hint__(), 5, id="length_hint"),
+        pytest.param(m.__length_hint__, 5, id="length_hint"),
         pytest.param(lambda: list(m), [1], id="iter"),
         pytest.param(lambda: list(reversed(m)), [10], id="reversed"),
         pytest.param(lambda: 1 in m, True, id="contains"),
