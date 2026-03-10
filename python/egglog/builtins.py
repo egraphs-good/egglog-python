@@ -656,7 +656,7 @@ def multiset_not_contains_swapped(x: T, xs: MultiSet[T]) -> Unit: ...
 def multiset_contains_swapped(x: T, xs: MultiSet[T]) -> Unit: ...
 
 
-@function(egg_fn="unstable-multiset-fold", builtin=True)
+@function(egg_fn="unstable-multiset-reduce", builtin=True)
 def multiset_fold(f: Callable[[T, T], T], initial: T, xs: MultiSet[T]) -> T: ...
 
 
@@ -875,7 +875,7 @@ class BigInt(BuiltinExpr, egg_sort="BigInt"):
     def bool_ge(self, other: BigIntLike) -> Bool: ...
 
 
-converter(i64, BigInt, lambda i: BigInt(i))
+converter(i64, BigInt, BigInt)
 
 BigIntLike: TypeAlias = BigInt | i64Like
 
@@ -1113,6 +1113,7 @@ class UnstableFn(BuiltinExpr, Generic[T, *TS], egg_sort="UnstableFn"):
 
 # Method Type is for builtins like __getitem__
 converter(MethodType, UnstableFn, lambda m: UnstableFn[*get_type_args()](m.__func__, m.__self__))  # type: ignore[operator, misc]
+# Ignore PLW0108.
 converter(RuntimeFunction, UnstableFn, lambda rf: UnstableFn[*get_type_args()](rf))  # type: ignore[operator, misc]
 # converter(RuntimeClass, UnstableFn, lambda rc: UnstableFn[*get_type_args()](rc))  # type: ignore[operator, misc]
 converter(partial, UnstableFn, lambda p: UnstableFn[*get_type_args()](p.func, *p.args))  # type: ignore[operator, misc]

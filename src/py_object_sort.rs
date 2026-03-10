@@ -9,7 +9,7 @@ use core::fmt;
 ///
 ///
 use egglog::{
-    BaseValue, Term, TermDag, Value, add_primitive,
+    BaseValue, TermDag, TermId, Value, add_primitive,
     ast::Literal,
     prelude::{BaseSort, EGraph},
     sort::{BaseValues, S},
@@ -195,7 +195,7 @@ impl BaseSort for PyObjectSort {
         base_values: &BaseValues,
         value: Value,
         termdag: &mut TermDag,
-    ) -> Term {
+    ) -> TermId {
         let ident = base_values.unwrap::<PyPickledValue>(value);
         let arg = termdag.lit(Literal::String(STANDARD.encode(&ident.0).into()));
         termdag.app("py-object".into(), vec![arg])

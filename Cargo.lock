@@ -316,8 +316,8 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "egglog"
-version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#e2bbf46cdade813bb2d03d3076d6d61e8a054e52"
+version = "2.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#66b277805587423e92a96b05fc4b2643f2cf4aec"
 dependencies = [
  "csv",
  "dyn-clone",
@@ -343,8 +343,8 @@ dependencies = [
 
 [[package]]
 name = "egglog-add-primitive"
-version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#e2bbf46cdade813bb2d03d3076d6d61e8a054e52"
+version = "2.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#66b277805587423e92a96b05fc4b2643f2cf4aec"
 dependencies = [
  "quote",
  "syn 2.0.107",
@@ -352,16 +352,16 @@ dependencies = [
 
 [[package]]
 name = "egglog-ast"
-version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#e2bbf46cdade813bb2d03d3076d6d61e8a054e52"
+version = "2.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#66b277805587423e92a96b05fc4b2643f2cf4aec"
 dependencies = [
  "ordered-float",
 ]
 
 [[package]]
 name = "egglog-bridge"
-version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#e2bbf46cdade813bb2d03d3076d6d61e8a054e52"
+version = "2.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#66b277805587423e92a96b05fc4b2643f2cf4aec"
 dependencies = [
  "anyhow",
  "dyn-clone",
@@ -384,17 +384,19 @@ dependencies = [
 
 [[package]]
 name = "egglog-concurrency"
-version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#e2bbf46cdade813bb2d03d3076d6d61e8a054e52"
+version = "2.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#66b277805587423e92a96b05fc4b2643f2cf4aec"
 dependencies = [
  "arc-swap",
+ "egglog-numeric-id",
  "rayon",
+ "smallvec",
 ]
 
 [[package]]
 name = "egglog-core-relations"
-version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#e2bbf46cdade813bb2d03d3076d6d61e8a054e52"
+version = "2.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#66b277805587423e92a96b05fc4b2643f2cf4aec"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -424,7 +426,7 @@ dependencies = [
 [[package]]
 name = "egglog-experimental"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-experimental?branch=main#908c47d7046c840c8ff07caa0f7ff29a2e7adc82"
+source = "git+https://github.com/egraphs-good/egglog-experimental?branch=main#2b9647dcad48a678835e369ad855d00097e5dd19"
 dependencies = [
  "egglog",
  "egglog-ast",
@@ -436,16 +438,16 @@ dependencies = [
 
 [[package]]
 name = "egglog-numeric-id"
-version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#e2bbf46cdade813bb2d03d3076d6d61e8a054e52"
+version = "2.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#66b277805587423e92a96b05fc4b2643f2cf4aec"
 dependencies = [
  "rayon",
 ]
 
 [[package]]
 name = "egglog-reports"
-version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#e2bbf46cdade813bb2d03d3076d6d61e8a054e52"
+version = "2.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#66b277805587423e92a96b05fc4b2643f2cf4aec"
 dependencies = [
  "clap",
  "hashbrown 0.16.0",
@@ -458,8 +460,8 @@ dependencies = [
 
 [[package]]
 name = "egglog-union-find"
-version = "1.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#e2bbf46cdade813bb2d03d3076d6d61e8a054e52"
+version = "2.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=multiset-changes#66b277805587423e92a96b05fc4b2643f2cf4aec"
 dependencies = [
  "crossbeam",
  "egglog-concurrency",

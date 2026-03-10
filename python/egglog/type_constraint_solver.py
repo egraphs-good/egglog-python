@@ -47,7 +47,7 @@ class TypeConstraintSolver:
         try:
             cls_typevars = decls.get_class_decl(ref.ident).type_vars
         except KeyError:
-            cls_typevars = []
+            cls_typevars = ()
         for typevar, arg in zip(cls_typevars, ref.args, strict=True):
             self.infer_typevars(typevar, arg)
 

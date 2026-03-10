@@ -868,6 +868,7 @@ class EGraph:
     # For storing the global "current" egraph
     _token_stack: list[EGraph] = field(default_factory=list, repr=False)
 
+    # TODO: Add EGraph(...commands) constructor
     def __post_init__(self, seminaive: bool, save_egglog_string: bool) -> None:
         egraph = bindings.EGraph(seminaive=seminaive, record=save_egglog_string)
         self._state = EGraphState(egraph)
@@ -1037,7 +1038,7 @@ class EGraph:
             res = self._from_termdag(termdag, term, tp)
         return (res, cost) if include_cost else res
 
-    def _from_termdag(self, termdag: bindings.TermDag, term: bindings._Term, tp: JustTypeRef) -> Any:
+    def _from_termdag(self, termdag: bindings.TermDag, term: int, tp: JustTypeRef) -> Any:
         (new_typed_expr,) = self._state.exprs_from_egg(termdag, [term], tp)
         return RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr)
 
@@ -1179,13 +1180,14 @@ class EGraph:
             serialized = self._serialize(**kwargs)
             VisualizerWidget(egraphs=[serialized.to_json()]).display_or_open()
 
-    def saturate(
+    def saturate(  # noqa: C901
         self,
         schedule: Schedule | None = None,
         *,
         expr: Expr | None = None,
         max: int = 1000,
         visualize: bool = True,
+        print_frozen: bool = False,
         **kwargs: Unpack[GraphvizKwargs],
     ) -> None:
         """
@@ -1210,9 +1212,14 @@ class EGraph:
                 i += 1
                 if visualize:
                     egraphs.append(to_json())
+                if print_frozen:
+                    print(f"After iteration {i}:")
+                    print(self.freeze())
         except:
             if visualize:
                 egraphs.append(to_json())
+            if print_frozen:
+                print(self.freeze())
             raise
         finally:
             if visualize:

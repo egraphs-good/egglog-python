@@ -34,6 +34,9 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::conversions::Function>()?;
     m.add_class::<crate::extract::Extractor>()?;
     m.add_class::<crate::extract::CostModel>()?;
+    m.add_class::<crate::freeze::FrozenRow>()?;
+    m.add_class::<crate::freeze::FrozenFunction>()?;
+    m.add_class::<crate::freeze::FrozenEGraph>()?;
     crate::conversions::add_structs_to_module(m)?;
     crate::conversions::add_enums_to_module(m)?;
 

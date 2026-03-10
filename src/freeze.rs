@@ -31,12 +31,13 @@ pub struct FrozenEGraph {
 }
 
 impl FrozenEGraph {
-    /// Convert this frozen e-graph into a list of egglog commands that can reconstruct it, giv
+    /// Convert this frozen e-graph into a list of egglog commands that can reconstruct it
     pub fn from_egraph(egraph: &EGraph) -> FrozenEGraph {
         let mut functions = HashMap::new();
-        for (fname, func) in &egraph.functions {
+        for fname in egraph.get_function_names() {
+            let func = egraph.get_function(&fname).unwrap();
             let mut rows = Vec::new();
-            egraph.backend.for_each(func.backend_id, |row| {
+            egraph.function_for_each(func, |row| {
                 let frozen_row = FrozenRow {
                     subsumed: row.subsumed,
                     inputs: row.vals[..row.vals.len() - 1]

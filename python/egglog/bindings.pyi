@@ -31,6 +31,9 @@ __all__ = [
     "Fact",
     "Fail",
     "Float",
+    "FrozenEGraph",
+    "FrozenFunction",
+    "FrozenRow",
     "Function",
     "FunctionCommand",
     "FusedIntersect",
@@ -55,6 +58,9 @@ __all__ = [
     "PrintFunctionSize",
     "PrintOverallStatistics",
     "PrintSize",
+    "Prove",
+    "ProveExists",
+    "ProveExistsOutput",
     "Push",
     "Relation",
     "Repeat",
@@ -269,6 +275,7 @@ class TermApp:
     def __new__(cls, name: str, args: list[int]) -> TermApp: ...
 
 _Term: TypeAlias = TermLit | TermVar | TermApp
+_TermId: TypeAlias = int
 
 ##
 # Facts
@@ -531,15 +538,20 @@ class PrintAllFunctionsSize:
 @final
 class ExtractVariants:
     termdag: TermDag
-    terms: list[_Term]
-    def __new__(cls, termdag: TermDag, terms: list[_Term]) -> ExtractVariants: ...
+    terms: list[_TermId]
+    def __new__(cls, termdag: TermDag, terms: list[_TermId]) -> ExtractVariants: ...
 
 @final
 class ExtractBest:
     termdag: TermDag
     cost: int
-    term: _Term
-    def __new__(cls, termdag: TermDag, cost: int, term: _Term) -> ExtractBest: ...
+    term: _TermId
+    def __new__(cls, termdag: TermDag, cost: int, term: _TermId) -> ExtractBest: ...
+
+@final
+class ProveExistsOutput:
+    proof: str
+    def __new__(cls, proof: str) -> ProveExistsOutput: ...
 
 @final
 class OverallStatistics:
@@ -555,10 +567,10 @@ class RunScheduleOutput:
 class PrintFunctionOutput:
     function: Function
     termdag: TermDag
-    terms: list[tuple[_Term, _Term]]
+    terms: list[tuple[_TermId, _TermId]]
     mode: _PrintFunctionMode
     def __new__(
-        cls, function: Function, termdag: TermDag, terms: list[tuple[_Term, _Term]], mode: _PrintFunctionMode
+        cls, function: Function, termdag: TermDag, terms: list[tuple[_TermId, _TermId]], mode: _PrintFunctionMode
     ) -> PrintFunctionOutput: ...
 
 @final
@@ -571,6 +583,7 @@ _CommandOutput: TypeAlias = (
     | PrintAllFunctionsSize
     | ExtractVariants
     | ExtractBest
+    | ProveExistsOutput
     | OverallStatistics
     | RunScheduleOutput
     | PrintFunctionOutput
@@ -719,6 +732,18 @@ class Check:
     def __new__(cls, span: _Span, facts: list[_Fact]) -> Check: ...
 
 @final
+class Prove:
+    span: _Span
+    facts: list[_Fact]
+    def __new__(cls, span: _Span, facts: list[_Fact]) -> Prove: ...
+
+@final
+class ProveExists:
+    span: _Span
+    expr: str
+    def __new__(cls, span: _Span, expr: str) -> ProveExists: ...
+
+@final
 class PrintFunction:
     span: _Span
     name: str
@@ -823,6 +848,8 @@ _Command: TypeAlias = (
     | RunSchedule
     | Extract
     | Check
+    | Prove
+    | ProveExists
     | PrintFunction
     | PrintSize
     | Output
@@ -845,14 +872,14 @@ _Command: TypeAlias = (
 @final
 class TermDag:
     def size(self) -> int: ...
-    def lookup(self, node: _Term) -> int: ...
-    def get(self, id: int) -> _Term: ...
-    def app(self, sym: str, children: list[int]) -> _Term: ...
-    def lit(self, lit: _Literal) -> _Term: ...
-    def var(self, sym: str) -> _Term: ...
-    def expr_to_term(self, expr: _Expr) -> _Term: ...
-    def term_to_expr(self, term: _Term, span: _Span) -> _Expr: ...
-    def to_string(self, term: _Term) -> str: ...
+    def lookup(self, node: _Term) -> _TermId: ...
+    def get(self, id: _TermId) -> _Term: ...
+    def app(self, sym: str, children: list[_TermId]) -> _TermId: ...
+    def lit(self, lit: _Literal) -> _TermId: ...
+    def var(self, sym: str) -> _TermId: ...
+    def expr_to_term(self, expr: _Expr) -> _TermId: ...
+    def term_to_expr(self, term: _TermId, span: _Span) -> _Expr: ...
+    def to_string(self, term: _TermId) -> str: ...
 
 ##
 # Extraction
@@ -882,10 +909,10 @@ class Extractor(Generic[_COST]):
     def __new__(
         cls, rootsorts: list[str] | None, egraph: EGraph, cost_model: CostModel[_COST, Any]
     ) -> Extractor[_COST]: ...
-    def extract_best(self, egraph: EGraph, termdag: TermDag, value: Value, sort: str) -> tuple[_COST, _Term]: ...
+    def extract_best(self, egraph: EGraph, termdag: TermDag, value: Value, sort: str) -> tuple[_COST, _TermId]: ...
     def extract_variants(
         self, egraph: EGraph, termdag: TermDag, value: Value, nvariants: int, sort: str
-    ) -> list[tuple[_COST, _Term]]: ...
+    ) -> list[tuple[_COST, _TermId]]: ...
 
 ##
 # Frozen

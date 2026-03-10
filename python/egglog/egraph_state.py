@@ -631,14 +631,12 @@ class EGraphState:
             case _:
                 assert_never(expr)
 
-    def exprs_from_egg(
-        self, termdag: bindings.TermDag, terms: list[bindings._Term], tp: JustTypeRef
-    ) -> Iterable[TypedExprDecl]:
+    def exprs_from_egg(self, termdag: bindings.TermDag, terms: list[int], tp: JustTypeRef) -> Iterable[TypedExprDecl]:
         """
         Create a function that can convert from an egg term to a typed expr.
         """
         state = FromEggState(self, termdag)
-        return [state.from_expr(tp, term) for term in terms]
+        return [state.resolve_term(term_id, tp) for term_id in terms]
 
     def _get_possible_types(self, cls_ident: Ident) -> frozenset[JustTypeRef]:
         """

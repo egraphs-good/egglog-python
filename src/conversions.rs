@@ -138,13 +138,16 @@ convert_enums!(
                 variants: variants.iter().map(|v| v.into()).collect()
             };
         Sort(span: Span, name: String, presort_and_args: Option<(String, Vec<Expr>)>)
-            s -> egglog::ast::Command::Sort(
-                s.span.clone().into(),
-                (&s.name).into(),
-                s.presort_and_args.as_ref().map(|(p, a)| (p.into(), a.iter().map(|e| e.into()).collect()))
-            ),
-            egglog::ast::Command::Sort(span, n, presort_and_args) => Sort {
-                name: n.to_string(),
+            s -> egglog::ast::Command::Sort {
+                span: s.span.clone().into(),
+                name: (&s.name).into(),
+                presort_and_args: s.presort_and_args.as_ref().map(|(p, a)| (p.into(), a.iter().map(|e| e.into()).collect())),
+                uf: None,
+                proof_func: None,
+                unionable: true
+            },
+            egglog::ast::Command::Sort { span, name, presort_and_args, .. } => Sort {
+                name: name.to_string(),
                 presort_and_args: presort_and_args.as_ref().map(|(p, a)| (p.to_string(), a.iter().map(|e| e.into()).collect())),
                 span: span.into()
             };
@@ -153,9 +156,11 @@ convert_enums!(
                 span: f.span.clone().into(),
                 name: (&f.name).into(),
                 schema: (&f.schema).into(),
-                merge: f.merge.as_ref().map(|e| e.into())
+                merge: f.merge.as_ref().map(|e| e.into()),
+                hidden: false,
+                let_binding: false
             },
-            egglog::ast::Command::Function {span, name, schema, merge} => FunctionCommand {
+            egglog::ast::Command::Function {span, name, schema, merge, .. } => FunctionCommand {
                 span: span.into(),
                 name: name.to_string(),
                 schema: schema.into(),
@@ -210,6 +215,18 @@ convert_enums!(
         Check(span: Span, facts: Vec<Fact_>)
             c -> egglog::ast::Command::Check(c.span.clone().into(), c.facts.iter().map(|f| f.into()).collect()),
             egglog::ast::Command::Check(span, facts) => Check { span: span.into(), facts: facts.iter().map(|f| f.into()).collect() };
+        ProveCommand[name="Prove"](span: Span, facts: Vec<Fact_>)
+            p -> egglog::ast::Command::Prove(p.span.clone().into(), p.facts.iter().map(|f| f.into()).collect()),
+            egglog::ast::Command::Prove(span, facts) => ProveCommand {
+                span: span.into(),
+                facts: facts.iter().map(|f| f.into()).collect()
+            };
+        ProveExistsCommand[name="ProveExists"](span: Span, expr: String)
+            p -> egglog::ast::Command::ProveExists(p.span.clone().into(), (&p.expr).into()),
+            egglog::ast::Command::ProveExists(span, expr) => ProveExistsCommand {
+                span: span.into(),
+                expr: expr.to_string()
+            };
         PrintFunction(span: Span, name: String, length: Option<usize>, filename: Option<String>, mode: PrintFunctionMode)
             p -> egglog::ast::Command::PrintFunction(p.span.clone().into(), (&p.name).into(), p.length, p.filename.clone(), p.mode.clone().into()),
             egglog::ast::Command::PrintFunction(span, n, l, f, m) => PrintFunction {
@@ -262,9 +279,12 @@ convert_enums!(
                 name: (&c.name).into(),
                 schema: (&c.schema).into(),
                 cost: c.cost,
-                unextractable: c.unextractable
+                unextractable: c.unextractable,
+                hidden: false,
+                let_binding: false,
+                term_constructor: None
             },
-            egglog::ast::Command::Constructor {span, name, schema, cost, unextractable} => Constructor {
+            egglog::ast::Command::Constructor {span, name, schema, cost, unextractable, .. } => Constructor {
                 span: span.into(),
                 name: name.to_string(),
                 schema: schema.into(),
@@ -364,25 +384,30 @@ convert_enums!(
         PrintAllFunctionsSize(sizes: Vec<(String, usize)>)
             b -> egglog::CommandOutput::PrintAllFunctionsSize(b.sizes.clone()),
             egglog::CommandOutput::PrintAllFunctionsSize(sizes) => PrintAllFunctionsSize {sizes: sizes.clone()};
-        ExtractBest(termdag: TermDag, cost: DefaultCost, term: Term)
+        ExtractBest(termdag: TermDag, cost: DefaultCost, term: usize)
             b -> egglog::CommandOutput::ExtractBest(
                 b.termdag.0.clone(),
                 b.cost,
-                (&b.term).into()
+                b.term
             ),
             egglog::CommandOutput::ExtractBest(termdag, cost, term) => ExtractBest {
                 termdag: TermDag(termdag.clone()),
                 cost: *cost,
-                term: term.into()
+                term: *term
             };
-        ExtractVariants(termdag: TermDag, terms: Vec<Term>)
+        ExtractVariants(termdag: TermDag, terms: Vec<usize>)
             v -> egglog::CommandOutput::ExtractVariants(
                 v.termdag.0.clone(),
-                v.terms.iter().map(|v| v.into()).collect()
+                v.terms.clone()
             ),
             egglog::CommandOutput::ExtractVariants(termdag, terms) => ExtractVariants {
                 termdag: TermDag(termdag.clone()),
-                terms: terms.iter().map(|v| v.into()).collect()
+                terms: terms.clone()
+            };
+        ProveExistsOutput(proof: String)
+            _p -> panic!("Converting Python proof output back into egglog is unsupported"),
+            egglog::CommandOutput::ProveExists { proof_store, proof_id } => ProveExistsOutput {
+                proof: proof_store.proof_to_string(*proof_id)
             };
         OverallStatistics(report: RunReport)
             b -> egglog::CommandOutput::OverallStatistics(b.report.clone().into()),
@@ -390,17 +415,17 @@ convert_enums!(
         RunScheduleOutput(report: RunReport)
             b -> egglog::CommandOutput::RunSchedule(b.report.clone().into()),
             egglog::CommandOutput::RunSchedule(report) => RunScheduleOutput {report: report.into()};
-        PrintFunctionOutput(function: Function, termdag: TermDag, terms: Vec<(Term, Term)>, mode: PrintFunctionMode)
+        PrintFunctionOutput(function: Function, termdag: TermDag, terms: Vec<(usize, usize)>, mode: PrintFunctionMode)
             v -> egglog::CommandOutput::PrintFunction(
                 v.function.0.clone(),
                 v.termdag.0.clone(),
-                v.terms.iter().map(|(l, r)| (l.into(), r.into())).collect(),
+                v.terms.clone(),
                 v.mode.clone().into()
             ),
             egglog::CommandOutput::PrintFunction(function, termdag, terms, mode) => PrintFunctionOutput {
                 function: Function(function.clone()),
                 termdag:  TermDag(termdag.clone()),
-                terms: terms.iter().map(|(l, r)| (l.into(), r.into())).collect(),
+                terms: terms.clone(),
                 mode: mode.into()
             };
         UserDefinedOutput(output: UserDefinedCommandOutput)

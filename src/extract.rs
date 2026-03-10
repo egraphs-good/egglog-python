@@ -2,7 +2,8 @@ use std::cmp::Ordering;
 
 use pyo3::{exceptions::PyValueError, prelude::*};
 
-use crate::{conversions::Term, egraph::EGraph, egraph::Value, termdag::TermDag};
+use crate::{egraph::EGraph, egraph::Value, termdag::TermDag};
+use egglog::TermId;
 
 #[derive(Debug)]
 // We have to store the result, since the cost model does not return errors
@@ -216,7 +217,7 @@ impl Extractor {
         termdag: &mut TermDag,
         value: Value,
         sort: String,
-    ) -> PyResult<(Py<PyAny>, Term)> {
+    ) -> PyResult<(Py<PyAny>, TermId)> {
         let sort = egraph
             .egraph
             .get_sort_by_name(&sort)
@@ -225,7 +226,7 @@ impl Extractor {
             .0
             .extract_best_with_sort(&egraph.egraph, &mut termdag.0, value.0, sort.clone())
             .ok_or(PyValueError::new_err("Unextractable root".to_string()))?;
-        Ok((cost.0.clone_ref(py), term.into()))
+        Ok((cost.0.clone_ref(py), term))
     }
 
     /// Extract variants of an e-class.
@@ -240,7 +241,7 @@ impl Extractor {
         value: Value,
         nvariants: usize,
         sort: String,
-    ) -> PyResult<Vec<(Py<PyAny>, Term)>> {
+    ) -> PyResult<Vec<(Py<PyAny>, TermId)>> {
         let sort = egraph
             .egraph
             .get_sort_by_name(&sort)
@@ -254,7 +255,7 @@ impl Extractor {
         );
         Ok(variants
             .into_iter()
-            .map(|(cost, term)| (cost.0.clone_ref(py), term.into()))
+            .map(|(cost, term)| (cost.0.clone_ref(py), term))
             .collect())
     }
 }

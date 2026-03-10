@@ -63,8 +63,8 @@ class Boolean(Expr, ruleset=array_api_ruleset):
             not _CURRENT_EGRAPH
             and (
                 args := get_callable_args(self, Int.__eq__)
-                or get_callable_args(self, Boolean.__eq__)
-                or get_callable_args(self, Value.__eq__)
+                or get_callable_args(self, Boolean.__eq__)  # type: ignore[arg-type]
+                or get_callable_args(self, Value.__eq__)  # type: ignore[arg-type]
             )
             is not None
         ):

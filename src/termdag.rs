@@ -36,22 +36,20 @@ impl TermDag {
     /// and insert into the DAG if it is not already present.
     ///
     /// Panics if any of the children are not already in the DAG.
-    pub fn app(&mut self, sym: String, children: Vec<Term>) -> Term {
-        self.0
-            .app(sym, children.into_iter().map(|c| c.into()).collect())
-            .into()
+    pub fn app(&mut self, sym: String, children: Vec<TermId>) -> TermId {
+        self.0.app(sym, children)
     }
 
-    /// Make and return a [`Term::Lit`] with the given literal, and insert into
-    /// the DAG if it is not already present.
-    pub fn lit(&mut self, lit: Literal) -> Term {
-        self.0.lit(lit.into()).into()
+    /// Make a [`Term::Lit`] with the given literal and return its id,
+    /// inserting it into the DAG if it is not already present.
+    pub fn lit(&mut self, lit: Literal) -> TermId {
+        self.0.lit(lit.into())
     }
 
-    /// Make and return a [`Term::Var`] with the given symbol, and insert into
+    /// Make and return a [`Term::Var`] id with the given symbol, and insert into
     /// the DAG if it is not already present.
-    pub fn var(&mut self, sym: String) -> Term {
-        self.0.var(sym).into()
+    pub fn var(&mut self, sym: String) -> TermId {
+        self.0.var(sym)
     }
 
     /// Recursively converts the given expression to a term.
@@ -59,21 +57,21 @@ impl TermDag {
     /// This involves inserting every subexpression into this DAG. Because
     /// TermDags are hashconsed, the resulting term is guaranteed to maximally
     /// share subterms.
-    pub fn expr_to_term(&mut self, expr: Expr) -> Term {
-        self.0.expr_to_term(&expr.into()).into()
+    pub fn expr_to_term(&mut self, expr: Expr) -> TermId {
+        self.0.expr_to_term(&expr.into())
     }
 
     /// Recursively converts the given term to an expression.
     ///
     /// Panics if the term contains subterms that are not in the DAG.
-    pub fn term_to_expr(&self, term: Term, span: Span) -> Expr {
-        self.0.term_to_expr(&term.into(), span.into()).into()
+    pub fn term_to_expr(&self, term: TermId, span: Span) -> Expr {
+        self.0.term_to_expr(&term, span.into()).into()
     }
 
     /// Converts the given term to a string.
     ///
     /// Panics if the term or any of its subterms are not in the DAG.
-    pub fn to_string(&self, term: Term) -> String {
-        self.0.to_string(&term.into())
+    pub fn to_string(&self, term: TermId) -> String {
+        self.0.to_string(term)
     }
 }
