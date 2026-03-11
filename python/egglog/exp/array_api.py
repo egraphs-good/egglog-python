@@ -308,7 +308,7 @@ def _int(i: i64, j: i64, r: Boolean, o: Int, b: Int, ot: Callable[[], Int], bt: 
     yield rule(eq(Int(i)).to(Int(j)), ne(i).to(j)).then(panic("Different ints cannot be equal"))
 
 
-converter(i64, Int, lambda x: Int(x))
+converter(i64, Int, Int)
 
 IntLike: TypeAlias = Int | i64Like
 
@@ -333,7 +333,7 @@ class OptionalInt(Expr, ruleset=array_api_ruleset):
 OptionalIntLike: TypeAlias = OptionalInt | IntLike | None
 
 converter(type(None), OptionalInt, lambda _: OptionalInt.none)
-converter(Int, OptionalInt, OptionalInt.some)
+converter(Int, OptionalInt, lambda x: OptionalInt.some(x))
 
 
 # @array_api_ruleset.register
@@ -413,11 +413,12 @@ class Float(Expr, ruleset=array_api_ruleset):
     def __ge__(self, other: FloatLike) -> Boolean: ...
 
 
-converter(float, Float, lambda x: Float(x))
+FloatLike: TypeAlias = Float | float | IntLike
+
+
+converter(float, Float, Float)
 converter(Int, Float, lambda x: Float.from_int(x))
 converter(BigRat, Float, lambda x: Float.rational(x))
-
-FloatLike: TypeAlias = Float | float | IntLike
 
 
 @array_api_ruleset.register
@@ -524,6 +525,14 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         >>> int(TupleInt(3, lambda i: i * 10)[2])
         20
         """
+
+    def __eq__(self, other: TupleIntLike) -> Boolean:  # type: ignore[override]
+        other = cast("TupleInt", other)
+        return Boolean.if_(
+            self.length() == other.length(),
+            lambda: TupleInt.range(self.length()).foldl_boolean(lambda acc, i: acc & (self[i] == other[i]), TRUE),
+            lambda: FALSE,
+        )
 
     @method(preserve=True)
     def __len__(self) -> int:
@@ -960,7 +969,7 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
         )
 
 
-converter(Vec[TupleInt], TupleTupleInt, lambda x: TupleTupleInt(x))
+converter(Vec[TupleInt], TupleTupleInt, TupleTupleInt)
 
 TupleTupleIntLike: TypeAlias = TupleTupleInt | VecLike[TupleInt, TupleIntLike]
 
@@ -1175,9 +1184,9 @@ class Value(Expr, ruleset=array_api_ruleset):
 ValueLike: TypeAlias = Value | IntLike | FloatLike | BooleanLike
 
 
-converter(Int, Value, Value.from_int)
-converter(Float, Value, Value.from_float)
-converter(Boolean, Value, Value.from_bool)
+converter(Int, Value, lambda x: Value.from_int(x))
+converter(Float, Value, lambda x: Value.from_float(x))
+converter(Boolean, Value, lambda x: Value.from_bool(x))
 converter(Value, Int, lambda x: x.to_int, 10)
 
 
@@ -1377,7 +1386,7 @@ class TupleValue(Expr, ruleset=array_api_ruleset):
     def if_(cls, b: BooleanLike, i: Callable[[], TupleValue], j: Callable[[], TupleValue]) -> TupleValue: ...
 
 
-converter(Vec[Value], TupleValue, lambda x: TupleValue(x))
+converter(Vec[Value], TupleValue, TupleValue)
 converter(TupleInt, TupleValue, lambda x: TupleValue.from_tuple_int(x))
 
 TupleValueLike: TypeAlias = TupleValue | VecLike[Value, ValueLike] | TupleIntLike
@@ -1447,8 +1456,8 @@ class MultiAxisIndexKeyItem(Expr, ruleset=array_api_ruleset):
 
 converter(type(...), MultiAxisIndexKeyItem, lambda _: MultiAxisIndexKeyItem.ELLIPSIS)
 converter(type(None), MultiAxisIndexKeyItem, lambda _: MultiAxisIndexKeyItem.NONE)
-converter(Int, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.int)
-converter(Slice, MultiAxisIndexKeyItem, MultiAxisIndexKeyItem.slice)
+converter(Int, MultiAxisIndexKeyItem, lambda i: MultiAxisIndexKeyItem.int(i))
+converter(Slice, MultiAxisIndexKeyItem, lambda s: MultiAxisIndexKeyItem.slice(s))
 
 MultiAxisIndexKeyItemLike: TypeAlias = MultiAxisIndexKeyItem | EllipsisType | None | IntLike | SliceLike
 
@@ -1606,7 +1615,7 @@ PyTupleValuesRecursive: TypeAlias = Value | tuple["PyTupleValuesRecursive", ...]
 RecursiveValueLike: TypeAlias = RecursiveValue | VecLike[RecursiveValue, "RecursiveValueLike"] | ValueLike
 
 converter(Vec[RecursiveValue], RecursiveValue, lambda x: RecursiveValue.vec(x))
-converter(Value, RecursiveValue, lambda x: RecursiveValue(x))
+converter(Value, RecursiveValue, RecursiveValue)
 
 
 # TODO: Fix bug in bindings so that we can write this as lambda instead
@@ -1938,7 +1947,7 @@ VecValuesRecursive: TypeAlias = "Value | Vec[VecValuesRecursive]"
 NDArrayLike: TypeAlias = NDArray | RecursiveValueLike
 
 converter(NDArray, IndexKey, lambda v: IndexKey.ndarray(v))
-converter(RecursiveValue, NDArray, lambda v: NDArray(v))
+converter(RecursiveValue, NDArray, NDArray)
 # Need this if we want to use ints in slices of arrays coming from 1d arrays, but make it more expensive
 # to prefer upcasting in the other direction when we can, which is safer at runtime
 converter(NDArray, Value, lambda n: n.index(()), 100)
@@ -2047,7 +2056,7 @@ class TupleNDArray(Expr, ruleset=array_api_ruleset):
         return self[self.length() - 1]
 
 
-converter(Vec[NDArray], TupleNDArray, lambda x: TupleNDArray(x))
+converter(Vec[NDArray], TupleNDArray, TupleNDArray)
 
 TupleNDArrayLike: TypeAlias = TupleNDArray | VecLike[NDArray, NDArrayLike]
 
@@ -2171,24 +2180,31 @@ def _sum(x: NDArray, y: NDArray, v: Value, dtype: DType):
     ]
 
 
-@function
-def reshape(x: NDArray, shape: TupleIntLike, copy: OptionalBool = OptionalBool.none) -> NDArray: ...
+@function(ruleset=array_api_ruleset)
+def reshape(x: NDArray, shape: TupleIntLike, copy: OptionalBool = OptionalBool.none) -> NDArray:
+    shape = cast("TupleInt", shape)
+    resolved_shape = normalize_reshape_shape(x.shape, shape)
+    return NDArray.if_(
+        # If we are reshaping to the same shape, just return the original array to avoid unnecessary indexing
+        resolved_shape == x.shape,
+        lambda: x,
+        lambda: NDArray.fn(
+            resolved_shape,
+            x.dtype,
+            lambda idx: x.index(unravel_index(ravel_index(idx, resolved_shape), x.shape)),
+        ),
+    )
 
 
-# @function
-# def reshape_transform_index(original_shape: TupleInt, shape: TupleInt, index: TupleInt) -> TupleInt:
-#     """
-#     Transforms an indexing operation on a reshaped array to an indexing operation on the original array.
-#     """
-#     ...
-
-
-# @function
-# def reshape_transform_shape(original_shape: TupleInt, shape: TupleInt) -> TupleInt:
-#     """
-#     Transforms the shape of an array to one that is reshaped, by replacing -1 with the correct value.
-#     """
-#     ...
+@function(ruleset=array_api_ruleset, unextractable=True)
+def normalize_reshape_shape(original_shape: TupleIntLike, shape: TupleIntLike) -> TupleInt:
+    """
+    Replace a single inferred `-1` dimension with the corresponding concrete dimension.
+    """
+    original_shape = cast("TupleInt", original_shape)
+    shape = cast("TupleInt", shape)
+    inferred_dim = original_shape.product() // shape.filter(lambda d: ~(d == Int(-1))).product()
+    return shape.map(lambda d: Int.if_(d == Int(-1), lambda: inferred_dim, lambda: d))
 
 
 # @array_api_ruleset.register
@@ -2591,29 +2607,6 @@ def _interval_analaysis(
 ##
 
 
-def _demand_shape(compound: NDArray, inner: NDArray) -> Command:
-    __a = var("__a", NDArray)
-    return rule(eq(__a).to(compound)).then(inner.shape, inner.shape.length())
-
-
-@array_api_ruleset.register
-def _reshape_math(x: NDArray, shape: TupleInt, copy: OptionalBool):
-    res = reshape(x, shape, copy)
-
-    yield rewrite(res.shape).to(shape)
-    yield _demand_shape(res, x)
-    # Demand shape length and index
-    yield rule(res).then(shape.length(), shape[0])
-
-    # Reshaping a vec to a vec is the same as the vec
-    yield rewrite(res).to(
-        x,
-        eq(x.shape.length()).to(Int(1)),
-        eq(shape.length()).to(Int(1)),
-        eq(shape[0]).to(Int(-1)),
-    )
-
-
 @array_api_ruleset.register
 def _indexing_pushdown(x: NDArray, shape: TupleInt, copy: OptionalBool, i: Int):
     # rewrite full getitem to indexec
@@ -2774,21 +2767,7 @@ def unravel_index(flat_index: IntLike, shape: TupleIntLike) -> TupleInt:
     )
 
 
-@ruleset
-def array_api_functional_ruleset(
-    shape: TupleInt,
-    ob: OptionalBool,
-    ndarray: NDArray,
-):
-    # TODO: Support -1 in shape like numpy does
-    yield rewrite(reshape(ndarray, shape, ob), subsume=False).to(
-        NDArray.fn(
-            shape, ndarray.dtype, lambda idx: ndarray.index(unravel_index(ravel_index(idx, shape), ndarray.shape))
-        )
-    )
-
-
-array_api_combined_ruleset = array_api_ruleset | array_api_functional_ruleset
+array_api_combined_ruleset = array_api_ruleset
 array_api_schedule = (array_api_combined_ruleset + run()).saturate()
 
 _CURRENT_EGRAPH: None | EGraph = None

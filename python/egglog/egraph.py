@@ -4,7 +4,6 @@ import contextlib
 import inspect
 import pathlib
 import tempfile
-from collections import defaultdict
 from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field
@@ -1215,6 +1214,7 @@ class EGraph:
                 if print_frozen:
                     print(f"After iteration {i}:")
                     print(self.freeze())
+                    print("\n")
         except:
             if visualize:
                 egraphs.append(to_json())
@@ -1343,68 +1343,144 @@ class EGraph:
         resolved, _ = resolve_callable(fn)
         return resolved in self._state.cost_callables
 
-    def freeze(self) -> FrozenEGraph:
+    def freeze(self) -> FrozenEGraph:  # noqa: C901,PLR0912
         """
-        Freezes the egraph and returns a FrozenEGraph instance, that can be used for debugging.
+        Freeze the current e-graph state for debugging.
+
+        The returned :class:`FrozenEGraph` contains a snapshot of the current
+        declarations and can be pretty-printed back into replayable high-level
+        actions with ``str(...)``.
+
+        This is useful when debugging unexpected unions, sets, subsumptions, or
+        costs after a run:
+
+        >>> from egglog import *
+        >>> class Math(Expr):
+        ...     def __init__(self, value: i64Like) -> None: ...
+        ...
+        >>> egraph = EGraph()
+        >>> egraph.register(Math(1))
+        >>> str(egraph.freeze())
+        'EGraph(Math(1)).freeze()'
         """
         frozen = self._egraph.freeze()
-        frozen_py = FrozenEGraph({}, defaultdict(list))
-        for name, fn in frozen.functions.items():
-            for row in fn.rows:
-                tp = self._state.egg_sort_to_type_ref[fn.output_sort]
-                res = RuntimeExpr.__from_values__(
-                    self.__egg_decls__,
-                    TypedExprDecl(
-                        tp=tp,
-                        expr=self._state.value_to_expr(tp=tp, value=row.output),
-                    ),
-                )
-                if fn.is_let_binding:
-                    frozen_py.global_bindings[name] = cast("BaseExpr", res)
-                    continue
-                call = self._values_to_expr(row.inputs, name)
-                frozen_py.outputs[cast("BaseExpr", res)].append(FrozenRow(cast("BaseExpr", call), row.subsumed))
-        return frozen_py
+        let_bindings: dict[str, TypedExprDecl] = {}
+        e_classes: dict[bindings.Value, tuple[JustTypeRef, list[CallDecl]]] = {}
+        sets: dict[CallDecl, TypedExprDecl] = {}
+        costs: dict[CallDecl, tuple[JustTypeRef, int]] = {}
+        expr_actions: list[TypedExprDecl] = []
+        subsumed: list[tuple[JustTypeRef, CallDecl]] = []
 
-    def _values_to_expr(self, args: list[bindings.Value], name: str) -> RuntimeExpr:
+        def append_e_class_row(output: bindings.Value, tp: JustTypeRef, call: CallDecl, is_subsumed: bool) -> None:
+            if output not in e_classes:
+                e_classes[output] = (tp, [])
+            e_class_tp, exprs = e_classes[output]
+            assert e_class_tp == tp
+            exprs.append(call)
+            if is_subsumed:
+                subsumed.append((tp, call))
+
+        for name, fn in frozen.functions.items():
+            if fn.is_let_binding:
+                if name.startswith("$__expr_"):
+                    continue
+                for row in fn.rows:
+                    output_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
+                    let_bindings[name] = TypedExprDecl(output_tp, self._state.value_to_expr(output_tp, row.output))
+                continue
+            is_cost = False
+            if name in self._state.egg_fn_to_callable_refs:
+                (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
+            else:
+                (callable_ref,) = (
+                    ref for ref in self._state.cost_callables if name == self._state.cost_table_name(ref)
+                )
+                is_cost = True
+            callable_decl = self.__egg_decls__.get_callable_decl(callable_ref)
+            signature = callable_decl.signature
+            assert isinstance(signature, FunctionSignature), (
+                f"Cannot freeze special callable {callable_ref} with signature {signature}"
+            )
+            assert signature.var_arg_type is None, f"Frozen calls do not support var args: {callable_ref}"
+            assert not signature.reverse_args, f"Frozen calls do not support reverse_args: {callable_ref}"
+
+            for row in fn.rows:
+                arg_exprs = tuple(
+                    TypedExprDecl(tp, self._state.value_to_expr(tp, value))
+                    for arg_type, value in zip(signature.arg_types, row.inputs, strict=True)
+                    for tp in (arg_type.to_just(),)
+                )
+                call = CallDecl(callable_ref, arg_exprs)
+                if is_cost:
+                    cost_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
+                    cost_expr = TypedExprDecl(cost_tp, self._state.value_to_expr(cost_tp, row.output))
+                    match cost_expr.expr:
+                        case LitDecl(int(value)):
+                            costs[call] = (signature.semantic_return_type.to_just(), value)
+                        case _:
+                            raise TypeError(f"Expected integer cost for {callable_ref}, got {cost_expr.expr}")
+                    continue
+
+                output_tp = signature.semantic_return_type.to_just()
+                match callable_decl:
+                    case ConstructorDecl():
+                        append_e_class_row(row.output, output_tp, call, row.subsumed)
+                    case FunctionDecl():
+                        set_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
+                        sets[call] = TypedExprDecl(set_tp, self._state.value_to_expr(set_tp, row.output))
+                    case ConstantDecl(type_ref):
+                        if type_ref.ident.module == Ident.builtin("").module:
+                            set_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
+                            sets[call] = TypedExprDecl(set_tp, self._state.value_to_expr(set_tp, row.output))
+                            continue
+                        append_e_class_row(row.output, output_tp, call, row.subsumed)
+                    case RelationDecl():
+                        if row.subsumed:
+                            raise TypeError(f"Cannot freeze subsumed relation row for {callable_ref}")
+                        expr_actions.append(TypedExprDecl(output_tp, call))
+                    case _:
+                        assert_never(callable_decl)
+
+        return FrozenEGraph(
+            self.__egg_decls__.copy(),
+            EGraphDecl(
+                let_bindings=let_bindings,
+                e_classes={value: (tp, tuple(exprs)) for value, (tp, exprs) in e_classes.items()},
+                sets=sets,
+                expr_actions=tuple(expr_actions),
+                costs=costs,
+                subsumed=tuple(subsumed),
+            ),
+        )
+
+    def _values_to_expr(self, args: list[bindings.Value], name: str) -> RuntimeExpr | None:
+        if name not in self._state.egg_fn_to_callable_refs:
+            return None
         (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
         signature = self.__egg_decls__.get_callable_decl(callable_ref).signature
         assert isinstance(signature, FunctionSignature)
-        arg_exprs = [
-            TypedExprDecl(tp.to_just(), self._state.value_to_expr(tp.to_just(), arg))
-            for (arg, tp) in zip(args, signature.arg_types, strict=True)
-        ]
+        arg_exprs = tuple(
+            TypedExprDecl(tp, self._state.value_to_expr(tp, arg))
+            for arg_type, arg in zip(signature.arg_types, args, strict=True)
+            for tp in (arg_type.to_just(),)
+        )
         res_type = signature.semantic_return_type.to_just()
         return RuntimeExpr.__from_values__(
             self.__egg_decls__,
-            TypedExprDecl(res_type, CallDecl(callable_ref, tuple(arg_exprs))),
+            TypedExprDecl(res_type, CallDecl(callable_ref, arg_exprs)),
         )
 
 
 @dataclass(frozen=True)
-class FrozenRow:
-    output: BaseExpr
-    subsumed: bool
-
-
-@dataclass(frozen=True)
 class FrozenEGraph:
-    global_bindings: dict[str, BaseExpr]
-    outputs: dict[BaseExpr, list[FrozenRow]]
+    __egg_decls__: Declarations
+    decl: EGraphDecl
 
     def __str__(self) -> str:
-        res = "Global Bindings:\n"
-        for name, value in self.global_bindings.items():
-            res += f"  {name}: {value}\n"
-        res += "Outputs:\n"
-        for output, rows in self.outputs.items():
-            res += f"  {output}:\n"
-            for row in rows:
-                res += f"    {row.output}"
-                if row.subsumed:
-                    res += " (subsumed)"
-                res += "\n"
-        return res
+        return pretty_decl(self.__egg_decls__, self.decl)
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
 # Either a constant or a function.
@@ -1696,11 +1772,14 @@ def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
     from .builtins import i64  # noqa: PLC0415
 
     expr_runtime = to_runtime_expr(expr)
+    cost_runtime = to_runtime_expr(convert(cost, i64))
     typed_expr_decl = expr_runtime.__egg_typed_expr__
     expr_decl = typed_expr_decl.expr
     assert isinstance(expr_decl, CallDecl), "Can only set cost of calls, not literals or vars"
-    cost_decl = to_runtime_expr(convert(cost, i64)).__egg_typed_expr__.expr
-    return Action(expr_runtime.__egg_decls__, SetCostDecl(typed_expr_decl.tp, expr_decl, cost_decl))
+    return Action(
+        Declarations.create(expr_runtime, cost_runtime),
+        SetCostDecl(typed_expr_decl.tp, expr_decl, cost_runtime.__egg_typed_expr__.expr),
+    )
 
 
 def let(name: str, expr: BaseExpr) -> Action:

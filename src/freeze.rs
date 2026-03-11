@@ -1,8 +1,7 @@
 // Freeze an egglog, turning it an immutable structure that can be printed, serialized, or added back to an e-graph.
 
-use std::collections::HashMap;
-
 use egglog::EGraph;
+use indexmap::IndexMap;
 use pyo3::prelude::*;
 
 use crate::egraph::Value;
@@ -27,13 +26,13 @@ pub struct FrozenFunction {
 #[pyclass(eq, frozen, get_all)]
 #[derive(PartialEq, Eq, Clone)]
 pub struct FrozenEGraph {
-    functions: HashMap<String, FrozenFunction>,
+    functions: IndexMap<String, FrozenFunction>,
 }
 
 impl FrozenEGraph {
     /// Convert this frozen e-graph into a list of egglog commands that can reconstruct it
     pub fn from_egraph(egraph: &EGraph) -> FrozenEGraph {
-        let mut functions = HashMap::new();
+        let mut functions = IndexMap::new();
         for fname in egraph.get_function_names() {
             let func = egraph.get_function(&fname).unwrap();
             let mut rows = Vec::new();

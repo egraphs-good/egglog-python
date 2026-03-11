@@ -660,14 +660,16 @@ The default renderer for the e-graph in a Jupyter Notebook [an interactive Javas
 egraph
 ```
 
-You can also customize the visualization through using the <inv:egglog.EGraph.display> method:
+You can also customize the visualization with
+{meth}`egglog.egraph.EGraph.display`:
 
 ```{code-cell} python
 egraph.display()
 ```
 
-If you would like to visualize the progression of the e-graph over time, you can use the <inv:egglog.EGraph.saturate> method to
-run a number of iterations and then visualize the e-graph at each step:
+If you would like to visualize the progression of the e-graph over time, you can
+use {meth}`egglog.egraph.EGraph.saturate` to run a number of iterations and then
+visualize the e-graph at each step:
 
 ```{code-cell} python
 egraph = EGraph()
@@ -708,6 +710,31 @@ egraph.register(Math(1) + Math(2))
 egraph.run(2)
 stats = egraph.stats()
 stats.num_matches_per_rule
+```
+
+### Freeze the e-graph
+
+For a replayable, high-level snapshot of the current e-graph, use
+{meth}`egglog.egraph.EGraph.freeze`.
+
+Unlike the lower-level serializer, `freeze()` reconstructs the current e-graph as
+high-level Python actions, so it is convenient for debugging and for writing
+regression tests around unexpected unions, sets, costs, or subsumptions.
+
+```{code-cell} python
+class DebugMath(Expr):
+    def __init__(self, value: i64Like) -> None: ...
+
+
+@function
+def debug_score(x: DebugMath) -> i64: ...
+
+
+egraph = EGraph()
+expr = DebugMath(1)
+egraph.register(expr, set_(debug_score(expr)).to(3))
+
+str(egraph.freeze())
 ```
 
 ### Serialize the e-graph

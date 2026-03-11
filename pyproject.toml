@@ -206,6 +206,8 @@ ignore = [
     "PLW1641",
     # allow non module file for docs
     "INP001",
+    # don't replace lambdas with functions because we need them to defer resolution
+    "PLW0108",
 ]
 select = ["ALL"]
 

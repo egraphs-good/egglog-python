@@ -781,16 +781,16 @@ def test_vec_like_conversion():
     @function
     def my_fn(xs: VecLike[i64, i64Like]) -> Unit: ...
 
-    assert expr_parts(my_fn((1, 2))) == expr_parts(my_fn(Vec[i64](i64(1), i64(2))))
-    assert expr_parts(my_fn([])) == expr_parts(my_fn(Vec[i64]()))
+    assert expr_parts(my_fn((1, 2))) == expr_parts(my_fn(Vec(i64(1), i64(2))))
+    assert expr_parts(my_fn([])) == expr_parts(my_fn(Vec[i64].empty()))
 
 
 def test_set_like_conversion():
     @function
     def my_fn(xs: SetLike[i64, i64Like]) -> Unit: ...
 
-    assert expr_parts(my_fn({1, 2})) == expr_parts(my_fn(Set[i64](i64(1), i64(2))))
-    assert expr_parts(my_fn(set())) == expr_parts(my_fn(Set[i64]()))
+    assert expr_parts(my_fn({1, 2})) == expr_parts(my_fn(Set(i64(1), i64(2))))
+    assert expr_parts(my_fn(set())) == expr_parts(my_fn(Set[i64].empty()))
 
 
 def test_map_like_conversion():

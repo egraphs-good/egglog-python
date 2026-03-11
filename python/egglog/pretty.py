@@ -77,7 +77,15 @@ NAMED_UNARY_METHODS = {
 }
 
 AllDecls: TypeAlias = (
-    RulesetDecl | CombinedRulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl | BackOffDecl
+    RulesetDecl
+    | CombinedRulesetDecl
+    | CommandDecl
+    | ActionDecl
+    | FactDecl
+    | ExprDecl
+    | ScheduleDecl
+    | BackOffDecl
+    | EGraphDecl
 )
 
 
@@ -229,6 +237,9 @@ class TraverseContext:
                 self(CallDecl(ref, args))
             case DummyDecl():
                 pass
+            case EGraphDecl() as eg:
+                for a in eg.to_actions:
+                    self(a)
             case _:
                 assert_never(decl)
 
@@ -385,6 +396,8 @@ class PrettyContext:
                 return "__InternalDummyValueShouldNotBeSeenOpenAnIssue()", "dummy"
             case GetCostDecl(ref, args):
                 return f"get_cost({self(CallDecl(ref, args))})", "get_cost"
+            case EGraphDecl() as eg:
+                return f"EGraph({', '.join(map(self, eg.to_actions))}).freeze()", "egraph"
         assert_never(decl)
 
     def _call(

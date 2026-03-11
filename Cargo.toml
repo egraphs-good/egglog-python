@@ -10,9 +10,10 @@ name = "egglog"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.27", features = ["extension-module", "num-bigint", "num-rational"] }
+pyo3 = { version = "0.27", features = ["extension-module", "num-bigint", "num-rational", "indexmap"] }
 num-bigint = "*"
 num-rational = "*"
+indexmap = "2.12"
 # egglog = { path = "../egg-smol", default-features = false }
 # egglog-bridge = { path = "../egg-smol/egglog-bridge" }
 # egglog-core-relations = { path = "../egg-smol/core-relations" }

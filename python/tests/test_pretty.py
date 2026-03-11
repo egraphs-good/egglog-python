@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, ClassVar
 import pytest
 
 from egglog import *
+from egglog.declarations import EGraphDecl
 
 if TYPE_CHECKING:
     from egglog.runtime import RuntimeExpr
@@ -59,6 +60,14 @@ class A(Expr):
     def __ceil__(self) -> A: ...
 
 
+class Box(Expr):
+    def __init__(self, vec: Vec[A] = Vec[A].empty()) -> None: ...
+
+
+class Wrapper(Expr):
+    def __init__(self, box: Box) -> None: ...
+
+
 @function
 def f(x: A) -> A: ...
 
@@ -100,6 +109,8 @@ setitem_a = A()
 setitem_a[g()] = h()
 
 b = constant("b", A)
+c_i64 = constant("c_i64", i64)
+rel = relation("rel", A)
 
 
 @function
@@ -239,3 +250,49 @@ _A_2 + _A_3""",
 @pytest.mark.parametrize(("x", "s"), PARAMS)
 def test_str(x: RuntimeExpr, s: str) -> None:
     assert str(x) == s
+
+
+FREEZE_PARAMS = [
+    pytest.param((A(),), "EGraph(A()).freeze()", id="freeze add"),
+    pytest.param((b,), "EGraph(b).freeze()", id="freeze constant"),
+    pytest.param((set_(p()).to(i64(1)),), "EGraph(set_(p()).to(i64(1))).freeze()", id="freeze set"),
+    pytest.param((set_(c_i64).to(i64(1)),), "EGraph(set_(c_i64).to(i64(1))).freeze()", id="freeze constant set"),
+    pytest.param((union(g()).with_(h()),), "EGraph(union(g()).with_(h())).freeze()", id="freeze union"),
+    pytest.param((rel(g()),), "EGraph(rel(g())).freeze()", id="freeze relation"),
+    pytest.param((g(), subsume(g())), "EGraph(subsume(g())).freeze()", id="freeze subsume"),
+    pytest.param((g(), set_cost(g(), 10)), "EGraph(set_cost(g(), 10)).freeze()", id="freeze set cost"),
+]
+
+
+@pytest.mark.parametrize(("actions", "s"), FREEZE_PARAMS)
+def test_frozen_egraph_str(actions: tuple[ActionLike, ...], s: str) -> None:
+    egraph = EGraph()
+    egraph.register(*actions)
+    frozen = egraph.freeze()
+    assert isinstance(frozen.decl, EGraphDecl)
+    assert str(frozen) == s
+
+
+def test_frozen_egraph_str_grounding() -> None:
+    egraph = EGraph()
+    egraph.register(f(g()), union(g()).with_(h()))
+    frozen = egraph.freeze()
+    assert isinstance(frozen.decl, EGraphDecl)
+    assert str(frozen) == "EGraph(union(g()).with_(h()), f(g())).freeze()"
+
+
+def test_frozen_egraph_str_let_vec_constructor() -> None:
+    egraph = EGraph()
+    egraph.register(let("$x", Vec(A())))
+    frozen = egraph.freeze()
+    assert isinstance(frozen.decl, EGraphDecl)
+    assert str(frozen) == 'EGraph(let("$x", Vec(A()))).freeze()'
+
+
+def test_frozen_egraph_str_nested_vec_constructor() -> None:
+    egraph = EGraph()
+    egraph.register(Wrapper(Box(Vec(A()))))
+    frozen = egraph.freeze()
+    assert isinstance(frozen.decl, EGraphDecl)
+    assert "Value(" not in str(frozen)
+    assert str(frozen) == "EGraph(Wrapper(Box(Vec(A())))).freeze()"

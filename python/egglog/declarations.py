@@ -7,7 +7,7 @@ We separate it it into two pieces, the references the declarations, so that we c
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from functools import cached_property
+from functools import cache, cached_property
 from itertools import chain, repeat
 from typing import (
     TYPE_CHECKING,
@@ -24,6 +24,8 @@ from typing import (
 )
 from uuid import UUID
 from weakref import WeakValueDictionary
+
+from egglog import bindings
 
 from .bindings import Value
 
@@ -54,6 +56,7 @@ __all__ = [
     "DefaultRewriteDecl",
     "DelayedDeclarations",
     "DummyDecl",
+    "EGraphDecl",
     "EqDecl",
     "ExprActionDecl",
     "ExprDecl",
@@ -347,6 +350,175 @@ class RulesetDecl:
 @dataclass(frozen=True)
 class CombinedRulesetDecl:
     rulesets: tuple[Ident, ...]
+
+
+T_expr_decl = TypeVar("T_expr_decl", bound="ExprDecl")
+
+
+@dataclass(frozen=True)
+class EGraphDecl:
+    """
+    State of an e-graph, which when re-added to a new e-graph will reconstruct the same e-graph, given the same Declarations.
+
+    All the expressions in here may reference values which appear in the `e_classes` mapping.
+    """
+
+    # Mapping from top level let binding names to their types and expressions
+    let_bindings: dict[str, TypedExprDecl] = field(default_factory=dict)
+    # Mapping from egglog values representing e-classes to all the expressions in that e-class
+    e_classes: dict[bindings.Value, tuple[JustTypeRef, tuple[CallDecl, ...]]] = field(default_factory=dict)
+    # Mapping from function calls to the values they are set to
+    sets: dict[CallDecl, TypedExprDecl] = field(default_factory=dict)
+    # Top-level expr actions such as relation facts.
+    expr_actions: tuple[TypedExprDecl, ...] = field(default=())
+    # Mapping from function calls to the set costs.
+    costs: dict[CallDecl, tuple[JustTypeRef, int]] = field(default_factory=dict)
+    # Set of values which are subsumed
+    subsumed: tuple[tuple[JustTypeRef, CallDecl], ...] = field(default=())
+
+    def __hash__(self) -> int:
+        return hash((
+            type(self),
+            tuple(self.let_bindings.items()),
+            tuple((value, tp, exprs) for value, (tp, exprs) in self.e_classes.items()),
+            tuple(self.sets.items()),
+            self.expr_actions,
+            tuple(self.costs.items()),
+            self.subsumed,
+        ))
+
+    @cached_property
+    def to_actions(self) -> list[ActionDecl]:  # noqa: C901
+        """
+        Converts this egraph decl to a list of actions that can be executed to reconstruct the egraph.
+
+        Converts all e-classes to grounded terms + unions.
+
+        Currently does not support cycles or empty e-classes.
+        """
+        # First fill up the e_class_grounded_term for all e_classes
+        # by iteratively adding grounded terms for e-classes which have a grounded term until no more progress can be  made.
+
+        # mapping from e-class to a grounded term in that e-class
+        e_class_grounded_term: dict[Value, CallDecl] = {}
+
+        def is_grounded(expr: ExprDecl) -> bool:
+            """
+            Checks if the given expression is grounded, meaning any values recursively in it have grounded terms in their e-classes.
+            """
+            match expr:
+                case LetRefDecl(name):
+                    raise ValueError(f"Cannot have unexpanded let bindings in egraph decl: {name}")
+                case UnboundVarDecl(_):
+                    msg = "Cannot have unbound variables in egraph decl"
+                    raise ValueError(msg)
+                case CallDecl(_, args, _):
+                    return all(is_grounded(a.expr) for a in args)
+                case LitDecl(_) | PyObjectDecl(_):
+                    return True
+                case PartialCallDecl(call):
+                    return is_grounded(call)
+                case DummyDecl():
+                    msg = "Cannot have dummy decls in egraph decl"
+                    raise ValueError(msg)
+                case ValueDecl(value):
+                    return value in e_class_grounded_term
+                case GetCostDecl():
+                    msg = "Cannot have GetCostDecl in egraph decl"
+                    raise ValueError(msg)
+                case _:
+                    assert_never(expr)
+
+        made_progress = True
+        while made_progress:
+            made_progress = False
+            for e_class, (_, exprs) in self.e_classes.items():
+                if e_class in e_class_grounded_term:
+                    continue
+                for expr in exprs:
+                    if is_grounded(expr):
+                        e_class_grounded_term[e_class] = expr
+                        made_progress = True
+                        break
+
+        # call declarations already emitted as part of other actions.
+        emitted_call_decls = set[CallDecl]()
+
+        @cache
+        def to_grounded(expr: ExprDecl) -> ExprDecl:
+            """
+            Converts the given expression to a grounded term, by replacing any values in it with their grounded terms.
+            """
+            match expr:
+                case LetRefDecl(name):
+                    raise ValueError(f"Cannot have unexpanded let bindings in egraph decl: {name}")
+                case UnboundVarDecl(_):
+                    msg = "Cannot have unbound variables in egraph decl"
+                    raise ValueError(msg)
+                case CallDecl(callable, args, bound_tp_params):
+                    emitted_call_decls.add(expr)
+                    new_args = tuple(TypedExprDecl(a.tp, to_grounded(a.expr)) for a in args)
+                    return CallDecl(callable, new_args, bound_tp_params)
+                case LitDecl(_) | PyObjectDecl(_):
+                    return expr
+                case PartialCallDecl(call):
+                    return PartialCallDecl(cast("CallDecl", to_grounded(call)))
+                case DummyDecl():
+                    msg = "Cannot have dummy decls in egraph decl"
+                    raise ValueError(msg)
+                case ValueDecl(value):
+                    if value not in e_class_grounded_term:
+                        raise ValueError(f"Value {value} does not have a grounded term in egraph decl")
+                    return to_grounded(e_class_grounded_term[value])
+                case GetCostDecl():
+                    msg = "Cannot have GetCostDecl in egraph decl"
+                    raise ValueError(msg)
+                case _:
+                    assert_never(expr)
+
+        # calls that are in e-classes with only one value, so wouldn't be added as a union and might need
+        # to be added as a single expr action if they don't show up anywhere else
+        single_e_class_calls: list[tuple[JustTypeRef, CallDecl]] = []
+
+        # Now add all e-classes as actions.
+        actions: list[ActionDecl] = []
+        for e_class, (tp, exprs) in self.e_classes.items():
+            chosen_term = e_class_grounded_term[e_class]
+            if len(exprs) == 1:
+                single_e_class_calls.append((tp, chosen_term))
+                continue
+
+            grounded_chosen_term = to_grounded(chosen_term)
+            for expr in exprs:
+                if expr == chosen_term:
+                    continue
+                actions.append(UnionDecl(tp, grounded_chosen_term, to_grounded(expr)))
+        actions.extend(
+            LetDecl(name, TypedExprDecl(typed_expr.tp, to_grounded(typed_expr.expr)))
+            for name, typed_expr in self.let_bindings.items()
+        )
+        actions.extend(
+            SetDecl(set_expr.tp, cast("CallDecl", to_grounded(call)), to_grounded(set_expr.expr))
+            for call, set_expr in self.sets.items()
+        )
+        actions.extend(
+            ExprActionDecl(TypedExprDecl(typed_expr.tp, to_grounded(typed_expr.expr)))
+            for typed_expr in self.expr_actions
+        )
+        actions.extend(
+            SetCostDecl(tp, cast("CallDecl", to_grounded(call)), LitDecl(cost))
+            for call, (tp, cost) in self.costs.items()
+        )
+        actions.extend(ChangeDecl(tp, cast("CallDecl", to_grounded(call)), "subsume") for tp, call in self.subsumed)
+
+        # Now add any remaining call    s that weren't part of any other actions
+        actions.extend(
+            ExprActionDecl(TypedExprDecl(tp, to_grounded(expr)))
+            for (tp, expr) in single_e_class_calls
+            if expr not in emitted_call_decls
+        )
+
+        return actions
 
 
 # Have two different types of type refs, one that can include vars recursively and one that cannot.

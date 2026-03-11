@@ -72,6 +72,8 @@ class EGraphState:
 
     # Callables which have cost tables associated with them
     cost_callables: set[CallableRef] = field(default_factory=set)
+    # Counter for deterministic synthetic let bindings created while lowering expressions to egg.
+    expr_to_let_counter: int = 0
 
     def copy(self) -> EGraphState:
         """
@@ -87,6 +89,7 @@ class EGraphState:
             egg_sort_to_type_ref=self.egg_sort_to_type_ref.copy(),
             expr_to_egg_cache=self.expr_to_egg_cache.copy(),
             cost_callables=self.cost_callables.copy(),
+            expr_to_let_counter=self.expr_to_let_counter,
         )
 
     def run_schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Command:
@@ -316,8 +319,10 @@ class EGraphState:
                 return bindings.Let(span(), var_egg.name, self.typed_expr_to_egg(typed_expr))
             case SetDecl(tp, call, rhs):
                 self.type_ref_to_egg(tp)
-                call_ = self._expr_to_egg(call)
-                return bindings.Set(span(), call_.name, call_.args, self._expr_to_egg(rhs))
+                egg_fn, typed_args = self.translate_call(call)
+                return bindings.Set(
+                    span(), egg_fn, [self.typed_expr_to_egg(arg, False) for arg in typed_args], self._expr_to_egg(rhs)
+                )
             case ExprActionDecl(typed_expr):
                 if expr_to_let:
                     maybe_typed_expr = self._transform_let(typed_expr)
@@ -328,7 +333,7 @@ class EGraphState:
                 return bindings.Expr_(span(), self.typed_expr_to_egg(typed_expr))
             case ChangeDecl(tp, call, change):
                 self.type_ref_to_egg(tp)
-                call_ = self._expr_to_egg(call)
+                egg_fn, typed_args = self.translate_call(call)
                 egg_change: bindings._Change
                 match change:
                     case "delete":
@@ -337,7 +342,9 @@ class EGraphState:
                         egg_change = bindings.Subsume()
                     case _:
                         assert_never(change)
-                return bindings.Change(span(), egg_change, call_.name, call_.args)
+                return bindings.Change(
+                    span(), egg_change, egg_fn, [self.typed_expr_to_egg(arg, False) for arg in typed_args]
+                )
             case UnionDecl(tp, lhs, rhs):
                 self.type_ref_to_egg(tp)
                 return bindings.Union(span(), self._expr_to_egg(lhs), self._expr_to_egg(rhs))
@@ -532,10 +539,10 @@ class EGraphState:
         """
         Rewrites this expression as a let binding if it's not already a let binding.
         """
-        # TODO: Replace with counter so that it works with hash collisions and is more stable
-        var_decl = LetRefDecl(f"$__expr_{hash(typed_expr)}")
-        if var_decl in self.expr_to_egg_cache:
+        if isinstance(self.expr_to_egg_cache.get(typed_expr.expr), bindings.Var):
             return None
+        var_decl = LetRefDecl(f"$__expr_{self.expr_to_let_counter}")
+        self.expr_to_let_counter += 1
         var_egg = self._expr_to_egg(var_decl)
         cmd = bindings.ActionCommand(bindings.Let(span(), var_egg.name, self.typed_expr_to_egg(typed_expr)))
         try:
