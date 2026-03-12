@@ -1568,3 +1568,37 @@ def test_binary_preserved():
 
     assert X(1) + 10 == (X(1), 10)
     assert 10 + X(1) == (X(10), X(1))
+
+
+def test_custom_cost_model_size():
+    """
+    https://egraphs.zulipchat.com/#narrow/channel/375765-egg.2Fegglog/topic/Cost.20function.3A.20using.20function.20values.20of.20subtrees/near/577062352
+    """
+
+    class KAT(Expr):
+        @classmethod
+        def eps(cls) -> KAT: ...
+
+        @classmethod
+        def emp(cls) -> KAT: ...
+
+        def func(self, other: KAT) -> KAT: ...
+
+        def size(self) -> i64: ...
+
+    eps, emp = KAT.eps(), KAT.emp()
+
+    eg = EGraph()
+    q0 = eg.let("q0", KAT.func(eps, emp))
+
+    eg.register(set_(eps.size()).to(i64(1)))
+    eg.register(set_(emp.size()).to(i64(0)))
+
+    def conv_cost(eg, expr, child_costs):
+        if isinstance(expr, KAT):
+            args = get_callable_args(expr)
+            return sum(int(eg.lookup_function_value(cast("KAT", a).size())) for a in args)
+
+        return 2
+
+    assert eg.extract(q0, include_cost=True, cost_model=conv_cost) == (KAT.eps().func(KAT.emp()), 1)

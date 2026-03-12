@@ -130,6 +130,9 @@ IGNORED_ATTRIBUTES = {
     "__firstlineno__",
     "__static_attributes__",
     "__match_args__",
+    # Added in 3.14
+    # https://egraphs.zulipchat.com/#narrow/channel/375765-egg.2Fegglog/topic/Cost.20function.3A.20using.20function.20values.20of.20subtrees/near/577236488
+    "__classdictcell__",
     # Ignore all reflected binary method
     *(f"__r{m[2:]}" for m in NUMERIC_BINARY_METHODS),
 }

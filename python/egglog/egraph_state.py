@@ -680,6 +680,8 @@ class EGraphState:
                 assert_never(ref)
 
     def typed_expr_to_value(self, typed_expr: TypedExprDecl) -> bindings.Value:
+        if isinstance(typed_expr.expr, ValueDecl):
+            return typed_expr.expr.value
         egg_expr = self.typed_expr_to_egg(typed_expr, False)
         return self.egraph.eval_expr(egg_expr)[1]
 

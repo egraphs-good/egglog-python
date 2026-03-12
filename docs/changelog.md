@@ -4,7 +4,14 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-- Support using facts as union actions, add conversions to multisets, and update multiset examlpe [#382](https://github.com/egraphs-good/egglog-python/pull/382)
+## 13.0.1 (2026-03-04)
+
+- Fix install by adding cloudpickle as required dependency [#405](https://github.com/egraphs-good/egglog-python/pull/405)
+- Add __classdictcell__ to ignored attributes (Python 3.14 support) [#403](https://github.com/egraphs-good/egglog-python/pull/403)
+## 13.0.0 (2026-03-03)
+
+- Support using facts as union actions, add conversions to multisets, and update multiset example [#382](https://github.com/egraphs-good/egglog-python/pull/382)
+- Fix lookup of cost model based on value (see [zulip for issue](https://egraphs.zulipchat.com/#narrow/channel/375765-egg.2Fegglog/topic/Cost.20function.3A.20using.20function.20values.20of.20subtrees/near/577062352))
 
 ## 12.0.0 (2025-11-16)
 

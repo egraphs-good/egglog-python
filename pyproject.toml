@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Software Development :: Interpreters",
     "Typing :: Typed",
 ]
-dependencies = ["typing-extensions", "black", "graphviz", "anywidget"]
+dependencies = ["typing-extensions", "black", "graphviz", "anywidget", "cloudpickle>=3"]
 
 [project.optional-dependencies]
 
@@ -35,8 +35,7 @@ array = [
     "array_api_compat",
     "numba>=0.59.1",
     "llvmlite>=0.42.0",
-    "numpy>2",
-    "cloudpickle>=3",
+    "numpy>2"
 ]
 dev = [
     "ruff",
