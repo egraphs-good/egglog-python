@@ -809,6 +809,7 @@ def _add_default_rewrite(
     resolved_value = resolve_literal(type_ref, default_rewrite, Thunk.value(decls))
     rewrite_decl = DefaultRewriteDecl(ref, resolved_value.__egg_typed_expr__.expr, subsume)
     ruleset_decls = _add_default_rewrite_inner(decls, rewrite_decl, ruleset)
+    ruleset_decls |= decls
     ruleset_decls |= resolved_value
 
 

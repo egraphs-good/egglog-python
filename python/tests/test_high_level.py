@@ -658,6 +658,19 @@ class TestDefaultReplacements:
 
         check_eq(f(), A(), r)
 
+    def test_function_ruleset_can_run_after_materialization_without_registration(self):
+        r = ruleset()
+
+        @function(ruleset=r)
+        def f() -> A:
+            return A()
+
+        # Materialize the function once so its default rewrite is added to the ruleset,
+        # but do not register any expression that would separately add `f` to the egraph.
+        f()
+        egraph = EGraph()
+        assert not egraph.run(r).updated
+
     def test_constant(self):
         a = constant("a", A, A())
         check_eq(a, A(), run())

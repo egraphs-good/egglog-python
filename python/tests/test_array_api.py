@@ -373,6 +373,15 @@ def lda(X: NDArray, y: NDArray):
     return run_lda(X, y)
 
 
+def test_lda_symbolic_build_cold_schedule():
+    X_arr = NDArray.var("X")
+    y_arr = NDArray.var("y")
+    egraph = EGraph()
+    with set_array_api_egraph(egraph):
+        res = lda(X_arr, y_arr)
+    assert isinstance(res, NDArray)
+
+
 @pytest.mark.parametrize(
     "program",
     [
