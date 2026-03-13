@@ -60,6 +60,17 @@ def test_eqsat_basic():
     egraph.check(eq(expr1).to(expr2))
 
 
+def test_let_auto_prefixes_global_names(capfd: pytest.CaptureFixture[str]):
+    egraph = EGraph(save_egglog_string=True)
+
+    x = egraph.let("x", i64(1))
+    egraph.check(eq(x).to(i64(1)))
+
+    captured = capfd.readouterr()
+    assert "should start with `$`" not in captured.err
+    assert "(let $x " in egraph.as_egglog_string
+
+
 def test_fib():
     egraph = EGraph()
 

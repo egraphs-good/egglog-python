@@ -39,6 +39,10 @@ def span(frame_index: int = 0) -> bindings.RustSpan:
     return bindings.RustSpan("", 0, 0)
 
 
+def _normalize_global_let_name(name: str) -> str:
+    return name if name.startswith("$") else f"${name}"
+
+
 @dataclass
 class EGraphState:
     """
@@ -574,7 +578,7 @@ class EGraphState:
         res: bindings._Expr
         match expr_decl:
             case LetRefDecl(name):
-                res = bindings.Var(span(), f"{name}")
+                res = bindings.Var(span(), _normalize_global_let_name(name))
             case UnboundVarDecl(name, egg_name):
                 res = bindings.Var(span(), egg_name or f"_{name}")
             case LitDecl(value):

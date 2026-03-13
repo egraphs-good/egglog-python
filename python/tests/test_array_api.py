@@ -443,14 +443,13 @@ def test_polynomial_factoring(input: Value, expected: Value):
     egraph = EGraph()
     x = egraph.let("x", input)
     egraph.run(polynomial_schedule)
-    # egraph.run(to_polynomial_ruleset.saturate())
-    # egraph.display()
-    # egraph.run(factor_ruleset.saturate())
-    # egraph.display()
-    # egraph.run(from_polynomial_ruleset.saturate())
-    # egraph.display()
     equiv_expr = egraph.extract(x)
-    assert eq(equiv_expr).to(expected), f"Expected {expected}, got {equiv_expr}"
+    # Normalized them both so that we don't have to worry about term order.
+    normalized = EGraph()
+    extracted_ref = normalized.let("extracted", equiv_expr)
+    expected_ref = normalized.let("expected", expected)
+    normalized.run(to_polynomial_ruleset.saturate())
+    normalized.check(eq(extracted_ref).to(expected_ref))
 
 
 # if calling as script, print out egglog source for test
