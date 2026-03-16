@@ -1117,6 +1117,20 @@ def test_dynamic_cost():
 
 
 class TestScheduler:
+    def test_seq_schedule_decls_track_ruleset_updates(self):
+        egraph = EGraph()
+
+        rel = relation("rel_live", i64)
+        live_rules = ruleset(name="live-rules")
+        schedule = seq(live_rules, run()).saturate()
+        _ = schedule.__egg_decls__
+
+        live_rules.register(rule(rel(i64(0))).then(rel(i64(1))))
+
+        egraph.register(rel(i64(0)))
+        egraph.run(schedule)
+        egraph.check(rel(i64(1)))
+
     def test_sequence_repeat_saturate(self):
         """
         Mirrors the scheduling example: alternate step-right and step-left,

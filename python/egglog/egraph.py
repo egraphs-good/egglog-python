@@ -1565,7 +1565,7 @@ class Schedule(DelayedDeclarations):
         """
         Run two schedules in sequence.
         """
-        return Schedule(Thunk.fn(Declarations.create, self, other), SequenceDecl((self.schedule, other.schedule)))
+        return Schedule(partial(Declarations.create, self, other), SequenceDecl((self.schedule, other.schedule)))
 
 
 @dataclass
@@ -2046,7 +2046,7 @@ def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | N
     """
     facts = _fact_likes(until)
     return Schedule(
-        Thunk.fn(Declarations.create, ruleset, *facts),
+        partial(Declarations.create, ruleset, *facts),
         RunDecl(
             ruleset.__egg_ident__ if ruleset else Ident(""),
             tuple(f.fact for f in facts),
@@ -2089,7 +2089,7 @@ def seq(*schedules: Schedule) -> Schedule:
     """
     Run a sequence of schedules.
     """
-    return Schedule(Thunk.fn(Declarations.create, *schedules), SequenceDecl(tuple(s.schedule for s in schedules)))
+    return Schedule(partial(Declarations.create, *schedules), SequenceDecl(tuple(s.schedule for s in schedules)))
 
 
 def _action_likes(action_likes: Iterable[ActionLike]) -> tuple[Action, ...]:

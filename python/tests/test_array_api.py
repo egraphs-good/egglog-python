@@ -172,6 +172,18 @@ class TestNDArray:
             array_api_schedule,
         )
 
+    def test_reshape_after_schedule_decls_access(self):
+        _ = array_api_schedule.__egg_decls__
+
+        x = NDArray.var("x")
+        assume_shape(x, TupleInt((Int(5),)))
+        res = reshape(x, TupleInt((-1,)))
+        egraph = EGraph()
+        egraph.register(res)
+        egraph.run(array_api_schedule)
+
+        egraph.check(eq(res).to(x))
+
     def test_reshape_vec_noop(self):
         x = NDArray.var("x")
         assume_shape(x, TupleInt((Int(5),)))
