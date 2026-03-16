@@ -8,6 +8,7 @@ from .builtins import *  # noqa: UP029
 from .conversion import *
 from .deconstruct import *
 from .egraph import *
+from .egraph import ActionLike as ActionLike
 from .runtime import define_expr_method as define_expr_method
 
 del ipython_magic

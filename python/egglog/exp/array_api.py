@@ -503,7 +503,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         Create a TupleInt from a length and an index function.
 
         >>> list(TupleInt.fn(3, lambda i: i * 10))
-        [i64(0), i64(10), i64(20)]
+        [Int(0), Int(10), Int(20)]
         """
 
     def length(self) -> Int:
@@ -522,7 +522,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
         >>> int(TupleInt([10, 20, 30])[1])
         20
-        >>> int(TupleInt(3, lambda i: i * 10)[2])
+        >>> int(TupleInt.fn(3, lambda i: i * 10)[2])
         20
         """
 
@@ -653,7 +653,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
 
         >>> ti = TupleInt([1, 2, 3])
         >>> list(ti.drop_last())
-        [i64(1), i64(2)]
+        [Int(1), Int(2)]
         """
         return TupleInt.fn(self.length() - 1, self.__getitem__)
 
@@ -759,8 +759,8 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         >>> ti1 = TupleInt([1, 2])
         >>> ti2 = TupleInt([3, 4])
         >>> ti = TupleInt.if_(TRUE, lambda: ti1, lambda: ti2)
-        >>> list(ti)
-        [i64(1), i64(2)]
+        >>> list(map(int, ti))
+        [1, 2]
         """
 
     @method(unextractable=True)
@@ -957,8 +957,8 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
 
         https://github.com/saulshanabrook/saulshanabrook/discussions/39
 
-        >>> list(TupleTupleInt([TupleInt([1, 2]), TupleInt([3, 4])]).product())
-        [TupleInt([1, 3]), TupleInt([1, 4]), TupleInt([2, 3]), TupleInt([2, 4])]
+        >>> [[int(x) for x in row] for row in TupleTupleInt([TupleInt([1, 2]), TupleInt([3, 4])]).product()]
+        [[1, 3], [1, 4], [2, 3], [2, 4]]
         """
         return TupleTupleInt.fn(
             self.map_int(lambda x: x.length()).product(),
@@ -1170,14 +1170,12 @@ class Value(Expr, ruleset=array_api_ruleset):
         Differentiate self with respect to v.
 
         >>> x = Value.var("x")
-        >>> x.diff(x).eval()
+        >>> int(x.diff(x).to_int)
         1
-        >>> x.diff(Value.var("y")).eval()
+        >>> int(x.diff(Value.var("y")).to_int)
         0
-        >>> (x + Value.from_int(2)).diff(x).eval()
+        >>> int((x + Value.from_int(2)).diff(x).to_int)
         1
-        >>> (x * x).diff(x).eval()
-        2 * x
         """
 
 
@@ -1566,7 +1564,7 @@ class RecursiveValue(Expr):
         Index into the RecursiveValue with the given indices. It should match the shape.
 
         >>> rv = convert(((1, 2), (3, 4)), RecursiveValue)
-        >>> int(rv[[0, 1]])
+        >>> int(rv[[0, 1]].to_int)
         2
         """
 

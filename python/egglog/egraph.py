@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Action",
+    "ActionLike",
     "BackOff",
     "BaseExpr",
     "BuiltinExpr",
@@ -396,7 +397,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     runtime_cls: RuntimeClass,
 ) -> Declarations:
     """
-    Lazy constructor for class declerations to support classes with methods whose types are not yet defined.
+    Lazy constructor for class declarations to support classes with methods whose types are not yet defined.
     """
     parameters: list[TypeVar] = (
         # Get the generic params from the orig bases generic class
@@ -408,8 +409,12 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()), doc=namespace.pop("__doc__", None)
     )
     decls = Declarations(_classes={cls_ident: cls_decl})
-    # Update class think eagerly when resolving so that lookups work in methods
+    # Update class thunk eagerly when resolving so that lookups work in methods.
     runtime_cls.__egg_decls_thunk__ = Thunk.value(decls)
+    # Cached RuntimeFunction/RuntimeExpr wrappers capture the current decl thunk, so
+    # swapping in the concrete declarations must invalidate any wrappers created while
+    # the class was still pointing at the lazy declaration builder.
+    runtime_cls.__egg_attr_cache__.clear()
 
     ##
     # Register class variables
@@ -2369,6 +2374,9 @@ class _CostModel(Generic[COST]):
         except KeyError:
             pass
         res = self.egraph._values_to_expr(args, name)
+        if res is None:
+            msg = f"Cannot compute custom cost for unknown egg function {name!r}"
+            raise ValueError(msg)
         index = len(self.enode_cost_expressions)
         self.enode_cost_expressions.append(res)
         self.enode_cost_results[(name, tuple(args))] = index

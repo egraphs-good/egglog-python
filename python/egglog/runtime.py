@@ -15,7 +15,7 @@ import itertools
 import operator
 import types
 from collections.abc import Callable
-from dataclasses import InitVar, dataclass, replace
+from dataclasses import InitVar, dataclass, field, replace
 from inspect import Parameter, Signature
 from typing import TYPE_CHECKING, Any, TypeVar, Union, assert_never, cast, get_args, get_origin
 
@@ -238,14 +238,7 @@ class RuntimeClassDescriptor:
     def __get__(self, obj: object, owner: RuntimeClass | None = None) -> Callable:
         if owner is None:
             raise AttributeError(f"Can only access {self.name} on the class, not an instance")
-        cls_decl = owner.__egg_decls__._classes[owner.__egg_tp__.ident]
-        if self.name in cls_decl.class_methods:
-            return RuntimeFunction(
-                owner.__egg_decls_thunk__, Thunk.value(ClassMethodRef(owner.__egg_tp__.ident, self.name)), None
-            )
-        if self.name in cls_decl.preserved_methods:
-            return cls_decl.preserved_methods[self.name]
-        raise AttributeError(f"Class {owner.__egg_tp__.ident} has no method {self.name}") from None
+        return RuntimeClass.__getattr__(owner, self.name)
 
 
 RUNTIME_CLASS_DESCRIPTORS: dict[str, RuntimeClassDescriptor] = {
@@ -258,6 +251,9 @@ class RuntimeClass(DelayedDeclarations, metaclass=ClassFactory):
     __egg_tp__: TypeRefWithVars
     # True if we want `__parameters__` to be recognized by `Union`, which means we can't inherit from `type` directly.
     _egg_has_params: InitVar[bool] = False
+    __egg_attr_cache__: dict[str, RuntimeFunction | RuntimeExpr | Callable] = field(
+        init=False, repr=False, default_factory=dict
+    )
 
     def __post_init__(self, _egg_has_params: bool) -> None:
         global _PY_OBJECT_CLASS, _UNSTABLE_FN_CLASS
@@ -362,7 +358,7 @@ class RuntimeClass(DelayedDeclarations, metaclass=ClassFactory):
         tp = TypeRefWithVars(self.__egg_tp__.ident, final_args)
         return RuntimeClass(Thunk.fn(Declarations.create, self, *decls_like), tp, _egg_has_params=True)
 
-    def __getattr__(self, name: str) -> RuntimeFunction | RuntimeExpr | Callable:
+    def __getattr__(self, name: str) -> RuntimeFunction | RuntimeExpr | Callable:  # noqa: C901
         if not isinstance(name, str):
             raise TypeError(f"Attribute name must be a string, got {name!r}")
         if name == "__origin__" and self.__egg_tp__.args:
@@ -381,6 +377,11 @@ class RuntimeClass(DelayedDeclarations, metaclass=ClassFactory):
             raise AttributeError
 
         try:
+            return self.__egg_attr_cache__[name]
+        except KeyError:
+            pass
+
+        try:
             cls_decl = self.__egg_decls__._classes[self.__egg_tp__.ident]
         except Exception as e:
             e.add_note(f"Error processing class {self.__egg_tp__.ident}")
@@ -388,29 +389,33 @@ class RuntimeClass(DelayedDeclarations, metaclass=ClassFactory):
 
         preserved_methods = cls_decl.preserved_methods
         if name in preserved_methods:
-            return preserved_methods[name]
-
+            res = preserved_methods[name]
         # if this is a class variable, return an expr for it, otherwise, assume it's a method
-        if name in cls_decl.class_variables:
+        elif name in cls_decl.class_variables:
             return_tp = cls_decl.class_variables[name]
-            return RuntimeExpr(
+            res = RuntimeExpr(
                 self.__egg_decls_thunk__,
                 Thunk.value(TypedExprDecl(return_tp.type_ref, CallDecl(ClassVariableRef(self.__egg_tp__.ident, name)))),
             )
-        bound = self.__egg_tp__.to_just() if self.__egg_tp__.args else None
-        if name in cls_decl.class_methods:
-            return RuntimeFunction(
-                self.__egg_decls_thunk__, Thunk.value(ClassMethodRef(self.__egg_tp__.ident, name)), bound
+        else:
+            if name in cls_decl.class_methods:
+                callable_ref: CallableRef = ClassMethodRef(self.__egg_tp__.ident, name)
+            # allow referencing properties and methods as class variables as well
+            elif name in cls_decl.properties:
+                callable_ref = PropertyRef(self.__egg_tp__.ident, name)
+            elif name in cls_decl.methods:
+                callable_ref = MethodRef(self.__egg_tp__.ident, name)
+            else:
+                msg = f"Class {self.__egg_tp__.ident} has no method {name}"
+                raise AttributeError(msg) from None
+            res = RuntimeFunction(
+                self.__egg_decls_thunk__,
+                Thunk.value(callable_ref),
+                self.__egg_tp__.to_just() if self.__egg_tp__.args else None,
             )
-        # allow referencing properties and methods as class variables as well
-        if name in cls_decl.properties:
-            return RuntimeFunction(
-                self.__egg_decls_thunk__, Thunk.value(PropertyRef(self.__egg_tp__.ident, name)), bound
-            )
-        if name in cls_decl.methods:
-            return RuntimeFunction(self.__egg_decls_thunk__, Thunk.value(MethodRef(self.__egg_tp__.ident, name)), bound)
-        msg = f"Class {self.__egg_tp__.ident} has no method {name}"
-        raise AttributeError(msg) from None
+
+        self.__egg_attr_cache__[name] = res
+        return res
 
     def __str__(self) -> str:
         return str(self.__egg_tp__)

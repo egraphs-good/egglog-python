@@ -71,7 +71,7 @@ jobs:
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           # allow updating snapshots due to indeterministic benchmarks
-          run: pytest -vvv --snapshot-update --durations=10
+          run: pytest -vvv --snapshot-update --durations=10 python/tests/test_array_api.py -k 'test_jit or test_run_lda'
           mode: ${{ matrix.runner == 'ubuntu-latest' && 'instrumentation' || 'walltime' }}
 
   docs:

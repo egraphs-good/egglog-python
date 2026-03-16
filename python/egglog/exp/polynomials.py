@@ -5,7 +5,6 @@ Helpers for the polynomial container examples in the containers docs.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -54,7 +53,7 @@ def symbolic_bending_examples() -> tuple[enp.NDArray, enp.NDArray]:
 
 @egglog.ruleset
 def remove_subtraction(a: enp.Value, b: enp.Value):
-    yield egglog.rewrite(a - b, subsume=True).to(a + (-1) * b)
+    yield egglog.rewrite(a - b, subsume=True).to(a + enp.Value.from_int(-1) * b)
 
 
 @egglog.ruleset
@@ -78,7 +77,7 @@ class Report:
     extract_sec: float
     extracted: enp.NDArray
     cost: int
-    function_sizes: list[tuple[Callable, int]]
+    function_sizes: list[tuple[egglog.ExprCallable, int]]
     updated: bool
 
     @property
