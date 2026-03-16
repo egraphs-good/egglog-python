@@ -4,6 +4,18 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Improve high-level Python ergonomics and docs [#397](https://github.com/egraphs-good/egglog-python/pull/397)
+  - Add `EGraph.freeze()`, returning a `FrozenEGraph` snapshot that can be pretty-printed back into replayable high-level Python actions for debugging and inspection.
+  - Add a variadic `EGraph(*actions, seminaive=True, save_egglog_string=False)` constructor so actions can be registered at construction time, and export `ActionLike` from `egglog` for typing code that works with `EGraph.register(...)` and the constructor.
+  - Add richer general-purpose builtin helpers used by the new containers/polynomials work, including additional `Vec`, `MultiSet`, numeric, and string operations.
+  - Expand the Python integration/reference docs with examples for `run`, `stats`, `function_values`, `freeze`, `display`, and `saturate`, and clarify that proof-mode commands exposed in low-level bindings are not yet supported as a full high-level Python workflow.
+  - Add the new containers/polynomials documentation and examples.
+  - Fix several high-level bugs:
+    - auto-prefix generated `let` bindings with `$` so recorded programs and round-tripped output are valid egglog;
+    - keep schedules and default-rewrite rules live after materialization so later declarations are not missed;
+    - fix empty Python container conversions and several higher-order callable / nested-lambda inference edge cases.
+  - Update the experimental `egglog.exp.array_api` module overall, including docs, doctests, and CI coverage.
+
 ## 13.0.1 (2026-03-04)
 
 - Fix install by adding cloudpickle as required dependency [#405](https://github.com/egraphs-good/egglog-python/pull/405)

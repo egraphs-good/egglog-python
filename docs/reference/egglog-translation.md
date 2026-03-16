@@ -211,6 +211,15 @@ The correct function type (in this case it would be `Callable[[i64, i64], Unit]`
 
 To run actions in Python, they are passed as arguments to the `egraph.register` function. We have constructors to create each kind of action. They are created and registered in this way, so that we can use the same syntax for executing them on the top level egraph as we do for defining them as results for rules.
 
+You can also pass initial actions directly to the high-level constructor:
+
+```{code-cell} python
+egraph = EGraph(
+    let("x", i64(1)),
+    set_(fib(0)).to(i64(0)),
+)
+```
+
 Here are examples of all the actions:
 
 ### Let
