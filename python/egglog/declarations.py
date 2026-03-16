@@ -377,11 +377,11 @@ class EGraphDecl:
     def __hash__(self) -> int:
         return hash((
             type(self),
-            tuple(self.let_bindings.items()),
-            tuple((value, tp, exprs) for value, (tp, exprs) in self.e_classes.items()),
-            tuple(self.sets.items()),
+            frozenset(self.let_bindings.items()),
+            frozenset((value, tp, exprs) for value, (tp, exprs) in self.e_classes.items()),
+            frozenset(self.sets.items()),
             self.expr_actions,
-            tuple(self.costs.items()),
+            frozenset(self.costs.items()),
             self.subsumed,
         ))
 
@@ -509,7 +509,7 @@ class EGraphDecl:
         )
         actions.extend(ChangeDecl(tp, cast("CallDecl", to_grounded(call)), "subsume") for tp, call in self.subsumed)
 
-        # Now add any remaining call    s that weren't part of any other actions
+        # Now add any remaining calls that weren't part of any other actions
         actions.extend(
             ExprActionDecl(TypedExprDecl(tp, to_grounded(expr)))
             for (tp, expr) in single_e_class_calls

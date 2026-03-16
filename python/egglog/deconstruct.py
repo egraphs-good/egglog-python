@@ -189,7 +189,7 @@ def _deconstruct_call_decl(
         ), arg_exprs
     egg_bound = (
         JustTypeRef(call.callable.ident, call.bound_tp_params)
-        if isinstance(call.callable, (ClassMethodRef, MethodRef, InitRef)) and call.bound_tp_params
+        if isinstance(call.callable, (ClassMethodRef, MethodRef)) and call.bound_tp_params
         else None
     )
 

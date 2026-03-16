@@ -83,7 +83,7 @@ class EGraphState:
 
     def copy(self) -> EGraphState:
         """
-        Returns a copy of the state. Th egraph reference is kept the same. Used for pushing/popping.
+        Returns a copy of the state. The egraph reference is kept the same. Used for pushing/popping.
         """
         return EGraphState(
             egraph=self.egraph,
@@ -802,7 +802,7 @@ class EGraphState:
     def _unstable_fn_value_to_expr(
         self, name: str, partial_args: list[bindings.Value], return_tp: JustTypeRef, _arg_types: list[JustTypeRef]
     ) -> PartialCallDecl:
-        # Similar to FromEggState::from_call but accepts partial list of args and returns in values
+        # Similar to FromEggState::from_call but reconstructs a partial application from serialized values.
         # Find first callable ref whose return type matches and fill in arg types.
         for callable_ref in self.egg_fn_to_callable_refs[name]:
             signature = self.__egg_decls__.get_callable_decl(callable_ref).signature

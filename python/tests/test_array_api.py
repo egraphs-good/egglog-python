@@ -456,7 +456,7 @@ x, y, z, q, r = map(constant, ("x", "y", "z", "q", "r"), repeat(Value))
 
 
 @pytest.mark.parametrize(
-    ("input", "expected"),
+    ("input_expr", "expected"),
     [
         pytest.param(x * x, x**2, id="exp"),
         pytest.param(x * y + x * z, x * (y + z), id="factor"),
@@ -466,9 +466,9 @@ x, y, z, q, r = map(constant, ("x", "y", "z", "q", "r"), repeat(Value))
         ),
     ],
 )
-def test_polynomial_factoring(input: Value, expected: Value):
+def test_polynomial_factoring(input_expr: Value, expected: Value):
     egraph = EGraph()
-    x = egraph.let("x", input)
+    x = egraph.let("x", input_expr)
     egraph.run(polynomial_schedule)
     equiv_expr = egraph.extract(x)
     # Normalized them both so that we don't have to worry about term order.

@@ -37,7 +37,11 @@ def jit(
     try:
         return cast("X", egraph.extract(fn_program.as_py_object).value)
     except bindings.EggSmolError as e:
-        e.add_note(f"Failed to get py object from {egraph.extract(fn_program)}")
+        try:
+            debug_program = egraph.extract(fn_program)
+        except bindings.EggSmolError:
+            debug_program = fn_program
+        e.add_note(f"Failed to get py object from {debug_program}")
         raise
 
 

@@ -1207,7 +1207,7 @@ converter(object, PyObject, PyObject)
 
 
 @function(builtin=True, egg_fn="py-eval")
-def py_eval(code: StringLike, globals: object = PyObject.dict(), locals: object = PyObject.dict()) -> PyObject: ...
+def py_eval(code: StringLike, globals_: object = PyObject.dict(), locals_: object = PyObject.dict()) -> PyObject: ...
 
 
 class PyObjectFunction(Protocol):
@@ -1226,7 +1226,7 @@ def py_eval_fn(fn: Callable) -> PyObjectFunction:
 
 
 @function(builtin=True, egg_fn="py-exec")
-def py_exec(code: StringLike, globals: object = PyObject.dict(), locals: object = PyObject.dict()) -> PyObject:
+def py_exec(code: StringLike, globals_: object = PyObject.dict(), locals_: object = PyObject.dict()) -> PyObject:
     """
     Copies the locals, execs the Python code, and returns the locals with any updates.
     """

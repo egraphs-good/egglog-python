@@ -572,7 +572,7 @@ def vec_recursive_value_program(x: Vec[RecursiveValue]) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _vec_recursive_value_program(v: Value, vv: Vec[RecursiveValue]):
+def _vec_recursive_value_program(vv: Vec[RecursiveValue]):
     yield rewrite(vec_recursive_value_program(Vec[RecursiveValue].empty())).to(Program(""))
     yield rewrite(vec_recursive_value_program(vv)).to(
         recursive_value_program(vv[0]) + ", " + vec_recursive_value_program(vv.remove(0)),

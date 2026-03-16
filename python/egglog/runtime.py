@@ -306,9 +306,11 @@ class RuntimeClass(DelayedDeclarations, metaclass=ClassFactory):
             return_tp = res_typed_expr.tp
             assert isinstance(call, CallDecl), "partial function must be a call"
             # Clip off the remaining arguments
-            n_args = len(partial_args)
-            value = PartialCallDecl(replace(call, args=call.args[:n_args]))
-            remaining_arg_types = [a.tp for a in call.args[n_args:]]
+            captured_args = len(partial_args) + int(
+                isinstance(fn_arg, RuntimeFunction) and isinstance(fn_arg.__egg_bound__, RuntimeExpr)
+            )
+            value = PartialCallDecl(replace(call, args=call.args[:captured_args]))
+            remaining_arg_types = [a.tp for a in call.args[captured_args:]]
             type_ref = JustTypeRef(Ident.builtin("UnstableFn"), (return_tp, *remaining_arg_types))
             return RuntimeExpr.__from_values__(Declarations.create(self, res), TypedExprDecl(type_ref, value))
 

@@ -435,7 +435,7 @@ GradientBending_distributed = gradient_egraph.extract(GradientBending)
 FunctionBending_distributed
 ```
 
-We now have an expression that is mainly a sum of products, a multivariate polyonimal.
+We now have an expression that is mainly a sum of products, a multivariate polynomial.
 
 For some sense of their size, the `FunctionBending` has initial cost of 401 and the `GradientBending` has 20,570.
 This cost is produced by the Egglog extractor, corresponding roughly to one node per op like `*` and one per variable as a tree.

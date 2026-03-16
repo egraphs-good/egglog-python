@@ -1,3 +1,5 @@
+import base64
+import json
 import pathlib
 import webbrowser
 
@@ -24,21 +26,15 @@ class VisualizerWidget(anywidget.AnyWidget):
 
     def display_or_open(self) -> None:
         """
-        Displays the widget if we are in a Jupyter environment, otherwise saves it to a file and opens it.
+        Displays the widget if we are in a Jupyter environment, otherwise opens a standalone HTML page.
         """
         if IN_IPYTHON:
             display(self)
             return
-        # 1. Create a temporary html file that will stay open after close
-        # 2. Write the widget to it with embed_minimal_html
-        # 3. Open the file using the open function from graphviz
-        file = pathlib.Path.cwd() / "tmp.html"
-        file.write_text(HTML.replace("MAGIC_STRING", str(self.egraphs)))
-        # https://github.com/manzt/anywidget/issues/339#issuecomment-1755654547
-        # embed_minimal_html(file, views=[self], drop_defaults=False)
-        # Instead of embedding widget, just save
-        print("Visualizer widget saved to", file)
-        webbrowser.open(file.as_uri())
+        payload = json.dumps(self.egraphs).replace("</", "<\\/")
+        html = HTML.replace("MAGIC_STRING", payload)
+        data_uri = "data:text/html;base64," + base64.b64encode(html.encode()).decode()
+        webbrowser.open(data_uri)
 
 
 HTML = """

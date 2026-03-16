@@ -66,9 +66,6 @@ impl EGraph {
             let cmd_string = cmd.to_string();
             cmds_str = cmds_str + &cmd_string + "\n";
         }
-        if let Some(cmds) = &mut self.cmds {
-            cmds.push_str(&cmds_str);
-        }
         info!("Running commands:\n{}", cmds_str);
         let res = py.detach(|| self.egraph.run_program(commands));
         if let Some(err) = PyErr::take(py) {
@@ -77,6 +74,9 @@ impl EGraph {
         match res {
             Err(e) => Err(WrappedError::Egglog(e)),
             Ok(outputs) => {
+                if let Some(cmds) = &mut self.cmds {
+                    cmds.push_str(&cmds_str);
+                }
                 Ok(outputs.into_iter().map(|o| o.into()).collect())
             }
         }

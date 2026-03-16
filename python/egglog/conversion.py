@@ -228,9 +228,9 @@ def resolve_literal(
     if isinstance(arg, RuntimeExpr) and tp.matches_just({}, arg.__egg_typed_expr__.tp):
         return arg
     tp_just = tp.to_just()
-    arg_type = resolve_type(arg)
     if arg is DUMMY_VALUE:
         return RuntimeExpr.__from_values__(decls(), TypedExprDecl(tp_just, DummyDecl()))
+    arg_type = resolve_type(arg)
     if (conversion := _lookup_conversion(arg_type, tp_just)) is not None:
         with with_type_args(tp_just.args, decls):
             return conversion[1](arg)

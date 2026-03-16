@@ -1,4 +1,4 @@
-// Freeze an egglog, turning it an immutable structure that can be printed, serialized, or added back to an e-graph.
+// Freeze an egglog, turning it into an immutable structure that can be printed, serialized, or added back to an e-graph.
 
 use egglog::EGraph;
 use indexmap::IndexMap;
@@ -30,7 +30,7 @@ pub struct FrozenEGraph {
 }
 
 impl FrozenEGraph {
-    /// Convert this frozen e-graph into a list of egglog commands that can reconstruct it
+    /// Convert a live `EGraph` into an immutable `FrozenEGraph` snapshot.
     pub fn from_egraph(egraph: &EGraph) -> FrozenEGraph {
         let mut functions = IndexMap::new();
         for fname in egraph.get_function_names() {
