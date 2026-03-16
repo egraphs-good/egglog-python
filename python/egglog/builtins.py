@@ -801,7 +801,7 @@ class BigInt(BuiltinExpr, egg_sort="BigInt"):
     def bool_ge(self, other: BigIntLike) -> Bool: ...
 
 
-converter(i64, BigInt, lambda i: BigInt(i))
+converter(i64, BigInt, BigInt)
 
 BigIntLike: TypeAlias = BigInt | i64Like
 

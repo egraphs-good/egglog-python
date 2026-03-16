@@ -253,7 +253,7 @@ class TestNormalFns:
 
         @r.register
         def _rewrite(a: A):
-            yield rewrite(transform_a(a)).to(apply_f(lambda x: my_transform_a(x), a))
+            yield rewrite(transform_a(a)).to(apply_f(my_transform_a, a))
 
         assert check_eq(transform_a(A()), my_transform_a(A()), r * 10)
 
@@ -276,7 +276,7 @@ class TestNormalFns:
 
         @ruleset
         def my_ruleset(a: A):
-            yield rewrite(transform_a(a)).to(apply_f(lambda x: my_transform_a(x), a))
+            yield rewrite(transform_a(a)).to(apply_f(my_transform_a, a))
 
         assert check_eq(transform_a(A()), my_transform_a(A()), (my_ruleset | apply_ruleset) * 10)
 
@@ -296,7 +296,7 @@ class TestNormalFns:
 
         @function(ruleset=r)
         def transform_a(a: A) -> A:
-            return apply_f(lambda x: my_transform_a(x), a)
+            return apply_f(my_transform_a, a)
 
         assert check_eq(transform_a(A()), my_transform_a(A()), r * 10)
 
@@ -325,7 +325,7 @@ class TestNormalFns:
         @function
         def transform_a(a: A) -> A: ...
 
-        v = higher_order(lambda a: transform_a(a))
+        v = higher_order(transform_a)
         assert str(v) == "higher_order(lambda a: transform_a(a))"
 
     def test_multiple_same(self):
