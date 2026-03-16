@@ -118,10 +118,7 @@ def convert(source: object, target: type[V]) -> V:
     """
     Convert a source object to a target type.
     """
-    target = cast("RuntimeClass", target)
-    # TODO: for some reason this breaks things
-    # if not issubclass(target, RuntimeClass):
-    #     raise TypeError(f"Expected target type to be a egglog type, got {target} of type {type(target)}")
+    assert isinstance(target, RuntimeClass)
     return cast("V", resolve_literal(target.__egg_tp__, source, target.__egg_decls_thunk__))
 
 

@@ -526,6 +526,10 @@ The `(check ...)` command to verify that some facts are true, can be translated 
 egraph.check(eq(fib(1)).to(i64(1)))
 ```
 
+Low-level proof-mode commands such as `Prove`, `ProveExists`, and
+`ProveExistsOutput` are exposed through the bindings layer, but the high-level
+Python API does not yet support a complete proof workflow.
+
 ## Extract
 
 The `(extract ...)` command in egglog translates to the `egraph.extract` method, returning the lowest cost expression:

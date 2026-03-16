@@ -1098,7 +1098,6 @@ class Value(Expr, ruleset=array_api_ruleset):
 
     def isfinite(self) -> Boolean: ...
 
-    # TODO: Fix
     def __lt__(self, other: ValueLike) -> Value: ...
     def __le__(self, other: ValueLike) -> Boolean: ...
     def __gt__(self, other: ValueLike) -> Boolean: ...
@@ -1538,20 +1537,9 @@ class RecursiveValue(Expr):
     >>> convert(Value.from_int(42), RecursiveValue)
     RecursiveValue(Value.from_int(Int(42)))
     >>> convert((1, 2, 3), RecursiveValue)
-    RecursiveValue.vec(
-        Vec(
-            RecursiveValue(Value.from_int(Int(1))),
-            RecursiveValue(Value.from_int(Int(2))),
-            RecursiveValue(Value.from_int(Int(3))),
-        )
-    )
+    RecursiveValue.vec(Vec(RecursiveValue(Value.from_int(Int(1))), RecursiveValue(Value.from_int(Int(2))), RecursiveValue(Value.from_int(Int(3)))))
     >>> convert(((1,), (2,)), RecursiveValue)
-    RecursiveValue.vec(
-        Vec(
-            RecursiveValue.vec(Vec(RecursiveValue(Value.from_int(Int(1))))),
-            RecursiveValue.vec(Vec(RecursiveValue(Value.from_int(Int(2))))),
-        )
-    )
+    RecursiveValue.vec(Vec(RecursiveValue.vec(Vec(RecursiveValue(Value.from_int(Int(1))))), RecursiveValue.vec(Vec(RecursiveValue(Value.from_int(Int(2)))))))
     """
 
     def __init__(self, value: ValueLike) -> None: ...
@@ -1616,12 +1604,6 @@ converter(Vec[RecursiveValue], RecursiveValue, lambda x: RecursiveValue.vec(x))
 converter(Value, RecursiveValue, RecursiveValue)
 
 
-# TODO: Fix bug in bindings so that we can write this as lambda instead
-@function(ruleset=array_api_ruleset, unextractable=True)
-def partially_apply_index_fn(idx_fn: Callable[[TupleInt], Value], first_dim: Int, rest_indices: TupleInt) -> Value:
-    return idx_fn(rest_indices.append_start(first_dim))
-
-
 @array_api_ruleset.register
 def _recursive_value(
     v: Value,
@@ -1662,7 +1644,8 @@ def _recursive_value(
             RecursiveValue.vec(
                 k.range().map(
                     lambda i: RecursiveValue.from_index_and_shape(
-                        vi1, partial(partially_apply_index_fn, idx_fn, Int(i))
+                        vi1,
+                        lambda rest_indices: idx_fn(rest_indices.append_start(Int(i))),
                     )
                 )
             )
@@ -2799,57 +2782,20 @@ class ExprWithValue(Protocol[T_co]):
 
 def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
     """
-    Try evaluating an expression that should produce a primitive (e.g., Bool/i64).
-    If extraction fails, register the expr, run the schedule, and retry.
+    Evaluate an expression in the current e-graph, then re-extract it in a fresh
+    e-graph to avoid cross-expression contradictions.
     """
     egraph = _get_current_egraph()
     egraph.register(expr)  # type: ignore[arg-type]
     egraph.run(array_api_schedule)
-    # egraph.display(n_inline_leaves=2, split_primitive_outputs=True, split_functions=[Int])
     extracted_expr = egraph.extract(expr)  # type: ignore[call-overload]
-    # with contextlib.suppress(ExprValueError):
-    #     extracted_expr.value
-    # run on another e-graph to get around bug
-    # https://github.com/egraphs-good/egglog/issues/801
 
     new_egraph = EGraph()
+    # The fresh e-graph needs the extracted expression registered before the schedule runs,
+    # otherwise the simplification rules never see it.
     new_egraph.register(extracted_expr)
     new_egraph.run(array_api_schedule)
-    # new_egraph.display()
-    # try:
     return new_egraph.extract(extracted_expr).value
-
-    # except EggSmolError as e:
-    #     new_egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
-    #     raise e
-
-    # try:
-    #     return egraph.extract(prim_expr).value  # type: ignore[attr-defined]
-    # except EggSmolError:
-    #     pass
-    # If this primitive doesn't exist in the egraph, we need to try to create it by
-    # registering the expression and running the schedule
-    # egraph.register(expr)
-    # try:
-    #     _report = egraph.run(schedule)
-    #     # Matching rules?
-    #     # for k, v in _report.num_matches_per_rule.items():
-    #     #     if v > 0:
-    #     #         print(f"Applied rule {k} {v} times")
-    # except EggSmolError as e:
-    #     # Write out the egraph for debugging
-    #     with NamedTemporaryFile(mode="w", suffix=".egg", delete=False) as f:
-    #         f.write(egraph.as_egglog_string)
-    #         e.add_note(f"EGraph written to {f.name} for debugging")
-    #     raise
-    # try:
-    #     return egraph.extract(prim_expr).value  # type: ignore[attr-defined]
-    # except BaseException as e:
-    #     # egraph.display(n_inline_leaves=1, split_primitive_outputs=True)
-    #     e.add_note(f"Cannot evaluate {egraph.extract(expr)}")
-    #     raise
-
-    # egraph.saturate(array_api_combined_ruleset + run(), n_inline_leaves=2, split_functions=[Int])
 
 
 ##
@@ -2977,15 +2923,6 @@ def factor_ruleset(
 @ruleset
 def from_polynomial_ruleset(mss: MultiSet[MultiSet[Value]], n1: Value, n: Value, i: i64):
     mul: Callable[[Value, Value], Value] = Value.__mul__
-    # yield rewrite(polynomial(mss), subsume=True).to(
-    #     multiset_fold(
-    #         Value.__add__,
-    #         Value.from_int(0),
-    #         mss.map(
-    #             partial(multiset_fold, mul, Value.from_int(1)),
-    #         ),
-    #     )
-    # )
 
     yield rule(
         eq(n).to(polynomial(mss)),
@@ -3042,17 +2979,6 @@ def from_polynomial_ruleset(mss: MultiSet[MultiSet[Value]], n1: Value, n: Value,
         union(n1).with_(Value.from_int(i + 1) * n),
         delete(n + Value.from_int(i) * n),
     )
-
-
-# @ruleset
-# def to_exp_ruleset():
-#     """
-#     x * x => x**2
-#     x ** n * x => x ** (n + 1)
-#     x * x ** n => x ** (n + 1)
-#     x ** n * x **
-
-#     """
 
 
 polynomial_schedule = to_polynomial_ruleset.saturate() + factor_ruleset.saturate() + from_polynomial_ruleset.saturate()

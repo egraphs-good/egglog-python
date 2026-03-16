@@ -652,124 +652,106 @@ egraph.check(eq(x).to(WrappedMath(math_float(3.14)) + WrappedMath(math_float(3.1
 egraph
 ```
 
-## Visualization
+## Debugging and Inspection
 
-The default renderer for the e-graph in a Jupyter Notebook [an interactive Javascript visualizer](https://github.com/egraphs-good/egraph-visualizer):
+When a rule does not fire or an equality appears unexpectedly, the most useful
+high-level inspection methods are `run`, `stats`, `function_values`, `freeze`,
+`display`, and `saturate`.
 
 ```{code-cell} python
-egraph
+from __future__ import annotations
+
+from egglog import *
+
+
+class DebugMath(Expr):
+    def __init__(self, value: i64Like) -> None: ...
+
+    def __add__(self, other: DebugMath) -> DebugMath: ...
+
+
+@function
+def score(x: DebugMath) -> i64: ...
+
+
+debug_rules = ruleset()
+
+
+@debug_rules.register
+def _(i: i64, j: i64):
+    yield rewrite(DebugMath(i) + DebugMath(j)).to(DebugMath(i + j))
 ```
 
-You can also customize the visualization with
-{meth}`egglog.egraph.EGraph.display`:
+### `run`
+
+Use {meth}`egglog.egraph.EGraph.run` to execute a schedule and inspect the
+`RunReport` for per-run counters and timings:
+
+```{code-cell} python
+egraph = EGraph()
+expr = egraph.let("expr", DebugMath(2) + DebugMath(3))
+egraph.register(set_(score(expr)).to(5))
+
+report = egraph.run(debug_rules)
+report.num_matches_per_rule
+```
+
+### `stats`
+
+Use {meth}`egglog.egraph.EGraph.stats` when you want cumulative counters for the
+current e-graph instead of only the most recent run:
+
+```{code-cell} python
+stats = egraph.stats()
+stats.num_matches_per_rule
+```
+
+### `function_values`
+
+Use {meth}`egglog.egraph.EGraph.function_values` to inspect the current rows in a
+function table:
+
+```{code-cell} python
+egraph.function_values(score)
+```
+
+### `freeze`
+
+Use {meth}`egglog.egraph.EGraph.freeze` to snapshot the current state into a
+replayable high-level program:
+
+```{code-cell} python
+frozen = egraph.freeze()
+str(frozen)
+```
+
+### `display`
+
+In Jupyter, the default rich display for an e-graph is the interactive
+[egraph visualizer](https://github.com/egraphs-good/egraph-visualizer). You can
+also call {meth}`egglog.egraph.EGraph.display` directly:
 
 ```{code-cell} python
 egraph.display()
 ```
 
-If you would like to visualize the progression of the e-graph over time, you can
-use {meth}`egglog.egraph.EGraph.saturate` to run a number of iterations and then
-visualize the e-graph at each step:
+### `saturate`
+
+Use {meth}`egglog.egraph.EGraph.saturate` to keep running until the schedule
+stops changing the graph while printing the extracted form after each step:
 
 ```{code-cell} python
 egraph = EGraph()
-egraph.register(Math(2) + Math(100))
-i, j = vars_("i j", i64)
-r = ruleset(
-    rewrite(Math(i) + Math(j)).to(Math(i + j)),
-)
-egraph.saturate(r)
+expr = egraph.let("expr", DebugMath(2) + DebugMath(100))
+egraph.saturate(debug_rules, expr=expr, max=2, visualize=False)
 ```
 
-## Debugging and Inspection
+Common pitfalls when authoring rules:
 
-When a rewrite or rule causes an unexpected equality, these hooks are the fastest ways to
-figure out which rules fired and what the e-graph contains.
-
-### Run reports and rule counts
-
-`EGraph.run(...)` returns a `RunReport` that includes counts and timings per rule.
-
-```{code-cell} python
-egraph = EGraph()
-egraph.register(Math(2) + Math(100))
-report = egraph.run(3, ruleset=ruleset(rewrite(Math(2) + Math(100)).to(Math(102))))
-
-# How many times each rule matched in this run:
-report.num_matches_per_rule
-
-# Total time spent searching/applying each rule:
-report.search_and_apply_time_per_rule
-```
-
-You can also retrieve cumulative stats for the current e-graph:
-
-```{code-cell} python
-egraph = EGraph()
-egraph.register(Math(1) + Math(2))
-egraph.run(2)
-stats = egraph.stats()
-stats.num_matches_per_rule
-```
-
-### Freeze the e-graph
-
-For a replayable, high-level snapshot of the current e-graph, use
-{meth}`egglog.egraph.EGraph.freeze`.
-
-Unlike the lower-level serializer, `freeze()` reconstructs the current e-graph as
-high-level Python actions, so it is convenient for debugging and for writing
-regression tests around unexpected unions, sets, costs, or subsumptions.
-
-```{code-cell} python
-class DebugMath(Expr):
-    def __init__(self, value: i64Like) -> None: ...
-
-
-@function
-def debug_score(x: DebugMath) -> i64: ...
-
-
-egraph = EGraph()
-expr = DebugMath(1)
-egraph.register(expr, set_(debug_score(expr)).to(3))
-
-str(egraph.freeze())
-```
-
-### Serialize the e-graph
-
-If you create the e-graph with `save_egglog_string=True`, you can dump the program
-sent to egglog for offline inspection or minimization:
-
-```{code-cell} python
-egraph = EGraph(save_egglog_string=True)
-egraph.register(Math(1) + Math(2))
-egraph.run(2)
-egglog_program = egraph.as_egglog_string
-```
-
-For structural inspection, the internal serializer can be used to produce JSON or
-Graphviz output. These are especially useful when an unsound rewrite merges
-unexpected e-classes.
-
-```{code-cell} python
-egraph = EGraph()
-egraph.register(Math(1) + Math(2))
-egraph.run(2)
-serialized = egraph._serialize(split_primitive_outputs=True)  # internal helper
-json_blob = serialized.to_json()
-dot = serialized.to_dot()
-```
-
-### Common pitfalls (rule authoring)
-
-- Primitive container sorts like `Vec[...]` should not be merged or unioned. Avoid
-  using merge functions that combine Vec outputs, and prefer one-way `set_` rules.
-- Guard vector indexing rules with bounds checks (`0 <= k < vs.length()`) to avoid
-  `vec-get failed` panics and unsound conclusions.
-- Be careful with rules that build terms with negative lengths (e.g., `length - 1`);
-  ensure they only fire when the length is proven positive.
+- Primitive container sorts like `Vec[...]` should not be merged or unioned.
+- Guard vector indexing rules with bounds checks (`0 <= k < vs.length()`).
+- Ensure rules that subtract from lengths only fire when the length is proven
+  positive.
 
 ## Custom Cost Models
 

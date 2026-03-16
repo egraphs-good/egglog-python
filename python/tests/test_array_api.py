@@ -7,6 +7,7 @@ from pathlib import Path
 from types import FunctionType
 
 import numba
+import numpy as np
 import pytest
 from sklearn import config_context, datasets
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -30,6 +31,20 @@ some_int_index = constant("some_int_index", Int)
 
 def test_upcast_order():
     assert Int(2) > round(0.5 * Int(2))  # type: ignore[operator]
+
+
+def test_cross_eval_numpy_uses_fresh_egraph():
+    x = NDArray([1, 2, 3])
+    y = NDArray([4, 5, 6])
+
+    assert cross(x, y).eval_numpy(np.dtype("int64")).tolist() == [-3, 6, -3]
+
+
+def test_vecdot_eval_numpy_uses_fresh_egraph():
+    v = NDArray([[0.0, 5.0, 0.0], [0.0, 0.0, 10.0], [0.0, 6.0, 8.0]])
+    n = NDArray([0.0, 0.6, 0.8])
+
+    assert vecdot(v, n).eval_numpy(np.dtype("float64")).tolist() == pytest.approx([3.0, 8.0, 10.0])
 
 
 @function(ruleset=array_api_ruleset)
@@ -276,7 +291,7 @@ def linalg_val(X: NDArray, linalg_fn: Callable[[NDArray, TupleIntLike], NDArray]
 class TestLoopNest:
     @pytest.mark.parametrize("linalg_fn", [linalg_norm, linalg_norm_v2])
     def test_shape(self, linalg_fn):
-        X = np.random.random((3, 2, 3, 4))
+        X = np.random.default_rng(0).random((3, 2, 3, 4))
         expect = np.linalg.norm(X, axis=(0, 1))
         assert expect.shape == (3, 4)
 
@@ -332,7 +347,7 @@ class TestLoopNest:
 
         assert inspect.getsource(fn) == snapshot_py(name="code")
 
-        X = np.random.random((3, 2, 3, 4))
+        X = np.random.default_rng(0).random((3, 2, 3, 4))
         expect = np.linalg.norm(X, axis=(0, 1))
 
         for idxs in np.ndindex(*expect.shape):

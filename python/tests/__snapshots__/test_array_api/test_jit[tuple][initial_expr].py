@@ -1,3 +1,1 @@
-NDArray.var("x")[
-    IndexKey.int((NDArray.var("x").shape + TupleInt(Vec(Int(1), Int(2))))[Int(100)])
-]
+NDArray.var("x")[IndexKey.int((NDArray.var("x").shape + TupleInt(Vec(Int(1), Int(2))))[Int(100)])]

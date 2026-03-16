@@ -1,12 +1,4 @@
-"""
-Provides a class for solving type constraints.
-
-
-Usages:
-
-When trying to resolve a literal to a value
-
-"""
+"""Provides a class for solving type constraints."""
 
 from __future__ import annotations
 
@@ -110,6 +102,7 @@ class TypeConstraintSolver:
         If this fails and we have an UnstableFn type and a function value, we can try to infer the typevars by calling
         it with the input types, if we can resolve those
         """
+        from .egraph import set_current_ruleset  # noqa: PLC0415
         from .runtime import RuntimeExpr  # noqa: PLC0415
 
         try:
@@ -117,12 +110,19 @@ class TypeConstraintSolver:
         except TypeConstraintError:
             if isinstance(tp, TypeVarRef) or tp.ident != Ident.builtin("UnstableFn") or not callable(value):
                 raise
+        # Probe against an isolated copy of the declarations with no ambient ruleset so any temporary
+        # unnamed-function rewrites created while inferring types are discarded after the probe.
+        probe_decls = decls().copy()
         dummy_args = [
-            RuntimeExpr.__from_values__(decls(), TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()))
+            RuntimeExpr.__from_values__(
+                probe_decls,
+                TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()),
+            )
             for arg_tp in tp.args[1:]
         ]
         try:
-            result = value(*dummy_args)
+            with set_current_ruleset(None):
+                result = value(*dummy_args)
         except Exception as e:
             e.add_note(f"While trying to infer return type of {value} by calling it")
             raise

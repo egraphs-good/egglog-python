@@ -323,7 +323,6 @@ class _ExprMetaclass(type):
         if not bases or bases == (BaseExpr,):
             return super().__new__(cls, name, bases, namespace)
         builtin = BuiltinExpr in bases
-        # TODO: Raise error on subclassing or multiple inheritence
 
         frame = currentframe()
         assert frame
@@ -332,7 +331,6 @@ class _ExprMetaclass(type):
         cls_ident = Ident(name, _get_module(prev_frame))
         # Pass in an instance of the class so that when we are generating the decls
         # we can update them eagerly so that we can access the methods in the class body
-        # TODO: How should we normalize unparameterized classes? Should they have args of the typevars?
         runtime_cls = RuntimeClass(None, TypeRefWithVars(cls_ident))  # type: ignore[arg-type]
 
         # Store frame so that we can get live access to updated locals/globals
@@ -867,19 +865,23 @@ class EGraph:
     Can run actions, check facts, run schedules, or extract minimal cost expressions.
     """
 
-    seminaive: InitVar[bool] = True
-    save_egglog_string: InitVar[bool] = False
-
     _state: EGraphState = field(init=False, repr=False)
     # For pushing/popping with egglog
     _state_stack: list[EGraphState] = field(default_factory=list, repr=False)
     # For storing the global "current" egraph
     _token_stack: list[EGraph] = field(default_factory=list, repr=False)
 
-    # TODO: Add EGraph(...commands) constructor
-    def __post_init__(self, seminaive: bool, save_egglog_string: bool) -> None:
-        egraph = bindings.EGraph(seminaive=seminaive, record=save_egglog_string)
-        self._state = EGraphState(egraph)
+    def __init__(
+        self,
+        *actions: ActionLike,
+        seminaive: bool = True,
+        save_egglog_string: bool = False,
+    ) -> None:
+        self._state = EGraphState(bindings.EGraph(seminaive=seminaive, record=save_egglog_string))
+        self._state_stack = []
+        self._token_stack = []
+        if actions:
+            self.register(*actions)
 
     def _add_decls(self, *decls: DeclarationsLike) -> None:
         for d in decls:
@@ -1367,8 +1369,7 @@ class EGraph:
         >>> class Math(Expr):
         ...     def __init__(self, value: i64Like) -> None: ...
         ...
-        >>> egraph = EGraph()
-        >>> egraph.register(Math(1))
+        >>> egraph = EGraph(Math(1))
         >>> str(egraph.freeze())
         'EGraph(Math(1)).freeze()'
         """

@@ -78,6 +78,8 @@ class EGraphState:
     cost_callables: set[CallableRef] = field(default_factory=set)
     # Counter for deterministic synthetic let bindings created while lowering expressions to egg.
     expr_to_let_counter: int = 0
+    # Counter for deterministic synthetic names assigned to unnamed functions.
+    unnamed_function_counter: int = 0
 
     def copy(self) -> EGraphState:
         """
@@ -94,6 +96,7 @@ class EGraphState:
             expr_to_egg_cache=self.expr_to_egg_cache.copy(),
             cost_callables=self.cost_callables.copy(),
             expr_to_let_counter=self.expr_to_let_counter,
+            unnamed_function_counter=self.unnamed_function_counter,
         )
 
     def run_schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Command:
@@ -675,11 +678,10 @@ class EGraphState:
                 return f"{cls_ident}.{name}"
             case InitRef(cls_ident):
                 return f"{cls_ident}.__init__"
-            case UnnamedFunctionRef(args, val):
-                parts = [str(self._expr_to_egg(a.expr)) + "-" + str(self.type_ref_to_egg(a.tp)) for a in args] + [
-                    str(self.typed_expr_to_egg(val, False))
-                ]
-                return "_".join(parts)
+            case UnnamedFunctionRef():
+                name = f"_lambda_{self.unnamed_function_counter}"
+                self.unnamed_function_counter += 1
+                return name
             case _:
                 assert_never(ref)
 

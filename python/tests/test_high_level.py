@@ -171,6 +171,33 @@ def test_extract_include_cost():
     assert cost == 1
 
 
+def test_egraph_constructor_registers_actions():
+    class ConstructorExpr(Expr):
+        def __init__(self) -> None: ...
+
+    @function
+    def constructor_cost() -> i64: ...
+
+    @function
+    def constructor_lhs() -> ConstructorExpr: ...
+
+    @function
+    def constructor_rhs() -> ConstructorExpr: ...
+
+    constructed = EGraph(
+        ConstructorExpr(), set_(constructor_cost()).to(i64(1)), eq(constructor_lhs()).to(constructor_rhs())
+    )
+
+    expected = EGraph()
+    expected.register(
+        ConstructorExpr(),
+        set_(constructor_cost()).to(i64(1)),
+        eq(constructor_lhs()).to(constructor_rhs()),
+    )
+
+    assert str(constructed.freeze()) == str(expected.freeze())
+
+
 def test_relation():
     egraph = EGraph()
 

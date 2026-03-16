@@ -25,8 +25,6 @@ from typing import (
 from uuid import UUID
 from weakref import WeakValueDictionary
 
-from egglog import bindings
-
 from .bindings import Value
 
 if TYPE_CHECKING:
@@ -366,7 +364,7 @@ class EGraphDecl:
     # Mapping from top level let binding names to their types and expressions
     let_bindings: dict[str, TypedExprDecl] = field(default_factory=dict)
     # Mapping from egglog values representing e-classes to all the expressions in that e-class
-    e_classes: dict[bindings.Value, tuple[JustTypeRef, tuple[CallDecl, ...]]] = field(default_factory=dict)
+    e_classes: dict[Value, tuple[JustTypeRef, tuple[CallDecl, ...]]] = field(default_factory=dict)
     # Mapping from function calls to the values they are set to
     sets: dict[CallDecl, TypedExprDecl] = field(default_factory=dict)
     # Top-level expr actions such as relation facts.
