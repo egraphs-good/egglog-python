@@ -95,7 +95,7 @@ def test_convert_to_generic():
     class G(BuiltinExpr, Generic[T]):
         def __init__(self, x: T) -> None: ...
 
-    converter(i64, G[i64], lambda x: G(x))
+    converter(i64, G[i64], G)
     assert expr_parts(convert(10, G[i64])) == expr_parts(G(i64(10)))
 
     with pytest.raises(ConvertError):
@@ -114,7 +114,7 @@ def test_convert_to_unbound_generic():
     class G(BuiltinExpr, Generic[T]):
         def __init__(self, x: i64) -> None: ...
 
-    converter(i64, G, lambda x: G[get_type_args()[0]](x))  # type: ignore[misc, operator]
+    converter(i64, G, G[get_type_args()[0]])  # type: ignore[misc, operator]
     assert expr_parts(convert(10, G[String])) == expr_parts(G[String](i64(10)))
 
 

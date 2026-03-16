@@ -297,7 +297,7 @@ def _int(i: i64, j: i64, r: Boolean, o: Int, b: Int):
     yield rule(eq(Int.NEVER).to(Int(i))).then(panic("Int.NEVER cannot be equal to any real int"))
 
 
-converter(i64, Int, lambda x: Int(x))
+converter(i64, Int, Int)
 
 IntLike: TypeAlias = Int | i64Like
 
@@ -377,8 +377,8 @@ class Float(Expr, ruleset=array_api_ruleset):
     def __ge__(self, other: FloatLike) -> Boolean: ...
 
 
-converter(float, Float, lambda x: Float(x))
-converter(Int, Float, lambda x: Float.from_int(x))
+converter(float, Float, Float)
+converter(Int, Float, Float.from_int)
 
 
 FloatLike: TypeAlias = Float | float | IntLike
@@ -521,7 +521,7 @@ class TupleInt(Expr, ruleset=array_api_ruleset):
         return TupleInt.range(self.length()).filter(lambda i: ~indices.contains(i)).map(lambda i: self[i])
 
 
-converter(Vec[Int], TupleInt, lambda x: TupleInt.from_vec(x))
+converter(Vec[Int], TupleInt, TupleInt.from_vec)
 
 TupleIntLike: TypeAlias = TupleInt | VecLike[Int, IntLike]
 
@@ -649,7 +649,7 @@ class TupleTupleInt(Expr, ruleset=array_api_ruleset):
         )
 
 
-converter(Vec[TupleInt], TupleTupleInt, lambda x: TupleTupleInt.from_vec(x))
+converter(Vec[TupleInt], TupleTupleInt, TupleTupleInt.from_vec)
 
 TupleTupleIntLike: TypeAlias = TupleTupleInt | VecLike[TupleInt, TupleIntLike]
 
@@ -755,8 +755,8 @@ class IsDtypeKind(Expr, ruleset=array_api_ruleset):
 def isdtype(dtype: DType, kind: IsDtypeKind) -> Boolean: ...
 
 
-converter(DType, IsDtypeKind, lambda x: IsDtypeKind.dtype(x))
-converter(str, IsDtypeKind, lambda x: IsDtypeKind.string(x))
+converter(DType, IsDtypeKind, IsDtypeKind.dtype)
+converter(str, IsDtypeKind, IsDtypeKind.string)
 converter(
     tuple, IsDtypeKind, lambda x: convert(x[0], IsDtypeKind) | convert(x[1:], IsDtypeKind) if x else IsDtypeKind.NULL
 )
@@ -922,8 +922,8 @@ class TupleValue(Expr, ruleset=array_api_ruleset):
         return TupleValue(ti.length(), lambda i: Value.int(ti[i]))
 
 
-converter(Vec[Value], TupleValue, lambda x: TupleValue.from_vec(x))
-converter(TupleInt, TupleValue, lambda x: TupleValue.from_tuple_int(x))
+converter(Vec[Value], TupleValue, TupleValue.from_vec)
+converter(TupleInt, TupleValue, TupleValue.from_tuple_int)
 
 TupleValueLike: TypeAlias = TupleValue | VecLike[Value, ValueLike] | TupleIntLike
 
@@ -1073,9 +1073,9 @@ IndexKeyLike: TypeAlias = "IndexKey | IntLike | SliceLike | MultiAxisIndexKeyLik
 
 
 converter(type(...), IndexKey, lambda _: IndexKey.ELLIPSIS)
-converter(Int, IndexKey, lambda i: IndexKey.int(i))
-converter(Slice, IndexKey, lambda s: IndexKey.slice(s))
-converter(MultiAxisIndexKey, IndexKey, lambda m: IndexKey.multi_axis(m))
+converter(Int, IndexKey, IndexKey.int)
+converter(Slice, IndexKey, IndexKey.slice)
+converter(MultiAxisIndexKey, IndexKey, IndexKey.multi_axis)
 
 
 class Device(Expr, ruleset=array_api_ruleset): ...
@@ -1232,13 +1232,13 @@ class NDArray(Expr, ruleset=array_api_ruleset):
 
 NDArrayLike: TypeAlias = NDArray | ValueLike | TupleValueLike
 
-converter(NDArray, IndexKey, lambda v: IndexKey.ndarray(v))
-converter(Value, NDArray, lambda v: NDArray.scalar(v))
+converter(NDArray, IndexKey, IndexKey.ndarray)
+converter(Value, NDArray, NDArray.scalar)
 # Need this if we want to use ints in slices of arrays coming from 1d arrays, but make it more expensive
 # to prefer upcasting in the other direction when we can, which is safer at runtime
 converter(NDArray, Value, lambda n: n.to_value(), 100)
-converter(TupleValue, NDArray, lambda v: NDArray.vector(v))
-converter(TupleInt, TupleValue, lambda v: TupleValue.from_tuple_int(v))
+converter(TupleValue, NDArray, NDArray.vector)
+converter(TupleInt, TupleValue, TupleValue.from_tuple_int)
 
 
 @array_api_ruleset.register
@@ -1322,7 +1322,7 @@ class TupleNDArray(Expr, ruleset=array_api_ruleset):
         return try_evaling(_get_current_egraph(), array_api_schedule, self, self.to_vec)
 
 
-converter(Vec[NDArray], TupleNDArray, lambda x: TupleNDArray.from_vec(x))
+converter(Vec[NDArray], TupleNDArray, TupleNDArray.from_vec)
 
 TupleNDArrayLike: TypeAlias = TupleNDArray | VecLike[NDArray, NDArrayLike]
 
@@ -1371,7 +1371,7 @@ class OptionalBool(Expr, ruleset=array_api_ruleset):
 
 
 converter(type(None), OptionalBool, lambda _: OptionalBool.none)
-converter(Boolean, OptionalBool, lambda x: OptionalBool.some(x))
+converter(Boolean, OptionalBool, OptionalBool.some)
 
 
 class OptionalDType(Expr, ruleset=array_api_ruleset):
@@ -1382,7 +1382,7 @@ class OptionalDType(Expr, ruleset=array_api_ruleset):
 
 
 converter(type(None), OptionalDType, lambda _: OptionalDType.none)
-converter(DType, OptionalDType, lambda x: OptionalDType.some(x))
+converter(DType, OptionalDType, OptionalDType.some)
 
 
 class OptionalDevice(Expr, ruleset=array_api_ruleset):
@@ -1393,7 +1393,7 @@ class OptionalDevice(Expr, ruleset=array_api_ruleset):
 
 
 converter(type(None), OptionalDevice, lambda _: OptionalDevice.none)
-converter(Device, OptionalDevice, lambda x: OptionalDevice.some(x))
+converter(Device, OptionalDevice, OptionalDevice.some)
 
 
 class OptionalTupleInt(Expr, ruleset=array_api_ruleset):
@@ -1404,7 +1404,7 @@ class OptionalTupleInt(Expr, ruleset=array_api_ruleset):
 
 
 converter(type(None), OptionalTupleInt, lambda _: OptionalTupleInt.none)
-converter(TupleInt, OptionalTupleInt, lambda x: OptionalTupleInt.some(x))
+converter(TupleInt, OptionalTupleInt, OptionalTupleInt.some)
 
 
 class IntOrTuple(Expr, ruleset=array_api_ruleset):
@@ -1417,8 +1417,8 @@ class IntOrTuple(Expr, ruleset=array_api_ruleset):
     def tuple(cls, value: TupleIntLike) -> IntOrTuple: ...
 
 
-converter(Int, IntOrTuple, lambda v: IntOrTuple.int(v))
-converter(TupleInt, IntOrTuple, lambda v: IntOrTuple.tuple(v))
+converter(Int, IntOrTuple, IntOrTuple.int)
+converter(TupleInt, IntOrTuple, IntOrTuple.tuple)
 
 
 class OptionalIntOrTuple(Expr, ruleset=array_api_ruleset):
@@ -1429,7 +1429,7 @@ class OptionalIntOrTuple(Expr, ruleset=array_api_ruleset):
 
 
 converter(type(None), OptionalIntOrTuple, lambda _: OptionalIntOrTuple.none)
-converter(IntOrTuple, OptionalIntOrTuple, lambda v: OptionalIntOrTuple.some(v))
+converter(IntOrTuple, OptionalIntOrTuple, OptionalIntOrTuple.some)
 
 
 @function
