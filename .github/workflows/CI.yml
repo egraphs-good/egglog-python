@@ -63,11 +63,12 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
       - run: |
           export UV_PROJECT_ENVIRONMENT="${pythonLocation}"
-          uv sync --extra test --locked
+          uv sync --extra test --locked --python 3.12
       - uses: CodSpeedHQ/action@v4.11.1
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
