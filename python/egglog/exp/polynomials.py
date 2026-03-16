@@ -1,338 +1,245 @@
-# # Optimizing Polynomials
-#
-# This post explore a few different ways of optimizing polynomials in Egglog. This is mean to see if we can
-# represent addition and multiplication through built-in multiset data structures in egglog if this can help
-# avoid some of the issues with associativity/commutativity blowup.
+"""
+Helpers for the polynomial container examples in the containers docs.
+"""
 
-# +
-# First we can define a generic number type
-# mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
-from functools import partial
-from pathlib import Path
-from typing import TypeAlias
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 
-from egglog import *
+import numpy as np
+
+import egglog
+import egglog.exp.array_api as enp
+
+__all__ = [
+    "Report",
+    "TotalReport",
+    "bending_function",
+    "distribute",
+    "factoring",
+    "remove_subtraction",
+    "run_example",
+    "symbolic_bending_examples",
+    "symbolic_bending_inputs",
+    "try_example",
+]
 
 
-class Number(Expr, egg_sort="Number"):
-    def __init__(self, value: i64Like) -> None: ...
-    def __add__(self, other: NumberLike) -> Number: ...
-    def __radd__(self, other: NumberLike) -> Number: ...
-    def __sub__(self, other: NumberLike) -> Number: ...
-    def __rsub__(self, other: NumberLike) -> Number: ...
-    def __mul__(self, other: NumberLike) -> Number: ...
-    def __rmul__(self, other: NumberLike) -> Number: ...
-    def __truediv__(self, other: NumberLike) -> Number: ...
-    def __rtruediv__(self, other: NumberLike) -> Number: ...
-    def __pow__(self, power: NumberLike) -> Number: ...
-    def __neg__(self) -> Number: ...
+def bending_function(Q, Bp, Bpp):
+    xp = Q.__array_namespace__()
+    QM = xp.reshape(Q, (4, 3)).T
+
+    yip = xp.vecdot(QM, Bp)
+    yipp = xp.vecdot(QM, Bpp)
+    num = xp.linalg.vector_norm(xp.cross(yip, yipp))
+    den = xp.linalg.vector_norm(yip) ** 3
+    return (num / den) ** 2
 
 
-# Then we can define a large polynomial, based on output from a paper on simulating cloths
-# -
+def symbolic_bending_inputs() -> tuple[enp.NDArray, enp.NDArray, enp.NDArray]:
+    bp = enp.NDArray([enp.Value.var(f"bp{i}") for i in range(1, 5)])
+    bpp = enp.NDArray([enp.Value.var(f"bpp{i}") for i in range(1, 5)])
+    q = enp.NDArray([enp.Value.var(f"q{i}") for i in range(1, 13)])
+    return bp, bpp, q
 
-NumberLike: TypeAlias = Number | i64Like
-converter(i64, Number, Number)
 
-bpp1 = constant("bpp1", Number)
-bpp2 = constant("bpp2", Number)
-bpp3 = constant("bpp3", Number)
-bpp4 = constant("bpp4", Number)
-bp1 = constant("bp1", Number)
-bp2 = constant("bp2", Number)
-bp3 = constant("bp3", Number)
-bp4 = constant("bp4", Number)
-q1 = constant("q1", Number)
-q2 = constant("q2", Number)
-q3 = constant("q3", Number)
-q4 = constant("q4", Number)
-q5 = constant("q5", Number)
-q6 = constant("q6", Number)
-q7 = constant("q7", Number)
-q8 = constant("q8", Number)
-q9 = constant("q9", Number)
-q10 = constant("q10", Number)
-q11 = constant("q11", Number)
-q12 = constant("q12", Number)
+def symbolic_bending_examples() -> tuple[enp.NDArray, enp.NDArray]:
+    bp, bpp, q = symbolic_bending_inputs()
+    function_bending = enp.NDArray(bending_function(q, bp, bpp).eval())
+    gradient_bending = enp.NDArray(function_bending.diff(q).eval())
+    return function_bending, gradient_bending
 
-res = (
-    (
-        -bp4 * bpp1 * q1 * q11
-        + bp1 * bpp4 * q1 * q11
-        + bp4 * bpp1 * q10 * q2
-        - bp1 * bpp4 * q10 * q2
-        - bp4 * bpp2 * q11 * q4
-        + bp2 * bpp4 * q11 * q4
-        + bp2 * bpp1 * q2 * q4
-        - bp1 * bpp2 * q2 * q4
-        - bp2 * bpp1 * q1 * q5
-        + bp1 * bpp2 * q1 * q5
-        + bp4 * bpp2 * q10 * q5
-        - bp2 * bpp4 * q10 * q5
-        - bp4 * bpp3 * q11 * q7
-        + bp3 * bpp4 * q11 * q7
-        + bp3 * bpp1 * q2 * q7
-        - bp1 * bpp3 * q2 * q7
-        + bp3 * bpp2 * q5 * q7
-        - bp2 * bpp3 * q5 * q7
-        - bp3 * bpp1 * q1 * q8
-        + bp1 * bpp3 * q1 * q8
-        + bp4 * bpp3 * q10 * q8
-        - bp3 * bpp4 * q10 * q8
-        - bp3 * bpp2 * q4 * q8
-        + bp2 * bpp3 * q4 * q8
+
+@egglog.ruleset
+def remove_subtraction(a: enp.Value, b: enp.Value):
+    yield egglog.rewrite(a - b, subsume=True).to(a + (-1) * b)
+
+
+@egglog.ruleset
+def distribute(a: enp.Value, b: enp.Value, c: enp.Value):
+    yield egglog.rewrite((a + b) * c, subsume=True).to(a * c + b * c)
+    yield egglog.rewrite(c * (a + b), subsume=True).to(c * a + c * b)
+
+
+@egglog.ruleset
+def factoring(a: enp.Value, b: enp.Value, c: enp.Value):
+    yield egglog.birewrite((a + b) * c).to(a * c + b * c)
+    yield egglog.rewrite(a * b).to(b * a)
+    yield egglog.rewrite(a + b).to(b + a)
+    yield egglog.birewrite(a * (b * c)).to((a * b) * c)
+
+
+@dataclass(frozen=True)
+class Report:
+    register_sec: float
+    run_sec: float
+    extract_sec: float
+    extracted: enp.NDArray
+    cost: int
+    function_sizes: list[tuple[Callable, int]]
+    updated: bool
+
+    @property
+    def total_sec(self) -> float:
+        return self.register_sec + self.run_sec + self.extract_sec
+
+    @property
+    def total_size(self) -> int:
+        return sum(size for _, size in self.function_sizes)
+
+
+def run_example(
+    ruleset: egglog.Schedule | egglog.Ruleset, input: enp.NDArray, egraph: egglog.EGraph | None = None
+) -> Report:
+    if egraph is None:
+        egraph = egglog.EGraph()
+
+    start = time.perf_counter()
+    egraph.register(input)
+    register_sec = time.perf_counter() - start
+
+    start = time.perf_counter()
+    run_report = egraph.run(ruleset)
+    run_sec = time.perf_counter() - start
+
+    start = time.perf_counter()
+    extracted, cost = egraph.extract(input, include_cost=True)
+    extract_sec = time.perf_counter() - start
+
+    return Report(register_sec, run_sec, extract_sec, extracted, cost, egraph.all_function_sizes(), run_report.updated)
+
+
+@dataclass(frozen=True)
+class TotalReport:
+    original: Report
+    distributed: Report
+    factored: list[Report]
+    polynomial_multisets: Report
+    polynomial_multisets_factored: Report
+    polynomial: Report
+
+    @property
+    def combined_factored(self) -> Report:
+        if not self.factored:
+            return self.distributed
+        return Report(
+            register_sec=self.factored[0].register_sec,
+            run_sec=sum(r.run_sec for r in self.factored),
+            extract_sec=self.factored[-1].extract_sec,
+            extracted=self.factored[-1].extracted,
+            cost=self.factored[-1].cost,
+            function_sizes=self.factored[-1].function_sizes,
+            updated=self.factored[-1].updated,
+        )
+
+    @property
+    def combined_polynomial(self) -> Report:
+        return Report(
+            register_sec=self.polynomial_multisets.register_sec,
+            run_sec=self.polynomial_multisets.run_sec
+            + self.polynomial_multisets_factored.run_sec
+            + self.polynomial.run_sec,
+            extract_sec=self.polynomial.extract_sec,
+            extracted=self.polynomial.extracted,
+            cost=self.polynomial.cost,
+            function_sizes=self.polynomial.function_sizes,
+            updated=self.polynomial.updated,
+        )
+
+    def __str__(self) -> str:
+        return f"""Costs:
+* original: {self.original.cost:,}
+* distributed: {self.distributed.cost:,}
+* factored: {self.combined_factored.cost:,}
+* horner multisets: {self.combined_polynomial.cost:,}
+
+
+Number of nodes:
+* original: {self.original.total_size:,}
+* distributed: {self.distributed.total_size:,}
+* factored: {self.combined_factored.total_size:,}
+* horner multisets: {self.combined_polynomial.total_size:,}
+
+Time:
+* original: {self.original.total_sec:.2f}s
+* distributed: {self.distributed.total_sec:.2f}s
+* factored: {self.combined_factored.total_sec:.2f}s
+* horner multisets: {self.combined_polynomial.total_sec:.2f}s
+"""
+
+
+def try_example(
+    expr: enp.NDArray,
+    *,
+    max_factoring_iters: int = 20,
+    max_factoring_sec: float = 10.0,
+) -> TotalReport:
+    original_report = run_example(remove_subtraction, expr)
+    print(f"original cost: {original_report.cost:,}")
+    distributed_report = run_example(distribute.saturate(), original_report.extracted)
+    print(f"distributed cost: {distributed_report.cost:,}")
+
+    egraph = egglog.EGraph()
+    polynomial_multisets_report = run_example(
+        enp.to_polynomial_ruleset.saturate(), distributed_report.extracted, egraph
     )
-    ** 2
-    + (
-        bp4 * bpp1 * q1 * q12
-        - bp1 * bpp4 * q1 * q12
-        - bp4 * bpp1 * q10 * q3
-        + bp1 * bpp4 * q10 * q3
-        + bp4 * bpp2 * q12 * q4
-        - bp2 * bpp4 * q12 * q4
-        - bp2 * bpp1 * q3 * q4
-        + bp1 * bpp2 * q3 * q4
-        + bp2 * bpp1 * q1 * q6
-        - bp1 * bpp2 * q1 * q6
-        - bp4 * bpp2 * q10 * q6
-        + bp2 * bpp4 * q10 * q6
-        + bp4 * bpp3 * q12 * q7
-        - bp3 * bpp4 * q12 * q7
-        - bp3 * bpp1 * q3 * q7
-        + bp1 * bpp3 * q3 * q7
-        - bp3 * bpp2 * q6 * q7
-        + bp2 * bpp3 * q6 * q7
-        + bp3 * bpp1 * q1 * q9
-        - bp1 * bpp3 * q1 * q9
-        - bp4 * bpp3 * q10 * q9
-        + bp3 * bpp4 * q10 * q9
-        + bp3 * bpp2 * q4 * q9
-        - bp2 * bpp3 * q4 * q9
+    polynomial_multisets_factored_report = run_example(
+        enp.factor_ruleset.saturate(), polynomial_multisets_report.extracted, egraph
     )
-    ** 2
-    + (
-        -bp4 * bpp1 * q12 * q2
-        + bp1 * bpp4 * q12 * q2
-        + bp4 * bpp1 * q11 * q3
-        - bp1 * bpp4 * q11 * q3
-        - bp4 * bpp2 * q12 * q5
-        + bp2 * bpp4 * q12 * q5
-        + bp2 * bpp1 * q3 * q5
-        - bp1 * bpp2 * q3 * q5
-        + bp4 * bpp2 * q11 * q6
-        - bp2 * bpp4 * q11 * q6
-        - bp2 * bpp1 * q2 * q6
-        + bp1 * bpp2 * q2 * q6
-        - bp4 * bpp3 * q12 * q8
-        + bp3 * bpp4 * q12 * q8
-        + bp3 * bpp1 * q3 * q8
-        - bp1 * bpp3 * q3 * q8
-        + bp3 * bpp2 * q6 * q8
-        - bp2 * bpp3 * q6 * q8
-        + bp4 * bpp3 * q11 * q9
-        - bp3 * bpp4 * q11 * q9
-        - bp3 * bpp1 * q2 * q9
-        + bp1 * bpp3 * q2 * q9
-        - bp3 * bpp2 * q5 * q9
-        + bp2 * bpp3 * q5 * q9
+    polynomial_report = run_example(
+        enp.from_polynomial_ruleset.saturate(), polynomial_multisets_factored_report.extracted, egraph
     )
-    ** 2
-) / (
-    (bp1 * q1 + bp4 * q10 + bp2 * q4 + bp3 * q7) ** 2
-    + (bp4 * q11 + bp1 * q2 + bp2 * q5 + bp3 * q8) ** 2
-    + (bp4 * q12 + bp1 * q3 + bp2 * q6 + bp3 * q9) ** 2
-) ** 3
+    print(f"polynomial cost: {polynomial_report.cost:,}")
 
-# -
+    egraph = egglog.EGraph()
+    factored_reports: list[Report] = []
+    for i in range(max_factoring_iters):
+        res = run_example(factoring, distributed_report.extracted, egraph)
+        if not res.updated or res.run_sec > max_factoring_sec:
+            break
+        print(f"factoring iteration {i}, cost: {res.cost:,}")
+        factored_reports.append(res)
+    print("Finished\n")
 
-print("saving initial expression to initial.py")
-INITIAL_STR = "from egglog.exp.polynomials import *\n\n"
-Path("tmp/initial.py").write_text(INITIAL_STR + str(res))
-
-egraph = EGraph(save_egglog_string=True)
-res = egraph.let("res", res)
-
-
-@function
-def monomial(x: MultiSetLike[Number, NumberLike]) -> Number: ...
-
-
-@function(merge=lambda old, new: new)
-def get_monomial(x: Number) -> MultiSet[Number]:
-    """
-    Only defined on monomials:
-
-        get_monomial(monomial(xs)) => xs
-    """
-
-
-@function(merge=lambda old, new: new)
-def get_sole_polynomial(xs: MultiSet[Number]) -> MultiSet[MultiSet[Number]]:
-    """
-    Only defined on monomials that contain a single polynomial:
-
-        get_sole_polynomial(MultiSet(polynomial(xs))) => xs
-    """
-
-
-# MultiSet[MultiSet[Number]]
-@function
-def polynomial(x: MultiSetLike[MultiSet[Number], MultiSetLike[Number, NumberLike]]) -> Number: ...
-
-
-# a + x * y
-
-# polynomial(multiset(multiset(a), multiset(x, y)))
-
-
-@ruleset
-def to_polynomial_ruleset(
-    n1: Number,
-    n2: Number,
-    n3: Number,
-    mss: MultiSet[MultiSet[Number]],
-    mss1: MultiSet[MultiSet[Number]],
-):
-    yield rewrite(-n1, subsume=True).to(-1 * n1)
-    yield rewrite(n1 - n2, subsume=True).to(n1 + (-1 * n2))
-    yield rule(
-        n3 == n1 + n2,
-        name="add",
-    ).then(
-        union(n3).with_(polynomial(MultiSet(MultiSet(n1), MultiSet(n2)))),
-        set_(get_sole_polynomial(MultiSet(n3))).to(MultiSet(MultiSet(n1), MultiSet(n2))),
-        delete(n1 + n2),
-    )
-    yield rule(
-        n3 == n1 * n2,
-        name="mul",
-    ).then(
-        union(n3).with_(monomial(MultiSet(n1, n2))),
-        set_(get_monomial(n3)).to(MultiSet(n1, n2)),
-        delete(n1 * n2),
-        # MultiSet(n1, n2).fill_index(ms_index),
-    )
-    yield rule(
-        n1 == polynomial(mss),
-        mss1 == mss.map(partial(multiset_flat_map, get_monomial)),
-        mss != mss1,
-        name="unwrap monomial",
-    ).then(
-        union(n1).with_(polynomial(mss1)),
-        delete(polynomial(mss)),
-        set_(get_sole_polynomial(MultiSet(n1))).to(mss1),
-    )
-    yield rule(
-        n1 == polynomial(mss),
-        mss1 == multiset_flat_map(UnstableFn(get_sole_polynomial), mss),
-        mss != mss1,
-        name="unwrap polynomial",
-    ).then(
-        union(n1).with_(polynomial(mss1)),
-        delete(polynomial(mss)),
-        set_(get_sole_polynomial(MultiSet(n1))).to(mss1),
+    return TotalReport(
+        original_report,
+        distributed_report,
+        factored_reports,
+        polynomial_multisets_report,
+        polynomial_multisets_factored_report,
+        polynomial_report,
     )
 
 
-egraph.run(to_polynomial_ruleset.saturate())
-print("saving polynomial expression to polynomial.py")
-Path("tmp/polynomial.py").write_text(INITIAL_STR + str(egraph.extract(res)))
+def main() -> None:
+    rng = np.random.default_rng(0)
+    q = rng.random(12)
+    bp = rng.random(4)
+    bpp = rng.random(4)
+
+    qm = np.reshape(q, (4, 3)).T
+    yip = qm @ bp
+    yipp = qm @ bpp
+    expected = (np.linalg.norm(np.cross(yip, yipp)) / np.linalg.norm(yip) ** 3) ** 2
+    result = bending_function(q, bp, bpp)
+    assert np.isclose(result, expected)
+
+    function_bending, gradient_bending = symbolic_bending_examples()
+
+    function_report = try_example(function_bending, max_factoring_iters=0)
+    assert function_report.original.cost > 0
+    assert function_report.polynomial.cost > 0
+
+    gradient_report = run_example(remove_subtraction, gradient_bending)
+    assert gradient_report.cost > 0
+    assert gradient_report.total_sec >= 0.0
+    assert gradient_report.total_size > 0
+
+    print(function_report)
+    print("gradient remove_subtraction cost:", gradient_report.cost)
 
 
-@ruleset
-def factor_ruleset(
-    n: Number,
-    mss: MultiSet[MultiSet[Number]],
-    counts: MultiSet[Number],
-    factor: Number,
-    divided: MultiSet[MultiSet[Number]],
-    remainder: MultiSet[MultiSet[Number]],
-):
-    yield rule(
-        n == polynomial(mss),
-        # Find factor that shows up in most monomials, at least two of them
-        counts == MultiSet.sum_multisets(mss.map(MultiSet.reset_counts)),
-        factor == counts.pick_max(),
-        # Only factor out if it term appears in more than one monomial
-        counts.count(factor) > 1,
-        # map, including only those factor that contain the factor, removing them from that
-        # other items are omitted from the map
-        divided == mss.map(partial(multiset_remove_swapped, factor)),
-        # remainder is those monomials that do not contain the factor
-        remainder == mss.filter(partial(multiset_not_contains_swapped, factor)),
-        name="factor",
-    ).then(
-        union(n).with_(polynomial(MultiSet(MultiSet(factor, polynomial(divided))) + remainder)),
-        # delete(polynomial(mss)),
-    )
-
-
-egraph.run(factor_ruleset.saturate())
-print("saving factored expression to factored.py")
-Path("tmp/factored.py").write_text(INITIAL_STR + str(egraph.extract(res)))
-
-
-print("saving egraph to polynomials.egg")
-Path("tmp/polynomials.egg").write_text(egraph.as_egglog_string)
-
-# simplifying polynomials
-
-# @function(merge=lambda old, new: new)
-# def get_polynomial_sole_monomial(x: Number) -> MultiSet[Number]:
-#     """
-#     Only defined on polynomials that contain a single monomial:
-
-#         get_polynomial_sole_monomial(polynomial(MultiSet(xs))) => xs
-#     """
-
-
-# @ruleset
-# def simplified_factor_ruleset(
-#     n: Number,
-#     mss: MultiSet[MultiSet[Number]],
-#     mss1: MultiSet[MultiSet[Number]],
-#     ms: MultiSet[Number],
-# ):
-#     # replace all monomial with polyomials with one monomial with just monomials
-#     # a = polynomial(
-#     #     MultiSet(
-#     #         MultiSet(bp1, bpp4, q12, q1),
-#     #         MultiSet(q7, polynomial(MultiSet(MultiSet(bp3, _Number_10)))),
-#     #         MultiSet(q9, polynomial(MultiSet(MultiSet(bpp3, _Number_8)))),
-#     #     )
-#     # )
-#     # replace_with = polynomial(
-#     #     MultiSet(
-#     #         MultiSet(bp1, bpp4, q12, q1),
-#     #         MultiSet(q7, bp3, _Number_10),
-#     #         MultiSet(q9, bpp3, _Number_8),
-#     #     )
-#     # )
-
-#     yield rule(
-#         n == polynomial(mss),
-#         mss.length() == i64(1),
-#         ms == mss.pick(),
-#         name="set polynomial sole monomial",
-#     ).then(
-#         set_(get_polynomial_sole_monomial(n)).to(ms),
-#     )
-#     yield rule(
-#         n == polynomial(mss),
-#         mss1 == mss.map(partial(multiset_flat_map, get_polynomial_sole_monomial)),
-#         mss != mss1,
-#         name="unwrap polynomial sole monomial",
-#     ).then(
-#         union(n).with_(polynomial(mss1)),
-#         subsume(polynomial(mss)),
-#     )
-
-
-# print("simplifying factored")
-# egraph.run(simplified_factor_ruleset.saturate())
-# print("extracting simplified factored")
-# finished_simplified = egraph.extract(res)
-# print("saving simplified factored expression to simplified_factored.py")
-# Path("simplified_factored.py").write_text(INITIAL_STR + str(finished_simplified))
+if __name__ == "__main__":
+    main()
