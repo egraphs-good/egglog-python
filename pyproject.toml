@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Software Development :: Interpreters",
     "Typing :: Typed",
 ]
-dependencies = ["typing-extensions", "black", "graphviz", "anywidget", "cloudpickle>=3"]
+dependencies = ["typing-extensions", "black", "graphviz", "anywidget", "cloudpickle>=3", "opentelemetry-api"]
 
 [project.optional-dependencies]
 
@@ -52,6 +52,8 @@ test = [
     "mypy",
     "syrupy>=5",
     "egglog[array]",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
     "pytest-codspeed",
     "pytest-benchmark",
     "pytest-xdist"

@@ -40,6 +40,7 @@
 
 ## Verification
 
+- Prefer the minimal code change and the minimal diff that solves the task; only broaden the change if the smaller fix is not sufficient.
 - Run `make mypy` for typing changes.
 - Run targeted pytest for touched modules.
 - Run `make docs` for docs or public API changes.

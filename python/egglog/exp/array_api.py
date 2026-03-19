@@ -20,6 +20,7 @@ from types import EllipsisType
 from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAlias, TypeVar, cast
 
 import numpy as np
+from opentelemetry import trace
 
 from egglog import *
 from egglog.runtime import RuntimeExpr
@@ -29,6 +30,8 @@ from .program_gen import *
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from types import ModuleType
+
+_TRACER = trace.get_tracer(__name__)
 
 
 # Pretend that exprs are numbers b/c sklearn does isinstance checks
@@ -2780,6 +2783,7 @@ class ExprWithValue(Protocol[T_co]):
     def value(self) -> T_co: ...
 
 
+@_TRACER.start_as_current_span("try_evaling")
 def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
     """
     Evaluate an expression in the current e-graph, then re-extract it in a fresh
@@ -2790,12 +2794,13 @@ def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
     egraph.run(array_api_schedule)
     extracted_expr = egraph.extract(expr)  # type: ignore[call-overload]
 
-    new_egraph = EGraph()
-    # The fresh e-graph needs the extracted expression registered before the schedule runs,
-    # otherwise the simplification rules never see it.
-    new_egraph.register(extracted_expr)
-    new_egraph.run(array_api_schedule)
-    return new_egraph.extract(extracted_expr).value
+    with _TRACER.start_as_current_span("try_evaling second"):
+        new_egraph = EGraph()
+        # The fresh e-graph needs the extracted expression registered before the schedule runs,
+        # otherwise the simplification rules never see it.
+        new_egraph.register(extracted_expr)
+        new_egraph.run(array_api_schedule)
+        return new_egraph.extract(extracted_expr).value
 
 
 ##

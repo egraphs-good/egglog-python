@@ -31,9 +31,11 @@ from uuid import uuid4
 from warnings import warn
 
 import graphviz
+from opentelemetry import trace
 from typing_extensions import ParamSpec, Unpack
 
 from . import bindings
+from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
 from .declarations import *
@@ -45,6 +47,9 @@ from .thunk import *
 
 if TYPE_CHECKING:
     from .builtins import String, Unit, i64, i64Like
+
+
+_TRACER = trace.get_tracer(__name__)
 
 
 __all__ = [
@@ -877,11 +882,13 @@ class EGraph:
         seminaive: bool = True,
         save_egglog_string: bool = False,
     ) -> None:
-        self._state = EGraphState(bindings.EGraph(seminaive=seminaive, record=save_egglog_string))
-        self._state_stack = []
-        self._token_stack = []
-        if actions:
-            self.register(*actions)
+        with _TRACER.start_as_current_span("create"):
+            with _TRACER.start_as_current_span("create_bindings"):
+                self._state = EGraphState(bindings.EGraph(seminaive=seminaive, record=save_egglog_string))
+            self._state_stack = []
+            self._token_stack = []
+            if actions:
+                self.register(*actions)
 
     def _add_decls(self, *decls: DeclarationsLike) -> None:
         for d in decls:
@@ -911,7 +918,7 @@ class EGraph:
         """
         Loads a CSV file and sets it as *input, output of the function.
         """
-        self._egraph.run_program(bindings.Input(span(1), self._callable_to_egg(fn)[1], path))
+        self._run_program(bindings.Input(span(1), self._callable_to_egg(fn)[1], path))
 
     def _callable_to_egg(self, fn: ExprCallable) -> tuple[CallableRef, str]:
         ref, decls = resolve_callable(fn)
@@ -951,6 +958,7 @@ class EGraph:
     @overload
     def run(self, schedule: Schedule, /) -> bindings.RunReport: ...
 
+    @_TRACER.start_as_current_span("run")
     def run(
         self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
     ) -> bindings.RunReport:
@@ -964,7 +972,7 @@ class EGraph:
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
         self._add_decls(schedule)
         cmd = self._state.run_schedule_to_egg(schedule.schedule)
-        (command_output,) = self._egraph.run_program(cmd)
+        (command_output,) = self._run_program(cmd)
         assert isinstance(command_output, bindings.RunScheduleOutput)
         return command_output.report
 
@@ -972,7 +980,7 @@ class EGraph:
         """
         Returns the overall run report for the egraph.
         """
-        (output,) = self._egraph.run_program(bindings.PrintOverallStatistics(span(1), None))
+        (output,) = self._run_program(bindings.PrintOverallStatistics(span(1), None))
         assert isinstance(output, bindings.OverallStatistics)
         return output.report
 
@@ -989,17 +997,18 @@ class EGraph:
             raise
         return True
 
+    @_TRACER.start_as_current_span("check")
     def check(self, *facts: FactLike) -> None:
         """
         Check if a fact is true in the egraph.
         """
-        self._egraph.run_program(self._facts_to_check(facts))
+        self._run_program(self._facts_to_check(facts))
 
     def check_fail(self, *facts: FactLike) -> None:
         """
         Checks that one of the facts is not true
         """
-        self._egraph.run_program(bindings.Fail(span(1), self._facts_to_check(facts)))
+        self._run_program(bindings.Fail(span(1), self._facts_to_check(facts)))
 
     def _facts_to_check(self, fact_likes: Iterable[FactLike]) -> bindings.Check:
         facts = _fact_likes(fact_likes)
@@ -1022,6 +1031,7 @@ class EGraph:
         self, expr: BASE_EXPR, /, include_cost: Literal[True], cost_model: CostModel[COST]
     ) -> tuple[BASE_EXPR, COST]: ...
 
+    @_TRACER.start_as_current_span("extract")
     def extract(
         self, expr: BASE_EXPR, /, include_cost: bool = False, cost_model: CostModel[COST] | None = None
     ) -> BASE_EXPR | tuple[BASE_EXPR, COST]:
@@ -1041,10 +1051,10 @@ class EGraph:
             self.register(expr)
             egg_cost_model = _CostModel(cost_model, self).to_bindings_cost_model()
             egg_sort = self._state.type_ref_to_egg(tp)
-            extractor = bindings.Extractor([egg_sort], self._state.egraph, egg_cost_model)
+            extractor = call_with_current_trace(bindings.Extractor, [egg_sort], self._state.egraph, egg_cost_model)
             termdag = bindings.TermDag()
             value = self._state.typed_expr_to_value(runtime_expr.__egg_typed_expr__)
-            cost, term = extractor.extract_best(self._state.egraph, termdag, value, egg_sort)
+            cost, term = call_with_current_trace(extractor.extract_best, self._state.egraph, termdag, value, egg_sort)
             res = self._from_termdag(termdag, term, tp)
         return (res, cost) if include_cost else res
 
@@ -1074,24 +1084,26 @@ class EGraph:
         else:
             cmd = bindings.Extract(span(2), *args)
         try:
-            return self._egraph.run_program(cmd)[0]
+            return self._run_program(cmd)[0]
         except BaseException as e:
             e.add_note("while extracting: " + str(expr))
             raise
 
+    @_TRACER.start_as_current_span("push")
     def push(self) -> None:
         """
         Push the current state of the egraph, so that it can be popped later and reverted back.
         """
-        self._egraph.run_program(bindings.Push(1))
+        self._run_program(bindings.Push(1))
         self._state_stack.append(self._state)
         self._state = self._state.copy()
 
+    @_TRACER.start_as_current_span("pop")
     def pop(self) -> None:
         """
         Pop the current state of the egraph, reverting back to the previous state.
         """
-        self._egraph.run_program(bindings.Pop(span(1), 1))
+        self._run_program(bindings.Pop(span(1), 1))
         self._state = self._state_stack.pop()
 
     def __enter__(self) -> Self:
@@ -1116,7 +1128,8 @@ class EGraph:
         split_functions = kwargs.pop("split_functions", [])
         include_temporary_functions = kwargs.pop("include_temporary_functions", False)
         n_inline_leaves = kwargs.pop("n_inline_leaves", 0)
-        serialized = self._egraph.serialize(
+        serialized = call_with_current_trace(
+            self._egraph.serialize,
             [],
             max_functions=max_functions,
             max_calls_per_function=max_calls_per_function,
@@ -1240,10 +1253,14 @@ class EGraph:
     def _egraph(self) -> bindings.EGraph:
         return self._state.egraph
 
+    def _run_program(self, *commands: bindings._Command) -> list[bindings._CommandOutput]:
+        return call_with_current_trace(self._egraph.run_program, *commands)
+
     @property
     def __egg_decls__(self) -> Declarations:
         return self._state.__egg_decls__
 
+    @_TRACER.start_as_current_span("register")
     def register(
         self,
         /,
@@ -1268,7 +1285,7 @@ class EGraph:
     def _register_commands(self, cmds: list[Command]) -> None:
         self._add_decls(*cmds)
         egg_cmds = [egg_cmd for cmd in cmds if (egg_cmd := self._command_to_egg(cmd)) is not None]
-        self._egraph.run_program(*egg_cmds)
+        self._run_program(*egg_cmds)
 
     def _command_to_egg(self, cmd: Command) -> bindings._Command | None:
         ruleset_ident = Ident("")
@@ -1288,7 +1305,7 @@ class EGraph:
         Returns the number of rows in a certain function
         """
         egg_name = self._callable_to_egg(fn)[1]
-        (output,) = self._egraph.run_program(bindings.PrintSize(span(1), egg_name))
+        (output,) = self._run_program(bindings.PrintSize(span(1), egg_name))
         assert isinstance(output, bindings.PrintFunctionSize)
         return output.size
 
@@ -1296,7 +1313,7 @@ class EGraph:
         """
         Returns a list of all functions and their sizes.
         """
-        (output,) = self._egraph.run_program(bindings.PrintSize(span(1), None))
+        (output,) = self._run_program(bindings.PrintSize(span(1), None))
         assert isinstance(output, bindings.PrintAllFunctionsSize)
         return [(callables[0], size) for (name, size) in output.sizes if (callables := self._egg_fn_to_callables(name))]
 
@@ -1317,7 +1334,7 @@ class EGraph:
         """
         ref, egg_name = self._callable_to_egg(fn)
         cmd = bindings.PrintFunction(span(1), egg_name, length, None, bindings.DefaultPrintFunctionMode())
-        (output,) = self._egraph.run_program(cmd)
+        (output,) = self._run_program(cmd)
         assert isinstance(output, bindings.PrintFunctionOutput)
         signature = self.__egg_decls__.get_callable_decl(ref).signature
         assert isinstance(signature, FunctionSignature)

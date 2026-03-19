@@ -5,6 +5,7 @@ use crate::error::{EggResult, WrappedError};
 use crate::freeze::FrozenEGraph;
 use crate::py_object_sort::{PyObjectSort, PyPickledValue, load};
 use crate::serialize::SerializedEGraph;
+use crate::tracing_otel;
 
 use egglog::prelude::{RustSpan, Span, add_base_sort};
 use egglog::{SerializeConfig, span};
@@ -53,12 +54,16 @@ impl EGraph {
     /// Run a series of commands on the EGraph.
     /// Returns a list of strings representing the output.
     /// An EggSmolError is raised if there is problem parsing or executing.
-    #[pyo3(signature=(*commands))]
+    #[pyo3(signature=(*commands, traceparent=None, tracestate=None))]
     fn run_program(
         &mut self,
         py: Python<'_>,
         commands: Vec<Command>,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
     ) -> EggResult<Vec<CommandOutput>> {
+        let _context_guard =
+            tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
         let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
         let mut cmds_str = String::new();
 
@@ -66,6 +71,12 @@ impl EGraph {
             let cmd_string = cmd.to_string();
             cmds_str = cmds_str + &cmd_string + "\n";
         }
+        let span = tracing::info_span!(
+            "bindings.run_program",
+            command_count = commands.len(),
+            commands = tracing::field::display(cmds_str.trim_end())
+        );
+        let _entered = span.enter();
         info!("Running commands:\n{}", cmds_str);
         let res = py.detach(|| self.egraph.run_program(commands));
         if let Some(err) = PyErr::take(py) {
@@ -77,7 +88,8 @@ impl EGraph {
                 if let Some(cmds) = &mut self.cmds {
                     cmds.push_str(&cmds_str);
                 }
-                Ok(outputs.into_iter().map(|o| o.into()).collect())
+                let outputs = outputs.into_iter().map(|o| o.into()).collect();
+                Ok(outputs)
             }
         }
     }
@@ -90,33 +102,43 @@ impl EGraph {
 
     /// Serialize the EGraph to a SerializedEGraph object.
     #[pyo3(
-        signature = (root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=false),
-        text_signature = "(self, root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=False)"
+        signature = (root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=false, traceparent=None, tracestate=None),
+        text_signature = "(self, root_eclasses, *, max_functions=None, max_calls_per_function=None, include_temporary_functions=False, traceparent=None, tracestate=None)"
     )]
     fn serialize(
         &mut self,
-        py: Python<'_>,
         root_eclasses: Vec<Expr>,
         max_functions: Option<usize>,
         max_calls_per_function: Option<usize>,
         include_temporary_functions: bool,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
     ) -> SerializedEGraph {
-        py.detach(|| {
-            let root_eclasses: Vec<_> = root_eclasses
-                .into_iter()
-                .map(|x| self.egraph.eval_expr(&egglog::ast::Expr::from(x)).unwrap())
-                .collect();
-            let res = self.egraph.serialize(SerializeConfig {
-                max_functions,
-                max_calls_per_function,
-                include_temporary_functions,
-                root_eclasses,
-            });
-            SerializedEGraph {
-                egraph: res.egraph,
-                truncated_functions: res.truncated_functions,
-                discarded_functions: res.discarded_functions,
-            }
+        let _context_guard =
+            tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
+        let span = tracing::info_span!(
+            "bindings.serialize",
+            root_eclass_count = root_eclasses.len()
+        );
+        let _entered = span.enter();
+        Python::attach(|py| {
+            py.detach(|| {
+                let root_eclasses: Vec<_> = root_eclasses
+                    .into_iter()
+                    .map(|x| self.egraph.eval_expr(&egglog::ast::Expr::from(x)).unwrap())
+                    .collect();
+                let res = self.egraph.serialize(SerializeConfig {
+                    max_functions,
+                    max_calls_per_function,
+                    include_temporary_functions,
+                    root_eclasses,
+                });
+                SerializedEGraph {
+                    egraph: res.egraph,
+                    truncated_functions: res.truncated_functions,
+                    discarded_functions: res.discarded_functions,
+                }
+            })
         })
     }
 
@@ -133,7 +155,18 @@ impl EGraph {
             .map(Value)
     }
 
-    fn eval_expr(&mut self, py: Python<'_>, expr: Expr) -> EggResult<(String, Value)> {
+    #[pyo3(signature = (expr, *, traceparent=None, tracestate=None))]
+    fn eval_expr(
+        &mut self,
+        py: Python<'_>,
+        expr: Expr,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
+    ) -> EggResult<(String, Value)> {
+        let _context_guard =
+            tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
+        let span = tracing::info_span!("bindings.eval_expr");
+        let _entered = span.enter();
         let expr: egglog::ast::Expr = expr.into();
         let res = py.detach(|| {
             self.egraph

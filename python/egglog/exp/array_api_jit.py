@@ -3,6 +3,7 @@ from collections.abc import Callable
 from typing import TypeVar, cast
 
 import numpy as np
+from opentelemetry import trace
 
 from egglog import EGraph, bindings, greedy_dag_cost_model
 from egglog.exp.array_api import NDArray, set_array_api_egraph
@@ -12,8 +13,10 @@ from egglog.exp.array_api_program_gen import EvalProgram, array_api_program_gen_
 from .program_gen import Program
 
 X = TypeVar("X", bound=Callable)
+_TRACER = trace.get_tracer(__name__)
 
 
+@_TRACER.start_as_current_span("jit")
 def jit(
     fn: X,
     *,
@@ -45,12 +48,13 @@ def jit(
         raise
 
 
+@_TRACER.start_as_current_span("function_to_program")
 def function_to_program(fn: Callable, save_egglog_string: bool) -> tuple[EGraph, NDArray, NDArray, Program]:
     sig = inspect.signature(fn)
     arg1, arg2 = sig.parameters.keys()
     egraph = EGraph(save_egglog_string=save_egglog_string)
     with egraph:
-        with set_array_api_egraph(egraph):
+        with _TRACER.start_as_current_span("call_function"), set_array_api_egraph(egraph):
             res = fn(NDArray.var(arg1), NDArray.var(arg2))
         egraph.register(res)
         egraph.run(array_api_numba_schedule)

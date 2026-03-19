@@ -14,6 +14,10 @@ pyo3 = { version = "0.27", features = ["extension-module", "num-bigint", "num-ra
 num-bigint = "*"
 num-rational = "*"
 indexmap = "2.12"
+opentelemetry = "0.28"
+opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "trace"] }
+opentelemetry-stdout = { version = "0.28", features = ["trace"] }
+opentelemetry_sdk = "0.28"
 # egglog = { path = "../egg-smol", default-features = false }
 # egglog-bridge = { path = "../egg-smol/egglog-bridge" }
 # egglog-core-relations = { path = "../egg-smol/core-relations" }
@@ -33,6 +37,9 @@ pyo3-log =  "*"
 log = "0.4"
 lalrpop-util = { version = "0.22", features = ["lexer"] }
 ordered-float = "5"
+tracing = "0.1"
+tracing-opentelemetry = "0.29"
+tracing-subscriber = "0.3"
 uuid = { version = "1.18", features = ["v4"] }
 rayon = "1.11"
 base64 = "0.22.1"

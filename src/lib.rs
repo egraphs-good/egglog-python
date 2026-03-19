@@ -2,13 +2,30 @@ mod conversions;
 mod egraph;
 mod error;
 mod extract;
+mod freeze;
 mod py_object_sort;
 mod serialize;
 mod termdag;
+mod tracing_otel;
 mod utils;
-mod freeze;
 
 use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
+
+#[pyfunction]
+#[pyo3(signature = (*, exporter, endpoint=None))]
+fn setup_tracing(py: Python<'_>, exporter: &str, endpoint: Option<&str>) -> PyResult<()> {
+    let exporter = exporter.to_string();
+    let endpoint = endpoint.map(str::to_string);
+    py.detach(move || crate::tracing_otel::setup_tracing(&exporter, endpoint.as_deref()))
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+}
+
+#[pyfunction]
+fn shutdown_tracing(py: Python<'_>) -> PyResult<()> {
+    py.detach(crate::tracing_otel::shutdown_tracing)
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+}
 
 /// Bindings for egglog rust library
 #[pymodule]
@@ -37,6 +54,8 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::freeze::FrozenRow>()?;
     m.add_class::<crate::freeze::FrozenFunction>()?;
     m.add_class::<crate::freeze::FrozenEGraph>()?;
+    m.add_function(wrap_pyfunction!(setup_tracing, m)?)?;
+    m.add_function(wrap_pyfunction!(shutdown_tracing, m)?)?;
     crate::conversions::add_structs_to_module(m)?;
     crate::conversions::add_enums_to_module(m)?;
 

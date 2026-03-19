@@ -63,6 +63,17 @@ def test_example(example_file: pathlib.Path):
 
 
 BLACK_MODE = black.Mode(line_length=88)
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+GENERIC_FRESH_EGRAPH_REPRO = REPO_ROOT / "test-data" / "generic-fresh-egraph-repro.egg"
+GENERIC_FRESH_EGRAPH_ROOT = '(let $__expr_0 (unstable-vec-map (unstable-fn "f1") (vec-range 1)))'
+GENERIC_FRESH_EGRAPH_RESOLVED = "(vec-of (int 1))"
+
+
+def extract_best_term(program: str) -> str:
+    egraph = EGraph(record=True)
+    outputs = egraph.run_program(*egraph.parse_program(program))
+    extract = next(output for output in outputs if isinstance(output, ExtractBest))
+    return extract.termdag.to_string(extract.term)
 
 
 class TestEGraph:
@@ -96,6 +107,24 @@ class TestEGraph:
             match="to have type",
         ):
             egraph.run_program(*egraph.parse_program(program))
+
+    def test_generic_fresh_egraph_repro(self):
+        program = GENERIC_FRESH_EGRAPH_REPRO.read_text()
+        first = extract_best_term(program)
+
+        assert "get (vec" in first
+
+        second = extract_best_term(program.replace(GENERIC_FRESH_EGRAPH_ROOT, f"(let $__expr_0 {first})"))
+
+        assert second == GENERIC_FRESH_EGRAPH_RESOLVED
+
+    def test_generic_fresh_egraph_repro_without_inner_unstable_app(self):
+        program = GENERIC_FRESH_EGRAPH_REPRO.read_text().replace(
+            '(vec-of (unstable-app (unstable-fn "c0" i) (int 0)))',
+            "(vec-of (int i))",
+        )
+
+        assert extract_best_term(program) == GENERIC_FRESH_EGRAPH_RESOLVED
 
     def test_run_rules(self):
         egraph = EGraph()

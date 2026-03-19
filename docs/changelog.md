@@ -8,13 +8,14 @@ _This project uses semantic versioning_
   - Add `EGraph.freeze()`, returning a `FrozenEGraph` snapshot that can be pretty-printed back into replayable high-level Python actions for debugging and inspection.
   - Add a variadic `EGraph(*actions, seminaive=True, save_egglog_string=False)` constructor so actions can be registered at construction time, and export `ActionLike` from `egglog` for typing code that works with `EGraph.register(...)` and the constructor.
   - Add richer general-purpose builtin helpers used by the new containers/polynomials work, including additional `Vec`, `MultiSet`, numeric, and string operations.
-  - Expand the Python integration/reference docs with examples for `run`, `stats`, `function_values`, `freeze`, `display`, and `saturate`, and clarify that proof-mode commands exposed in low-level bindings are not yet supported as a full high-level Python workflow.
-  - Add the new containers/polynomials documentation and examples.
+  - Expand the [Python integration reference](reference/python-integration.md) with examples for `run`, `stats`, `function_values`, `freeze`, `display`, and `saturate`, and clarify that proof-mode commands exposed in low-level bindings are not yet supported as a full high-level Python workflow.
+  - Add [OpenTelemetry tracing docs](how-to-guides/tracing.md) and the linked [`pytest` tracing workflow](reference/contributing.md#tracing) for debugging Python and Rust spans together.
+  - Add the new [containers/polynomials write-up](explanation/2026_02_containers.md).
   - Fix several high-level bugs:
     - auto-prefix generated `let` bindings with `$` so recorded programs and round-tripped output are valid egglog;
     - keep schedules and default-rewrite rules live after materialization so later declarations are not missed;
     - fix empty Python container conversions and several higher-order callable / nested-lambda inference edge cases.
-  - Update the experimental `egglog.exp.array_api` module overall, including docs, doctests, and CI coverage.
+  - Update the experimental `egglog.exp.array_api` module.
 
 ## 13.0.1 (2026-03-04)
 

@@ -12,8 +12,10 @@ from typing import TYPE_CHECKING, Literal, assert_never, overload
 from uuid import UUID
 
 import cloudpickle
+from opentelemetry import trace
 
 from . import bindings
+from ._tracing import call_with_current_trace
 from .declarations import *
 from .declarations import ConstructorDecl
 from .pretty import *
@@ -23,6 +25,9 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 __all__ = ["EGraphState", "span"]
+
+
+_TRACER = trace.get_tracer(__name__)
 
 
 def span(frame_index: int = 0) -> bindings.RustSpan:
@@ -99,6 +104,10 @@ class EGraphState:
             unnamed_function_counter=self.unnamed_function_counter,
         )
 
+    def _run_program(self, *commands: bindings._Command) -> list[bindings._CommandOutput]:
+        return call_with_current_trace(self.egraph.run_program, *commands)
+
+    @_TRACER.start_as_current_span("run_schedule_to_egg")
     def run_schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Command:
         """
         Turn a run schedule into an egg command.
@@ -246,7 +255,7 @@ class EGraphState:
             case RulesetDecl(rules):
                 if ident not in self.rulesets:
                     if str(ident):
-                        self.egraph.run_program(bindings.AddRuleset(span(), str(ident)))
+                        self._run_program(bindings.AddRuleset(span(), str(ident)))
                     added_rules = self.rulesets[ident] = set()
                 else:
                     added_rules = self.rulesets[ident]
@@ -255,7 +264,7 @@ class EGraphState:
                         continue
                     cmd = self.command_to_egg(rule, ident)
                     if cmd is not None:
-                        self.egraph.run_program(cmd)
+                        self._run_program(cmd)
                     added_rules.add(rule)
             case CombinedRulesetDecl(rulesets):
                 if ident in self.rulesets:
@@ -263,7 +272,7 @@ class EGraphState:
                 self.rulesets[ident] = set()
                 for ruleset in rulesets:
                     self.ruleset_to_egg(ruleset)
-                self.egraph.run_program(bindings.UnstableCombinedRuleset(span(), str(ident), list(map(str, rulesets))))
+                self._run_program(bindings.UnstableCombinedRuleset(span(), str(ident), list(map(str, rulesets))))
 
     def command_to_egg(self, cmd: CommandDecl, ruleset: Ident) -> bindings._Command | None:
         match cmd:
@@ -375,9 +384,7 @@ class EGraphState:
             signature = self.__egg_decls__.get_callable_decl(ref).signature
             assert isinstance(signature, FunctionSignature), "Can only add cost tables for functions"
             signature = replace(signature, return_type=TypeRefWithVars(Ident.builtin("i64")))
-            self.egraph.run_program(
-                bindings.FunctionCommand(span(), name, self._signature_to_egg_schema(signature), None)
-            )
+            self._run_program(bindings.FunctionCommand(span(), name, self._signature_to_egg_schema(signature), None))
         return name
 
     def cost_table_name(self, ref: CallableRef) -> str:
@@ -407,18 +414,16 @@ class EGraphState:
         reverse_args = False
         match decl:
             case RelationDecl(arg_types, _, _):
-                self.egraph.run_program(
-                    bindings.Relation(span(), egg_name, [self.type_ref_to_egg(a) for a in arg_types])
-                )
+                self._run_program(bindings.Relation(span(), egg_name, [self.type_ref_to_egg(a) for a in arg_types]))
             case ConstantDecl(tp, _):
                 # Use constructor declaration instead of constant b/c constants cannot be extracted
                 # https://github.com/egraphs-good/egglog/issues/334
                 is_function = self.__egg_decls__._classes[tp.ident].builtin
                 schema = bindings.Schema([], self.type_ref_to_egg(tp))
                 if is_function:
-                    self.egraph.run_program(bindings.FunctionCommand(span(), egg_name, schema, None))
+                    self._run_program(bindings.FunctionCommand(span(), egg_name, schema, None))
                 else:
-                    self.egraph.run_program(bindings.Constructor(span(), egg_name, schema, None, False))
+                    self._run_program(bindings.Constructor(span(), egg_name, schema, None, False))
             case FunctionDecl(signature, builtin, _, merge):
                 if isinstance(signature, FunctionSignature):
                     reverse_args = signature.reverse_args
@@ -431,27 +436,26 @@ class EGraphState:
                         if merge:
                             msg = "Cannot specify a merge function for a function that returns unit"
                             raise ValueError(msg)
-                        self.egraph.run_program(bindings.Relation(span(), egg_name, schema.input))
+                        self._run_program(bindings.Relation(span(), egg_name, schema.input))
                     else:
-                        self.egraph.run_program(
+                        self._run_program(
                             bindings.FunctionCommand(
                                 span(),
                                 egg_name,
                                 self._signature_to_egg_schema(signature),
                                 self._expr_to_egg(merge) if merge else None,
-                            )
+                            ),
                         )
             case ConstructorDecl(signature, _, cost, unextractable):
-                self.egraph.run_program(
+                self._run_program(
                     bindings.Constructor(
                         span(),
                         egg_name,
                         self._signature_to_egg_schema(signature),
                         cost,
                         unextractable,
-                    )
+                    ),
                 )
-
             case _:
                 assert_never(decl)
         self.callable_ref_to_egg_fn[ref] = egg_name, reverse_args
@@ -493,7 +497,7 @@ class EGraphState:
                 else:
                     type_args = [bindings.Var(span(), self.type_ref_to_egg(a)) for a in ref.args]
                 assert decl.egg_name
-                self.egraph.run_program(bindings.Sort(span(), egg_name, (decl.egg_name, type_args)))
+                self._run_program(bindings.Sort(span(), egg_name, (decl.egg_name, type_args)))
 
             # For builtin classes, let's also make sure we have the mapping of all egg fn names for class methods.
             # these can be created even without adding them to the e-graph, like `vec-empty` which can be extracted
@@ -503,7 +507,7 @@ class EGraphState:
             if decl.init:
                 self.callable_ref_to_egg(InitRef(ref.ident))
         else:
-            self.egraph.run_program(bindings.Sort(span(), egg_name, None))
+            self._run_program(bindings.Sort(span(), egg_name, None))
 
         return egg_name
 
@@ -553,7 +557,7 @@ class EGraphState:
         var_egg = self._expr_to_egg(var_decl)
         cmd = bindings.ActionCommand(bindings.Let(span(), var_egg.name, self.typed_expr_to_egg(typed_expr)))
         try:
-            self.egraph.run_program(cmd)
+            self._run_program(cmd)
         # errors when creating let bindings for things like `(vec-empty)`
         except bindings.EggSmolError:
             return typed_expr
@@ -689,7 +693,7 @@ class EGraphState:
         if isinstance(typed_expr.expr, ValueDecl):
             return typed_expr.expr.value
         egg_expr = self.typed_expr_to_egg(typed_expr, False)
-        return self.egraph.eval_expr(egg_expr)[1]
+        return call_with_current_trace(self.egraph.eval_expr, egg_expr)[1]
 
     def value_to_expr(self, tp: JustTypeRef, value: bindings.Value) -> ExprDecl:  # noqa: C901, PLR0911, PLR0912
         if tp.ident.module != Ident.builtin("").module:

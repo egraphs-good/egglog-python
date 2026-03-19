@@ -2,7 +2,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Generic, Protocol, TypeAlias, TypeVar, final
+from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar, final
 
 __all__ = [
     "ActionCommand",
@@ -105,7 +105,12 @@ __all__ = [
     "Var",
     "Variant",
     "WithPlan",
+    "setup_tracing",
+    "shutdown_tracing",
 ]
+
+def setup_tracing(*, exporter: Literal["console", "http"], endpoint: str | None = None) -> None: ...
+def shutdown_tracing() -> None: ...
 
 @final
 class SerializedEGraph:
@@ -127,7 +132,9 @@ class EGraph:
     ) -> EGraph: ...
     def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
     def commands(self) -> str | None: ...
-    def run_program(self, *commands: _Command) -> list[_CommandOutput]: ...
+    def run_program(
+        self, *commands: _Command, traceparent: str | None = None, tracestate: str | None = None
+    ) -> list[_CommandOutput]: ...
     def serialize(
         self,
         root_eclasses: list[_Expr],
@@ -135,10 +142,14 @@ class EGraph:
         max_functions: int | None = None,
         max_calls_per_function: int | None = None,
         include_temporary_functions: bool = False,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
     ) -> SerializedEGraph: ...
     def set_report_level(self, level: _ReportLevel) -> None: ...
     def lookup_function(self, name: str, key: list[Value]) -> Value | None: ...
-    def eval_expr(self, expr: _Expr) -> tuple[str, Value]: ...
+    def eval_expr(
+        self, expr: _Expr, *, traceparent: str | None = None, tracestate: str | None = None
+    ) -> tuple[str, Value]: ...
     def value_to_i64(self, v: Value) -> int: ...
     def value_to_f64(self, v: Value) -> float: ...
     def value_to_string(self, v: Value) -> str: ...
@@ -907,11 +918,34 @@ class CostModel(Generic[_COST, _ENODE_COST]):
 @final
 class Extractor(Generic[_COST]):
     def __new__(
-        cls, rootsorts: list[str] | None, egraph: EGraph, cost_model: CostModel[_COST, Any]
+        cls,
+        rootsorts: list[str] | None,
+        egraph: EGraph,
+        cost_model: CostModel[_COST, Any],
+        *,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
     ) -> Extractor[_COST]: ...
-    def extract_best(self, egraph: EGraph, termdag: TermDag, value: Value, sort: str) -> tuple[_COST, _TermId]: ...
+    def extract_best(
+        self,
+        egraph: EGraph,
+        termdag: TermDag,
+        value: Value,
+        sort: str,
+        *,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
+    ) -> tuple[_COST, _TermId]: ...
     def extract_variants(
-        self, egraph: EGraph, termdag: TermDag, value: Value, nvariants: int, sort: str
+        self,
+        egraph: EGraph,
+        termdag: TermDag,
+        value: Value,
+        nvariants: int,
+        sort: str,
+        *,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
     ) -> list[tuple[_COST, _TermId]]: ...
 
 ##
