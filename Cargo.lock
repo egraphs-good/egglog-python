@@ -360,7 +360,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "egglog"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#5d5bee20272084b98558d1f6fc9c2f93a9a8ccbb"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#00a6ce015ec9b898d1eefda86d46e52103607baf"
 dependencies = [
  "csv",
  "dyn-clone",
@@ -387,7 +387,7 @@ dependencies = [
 [[package]]
 name = "egglog-add-primitive"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#5d5bee20272084b98558d1f6fc9c2f93a9a8ccbb"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#00a6ce015ec9b898d1eefda86d46e52103607baf"
 dependencies = [
  "quote",
  "syn 2.0.107",
@@ -396,7 +396,7 @@ dependencies = [
 [[package]]
 name = "egglog-ast"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#5d5bee20272084b98558d1f6fc9c2f93a9a8ccbb"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#00a6ce015ec9b898d1eefda86d46e52103607baf"
 dependencies = [
  "ordered-float",
 ]
@@ -404,7 +404,7 @@ dependencies = [
 [[package]]
 name = "egglog-bridge"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#5d5bee20272084b98558d1f6fc9c2f93a9a8ccbb"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#00a6ce015ec9b898d1eefda86d46e52103607baf"
 dependencies = [
  "anyhow",
  "dyn-clone",
@@ -428,7 +428,7 @@ dependencies = [
 [[package]]
 name = "egglog-concurrency"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#5d5bee20272084b98558d1f6fc9c2f93a9a8ccbb"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#00a6ce015ec9b898d1eefda86d46e52103607baf"
 dependencies = [
  "arc-swap",
  "egglog-numeric-id",
@@ -439,7 +439,7 @@ dependencies = [
 [[package]]
 name = "egglog-core-relations"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#5d5bee20272084b98558d1f6fc9c2f93a9a8ccbb"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#00a6ce015ec9b898d1eefda86d46e52103607baf"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -482,7 +482,7 @@ dependencies = [
 [[package]]
 name = "egglog-numeric-id"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#5d5bee20272084b98558d1f6fc9c2f93a9a8ccbb"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#00a6ce015ec9b898d1eefda86d46e52103607baf"
 dependencies = [
  "rayon",
 ]
@@ -490,7 +490,7 @@ dependencies = [
 [[package]]
 name = "egglog-reports"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#5d5bee20272084b98558d1f6fc9c2f93a9a8ccbb"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#00a6ce015ec9b898d1eefda86d46e52103607baf"
 dependencies = [
  "clap",
  "hashbrown 0.16.0",
@@ -504,7 +504,7 @@ dependencies = [
 [[package]]
 name = "egglog-union-find"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#5d5bee20272084b98558d1f6fc9c2f93a9a8ccbb"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=fix-container-fn-bug#00a6ce015ec9b898d1eefda86d46e52103607baf"
 dependencies = [
  "crossbeam",
  "egglog-concurrency",
