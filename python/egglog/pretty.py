@@ -1,5 +1,5 @@
 """
-Pretty printing for declerations.
+Pretty printing for declarations.
 """
 
 from __future__ import annotations
@@ -77,7 +77,15 @@ NAMED_UNARY_METHODS = {
 }
 
 AllDecls: TypeAlias = (
-    RulesetDecl | CombinedRulesetDecl | CommandDecl | ActionDecl | FactDecl | ExprDecl | ScheduleDecl | BackOffDecl
+    RulesetDecl
+    | CombinedRulesetDecl
+    | CommandDecl
+    | ActionDecl
+    | FactDecl
+    | ExprDecl
+    | ScheduleDecl
+    | BackOffDecl
+    | EGraphDecl
 )
 
 
@@ -96,6 +104,12 @@ def pretty_decl(
     if wrapping_fn:
         expr = f"{wrapping_fn}({expr})"
     program = "\n".join([*pretty.statements, expr])
+    # First unparse AST to get consistent formatting, then use black to format it nicely
+    try:
+        ast_tree = ast.parse(program, mode="exec")
+    except SyntaxError:
+        return program
+    program = ast.unparse(ast_tree)
     try:
         # TODO: Try replacing with ruff for speed
         # https://github.com/amyreese/ruff-api
@@ -221,6 +235,11 @@ class TraverseContext:
                 self(schedule)
             case GetCostDecl(ref, args):
                 self(CallDecl(ref, args))
+            case DummyDecl():
+                pass
+            case EGraphDecl() as eg:
+                for a in eg.to_actions:
+                    self(a)
             case _:
                 assert_never(decl)
 
@@ -252,7 +271,7 @@ class PrettyContext:
         if decl in self.names:
             return self.names[decl]
         expr, tp_name = self.uncached(decl, unwrap_lit=unwrap_lit, parens=parens, ruleset_ident=ruleset_ident)
-        # We use a heuristic to decide whether to name this sub-expression as a variable
+        # We use a heuristic to decide whether to name this sub-expression as a variable.
         # The rough goal is to reduce the number of newlines, given our line length of ~180
         # We determine it's worth making a new line for this expression if the total characters
         # it would take up is > than some constant (~ line length).
@@ -271,8 +290,8 @@ class PrettyContext:
         self, decl: AllDecls, *, unwrap_lit: bool, parens: bool, ruleset_ident: Ident | None
     ) -> tuple[str, str]:
         """
-        Returns a tuple of a string value of the decleration and the "type" to use when create a memoized cached version
-        for de-duplication.
+        Returns a tuple of a string value of the declaration and the "type" to use when create a memoized cached version
+        for deduplication.
         """
         match decl:
             case LitDecl(value):
@@ -373,8 +392,12 @@ class PrettyContext:
                 return f"back_off({', '.join(list_args)})", "scheduler"
             case ValueDecl(value):
                 return str(value), "value"
+            case DummyDecl():
+                return "__InternalDummyValueShouldNotBeSeenOpenAnIssue()", "dummy"
             case GetCostDecl(ref, args):
                 return f"get_cost({self(CallDecl(ref, args))})", "get_cost"
+            case EGraphDecl() as eg:
+                return f"EGraph({', '.join(map(self, eg.to_actions))}).freeze()", "egraph"
         assert_never(decl)
 
     def _call(

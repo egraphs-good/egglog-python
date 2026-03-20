@@ -56,6 +56,12 @@ __all__ = [
     "i64",
     "i64Like",
     "join",
+    "multiset_contains_swapped",
+    "multiset_flat_map",
+    "multiset_fold",
+    "multiset_not_contains_swapped",
+    "multiset_remove_swapped",
+    "multiset_subtract_swapped",
     "py_eval",
     "py_eval_fn",
     "py_exec",
@@ -77,7 +83,7 @@ class ExprValueError(AttributeError):
 
 class Unit(BuiltinExpr, egg_sort="Unit"):
     """
-    The unit type. This is used to reprsent if a value exists in the e-graph or not.
+    The unit type. This is used to represent if a value exists in the e-graph or not.
     """
 
     def __init__(self) -> None: ...
@@ -110,6 +116,9 @@ class String(BuiltinExpr, egg_sort="String"):
     @method(preserve=True)
     def __add__(self, other: StringLike) -> String:
         return join(self, other)
+
+    @method(egg_fn="log")
+    def log(self) -> Unit: ...
 
 
 StringLike: TypeAlias = String | str
@@ -281,8 +290,14 @@ class i64(BuiltinExpr, egg_sort="i64"):  # noqa: N801
     @method(egg_fn="bool->=")
     def bool_ge(self, other: i64Like) -> Bool: ...
 
+    @method(egg_fn="abs")
+    def __abs__(self) -> i64: ...
 
-# The types which can be convertered into an i64
+    @method(egg_fn="vec-range")
+    def range(self) -> Vec[i64]: ...
+
+
+# The types which can be converted into an i64
 i64Like: TypeAlias = i64 | int  # noqa: N816, PYI042
 
 converter(int, i64, i64)
@@ -348,6 +363,9 @@ class f64(BuiltinExpr, egg_sort="f64"):  # noqa: N801
 
     def __rmod__(self, other: f64Like) -> f64: ...
 
+    @method(egg_fn="abs")
+    def __abs__(self) -> f64: ...
+
     @method(egg_fn="<")
     def __lt__(self, other: f64Like) -> Unit:  # type: ignore[has-type]
         ...
@@ -399,7 +417,7 @@ class Map(BuiltinExpr, Generic[T, V], egg_sort="Map"):
     @property
     def value(self) -> dict[T, V]:
         d = {}
-        while args := get_callable_args(self, Map[T, V].insert):
+        while args := get_callable_args(self, Map.insert):  # type: ignore[var-annotated]
             self, k, v = args  # noqa: PLW0642
             d[k] = v
         if get_callable_args(self, Map.empty) is None:
@@ -521,9 +539,7 @@ class Set(BuiltinExpr, Generic[T], egg_sort="Set"):
 converter(
     set,
     Set,
-    lambda t: Set[get_type_args()[0]](  # type: ignore[misc,operator]
-        *(convert(x, get_type_args()[0]) for x in t)
-    ),
+    lambda t: Set(*(convert(x, get_type_args()[0]) for x in t)) if t else Set[get_type_args()[0]].empty(),  # type: ignore[misc]
 )
 
 SetLike: TypeAlias = Set[T] | set[TO]
@@ -559,6 +575,17 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     @method(egg_fn="multiset-of")
     def __init__(self, *args: T) -> None: ...
 
+    @method(egg_fn="multiset-intersection")
+    def __and__(self, other: MultiSet[T]) -> MultiSet[T]: ...
+
+    @method(egg_fn="multiset-single")
+    @classmethod
+    def single(cls, x: T, i: i64Like) -> MultiSet[T]: ...
+
+    @method(egg_fn="multiset-sum-multisets")
+    @classmethod
+    def sum_multisets(cls, xs: MultiSet[MultiSet[T]]) -> MultiSet[T]: ...
+
     @method(egg_fn="multiset-insert")
     def insert(self, value: T) -> MultiSet[T]: ...
 
@@ -580,16 +607,63 @@ class MultiSet(BuiltinExpr, Generic[T], egg_sort="MultiSet"):
     @method(egg_fn="multiset-sum")
     def __add__(self, other: MultiSet[T]) -> MultiSet[T]: ...
 
+    @method(egg_fn="multiset-subtract")
+    def __sub__(self, other: MultiSet[T]) -> MultiSet[T]: ...
+
     @method(egg_fn="unstable-multiset-map", reverse_args=True)
-    def map(self, f: Callable[[T], T]) -> MultiSet[T]: ...
+    def map(self, f: Callable[[T], V]) -> MultiSet[V]: ...
+
+    @method(egg_fn="unstable-multiset-fill-index")
+    def fill_index(self, f: Callable[[MultiSet[T], T], i64]) -> Unit: ...
+
+    @method(egg_fn="unstable-multiset-clear-index")
+    def clear_index(self, f: Callable[[MultiSet[T], T], i64]) -> Unit: ...
+
+    @method(egg_fn="multiset-pick-max")
+    def pick_max(self) -> T: ...
+
+    @method(egg_fn="multiset-count")
+    def count(self, value: T) -> i64: ...
+
+    @method(egg_fn="unstable-multiset-filter", reverse_args=True)
+    def filter(self, f: Callable[[T], Unit]) -> MultiSet[T]: ...
+
+    @method(egg_fn="unstable-multiset-filter-not", reverse_args=True)
+    def filter_not(self, f: Callable[[T], Unit]) -> MultiSet[T]: ...
+
+    @method(egg_fn="multiset-reset-counts")
+    def reset_counts(self) -> MultiSet[T]: ...
+
+
+# TODO: Move to method when partial supports reverse_args
+@function(egg_fn="unstable-multiset-flat-map", builtin=True)
+def multiset_flat_map(f: Callable[[T], MultiSet[T]], xs: MultiSet[T]) -> MultiSet[T]: ...
+
+
+@function(egg_fn="multiset-remove-swapped", builtin=True)
+def multiset_remove_swapped(x: T, xs: MultiSet[T]) -> MultiSet[T]: ...
+
+
+@function(egg_fn="multiset-subtract-swapped", builtin=True)
+def multiset_subtract_swapped(x: MultiSet[T], xs: MultiSet[T]) -> MultiSet[T]: ...
+
+
+@function(egg_fn="multiset-not-contains-swapped", builtin=True)
+def multiset_not_contains_swapped(x: T, xs: MultiSet[T]) -> Unit: ...
+
+
+@function(egg_fn="multiset-contains-swapped", builtin=True)
+def multiset_contains_swapped(x: T, xs: MultiSet[T]) -> Unit: ...
+
+
+@function(egg_fn="unstable-multiset-reduce", builtin=True)
+def multiset_fold(f: Callable[[T, T], T], initial: T, xs: MultiSet[T]) -> T: ...
 
 
 converter(
     tuple,
     MultiSet,
-    lambda t: MultiSet[get_type_args()[0]](  # type: ignore[misc,operator]
-        *(convert(x, get_type_args()[0]) for x in t)
-    ),
+    lambda t: MultiSet(*(convert(x, get_type_args()[0]) for x in t)) if t else MultiSet[get_type_args()[0]](),  # type: ignore[operator,misc]
 )
 
 MultiSetLike: TypeAlias = MultiSet[T] | tuple[TO, ...]
@@ -801,7 +875,7 @@ class BigInt(BuiltinExpr, egg_sort="BigInt"):
     def bool_ge(self, other: BigIntLike) -> Bool: ...
 
 
-converter(i64, BigInt, lambda i: BigInt(i))
+converter(i64, BigInt, BigInt)
 
 BigIntLike: TypeAlias = BigInt | i64Like
 
@@ -943,7 +1017,7 @@ class Vec(BuiltinExpr, Generic[T], egg_sort="Vec"):
     def empty(cls) -> Vec[T]: ...
 
     @method(egg_fn="vec-append")
-    def append(self, *others: Vec[T]) -> Vec[T]: ...
+    def append(self, *others: VecLike[T, T]) -> Vec[T]: ...
 
     @method(egg_fn="vec-push")
     def push(self, value: T) -> Vec[T]: ...
@@ -972,17 +1046,112 @@ class Vec(BuiltinExpr, Generic[T], egg_sort="Vec"):
     @method(egg_fn="vec-set")
     def set(self, index: i64Like, value: T) -> Vec[T]: ...
 
+    @method(egg_fn="vec-union")
+    def __or__(self, other: Vec[T]) -> Vec[T]: ...
+
+    @method(egg_fn="unstable-vec-map", reverse_args=True)
+    def map(self, fn: Callable[[T], V]) -> Vec[V]: ...
+
 
 for sequence_type in (list, tuple):
     converter(
         sequence_type,
         Vec,
-        lambda t: Vec[get_type_args()[0]](  # type: ignore[misc,operator]
-            *(convert(x, get_type_args()[0]) for x in t)
-        ),
+        lambda t: Vec(*(convert(x, get_type_args()[0]) for x in t)) if t else Vec[get_type_args()[0]].empty(),  # type: ignore[misc]
     )
 
 VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
+
+
+TS = TypeVarTuple("TS")
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+
+
+class UnstableFn(BuiltinExpr, Generic[T, *TS], egg_sort="UnstableFn"):
+    @overload
+    def __init__(self, f: Callable[[Unpack[TS]], T]) -> None: ...
+
+    @overload
+    def __init__(self, f: Callable[[T1, Unpack[TS]], T], _a: T1, /) -> None: ...
+
+    @overload
+    def __init__(self, f: Callable[[T1, T2, Unpack[TS]], T], _a: T1, _b: T2, /) -> None: ...
+
+    # Removing due to bug in MyPy
+    # https://github.com/python/mypy/issues/17212
+    # @overload
+    # def __init__(self, f: Callable[[T1, T2, T3, Unpack[TS]], T], _a: T1, _b: T2, _c: T3, /) -> None: ...
+
+    # etc, for partial application
+
+    @method(egg_fn="unstable-fn")
+    def __init__(self, f, *partial) -> None: ...
+
+    @method(preserve=True)
+    @deprecated("use .value")
+    def eval(self) -> Callable[[Unpack[TS]], T]:
+        return self.value
+
+    @method(preserve=True)  # type: ignore[prop-decorator]
+    @property
+    def value(self) -> Callable[[Unpack[TS]], T]:
+        """
+        If this is a constructor, returns either the callable directly or a `functools.partial` function if args are provided.
+        """
+        if (fn := get_literal_value(self)) is not None:
+            return fn
+        raise ExprValueError(self, "UnstableFn(f, *args)")
+
+    __match_args__ = ("value",)
+
+    @method(egg_fn="unstable-app")
+    def __call__(self, *args: *TS) -> T: ...
+
+
+# Method Type is for builtins like __getitem__
+converter(MethodType, UnstableFn, lambda m: UnstableFn[*get_type_args()](m.__func__, m.__self__))  # type: ignore[operator, misc]
+# Ignore PLW0108.
+converter(RuntimeFunction, UnstableFn, lambda rf: UnstableFn[*get_type_args()](rf))  # type: ignore[operator, misc]
+# converter(RuntimeClass, UnstableFn, lambda rc: UnstableFn[*get_type_args()](rc))  # type: ignore[operator, misc]
+converter(partial, UnstableFn, lambda p: UnstableFn[*get_type_args()](p.func, *p.args))  # type: ignore[operator, misc]
+
+
+def _convert_function(fn: FunctionType) -> UnstableFn:
+    """
+    Converts a function type to an unstable function. This function will be an anon function in egglog.
+
+    Would just be UnstableFn(function(a)) but we have to account for unbound vars within the body.
+
+    This means that we have to turn all of those unbound vars into args to the function, and then
+    partially apply them, alongside creating a default rewrite for the function.
+    """
+    decls = Declarations()
+    return_type, *arg_types = [resolve_type_annotation_mutate(decls, tp) for tp in get_type_args()]
+    arg_names = [p.name for p in signature(fn).parameters.values()]
+    arg_decls = [
+        TypedExprDecl(tp.to_just(), UnboundVarDecl(name)) for name, tp in zip(arg_names, arg_types, strict=True)
+    ]
+    res = resolve_literal(
+        return_type, fn(*(RuntimeExpr.__from_values__(decls, a) for a in arg_decls)), Thunk.value(decls)
+    )
+    res_expr = res.__egg_typed_expr__
+    decls |= res
+    # these are all the args that appear in the body that are not bound by the args of the function
+    unbound_vars = list(collect_unbound_vars(res_expr) - set(arg_decls))
+    # prefix the args with them
+    fn_ref = UnnamedFunctionRef(tuple(unbound_vars + arg_decls), res_expr)
+    rewrite_decl = DefaultRewriteDecl(fn_ref, res_expr.expr, subsume=True)
+    ruleset_decls = _add_default_rewrite_inner(decls, rewrite_decl, get_current_ruleset())
+    ruleset_decls |= res
+
+    fn = RuntimeFunction(Thunk.value(decls), Thunk.value(fn_ref))
+    return UnstableFn(fn, *(RuntimeExpr.__from_values__(decls, v) for v in unbound_vars))
+
+
+converter(FunctionType, UnstableFn, _convert_function)
 
 
 class PyObject(BuiltinExpr, egg_sort="PyObject"):
@@ -1038,7 +1207,7 @@ converter(object, PyObject, PyObject)
 
 
 @function(builtin=True, egg_fn="py-eval")
-def py_eval(code: StringLike, globals: object = PyObject.dict(), locals: object = PyObject.dict()) -> PyObject: ...
+def py_eval(code: StringLike, globals_: object = PyObject.dict(), locals_: object = PyObject.dict()) -> PyObject: ...
 
 
 class PyObjectFunction(Protocol):
@@ -1057,99 +1226,10 @@ def py_eval_fn(fn: Callable) -> PyObjectFunction:
 
 
 @function(builtin=True, egg_fn="py-exec")
-def py_exec(code: StringLike, globals: object = PyObject.dict(), locals: object = PyObject.dict()) -> PyObject:
+def py_exec(code: StringLike, globals_: object = PyObject.dict(), locals_: object = PyObject.dict()) -> PyObject:
     """
     Copies the locals, execs the Python code, and returns the locals with any updates.
     """
-
-
-TS = TypeVarTuple("TS")
-
-T1 = TypeVar("T1")
-T2 = TypeVar("T2")
-T3 = TypeVar("T3")
-
-
-class UnstableFn(BuiltinExpr, Generic[T, *TS], egg_sort="UnstableFn"):
-    @overload
-    def __init__(self, f: Callable[[Unpack[TS]], T]) -> None: ...
-
-    @overload
-    def __init__(self, f: Callable[[T1, Unpack[TS]], T], _a: T1, /) -> None: ...
-
-    @overload
-    def __init__(self, f: Callable[[T1, T2, Unpack[TS]], T], _a: T1, _b: T2, /) -> None: ...
-
-    # Removing due to bug in MyPy
-    # https://github.com/python/mypy/issues/17212
-    # @overload
-    # def __init__(self, f: Callable[[T1, T2, T3, Unpack[TS]], T], _a: T1, _b: T2, _c: T3, /) -> None: ...
-
-    # etc, for partial application
-
-    @method(egg_fn="unstable-fn")
-    def __init__(self, f, *partial) -> None: ...
-
-    @method(preserve=True)
-    @deprecated("use .value")
-    def eval(self) -> Callable[[Unpack[TS]], T]:
-        return self.value
-
-    @method(preserve=True)  # type: ignore[prop-decorator]
-    @property
-    def value(self) -> Callable[[Unpack[TS]], T]:
-        """
-        If this is a constructor, returns either the callable directly or a `functools.partial` function if args are provided.
-        """
-        if (fn := get_literal_value(self)) is not None:
-            return fn
-        raise ExprValueError(self, "UnstableFn(f, *args)")
-
-    __match_args__ = ("value",)
-
-    @method(egg_fn="unstable-app")
-    def __call__(self, *args: *TS) -> T: ...
-
-
-# Method Type is for builtins like __getitem__
-converter(MethodType, UnstableFn, lambda m: UnstableFn(m.__func__, m.__self__))
-converter(RuntimeFunction, UnstableFn, UnstableFn)
-converter(partial, UnstableFn, lambda p: UnstableFn(p.func, *p.args))
-
-
-def _convert_function(fn: FunctionType) -> UnstableFn:
-    """
-    Converts a function type to an unstable function. This function will be an anon function in egglog.
-
-    Would just be UnstableFn(function(a)) but we have to account for unbound vars within the body.
-
-    This means that we have to turn all of those unbound vars into args to the function, and then
-    partially apply them, alongside creating a default rewrite for the function.
-    """
-    decls = Declarations()
-    return_type, *arg_types = [resolve_type_annotation_mutate(decls, tp) for tp in get_type_args()]
-    arg_names = [p.name for p in signature(fn).parameters.values()]
-    arg_decls = [
-        TypedExprDecl(tp.to_just(), UnboundVarDecl(name)) for name, tp in zip(arg_names, arg_types, strict=True)
-    ]
-    res = resolve_literal(
-        return_type, fn(*(RuntimeExpr.__from_values__(decls, a) for a in arg_decls)), Thunk.value(decls)
-    )
-    res_expr = res.__egg_typed_expr__
-    decls |= res
-    # these are all the args that appear in the body that are not bound by the args of the function
-    unbound_vars = list(collect_unbound_vars(res_expr) - set(arg_decls))
-    # prefix the args with them
-    fn_ref = UnnamedFunctionRef(tuple(unbound_vars + arg_decls), res_expr)
-    rewrite_decl = DefaultRewriteDecl(fn_ref, res_expr.expr, subsume=True)
-    ruleset_decls = _add_default_rewrite_inner(decls, rewrite_decl, get_current_ruleset())
-    ruleset_decls |= res
-
-    fn = RuntimeFunction(Thunk.value(decls), Thunk.value(fn_ref))
-    return UnstableFn(fn, *(RuntimeExpr.__from_values__(decls, v) for v in unbound_vars))
-
-
-converter(FunctionType, UnstableFn, _convert_function)
 
 
 Container: TypeAlias = Map | Set | MultiSet | Vec | UnstableFn

@@ -61,14 +61,15 @@ class LoopNestAPI(Expr, ruleset=array_api_ruleset):
 
 
 @array_api_ruleset.register
-def _loopnest_api_ruleset(lna: LoopNestAPI, dim: Int, ti: TupleInt, idx_fn: Callable[[Int], Int], i: i64):
+def _loopnest_api_ruleset(lna: LoopNestAPI, dim: Int, ti: TupleInt, idx_fn: Callable[[Int], Int], i: i64, vs: Vec[Int]):
     # from_tuple
-    yield rewrite(LoopNestAPI.from_tuple(TupleInt.EMPTY), subsume=True).to(OptionalLoopNestAPI.NONE)
-    yield rewrite(LoopNestAPI.from_tuple(ti.append(dim)), subsume=True).to(
-        OptionalLoopNestAPI(LoopNestAPI(dim, LoopNestAPI.from_tuple(ti)))
+    yield rewrite(LoopNestAPI.from_tuple(TupleInt(())), subsume=True).to(OptionalLoopNestAPI.NONE)
+    yield rewrite(LoopNestAPI.from_tuple(TupleInt(vs)), subsume=True).to(
+        OptionalLoopNestAPI(LoopNestAPI(vs[vs.length() - 1], LoopNestAPI.from_tuple(TupleInt(vs.pop())))),
+        vs.length() > 0,
     )
     # get_dims
-    yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI.NONE).get_dims(), subsume=True).to(TupleInt.single(dim))
+    yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI.NONE).get_dims(), subsume=True).to(TupleInt((dim,)))
     yield rewrite(LoopNestAPI(dim, OptionalLoopNestAPI(lna)).get_dims(), subsume=True).to(lna.get_dims().append(dim))
     # unwrap
     yield rewrite(OptionalLoopNestAPI(lna).unwrap()).to(lna)

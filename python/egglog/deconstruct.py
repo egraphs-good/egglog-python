@@ -23,7 +23,14 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound=BaseExpr)
 TS = TypeVarTuple("TS", default=Unpack[tuple[BaseExpr, ...]])
 
-__all__ = ["get_callable_args", "get_callable_fn", "get_let_name", "get_literal_value", "get_var_name"]
+__all__ = [
+    "get_callable_args",
+    "get_callable_fn",
+    "get_constant_name",
+    "get_let_name",
+    "get_literal_value",
+    "get_var_name",
+]
 
 
 @overload
@@ -71,6 +78,19 @@ def get_literal_value(x: object) -> object:
             if not args:
                 return fn
             return partial(fn, *args)
+    return None
+
+
+def get_constant_name(x: BaseExpr) -> Ident | None:
+    """
+    Check if the expression is a constant and return its name.
+    If it is not a constant, return None.
+    """
+    if not isinstance(x, RuntimeExpr):
+        raise TypeError(f"Expected Expression, got {type(x).__name__}")
+    match x.__egg_typed_expr__.expr:
+        case CallDecl(ConstantRef(ident)):
+            return ident
     return None
 
 
@@ -168,8 +188,8 @@ def _deconstruct_call_decl(
             TypeRefWithVars(call.callable.ident, tuple(tp.to_var() for tp in (call.bound_tp_params or []))),
         ), arg_exprs
     egg_bound = (
-        JustTypeRef(call.callable.ident, call.bound_tp_params or ())
-        if isinstance(call.callable, ClassMethodRef)
+        JustTypeRef(call.callable.ident, call.bound_tp_params)
+        if isinstance(call.callable, (ClassMethodRef, MethodRef)) and call.bound_tp_params
         else None
     )
 

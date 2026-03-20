@@ -58,20 +58,22 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version-file: ".python-version"
+          # Work around import-time SciPy/sklearn segfaults on the codspeed ARM64 Python 3.13 runner.
+          python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@1.79.0
       - uses: Swatinem/rust-cache@v2
       - run: |
           export UV_PROJECT_ENVIRONMENT="${pythonLocation}"
-          uv sync --extra test --locked
-      - uses: CodSpeedHQ/action@v4.3.1
+          uv sync --extra test --locked --python 3.12
+      - uses: CodSpeedHQ/action@v4.11.1
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           # allow updating snapshots due to indeterministic benchmarks
-          run: pytest -vvv --snapshot-update --durations=10
+          run: pytest -vvv --snapshot-update --durations=10 --codspeed-max-rounds=10 python/tests/test_array_api.py -k "test_jit or test_run_lda"
           mode: ${{ matrix.runner == 'ubuntu-latest' && 'instrumentation' || 'walltime' }}
 
   docs:

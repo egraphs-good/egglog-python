@@ -17,24 +17,19 @@ array_api_numba_schedule = (array_api_combined_ruleset | array_api_numba_ruleset
 # Rewrite mean(x, <int>, <expand dims>) to use sum b/c numba cant do mean with axis
 # https://github.com/numba/numba/issues/1269
 @array_api_numba_ruleset.register
-def _mean(y: NDArray, x: NDArray, i: Int):
-    axis = OptionalIntOrTuple.some(IntOrTuple.int(i))
-    res = sum(x, axis) / NDArray.scalar(Value.int(x.shape[i]))
+def _mean(y: NDArray, x: NDArray, axis: Int):
+    res = sum(x, axis) / x.shape[axis]
 
     yield rewrite(mean(x, axis, FALSE), subsume=True).to(res)
-    yield rewrite(mean(x, axis, TRUE), subsume=True).to(expand_dims(res, i))
+    yield rewrite(mean(x, axis, TRUE), subsume=True).to(expand_dims(res, axis))
 
 
 # Rewrite std(x, <int>) to use mean and sum b/c numba cant do std with axis
 @array_api_numba_ruleset.register
-def _std(y: NDArray, x: NDArray, i: Int):
-    axis = OptionalIntOrTuple.some(IntOrTuple.int(i))
+def _std(y: NDArray, x: NDArray, axis: Int):
     # https://numpy.org/doc/stable/reference/generated/numpy.std.html
     # "std = sqrt(mean(x)), where x = abs(a - a.mean())**2."
-    yield rewrite(
-        std(x, axis),
-        subsume=True,
-    ).to(
+    yield rewrite(std(x, axis), subsume=True).to(
         sqrt(mean(square(x - mean(x, axis, keepdims=TRUE)), axis)),
     )
 
@@ -47,14 +42,16 @@ def count_values(x: NDArrayLike, values: TupleValueLike) -> TupleValue:
     """
     x = cast(NDArray, x)
     values = cast(TupleValue, values)
-    return TupleValue(values.length(), lambda i: sum(x == values[i]).to_value())
+    return TupleValue.fn(values.length(), lambda i: sum(x == values[i]).index(()))
 
 
 @array_api_numba_ruleset.register
 def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
     return [
         # The unique counts are the count of all the unique values
-        rewrite(unique_counts(x)[1], subsume=True).to(NDArray.vector(count_values(x, unique_values(x).to_values()))),
+        rewrite(unique_counts_counts(x), subsume=True).to(
+            NDArray.from_tuple_value(count_values(x, unique_values(x).to_tuple_values()))
+        ),
     ]
 
 
@@ -63,7 +60,5 @@ def _unique_counts(x: NDArray, c: NDArray, tv: TupleValue, v: Value):
 def _unique_inverse(x: NDArray, i: Int):
     return [
         # Creating a mask array of when the unique inverse is a value is the same as a mask array for when the value is that index of the unique values
-        rewrite(unique_inverse(x)[Int(1)] == NDArray.scalar(Value.int(i)), subsume=True).to(
-            x == NDArray.scalar(unique_values(x).index((i,)))
-        ),
+        rewrite(unique_inverse_inverse_indices(x) == i, subsume=True).to(x == unique_values(x).index((i,))),
     ]

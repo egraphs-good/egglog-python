@@ -652,32 +652,106 @@ egraph.check(eq(x).to(WrappedMath(math_float(3.14)) + WrappedMath(math_float(3.1
 egraph
 ```
 
-## Visualization
+## Debugging and Inspection
 
-The default renderer for the e-graph in a Jupyter Notebook [an interactive Javascript visualizer](https://github.com/egraphs-good/egraph-visualizer):
+When a rule does not fire or an equality appears unexpectedly, the most useful
+high-level inspection methods are `run`, `stats`, `function_values`, `freeze`,
+`display`, and `saturate`.
 
 ```{code-cell} python
-egraph
+from __future__ import annotations
+
+from egglog import *
+
+
+class DebugMath(Expr):
+    def __init__(self, value: i64Like) -> None: ...
+
+    def __add__(self, other: DebugMath) -> DebugMath: ...
+
+
+@function
+def score(x: DebugMath) -> i64: ...
+
+
+debug_rules = ruleset()
+
+
+@debug_rules.register
+def _(i: i64, j: i64):
+    yield rewrite(DebugMath(i) + DebugMath(j)).to(DebugMath(i + j))
 ```
 
-You can also customize the visualization through using the <inv:egglog.EGraph.display> method:
+### `run`
+
+Use {meth}`egglog.egraph.EGraph.run` to execute a schedule and inspect the
+`RunReport` for per-run counters and timings:
+
+```{code-cell} python
+egraph = EGraph()
+expr = egraph.let("expr", DebugMath(2) + DebugMath(3))
+egraph.register(set_(score(expr)).to(5))
+
+report = egraph.run(debug_rules)
+report.num_matches_per_rule
+```
+
+### `stats`
+
+Use {meth}`egglog.egraph.EGraph.stats` when you want cumulative counters for the
+current e-graph instead of only the most recent run:
+
+```{code-cell} python
+stats = egraph.stats()
+stats.num_matches_per_rule
+```
+
+### `function_values`
+
+Use {meth}`egglog.egraph.EGraph.function_values` to inspect the current rows in a
+function table:
+
+```{code-cell} python
+egraph.function_values(score)
+```
+
+### `freeze`
+
+Use {meth}`egglog.egraph.EGraph.freeze` to snapshot the current state into a
+replayable high-level program:
+
+```{code-cell} python
+frozen = egraph.freeze()
+str(frozen)
+```
+
+### `display`
+
+In Jupyter, the default rich display for an e-graph is the interactive
+[egraph visualizer](https://github.com/egraphs-good/egraph-visualizer). You can
+also call {meth}`egglog.egraph.EGraph.display` directly:
 
 ```{code-cell} python
 egraph.display()
 ```
 
-If you would like to visualize the progression of the e-graph over time, you can use the <inv:egglog.EGraph.saturate> method to
-run a number of iterations and then visualize the e-graph at each step:
+### `saturate`
+
+Use {meth}`egglog.egraph.EGraph.saturate` to keep running until the schedule
+stops changing the graph while printing the extracted form after each step:
 
 ```{code-cell} python
 egraph = EGraph()
-egraph.register(Math(2) + Math(100))
-i, j = vars_("i j", i64)
-r = ruleset(
-    rewrite(Math(i) + Math(j)).to(Math(i + j)),
-)
-egraph.saturate(r)
+expr = egraph.let("expr", DebugMath(2) + DebugMath(100))
+egraph.saturate(debug_rules, expr=expr, max=2, visualize=False)
 ```
+
+Common pitfalls when authoring rules:
+
+- Primitive container sorts like `Vec[...]` should not be merged or unioned.
+- Guard vector indexing rules with bounds checks (`0 <= k < vs.length()`).
+- Ensure rules that subtract from lengths only fire when the length is proven
+  positive.
 
 ## Custom Cost Models
 

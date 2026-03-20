@@ -83,7 +83,7 @@ def test_py_object():
     evalled = EvalProgram(fn, {"z": 10})
     egraph = EGraph()
     egraph.register(evalled)
-    egraph.run((to_program_ruleset | eval_program_rulseset | program_gen_ruleset).saturate())
+    egraph.run((to_program_ruleset | eval_program_ruleset | program_gen_ruleset).saturate())
     res = cast("FunctionType", egraph.extract(evalled.as_py_object).value)
     assert res(1, 2) == 13
     assert inspect.getsource(res)

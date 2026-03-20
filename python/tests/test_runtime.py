@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import doctest
+
 import pytest
 
 from egglog.declarations import *
+from egglog.exp import array_api
 from egglog.runtime import *
 from egglog.thunk import *
 from egglog.type_constraint_solver import *
@@ -12,9 +15,7 @@ def test_type_str():
     decls = Declarations(
         _classes={
             Ident.builtin("i64"): ClassDecl(),
-            Ident.builtin("Map"): ClassDecl(
-                type_vars=(ClassTypeVarRef(Ident.builtin("K")), ClassTypeVarRef(Ident.builtin("V")))
-            ),
+            Ident.builtin("Map"): ClassDecl(type_vars=(TypeVarRef(Ident.builtin("K")), TypeVarRef(Ident.builtin("V")))),
         }
     )
     i64 = RuntimeClass(Thunk.value(decls), TypeRefWithVars(Ident.builtin("i64")))
@@ -40,7 +41,7 @@ def test_function_call():
 
 
 def test_classmethod_call():
-    K, V = ClassTypeVarRef(Ident.builtin("K")), ClassTypeVarRef(Ident.builtin("V"))
+    K, V = TypeVarRef(Ident.builtin("K")), TypeVarRef(Ident.builtin("V"))
     decls = Declarations(
         _classes={
             Ident.builtin("i64"): ClassDecl(),
@@ -127,3 +128,19 @@ def test_class_variable():
     assert one.__egg_typed_expr__ == TypedExprDecl(
         JustTypeRef(Ident.builtin("i64")), CallDecl(ClassVariableRef(Ident.builtin("i64"), "one"))
     )
+
+
+def test_runtime_class_attr_lookup_is_stable():
+    assert array_api.TupleInt.__getitem__ is array_api.TupleInt.__getitem__
+    assert array_api.TupleInt.__dict__["__getitem__"] is array_api.TupleInt.__dict__["__getitem__"]
+
+
+def test_doctest_finder_collects_runtime_function_docstrings():
+    names = {test.name for test in doctest.DocTestFinder().find(array_api)}
+    assert {
+        "egglog.exp.array_api.TupleInt.__getitem__",
+        "egglog.exp.array_api.TupleInt.if_",
+        "egglog.exp.array_api.TupleTupleInt.product",
+        "egglog.exp.array_api.Value.diff",
+        "egglog.exp.array_api.RecursiveValue.__getitem__",
+    } <= names

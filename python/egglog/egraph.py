@@ -31,9 +31,11 @@ from uuid import uuid4
 from warnings import warn
 
 import graphviz
+from opentelemetry import trace
 from typing_extensions import ParamSpec, Unpack
 
 from . import bindings
+from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
 from .declarations import *
@@ -47,8 +49,12 @@ if TYPE_CHECKING:
     from .builtins import String, Unit, i64, i64Like
 
 
+_TRACER = trace.get_tracer(__name__)
+
+
 __all__ = [
     "Action",
+    "ActionLike",
     "BackOff",
     "BaseExpr",
     "BuiltinExpr",
@@ -322,7 +328,6 @@ class _ExprMetaclass(type):
         if not bases or bases == (BaseExpr,):
             return super().__new__(cls, name, bases, namespace)
         builtin = BuiltinExpr in bases
-        # TODO: Raise error on subclassing or multiple inheritence
 
         frame = currentframe()
         assert frame
@@ -395,20 +400,24 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     runtime_cls: RuntimeClass,
 ) -> Declarations:
     """
-    Lazy constructor for class declerations to support classes with methods whose types are not yet defined.
+    Lazy constructor for class declarations to support classes with methods whose types are not yet defined.
     """
     parameters: list[TypeVar] = (
         # Get the generic params from the orig bases generic class
         namespace["__orig_bases__"][1].__parameters__ if "__orig_bases__" in namespace else []
     )
-    type_vars = tuple(ClassTypeVarRef.from_type_var(p) for p in parameters)
+    type_vars = tuple(TypeVarRef.from_type_var(p) for p in parameters)
     del parameters
     cls_decl = ClassDecl(
         egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()), doc=namespace.pop("__doc__", None)
     )
     decls = Declarations(_classes={cls_ident: cls_decl})
-    # Update class think eagerly when resolving so that lookups work in methods
+    # Update class thunk eagerly when resolving so that lookups work in methods.
     runtime_cls.__egg_decls_thunk__ = Thunk.value(decls)
+    # Cached RuntimeFunction/RuntimeExpr wrappers capture the current decl thunk, so
+    # swapping in the concrete declarations must invalidate any wrappers created while
+    # the class was still pointing at the lazy declaration builder.
+    runtime_cls.__egg_attr_cache__.clear()
 
     ##
     # Register class variables
@@ -591,7 +600,7 @@ def _fn_decl(
     else:
         var_arg_type = None
     arg_types = tuple(
-        decls.get_paramaterized_class(ref.ident)
+        decls.get_parameterized_class(ref.ident)
         if i == 0 and isinstance(ref, MethodRef | PropertyRef)
         else resolve_type_annotation_mutate(decls, hints[t.name])
         for i, t in enumerate(params)
@@ -606,7 +615,7 @@ def _fn_decl(
     decls.update(*arg_defaults)
 
     return_type = (
-        decls.get_paramaterized_class(ref.ident)
+        decls.get_parameterized_class(ref.ident)
         if isinstance(ref, InitRef)
         else arg_types[0]
         if mutates_first_arg
@@ -663,6 +672,8 @@ def _fn_decl(
             doc=doc,
         )
     decls.set_function_decl(ref, decl)
+    if is_builtin:
+        return lambda: None
     return Thunk.fn(
         _add_default_rewrite_function,
         decls,
@@ -778,7 +789,7 @@ def _add_default_rewrite_function(
     arg_exprs: list[RuntimeExpr | RuntimeClass] = [RuntimeExpr.__from_values__(decls, a) for a in args]
     # If this is a classmethod, add the class as the first arg
     if isinstance(ref, ClassMethodRef):
-        tp = decls.get_paramaterized_class(ref.ident)
+        tp = decls.get_parameterized_class(ref.ident)
         arg_exprs.insert(0, RuntimeClass(Thunk.value(decls), tp))
     with set_current_ruleset(ruleset):
         res = fn(*arg_exprs)
@@ -806,6 +817,7 @@ def _add_default_rewrite(
     resolved_value = resolve_literal(type_ref, default_rewrite, Thunk.value(decls))
     rewrite_decl = DefaultRewriteDecl(ref, resolved_value.__egg_typed_expr__.expr, subsume)
     ruleset_decls = _add_default_rewrite_inner(decls, rewrite_decl, ruleset)
+    ruleset_decls |= decls
     ruleset_decls |= resolved_value
 
 
@@ -858,20 +870,27 @@ class EGraph:
     Can run actions, check facts, run schedules, or extract minimal cost expressions.
     """
 
-    seminaive: InitVar[bool] = True
-    save_egglog_string: InitVar[bool] = False
-
     _state: EGraphState = field(init=False, repr=False)
     # For pushing/popping with egglog
     _state_stack: list[EGraphState] = field(default_factory=list, repr=False)
     # For storing the global "current" egraph
     _token_stack: list[EGraph] = field(default_factory=list, repr=False)
 
-    def __post_init__(self, seminaive: bool, save_egglog_string: bool) -> None:
-        egraph = bindings.EGraph(seminaive=seminaive, record=save_egglog_string)
-        self._state = EGraphState(egraph)
+    def __init__(
+        self,
+        *actions: ActionLike,
+        seminaive: bool = True,
+        save_egglog_string: bool = False,
+    ) -> None:
+        with _TRACER.start_as_current_span("create"):
+            with _TRACER.start_as_current_span("create_bindings"):
+                self._state = EGraphState(bindings.EGraph(seminaive=seminaive, record=save_egglog_string))
+            self._state_stack = []
+            self._token_stack = []
+            if actions:
+                self.register(*actions)
 
-    def _add_decls(self, *decls: DeclerationsLike) -> None:
+    def _add_decls(self, *decls: DeclarationsLike) -> None:
         for d in decls:
             self._state.__egg_decls__ |= d
 
@@ -899,7 +918,7 @@ class EGraph:
         """
         Loads a CSV file and sets it as *input, output of the function.
         """
-        self._egraph.run_program(bindings.Input(span(1), self._callable_to_egg(fn)[1], path))
+        self._run_program(bindings.Input(span(1), self._callable_to_egg(fn)[1], path))
 
     def _callable_to_egg(self, fn: ExprCallable) -> tuple[CallableRef, str]:
         ref, decls = resolve_callable(fn)
@@ -939,6 +958,7 @@ class EGraph:
     @overload
     def run(self, schedule: Schedule, /) -> bindings.RunReport: ...
 
+    @_TRACER.start_as_current_span("run")
     def run(
         self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
     ) -> bindings.RunReport:
@@ -952,7 +972,7 @@ class EGraph:
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
         self._add_decls(schedule)
         cmd = self._state.run_schedule_to_egg(schedule.schedule)
-        (command_output,) = self._egraph.run_program(cmd)
+        (command_output,) = self._run_program(cmd)
         assert isinstance(command_output, bindings.RunScheduleOutput)
         return command_output.report
 
@@ -960,7 +980,7 @@ class EGraph:
         """
         Returns the overall run report for the egraph.
         """
-        (output,) = self._egraph.run_program(bindings.PrintOverallStatistics(span(1), None))
+        (output,) = self._run_program(bindings.PrintOverallStatistics(span(1), None))
         assert isinstance(output, bindings.OverallStatistics)
         return output.report
 
@@ -977,17 +997,18 @@ class EGraph:
             raise
         return True
 
+    @_TRACER.start_as_current_span("check")
     def check(self, *facts: FactLike) -> None:
         """
         Check if a fact is true in the egraph.
         """
-        self._egraph.run_program(self._facts_to_check(facts))
+        self._run_program(self._facts_to_check(facts))
 
     def check_fail(self, *facts: FactLike) -> None:
         """
         Checks that one of the facts is not true
         """
-        self._egraph.run_program(bindings.Fail(span(1), self._facts_to_check(facts)))
+        self._run_program(bindings.Fail(span(1), self._facts_to_check(facts)))
 
     def _facts_to_check(self, fact_likes: Iterable[FactLike]) -> bindings.Check:
         facts = _fact_likes(fact_likes)
@@ -1010,6 +1031,7 @@ class EGraph:
         self, expr: BASE_EXPR, /, include_cost: Literal[True], cost_model: CostModel[COST]
     ) -> tuple[BASE_EXPR, COST]: ...
 
+    @_TRACER.start_as_current_span("extract")
     def extract(
         self, expr: BASE_EXPR, /, include_cost: bool = False, cost_model: CostModel[COST] | None = None
     ) -> BASE_EXPR | tuple[BASE_EXPR, COST]:
@@ -1029,14 +1051,14 @@ class EGraph:
             self.register(expr)
             egg_cost_model = _CostModel(cost_model, self).to_bindings_cost_model()
             egg_sort = self._state.type_ref_to_egg(tp)
-            extractor = bindings.Extractor([egg_sort], self._state.egraph, egg_cost_model)
+            extractor = call_with_current_trace(bindings.Extractor, [egg_sort], self._state.egraph, egg_cost_model)
             termdag = bindings.TermDag()
             value = self._state.typed_expr_to_value(runtime_expr.__egg_typed_expr__)
-            cost, term = extractor.extract_best(self._state.egraph, termdag, value, egg_sort)
+            cost, term = call_with_current_trace(extractor.extract_best, self._state.egraph, termdag, value, egg_sort)
             res = self._from_termdag(termdag, term, tp)
         return (res, cost) if include_cost else res
 
-    def _from_termdag(self, termdag: bindings.TermDag, term: bindings._Term, tp: JustTypeRef) -> Any:
+    def _from_termdag(self, termdag: bindings.TermDag, term: int, tp: JustTypeRef) -> Any:
         (new_typed_expr,) = self._state.exprs_from_egg(termdag, [term], tp)
         return RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr)
 
@@ -1062,24 +1084,26 @@ class EGraph:
         else:
             cmd = bindings.Extract(span(2), *args)
         try:
-            return self._egraph.run_program(cmd)[0]
+            return self._run_program(cmd)[0]
         except BaseException as e:
-            e.add_note("while extracting expr:\n" + str(expr))
+            e.add_note("while extracting: " + str(expr))
             raise
 
+    @_TRACER.start_as_current_span("push")
     def push(self) -> None:
         """
         Push the current state of the egraph, so that it can be popped later and reverted back.
         """
-        self._egraph.run_program(bindings.Push(1))
+        self._run_program(bindings.Push(1))
         self._state_stack.append(self._state)
         self._state = self._state.copy()
 
+    @_TRACER.start_as_current_span("pop")
     def pop(self) -> None:
         """
         Pop the current state of the egraph, reverting back to the previous state.
         """
-        self._egraph.run_program(bindings.Pop(span(1), 1))
+        self._run_program(bindings.Pop(span(1), 1))
         self._state = self._state_stack.pop()
 
     def __enter__(self) -> Self:
@@ -1104,7 +1128,8 @@ class EGraph:
         split_functions = kwargs.pop("split_functions", [])
         include_temporary_functions = kwargs.pop("include_temporary_functions", False)
         n_inline_leaves = kwargs.pop("n_inline_leaves", 0)
-        serialized = self._egraph.serialize(
+        serialized = call_with_current_trace(
+            self._egraph.serialize,
             [],
             max_functions=max_functions,
             max_calls_per_function=max_calls_per_function,
@@ -1178,13 +1203,14 @@ class EGraph:
             serialized = self._serialize(**kwargs)
             VisualizerWidget(egraphs=[serialized.to_json()]).display_or_open()
 
-    def saturate(
+    def saturate(  # noqa: C901
         self,
         schedule: Schedule | None = None,
         *,
         expr: Expr | None = None,
         max: int = 1000,
         visualize: bool = True,
+        print_frozen: bool = False,
         **kwargs: Unpack[GraphvizKwargs],
     ) -> None:
         """
@@ -1209,9 +1235,15 @@ class EGraph:
                 i += 1
                 if visualize:
                     egraphs.append(to_json())
+                if print_frozen:
+                    print(f"After iteration {i}:")
+                    print(self.freeze())
+                    print("\n")
         except:
             if visualize:
                 egraphs.append(to_json())
+            if print_frozen:
+                print(self.freeze())
             raise
         finally:
             if visualize:
@@ -1221,10 +1253,14 @@ class EGraph:
     def _egraph(self) -> bindings.EGraph:
         return self._state.egraph
 
+    def _run_program(self, *commands: bindings._Command) -> list[bindings._CommandOutput]:
+        return call_with_current_trace(self._egraph.run_program, *commands)
+
     @property
     def __egg_decls__(self) -> Declarations:
         return self._state.__egg_decls__
 
+    @_TRACER.start_as_current_span("register")
     def register(
         self,
         /,
@@ -1249,7 +1285,7 @@ class EGraph:
     def _register_commands(self, cmds: list[Command]) -> None:
         self._add_decls(*cmds)
         egg_cmds = [egg_cmd for cmd in cmds if (egg_cmd := self._command_to_egg(cmd)) is not None]
-        self._egraph.run_program(*egg_cmds)
+        self._run_program(*egg_cmds)
 
     def _command_to_egg(self, cmd: Command) -> bindings._Command | None:
         ruleset_ident = Ident("")
@@ -1269,7 +1305,7 @@ class EGraph:
         Returns the number of rows in a certain function
         """
         egg_name = self._callable_to_egg(fn)[1]
-        (output,) = self._egraph.run_program(bindings.PrintSize(span(1), egg_name))
+        (output,) = self._run_program(bindings.PrintSize(span(1), egg_name))
         assert isinstance(output, bindings.PrintFunctionSize)
         return output.size
 
@@ -1277,7 +1313,7 @@ class EGraph:
         """
         Returns a list of all functions and their sizes.
         """
-        (output,) = self._egraph.run_program(bindings.PrintSize(span(1), None))
+        (output,) = self._run_program(bindings.PrintSize(span(1), None))
         assert isinstance(output, bindings.PrintAllFunctionsSize)
         return [(callables[0], size) for (name, size) in output.sizes if (callables := self._egg_fn_to_callables(name))]
 
@@ -1298,7 +1334,7 @@ class EGraph:
         """
         ref, egg_name = self._callable_to_egg(fn)
         cmd = bindings.PrintFunction(span(1), egg_name, length, None, bindings.DefaultPrintFunctionMode())
-        (output,) = self._egraph.run_program(cmd)
+        (output,) = self._run_program(cmd)
         assert isinstance(output, bindings.PrintFunctionOutput)
         signature = self.__egg_decls__.get_callable_decl(ref).signature
         assert isinstance(signature, FunctionSignature)
@@ -1334,6 +1370,144 @@ class EGraph:
         """
         resolved, _ = resolve_callable(fn)
         return resolved in self._state.cost_callables
+
+    def freeze(self) -> FrozenEGraph:  # noqa: C901,PLR0912
+        """
+        Freeze the current e-graph state for debugging.
+
+        The returned :class:`FrozenEGraph` contains a snapshot of the current
+        declarations and can be pretty-printed back into replayable high-level
+        actions with ``str(...)``.
+
+        This is useful when debugging unexpected unions, sets, subsumptions, or
+        costs after a run:
+
+        >>> from egglog import *
+        >>> class Math(Expr):
+        ...     def __init__(self, value: i64Like) -> None: ...
+        ...
+        >>> egraph = EGraph(Math(1))
+        >>> str(egraph.freeze())
+        'EGraph(Math(1)).freeze()'
+        """
+        frozen = self._egraph.freeze()
+        let_bindings: dict[str, TypedExprDecl] = {}
+        e_classes: dict[bindings.Value, tuple[JustTypeRef, list[CallDecl]]] = {}
+        sets: dict[CallDecl, TypedExprDecl] = {}
+        costs: dict[CallDecl, tuple[JustTypeRef, int]] = {}
+        expr_actions: list[TypedExprDecl] = []
+        subsumed: list[tuple[JustTypeRef, CallDecl]] = []
+
+        def append_e_class_row(output: bindings.Value, tp: JustTypeRef, call: CallDecl, is_subsumed: bool) -> None:
+            if output not in e_classes:
+                e_classes[output] = (tp, [])
+            e_class_tp, exprs = e_classes[output]
+            assert e_class_tp == tp
+            exprs.append(call)
+            if is_subsumed:
+                subsumed.append((tp, call))
+
+        for name, fn in frozen.functions.items():
+            if fn.is_let_binding:
+                if name.startswith("$__expr_"):
+                    continue
+                for row in fn.rows:
+                    output_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
+                    let_bindings[name] = TypedExprDecl(output_tp, self._state.value_to_expr(output_tp, row.output))
+                continue
+            is_cost = False
+            if name in self._state.egg_fn_to_callable_refs:
+                (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
+            else:
+                (callable_ref,) = (
+                    ref for ref in self._state.cost_callables if name == self._state.cost_table_name(ref)
+                )
+                is_cost = True
+            callable_decl = self.__egg_decls__.get_callable_decl(callable_ref)
+            signature = callable_decl.signature
+            assert isinstance(signature, FunctionSignature), (
+                f"Cannot freeze special callable {callable_ref} with signature {signature}"
+            )
+            assert signature.var_arg_type is None, f"Frozen calls do not support var args: {callable_ref}"
+            assert not signature.reverse_args, f"Frozen calls do not support reverse_args: {callable_ref}"
+
+            for row in fn.rows:
+                arg_exprs = tuple(
+                    TypedExprDecl(tp, self._state.value_to_expr(tp, value))
+                    for arg_type, value in zip(signature.arg_types, row.inputs, strict=True)
+                    for tp in (arg_type.to_just(),)
+                )
+                call = CallDecl(callable_ref, arg_exprs)
+                if is_cost:
+                    cost_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
+                    cost_expr = TypedExprDecl(cost_tp, self._state.value_to_expr(cost_tp, row.output))
+                    match cost_expr.expr:
+                        case LitDecl(int(value)):
+                            costs[call] = (signature.semantic_return_type.to_just(), value)
+                        case _:
+                            raise TypeError(f"Expected integer cost for {callable_ref}, got {cost_expr.expr}")
+                    continue
+
+                output_tp = signature.semantic_return_type.to_just()
+                match callable_decl:
+                    case ConstructorDecl():
+                        append_e_class_row(row.output, output_tp, call, row.subsumed)
+                    case FunctionDecl():
+                        set_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
+                        sets[call] = TypedExprDecl(set_tp, self._state.value_to_expr(set_tp, row.output))
+                    case ConstantDecl(type_ref):
+                        if type_ref.ident.module == Ident.builtin("").module:
+                            set_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
+                            sets[call] = TypedExprDecl(set_tp, self._state.value_to_expr(set_tp, row.output))
+                            continue
+                        append_e_class_row(row.output, output_tp, call, row.subsumed)
+                    case RelationDecl():
+                        if row.subsumed:
+                            raise TypeError(f"Cannot freeze subsumed relation row for {callable_ref}")
+                        expr_actions.append(TypedExprDecl(output_tp, call))
+                    case _:
+                        assert_never(callable_decl)
+
+        return FrozenEGraph(
+            self.__egg_decls__.copy(),
+            EGraphDecl(
+                let_bindings=let_bindings,
+                e_classes={value: (tp, tuple(exprs)) for value, (tp, exprs) in e_classes.items()},
+                sets=sets,
+                expr_actions=tuple(expr_actions),
+                costs=costs,
+                subsumed=tuple(subsumed),
+            ),
+        )
+
+    def _values_to_expr(self, args: list[bindings.Value], name: str) -> RuntimeExpr | None:
+        if name not in self._state.egg_fn_to_callable_refs:
+            return None
+        (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
+        signature = self.__egg_decls__.get_callable_decl(callable_ref).signature
+        assert isinstance(signature, FunctionSignature)
+        arg_exprs = tuple(
+            TypedExprDecl(tp, self._state.value_to_expr(tp, arg))
+            for arg_type, arg in zip(signature.arg_types, args, strict=True)
+            for tp in (arg_type.to_just(),)
+        )
+        res_type = signature.semantic_return_type.to_just()
+        return RuntimeExpr.__from_values__(
+            self.__egg_decls__,
+            TypedExprDecl(res_type, CallDecl(callable_ref, arg_exprs)),
+        )
+
+
+@dataclass(frozen=True)
+class FrozenEGraph:
+    __egg_decls__: Declarations
+    decl: EGraphDecl
+
+    def __str__(self) -> str:
+        return pretty_decl(self.__egg_decls__, self.decl)
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
 # Either a constant or a function.
@@ -1384,7 +1558,7 @@ def ruleset(
 
 
 @dataclass
-class Schedule(DelayedDeclerations):
+class Schedule(DelayedDeclarations):
     """
     A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
     """
@@ -1414,7 +1588,7 @@ class Schedule(DelayedDeclerations):
         """
         Run two schedules in sequence.
         """
-        return Schedule(Thunk.fn(Declarations.create, self, other), SequenceDecl((self.schedule, other.schedule)))
+        return Schedule(partial(Declarations.create, self, other), SequenceDecl((self.schedule, other.schedule)))
 
 
 @dataclass
@@ -1625,11 +1799,14 @@ def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
     from .builtins import i64  # noqa: PLC0415
 
     expr_runtime = to_runtime_expr(expr)
+    cost_runtime = to_runtime_expr(convert(cost, i64))
     typed_expr_decl = expr_runtime.__egg_typed_expr__
     expr_decl = typed_expr_decl.expr
     assert isinstance(expr_decl, CallDecl), "Can only set cost of calls, not literals or vars"
-    cost_decl = to_runtime_expr(convert(cost, i64)).__egg_typed_expr__.expr
-    return Action(expr_runtime.__egg_decls__, SetCostDecl(typed_expr_decl.tp, expr_decl, cost_decl))
+    return Action(
+        Declarations.create(expr_runtime, cost_runtime),
+        SetCostDecl(typed_expr_decl.tp, expr_decl, cost_runtime.__egg_typed_expr__.expr),
+    )
 
 
 def let(name: str, expr: BaseExpr) -> Action:
@@ -1892,7 +2069,7 @@ def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | N
     """
     facts = _fact_likes(until)
     return Schedule(
-        Thunk.fn(Declarations.create, ruleset, *facts),
+        partial(Declarations.create, ruleset, *facts),
         RunDecl(
             ruleset.__egg_ident__ if ruleset else Ident(""),
             tuple(f.fact for f in facts),
@@ -1935,7 +2112,7 @@ def seq(*schedules: Schedule) -> Schedule:
     """
     Run a sequence of schedules.
     """
-    return Schedule(Thunk.fn(Declarations.create, *schedules), SequenceDecl(tuple(s.schedule for s in schedules)))
+    return Schedule(partial(Declarations.create, *schedules), SequenceDecl(tuple(s.schedule for s in schedules)))
 
 
 def _action_likes(action_likes: Iterable[ActionLike]) -> tuple[Action, ...]:
@@ -2214,18 +2391,10 @@ class _CostModel(Generic[COST]):
             return self.enode_cost_results[(name, tuple(args))]
         except KeyError:
             pass
-        (callable_ref,) = self.egraph._state.egg_fn_to_callable_refs[name]
-        signature = self.egraph.__egg_decls__.get_callable_decl(callable_ref).signature
-        assert isinstance(signature, FunctionSignature)
-        arg_exprs = [
-            TypedExprDecl(tp.to_just(), self.egraph._state.value_to_expr(tp.to_just(), arg))
-            for (arg, tp) in zip(args, signature.arg_types, strict=True)
-        ]
-        res_type = signature.semantic_return_type.to_just()
-        res = RuntimeExpr.__from_values__(
-            self.egraph.__egg_decls__,
-            TypedExprDecl(res_type, CallDecl(callable_ref, tuple(arg_exprs))),
-        )
+        res = self.egraph._values_to_expr(args, name)
+        if res is None:
+            msg = f"Cannot compute custom cost for unknown egg function {name!r}"
+            raise ValueError(msg)
         index = len(self.enode_cost_expressions)
         self.enode_cost_expressions.append(res)
         self.enode_cost_results[(name, tuple(args))] = index

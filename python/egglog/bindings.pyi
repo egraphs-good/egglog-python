@@ -2,7 +2,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Generic, Protocol, TypeAlias, TypeVar, final
+from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar, final
 
 __all__ = [
     "ActionCommand",
@@ -31,6 +31,9 @@ __all__ = [
     "Fact",
     "Fail",
     "Float",
+    "FrozenEGraph",
+    "FrozenFunction",
+    "FrozenRow",
     "Function",
     "FunctionCommand",
     "FusedIntersect",
@@ -55,6 +58,9 @@ __all__ = [
     "PrintFunctionSize",
     "PrintOverallStatistics",
     "PrintSize",
+    "Prove",
+    "ProveExists",
+    "ProveExistsOutput",
     "Push",
     "Relation",
     "Repeat",
@@ -99,7 +105,12 @@ __all__ = [
     "Var",
     "Variant",
     "WithPlan",
+    "setup_tracing",
+    "shutdown_tracing",
 ]
+
+def setup_tracing(*, exporter: Literal["console", "http"], endpoint: str | None = None) -> None: ...
+def shutdown_tracing() -> None: ...
 
 @final
 class SerializedEGraph:
@@ -121,7 +132,9 @@ class EGraph:
     ) -> EGraph: ...
     def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
     def commands(self) -> str | None: ...
-    def run_program(self, *commands: _Command) -> list[_CommandOutput]: ...
+    def run_program(
+        self, *commands: _Command, traceparent: str | None = None, tracestate: str | None = None
+    ) -> list[_CommandOutput]: ...
     def serialize(
         self,
         root_eclasses: list[_Expr],
@@ -129,10 +142,14 @@ class EGraph:
         max_functions: int | None = None,
         max_calls_per_function: int | None = None,
         include_temporary_functions: bool = False,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
     ) -> SerializedEGraph: ...
     def set_report_level(self, level: _ReportLevel) -> None: ...
     def lookup_function(self, name: str, key: list[Value]) -> Value | None: ...
-    def eval_expr(self, expr: _Expr) -> tuple[str, Value]: ...
+    def eval_expr(
+        self, expr: _Expr, *, traceparent: str | None = None, tracestate: str | None = None
+    ) -> tuple[str, Value]: ...
     def value_to_i64(self, v: Value) -> int: ...
     def value_to_f64(self, v: Value) -> float: ...
     def value_to_string(self, v: Value) -> str: ...
@@ -147,6 +164,7 @@ class EGraph:
     def value_to_function(self, v: Value) -> tuple[str, list[Value]]: ...
     def value_to_set(self, v: Value) -> set[Value]: ...
     # def dynamic_cost_model_enode_cost(self, func: str, args: list[Value]) -> int: ...
+    def freeze(self) -> FrozenEGraph: ...
 
 @final
 class Value:
@@ -268,6 +286,7 @@ class TermApp:
     def __new__(cls, name: str, args: list[int]) -> TermApp: ...
 
 _Term: TypeAlias = TermLit | TermVar | TermApp
+_TermId: TypeAlias = int
 
 ##
 # Facts
@@ -530,15 +549,20 @@ class PrintAllFunctionsSize:
 @final
 class ExtractVariants:
     termdag: TermDag
-    terms: list[_Term]
-    def __new__(cls, termdag: TermDag, terms: list[_Term]) -> ExtractVariants: ...
+    terms: list[_TermId]
+    def __new__(cls, termdag: TermDag, terms: list[_TermId]) -> ExtractVariants: ...
 
 @final
 class ExtractBest:
     termdag: TermDag
     cost: int
-    term: _Term
-    def __new__(cls, termdag: TermDag, cost: int, term: _Term) -> ExtractBest: ...
+    term: _TermId
+    def __new__(cls, termdag: TermDag, cost: int, term: _TermId) -> ExtractBest: ...
+
+@final
+class ProveExistsOutput:
+    proof: str
+    def __new__(cls, proof: str) -> ProveExistsOutput: ...
 
 @final
 class OverallStatistics:
@@ -554,10 +578,10 @@ class RunScheduleOutput:
 class PrintFunctionOutput:
     function: Function
     termdag: TermDag
-    terms: list[tuple[_Term, _Term]]
+    terms: list[tuple[_TermId, _TermId]]
     mode: _PrintFunctionMode
     def __new__(
-        cls, function: Function, termdag: TermDag, terms: list[tuple[_Term, _Term]], mode: _PrintFunctionMode
+        cls, function: Function, termdag: TermDag, terms: list[tuple[_TermId, _TermId]], mode: _PrintFunctionMode
     ) -> PrintFunctionOutput: ...
 
 @final
@@ -570,6 +594,7 @@ _CommandOutput: TypeAlias = (
     | PrintAllFunctionsSize
     | ExtractVariants
     | ExtractBest
+    | ProveExistsOutput
     | OverallStatistics
     | RunScheduleOutput
     | PrintFunctionOutput
@@ -718,6 +743,18 @@ class Check:
     def __new__(cls, span: _Span, facts: list[_Fact]) -> Check: ...
 
 @final
+class Prove:
+    span: _Span
+    facts: list[_Fact]
+    def __new__(cls, span: _Span, facts: list[_Fact]) -> Prove: ...
+
+@final
+class ProveExists:
+    span: _Span
+    expr: str
+    def __new__(cls, span: _Span, expr: str) -> ProveExists: ...
+
+@final
 class PrintFunction:
     span: _Span
     name: str
@@ -822,6 +859,8 @@ _Command: TypeAlias = (
     | RunSchedule
     | Extract
     | Check
+    | Prove
+    | ProveExists
     | PrintFunction
     | PrintSize
     | Output
@@ -844,14 +883,14 @@ _Command: TypeAlias = (
 @final
 class TermDag:
     def size(self) -> int: ...
-    def lookup(self, node: _Term) -> int: ...
-    def get(self, id: int) -> _Term: ...
-    def app(self, sym: str, children: list[int]) -> _Term: ...
-    def lit(self, lit: _Literal) -> _Term: ...
-    def var(self, sym: str) -> _Term: ...
-    def expr_to_term(self, expr: _Expr) -> _Term: ...
-    def term_to_expr(self, term: _Term, span: _Span) -> _Expr: ...
-    def to_string(self, term: _Term) -> str: ...
+    def lookup(self, node: _Term) -> _TermId: ...
+    def get(self, id: _TermId) -> _Term: ...
+    def app(self, sym: str, children: list[_TermId]) -> _TermId: ...
+    def lit(self, lit: _Literal) -> _TermId: ...
+    def var(self, sym: str) -> _TermId: ...
+    def expr_to_term(self, expr: _Expr) -> _TermId: ...
+    def term_to_expr(self, term: _TermId, span: _Span) -> _Expr: ...
+    def to_string(self, term: _TermId) -> str: ...
 
 ##
 # Extraction
@@ -879,9 +918,53 @@ class CostModel(Generic[_COST, _ENODE_COST]):
 @final
 class Extractor(Generic[_COST]):
     def __new__(
-        cls, rootsorts: list[str] | None, egraph: EGraph, cost_model: CostModel[_COST, Any]
+        cls,
+        rootsorts: list[str] | None,
+        egraph: EGraph,
+        cost_model: CostModel[_COST, Any],
+        *,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
     ) -> Extractor[_COST]: ...
-    def extract_best(self, egraph: EGraph, termdag: TermDag, value: Value, sort: str) -> tuple[_COST, _Term]: ...
+    def extract_best(
+        self,
+        egraph: EGraph,
+        termdag: TermDag,
+        value: Value,
+        sort: str,
+        *,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
+    ) -> tuple[_COST, _TermId]: ...
     def extract_variants(
-        self, egraph: EGraph, termdag: TermDag, value: Value, nvariants: int, sort: str
-    ) -> list[tuple[_COST, _Term]]: ...
+        self,
+        egraph: EGraph,
+        termdag: TermDag,
+        value: Value,
+        nvariants: int,
+        sort: str,
+        *,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
+    ) -> list[tuple[_COST, _TermId]]: ...
+
+##
+# Frozen
+##
+
+@final
+class FrozenEGraph:
+    functions: dict[str, FrozenFunction]
+
+@final
+class FrozenFunction:
+    input_sorts: list[str]
+    output_sort: str
+    is_let_binding: bool
+    rows: list[FrozenRow]
+
+@final
+class FrozenRow:
+    subsumed: bool
+    inputs: list[Value]
+    output: Value

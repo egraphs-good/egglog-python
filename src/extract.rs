@@ -2,7 +2,8 @@ use std::cmp::Ordering;
 
 use pyo3::{exceptions::PyValueError, prelude::*};
 
-use crate::{conversions::Term, egraph::EGraph, egraph::Value, termdag::TermDag};
+use crate::{egraph::EGraph, egraph::Value, termdag::TermDag, tracing_otel};
+use egglog::TermId;
 
 #[derive(Debug)]
 // We have to store the result, since the cost model does not return errors
@@ -181,12 +182,22 @@ impl Extractor {
     ///
     /// For convenience, if the rootsorts is `None`, it defaults to extract all extractable rootsorts.
     #[new]
+    #[pyo3(signature = (rootsorts, egraph, cost_model, *, traceparent=None, tracestate=None))]
     fn new(
         py: Python<'_>,
         rootsorts: Option<Vec<String>>,
         egraph: &EGraph,
         cost_model: CostModel,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
     ) -> PyResult<Self> {
+        let _context_guard =
+            tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
+        let span = tracing::info_span!(
+            "bindings.extractor.new",
+            has_rootsorts = rootsorts.is_some()
+        );
+        let _entered = span.enter();
         let egraph = &egraph.egraph;
         // Transforms sorts to arcsorts, returning an error if any are unknown
         let rootsorts = rootsorts
@@ -209,6 +220,7 @@ impl Extractor {
     ///
     /// This function expects the sort to be already computed,
     /// which can be one of the rootsorts, or reachable from rootsorts, or primitives, or containers of computed sorts.
+    #[pyo3(signature = (egraph, termdag, value, sort, *, traceparent=None, tracestate=None))]
     fn extract_best(
         &self,
         py: Python<'_>,
@@ -216,7 +228,13 @@ impl Extractor {
         termdag: &mut TermDag,
         value: Value,
         sort: String,
-    ) -> PyResult<(Py<PyAny>, Term)> {
+        traceparent: Option<String>,
+        tracestate: Option<String>,
+    ) -> PyResult<(Py<PyAny>, TermId)> {
+        let _context_guard =
+            tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
+        let span = tracing::info_span!("bindings.extractor.extract_best", sort = %sort);
+        let _entered = span.enter();
         let sort = egraph
             .egraph
             .get_sort_by_name(&sort)
@@ -225,13 +243,14 @@ impl Extractor {
             .0
             .extract_best_with_sort(&egraph.egraph, &mut termdag.0, value.0, sort.clone())
             .ok_or(PyValueError::new_err("Unextractable root".to_string()))?;
-        Ok((cost.0.clone_ref(py), term.into()))
+        Ok((cost.0.clone_ref(py), term))
     }
 
     /// Extract variants of an e-class.
     ///
     /// The variants are selected by first picking `nvariants` e-nodes with the lowest cost from the e-class
     /// and then extracting a term from each e-node.
+    #[pyo3(signature = (egraph, termdag, value, nvariants, sort, *, traceparent=None, tracestate=None))]
     fn extract_variants(
         &self,
         py: Python<'_>,
@@ -240,7 +259,13 @@ impl Extractor {
         value: Value,
         nvariants: usize,
         sort: String,
-    ) -> PyResult<Vec<(Py<PyAny>, Term)>> {
+        traceparent: Option<String>,
+        tracestate: Option<String>,
+    ) -> PyResult<Vec<(Py<PyAny>, TermId)>> {
+        let _context_guard =
+            tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
+        let span = tracing::info_span!("bindings.extractor.extract_variants", sort = %sort, variant_count = nvariants);
+        let _entered = span.enter();
         let sort = egraph
             .egraph
             .get_sort_by_name(&sort)
@@ -254,7 +279,7 @@ impl Extractor {
         );
         Ok(variants
             .into_iter()
-            .map(|(cost, term)| (cost.0.clone_ref(py), term.into()))
+            .map(|(cost, term)| (cost.0.clone_ref(py), term))
             .collect())
     }
 }

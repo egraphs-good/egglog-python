@@ -15,12 +15,9 @@ array_api_program_gen_ruleset = ruleset(name="array_api_program_gen_ruleset")
 array_api_program_gen_eval_ruleset = ruleset(name="array_api_program_gen_eval_ruleset")
 
 array_api_program_gen_combined_ruleset = (
-    array_api_program_gen_ruleset
-    | program_gen_ruleset
-    | array_api_program_gen_eval_ruleset
-    | array_api_vec_to_cons_ruleset
+    array_api_program_gen_ruleset | program_gen_ruleset | array_api_program_gen_eval_ruleset
 )
-array_api_program_gen_schedule = (array_api_program_gen_combined_ruleset | eval_program_rulseset).saturate()
+array_api_program_gen_schedule = (array_api_program_gen_combined_ruleset | eval_program_ruleset).saturate()
 
 
 @function
@@ -38,7 +35,7 @@ def int_program(x: Int) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _int_program(i64_: i64, i: Int, j: Int, s: String):
+def _int_program(i64_: i64, i: Int, j: Int, s: String, b: Boolean, ti: Callable[[], Int], ti1: Callable[[], Int]):
     yield rewrite(int_program(Int.var(s))).to(Program(s, True))
     yield rewrite(int_program(Int(i64_))).to(Program(i64_.to_string()))
     yield rewrite(int_program(~i)).to(Program("~") + int_program(i))
@@ -60,26 +57,56 @@ def _int_program(i64_: i64, i: Int, j: Int, s: String):
     yield rewrite(int_program(i >> j)).to(Program("(") + int_program(i) + " >> " + int_program(j) + ")")
     yield rewrite(int_program(i // j)).to(Program("(") + int_program(i) + " // " + int_program(j) + ")")
 
+    assigned = int_program(j).assign()
+    yield rewrite(int_program(check_index(i, j)), subsume=True).to(
+        assigned.statement(Program("assert ") + assigned + " < " + int_program(i))
+    )
+
+    yield rewrite(int_program(Int.if_(b, ti, ti1))).to(
+        int_program(ti()) + " if " + bool_program(b) + " else " + int_program(ti1())
+    )
+
 
 @function
+def program_if(b: BooleanLike, t: Callable[[], Program], f: Callable[[], Program]) -> Program: ...
+
+
+@function(ruleset=array_api_program_gen_ruleset)
 def tuple_int_foldl_program(xs: TupleIntLike, f: Callable[[Program, Int], Program], init: ProgramLike) -> Program: ...
 
 
 @function(ruleset=array_api_program_gen_ruleset)
-def tuple_int_program(x: TupleIntLike) -> Program:
-    return tuple_int_foldl_program(x, lambda acc, i: acc + int_program(i) + ", ", "(") + ")"
+def tuple_int_program(x: TupleIntLike) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _tuple_int_program(i: Int, ti: TupleInt, ti2: TupleInt, f: Callable[[Program, Int], Program], init: Program):
+def _tuple_int_program(
+    i: Int,
+    ti: TupleInt,
+    ti2: TupleInt,
+    f: Callable[[Program, Int], Program],
+    init: Program,
+    b: Boolean,
+    tt: Callable[[], Program],
+    ft: Callable[[], Program],
+    vi: Vec[Int],
+):
     yield rewrite(int_program(ti[i])).to(tuple_int_program(ti) + "[" + int_program(i) + "]")
     yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_int_program(ti) + ")")
 
-    yield rewrite(tuple_int_foldl_program(TupleInt.EMPTY, f, init)).to(init)
-    yield rewrite(tuple_int_foldl_program(ti.append(i), f, init)).to(f(tuple_int_foldl_program(ti, f, init), i))
+    yield rewrite(program_if(True, tt, ft)).to(tt())
+    yield rewrite(program_if(False, tt, ft)).to(ft())
 
     yield rewrite(tuple_int_program(ti + ti2)).to(
         Program("(") + tuple_int_program(ti) + " + " + tuple_int_program(ti2) + ")"
+    )
+    yield rewrite(tuple_int_program(ti)).to(
+        tuple_int_foldl_program(ti, lambda acc, i: acc + int_program(i) + ", ", "(") + ")"
+    )
+
+    yield rewrite(tuple_int_foldl_program(TupleInt(()), f, init)).to(init)
+    yield rewrite(tuple_int_foldl_program(TupleInt(vi), f, init)).to(
+        f(tuple_int_foldl_program(vi.pop(), f, init), vi[vi.length() - 1]), vi.length() > 0
     )
 
 
@@ -139,41 +166,50 @@ def value_program(x: Value) -> Program: ...
 
 @array_api_program_gen_ruleset.register
 def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Value, xs: NDArray, ti: TupleInt):
-    yield rewrite(value_program(Value.int(i))).to(int_program(i))
-    yield rewrite(value_program(Value.bool(b))).to(bool_program(b))
-    yield rewrite(value_program(Value.float(f))).to(float_program(f))
+    yield rewrite(value_program(Value.from_int(i))).to(int_program(i))
+    yield rewrite(value_program(Value.from_bool(b))).to(bool_program(b))
+    yield rewrite(value_program(Value.from_float(f))).to(float_program(f))
     # Could add .item() but we usually dont need it.
-    yield rewrite(value_program(x.to_value())).to(ndarray_program(x))
+    # yield rewrite(value_program(x.to_value())).to(ndarray_program(x))
     yield rewrite(value_program(v1 < v2)).to(Program("(") + value_program(v1) + " < " + value_program(v2) + ")")
     yield rewrite(value_program(v1 / v2)).to(Program("(") + value_program(v1) + " / " + value_program(v2) + ")")
     yield rewrite(value_program(v1 + v2)).to(Program("(") + value_program(v1) + " + " + value_program(v2) + ")")
     yield rewrite(value_program(v1 * v2)).to(Program("(") + value_program(v1) + " * " + value_program(v2) + ")")
     yield rewrite(bool_program(v1.to_bool)).to(value_program(v1))
     yield rewrite(int_program(v1.to_int)).to(value_program(v1))
-    yield rewrite(value_program(xs.index(ti))).to((ndarray_program(xs) + "[" + tuple_int_program(ti) + "]").assign())
+    yield rewrite(value_program(xs.index(ti))).to(
+        (ndarray_program(xs) + "[" + tuple_int_program(ti) + "]").assign(), ne(ti).to(TupleInt(()))
+    )
+    yield rewrite(value_program(xs.index(TupleInt(())))).to(ndarray_program(xs))
     yield rewrite(value_program(v1.sqrt())).to(Program("np.sqrt(") + value_program(v1) + ")")
     yield rewrite(value_program(v1.real())).to(Program("np.real(") + value_program(v1) + ")")
     yield rewrite(value_program(v1.conj())).to(Program("np.conj(") + value_program(v1) + ")")
 
 
-@function
+@function(ruleset=array_api_program_gen_ruleset)
 def tuple_value_foldl_program(
     xs: TupleValueLike, f: Callable[[Program, Value], Program], init: ProgramLike
 ) -> Program: ...
 
 
-@function(ruleset=array_api_program_gen_ruleset)
-def tuple_value_program(x: TupleValueLike) -> Program:
-    return tuple_value_foldl_program(x, lambda acc, i: acc + value_program(i) + ", ", "(") + ")"
+@function
+def tuple_value_program(x: TupleValueLike) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _tuple_value_program(i: Int, ti: TupleValue, f: Callable[[Program, Value], Program], v: Value, init: Program):
+def _tuple_value_program(
+    i: Int, ti: TupleValue, f: Callable[[Program, Value], Program], v: Value, init: Program, vv: Vec[Value]
+):
     yield rewrite(value_program(ti[i])).to(tuple_value_program(ti) + "[" + int_program(i) + "]")
     yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_value_program(ti) + ")")
+    yield rewrite(tuple_value_program(ti)).to(
+        tuple_value_foldl_program(ti, lambda acc, i: acc + value_program(i) + ", ", "(") + ")"
+    )
 
-    yield rewrite(tuple_value_foldl_program(TupleValue.EMPTY, f, init)).to(init)
-    yield rewrite(tuple_value_foldl_program(ti.append(v), f, init)).to(f(tuple_value_foldl_program(ti, f, init), v))
+    yield rewrite(tuple_value_foldl_program(TupleValue(()), f, init)).to(init)
+    yield rewrite(tuple_value_foldl_program(TupleValue(vv), f, init)).to(
+        f(tuple_value_foldl_program(vv.pop(), f, init), vv[vv.length() - 1]), vv.length() > 0
+    )
 
 
 @function
@@ -189,13 +225,15 @@ def tuple_ndarray_program(x: TupleNDArrayLike) -> Program:
 
 @array_api_program_gen_ruleset.register
 def _tuple_ndarray_program(
-    i: Int, ti: TupleNDArray, f: Callable[[Program, NDArray], Program], v: NDArray, init: Program
+    i: Int, ti: TupleNDArray, f: Callable[[Program, NDArray], Program], v: NDArray, init: Program, vn: Vec[NDArray]
 ):
     yield rewrite(ndarray_program(ti[i])).to(tuple_ndarray_program(ti) + "[" + int_program(i) + "]")
     yield rewrite(int_program(ti.length())).to(Program("len(") + tuple_ndarray_program(ti) + ")")
 
-    yield rewrite(tuple_ndarray_foldl_program(TupleNDArray.EMPTY, f, init)).to(init)
-    yield rewrite(tuple_ndarray_foldl_program(ti.append(v), f, init)).to(f(tuple_ndarray_foldl_program(ti, f, init), v))
+    yield rewrite(tuple_ndarray_foldl_program(TupleNDArray(()), f, init)).to(init)
+    yield rewrite(tuple_ndarray_foldl_program(TupleNDArray(vn), f, init)).to(
+        f(tuple_ndarray_foldl_program(vn.pop(), f, init), vn[vn.length() - 1]), vn.length() > 0
+    )
 
 
 @function
@@ -303,22 +341,13 @@ def _index_key_program(i: Int, s: Slice, key: MultiAxisIndexKey, a: NDArray):
 
 
 @function
-def int_or_tuple_program(x: IntOrTuple) -> Program: ...
-
-
-@array_api_program_gen_ruleset.register
-def _int_or_tuple_program(x: Int, t: TupleInt):
-    yield rewrite(int_or_tuple_program(IntOrTuple.int(x))).to(int_program(x))
-    yield rewrite(int_or_tuple_program(IntOrTuple.tuple(t))).to(tuple_int_program(t))
-
-
-@function
 def optional_int_or_tuple_program(x: OptionalIntOrTuple) -> Program: ...
 
 
 @array_api_program_gen_ruleset.register
-def _optional_int_or_tuple_program(it: IntOrTuple):
-    yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.some(it))).to(int_or_tuple_program(it))
+def _optional_int_or_tuple_program(i: Int, ti: TupleInt):
+    yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.int(i))).to(int_program(i))
+    yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.tuple(ti))).to(tuple_int_program(ti))
     yield rewrite(optional_int_or_tuple_program(OptionalIntOrTuple.none)).to(Program("None"))
 
 
@@ -332,18 +361,18 @@ def _ndarray_program(
     ti: TupleInt,
     i: Int,
     tv: TupleValue,
-    v: Value,
+    rv: RecursiveValue,
     ob: OptionalBool,
     tnd: TupleNDArray,
     optional_device_: OptionalDevice,
-    int_or_tuple_: IntOrTuple,
+    optional_int_or_tuple_: OptionalIntOrTuple,
     idx: IndexKey,
     odtype: OptionalDType,
 ):
     # Var
     yield rewrite(ndarray_program(NDArray.var(s))).to(Program(s, True))
 
-    # Asssume dtype
+    # Assume dtype
     z_assumed_dtype = copy(z)
     assume_dtype(z_assumed_dtype, dtype)
     z_program = ndarray_program(z)
@@ -395,10 +424,8 @@ def _ndarray_program(
     # Tuple ndarray indexing
     yield rewrite(ndarray_program(tnd[i])).to(tuple_ndarray_program(tnd) + "[" + int_program(i) + "]")
 
-    # ndarray scalar
-    # TODO: Use dtype and shape and indexing instead?
-    # TODO: SPecify dtype?
-    yield rewrite(ndarray_program(NDArray.scalar(v))).to(Program("np.array(") + value_program(v) + ")")
+    # literal array
+    yield rewrite(ndarray_program(NDArray(rv))).to(Program("np.array(") + recursive_value_program(rv) + ")")
 
     # zeros
     yield rewrite(ndarray_program(zeros(ti, OptionalDType.none, optional_device_))).to(
@@ -457,20 +484,28 @@ def _ndarray_program(
     # mean(x, axis)
     yield rewrite(ndarray_program(mean(x))).to((Program("np.mean(") + ndarray_program(x) + ")").assign())
     yield rewrite(
-        ndarray_program(mean(x, OptionalIntOrTuple.some(int_or_tuple_), FALSE)),
-    ).to(
-        (Program("np.mean(") + ndarray_program(x) + ", axis=" + int_or_tuple_program(int_or_tuple_) + ")").assign(),
-    )
-    yield rewrite(
-        ndarray_program(mean(x, OptionalIntOrTuple.some(int_or_tuple_), TRUE)),
+        ndarray_program(mean(x, optional_int_or_tuple_, FALSE)),
     ).to(
         (
             Program("np.mean(")
             + ndarray_program(x)
             + ", axis="
-            + int_or_tuple_program(int_or_tuple_)
+            + optional_int_or_tuple_program(optional_int_or_tuple_)
+            + ")"
+        ).assign(),
+        optional_int_or_tuple_ != OptionalIntOrTuple.none,
+    )
+    yield rewrite(
+        ndarray_program(mean(x, optional_int_or_tuple_, TRUE)),
+    ).to(
+        (
+            Program("np.mean(")
+            + ndarray_program(x)
+            + ", axis="
+            + optional_int_or_tuple_program(optional_int_or_tuple_)
             + ", keepdims=True)"
         ).assign(),
+        optional_int_or_tuple_ != OptionalIntOrTuple.none,
     )
 
     # Concat
@@ -480,16 +515,21 @@ def _ndarray_program(
     yield rewrite(ndarray_program(concat(tnd, OptionalInt.some(i)))).to(
         (Program("np.concatenate(") + tuple_ndarray_program(tnd) + ", axis=" + int_program(i) + ")").assign()
     )
-    # Vector
-    yield rewrite(ndarray_program(NDArray.vector(tv))).to(Program("np.array(") + tuple_value_program(tv) + ")")
     # std
     yield rewrite(ndarray_program(std(x))).to((Program("np.std(") + ndarray_program(x) + ")").assign())
-    yield rewrite(ndarray_program(std(x, OptionalIntOrTuple.some(int_or_tuple_)))).to(
-        (Program("np.std(") + ndarray_program(x) + ", axis=" + int_or_tuple_program(int_or_tuple_) + ")").assign(),
+    yield rewrite(ndarray_program(std(x, optional_int_or_tuple_))).to(
+        (
+            Program("np.std(")
+            + ndarray_program(x)
+            + ", axis="
+            + optional_int_or_tuple_program(optional_int_or_tuple_)
+            + ")"
+        ).assign(),
+        optional_int_or_tuple_ != OptionalIntOrTuple.none,
     )
     # svd
-    yield rewrite(tuple_ndarray_program(svd(x))).to((Program("np.linalg.svd(") + ndarray_program(x) + ")").assign())
-    yield rewrite(tuple_ndarray_program(svd(x, FALSE))).to(
+    yield rewrite(tuple_ndarray_program(svd_(x))).to((Program("np.linalg.svd(") + ndarray_program(x) + ")").assign())
+    yield rewrite(tuple_ndarray_program(svd_(x, FALSE))).to(
         (Program("np.linalg.svd(") + ndarray_program(x) + ", full_matrices=False)").assign()
     )
     # sqrt
@@ -498,8 +538,15 @@ def _ndarray_program(
     yield rewrite(ndarray_program(x.T)).to(ndarray_program(x) + ".T")
     # sum
     yield rewrite(ndarray_program(sum(x))).to((Program("np.sum(") + ndarray_program(x) + ")").assign())
-    yield rewrite(ndarray_program(sum(x, OptionalIntOrTuple.some(int_or_tuple_)))).to(
-        (Program("np.sum(") + ndarray_program(x) + ", axis=" + int_or_tuple_program(int_or_tuple_) + ")").assign()
+    yield rewrite(ndarray_program(sum(x, optional_int_or_tuple_))).to(
+        (
+            Program("np.sum(")
+            + ndarray_program(x)
+            + ", axis="
+            + optional_int_or_tuple_program(optional_int_or_tuple_)
+            + ")"
+        ).assign(),
+        optional_int_or_tuple_ != OptionalIntOrTuple.none,
     )
     yield rewrite(tuple_int_program(x.shape)).to(ndarray_program(x) + ".shape")
     yield rewrite(ndarray_program(abs(x))).to((Program("np.abs(") + ndarray_program(x) + ")").assign())
@@ -507,4 +554,27 @@ def _ndarray_program(
     # asarray
     yield rewrite(ndarray_program(asarray(x, odtype, OptionalBool.none, optional_device_))).to(
         Program("np.asarray(") + ndarray_program(x) + ", " + optional_dtype_program(odtype) + ")"
+    )
+
+
+@function
+def recursive_value_program(x: RecursiveValue) -> Program: ...
+
+
+@array_api_program_gen_ruleset.register
+def _recursive_value_program(v: Value, vv: Vec[RecursiveValue]):
+    yield rewrite(recursive_value_program(RecursiveValue(v))).to(value_program(v))
+    yield rewrite(recursive_value_program(RecursiveValue.vec(vv))).to("(" + vec_recursive_value_program(vv) + ")")
+
+
+@function
+def vec_recursive_value_program(x: Vec[RecursiveValue]) -> Program: ...
+
+
+@array_api_program_gen_ruleset.register
+def _vec_recursive_value_program(vv: Vec[RecursiveValue]):
+    yield rewrite(vec_recursive_value_program(Vec[RecursiveValue].empty())).to(Program(""))
+    yield rewrite(vec_recursive_value_program(vv)).to(
+        recursive_value_program(vv[0]) + ", " + vec_recursive_value_program(vv.remove(0)),
+        vv.length() > 0,
     )

@@ -86,6 +86,39 @@ If there is a performance sensitive piece of code, you could isolate it in a fil
 uv run py-spy record  --format speedscope  --  python -O tmp.py
 ```
 
+### Tracing
+
+`pytest` can also configure OpenTelemetry tracing for local debugging. For the full host-application setup and the
+Jaeger startup command, see {doc}`../how-to-guides/tracing`. The pytest plugin configures both the Python tracer
+provider and `egglog.bindings.setup_tracing(...)` for you.
+
+To print both Python and Rust spans to the console during a test run:
+
+```bash
+uv run pytest python/tests/test_tracing.py --benchmark-disable -q -s --otel-traces=console
+```
+
+Console mode is intentionally verbose. It works best for short runs or a single targeted test.
+
+For a targeted test, pass the same flag to the test you are debugging:
+
+```bash
+uv run pytest python/tests/test_array_api.py::test_jit[lda] -vv --benchmark-disable -s --otel-traces=console
+```
+
+To send spans to Jaeger over OTLP/HTTP, start Jaeger as shown in {doc}`../how-to-guides/tracing`, then run pytest
+with the Jaeger tracing mode:
+
+```bash
+uv run pytest python/tests/test_array_api.py::test_jit[lda] -vv --benchmark-disable --otel-traces=jaeger
+```
+
+Then open [http://localhost:16686](http://localhost:16686).
+
+For a longer-running or performance-sensitive test, prefer `--otel-traces=jaeger` over console mode.
+
+If you need a non-default OTLP endpoint, add `--otel-otlp-endpoint=http://host:4318/v1/traces`.
+
 ### Making changes
 
 All changes that impact users should be documented in the `docs/changelog.md` file. Please also add tests for any new features
