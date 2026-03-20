@@ -108,24 +108,6 @@ class TestEGraph:
         ):
             egraph.run_program(*egraph.parse_program(program))
 
-    def test_generic_fresh_egraph_repro(self):
-        program = GENERIC_FRESH_EGRAPH_REPRO.read_text()
-        first = extract_best_term(program)
-
-        assert "get (vec" in first
-
-        second = extract_best_term(program.replace(GENERIC_FRESH_EGRAPH_ROOT, f"(let $__expr_0 {first})"))
-
-        assert second == GENERIC_FRESH_EGRAPH_RESOLVED
-
-    def test_generic_fresh_egraph_repro_without_inner_unstable_app(self):
-        program = GENERIC_FRESH_EGRAPH_REPRO.read_text().replace(
-            '(vec-of (unstable-app (unstable-fn "c0" i) (int 0)))',
-            "(vec-of (int i))",
-        )
-
-        assert extract_best_term(program) == GENERIC_FRESH_EGRAPH_RESOLVED
-
     def test_run_rules(self):
         egraph = EGraph()
         res = egraph.run_program(

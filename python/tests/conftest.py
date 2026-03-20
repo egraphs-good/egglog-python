@@ -1,5 +1,4 @@
 import copy
-from importlib import import_module
 
 import pytest
 from syrupy.extensions.single_file import SingleFileSnapshotExtension
@@ -7,7 +6,7 @@ from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
 @pytest.fixture(autouse=True)
 def _reset_conversions():
-    conversion = import_module("egglog.conversion")
+    from egglog import conversion  # noqa: PLC0415
 
     old_conversions = copy.copy(conversion.CONVERSIONS)
     old_conversion_decls = copy.copy(conversion._TO_PROCESS_DECLS)
@@ -18,7 +17,7 @@ def _reset_conversions():
 
 @pytest.fixture(autouse=True)
 def _reset_current_egraph():
-    array_api = import_module("egglog.exp.array_api")
+    from egglog.exp import array_api  # noqa: PLC0415
 
     yield
     array_api._CURRENT_EGRAPH = None
