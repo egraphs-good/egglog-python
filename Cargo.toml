@@ -23,11 +23,11 @@ opentelemetry_sdk = "0.28"
 # egglog-core-relations = { path = "../egg-smol/core-relations" }
 # egglog-ast = { path = "../egg-smol/egglog-ast" }
 # egglog-reports = { path = "../egg-smol/egglog-reports" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "multiset-changes", default-features = false }
-egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "multiset-changes" }
-egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "multiset-changes" }
-egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "multiset-changes" }
-egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "multiset-changes" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug", default-features = false }
+egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
+egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
+egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
+egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
 
 
 egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", branch = "main", default-features = false }
@@ -52,11 +52,11 @@ base64 = "0.22.1"
 # egglog-reports = { path = "../egg-smol/egglog-reports"  }
 # egglog-bridge = { path = "../egg-smol/egglog-bridge"  }
 
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "multiset-changes" }
-egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "multiset-changes" }
-egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "multiset-changes" }
-egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "multiset-changes" }
-egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "multiset-changes" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
+egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
+egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
+egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
+egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
 
 # enable debug symbols for easier profiling
 [profile.release]

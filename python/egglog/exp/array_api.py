@@ -2792,18 +2792,9 @@ def try_evaling(expr: ExprWithValue[T_co]) -> T_co:
     egraph = _get_current_egraph()
     egraph.register(expr)  # type: ignore[arg-type]
     egraph.run(array_api_schedule)
-    extracted_expr = egraph.extract(expr)  # type: ignore[call-overload]
-
-    with _TRACER.start_as_current_span("try_evaling second"):
-        new_egraph = EGraph()
-        # The fresh e-graph needs the extracted expression registered before the schedule runs,
-        # otherwise the simplification rules never see it.
-        new_egraph.register(extracted_expr)
-        new_egraph.run(array_api_schedule)
-        return new_egraph.extract(extracted_expr).value
+    return egraph.extract(expr).value  # type: ignore[call-overload]
 
 
-##
 # Polynomials
 ##
 

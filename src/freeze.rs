@@ -34,9 +34,8 @@ impl FrozenEGraph {
     pub fn from_egraph(egraph: &EGraph) -> FrozenEGraph {
         let mut functions = IndexMap::new();
         for fname in egraph.get_function_names() {
-            let func = egraph.get_function(&fname).unwrap();
             let mut rows = Vec::new();
-            egraph.function_for_each(func, |row| {
+            egraph.function_for_each(&fname, |row| {
                 let frozen_row = FrozenRow {
                     subsumed: row.subsumed,
                     inputs: row.vals[..row.vals.len() - 1]
@@ -47,7 +46,8 @@ impl FrozenEGraph {
                     output: Value(*row.vals.last().unwrap()),
                 };
                 rows.push(frozen_row);
-            });
+            }).unwrap();
+            let func = egraph.get_function(&fname).unwrap();
             let frozen_function = FrozenFunction {
                 input_sorts: func
                     .schema()
