@@ -482,7 +482,7 @@ def test_polynomial_factoring(input_expr: Value, expected: Value):
 # if calling as script, print out egglog source for test
 # similar to jit, but don't include pyobject parts so it works in vanilla egglog
 if __name__ == "__main__":
-    print("Generating egglog source for test")
+    print("Generating egglog source for lda")
     egraph, _, _, program = function_to_program(lda, True)
     egraph.register(program.compile())
     egraph.run(array_api_program_gen_combined_ruleset.saturate())
