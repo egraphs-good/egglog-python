@@ -9,4 +9,5 @@ tutorials/tut_2_datalog
 tutorials/tut_3_analysis
 tutorials/tut_4_scheduling
 tutorials/tut_5_extraction
+tutorials/pandoc_symreg_ac_multiset
 ```
