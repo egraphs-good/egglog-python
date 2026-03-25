@@ -1,6 +1,6 @@
 [package]
 name = "egglog_python"
-version = "13.0.1"
+version = "13.1.0"
 edition = "2024"
 
 
