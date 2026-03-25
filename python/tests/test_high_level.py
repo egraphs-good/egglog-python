@@ -60,6 +60,17 @@ def test_eqsat_basic():
     egraph.check(eq(expr1).to(expr2))
 
 
+def test_let_auto_prefixes_global_names(capfd: pytest.CaptureFixture[str]):
+    egraph = EGraph(save_egglog_string=True)
+
+    x = egraph.let("x", i64(1))
+    egraph.check(eq(x).to(i64(1)))
+
+    captured = capfd.readouterr()
+    assert "should start with `$`" not in captured.err
+    assert "(let $x " in egraph.as_egglog_string
+
+
 def test_fib():
     egraph = EGraph()
 
@@ -158,6 +169,33 @@ def test_extract_constant_twice():
 def test_extract_include_cost():
     _, cost = EGraph().extract(i64(0), include_cost=True)
     assert cost == 1
+
+
+def test_egraph_constructor_registers_actions():
+    class ConstructorExpr(Expr):
+        def __init__(self) -> None: ...
+
+    @function
+    def constructor_cost() -> i64: ...
+
+    @function
+    def constructor_lhs() -> ConstructorExpr: ...
+
+    @function
+    def constructor_rhs() -> ConstructorExpr: ...
+
+    constructed = EGraph(
+        ConstructorExpr(), set_(constructor_cost()).to(i64(1)), eq(constructor_lhs()).to(constructor_rhs())
+    )
+
+    expected = EGraph()
+    expected.register(
+        ConstructorExpr(),
+        set_(constructor_cost()).to(i64(1)),
+        eq(constructor_lhs()).to(constructor_rhs()),
+    )
+
+    assert str(constructed.freeze()) == str(expected.freeze())
 
 
 def test_relation():
@@ -658,6 +696,19 @@ class TestDefaultReplacements:
 
         check_eq(f(), A(), r)
 
+    def test_function_ruleset_can_run_after_materialization_without_registration(self):
+        r = ruleset()
+
+        @function(ruleset=r)
+        def f() -> A:
+            return A()
+
+        # Materialize the function once so its default rewrite is added to the ruleset,
+        # but do not register any expression that would separately add `f` to the egraph.
+        f()
+        egraph = EGraph()
+        assert not egraph.run(r).updated
+
     def test_constant(self):
         a = constant("a", A, A())
         check_eq(a, A(), run())
@@ -781,16 +832,16 @@ def test_vec_like_conversion():
     @function
     def my_fn(xs: VecLike[i64, i64Like]) -> Unit: ...
 
-    assert expr_parts(my_fn((1, 2))) == expr_parts(my_fn(Vec[i64](i64(1), i64(2))))
-    assert expr_parts(my_fn([])) == expr_parts(my_fn(Vec[i64]()))
+    assert expr_parts(my_fn((1, 2))) == expr_parts(my_fn(Vec(i64(1), i64(2))))
+    assert expr_parts(my_fn([])) == expr_parts(my_fn(Vec[i64].empty()))
 
 
 def test_set_like_conversion():
     @function
     def my_fn(xs: SetLike[i64, i64Like]) -> Unit: ...
 
-    assert expr_parts(my_fn({1, 2})) == expr_parts(my_fn(Set[i64](i64(1), i64(2))))
-    assert expr_parts(my_fn(set())) == expr_parts(my_fn(Set[i64]()))
+    assert expr_parts(my_fn({1, 2})) == expr_parts(my_fn(Set(i64(1), i64(2))))
+    assert expr_parts(my_fn(set())) == expr_parts(my_fn(Set[i64].empty()))
 
 
 def test_map_like_conversion():
@@ -1093,6 +1144,20 @@ def test_dynamic_cost():
 
 
 class TestScheduler:
+    def test_seq_schedule_decls_track_ruleset_updates(self):
+        egraph = EGraph()
+
+        rel = relation("rel_live", i64)
+        live_rules = ruleset(name="live-rules")
+        schedule = seq(live_rules, run()).saturate()
+        _ = schedule.__egg_decls__
+
+        live_rules.register(rule(rel(i64(0))).then(rel(i64(1))))
+
+        egraph.register(rel(i64(0)))
+        egraph.run(schedule)
+        egraph.check(rel(i64(1)))
+
     def test_sequence_repeat_saturate(self):
         """
         Mirrors the scheduling example: alternate step-right and step-left,
@@ -1245,7 +1310,7 @@ class TestCustomExtract:
         # cost = 2
         x = i64(10)
         # cost = 3 + 2 = 5
-        xs = Vec[i64](x)
+        xs = Vec(x)
         # cost = 100
         res = E()
         # cost = 1 + 5  = 6

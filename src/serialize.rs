@@ -35,7 +35,7 @@ impl SerializedEGraph {
         serde_json::to_string(&self.egraph).unwrap()
     }
 
-    /// Split all primitive nodes, as well as other ops that match, into seperate e-classes
+    /// Split all primitive nodes, as well as other ops that match, into separate e-classes
     fn split_classes(&mut self, egraph: &EGraph, ops: HashSet<String>) {
         self.egraph.split_classes(|id, node| {
             egraph.egraph.from_node_id(id).is_primitive() || ops.contains(&node.op)

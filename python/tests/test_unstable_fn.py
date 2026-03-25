@@ -53,6 +53,15 @@ MathListLike: TypeAlias = MathList | None
 converter(type(None), MathList, lambda _: MathList.NIL)
 
 
+class Pair(Expr):
+    def __init__(self, x: i64Like) -> None: ...
+
+    def add(self, y: i64Like) -> Pair: ...
+
+
+converter(i64, Pair, Pair)
+
+
 @function
 def square(x: MathLike) -> Math: ...
 
@@ -72,6 +81,12 @@ def test_string_fn():
 
 def test_string_fn_partial():
     assert str(UnstableFn(Math.__mul__, Math(2))) == "partial(Math.__mul__, Math(2))"
+
+
+def test_bound_runtime_function_partial():
+    pair = Pair(2)
+    assert expr_parts(UnstableFn(pair.add)) == expr_parts(UnstableFn(Pair.add, pair))
+    assert expr_parts(UnstableFn(pair.add, 3)) == expr_parts(UnstableFn(Pair.add, pair, 3))
 
 
 @ruleset
@@ -363,3 +378,16 @@ class TestNormalFns:
         egraph.run(10)
         egraph.check(eq(x).to(A()))
         egraph.check(eq(y).to(C()))
+
+    def test_different_parameter_names_get_different_names(self):
+        @function
+        def apply_f(f: Callable[[A], A], x: A) -> A:
+            return f(x)
+
+        egraph = EGraph(save_egglog_string=True)
+        egraph.register(apply_f(lambda left: A(), A()))
+        egraph.register(apply_f(lambda right: A(), A()))
+
+        egglog = egraph.as_egglog_string
+        assert "_lambda_0" in egglog
+        assert "_lambda_1" in egglog

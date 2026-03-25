@@ -11,22 +11,20 @@ from .declarations import *
 from .pretty import *
 from .runtime import *
 from .thunk import *
-from .type_constraint_solver import TypeConstraintError
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from .egraph import BaseExpr
-    from .type_constraint_solver import TypeConstraintSolver
 
 __all__ = ["ConvertError", "convert", "converter", "get_type_args"]
 # Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
 CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable[[Any], RuntimeExpr]]] = {}
-# Global declerations to store all convertable types so we can query if they have certain methods or not
+# Global declarations to store all convertible types so we can query if they have certain methods or not
 _CONVERSION_DECLS = Declarations.create()
-# Defer a list of declerations to be added to the global declerations, so that we can not trigger them procesing
+# Defer a list of declarations to be added to the global declarations, so that we can not trigger them processing
 # until we need them
-_TO_PROCESS_DECLS: list[DeclerationsLike] = []
+_TO_PROCESS_DECLS: list[DeclarationsLike] = []
 
 
 def retrieve_conversion_decls() -> Declarations:
@@ -134,7 +132,7 @@ def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
 
 def process_tp(tp: type | RuntimeClass) -> JustTypeRef | type:
     """
-    Process a type before converting it, to add it to the global declerations and resolve to a ref.
+    Process a type before converting it, to add it to the global declarations and resolve to a ref.
     """
     if isinstance(tp, RuntimeClass):
         _TO_PROCESS_DECLS.append(tp)
@@ -220,41 +218,19 @@ def resolve_literal(
     tp: TypeOrVarRef,
     arg: object,
     decls: Callable[[], Declarations] = retrieve_conversion_decls,
-    tcs: TypeConstraintSolver | None = None,
-    cls_ident: Ident | None = None,
 ) -> RuntimeExpr:
     """
     Try to convert an object to a type, raising a ConvertError if it is not possible.
 
-    If the type has vars in it, they will be tried to be resolved into concrete vars based on the type constraint solver.
-
     If it cannot be resolved, we assume that the value passed in will resolve it.
     """
-    arg_type = resolve_type(arg)
-
-    # If we have any type variables, dont bother trying to resolve the literal, just return the arg
-    try:
-        tp_just = tp.to_just()
-    except TypeVarError:
-        # If this is a generic arg but passed in a non runtime expression, try to resolve the generic
-        # args first based on the existing type constraint solver
-        if tcs:
-            try:
-                tp_just = tcs.substitute_typevars(tp, cls_ident)
-            # If we can't resolve the type var yet, then just assume it is the right value
-            except TypeConstraintError:
-                assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
-                tp_just = arg.__egg_typed_expr__.tp
-        else:
-            # If this is a var, it has to be a runtime expession
-            assert isinstance(arg, RuntimeExpr), f"Expected a runtime expression, got {arg}"
-            return arg
-    if tcs:
-        tcs.infer_typevars(tp, tp_just, cls_ident)
-    if arg_type == tp_just:
-        # If the type is an egg type, it has to be a runtime expr
-        assert isinstance(arg, RuntimeExpr)
+    # If this is a runtime expression that could match the type already, just return it
+    if isinstance(arg, RuntimeExpr) and tp.matches_just({}, arg.__egg_typed_expr__.tp):
         return arg
+    tp_just = tp.to_just()
+    if arg is DUMMY_VALUE:
+        return RuntimeExpr.__from_values__(decls(), TypedExprDecl(tp_just, DummyDecl()))
+    arg_type = resolve_type(arg)
     if (conversion := _lookup_conversion(arg_type, tp_just)) is not None:
         with with_type_args(tp_just.args, decls):
             return conversion[1](arg)
@@ -265,7 +241,7 @@ def _lookup_conversion(lhs: type | JustTypeRef, rhs: JustTypeRef) -> tuple[int, 
     """
     Looks up a conversion function for the given types.
 
-    Also looks up all parent types of the lhs if it is a Python type and looks up more general not paramtrized types for rhs.
+    Also looks up all parent types of the lhs if it is a Python type and looks up more general not parametrized types for rhs.
     """
     for lhs_type in lhs.__mro__ if isinstance(lhs, type) else [lhs]:
         if (key := (lhs_type, rhs)) in CONVERSIONS:
@@ -275,7 +251,7 @@ def _lookup_conversion(lhs: type | JustTypeRef, rhs: JustTypeRef) -> tuple[int, 
     return None
 
 
-def _debug_print_converers():
+def _debug_print_converters():
     """
     Prints a mapping of all source types to target types that have a conversion function.
     """

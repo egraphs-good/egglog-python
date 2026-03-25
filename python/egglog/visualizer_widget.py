@@ -1,11 +1,13 @@
+import base64
+import json
 import pathlib
 import webbrowser
 
 import anywidget
 import traitlets
 from IPython.display import display
-from ipywidgets.embed import embed_minimal_html
 
+# from ipywidgets.embed import embed_minimal_html
 from .ipython_magic import IN_IPYTHON
 
 CURRENT_DIR = pathlib.Path(__file__).parent
@@ -24,16 +26,24 @@ class VisualizerWidget(anywidget.AnyWidget):
 
     def display_or_open(self) -> None:
         """
-        Displays the widget if we are in a Jupyter environment, otherwise saves it to a file and opens it.
+        Displays the widget if we are in a Jupyter environment, otherwise opens a standalone HTML page.
         """
         if IN_IPYTHON:
             display(self)
             return
-        # 1. Create a temporary html file that will stay open after close
-        # 2. Write the widget to it with embed_minimal_html
-        # 3. Open the file using the open function from graphviz
-        file = pathlib.Path.cwd() / "tmp.html"
-        # https://github.com/manzt/anywidget/issues/339#issuecomment-1755654547
-        embed_minimal_html(file, views=[self], drop_defaults=False)
-        print("Visualizer widget saved to", file)
-        webbrowser.open(file.as_uri())
+        payload = json.dumps(self.egraphs).replace("</", "<\\/")
+        html = HTML.replace("MAGIC_STRING", payload)
+        data_uri = "data:text/html;base64," + base64.b64encode(html.encode()).decode()
+        webbrowser.open(data_uri)
+
+
+HTML = """
+<div id="egraph-visualizer"></div>
+<link rel="stylesheet" href="https://esm.sh/egraph-visualizer/dist/style.css" />
+<script type="module">
+  import { mount } from "https://esm.sh/egraph-visualizer";
+  const egraphs = MAGIC_STRING;
+  const mounted = mount(document.getElementById("egraph-visualizer"));
+  mounted.render(egraphs);
+</script>
+"""

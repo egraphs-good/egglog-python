@@ -1,3 +1,4 @@
+from ._tracing import call_with_current_trace
 from .bindings import EGraph
 
 EGRAPH_VAR = "_MAGIC_EGRAPH"
@@ -33,7 +34,7 @@ if IN_IPYTHON:
             e = EGraph()
             local_ns[EGRAPH_VAR] = e
         cmds = e.parse_program(cell)
-        res = e.run_program(*cmds)
+        res = call_with_current_trace(e.run_program, *cmds)
         if "output" in line:
             print("\n".join(res))
         if "graph" in line:

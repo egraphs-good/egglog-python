@@ -63,6 +63,17 @@ def test_example(example_file: pathlib.Path):
 
 
 BLACK_MODE = black.Mode(line_length=88)
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+GENERIC_FRESH_EGRAPH_REPRO = REPO_ROOT / "test-data" / "generic-fresh-egraph-repro.egg"
+GENERIC_FRESH_EGRAPH_ROOT = '(let $__expr_0 (unstable-vec-map (unstable-fn "f1") (vec-range 1)))'
+GENERIC_FRESH_EGRAPH_RESOLVED = "(vec-of (int 1))"
+
+
+def extract_best_term(program: str) -> str:
+    egraph = EGraph(record=True)
+    outputs = egraph.run_program(*egraph.parse_program(program))
+    extract = next(output for output in outputs if isinstance(output, ExtractBest))
+    return extract.termdag.to_string(extract.term)
 
 
 class TestEGraph:
