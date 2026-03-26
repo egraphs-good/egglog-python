@@ -18,16 +18,11 @@ opentelemetry = "0.28"
 opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "trace"] }
 opentelemetry-stdout = { version = "0.28", features = ["trace"] }
 opentelemetry_sdk = "0.28"
-# egglog = { path = "../egg-smol", default-features = false }
-# egglog-bridge = { path = "../egg-smol/egglog-bridge" }
-# egglog-core-relations = { path = "../egg-smol/core-relations" }
-# egglog-ast = { path = "../egg-smol/egglog-ast" }
-# egglog-reports = { path = "../egg-smol/egglog-reports" }
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug", default-features = false }
-egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
-egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
-egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
-egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "codex/f64-unary-primitives", default-features = false }
+egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "codex/f64-unary-primitives" }
+egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "codex/f64-unary-primitives" }
+egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "codex/f64-unary-primitives" }
+egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "codex/f64-unary-primitives" }
 
 
 egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental", branch = "main", default-features = false }
@@ -52,11 +47,11 @@ base64 = "0.22.1"
 # egglog-reports = { path = "../egg-smol/egglog-reports"  }
 # egglog-bridge = { path = "../egg-smol/egglog-bridge"  }
 
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
-egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
-egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
-egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
-egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "fix-container-fn-bug" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "codex/f64-unary-primitives" }
+egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "codex/f64-unary-primitives" }
+egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "codex/f64-unary-primitives" }
+egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "codex/f64-unary-primitives" }
+egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", branch = "codex/f64-unary-primitives" }
 
 # enable debug symbols for easier profiling
 [profile.release]

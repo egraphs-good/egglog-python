@@ -1,332 +1,327 @@
 # # 2026-03 - Replicating `srtree-eqsat` in Egglog
 #
-# This note recreates the `srtree-eqsat` simplification pipeline from
-# de Franca and Kronberger (2023) inside Egglog, then tests a multiset-based
-# alternative for the A/C-heavy parts of the rewrite system.
+# This notebook summarizes the current baseline-only replication of the
+# `srtree-eqsat` equality-saturation pipeline from de Franca and Kronberger
+# (2023) in Egglog.
 #
-# The notebook is self-contained:
-# - it runs the Egglog implementation live
-# - it embeds the Haskell reference numbers in the Python module
-# - it does not shell out to `/Users/saul/p/srtree-eqsat`
+# It is intentionally self-contained:
+# - it reads precomputed corpus results from
+#   `python/exp/srtree_eqsat/corpus_baseline_rows.csv`
+# - it does not shell out to a local `srtree-eqsat` checkout
+# - all conclusions are computed from the loaded corpus data at runtime
 #
-# Haskell reference numbers were collected offline with:
+# Offline regeneration commands from the repository root:
+# - `uv run --project . python python/exp/srtree_eqsat/compare_all_rows.py`
 #
-# ```bash
-# cd /Users/saul/p/srtree-eqsat
-# stack exec -- runghc /Users/saul/p/egg-smol-python/python/exp/srtree_eqsat/haskell_compare.hs 1 50
-# ```
-#
-# Egglog reproduction can be rerun with:
-#
-# ```bash
-# cd /Users/saul/p/egg-smol-python
-# uv run --project /Users/saul/p/egg-smol-python python /Users/saul/p/egg-smol-python/docs/explanation/2026_03_srtree_eqsat_replication.py
-# ```
-#
-# The current pass stays on two `test/example_hl` rows:
-# - row 1: small sanity case
-# - row 50: a function-heavy representative case
-#
-# The full `657`-row expansion is intentionally deferred because the multiset
-# lowering stage is still the dominant blow-up point on the representative case.
+# The executed notebook shown in GitHub is generated from this `py:light` file.
 
 # +
 from __future__ import annotations
 
-from textwrap import shorten
+from io import BytesIO
+from pathlib import Path
 
-from egglog.exp.srtree_eqsat import (
-    HASKELL_REFERENCE_ROWS,
-    core_examples,
-    parse_hl_expr,
-    run_baseline_pipeline,
-    run_multiset_pipeline,
+import matplotlib as mpl
+
+mpl.use("Agg")
+import matplotlib.pyplot as plt
+import pandas as pd
+
+try:
+    from IPython.display import Image, Markdown, display
+except ImportError:  # pragma: no cover
+
+    def Markdown(text: str) -> str:  # type: ignore[misc]
+        return text
+
+    Image = None
+
+    def display(obj: object) -> None:  # pragma: no cover
+        print(obj)
+
+
+def find_repo_root(start: Path) -> Path:
+    for candidate in (start, *start.parents):
+        if (candidate / "pyproject.toml").exists() and (candidate / "python" / "egglog").exists():
+            return candidate
+    msg = f"Could not locate egg-smol-python repo root from {start}"
+    raise FileNotFoundError(msg)
+
+
+def show_figure() -> None:
+    figure = plt.gcf()
+    if Image is None:  # pragma: no cover
+        print(figure)
+    else:
+        buffer = BytesIO()
+        figure.savefig(buffer, format="png", bbox_inches="tight")
+        buffer.seek(0)
+        display(Image(data=buffer.getvalue(), format="png"))
+    plt.close(figure)
+
+
+REPO_ROOT = find_repo_root(Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd().resolve())
+CSV_PATH = REPO_ROOT / "python" / "exp" / "srtree_eqsat" / "corpus_baseline_rows.csv"
+if not CSV_PATH.exists():
+    msg = f"Missing corpus artifact: {CSV_PATH}"
+    raise FileNotFoundError(msg)
+
+data = pd.read_csv(CSV_PATH, keep_default_na=False)
+for column in [
+    "egglog_runtime_s",
+    "haskell_runtime_s",
+    "egglog_before_params",
+    "egglog_after_params",
+    "haskell_before_params",
+    "haskell_after_params",
+    "optimal_params",
+    "egglog_gap_to_optimal",
+    "haskell_gap_to_optimal",
+    "egglog_total_size",
+    "egglog_node_count",
+    "egglog_eclass_count",
+    "haskell_after_nodes",
+]:
+    data[column] = pd.to_numeric(data[column].replace("na", pd.NA), errors="coerce")
+
+comparable = data[data["haskell_status"] == "ok"].copy()
+mismatches = comparable[
+    (comparable["egglog_before_params"] != comparable["haskell_before_params"])
+    | (comparable["egglog_after_params"] != comparable["haskell_after_params"])
+].copy()
+optimal_rows = data[data["optimal_params"].notna()].copy()
+haskell_ok = comparable.copy()
+haskell_failures = data[data["haskell_status"] != "ok"].copy()
+egglog_non_saturated = data[data["egglog_status"] != "saturated"].copy()
+domain_limited = data[data["egglog_numeric_status"] != "ok"].copy()
+# -
+
+# ## 1. What This Reproduces
+#
+# The source corpus is `test/example_hl` from `srtree-eqsat`. The baseline
+# Egglog translation keeps the same Haskell pipeline shape:
+# - constant analysis over the expression language
+# - `rewritesBasic`
+# - `constReduction`
+# - `constFusion`
+# - `rewritesFun`
+# - the same backoff scheduling strategy used in the Haskell source
+#
+# The comparison here is not against the paper's external SR systems directly.
+# It is an implementation-level replication check: does Egglog behave similarly
+# to the source Haskell EqSat implementation on the same `example_hl` corpus?
+
+# +
+summary_lines = [
+    f"- Rows in the corpus: `{len(data)}`",
+    f"- Rows where the Haskell implementation completed: `{len(haskell_ok)}`",
+    f"- Rows where the Haskell implementation failed: `{len(haskell_failures)}`",
+    f"- Rows where Egglog reported saturation: `{int((data['egglog_status'] == 'saturated').sum())}`",
+    f"- Rows where Egglog did not saturate under the current cutoff/budget: `{len(egglog_non_saturated)}`",
+    f"- Rows with a domain-limited numeric check: `{len(domain_limited)}`",
+]
+display(Markdown("## Corpus Overview\n\n" + "\n".join(summary_lines)))
+# -
+
+# ## 2. Corpus-Level Comparison
+#
+# The table below is the per-row comparison requested for the full corpus:
+# Haskell time, Egglog time, the final parameter count from each, and the
+# estimated minimal parameter count from the numeric Jacobian rank.
+
+# +
+comparison_table = data[
+    [
+        "row",
+        "haskell_runtime_s",
+        "egglog_runtime_s",
+        "haskell_after_params",
+        "egglog_after_params",
+        "optimal_params",
+        "haskell_status",
+        "egglog_status",
+    ]
+].copy()
+display(comparison_table)
+# -
+
+# ## 3. Data-Derived Findings
+
+# +
+egglog_total = data["egglog_runtime_s"].sum()
+egglog_median = data["egglog_runtime_s"].median()
+haskell_total = haskell_ok["haskell_runtime_s"].sum()
+haskell_median = haskell_ok["haskell_runtime_s"].median()
+optimal_egglog = int((optimal_rows["egglog_gap_to_optimal"] == 0).sum())
+optimal_haskell = int((optimal_rows["haskell_gap_to_optimal"] == 0).sum())
+mismatch_rate = (len(mismatches) / len(haskell_ok)) if len(haskell_ok) else 0.0
+
+display(
+    Markdown(
+        "\n".join([
+            "## High-Level Findings",
+            "",
+            f"- On comparable rows, Egglog and Haskell disagree on parameter counts for `{len(mismatches)}` of `{len(haskell_ok)}` rows (`{mismatch_rate:.1%}`).",
+            f"- Egglog total runtime across the corpus is `{egglog_total:.3f}s`; Haskell total runtime on successful rows is `{haskell_total:.3f}s`.",
+            f"- Egglog median per-row runtime is `{egglog_median:.4f}s`; Haskell median per-row runtime is `{haskell_median:.4f}s`.",
+            f"- Egglog reaches the estimated optimal parameter count on `{optimal_egglog}` rows with a valid optimal estimate; Haskell does so on `{optimal_haskell}` such rows.",
+            f"- The Haskell implementation failed on rows `{', '.join(str(int(row)) for row in haskell_failures['row']) or 'none'}`.",
+            f"- Egglog did not saturate on rows `{', '.join(str(int(row)) for row in egglog_non_saturated['row']) or 'none'}` under the current cutoff and iteration budget.",
+        ])
+    )
 )
+# -
 
+# ## 4. Plots
 
-def md_table(rows: list[dict[str, str]]) -> str:
-    headers = list(rows[0])
-    widths = {header: max(len(header), *(len(row[header]) for row in rows)) for header in headers}
-    header = "| " + " | ".join(header.ljust(widths[header]) for header in headers) + " |"
-    separator = "| " + " | ".join("-" * widths[header] for header in headers) + " |"
-    body = "\n".join("| " + " | ".join(row[header].ljust(widths[header]) for header in headers) + " |" for row in rows)
-    return f"{header}\n{separator}\n{body}"
+# +
+plt.figure(figsize=(6, 6))
+plt.scatter(
+    comparable["haskell_runtime_s"],
+    comparable["egglog_runtime_s"],
+    alpha=0.6,
+    s=16,
+)
+max_runtime = max(comparable["haskell_runtime_s"].max(), comparable["egglog_runtime_s"].max())
+plt.plot([0.0, max_runtime], [0.0, max_runtime], linestyle="--", color="black", linewidth=1.0)
+plt.xlabel("Haskell runtime (s)")
+plt.ylabel("Egglog runtime (s)")
+plt.title("Runtime Comparison Across Comparable Rows")
+plt.tight_layout()
+show_figure()
+# -
 
-
-def fmt_float(value: float, digits: int = 4) -> str:
-    return f"{value:.{digits}f}"
-
-
-def fmt_optional_size(value: int) -> str:
-    return "na" if value < 0 else str(value)
-
-
-def compact_rule(rule: str) -> str:
-    if "srtree_eqsat_multiset_lower" in rule and "Expr___mul__" in rule and "multiset-sum" in rule:
-        return "product flattening"
-    if "srtree_eqsat_multiset_lower" in rule and "Expr___add__" in rule and "multiset-sum" in rule:
-        return "sum flattening"
-    if "srtree_eqsat_multiset_reify" in rule and "Expr___mul__" in rule:
-        return "product reify"
-    if "srtree_eqsat_multiset_reify" in rule and "Expr___add__" in rule:
-        return "sum reify"
-    if "srtree_eqsat_const_analysis" in rule and "OptionalF64_some" in rule and "union" in rule:
-        return "const union"
-    if "srtree_eqsat_const_analysis" in rule and "OptionalF64_some" in rule and "set" in rule:
-        return "const set"
-    return shorten(rule.replace("\n", " "), width=64, placeholder="...")
-
-
-examples = core_examples()
-baseline_reports = {
-    example.name: run_baseline_pipeline(
-        example.expr,
-        node_cutoff=50_000,
-        iteration_limit=12,
-        input_names=example.input_names,
-        sample_points=example.sample_points,
+# +
+plt.figure(figsize=(6, 6))
+plt.scatter(
+    comparable["haskell_after_params"],
+    comparable["egglog_after_params"],
+    alpha=0.4,
+    s=16,
+    label="matching or comparable rows",
+)
+if not mismatches.empty:
+    plt.scatter(
+        mismatches["haskell_after_params"],
+        mismatches["egglog_after_params"],
+        color="red",
+        s=22,
+        label="mismatch rows",
     )
-    for example in examples
-}
-multiset_reports = {
-    example.name: run_multiset_pipeline(
-        example.expr,
-        saturate_without_limits=False,
-        node_cutoff=50_000,
-        iteration_limit=2,
-        input_names=example.input_names,
-        sample_points=example.sample_points,
+max_params = max(comparable["haskell_after_params"].max(), comparable["egglog_after_params"].max())
+plt.plot([0.0, max_params], [0.0, max_params], linestyle="--", color="black", linewidth=1.0)
+plt.xlabel("Haskell final params")
+plt.ylabel("Egglog final params")
+plt.title("Final Parameter Counts")
+plt.legend()
+plt.tight_layout()
+show_figure()
+# -
+
+# +
+plt.figure(figsize=(8, 4))
+plt.hist(
+    [
+        optimal_rows["egglog_gap_to_optimal"].dropna(),
+        optimal_rows["haskell_gap_to_optimal"].dropna(),
+    ],
+    bins=range(int(max(optimal_rows["egglog_gap_to_optimal"].max(), optimal_rows["haskell_gap_to_optimal"].max())) + 2),
+    label=["Egglog", "Haskell"],
+    alpha=0.7,
+)
+plt.xlabel("Gap to optimal parameter count")
+plt.ylabel("Rows")
+plt.title("How Far Each Implementation Is From the Estimated Optimum")
+plt.legend()
+plt.tight_layout()
+show_figure()
+# -
+
+# +
+status_counts = pd.DataFrame({
+    "category": [
+        "Haskell failures",
+        "Egglog non-saturated",
+        "Egglog domain-limited",
+    ],
+    "count": [
+        len(haskell_failures),
+        len(egglog_non_saturated),
+        len(domain_limited),
+    ],
+})
+plt.figure(figsize=(7, 4))
+plt.bar(status_counts["category"], status_counts["count"], color=["#cc6677", "#4477aa", "#ddcc77"])
+plt.ylabel("Rows")
+plt.title("Failure and Limitation Counts")
+plt.tight_layout()
+show_figure()
+# -
+
+# ## 5. Rows Worth Inspecting
+#
+# These are the rows where the baseline still differs from the Haskell result
+# or where the source implementation failed.
+
+# +
+display(
+    mismatches[
+        [
+            "row",
+            "haskell_after_params",
+            "egglog_after_params",
+            "optimal_params",
+            "haskell_runtime_s",
+            "egglog_runtime_s",
+            "egglog_output",
+            "haskell_output",
+        ]
+    ]
+)
+# -
+
+# +
+display(
+    data[data["haskell_status"] != "ok"][
+        [
+            "row",
+            "haskell_status",
+            "haskell_runtime_s",
+            "egglog_after_params",
+            "optimal_params",
+            "input_expr",
+        ]
+    ]
+)
+# -
+
+# ## 6. Current Limitations
+#
+# The current baseline results show where the replication is close to the source
+# implementation and where it still falls short.
+
+# +
+egglog_wins = int((comparable["egglog_after_params"] < comparable["haskell_after_params"]).sum())
+haskell_wins = int((comparable["egglog_after_params"] > comparable["haskell_after_params"]).sum())
+both_above_optimal = int(
+    (
+        (optimal_rows["egglog_gap_to_optimal"].fillna(0) > 0) & (optimal_rows["haskell_gap_to_optimal"].fillna(0) > 0)
+    ).sum()
+)
+egglog_below_estimate = int((optimal_rows["egglog_gap_to_optimal"].fillna(0) < 0).sum())
+haskell_below_estimate = int((optimal_rows["haskell_gap_to_optimal"].fillna(0) < 0).sum())
+
+display(
+    Markdown(
+        "\n".join([
+            "## Current Limitations",
+            "",
+            f"- Egglog still finishes with more parameters than Haskell on `{haskell_wins}` comparable rows; Egglog finishes with fewer on `{egglog_wins}` rows.",
+            f"- Both implementations remain above the estimated optimal parameter count on `{both_above_optimal}` rows with a valid optimal estimate.",
+            f"- The Haskell implementation failed on `{len(haskell_failures)}` rows, so the comparison corpus is not fully comparable end to end.",
+            f"- Egglog did not saturate on `{len(egglog_non_saturated)}` rows under the current cutoff and iteration budget.",
+            f"- The numeric-rank estimate is not acting like a strict lower bound in every case: Egglog lands below that estimate on `{egglog_below_estimate}` rows and Haskell does so on `{haskell_below_estimate}` rows.",
+        ])
     )
-    for example in examples
-}
+)
 # -
-
-# ## 1. Selected Examples and Parsing
-#
-# The source repo stores `example_hl` expressions in a small Python-like syntax.
-# The Egglog replication parses those expressions with a restricted `eval`
-# environment that binds:
-# - `alpha`, `beta`, `theta` to Egglog variables
-# - arithmetic through Python operator overloads
-# - `sqr`, `cube`, `cbrt`, `exp`, `log`, `sqrt`, and `abs`
-#
-# The notebook embeds the two selected rows directly so it can be rerun without
-# the source checkout.
-
-# +
-example_rows = []
-for example in examples:
-    parsed = parse_hl_expr(example.source)
-    example_rows.append({
-        "name": example.name,
-        "row": str(example.row),
-        "description": example.description,
-        "source": example.source,
-        "parsed?": "yes" if parsed == example.expr else "yes",
-    })
-
-print(md_table(example_rows))
-# -
-
-# ## 2. Baseline Egglog Replication
-#
-# The baseline reproduces the Haskell pipeline shape:
-# - `rewriteConst = constReduction` with backoff `(100, 10)`
-# - `rewriteAll = rewritesBasic + constReduction + constFusion + rewritesFun`
-#   with backoff `(2500, 30)`
-# - run the const pass once
-# - then run the full pass, extract, rebuild, and repeat up to two times
-#
-# Egglog also adds one user-level guard that the Haskell public API does not
-# expose: after every iteration we check total function size with
-# `sum(size for _, size in egraph.all_function_sizes())` so we can report
-# whether a run saturated, hit the user cutoff, or simply ran out of budget.
-
-# +
-baseline_rows = []
-for example in examples:
-    report = baseline_reports[example.name]
-    metric = report.metric_report
-    baseline_rows.append({
-        "example": example.name,
-        "stop": report.stop_reason,
-        "runtime_s": fmt_float(report.total_sec),
-        "total_size": str(report.total_size),
-        "nodes": str(report.node_count),
-        "eclasses": str(report.eclass_count),
-        "cost": str(report.cost),
-        "params": f"{metric.before_parameter_count} -> {metric.after_parameter_count}",
-        "reduction": fmt_float(metric.reduction_ratio),
-        "optimal_gap": str(metric.jacobian_rank_gap),
-        "max_err": f"{report.numeric_max_abs_error:.2e}",
-    })
-
-print(md_table(baseline_rows))
-# -
-
-# +
-for example in examples:
-    report = baseline_reports[example.name]
-    print(f"### {example.name} baseline extracted Python")
-    print("```python")
-    print(report.python_source)
-    print("```")
-    print()
-# -
-
-# ## 3. Haskell Comparison
-#
-# The Haskell numbers below come from the exported `simplifyEqSat` API in
-# `/Users/saul/p/srtree-eqsat`.
-#
-# One important limitation of the source comparison path:
-# - the public API returns only the simplified expression
-# - it does not expose the final e-graph size or the internal stop reason
-# - when I tried to copy the old intermediate graph bookkeeping directly,
-#   forcing those graph internals on row 50 crashed in the pinned Haskell stack
-#
-# So the comparison is exact on:
-# - runtime
-# - input/output parameter counts
-# - input/output expression tree sizes
-# - final extracted expression
-#
-# and unavailable on:
-# - final memo size
-# - final e-class count
-# - internal stop reason
-
-# +
-comparison_rows = []
-for example in examples:
-    egg = baseline_reports[example.name]
-    hs = HASKELL_REFERENCE_ROWS[example.row]
-    comparison_rows.append({
-        "example": example.name,
-        "egglog_params": f"{egg.metric_report.before_parameter_count} -> {egg.metric_report.after_parameter_count}",
-        "haskell_params": f"{hs.before_parameter_count} -> {hs.after_parameter_count}",
-        "egglog_egraph_nodes": f"{egg.node_count}",
-        "haskell_tree_nodes": f"{hs.after_node_count}",
-        "egglog_runtime_s": fmt_float(egg.total_sec),
-        "haskell_runtime_s": fmt_float(hs.runtime_sec),
-        "haskell_memo": fmt_optional_size(hs.memo_size),
-    })
-
-print(md_table(comparison_rows))
-# -
-
-# ## The directly comparable summary is more useful in explicit prose:
-#
-# - Row 1 matches on the paper-aligned metric: both Haskell and Egglog stay at
-#   `2 -> 2` parameters.
-# - Row 50 differs by one parameter: Haskell reaches `14 -> 12`, while the
-#   current Egglog baseline reaches `14 -> 13`.
-# - The likely causes are:
-#   - the Egglog replication currently has weaker nonlinear constant analysis
-#     than the Haskell `Analysis (Maybe Double)` path
-#   - extraction tie-breaks differ between the two implementations
-#   - the Haskell public API hides the intermediate graph state that would make
-#     debugging the exact divergence easier
-
-# +
-for example in examples:
-    hs = HASKELL_REFERENCE_ROWS[example.row]
-    print(f"### {example.name} Haskell extracted Python")
-    print("```python")
-    print(hs.simplified_python)
-    print("```")
-    print()
-# -
-
-# ## 4. Multiset Hypothesis
-#
-# The multiset path replaces binary A/C structure with:
-# - `sum_(MultiSet[Expr])`
-# - `product_(MultiSet[Expr])`
-#
-# The current implementation runs in three fresh-egraph stages:
-# 1. lower binary additive and multiplicative islands into multiset form
-# 2. simplify in multiset form
-# 3. reify multisets back to binary form and run the cleanup rules
-#
-# For this first pass I kept the run reproducible and bounded:
-# - no backoff scheduler in the multiset stages
-# - explicit node cutoff and small iteration budget
-#
-# I also tried the unrestricted version on the same examples. That was not
-# practical to carry through on the representative case, which already shows
-# that the current multiset lowering does not remove the need for safety guards.
-
-# +
-multiset_rows = []
-for example in examples:
-    report = multiset_reports[example.name]
-    metric = report.metric_report
-    multiset_rows.append({
-        "example": example.name,
-        "stop": report.stop_reason,
-        "runtime_s": fmt_float(report.total_sec),
-        "total_size": str(report.total_size),
-        "nodes": str(report.node_count),
-        "eclasses": str(report.eclass_count),
-        "cost": str(report.cost),
-        "params": f"{metric.before_parameter_count} -> {metric.after_parameter_count}",
-        "reduction": fmt_float(metric.reduction_ratio),
-        "optimal_gap": str(metric.jacobian_rank_gap),
-        "max_err": f"{report.numeric_max_abs_error:.2e}",
-    })
-
-print(md_table(multiset_rows))
-# -
-
-# +
-for example in examples:
-    report = multiset_reports[example.name]
-    print(f"### {example.name} multiset stage summary")
-    stage_rows = []
-    for stage in report.stages:
-        hottest = ", ".join(
-            f"{compact_rule(rule)}={count}"
-            for rule, count in sorted(stage.matches_per_rule.items(), key=lambda item: item[1], reverse=True)[:3]
-        )
-        stage_rows.append({
-            "stage": stage.name,
-            "stop": stage.stop_reason,
-            "size": str(stage.total_size),
-            "nodes": str(stage.node_count),
-            "eclasses": str(stage.eclass_count),
-            "hot_rules": hottest or "none",
-        })
-    print(md_table(stage_rows))
-    print()
-# -
-
-# ## 5. Conclusions
-#
-# Baseline replication:
-# - Row 1 is a clean sanity match on the paper metric: both paths stay at
-#   `2 -> 2` parameters with zero numerical error.
-# - Row 50 is close but not identical: Egglog reaches `14 -> 13`, while the
-#   Haskell source reaches `14 -> 12`.
-# - The Egglog baseline does reproduce the overall style of the paper's
-#   simplifier: parameter reduction, cost-aware extraction, and zero numerical
-#   drift on sampled points.
-#
-# Multiset hypothesis:
-# - The multiset pipeline did shrink the final bounded e-graph footprint:
-#   - row 1: `25 -> 19` total size versus the baseline
-#   - row 50: `178 -> 120` total size versus the baseline
-# - But it did not yet improve the actual simplification result:
-#   - row 1 stays `2 -> 2`
-#   - row 50 regresses from `14 -> 13` in the baseline to `14 -> 14`
-# - The dominant remaining blow-up comes from the lowering and reification
-#   stages, especially the multiplicative flattening rules:
-#   - `product flattening` dominates the row 50 lowering stage
-#   - `product reify` dominates the row 50 cleanup stage
-#
-# So the current answer is:
-# - multisets do not yet let this pipeline run safely to saturation without
-#   limits on the representative case
-# - the blow-up moved from binary A/C search into multiset flatten/reify churn
-# - the next useful step is to redesign the multiset lowering and reification
-#   rules, not to widen the runtime budget on the current version

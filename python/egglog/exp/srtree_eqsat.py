@@ -1,13 +1,14 @@
 """
-Helpers for reproducing the srtree-eqsat pipeline in egglog.
+Helpers for reproducing the baseline srtree-eqsat pipeline in egglog.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, TypeAlias, cast
@@ -17,44 +18,55 @@ import numpy as np
 import egglog
 from egglog import *
 from egglog.deconstruct import get_callable_args
-from egglog.exp.program_gen import Program, program_gen_ruleset
 
 __all__ = [
     "HASKELL_REFERENCE_ROWS",
     "Comparison",
     "Example",
-    "Expr",
     "HaskellRow",
     "IterationTrace",
     "MetricReport",
+    "Num",
+    "NumLike",
     "PipelineReport",
     "StageReport",
     "compare_to_haskell",
-    "compile_expr_callable",
     "core_examples",
     "count_paper_params",
     "default_hl_eval_env",
     "estimate_corpus_runtime",
-    "expr_to_python_source",
+    "eval_num",
+    "jacobian_rank",
     "load_example_hl_row",
     "load_example_hl_rows",
     "parse_hl_expr",
+    "render_num",
     "run_baseline_pipeline",
-    "run_multiset_pipeline",
     "sample_runtime_probe",
 ]
 
 
-SOURCE_REPO = Path("/Users/saul/p/srtree-eqsat")
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SOURCE_REPO = REPO_ROOT.parent / "srtree-eqsat"
 EXAMPLE_HL_PATH = SOURCE_REPO / "test/example_hl"
 
-ROW_1_SOURCE = "sqr(-9.29438919215253 + 2.93547417364396 * theta)"
-ROW_50_SOURCE = (
-    "(exp(0.743694003014863 * alpha) * (-0.0121179632900701 * theta + 0.00904122619609017 * alpha) * "
-    "(-3.05659895630567 * theta + 8.63005732191704) + -0.557193153898209 * alpha - log(0.782997897866162 * theta) + "
-    "sqr(exp(-0.144728813168975 * theta)) * (-1.54770141702422 + -3.31046821812388 * theta) + "
-    "6.34043434659957 * beta * 0.643712432648199) * -0.0413897531650583 + 0.530747148732844"
-)
+SELECTED_BATCH_ROWS = (1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 75, 100, 150, 200)
+SELECTED_ROW_SOURCES: dict[int, str] = {
+    1: "sqr(-9.29438919215253 + 2.93547417364396 * theta)",
+    2: "(((2.91970418475328 + -0.773583225885789 * theta) * 2.87230609775115 * theta + (-1.22356797479824 + 0.377885426397629 * theta) * (10.3917281470804 - -1.20862070725184 * alpha)) * (0.114247677264604 * alpha + 0.127799885276295 * beta) * (3.60250727355285 * beta + 1.35381696253641 * theta - 9.60356246300082 * alpha) - (sqr(-9.29438919215253 + 2.93547417364396 * theta) + (-1.31893797108115 * beta + 2.10814063839763 * alpha) - 5.16995214427275 * alpha) * (1.25099225339683 * alpha + -1.0075335593301 * beta)) * 0.227993040492379 + 1.72695871415228",
+    3: "(((2.78948361720301 + -0.603311011990701 * theta) * 2.66295898187985 * theta + (-1.70053796438431 + 0.354410284952137 * theta) * (2.30920195902924 * alpha + -0.684514001199842 * beta)) * (-0.423113013561051 * alpha + -0.820293590903207 * beta) * exp(0.648433111594964 * alpha) - (4.84782777418965 * alpha + -10.2013161038227 * beta + (4.49181352322002 + 3.34338756313595 * theta) - 1.52463076043089 * alpha) * sqr(-4.40371470183112 + 1.239832234323 * theta)) * 0.0555952399242293 + 2.3974618452108",
+    4: "(((2.84721301451649 + -1.0832466055762 * theta) * 2.87288386010019 * theta + (-0.960822430613027 + 0.352212452215726 * theta) * (9.49502848514098 - -4.43457932618305 * alpha)) * (0.0231254136991372 * alpha + -0.201859225439622 * beta) * exp(0.533684665488698 * alpha) - (4.3709278998084 * alpha + 0.0676271161563555 * beta + (-10.1636621343434 + 2.20402481737344 * theta) - 2.00153063481211 * alpha) * (-0.173514070270718 * alpha + 1.4309773332239 * beta)) * 0.418278900765285 + -0.250852384709946",
+    5: "(2.98279150112649 - 2.50335104760053 * alpha + exp(0.472180751947384 * alpha) + (-5.46511983933291 * alpha + 4.7308388959051 * beta + sqr(1.9820027542127 * alpha + -0.507993116540432 * beta) + -0.902691894725103 * theta) * (sqr(-9.71025706279119 + 3.06939441276146 * theta) + -12.1940251737044) * (-0.00113611973003391 * alpha + 0.0069224336526928 * beta)) * 1.38844130555412 + 0.330982870226231",
+    10: "(-4.0257291259403 * alpha + exp(0.496521530470785 * alpha) * (sqr(-9.90385501742711 + 3.09891553397754 * theta) + -12.0313313266527) * (-0.0209790347331461 * alpha + 0.15542475900314 * beta)) * 0.218016003919151 + 2.93075744602469",
+    20: "sqr(cube(-0.453946451098545 * theta) + 3.0472620183122 * theta) * -0.342063915063894 + 10.6692145111104",
+    30: "(exp(-1.47422568429434 * alpha) - (cube(-0.58923877562757 * theta) + sqr(2.39236882178653 * theta - 6.26125635041365)) * -0.00792212718106198 * beta) * (exp(1.19822491431359 * alpha) + 19.3608807319069 * beta) * 0.313237693440143 + -0.504509880559088",
+    40: "sqr(0.309853513321887 * theta - exp(-0.00478572314032874 * alpha)) * 32.3824199084528 + -4.32199869886884",
+    50: "(exp(0.743694003014863 * alpha) * (-0.0121179632900701 * theta + 0.00904122619609017 * alpha) * (-3.05659895630567 * theta + 8.63005732191704) + -0.557193153898209 * alpha - log(0.782997897866162 * theta) + sqr(exp(-0.144728813168975 * theta)) * (-1.54770141702422 + -3.31046821812388 * theta) + 6.34281372899835) * 1.70035591779884 * beta * 1.03068155805492 + 0.404362453868565",
+    75: "(0.27658499902994 * beta + (-3.09568685791928 * theta - 1.06543349470034 * beta + 4.80847033528277 * alpha) * (0.00840515601044034 * theta - exp(-5.89563245316599 * theta - -2.2128445010022 * beta))) * (sqr(-1.73329369062705 * theta + 5.01701830214846) - 3.04752460994615 * alpha) * 0.830662588380978 + 2.77768079307633",
+    100: "(-0.817246761082895 * theta + 4.7987094782841 - 1.18369793731582 * alpha * (3.27838657131292 * theta + -15.2760394159237) * (-0.0953755961420584 * theta + 0.0270703912792823 * alpha)) * 1.11985975437354 * beta * 1.01334538331164 + 0.201404917055389",
+    150: "((5.53327625349294 * beta - 9.01964233670581 * theta - (-17.4546811325902 * alpha - 2.50583781801447 * alpha)) * (-2.49821516165647 - -0.402138004942828 * theta) * (log(0.347653612616773 * alpha) - -0.512350969799209 * theta) - (1.40058250223625 * alpha - -0.313213248196185 * beta - -0.244937726279955 * beta) * exp(0.569380315263419 * alpha) * (-0.841465262470357 * theta + exp(0.242251869587583 * alpha) - sqr(0.466508892559209 * theta + -2.80204970690573))) * 0.0632264979538498 * beta * 1.00057660932339 + -0.455923813201509",
+    200: "(sqr(-7.01398906858873 * theta - -20.9157503480256 + 0.40965685006749 * beta) - 18.7131049568053 * alpha) / (-2.89176232552097 * beta + 15.8269215595989 + sqr(-1.76570724282939 * theta - -5.46414193899484)) * 0.689375955248431 + 0.570693365253855",
+}
 
 
 language_rules = ruleset(name="srtree_eqsat_lang")
@@ -63,165 +75,161 @@ basic_rules = ruleset(name="srtree_eqsat_basic")
 fun_rules = ruleset(name="srtree_eqsat_fun")
 const_reduction_rules = ruleset(name="srtree_eqsat_const_reduction")
 const_fusion_rules = ruleset(name="srtree_eqsat_const_fusion")
-program_rules = ruleset(name="srtree_eqsat_program")
-multiset_lower_rules = ruleset(name="srtree_eqsat_multiset_lower")
-multiset_simplify_rules = ruleset(name="srtree_eqsat_multiset_simplify")
-multiset_reify_rules = ruleset(name="srtree_eqsat_multiset_reify")
 
 
 class OptionalF64(Expr, ruleset=language_rules):
     none: ClassVar[OptionalF64]
 
     @classmethod
-    def some(cls, value: f64Like) -> OptionalF64: ...
+    def some(cls, value: f64Like) -> OptionalF64: ...  # type: ignore[empty-body]
 
 
-class Expr(Expr, ruleset=language_rules):
+class Num(Expr, ruleset=language_rules):
     @method(cost=5)
     def __init__(self, value: f64Like) -> None: ...
 
     @method(cost=1)
     @classmethod
-    def var(cls, name: StringLike) -> Expr: ...
+    def var(cls, name: StringLike) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=5)
     @classmethod
-    def param(cls, index: i64Like) -> Expr: ...
+    def param(cls, index: i64Like) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=1)
-    def __add__(self, other: ExprLike) -> Expr: ...
+    def __add__(self, other: NumLike) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=1)
-    def __sub__(self, other: ExprLike) -> Expr: ...
+    def __sub__(self, other: NumLike) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=1)
-    def __mul__(self, other: ExprLike) -> Expr: ...
+    def __mul__(self, other: NumLike) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=1)
-    def __truediv__(self, other: ExprLike) -> Expr: ...
+    def __truediv__(self, other: NumLike) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=1)
-    def __pow__(self, other: ExprLike) -> Expr: ...
+    def __pow__(self, other: NumLike) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=1)
-    def __neg__(self) -> Expr: ...
+    def __neg__(self) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=1)
-    def exp(self) -> Expr: ...
+    def exp(self) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=1)
-    def log(self) -> Expr: ...
+    def log(self) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=1)
-    def sqrt(self) -> Expr: ...
+    def sqrt(self) -> Num: ...  # type: ignore[empty-body]
 
     @method(cost=1)
-    def __abs__(self) -> Expr: ...
+    def __abs__(self) -> Num: ...  # type: ignore[empty-body]
 
-    def __radd__(self, other: ExprLike) -> Expr: ...
+    def __radd__(self, other: NumLike) -> Num: ...  # type: ignore[empty-body]
 
-    def __rsub__(self, other: ExprLike) -> Expr: ...
+    def __rsub__(self, other: NumLike) -> Num: ...  # type: ignore[empty-body]
 
-    def __rmul__(self, other: ExprLike) -> Expr: ...
+    def __rmul__(self, other: NumLike) -> Num: ...  # type: ignore[empty-body]
 
-    def __rtruediv__(self, other: ExprLike) -> Expr: ...
+    def __rtruediv__(self, other: NumLike) -> Num: ...  # type: ignore[empty-body]
 
-    def __rpow__(self, other: ExprLike) -> Expr: ...
-
-
-ExprLike: TypeAlias = Expr | StringLike | float | int
-
-converter(float, Expr, Expr)
-converter(int, Expr, lambda value: Expr(float(value)))
-converter(String, Expr, Expr.var)
-converter(str, Expr, Expr.var)
+    def __rpow__(self, other: NumLike) -> Num: ...  # type: ignore[empty-body]
 
 
-@function(ruleset=program_rules)
-def expr_program(expr: Expr) -> Program: ...
+NumLike: TypeAlias = Num | StringLike | float | int
+
+converter(float, Num, Num)
+converter(int, Num, lambda value: Num(float(value)))
+converter(String, Num, Num.var)
+converter(str, Num, Num.var)
 
 
-@function(ruleset=multiset_lower_rules | multiset_simplify_rules | multiset_reify_rules)
-def sum_(xs: MultiSetLike[Expr, ExprLike]) -> Expr: ...
+@function(ruleset=const_analysis_rules, merge=lambda old, _new: old)  # type: ignore[call-overload]
+def const_value(num: Num) -> OptionalF64: ...  # type: ignore[empty-body]
 
 
-@function(ruleset=multiset_lower_rules | multiset_simplify_rules | multiset_reify_rules)
-def product_(xs: MultiSetLike[Expr, ExprLike]) -> Expr: ...
+def exp(x: NumLike) -> Num:
+    return convert(x, Num).exp()
 
 
-@function(ruleset=const_analysis_rules, merge=lambda old, _new: old)
-def const_value(expr: Expr) -> OptionalF64: ...
+def log(x: NumLike) -> Num:
+    return convert(x, Num).log()
 
 
-def exp(x: ExprLike) -> Expr:
-    return convert(x, Expr).exp()
+def sqrt(x: NumLike) -> Num:
+    return convert(x, Num).sqrt()
 
 
-def log(x: ExprLike) -> Expr:
-    return convert(x, Expr).log()
+def cbrt(x: NumLike) -> Num:
+    return convert(x, Num) ** (1.0 / 3.0)
 
 
-def sqrt(x: ExprLike) -> Expr:
-    return convert(x, Expr).sqrt()
+def sqr(x: NumLike) -> Num:
+    return convert(x, Num) ** 2.0
 
 
-def cbrt(x: ExprLike) -> Expr:
-    return convert(x, Expr) ** (1.0 / 3.0)
+def cube(x: NumLike) -> Num:
+    return convert(x, Num) ** 3.0
 
 
-def sqr(x: ExprLike) -> Expr:
-    return convert(x, Expr) ** 2.0
+def _zero() -> Num:
+    return Num(0.0)
 
 
-def cube(x: ExprLike) -> Expr:
-    return convert(x, Expr) ** 3.0
-
-
-def _zero() -> Expr:
-    return Expr(0.0)
-
-
-def _one() -> Expr:
-    return Expr(1.0)
+def _one() -> Num:
+    return Num(1.0)
 
 
 @const_analysis_rules.register
 def _const_analysis(
-    expr: Expr,
-    x: Expr,
-    y: Expr,
+    num: Num,
+    x: Num,
+    y: Num,
     a: f64,
     b: f64,
     i: i64,
     s: String,
 ) -> Iterable[RewriteOrRule]:
-    yield rule(eq(expr).to(Expr(a))).then(set_(const_value(expr)).to(OptionalF64.some(a)))
-    yield rule(eq(expr).to(Expr.var(s))).then(set_(const_value(expr)).to(OptionalF64.none))
-    yield rule(eq(expr).to(Expr.param(i))).then(set_(const_value(expr)).to(OptionalF64.none))
+    yield rule(eq(num).to(Num(a))).then(set_(const_value(num)).to(OptionalF64.some(a)))
+    yield rule(eq(num).to(Num.var(s))).then(set_(const_value(num)).to(OptionalF64.none))
+    yield rule(eq(num).to(Num.param(i))).then(set_(const_value(num)).to(OptionalF64.none))
 
-    yield rule(eq(expr).to(x + y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
-        set_(const_value(expr)).to(OptionalF64.some(a + b))
+    yield rule(eq(num).to(x + y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
+        set_(const_value(num)).to(OptionalF64.some(a + b))
     )
-    yield rule(eq(expr).to(x - y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
-        set_(const_value(expr)).to(OptionalF64.some(a - b))
+    yield rule(eq(num).to(x - y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
+        set_(const_value(num)).to(OptionalF64.some(a - b))
     )
-    yield rule(eq(expr).to(x * y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
-        set_(const_value(expr)).to(OptionalF64.some(a * b))
+    yield rule(eq(num).to(x * y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
+        set_(const_value(num)).to(OptionalF64.some(a * b))
     )
-    yield rule(eq(expr).to(x / y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
-        set_(const_value(expr)).to(OptionalF64.some(a / b))
+    yield rule(eq(num).to(x / y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
+        set_(const_value(num)).to(OptionalF64.some(a / b))
     )
-    yield rule(eq(expr).to(x**y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
-        set_(const_value(expr)).to(OptionalF64.some(a**b))
+    yield rule(eq(num).to(x**y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
+        set_(const_value(num)).to(OptionalF64.some(a**b))
     )
-    yield rule(eq(expr).to(-x), const_value(x) == OptionalF64.some(a)).then(
-        set_(const_value(expr)).to(OptionalF64.some(-a))
+    yield rule(eq(num).to(-x), const_value(x) == OptionalF64.some(a)).then(
+        set_(const_value(num)).to(OptionalF64.some(-a))
     )
-    yield rule(eq(expr).to(x), const_value(x) == OptionalF64.some(a)).then(union(expr).with_(Expr(a)))
+    yield rule(eq(num).to(exp(x)), const_value(x) == OptionalF64.some(a)).then(
+        set_(const_value(num)).to(OptionalF64.some(a.exp()))
+    )
+    yield rule(eq(num).to(log(x)), const_value(x) == OptionalF64.some(a), a > 0.0).then(
+        set_(const_value(num)).to(OptionalF64.some(a.log()))
+    )
+    yield rule(eq(num).to(sqrt(x)), const_value(x) == OptionalF64.some(a), a >= 0.0).then(
+        set_(const_value(num)).to(OptionalF64.some(a.sqrt()))
+    )
+    yield rule(eq(num).to(abs(x)), const_value(x) == OptionalF64.some(a)).then(
+        set_(const_value(num)).to(OptionalF64.some(abs(a)))
+    )
+    yield rule(eq(num).to(x), const_value(x) == OptionalF64.some(a)).then(union(num).with_(Num(a)))
 
 
 @basic_rules.register
-def _basic_rewrites(x: Expr, y: Expr, z: Expr, a: Expr, b: Expr) -> Iterable[RewriteOrRule]:
+def _basic_rewrites(x: Num, y: Num, z: Num, a: Num, b: Num) -> Iterable[RewriteOrRule]:
     yield rewrite(x + y).to(y + x)
     yield rewrite(x * y).to(y * x)
     yield rewrite(x * x).to(x**2.0)
@@ -243,12 +251,12 @@ def _basic_rewrites(x: Expr, y: Expr, z: Expr, a: Expr, b: Expr) -> Iterable[Rew
 
 
 @fun_rules.register
-def _fun_rewrites(x: Expr, y: Expr, a: Expr, b: Expr, c: f64, d: f64) -> Iterable[RewriteOrRule]:
-    half = Expr(0.5)
-    yield rewrite(log(x * y)).to(log(x) + log(y), const_value(x) == OptionalF64.some(c), c >= 0.0, c != 0.0)
+def _fun_rewrites(x: Num, y: Num, a: Num, b: Num, c: f64, d: f64) -> Iterable[RewriteOrRule]:
+    half = Num(0.5)
+    yield rewrite(log(x * y)).to(log(x) + log(y), const_value(x) == OptionalF64.some(c), c >= 0.0, c != 0.0)  # type: ignore[arg-type]
     yield rewrite((x**a) * (x**b)).to(x ** (a + b))
-    yield rewrite(log(x / y)).to(log(x) - log(y), const_value(x) == OptionalF64.some(c), c >= 0.0, c != 0.0)
-    yield rewrite(log(x**y)).to(y * log(x), const_value(y) == OptionalF64.some(c), c >= 0.0, c != 0.0)
+    yield rewrite(log(x / y)).to(log(x) - log(y), const_value(x) == OptionalF64.some(c), c >= 0.0, c != 0.0)  # type: ignore[arg-type]
+    yield rewrite(log(x**y)).to(y * log(x), const_value(y) == OptionalF64.some(c), c >= 0.0, c != 0.0)  # type: ignore[arg-type]
     yield rewrite(log(sqrt(x))).to(half * log(x), const_value(x) == OptionalF64.none)
     yield rewrite(log(exp(x))).to(x, const_value(x) == OptionalF64.none)
     yield rewrite(exp(log(x))).to(x, const_value(x) == OptionalF64.none)
@@ -269,7 +277,7 @@ def _fun_rewrites(x: Expr, y: Expr, a: Expr, b: Expr, c: f64, d: f64) -> Iterabl
 
 
 @const_reduction_rules.register
-def _const_reduction(x: Expr, y: Expr, z: Expr, a: Expr, b: Expr, c: f64) -> Iterable[RewriteOrRule]:
+def _const_reduction(x: Num, y: Num, z: Num, a: Num, b: Num, c: f64) -> Iterable[RewriteOrRule]:
     zero = _zero()
     one = _one()
     yield rewrite(zero + x).to(x)
@@ -306,7 +314,7 @@ def _const_reduction(x: Expr, y: Expr, z: Expr, a: Expr, b: Expr, c: f64) -> Ite
 
 
 @const_fusion_rules.register
-def _const_fusion(x: Expr, y: Expr, a: Expr, b: Expr) -> Iterable[RewriteOrRule]:
+def _const_fusion(x: Num, y: Num, a: Num, b: Num) -> Iterable[RewriteOrRule]:
     yield rewrite((a * x) + b).to(
         a * (x + (b / a)),
         const_value(a) != OptionalF64.none,
@@ -381,103 +389,6 @@ def _const_fusion(x: Expr, y: Expr, a: Expr, b: Expr) -> Iterable[RewriteOrRule]
     )
 
 
-@multiset_lower_rules.register
-def _multiset_lower(x: Expr, y: Expr, xs: MultiSet[Expr], ys: MultiSet[Expr]) -> Iterable[RewriteOrRule]:
-    yield rewrite(x + y, subsume=True).to(sum_(MultiSet(x, y)))
-    yield rewrite(x * y, subsume=True).to(product_(MultiSet(x, y)))
-    yield rule(eq(x).to(sum_(xs)), eq(y).to(sum_(ys))).then(union(x + y).with_(sum_(xs + ys)))
-    yield rule(eq(x).to(product_(xs)), eq(y).to(product_(ys))).then(union(x * y).with_(product_(xs + ys)))
-
-
-@multiset_simplify_rules.register
-def _multiset_simplify(
-    x: Expr,
-    y: Expr,
-    z: Expr,
-    xs: MultiSet[Expr],
-    ys: MultiSet[Expr],
-    zs: MultiSet[Expr],
-    common: MultiSet[Expr],
-    i: f64,
-    j: f64,
-) -> Iterable[RewriteOrRule]:
-    yield rewrite(sum_(MultiSet[Expr]())).to(_zero())
-    yield rewrite(product_(MultiSet[Expr]())).to(_one())
-    yield rule(eq(x).to(sum_(xs)), xs.length() == i64(1)).then(union(x).with_(xs.pick()))
-    yield rule(eq(x).to(product_(xs)), xs.length() == i64(1)).then(union(x).with_(xs.pick()))
-    yield rule(eq(x).to(sum_(xs)), xs.contains(_zero()), xs.length() > 1).then(union(x).with_(sum_(xs.remove(_zero()))))
-    yield rule(eq(x).to(product_(xs)), xs.contains(_one()), xs.length() > 1).then(
-        union(x).with_(product_(xs.remove(_one())))
-    )
-    yield rule(eq(x).to(product_(xs)), xs.contains(_zero())).then(union(x).with_(_zero()))
-
-    yield rule(
-        eq(x).to(sum_(xs)),
-        eq(y).to(Expr(i)),
-        xs.contains(y),
-        eq(z).to(Expr(j)),
-        xs.remove(y).contains(z),
-    ).then(union(x).with_(sum_(xs.remove(y).remove(z).insert(Expr(i + j)))))
-    yield rule(
-        eq(x).to(product_(xs)),
-        eq(y).to(Expr(i)),
-        xs.contains(y),
-        eq(z).to(Expr(j)),
-        xs.remove(y).contains(z),
-    ).then(union(x).with_(product_(xs.remove(y).remove(z).insert(Expr(i * j)))))
-
-    yield rule(
-        eq(x).to(sum_(xs)),
-        eq(y).to(product_(ys)),
-        eq(z).to(product_(zs)),
-        xs.contains(y),
-        xs.remove(y).contains(z),
-        eq(common).to(ys & zs),
-        common.length() > 0,
-    ).then(
-        union(x).with_(
-            sum_(
-                xs.remove(y)
-                .remove(z)
-                .insert(product_(common.insert(sum_(MultiSet(product_(ys - common), product_(zs - common))))))
-            )
-        )
-    )
-
-
-@multiset_reify_rules.register
-def _multiset_reify(x: Expr, y: Expr, xs: MultiSet[Expr], ys: MultiSet[Expr]) -> Iterable[RewriteOrRule]:
-    yield rewrite(sum_(MultiSet[Expr]())).to(_zero())
-    yield rewrite(product_(MultiSet[Expr]())).to(_one())
-    yield rule(eq(x).to(sum_(xs)), xs.length() == i64(1)).then(union(x).with_(xs.pick()))
-    yield rule(eq(x).to(product_(xs)), xs.length() == i64(1)).then(union(x).with_(xs.pick()))
-    yield rule(eq(x).to(sum_(xs)), xs.length() > 1, eq(y).to(xs.pick()), eq(ys).to(xs.remove(y))).then(
-        union(x).with_(y + sum_(ys))
-    )
-    yield rule(eq(x).to(product_(xs)), xs.length() > 1, eq(y).to(xs.pick()), eq(ys).to(xs.remove(y))).then(
-        union(x).with_(y * product_(ys))
-    )
-
-
-@program_rules.register
-def _expr_program(x: Expr, y: Expr, value: f64, name: String, index: i64) -> Iterable[RewriteOrRule]:
-    yield rewrite(expr_program(Expr(value)), subsume=True).to(Program(value.to_string()))
-    yield rewrite(expr_program(Expr.var(name)), subsume=True).to(Program(name, True))
-    yield rewrite(expr_program(Expr.param(index)), subsume=True).to(Program("params[") + index.to_string() + "]")
-    yield rewrite(expr_program(x + y), subsume=True).to(Program("(") + expr_program(x) + " + " + expr_program(y) + ")")
-    yield rewrite(expr_program(x - y), subsume=True).to(Program("(") + expr_program(x) + " - " + expr_program(y) + ")")
-    yield rewrite(expr_program(x * y), subsume=True).to(Program("(") + expr_program(x) + " * " + expr_program(y) + ")")
-    yield rewrite(expr_program(x / y), subsume=True).to(Program("(") + expr_program(x) + " / " + expr_program(y) + ")")
-    yield rewrite(expr_program(x**y), subsume=True).to(Program("(") + expr_program(x) + " ** " + expr_program(y) + ")")
-    yield rewrite(expr_program(-x), subsume=True).to(Program("(-") + expr_program(x) + ")")
-    yield rewrite(expr_program(exp(x)), subsume=True).to(Program("np.exp(") + expr_program(x) + ")")
-    yield rewrite(expr_program(log(x)), subsume=True).to(Program("np.log(") + expr_program(x) + ")")
-    yield rewrite(expr_program(sqrt(x)), subsume=True).to(Program("np.sqrt(") + expr_program(x) + ")")
-    yield rewrite(expr_program(abs(x)), subsume=True).to(Program("np.abs(") + expr_program(x) + ")")
-    yield rewrite(expr_program(sum_(MultiSet[Expr]())), subsume=True).to(Program("0.0"))
-    yield rewrite(expr_program(product_(MultiSet[Expr]())), subsume=True).to(Program("1.0"))
-
-
 @dataclass(frozen=True)
 class Example:
     name: str
@@ -488,7 +399,7 @@ class Example:
     sample_points: tuple[tuple[float, ...], ...]
 
     @property
-    def expr(self) -> Expr:
+    def expr(self) -> Num:
         return parse_hl_expr(self.source)
 
 
@@ -506,7 +417,7 @@ class IterationTrace:
 @dataclass(frozen=True)
 class StageReport:
     name: str
-    extracted: Expr
+    extracted: Num
     cost: int
     register_sec: float
     run_sec: float
@@ -530,23 +441,25 @@ class MetricReport:
     before_parameter_count: int
     after_parameter_count: int
     reduction_ratio: float
-    jacobian_rank: int
-    jacobian_rank_gap: int
+    optimal_parameter_count: int | None
+    gap_to_optimal: int | None
+    optimal_status: str
 
 
 @dataclass(frozen=True)
 class PipelineReport:
     mode: str
     stages: tuple[StageReport, ...]
-    extracted: Expr
+    extracted: Num
     cost: int
     total_size: int
     node_count: int
     eclass_count: int
     stop_reason: str
-    python_source: str
+    rendered: str
     metric_report: MetricReport
-    numeric_max_abs_error: float
+    numeric_max_abs_error: float | None
+    numeric_status: str
     notes: tuple[str, ...] = ()
 
     @property
@@ -585,7 +498,7 @@ class Comparison:
 HASKELL_REFERENCE_ROWS: dict[int, HaskellRow] = {
     1: HaskellRow(
         row=1,
-        runtime_sec=0.001351,
+        runtime_sec=0.001157,
         memo_size=-1,
         eclass_count=-1,
         before_parameter_count=2,
@@ -593,62 +506,538 @@ HASKELL_REFERENCE_ROWS: dict[int, HaskellRow] = {
         before_node_count=7,
         after_node_count=7,
         simplified_python="(-9.29438919215253 + (2.93547417364396 * x[:, 2])) ** 2.0",
-        notes="Source helper uses exported simplifyEqSat only; final e-graph sizes are not exposed.",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    2: HaskellRow(
+        row=2,
+        runtime_sec=0.045097,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=21,
+        after_parameter_count=18,
+        before_node_count=73,
+        after_node_count=65,
+        simplified_python="((((((x[:, 2] * ((x[:, 2] + -3.7742599465107096) * -2.221967816829757)) + ((x[:, 0] + 8.598006045013985) * ((x[:, 2] + -3.237933747438949) * 0.45672015131286553))) * (((x[:, 0] * 0.114247677264604) + (0.127799885276295 * x[:, 1])) * (((x[:, 1] * 3.60250727355285) + (x[:, 2] * 1.35381696253641)) - (x[:, 0] * 9.60356246300082)))) - ((((-9.29438919215253 + (x[:, 2] * 2.93547417364396)) ** 2.0 + (x[:, 1] * -1.31893797108115)) + (x[:, 0] * -3.0618115058751196)) * ((x[:, 0] * 1.25099225339683) + (x[:, 1] * -1.0075335593301)))) * 0.227993040492379) + 1.72695871415228)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    3: HaskellRow(
+        row=3,
+        runtime_sec=0.221145,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=19,
+        after_parameter_count=17,
+        before_node_count=66,
+        after_node_count=60,
+        simplified_python="((((((x[:, 2] * ((x[:, 2] + -4.623624568029607) * -1.6065924782476593)) + ((-1.70053796438431 + (x[:, 2] * 0.354410284952137)) * ((2.30920195902924 * x[:, 0]) + (-0.684514001199842 * x[:, 1])))) * (((x[:, 0] * -0.423113013561051) + (x[:, 1] * -0.820293590903207)) * np.exp((x[:, 0] * 0.648433111594964)))) - (((x[:, 1] * -10.2013161038227) + ((4.49181352322002 + (x[:, 2] * 3.34338756313595)) + (x[:, 0] * 3.32319701375876))) * (-4.40371470183112 + (x[:, 2] * 1.239832234323)) ** 2.0)) * 5.55952399242293e-2) + 2.3974618452108)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    4: HaskellRow(
+        row=4,
+        runtime_sec=0.058744,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=19,
+        after_parameter_count=16,
+        before_node_count=64,
+        after_node_count=56,
+        simplified_python="((((((x[:, 2] * ((x[:, 2] + -2.628407049567445) * -3.1120416896681817)) + ((x[:, 0] + 2.1411339806415373) * ((x[:, 2] + -2.7279626957213154) * 1.5619140590200937))) * (((x[:, 0] * 2.31254136991372e-2) + (-0.201859225439622 * x[:, 1])) * np.exp((x[:, 0] * 0.533684665488698)))) - (((x[:, 1] * 6.76271161563555e-2) + ((-10.1636621343434 + (x[:, 2] * 2.20402481737344)) + (x[:, 0] * 2.3693972649962904))) * ((x[:, 0] * -0.173514070270718) + (x[:, 1] * 1.4309773332239)))) * 0.418278900765285) + -0.250852384709946)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    5: HaskellRow(
+        row=5,
+        runtime_sec=0.243354,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=15,
+        after_parameter_count=14,
+        before_node_count=54,
+        after_node_count=52,
+        simplified_python="(1.38844130555412 * ((np.exp((x[:, 0] * 0.472180751947384)) + (x[:, 0] * -2.50335104760053)) + (((((((x[:, 0] * -5.46511983933291) + (4.7308388959051 * x[:, 1])) + ((x[:, 0] * 1.9820027542127) + (x[:, 1] * -0.507993116540432)) ** 2.0) + (-0.902691894725103 * x[:, 2])) * ((-9.71025706279119 + (x[:, 2] * 3.06939441276146)) ** 2.0 + -12.1940251737044)) * ((x[:, 0] * -1.13611973003391e-3) + (x[:, 1] * 6.9224336526928e-3))) + 3.2211759894748377)))",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    10: HaskellRow(
+        row=10,
+        runtime_sec=0.004942,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=9,
+        after_parameter_count=9,
+        before_node_count=30,
+        after_node_count=30,
+        simplified_python="((((-4.0257291259403 * x[:, 0]) + ((np.exp((x[:, 0] * 0.496521530470785)) * ((-9.90385501742711 + (3.09891553397754 * x[:, 2])) ** 2.0 + -12.0313313266527)) * ((x[:, 0] * -2.09790347331461e-2) + (0.15542475900314 * x[:, 1])))) * 0.218016003919151) + 2.93075744602469)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    20: HaskellRow(
+        row=20,
+        runtime_sec=0.001421,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=4,
+        after_parameter_count=4,
+        before_node_count=15,
+        after_node_count=15,
+        simplified_python="((((-0.453946451098545 * x[:, 2]) ** 3.0 + (x[:, 2] * 3.0472620183122)) ** 2.0 * -0.342063915063894) + 10.6692145111104)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    30: HaskellRow(
+        row=30,
+        runtime_sec=0.01223,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=9,
+        after_parameter_count=9,
+        before_node_count=35,
+        after_node_count=35,
+        simplified_python="((((np.exp((-1.47422568429434 * x[:, 0])) - (((-0.58923877562757 * x[:, 2]) ** 3.0 + ((x[:, 2] * 2.39236882178653) - 6.26125635041365) ** 2.0) * (-7.92212718106198e-3 * x[:, 1]))) * (np.exp((x[:, 0] * 1.19822491431359)) + (x[:, 1] * 19.3608807319069))) * 0.313237693440143) + -0.504509880559088)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    40: HaskellRow(
+        row=40,
+        runtime_sec=0.00085,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=4,
+        after_parameter_count=4,
+        before_node_count=14,
+        after_node_count=14,
+        simplified_python="((((0.309853513321887 * x[:, 2]) - np.exp((-4.78572314032874e-3 * x[:, 0]))) ** 2.0 * 32.3824199084528) + -4.32199869886884)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
     ),
     50: HaskellRow(
         row=50,
-        runtime_sec=0.547641,
+        runtime_sec=0.495965,
         memo_size=-1,
         eclass_count=-1,
         before_parameter_count=14,
         after_parameter_count=12,
         before_node_count=60,
         after_node_count=46,
-        simplified_python=(
-            "(-4.13897531650583e-2 * ((np.exp((x[:, 2] * -0.144728813168975)) ** 2.0) * "
-            "(-1.54770141702422 - (x[:, 2] * 3.31046821812388)) + ((x[:, 1] * 4.081416417295803) + "
-            "(((((np.exp((0.743694003014863 * x[:, 0])) * ((x[:, 0] * 9.04122619609017e-3) - "
-            "(x[:, 2] * 1.21179632900701e-2))) * (8.63005732191704 - (x[:, 2] * 3.05659895630567))) - "
-            "(x[:, 0] * 0.557193153898209)) - np.log(x[:, 2])) + -12.578528004457953))))"
-        ),
-        notes="Source helper uses exported simplifyEqSat only; final e-graph sizes are not exposed.",
+        simplified_python="((((np.exp((x[:, 2] * -0.144728813168975)) ** 2.0 * (-1.54770141702422 - (x[:, 2] * 3.31046821812388))) + (((((np.exp((0.743694003014863 * x[:, 0])) * ((x[:, 0] * 9.04122619609017e-3) - (x[:, 2] * 1.21179632900701e-2))) * (8.63005732191704 - (x[:, 2] * 3.05659895630567))) - (x[:, 0] * 0.557193153898209)) - np.log(x[:, 2])) + 6.5874389967108335)) * (x[:, 1] * 1.752525486604812)) + 0.404362453868565)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    75: HaskellRow(
+        row=75,
+        runtime_sec=0.007188,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=12,
+        after_parameter_count=12,
+        before_node_count=44,
+        after_node_count=44,
+        simplified_python="(((((0.27658499902994 * x[:, 1]) + ((((-3.09568685791928 * x[:, 2]) - (x[:, 1] * 1.06543349470034)) + (4.80847033528277 * x[:, 0])) * ((x[:, 2] * 8.40515601044034e-3) - np.exp(((x[:, 2] * -5.89563245316599) - (x[:, 1] * -2.2128445010022)))))) * (((x[:, 2] * -1.73329369062705) + 5.01701830214846) ** 2.0 - (x[:, 0] * 3.04752460994615))) * 0.830662588380978) + 2.77768079307633)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    100: HaskellRow(
+        row=100,
+        runtime_sec=0.0546,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=10,
+        after_parameter_count=8,
+        before_node_count=31,
+        after_node_count=27,
+        simplified_python="((((-0.817246761082895 * x[:, 2]) + (-3.880619422186987 * ((x[:, 0] * (((x[:, 2] * -9.53755961420584e-2) + (x[:, 0] * 2.70703912792823e-2)) * (x[:, 2] + -4.659621153159492))) + -1.2365833791502565))) * (x[:, 1] * 1.134804712050934)) + 0.201404917055389)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    150: HaskellRow(
+        row=150,
+        runtime_sec=0.554163,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=19,
+        after_parameter_count=16,
+        before_node_count=72,
+        after_node_count=62,
+        simplified_python="(((((((5.53327625349294 * x[:, 1]) - (9.01964233670581 * x[:, 2])) - (x[:, 0] * -19.96051895060467)) * ((-2.49821516165647 - (x[:, 2] * -0.402138004942828)) * (np.log((x[:, 0] * 0.347653612616773)) - (x[:, 2] * -0.512350969799209)))) - (((x[:, 0] * 1.40058250223625) + (x[:, 1] * 0.55815097447614)) * (np.exp((x[:, 0] * 0.569380315263419)) * (((x[:, 2] * -0.841465262470357) + np.exp((x[:, 0] * 0.242251869587583))) - ((x[:, 2] * 0.466508892559209) + -2.80204970690573) ** 2.0)))) * (x[:, 1] * 6.326295494205529e-2)) + -0.455923813201509)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
+    ),
+    200: HaskellRow(
+        row=200,
+        runtime_sec=0.009585,
+        memo_size=-1,
+        eclass_count=-1,
+        before_parameter_count=10,
+        after_parameter_count=10,
+        before_node_count=33,
+        after_node_count=33,
+        simplified_python="(((((((-7.01398906858873 * x[:, 2]) - -20.9157503480256) + (0.40965685006749 * x[:, 1])) ** 2.0 - (18.7131049568053 * x[:, 0])) / (((x[:, 1] * -2.89176232552097) + 15.8269215595989) + ((x[:, 2] * -1.76570724282939) - -5.46414193899484) ** 2.0)) * 0.689375955248431) + 0.570693365253855)",
+        notes="This helper uses the source repo's exported simplifyEqSat. The public API does not expose intermediate e-graph sizes or stop reasons.",
     ),
 }
 
 
-def _default_sample_points(
-    input_names: Sequence[str], *, seed: int = 0, count: int = 64
-) -> tuple[tuple[float, ...], ...]:
+@dataclass(frozen=True)
+class SampleSelection:
+    points: tuple[tuple[float, ...], ...]
+    status: str
+    attempts: int
+
+
+def _real_cube_root(value: float) -> float:
+    return math.copysign(abs(value) ** (1.0 / 3.0), value)
+
+
+def _is_integer_like(value: float, *, tol: float = 1e-9) -> bool:
+    return abs(value - round(value)) <= tol
+
+
+def _render_float(value: float) -> str:
+    return repr(float(value))
+
+
+def _eval_power(base: float, exponent: float) -> float | None:  # noqa: PLR0911
+    if not math.isfinite(base) or not math.isfinite(exponent):
+        return None
+    if base == 0.0 and exponent < 0.0:
+        return None
+    if base < 0.0 and not _is_integer_like(exponent):
+        if math.isclose(exponent, 1.0 / 3.0, rel_tol=1e-9, abs_tol=1e-9):
+            return _real_cube_root(base)
+        if math.isclose(exponent, -1.0 / 3.0, rel_tol=1e-9, abs_tol=1e-9):
+            cube_root = _real_cube_root(base)
+            if cube_root == 0.0:
+                return None
+            return 1.0 / cube_root
+        return None
+    try:
+        value = base**exponent
+    except (OverflowError, ValueError):
+        return None
+    if isinstance(value, complex):
+        return None
+    return float(value) if math.isfinite(float(value)) else None
+
+
+def render_num(num: Num, *, param_name: str = "params") -> str:  # noqa: C901, PLR0911, PLR0912
+    match get_callable_args(num, Num):
+        case (value_expr,):
+            return _render_float(float(cast("f64", value_expr).value))
+        case _:
+            pass
+    match get_callable_args(num, Num.var):
+        case (name_expr,):
+            return cast("String", name_expr).value
+        case _:
+            pass
+    match get_callable_args(num, Num.param):
+        case (index_expr,):
+            return f"{param_name}[{int(cast('i64', index_expr).value)}]"
+        case _:
+            pass
+    match get_callable_args(num, Num.__add__):
+        case (lhs, rhs):
+            return f"({render_num(cast('Num', lhs), param_name=param_name)} + {render_num(cast('Num', rhs), param_name=param_name)})"
+        case _:
+            pass
+    match get_callable_args(num, Num.__sub__):
+        case (lhs, rhs):
+            return f"({render_num(cast('Num', lhs), param_name=param_name)} - {render_num(cast('Num', rhs), param_name=param_name)})"
+        case _:
+            pass
+    match get_callable_args(num, Num.__mul__):
+        case (lhs, rhs):
+            return f"({render_num(cast('Num', lhs), param_name=param_name)} * {render_num(cast('Num', rhs), param_name=param_name)})"
+        case _:
+            pass
+    match get_callable_args(num, Num.__truediv__):
+        case (lhs, rhs):
+            return f"({render_num(cast('Num', lhs), param_name=param_name)} / {render_num(cast('Num', rhs), param_name=param_name)})"
+        case _:
+            pass
+    match get_callable_args(num, Num.__pow__):
+        case (lhs, rhs):
+            return f"({render_num(cast('Num', lhs), param_name=param_name)} ** {render_num(cast('Num', rhs), param_name=param_name)})"
+        case _:
+            pass
+    match get_callable_args(num, Num.__neg__):
+        case (inner,):
+            return f"(-{render_num(inner, param_name=param_name)})"
+        case _:
+            pass
+    match get_callable_args(num, Num.exp):
+        case (inner,):
+            return f"exp({render_num(inner, param_name=param_name)})"
+        case _:
+            pass
+    match get_callable_args(num, Num.log):
+        case (inner,):
+            return f"log({render_num(inner, param_name=param_name)})"
+        case _:
+            pass
+    match get_callable_args(num, Num.sqrt):
+        case (inner,):
+            return f"sqrt({render_num(inner, param_name=param_name)})"
+        case _:
+            pass
+    match get_callable_args(num, Num.__abs__):
+        case (inner,):
+            return f"abs({render_num(inner, param_name=param_name)})"
+        case _:
+            pass
+    msg = f"Unsupported Num node for rendering: {num!r}"
+    raise TypeError(msg)
+
+
+def eval_num(num: Num, env: Mapping[str, float], params: Sequence[float] | None = None) -> float | None:  # noqa: C901, PLR0911, PLR0912
+    match get_callable_args(num, Num):
+        case (value_expr,):
+            value = float(cast("f64", value_expr).value)
+            return value if math.isfinite(value) else None
+        case _:
+            pass
+    match get_callable_args(num, Num.var):
+        case (name_expr,):
+            env_value = env.get(cast("String", name_expr).value)
+            if env_value is None or not math.isfinite(env_value):
+                return None
+            return float(env_value)
+        case _:
+            pass
+    match get_callable_args(num, Num.param):
+        case (index_expr,):
+            if params is None:
+                return None
+            index = int(cast("i64", index_expr).value)
+            if index < 0 or index >= len(params):
+                return None
+            value = float(params[index])
+            return value if math.isfinite(value) else None
+        case _:
+            pass
+    match get_callable_args(num, Num.__add__):
+        case (lhs, rhs):
+            left = eval_num(cast("Num", lhs), env, params)
+            right = eval_num(cast("Num", rhs), env, params)
+            if left is None or right is None:
+                return None
+            value = left + right
+            return value if math.isfinite(value) else None
+        case _:
+            pass
+    match get_callable_args(num, Num.__sub__):
+        case (lhs, rhs):
+            left = eval_num(cast("Num", lhs), env, params)
+            right = eval_num(cast("Num", rhs), env, params)
+            if left is None or right is None:
+                return None
+            value = left - right
+            return value if math.isfinite(value) else None
+        case _:
+            pass
+    match get_callable_args(num, Num.__mul__):
+        case (lhs, rhs):
+            left = eval_num(cast("Num", lhs), env, params)
+            right = eval_num(cast("Num", rhs), env, params)
+            if left is None or right is None:
+                return None
+            value = left * right
+            return value if math.isfinite(value) else None
+        case _:
+            pass
+    match get_callable_args(num, Num.__truediv__):
+        case (lhs, rhs):
+            left = eval_num(cast("Num", lhs), env, params)
+            right = eval_num(cast("Num", rhs), env, params)
+            if left is None or right is None or right == 0.0:
+                return None
+            value = left / right
+            return value if math.isfinite(value) else None
+        case _:
+            pass
+    match get_callable_args(num, Num.__pow__):
+        case (lhs, rhs):
+            left = eval_num(cast("Num", lhs), env, params)
+            right = eval_num(cast("Num", rhs), env, params)
+            if left is None or right is None:
+                return None
+            return _eval_power(left, right)
+        case _:
+            pass
+    match get_callable_args(num, Num.__neg__):
+        case (inner,):
+            inner_value = eval_num(inner, env, params)
+            if inner_value is None:
+                return None
+            neg_value = -inner_value
+            return neg_value if math.isfinite(neg_value) else None
+        case _:
+            pass
+    match get_callable_args(num, Num.exp):
+        case (inner,):
+            exp_input = eval_num(inner, env, params)
+            if exp_input is None:
+                return None
+            try:
+                result = math.exp(exp_input)
+            except OverflowError:
+                return None
+            return result if math.isfinite(result) else None
+        case _:
+            pass
+    match get_callable_args(num, Num.log):
+        case (inner,):
+            log_input = eval_num(inner, env, params)
+            if log_input is None or log_input <= 0.0:
+                return None
+            result = math.log(log_input)
+            return result if math.isfinite(result) else None
+        case _:
+            pass
+    match get_callable_args(num, Num.sqrt):
+        case (inner,):
+            sqrt_input = eval_num(inner, env, params)
+            if sqrt_input is None or sqrt_input < 0.0:
+                return None
+            result = math.sqrt(sqrt_input)
+            return result if math.isfinite(result) else None
+        case _:
+            pass
+    match get_callable_args(num, Num.__abs__):
+        case (inner,):
+            abs_input = eval_num(inner, env, params)
+            if abs_input is None:
+                return None
+            result = abs(abs_input)
+            return result if math.isfinite(result) else None
+        case _:
+            pass
+    msg = f"Unsupported Num node for evaluation: {num!r}"
+    raise TypeError(msg)
+
+
+def _parameterize_num(num: Num) -> tuple[Num, tuple[float, ...]]:  # noqa: C901
+    params: list[float] = []
+
+    def go(node: Num) -> Num:  # noqa: C901, PLR0911, PLR0912
+        match get_callable_args(node, Num):
+            case (value_expr,):
+                value = float(cast("f64", value_expr).value)
+                if value.is_integer():
+                    return Num(value)
+                index = len(params)
+                params.append(value)
+                return Num.param(index)
+            case _:
+                pass
+        match get_callable_args(node, Num.var):
+            case (name_expr,):
+                return Num.var(cast("String", name_expr).value)
+            case _:
+                pass
+        match get_callable_args(node, Num.param):
+            case (index_expr,):
+                return Num.param(cast("i64", index_expr).value)
+            case _:
+                pass
+        match get_callable_args(node, Num.__add__):
+            case (lhs, rhs):
+                return go(cast("Num", lhs)) + go(cast("Num", rhs))
+            case _:
+                pass
+        match get_callable_args(node, Num.__sub__):
+            case (lhs, rhs):
+                return go(cast("Num", lhs)) - go(cast("Num", rhs))
+            case _:
+                pass
+        match get_callable_args(node, Num.__mul__):
+            case (lhs, rhs):
+                return go(cast("Num", lhs)) * go(cast("Num", rhs))
+            case _:
+                pass
+        match get_callable_args(node, Num.__truediv__):
+            case (lhs, rhs):
+                return go(cast("Num", lhs)) / go(cast("Num", rhs))
+            case _:
+                pass
+        match get_callable_args(node, Num.__pow__):
+            case (lhs, rhs):
+                return go(cast("Num", lhs)) ** go(cast("Num", rhs))
+            case _:
+                pass
+        match get_callable_args(node, Num.__neg__):
+            case (inner,):
+                return -go(inner)
+            case _:
+                pass
+        match get_callable_args(node, Num.exp):
+            case (inner,):
+                return exp(go(inner))
+            case _:
+                pass
+        match get_callable_args(node, Num.log):
+            case (inner,):
+                return log(go(inner))
+            case _:
+                pass
+        match get_callable_args(node, Num.sqrt):
+            case (inner,):
+                return sqrt(go(inner))
+            case _:
+                pass
+        match get_callable_args(node, Num.__abs__):
+            case (inner,):
+                return abs(go(inner))
+            case _:
+                pass
+        msg = f"Unsupported Num node while parameterizing: {node!r}"
+        raise TypeError(msg)
+
+    return go(num), tuple(params)
+
+
+def count_paper_params(num: Num) -> int:
+    _, values = _parameterize_num(num)
+    return len(values)
+
+
+def _choose_domain_safe_sample_points(
+    num: Num,
+    input_names: Sequence[str],
+    *,
+    seed: int = 0,
+    count: int = 64,
+    max_attempts: int = 8192,
+) -> SampleSelection:
     rng = np.random.default_rng(seed)
-    return tuple(tuple(float(x) for x in row) for row in rng.uniform(0.25, 2.0, size=(count, len(input_names))))
+    accepted: list[tuple[float, ...]] = []
+    attempts = 0
+    while len(accepted) < count and attempts < max_attempts:
+        attempts += 1
+        candidate = tuple(float(x) for x in rng.uniform(0.25, 2.0, size=len(input_names)))
+        env = dict(zip(input_names, candidate, strict=True))
+        if eval_num(num, env) is None:
+            continue
+        accepted.append(candidate)
+    status = "ok" if len(accepted) == count else "domain_limited"
+    return SampleSelection(points=tuple(accepted), status=status, attempts=attempts)
 
 
-def core_examples() -> tuple[Example, Example]:
+def core_examples() -> tuple[Example, ...]:
     input_names = ("alpha", "beta", "theta")
-    return (
+    descriptions = {
+        1: "Small sanity case from test/example_hl row 1.",
+        50: "Function-heavy representative case from test/example_hl row 50.",
+    }
+    return tuple(
         Example(
-            name="row_1",
-            row=1,
-            source=ROW_1_SOURCE,
-            description="Small sanity case from test/example_hl row 1.",
+            name=f"row_{row}",
+            row=row,
+            source=SELECTED_ROW_SOURCES[row],
+            description=descriptions.get(row, f"Selected batch case from test/example_hl row {row}."),
             input_names=input_names,
-            sample_points=_default_sample_points(input_names, seed=1),
-        ),
-        Example(
-            name="row_50",
-            row=50,
-            source=ROW_50_SOURCE,
-            description="Function-heavy representative case from test/example_hl row 50.",
-            input_names=input_names,
-            sample_points=_default_sample_points(input_names, seed=50),
-        ),
+            sample_points=_choose_domain_safe_sample_points(
+                parse_hl_expr(SELECTED_ROW_SOURCES[row]), input_names, seed=row
+            ).points,
+        )
+        for row in SELECTED_BATCH_ROWS
     )
 
 
 def default_hl_eval_env() -> dict[str, object]:
-    alpha = Expr.var("alpha")
-    beta = Expr.var("beta")
-    theta = Expr.var("theta")
+    alpha = Num.var("alpha")
+    beta = Num.var("beta")
+    theta = Num.var("theta")
     return {
         "__builtins__": {},
         "alpha": alpha,
@@ -664,12 +1053,12 @@ def default_hl_eval_env() -> dict[str, object]:
     }
 
 
-def parse_hl_expr(source: str) -> Expr:
-    expr = eval(source, default_hl_eval_env(), {})
-    if not isinstance(expr, Expr):
-        msg = f"HL expression did not produce an Expr: {source!r}"
+def parse_hl_expr(source: str) -> Num:
+    num = eval(source, default_hl_eval_env(), {})
+    if not isinstance(num, Num):
+        msg = f"HL expression did not produce a Num: {source!r}"
         raise TypeError(msg)
-    return expr
+    return num
 
 
 def load_example_hl_rows() -> tuple[str, ...]:
@@ -677,6 +1066,8 @@ def load_example_hl_rows() -> tuple[str, ...]:
 
 
 def load_example_hl_row(row: int) -> str:
+    if row in SELECTED_ROW_SOURCES:
+        return SELECTED_ROW_SOURCES[row]
     rows = load_example_hl_rows()
     if row < 1 or row > len(rows):
         msg = f"row must be between 1 and {len(rows)}, got {row}"
@@ -684,217 +1075,57 @@ def load_example_hl_row(row: int) -> str:
     return rows[row - 1]
 
 
-def _expr_to_program(expr: Expr) -> tuple[str, str]:
-    egraph = egglog.EGraph()
-    program = expr_program(expr)
-    egraph.register(program)
-    egraph.register(program.compile())
-    egraph.run((program_rules | program_gen_ruleset).saturate())
-    statements = cast("String", egraph.extract(program.statements)).value
-    body = cast("String", egraph.extract(program.expr)).value
-    return statements, body
-
-
-def _multiset_items(ms: object) -> tuple[Expr, ...]:
-    if args := get_callable_args(ms, MultiSet):
-        return tuple(cast("Expr", arg) for arg in args)
-    if args := get_callable_args(ms, MultiSet.single):
-        value, count = args
-        return tuple(cast("Expr", value) for _ in range(int(cast("i64", count).value)))
-    msg = f"Unsupported multiset node: {ms!r}"
-    raise TypeError(msg)
-
-
-def _contains_multiset(expr: Expr) -> bool:
-    if get_callable_args(expr, sum_) or get_callable_args(expr, product_):
-        return True
-    args = get_callable_args(expr)
-    if not args:
-        return False
-    return any(_contains_multiset(cast("Expr", arg)) for arg in args if isinstance(arg, Expr))
-
-
-def _manual_expr_to_python(expr: Expr) -> str:
-    if args := get_callable_args(expr, Expr):
-        return repr(float(cast("f64", args[0]).value))
-    if args := get_callable_args(expr, Expr.var):
-        return cast("String", args[0]).value
-    if args := get_callable_args(expr, Expr.param):
-        return f"params[{int(cast('i64', args[0]).value)}]"
-    if args := get_callable_args(expr, Expr.__add__):
-        return f"({_manual_expr_to_python(cast('Expr', args[0]))} + {_manual_expr_to_python(cast('Expr', args[1]))})"
-    if args := get_callable_args(expr, Expr.__sub__):
-        return f"({_manual_expr_to_python(cast('Expr', args[0]))} - {_manual_expr_to_python(cast('Expr', args[1]))})"
-    if args := get_callable_args(expr, Expr.__mul__):
-        return f"({_manual_expr_to_python(cast('Expr', args[0]))} * {_manual_expr_to_python(cast('Expr', args[1]))})"
-    if args := get_callable_args(expr, Expr.__truediv__):
-        return f"({_manual_expr_to_python(cast('Expr', args[0]))} / {_manual_expr_to_python(cast('Expr', args[1]))})"
-    if args := get_callable_args(expr, Expr.__pow__):
-        return f"({_manual_expr_to_python(cast('Expr', args[0]))} ** {_manual_expr_to_python(cast('Expr', args[1]))})"
-    if args := get_callable_args(expr, Expr.__neg__):
-        return f"(-{_manual_expr_to_python(cast('Expr', args[0]))})"
-    if args := get_callable_args(expr, Expr.exp):
-        return f"np.exp({_manual_expr_to_python(cast('Expr', args[0]))})"
-    if args := get_callable_args(expr, Expr.log):
-        return f"np.log({_manual_expr_to_python(cast('Expr', args[0]))})"
-    if args := get_callable_args(expr, Expr.sqrt):
-        return f"np.sqrt({_manual_expr_to_python(cast('Expr', args[0]))})"
-    if args := get_callable_args(expr, Expr.__abs__):
-        return f"np.abs({_manual_expr_to_python(cast('Expr', args[0]))})"
-    if args := get_callable_args(expr, sum_):
-        (ms,) = args
-        terms = [_manual_expr_to_python(term) for term in _multiset_items(ms)]
-        return "(" + " + ".join(terms) + ")" if terms else "0.0"
-    if args := get_callable_args(expr, product_):
-        (ms,) = args
-        terms = [_manual_expr_to_python(term) for term in _multiset_items(ms)]
-        return "(" + " * ".join(terms) + ")" if terms else "1.0"
-    msg = f"Unsupported Expr node for Python rendering: {expr!r}"
-    raise TypeError(msg)
-
-
-def expr_to_python_source(expr: Expr, *, parameterize: bool = False) -> tuple[str, tuple[float, ...]]:
-    if parameterize:
-        expr, values = _parameterize_expr(expr)
-    else:
-        values = ()
-    if _contains_multiset(expr):
-        statements = ""
-        body = _manual_expr_to_python(expr)
-    else:
-        statements, body = _expr_to_program(expr)
-    lines = [line for line in statements.splitlines() if line.strip()]
-    return ("\n".join((*lines, f"return {body}")) if lines else f"return {body}", values)
-
-
-def _compile_function_source(source: str, input_names: Sequence[str], *, with_params: bool) -> Callable[..., float]:
-    args = list(input_names)
-    if with_params:
-        args.append("params")
-    namespace = {"np": np}
-    exec(f"def __fn({', '.join(args)}):\n" + "\n".join(f"    {line}" for line in source.splitlines()), namespace)
-    return cast("Callable[..., float]", namespace["__fn"])
-
-
-def compile_expr_callable(
-    expr: Expr, *, input_names: Sequence[str], parameterize: bool = False
-) -> Callable[..., float]:
-    source, _ = expr_to_python_source(expr, parameterize=parameterize)
-    return _compile_function_source(source, input_names, with_params=parameterize)
-
-
-def _count_expr_nodes(expr: Expr) -> int:
-    args = get_callable_args(expr)
-    if not args:
-        return 1
-    return 1 + sum(_count_expr_nodes(cast("Expr", arg)) for arg in args if isinstance(arg, Expr))
-
-
-def _walk_expr(expr: Expr) -> Iterable[Expr]:
-    yield expr
-    args = get_callable_args(expr)
-    if not args:
-        return
-    for arg in args:
-        if isinstance(arg, Expr):
-            yield from _walk_expr(cast("Expr", arg))
-
-
-def _parameterize_expr(expr: Expr) -> tuple[Expr, tuple[float, ...]]:
-    params: list[float] = []
-
-    def go(node: Expr) -> Expr:
-        if args := get_callable_args(node, Expr):
-            (value_expr,) = args
-            value = float(cast("f64", value_expr).value)
-            if value.is_integer():
-                return Expr(value)
-            index = len(params)
-            params.append(value)
-            return Expr.param(index)
-        if args := get_callable_args(node, Expr.var):
-            return Expr.var(cast("String", args[0]).value)
-        if args := get_callable_args(node, Expr.param):
-            return Expr.param(cast("i64", args[0]).value)
-        if args := get_callable_args(node, Expr.__add__):
-            return go(cast("Expr", args[0])) + go(cast("Expr", args[1]))
-        if args := get_callable_args(node, Expr.__sub__):
-            return go(cast("Expr", args[0])) - go(cast("Expr", args[1]))
-        if args := get_callable_args(node, Expr.__mul__):
-            return go(cast("Expr", args[0])) * go(cast("Expr", args[1]))
-        if args := get_callable_args(node, Expr.__truediv__):
-            return go(cast("Expr", args[0])) / go(cast("Expr", args[1]))
-        if args := get_callable_args(node, Expr.__pow__):
-            return go(cast("Expr", args[0])) ** go(cast("Expr", args[1]))
-        if args := get_callable_args(node, Expr.__neg__):
-            return -go(cast("Expr", args[0]))
-        if args := get_callable_args(node, Expr.exp):
-            return exp(go(cast("Expr", args[0])))
-        if args := get_callable_args(node, Expr.log):
-            return log(go(cast("Expr", args[0])))
-        if args := get_callable_args(node, Expr.sqrt):
-            return sqrt(go(cast("Expr", args[0])))
-        if args := get_callable_args(node, Expr.__abs__):
-            return abs(go(cast("Expr", args[0])))
-        if args := get_callable_args(node, sum_):
-            (ms,) = args
-            return sum_(MultiSet(*(go(term) for term in _multiset_items(ms))))
-        if args := get_callable_args(node, product_):
-            (ms,) = args
-            return product_(MultiSet(*(go(term) for term in _multiset_items(ms))))
-        msg = f"Unsupported Expr node while parameterizing: {node!r}"
-        raise TypeError(msg)
-
-    return go(expr), tuple(params)
-
-
-def count_paper_params(expr: Expr) -> int:
-    _, values = _parameterize_expr(expr)
-    return len(values)
-
-
-def jacobian_rank(expr: Expr, *, input_names: Sequence[str], sample_points: Sequence[Sequence[float]]) -> int:
-    parameterized_expr, params = _parameterize_expr(expr)
+def jacobian_rank(num: Num, *, input_names: Sequence[str], sample_points: Sequence[Sequence[float]]) -> int | None:
+    parameterized_num, params = _parameterize_num(num)
     if not params:
         return 0
-    source, _ = expr_to_python_source(parameterized_expr, parameterize=False)
-    fn = _compile_function_source(source, input_names, with_params=True)
     params_np = np.array(params, dtype=float)
     eps = 1e-6
     rows: list[np.ndarray] = []
     for point in sample_points:
-        base = float(fn(*point, params_np))
-        if not np.isfinite(base):
+        env = dict(zip(input_names, point, strict=True))
+        base = eval_num(parameterized_num, env, tuple(float(value) for value in params_np))
+        if base is None:
             continue
         grads = np.zeros(params_np.size, dtype=float)
+        valid = True
         for index in range(params_np.size):
             perturbed = params_np.copy()
             perturbed[index] += eps
-            value = float(fn(*point, perturbed))
+            value = eval_num(parameterized_num, env, tuple(float(entry) for entry in perturbed))
+            if value is None:
+                valid = False
+                break
             grads[index] = (value - base) / eps
-        if np.isfinite(grads).all():
+        if valid and np.isfinite(grads).all():
             rows.append(grads)
     if not rows:
-        return 0
+        return None
     return int(np.linalg.matrix_rank(np.vstack(rows)))
 
 
 def _numeric_max_abs_error(
-    original: Expr,
-    simplified: Expr,
+    original: Num,
+    simplified: Num,
     *,
     input_names: Sequence[str],
     sample_points: Sequence[Sequence[float]],
-) -> float:
-    original_fn = compile_expr_callable(original, input_names=input_names)
-    simplified_fn = compile_expr_callable(simplified, input_names=input_names)
-    errors = []
+) -> tuple[float | None, str]:
+    if not sample_points:
+        return None, "domain_limited"
+    errors: list[float] = []
     for point in sample_points:
-        original_value = float(original_fn(*point))
-        simplified_value = float(simplified_fn(*point))
-        if np.isfinite(original_value) and np.isfinite(simplified_value):
-            errors.append(abs(original_value - simplified_value))
-    return float(max(errors, default=0.0))
+        env = dict(zip(input_names, point, strict=True))
+        original_value = eval_num(original, env)
+        simplified_value = eval_num(simplified, env)
+        if original_value is None:
+            continue
+        if simplified_value is None:
+            return None, "simplified_domain_error"
+        errors.append(abs(original_value - simplified_value))
+    if not errors:
+        return None, "domain_limited"
+    return float(max(errors)), "ok"
 
 
 def _serialized_counts(egraph: egglog.EGraph) -> tuple[int, int, dict[str, int]]:
@@ -916,7 +1147,7 @@ def _aggregate_rule_times(run_report: object) -> tuple[dict[str, int], dict[str,
 
 def _run_stage(
     name: str,
-    expr: Expr,
+    num: Num,
     rules: egglog.Ruleset | egglog.Schedule,
     *,
     node_cutoff: int | None,
@@ -925,7 +1156,7 @@ def _run_stage(
 ) -> StageReport:
     egraph = egglog.EGraph()
     start = time.perf_counter()
-    egraph.register(expr)
+    egraph.register(num)
     register_sec = time.perf_counter() - start
 
     traces: list[IterationTrace] = []
@@ -966,7 +1197,7 @@ def _run_stage(
             break
 
     start = time.perf_counter()
-    extracted, cost = egraph.extract(expr, include_cost=True)
+    extracted, cost = egraph.extract(num, include_cost=True)
     extract_sec = time.perf_counter() - start
     total_size = sum(size for _, size in egraph.all_function_sizes())
     node_count, eclass_count, op_counts = _serialized_counts(egraph)
@@ -988,32 +1219,29 @@ def _run_stage(
     )
 
 
-def _baseline_rulesets() -> tuple[egglog.Ruleset, egglog.Ruleset]:
+def _baseline_rulesets() -> tuple[egglog.Schedule, egglog.Schedule]:
     rewrite_const = const_analysis_rules | const_reduction_rules
     rewrite_all = const_analysis_rules | basic_rules | const_reduction_rules | const_fusion_rules | fun_rules
     return rewrite_const, rewrite_all
 
 
-def _multiset_cleanup_rules() -> egglog.Ruleset:
-    return const_analysis_rules | const_reduction_rules | const_fusion_rules | fun_rules
-
-
 def _pipeline_metrics(
-    original: Expr,
-    extracted: Expr,
+    original: Num,
+    extracted: Num,
     *,
     input_names: Sequence[str],
     sample_points: Sequence[Sequence[float]],
 ) -> MetricReport:
     before = count_paper_params(original)
     after = count_paper_params(extracted)
-    rank = jacobian_rank(extracted, input_names=input_names, sample_points=sample_points)
+    optimal = jacobian_rank(original, input_names=input_names, sample_points=sample_points)
     return MetricReport(
         before_parameter_count=before,
         after_parameter_count=after,
         reduction_ratio=((before - after) / before) if before else 0.0,
-        jacobian_rank=rank,
-        jacobian_rank_gap=after - rank,
+        optimal_parameter_count=optimal,
+        gap_to_optimal=(after - optimal) if optimal is not None else None,
+        optimal_status="ok" if optimal is not None else "domain_limited",
     )
 
 
@@ -1026,7 +1254,7 @@ def _baseline_notes(stage: StageReport) -> tuple[str, ...]:
 
 
 def run_baseline_pipeline(
-    expr: Expr,
+    num: Num,
     *,
     node_cutoff: int,
     iteration_limit: int,
@@ -1036,9 +1264,14 @@ def run_baseline_pipeline(
     rewrite_const, rewrite_all = _baseline_rulesets()
     const_scheduler = back_off(match_limit=100, ban_length=10)
     all_scheduler = back_off(match_limit=2500, ban_length=30)
+    sample_selection = (
+        SampleSelection(tuple(tuple(float(value) for value in row) for row in sample_points), "ok", len(sample_points))
+        if sample_points is not None
+        else _choose_domain_safe_sample_points(num, input_names)
+    )
     const_stage = _run_stage(
         "rewrite_const",
-        expr,
+        num,
         rewrite_const,
         node_cutoff=node_cutoff,
         iteration_limit=iteration_limit,
@@ -1046,7 +1279,7 @@ def run_baseline_pipeline(
     )
     current = const_stage.extracted
     stages = [const_stage]
-    previous_source = expr_to_python_source(current)[0]
+    previous_rendered = render_num(current)
     stop_reason = const_stage.stop_reason
     for pass_index in range(1, 3):
         stage = _run_stage(
@@ -1060,14 +1293,24 @@ def run_baseline_pipeline(
         stages.append(stage)
         current = stage.extracted
         stop_reason = stage.stop_reason
-        current_source = expr_to_python_source(current)[0]
-        if current_source == previous_source:
+        current_rendered = render_num(current)
+        if current_rendered == previous_rendered:
             break
-        previous_source = current_source
+        previous_rendered = current_rendered
         if stop_reason != "saturated":
             break
-    sample_points = sample_points or _default_sample_points(input_names)
-    metrics = _pipeline_metrics(expr, current, input_names=input_names, sample_points=sample_points)
+    metrics = _pipeline_metrics(num, current, input_names=input_names, sample_points=sample_selection.points)
+    numeric_max_abs_error, numeric_status = _numeric_max_abs_error(
+        num,
+        current,
+        input_names=input_names,
+        sample_points=sample_selection.points,
+    )
+    notes = list(_baseline_notes(stages[-1]))
+    if sample_selection.status != "ok":
+        notes.append(
+            "Numeric validation used a reduced domain-safe sample because not enough valid points were available."
+        )
     return PipelineReport(
         mode="baseline",
         stages=tuple(stages),
@@ -1077,81 +1320,11 @@ def run_baseline_pipeline(
         node_count=stages[-1].node_count,
         eclass_count=stages[-1].eclass_count,
         stop_reason=stop_reason,
-        python_source=expr_to_python_source(current)[0],
+        rendered=render_num(current),
         metric_report=metrics,
-        numeric_max_abs_error=_numeric_max_abs_error(
-            expr, current, input_names=input_names, sample_points=sample_points
-        ),
-        notes=_baseline_notes(stages[-1]),
-    )
-
-
-def _multiset_notes(stages: Sequence[StageReport]) -> tuple[str, ...]:
-    notes: list[str] = []
-    first = stages[0]
-    if first.stop_reason == "saturated":
-        notes.append("Multiset lowering saturated without backoff or node limits.")
-    else:
-        notes.append(f"Multiset lowering stopped with {first.stop_reason}.")
-    for stage in stages:
-        hot_rules = sorted(stage.matches_per_rule.items(), key=lambda item: item[1], reverse=True)[:3]
-        if hot_rules:
-            notes.append(f"{stage.name} hottest rules: {', '.join(f'{name}={count}' for name, count in hot_rules)}")
-    return tuple(notes)
-
-
-def run_multiset_pipeline(
-    expr: Expr,
-    *,
-    saturate_without_limits: bool = True,
-    node_cutoff: int | None = None,
-    iteration_limit: int | None = None,
-    input_names: Sequence[str] = ("alpha", "beta", "theta"),
-    sample_points: Sequence[Sequence[float]] | None = None,
-) -> PipelineReport:
-    iteration_limit = iteration_limit or 80
-    stage1 = _run_stage(
-        "multiset_lower",
-        expr,
-        const_analysis_rules | multiset_lower_rules,
-        node_cutoff=None if saturate_without_limits else node_cutoff,
-        iteration_limit=iteration_limit,
-        scheduler=None,
-    )
-    stage2 = _run_stage(
-        "multiset_simplify",
-        stage1.extracted,
-        const_analysis_rules | multiset_simplify_rules | fun_rules,
-        node_cutoff=None if saturate_without_limits else node_cutoff,
-        iteration_limit=iteration_limit,
-        scheduler=None,
-    )
-    stage3 = _run_stage(
-        "multiset_reify_cleanup",
-        stage2.extracted,
-        multiset_reify_rules | _multiset_cleanup_rules(),
-        node_cutoff=None if saturate_without_limits else node_cutoff,
-        iteration_limit=iteration_limit,
-        scheduler=None,
-    )
-    stages = (stage1, stage2, stage3)
-    sample_points = sample_points or _default_sample_points(input_names)
-    metrics = _pipeline_metrics(expr, stage3.extracted, input_names=input_names, sample_points=sample_points)
-    return PipelineReport(
-        mode="multiset",
-        stages=stages,
-        extracted=stage3.extracted,
-        cost=stage3.cost,
-        total_size=stage3.total_size,
-        node_count=stage3.node_count,
-        eclass_count=stage3.eclass_count,
-        stop_reason=stage3.stop_reason,
-        python_source=expr_to_python_source(stage3.extracted)[0],
-        metric_report=metrics,
-        numeric_max_abs_error=_numeric_max_abs_error(
-            expr, stage3.extracted, input_names=input_names, sample_points=sample_points
-        ),
-        notes=_multiset_notes(stages),
+        numeric_max_abs_error=numeric_max_abs_error,
+        numeric_status=numeric_status if sample_selection.status == "ok" else sample_selection.status,
+        notes=tuple(notes),
     )
 
 
@@ -1182,26 +1355,15 @@ def sample_runtime_probe(
     iteration_limit: int = 20,
 ) -> dict[str, float]:
     baseline_total = 0.0
-    multiset_total = 0.0
     for row in rows:
         source = load_example_hl_row(row)
-        expr = parse_hl_expr(source)
-        baseline_total += run_baseline_pipeline(
-            expr, node_cutoff=node_cutoff, iteration_limit=iteration_limit
-        ).total_sec
-        multiset_total += run_multiset_pipeline(
-            expr,
-            saturate_without_limits=False,
-            node_cutoff=node_cutoff,
-            iteration_limit=iteration_limit,
-        ).total_sec
+        num = parse_hl_expr(source)
+        baseline_total += run_baseline_pipeline(num, node_cutoff=node_cutoff, iteration_limit=iteration_limit).total_sec
     scale = len(load_example_hl_rows()) / len(rows)
     return {
         "sampled_rows": float(len(rows)),
         "baseline_sample_sec": baseline_total,
-        "multiset_sample_sec": multiset_total,
         "baseline_projected_sec": baseline_total * scale,
-        "multiset_projected_sec": multiset_total * scale,
     }
 
 

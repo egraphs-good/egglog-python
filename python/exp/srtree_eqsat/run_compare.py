@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from egglog.exp.srtree_eqsat import core_examples, run_baseline_pipeline, run_multiset_pipeline
+from egglog.exp.srtree_eqsat import HASKELL_REFERENCE_ROWS, compare_to_haskell, core_examples, run_baseline_pipeline
 
 
 def _table(rows: list[dict[str, str]]) -> str:
@@ -15,20 +15,24 @@ def _table(rows: list[dict[str, str]]) -> str:
 def main() -> None:
     rows: list[dict[str, str]] = []
     for example in core_examples():
-        baseline = run_baseline_pipeline(example.expr, node_cutoff=50_000, iteration_limit=12)
-        multiset = run_multiset_pipeline(
-            example.expr, saturate_without_limits=False, node_cutoff=50_000, iteration_limit=2
+        baseline = run_baseline_pipeline(
+            example.expr,
+            node_cutoff=50_000,
+            iteration_limit=12,
+            input_names=example.input_names,
+            sample_points=example.sample_points,
         )
+        comparison = compare_to_haskell(example.name, baseline, HASKELL_REFERENCE_ROWS[example.row])
         rows.append({
             "example": example.name,
-            "baseline_stop": baseline.stop_reason,
-            "baseline_params": f"{baseline.metric_report.before_parameter_count}->{baseline.metric_report.after_parameter_count}",
-            "baseline_size": str(baseline.total_size),
-            "baseline_time": f"{baseline.total_sec:.4f}",
-            "multiset_stop": multiset.stop_reason,
-            "multiset_params": f"{multiset.metric_report.before_parameter_count}->{multiset.metric_report.after_parameter_count}",
-            "multiset_size": str(multiset.total_size),
-            "multiset_time": f"{multiset.total_sec:.4f}",
+            "egglog_stop": baseline.stop_reason,
+            "egglog_params": f"{baseline.metric_report.before_parameter_count}->{baseline.metric_report.after_parameter_count}",
+            "haskell_params": f"{HASKELL_REFERENCE_ROWS[example.row].before_parameter_count}->{HASKELL_REFERENCE_ROWS[example.row].after_parameter_count}",
+            "optimal_params": str(baseline.metric_report.optimal_parameter_count),
+            "egglog_size": str(baseline.total_size),
+            "egglog_time": f"{baseline.total_sec:.4f}",
+            "haskell_time": f"{HASKELL_REFERENCE_ROWS[example.row].runtime_sec:.4f}",
+            "notes": "; ".join(comparison.notes) or "-",
         })
     print(_table(rows))
 
