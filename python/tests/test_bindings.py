@@ -77,6 +77,11 @@ def extract_best_term(program: str) -> str:
 
 
 class TestEGraph:
+    def test_run_report_can_stop_field(self):
+        report = RunReport([], False, True, {}, {}, {}, {}, {})
+        assert report.updated is False
+        assert report.can_stop is True
+
     def test_parse_program(self, snapshot_py):
         res = EGraph().parse_program(
             """(datatype Math

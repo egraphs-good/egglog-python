@@ -90,6 +90,14 @@ match MyExpr("hello"):
         print(f"Matched MyExpr with value: {value}")
 ```
 
+This pattern also works well as a general alternative to `cast(...)`-heavy tuple destructuring from `get_callable_args`. If a custom `Expr` exposes preserved properties and `__match_args__`, later walkers can often match nested expressions directly:
+
+```python
+match get_callable_args(expr, Math.__sub__):
+    case (Math(lhs), Math(rhs)):
+        ...
+```
+
 ## Python Object Sort
 
 We define a custom "primitive sort" (i.e. a builtin type) for `PyObject`s. This allows us to store any Python object in the e-graph.
@@ -249,6 +257,8 @@ Registering a conversion from A to B will also register all transitively reachab
 ```{code-cell} python
 Math(2) + 30 + "x"
 ```
+
+When defining converters for a custom `Expr` sort, prefer registering conversions from egglog primitive sorts such as `i64`, `f64`, and `String` rather than directly from Python builtins like `int`, `float`, and `str`. The builtin promotions already handle those Python values transitively, so keeping the custom converters at the egglog-sort layer makes the promotion path clearer and usually leads to cleaner `...Like` aliases such as `Math | i64Like | f64Like | StringLike`.
 
 If you want to have this work with the static type checker, you can define your own `Union` type, which MUST include
 the `Expr` class as the first item in the union. For example, in this case you could then define:

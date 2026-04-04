@@ -28,8 +28,6 @@ from typing import Any
 import altair as alt
 import pandas as pd
 
-from egglog.exp.param_eq_hegg import HEIGHT_LIMIT
-
 SVGDisplay: Any | None
 
 try:
@@ -53,7 +51,6 @@ alt.renderers.enable("default")
 ALGORITHM_ORDER = ["Bingo", "EPLEX", "GP-GOMEA", "Operon", "PySR", "SBP"]
 MODE_LABELS = {
     "egglog-baseline": "Egglog baseline",
-    "egglog-height-guard": "Egglog height-guard",
 }
 
 
@@ -148,11 +145,21 @@ def _paper_runtime_frame() -> pd.DataFrame:
 
 def add_paper_metrics(frame: pd.DataFrame, *, prefix: str) -> pd.DataFrame:
     result = frame.copy()
-    result["orig_x_egg"] = (result[prefix + "orig_params"] - result[prefix + "simpl_params"]) / result[prefix + "orig_params"]
-    result["orig_x_sympy"] = (result[prefix + "orig_params"] - result[prefix + "orig_params_sympy"]) / result[prefix + "orig_params"]
-    result["orig_x_sympyegg"] = (result[prefix + "orig_params"] - result[prefix + "simpl_params_sympy"]) / result[prefix + "orig_params"]
-    result["sympy_x_egg"] = (result[prefix + "orig_params_sympy"] - result[prefix + "simpl_params"]) / result[prefix + "orig_params_sympy"]
-    result["sympyegg_x_egg"] = (result[prefix + "simpl_params_sympy"] - result[prefix + "simpl_params"]) / result[prefix + "simpl_params_sympy"]
+    result["orig_x_egg"] = (result[prefix + "orig_params"] - result[prefix + "simpl_params"]) / result[
+        prefix + "orig_params"
+    ]
+    result["orig_x_sympy"] = (result[prefix + "orig_params"] - result[prefix + "orig_params_sympy"]) / result[
+        prefix + "orig_params"
+    ]
+    result["orig_x_sympyegg"] = (result[prefix + "orig_params"] - result[prefix + "simpl_params_sympy"]) / result[
+        prefix + "orig_params"
+    ]
+    result["sympy_x_egg"] = (result[prefix + "orig_params_sympy"] - result[prefix + "simpl_params"]) / result[
+        prefix + "orig_params_sympy"
+    ]
+    result["sympyegg_x_egg"] = (result[prefix + "simpl_params_sympy"] - result[prefix + "simpl_params"]) / result[
+        prefix + "simpl_params_sympy"
+    ]
     result["orig_rank"] = result["n_params"] - result["n_rank"]
     result["simpl_rank"] = result[prefix + "simpl_params"] - result["n_rank"]
     result["sympy_rank"] = result[prefix + "orig_params_sympy"] - result["n_rank"]
@@ -210,27 +217,19 @@ def comparison_table(frame: pd.DataFrame, *, implementation: str) -> pd.DataFram
                 percent = float("nan")
                 if not eligible.empty:
                     percent = 100.0 * (eligible["simpl_rank"] <= delta).sum() / len(eligible)
-                rows.append(
-                    {
-                        "implementation": implementation,
-                        "dataset": dataset,
-                        "algorithm": algorithm,
-                        "delta": f"Δ {'==' if delta == 0 else '<='} {delta}",
-                        "percent": percent,
-                    }
-                )
+                rows.append({
+                    "implementation": implementation,
+                    "dataset": dataset,
+                    "algorithm": algorithm,
+                    "delta": f"Δ {'==' if delta == 0 else '<='} {delta}",
+                    "percent": percent,
+                })
     return pd.DataFrame(rows)
 
 
 def table4_wide(frame: pd.DataFrame, index_columns: list[str]) -> pd.DataFrame:
-    zero = (
-        frame[frame["delta"] == "Δ == 0"][[*index_columns, "percent"]]
-        .rename(columns={"percent": "Δ == 0"})
-    )
-    one = (
-        frame[frame["delta"] == "Δ <= 1"][[*index_columns, "percent"]]
-        .rename(columns={"percent": "Δ <= 1"})
-    )
+    zero = frame[frame["delta"] == "Δ == 0"][[*index_columns, "percent"]].rename(columns={"percent": "Δ == 0"})
+    one = frame[frame["delta"] == "Δ <= 1"][[*index_columns, "percent"]].rename(columns={"percent": "Δ <= 1"})
     return zero.merge(one, on=index_columns, how="outer")
 
 
@@ -276,8 +275,6 @@ egglog = add_paper_metrics(_paper_egglog_frame(), prefix="")
 runtime_rows = _paper_runtime_frame()
 
 egglog_baseline = egglog[egglog["mode"] == "egglog-baseline"].copy()
-egglog_guard = egglog[egglog["mode"] == "egglog-height-guard"].copy()
-
 haskell_box_methods = {
     "EqSat": "orig_x_egg",
     "Sympy": "orig_x_sympy",
@@ -292,7 +289,6 @@ haskell_table4 = comparison_table(haskell, implementation="Haskell")
 egglog_table4 = pd.concat(
     [
         comparison_table(egglog_baseline, implementation="Egglog baseline"),
-        comparison_table(egglog_guard, implementation="Egglog height-guard"),
     ],
     ignore_index=True,
 )
@@ -312,42 +308,19 @@ baseline_compare = egglog_baseline.merge(
     on=["dataset", "raw_index", "algorithm"],
     suffixes=("_egglog", "_haskell"),
 )
-baseline_compare["orig_param_match"] = baseline_compare["simpl_params_egglog"] == baseline_compare["simpl_params_haskell"]
-baseline_compare["sympy_param_match"] = baseline_compare["simpl_params_sympy_egglog"] == baseline_compare["simpl_params_sympy_haskell"]
-
-guard_compare = egglog_guard.merge(
-    haskell[
-        [
-            "dataset",
-            "raw_index",
-            "algorithm",
-            "simpl_params",
-            "simpl_params_sympy",
-        ]
-    ],
-    on=["dataset", "raw_index", "algorithm"],
-    suffixes=("_egglog", "_haskell"),
+baseline_compare["orig_param_match"] = (
+    baseline_compare["simpl_params_egglog"] == baseline_compare["simpl_params_haskell"]
 )
-guard_compare["orig_abs_gap"] = (guard_compare["simpl_params_egglog"] - guard_compare["simpl_params_haskell"]).abs()
-baseline_compare["orig_abs_gap"] = (baseline_compare["simpl_params_egglog"] - baseline_compare["simpl_params_haskell"]).abs()
-comparison_gaps = baseline_compare[
-    ["dataset", "raw_index", "algorithm", "orig_abs_gap"]
-].merge(
-    guard_compare[["dataset", "raw_index", "algorithm", "orig_abs_gap"]],
-    on=["dataset", "raw_index", "algorithm"],
-    suffixes=("_baseline", "_guard"),
+baseline_compare["sympy_param_match"] = (
+    baseline_compare["simpl_params_sympy_egglog"] == baseline_compare["simpl_params_sympy_haskell"]
 )
-guard_closer = int((comparison_gaps["orig_abs_gap_guard"] < comparison_gaps["orig_abs_gap_baseline"]).sum())
-baseline_closer = int((comparison_gaps["orig_abs_gap_baseline"] < comparison_gaps["orig_abs_gap_guard"]).sum())
-same_gap = int((comparison_gaps["orig_abs_gap_baseline"] == comparison_gaps["orig_abs_gap_guard"]).sum())
 
-status_rows = pd.concat(
-    [
-        egglog_baseline.assign(status=egglog_baseline["orig_status"], mode_label="Egglog baseline")[["status", "mode_label"]],
-        egglog_guard.assign(status=egglog_guard["orig_status"], mode_label="Egglog height-guard")[["status", "mode_label"]],
-    ],
-    ignore_index=True,
-).rename(columns={"mode_label": "mode"})
+baseline_compare["orig_abs_gap"] = (
+    baseline_compare["simpl_params_egglog"] - baseline_compare["simpl_params_haskell"]
+).abs()
+status_rows = egglog_baseline.assign(status=egglog_baseline["orig_status"], mode_label="Egglog baseline")[
+    ["status", "mode_label"]
+].rename(columns={"mode_label": "mode"})
 # -
 
 # ## 1. Provenance
@@ -355,8 +328,8 @@ status_rows = pd.concat(
 # This notebook uses two archives supplied by the original author:
 # - `param-eq-haskell`, which contains the archived experiment tables and the
 #   original plotting notebook used to build the paper figures
-# - `pandoc-symreg`, which contains the older hegg-style equality engine and the
-#   matcher-height limit used to control matching growth
+# - `pandoc-symreg`, which contains the older hegg-style equality engine that
+#   informed the later follow-up experiments
 #
 # The normalized artifacts already include the paper cleanup from the original
 # notebook:
@@ -373,7 +346,6 @@ summary = [
     f"- Pagie rows after cleanup: `{int((haskell['dataset'] == 'pagie').sum())}`",
     f"- Kotanchek rows after cleanup: `{int((haskell['dataset'] == 'kotanchek').sum())}`",
     f"- Pagie runtime scatter rows: `{len(runtime_rows)}`",
-    f"- Height limit observed in the archived `pandoc-symreg` matcher: `{HEIGHT_LIMIT}`",
 ]
 display(Markdown("## Artifact Overview\n\n" + "\n".join(summary)))
 # -
@@ -461,17 +433,11 @@ display(
 # - the older expression language from the paper-era code
 # - the paper-era extraction cost model
 # - the `FixTree.hs` rewrite loop and backoff scheduler
-#
-# It also runs a second mode, `egglog-height-guard`, which approximates the
-# matcher-height pruning from the `pandoc-symreg` archive by guarding the
-# highest-growth rewrite patterns with an explicit expression-height analysis.
 
 # +
 baseline_summary = [
     f"- Egglog baseline original-input status counts: `{egglog_baseline['orig_status'].value_counts().to_dict()}`",
     f"- Egglog baseline sympy-input status counts: `{egglog_baseline['sympy_status'].value_counts().to_dict()}`",
-    f"- Egglog height-guard original-input status counts: `{egglog_guard['orig_status'].value_counts().to_dict()}`",
-    f"- Egglog height-guard sympy-input status counts: `{egglog_guard['sympy_status'].value_counts().to_dict()}`",
 ]
 display(Markdown("## Egglog Run Overview\n\n" + "\n".join(baseline_summary)))
 # -
@@ -486,7 +452,9 @@ display(Markdown("## Egglog Run Overview\n\n" + "\n".join(baseline_summary)))
 # +
 show_chart(
     boxplot_chart(
-        melt_methods(egglog_baseline[egglog_baseline["dataset"] == "pagie"], columns=haskell_box_methods, value_name="ratio"),
+        melt_methods(
+            egglog_baseline[egglog_baseline["dataset"] == "pagie"], columns=haskell_box_methods, value_name="ratio"
+        ),
         y="ratio",
         title="Egglog baseline analog of Figure 3 (Pagie)",
     )
@@ -496,7 +464,9 @@ show_chart(
 # +
 show_chart(
     boxplot_chart(
-        melt_methods(egglog_baseline[egglog_baseline["dataset"] == "pagie"], columns=comparison_methods, value_name="ratio"),
+        melt_methods(
+            egglog_baseline[egglog_baseline["dataset"] == "pagie"], columns=comparison_methods, value_name="ratio"
+        ),
         y="ratio",
         title="Egglog baseline analog of Figure 4 (Pagie)",
     )
@@ -506,7 +476,9 @@ show_chart(
 # +
 show_chart(
     boxplot_chart(
-        melt_methods(egglog_baseline[egglog_baseline["dataset"] == "kotanchek"], columns=haskell_box_methods, value_name="ratio"),
+        melt_methods(
+            egglog_baseline[egglog_baseline["dataset"] == "kotanchek"], columns=haskell_box_methods, value_name="ratio"
+        ),
         y="ratio",
         title="Egglog baseline analog of Figure 5 (Kotanchek)",
     )
@@ -516,7 +488,9 @@ show_chart(
 # +
 show_chart(
     boxplot_chart(
-        melt_methods(egglog_baseline[egglog_baseline["dataset"] == "kotanchek"], columns=comparison_methods, value_name="ratio"),
+        melt_methods(
+            egglog_baseline[egglog_baseline["dataset"] == "kotanchek"], columns=comparison_methods, value_name="ratio"
+        ),
         y="ratio",
         title="Egglog baseline analog of Figure 6 (Kotanchek)",
     )
@@ -545,22 +519,20 @@ display(table4_wide(egglog_table4, ["implementation", "dataset", "algorithm"]).r
 # -
 
 # +
-exact_match_rows = pd.DataFrame(
-    [
-        {
-            "mode": "Egglog baseline",
-            "input": "original expressions",
-            "exact_param_matches": int(baseline_compare["orig_param_match"].sum()),
-            "total_rows": len(baseline_compare),
-        },
-        {
-            "mode": "Egglog baseline",
-            "input": "sympy expressions",
-            "exact_param_matches": int(baseline_compare["sympy_param_match"].sum()),
-            "total_rows": len(baseline_compare),
-        },
-    ]
-)
+exact_match_rows = pd.DataFrame([
+    {
+        "mode": "Egglog baseline",
+        "input": "original expressions",
+        "exact_param_matches": int(baseline_compare["orig_param_match"].sum()),
+        "total_rows": len(baseline_compare),
+    },
+    {
+        "mode": "Egglog baseline",
+        "input": "sympy expressions",
+        "exact_param_matches": int(baseline_compare["sympy_param_match"].sum()),
+        "total_rows": len(baseline_compare),
+    },
+])
 display(Markdown("### Exact-match counts against archived Haskell parameter totals"))
 display(exact_match_rows)
 # -
@@ -582,47 +554,39 @@ show_chart(
 # -
 
 # +
-guard_summary = pd.DataFrame(
-    [
-        {
-            "mode": "Egglog baseline",
-            "orig_non_saturated_rows": int((egglog_baseline["orig_status"] != "saturated").sum()),
-            "sympy_non_saturated_rows": int((egglog_baseline["sympy_status"] != "saturated").sum()),
-            "median_orig_runtime_ms": float(egglog_baseline["orig_runtime_ms"].median()),
-            "median_sympy_runtime_ms": float(egglog_baseline["sympy_runtime_ms"].median()),
-        },
-        {
-            "mode": "Egglog height-guard",
-            "orig_non_saturated_rows": int((egglog_guard["orig_status"] != "saturated").sum()),
-            "sympy_non_saturated_rows": int((egglog_guard["sympy_status"] != "saturated").sum()),
-            "median_orig_runtime_ms": float(egglog_guard["orig_runtime_ms"].median()),
-            "median_sympy_runtime_ms": float(egglog_guard["sympy_runtime_ms"].median()),
-        },
-    ]
-)
-display(Markdown("### Baseline vs height-guard summary"))
-display(guard_summary.round(2))
+baseline_summary_frame = pd.DataFrame([
+    {
+        "mode": "Egglog baseline",
+        "orig_non_saturated_rows": int((egglog_baseline["orig_status"] != "saturated").sum()),
+        "sympy_non_saturated_rows": int((egglog_baseline["sympy_status"] != "saturated").sum()),
+        "median_orig_runtime_ms": float(egglog_baseline["orig_runtime_ms"].median()),
+        "median_sympy_runtime_ms": float(egglog_baseline["sympy_runtime_ms"].median()),
+    },
+])
+display(Markdown("### Egglog baseline summary"))
+display(baseline_summary_frame.round(2))
 # -
 
 # +
-show_chart(status_summary_chart(status_rows.groupby(["mode", "status"]).size().reset_index(name="count"), title="Egglog original-input statuses by mode"))
+show_chart(
+    status_summary_chart(
+        status_rows.groupby(["mode", "status"]).size().reset_index(name="count"),
+        title="Egglog original-input statuses by mode",
+    )
+)
 # -
 
 # +
 display(
     Markdown(
-        "\n".join(
-            [
-                "## Comparison Summary",
-                "",
-                f"- Egglog baseline exactly matches archived Haskell final parameter counts on `{int(baseline_compare['orig_param_match'].sum())}` of `{len(baseline_compare)}` original-expression rows.",
-                f"- Egglog baseline exactly matches archived Haskell `Sympy + EqSat` parameter counts on `{int(baseline_compare['sympy_param_match'].sum())}` of `{len(baseline_compare)}` sympy-expression rows.",
-                f"- Compared directly to the archived Haskell counts, the height-guard mode is closer on `{guard_closer}` rows, the plain baseline is closer on `{baseline_closer}` rows, and they tie on `{same_gap}` rows.",
-                f"- Egglog baseline original-input timeouts or failures occur on `{int((egglog_baseline['orig_status'] != 'saturated').sum())}` of `{len(egglog_baseline)}` paper rows.",
-                f"- Egglog baseline sympy-input timeouts or failures occur on `{int((egglog_baseline['sympy_status'] != 'saturated').sum())}` of `{len(egglog_baseline)}` paper rows.",
-                f"- Egglog height-guard original-input timeouts or failures occur on `{int((egglog_guard['orig_status'] != 'saturated').sum())}` of `{len(egglog_guard)}` paper rows.",
-            ]
-        )
+        "\n".join([
+            "## Comparison Summary",
+            "",
+            f"- Egglog baseline exactly matches archived Haskell final parameter counts on `{int(baseline_compare['orig_param_match'].sum())}` of `{len(baseline_compare)}` original-expression rows.",
+            f"- Egglog baseline exactly matches archived Haskell `Sympy + EqSat` parameter counts on `{int(baseline_compare['sympy_param_match'].sum())}` of `{len(baseline_compare)}` sympy-expression rows.",
+            f"- Egglog baseline original-input timeouts or failures occur on `{int((egglog_baseline['orig_status'] != 'saturated').sum())}` of `{len(egglog_baseline)}` paper rows.",
+            f"- Egglog baseline sympy-input timeouts or failures occur on `{int((egglog_baseline['sympy_status'] != 'saturated').sum())}` of `{len(egglog_baseline)}` paper rows.",
+        ])
     )
 )
 # -
@@ -635,9 +599,15 @@ display(
 # +
 baseline_failures = egglog_baseline[egglog_baseline["orig_status"] != "saturated"].copy()
 failure_by_algorithm = baseline_failures.groupby("algorithm").size().sort_values(ascending=False)
-sympy_success_delta = int((egglog_baseline["sympy_status"] == "saturated").sum() - (egglog_baseline["orig_status"] == "saturated").sum())
-source_node_sizes = haskell[["dataset", "raw_index", "algorithm", "orig_nodes"]].rename(columns={"orig_nodes": "source_orig_nodes"})
-baseline_failures_with_sizes = baseline_failures.merge(source_node_sizes, on=["dataset", "raw_index", "algorithm"], how="left")
+sympy_success_delta = int(
+    (egglog_baseline["sympy_status"] == "saturated").sum() - (egglog_baseline["orig_status"] == "saturated").sum()
+)
+source_node_sizes = haskell[["dataset", "raw_index", "algorithm", "orig_nodes"]].rename(
+    columns={"orig_nodes": "source_orig_nodes"}
+)
+baseline_failures_with_sizes = baseline_failures.merge(
+    source_node_sizes, on=["dataset", "raw_index", "algorithm"], how="left"
+)
 baseline_sat_with_sizes = egglog_baseline[egglog_baseline["orig_status"] == "saturated"].merge(
     source_node_sizes,
     on=["dataset", "raw_index", "algorithm"],
@@ -651,7 +621,7 @@ conclusion_lines = [
     f"- The archived Sympy inputs therefore remove `{sympy_success_delta}` baseline failures, which is consistent with the paper's observation that preprocessing can cut down the parameter-reduction problem before EqSat runs.",
     f"- Using the archived source-node counts for the same rows, the median original node count for Egglog baseline failures is `{baseline_timeout_median_nodes:.1f}`, versus `{baseline_sat_median_nodes:.1f}` for saturated rows; the runtime tail still tracks expression size.",
     f"- Failures are concentrated in `{', '.join(f'{alg} ({count})' for alg, count in failure_by_algorithm.items()) or 'none'}`, which points to specific expression families rather than a uniform issue across all algorithms.",
-    f"- The height-guard approximation does not yet dominate the plain baseline: it is closer to the archived Haskell parameter totals on `{guard_closer}` rows and worse on `{baseline_closer}` rows.",
+    f"- The baseline still has a median original-input gap-to-rank of `{float(egglog_baseline['simpl_rank'].median()):.2f}`, versus `{float(haskell['simpl_rank'].median()):.2f}` in the archived Haskell results.",
     "",
     "The archived rule sets suggest that A/C pressure is most likely to affect:",
     "- `+` and `*` associativity and commutativity rewrites, especially when chained through factorization-style rewrites and reciprocal rewrites.",
@@ -661,12 +631,12 @@ conclusion_lines = [
     "The best follow-up points for a multiset experiment are:",
     "- additive islands that currently rely on repeated binary reassociation before a factorization rewrite becomes visible",
     "- multiplicative islands that feed reciprocal and logarithm rewrites",
-    f"- the height-limited matcher paths now approximated with an explicit `{HEIGHT_LIMIT}`-level guard instead of a native matcher cutoff",
+    "- classes where constant-analysis guards still block paper rewrites that the Haskell implementation can fire after rebuild",
     "",
     "The expected outcomes to test next are:",
     "- a shorter runtime tail on the Pagie expressions that currently timeout in Egglog baseline",
     "- fewer rows where Egglog remains above the archived rank target after simplification",
-    "- less need for height-guard-style pruning once A/C-heavy binary structure is containerized directly",
+    "- less dependence on repeated binary reassociation once A/C-heavy structure is containerized directly",
 ]
 display(Markdown("## Conclusion\n\n" + "\n".join(conclusion_lines)))
 # -

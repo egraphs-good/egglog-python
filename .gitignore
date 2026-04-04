@@ -87,3 +87,4 @@ visualizer.tgz
 package
 .mypy_cache/
 *.json
+!python/tests/param_eq_hegg_haskell_golden.json

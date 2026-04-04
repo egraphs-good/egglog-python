@@ -35,18 +35,20 @@ impl FrozenEGraph {
         let mut functions = IndexMap::new();
         for fname in egraph.get_function_names() {
             let mut rows = Vec::new();
-            egraph.function_for_each(&fname, |row| {
-                let frozen_row = FrozenRow {
-                    subsumed: row.subsumed,
-                    inputs: row.vals[..row.vals.len() - 1]
-                        .iter()
-                        .cloned()
-                        .map(Value)
-                        .collect(),
-                    output: Value(*row.vals.last().unwrap()),
-                };
-                rows.push(frozen_row);
-            }).unwrap();
+            egraph
+                .function_for_each(&fname, |row| {
+                    let frozen_row = FrozenRow {
+                        subsumed: row.subsumed,
+                        inputs: row.vals[..row.vals.len() - 1]
+                            .iter()
+                            .cloned()
+                            .map(Value)
+                            .collect(),
+                        output: Value(*row.vals.last().unwrap()),
+                    };
+                    rows.push(frozen_row);
+                })
+                .unwrap();
             let func = egraph.get_function(&fname).unwrap();
             let frozen_function = FrozenFunction {
                 input_sorts: func

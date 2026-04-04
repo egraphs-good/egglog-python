@@ -1578,11 +1578,14 @@ class Schedule(DelayedDeclarations):
         """
         return Schedule(self.__egg_decls_thunk__, RepeatDecl(self.schedule, length))
 
-    def saturate(self) -> Schedule:
+    def saturate(self, *, stop_when_no_updates: bool = False) -> Schedule:
         """
         Run the schedule until the e-graph is saturated.
         """
-        return Schedule(self.__egg_decls_thunk__, SaturateDecl(self.schedule))
+        return Schedule(
+            self.__egg_decls_thunk__,
+            SaturateDecl(self.schedule, stop_when_no_updates=stop_when_no_updates),
+        )
 
     def __add__(self, other: Schedule) -> Schedule:
         """
@@ -2063,7 +2066,9 @@ def to_runtime_expr(expr: BaseExpr) -> RuntimeExpr:
     return expr
 
 
-def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | None = None) -> Schedule:
+def run(
+    ruleset: Ruleset | UnstableCombinedRuleset | None = None, *until: FactLike, scheduler: BackOff | None = None
+) -> Schedule:
     """
     Create a run configuration.
     """
@@ -2078,16 +2083,23 @@ def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | N
     )
 
 
-def back_off(match_limit: None | int = None, ban_length: None | int = None) -> BackOff:
+def back_off(
+    match_limit: None | int = None,
+    ban_length: None | int = None,
+    *,
+    egg_like: bool = False,
+) -> BackOff:
     """
     Create a backoff scheduler configuration.
 
     ```python
     schedule = run(analysis_ruleset).saturate() + run(ruleset, scheduler=back_off(match_limit=1000, ban_length=5)) * 10
     ```
-    This will run the `analysis_ruleset` until saturation, then run `ruleset` 10 times, using a backoff scheduler.
+    This will run the `analysis_ruleset` until saturation, then run `ruleset` 10 times,
+    using a backoff scheduler. Set `egg_like=True` to use the fresh-rematch variant
+    that is closer to `egg`/`hegg`; the default keeps egglog's backlog behavior.
     """
-    return BackOff(BackOffDecl(id=uuid4(), match_limit=match_limit, ban_length=ban_length))
+    return BackOff(BackOffDecl(id=uuid4(), match_limit=match_limit, ban_length=ban_length, egg_like=egg_like))
 
 
 @dataclass(frozen=True)

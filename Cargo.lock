@@ -360,7 +360,6 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "egglog"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=codex%2Ff64-unary-primitives#43b825f9be1798866614f58b5189538f00af8cd8"
 dependencies = [
  "csv",
  "dyn-clone",
@@ -387,7 +386,6 @@ dependencies = [
 [[package]]
 name = "egglog-add-primitive"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=codex%2Ff64-unary-primitives#43b825f9be1798866614f58b5189538f00af8cd8"
 dependencies = [
  "quote",
  "syn 2.0.107",
@@ -396,7 +394,6 @@ dependencies = [
 [[package]]
 name = "egglog-ast"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=codex%2Ff64-unary-primitives#43b825f9be1798866614f58b5189538f00af8cd8"
 dependencies = [
  "ordered-float",
 ]
@@ -404,7 +401,6 @@ dependencies = [
 [[package]]
 name = "egglog-bridge"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=codex%2Ff64-unary-primitives#43b825f9be1798866614f58b5189538f00af8cd8"
 dependencies = [
  "anyhow",
  "dyn-clone",
@@ -428,7 +424,6 @@ dependencies = [
 [[package]]
 name = "egglog-concurrency"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=codex%2Ff64-unary-primitives#43b825f9be1798866614f58b5189538f00af8cd8"
 dependencies = [
  "arc-swap",
  "egglog-numeric-id",
@@ -439,7 +434,6 @@ dependencies = [
 [[package]]
 name = "egglog-core-relations"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=codex%2Ff64-unary-primitives#43b825f9be1798866614f58b5189538f00af8cd8"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -469,7 +463,6 @@ dependencies = [
 [[package]]
 name = "egglog-experimental"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-experimental?branch=main#eae9570d78105c53497fccdf0ff7fb1937592036"
 dependencies = [
  "egglog",
  "egglog-ast",
@@ -482,7 +475,6 @@ dependencies = [
 [[package]]
 name = "egglog-numeric-id"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=codex%2Ff64-unary-primitives#43b825f9be1798866614f58b5189538f00af8cd8"
 dependencies = [
  "rayon",
 ]
@@ -490,7 +482,6 @@ dependencies = [
 [[package]]
 name = "egglog-reports"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=codex%2Ff64-unary-primitives#43b825f9be1798866614f58b5189538f00af8cd8"
 dependencies = [
  "clap",
  "hashbrown 0.16.0",
@@ -504,7 +495,6 @@ dependencies = [
 [[package]]
 name = "egglog-union-find"
 version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?branch=codex%2Ff64-unary-primitives#43b825f9be1798866614f58b5189538f00af8cd8"
 dependencies = [
  "crossbeam",
  "egglog-concurrency",

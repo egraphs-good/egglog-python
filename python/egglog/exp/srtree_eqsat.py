@@ -88,6 +88,16 @@ class Num(Expr, ruleset=language_rules):
     @method(cost=5)
     def __init__(self, value: f64Like) -> None: ...
 
+    __match_args__ = ("value",)
+
+    @method(preserve=True)  # type: ignore[prop-decorator]
+    @property
+    def value(self) -> float:
+        match get_callable_args(self, Num):
+            case (f64(value),):
+                return value
+        raise ExprValueError(self, "Num")
+
     @method(cost=1)
     @classmethod
     def var(cls, name: StringLike) -> Num: ...  # type: ignore[empty-body]
@@ -816,9 +826,9 @@ def eval_num(num: Num, env: Mapping[str, float], params: Sequence[float] | None 
         case _:
             pass
     match get_callable_args(num, Num.__sub__):
-        case (lhs, rhs):
-            left = eval_num(cast("Num", lhs), env, params)
-            right = eval_num(cast("Num", rhs), env, params)
+        case (Num(lhs), Num(rhs)):
+            left = eval_num(lhs, env, params)
+            right = eval_num(rhs, env, params)
             if left is None or right is None:
                 return None
             value = left - right

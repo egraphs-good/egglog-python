@@ -1,4 +1,4 @@
-# mypy: disable-error-code="empty-body,arg-type,return-value,call-overload,assignment"
+# mypy: disable-error-code="empty-body"
 
 """
 Helpers for reproducing the paper-era param-eq EqSat pipeline in egglog.
@@ -10,9 +10,31 @@ The archived sources expose two closely related Haskell implementations:
 - `pandoc-symreg/src/Data/SRTree/EqSat.hs`, which contains a later hegg-based
   implementation together with a depth-limited matcher in `Data.Equality`.
 
-This module mirrors the experiment harness as the baseline, then adds an
-approximate "height guard" mode that tries to mimic the matcher pruning from
-the second archive by constraining the highest-growth rewrite patterns.
+This module mirrors the paper experiment harness only.
+
+Design notes for future agents:
+
+- The paper-facing Haskell source is `param-eq-haskell/src/FixTree.hs`.
+- That Haskell implementation keeps analysis inside hegg rebuild; this Python
+  file has to approximate that with explicit Egglog rulesets plus a schedule.
+- Numeric literals stay as constants in the EqSat language, matching
+  `FixTree.toFixTree (Const x) = ConstF x`. The paper only turns constants into
+  fitted parameters later for reporting, via
+  `recountParams . replaceConstsWithParams` in `Main.hs`.
+- Mixed classes are intentional and paper-faithful. A class may contain both a
+  constant representative and a non-constant representative while its analysis
+  still says "not constant". Only classes whose analysis is definitively
+  constant get pruned to leaf nodes.
+
+Quick symbol map back to the Haskell file:
+
+- `joinA` -> `join_const_value`
+- `evalConstant` -> `const_seed_rules | const_propagation_rules`
+- `modifyA` -> `const_prune_rules`
+- `rewritesBasic` -> `_basic_rewrites`
+- `rewritesFun` -> `_fun_rewrites`
+- `rewriteTree` -> `_run_single_pass`
+- `simplifyE` -> `run_paper_pipeline`
 """
 
 from __future__ import annotations
@@ -24,14 +46,14 @@ import math
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Literal, TypeAlias, cast
+from typing import ClassVar, Literal, TypeAlias
 
 import egglog
 from egglog import *
 from egglog.deconstruct import get_callable_args
+from egglog.egraph import FactLike
 
 __all__ = [
-    "HEIGHT_LIMIT",
     "Mode",
     "Num",
     "NumLike",
@@ -44,24 +66,37 @@ __all__ = [
 ]
 
 
-HEIGHT_LIMIT = 8
 MAX_PASSES = 2
 BACKOFF_MATCH_LIMIT = 2500
 BACKOFF_BAN_LENGTH = 30
+CONST_MERGE_TOLERANCE = 1e-6
 
-Mode = Literal["egglog-baseline", "egglog-height-guard"]
+Mode = Literal["egglog-baseline"]
 
 
+# Language and ruleset declarations
 language_rules = ruleset(name="param_eq_hegg_lang")
-const_analysis_rules = ruleset(name="param_eq_hegg_const_analysis")
-height_analysis_rules = ruleset(name="param_eq_hegg_height")
-basic_rules = ruleset(name="param_eq_hegg_basic")
-basic_rules_height_guard = ruleset(name="param_eq_hegg_basic_height_guard")
+const_merge_rules = ruleset(name="param_eq_hegg_const_merge")
+const_seed_rules = ruleset(name="param_eq_hegg_const_seed")
+const_propagation_rules = ruleset(name="param_eq_hegg_const_propagation")
+const_prune_rules = ruleset(name="param_eq_hegg_const_prune")
+basic_add_comm_rules = ruleset(name="param_eq_hegg_basic_add_comm")
+basic_mul_comm_rules = ruleset(name="param_eq_hegg_basic_mul_comm")
+basic_add_assoc_rules = ruleset(name="param_eq_hegg_basic_add_assoc")
+basic_mul_assoc_rules = ruleset(name="param_eq_hegg_basic_mul_assoc")
+basic_mul_div_rules = ruleset(name="param_eq_hegg_basic_mul_div")
+basic_product_regroup_rules = ruleset(name="param_eq_hegg_basic_product_regroup")
+basic_other_rules = ruleset(name="param_eq_hegg_basic_other")
 fun_rules = ruleset(name="param_eq_hegg_fun")
-fun_rules_height_guard = ruleset(name="param_eq_hegg_fun_height_guard")
 
 
 class OptionalF64(Expr, ruleset=language_rules):
+    """
+    Explicit stand-in for Haskell's `Maybe Double` analysis domain.
+
+    `none` corresponds to `Nothing`, `some(x)` corresponds to `Just x`.
+    """
+
     none: ClassVar[OptionalF64]
 
     @classmethod
@@ -69,8 +104,26 @@ class OptionalF64(Expr, ruleset=language_rules):
 
 
 class Num(Expr, ruleset=language_rules):
+    """
+    Paper EqSat language subset.
+
+    This is deliberately closer to `FixTree`'s `SRTreeF` than to the newer
+    `srtree_eqsat` translation. The paper corpus only needs constants,
+    variables, arithmetic, and a small unary-function set.
+    """
+
     @method(cost=5)
     def __init__(self, value: f64Like) -> None: ...
+
+    __match_args__ = ("value",)
+
+    @method(preserve=True)  # type: ignore[prop-decorator]
+    @property
+    def value(self) -> float:
+        match get_callable_args(self, Num):
+            case (f64(value),):
+                return value
+        raise ExprValueError(self, "Num")
 
     @method(cost=1)
     @classmethod
@@ -114,23 +167,27 @@ class Num(Expr, ruleset=language_rules):
     def __rpow__(self, other: NumLike) -> Num: ...
 
 
-NumLike: TypeAlias = Num | StringLike | float | int
+NumLike: TypeAlias = Num | StringLike | f64Like | i64Like
 
-converter(float, Num, Num)
-converter(int, Num, lambda value: Num(float(value)))
+converter(f64, Num, Num)
+converter(i64, Num, lambda value: Num(f64.from_i64(value)))
 converter(String, Num, Num.var)
-converter(str, Num, Num.var)
+
+
+# Analysis domain and merge
+@function
+def join_const_value(old: OptionalF64, new: OptionalF64) -> OptionalF64: ...
 
 
 @function(
-    ruleset=const_analysis_rules,
-    merge=lambda old, new: old if old != OptionalF64.none else new,
+    merge=lambda old, new: join_const_value(old, new),
 )
 def const_value(num: Num) -> OptionalF64: ...
 
 
-@function(ruleset=height_analysis_rules, merge=lambda old, new: old.max(new))
-def expr_height(num: Num) -> i64: ...
+# Surface syntax helpers
+# Convenience wrappers keep the parser and rewrites close to the Haskell
+# surface syntax while still using the operator-overloaded Python DSL.
 
 
 def exp(x: NumLike) -> Num:
@@ -151,12 +208,12 @@ def neg(x: NumLike) -> Num:
 
 def square(x: NumLike) -> Num:
     value = convert(x, Num)
-    return value * value
+    return value**2
 
 
 def cube(x: NumLike) -> Num:
     value = convert(x, Num)
-    return value * value * value
+    return value**3
 
 
 def plog(x: NumLike) -> Num:
@@ -202,205 +259,611 @@ def _combine_binary(lhs: float, rhs: float, op: Literal["add", "sub", "mul", "di
     return value if math.isfinite(value) else None
 
 
-@const_analysis_rules.register
-def _const_analysis(
+# Analysis algebra
+@const_merge_rules.register
+def _const_merge(
+    merged: OptionalF64,
+    other: OptionalF64,
+    a: f64,
+    b: f64,
+) -> Iterable[RewriteOrRule]:
+    """
+    Mirror `FixTree.joinA` on `Maybe Double`.
+
+    The Haskell behavior is:
+    - `Nothing` dominates any merge
+    - `Just a` with `Just b` is allowed only when the constants agree up to the
+      tolerance used in the paper code
+    - differing constants are an invariant violation
+
+    This is the key reason mixed classes remain possible: if one representative
+    analyzes to `none` and another to `some(a)`, the class analysis stays
+    `none`.
+    """
+    yield rewrite(join_const_value(OptionalF64.none, other)).to(OptionalF64.none)
+    yield rewrite(join_const_value(other, OptionalF64.none)).to(OptionalF64.none)
+    yield rewrite(join_const_value(OptionalF64.some(a), OptionalF64.some(a))).to(OptionalF64.some(a))
+    yield rewrite(join_const_value(OptionalF64.some(a), OptionalF64.some(b))).to(
+        OptionalF64.some(a),
+        eq(a).to(b),
+    )
+    yield rewrite(join_const_value(OptionalF64.some(a), OptionalF64.some(b))).to(
+        OptionalF64.some(a),
+        abs(a - b) <= CONST_MERGE_TOLERANCE,
+    )
+    yield rule(
+        eq(merged).to(join_const_value(OptionalF64.some(a), OptionalF64.some(b))),
+        abs(a - b) > CONST_MERGE_TOLERANCE,
+    ).then(panic("Merged different constant values"))
+
+
+@const_seed_rules.register
+def _const_seed(
+    num: Num,
+    a: f64,
+    s: String,
+) -> Iterable[RewriteOrRule]:
+    """
+    Seed the explicit analysis with leaf facts.
+
+    This corresponds to the leaf cases in `FixTree.evalConstant`:
+    - `ConstF x -> Just x`
+    - `VarF _ -> Nothing`
+
+    The paper harness's benchmark expressions do not materialize `ParamF`
+    before EqSat, so there is no separate parameter leaf here.
+    """
+    yield rule(eq(num).to(Num(a))).then(set_(const_value(num)).to(OptionalF64.some(a)))
+    yield rule(eq(num).to(Num.var(s))).then(set_(const_value(num)).to(OptionalF64.none))
+
+
+@const_propagation_rules.register
+def _const_propagation(
     num: Num,
     x: Num,
     y: Num,
     a: f64,
     b: f64,
-    s: String,
 ) -> Iterable[RewriteOrRule]:
-    yield rule(eq(num).to(Num(a))).then(set_(const_value(num)).to(OptionalF64.some(a)))
-    yield rule(eq(num).to(Num.var(s))).then(set_(const_value(num)).to(OptionalF64.none))
+    """
+    Explicit approximation of `FixTree.makeA` + `evalConstant`.
+
+    In Haskell this logic is one algebra over `SRTreeF (Maybe Double)` and runs
+    as part of rebuild. In Egglog we spell it as rules:
+    - if any required child is `none`, the parent becomes `none`
+    - if all required children are `some`, compute the folded constant
+    - when a folded constant exists, union the class with `Num(constant)`
+    """
+    yield rule(eq(num).to(x + y), const_value(x) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
+    yield rule(eq(num).to(x + y), const_value(y) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
     yield rule(eq(num).to(x + y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
         set_(const_value(num)).to(OptionalF64.some(a + b)),
         union(num).with_(Num(a + b)),
     )
+    yield rule(eq(num).to(x - y), const_value(x) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
+    yield rule(eq(num).to(x - y), const_value(y) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
     yield rule(eq(num).to(x - y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
         set_(const_value(num)).to(OptionalF64.some(a - b)),
         union(num).with_(Num(a - b)),
     )
+    yield rule(eq(num).to(x * y), const_value(x) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
+    yield rule(eq(num).to(x * y), const_value(y) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
     yield rule(eq(num).to(x * y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b)).then(
         set_(const_value(num)).to(OptionalF64.some(a * b)),
         union(num).with_(Num(a * b)),
+    )
+    yield rule(eq(num).to(x / y), const_value(x) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
+    yield rule(eq(num).to(x / y), const_value(y) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
+    yield rule(
+        eq(num).to(x / y),
+        const_value(x) == OptionalF64.some(a),
+        const_value(y) == OptionalF64.some(b),
+        eq(b).to(f64(0.0)),
+    ).then(
+        set_(const_value(num)).to(OptionalF64.none),
     )
     yield rule(
         eq(num).to(x / y),
         const_value(x) == OptionalF64.some(a),
         const_value(y) == OptionalF64.some(b),
-        b != 0.0,
+        b > 0.0,
     ).then(
         set_(const_value(num)).to(OptionalF64.some(a / b)),
         union(num).with_(Num(a / b)),
     )
-    yield rule(eq(num).to(x**y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b), a >= 0.0).then(
+    yield rule(
+        eq(num).to(x / y),
+        const_value(x) == OptionalF64.some(a),
+        const_value(y) == OptionalF64.some(b),
+        b < 0.0,
+    ).then(
+        set_(const_value(num)).to(OptionalF64.some(a / b)),
+        union(num).with_(Num(a / b)),
+    )
+    yield rule(eq(num).to(x**y), const_value(x) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
+    yield rule(eq(num).to(x**y), const_value(y) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
+    yield rule(
+        eq(num).to(x**y),
+        const_value(x) == OptionalF64.some(a),
+        const_value(y) == OptionalF64.some(b),
+        a < 0.0,
+        eq(f64.from_i64(b.to_i64())).to(b),
+    ).then(
         set_(const_value(num)).to(OptionalF64.some(a**b)),
         union(num).with_(Num(a**b)),
     )
-    yield rule(eq(num).to(Num(-1.0) * x), const_value(x) == OptionalF64.some(a)).then(
-        set_(const_value(num)).to(OptionalF64.some(-a)),
-        union(num).with_(Num(-a)),
+    yield rule(
+        eq(num).to(x**y),
+        const_value(x) == OptionalF64.some(a),
+        const_value(y) == OptionalF64.some(b),
+        a < 0.0,
+        ne(f64.from_i64(b.to_i64())).to(b),
+    ).then(
+        set_(const_value(num)).to(OptionalF64.none),
     )
+    yield rule(
+        eq(num).to(x**y),
+        const_value(x) == OptionalF64.some(a),
+        const_value(y) == OptionalF64.some(b),
+        eq(a).to(f64(0.0)),
+        b < 0.0,
+    ).then(
+        set_(const_value(num)).to(OptionalF64.none),
+    )
+    yield rule(
+        eq(num).to(x**y),
+        const_value(x) == OptionalF64.some(a),
+        const_value(y) == OptionalF64.some(b),
+        eq(a).to(f64(0.0)),
+        b >= 0.0,
+    ).then(
+        set_(const_value(num)).to(OptionalF64.some(a**b)),
+        union(num).with_(Num(a**b)),
+    )
+    yield rule(
+        eq(num).to(x**y), const_value(x) == OptionalF64.some(a), const_value(y) == OptionalF64.some(b), a > 0.0
+    ).then(
+        set_(const_value(num)).to(OptionalF64.some(a**b)),
+        union(num).with_(Num(a**b)),
+    )
+    yield rule(eq(num).to(exp(x)), const_value(x) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
     yield rule(eq(num).to(exp(x)), const_value(x) == OptionalF64.some(a)).then(
         set_(const_value(num)).to(OptionalF64.some(a.exp())),
         union(num).with_(Num(a.exp())),
+    )
+    yield rule(eq(num).to(log(x)), const_value(x) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
+    yield rule(eq(num).to(log(x)), const_value(x) == OptionalF64.some(a), a <= 0.0).then(
+        set_(const_value(num)).to(OptionalF64.none),
     )
     yield rule(eq(num).to(log(x)), const_value(x) == OptionalF64.some(a), a > 0.0).then(
         set_(const_value(num)).to(OptionalF64.some(a.log())),
         union(num).with_(Num(a.log())),
     )
+    yield rule(eq(num).to(sqrt(x)), const_value(x) == OptionalF64.none).then(
+        set_(const_value(num)).to(OptionalF64.none)
+    )
+    yield rule(eq(num).to(sqrt(x)), const_value(x) == OptionalF64.some(a), a < 0.0).then(
+        set_(const_value(num)).to(OptionalF64.none),
+    )
     yield rule(eq(num).to(sqrt(x)), const_value(x) == OptionalF64.some(a), a >= 0.0).then(
         set_(const_value(num)).to(OptionalF64.some(a.sqrt())),
         union(num).with_(Num(a.sqrt())),
     )
+    yield rule(eq(num).to(abs(x)), const_value(x) == OptionalF64.none).then(set_(const_value(num)).to(OptionalF64.none))
     yield rule(eq(num).to(abs(x)), const_value(x) == OptionalF64.some(a)).then(
         set_(const_value(num)).to(OptionalF64.some(abs(a))),
         union(num).with_(Num(abs(a))),
     )
 
 
-@height_analysis_rules.register
-def _height_analysis(
+# Guard helpers
+GuardConditions: TypeAlias = tuple[FactLike, ...]
+GuardCases: TypeAlias = tuple[GuardConditions, ...]
+
+
+def is_const(num: Num, value: f64) -> GuardConditions:
+    return (const_value(num) == OptionalF64.some(value),)
+
+
+def is_not_const(num: Num) -> GuardConditions:
+    return (const_value(num) == OptionalF64.none,)
+
+
+def _is_nonnegative_const(num: Num, value: f64) -> GuardConditions:
+    return (*is_const(num, value), value >= 0.0)
+
+
+def _is_positive_const(num: Num, value: f64) -> GuardConditions:
+    return (*is_const(num, value), value > 0.0)
+
+
+def is_negative(num: Num, value: f64) -> GuardConditions:
+    return (*is_const(num, value), value < 0.0)
+
+
+def is_not_zero(num: Num, value: f64) -> GuardCases:
+    return (
+        is_not_const(num),
+        _is_positive_const(num, value),
+        is_negative(num, value),
+    )
+
+
+def is_not_neg_consts(left: Num, right: Num, left_value: f64, right_value: f64) -> GuardCases:
+    return (
+        _is_nonnegative_const(left, left_value),
+        _is_nonnegative_const(right, right_value),
+    )
+
+
+# `rewritesBasic`
+@const_prune_rules.register
+def _const_prune(
     num: Num,
     x: Num,
     y: Num,
     a: f64,
-    i: i64,
-    j: i64,
-    s: String,
 ) -> Iterable[RewriteOrRule]:
-    yield rule(eq(num).to(Num.var(s))).then(set_(expr_height(num)).to(i64(1)))
-    yield rule(eq(num).to(Num(a))).then(set_(expr_height(num)).to(i64(1)))
-    yield rule(eq(num).to(x + y), expr_height(x) == i, expr_height(y) == j).then(
-        set_(expr_height(num)).to(i.max(j) + 1)
+    """
+    Approximate `FixTree.modifyA`.
+
+    Haskell does two things once an e-class analysis becomes `Just d`:
+    - inserts the constant representative `ConstF d`
+    - prunes the class down to leaf e-nodes
+
+    Egglog cannot filter a class's node set directly, so we approximate that by
+    deleting composite representatives that are already known constant. This is
+    intentionally weaker than the hegg implementation, but it serves the same
+    purpose: keep truly constant classes from carrying around redundant call
+    nodes.
+    """
+    yield rule(eq(num).to(x + y), const_value(num) == OptionalF64.some(a)).then(
+        union(num).with_(Num(a)),
+        delete(x + y),
     )
-    yield rule(eq(num).to(x - y), expr_height(x) == i, expr_height(y) == j).then(
-        set_(expr_height(num)).to(i.max(j) + 1)
+    yield rule(eq(num).to(x - y), const_value(num) == OptionalF64.some(a)).then(
+        union(num).with_(Num(a)),
+        delete(x - y),
     )
-    yield rule(eq(num).to(x * y), expr_height(x) == i, expr_height(y) == j).then(
-        set_(expr_height(num)).to(i.max(j) + 1)
+    yield rule(eq(num).to(x * y), const_value(num) == OptionalF64.some(a)).then(
+        union(num).with_(Num(a)),
+        delete(x * y),
     )
-    yield rule(eq(num).to(x / y), expr_height(x) == i, expr_height(y) == j).then(
-        set_(expr_height(num)).to(i.max(j) + 1)
+    yield rule(eq(num).to(x / y), const_value(num) == OptionalF64.some(a)).then(
+        union(num).with_(Num(a)),
+        delete(x / y),
     )
-    yield rule(eq(num).to(x**y), expr_height(x) == i, expr_height(y) == j).then(
-        set_(expr_height(num)).to(i.max(j) + 1)
+    yield rule(eq(num).to(x**y), const_value(num) == OptionalF64.some(a)).then(
+        union(num).with_(Num(a)),
+        delete(x**y),
     )
-    yield rule(eq(num).to(Num(-1.0) * x), expr_height(x) == i).then(set_(expr_height(num)).to(i + 1))
-    yield rule(eq(num).to(exp(x)), expr_height(x) == i).then(set_(expr_height(num)).to(i + 1))
-    yield rule(eq(num).to(log(x)), expr_height(x) == i).then(set_(expr_height(num)).to(i + 1))
-    yield rule(eq(num).to(sqrt(x)), expr_height(x) == i).then(set_(expr_height(num)).to(i + 1))
-    yield rule(eq(num).to(abs(x)), expr_height(x) == i).then(set_(expr_height(num)).to(i + 1))
+    yield rule(eq(num).to(exp(x)), const_value(num) == OptionalF64.some(a)).then(
+        union(num).with_(Num(a)),
+        delete(exp(x)),
+    )
+    yield rule(eq(num).to(log(x)), const_value(num) == OptionalF64.some(a)).then(
+        union(num).with_(Num(a)),
+        delete(log(x)),
+    )
+    yield rule(eq(num).to(sqrt(x)), const_value(num) == OptionalF64.some(a)).then(
+        union(num).with_(Num(a)),
+        delete(sqrt(x)),
+    )
+    yield rule(eq(num).to(abs(x)), const_value(num) == OptionalF64.some(a)).then(
+        union(num).with_(Num(a)),
+        delete(abs(x)),
+    )
 
 
-def _guard(guarded: bool, *terms: Num) -> tuple[Unit, ...]:
-    if not guarded:
-        return ()
-    return tuple(expr_height(term) <= i64(HEIGHT_LIMIT) for term in terms)
+@basic_add_comm_rules.register
+def _basic_add_comm(x: Num, y: Num) -> Iterable[RewriteOrRule]:
+    yield rewrite(x + y).to(y + x)
 
 
-def _basic_rules_impl(guarded: bool, x: Num, y: Num, z: Num, a: Num, b: Num, c: Num, d: Num, e: f64) -> Iterable[RewriteOrRule]:
-    yield rewrite(x + y).to(y + x, *_guard(guarded, x, y))
-    yield rewrite(x * y).to(y * x, *_guard(guarded, x, y))
-    yield rewrite(x + (y + z)).to((x + y) + z, *_guard(guarded, x, y, z))
-    yield rewrite(x * (y * z)).to((x * y) * z, *_guard(guarded, x, y, z))
-    yield rewrite(x * (y / z)).to((x * y) / z, *_guard(guarded, x, y, z))
-    yield rewrite((x * y) / z).to(x * (y / z), *_guard(guarded, x, y, z))
-    yield rewrite((a * x) * (b * y)).to((a * b) * (x * y), const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, a, b, x, y))
-    yield rewrite(a * x + b).to(a * (x + (b / a)), const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, *_guard(guarded, a, b, x))
-    yield rewrite(a * x - b).to(a * (x - (b / a)), const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, *_guard(guarded, a, b, x))
-    yield rewrite(b - (a * x)).to(a * ((b / a) - x), const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, *_guard(guarded, a, b, x))
-    yield rewrite(a * x + (b * y)).to(a * (x + ((b / a) * y)), const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, a, b, x, y))
-    yield rewrite(a * x - (b * y)).to(a * (x - ((b / a) * y)), const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, a, b, x, y))
-    yield rewrite(a * x + (b / y)).to(a * (x + ((b / a) / y)), const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, a, b, x, y))
-    yield rewrite(a * x - (b / y)).to(a * (x - ((b / a) / y)), const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, a, b, x, y))
+@basic_mul_comm_rules.register
+def _basic_mul_comm(x: Num, y: Num) -> Iterable[RewriteOrRule]:
+    yield rewrite(x * y).to(y * x)
 
-    yield rewrite(a / (b * x)).to((a / b) / x, const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, *_guard(guarded, a, b, x))
-    yield rewrite(x / (b * y)).to((1.0 / b) * x / y, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, b, x, y))
-    yield rewrite((x / a) + b).to((x + (b * a)) / a, const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, *_guard(guarded, a, b, x))
-    yield rewrite((x / a) - b).to((x - (b * a)) / a, const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, *_guard(guarded, a, b, x))
-    yield rewrite(b - (x / a)).to(((b * a) - x) / a, const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, *_guard(guarded, a, b, x))
-    yield rewrite((x / a) + (b * y)).to((x + ((b * a) * y)) / a, const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, a, b, x, y))
-    yield rewrite((x / a) + (y / b)).to((x + (y / (b * a))) / a, const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, a, b, x, y))
-    yield rewrite((x / a) - (b * y)).to((x - ((b * a) * y)) / a, const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, a, b, x, y))
-    yield rewrite((x / a) - (b / y)).to((x - (y / (b * a))) / a, const_value(a) != OptionalF64.none, const_value(b) != OptionalF64.none, const_value(x) == OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, a, b, x, y))
+
+@basic_add_assoc_rules.register
+def _basic_add_assoc(x: Num, y: Num, z: Num) -> Iterable[RewriteOrRule]:
+    yield rewrite(x + (y + z)).to((x + y) + z)
+
+
+@basic_mul_assoc_rules.register
+def _basic_mul_assoc(x: Num, y: Num, z: Num) -> Iterable[RewriteOrRule]:
+    yield rewrite(x * (y * z)).to((x * y) * z)
+
+
+@basic_mul_div_rules.register
+def _basic_mul_div(x: Num, y: Num, z: Num) -> Iterable[RewriteOrRule]:
+    yield rewrite(x * (y / z)).to((x * y) / z)
+    yield rewrite((x * y) / z).to(x * (y / z))
+
+
+@basic_product_regroup_rules.register
+def _basic_product_regroup(a: Num, b: Num, x: Num, y: Num, ca: f64, cb: f64) -> Iterable[RewriteOrRule]:
+    yield rewrite((a * x) * (b * y)).to(
+        (a * b) * (x * y),
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+        *is_not_const(y),
+    )
+
+
+@basic_other_rules.register
+def _basic_rewrites(
+    x: Num,
+    y: Num,
+    z: Num,
+    a: Num,
+    b: Num,
+    c: Num,
+    d: Num,
+    ca: f64,
+    cb: f64,
+    cc: f64,
+    cd: f64,
+    e: f64,
+) -> Iterable[RewriteOrRule]:
+    """
+    Translation of `FixTree.rewritesBasic`.
+
+    Guard style differs from Haskell only where Egglog soundness requires it:
+    we avoid `!= none`-style class tests and instead match explicit
+    `const_value(...) == some(...)` or `== none` cases.
+    """
+    yield rewrite(a * x + b).to(
+        a * (x + (b / a)),
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+    )
+    yield rewrite(a * x - b).to(
+        a * (x - (b / a)),
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+    )
+    yield rewrite(b - (a * x)).to(
+        a * ((b / a) - x),
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+    )
+    yield rewrite(a * x + (b * y)).to(
+        a * (x + ((b / a) * y)),
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+        *is_not_const(y),
+    )
+    yield rewrite(a * x - (b * y)).to(
+        a * (x - ((b / a) * y)),
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+        *is_not_const(y),
+    )
+    yield rewrite(a * x + (b / y)).to(
+        a * (x + ((b / a) / y)),
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+        *is_not_const(y),
+    )
+    yield rewrite(a * x - (b / y)).to(
+        a * (x - ((b / a) / y)),
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+        *is_not_const(y),
+    )
+    yield rewrite(a / (b * x)).to(
+        (a / b) / x,
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+    )
+    yield rewrite(x / (b * y)).to(
+        (Num(1.0) / b) * x / y,
+        *is_const(b, cb),
+        *is_not_const(x),
+        *is_not_const(y),
+    )
+    yield rewrite((x / a) + b).to(
+        (x + (b * a)) / a,
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+    )
+    yield rewrite((x / a) - b).to(
+        (x - (b * a)) / a,
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+    )
+    yield rewrite(b - (x / a)).to(
+        ((b * a) - x) / a,
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+    )
+    yield rewrite((x / a) + (b * y)).to(
+        (x + ((b * a) * y)) / a,
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+        *is_not_const(y),
+    )
+    yield rewrite((x / a) + (y / b)).to(
+        (x + (y / (b * a))) / a,
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+        *is_not_const(y),
+    )
+    yield rewrite((x / a) - (b * y)).to(
+        (x - ((b * a) * y)) / a,
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+        *is_not_const(y),
+    )
+    yield rewrite((x / a) - (b / y)).to(
+        (x - (y / (b * a))) / a,
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_not_const(x),
+        *is_not_const(y),
+    )
     yield rewrite((b + (a * x)) / (c + (d * y))).to(
         (a / d) * (((b / a) + x) / ((c / d) + y)),
-        const_value(a) != OptionalF64.none,
-        const_value(b) != OptionalF64.none,
-        const_value(c) != OptionalF64.none,
-        const_value(d) != OptionalF64.none,
-        *_guard(guarded, a, b, c, d, x, y),
+        *is_const(a, ca),
+        *is_const(b, cb),
+        *is_const(c, cc),
+        *is_const(d, cd),
     )
     yield rewrite((b + x) / (c + (d * y))).to(
-        (1.0 / d) * ((b + x) / ((c / d) + y)),
-        const_value(b) != OptionalF64.none,
-        const_value(c) != OptionalF64.none,
-        const_value(d) != OptionalF64.none,
-        *_guard(guarded, b, c, d, x, y),
+        (Num(1.0) / d) * ((b + x) / ((c / d) + y)),
+        *is_const(b, cb),
+        *is_const(c, cc),
+        *is_const(d, cd),
     )
 
-    yield rewrite(0.0 + x).to(x)
-    yield rewrite(x - 0.0).to(x)
-    yield rewrite(1.0 * x).to(x)
-    yield rewrite(0.0 * x).to(0.0)
-    yield rewrite(0.0 / x).to(0.0)
-    yield rewrite(x - x).to(0.0)
-    yield rewrite(x / x).to(1.0, const_value(x) == OptionalF64.none, *_guard(guarded, x))
-    yield rewrite(x / x).to(1.0, const_value(x) == OptionalF64.some(e), e > 0.0, *_guard(guarded, x))
-    yield rewrite(x / x).to(1.0, const_value(x) == OptionalF64.some(e), e < 0.0, *_guard(guarded, x))
-    yield rewrite((x * y) + (x * z)).to(x * (y + z), *_guard(guarded, x, y, z))
-    yield rewrite(x - (y + z)).to((x - y) - z, *_guard(guarded, x, y, z))
-    yield rewrite(x - (y - z)).to((x - y) + z, *_guard(guarded, x, y, z))
-    yield rewrite(Num(-1.0) * (x + y)).to((Num(-1.0) * x) - y, *_guard(guarded, x, y))
-    yield rewrite(x - a).to(x + (Num(-1.0) * a), const_value(a) != OptionalF64.none, const_value(x) == OptionalF64.none, *_guard(guarded, x, a))
-    yield rewrite(x - (a * y)).to(x + ((Num(-1.0) * a) * y), const_value(a) != OptionalF64.none, const_value(y) == OptionalF64.none, *_guard(guarded, x, a, y))
-    yield rewrite((1.0 / x) * (1.0 / y)).to(1.0 / (x * y), *_guard(guarded, x, y))
-    yield rewrite(x * (1.0 / x)).to(1.0, const_value(x) == OptionalF64.none, *_guard(guarded, x))
-    yield rewrite(x * (1.0 / x)).to(1.0, const_value(x) == OptionalF64.some(e), e > 0.0, *_guard(guarded, x))
-    yield rewrite(x * (1.0 / x)).to(1.0, const_value(x) == OptionalF64.some(e), e < 0.0, *_guard(guarded, x))
-    yield rewrite(x - ((-1.0) * y)).to(x + y, const_value(y) == OptionalF64.none, *_guard(guarded, x, y))
-    yield rewrite(x + (Num(-1.0) * y)).to(x - y, const_value(y) == OptionalF64.none, *_guard(guarded, x, y))
-    yield rewrite(0.0 - x).to(Num(-1.0) * x, const_value(x) == OptionalF64.none, *_guard(guarded, x))
+    yield rewrite(Num(0.0) + x).to(x)
+    yield rewrite(x - Num(0.0)).to(x)
+    yield rewrite(Num(1.0) * x).to(x)
+    yield rewrite(Num(0.0) * x).to(Num(0.0))
+    yield rewrite(Num(0.0) / x).to(Num(0.0))
+    yield rewrite(x - x).to(Num(0.0))
+    for guard in is_not_zero(x, ca):
+        yield rewrite(x / x).to(Num(1.0), *guard)
+    yield rewrite((x * y) + (x * z)).to(x * (y + z))
+    yield rewrite(x - (y + z)).to((x - y) - z)
+    yield rewrite(x - (y - z)).to((x - y) + z)
+    yield rewrite(Num(-1.0) * (x + y)).to((Num(-1.0) * x) - y)
+    yield rewrite(x - a).to(
+        x + (Num(-1.0) * a),
+        *is_const(a, ca),
+        *is_not_const(x),
+    )
+    yield rewrite(x - (a * y)).to(
+        x + ((Num(-1.0) * a) * y),
+        *is_const(a, ca),
+        *is_not_const(y),
+    )
+    yield rewrite((Num(1.0) / x) * (Num(1.0) / y)).to(Num(1.0) / (x * y))
+    for guard in is_not_zero(x, ca):
+        yield rewrite(x * (Num(1.0) / x)).to(Num(1.0), *guard)
+    yield rewrite(x - (Num(-1.0) * y)).to(x + y, *is_not_const(y))
+    yield rewrite(x + (Num(-1.0) * y)).to(x - y, *is_not_const(y))
+    yield rewrite(Num(0.0) - x).to(Num(-1.0) * x, *is_not_const(x))
 
 
-def _fun_rules_impl(guarded: bool, x: Num, y: Num, a: Num, b: Num, c: f64, d: f64) -> Iterable[RewriteOrRule]:
-    yield rewrite(log(x * y)).to(log(x) + log(y), const_value(x) == OptionalF64.some(c), c >= 0.0, c != 0.0, *_guard(guarded, x, y))
-    yield rewrite(log(x * y)).to(log(x) + log(y), const_value(y) == OptionalF64.some(d), d >= 0.0, d != 0.0, *_guard(guarded, x, y))
-    yield rewrite(log(x / y)).to(log(x) - log(y), const_value(x) == OptionalF64.some(c), c >= 0.0, c != 0.0, *_guard(guarded, x, y))
-    yield rewrite(log(x / y)).to(log(x) - log(y), const_value(y) == OptionalF64.some(d), d >= 0.0, d != 0.0, *_guard(guarded, x, y))
-    yield rewrite(log(x**y)).to(y * log(x), const_value(x) == OptionalF64.some(c), c >= 0.0, c != 0.0, *_guard(guarded, x, y))
-    yield rewrite(log(1.0)).to(0.0)
-    yield rewrite(log(sqrt(x))).to(0.5 * log(x), const_value(x) == OptionalF64.none, *_guard(guarded, x))
-    yield rewrite(log(exp(x))).to(x, const_value(x) == OptionalF64.none, *_guard(guarded, x))
-    yield rewrite(exp(log(x))).to(x, const_value(x) == OptionalF64.none, *_guard(guarded, x))
-    yield rewrite(x ** 0.5).to(sqrt(x), *_guard(guarded, x))
-    yield rewrite(sqrt(a * x)).to(sqrt(a) * sqrt(x), const_value(a) == OptionalF64.some(c), c >= 0.0, *_guard(guarded, a, x))
-    yield rewrite(sqrt(a * (x - y))).to(sqrt(Num(-1.0) * a) * sqrt(y - x), const_value(a) == OptionalF64.some(c), c < 0.0, *_guard(guarded, a, x, y))
-    yield rewrite(sqrt(a * (b + y))).to(sqrt(Num(-1.0) * a) * sqrt(b - y), const_value(a) == OptionalF64.some(c), c < 0.0, const_value(b) == OptionalF64.some(d), d < 0.0, *_guard(guarded, a, b, y))
-    yield rewrite(sqrt(a / x)).to(sqrt(a) / sqrt(x), const_value(a) == OptionalF64.some(c), c >= 0.0, *_guard(guarded, a, x))
-    yield rewrite(abs(x * y)).to(abs(x) * abs(y), *_guard(guarded, x, y))
-
-
-@basic_rules.register
-def _basic_rewrites(x: Num, y: Num, z: Num, a: Num, b: Num, c: Num, d: Num, e: f64) -> Iterable[RewriteOrRule]:
-    yield from _basic_rules_impl(False, x, y, z, a, b, c, d, e)
-
-
-@basic_rules_height_guard.register
-def _basic_rewrites_height_guard(x: Num, y: Num, z: Num, a: Num, b: Num, c: Num, d: Num, e: f64) -> Iterable[RewriteOrRule]:
-    yield from _basic_rules_impl(True, x, y, z, a, b, c, d, e)
-
-
+# `rewritesFun`
 @fun_rules.register
 def _fun_rewrites(x: Num, y: Num, a: Num, b: Num, c: f64, d: f64) -> Iterable[RewriteOrRule]:
-    yield from _fun_rules_impl(False, x, y, a, b, c, d)
+    """
+    Translation of `FixTree.rewritesFun`.
 
-
-@fun_rules_height_guard.register
-def _fun_rewrites_height_guard(x: Num, y: Num, a: Num, b: Num, c: f64, d: f64) -> Iterable[RewriteOrRule]:
-    yield from _fun_rules_impl(True, x, y, a, b, c, d)
+    The unary function subset here is the subset exercised by the archived
+    paper corpora.
+    """
+    yield rewrite(log(x * y)).to(
+        log(x) + log(y),
+        const_value(x) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(y) == OptionalF64.none,
+    )
+    yield rewrite(log(x * y)).to(
+        log(x) + log(y),
+        const_value(x) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(y) == OptionalF64.some(d),
+        d > 0.0,
+    )
+    yield rewrite(log(x * y)).to(
+        log(x) + log(y),
+        const_value(y) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(x) == OptionalF64.none,
+    )
+    yield rewrite(log(x * y)).to(
+        log(x) + log(y),
+        const_value(y) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(x) == OptionalF64.some(d),
+        d > 0.0,
+    )
+    yield rewrite(log(x * y)).to(
+        log(x) + log(y),
+        const_value(x) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(y) == OptionalF64.some(d),
+        d < 0.0,
+    )
+    yield rewrite(log(x * y)).to(
+        log(x) + log(y),
+        const_value(y) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(x) == OptionalF64.some(d),
+        d < 0.0,
+    )
+    yield rewrite(log(x / y)).to(
+        log(x) - log(y),
+        const_value(x) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(y) == OptionalF64.none,
+    )
+    yield rewrite(log(x / y)).to(
+        log(x) - log(y),
+        const_value(x) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(y) == OptionalF64.some(d),
+        d > 0.0,
+    )
+    yield rewrite(log(x / y)).to(
+        log(x) - log(y),
+        const_value(y) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(x) == OptionalF64.none,
+    )
+    yield rewrite(log(x / y)).to(
+        log(x) - log(y),
+        const_value(y) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(x) == OptionalF64.some(d),
+        d > 0.0,
+    )
+    yield rewrite(log(x / y)).to(
+        log(x) - log(y),
+        const_value(x) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(y) == OptionalF64.some(d),
+        d < 0.0,
+    )
+    yield rewrite(log(x / y)).to(
+        log(x) - log(y),
+        const_value(y) == OptionalF64.some(c),
+        c > 0.0,
+        const_value(x) == OptionalF64.some(d),
+        d < 0.0,
+    )
+    yield rewrite(log(x**y)).to(y * log(x), const_value(x) == OptionalF64.some(c), c > 0.0)
+    yield rewrite(log(Num(1.0))).to(Num(0.0))
+    yield rewrite(log(sqrt(x))).to(Num(0.5) * log(x), *is_not_const(x))
+    yield rewrite(log(exp(x))).to(x, *is_not_const(x))
+    yield rewrite(exp(log(x))).to(x, *is_not_const(x))
+    yield rewrite(x ** Num(0.5)).to(sqrt(x))
+    for guard in is_not_neg_consts(a, x, c, d):
+        yield rewrite(sqrt(a * x)).to(sqrt(a) * sqrt(x), *guard)
+    yield rewrite(sqrt(a * (x - y))).to(sqrt(Num(-1.0) * a) * sqrt(y - x), *is_negative(a, c))
+    yield rewrite(sqrt(a * (b + y))).to(sqrt(Num(-1.0) * a) * sqrt(b - y), *is_negative(a, c), *is_negative(b, d))
+    for guard in is_not_neg_consts(a, x, c, d):
+        yield rewrite(sqrt(a / x)).to(sqrt(a) / sqrt(x), *guard)
+    yield rewrite(abs(x * y)).to(abs(x) * abs(y))
 
 
 @dataclass(frozen=True)
@@ -481,63 +944,71 @@ def _from_ast(node: ast.AST) -> Num:  # noqa: C901, PLR0911, PLR0912
 
 
 def parse_expression(source: str) -> Num:
+    """
+    Parse the archived paper expression syntax into the Egglog DSL.
+
+    The input strings come from the normalized copies of the Haskell benchmark
+    corpora. Numeric literals are kept as constants here; the paper's
+    parameter-count reporting projects them to fitted parameters later.
+    """
     return _from_ast(ast.parse(_normalize_expression(source), mode="eval"))
 
 
 def render_num(num: Num) -> str:  # noqa: C901, PLR0911, PLR0912
+    """Render a `Num` back into a Python-like surface syntax for reports."""
     match get_callable_args(num, Num):
-        case (value_expr,):
-            return _render_float(float(cast("f64", value_expr).value))
+        case (value_expr,) if isinstance(value_expr, f64):
+            return _render_float(float(value_expr.value))
         case _:
             pass
     match get_callable_args(num, Num.var):
-        case (name_expr,):
-            return cast("String", name_expr).value
+        case (name_expr,) if isinstance(name_expr, String):
+            return name_expr.value
         case _:
             pass
     match get_callable_args(num, Num.__add__):
-        case (lhs, rhs):
-            return f"({render_num(cast('Num', lhs))} + {render_num(cast('Num', rhs))})"
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return f"({render_num(lhs)} + {render_num(rhs)})"
         case _:
             pass
     match get_callable_args(num, Num.__sub__):
-        case (lhs, rhs):
-            return f"({render_num(cast('Num', lhs))} - {render_num(cast('Num', rhs))})"
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return f"({render_num(lhs)} - {render_num(rhs)})"
         case _:
             pass
     match get_callable_args(num, Num.__mul__):
-        case (lhs, rhs):
-            return f"({render_num(cast('Num', lhs))} * {render_num(cast('Num', rhs))})"
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return f"({render_num(lhs)} * {render_num(rhs)})"
         case _:
             pass
     match get_callable_args(num, Num.__truediv__):
-        case (lhs, rhs):
-            return f"({render_num(cast('Num', lhs))} / {render_num(cast('Num', rhs))})"
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return f"({render_num(lhs)} / {render_num(rhs)})"
         case _:
             pass
     match get_callable_args(num, Num.__pow__):
-        case (lhs, rhs):
-            return f"({render_num(cast('Num', lhs))} ** {render_num(cast('Num', rhs))})"
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return f"({render_num(lhs)} ** {render_num(rhs)})"
         case _:
             pass
     match get_callable_args(num, Num.exp):
-        case (inner,):
-            return f"exp({render_num(cast('Num', inner))})"
+        case (inner,) if isinstance(inner, Num):
+            return f"exp({render_num(inner)})"
         case _:
             pass
     match get_callable_args(num, Num.log):
-        case (inner,):
-            return f"log({render_num(cast('Num', inner))})"
+        case (inner,) if isinstance(inner, Num):
+            return f"log({render_num(inner)})"
         case _:
             pass
     match get_callable_args(num, Num.sqrt):
-        case (inner,):
-            return f"sqrt({render_num(cast('Num', inner))})"
+        case (inner,) if isinstance(inner, Num):
+            return f"sqrt({render_num(inner)})"
         case _:
             pass
     match get_callable_args(num, Num.__abs__):
-        case (inner,):
-            return f"abs({render_num(cast('Num', inner))})"
+        case (inner,) if isinstance(inner, Num):
+            return f"abs({render_num(inner)})"
         case _:
             pass
     msg = f"Unsupported Num node for rendering: {num!r}"
@@ -545,91 +1016,98 @@ def render_num(num: Num) -> str:  # noqa: C901, PLR0911, PLR0912
 
 
 def _eval_num(num: Num, env: Mapping[str, float]) -> float | None:  # noqa: C901, PLR0911, PLR0912
+    """
+    Structural evaluator for notebook/debugging use.
+
+    This is not part of the EqSat algorithm. It is only used for artifact
+    checks and mirrors the real-domain restrictions used elsewhere in the
+    replication notebooks.
+    """
     match get_callable_args(num, Num):
-        case (value_expr,):
-            value = float(cast("f64", value_expr).value)
+        case (value_expr,) if isinstance(value_expr, f64):
+            value = float(value_expr.value)
             return value if math.isfinite(value) else None
         case _:
             pass
     match get_callable_args(num, Num.var):
-        case (name_expr,):
-            value = env.get(cast("String", name_expr).value)
-            if value is None or not math.isfinite(value):
+        case (name_expr,) if isinstance(name_expr, String):
+            env_value = env.get(name_expr.value)
+            if env_value is None or not math.isfinite(env_value):
                 return None
-            return float(value)
+            return float(env_value)
         case _:
             pass
     match get_callable_args(num, Num.__add__):
-        case (lhs, rhs):
-            left = _eval_num(cast("Num", lhs), env)
-            right = _eval_num(cast("Num", rhs), env)
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            left = _eval_num(lhs, env)
+            right = _eval_num(rhs, env)
             return None if left is None or right is None else _combine_binary(left, right, "add")
         case _:
             pass
     match get_callable_args(num, Num.__sub__):
-        case (lhs, rhs):
-            left = _eval_num(cast("Num", lhs), env)
-            right = _eval_num(cast("Num", rhs), env)
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            left = _eval_num(lhs, env)
+            right = _eval_num(rhs, env)
             return None if left is None or right is None else _combine_binary(left, right, "sub")
         case _:
             pass
     match get_callable_args(num, Num.__mul__):
-        case (lhs, rhs):
-            left = _eval_num(cast("Num", lhs), env)
-            right = _eval_num(cast("Num", rhs), env)
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            left = _eval_num(lhs, env)
+            right = _eval_num(rhs, env)
             return None if left is None or right is None else _combine_binary(left, right, "mul")
         case _:
             pass
     match get_callable_args(num, Num.__truediv__):
-        case (lhs, rhs):
-            left = _eval_num(cast("Num", lhs), env)
-            right = _eval_num(cast("Num", rhs), env)
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            left = _eval_num(lhs, env)
+            right = _eval_num(rhs, env)
             return None if left is None or right is None else _combine_binary(left, right, "div")
         case _:
             pass
     match get_callable_args(num, Num.__pow__):
-        case (lhs, rhs):
-            left = _eval_num(cast("Num", lhs), env)
-            right = _eval_num(cast("Num", rhs), env)
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            left = _eval_num(lhs, env)
+            right = _eval_num(rhs, env)
             return None if left is None or right is None else _combine_binary(left, right, "pow")
         case _:
             pass
     match get_callable_args(num, Num.exp):
-        case (inner,):
-            value = _eval_num(cast("Num", inner), env)
-            if value is None:
+        case (inner,) if isinstance(inner, Num):
+            inner_value = _eval_num(inner, env)
+            if inner_value is None:
                 return None
             try:
-                result = math.exp(value)
+                result = math.exp(inner_value)
             except OverflowError:
                 return None
             return result if math.isfinite(result) else None
         case _:
             pass
     match get_callable_args(num, Num.log):
-        case (inner,):
-            value = _eval_num(cast("Num", inner), env)
-            if value is None or value <= 0.0:
+        case (inner,) if isinstance(inner, Num):
+            inner_value = _eval_num(inner, env)
+            if inner_value is None or inner_value <= 0.0:
                 return None
-            result = math.log(value)
+            result = math.log(inner_value)
             return result if math.isfinite(result) else None
         case _:
             pass
     match get_callable_args(num, Num.sqrt):
-        case (inner,):
-            value = _eval_num(cast("Num", inner), env)
-            if value is None or value < 0.0:
+        case (inner,) if isinstance(inner, Num):
+            inner_value = _eval_num(inner, env)
+            if inner_value is None or inner_value < 0.0:
                 return None
-            result = math.sqrt(value)
+            result = math.sqrt(inner_value)
             return result if math.isfinite(result) else None
         case _:
             pass
     match get_callable_args(num, Num.__abs__):
-        case (inner,):
-            value = _eval_num(cast("Num", inner), env)
-            if value is None:
+        case (inner,) if isinstance(inner, Num):
+            inner_value = _eval_num(inner, env)
+            if inner_value is None:
                 return None
-            result = abs(value)
+            result = abs(inner_value)
             return result if math.isfinite(result) else None
         case _:
             pass
@@ -638,6 +1116,18 @@ def _eval_num(num: Num, env: Mapping[str, float]) -> float | None:  # noqa: C901
 
 
 def count_params(num: Num) -> int:  # noqa: C901, PLR0911, PLR0912
+    """
+    Mirror the paper harness's parameter counting:
+
+        recountParams . replaceConstsWithParams
+
+    from ``param-eq-haskell/src/Main.hs``.
+
+    That means numeric leaves are counted as parameters for reporting, but the
+    EqSat language itself still sees them as constants. Power exponents follow
+    the Haskell projection too: constant exponents are not counted as
+    parameters, but non-constant exponent subexpressions are still traversed.
+    """
     match get_callable_args(num, Num):
         case (_value_expr,):
             return 1
@@ -649,48 +1139,52 @@ def count_params(num: Num) -> int:  # noqa: C901, PLR0911, PLR0912
         case _:
             pass
     match get_callable_args(num, Num.__add__):
-        case (lhs, rhs):
-            return count_params(cast("Num", lhs)) + count_params(cast("Num", rhs))
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return count_params(lhs) + count_params(rhs)
         case _:
             pass
     match get_callable_args(num, Num.__sub__):
-        case (lhs, rhs):
-            return count_params(cast("Num", lhs)) + count_params(cast("Num", rhs))
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return count_params(lhs) + count_params(rhs)
         case _:
             pass
     match get_callable_args(num, Num.__mul__):
-        case (lhs, rhs):
-            return count_params(cast("Num", lhs)) + count_params(cast("Num", rhs))
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return count_params(lhs) + count_params(rhs)
         case _:
             pass
     match get_callable_args(num, Num.__truediv__):
-        case (lhs, rhs):
-            return count_params(cast("Num", lhs)) + count_params(cast("Num", rhs))
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return count_params(lhs) + count_params(rhs)
         case _:
             pass
     match get_callable_args(num, Num.__pow__):
-        case (lhs, rhs):
-            return count_params(cast("Num", lhs))
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            match get_callable_args(rhs, Num):
+                case (_value_expr,):
+                    return count_params(lhs)
+                case _:
+                    return count_params(lhs) + count_params(rhs)
         case _:
             pass
     match get_callable_args(num, Num.exp):
-        case (inner,):
-            return count_params(cast("Num", inner))
+        case (inner,) if isinstance(inner, Num):
+            return count_params(inner)
         case _:
             pass
     match get_callable_args(num, Num.log):
-        case (inner,):
-            return count_params(cast("Num", inner))
+        case (inner,) if isinstance(inner, Num):
+            return count_params(inner)
         case _:
             pass
     match get_callable_args(num, Num.sqrt):
-        case (inner,):
-            return count_params(cast("Num", inner))
+        case (inner,) if isinstance(inner, Num):
+            return count_params(inner)
         case _:
             pass
     match get_callable_args(num, Num.__abs__):
-        case (inner,):
-            return count_params(cast("Num", inner))
+        case (inner,) if isinstance(inner, Num):
+            return count_params(inner)
         case _:
             pass
     msg = f"Unsupported Num node while counting parameters: {num!r}"
@@ -698,6 +1192,7 @@ def count_params(num: Num) -> int:  # noqa: C901, PLR0911, PLR0912
 
 
 def count_nodes(num: Num) -> int:  # noqa: C901, PLR0911, PLR0912
+    """Count AST nodes in the rendered tree, matching the paper tables' style."""
     match get_callable_args(num, Num):
         case (_value_expr,):
             return 1
@@ -709,48 +1204,48 @@ def count_nodes(num: Num) -> int:  # noqa: C901, PLR0911, PLR0912
         case _:
             pass
     match get_callable_args(num, Num.__add__):
-        case (lhs, rhs):
-            return 1 + count_nodes(cast("Num", lhs)) + count_nodes(cast("Num", rhs))
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return 1 + count_nodes(lhs) + count_nodes(rhs)
         case _:
             pass
     match get_callable_args(num, Num.__sub__):
-        case (lhs, rhs):
-            return 1 + count_nodes(cast("Num", lhs)) + count_nodes(cast("Num", rhs))
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return 1 + count_nodes(lhs) + count_nodes(rhs)
         case _:
             pass
     match get_callable_args(num, Num.__mul__):
-        case (lhs, rhs):
-            return 1 + count_nodes(cast("Num", lhs)) + count_nodes(cast("Num", rhs))
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return 1 + count_nodes(lhs) + count_nodes(rhs)
         case _:
             pass
     match get_callable_args(num, Num.__truediv__):
-        case (lhs, rhs):
-            return 1 + count_nodes(cast("Num", lhs)) + count_nodes(cast("Num", rhs))
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return 1 + count_nodes(lhs) + count_nodes(rhs)
         case _:
             pass
     match get_callable_args(num, Num.__pow__):
-        case (lhs, rhs):
-            return 1 + count_nodes(cast("Num", lhs)) + count_nodes(cast("Num", rhs))
+        case (lhs, rhs) if isinstance(lhs, Num) and isinstance(rhs, Num):
+            return 1 + count_nodes(lhs) + count_nodes(rhs)
         case _:
             pass
     match get_callable_args(num, Num.exp):
-        case (inner,):
-            return 1 + count_nodes(cast("Num", inner))
+        case (inner,) if isinstance(inner, Num):
+            return 1 + count_nodes(inner)
         case _:
             pass
     match get_callable_args(num, Num.log):
-        case (inner,):
-            return 1 + count_nodes(cast("Num", inner))
+        case (inner,) if isinstance(inner, Num):
+            return 1 + count_nodes(inner)
         case _:
             pass
     match get_callable_args(num, Num.sqrt):
-        case (inner,):
-            return 1 + count_nodes(cast("Num", inner))
+        case (inner,) if isinstance(inner, Num):
+            return 1 + count_nodes(inner)
         case _:
             pass
     match get_callable_args(num, Num.__abs__):
-        case (inner,):
-            return 1 + count_nodes(cast("Num", inner))
+        case (inner,) if isinstance(inner, Num):
+            return 1 + count_nodes(inner)
         case _:
             pass
     msg = f"Unsupported Num node while counting nodes: {num!r}"
@@ -762,18 +1257,60 @@ def _serialized_counts(egraph: egglog.EGraph) -> tuple[int, int]:
     return len(payload.get("nodes", {})), len(payload.get("class_data", {}))
 
 
-def _rules_for_mode(mode: Mode) -> egglog.Ruleset:
-    if mode == "egglog-baseline":
-        return const_analysis_rules | basic_rules | fun_rules
-    return const_analysis_rules | height_analysis_rules | basic_rules_height_guard | fun_rules_height_guard
+# Haskell runs one `equalitySaturation' (BackoffScheduler 2500 30)` per outer
+# pass, and `simplifyE` repeats that extracted result up to twice. For this
+# explicit-analysis translation, the accepted Egglog approximation is the
+# smaller bounded schedule that was validated against the Haskell canaries:
+# - run four explicit `analysis.saturate() + rewrite` rounds
+# - finish with one last `analysis.saturate()` so `const_value(root)` settles
+analysis_schedule = const_merge_rules | const_seed_rules | const_propagation_rules | const_prune_rules
+basic_rules = (
+    basic_add_comm_rules
+    | basic_mul_comm_rules
+    | basic_add_assoc_rules
+    | basic_mul_assoc_rules
+    | basic_mul_div_rules
+    | basic_product_regroup_rules
+    | basic_other_rules
+)
+# After splitting scheduler progress from database progress and using
+# `stop_when_no_updates=True`, the reduced quadratic-sum canary no longer needs
+# `add_comm` removed. The larger `pagie_operon_15` case still runs much longer
+# with `add_comm` restored, so the current baseline keeps it disabled as the
+# narrowest remaining compensation while the next engine-level mismatch is
+# isolated.
+baseline_basic_rules = (
+    basic_mul_comm_rules
+    | basic_add_assoc_rules
+    | basic_mul_assoc_rules
+    | basic_mul_div_rules
+    | basic_product_regroup_rules
+    | basic_other_rules
+)
+scheduler = back_off(match_limit=BACKOFF_MATCH_LIMIT, ban_length=BACKOFF_BAN_LENGTH, egg_like=True)
+rewrite_schedule = run(baseline_basic_rules | fun_rules, scheduler=scheduler)
+analysis_rewrite_round = analysis_schedule.saturate() + rewrite_schedule
+total_ruleset = scheduler.scope(
+    analysis_rewrite_round
+    + analysis_rewrite_round
+    + analysis_rewrite_round
+    + analysis_rewrite_round
+    + analysis_schedule.saturate()
+)
 
 
-def _run_single_pass(num: Num, mode: Mode) -> tuple[Num, int, int, int, int, float]:
+def _run_single_pass(num: Num) -> tuple[Num, int, int, int, int, float]:
+    """
+    One paper-style EqSat pass.
+
+    This corresponds to one application of `rewriteTree` in Haskell. The caller
+    is responsible for the outer `rewriteUntilNoChange ... 2` behavior.
+    """
     egraph = egglog.EGraph()
     egraph.register(num)
-    scheduler = back_off(match_limit=BACKOFF_MATCH_LIMIT, ban_length=BACKOFF_BAN_LENGTH)
+
     start = time.perf_counter()
-    egraph.run(run(_rules_for_mode(mode), scheduler=scheduler).saturate())
+    egraph.run(total_ruleset)
     elapsed = time.perf_counter() - start
     extracted, cost = egraph.extract(num, include_cost=True)
     total_size = sum(size for _, size in egraph.all_function_sizes())
@@ -782,6 +1319,18 @@ def _run_single_pass(num: Num, mode: Mode) -> tuple[Num, int, int, int, int, flo
 
 
 def run_paper_pipeline(num: Num, *, mode: Mode) -> PaperPipelineReport:
+    """
+    Approximate `simplifyE` from `FixTree.hs`.
+
+    Haskell does:
+        relabelParams . toSRTree . rewriteUntilNoChange [rewriteTree] 2 . toFixTree
+
+    Here we mirror that as:
+    - run `_run_single_pass` on the current extracted term
+    - extract
+    - stop early if the rendered term is unchanged
+    - otherwise rebuild from the extracted term and try again
+    """
     before_nodes = count_nodes(num)
     before_params = count_params(num)
     current = num
@@ -793,7 +1342,7 @@ def run_paper_pipeline(num: Num, *, mode: Mode) -> PaperPipelineReport:
     passes = 0
     status = "saturated"
     for pass_index in range(1, MAX_PASSES + 1):
-        extracted, last_cost, total_size, node_count, eclass_count, elapsed = _run_single_pass(current, mode)
+        extracted, last_cost, total_size, node_count, eclass_count, elapsed = _run_single_pass(current)
         total_sec += elapsed
         passes = pass_index
         if render_num(extracted) == render_num(current):
@@ -822,10 +1371,10 @@ def run_paper_pipeline(num: Num, *, mode: Mode) -> PaperPipelineReport:
 
 def _cli() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("egglog-baseline", "egglog-height-guard"), required=True)
+    parser.add_argument("--mode", choices=("egglog-baseline",), required=True)
     parser.add_argument("--expr", required=True)
     args = parser.parse_args()
-    report = run_paper_pipeline(parse_expression(args.expr), mode=cast("Mode", args.mode))
+    report = run_paper_pipeline(parse_expression(args.expr), mode="egglog-baseline")
     payload = {
         "mode": report.mode,
         "status": report.status,

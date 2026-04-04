@@ -1,19 +1,22 @@
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
+import os
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-TIMEOUT_SEC = 5.0
+TIMEOUT_SEC = 180.0
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "artifacts"
 HASKELL_ROWS_PATH = OUTPUT_DIR / "haskell_paper_rows.csv"
 EGGLOG_ROWS_PATH = OUTPUT_DIR / "egglog_paper_rows.csv"
 
-MODES = ("egglog-baseline", "egglog-height-guard")
+MODES = ("egglog-baseline",)
 
 
 def _load_rows() -> list[dict[str, str]]:
@@ -23,9 +26,9 @@ def _load_rows() -> list[dict[str, str]]:
 
 def _run_one(source: str, mode: str) -> dict[str, str]:
     start = time.perf_counter()
-    proc = None
+    proc: subprocess.Popen[str] | None = None
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [
                 sys.executable,
                 "-m",
@@ -34,12 +37,18 @@ def _run_one(source: str, mode: str) -> dict[str, str]:
                 mode,
                 f"--expr={source}",
             ],
-            capture_output=True,
-            check=False,
             text=True,
-            timeout=TIMEOUT_SEC,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
         )
+        stdout, stderr = proc.communicate(timeout=TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
+        if proc is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.communicate(timeout=1.0)
         return {
             "status": "timeout",
             "runtime_ms": f"{TIMEOUT_SEC * 1000.0:.6f}",
@@ -56,7 +65,7 @@ def _run_one(source: str, mode: str) -> dict[str, str]:
         }
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     if proc.returncode != 0:
-        message = proc.stderr.strip() or proc.stdout.strip() or "subprocess failure"
+        message = stderr.strip() or stdout.strip() or "subprocess failure"
         return {
             "status": "failed",
             "runtime_ms": f"{elapsed_ms:.6f}",
@@ -71,7 +80,7 @@ def _run_one(source: str, mode: str) -> dict[str, str]:
             "extracted_cost": "na",
             "rendered": message.splitlines()[0],
         }
-    payload = json.loads(proc.stdout)
+    payload = json.loads(stdout)
     return {
         "status": str(payload["status"]),
         "runtime_ms": f"{elapsed_ms:.6f}",
@@ -90,18 +99,43 @@ def _run_one(source: str, mode: str) -> dict[str, str]:
 
 def main() -> None:
     rows = _load_rows()
-    output_rows: list[dict[str, str]] = []
     total = len(rows) * len(MODES)
-    counter = 0
-    for source_row in rows:
-        for mode in MODES:
-            counter += 1
-            if counter == 1 or counter % 25 == 0:
-                print(f"[{counter}/{total}] {source_row['dataset']} {source_row['algorithm']}#{source_row['algo_row']} {mode}", flush=True)
-            original = _run_one(source_row["original_expr"], mode)
-            sympy = _run_one(source_row["sympy_expr"], mode)
-            output_rows.append(
-                {
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = EGGLOG_ROWS_PATH.with_suffix(".csv.partial")
+    completed_keys: set[tuple[str, str, str, str, str]] = set()
+    fieldnames: list[str] | None = None
+    if temp_path.exists():
+        with temp_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = list(reader.fieldnames) if reader.fieldnames is not None else None
+            for row in reader:
+                completed_keys.add((row["dataset"], row["raw_index"], row["algorithm"], row["algo_row"], row["mode"]))
+
+    counter = len(completed_keys)
+    with temp_path.open("a" if completed_keys else "w", newline="", encoding="utf-8") as handle:
+        writer: csv.DictWriter[str] | None = None
+        if fieldnames is not None:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        for source_row in rows:
+            for mode in MODES:
+                key = (
+                    source_row["dataset"],
+                    source_row["raw_index"],
+                    source_row["algorithm"],
+                    source_row["algo_row"],
+                    mode,
+                )
+                if key in completed_keys:
+                    continue
+                counter += 1
+                if counter == 1 or counter % 25 == 0:
+                    print(
+                        f"[{counter}/{total}] {source_row['dataset']} {source_row['algorithm']}#{source_row['algo_row']} {mode}",
+                        flush=True,
+                    )
+                original = _run_one(source_row["original_expr"], mode)
+                sympy = _run_one(source_row["sympy_expr"], mode)
+                output_row = {
                     "dataset": source_row["dataset"],
                     "raw_index": source_row["raw_index"],
                     "algorithm_raw": source_row["algorithm_raw"],
@@ -139,13 +173,15 @@ def main() -> None:
                     "sympy_extracted_cost": sympy["extracted_cost"],
                     "sympy_rendered": sympy["rendered"],
                 }
-            )
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    with EGGLOG_ROWS_PATH.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(output_rows[0]))
-        writer.writeheader()
-        writer.writerows(output_rows)
+                if fieldnames is None:
+                    fieldnames = list(output_row)
+                    writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                    writer.writeheader()
+                assert writer is not None
+                writer.writerow(output_row)
+                handle.flush()
+                completed_keys.add(key)
+    temp_path.replace(EGGLOG_ROWS_PATH)
 
 
 if __name__ == "__main__":
