@@ -515,6 +515,7 @@ class Function:
 class RunReport:
     iterations: list[IterationReport]
     updated: bool
+    can_stop: bool
     search_and_apply_time_per_rule: dict[str, timedelta]
     num_matches_per_rule: dict[str, int]
     search_and_apply_time_per_ruleset: dict[str, timedelta]
@@ -525,6 +526,7 @@ class RunReport:
         cls,
         iterations: list[IterationReport],
         updated: bool,
+        can_stop: bool,
         search_and_apply_time_per_rule: dict[str, timedelta],
         num_matches_per_rule: dict[str, int],
         search_and_apply_time_per_ruleset: dict[str, timedelta],

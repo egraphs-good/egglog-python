@@ -127,6 +127,7 @@ long_line = (
 r = ruleset(name="r")
 
 bo = back_off(ban_length=5)
+bo_egg = back_off(ban_length=5, egg_like=True)
 
 
 class BadRepr:
@@ -222,6 +223,11 @@ _A_2 + _A_3""",
     # Schedules
     pytest.param(r, 'ruleset(name="r")', id="ruleset with name"),
     pytest.param(r.saturate(), 'ruleset(name="r").saturate()', id="saturate"),
+    pytest.param(
+        r.saturate(stop_when_no_updates=True),
+        'ruleset(name="r").saturate(stop_when_no_updates=True)',
+        id="saturate stop_when_no_updates",
+    ),
     pytest.param(r * 10, 'ruleset(name="r") * 10', id="repeat"),
     pytest.param(r + r, 'ruleset(name="r") + ruleset(name="r")', id="sequence"),
     pytest.param(seq(r, r, r), 'seq(ruleset(name="r"), ruleset(name="r"), ruleset(name="r"))', id="seq"),
@@ -235,6 +241,12 @@ _A_2 + _A_3""",
         bo.scope(run(r, scheduler=bo)),
         '_scheduler_1 = back_off(ban_length=5)\n_scheduler_1.scope(run(ruleset(name="r"), scheduler=_scheduler_1))',
         id="scoped scheduler",
+    ),
+    pytest.param(bo_egg, "back_off(ban_length=5, egg_like=True)", id="egg-like scheduler"),
+    pytest.param(
+        run(r, h(), scheduler=bo_egg),
+        'run(ruleset(name="r"), h(), scheduler=back_off(ban_length=5, egg_like=True))',
+        id="run with egg-like scheduler",
     ),
     # Functions
     pytest.param(f, "f", id="function"),

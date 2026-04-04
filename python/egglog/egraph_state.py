@@ -146,7 +146,7 @@ class EGraphState:
                     self.ruleset_to_egg(ruleset_name)
                     if scheduler and scheduler.id not in bound_schedulers:
                         unbound_schedulers.append(scheduler)
-                case SaturateDecl(inner) | RepeatDecl(inner, _):
+                case SaturateDecl(inner, _) | RepeatDecl(inner, _):
                     return helper(inner)
                 case SequenceDecl(schedules):
                     for sc in schedules:
@@ -165,7 +165,7 @@ class EGraphState:
     def _schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Schedule:
         msg = "Should never reach this, let schedulers should be handled by custom scheduler"
         match schedule:
-            case SaturateDecl(schedule):
+            case SaturateDecl(schedule, _):
                 return bindings.Saturate(span(), self._schedule_to_egg(schedule))
             case RepeatDecl(schedule, times):
                 return bindings.Repeat(span(), times, self._schedule_to_egg(schedule))
@@ -192,7 +192,7 @@ class EGraphState:
         The bound_schedulers is a list of all the schedulers that have been bound. We can lookup their name as `_scheduler_{index}`.
         """
         match schedule:
-            case LetSchedulerDecl(BackOffDecl(id, match_limit, ban_length), inner):
+            case LetSchedulerDecl(BackOffDecl(id, match_limit, ban_length, egg_like), inner):
                 name = f"_scheduler_{len(bound_schedulers)}"
                 bound_schedulers.append(id)
                 args: list[bindings._Expr] = []
@@ -202,7 +202,8 @@ class EGraphState:
                 if ban_length is not None:
                     args.append(bindings.Var(span(), ":ban-length"))
                     args.append(bindings.Lit(span(), bindings.Int(ban_length)))
-                back_off_decl = bindings.Call(span(), "back-off", args)
+                scheduler_name = "back-off-egg" if egg_like else "back-off"
+                back_off_decl = bindings.Call(span(), scheduler_name, args)
                 let_decl = bindings.Call(span(), "let-scheduler", [bindings.Var(span(), name), back_off_decl])
                 return [let_decl, *self._schedule_with_scheduler_to_egg(inner, bound_schedulers)]
             case RunDecl(ruleset_ident, until, scheduler):
@@ -224,10 +225,11 @@ class EGraphState:
                         raise ValueError(msg)
                     args.append(fact_egg.expr)
                 return [bindings.Call(span(), name, args)]
-            case SaturateDecl(inner):
-                return [
-                    bindings.Call(span(), "saturate", self._schedule_with_scheduler_to_egg(inner, bound_schedulers))
-                ]
+            case SaturateDecl(inner, stop_when_no_updates):
+                args = self._schedule_with_scheduler_to_egg(inner, bound_schedulers)
+                if stop_when_no_updates:
+                    args = [bindings.Var(span(), ":stop-when-no-updates"), *args]
+                return [bindings.Call(span(), "saturate", args)]
             case RepeatDecl(inner, times):
                 return [
                     bindings.Call(

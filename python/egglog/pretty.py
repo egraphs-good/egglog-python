@@ -197,7 +197,7 @@ class TraverseContext:
                 self(rhs)
             case LetDecl(_, d) | ExprActionDecl(d) | ExprFactDecl(d):
                 self(d.expr)
-            case ChangeDecl(_, d, _) | SaturateDecl(d) | RepeatDecl(d, _) | ActionCommandDecl(d):
+            case ChangeDecl(_, d, _) | SaturateDecl(d, _) | RepeatDecl(d, _) | ActionCommandDecl(d):
                 self(d)
             case PanicDecl(_) | UnboundVarDecl(_) | LetRefDecl(_) | LitDecl(_) | PyObjectDecl(_):
                 pass
@@ -360,8 +360,9 @@ class PrettyContext:
                 if ruleset_ident:
                     list_args.append(f"name={ruleset_ident.name!r})")
                 return (f"unstable_combine_rulesets({', '.join(list_args)})", "combined_ruleset")
-            case SaturateDecl(schedule):
-                return f"{self(schedule, parens=True)}.saturate()", "schedule"
+            case SaturateDecl(schedule, stop_when_no_updates):
+                suffix = ".saturate(stop_when_no_updates=True)" if stop_when_no_updates else ".saturate()"
+                return f"{self(schedule, parens=True)}{suffix}", "schedule"
             case RepeatDecl(schedule, times):
                 return f"{self(schedule, parens=True)} * {times}", "schedule"
             case SequenceDecl(schedules):
@@ -383,12 +384,14 @@ class PrettyContext:
             case DefaultRewriteDecl():
                 msg = "default rewrites should not be pretty printed"
                 raise TypeError(msg)
-            case BackOffDecl(_, match_limit, ban_length):
+            case BackOffDecl(_, match_limit, ban_length, egg_like):
                 list_args = []
                 if match_limit is not None:
                     list_args.append(f"match_limit={match_limit}")
                 if ban_length is not None:
                     list_args.append(f"ban_length={ban_length}")
+                if egg_like:
+                    list_args.append("egg_like=True")
                 return f"back_off({', '.join(list_args)})", "scheduler"
             case ValueDecl(value):
                 return str(value), "value"

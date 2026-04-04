@@ -641,6 +641,7 @@ convert_struct!(
     egglog_reports::RunReport: "{:?}" => RunReport(
         iterations: Vec<IterationReport>,
         updated: bool,
+        can_stop: bool,
         search_and_apply_time_per_rule: HashMap<String, WrappedDuration>,
         num_matches_per_rule: HashMap<String, usize>,
         search_and_apply_time_per_ruleset: HashMap<String, WrappedDuration>,
@@ -654,6 +655,7 @@ convert_struct!(
                 .map(|i| Arc::new(i.clone().into()))
                 .collect(),
             updated: r.updated,
+            can_stop: r.can_stop,
             search_and_apply_time_per_rule: r
                 .search_and_apply_time_per_rule
                 .iter()
@@ -683,6 +685,7 @@ convert_struct!(
         r -> RunReport {
             iterations: r.iterations.iter().map(|i| i.as_ref().into()).collect(),
             updated: r.updated,
+            can_stop: r.can_stop,
             search_and_apply_time_per_rule: r
                 .search_and_apply_time_per_rule
                 .iter()
