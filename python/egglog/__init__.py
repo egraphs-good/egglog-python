@@ -4,7 +4,7 @@ Package for creating e-graphs in Python.
 
 from . import config, ipython_magic  # noqa: F401
 from .bindings import EggSmolError, StageInfo, TimeOnly, WithPlan  # noqa: F401
-from .builtins import *  # noqa: UP029
+from .builtins import *
 from .conversion import *
 from .deconstruct import *
 from .egraph import *
