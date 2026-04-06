@@ -11,9 +11,10 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+
 from egglog.exp.param_eq.generate_haskell_golden import _canonicalize
 from egglog.exp.param_eq.paths import ARTIFACT_DIR, llvm_bin_dir, param_eq_data_dir
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 ARCHIVED_ROWS_PATH = ARTIFACT_DIR / "haskell_paper_rows.csv"
 LIVE_ROWS_PATH = ARTIFACT_DIR / "haskell_live_rows.csv"
@@ -37,86 +38,82 @@ def _build_haskell_program(rows: list[dict[str, str]]) -> str:
         algo_row = json.dumps(row["algo_row"])
         zero_index = int(row["algo_row"]) - 1
         prefix = "  " if index == 0 else "  , "
-        case_lines.append(
-            f'{prefix}(({dataset}, {raw_index}, {algorithm}, {algo_row}), {raw_algorithm}, {zero_index})'
-        )
+        case_lines.append(f"{prefix}(({dataset}, {raw_index}, {algorithm}, {algo_row}), {raw_algorithm}, {zero_index})")
     joined_case_lines = "\n".join(case_lines)
-    return "\n".join(
-        [
-            "import Data.List (intercalate)",
-            "import qualified Data.Map as M",
-            "import Data.SRTree",
-            "import Data.SRTree.Print",
-            "import Data.Time.Clock.POSIX (getPOSIXTime)",
-            "import FixTree",
-            "import KotanchekSR (kotanchekSR)",
-            "import KotanchekSympy (kotanchekSympy)",
-            "import PagieSR (pagieSR)",
-            "import PagieSympy (pagieSympy)",
-            "import Reparam (replaceConstsWithParams)",
-            "",
-            "type RowId = (String, String, String, String)",
-            "type RowCase = (RowId, String, Int)",
-            "",
-            "cases :: [RowCase]",
-            "cases =",
-            "  [",
-            joined_case_lines,
-            "  ]",
-            "",
-            "sanitize :: String -> String",
-            "sanitize = map (\\c -> if c == '\\t' || c == '\\n' then ' ' else c)",
-            "",
-            "lookupOriginal :: String -> String -> Int -> SRTree Int Double",
-            "lookupOriginal dataset algorithm rowIndex = case dataset of",
-            "  \"pagie\" -> (pagieSR M.! algorithm) !! rowIndex",
-            "  \"kotanchek\" -> (kotanchekSR M.! algorithm) !! rowIndex",
-            "  _ -> error \"unknown dataset\"",
-            "",
-            "lookupSympy :: String -> String -> Int -> SRTree Int Double",
-            "lookupSympy dataset algorithm rowIndex = case dataset of",
-            "  \"pagie\" -> (pagieSympy M.! algorithm) !! rowIndex",
-            "  \"kotanchek\" -> (kotanchekSympy M.! algorithm) !! rowIndex",
-            "  _ -> error \"unknown dataset\"",
-            "",
-            "emitExpr :: RowId -> String -> SRTree Int Double -> IO ()",
-            "emitExpr (dataset, rawIndex, algorithm, algoRow) label expr = do",
-            "  start <- getPOSIXTime",
-            "  let simplified = simplifyE expr",
-            "  end <- getPOSIXTime",
-            "  let beforeNodes = countNodes expr",
-            "      beforeParams = recountParams (replaceConstsWithParams expr)",
-            "      afterNodes = countNodes simplified",
-            "      afterParams = recountParams (replaceConstsWithParams simplified)",
-            "      runtimeMs = (realToFrac (end - start) :: Double) * 1000.0",
-            "      rendered = showDefault simplified",
-            "      fields =",
-            "        [ dataset",
-            "        , rawIndex",
-            "        , algorithm",
-            "        , algoRow",
-            "        , label",
-            "        , show beforeNodes",
-            "        , show beforeParams",
-            "        , show afterNodes",
-            "        , show afterParams",
-            "        , show runtimeMs",
-            "        , rendered",
-            "        ]",
-            "  putStrLn (intercalate \"\\t\" (map sanitize fields))",
-            "",
-            "emitCase :: RowCase -> IO ()",
-            "emitCase (rowId@(dataset, _, _, _), rawAlgorithm, rowIndex) = do",
-            "  let originalExpr = lookupOriginal dataset rawAlgorithm rowIndex",
-            "      sympyExpr = lookupSympy dataset rawAlgorithm rowIndex",
-            "  emitExpr rowId \"original\" originalExpr",
-            "  emitExpr rowId \"sympy\" sympyExpr",
-            "",
-            "main :: IO ()",
-            "main = mapM_ emitCase cases",
-            "",
-        ]
-    )
+    return "\n".join([
+        "import Data.List (intercalate)",
+        "import qualified Data.Map as M",
+        "import Data.SRTree",
+        "import Data.SRTree.Print",
+        "import Data.Time.Clock.POSIX (getPOSIXTime)",
+        "import FixTree",
+        "import KotanchekSR (kotanchekSR)",
+        "import KotanchekSympy (kotanchekSympy)",
+        "import PagieSR (pagieSR)",
+        "import PagieSympy (pagieSympy)",
+        "import Reparam (replaceConstsWithParams)",
+        "",
+        "type RowId = (String, String, String, String)",
+        "type RowCase = (RowId, String, Int)",
+        "",
+        "cases :: [RowCase]",
+        "cases =",
+        "  [",
+        joined_case_lines,
+        "  ]",
+        "",
+        "sanitize :: String -> String",
+        "sanitize = map (\\c -> if c == '\\t' || c == '\\n' then ' ' else c)",
+        "",
+        "lookupOriginal :: String -> String -> Int -> SRTree Int Double",
+        "lookupOriginal dataset algorithm rowIndex = case dataset of",
+        '  "pagie" -> (pagieSR M.! algorithm) !! rowIndex',
+        '  "kotanchek" -> (kotanchekSR M.! algorithm) !! rowIndex',
+        '  _ -> error "unknown dataset"',
+        "",
+        "lookupSympy :: String -> String -> Int -> SRTree Int Double",
+        "lookupSympy dataset algorithm rowIndex = case dataset of",
+        '  "pagie" -> (pagieSympy M.! algorithm) !! rowIndex',
+        '  "kotanchek" -> (kotanchekSympy M.! algorithm) !! rowIndex',
+        '  _ -> error "unknown dataset"',
+        "",
+        "emitExpr :: RowId -> String -> SRTree Int Double -> IO ()",
+        "emitExpr (dataset, rawIndex, algorithm, algoRow) label expr = do",
+        "  start <- getPOSIXTime",
+        "  let simplified = simplifyE expr",
+        "  end <- getPOSIXTime",
+        "  let beforeNodes = countNodes expr",
+        "      beforeParams = recountParams (replaceConstsWithParams expr)",
+        "      afterNodes = countNodes simplified",
+        "      afterParams = recountParams (replaceConstsWithParams simplified)",
+        "      runtimeMs = (realToFrac (end - start) :: Double) * 1000.0",
+        "      rendered = showDefault simplified",
+        "      fields =",
+        "        [ dataset",
+        "        , rawIndex",
+        "        , algorithm",
+        "        , algoRow",
+        "        , label",
+        "        , show beforeNodes",
+        "        , show beforeParams",
+        "        , show afterNodes",
+        "        , show afterParams",
+        "        , show runtimeMs",
+        "        , rendered",
+        "        ]",
+        '  putStrLn (intercalate "\\t" (map sanitize fields))',
+        "",
+        "emitCase :: RowCase -> IO ()",
+        "emitCase (rowId@(dataset, _, _, _), rawAlgorithm, rowIndex) = do",
+        "  let originalExpr = lookupOriginal dataset rawAlgorithm rowIndex",
+        "      sympyExpr = lookupSympy dataset rawAlgorithm rowIndex",
+        '  emitExpr rowId "original" originalExpr',
+        '  emitExpr rowId "sympy" sympyExpr',
+        "",
+        "main :: IO ()",
+        "main = mapM_ emitCase cases",
+        "",
+    ])
 
 
 def _run_haskell_chunk(rows: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -154,23 +151,21 @@ def _run_haskell_chunk(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             runtime_ms,
             rendered,
         ) = line.split("\t", maxsplit=10)
-        results.append(
-            {
-                "dataset": dataset,
-                "raw_index": raw_index,
-                "algorithm": algorithm,
-                "algo_row": algo_row,
-                "label": label,
-                "status": "saturated",
-                "before_nodes": before_nodes,
-                "before_params": before_params,
-                "after_nodes": after_nodes,
-                "after_params": after_params,
-                "runtime_ms": runtime_ms,
-                "rendered_haskell": rendered,
-                "rendered_python": _canonicalize(rendered),
-            }
-        )
+        results.append({
+            "dataset": dataset,
+            "raw_index": raw_index,
+            "algorithm": algorithm,
+            "algo_row": algo_row,
+            "label": label,
+            "status": "saturated",
+            "before_nodes": before_nodes,
+            "before_params": before_params,
+            "after_nodes": after_nodes,
+            "after_params": after_params,
+            "runtime_ms": runtime_ms,
+            "rendered_haskell": rendered,
+            "rendered_python": _canonicalize(rendered),
+        })
     return results
 
 
@@ -274,31 +269,29 @@ def _write_live_rows(rows: list[dict[str, str]], live_results: list[dict[str, st
         original = indexed[(row["dataset"], row["raw_index"], row["algorithm"], row["algo_row"], "original")]
         sympy = indexed[(row["dataset"], row["raw_index"], row["algorithm"], row["algo_row"], "sympy")]
         output_row = dict(row)
-        output_row.update(
-            {
-                "orig_nodes": original["before_nodes"],
-                "orig_params": original["before_params"],
-                "simpl_nodes": original["after_nodes"],
-                "simpl_params": original["after_params"],
-                "orig_live_status": original["status"],
-                "orig_nodes_sympy": sympy["before_nodes"],
-                "orig_params_sympy": sympy["before_params"],
-                "simpl_nodes_sympy": sympy["after_nodes"],
-                "simpl_params_sympy": sympy["after_params"],
-                "sympy_live_status": sympy["status"],
-                "orig_runtime_ms": original["runtime_ms"],
-                "sympy_runtime_ms": sympy["runtime_ms"],
-                "orig_rendered_haskell": original["rendered_haskell"],
-                "orig_rendered_python": original["rendered_python"],
-                "sympy_rendered_haskell": sympy["rendered_haskell"],
-                "sympy_rendered_python": sympy["rendered_python"],
-                "baseline_source": (
-                    "live_haskell"
-                    if original["status"] == "saturated" and sympy["status"] == "saturated"
-                    else "archived_fallback"
-                ),
-            }
-        )
+        output_row.update({
+            "orig_nodes": original["before_nodes"],
+            "orig_params": original["before_params"],
+            "simpl_nodes": original["after_nodes"],
+            "simpl_params": original["after_params"],
+            "orig_live_status": original["status"],
+            "orig_nodes_sympy": sympy["before_nodes"],
+            "orig_params_sympy": sympy["before_params"],
+            "simpl_nodes_sympy": sympy["after_nodes"],
+            "simpl_params_sympy": sympy["after_params"],
+            "sympy_live_status": sympy["status"],
+            "orig_runtime_ms": original["runtime_ms"],
+            "sympy_runtime_ms": sympy["runtime_ms"],
+            "orig_rendered_haskell": original["rendered_haskell"],
+            "orig_rendered_python": original["rendered_python"],
+            "sympy_rendered_haskell": sympy["rendered_haskell"],
+            "sympy_rendered_python": sympy["rendered_python"],
+            "baseline_source": (
+                "live_haskell"
+                if original["status"] == "saturated" and sympy["status"] == "saturated"
+                else "archived_fallback"
+            ),
+        })
         output_rows.append(output_row)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

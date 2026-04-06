@@ -457,6 +457,7 @@ GuardConditions: TypeAlias = tuple[FactLike, ...]
 GuardCases: TypeAlias = tuple[GuardConditions, ...]
 _CONST_GUARD_COUNTER = count()
 
+
 def _fresh_const_guard_value(prefix: str = "_const_value") -> f64:
     return var(f"{prefix}_{next(_CONST_GUARD_COUNTER)}", f64)
 
@@ -1268,6 +1269,7 @@ def count_nodes(num: Num) -> int:  # noqa: C901, PLR0911, PLR0912
 def _serialized_counts(egraph: egglog.EGraph) -> tuple[int, int]:
     payload = json.loads(egraph._serialize().to_json())
     return len(payload.get("nodes", {})), len(payload.get("class_data", {}))
+
 
 analysis_schedule = const_merge_rules | const_seed_rules | const_propagation_rules | const_prune_rules
 basic_rules = (

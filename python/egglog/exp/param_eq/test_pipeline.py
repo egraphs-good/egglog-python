@@ -64,6 +64,7 @@ def test_run_paper_pipeline_saturates_simple_expression() -> None:
     assert report.after_nodes <= report.before_nodes
     assert report.after_params == 0
 
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
@@ -165,6 +166,7 @@ def test_reduced_schedule_case_matches_haskell_canary() -> None:
 
     assert report.rendered == case["simplify_e_expr_python"]
 
+
 def test_add_comm_is_required_for_left_biased_factorization_path() -> None:
     source = parse_expression("(1 / ((x0 * x0) + 1)) + (4 * (x1 * x1))")
     expected = parse_expression("4 * ((x1 * x1) + (0.25 / ((x0 * x0) + 1)))")
@@ -178,7 +180,9 @@ def test_add_comm_is_required_for_left_biased_factorization_path() -> None:
         round_sat = param_eq_hegg.run(basic_rules | param_eq_hegg.fun_rules, scheduler=scheduler) + (
             param_eq_hegg.analysis_schedule.saturate()
         )
-        return scheduler.scope(round_sat + round_sat + round_sat + round_sat + param_eq_hegg.analysis_schedule.saturate())
+        return scheduler.scope(
+            round_sat + round_sat + round_sat + round_sat + param_eq_hegg.analysis_schedule.saturate()
+        )
 
     no_add_comm_basic_rules = (
         param_eq_hegg.basic_mul_comm_rules

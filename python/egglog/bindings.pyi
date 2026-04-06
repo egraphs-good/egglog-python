@@ -176,7 +176,6 @@ class Value:
     def __ge__(self, other: object) -> bool: ...
 
 @final
-
 @final
 class EggSmolError(Exception):
     context: str

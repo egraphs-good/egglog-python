@@ -8,14 +8,15 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
-import time
 
-from egglog.exp.param_eq.pipeline import parse_expression, run_paper_pipeline
-from egglog.exp.param_eq.paths import ARTIFACT_DIR, llvm_bin_dir, param_eq_data_dir
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+
+from egglog.exp.param_eq.paths import ARTIFACT_DIR, llvm_bin_dir, param_eq_data_dir
+from egglog.exp.param_eq.pipeline import parse_expression, run_paper_pipeline
 
 ARCHIVED_RUNTIME_PATH = ARTIFACT_DIR / "pagie_runtime_scatter.csv"
 RUNTIME_COMPARE_PATH = ARTIFACT_DIR / "pagie_runtime_compare.csv"
@@ -39,15 +40,13 @@ def _load_pagie_rows() -> list[dict[str, str]]:
     for raw_index, row in enumerate(raw_rows):
         raw_algorithm = row["algorithm"]
         counts[raw_algorithm] += 1
-        rows.append(
-            {
-                "raw_index": str(raw_index),
-                "algorithm_raw": raw_algorithm,
-                "algorithm": _clean_algorithm(raw_algorithm),
-                "algo_row": str(counts[raw_algorithm]),
-                "expr": row["expr"].strip(),
-            }
-        )
+        rows.append({
+            "raw_index": str(raw_index),
+            "algorithm_raw": raw_algorithm,
+            "algorithm": _clean_algorithm(raw_algorithm),
+            "algo_row": str(counts[raw_algorithm]),
+            "expr": row["expr"].strip(),
+        })
     return rows
 
 
@@ -60,43 +59,41 @@ def _build_haskell_program(rows: list[dict[str, str]]) -> str:
         prefix = "  " if index == 0 else "  , "
         case_lines.append(f"{prefix}({algorithm}, {algo_row}, {zero_index})")
     joined_case_lines = "\n".join(case_lines)
-    return "\n".join(
-        [
-            "import Control.Exception (evaluate)",
-            "import Data.List (intercalate)",
-            "import qualified Data.Map as M",
-            "import Data.SRTree",
-            "import Data.Time.Clock.POSIX (getPOSIXTime)",
-            "import FixTree (simplifyE)",
-            "import PagieSR (pagieSR)",
-            "",
-            "type RowCase = (String, String, Int)",
-            "",
-            "cases :: [RowCase]",
-            "cases =",
-            "  [",
-            joined_case_lines,
-            "  ]",
-            "",
-            "sanitize :: String -> String",
-            "sanitize = map (\\c -> if c == '\\t' || c == '\\n' then ' ' else c)",
-            "",
-            "emitCase :: RowCase -> IO ()",
-            "emitCase (algorithm, algoRow, rowIndex) = do",
-            "  let expr = (pagieSR M.! algorithm) !! rowIndex",
-            "      beforeNodes = countNodes expr",
-            "  start <- getPOSIXTime",
-            "  afterNodes <- evaluate (countNodes (simplifyE expr))",
-            "  end <- getPOSIXTime",
-            "  let runtimeMs = (realToFrac (end - start) :: Double) * 1000.0",
-            "      fields = [algorithm, algoRow, show beforeNodes, show afterNodes, show runtimeMs]",
-            "  putStrLn (intercalate \"\\t\" (map sanitize fields))",
-            "",
-            "main :: IO ()",
-            "main = mapM_ emitCase cases",
-            "",
-        ]
-    )
+    return "\n".join([
+        "import Control.Exception (evaluate)",
+        "import Data.List (intercalate)",
+        "import qualified Data.Map as M",
+        "import Data.SRTree",
+        "import Data.Time.Clock.POSIX (getPOSIXTime)",
+        "import FixTree (simplifyE)",
+        "import PagieSR (pagieSR)",
+        "",
+        "type RowCase = (String, String, Int)",
+        "",
+        "cases :: [RowCase]",
+        "cases =",
+        "  [",
+        joined_case_lines,
+        "  ]",
+        "",
+        "sanitize :: String -> String",
+        "sanitize = map (\\c -> if c == '\\t' || c == '\\n' then ' ' else c)",
+        "",
+        "emitCase :: RowCase -> IO ()",
+        "emitCase (algorithm, algoRow, rowIndex) = do",
+        "  let expr = (pagieSR M.! algorithm) !! rowIndex",
+        "      beforeNodes = countNodes expr",
+        "  start <- getPOSIXTime",
+        "  afterNodes <- evaluate (countNodes (simplifyE expr))",
+        "  end <- getPOSIXTime",
+        "  let runtimeMs = (realToFrac (end - start) :: Double) * 1000.0",
+        "      fields = [algorithm, algoRow, show beforeNodes, show afterNodes, show runtimeMs]",
+        '  putStrLn (intercalate "\\t" (map sanitize fields))',
+        "",
+        "main :: IO ()",
+        "main = mapM_ emitCase cases",
+        "",
+    ])
 
 
 def _run_haskell_chunk(rows: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -122,18 +119,16 @@ def _run_haskell_chunk(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
     for line in output.splitlines():
         algorithm_raw, algo_row, before_nodes, after_nodes, runtime_ms = line.split("\t", maxsplit=4)
-        results.append(
-            {
-                "implementation": "Live Haskell",
-                "algorithm_raw": algorithm_raw,
-                "algorithm": _clean_algorithm(algorithm_raw),
-                "algo_row": algo_row,
-                "node_count": before_nodes,
-                "after_nodes": after_nodes,
-                "runtime_ms": runtime_ms,
-                "status": "saturated",
-            }
-        )
+        results.append({
+            "implementation": "Live Haskell",
+            "algorithm_raw": algorithm_raw,
+            "algorithm": _clean_algorithm(algorithm_raw),
+            "algo_row": algo_row,
+            "node_count": before_nodes,
+            "after_nodes": after_nodes,
+            "runtime_ms": runtime_ms,
+            "status": "saturated",
+        })
     return results
 
 
@@ -150,18 +145,16 @@ def _run_haskell_rows_serial(rows: list[dict[str, str]], *, batch_size: int) -> 
                     f"live Haskell runtime sweep failed on {row['algorithm_raw']}#{row['algo_row']}",
                     flush=True,
                 )
-                results.append(
-                    {
-                        "implementation": "Live Haskell",
-                        "algorithm_raw": row["algorithm_raw"],
-                        "algorithm": row["algorithm"],
-                        "algo_row": row["algo_row"],
-                        "node_count": "na",
-                        "after_nodes": "na",
-                        "runtime_ms": "na",
-                        "status": "stack_overflow",
-                    }
-                )
+                results.append({
+                    "implementation": "Live Haskell",
+                    "algorithm_raw": row["algorithm_raw"],
+                    "algorithm": row["algorithm"],
+                    "algo_row": row["algo_row"],
+                    "node_count": "na",
+                    "after_nodes": "na",
+                    "runtime_ms": "na",
+                    "status": "stack_overflow",
+                })
                 continue
             mid = len(batch) // 2
             results.extend(_run_haskell_rows_serial(batch[:mid], batch_size=max(1, mid)))

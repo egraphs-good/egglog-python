@@ -1315,11 +1315,7 @@ class EGraph:
         """
         (output,) = self._run_program(bindings.PrintSize(span(1), None))
         assert isinstance(output, bindings.PrintAllFunctionsSize)
-        return [
-            (callables[0], size)
-            for (name, size) in output.sizes
-            if (callables := self._egg_fn_to_callables(name))
-        ]
+        return [(callables[0], size) for (name, size) in output.sizes if (callables := self._egg_fn_to_callables(name))]
 
     def _egg_fn_to_callables(self, egg_fn: str) -> list[ExprCallable]:
         return [

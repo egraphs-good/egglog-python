@@ -124,13 +124,11 @@ def _normalize_runtime_rows(source_dir: Path) -> list[dict[str, str]]:
         node_count = int(benchmark_name.split("/")[-1])
         _, numeric, unit, *_ = time_line.split()
         runtime_ms = float(numeric) * _to_runtime_multiplier(unit)
-        rows.append(
-            {
-                "benchmark_name": benchmark_name,
-                "node_count": str(node_count),
-                "runtime_ms": f"{runtime_ms:.9f}",
-            }
-        )
+        rows.append({
+            "benchmark_name": benchmark_name,
+            "node_count": str(node_count),
+            "runtime_ms": f"{runtime_ms:.9f}",
+        })
     return rows
 
 

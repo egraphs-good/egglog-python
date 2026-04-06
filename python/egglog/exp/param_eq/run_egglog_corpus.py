@@ -14,8 +14,9 @@ import sys
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 
-from egglog.exp.param_eq.paths import ARTIFACT_DIR
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+
+from egglog.exp.param_eq.paths import ARTIFACT_DIR
 
 TIMEOUT_SEC = 180.0
 

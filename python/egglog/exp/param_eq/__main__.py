@@ -4,6 +4,5 @@ from __future__ import annotations
 
 from .pipeline import _cli
 
-
 if __name__ == "__main__":
     _cli()

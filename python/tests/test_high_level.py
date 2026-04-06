@@ -1309,6 +1309,7 @@ class TestScheduler:
         with pytest.raises(ValueError, match="Can only have one until fact with custom scheduler"):
             egraph.run(run(r, rel(i64(0)), rel(i64(1)), scheduler=bo))
 
+
 @function
 def ff(x: i64Like, y: i64Like) -> E: ...
 
