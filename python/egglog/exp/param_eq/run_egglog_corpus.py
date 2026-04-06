@@ -1,11 +1,13 @@
-"""Run the retained Egglog baseline across the archived param-eq paper rows."""
+"""Run retained Egglog param-eq baseline and ablation modes across the paper rows."""
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import csv
 import json
 import os
+import pathlib
 import signal
 import subprocess
 import sys
@@ -18,8 +20,19 @@ TIMEOUT_SEC = 180.0
 OUTPUT_DIR = ARTIFACT_DIR
 HASKELL_ROWS_PATH = OUTPUT_DIR / "haskell_paper_rows.csv"
 EGGLOG_ROWS_PATH = OUTPUT_DIR / "egglog_paper_rows.csv"
+ABLATION_ROWS_PATH = OUTPUT_DIR / "egglog_ablation_rows.csv"
 
-MODES = ("egglog-baseline",)
+DEFAULT_MODES = ("egglog-baseline",)
+ABLATION_MODES = (
+    "egglog-baseline",
+    "no-haskell-backoff",
+    "no-graph-size-stop",
+    "no-bound-scheduler",
+    "no-fresh-rematch",
+)
+ALL_MODES = DEFAULT_MODES + tuple(mode for mode in ABLATION_MODES if mode not in DEFAULT_MODES) + (
+    "egglog-haskell-literal",
+)
 
 
 def _load_rows() -> list[dict[str, str]]:
@@ -101,10 +114,26 @@ def _run_one(source: str, mode: str) -> dict[str, str]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mode",
+        action="append",
+        choices=ALL_MODES,
+        help="Pipeline mode to evaluate. Repeat to compare multiple modes.",
+    )
+    parser.add_argument(
+        "--output",
+        default=str(EGGLOG_ROWS_PATH),
+        help="Where to write the resulting CSV artifact.",
+    )
+    args = parser.parse_args()
+    modes = tuple(args.mode) if args.mode else DEFAULT_MODES
+    output_path = pathlib.Path(args.output)
+
     rows = _load_rows()
-    total = len(rows) * len(MODES)
+    total = len(rows) * len(modes)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    temp_path = EGGLOG_ROWS_PATH.with_suffix(".csv.partial")
+    temp_path = output_path.with_suffix(".csv.partial")
     completed_keys: set[tuple[str, str, str, str, str]] = set()
     fieldnames: list[str] | None = None
     if temp_path.exists():
@@ -120,7 +149,7 @@ def main() -> None:
         if fieldnames is not None:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
         for source_row in rows:
-            for mode in MODES:
+            for mode in modes:
                 key = (
                     source_row["dataset"],
                     source_row["raw_index"],
@@ -184,7 +213,7 @@ def main() -> None:
                 writer.writerow(output_row)
                 handle.flush()
                 completed_keys.add(key)
-    temp_path.replace(EGGLOG_ROWS_PATH)
+    temp_path.replace(output_path)
 
 
 if __name__ == "__main__":

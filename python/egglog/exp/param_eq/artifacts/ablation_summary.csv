@@ -1,0 +1,6 @@
+mode,evaluation_scope,orig_exact,sympy_exact,orig_saturated,sympy_saturated,orig_max_gap,sympy_max_gap,orig_median_delta,sympy_median_delta,orig_pattern_ok,sympy_pattern_ok,accepted,note
+Egglog baseline,full corpus,318/341,336/341,341/341,341/341,2,1,-1,-1,true,true,true,Retained baseline against current local Haskell.
+No Haskell backoff,targeted fail,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,false,false,false,Timed out on `pagie Operon#15` original while the retained baseline saturated that row in about 11.7s.
+No graph-size stop,targeted parity only,n/a,n/a,n/a,n/a,n/a,n/a,n/a,n/a,false,false,false,Matched the targeted `pagie Operon#15` and `pagie GOMEA#17/#18/#28` parameter counts but slowed `pagie Operon#15` from about 11.7s to about 57.3s; a full aggregate run was not kept once the other ablations had already shown the current stack was still needed for full saturation.
+No bound scheduler,full corpus,315/341,336/341,339/341,341/341,2,1,-1,-1,true,true,false,Loses full original-input saturation by timing out on `pagie EPLEX#25` and `pagie SRjl#1`.
+No fresh rematch,full corpus,317/341,336/341,339/341,341/341,2,1,-1,-1,true,true,false,Loses full original-input saturation by timing out on `pagie SRjl#20` and `kotanchek Operon#21`.

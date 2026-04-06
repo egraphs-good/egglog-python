@@ -29,7 +29,7 @@ Quick symbol map back to the Haskell file:
 - `modifyA` -> `const_prune_rules`
 - `rewritesBasic` -> `_basic_rewrites`
 - `rewritesFun` -> `_fun_rewrites`
-- `rewriteTree` -> `_run_single_pass`
+- `rewriteTree` -> `_run_single_pass_*`
 - `simplifyE` -> `run_paper_pipeline`
 """
 
@@ -42,7 +42,7 @@ import math
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Literal, TypeAlias
+from typing import ClassVar, Literal, TypeAlias, cast
 
 import egglog
 from egglog import *
@@ -63,11 +63,19 @@ __all__ = [
 
 
 MAX_PASSES = 2
+HASKELL_INNER_ITERATION_LIMIT = 30
 BACKOFF_MATCH_LIMIT = 2500
 BACKOFF_BAN_LENGTH = 30
 CONST_MERGE_TOLERANCE = 1e-6
 
-Mode = Literal["egglog-baseline"]
+Mode = Literal[
+    "egglog-baseline",
+    "egglog-haskell-literal",
+    "no-haskell-backoff",
+    "no-graph-size-stop",
+    "no-bound-scheduler",
+    "no-fresh-rematch",
+]
 
 
 # Language and ruleset declarations
@@ -881,6 +889,16 @@ class PaperPipelineReport:
     extracted_cost: int
 
 
+@dataclass(frozen=True)
+class ScheduleModeConfig:
+    """Low-level EqSat controls for one `rewriteTree`-like pass."""
+
+    persistent_scheduler: bool
+    fresh_rematch: bool
+    haskell_backoff: bool
+    graph_size_stop: bool
+
+
 def _normalize_expression(source: str) -> str:
     return source.strip().replace("^", "**")
 
@@ -1254,12 +1272,56 @@ def _serialized_counts(egraph: egglog.EGraph) -> tuple[int, int]:
     return len(payload.get("nodes", {})), len(payload.get("class_data", {}))
 
 
+MODE_CONFIGS: dict[Mode, ScheduleModeConfig] = {
+    "egglog-baseline": ScheduleModeConfig(
+        persistent_scheduler=True,
+        fresh_rematch=True,
+        haskell_backoff=True,
+        graph_size_stop=True,
+    ),
+    # Historical alias kept so old commands and notes still resolve to the
+    # retained baseline.
+    "egglog-haskell-literal": ScheduleModeConfig(
+        persistent_scheduler=True,
+        fresh_rematch=True,
+        haskell_backoff=True,
+        graph_size_stop=True,
+    ),
+    "no-haskell-backoff": ScheduleModeConfig(
+        persistent_scheduler=True,
+        fresh_rematch=True,
+        haskell_backoff=False,
+        graph_size_stop=True,
+    ),
+    "no-graph-size-stop": ScheduleModeConfig(
+        persistent_scheduler=True,
+        fresh_rematch=True,
+        haskell_backoff=True,
+        graph_size_stop=False,
+    ),
+    "no-bound-scheduler": ScheduleModeConfig(
+        persistent_scheduler=False,
+        fresh_rematch=True,
+        haskell_backoff=True,
+        graph_size_stop=True,
+    ),
+    "no-fresh-rematch": ScheduleModeConfig(
+        persistent_scheduler=True,
+        fresh_rematch=False,
+        haskell_backoff=True,
+        graph_size_stop=True,
+    ),
+}
+
+
 # Haskell runs one `equalitySaturation' (BackoffScheduler 2500 30)` per outer
-# pass, and `simplifyE` repeats that extracted result up to twice. For this
-# explicit-analysis translation, the accepted Egglog approximation is the
-# smaller bounded schedule that was validated against the Haskell canaries:
-# - run four explicit `analysis.saturate() + rewrite` rounds
-# - finish with one last `analysis.saturate()` so `const_value(root)` settles
+# pass, and `simplifyE` repeats that extracted result up to twice. The retained
+# pipeline now mirrors that control flow directly through the low-level bound
+# scheduler path in `_run_single_pass_haskell_literal`.
+#
+# The schedule objects below remain as a small bounded helper for local e-graph
+# checks and historical experiments, but they are no longer the retained
+# `run_paper_pipeline` baseline.
 analysis_schedule = const_merge_rules | const_seed_rules | const_propagation_rules | const_prune_rules
 basic_rules = (
     basic_add_comm_rules
@@ -1270,20 +1332,10 @@ basic_rules = (
     | basic_product_regroup_rules
     | basic_other_rules
 )
-# After splitting scheduler progress from database progress and using
-# `stop_when_no_updates=True`, the reduced quadratic-sum canary no longer needs
-# `add_comm` removed. The larger `pagie_operon_15` case still runs much longer
-# with `add_comm` restored, so the current baseline keeps it disabled as the
-# narrowest remaining compensation while the next engine-level mismatch is
-# isolated.
-baseline_basic_rules = (
-    basic_mul_comm_rules
-    | basic_add_assoc_rules
-    | basic_mul_assoc_rules
-    | basic_mul_div_rules
-    | basic_product_regroup_rules
-    | basic_other_rules
-)
+# The retained baseline should keep the Haskell rewrite set intact. If the
+# current schedule still diverges from Haskell, that should be diagnosed as a
+# schedule or engine issue rather than by silently dropping `add_comm`.
+baseline_basic_rules = basic_rules
 scheduler = back_off(match_limit=BACKOFF_MATCH_LIMIT, ban_length=BACKOFF_BAN_LENGTH, egg_like=True)
 rewrite_schedule = run(baseline_basic_rules | fun_rules, scheduler=scheduler)
 analysis_rewrite_round = analysis_schedule.saturate() + rewrite_schedule
@@ -1294,25 +1346,119 @@ total_ruleset = scheduler.scope(
     + analysis_rewrite_round
     + analysis_schedule.saturate()
 )
+baseline_rewrite_ruleset = baseline_basic_rules | fun_rules
+literal_rewrite_ruleset = basic_rules | fun_rules
 
 
-def _run_single_pass(num: Num) -> tuple[Num, int, int, int, int, float]:
+def _run_single_pass_baseline(num: Num) -> tuple[Num, int, int, int, int, float]:
     """
-    One paper-style EqSat pass.
+    One retained paper-style EqSat pass.
 
-    This corresponds to one application of `rewriteTree` in Haskell. The caller
-    is responsible for the outer `rewriteUntilNoChange ... 2` behavior.
+    The retained baseline now matches the Haskell-style inner loop directly:
+    one reused backoff scheduler, up to 30 rewrite iterations, and explicit
+    analysis saturation after each rewrite step.
+    """
+    return _run_single_pass_for_mode(num, "egglog-baseline")
+
+
+def _add_iteration_scheduler(
+    egraph: egglog.EGraph,
+    *,
+    fresh_rematch: bool,
+    haskell_backoff: bool,
+) -> egglog.bindings.SchedulerHandle:
+    """Create one scheduler instance for the current rewrite iteration."""
+    return egraph._add_backoff_scheduler(
+        match_limit=BACKOFF_MATCH_LIMIT,
+        ban_length=BACKOFF_BAN_LENGTH,
+        egg_like=fresh_rematch,
+        haskell_backoff=haskell_backoff,
+    )
+
+
+def _run_single_pass_with_config_egraph(
+    num: Num,
+    config: ScheduleModeConfig,
+) -> tuple[egglog.EGraph, float]:
+    """
+    Run one `rewriteTree`-like pass and return the populated e-graph.
+
+    The baseline uses one persistent fresh-rematch scheduler with Haskell-style
+    backoff accounting and graph-size stability stopping. Ablation modes toggle
+    one of those controls at a time while keeping the rewrite set and analysis
+    structure fixed.
     """
     egraph = egglog.EGraph()
     egraph.register(num)
+    scheduler_handle = (
+        _add_iteration_scheduler(
+            egraph,
+            fresh_rematch=config.fresh_rematch,
+            haskell_backoff=config.haskell_backoff,
+        )
+        if config.persistent_scheduler
+        else None
+    )
 
     start = time.perf_counter()
-    egraph.run(total_ruleset)
+    previous_counts = _serialized_counts(egraph)
+    for _ in range(HASKELL_INNER_ITERATION_LIMIT):
+        rewrite_scheduler = scheduler_handle or _add_iteration_scheduler(
+            egraph,
+            fresh_rematch=config.fresh_rematch,
+            haskell_backoff=config.haskell_backoff,
+        )
+        rewrite_report = egraph._run_ruleset_with_scheduler(literal_rewrite_ruleset, rewrite_scheduler)
+        analysis_report = egraph.run(analysis_schedule.saturate())
+        if config.graph_size_stop:
+            current_counts = _serialized_counts(egraph)
+            if current_counts == previous_counts:
+                break
+            previous_counts = current_counts
+        elif not (rewrite_report.updated or analysis_report.updated):
+            break
     elapsed = time.perf_counter() - start
+    return egraph, elapsed
+
+
+def _run_single_pass_haskell_literal_egraph(num: Num) -> tuple[egglog.EGraph, float]:
+    """Historical alias for the retained baseline's one-pass e-graph trace."""
+    return _run_single_pass_with_config_egraph(num, MODE_CONFIGS["egglog-baseline"])
+
+
+def _run_single_pass_haskell_literal(num: Num) -> tuple[Num, int, int, int, int, float]:
+    """
+    Mirror one Haskell `rewriteTree` pass as directly as Egglog allows.
+
+    `FixTree.rewriteTree` runs one `equalitySaturation' (BackoffScheduler 2500
+    30)`. Here we keep one fresh-rematch backoff scheduler bound to the same
+    e-graph across up to 30 rewrite iterations, and we interleave explicit
+    analysis saturation after each rewrite step because Egglog does not embed
+    that analysis inside rebuild. The scheduler also uses Haskell-style
+    backoff accounting based on substitution width instead of raw match count.
+    """
+    egraph, elapsed = _run_single_pass_haskell_literal_egraph(num)
     extracted, cost = egraph.extract(num, include_cost=True)
     total_size = sum(size for _, size in egraph.all_function_sizes())
     node_count, eclass_count = _serialized_counts(egraph)
     return extracted, int(cost), total_size, node_count, eclass_count, elapsed
+
+
+def _run_single_pass_for_mode(num: Num, mode: Mode) -> tuple[Num, int, int, int, int, float]:
+    """Run one pass using the low-level schedule controls for `mode`."""
+    config = MODE_CONFIGS[mode]
+    egraph, elapsed = _run_single_pass_with_config_egraph(num, config)
+    extracted, cost = egraph.extract(num, include_cost=True)
+    total_size = sum(size for _, size in egraph.all_function_sizes())
+    node_count, eclass_count = _serialized_counts(egraph)
+    return extracted, int(cost), total_size, node_count, eclass_count, elapsed
+
+
+def _run_single_pass(num: Num, mode: Mode = "egglog-baseline") -> tuple[Num, int, int, int, int, float]:
+    if mode in MODE_CONFIGS:
+        return _run_single_pass_for_mode(num, mode)
+    msg = f"Unsupported param-eq mode: {mode}"
+    raise ValueError(msg)
 
 
 def run_paper_pipeline(num: Num, *, mode: Mode) -> PaperPipelineReport:
@@ -1339,7 +1485,7 @@ def run_paper_pipeline(num: Num, *, mode: Mode) -> PaperPipelineReport:
     passes = 0
     status = "saturated"
     for pass_index in range(1, MAX_PASSES + 1):
-        extracted, last_cost, total_size, node_count, eclass_count, elapsed = _run_single_pass(current)
+        extracted, last_cost, total_size, node_count, eclass_count, elapsed = _run_single_pass(current, mode)
         total_sec += elapsed
         passes = pass_index
         if render_num(extracted) == render_num(current):
@@ -1368,10 +1514,10 @@ def run_paper_pipeline(num: Num, *, mode: Mode) -> PaperPipelineReport:
 
 def _cli() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("egglog-baseline",), required=True)
+    parser.add_argument("--mode", choices=tuple(MODE_CONFIGS), required=True)
     parser.add_argument("--expr", required=True)
     args = parser.parse_args()
-    report = run_paper_pipeline(parse_expression(args.expr), mode="egglog-baseline")
+    report = run_paper_pipeline(parse_expression(args.expr), mode=cast(Mode, args.mode))
     payload = {
         "mode": report.mode,
         "status": report.status,

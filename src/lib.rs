@@ -4,6 +4,7 @@ mod error;
 mod extract;
 mod freeze;
 mod py_object_sort;
+mod scheduler_handle;
 mod serialize;
 mod termdag;
 mod tracing_otel;
@@ -44,6 +45,7 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_class::<crate::serialize::SerializedEGraph>()?;
     m.add_class::<crate::egraph::EGraph>()?;
+    m.add_class::<crate::scheduler_handle::SchedulerHandle>()?;
     m.add_class::<crate::egraph::Value>()?;
     m.add_class::<crate::error::EggSmolError>()?;
     m.add_class::<crate::termdag::TermDag>()?;

@@ -976,6 +976,31 @@ class EGraph:
         assert isinstance(command_output, bindings.RunScheduleOutput)
         return command_output.report
 
+    def _add_backoff_scheduler(
+        self,
+        *,
+        match_limit: int,
+        ban_length: int,
+        egg_like: bool,
+        haskell_backoff: bool = False,
+    ) -> bindings.SchedulerHandle:
+        return self._egraph.add_backoff_scheduler(
+            match_limit,
+            ban_length,
+            egg_like=egg_like,
+            haskell_backoff=haskell_backoff,
+        )
+
+    def _run_ruleset_with_scheduler(
+        self,
+        ruleset: Ruleset | UnstableCombinedRuleset,
+        scheduler: bindings.SchedulerHandle,
+    ) -> bindings.RunReport:
+        self._add_decls(ruleset)
+        ruleset_ident = ruleset.__egg_ident__
+        self._state.ruleset_to_egg(ruleset_ident)
+        return call_with_current_trace(self._egraph.run_ruleset_with_scheduler, str(ruleset_ident), scheduler)
+
     def stats(self) -> bindings.RunReport:
         """
         Returns the overall run report for the egraph.

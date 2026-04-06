@@ -1,24 +1,27 @@
 # mypy: disable-error-code="import-untyped,no-redef,misc"
 
-"""Notebook source for comparing the retained Egglog baseline to archived paper artifacts."""
+"""Notebook source for comparing the retained Egglog baseline to archived and live Haskell artifacts."""
 
 # # 2026-03 - Replicating the Param-Eq Paper in Egglog
 #
 # This notebook rebuilds the de Franca and Kronberger (2023) paper figures from
-# the archived Haskell experiment outputs and compares them to an Egglog
-# translation of the older `param-eq-haskell` simplification pipeline.
+# the archived Haskell experiment outputs, then compares the current Egglog
+# baseline primarily against a fresh full-corpus artifact generated from the
+# current local `param-eq-haskell` code.
 #
 # The Haskell sources this notebook is tracing back to are:
 # - `../param-eq-haskell/src/FixTree.hs`
 # - `../param-eq-haskell/src/Main.hs`
 #
 # It is artifacts-first:
-# - it reads normalized Haskell artifacts from `python/egglog/exp/param_eq/artifacts`
+# - it reads normalized archived Haskell artifacts from `python/egglog/exp/param_eq/artifacts`
+# - it reads a fresh full-corpus live Haskell artifact from the same directory
 # - it reads the Egglog corpus results from the same directory
 # - it does not run Haskell at notebook execution time
 #
 # Offline regeneration commands from the repository root:
 # - `uv run python -m egglog.exp.param_eq.normalize_archives`
+# - `uv run python -m egglog.exp.param_eq.run_haskell_corpus`
 # - `uv run python -m egglog.exp.param_eq.run_egglog_corpus`
 # - `uv run python python/egglog/exp/param_eq/replication.py`
 #
@@ -45,15 +48,23 @@ alt.renderers.enable("default")
 ALGORITHM_ORDER = ["Bingo", "EPLEX", "GP-GOMEA", "Operon", "PySR", "SBP"]
 MODE_LABELS = {
     "egglog-baseline": "Egglog baseline",
+    "no-haskell-backoff": "No Haskell backoff",
+    "no-graph-size-stop": "No graph-size stop",
+    "no-bound-scheduler": "No bound scheduler",
+    "no-fresh-rematch": "No fresh rematch",
+    "egglog-haskell-literal": "Historical literal alias",
 }
 BOX_COLOR = "#4C78A8"
 POINT_COLOR = "#F58518"
 MISMATCH_COLOR = "#E45756"
-HASKELL_PATH = ARTIFACT_DIR / "haskell_paper_rows.csv"
+ARCHIVED_HASKELL_PATH = ARTIFACT_DIR / "haskell_paper_rows.csv"
+LIVE_HASKELL_PATH = ARTIFACT_DIR / "haskell_live_rows.csv"
 EGGLOG_PATH = ARTIFACT_DIR / "egglog_paper_rows.csv"
+EGGLOG_ABLATION_PATH = ARTIFACT_DIR / "egglog_ablation_rows.csv"
+ABLATION_SUMMARY_PATH = ARTIFACT_DIR / "ablation_summary.csv"
 RUNTIME_PATH = ARTIFACT_DIR / "pagie_runtime_scatter.csv"
 
-for required_path in [HASKELL_PATH, EGGLOG_PATH, RUNTIME_PATH]:
+for required_path in [ARCHIVED_HASKELL_PATH, LIVE_HASKELL_PATH, EGGLOG_PATH, RUNTIME_PATH]:
     if not required_path.exists():
         msg = f"Missing required artifact: {required_path}"
         raise FileNotFoundError(msg)
@@ -67,7 +78,7 @@ def _coerce_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 
 
 def _paper_haskell_frame() -> pd.DataFrame:
-    frame = pd.read_csv(HASKELL_PATH)
+    frame = pd.read_csv(ARCHIVED_HASKELL_PATH)
     frame = frame[frame["is_paper_row"] == 1].copy()
     return _coerce_numeric(
         frame,
@@ -88,8 +99,32 @@ def _paper_haskell_frame() -> pd.DataFrame:
     )
 
 
-def _paper_egglog_frame() -> pd.DataFrame:
-    frame = pd.read_csv(EGGLOG_PATH)
+def _live_haskell_frame() -> pd.DataFrame:
+    frame = pd.read_csv(LIVE_HASKELL_PATH)
+    frame = frame[frame["is_paper_row"] == 1].copy()
+    return _coerce_numeric(
+        frame,
+        [
+            "raw_index",
+            "algo_row",
+            "orig_nodes",
+            "orig_params",
+            "simpl_nodes",
+            "simpl_params",
+            "orig_runtime_ms",
+            "orig_nodes_sympy",
+            "orig_params_sympy",
+            "simpl_nodes_sympy",
+            "simpl_params_sympy",
+            "sympy_runtime_ms",
+            "n_params",
+            "n_rank",
+        ],
+    )
+
+
+def _paper_egglog_frame(path: os.PathLike[str] | str = EGGLOG_PATH) -> pd.DataFrame:
+    frame = pd.read_csv(path)
     frame = frame[frame["is_paper_row"] == 1].copy()
     return _coerce_numeric(
         frame,
@@ -120,6 +155,21 @@ def _paper_egglog_frame() -> pd.DataFrame:
             "sympy_extracted_cost",
         ],
     )
+
+
+def _ablation_summary_frame() -> pd.DataFrame:
+    if ABLATION_SUMMARY_PATH.exists():
+        frame = pd.read_csv(ABLATION_SUMMARY_PATH)
+        frame = _coerce_numeric(frame, ["orig_max_gap", "sympy_max_gap", "orig_median_delta", "sympy_median_delta"])
+        for column in ["orig_pattern_ok", "sympy_pattern_ok", "accepted"]:
+            if column in frame.columns:
+                frame[column] = frame[column].map(
+                    lambda value: value
+                    if isinstance(value, bool)
+                    else str(value).strip().lower() in {"1", "true", "yes", "pass"}
+                )
+        return frame
+    return pd.DataFrame()
 
 
 def _paper_runtime_frame() -> pd.DataFrame:
@@ -370,11 +420,11 @@ def summarize_egglog_reduction_vs_haskell(candidate: pd.DataFrame, baseline: pd.
     baseline_spread = baseline_medians.max() - baseline_medians.min()
     if candidate_spread < baseline_spread * 0.5:
         return (
-            f"For {context}, Egglog does not preserve the method separation visible in the archived Haskell baseline. "
+            f"For {context}, Egglog does not preserve the method separation visible in the Haskell reference artifact. "
             "The three modes collapse toward the same reduction level, which argues that Egglog is not yet reproducing the distinct effect of each pipeline stage."
         )
     return (
-        f"For {context}, Egglog broadly preserves the same qualitative ordering as the archived Haskell baseline, "
+        f"For {context}, Egglog broadly preserves the same qualitative ordering as the Haskell reference artifact, "
         "which supports the hypothesis that the reproduction is close on this slice."
     )
 
@@ -384,11 +434,11 @@ def summarize_egglog_comparison_vs_haskell(candidate: pd.DataFrame, baseline: pd
     baseline_medians = baseline.groupby("method")["ratio"].median()
     if candidate_medians.get("Sympy x EqSat", 0.0) < baseline_medians.get("Sympy x EqSat", 0.0) * 0.5:
         return (
-            f"For {context}, Egglog largely loses the extra gain that archived Haskell gets from rerunning EqSat after Sympy. "
+            f"For {context}, Egglog largely loses the extra gain that the Haskell reference artifact gets from rerunning EqSat after Sympy. "
             "That supports the current hypothesis that the remaining gap is in how Egglog reproduces the rewrite schedule and A/C-heavy search, not in the basic parser or metric bookkeeping."
         )
     return (
-        f"For {context}, Egglog retains most of the archived advantage of EqSat over the Sympy-derived inputs, "
+        f"For {context}, Egglog retains most of the Haskell-reference advantage of EqSat over the Sympy-derived inputs, "
         "which supports the baseline-reproduction hypothesis for this comparison."
     )
 
@@ -398,11 +448,11 @@ def summarize_egglog_rank_vs_haskell(candidate: pd.DataFrame, baseline: pd.DataF
     baseline_near = (baseline["simpl_rank"] <= 1).sum()
     if candidate_near >= baseline_near * 0.9:
         return (
-            f"For {context}, Egglog is close to the archived baseline on the coarse rank target. "
+            f"For {context}, Egglog is close to the Haskell reference on the coarse rank target. "
             "So the remaining mismatch is not that Egglog fails to simplify at all; it is that it still misses some of the exact final forms and some hard cases."
         )
     return (
-        f"For {context}, Egglog is still noticeably behind the archived baseline even on the coarse rank target, "
+        f"For {context}, Egglog is still noticeably behind the Haskell reference even on the coarse rank target, "
         "so the reproduction gap is visible before we look at exact expression equality."
     )
 
@@ -412,11 +462,11 @@ def summarize_egglog_runtime(frame: pd.DataFrame, *, x: str, y: str, context: st
     correlation = clean[x].corr(clean[y]) if len(clean) > 1 else 0.0
     if correlation > 0.5:
         return (
-            f"For {context}, Egglog shows the same basic size-driven runtime tail as the archived baseline. "
+            f"For {context}, Egglog shows the same basic size-driven runtime tail as the Haskell reference. "
             "That supports the idea that it is hitting the same families of hard expressions, even though some outcomes still diverge."
         )
     return (
-        f"For {context}, runtime does not track size as strongly as in the archived baseline, "
+        f"For {context}, runtime does not track size as strongly as in the Haskell reference, "
         "which would suggest a different failure mode."
     )
 
@@ -428,7 +478,7 @@ def summarize_match_scatter(frame: pd.DataFrame, *, context: str) -> str:
     if exact / total >= 0.8:
         return (
             f"For {context}, {phrase} sit on or very near the diagonal. "
-            "That supports the hypothesis that Egglog is partially reproducing the Haskell baseline on final parameter counts, but not yet meeting it exactly across the whole corpus."
+            "That supports the hypothesis that Egglog is partially reproducing the Haskell reference on final parameter counts, but not yet meeting it exactly across the whole corpus."
         )
     return (
         f"For {context}, too many points miss the diagonal for us to call the baseline reproduced yet."
@@ -446,9 +496,176 @@ def summarize_status_counts(frame: pd.DataFrame, *, context: str) -> str:
     )
 
 
-haskell = add_paper_metrics(_paper_haskell_frame(), prefix="")
+def _mode_label(mode: str) -> str:
+    return MODE_LABELS.get(mode, mode)
+
+
+def _per_algorithm_median_deltas(frame: pd.DataFrame, simpl_col: str) -> dict[str, float]:
+    deltas = frame.assign(delta=frame[simpl_col] - frame["n_params"]).groupby("algorithm")["delta"].median()
+    return {algorithm: float(deltas.get(algorithm, float("nan"))) for algorithm in ALGORITHM_ORDER}
+
+
+def _same_pattern(observed: dict[str, float], expected: dict[str, float]) -> bool:
+    return all(observed.get(algorithm) == expected.get(algorithm) for algorithm in ALGORITHM_ORDER)
+
+
+def ablation_summary_table(candidate_rows: pd.DataFrame, live_rows: pd.DataFrame) -> pd.DataFrame:
+    if candidate_rows.empty:
+        return pd.DataFrame()
+    live_orig_pattern = _per_algorithm_median_deltas(live_rows, "simpl_params")
+    live_sympy_pattern = _per_algorithm_median_deltas(live_rows, "simpl_params_sympy")
+    rows: list[dict[str, object]] = []
+    for mode, frame in candidate_rows.groupby("mode"):
+        compare = frame.merge(
+            live_rows[
+                [
+                    "dataset",
+                    "raw_index",
+                    "algorithm",
+                    "simpl_params",
+                    "simpl_params_sympy",
+                ]
+            ],
+            on=["dataset", "raw_index", "algorithm"],
+            suffixes=("_egglog", "_haskell"),
+        )
+        orig_exact = int((compare["simpl_params_egglog"] == compare["simpl_params_haskell"]).sum())
+        sympy_exact = int((compare["simpl_params_sympy_egglog"] == compare["simpl_params_sympy_haskell"]).sum())
+        orig_gap = int((compare["simpl_params_egglog"] - compare["simpl_params_haskell"]).abs().max())
+        sympy_gap = int((compare["simpl_params_sympy_egglog"] - compare["simpl_params_sympy_haskell"]).abs().max())
+        orig_median_delta = float((frame["simpl_params"] - frame["n_params"]).median())
+        sympy_median_delta = float((frame["simpl_params_sympy"] - frame["n_params"]).median())
+        orig_pattern_ok = _same_pattern(_per_algorithm_median_deltas(frame, "simpl_params"), live_orig_pattern)
+        sympy_pattern_ok = _same_pattern(_per_algorithm_median_deltas(frame, "simpl_params_sympy"), live_sympy_pattern)
+        orig_saturated = int((frame["orig_status"] == "saturated").sum())
+        sympy_saturated = int((frame["sympy_status"] == "saturated").sum())
+        accepted = (
+            orig_saturated == len(frame)
+            and sympy_saturated == len(frame)
+            and orig_median_delta == -1.0
+            and sympy_median_delta == -1.0
+            and orig_pattern_ok
+            and sympy_pattern_ok
+            and orig_exact >= 315
+            and sympy_exact >= 335
+            and orig_gap <= 2
+            and sympy_gap <= 1
+        )
+        rows.append(
+            {
+                "mode": _mode_label(str(mode)),
+                "orig_exact": f"{orig_exact}/{len(frame)}",
+                "sympy_exact": f"{sympy_exact}/{len(frame)}",
+                "orig_max_gap": orig_gap,
+                "sympy_max_gap": sympy_gap,
+                "orig_median_delta": orig_median_delta,
+                "sympy_median_delta": sympy_median_delta,
+                "orig_pattern_ok": orig_pattern_ok,
+                "sympy_pattern_ok": sympy_pattern_ok,
+                "orig_saturated": f"{orig_saturated}/{len(frame)}",
+                "sympy_saturated": f"{sympy_saturated}/{len(frame)}",
+                "accepted": accepted,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def live_baseline_ablation_row(baseline_rows: pd.DataFrame, live_rows: pd.DataFrame) -> dict[str, object]:
+    compare = baseline_rows.merge(
+        live_rows[
+            [
+                "dataset",
+                "raw_index",
+                "algorithm",
+                "simpl_params",
+                "simpl_params_sympy",
+            ]
+        ],
+        on=["dataset", "raw_index", "algorithm"],
+        suffixes=("_egglog", "_haskell"),
+    )
+    orig_exact = int((compare["simpl_params_egglog"] == compare["simpl_params_haskell"]).sum())
+    sympy_exact = int((compare["simpl_params_sympy_egglog"] == compare["simpl_params_sympy_haskell"]).sum())
+    orig_gap = int((compare["simpl_params_egglog"] - compare["simpl_params_haskell"]).abs().max())
+    sympy_gap = int((compare["simpl_params_sympy_egglog"] - compare["simpl_params_sympy_haskell"]).abs().max())
+    orig_median_delta = float((baseline_rows["simpl_params"] - baseline_rows["n_params"]).median())
+    sympy_median_delta = float((baseline_rows["simpl_params_sympy"] - baseline_rows["n_params"]).median())
+    live_orig_pattern = _per_algorithm_median_deltas(live_rows, "simpl_params")
+    live_sympy_pattern = _per_algorithm_median_deltas(live_rows, "simpl_params_sympy")
+    orig_pattern_ok = _same_pattern(_per_algorithm_median_deltas(baseline_rows, "simpl_params"), live_orig_pattern)
+    sympy_pattern_ok = _same_pattern(
+        _per_algorithm_median_deltas(baseline_rows, "simpl_params_sympy"),
+        live_sympy_pattern,
+    )
+    orig_saturated = int((baseline_rows["orig_status"] == "saturated").sum())
+    sympy_saturated = int((baseline_rows["sympy_status"] == "saturated").sum())
+    accepted = (
+        orig_saturated == len(baseline_rows)
+        and sympy_saturated == len(baseline_rows)
+        and orig_median_delta == -1.0
+        and sympy_median_delta == -1.0
+        and orig_pattern_ok
+        and sympy_pattern_ok
+        and orig_exact >= 315
+        and sympy_exact >= 335
+        and orig_gap <= 2
+        and sympy_gap <= 1
+    )
+    return {
+        "mode": _mode_label("egglog-baseline"),
+        "evaluation_scope": "full corpus",
+        "orig_exact": f"{orig_exact}/{len(baseline_rows)}",
+        "sympy_exact": f"{sympy_exact}/{len(baseline_rows)}",
+        "orig_saturated": f"{orig_saturated}/{len(baseline_rows)}",
+        "sympy_saturated": f"{sympy_saturated}/{len(baseline_rows)}",
+        "orig_max_gap": orig_gap,
+        "sympy_max_gap": sympy_gap,
+        "orig_median_delta": orig_median_delta,
+        "sympy_median_delta": sympy_median_delta,
+        "orig_pattern_ok": orig_pattern_ok,
+        "sympy_pattern_ok": sympy_pattern_ok,
+        "accepted": accepted,
+        "note": "Retained baseline against current local Haskell.",
+    }
+
+
+def refresh_baseline_row(summary: pd.DataFrame, baseline_rows: pd.DataFrame, live_rows: pd.DataFrame) -> pd.DataFrame:
+    baseline_row = pd.DataFrame([live_baseline_ablation_row(baseline_rows, live_rows)])
+    if summary.empty:
+        return baseline_row
+    without_baseline = summary[~summary["mode"].isin(["egglog-baseline", _mode_label("egglog-baseline")])].copy()
+    combined = pd.concat([baseline_row, without_baseline], ignore_index=True, sort=False)
+    column_order = list(summary.columns)
+    for column in baseline_row.columns:
+        if column not in column_order:
+            column_order.append(column)
+    return combined.reindex(columns=column_order)
+
+
+def summarize_ablation_results(frame: pd.DataFrame) -> str:
+    if frame.empty:
+        return "No ablation artifact is available yet, so the scheduler-ablation acceptance check could not be evaluated."
+    accepted = frame[frame["accepted"]]
+    baseline_row = frame[frame["mode"].isin(["egglog-baseline", _mode_label("egglog-baseline")])]
+    assert not baseline_row.empty
+    if len(accepted) == 1 and accepted.iloc[0]["mode"] in {"egglog-baseline", _mode_label("egglog-baseline")}:
+        return (
+            "Only the retained baseline preserves the live-Haskell notebook conclusions. "
+            "That means the tested scheduler customizations still look necessary as a stack, and the next work should return to the small remaining row-level mismatch tail."
+        )
+    accepted_modes = ", ".join(str(mode) for mode in accepted["mode"])
+    return (
+        "More than one mode preserves the live-Haskell notebook conclusions. "
+        f"The currently acceptable stack(s) are: {accepted_modes}. Prefer the simplest surviving one."
+    )
+
+
+archived_haskell = add_paper_metrics(_paper_haskell_frame(), prefix="")
+live_haskell = add_paper_metrics(_live_haskell_frame(), prefix="")
 egglog = add_paper_metrics(_paper_egglog_frame(), prefix="")
 runtime_rows = _paper_runtime_frame()
+
+haskell = archived_haskell
 
 egglog_baseline = egglog[egglog["mode"] == "egglog-baseline"].copy()
 haskell_box_methods = {
@@ -461,7 +678,7 @@ comparison_methods = {
     "Sympy + EqSat x EqSat": "sympyegg_x_egg",
 }
 
-haskell_table4 = comparison_table(haskell, implementation="Haskell")
+haskell_table4 = comparison_table(archived_haskell, implementation="Archived Haskell")
 egglog_table4 = pd.concat(
     [
         comparison_table(egglog_baseline, implementation="Egglog baseline"),
@@ -470,7 +687,7 @@ egglog_table4 = pd.concat(
 )
 
 baseline_compare = egglog_baseline.merge(
-    haskell[
+    live_haskell[
         [
             "dataset",
             "raw_index",
@@ -497,14 +714,43 @@ baseline_compare["orig_abs_gap"] = (
 status_rows = egglog_baseline.assign(status=egglog_baseline["orig_status"], mode_label="Egglog baseline")[
     ["status", "mode_label"]
 ].rename(columns={"mode_label": "mode"})
+
+archive_drift = live_haskell.merge(
+    archived_haskell[
+        [
+            "dataset",
+            "raw_index",
+            "algorithm",
+            "simpl_params",
+            "simpl_params_sympy",
+        ]
+    ],
+    on=["dataset", "raw_index", "algorithm"],
+    suffixes=("_live", "_archived"),
+)
+archive_drift["orig_param_drift"] = archive_drift["simpl_params_live"] - archive_drift["simpl_params_archived"]
+archive_drift["sympy_param_drift"] = (
+    archive_drift["simpl_params_sympy_live"] - archive_drift["simpl_params_sympy_archived"]
+)
+live_fallback_rows = live_haskell[live_haskell["baseline_source"] != "live_haskell"][
+    ["dataset", "algorithm", "algo_row", "baseline_source", "orig_live_status", "sympy_live_status"]
+].drop_duplicates()
+if ABLATION_SUMMARY_PATH.exists():
+    ablation_summary = _ablation_summary_frame()
+else:
+    egglog_ablations = (
+        add_paper_metrics(_paper_egglog_frame(EGGLOG_ABLATION_PATH), prefix="") if EGGLOG_ABLATION_PATH.exists() else pd.DataFrame()
+    )
+    ablation_summary = ablation_summary_table(egglog_ablations, live_haskell)
+ablation_summary = refresh_baseline_row(ablation_summary, egglog_baseline, live_haskell)
 # -
 
 # ## 1. Provenance
 #
-# This notebook uses the retained `param-eq-haskell` checkout and its archived
-# paper outputs:
-# - `param-eq-haskell`, which contains the archived experiment tables and the
-#   original plotting notebook used to build the paper figures
+# This notebook uses two Haskell-side baselines:
+# - the archived paper outputs, which define the published target figures
+# - a fresh full-corpus artifact generated by running the current local
+#   `param-eq-haskell` checkout on the same retained rows
 #
 # The normalized artifacts already include the paper cleanup from the original
 # notebook:
@@ -521,6 +767,8 @@ summary = [
     f"- Pagie rows after cleanup: `{int((haskell['dataset'] == 'pagie').sum())}`",
     f"- Kotanchek rows after cleanup: `{int((haskell['dataset'] == 'kotanchek').sum())}`",
     f"- Pagie runtime scatter rows: `{len(runtime_rows)}`",
+    f"- Live Haskell corpus rows available: `{len(live_haskell)}`",
+    f"- Scheduler ablation summary rows available: `{len(ablation_summary)}`",
 ]
 display(Markdown("## Artifact Overview\n\n" + "\n".join(summary)))
 # -
@@ -635,7 +883,63 @@ display(
 )
 # -
 
-# ## 3. Egglog Translation of the Older Hegg-Era Pipeline
+# ## 3. Drift Between Published And Current Local Haskell
+#
+# Before comparing Egglog to Haskell, it is useful to separate true Egglog
+# mismatches from drift between the published archived rows and the current
+# local `param-eq-haskell` implementation.
+
+# +
+archive_drift_summary = pd.DataFrame(
+    [
+        {
+            "comparison": "original expressions",
+            "exact_param_matches": int((archive_drift["orig_param_drift"] == 0).sum()),
+            "total_rows": len(archive_drift),
+            "nonzero_drift_rows": int((archive_drift["orig_param_drift"] != 0).sum()),
+        },
+        {
+            "comparison": "sympy expressions",
+            "exact_param_matches": int((archive_drift["sympy_param_drift"] == 0).sum()),
+            "total_rows": len(archive_drift),
+            "nonzero_drift_rows": int((archive_drift["sympy_param_drift"] != 0).sum()),
+        },
+    ]
+)
+display(Markdown("### Published archived rows vs current local Haskell"))
+display(archive_drift_summary)
+# -
+
+# +
+archive_drift_top = archive_drift.assign(abs_orig_drift=archive_drift["orig_param_drift"].abs())[
+    [
+        "dataset",
+        "algorithm",
+        "algo_row",
+        "orig_param_drift",
+        "sympy_param_drift",
+        "simpl_params_live",
+        "simpl_params_archived",
+        "simpl_params_sympy_live",
+        "simpl_params_sympy_archived",
+    ]
+].sort_values(["orig_param_drift"], key=lambda s: s.abs(), ascending=False)
+display(Markdown("### Largest published-vs-live Haskell drifts"))
+display(archive_drift_top.head(12))
+display(Markdown("### Live-Haskell fallback rows"))
+display(live_fallback_rows if not live_fallback_rows.empty else pd.DataFrame([{"status": "none"}]))
+show_note(
+    (
+        f"The published and current local Haskell results already drift on "
+        f"`{int((archive_drift['orig_param_drift'] != 0).sum())}` of `{len(archive_drift)}` original rows "
+        f"and `{int((archive_drift['sympy_param_drift'] != 0).sum())}` of `{len(archive_drift)}` sympy rows. "
+        f"The live artifact currently carries `{len(live_fallback_rows)}` archived fallback rows because those current local Haskell reruns still overflow their stack budget. "
+        "So Egglog should now be judged primarily against the live Haskell artifact, while the archived rows remain important as the published-paper reference and as fallback for the pathological live rows."
+    )
+)
+# -
+
+# ## 4. Egglog Translation of the Older Hegg-Era Pipeline
 #
 # The Egglog runner uses the archived experiment harness as the baseline:
 # - the older expression language from the paper-era code
@@ -650,12 +954,12 @@ baseline_summary = [
 display(Markdown("## Egglog Run Overview\n\n" + "\n".join(baseline_summary)))
 # -
 
-# ## 4. Haskell vs Egglog Comparison
+# ## 5. Current Local Haskell vs Egglog Comparison
 #
-# The next figures mirror the paper plots with Egglog data. For the Egglog
-# charts, "Sympy" means the archived Sympy output re-counted by the Egglog
-# parser, and "Sympy + EqSat" means running the Egglog EqSat translation on the
-# archived Sympy expression.
+# The next figures compare Egglog to the current local Haskell corpus artifact.
+# For the Egglog charts, "Sympy" means the archived Sympy output re-counted by
+# the Egglog parser, and "Sympy + EqSat" means running the Egglog EqSat
+# translation on the archived Sympy expression.
 
 # +
 show_chart(
@@ -670,8 +974,8 @@ show_chart(
 show_note(
     summarize_egglog_reduction_vs_haskell(
         melt_methods(egglog_baseline[egglog_baseline["dataset"] == "pagie"], columns=haskell_box_methods, value_name="ratio"),
-        melt_methods(haskell[haskell["dataset"] == "pagie"], columns=haskell_box_methods, value_name="ratio"),
-        context="the Egglog baseline Pagie rows",
+        melt_methods(live_haskell[live_haskell["dataset"] == "pagie"], columns=haskell_box_methods, value_name="ratio"),
+        context="the Egglog baseline Pagie rows against current local Haskell",
     )
 )
 # -
@@ -689,8 +993,8 @@ show_chart(
 show_note(
     summarize_egglog_comparison_vs_haskell(
         melt_methods(egglog_baseline[egglog_baseline["dataset"] == "pagie"], columns=comparison_methods, value_name="ratio"),
-        melt_methods(haskell[haskell["dataset"] == "pagie"], columns=comparison_methods, value_name="ratio"),
-        context="the Egglog baseline Pagie comparisons",
+        melt_methods(live_haskell[live_haskell["dataset"] == "pagie"], columns=comparison_methods, value_name="ratio"),
+        context="the Egglog baseline Pagie comparisons against current local Haskell",
     )
 )
 # -
@@ -708,8 +1012,8 @@ show_chart(
 show_note(
     summarize_egglog_reduction_vs_haskell(
         melt_methods(egglog_baseline[egglog_baseline["dataset"] == "kotanchek"], columns=haskell_box_methods, value_name="ratio"),
-        melt_methods(haskell[haskell["dataset"] == "kotanchek"], columns=haskell_box_methods, value_name="ratio"),
-        context="the Egglog baseline Kotanchek rows",
+        melt_methods(live_haskell[live_haskell["dataset"] == "kotanchek"], columns=haskell_box_methods, value_name="ratio"),
+        context="the Egglog baseline Kotanchek rows against current local Haskell",
     )
 )
 # -
@@ -727,15 +1031,21 @@ show_chart(
 show_note(
     summarize_egglog_comparison_vs_haskell(
         melt_methods(egglog_baseline[egglog_baseline["dataset"] == "kotanchek"], columns=comparison_methods, value_name="ratio"),
-        melt_methods(haskell[haskell["dataset"] == "kotanchek"], columns=comparison_methods, value_name="ratio"),
-        context="the Egglog baseline Kotanchek comparisons",
+        melt_methods(live_haskell[live_haskell["dataset"] == "kotanchek"], columns=comparison_methods, value_name="ratio"),
+        context="the Egglog baseline Kotanchek comparisons against current local Haskell",
     )
 )
 # -
 
 # +
 show_chart(rank_boxplot(egglog_baseline, title="Egglog baseline analog of Figure 7"))
-show_note(summarize_egglog_rank_vs_haskell(egglog_baseline, haskell, context="the Egglog baseline runs"))
+show_note(
+    summarize_egglog_rank_vs_haskell(
+        egglog_baseline,
+        live_haskell,
+        context="the Egglog baseline runs against current local Haskell",
+    )
+)
 # -
 
 # +
@@ -778,7 +1088,7 @@ exact_match_rows = pd.DataFrame([
         "total_rows": len(baseline_compare),
     },
 ])
-display(Markdown("### Exact-match counts against archived Haskell parameter totals"))
+display(Markdown("### Exact-match counts against current local Haskell parameter totals"))
 display(exact_match_rows)
 # -
 
@@ -789,7 +1099,7 @@ show_chart(
     alt.Chart(baseline_orig_scatter)
     .mark_circle(size=78, opacity=0.82, stroke="white", strokeWidth=0.85)
     .encode(
-        x=alt.X("simpl_params_haskell:Q", title="Archived Haskell final params"),
+        x=alt.X("simpl_params_haskell:Q", title="Current local Haskell final params"),
         y=alt.Y("simpl_params_egglog:Q", title="Egglog baseline final params"),
         color=alt.Color(
             "match:N",
@@ -798,7 +1108,7 @@ show_chart(
         ),
         tooltip=["dataset", "algorithm", "algo_row", "simpl_params_haskell", "simpl_params_egglog", "orig_rendered"],
     )
-    .properties(title="Egglog baseline vs archived Haskell final parameter counts", width=360, height=320)
+    .properties(title="Egglog baseline vs current local Haskell final parameter counts", width=360, height=320)
 )
 show_note(summarize_match_scatter(baseline_orig_scatter, context="saturated original-expression rows"))
 # -
@@ -838,8 +1148,8 @@ display(
         "\n".join([
             "## Comparison Summary",
             "",
-            f"- Egglog baseline exactly matches archived Haskell final parameter counts on `{int(baseline_compare['orig_param_match'].sum())}` of `{len(baseline_compare)}` original-expression rows.",
-            f"- Egglog baseline exactly matches archived Haskell `Sympy + EqSat` parameter counts on `{int(baseline_compare['sympy_param_match'].sum())}` of `{len(baseline_compare)}` sympy-expression rows.",
+            f"- Egglog baseline exactly matches current local Haskell final parameter counts on `{int(baseline_compare['orig_param_match'].sum())}` of `{len(baseline_compare)}` original-expression rows.",
+            f"- Egglog baseline exactly matches current local Haskell `Sympy + EqSat` parameter counts on `{int(baseline_compare['sympy_param_match'].sum())}` of `{len(baseline_compare)}` sympy-expression rows.",
             f"- Egglog baseline original-input timeouts or failures occur on `{int((egglog_baseline['orig_status'] != 'saturated').sum())}` of `{len(egglog_baseline)}` paper rows.",
             f"- Egglog baseline sympy-input timeouts or failures occur on `{int((egglog_baseline['sympy_status'] != 'saturated').sum())}` of `{len(egglog_baseline)}` paper rows.",
         ])
@@ -847,52 +1157,60 @@ display(
 )
 # -
 
-# ## 5. Current Limitations and Likely A/C Effects
+# ## 6. Scheduler Ablation
 #
-# The statements below are derived from the loaded artifacts and then connected
-# back to the rewrite structure in the archived source.
+# These rows remove one scheduler customization at a time while keeping the
+# Haskell rewrite set and explicit analysis structure fixed.
 
 # +
-baseline_failures = egglog_baseline[egglog_baseline["orig_status"] != "saturated"].copy()
-failure_by_algorithm = baseline_failures.groupby("algorithm").size().sort_values(ascending=False)
-sympy_success_delta = int(
-    (egglog_baseline["sympy_status"] == "saturated").sum() - (egglog_baseline["orig_status"] == "saturated").sum()
+display(Markdown("### Scheduler ablation acceptance table"))
+if ablation_summary.empty:
+    display(pd.DataFrame([{"status": "no ablation artifact available"}]))
+else:
+    display(ablation_summary)
+show_note(summarize_ablation_results(ablation_summary))
+# -
+
+# ## 7. Current Limitations
+#
+# The statements below are derived from the loaded artifacts, using current
+# local Haskell as the primary comparison target and the archived paper rows as
+# the published-reference target.
+
+# +
+orig_mismatches = baseline_compare[~baseline_compare["orig_param_match"]].copy()
+sympy_mismatches = baseline_compare[~baseline_compare["sympy_param_match"]].copy()
+orig_by_algorithm = orig_mismatches.groupby(["dataset", "algorithm"]).size().sort_values(ascending=False)
+sympy_by_algorithm = sympy_mismatches.groupby(["dataset", "algorithm"]).size().sort_values(ascending=False)
+orig_max_gap = float(baseline_compare["orig_abs_gap"].max())
+sympy_max_gap = float(
+    (
+        baseline_compare["simpl_params_sympy_egglog"] - baseline_compare["simpl_params_sympy_haskell"]
+    )
+    .abs()
+    .max()
 )
-source_node_sizes = haskell[["dataset", "raw_index", "algorithm", "orig_nodes"]].rename(
-    columns={"orig_nodes": "source_orig_nodes"}
+archive_orig_drift = int((archive_drift["orig_param_drift"] != 0).sum())
+archive_sympy_drift = int((archive_drift["sympy_param_drift"] != 0).sum())
+accepted_ablation_modes = (
+    ", ".join(ablation_summary.loc[ablation_summary["accepted"], "mode"].tolist()) if not ablation_summary.empty else "unavailable"
 )
-baseline_failures_with_sizes = baseline_failures.merge(
-    source_node_sizes, on=["dataset", "raw_index", "algorithm"], how="left"
-)
-baseline_sat_with_sizes = egglog_baseline[egglog_baseline["orig_status"] == "saturated"].merge(
-    source_node_sizes,
-    on=["dataset", "raw_index", "algorithm"],
-    how="left",
-)
-baseline_timeout_median_nodes = baseline_failures_with_sizes["source_orig_nodes"].median()
-baseline_sat_median_nodes = baseline_sat_with_sizes["source_orig_nodes"].median()
 
 conclusion_lines = [
-    f"- The Egglog baseline saturates on `{int((egglog_baseline['orig_status'] == 'saturated').sum())}` of `{len(egglog_baseline)}` original paper rows, but on `{int((egglog_baseline['sympy_status'] == 'saturated').sum())}` of `{len(egglog_baseline)}` archived Sympy rows.",
-    f"- The archived Sympy inputs therefore remove `{sympy_success_delta}` baseline failures, which is consistent with the paper's observation that preprocessing can cut down the parameter-reduction problem before EqSat runs.",
-    f"- Using the archived source-node counts for the same rows, the median original node count for Egglog baseline failures is `{baseline_timeout_median_nodes:.1f}`, versus `{baseline_sat_median_nodes:.1f}` for saturated rows; the runtime tail still tracks expression size.",
-    f"- Failures are concentrated in `{', '.join(f'{alg} ({count})' for alg, count in failure_by_algorithm.items()) or 'none'}`, which points to specific expression families rather than a uniform issue across all algorithms.",
-    f"- The baseline still has a median original-input gap-to-rank of `{float(egglog_baseline['simpl_rank'].median()):.2f}`, versus `{float(haskell['simpl_rank'].median()):.2f}` in the archived Haskell results.",
+    f"- The Egglog baseline now saturates on all `{len(egglog_baseline)}` retained paper rows for both original and sympy inputs.",
+    f"- Against the current local Haskell artifact, Egglog exactly matches final parameter counts on `{int(baseline_compare['orig_param_match'].sum())}` of `{len(baseline_compare)}` original rows and `{int(baseline_compare['sympy_param_match'].sum())}` of `{len(baseline_compare)}` sympy rows.",
+    f"- The live Haskell artifact currently includes `{len(live_fallback_rows)}` archived fallback rows for cases that still overflow the current local Haskell stack budget.",
+    f"- The remaining original-input gaps are small: the largest current live-Haskell gap is `{orig_max_gap:.0f}` parameters.",
+    f"- The remaining sympy-input gaps are also small: the largest current live-Haskell gap is `{sympy_max_gap:.0f}` parameter.",
+    f"- The published archived rows drift from current local Haskell on `{archive_orig_drift}` original rows and `{archive_sympy_drift}` sympy rows, so not every paper-row mismatch should be treated as an Egglog bug.",
+    f"- Original-input live mismatches are currently concentrated in `{', '.join(f'{dataset} {alg} ({count})' for (dataset, alg), count in orig_by_algorithm.head(6).items()) or 'none'}`.",
+    f"- Sympy-input live mismatches are currently concentrated in `{', '.join(f'{dataset} {alg} ({count})' for (dataset, alg), count in sympy_by_algorithm.head(6).items()) or 'none'}`.",
+    f"- Scheduler ablation modes that still preserve the current notebook-level live-Haskell conclusions: `{accepted_ablation_modes}`.",
     "",
-    "The archived rule sets suggest that A/C pressure is most likely to affect:",
-    "- `+` and `*` associativity and commutativity rewrites, especially when chained through factorization-style rewrites and reciprocal rewrites.",
-    "- distributivity and refactorization rules that depend on binary tree shape, such as `(x*y) + (x*z) -> x*(y+z)` and its surrounding normalization rules.",
-    "- power-merging and logarithm rewrites, where repeated multiplication and reassociation can create many equivalent binary trees before extraction.",
-    "",
-    "The best follow-up points for a multiset experiment are:",
-    "- additive islands that currently rely on repeated binary reassociation before a factorization rewrite becomes visible",
-    "- multiplicative islands that feed reciprocal and logarithm rewrites",
-    "- classes where constant-analysis guards still block paper rewrites that the Haskell implementation can fire after rebuild",
-    "",
-    "The expected outcomes to test next are:",
-    "- a shorter runtime tail on the Pagie expressions that currently timeout in Egglog baseline",
-    "- fewer rows where Egglog remains above the archived rank target after simplification",
-    "- less dependence on repeated binary reassociation once A/C-heavy structure is containerized directly",
+    "The practical next step is now narrower than before:",
+    "- if only the retained baseline survives the ablation gate, keep the current scheduler stack and return to the small live-mismatch tail",
+    "- if a simpler ablation survives, prefer that simpler stack and then regenerate the live comparison notebook from it",
+    "- either way, classify the two live-Haskell fallback rows separately from true Egglog mismatches",
 ]
 display(Markdown("## Conclusion\n\n" + "\n".join(conclusion_lines)))
 # -

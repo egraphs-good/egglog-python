@@ -78,6 +78,7 @@ __all__ = [
     "RustSpan",
     "Saturate",
     "Scan",
+    "SchedulerHandle",
     "Schema",
     "Sequence",
     "SerializedEGraph",
@@ -135,6 +136,22 @@ class EGraph:
     def run_program(
         self, *commands: _Command, traceparent: str | None = None, tracestate: str | None = None
     ) -> list[_CommandOutput]: ...
+    def add_backoff_scheduler(
+        self,
+        match_limit: int,
+        ban_length: int,
+        *,
+        egg_like: bool = False,
+        haskell_backoff: bool = False,
+    ) -> SchedulerHandle: ...
+    def run_ruleset_with_scheduler(
+        self,
+        ruleset: str,
+        scheduler: SchedulerHandle,
+        *,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
+    ) -> RunReport: ...
     def serialize(
         self,
         root_eclasses: list[_Expr],
@@ -174,6 +191,9 @@ class Value:
     def __le__(self, other: object) -> bool: ...
     def __gt__(self, other: object) -> bool: ...
     def __ge__(self, other: object) -> bool: ...
+
+@final
+class SchedulerHandle: ...
 
 @final
 class EggSmolError(Exception):
