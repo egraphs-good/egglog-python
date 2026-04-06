@@ -1,4 +1,4 @@
-"""Run retained Egglog param-eq baseline and ablation modes across the paper rows."""
+"""Run the retained Egglog param-eq baseline across the paper rows."""
 
 from __future__ import annotations
 
@@ -12,27 +12,17 @@ import signal
 import subprocess
 import sys
 import time
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 
 from egglog.exp.param_eq.paths import ARTIFACT_DIR
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 TIMEOUT_SEC = 180.0
 
 OUTPUT_DIR = ARTIFACT_DIR
 HASKELL_ROWS_PATH = OUTPUT_DIR / "haskell_paper_rows.csv"
 EGGLOG_ROWS_PATH = OUTPUT_DIR / "egglog_paper_rows.csv"
-ABLATION_ROWS_PATH = OUTPUT_DIR / "egglog_ablation_rows.csv"
-
-DEFAULT_MODES = ("egglog-baseline",)
-ABLATION_MODES = (
-    "egglog-baseline",
-    "no-haskell-backoff",
-    "no-graph-size-stop",
-    "no-bound-scheduler",
-    "no-fresh-rematch",
-)
-ALL_MODES = DEFAULT_MODES + tuple(mode for mode in ABLATION_MODES if mode not in DEFAULT_MODES) + (
-    "egglog-haskell-literal",
-)
+DEFAULT_WORKERS = max(1, min(os.cpu_count() or 1, 4))
 
 
 def _load_rows() -> list[dict[str, str]]:
@@ -40,7 +30,7 @@ def _load_rows() -> list[dict[str, str]]:
         return [row for row in csv.DictReader(handle) if row["is_paper_row"] == "1"]
 
 
-def _run_one(source: str, mode: str) -> dict[str, str]:
+def _run_one(source: str) -> dict[str, str]:
     start = time.perf_counter()
     proc: subprocess.Popen[str] | None = None
     try:
@@ -49,8 +39,6 @@ def _run_one(source: str, mode: str) -> dict[str, str]:
                 sys.executable,
                 "-m",
                 "egglog.exp.param_eq",
-                "--mode",
-                mode,
                 f"--expr={source}",
             ],
             text=True,
@@ -113,106 +101,121 @@ def _run_one(source: str, mode: str) -> dict[str, str]:
     }
 
 
+def _run_row(source_row: dict[str, str]) -> dict[str, str]:
+    original = _run_one(source_row["original_expr"])
+    sympy = _run_one(source_row["sympy_expr"])
+    return {
+        "dataset": source_row["dataset"],
+        "raw_index": source_row["raw_index"],
+        "algorithm_raw": source_row["algorithm_raw"],
+        "algorithm": source_row["algorithm"],
+        "algo_row": source_row["algo_row"],
+        "is_paper_row": source_row["is_paper_row"],
+        "drop_reason": source_row["drop_reason"],
+        "n_params": source_row["n_params"],
+        "n_rank": source_row["n_rank"],
+        "original_expr": source_row["original_expr"],
+        "sympy_expr": source_row["sympy_expr"],
+        "orig_status": original["status"],
+        "orig_runtime_ms": original["runtime_ms"],
+        "orig_nodes": original["before_nodes"],
+        "orig_params": original["before_params"],
+        "simpl_nodes": original["after_nodes"],
+        "simpl_params": original["after_params"],
+        "orig_total_size": original["total_size"],
+        "orig_egraph_nodes": original["egraph_nodes"],
+        "orig_eclass_count": original["eclass_count"],
+        "orig_passes": original["passes"],
+        "orig_extracted_cost": original["extracted_cost"],
+        "orig_rendered": original["rendered"],
+        "sympy_status": sympy["status"],
+        "sympy_runtime_ms": sympy["runtime_ms"],
+        "orig_nodes_sympy": sympy["before_nodes"],
+        "orig_params_sympy": sympy["before_params"],
+        "simpl_nodes_sympy": sympy["after_nodes"],
+        "simpl_params_sympy": sympy["after_params"],
+        "sympy_total_size": sympy["total_size"],
+        "sympy_egraph_nodes": sympy["egraph_nodes"],
+        "sympy_eclass_count": sympy["eclass_count"],
+        "sympy_passes": sympy["passes"],
+        "sympy_extracted_cost": sympy["extracted_cost"],
+        "sympy_rendered": sympy["rendered"],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--mode",
-        action="append",
-        choices=ALL_MODES,
-        help="Pipeline mode to evaluate. Repeat to compare multiple modes.",
-    )
     parser.add_argument(
         "--output",
         default=str(EGGLOG_ROWS_PATH),
         help="Where to write the resulting CSV artifact.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help="Number of Egglog rows to evaluate in parallel.",
+    )
     args = parser.parse_args()
-    modes = tuple(args.mode) if args.mode else DEFAULT_MODES
     output_path = pathlib.Path(args.output)
 
     rows = _load_rows()
-    total = len(rows) * len(modes)
+    total = len(rows)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_suffix(".csv.partial")
-    completed_keys: set[tuple[str, str, str, str, str]] = set()
+    completed_keys: set[tuple[str, str, str, str]] = set()
     fieldnames: list[str] | None = None
     if temp_path.exists():
         with temp_path.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
             fieldnames = list(reader.fieldnames) if reader.fieldnames is not None else None
             for row in reader:
-                completed_keys.add((row["dataset"], row["raw_index"], row["algorithm"], row["algo_row"], row["mode"]))
+                completed_keys.add((row["dataset"], row["raw_index"], row["algorithm"], row["algo_row"]))
 
-    counter = len(completed_keys)
+    pending_rows = [
+        row
+        for row in rows
+        if (
+            row["dataset"],
+            row["raw_index"],
+            row["algorithm"],
+            row["algo_row"],
+        )
+        not in completed_keys
+    ]
     with temp_path.open("a" if completed_keys else "w", newline="", encoding="utf-8") as handle:
         writer: csv.DictWriter[str] | None = None
         if fieldnames is not None:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        for source_row in rows:
-            for mode in modes:
-                key = (
-                    source_row["dataset"],
-                    source_row["raw_index"],
-                    source_row["algorithm"],
-                    source_row["algo_row"],
-                    mode,
-                )
-                if key in completed_keys:
-                    continue
-                counter += 1
-                if counter == 1 or counter % 25 == 0:
-                    print(
-                        f"[{counter}/{total}] {source_row['dataset']} {source_row['algorithm']}#{source_row['algo_row']} {mode}",
-                        flush=True,
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+        ) as progress:
+            task = progress.add_task("egglog rows", total=total, completed=len(completed_keys))
+            with ThreadPoolExecutor(max_workers=args.workers) as executor:
+                futures: dict[Future[dict[str, str]], tuple[str, str, str, str]] = {
+                    executor.submit(_run_row, row): (
+                        row["dataset"],
+                        row["raw_index"],
+                        row["algorithm"],
+                        row["algo_row"],
                     )
-                original = _run_one(source_row["original_expr"], mode)
-                sympy = _run_one(source_row["sympy_expr"], mode)
-                output_row = {
-                    "dataset": source_row["dataset"],
-                    "raw_index": source_row["raw_index"],
-                    "algorithm_raw": source_row["algorithm_raw"],
-                    "algorithm": source_row["algorithm"],
-                    "algo_row": source_row["algo_row"],
-                    "is_paper_row": source_row["is_paper_row"],
-                    "drop_reason": source_row["drop_reason"],
-                    "n_params": source_row["n_params"],
-                    "n_rank": source_row["n_rank"],
-                    "mode": mode,
-                    "original_expr": source_row["original_expr"],
-                    "sympy_expr": source_row["sympy_expr"],
-                    "orig_status": original["status"],
-                    "orig_runtime_ms": original["runtime_ms"],
-                    "orig_nodes": original["before_nodes"],
-                    "orig_params": original["before_params"],
-                    "simpl_nodes": original["after_nodes"],
-                    "simpl_params": original["after_params"],
-                    "orig_total_size": original["total_size"],
-                    "orig_egraph_nodes": original["egraph_nodes"],
-                    "orig_eclass_count": original["eclass_count"],
-                    "orig_passes": original["passes"],
-                    "orig_extracted_cost": original["extracted_cost"],
-                    "orig_rendered": original["rendered"],
-                    "sympy_status": sympy["status"],
-                    "sympy_runtime_ms": sympy["runtime_ms"],
-                    "orig_nodes_sympy": sympy["before_nodes"],
-                    "orig_params_sympy": sympy["before_params"],
-                    "simpl_nodes_sympy": sympy["after_nodes"],
-                    "simpl_params_sympy": sympy["after_params"],
-                    "sympy_total_size": sympy["total_size"],
-                    "sympy_egraph_nodes": sympy["egraph_nodes"],
-                    "sympy_eclass_count": sympy["eclass_count"],
-                    "sympy_passes": sympy["passes"],
-                    "sympy_extracted_cost": sympy["extracted_cost"],
-                    "sympy_rendered": sympy["rendered"],
+                    for row in pending_rows
                 }
-                if fieldnames is None:
-                    fieldnames = list(output_row)
-                    writer = csv.DictWriter(handle, fieldnames=fieldnames)
-                    writer.writeheader()
-                assert writer is not None
-                writer.writerow(output_row)
-                handle.flush()
-                completed_keys.add(key)
+                for future in as_completed(futures):
+                    output_row = future.result()
+                    if fieldnames is None:
+                        fieldnames = list(output_row)
+                        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                        writer.writeheader()
+                    assert writer is not None
+                    writer.writerow(output_row)
+                    handle.flush()
+                    completed_keys.add(futures[future])
+                    progress.advance(task)
     temp_path.replace(output_path)
 
 

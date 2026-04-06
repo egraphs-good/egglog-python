@@ -42,7 +42,8 @@ import math
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Literal, TypeAlias, cast
+from itertools import count
+from typing import ClassVar, Literal, TypeAlias
 
 import egglog
 from egglog import *
@@ -50,7 +51,6 @@ from egglog.deconstruct import get_callable_args
 from egglog.egraph import FactLike
 
 __all__ = [
-    "Mode",
     "Num",
     "NumLike",
     "PaperPipelineReport",
@@ -64,18 +64,9 @@ __all__ = [
 
 MAX_PASSES = 2
 HASKELL_INNER_ITERATION_LIMIT = 30
-BACKOFF_MATCH_LIMIT = 2500
+BACKOFF_MATCH_LIMIT = 1000
 BACKOFF_BAN_LENGTH = 30
 CONST_MERGE_TOLERANCE = 1e-6
-
-Mode = Literal[
-    "egglog-baseline",
-    "egglog-haskell-literal",
-    "no-haskell-backoff",
-    "no-graph-size-stop",
-    "no-bound-scheduler",
-    "no-fresh-rematch",
-]
 
 
 # Language and ruleset declarations
@@ -464,9 +455,15 @@ def _const_propagation(
 # Guard helpers
 GuardConditions: TypeAlias = tuple[FactLike, ...]
 GuardCases: TypeAlias = tuple[GuardConditions, ...]
+_CONST_GUARD_COUNTER = count()
+
+def _fresh_const_guard_value(prefix: str = "_const_value") -> f64:
+    return var(f"{prefix}_{next(_CONST_GUARD_COUNTER)}", f64)
 
 
-def is_const(num: Num, value: f64) -> GuardConditions:
+def is_const(num: Num, value: f64 | None = None) -> GuardConditions:
+    if value is None:
+        value = _fresh_const_guard_value()
     return (const_value(num) == OptionalF64.some(value),)
 
 
@@ -474,19 +471,27 @@ def is_not_const(num: Num) -> GuardConditions:
     return (const_value(num) == OptionalF64.none,)
 
 
-def _is_nonnegative_const(num: Num, value: f64) -> GuardConditions:
+def _is_nonnegative_const(num: Num, value: f64 | None = None) -> GuardConditions:
+    if value is None:
+        value = _fresh_const_guard_value("_nonnegative_const_value")
     return (*is_const(num, value), value >= 0.0)
 
 
-def _is_positive_const(num: Num, value: f64) -> GuardConditions:
+def _is_positive_const(num: Num, value: f64 | None = None) -> GuardConditions:
+    if value is None:
+        value = _fresh_const_guard_value("_positive_const_value")
     return (*is_const(num, value), value > 0.0)
 
 
-def is_negative(num: Num, value: f64) -> GuardConditions:
+def is_negative(num: Num, value: f64 | None = None) -> GuardConditions:
+    if value is None:
+        value = _fresh_const_guard_value("_negative_const_value")
     return (*is_const(num, value), value < 0.0)
 
 
-def is_not_zero(num: Num, value: f64) -> GuardCases:
+def is_not_zero(num: Num, value: f64 | None = None) -> GuardCases:
+    if value is None:
+        value = _fresh_const_guard_value("_nonzero_const_value")
     return (
         is_not_const(num),
         _is_positive_const(num, value),
@@ -494,7 +499,16 @@ def is_not_zero(num: Num, value: f64) -> GuardCases:
     )
 
 
-def is_not_neg_consts(left: Num, right: Num, left_value: f64, right_value: f64) -> GuardCases:
+def is_not_neg_consts(
+    left: Num,
+    right: Num,
+    left_value: f64 | None = None,
+    right_value: f64 | None = None,
+) -> GuardCases:
+    if left_value is None:
+        left_value = _fresh_const_guard_value("_left_nonnegative_const_value")
+    if right_value is None:
+        right_value = _fresh_const_guard_value("_right_nonnegative_const_value")
     return (
         _is_nonnegative_const(left, left_value),
         _is_nonnegative_const(right, right_value),
@@ -587,11 +601,11 @@ def _basic_mul_div(x: Num, y: Num, z: Num) -> Iterable[RewriteOrRule]:
 
 
 @basic_product_regroup_rules.register
-def _basic_product_regroup(a: Num, b: Num, x: Num, y: Num, ca: f64, cb: f64) -> Iterable[RewriteOrRule]:
+def _basic_product_regroup(a: Num, b: Num, x: Num, y: Num) -> Iterable[RewriteOrRule]:
     yield rewrite((a * x) * (b * y)).to(
         (a * b) * (x * y),
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
         *is_not_const(y),
     )
@@ -606,11 +620,6 @@ def _basic_rewrites(
     b: Num,
     c: Num,
     d: Num,
-    ca: f64,
-    cb: f64,
-    cc: f64,
-    cd: f64,
-    e: f64,
 ) -> Iterable[RewriteOrRule]:
     """
     Translation of `FixTree.rewritesBasic`.
@@ -621,120 +630,120 @@ def _basic_rewrites(
     """
     yield rewrite(a * x + b).to(
         a * (x + (b / a)),
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
     )
     yield rewrite(a * x - b).to(
         a * (x - (b / a)),
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
     )
     yield rewrite(b - (a * x)).to(
         a * ((b / a) - x),
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
     )
     yield rewrite(a * x + (b * y)).to(
         a * (x + ((b / a) * y)),
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
         *is_not_const(y),
     )
     yield rewrite(a * x - (b * y)).to(
         a * (x - ((b / a) * y)),
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
         *is_not_const(y),
     )
     yield rewrite(a * x + (b / y)).to(
         a * (x + ((b / a) / y)),
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
         *is_not_const(y),
     )
     yield rewrite(a * x - (b / y)).to(
         a * (x - ((b / a) / y)),
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
         *is_not_const(y),
     )
     yield rewrite(a / (b * x)).to(
         (a / b) / x,
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
     )
     yield rewrite(x / (b * y)).to(
         (Num(1.0) / b) * x / y,
-        *is_const(b, cb),
+        *is_const(b),
         *is_not_const(x),
         *is_not_const(y),
     )
     yield rewrite((x / a) + b).to(
         (x + (b * a)) / a,
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
     )
     yield rewrite((x / a) - b).to(
         (x - (b * a)) / a,
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
     )
     yield rewrite(b - (x / a)).to(
         ((b * a) - x) / a,
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
     )
     yield rewrite((x / a) + (b * y)).to(
         (x + ((b * a) * y)) / a,
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
         *is_not_const(y),
     )
     yield rewrite((x / a) + (y / b)).to(
         (x + (y / (b * a))) / a,
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
         *is_not_const(y),
     )
     yield rewrite((x / a) - (b * y)).to(
         (x - ((b * a) * y)) / a,
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
         *is_not_const(y),
     )
     yield rewrite((x / a) - (b / y)).to(
         (x - (y / (b * a))) / a,
-        *is_const(a, ca),
-        *is_const(b, cb),
+        *is_const(a),
+        *is_const(b),
         *is_not_const(x),
         *is_not_const(y),
     )
     yield rewrite((b + (a * x)) / (c + (d * y))).to(
         (a / d) * (((b / a) + x) / ((c / d) + y)),
-        *is_const(a, ca),
-        *is_const(b, cb),
-        *is_const(c, cc),
-        *is_const(d, cd),
+        *is_const(a),
+        *is_const(b),
+        *is_const(c),
+        *is_const(d),
     )
     yield rewrite((b + x) / (c + (d * y))).to(
         (Num(1.0) / d) * ((b + x) / ((c / d) + y)),
-        *is_const(b, cb),
-        *is_const(c, cc),
-        *is_const(d, cd),
+        *is_const(b),
+        *is_const(c),
+        *is_const(d),
     )
 
     yield rewrite(Num(0.0) + x).to(x)
@@ -743,7 +752,7 @@ def _basic_rewrites(
     yield rewrite(Num(0.0) * x).to(Num(0.0))
     yield rewrite(Num(0.0) / x).to(Num(0.0))
     yield rewrite(x - x).to(Num(0.0))
-    for guard in is_not_zero(x, ca):
+    for guard in is_not_zero(x):
         yield rewrite(x / x).to(Num(1.0), *guard)
     yield rewrite((x * y) + (x * z)).to(x * (y + z))
     yield rewrite(x - (y + z)).to((x - y) - z)
@@ -751,16 +760,16 @@ def _basic_rewrites(
     yield rewrite(Num(-1.0) * (x + y)).to((Num(-1.0) * x) - y)
     yield rewrite(x - a).to(
         x + (Num(-1.0) * a),
-        *is_const(a, ca),
+        *is_const(a),
         *is_not_const(x),
     )
     yield rewrite(x - (a * y)).to(
         x + ((Num(-1.0) * a) * y),
-        *is_const(a, ca),
+        *is_const(a),
         *is_not_const(y),
     )
     yield rewrite((Num(1.0) / x) * (Num(1.0) / y)).to(Num(1.0) / (x * y))
-    for guard in is_not_zero(x, ca):
+    for guard in is_not_zero(x):
         yield rewrite(x * (Num(1.0) / x)).to(Num(1.0), *guard)
     yield rewrite(x - (Num(-1.0) * y)).to(x + y, *is_not_const(y))
     yield rewrite(x + (Num(-1.0) * y)).to(x - y, *is_not_const(y))
@@ -873,7 +882,6 @@ def _fun_rewrites(x: Num, y: Num, a: Num, b: Num, c: f64, d: f64) -> Iterable[Re
 
 @dataclass(frozen=True)
 class PaperPipelineReport:
-    mode: Mode
     status: str
     passes: int
     total_sec: float
@@ -887,16 +895,6 @@ class PaperPipelineReport:
     rendered: str
     extracted: Num
     extracted_cost: int
-
-
-@dataclass(frozen=True)
-class ScheduleModeConfig:
-    """Low-level EqSat controls for one `rewriteTree`-like pass."""
-
-    persistent_scheduler: bool
-    fresh_rematch: bool
-    haskell_backoff: bool
-    graph_size_stop: bool
 
 
 def _normalize_expression(source: str) -> str:
@@ -1271,57 +1269,6 @@ def _serialized_counts(egraph: egglog.EGraph) -> tuple[int, int]:
     payload = json.loads(egraph._serialize().to_json())
     return len(payload.get("nodes", {})), len(payload.get("class_data", {}))
 
-
-MODE_CONFIGS: dict[Mode, ScheduleModeConfig] = {
-    "egglog-baseline": ScheduleModeConfig(
-        persistent_scheduler=True,
-        fresh_rematch=True,
-        haskell_backoff=True,
-        graph_size_stop=True,
-    ),
-    # Historical alias kept so old commands and notes still resolve to the
-    # retained baseline.
-    "egglog-haskell-literal": ScheduleModeConfig(
-        persistent_scheduler=True,
-        fresh_rematch=True,
-        haskell_backoff=True,
-        graph_size_stop=True,
-    ),
-    "no-haskell-backoff": ScheduleModeConfig(
-        persistent_scheduler=True,
-        fresh_rematch=True,
-        haskell_backoff=False,
-        graph_size_stop=True,
-    ),
-    "no-graph-size-stop": ScheduleModeConfig(
-        persistent_scheduler=True,
-        fresh_rematch=True,
-        haskell_backoff=True,
-        graph_size_stop=False,
-    ),
-    "no-bound-scheduler": ScheduleModeConfig(
-        persistent_scheduler=False,
-        fresh_rematch=True,
-        haskell_backoff=True,
-        graph_size_stop=True,
-    ),
-    "no-fresh-rematch": ScheduleModeConfig(
-        persistent_scheduler=True,
-        fresh_rematch=False,
-        haskell_backoff=True,
-        graph_size_stop=True,
-    ),
-}
-
-
-# Haskell runs one `equalitySaturation' (BackoffScheduler 2500 30)` per outer
-# pass, and `simplifyE` repeats that extracted result up to twice. The retained
-# pipeline now mirrors that control flow directly through the low-level bound
-# scheduler path in `_run_single_pass_haskell_literal`.
-#
-# The schedule objects below remain as a small bounded helper for local e-graph
-# checks and historical experiments, but they are no longer the retained
-# `run_paper_pipeline` baseline.
 analysis_schedule = const_merge_rules | const_seed_rules | const_propagation_rules | const_prune_rules
 basic_rules = (
     basic_add_comm_rules
@@ -1332,136 +1279,58 @@ basic_rules = (
     | basic_product_regroup_rules
     | basic_other_rules
 )
-# The retained baseline should keep the Haskell rewrite set intact. If the
-# current schedule still diverges from Haskell, that should be diagnosed as a
-# schedule or engine issue rather than by silently dropping `add_comm`.
-baseline_basic_rules = basic_rules
-scheduler = back_off(match_limit=BACKOFF_MATCH_LIMIT, ban_length=BACKOFF_BAN_LENGTH, egg_like=True)
-rewrite_schedule = run(baseline_basic_rules | fun_rules, scheduler=scheduler)
-analysis_rewrite_round = analysis_schedule.saturate() + rewrite_schedule
-total_ruleset = scheduler.scope(
-    analysis_rewrite_round
-    + analysis_rewrite_round
-    + analysis_rewrite_round
-    + analysis_rewrite_round
-    + analysis_schedule.saturate()
-)
-baseline_rewrite_ruleset = baseline_basic_rules | fun_rules
-literal_rewrite_ruleset = basic_rules | fun_rules
+rewrite_ruleset = basic_rules | fun_rules
 
 
-def _run_single_pass_baseline(num: Num) -> tuple[Num, int, int, int, int, float]:
-    """
-    One retained paper-style EqSat pass.
-
-    The retained baseline now matches the Haskell-style inner loop directly:
-    one reused backoff scheduler, up to 30 rewrite iterations, and explicit
-    analysis saturation after each rewrite step.
-    """
-    return _run_single_pass_for_mode(num, "egglog-baseline")
-
-
-def _add_iteration_scheduler(
-    egraph: egglog.EGraph,
-    *,
-    fresh_rematch: bool,
-    haskell_backoff: bool,
-) -> egglog.bindings.SchedulerHandle:
-    """Create one scheduler instance for the current rewrite iteration."""
-    return egraph._add_backoff_scheduler(
+def _make_rewrite_scheduler() -> BackOff:
+    """Build the retained per-pass scheduler configuration."""
+    return back_off(
         match_limit=BACKOFF_MATCH_LIMIT,
         ban_length=BACKOFF_BAN_LENGTH,
-        egg_like=fresh_rematch,
-        haskell_backoff=haskell_backoff,
-    )
+        fresh_rematch=True,
+    ).persistent()
 
 
-def _run_single_pass_with_config_egraph(
-    num: Num,
-    config: ScheduleModeConfig,
-) -> tuple[egglog.EGraph, float]:
+def _graph_size(egraph: egglog.EGraph) -> int:
+    return sum(size for _, size in egraph.all_function_sizes())
+
+
+def _run_single_pass_egraph(num: Num) -> tuple[egglog.EGraph, float]:
     """
     Run one `rewriteTree`-like pass and return the populated e-graph.
 
-    The baseline uses one persistent fresh-rematch scheduler with Haskell-style
-    backoff accounting and graph-size stability stopping. Ablation modes toggle
-    one of those controls at a time while keeping the rewrite set and analysis
-    structure fixed.
+    This mirrors Haskell at the control-flow level:
+    - one fresh-rematch backoff scheduler per outer pass
+    - up to 30 inner rewrite rounds
+    - one saturated analysis round after each rewrite round
+    - stop when total egraph size stops changing
     """
     egraph = egglog.EGraph()
     egraph.register(num)
-    scheduler_handle = (
-        _add_iteration_scheduler(
-            egraph,
-            fresh_rematch=config.fresh_rematch,
-            haskell_backoff=config.haskell_backoff,
-        )
-        if config.persistent_scheduler
-        else None
-    )
+    rewrite_scheduler = _make_rewrite_scheduler()
 
     start = time.perf_counter()
-    previous_counts = _serialized_counts(egraph)
+    previous_size = _graph_size(egraph)
     for _ in range(HASKELL_INNER_ITERATION_LIMIT):
-        rewrite_scheduler = scheduler_handle or _add_iteration_scheduler(
-            egraph,
-            fresh_rematch=config.fresh_rematch,
-            haskell_backoff=config.haskell_backoff,
-        )
-        rewrite_report = egraph._run_ruleset_with_scheduler(literal_rewrite_ruleset, rewrite_scheduler)
-        analysis_report = egraph.run(analysis_schedule.saturate())
-        if config.graph_size_stop:
-            current_counts = _serialized_counts(egraph)
-            if current_counts == previous_counts:
-                break
-            previous_counts = current_counts
-        elif not (rewrite_report.updated or analysis_report.updated):
+        egraph.run(run(rewrite_ruleset, scheduler=rewrite_scheduler))
+        egraph.run(analysis_schedule.saturate())
+        current_size = _graph_size(egraph)
+        if current_size == previous_size:
             break
+        previous_size = current_size
     elapsed = time.perf_counter() - start
     return egraph, elapsed
 
 
-def _run_single_pass_haskell_literal_egraph(num: Num) -> tuple[egglog.EGraph, float]:
-    """Historical alias for the retained baseline's one-pass e-graph trace."""
-    return _run_single_pass_with_config_egraph(num, MODE_CONFIGS["egglog-baseline"])
-
-
-def _run_single_pass_haskell_literal(num: Num) -> tuple[Num, int, int, int, int, float]:
-    """
-    Mirror one Haskell `rewriteTree` pass as directly as Egglog allows.
-
-    `FixTree.rewriteTree` runs one `equalitySaturation' (BackoffScheduler 2500
-    30)`. Here we keep one fresh-rematch backoff scheduler bound to the same
-    e-graph across up to 30 rewrite iterations, and we interleave explicit
-    analysis saturation after each rewrite step because Egglog does not embed
-    that analysis inside rebuild. The scheduler also uses Haskell-style
-    backoff accounting based on substitution width instead of raw match count.
-    """
-    egraph, elapsed = _run_single_pass_haskell_literal_egraph(num)
+def _run_single_pass(num: Num) -> tuple[Num, int, int, int, int, float]:
+    egraph, elapsed = _run_single_pass_egraph(num)
     extracted, cost = egraph.extract(num, include_cost=True)
-    total_size = sum(size for _, size in egraph.all_function_sizes())
+    total_size = _graph_size(egraph)
     node_count, eclass_count = _serialized_counts(egraph)
     return extracted, int(cost), total_size, node_count, eclass_count, elapsed
 
 
-def _run_single_pass_for_mode(num: Num, mode: Mode) -> tuple[Num, int, int, int, int, float]:
-    """Run one pass using the low-level schedule controls for `mode`."""
-    config = MODE_CONFIGS[mode]
-    egraph, elapsed = _run_single_pass_with_config_egraph(num, config)
-    extracted, cost = egraph.extract(num, include_cost=True)
-    total_size = sum(size for _, size in egraph.all_function_sizes())
-    node_count, eclass_count = _serialized_counts(egraph)
-    return extracted, int(cost), total_size, node_count, eclass_count, elapsed
-
-
-def _run_single_pass(num: Num, mode: Mode = "egglog-baseline") -> tuple[Num, int, int, int, int, float]:
-    if mode in MODE_CONFIGS:
-        return _run_single_pass_for_mode(num, mode)
-    msg = f"Unsupported param-eq mode: {mode}"
-    raise ValueError(msg)
-
-
-def run_paper_pipeline(num: Num, *, mode: Mode) -> PaperPipelineReport:
+def run_paper_pipeline(num: Num) -> PaperPipelineReport:
     """
     Approximate `simplifyE` from `FixTree.hs`.
 
@@ -1485,7 +1354,7 @@ def run_paper_pipeline(num: Num, *, mode: Mode) -> PaperPipelineReport:
     passes = 0
     status = "saturated"
     for pass_index in range(1, MAX_PASSES + 1):
-        extracted, last_cost, total_size, node_count, eclass_count, elapsed = _run_single_pass(current, mode)
+        extracted, last_cost, total_size, node_count, eclass_count, elapsed = _run_single_pass(current)
         total_sec += elapsed
         passes = pass_index
         if render_num(extracted) == render_num(current):
@@ -1495,7 +1364,6 @@ def run_paper_pipeline(num: Num, *, mode: Mode) -> PaperPipelineReport:
     after_nodes = count_nodes(current)
     after_params = count_params(current)
     return PaperPipelineReport(
-        mode=mode,
         status=status,
         passes=passes,
         total_sec=total_sec,
@@ -1514,12 +1382,10 @@ def run_paper_pipeline(num: Num, *, mode: Mode) -> PaperPipelineReport:
 
 def _cli() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=tuple(MODE_CONFIGS), required=True)
     parser.add_argument("--expr", required=True)
     args = parser.parse_args()
-    report = run_paper_pipeline(parse_expression(args.expr), mode=cast(Mode, args.mode))
+    report = run_paper_pipeline(parse_expression(args.expr))
     payload = {
-        "mode": report.mode,
         "status": report.status,
         "passes": report.passes,
         "total_sec": report.total_sec,

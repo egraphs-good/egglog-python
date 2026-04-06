@@ -8,15 +8,18 @@ import json
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from egglog.exp.param_eq.generate_haskell_golden import _canonicalize, _source_to_haskell_expr
+from egglog.exp.param_eq.generate_haskell_golden import _canonicalize
 from egglog.exp.param_eq.paths import ARTIFACT_DIR, llvm_bin_dir, param_eq_data_dir
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 ARCHIVED_ROWS_PATH = ARTIFACT_DIR / "haskell_paper_rows.csv"
 LIVE_ROWS_PATH = ARTIFACT_DIR / "haskell_live_rows.csv"
 HASKELL_ROOT = param_eq_data_dir()
 DEFAULT_BATCH_SIZE = 24
+DEFAULT_WORKERS = 2
 
 
 def _load_rows() -> list[dict[str, str]]:
@@ -30,25 +33,30 @@ def _build_haskell_program(rows: list[dict[str, str]]) -> str:
         dataset = json.dumps(row["dataset"])
         raw_index = json.dumps(row["raw_index"])
         algorithm = json.dumps(row["algorithm"])
+        raw_algorithm = json.dumps(row["algorithm_raw"])
         algo_row = json.dumps(row["algo_row"])
-        original_expr = _source_to_haskell_expr(row["original_expr"])
-        sympy_expr = _source_to_haskell_expr(row["sympy_expr"])
+        zero_index = int(row["algo_row"]) - 1
         prefix = "  " if index == 0 else "  , "
         case_lines.append(
-            f'{prefix}(({dataset}, {raw_index}, {algorithm}, {algo_row}), {original_expr}, {sympy_expr})'
+            f'{prefix}(({dataset}, {raw_index}, {algorithm}, {algo_row}), {raw_algorithm}, {zero_index})'
         )
     joined_case_lines = "\n".join(case_lines)
     return "\n".join(
         [
             "import Data.List (intercalate)",
+            "import qualified Data.Map as M",
             "import Data.SRTree",
             "import Data.SRTree.Print",
             "import Data.Time.Clock.POSIX (getPOSIXTime)",
             "import FixTree",
+            "import KotanchekSR (kotanchekSR)",
+            "import KotanchekSympy (kotanchekSympy)",
+            "import PagieSR (pagieSR)",
+            "import PagieSympy (pagieSympy)",
             "import Reparam (replaceConstsWithParams)",
             "",
             "type RowId = (String, String, String, String)",
-            "type RowCase = (RowId, SRTree Int Double, SRTree Int Double)",
+            "type RowCase = (RowId, String, Int)",
             "",
             "cases :: [RowCase]",
             "cases =",
@@ -58,6 +66,18 @@ def _build_haskell_program(rows: list[dict[str, str]]) -> str:
             "",
             "sanitize :: String -> String",
             "sanitize = map (\\c -> if c == '\\t' || c == '\\n' then ' ' else c)",
+            "",
+            "lookupOriginal :: String -> String -> Int -> SRTree Int Double",
+            "lookupOriginal dataset algorithm rowIndex = case dataset of",
+            "  \"pagie\" -> (pagieSR M.! algorithm) !! rowIndex",
+            "  \"kotanchek\" -> (kotanchekSR M.! algorithm) !! rowIndex",
+            "  _ -> error \"unknown dataset\"",
+            "",
+            "lookupSympy :: String -> String -> Int -> SRTree Int Double",
+            "lookupSympy dataset algorithm rowIndex = case dataset of",
+            "  \"pagie\" -> (pagieSympy M.! algorithm) !! rowIndex",
+            "  \"kotanchek\" -> (kotanchekSympy M.! algorithm) !! rowIndex",
+            "  _ -> error \"unknown dataset\"",
             "",
             "emitExpr :: RowId -> String -> SRTree Int Double -> IO ()",
             "emitExpr (dataset, rawIndex, algorithm, algoRow) label expr = do",
@@ -86,7 +106,9 @@ def _build_haskell_program(rows: list[dict[str, str]]) -> str:
             "  putStrLn (intercalate \"\\t\" (map sanitize fields))",
             "",
             "emitCase :: RowCase -> IO ()",
-            "emitCase (rowId, originalExpr, sympyExpr) = do",
+            "emitCase (rowId@(dataset, _, _, _), rawAlgorithm, rowIndex) = do",
+            "  let originalExpr = lookupOriginal dataset rawAlgorithm rowIndex",
+            "      sympyExpr = lookupSympy dataset rawAlgorithm rowIndex",
             "  emitExpr rowId \"original\" originalExpr",
             "  emitExpr rowId \"sympy\" sympyExpr",
             "",
@@ -108,7 +130,7 @@ def _run_haskell_chunk(rows: list[dict[str, str]]) -> list[dict[str, str]]:
         if llvm_bin is not None:
             env["PATH"] = f"{llvm_bin}:{env['PATH']}"
         output = subprocess.check_output(
-            ["stack", "exec", "--", "runghc", "-isrc", str(temp_path), "+RTS", "-K2G", "-RTS"],
+            ["stack", "exec", "--", "runghc", "-isrc", str(temp_path), "+RTS", "-K3G", "-RTS"],
             cwd=HASKELL_ROOT,
             env=env,
             text=True,
@@ -187,7 +209,7 @@ def _archived_fallback_results(row: dict[str, str], *, reason: str) -> list[dict
     ]
 
 
-def _run_haskell_rows(rows: list[dict[str, str]], *, batch_size: int) -> list[dict[str, str]]:
+def _run_haskell_rows_serial(rows: list[dict[str, str]], *, batch_size: int) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
     total = len(rows)
     for start in range(0, total, batch_size):
@@ -211,11 +233,35 @@ def _run_haskell_rows(rows: list[dict[str, str]], *, batch_size: int) -> list[di
                 flush=True,
             )
             mid = len(batch) // 2
-            batch_results = _run_haskell_rows(batch[:mid], batch_size=max(1, mid))
-            batch_results.extend(_run_haskell_rows(batch[mid:], batch_size=max(1, len(batch) - mid)))
+            batch_results = _run_haskell_rows_serial(batch[:mid], batch_size=max(1, mid))
+            batch_results.extend(_run_haskell_rows_serial(batch[mid:], batch_size=max(1, len(batch) - mid)))
         results.extend(batch_results)
         end = start + len(batch)
         print(f"[{end}/{total}] live Haskell rows complete", flush=True)
+    return results
+
+
+def _run_haskell_rows(rows: list[dict[str, str]], *, batch_size: int, workers: int) -> list[dict[str, str]]:
+    if workers <= 1:
+        return _run_haskell_rows_serial(rows, batch_size=batch_size)
+
+    batches = [rows[start : start + batch_size] for start in range(0, len(rows), batch_size)]
+    results: list[dict[str, str]] = []
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+    ) as progress:
+        task = progress.add_task("live Haskell rows", total=len(rows))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(_run_haskell_rows_serial, batch, batch_size=batch_size): len(batch) for batch in batches
+            }
+            for future in as_completed(futures):
+                results.extend(future.result())
+                progress.advance(task, futures[future])
     return results
 
 
@@ -276,10 +322,16 @@ def main() -> None:
         default=DEFAULT_BATCH_SIZE,
         help="Number of rows to evaluate per temporary Haskell runner invocation.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help="Number of Haskell batches to evaluate in parallel.",
+    )
     args = parser.parse_args()
 
     rows = _load_rows()
-    live_results = _run_haskell_rows(rows, batch_size=args.batch_size)
+    live_results = _run_haskell_rows(rows, batch_size=args.batch_size, workers=args.workers)
     _write_live_rows(rows, live_results, args.output)
     print(args.output)
 

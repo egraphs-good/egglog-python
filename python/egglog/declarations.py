@@ -1031,7 +1031,6 @@ def collect_unbound_vars(typed_expr: TypedExprDecl) -> set[TypedExprDecl]:
 @dataclass(frozen=True)
 class SaturateDecl:
     schedule: ScheduleDecl
-    stop_when_no_updates: bool = False
 
 
 @dataclass(frozen=True)
@@ -1066,7 +1065,8 @@ class BackOffDecl:
     id: UUID
     match_limit: int | None
     ban_length: int | None
-    egg_like: bool = False
+    fresh_rematch: bool = False
+    persistent: bool = False
 
 
 ##

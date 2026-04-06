@@ -6,7 +6,7 @@ import pathlib
 import tempfile
 from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar, Token
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, replace
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
 from types import FrameType, FunctionType
@@ -976,31 +976,6 @@ class EGraph:
         assert isinstance(command_output, bindings.RunScheduleOutput)
         return command_output.report
 
-    def _add_backoff_scheduler(
-        self,
-        *,
-        match_limit: int,
-        ban_length: int,
-        egg_like: bool,
-        haskell_backoff: bool = False,
-    ) -> bindings.SchedulerHandle:
-        return self._egraph.add_backoff_scheduler(
-            match_limit,
-            ban_length,
-            egg_like=egg_like,
-            haskell_backoff=haskell_backoff,
-        )
-
-    def _run_ruleset_with_scheduler(
-        self,
-        ruleset: Ruleset | UnstableCombinedRuleset,
-        scheduler: bindings.SchedulerHandle,
-    ) -> bindings.RunReport:
-        self._add_decls(ruleset)
-        ruleset_ident = ruleset.__egg_ident__
-        self._state.ruleset_to_egg(ruleset_ident)
-        return call_with_current_trace(self._egraph.run_ruleset_with_scheduler, str(ruleset_ident), scheduler)
-
     def stats(self) -> bindings.RunReport:
         """
         Returns the overall run report for the egraph.
@@ -1340,7 +1315,11 @@ class EGraph:
         """
         (output,) = self._run_program(bindings.PrintSize(span(1), None))
         assert isinstance(output, bindings.PrintAllFunctionsSize)
-        return [(callables[0], size) for (name, size) in output.sizes if (callables := self._egg_fn_to_callables(name))]
+        return [
+            (callables[0], size)
+            for (name, size) in output.sizes
+            if (callables := self._egg_fn_to_callables(name))
+        ]
 
     def _egg_fn_to_callables(self, egg_fn: str) -> list[ExprCallable]:
         return [
@@ -1603,14 +1582,11 @@ class Schedule(DelayedDeclarations):
         """
         return Schedule(self.__egg_decls_thunk__, RepeatDecl(self.schedule, length))
 
-    def saturate(self, *, stop_when_no_updates: bool = False) -> Schedule:
+    def saturate(self) -> Schedule:
         """
         Run the schedule until the e-graph is saturated.
         """
-        return Schedule(
-            self.__egg_decls_thunk__,
-            SaturateDecl(self.schedule, stop_when_no_updates=stop_when_no_updates),
-        )
+        return Schedule(self.__egg_decls_thunk__, SaturateDecl(self.schedule))
 
     def __add__(self, other: Schedule) -> Schedule:
         """
@@ -2112,7 +2088,7 @@ def back_off(
     match_limit: None | int = None,
     ban_length: None | int = None,
     *,
-    egg_like: bool = False,
+    fresh_rematch: bool = False,
 ) -> BackOff:
     """
     Create a backoff scheduler configuration.
@@ -2121,15 +2097,28 @@ def back_off(
     schedule = run(analysis_ruleset).saturate() + run(ruleset, scheduler=back_off(match_limit=1000, ban_length=5)) * 10
     ```
     This will run the `analysis_ruleset` until saturation, then run `ruleset` 10 times,
-    using a backoff scheduler. Set `egg_like=True` to use the fresh-rematch variant
+    using a backoff scheduler. Set `fresh_rematch=True` to use the fresh-rematch variant
     that is closer to `egg`/`hegg`; the default keeps egglog's backlog behavior.
     """
-    return BackOff(BackOffDecl(id=uuid4(), match_limit=match_limit, ban_length=ban_length, egg_like=egg_like))
+    return BackOff(
+        BackOffDecl(
+            id=uuid4(),
+            match_limit=match_limit,
+            ban_length=ban_length,
+            fresh_rematch=fresh_rematch,
+        )
+    )
 
 
 @dataclass(frozen=True)
 class BackOff:
     scheduler: BackOffDecl
+
+    def persistent(self) -> BackOff:
+        """
+        Reuse this scheduler across repeated runs on the same egraph.
+        """
+        return BackOff(replace(self.scheduler, persistent=True))
 
     def scope(self, schedule: Schedule) -> Schedule:
         """

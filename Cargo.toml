@@ -18,14 +18,14 @@ opentelemetry = "0.28"
 opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "trace"] }
 opentelemetry-stdout = { version = "0.28", features = ["trace"] }
 opentelemetry_sdk = "0.28"
-egglog = { git = "https://github.com/egraphs-good/egglog.git", rev = "b5c211b9def133cad9540a11744e8a1e40bd2a29", default-features = false }
+egglog = { git = "https://github.com/egraphs-good/egglog.git", default-features = false, rev = "b5c211b9def133cad9540a11744e8a1e40bd2a29" }
 egglog-ast = { git = "https://github.com/egraphs-good/egglog.git", rev = "b5c211b9def133cad9540a11744e8a1e40bd2a29" }
 egglog-core-relations = { git = "https://github.com/egraphs-good/egglog.git", rev = "b5c211b9def133cad9540a11744e8a1e40bd2a29" }
 egglog-reports = { git = "https://github.com/egraphs-good/egglog.git", rev = "b5c211b9def133cad9540a11744e8a1e40bd2a29" }
 egglog-bridge = { git = "https://github.com/egraphs-good/egglog.git", rev = "b5c211b9def133cad9540a11744e8a1e40bd2a29" }
 
 
-egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "fae7440e67497fb7ac56c889dde9eedec17636f9", default-features = false }
+egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental.git", default-features = false, rev = "3f38efab7307b765bdb912b81e99736f27e00b1f" }
 egraph-serialize = { version = "0.3", features = ["serde", "graphviz"] }
 serde_json = "1"
 pyo3-log =  "*"

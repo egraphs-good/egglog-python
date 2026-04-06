@@ -4,9 +4,6 @@ use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
 use crate::freeze::FrozenEGraph;
 use crate::py_object_sort::{PyObjectSort, PyPickledValue, load};
-use crate::scheduler_handle::{
-    SchedulerHandle, backlog_backoff, fresh_backoff, next_scheduler_owner_id,
-};
 use crate::serialize::SerializedEGraph;
 use crate::tracing_otel;
 
@@ -25,9 +22,8 @@ use std::path::PathBuf;
 /// Create an empty EGraph.
 #[pyclass(unsendable)]
 pub struct EGraph {
-    pub(crate) egraph: egglog::EGraph,
+    pub(crate) egraph: egglog_experimental::ExperimentalEGraph,
     cmds: Option<String>,
-    owner_id: usize,
 }
 
 #[pymethods]
@@ -42,7 +38,6 @@ impl EGraph {
         Self {
             egraph,
             cmds: if record { Some(String::new()) } else { None },
-            owner_id: next_scheduler_owner_id(),
         }
     }
 
@@ -103,53 +98,6 @@ impl EGraph {
     #[pyo3(signature = ())]
     fn commands(&self) -> Option<String> {
         self.cmds.clone()
-    }
-
-    #[pyo3(signature = (match_limit, ban_length, *, egg_like=false, haskell_backoff=false))]
-    fn add_backoff_scheduler(
-        &mut self,
-        match_limit: usize,
-        ban_length: usize,
-        egg_like: bool,
-        haskell_backoff: bool,
-    ) -> SchedulerHandle {
-        let scheduler_id = if egg_like {
-            self.egraph
-                .add_fresh_scheduler(fresh_backoff(match_limit, ban_length, haskell_backoff))
-        } else {
-            self.egraph
-                .add_scheduler(backlog_backoff(match_limit, ban_length, haskell_backoff))
-        };
-        SchedulerHandle::new(self.owner_id, scheduler_id)
-    }
-
-    #[pyo3(signature = (ruleset, scheduler, *, traceparent=None, tracestate=None))]
-    fn run_ruleset_with_scheduler(
-        &mut self,
-        py: Python<'_>,
-        ruleset: &str,
-        scheduler: &SchedulerHandle,
-        traceparent: Option<String>,
-        tracestate: Option<String>,
-    ) -> EggResult<RunReport> {
-        if scheduler.owner_id != self.owner_id {
-            return Err(WrappedError::Py(pyo3::exceptions::PyRuntimeError::new_err(
-                "SchedulerHandle belongs to a different EGraph",
-            )));
-        }
-        let _context_guard =
-            tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
-        let span = tracing::info_span!(
-            "bindings.run_ruleset_with_scheduler",
-            ruleset = tracing::field::display(ruleset)
-        );
-        let _entered = span.enter();
-        let scheduler_id = scheduler.scheduler_id;
-        let res = py.detach(|| self.egraph.step_rules_with_scheduler(scheduler_id, ruleset));
-        if let Some(err) = PyErr::take(py) {
-            return Err(WrappedError::Py(err));
-        }
-        res.map(Into::into).map_err(WrappedError::Egglog)
     }
 
     /// Serialize the EGraph to a SerializedEGraph object.

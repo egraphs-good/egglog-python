@@ -1,0 +1,634 @@
+implementation,algorithm_raw,algorithm,algo_row,node_count,after_nodes,runtime_ms,status
+Archived Haskell,,,,45,,212.200000000,archived_benchmark
+Archived Haskell,,,,41,,16.150000000,archived_benchmark
+Archived Haskell,,,,34,,193.600000000,archived_benchmark
+Archived Haskell,,,,48,,717.900000000,archived_benchmark
+Archived Haskell,,,,37,,26.040000000,archived_benchmark
+Archived Haskell,,,,45,,199.100000000,archived_benchmark
+Archived Haskell,,,,25,,117.200000000,archived_benchmark
+Archived Haskell,,,,38,,186.800000000,archived_benchmark
+Archived Haskell,,,,41,,23.130000000,archived_benchmark
+Archived Haskell,,,,44,,51.680000000,archived_benchmark
+Archived Haskell,,,,40,,160.200000000,archived_benchmark
+Archived Haskell,,,,25,,5.692000000,archived_benchmark
+Archived Haskell,,,,43,,92.390000000,archived_benchmark
+Archived Haskell,,,,44,,271.000000000,archived_benchmark
+Archived Haskell,,,,32,,89.710000000,archived_benchmark
+Archived Haskell,,,,45,,35.770000000,archived_benchmark
+Archived Haskell,,,,37,,35.700000000,archived_benchmark
+Archived Haskell,,,,45,,23.800000000,archived_benchmark
+Archived Haskell,,,,28,,4.230000000,archived_benchmark
+Archived Haskell,,,,41,,188.800000000,archived_benchmark
+Archived Haskell,,,,41,,74.220000000,archived_benchmark
+Archived Haskell,,,,40,,15.480000000,archived_benchmark
+Archived Haskell,,,,45,,204.600000000,archived_benchmark
+Archived Haskell,,,,33,,285.500000000,archived_benchmark
+Archived Haskell,,,,48,,30.500000000,archived_benchmark
+Archived Haskell,,,,45,,109.400000000,archived_benchmark
+Archived Haskell,,,,43,,27.120000000,archived_benchmark
+Archived Haskell,,,,48,,65.540000000,archived_benchmark
+Archived Haskell,,,,36,,14.420000000,archived_benchmark
+Archived Haskell,,,,48,,29.450000000,archived_benchmark
+Archived Haskell,,,,19,,442.100000000,archived_benchmark
+Archived Haskell,,,,17,,52.570000000,archived_benchmark
+Archived Haskell,,,,17,,70.240000000,archived_benchmark
+Archived Haskell,,,,19,,243.000000000,archived_benchmark
+Archived Haskell,,,,19,,340.200000000,archived_benchmark
+Archived Haskell,,,,19,,128.100000000,archived_benchmark
+Archived Haskell,,,,17,,53.480000000,archived_benchmark
+Archived Haskell,,,,16,,115.200000000,archived_benchmark
+Archived Haskell,,,,19,,237.200000000,archived_benchmark
+Archived Haskell,,,,14,,47.630000000,archived_benchmark
+Archived Haskell,,,,17,,53.940000000,archived_benchmark
+Archived Haskell,,,,20,,93.280000000,archived_benchmark
+Archived Haskell,,,,16,,129.500000000,archived_benchmark
+Archived Haskell,,,,19,,107.900000000,archived_benchmark
+Archived Haskell,,,,19,,327.000000000,archived_benchmark
+Archived Haskell,,,,19,,317.200000000,archived_benchmark
+Archived Haskell,,,,21,,320.700000000,archived_benchmark
+Archived Haskell,,,,21,,313.500000000,archived_benchmark
+Archived Haskell,,,,21,,123.100000000,archived_benchmark
+Archived Haskell,,,,17,,57.440000000,archived_benchmark
+Archived Haskell,,,,17,,55.740000000,archived_benchmark
+Archived Haskell,,,,17,,54.740000000,archived_benchmark
+Archived Haskell,,,,19,,336.200000000,archived_benchmark
+Archived Haskell,,,,18,,134.900000000,archived_benchmark
+Archived Haskell,,,,16,,53.960000000,archived_benchmark
+Archived Haskell,,,,1,,0.146800000,archived_benchmark
+Archived Haskell,,,,1,,0.147200000,archived_benchmark
+Archived Haskell,,,,21,,270.100000000,archived_benchmark
+Archived Haskell,,,,19,,56.220000000,archived_benchmark
+Archived Haskell,,,,17,,53.840000000,archived_benchmark
+Archived Haskell,,,,63,,6.460000000,archived_benchmark
+Archived Haskell,,,,77,,3.451000000,archived_benchmark
+Archived Haskell,,,,40,,105.000000000,archived_benchmark
+Archived Haskell,,,,29,,86.170000000,archived_benchmark
+Archived Haskell,,,,89,,1.360000000,archived_benchmark
+Archived Haskell,,,,64,,52.330000000,archived_benchmark
+Archived Haskell,,,,58,,1.405000000,archived_benchmark
+Archived Haskell,,,,67,,4.851000000,archived_benchmark
+Archived Haskell,,,,71,,46.370000000,archived_benchmark
+Archived Haskell,,,,66,,4.088000000,archived_benchmark
+Archived Haskell,,,,51,,3.149000000,archived_benchmark
+Archived Haskell,,,,83,,37.770000000,archived_benchmark
+Archived Haskell,,,,37,,2.279000000,archived_benchmark
+Archived Haskell,,,,78,,226.800000000,archived_benchmark
+Archived Haskell,,,,67,,24.290000000,archived_benchmark
+Archived Haskell,,,,29,,0.540800000,archived_benchmark
+Archived Haskell,,,,72,,2.782000000,archived_benchmark
+Archived Haskell,,,,55,,14.230000000,archived_benchmark
+Archived Haskell,,,,33,,0.783700000,archived_benchmark
+Archived Haskell,,,,67,,219.500000000,archived_benchmark
+Archived Haskell,,,,59,,6.614000000,archived_benchmark
+Archived Haskell,,,,25,,4.901000000,archived_benchmark
+Archived Haskell,,,,66,,27.150000000,archived_benchmark
+Archived Haskell,,,,43,,160.500000000,archived_benchmark
+Archived Haskell,,,,32,,2.992000000,archived_benchmark
+Archived Haskell,,,,29,,2.482000000,archived_benchmark
+Archived Haskell,,,,85,,7.570000000,archived_benchmark
+Archived Haskell,,,,69,,13.310000000,archived_benchmark
+Archived Haskell,,,,56,,1.331000000,archived_benchmark
+Archived Haskell,,,,32,,7.101000000,archived_benchmark
+Archived Haskell,,,,79,,13.280000000,archived_benchmark
+Archived Haskell,,,,55,,4.221000000,archived_benchmark
+Archived Haskell,,,,89,,109.200000000,archived_benchmark
+Archived Haskell,,,,217,,410.000000000,archived_benchmark
+Archived Haskell,,,,116,,1039.000000000,archived_benchmark
+Archived Haskell,,,,194,,379.400000000,archived_benchmark
+Archived Haskell,,,,142,,473.500000000,archived_benchmark
+Archived Haskell,,,,269,,380.200000000,archived_benchmark
+Archived Haskell,,,,191,,590.700000000,archived_benchmark
+Archived Haskell,,,,191,,377.100000000,archived_benchmark
+Archived Haskell,,,,241,,440.900000000,archived_benchmark
+Archived Haskell,,,,202,,358.800000000,archived_benchmark
+Archived Haskell,,,,223,,663.900000000,archived_benchmark
+Archived Haskell,,,,357,,531.900000000,archived_benchmark
+Archived Haskell,,,,154,,493.200000000,archived_benchmark
+Archived Haskell,,,,134,,555.700000000,archived_benchmark
+Archived Haskell,,,,184,,329.300000000,archived_benchmark
+Archived Haskell,,,,416,,707.500000000,archived_benchmark
+Archived Haskell,,,,129,,527.900000000,archived_benchmark
+Archived Haskell,,,,174,,339.700000000,archived_benchmark
+Archived Haskell,,,,160,,590.300000000,archived_benchmark
+Archived Haskell,,,,196,,463.500000000,archived_benchmark
+Archived Haskell,,,,151,,643.600000000,archived_benchmark
+Archived Haskell,,,,125,,709.800000000,archived_benchmark
+Archived Haskell,,,,168,,1315.000000000,archived_benchmark
+Archived Haskell,,,,155,,305.200000000,archived_benchmark
+Archived Haskell,,,,170,,373.500000000,archived_benchmark
+Archived Haskell,,,,138,,309.200000000,archived_benchmark
+Archived Haskell,,,,179,,663.600000000,archived_benchmark
+Archived Haskell,,,,133,,594.100000000,archived_benchmark
+Archived Haskell,,,,186,,423.500000000,archived_benchmark
+Archived Haskell,,,,165,,453.100000000,archived_benchmark
+Archived Haskell,,,,131,,1150.000000000,archived_benchmark
+Archived Haskell,,,,1,,0.139700000,archived_benchmark
+Archived Haskell,,,,30,,253.500000000,archived_benchmark
+Archived Haskell,,,,28,,274.600000000,archived_benchmark
+Archived Haskell,,,,10,,0.954400000,archived_benchmark
+Archived Haskell,,,,31,,435.000000000,archived_benchmark
+Archived Haskell,,,,1,,0.166900000,archived_benchmark
+Archived Haskell,,,,28,,157.900000000,archived_benchmark
+Archived Haskell,,,,29,,5.302000000,archived_benchmark
+Archived Haskell,,,,29,,73.570000000,archived_benchmark
+Archived Haskell,,,,28,,393.900000000,archived_benchmark
+Archived Haskell,,,,29,,262.800000000,archived_benchmark
+Archived Haskell,,,,29,,393.600000000,archived_benchmark
+Archived Haskell,,,,29,,225.200000000,archived_benchmark
+Archived Haskell,,,,26,,4.449000000,archived_benchmark
+Archived Haskell,,,,29,,173.700000000,archived_benchmark
+Archived Haskell,,,,26,,81.570000000,archived_benchmark
+Archived Haskell,,,,29,,294.500000000,archived_benchmark
+Archived Haskell,,,,27,,53.530000000,archived_benchmark
+Archived Haskell,,,,28,,3.177000000,archived_benchmark
+Archived Haskell,,,,28,,221.100000000,archived_benchmark
+Archived Haskell,,,,28,,4.708000000,archived_benchmark
+Archived Haskell,,,,31,,262.300000000,archived_benchmark
+Archived Haskell,,,,29,,130.800000000,archived_benchmark
+Archived Haskell,,,,27,,65.000000000,archived_benchmark
+Archived Haskell,,,,29,,24.890000000,archived_benchmark
+Archived Haskell,,,,28,,5.798000000,archived_benchmark
+Archived Haskell,,,,27,,20.730000000,archived_benchmark
+Archived Haskell,,,,28,,306.400000000,archived_benchmark
+Archived Haskell,,,,28,,85.760000000,archived_benchmark
+Archived Haskell,,,,28,,23.420000000,archived_benchmark
+Archived Haskell,,,,43,,14.500000000,archived_benchmark
+Archived Haskell,,,,23,,25.420000000,archived_benchmark
+Archived Haskell,,,,27,,3.468000000,archived_benchmark
+Archived Haskell,,,,49,,31.470000000,archived_benchmark
+Archived Haskell,,,,23,,2.993000000,archived_benchmark
+Archived Haskell,,,,53,,36.180000000,archived_benchmark
+Archived Haskell,,,,21,,8.431000000,archived_benchmark
+Archived Haskell,,,,20,,225.500000000,archived_benchmark
+Archived Haskell,,,,31,,102.600000000,archived_benchmark
+Archived Haskell,,,,25,,5.126000000,archived_benchmark
+Archived Haskell,,,,24,,294.000000000,archived_benchmark
+Archived Haskell,,,,15,,130.600000000,archived_benchmark
+Archived Haskell,,,,33,,5.123000000,archived_benchmark
+Archived Haskell,,,,29,,281.400000000,archived_benchmark
+Archived Haskell,,,,45,,36.260000000,archived_benchmark
+Archived Haskell,,,,47,,126.000000000,archived_benchmark
+Archived Haskell,,,,49,,111.500000000,archived_benchmark
+Archived Haskell,,,,23,,6.700000000,archived_benchmark
+Archived Haskell,,,,25,,13.980000000,archived_benchmark
+Archived Haskell,,,,39,,45.590000000,archived_benchmark
+Archived Haskell,,,,43,,5.005000000,archived_benchmark
+Archived Haskell,,,,27,,4.470000000,archived_benchmark
+Archived Haskell,,,,27,,268.900000000,archived_benchmark
+Archived Haskell,,,,29,,2.533000000,archived_benchmark
+Archived Haskell,,,,20,,1.174000000,archived_benchmark
+Archived Haskell,,,,16,,1.082000000,archived_benchmark
+Archived Haskell,,,,53,,254.400000000,archived_benchmark
+Archived Haskell,,,,41,,8.862000000,archived_benchmark
+Archived Haskell,,,,17,,1.122000000,archived_benchmark
+Archived Haskell,,,,27,,11.140000000,archived_benchmark
+Archived Haskell,,,,44,,233.900000000,archived_benchmark
+Archived Haskell,,,,39,,266.900000000,archived_benchmark
+Archived Haskell,,,,35,,11.920000000,archived_benchmark
+Archived Haskell,,,,41,,461.700000000,archived_benchmark
+Archived Haskell,,,,44,,59.140000000,archived_benchmark
+Archived Haskell,,,,31,,275.600000000,archived_benchmark
+Archived Haskell,,,,28,,107.900000000,archived_benchmark
+Archived Haskell,,,,37,,112.200000000,archived_benchmark
+Archived Haskell,,,,35,,515.900000000,archived_benchmark
+Archived Haskell,,,,36,,155.000000000,archived_benchmark
+Archived Haskell,,,,33,,11.260000000,archived_benchmark
+Archived Haskell,,,,41,,283.900000000,archived_benchmark
+Archived Haskell,,,,42,,532.300000000,archived_benchmark
+Archived Haskell,,,,43,,149.600000000,archived_benchmark
+Archived Haskell,,,,41,,241.400000000,archived_benchmark
+Archived Haskell,,,,34,,143.200000000,archived_benchmark
+Archived Haskell,,,,42,,28.950000000,archived_benchmark
+Archived Haskell,,,,43,,371.300000000,archived_benchmark
+Archived Haskell,,,,42,,339.400000000,archived_benchmark
+Archived Haskell,,,,35,,101.400000000,archived_benchmark
+Archived Haskell,,,,31,,339.800000000,archived_benchmark
+Archived Haskell,,,,31,,200.300000000,archived_benchmark
+Archived Haskell,,,,37,,198.200000000,archived_benchmark
+Archived Haskell,,,,26,,4.090000000,archived_benchmark
+Archived Haskell,,,,41,,231.500000000,archived_benchmark
+Archived Haskell,,,,43,,90.390000000,archived_benchmark
+Archived Haskell,,,,42,,129.600000000,archived_benchmark
+Archived Haskell,,,,44,,203.500000000,archived_benchmark
+Archived Haskell,,,,35,,42.310000000,archived_benchmark
+Archived Haskell,,,,28,,11.360000000,archived_benchmark
+Live Haskell,Operon,Operon,1,39,31,65.329,saturated
+Live Haskell,Operon,Operon,2,48,34,246.738,saturated
+Live Haskell,Operon,Operon,3,45,33,1480.4409999999998,saturated
+Live Haskell,Operon,Operon,4,47,37,393.28999999999996,saturated
+Live Haskell,Operon,Operon,5,49,37,301.294,saturated
+Live Haskell,Operon,Operon,6,45,35,1790.443,saturated
+Live Haskell,Operon,Operon,7,44,36,46.411,saturated
+Live Haskell,Operon,Operon,8,49,39,81.535,saturated
+Live Haskell,Operon,Operon,9,45,33,1352.33,saturated
+Live Haskell,Operon,Operon,10,43,33,380.983,saturated
+Live Haskell,Operon,Operon,11,41,31,3594.2059999999997,saturated
+Live Haskell,Operon,Operon,12,48,32,2125.07,saturated
+Live Haskell,Operon,Operon,13,41,35,54.144,saturated
+Live Haskell,Operon,Operon,14,47,37,151.29899999999998,saturated
+Live Haskell,Operon,Operon,15,45,29,754.6500000000001,saturated
+Live Haskell,Operon,Operon,16,50,38,387.974,saturated
+Live Haskell,Operon,Operon,17,45,37,1182.942,saturated
+Live Haskell,Operon,Operon,18,45,31,2054.6639999999998,saturated
+Live Haskell,Operon,Operon,19,41,35,68.841,saturated
+Live Haskell,Operon,Operon,20,47,37,1465.374,saturated
+Live Haskell,Operon,Operon,21,45,37,3641.356,saturated
+Live Haskell,Operon,Operon,22,42,34,110.607,saturated
+Live Haskell,Operon,Operon,23,45,37,201.139,saturated
+Live Haskell,Operon,Operon,24,41,33,366.697,saturated
+Live Haskell,Operon,Operon,25,45,33,1218.068,saturated
+Live Haskell,Operon,Operon,26,41,33,4412.607999999999,saturated
+Live Haskell,Operon,Operon,27,48,36,244.91299999999998,saturated
+Live Haskell,Operon,Operon,28,45,33,929.767,saturated
+Live Haskell,Operon,Operon,29,45,33,1005.7560000000001,saturated
+Live Haskell,Operon,Operon,30,45,33,197.646,saturated
+Live Haskell,GOMEA,GP-GOMEA,1,19,19,1608.662,saturated
+Live Haskell,GOMEA,GP-GOMEA,2,17,17,291.779,saturated
+Live Haskell,GOMEA,GP-GOMEA,3,17,17,290.49199999999996,saturated
+Live Haskell,GOMEA,GP-GOMEA,4,19,19,1317.443,saturated
+Live Haskell,GOMEA,GP-GOMEA,5,19,19,1635.3819999999998,saturated
+Live Haskell,GOMEA,GP-GOMEA,6,19,17,657.273,saturated
+Live Haskell,GOMEA,GP-GOMEA,25,16,16,292.588,saturated
+Live Haskell,GOMEA,GP-GOMEA,26,1,1,0.348,saturated
+Live Haskell,GOMEA,GP-GOMEA,27,1,1,0.32,saturated
+Live Haskell,GOMEA,GP-GOMEA,28,21,21,1594.139,saturated
+Live Haskell,GOMEA,GP-GOMEA,29,19,19,306.329,saturated
+Live Haskell,GOMEA,GP-GOMEA,30,17,17,307.37199999999996,saturated
+Live Haskell,EPLEX,EPLEX,1,29,22,536.438,saturated
+Live Haskell,EPLEX,EPLEX,2,89,73,7.266,saturated
+Live Haskell,EPLEX,EPLEX,3,64,48,302.601,saturated
+Live Haskell,EPLEX,EPLEX,4,58,46,6.409,saturated
+Live Haskell,EPLEX,EPLEX,5,67,54,661.822,saturated
+Live Haskell,EPLEX,EPLEX,6,71,44,1034.526,saturated
+Live Haskell,EPLEX,EPLEX,7,66,58,23.314999999999998,saturated
+Live Haskell,EPLEX,EPLEX,8,51,43,30.43,saturated
+Live Haskell,EPLEX,EPLEX,9,83,50,850.705,saturated
+Live Haskell,EPLEX,EPLEX,10,37,24,9.313,saturated
+Live Haskell,EPLEX,EPLEX,11,78,50,1333.088,saturated
+Live Haskell,EPLEX,EPLEX,12,67,43,168.049,saturated
+Live Haskell,GOMEA,GP-GOMEA,7,17,17,293.575,saturated
+Live Haskell,GOMEA,GP-GOMEA,8,16,14,653.524,saturated
+Live Haskell,GOMEA,GP-GOMEA,9,19,19,1311.402,saturated
+Live Haskell,GOMEA,GP-GOMEA,10,14,14,254.963,saturated
+Live Haskell,GOMEA,GP-GOMEA,11,17,17,299.165,saturated
+Live Haskell,GOMEA,GP-GOMEA,12,20,18,451.718,saturated
+Live Haskell,GOMEA,GP-GOMEA,13,16,14,612.305,saturated
+Live Haskell,GOMEA,GP-GOMEA,14,19,17,620.408,saturated
+Live Haskell,GOMEA,GP-GOMEA,15,19,19,1711.722,saturated
+Live Haskell,GOMEA,GP-GOMEA,16,19,19,1373.9470000000001,saturated
+Live Haskell,GOMEA,GP-GOMEA,17,21,21,1563.397,saturated
+Live Haskell,GOMEA,GP-GOMEA,18,21,21,1590.5819999999999,saturated
+Live Haskell,GOMEA,GP-GOMEA,19,21,19,807.5649999999999,saturated
+Live Haskell,GOMEA,GP-GOMEA,20,17,17,307.69,saturated
+Live Haskell,GOMEA,GP-GOMEA,21,17,17,301.305,saturated
+Live Haskell,GOMEA,GP-GOMEA,22,17,17,294.59499999999997,saturated
+Live Haskell,GOMEA,GP-GOMEA,23,19,19,1644.719,saturated
+Live Haskell,GOMEA,GP-GOMEA,24,18,14,743.892,saturated
+Live Haskell,EPLEX,EPLEX,13,29,27,2.592,saturated
+Live Haskell,EPLEX,EPLEX,14,72,46,15.588,saturated
+Live Haskell,EPLEX,EPLEX,15,55,36,92.545,saturated
+Live Haskell,EPLEX,EPLEX,16,33,28,3.233,saturated
+Live Haskell,EPLEX,EPLEX,17,67,45,1569.7369999999999,saturated
+Live Haskell,EPLEX,EPLEX,18,59,57,112.905,saturated
+Live Haskell,EPLEX,EPLEX,19,25,20,30.688,saturated
+Live Haskell,EPLEX,EPLEX,20,66,46,2819.846,saturated
+Live Haskell,EPLEX,EPLEX,21,43,29,1804.38,saturated
+Live Haskell,EPLEX,EPLEX,22,32,27,14.822000000000001,saturated
+Live Haskell,EPLEX,EPLEX,23,29,16,17.589000000000002,saturated
+Live Haskell,EPLEX,EPLEX,24,85,57,183.134,saturated
+Live Haskell,EPLEX,EPLEX,25,69,40,1490.616,saturated
+Live Haskell,EPLEX,EPLEX,26,56,32,6.193,saturated
+Live Haskell,EPLEX,EPLEX,27,32,22,38.96,saturated
+Live Haskell,EPLEX,EPLEX,28,79,45,660.704,saturated
+Live Haskell,EPLEX,EPLEX,29,55,49,23.256,saturated
+Live Haskell,EPLEX,EPLEX,30,89,67,936.4879999999999,saturated
+Live Haskell,FEAT,FEAT,19,196,102,7033.058,saturated
+Live Haskell,FEAT,FEAT,20,151,129,5693.588,saturated
+Live Haskell,FEAT,FEAT,21,125,107,5429.928999999999,saturated
+Live Haskell,FEAT,FEAT,22,168,158,8960.52,saturated
+Live Haskell,FEAT,FEAT,23,155,117,2908.0879999999997,saturated
+Live Haskell,FEAT,FEAT,24,170,152,3797.662,saturated
+Live Haskell,FEAT,FEAT,25,138,122,4579.621999999999,saturated
+Live Haskell,FEAT,FEAT,26,179,165,4903.648999999999,saturated
+Live Haskell,FEAT,FEAT,27,133,105,5060.751,saturated
+Live Haskell,FEAT,FEAT,28,186,142,3299.164,saturated
+Live Haskell,FEAT,FEAT,29,165,135,3724.513,saturated
+Live Haskell,FEAT,FEAT,30,131,113,8674.763,saturated
+Live Haskell,SBP,SBP,1,1,1,0.357,saturated
+Live Haskell,SBP,SBP,2,30,26,1623.767,saturated
+Live Haskell,SBP,SBP,3,28,26,1827.426,saturated
+Live Haskell,SBP,SBP,4,10,10,3.0149999999999997,saturated
+Live Haskell,SBP,SBP,5,31,29,3025.396,saturated
+Live Haskell,SBP,SBP,6,1,1,0.367,saturated
+Live Haskell,SBP,SBP,7,28,24,1012.72,saturated
+Live Haskell,SBP,SBP,8,29,27,21.676000000000002,saturated
+Live Haskell,SBP,SBP,9,29,25,528.854,saturated
+Live Haskell,SBP,SBP,10,28,28,2671.439,saturated
+Live Haskell,SBP,SBP,11,29,23,1527.794,saturated
+Live Haskell,SBP,SBP,12,29,29,2537.798,saturated
+Live Haskell,SBP,SBP,13,29,27,1065.06,saturated
+Live Haskell,SBP,SBP,14,26,26,20.739,saturated
+Live Haskell,SBP,SBP,15,29,27,1154.155,saturated
+Live Haskell,SBP,SBP,16,26,26,438.303,saturated
+Live Haskell,SBP,SBP,17,29,29,1693.189,saturated
+Live Haskell,SBP,SBP,18,27,21,288.389,saturated
+Live Haskell,SBP,SBP,19,28,28,12.546,saturated
+Live Haskell,SBP,SBP,20,28,22,1098.771,saturated
+Live Haskell,SBP,SBP,21,28,28,23.990000000000002,saturated
+Live Haskell,SBP,SBP,22,31,29,1598.17,saturated
+Live Haskell,SBP,SBP,23,29,29,667.135,saturated
+Live Haskell,SBP,SBP,24,27,25,310.47,saturated
+Live Haskell,FEAT,FEAT,1,217,185,4700.094,saturated
+Live Haskell,FEAT,FEAT,2,116,114,8964.145,saturated
+Live Haskell,FEAT,FEAT,3,194,160,4662.339,saturated
+Live Haskell,FEAT,FEAT,4,142,110,6398.497,saturated
+Live Haskell,FEAT,FEAT,5,269,231,7446.367,saturated
+Live Haskell,FEAT,FEAT,6,191,163,4022.83,saturated
+Live Haskell,FEAT,FEAT,7,191,157,8780.519999999999,saturated
+Live Haskell,FEAT,FEAT,8,241,203,4747.16,saturated
+Live Haskell,FEAT,FEAT,9,202,170,3436.1000000000004,saturated
+Live Haskell,FEAT,FEAT,10,223,181,3742.037,saturated
+Live Haskell,FEAT,FEAT,11,357,275,4493.65,saturated
+Live Haskell,FEAT,FEAT,12,154,136,7617.788,saturated
+Live Haskell,FEAT,FEAT,13,134,130,4183.656,saturated
+Live Haskell,FEAT,FEAT,14,184,159,3993.773,saturated
+Live Haskell,FEAT,FEAT,15,416,279,5598.429,saturated
+Live Haskell,FEAT,FEAT,16,129,113,5647.898999999999,saturated
+Live Haskell,FEAT,FEAT,17,174,114,2735.3360000000002,saturated
+Live Haskell,FEAT,FEAT,18,160,144,5508.09,saturated
+Live Haskell,SBP,SBP,25,29,29,136.163,saturated
+Live Haskell,SBP,SBP,26,28,28,25.141000000000002,saturated
+Live Haskell,SBP,SBP,27,27,25,110.67699999999999,saturated
+Live Haskell,SBP,SBP,28,28,28,1928.367,saturated
+Live Haskell,SBP,SBP,29,28,28,491.417,saturated
+Live Haskell,SBP,SBP,30,28,26,132.452,saturated
+Live Haskell,Bingo,Bingo,1,43,34,161.226,saturated
+Live Haskell,Bingo,Bingo,2,23,19,137.132,saturated
+Live Haskell,Bingo,Bingo,3,27,23,14.467,saturated
+Live Haskell,Bingo,Bingo,4,49,40,185.827,saturated
+Live Haskell,Bingo,Bingo,5,23,22,12.401,saturated
+Live Haskell,Bingo,Bingo,6,53,43,191.67999999999998,saturated
+Live Haskell,Bingo,Bingo,7,21,19,38.735,saturated
+Live Haskell,Bingo,Bingo,8,20,20,1575.9479999999999,saturated
+Live Haskell,Bingo,Bingo,9,31,27,568.3009999999999,saturated
+Live Haskell,Bingo,Bingo,10,25,23,23.323,saturated
+Live Haskell,Bingo,Bingo,11,24,22,2470.504,saturated
+Live Haskell,Bingo,Bingo,12,15,13,1212.757,saturated
+Live Haskell,Bingo,Bingo,13,33,29,32.252,saturated
+Live Haskell,Bingo,Bingo,14,29,25,3188.18,saturated
+Live Haskell,Bingo,Bingo,15,45,39,213.452,saturated
+Live Haskell,Bingo,Bingo,16,47,42,1060.12,saturated
+Live Haskell,Bingo,Bingo,17,49,36,868.6930000000001,saturated
+Live Haskell,Bingo,Bingo,18,23,21,26.939999999999998,saturated
+Live Haskell,Bingo,Bingo,19,25,23,57.342999999999996,saturated
+Live Haskell,Bingo,Bingo,20,39,32,340.452,saturated
+Live Haskell,Bingo,Bingo,21,43,33,267.963,saturated
+Live Haskell,Bingo,Bingo,22,27,27,28.387,saturated
+Live Haskell,Bingo,Bingo,23,27,23,1995.568,saturated
+Live Haskell,Bingo,Bingo,24,29,21,39.910000000000004,saturated
+Live Haskell,Bingo,Bingo,25,20,17,27.237000000000002,saturated
+Live Haskell,Bingo,Bingo,26,16,16,4.484,saturated
+Live Haskell,Bingo,Bingo,27,53,45,827.724,saturated
+Live Haskell,Bingo,Bingo,28,41,37,133.738,saturated
+Live Haskell,Bingo,Bingo,29,17,16,4.229,saturated
+Live Haskell,Bingo,Bingo,30,27,25,54.53,saturated
+Live Haskell,SRjl,PySR,19,42,36,1611.8809999999999,saturated
+Live Haskell,SRjl,PySR,20,39,23,1505.0300000000002,saturated
+Live Haskell,SRjl,PySR,21,33,23,1038.8690000000001,saturated
+Live Haskell,SRjl,PySR,22,31,21,1360.3590000000002,saturated
+Live Haskell,SRjl,PySR,23,39,19,1208.911,saturated
+Live Haskell,SRjl,PySR,24,28,26,281.008,saturated
+Live Haskell,SRjl,PySR,25,41,27,1574.154,saturated
+Live Haskell,SRjl,PySR,26,45,39,542.3280000000001,saturated
+Live Haskell,SRjl,PySR,27,42,34,1072.959,saturated
+Live Haskell,SRjl,PySR,28,44,36,1363.402,saturated
+Live Haskell,SRjl,PySR,29,35,29,249.337,saturated
+Live Haskell,SRjl,PySR,30,28,26,27.695999999999998,saturated
+Live Haskell,SRjl,PySR,1,46,34,1538.615,saturated
+Live Haskell,SRjl,PySR,2,39,37,1534.084,saturated
+Live Haskell,SRjl,PySR,3,35,31,57.991,saturated
+Live Haskell,SRjl,PySR,4,41,31,2544.34,saturated
+Live Haskell,SRjl,PySR,5,42,36,300.829,saturated
+Live Haskell,SRjl,PySR,6,33,29,4011.863,saturated
+Live Haskell,SRjl,PySR,7,28,24,574.1899999999999,saturated
+Live Haskell,SRjl,PySR,8,39,31,3375.787,saturated
+Live Haskell,SRjl,PySR,9,37,27,1667.841,saturated
+Live Haskell,SRjl,PySR,10,38,30,703.514,saturated
+Live Haskell,SRjl,PySR,11,33,27,42.230999999999995,saturated
+Live Haskell,SRjl,PySR,12,41,33,2879.2219999999998,saturated
+Live Haskell,SRjl,PySR,13,44,34,2146.1960000000004,saturated
+Live Haskell,SRjl,PySR,14,43,37,660.914,saturated
+Live Haskell,SRjl,PySR,15,41,35,1172.102,saturated
+Live Haskell,SRjl,PySR,16,34,30,827.414,saturated
+Live Haskell,SRjl,PySR,17,42,42,107.308,saturated
+Live Haskell,SRjl,PySR,18,47,34,2381.748,saturated
+Egglog,Operon,Operon,1,39,31,105.838791,saturated
+Egglog,Operon,Operon,3,45,33,156.246958,saturated
+Egglog,Operon,Operon,4,47,37,153.747166,saturated
+Egglog,Operon,Operon,5,49,37,117.175500,saturated
+Egglog,Operon,Operon,7,44,36,63.928250,saturated
+Egglog,Operon,Operon,8,49,39,91.700291,saturated
+Egglog,Operon,Operon,9,45,33,130.759417,saturated
+Egglog,Operon,Operon,6,45,35,450.486458,saturated
+Egglog,Operon,Operon,2,48,34,906.358708,saturated
+Egglog,Operon,Operon,13,41,35,60.785208,saturated
+Egglog,Operon,Operon,14,47,37,71.381083,saturated
+Egglog,Operon,Operon,12,48,32,567.433833,saturated
+Egglog,Operon,Operon,10,45,33,1269.690666,saturated
+Egglog,Operon,Operon,17,45,37,141.148583,saturated
+Egglog,Operon,Operon,16,50,36,779.861833,saturated
+Egglog,Operon,Operon,19,41,35,59.188458,saturated
+Egglog,Operon,Operon,15,45,29,1878.312667,saturated
+Egglog,Operon,Operon,21,45,37,534.792500,saturated
+Egglog,Operon,Operon,22,43,34,94.886291,saturated
+Egglog,Operon,Operon,11,41,31,3208.953875,saturated
+Egglog,Operon,Operon,24,41,33,73.659583,saturated
+Egglog,Operon,Operon,23,45,37,97.936416,saturated
+Egglog,Operon,Operon,25,45,33,156.988084,saturated
+Egglog,Operon,Operon,26,41,33,217.740792,saturated
+Egglog,Operon,Operon,28,45,33,133.859958,saturated
+Egglog,Operon,Operon,29,45,33,139.886583,saturated
+Egglog,Operon,Operon,30,45,33,83.274250,saturated
+Egglog,GOMEA,GP-GOMEA,1,20,17,50.160667,saturated
+Egglog,GOMEA,GP-GOMEA,2,20,17,49.523917,saturated
+Egglog,GOMEA,GP-GOMEA,3,21,17,43.315083,saturated
+Egglog,GOMEA,GP-GOMEA,4,20,17,49.965542,saturated
+Egglog,GOMEA,GP-GOMEA,5,21,17,50.728333,saturated
+Egglog,GOMEA,GP-GOMEA,6,18,17,42.698833,saturated
+Egglog,GOMEA,GP-GOMEA,7,19,17,44.818166,saturated
+Egglog,GOMEA,GP-GOMEA,8,19,14,73.878208,saturated
+Egglog,Operon,Operon,27,48,36,849.791875,saturated
+Egglog,GOMEA,GP-GOMEA,9,21,17,51.635583,saturated
+Egglog,GOMEA,GP-GOMEA,10,19,14,51.388209,saturated
+Egglog,GOMEA,GP-GOMEA,12,20,20,24.024250,saturated
+Egglog,GOMEA,GP-GOMEA,11,21,17,43.533375,saturated
+Egglog,GOMEA,GP-GOMEA,13,14,14,24.365125,saturated
+Egglog,GOMEA,GP-GOMEA,14,19,17,48.070166,saturated
+Egglog,GOMEA,GP-GOMEA,15,20,17,48.982083,saturated
+Egglog,GOMEA,GP-GOMEA,16,20,17,49.962750,saturated
+Egglog,GOMEA,GP-GOMEA,17,21,17,48.439750,saturated
+Egglog,GOMEA,GP-GOMEA,18,21,17,45.059292,saturated
+Egglog,GOMEA,GP-GOMEA,19,20,19,48.743000,saturated
+Egglog,GOMEA,GP-GOMEA,20,21,17,44.484958,saturated
+Egglog,GOMEA,GP-GOMEA,21,19,17,41.699667,saturated
+Egglog,GOMEA,GP-GOMEA,22,21,17,45.342875,saturated
+Egglog,GOMEA,GP-GOMEA,23,21,17,47.197291,saturated
+Egglog,GOMEA,GP-GOMEA,25,18,16,50.141083,saturated
+Egglog,GOMEA,GP-GOMEA,24,17,14,77.089625,saturated
+Egglog,GOMEA,GP-GOMEA,26,19,1,34.941791,saturated
+Egglog,GOMEA,GP-GOMEA,27,20,1,33.243708,saturated
+Egglog,GOMEA,GP-GOMEA,29,19,19,46.383458,saturated
+Egglog,GOMEA,GP-GOMEA,28,21,17,51.072792,saturated
+Egglog,GOMEA,GP-GOMEA,30,21,17,49.021959,saturated
+Egglog,EPLEX,EPLEX,2,93,89,58.228791,saturated
+Egglog,EPLEX,EPLEX,1,49,23,140.629875,saturated
+Egglog,EPLEX,EPLEX,3,74,58,54.098417,saturated
+Egglog,EPLEX,EPLEX,4,65,52,49.693375,saturated
+Egglog,EPLEX,EPLEX,5,73,57,83.567208,saturated
+Egglog,EPLEX,EPLEX,7,72,64,60.095792,saturated
+Egglog,EPLEX,EPLEX,8,64,47,55.362375,saturated
+Egglog,EPLEX,EPLEX,9,73,53,56.438666,saturated
+Egglog,EPLEX,EPLEX,10,37,31,40.343917,saturated
+Egglog,EPLEX,EPLEX,11,81,62,71.635458,saturated
+Egglog,EPLEX,EPLEX,12,74,44,62.351167,saturated
+Egglog,EPLEX,EPLEX,13,29,29,23.275666,saturated
+Egglog,EPLEX,EPLEX,14,72,51,50.519708,saturated
+Egglog,EPLEX,EPLEX,15,69,43,52.980083,saturated
+Egglog,EPLEX,EPLEX,16,33,29,45.851167,saturated
+Egglog,EPLEX,EPLEX,17,61,53,54.531833,saturated
+Egglog,Operon,Operon,20,47,35,3974.796834,saturated
+Egglog,EPLEX,EPLEX,19,30,23,53.429708,saturated
+Egglog,EPLEX,EPLEX,18,71,59,90.905500,saturated
+Egglog,EPLEX,EPLEX,21,61,37,62.319875,saturated
+Egglog,EPLEX,EPLEX,22,48,28,47.834791,saturated
+Egglog,EPLEX,EPLEX,23,49,17,51.562584,saturated
+Egglog,EPLEX,EPLEX,24,83,62,76.622958,saturated
+Egglog,EPLEX,EPLEX,20,66,46,477.779041,saturated
+Egglog,EPLEX,EPLEX,26,64,38,49.352333,saturated
+Egglog,EPLEX,EPLEX,27,31,24,47.622250,saturated
+Egglog,EPLEX,EPLEX,28,73,48,59.021000,saturated
+Egglog,EPLEX,EPLEX,29,67,53,61.951208,saturated
+Egglog,EPLEX,EPLEX,30,83,67,51.955375,saturated
+Egglog,EPLEX,EPLEX,6,73,45,1812.553209,saturated
+Egglog,EPLEX,EPLEX,25,96,45,3099.679291,saturated
+Egglog,FEAT,FEAT,2,116,114,2675.306709,saturated
+Egglog,FEAT,FEAT,4,142,112,2369.962625,saturated
+Egglog,Operon,Operon,18,45,31,12270.911958,saturated
+Egglog,FEAT,FEAT,1,217,187,10940.644916,saturated
+Egglog,FEAT,FEAT,6,191,163,4250.472250,saturated
+Egglog,FEAT,FEAT,5,269,227,10069.516125,saturated
+Egglog,FEAT,FEAT,7,191,157,4784.424750,saturated
+Egglog,FEAT,FEAT,3,194,160,13164.997500,saturated
+Egglog,FEAT,FEAT,11,357,271,18099.805791,saturated
+Egglog,FEAT,FEAT,9,202,172,18838.350250,saturated
+Egglog,FEAT,FEAT,13,134,130,5357.171500,saturated
+Egglog,FEAT,FEAT,12,154,136,8365.361084,saturated
+Egglog,FEAT,FEAT,10,223,183,27856.841625,saturated
+Egglog,FEAT,FEAT,14,184,159,7148.111458,saturated
+Egglog,FEAT,FEAT,16,129,113,5335.383000,saturated
+Egglog,FEAT,FEAT,8,241,203,39041.561125,saturated
+Egglog,FEAT,FEAT,18,160,146,1906.356958,saturated
+Egglog,FEAT,FEAT,20,151,129,1866.408500,saturated
+Egglog,FEAT,FEAT,19,242,104,4575.022417,saturated
+Egglog,FEAT,FEAT,22,168,158,3761.840625,saturated
+Egglog,FEAT,FEAT,21,125,107,6844.487500,saturated
+Egglog,FEAT,FEAT,17,174,116,14500.616917,saturated
+Egglog,FEAT,FEAT,23,155,115,2968.172833,saturated
+Egglog,FEAT,FEAT,25,138,122,4822.483750,saturated
+Egglog,FEAT,FEAT,27,133,103,5166.333334,saturated
+Egglog,FEAT,FEAT,15,416,279,29904.225375,saturated
+Egglog,FEAT,FEAT,26,196,167,11262.057416,saturated
+Egglog,FEAT,FEAT,24,170,152,15092.015583,saturated
+Egglog,SBP,SBP,1,29,1,143.359542,saturated
+Egglog,SBP,SBP,2,28,26,63.196000,saturated
+Egglog,SBP,SBP,3,28,28,30.644417,saturated
+Egglog,SBP,SBP,4,10,10,20.247375,saturated
+Egglog,SBP,SBP,5,29,29,295.455167,saturated
+Egglog,SBP,SBP,6,26,1,37.939000,saturated
+Egglog,SBP,SBP,7,28,26,62.636542,saturated
+Egglog,SBP,SBP,8,29,27,48.170167,saturated
+Egglog,SBP,SBP,9,29,25,76.428709,saturated
+Egglog,SBP,SBP,10,29,28,91.023416,saturated
+Egglog,SBP,SBP,11,29,27,56.085625,saturated
+Egglog,SBP,SBP,12,29,29,60.574750,saturated
+Egglog,FEAT,FEAT,29,165,135,5571.941250,saturated
+Egglog,SBP,SBP,14,27,26,53.534417,saturated
+Egglog,FEAT,FEAT,30,131,113,4763.681125,saturated
+Egglog,SBP,SBP,15,29,27,85.899000,saturated
+Egglog,SBP,SBP,16,29,26,63.513167,saturated
+Egglog,SBP,SBP,17,29,29,99.489083,saturated
+Egglog,SBP,SBP,18,28,21,81.509875,saturated
+Egglog,SBP,SBP,19,28,28,20.980417,saturated
+Egglog,SBP,SBP,21,28,28,41.260125,saturated
+Egglog,SBP,SBP,22,29,29,54.594250,saturated
+Egglog,SBP,SBP,20,29,24,137.537458,saturated
+Egglog,SBP,SBP,23,29,29,54.618333,saturated
+Egglog,SBP,SBP,25,29,29,226.535583,saturated
+Egglog,SBP,SBP,26,29,28,67.517708,saturated
+Egglog,SBP,SBP,27,29,25,73.296375,saturated
+Egglog,SBP,SBP,28,28,28,70.379792,saturated
+Egglog,SBP,SBP,29,28,28,30.618459,saturated
+Egglog,SBP,SBP,24,29,25,552.809500,saturated
+Egglog,SBP,SBP,30,28,26,89.657458,saturated
+Egglog,Bingo,Bingo,1,40,36,62.702958,saturated
+Egglog,Bingo,Bingo,3,34,24,43.909500,saturated
+Egglog,Bingo,Bingo,2,22,18,73.117166,saturated
+Egglog,Bingo,Bingo,5,21,21,25.035625,saturated
+Egglog,Bingo,Bingo,4,50,40,72.459500,saturated
+Egglog,Bingo,Bingo,7,27,19,51.864125,saturated
+Egglog,Bingo,Bingo,6,52,44,83.785250,saturated
+Egglog,Bingo,Bingo,8,19,19,57.882584,saturated
+Egglog,Bingo,Bingo,9,29,25,60.111417,saturated
+Egglog,Bingo,Bingo,10,23,21,54.424917,saturated
+Egglog,Bingo,Bingo,11,22,20,58.281750,saturated
+Egglog,Bingo,Bingo,13,32,32,49.131041,saturated
+Egglog,Bingo,Bingo,12,15,12,58.248917,saturated
+Egglog,Bingo,Bingo,14,28,28,31.387791,saturated
+Egglog,Bingo,Bingo,16,48,44,242.608167,saturated
+Egglog,Bingo,Bingo,15,44,38,419.521667,saturated
+Egglog,Bingo,Bingo,18,21,19,59.497542,saturated
+Egglog,Bingo,Bingo,19,23,21,62.785208,saturated
+Egglog,Bingo,Bingo,20,46,32,424.360833,saturated
+Egglog,FEAT,FEAT,28,186,146,8980.431833,saturated
+Egglog,Bingo,Bingo,22,26,26,24.990458,saturated
+Egglog,Bingo,Bingo,23,26,26,38.838208,saturated
+Egglog,Bingo,Bingo,24,28,22,44.786584,saturated
+Egglog,Bingo,Bingo,21,37,27,365.354833,saturated
+Egglog,Bingo,Bingo,26,15,15,21.652583,saturated
+Egglog,Bingo,Bingo,25,18,16,43.366667,saturated
+Egglog,Bingo,Bingo,28,37,37,47.020583,saturated
+Egglog,Bingo,Bingo,29,15,15,32.776375,saturated
+Egglog,Bingo,Bingo,30,25,23,64.492542,saturated
+Egglog,Bingo,Bingo,27,52,50,170.342292,saturated
+Egglog,SRjl,PySR,2,41,37,100.255583,saturated
+Egglog,SRjl,PySR,3,39,31,67.543333,saturated
+Egglog,Bingo,Bingo,17,58,36,3333.434542,saturated
+Egglog,SRjl,PySR,4,40,31,2459.031166,saturated
+Egglog,SRjl,PySR,5,42,36,609.322666,saturated
+Egglog,SRjl,PySR,6,32,29,100.721792,saturated
+Egglog,SRjl,PySR,7,37,24,58.742167,saturated
+Egglog,SRjl,PySR,8,40,31,146.059417,saturated
+Egglog,SRjl,PySR,9,37,27,132.030833,saturated
+Egglog,SRjl,PySR,11,35,27,56.076750,saturated
+Egglog,SRjl,PySR,10,45,30,74.886125,saturated
+Egglog,SRjl,PySR,13,44,36,460.011500,saturated
+Egglog,SRjl,PySR,14,43,37,62.262708,saturated
+Egglog,SRjl,PySR,15,43,33,2958.407042,saturated
+Egglog,SRjl,PySR,12,41,33,4074.732625,saturated
+Egglog,SRjl,PySR,17,44,42,102.848750,saturated
+Egglog,SRjl,PySR,18,44,43,125.789666,saturated
+Egglog,SRjl,PySR,19,44,36,147.283542,saturated
+Egglog,SRjl,PySR,16,45,30,1341.010291,saturated
+Egglog,SRjl,PySR,21,31,23,74.662458,saturated
+Egglog,SRjl,PySR,1,44,34,8812.673666,saturated
+Egglog,SRjl,PySR,20,42,23,1928.663083,saturated
+Egglog,SRjl,PySR,24,29,26,50.395416,saturated
+Egglog,SRjl,PySR,23,38,19,1121.870250,saturated
+Egglog,SRjl,PySR,26,45,39,599.320542,saturated
+Egglog,SRjl,PySR,22,41,21,2772.032042,saturated
+Egglog,SRjl,PySR,27,45,34,165.503959,saturated
+Egglog,SRjl,PySR,29,43,29,59.976375,saturated
+Egglog,SRjl,PySR,30,28,26,47.211542,saturated
+Egglog,SRjl,PySR,28,45,36,1329.933167,saturated
+Egglog,SRjl,PySR,25,41,27,7912.424375,saturated
+Egglog,SBP,SBP,13,29,27,41802.704584,saturated

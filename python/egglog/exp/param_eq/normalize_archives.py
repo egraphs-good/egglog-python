@@ -61,22 +61,24 @@ def _load_expression_lines(source_dir: Path, relative_path: Path) -> list[str]:
     return [line.strip() for line in _read_text(source_dir, relative_path).splitlines() if line.strip()]
 
 
+def _load_results_rows_by_algorithm(source_dir: Path, dataset: str) -> dict[str, list[dict[str, str]]]:
+    rows = _read_csv_text(_read_text(source_dir, Path("results") / f"{dataset}_results"))
+    grouped: defaultdict[str, list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        grouped[row["algorithm"]].append(row)
+    return dict(grouped)
+
+
 def _normalize_haskell_rows(source_dir: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for dataset in DATASETS:
         table_path = Path("results") / f"{dataset}_table_counts.csv"
         raw_rows = _read_csv_text(_read_text(source_dir, table_path))
+        results_rows_by_algorithm = _load_results_rows_by_algorithm(source_dir, dataset)
         exprs_by_algorithm = {
             path_algorithm: _load_expression_lines(
                 source_dir,
                 Path("results") / "exprs" / f"{path_algorithm}_exprs_{dataset}",
-            )
-            for path_algorithm in ("Bingo", "EPLEX", "FEAT", "GOMEA", "Operon", "SBP", "SRjl")
-        }
-        sympy_by_algorithm = {
-            path_algorithm: _load_expression_lines(
-                source_dir,
-                Path("results") / "exprs_simpl" / f"{path_algorithm}_exprs_{dataset}",
             )
             for path_algorithm in ("Bingo", "EPLEX", "FEAT", "GOMEA", "Operon", "SBP", "SRjl")
         }
@@ -86,7 +88,7 @@ def _normalize_haskell_rows(source_dir: Path) -> list[dict[str, str]]:
             algo_counts[raw_algorithm] += 1
             algo_row = algo_counts[raw_algorithm]
             exprs = exprs_by_algorithm[raw_algorithm]
-            sympy_exprs = sympy_by_algorithm[raw_algorithm]
+            sympy_exprs = results_rows_by_algorithm[raw_algorithm]
             is_paper_row, drop_reason = _paper_row_status(dataset, raw_index, raw_algorithm, raw_row["n_rank"])
             row = {
                 "dataset": dataset,
@@ -97,7 +99,7 @@ def _normalize_haskell_rows(source_dir: Path) -> list[dict[str, str]]:
                 "is_paper_row": "1" if is_paper_row else "0",
                 "drop_reason": drop_reason,
                 "original_expr": exprs[algo_row - 1],
-                "sympy_expr": sympy_exprs[algo_row - 1],
+                "sympy_expr": sympy_exprs[algo_row - 1]["expr_sympy"].strip(),
             }
             for key, value in raw_row.items():
                 if key == "":

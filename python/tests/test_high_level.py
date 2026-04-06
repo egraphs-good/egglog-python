@@ -1234,7 +1234,7 @@ class TestScheduler:
 
         assert implicit_values == explicit_values == {-3, -2, -1, 0, 1, 2}
 
-    def test_backoff_scheduler_egg_like_flag_changes_match_frontier(self):
+    def test_backoff_scheduler_fresh_rematch_flag_changes_match_frontier(self):
         r = relation("R", i64)
         s = relation("S", i64)
         seed = relation("Seed")
@@ -1243,10 +1243,10 @@ class TestScheduler:
         copy = ruleset(rule(r(x)).then(s(x)), name="copy")
         grow = ruleset(rule(seed()).then(r(i64(3))), name="grow")
 
-        def _run_and_collect(*, egg_like: bool) -> set[int]:
+        def _run_and_collect(*, fresh_rematch: bool) -> set[int]:
             egraph = EGraph()
             egraph.register(r(i64(0)), r(i64(1)), r(i64(2)), seed())
-            bo = back_off(match_limit=2, ban_length=2, egg_like=egg_like)
+            bo = back_off(match_limit=2, ban_length=2, fresh_rematch=fresh_rematch)
             schedule = bo.scope(seq(run(copy, scheduler=bo), run(grow), run(copy, scheduler=bo)))
             egraph.run(schedule)
             values = set()
@@ -1258,10 +1258,10 @@ class TestScheduler:
                     pass
             return values
 
-        assert _run_and_collect(egg_like=False) == {0, 1, 2}
-        assert _run_and_collect(egg_like=True) == {0, 1, 2, 3}
+        assert _run_and_collect(fresh_rematch=False) == {0, 1, 2}
+        assert _run_and_collect(fresh_rematch=True) == {0, 1, 2, 3}
 
-    def test_bound_scheduler_handle_reuses_state_across_runs(self):
+    def test_persistent_scheduler_reuses_state_across_runs(self):
         r = relation("R", i64)
         s = relation("S", i64)
         seed = relation("Seed")
@@ -1270,13 +1270,13 @@ class TestScheduler:
         copy = ruleset(rule(r(x)).then(s(x)), name="copy")
         grow = ruleset(rule(seed()).then(r(i64(3))), name="grow")
 
-        def _run_and_collect(*, egg_like: bool) -> set[int]:
+        def _run_and_collect(*, fresh_rematch: bool) -> set[int]:
             egraph = EGraph()
             egraph.register(r(i64(0)), r(i64(1)), r(i64(2)), seed())
-            scheduler = egraph._add_backoff_scheduler(match_limit=2, ban_length=2, egg_like=egg_like)
-            egraph._run_ruleset_with_scheduler(copy, scheduler)
+            scheduler = back_off(match_limit=2, ban_length=2, fresh_rematch=fresh_rematch).persistent()
+            egraph.run(run(copy, scheduler=scheduler))
             egraph.run(run(grow))
-            egraph._run_ruleset_with_scheduler(copy, scheduler)
+            egraph.run(run(copy, scheduler=scheduler))
             values = set()
             for i in range(4):
                 try:
@@ -1286,54 +1286,8 @@ class TestScheduler:
                     pass
             return values
 
-        assert _run_and_collect(egg_like=False) == {0, 1, 2}
-        assert _run_and_collect(egg_like=True) == {0, 1, 2, 3}
-
-    def test_bound_scheduler_handle_haskell_backoff_counts_tuple_width(self):
-        src = relation("src", i64, i64, i64)
-        dst = relation("dst", i64, i64, i64)
-        x = var("x", i64)
-        y = var("y", i64)
-        z = var("z", i64)
-
-        copy = ruleset(rule(src(x, y, z)).then(dst(x, y, z)))
-
-        def _run_and_collect(*, haskell_backoff: bool) -> set[int]:
-            egraph = EGraph()
-            egraph.register(src(i64(1), i64(2), i64(3)))
-            scheduler = egraph._add_backoff_scheduler(
-                match_limit=2,
-                ban_length=2,
-                egg_like=False,
-                haskell_backoff=haskell_backoff,
-            )
-            egraph._run_ruleset_with_scheduler(copy, scheduler)
-            values = set()
-            for i in range(3):
-                try:
-                    egraph.check(dst(i64(1), i64(2), i64(3)))
-                    values.add(i)
-                except EggSmolError:
-                    pass
-            return values
-
-        assert _run_and_collect(haskell_backoff=False) == {0, 1, 2}
-        assert _run_and_collect(haskell_backoff=True) == set()
-
-    def test_bound_scheduler_handle_is_scoped_to_one_egraph(self):
-        rel = relation("rel", i64)
-        x = var("x", i64)
-        noop = ruleset(rule(rel(x)).then(rel(x)))
-
-        first = EGraph()
-        first.register(rel(i64(1)))
-        scheduler = first._add_backoff_scheduler(match_limit=1, ban_length=1, egg_like=True)
-
-        second = EGraph()
-        second.register(rel(i64(1)))
-
-        with pytest.raises(RuntimeError, match="different EGraph"):
-            second._run_ruleset_with_scheduler(noop, scheduler)
+        assert _run_and_collect(fresh_rematch=False) == {0, 1, 2}
+        assert _run_and_collect(fresh_rematch=True) == {0, 1, 2, 3}
 
     def test_custom_scheduler_invalid_until(self):
         """
@@ -1354,22 +1308,6 @@ class TestScheduler:
         # Multiple until facts should error via high-level run
         with pytest.raises(ValueError, match="Can only have one until fact with custom scheduler"):
             egraph.run(run(r, rel(i64(0)), rel(i64(1)), scheduler=bo))
-
-    def test_custom_scheduler_saturate_can_stop_and_stop_when_no_updates(self):
-        rel = relation("rel", i64)
-        x = var("x", i64)
-        noop = ruleset(rule(rel(x)).then(rel(x)))
-        bo = back_off(match_limit=1, ban_length=3)
-
-        egraph = EGraph()
-        egraph.register(rel(i64(1)), rel(i64(2)), rel(i64(3)), rel(i64(4)))
-
-        report = egraph.run(bo.scope(run(noop, scheduler=bo).saturate(stop_when_no_updates=True)))
-
-        assert not report.updated
-        assert not report.can_stop
-        egraph.check(rel(i64(1)), rel(i64(2)), rel(i64(3)), rel(i64(4)))
-
 
 @function
 def ff(x: i64Like, y: i64Like) -> E: ...
