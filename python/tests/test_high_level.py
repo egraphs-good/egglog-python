@@ -1200,7 +1200,8 @@ class TestScheduler:
     def test_backoff_scheduler(self):
         """
         Passing `scheduler=...` to run(...) hoists the scheduler to the
-        outer scope. This is equivalent to an explicit outer `bo.scope(...)`.
+        outer scope. This is equivalent to an explicit outer `bo.scope(...)`
+        around the whole repeated schedule.
 
         https://egraphs.zulipchat.com/#narrow/channel/375765-egg.2Fegglog/topic/.E2.9C.94.20Backoff.20Scheduler.20Example/with/538745863
         """
@@ -1209,23 +1210,84 @@ class TestScheduler:
         grow = ruleset(rule(includes(x)).then(includes(x + 1)))
         shrink = ruleset(rule(includes(x)).then(includes(x - 1)))
 
-        e1 = EGraph()
-        e1.register(includes(i64(0)))
-        # default scheduler
-        with e1:
-            e1.run((grow + shrink) * 3)
-            e1.check(includes(i64(3)), includes(i64(-3)))
-        # back-off implicit outer hoisting
         bo = back_off(match_limit=1)
-        with e1:
-            e1.run((run(grow, scheduler=bo) + shrink) * 3)
-            e1.check(includes(i64(2)), includes(i64(-3)))
-            e1.check_fail(includes(i64(3)))
-        # back off inner hoisting
-        with e1:
-            e1.run(bo.scope(run(grow, scheduler=bo) + shrink) * 3)
-            e1.check(includes(i64(1)), includes(i64(-3)))
-            e1.check_fail(includes(i64(2)))
+
+        def _run_and_collect(schedule: Schedule) -> set[int]:
+            egraph = EGraph()
+            egraph.register(includes(i64(0)))
+            with egraph:
+                egraph.run(schedule)
+                values = set()
+                for i in range(-3, 4):
+                    try:
+                        egraph.check(includes(i64(i)))
+                        values.add(i)
+                    except EggSmolError:
+                        pass
+            return values
+
+        default_values = _run_and_collect((grow + shrink) * 3)
+        assert default_values == {-3, -2, -1, 0, 1, 2, 3}
+
+        implicit_values = _run_and_collect((run(grow, scheduler=bo) + shrink) * 3)
+        explicit_values = _run_and_collect(bo.scope((run(grow, scheduler=bo) + shrink) * 3))
+
+        assert implicit_values == explicit_values == {-3, -2, -1, 0, 1, 2}
+
+    def test_backoff_scheduler_fresh_rematch_flag_changes_match_frontier(self):
+        r = relation("R", i64)
+        s = relation("S", i64)
+        seed = relation("Seed")
+        x = var("x", i64)
+
+        copy = ruleset(rule(r(x)).then(s(x)), name="copy")
+        grow = ruleset(rule(seed()).then(r(i64(3))), name="grow")
+
+        def _run_and_collect(*, fresh_rematch: bool) -> set[int]:
+            egraph = EGraph()
+            egraph.register(r(i64(0)), r(i64(1)), r(i64(2)), seed())
+            bo = back_off(match_limit=2, ban_length=2, fresh_rematch=fresh_rematch)
+            schedule = bo.scope(seq(run(copy, scheduler=bo), run(grow), run(copy, scheduler=bo)))
+            egraph.run(schedule)
+            values = set()
+            for i in range(4):
+                try:
+                    egraph.check(s(i64(i)))
+                    values.add(i)
+                except EggSmolError:
+                    pass
+            return values
+
+        assert _run_and_collect(fresh_rematch=False) == {0, 1, 2}
+        assert _run_and_collect(fresh_rematch=True) == {0, 1, 2, 3}
+
+    def test_persistent_scheduler_reuses_state_across_runs(self):
+        r = relation("R", i64)
+        s = relation("S", i64)
+        seed = relation("Seed")
+        x = var("x", i64)
+
+        copy = ruleset(rule(r(x)).then(s(x)), name="copy")
+        grow = ruleset(rule(seed()).then(r(i64(3))), name="grow")
+
+        def _run_and_collect(*, fresh_rematch: bool) -> set[int]:
+            egraph = EGraph()
+            egraph.register(r(i64(0)), r(i64(1)), r(i64(2)), seed())
+            scheduler = back_off(match_limit=2, ban_length=2, fresh_rematch=fresh_rematch).persistent()
+            egraph.run(run(copy, scheduler=scheduler))
+            egraph.run(run(grow))
+            egraph.run(run(copy, scheduler=scheduler))
+            values = set()
+            for i in range(4):
+                try:
+                    egraph.check(s(i64(i)))
+                    values.add(i)
+                except EggSmolError:
+                    pass
+            return values
+
+        assert _run_and_collect(fresh_rematch=False) == {0, 1, 2}
+        assert _run_and_collect(fresh_rematch=True) == {0, 1, 2, 3}
 
     def test_custom_scheduler_invalid_until(self):
         """

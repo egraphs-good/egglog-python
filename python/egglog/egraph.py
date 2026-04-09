@@ -6,7 +6,7 @@ import pathlib
 import tempfile
 from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar, Token
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, replace
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
 from types import FrameType, FunctionType
@@ -2063,7 +2063,9 @@ def to_runtime_expr(expr: BaseExpr) -> RuntimeExpr:
     return expr
 
 
-def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | None = None) -> Schedule:
+def run(
+    ruleset: Ruleset | UnstableCombinedRuleset | None = None, *until: FactLike, scheduler: BackOff | None = None
+) -> Schedule:
     """
     Create a run configuration.
     """
@@ -2078,21 +2080,41 @@ def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | N
     )
 
 
-def back_off(match_limit: None | int = None, ban_length: None | int = None) -> BackOff:
+def back_off(
+    match_limit: None | int = None,
+    ban_length: None | int = None,
+    *,
+    fresh_rematch: bool = False,
+) -> BackOff:
     """
     Create a backoff scheduler configuration.
 
     ```python
     schedule = run(analysis_ruleset).saturate() + run(ruleset, scheduler=back_off(match_limit=1000, ban_length=5)) * 10
     ```
-    This will run the `analysis_ruleset` until saturation, then run `ruleset` 10 times, using a backoff scheduler.
+    This will run the `analysis_ruleset` until saturation, then run `ruleset` 10 times,
+    using a backoff scheduler. Set `fresh_rematch=True` to use the fresh-rematch variant
+    that is closer to `egg`/`hegg`; the default keeps egglog's backlog behavior.
     """
-    return BackOff(BackOffDecl(id=uuid4(), match_limit=match_limit, ban_length=ban_length))
+    return BackOff(
+        BackOffDecl(
+            id=uuid4(),
+            match_limit=match_limit,
+            ban_length=ban_length,
+            fresh_rematch=fresh_rematch,
+        )
+    )
 
 
 @dataclass(frozen=True)
 class BackOff:
     scheduler: BackOffDecl
+
+    def persistent(self) -> BackOff:
+        """
+        Reuse this scheduler across repeated runs on the same egraph.
+        """
+        return BackOff(replace(self.scheduler, persistent=True))
 
     def scope(self, schedule: Schedule) -> Schedule:
         """

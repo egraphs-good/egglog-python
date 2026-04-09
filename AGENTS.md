@@ -19,6 +19,9 @@
 
 - Use the Context7 MCP server for egglog documentation instead of copying external doc summaries into this file.
 - Keep general workflows in the how-to guides, and keep Python-specific runtime/reference examples in `docs/reference/python-integration.md`.
+- Before changing Python-facing `egglog` APIs or expression-inspection patterns, read `docs/reference/python-integration.md`.
+- Before changing how egglog concepts map into Python declarations, relations, actions, or sort/function definitions, read `docs/reference/egglog-translation.md`.
+- If a change touches both local Python ergonomics and egglog-language mapping, read `docs/reference/python-integration.md` first, then `docs/reference/egglog-translation.md`.
 - If a PR adds or updates a changelog entry in `docs/changelog.md`, keep it aligned with the final code changes.
 - For a clean docs rebuild, clear `docs/_build/`; the MyST-NB execution cache lives in `docs/_build/.jupyter_cache`.
 
@@ -41,6 +44,7 @@
 ## Verification
 
 - Prefer the minimal code change and the minimal diff that solves the task; only broaden the change if the smaller fix is not sufficient.
+- For long-running profiling or trace probes, run them with explicit timeouts, check for lingering worker processes before and after, and inspect memory usage after any timeout or manual kill before starting the next experiment.
 - Run `make mypy` for typing changes.
 - Run targeted pytest for touched modules.
 - Run `make docs` for docs or public API changes.

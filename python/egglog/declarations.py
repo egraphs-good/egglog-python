@@ -1065,6 +1065,8 @@ class BackOffDecl:
     id: UUID
     match_limit: int | None
     ban_length: int | None
+    fresh_rematch: bool = False
+    persistent: bool = False
 
 
 ##

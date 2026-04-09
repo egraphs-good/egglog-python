@@ -87,3 +87,4 @@ visualizer.tgz
 package
 .mypy_cache/
 *.json
+python/egglog/exp/param_eq/trace/

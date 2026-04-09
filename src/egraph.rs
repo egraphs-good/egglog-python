@@ -22,7 +22,7 @@ use std::path::PathBuf;
 /// Create an empty EGraph.
 #[pyclass(unsendable)]
 pub struct EGraph {
-    pub(crate) egraph: egglog::EGraph,
+    pub(crate) egraph: egglog_experimental::ExperimentalEGraph,
     cmds: Option<String>,
 }
 

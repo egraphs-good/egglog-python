@@ -383,13 +383,18 @@ class PrettyContext:
             case DefaultRewriteDecl():
                 msg = "default rewrites should not be pretty printed"
                 raise TypeError(msg)
-            case BackOffDecl(_, match_limit, ban_length):
+            case BackOffDecl(_, match_limit, ban_length, fresh_rematch, persistent):
                 list_args = []
                 if match_limit is not None:
                     list_args.append(f"match_limit={match_limit}")
                 if ban_length is not None:
                     list_args.append(f"ban_length={ban_length}")
-                return f"back_off({', '.join(list_args)})", "scheduler"
+                if fresh_rematch:
+                    list_args.append("fresh_rematch=True")
+                rendered = f"back_off({', '.join(list_args)})"
+                if persistent:
+                    rendered += ".persistent()"
+                return rendered, "scheduler"
             case ValueDecl(value):
                 return str(value), "value"
             case DummyDecl():

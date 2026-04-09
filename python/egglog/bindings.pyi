@@ -176,6 +176,7 @@ class Value:
     def __ge__(self, other: object) -> bool: ...
 
 @final
+@final
 class EggSmolError(Exception):
     context: str
     def __new__(cls, context: str) -> EggSmolError: ...
@@ -515,6 +516,7 @@ class Function:
 class RunReport:
     iterations: list[IterationReport]
     updated: bool
+    can_stop: bool
     search_and_apply_time_per_rule: dict[str, timedelta]
     num_matches_per_rule: dict[str, int]
     search_and_apply_time_per_ruleset: dict[str, timedelta]
@@ -525,6 +527,7 @@ class RunReport:
         cls,
         iterations: list[IterationReport],
         updated: bool,
+        can_stop: bool,
         search_and_apply_time_per_rule: dict[str, timedelta],
         num_matches_per_rule: dict[str, int],
         search_and_apply_time_per_ruleset: dict[str, timedelta],
