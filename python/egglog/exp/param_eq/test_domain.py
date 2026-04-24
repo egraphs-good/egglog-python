@@ -6,7 +6,7 @@ from hypothesis import strategies as st
 
 from .domain import *
 
-I64_STRATEGY = st.integers(-2**63, 2**63 - 1)
+I64_STRATEGY = st.integers(-(2**63), 2**63 - 1)
 EXPR_STRATEGY = st.recursive(
     st.sampled_from(["x", "y", "z"])
     | I64_STRATEGY.map(str)
@@ -79,6 +79,7 @@ def _test_expr(expr: str) -> Iterable[str]:
     yield (f"{binary}")
     yield (f"# n_params={container_cost.floats}")
     yield (f"{container}\n")
+
 
 @example("x - y")
 @example("-x - y")

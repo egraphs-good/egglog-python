@@ -21,23 +21,20 @@ def _sort_by_smallest_expression(frame: pd.DataFrame) -> pd.DataFrame:
         return frame.copy()
     result = frame.copy()
     result["_expr_len"] = result["source_orig_parsed_expr"].map(len)
-    result = result.sort_values(
-        [
-            "source_orig_parsed_n_params",
-            "source_before_nodes",
-            "_expr_len",
-            "dataset",
-            "raw_index",
-            "algo_row",
-            "input_kind",
-        ]
-    )
+    result = result.sort_values([
+        "source_orig_parsed_n_params",
+        "source_before_nodes",
+        "_expr_len",
+        "dataset",
+        "raw_index",
+        "algo_row",
+        "input_kind",
+    ])
     return result.drop(columns="_expr_len")
 
 
 def egglog_rank_misses_frame(*, variant: str = "baseline") -> pd.DataFrame:
     """Return rows where Egglog's raw final parameter count remains above `n_rank`."""
-
     egglog = load_egglog_results(variant=variant).copy()
     egglog["rank_gap"] = egglog["after_rank_difference"]
     egglog["parsed_rank_gap"] = egglog["after_parsed_rank_difference"]

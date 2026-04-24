@@ -82,7 +82,9 @@ def write_egglog_results(frame: pd.DataFrame, path: Path | None = None) -> None:
     validated.to_csv(output, index=False, na_rep=NA_REPR)
 
 
-def load_egglog_results(path: Path | None = None, *, variant: str | None = None, source_root: Path | None = None) -> pd.DataFrame:
+def load_egglog_results(
+    path: Path | None = None, *, variant: str | None = None, source_root: Path | None = None
+) -> pd.DataFrame:
     source = load_original_results_for_join(source_root)
     egglog = load_egglog_results_raw(path)
     if variant is not None:
@@ -365,7 +367,9 @@ def run_egglog_results_frame(
                         counts=status_counts,
                     ),
                 )
-    Console().print(f"memory_limit_mb={memory_limit_mb} workers={workers} total_system_memory_mb={total_system_memory_mb():.1f}")
+    Console().print(
+        f"memory_limit_mb={memory_limit_mb} workers={workers} total_system_memory_mb={total_system_memory_mb():.1f}"
+    )
     return EGGLOG_RESULTS_SCHEMA.validate(pd.DataFrame.from_records(results))
 
 

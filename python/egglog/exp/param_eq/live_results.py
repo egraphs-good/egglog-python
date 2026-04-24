@@ -88,8 +88,7 @@ def load_live_results(path: Path | None = None, *, source_root: Path | None = No
     joined["implementation"] = "haskell"
     joined["variant"] = "live"
     joined["baseline_source"] = [
-        "live_haskell" if status == SUCCESS_STATUS else MISSING_HASKELL_SOURCE
-        for status in joined["status"]
+        "live_haskell" if status == SUCCESS_STATUS else MISSING_HASKELL_SOURCE for status in joined["status"]
     ]
     joined["egraph_total_size"] = None
     joined["passes"] = None
@@ -117,10 +116,7 @@ def _load_rows() -> list[dict[str, object]]:
 
 
 def _row_label(row: dict[str, object]) -> str:
-    return (
-        f"{row['dataset']}/{row['algorithm_raw']} row={row['algo_row']} "
-        f"raw={row['raw_index']} {row['input_kind']}"
-    )
+    return f"{row['dataset']}/{row['algorithm_raw']} row={row['algo_row']} raw={row['raw_index']} {row['input_kind']}"
 
 
 def _build_haskell_program(row: dict[str, object]) -> str:
@@ -128,61 +124,59 @@ def _build_haskell_program(row: dict[str, object]) -> str:
     raw_algorithm = json.dumps(str(row["algorithm_raw"]))
     zero_index = int(row["algo_row"]) - 1
     lookup = "lookupOriginal" if row["input_kind"] == "original" else "lookupSympy"
-    return "\n".join(
-        [
-            "import Data.List (intercalate)",
-            "import qualified Data.Map as M",
-            "import Data.SRTree",
-            "import Data.SRTree.Print",
-            "import Data.Time.Clock.POSIX (getPOSIXTime)",
-            "import FixTree",
-            "import KotanchekSR (kotanchekSR)",
-            "import KotanchekSympy (kotanchekSympy)",
-            "import PagieSR (pagieSR)",
-            "import PagieSympy (pagieSympy)",
-            "import Reparam (replaceConstsWithParams)",
-            "",
-            "sanitize :: String -> String",
-            "sanitize = map (\\c -> if c == '\\t' || c == '\\n' then ' ' else c)",
-            "",
-            "lookupOriginal :: String -> String -> Int -> SRTree Int Double",
-            "lookupOriginal dataset algorithm rowIndex = case dataset of",
-            "  \"pagie\" -> (pagieSR M.! algorithm) !! rowIndex",
-            "  \"kotanchek\" -> (kotanchekSR M.! algorithm) !! rowIndex",
-            "  _ -> error \"unknown dataset\"",
-            "",
-            "lookupSympy :: String -> String -> Int -> SRTree Int Double",
-            "lookupSympy dataset algorithm rowIndex = case dataset of",
-            "  \"pagie\" -> (pagieSympy M.! algorithm) !! rowIndex",
-            "  \"kotanchek\" -> (kotanchekSympy M.! algorithm) !! rowIndex",
-            "  _ -> error \"unknown dataset\"",
-            "",
-            "emitExpr :: SRTree Int Double -> IO ()",
-            "emitExpr expr = do",
-            "  start <- getPOSIXTime",
-            "  let simplified = simplifyE expr",
-            "  end <- getPOSIXTime",
-            "  let beforeNodes = countNodes expr",
-            "      beforeParams = recountParams (replaceConstsWithParams expr)",
-            "      afterNodes = countNodes simplified",
-            "      afterParams = recountParams (replaceConstsWithParams simplified)",
-            "      runtimeMs = (realToFrac (end - start) :: Double) * 1000.0",
-            "      rendered = showDefault simplified",
-            "      fields =",
-            "        [ show beforeNodes",
-            "        , show beforeParams",
-            "        , show afterNodes",
-            "        , show afterParams",
-            "        , show runtimeMs",
-            "        , rendered",
-            "        ]",
-            "  putStrLn (intercalate \"\\t\" (map sanitize fields))",
-            "",
-            "main :: IO ()",
-            f"main = emitExpr ({lookup} {dataset} {raw_algorithm} {zero_index})",
-            "",
-        ]
-    )
+    return "\n".join([
+        "import Data.List (intercalate)",
+        "import qualified Data.Map as M",
+        "import Data.SRTree",
+        "import Data.SRTree.Print",
+        "import Data.Time.Clock.POSIX (getPOSIXTime)",
+        "import FixTree",
+        "import KotanchekSR (kotanchekSR)",
+        "import KotanchekSympy (kotanchekSympy)",
+        "import PagieSR (pagieSR)",
+        "import PagieSympy (pagieSympy)",
+        "import Reparam (replaceConstsWithParams)",
+        "",
+        "sanitize :: String -> String",
+        "sanitize = map (\\c -> if c == '\\t' || c == '\\n' then ' ' else c)",
+        "",
+        "lookupOriginal :: String -> String -> Int -> SRTree Int Double",
+        "lookupOriginal dataset algorithm rowIndex = case dataset of",
+        '  "pagie" -> (pagieSR M.! algorithm) !! rowIndex',
+        '  "kotanchek" -> (kotanchekSR M.! algorithm) !! rowIndex',
+        '  _ -> error "unknown dataset"',
+        "",
+        "lookupSympy :: String -> String -> Int -> SRTree Int Double",
+        "lookupSympy dataset algorithm rowIndex = case dataset of",
+        '  "pagie" -> (pagieSympy M.! algorithm) !! rowIndex',
+        '  "kotanchek" -> (kotanchekSympy M.! algorithm) !! rowIndex',
+        '  _ -> error "unknown dataset"',
+        "",
+        "emitExpr :: SRTree Int Double -> IO ()",
+        "emitExpr expr = do",
+        "  start <- getPOSIXTime",
+        "  let simplified = simplifyE expr",
+        "  end <- getPOSIXTime",
+        "  let beforeNodes = countNodes expr",
+        "      beforeParams = recountParams (replaceConstsWithParams expr)",
+        "      afterNodes = countNodes simplified",
+        "      afterParams = recountParams (replaceConstsWithParams simplified)",
+        "      runtimeMs = (realToFrac (end - start) :: Double) * 1000.0",
+        "      rendered = showDefault simplified",
+        "      fields =",
+        "        [ show beforeNodes",
+        "        , show beforeParams",
+        "        , show afterNodes",
+        "        , show afterParams",
+        "        , show runtimeMs",
+        "        , rendered",
+        "        ]",
+        '  putStrLn (intercalate "\\t" (map sanitize fields))',
+        "",
+        "main :: IO ()",
+        f"main = emitExpr ({lookup} {dataset} {raw_algorithm} {zero_index})",
+        "",
+    ])
 
 
 def _decode_process_output(value: str | bytes | None) -> str:
@@ -304,7 +298,7 @@ def _run_haskell_row(
         llvm_bin = llvm_bin_dir()
         if llvm_bin is not None:
             env["PATH"] = f"{llvm_bin}:{env['PATH']}"
-        process = subprocess.Popen(  # noqa: S603,S607
+        process = subprocess.Popen(
             ["stack", "exec", "--", "runghc", "-isrc", str(temp_path), "+RTS", "-K3G", "-RTS"],  # noqa: S607
             cwd=param_eq_data_dir(),
             env=env,
@@ -465,7 +459,9 @@ def run_live_results_frame(
                         ),
                     )
     materialized = [row for row in results if row is not None]
-    console.print(f"memory_limit_mb={memory_limit_mb} workers={workers} total_system_memory_mb={total_system_memory_mb():.1f}")
+    console.print(
+        f"memory_limit_mb={memory_limit_mb} workers={workers} total_system_memory_mb={total_system_memory_mb():.1f}"
+    )
     console.print(_status_table(materialized))
     return LIVE_RESULTS_SCHEMA.validate(pd.DataFrame.from_records(materialized))
 

@@ -83,50 +83,46 @@ def _load_pagie_rows() -> list[dict[str, object]]:
     for raw_index, row in enumerate(raw_rows.itertuples(index=False), start=0):
         raw_algorithm = str(row.algorithm)
         counts[raw_algorithm] += 1
-        rows.append(
-            {
-                "raw_index": raw_index,
-                "algorithm_raw": raw_algorithm,
-                "algorithm": _clean_algorithm(raw_algorithm),
-                "algo_row": counts[raw_algorithm],
-                "expr": str(row.expr).strip(),
-            }
-        )
+        rows.append({
+            "raw_index": raw_index,
+            "algorithm_raw": raw_algorithm,
+            "algorithm": _clean_algorithm(raw_algorithm),
+            "algo_row": counts[raw_algorithm],
+            "expr": str(row.expr).strip(),
+        })
     return rows
 
 
 def _build_haskell_program(row: dict[str, object]) -> str:
     algorithm = json.dumps(str(row["algorithm_raw"]))
     zero_index = int(row["algo_row"]) - 1
-    return "\n".join(
-        [
-            "import Control.Exception (evaluate)",
-            "import Data.List (intercalate)",
-            "import qualified Data.Map as M",
-            "import Data.SRTree",
-            "import Data.Time.Clock.POSIX (getPOSIXTime)",
-            "import FixTree (simplifyE)",
-            "import PagieSR (pagieSR)",
-            "",
-            "sanitize :: String -> String",
-            "sanitize = map (\\c -> if c == '\\t' || c == '\\n' then ' ' else c)",
-            "",
-            "emitCase :: String -> Int -> IO ()",
-            "emitCase algorithm rowIndex = do",
-            "  let expr = (pagieSR M.! algorithm) !! rowIndex",
-            "      beforeNodes = countNodes expr",
-            "  start <- getPOSIXTime",
-            "  afterNodes <- evaluate (countNodes (simplifyE expr))",
-            "  end <- getPOSIXTime",
-            "  let runtimeMs = (realToFrac (end - start) :: Double) * 1000.0",
-            "      fields = [show beforeNodes, show afterNodes, show runtimeMs]",
-            "  putStrLn (intercalate \"\\t\" (map sanitize fields))",
-            "",
-            "main :: IO ()",
-            f"main = emitCase {algorithm} {zero_index}",
-            "",
-        ]
-    )
+    return "\n".join([
+        "import Control.Exception (evaluate)",
+        "import Data.List (intercalate)",
+        "import qualified Data.Map as M",
+        "import Data.SRTree",
+        "import Data.Time.Clock.POSIX (getPOSIXTime)",
+        "import FixTree (simplifyE)",
+        "import PagieSR (pagieSR)",
+        "",
+        "sanitize :: String -> String",
+        "sanitize = map (\\c -> if c == '\\t' || c == '\\n' then ' ' else c)",
+        "",
+        "emitCase :: String -> Int -> IO ()",
+        "emitCase algorithm rowIndex = do",
+        "  let expr = (pagieSR M.! algorithm) !! rowIndex",
+        "      beforeNodes = countNodes expr",
+        "  start <- getPOSIXTime",
+        "  afterNodes <- evaluate (countNodes (simplifyE expr))",
+        "  end <- getPOSIXTime",
+        "  let runtimeMs = (realToFrac (end - start) :: Double) * 1000.0",
+        "      fields = [show beforeNodes, show afterNodes, show runtimeMs]",
+        '  putStrLn (intercalate "\\t" (map sanitize fields))',
+        "",
+        "main :: IO ()",
+        f"main = emitCase {algorithm} {zero_index}",
+        "",
+    ])
 
 
 def _missing_haskell_runtime_row(row: dict[str, object], *, status: str) -> dict[str, object]:
@@ -183,7 +179,7 @@ def _run_haskell_row(
         llvm_bin = llvm_bin_dir()
         if llvm_bin is not None:
             env["PATH"] = f"{llvm_bin}:{env['PATH']}"
-        process = subprocess.Popen(  # noqa: S603,S607
+        process = subprocess.Popen(
             ["stack", "exec", "--", "runghc", "-isrc", str(temp_path), "+RTS", "-K3G", "-RTS"],  # noqa: S607
             cwd=param_eq_data_dir(),
             env=env,
@@ -376,7 +372,9 @@ def _run_haskell_rows(
                         ),
                     )
     materialized = [row for row in results if row is not None]
-    console.print(f"memory_limit_mb={memory_limit_mb} workers={workers} total_system_memory_mb={total_system_memory_mb():.1f}")
+    console.print(
+        f"memory_limit_mb={memory_limit_mb} workers={workers} total_system_memory_mb={total_system_memory_mb():.1f}"
+    )
     console.print(_status_table(materialized))
     return materialized
 
@@ -541,7 +539,9 @@ def _run_egglog_rows(
                         counts=status_counts,
                     ),
                 )
-    Console().print(f"memory_limit_mb={memory_limit_mb} workers={workers} total_system_memory_mb={total_system_memory_mb():.1f}")
+    Console().print(
+        f"memory_limit_mb={memory_limit_mb} workers={workers} total_system_memory_mb={total_system_memory_mb():.1f}"
+    )
     return results
 
 

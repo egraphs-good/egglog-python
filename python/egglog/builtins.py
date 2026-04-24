@@ -494,7 +494,6 @@ class Maybe(BuiltinExpr, Generic[T], egg_sort="Maybe"):
     # def flat_map(self, f: Callable[[T], Maybe[V]]) -> Maybe[V]: ...
 
 
-
 converter(type(None), Maybe, lambda _: Maybe[get_type_args()[0]].none())
 # converter(object, Maybe, lambda x: Maybe[get_type_args()[0]].some(convert(x, get_type_args()[0])))
 

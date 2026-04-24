@@ -126,9 +126,9 @@ def _comparison_frame(old: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     merged["simplified_rank_old"] = merged["after_parsed_rank_difference_old"]
     merged["simplified_rank_new"] = merged["after_parsed_rank_difference_new"]
     merged["simplified_rank_delta"] = merged["simplified_rank_new"] - merged["simplified_rank_old"]
-    merged["rendered_changed"] = (
-        merged["simpl_parsed_expr_old"].fillna("<na>") != merged["simpl_parsed_expr_new"].fillna("<na>")
-    )
+    merged["rendered_changed"] = merged["simpl_parsed_expr_old"].fillna("<na>") != merged[
+        "simpl_parsed_expr_new"
+    ].fillna("<na>")
     merged["status_changed"] = merged["status_old"] != merged["status_new"]
     return merged
 
@@ -139,7 +139,7 @@ def _summarize(frame: pd.DataFrame) -> dict[str, float | int | None]:
     param_deltas = frame["param_reduction_delta"].dropna()
     rank_deltas = frame["simplified_rank_delta"].dropna()
     return {
-        "examples": int(len(frame)),
+        "examples": len(frame),
         "status_changed": int(frame["status_changed"].sum()),
         "old_non_success": int((frame["status_old"] != "saturated").sum()),
         "new_non_success": int((frame["status_new"] != "saturated").sum()),
@@ -156,28 +156,44 @@ def _summarize(frame: pd.DataFrame) -> dict[str, float | int | None]:
         "better_rank": int((rank_deltas < 0).sum()),
         "worse_rank": int((rank_deltas > 0).sum()),
         "same_rank": int((rank_deltas == 0).sum()),
-        "old_median_runtime_ms": _median(frame.loc[frame["runtime_ms_old"].notna() & frame["runtime_ms_new"].notna(), "runtime_ms_old"]),
-        "new_median_runtime_ms": _median(frame.loc[frame["runtime_ms_old"].notna() & frame["runtime_ms_new"].notna(), "runtime_ms_new"]),
+        "old_median_runtime_ms": _median(
+            frame.loc[frame["runtime_ms_old"].notna() & frame["runtime_ms_new"].notna(), "runtime_ms_old"]
+        ),
+        "new_median_runtime_ms": _median(
+            frame.loc[frame["runtime_ms_old"].notna() & frame["runtime_ms_new"].notna(), "runtime_ms_new"]
+        ),
         "median_runtime_delta_ms": _median(runtime_deltas),
         "old_median_egraph_total_size": _median(
-            frame.loc[frame["egraph_total_size_old"].notna() & frame["egraph_total_size_new"].notna(), "egraph_total_size_old"]
+            frame.loc[
+                frame["egraph_total_size_old"].notna() & frame["egraph_total_size_new"].notna(), "egraph_total_size_old"
+            ]
         ),
         "new_median_egraph_total_size": _median(
-            frame.loc[frame["egraph_total_size_old"].notna() & frame["egraph_total_size_new"].notna(), "egraph_total_size_new"]
+            frame.loc[
+                frame["egraph_total_size_old"].notna() & frame["egraph_total_size_new"].notna(), "egraph_total_size_new"
+            ]
         ),
         "median_egraph_total_size_delta": _median(size_deltas),
         "old_median_param_reduction": _median(
-            frame.loc[frame["param_reduction_old"].notna() & frame["param_reduction_new"].notna(), "param_reduction_old"]
+            frame.loc[
+                frame["param_reduction_old"].notna() & frame["param_reduction_new"].notna(), "param_reduction_old"
+            ]
         ),
         "new_median_param_reduction": _median(
-            frame.loc[frame["param_reduction_old"].notna() & frame["param_reduction_new"].notna(), "param_reduction_new"]
+            frame.loc[
+                frame["param_reduction_old"].notna() & frame["param_reduction_new"].notna(), "param_reduction_new"
+            ]
         ),
         "median_param_reduction_delta": _median(param_deltas),
         "old_median_simplified_rank": _median(
-            frame.loc[frame["simplified_rank_old"].notna() & frame["simplified_rank_new"].notna(), "simplified_rank_old"]
+            frame.loc[
+                frame["simplified_rank_old"].notna() & frame["simplified_rank_new"].notna(), "simplified_rank_old"
+            ]
         ),
         "new_median_simplified_rank": _median(
-            frame.loc[frame["simplified_rank_old"].notna() & frame["simplified_rank_new"].notna(), "simplified_rank_new"]
+            frame.loc[
+                frame["simplified_rank_old"].notna() & frame["simplified_rank_new"].notna(), "simplified_rank_new"
+            ]
         ),
         "median_simplified_rank_delta": _median(rank_deltas),
     }
@@ -193,7 +209,9 @@ def _summary_table(summary: dict[str, float | int | None], old_label: str, new_l
     table.add_row(
         "Median runtime ms (lower is better)",
         _fmt_number(summary["old_median_runtime_ms"]),
-        _fmt_compared_number(summary["new_median_runtime_ms"], summary["median_runtime_delta_ms"], lower_is_better=True),
+        _fmt_compared_number(
+            summary["new_median_runtime_ms"], summary["median_runtime_delta_ms"], lower_is_better=True
+        ),
         _fmt_delta(summary["median_runtime_delta_ms"], lower_is_better=True),
         _fmt_outcome(summary["median_runtime_delta_ms"], lower_is_better=True),
     )
@@ -382,7 +400,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=40, help="Maximum per-example rows to print. Use 0 for all.")
     parser.add_argument(
         "--sort",
-        choices=("row", "runtime-delta", "abs-runtime-delta", "size-delta", "param-delta", "rank-delta", "render-changed"),
+        choices=(
+            "row",
+            "runtime-delta",
+            "abs-runtime-delta",
+            "size-delta",
+            "param-delta",
+            "rank-delta",
+            "render-changed",
+        ),
         default="row",
     )
     parser.add_argument("--width", type=int, default=180, help="Rich console width for wide comparison tables.")
@@ -403,15 +429,13 @@ def main() -> None:
     console = Console(width=args.width)
     console.print(
         Panel.fit(
-            "\n".join(
-                (
-                    f"[bold]old:[/bold] {args.old}",
-                    f"[bold]new:[/bold] {args.new}",
-                    f"[bold]rows:[/bold] {len(old)} old, {len(new)} new, {len(compared)} shared",
-                    "Param reduction means before_params minus after_params; higher is better.",
-                    "Simplified rank means after_parsed_n_params minus target rank; lower is better.",
-                )
-            ),
+            "\n".join((
+                f"[bold]old:[/bold] {args.old}",
+                f"[bold]new:[/bold] {args.new}",
+                f"[bold]rows:[/bold] {len(old)} old, {len(new)} new, {len(compared)} shared",
+                "Param reduction means before_params minus after_params; higher is better.",
+                "Simplified rank means after_parsed_n_params minus target rank; lower is better.",
+            )),
             title="param_eq Corpus Comparison",
         )
     )

@@ -112,7 +112,9 @@ def test_analysis_constant_folding(source: str, expected_value: float, parser: C
     ("parser", "schedule"),
     [
         pytest.param(
-            parse_expression, (binary_analysis_schedule + (binary_basic_rules | binary_fun_rules)).saturate(), id="binary"
+            parse_expression,
+            (binary_analysis_schedule + (binary_basic_rules | binary_fun_rules)).saturate(),
+            id="binary",
         ),
         pytest.param(
             parse_expression_container,
@@ -144,8 +146,7 @@ EXPRS = [
 
 def _stable_snapshot_text(value: str) -> str:
     return (
-        value
-        .replace("0.00019393257710548765", "0.00019393257710559848")
+        value.replace("0.00019393257710548765", "0.00019393257710559848")
         .replace(
             "1.95039 - exp(0.10413025920259658 - x1 * x1) - exp(0.10432419177970204 - x0 * x0)",
             "1.95039 - 1.109745 / exp(x1 * x1) - 1.1099602365777974 / exp(x0 * x0)",
@@ -281,9 +282,7 @@ def test_container_self_factor_cycle_leaves_root_unextractable() -> None:
     serialized = json.loads(failing_egraph._serialize().to_json())
     root_eclass = next(class_id for class_id, data in serialized["class_data"].items() if data.get("let") == "$root")
     root_polynomials = [
-        node
-        for node in serialized["nodes"].values()
-        if node["eclass"] == root_eclass and node["op"] == "polynomial"
+        node for node in serialized["nodes"].values() if node["eclass"] == root_eclass and node["op"] == "polynomial"
     ]
     non_subsumed_root_polynomials = [node for node in root_polynomials if not node["subsumed"]]
 

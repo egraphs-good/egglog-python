@@ -196,6 +196,7 @@ def _deconstruct_call_decl(
 
     return RuntimeFunction(decls_thunk, Thunk.value(call.callable), egg_bound), arg_exprs
 
+
 def is_expr_instance(x: BaseExpr, cls: type[T]) -> TypeIs[T]:
     """
     Checks if the expression is an instance of the given class. Can normally use isinstance for this, but this also works for

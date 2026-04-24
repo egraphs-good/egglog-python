@@ -641,9 +641,9 @@ class EGraphState:
         signature: FunctionSignature,
         body: TypedExprDecl,
     ) -> bindings.UserDefined:
-        input_sort_expr = self._primitive_input_sorts_to_egg(
-            [self.type_ref_to_egg(arg_type.to_just()) for arg_type in signature.arg_types]
-        )
+        input_sort_expr = self._primitive_input_sorts_to_egg([
+            self.type_ref_to_egg(arg_type.to_just()) for arg_type in signature.arg_types
+        ])
         output_sort_expr = bindings.Var(span(), self.type_ref_to_egg(signature.semantic_return_type.to_just()))
         return bindings.UserDefined(
             span(),

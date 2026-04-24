@@ -136,7 +136,6 @@ def _base_output_row(row: dict[str, object], config: ProbeConfig) -> dict[str, o
 
 def configure_pipeline_for_probe(config: ProbeConfig) -> str:
     """Mutate `pipeline` globals for one child-process probe run."""
-
     from egglog import back_off
     from egglog.exp.param_eq import pipeline
 
@@ -163,7 +162,7 @@ def _evaluate_expression(source: str, config: ProbeConfig) -> dict[str, object]:
 
         scheduler_kind = configure_pipeline_for_probe(config)
         report = run_paper_pipeline(parse_expression(source))
-    except Exception as exc:  # noqa: BLE001 - probe output should preserve failures as data.
+    except Exception as exc:
         return {
             "status": "failed",
             "error": f"{type(exc).__name__}: {exc}",
@@ -229,20 +228,18 @@ def run_rank_miss_probe_row(row: dict[str, object], config: ProbeConfig) -> dict
     n_rank = float(output["n_rank"])
     probe_rank_gap = probe_after_params - n_rank
     baseline_rank_gap = float(output["baseline_rank_gap"])
-    output.update(
-        {
-            "probe_passes": payload.get("passes"),
-            "probe_total_size": payload.get("total_size"),
-            "probe_after_params": probe_after_params,
-            "probe_rank_gap": probe_rank_gap,
-            "probe_after_nodes": payload.get("after_nodes"),
-            "probe_rendered": payload.get("rendered"),
-            "param_delta": baseline_after_params - probe_after_params,
-            "rank_gap_delta": baseline_rank_gap - probe_rank_gap,
-            "improved": probe_after_params < baseline_after_params,
-            "reached_rank": probe_after_params <= n_rank,
-        }
-    )
+    output.update({
+        "probe_passes": payload.get("passes"),
+        "probe_total_size": payload.get("total_size"),
+        "probe_after_params": probe_after_params,
+        "probe_rank_gap": probe_rank_gap,
+        "probe_after_nodes": payload.get("after_nodes"),
+        "probe_rendered": payload.get("rendered"),
+        "param_delta": baseline_after_params - probe_after_params,
+        "rank_gap_delta": baseline_rank_gap - probe_rank_gap,
+        "improved": probe_after_params < baseline_after_params,
+        "reached_rank": probe_after_params <= n_rank,
+    })
     return output
 
 
@@ -275,10 +272,7 @@ def filter_rank_miss_rows(
 
 def _mode_configs(args: argparse.Namespace) -> list[ProbeConfig]:
     modes: list[ProbeMode]
-    if args.mode == "both":
-        modes = ["long_backoff", "no_backoff"]
-    else:
-        modes = [args.mode]
+    modes = ["long_backoff", "no_backoff"] if args.mode == "both" else [args.mode]
     configs = []
     for mode in modes:
         timeout_sec = args.long_backoff_timeout_sec if mode == "long_backoff" else args.no_backoff_timeout_sec
@@ -302,18 +296,16 @@ def _sort_output(frame: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
     result = frame.copy()
     result["_expr_len"] = result["source_orig_parsed_expr"].map(len)
-    result = result.sort_values(
-        [
-            "probe_mode",
-            "source_orig_parsed_n_params",
-            "source_before_nodes",
-            "_expr_len",
-            "dataset",
-            "raw_index",
-            "algo_row",
-            "input_kind",
-        ]
-    )
+    result = result.sort_values([
+        "probe_mode",
+        "source_orig_parsed_n_params",
+        "source_before_nodes",
+        "_expr_len",
+        "dataset",
+        "raw_index",
+        "algo_row",
+        "input_kind",
+    ])
     return result.loc[:, [*OUTPUT_COLUMNS, "_expr_len"]].drop(columns="_expr_len")
 
 
@@ -392,9 +384,19 @@ def _print_mode_summary(console: Console, results: pd.DataFrame, mode: ProbeMode
     if improved.empty:
         console.log(f"{mode}: no improved rows")
         return
-    examples = improved.sort_values(["source_orig_parsed_n_params", "source_before_nodes", "param_delta"], ascending=[True, True, False]).head(10)
+    examples = improved.sort_values(
+        ["source_orig_parsed_n_params", "source_before_nodes", "param_delta"], ascending=[True, True, False]
+    ).head(10)
     example_table = Table(title=f"{mode} smallest improved examples")
-    for column in ["dataset", "algorithm", "raw_index", "input_kind", "baseline_after_params", "probe_after_params", "n_rank"]:
+    for column in [
+        "dataset",
+        "algorithm",
+        "raw_index",
+        "input_kind",
+        "baseline_after_params",
+        "probe_after_params",
+        "n_rank",
+    ]:
         example_table.add_column(column)
     for row in examples.itertuples(index=False):
         example_table.add_row(

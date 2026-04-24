@@ -142,7 +142,9 @@ IGNORED_ATTRIBUTES = {
 }
 
 
-def check_eq(x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *actions: ActionLike, display=False) -> EGraph:
+def check_eq(
+    x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *actions: ActionLike, display=False
+) -> EGraph:
     """
     Verifies that two expressions are equal after running the schedule.
 
@@ -478,9 +480,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
                 subsume=False,
             )
             resolved_default = (
-                resolve_literal(type_ref, default_value, Thunk.value(decls))
-                if default_mode == "eager"
-                else None
+                resolve_literal(type_ref, default_value, Thunk.value(decls)) if default_mode == "eager" else None
             )
             if resolved_default is not None:
                 decls |= resolved_default
@@ -911,11 +911,7 @@ def _constant_thunk(
         unextractable=False,
         subsume=False,
     )
-    resolved_default = (
-        resolve_literal(type_ref, default_replacement, Thunk.value(decls))
-        if mode == "eager"
-        else None
-    )
+    resolved_default = resolve_literal(type_ref, default_replacement, Thunk.value(decls)) if mode == "eager" else None
     if resolved_default is not None:
         decls |= resolved_default
     decls._constants[ident] = ConstantDecl(
@@ -1582,11 +1578,7 @@ class EGraph:
         """
         (output,) = self._state.run_program(bindings.PrintSize(span(1), None))
         assert isinstance(output, bindings.PrintAllFunctionsSize)
-        return [
-            (callables[0], size)
-            for (name, size) in output.sizes
-            if (callables := self._egg_fn_to_callables(name))
-        ]
+        return [(callables[0], size) for (name, size) in output.sizes if (callables := self._egg_fn_to_callables(name))]
 
     def _egg_fn_to_callables(self, egg_fn: str) -> list[ExprCallable]:
         return [
