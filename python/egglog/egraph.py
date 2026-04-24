@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import contextlib
 import inspect
 import pathlib
+import sys
 import tempfile
-from collections.abc import Callable, Generator, Iterable
-from contextvars import ContextVar, Token
-from dataclasses import InitVar, dataclass, field
+from collections.abc import Callable, Iterable
+from dataclasses import InitVar, dataclass, field, replace
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
 from types import FrameType, FunctionType
@@ -103,7 +102,6 @@ __all__ = [
     "seq",
     "set_",
     "set_cost",
-    "set_current_ruleset",
     "subsume",
     "union",
     "unstable_combine_rulesets",
@@ -144,7 +142,9 @@ IGNORED_ATTRIBUTES = {
 }
 
 
-def check_eq(x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *, add_second=True, display=False) -> EGraph:
+def check_eq(
+    x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *actions: ActionLike, display=False
+) -> EGraph:
     """
     Verifies that two expressions are equal after running the schedule.
 
@@ -152,14 +152,15 @@ def check_eq(x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *, ad
     """
     egraph = EGraph()
     x_var = egraph.let("__check_eq_x", x)
-    y_var: BASE_EXPR = egraph.let("__check_eq_y", y) if add_second else y
+    if actions:
+        egraph.register(*actions)
     if schedule:
         try:
             egraph.run(schedule)
         finally:
             if display:
                 egraph.display()
-    fact = eq(x_var).to(y_var)
+    fact = eq(x_var).to(y)
     try:
         egraph.check(fact)
     except bindings.EggSmolError as err:
@@ -186,11 +187,27 @@ def check(x: FactLike, schedule: Schedule | None = None, *given: ActionLike) -> 
 # So that we can add the functions eagerly to the registry and wait on the methods till we process the class.
 
 
+def _resolve_merge(
+    decls: Declarations,
+    return_type: TypeOrVarRef,
+    merge: Callable[[object, object], object] | None,
+) -> ExprDecl | None:
+    if merge is None:
+        return None
+    old = RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), UnboundVarDecl("old", "old")))
+    new = RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), UnboundVarDecl("new", "new")))
+    resolved_merge = resolve_literal(return_type, merge(old, new), lambda: decls)
+    decls |= resolved_merge
+    return resolved_merge.__egg_typed_expr__.expr
+
+
 CALLABLE = TypeVar("CALLABLE", bound=Callable)
 CONSTRUCTOR_CALLABLE = TypeVar("CONSTRUCTOR_CALLABLE", bound=Callable[..., "Expr | None"])
 
 EXPR_NONE = TypeVar("EXPR_NONE", bound="Expr | None")
 BASE_EXPR_NONE = TypeVar("BASE_EXPR_NONE", bound="BaseExpr | None")
+USER_EXPR = TypeVar("USER_EXPR", bound="Expr")
+BUILTIN_EXPR = TypeVar("BUILTIN_EXPR", bound="BuiltinExpr")
 
 
 @overload
@@ -272,12 +289,21 @@ def function(
     *,
     egg_fn: str | None = ...,
     merge: Callable[[BASE_EXPR, BASE_EXPR], BASE_EXPR] | None = ...,
-    builtin: bool = ...,
     mutates_first_arg: bool = ...,
 ) -> Callable[[Callable[P, BASE_EXPR]], Callable[P, BASE_EXPR]]: ...
 
 
 # constructor
+@overload
+def function(
+    *,
+    egg_fn: str | None = ...,
+    cost: int | None = ...,
+    mutates_first_arg: bool = ...,
+    unextractable: bool = ...,
+) -> Callable[[CONSTRUCTOR_CALLABLE], CONSTRUCTOR_CALLABLE]: ...
+
+
 @overload
 def function(
     *,
@@ -294,10 +320,14 @@ def function(*args, **kwargs) -> Any:
     """
     Decorate a function typing stub to create an egglog function for it.
 
-    If a body is included, it will be added to the `ruleset` passed in as a default rewrite.
+    Python automatically infers whether this lowers to a `function`, `constructor`,
+    or eager `primitive` from the return type and whether a body/default exists.
 
-    This will default to creating a "constructor" in egglog, unless a merge function is passed in or the return
-    type is a primtive, then it will be a "function".
+    Bodies and defaults lower eagerly unless an explicit `ruleset` is provided,
+    in which case they are added as rewrite-backed defaults in that ruleset.
+    Direct top-level functions can only use an explicit `ruleset` when they
+    provide a body to lower as a rewrite. `subsume` is only valid for eqsort-
+    returning bodies on that explicit-ruleset rewrite path.
     """
     fn_locals = currentframe().f_back.f_locals  # type: ignore[union-attr]
 
@@ -328,6 +358,9 @@ class _ExprMetaclass(type):
         if not bases or bases == (BaseExpr,):
             return super().__new__(cls, name, bases, namespace)
         builtin = BuiltinExpr in bases
+        if builtin:
+            register_builtin_egg_sort(egg_sort)
+            _register_builtin_class_egg_fns(namespace)
 
         frame = currentframe()
         assert frame
@@ -428,10 +461,37 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         if getattr(v, "__origin__", None) == ClassVar:
             (inner_tp,) = v.__args__
             type_ref = resolve_type_annotation_mutate(decls, inner_tp)
-            cls_decl.class_variables[k] = ConstantDecl(type_ref.to_just())
-            _add_default_rewrite(
-                decls, ClassVariableRef(cls_ident, k), type_ref, namespace.pop(k, None), ruleset, subsume=False
+            default_value = namespace.pop(k, None)
+            has_default = default_value is not None
+            return_type_is_eqsort = _return_type_is_eqsort(decls, type_ref)
+            if has_default and ruleset is not None and not return_type_is_eqsort:
+                msg = "Primitive-returning defaults cannot use an explicit ruleset"
+                raise ValueError(msg)
+            default_mode = _normalize_callable_mode(
+                return_type_is_eqsort=return_type_is_eqsort,
+                returns_unit=type_ref == TypeRefWithVars(Ident.builtin("Unit")),
+                has_body=True if has_default else None,
+                has_ruleset=ruleset is not None,
+                require_body_for_ruleset=False,
+                has_merge=False,
+                builtin=False,
+                has_cost=False,
+                unextractable=False,
+                subsume=False,
             )
+            resolved_default = (
+                resolve_literal(type_ref, default_value, Thunk.value(decls)) if default_mode == "eager" else None
+            )
+            if resolved_default is not None:
+                decls |= resolved_default
+            cls_decl.class_variables[k] = ConstantDecl(
+                type_ref.to_just(),
+                body=resolved_default.__egg_typed_expr__ if resolved_default is not None else None,
+            )
+            if default_mode == "rewrite":
+                _add_default_rewrite(
+                    decls, ClassVariableRef(cls_ident, k), type_ref, default_value, ruleset, subsume=False
+                )
         else:
             msg = f"On class {cls_ident}, for attribute '{k}', expected a ClassVar, but got {v}"
             raise NotImplementedError(msg)
@@ -509,7 +569,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
             e.add_note(f"Error processing {cls_ident}.{method_name}")
             raise
 
-        if not builtin and not isinstance(ref, InitRef):
+        if not builtin:
             add_default_funcs.append(add_rewrite)
 
     # Add all rewrite methods at the end so that all methods are registered first and can be accessed
@@ -517,6 +577,12 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     for add_rewrite in add_default_funcs:
         add_rewrite()
     return decls
+
+
+def _register_builtin_class_egg_fns(namespace: dict[str, Any]) -> None:
+    for method in namespace.values():
+        if isinstance(method, _WrappedMethod):
+            register_builtin_egg_fn(method.egg_fn)
 
 
 @dataclass
@@ -530,6 +596,10 @@ class _FunctionConstructor:
     unextractable: bool = False
     ruleset: Ruleset | None = None
     subsume: bool = False
+
+    def __post_init__(self) -> None:
+        if self.builtin:
+            register_builtin_egg_fn(self.egg_fn)
 
     def __call__(self, fn: Callable) -> RuntimeFunction:
         return RuntimeFunction(*split_thunk(Thunk.fn(self.create_decls, fn)))
@@ -584,8 +654,9 @@ def _fn_decl(
     # won't be resolved correctly
     # We need this to be false so it returns "__forward_value__" https://github.com/python/cpython/blob/440ed18e08887b958ad50db1b823e692a747b671/Lib/typing.py#L919
     # https://github.com/egraphs-good/egglog-python/issues/210
-    hint_globals = {**fn.__globals__, **hint_locals}
-    hints = get_type_hints(fn, hint_globals)
+    module_globals = vars(sys.modules[fn.__module__]) if fn.__module__ in sys.modules else {}
+    hint_namespace = {**module_globals, **fn.__globals__, **hint_locals}
+    hints = get_type_hints(fn, globalns=hint_namespace, localns=hint_namespace)
 
     params = list(signature(fn).parameters.values())
 
@@ -624,27 +695,15 @@ def _fn_decl(
 
     arg_names = tuple(t.name for t in params)
 
-    merged = (
-        None
-        if merge is None
-        else resolve_literal(
-            return_type,
-            merge(
-                RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), UnboundVarDecl("old", "old"))),
-                RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), UnboundVarDecl("new", "new"))),
-            ),
-            lambda: decls,
-        )
-    )
-    decls |= merged
+    merge_expr = _resolve_merge(decls, return_type, merge)
 
     # defer this in generator so it doesn't resolve for builtins eagerly
-    args = (TypedExprDecl(tp.to_just(), UnboundVarDecl(name)) for name, tp in zip(arg_names, arg_types, strict=True))
-
-    return_type_is_eqsort = (
-        not decls._classes[return_type.ident].builtin if isinstance(return_type, TypeRefWithVars) else False
+    args = (
+        TypedExprDecl(tp.to_just(), UnboundVarDecl(name, f"_{i}"))
+        for i, (name, tp) in enumerate(zip(arg_names, arg_types, strict=True))
     )
-    is_constructor = not is_builtin and return_type_is_eqsort and merged is None
+
+    return_type_is_eqsort = _return_type_is_eqsort(decls, return_type)
     signature_ = FunctionSignature(
         return_type=None if mutates_first_arg else return_type,
         var_arg_type=var_arg_type,
@@ -654,25 +713,35 @@ def _fn_decl(
         reverse_args=reverse_args,
     )
     doc = fn.__doc__
+    mode = _normalize_callable_mode(
+        return_type_is_eqsort=return_type_is_eqsort,
+        returns_unit=signature_.semantic_return_type == TypeRefWithVars(Ident.builtin("Unit")),
+        has_body=None,
+        has_ruleset=ruleset is not None,
+        require_body_for_ruleset=isinstance(ref, FunctionRef),
+        has_merge=merge_expr is not None,
+        builtin=is_builtin,
+        has_cost=cost is not None,
+        unextractable=unextractable,
+        subsume=subsume,
+    )
     decl: ConstructorDecl | FunctionDecl
-    if is_constructor:
+    if mode == "constructor":
         decl = ConstructorDecl(signature_, egg_name, cost, unextractable, doc)
     else:
-        if cost is not None:
-            msg = "Cost can only be set for constructors"
-            raise ValueError(msg)
-        if unextractable:
-            msg = "Unextractable can only be set for constructors"
-            raise ValueError(msg)
         decl = FunctionDecl(
             signature=signature_,
             egg_name=egg_name,
-            merge=merged.__egg_typed_expr__.expr if merged is not None else None,
+            merge=merge_expr,
             builtin=is_builtin,
             doc=doc,
         )
     decls.set_function_decl(ref, decl)
-    if is_builtin:
+    if is_builtin and (
+        any(tp.vars for tp in arg_types)
+        or (var_arg_type is not None and bool(var_arg_type.vars))
+        or bool(return_type.vars)
+    ):
         return lambda: None
     return Thunk.fn(
         _add_default_rewrite_function,
@@ -744,6 +813,51 @@ def _relation_decls(ident: Ident, tps: tuple[type, ...], egg_fn: str | None) -> 
     return decls
 
 
+@overload
+def constant(
+    name: str,
+    tp: type[USER_EXPR],
+    /,
+    *,
+    egg_name: str | None = ...,
+    merge: Callable[[USER_EXPR, USER_EXPR], USER_EXPR] | None = ...,
+) -> USER_EXPR: ...
+
+
+@overload
+def constant(
+    name: str,
+    tp: type[BUILTIN_EXPR],
+    /,
+    *,
+    egg_name: str | None = ...,
+    merge: Callable[[BUILTIN_EXPR, BUILTIN_EXPR], BUILTIN_EXPR] | None = ...,
+) -> BUILTIN_EXPR: ...
+
+
+@overload
+def constant(
+    name: str,
+    tp: type[USER_EXPR],
+    default_replacement: USER_EXPR,
+    /,
+    *,
+    egg_name: str | None = ...,
+    ruleset: Ruleset | None = ...,
+) -> USER_EXPR: ...
+
+
+@overload
+def constant(
+    name: str,
+    tp: type[BUILTIN_EXPR],
+    default_replacement: BUILTIN_EXPR,
+    /,
+    *,
+    egg_name: str | None = ...,
+) -> BUILTIN_EXPR: ...
+
+
 def constant(
     name: str,
     tp: type[BASE_EXPR],
@@ -752,6 +866,7 @@ def constant(
     *,
     egg_name: str | None = None,
     ruleset: Ruleset | None = None,
+    merge: Callable[[BASE_EXPR, BASE_EXPR], BASE_EXPR] | None = None,
 ) -> BASE_EXPR:
     """
     A "constant" is implemented as the instantiation of a value that takes no args.
@@ -759,20 +874,138 @@ def constant(
     """
     return cast(
         "BASE_EXPR",
-        RuntimeExpr(*split_thunk(Thunk.fn(_constant_thunk, name, tp, egg_name, default_replacement, ruleset))),
+        RuntimeExpr(*split_thunk(Thunk.fn(_constant_thunk, name, tp, egg_name, default_replacement, ruleset, merge))),
     )
 
 
 def _constant_thunk(
-    name: str, tp: type, egg_name: str | None, default_replacement: object, ruleset: Ruleset | None
+    name: str,
+    tp: type,
+    egg_name: str | None,
+    default_replacement: object,
+    ruleset: Ruleset | None,
+    merge: Callable[[Any, Any], Any] | None = None,
 ) -> tuple[Declarations, TypedExprDecl]:
     decls = Declarations()
     type_ref = resolve_type_annotation_mutate(decls, tp)
     ident = Ident(name, _get_module())
     callable_ref = ConstantRef(ident)
-    decls._constants[ident] = ConstantDecl(type_ref.to_just(), egg_name)
-    _add_default_rewrite(decls, callable_ref, type_ref, default_replacement, ruleset, subsume=False)
+    has_default = default_replacement is not None
+    return_type_is_eqsort = _return_type_is_eqsort(decls, type_ref)
+    if ruleset is not None and not has_default:
+        msg = "Explicit rulesets require a default"
+        raise ValueError(msg)
+    if has_default and ruleset is not None and not return_type_is_eqsort:
+        msg = "Primitive-returning defaults cannot use an explicit ruleset"
+        raise ValueError(msg)
+    merge_expr = _resolve_merge(decls, type_ref, merge)
+    mode = _normalize_callable_mode(
+        return_type_is_eqsort=return_type_is_eqsort,
+        returns_unit=type_ref == TypeRefWithVars(Ident.builtin("Unit")),
+        has_body=True if has_default else None,
+        has_ruleset=ruleset is not None,
+        require_body_for_ruleset=False,
+        has_merge=merge_expr is not None,
+        builtin=False,
+        has_cost=False,
+        unextractable=False,
+        subsume=False,
+    )
+    resolved_default = resolve_literal(type_ref, default_replacement, Thunk.value(decls)) if mode == "eager" else None
+    if resolved_default is not None:
+        decls |= resolved_default
+    decls._constants[ident] = ConstantDecl(
+        type_ref.to_just(),
+        egg_name,
+        resolved_default.__egg_typed_expr__ if resolved_default is not None else None,
+        merge_expr,
+    )
+    if mode == "rewrite":
+        _add_default_rewrite(decls, callable_ref, type_ref, default_replacement, ruleset, subsume=False)
     return decls, TypedExprDecl(type_ref.to_just(), CallDecl(callable_ref))
+
+
+_CallableMode: TypeAlias = Literal["function", "constructor", "eager", "rewrite"]
+
+
+def _return_type_is_eqsort(decls: Declarations, return_type: TypeOrVarRef) -> bool:
+    return not decls._classes[return_type.ident].builtin if isinstance(return_type, TypeRefWithVars) else False
+
+
+def _normalize_callable_mode(
+    *,
+    return_type_is_eqsort: bool,
+    returns_unit: bool,
+    has_body: bool | None,
+    has_ruleset: bool,
+    require_body_for_ruleset: bool,
+    has_merge: bool,
+    builtin: bool,
+    has_cost: bool,
+    unextractable: bool,
+    subsume: bool,
+) -> _CallableMode:
+    if builtin and has_merge:
+        msg = "Builtin callables cannot use merge"
+        raise ValueError(msg)
+    if require_body_for_ruleset and has_ruleset and has_body is False:
+        msg = "Explicit rulesets require a body"
+        raise ValueError(msg)
+    if subsume:
+        if not return_type_is_eqsort:
+            msg = "Primitive-returning callables cannot use subsume"
+            raise ValueError(msg)
+        if not has_ruleset:
+            msg = "subsume requires an explicit ruleset"
+            raise ValueError(msg)
+        if has_body is False:
+            msg = "subsume requires a body"
+            raise ValueError(msg)
+
+    if return_type_is_eqsort:
+        if builtin:
+            msg = "Eqsort-returning callables cannot be builtin"
+            raise ValueError(msg)
+        if has_body is None:
+            return "function" if has_merge else "constructor"
+        if has_body:
+            if has_merge:
+                msg = "Eqsort-returning callables with bodies cannot use merge"
+                raise ValueError(msg)
+            if has_ruleset:
+                return "rewrite"
+            if has_cost:
+                msg = "Eqsort-returning eager bodies cannot use cost"
+                raise ValueError(msg)
+            if unextractable:
+                msg = "Eqsort-returning eager bodies cannot be unextractable"
+                raise ValueError(msg)
+            return "eager"
+        return "function" if has_merge else "constructor"
+
+    if has_cost:
+        msg = "Primitive-returning callables cannot use cost"
+        raise ValueError(msg)
+    if unextractable:
+        msg = "Primitive-returning callables cannot be unextractable"
+        raise ValueError(msg)
+    if returns_unit and has_merge:
+        msg = "Functions that return Unit cannot use merge"
+        raise ValueError(msg)
+    if has_body is None:
+        return "function"
+    if has_body:
+        if has_ruleset:
+            msg = "Primitive-returning callables with bodies cannot use an explicit ruleset"
+            raise ValueError(msg)
+        if builtin:
+            msg = "Builtin callables cannot have a body"
+            raise ValueError(msg)
+        if has_merge:
+            msg = "Primitive-returning callables with bodies cannot use merge"
+            raise ValueError(msg)
+        return "eager"
+    return "function"
 
 
 def _add_default_rewrite_function(
@@ -791,12 +1024,47 @@ def _add_default_rewrite_function(
     if isinstance(ref, ClassMethodRef):
         tp = decls.get_parameterized_class(ref.ident)
         arg_exprs.insert(0, RuntimeClass(Thunk.value(decls), tp))
-    with set_current_ruleset(ruleset):
-        res = fn(*arg_exprs)
-    # If the function mutates the first arg and we have overwritten it, then use that as the result
+    elif isinstance(ref, InitRef):
+        tp = decls.get_parameterized_class(ref.ident)
+        arg_exprs.insert(
+            0,
+            RuntimeExpr.__from_values__(decls, TypedExprDecl(tp.to_just(), CallDecl(ref, tuple(args)))),
+        )
+    res = fn(*arg_exprs)
     if mutates_first_arg and arg_exprs[0].__egg_typed_expr__ != args[0]:
         res = arg_exprs[0]
-    _add_default_rewrite(decls, ref, res_type, res, ruleset, subsume)
+    decl = decls.get_callable_decl(ref)
+    mode = _normalize_callable_mode(
+        return_type_is_eqsort=_return_type_is_eqsort(decls, res_type),
+        returns_unit=res_type == TypeRefWithVars(Ident.builtin("Unit")),
+        has_body=res is not None,
+        has_ruleset=ruleset is not None,
+        require_body_for_ruleset=isinstance(ref, FunctionRef),
+        has_merge=isinstance(decl, FunctionDecl) and decl.merge is not None,
+        builtin=isinstance(decl, FunctionDecl) and decl.builtin,
+        has_cost=isinstance(decl, ConstructorDecl) and decl.cost is not None,
+        unextractable=isinstance(decl, ConstructorDecl) and decl.unextractable,
+        subsume=subsume,
+    )
+    if mode in ("function", "constructor"):
+        return
+    if mode == "rewrite":
+        _add_default_rewrite(decls, ref, res_type, res, ruleset, subsume)
+        return
+
+    assert res is not None
+    resolved_value = resolve_literal(res_type, res, Thunk.value(decls))
+    decls |= resolved_value
+    match decl:
+        case ConstructorDecl(signature, egg_name, _, _, doc):
+            decls.set_function_decl(
+                ref,
+                FunctionDecl(signature=signature, egg_name=egg_name, body=resolved_value.__egg_typed_expr__, doc=doc),
+            )
+        case FunctionDecl():
+            decls.set_function_decl(ref, replace(decl, body=resolved_value.__egg_typed_expr__))
+        case _:
+            assert_never(decl)
 
 
 def _add_default_rewrite(
@@ -808,12 +1076,13 @@ def _add_default_rewrite(
     subsume: bool,
 ) -> None:
     """
-    Adds a default rewrite for the callable, if the default rewrite is not None
-
-    Will add it to the ruleset if it is passed in, or add it to the default ruleset on the passed in decls if not.
+    Adds a default rewrite for the callable when an explicit ruleset is provided.
     """
     if default_rewrite is None:
         return
+    if ruleset is None:
+        msg = "Default rewrites require an explicit ruleset"
+        raise ValueError(msg)
     resolved_value = resolve_literal(type_ref, default_rewrite, Thunk.value(decls))
     rewrite_decl = DefaultRewriteDecl(ref, resolved_value.__egg_typed_expr__.expr, subsume)
     ruleset_decls = _add_default_rewrite_inner(decls, rewrite_decl, ruleset)
@@ -822,14 +1091,15 @@ def _add_default_rewrite(
 
 
 def _add_default_rewrite_inner(
-    decls: Declarations, rewrite_decl: DefaultRewriteDecl, ruleset: Ruleset | None
+    decls: Declarations,
+    rewrite_decl: DefaultRewriteDecl,
+    ruleset: Ruleset | None,
 ) -> Declarations:
-    if ruleset:
-        ruleset_decls = ruleset._current_egg_decls
-        ruleset_decl = ruleset.__egg_ruleset__
-    else:
-        ruleset_decls = decls
-        ruleset_decl = decls.default_ruleset
+    if ruleset is None:
+        msg = "Default rewrites require an explicit ruleset"
+        raise ValueError(msg)
+    ruleset_decls = ruleset._current_egg_decls
+    ruleset_decl = ruleset.__egg_ruleset__
     ruleset_decl.rules.append(rewrite_decl)
     return ruleset_decls
 
@@ -880,11 +1150,11 @@ class EGraph:
         self,
         *actions: ActionLike,
         seminaive: bool = True,
-        save_egglog_string: bool = False,
+        save_egglog_string: bool = True,
     ) -> None:
         with _TRACER.start_as_current_span("create"):
             with _TRACER.start_as_current_span("create_bindings"):
-                self._state = EGraphState(bindings.EGraph(seminaive=seminaive, record=save_egglog_string))
+                self._state = EGraphState(bindings.EGraph(seminaive=seminaive), save_egglog_string=save_egglog_string)
             self._state_stack = []
             self._token_stack = []
             if actions:
@@ -905,11 +1175,7 @@ class EGraph:
         """
         Returns the egglog string for this module.
         """
-        cmds = self._egraph.commands()
-        if cmds is None:
-            msg = "Can't get egglog string unless EGraph created with save_egglog_string=True"
-            raise ValueError(msg)
-        return cmds
+        return self._state.egglog_string()
 
     def _ipython_display_(self) -> None:
         self.display()
@@ -918,7 +1184,7 @@ class EGraph:
         """
         Loads a CSV file and sets it as *input, output of the function.
         """
-        self._run_program(bindings.Input(span(1), self._callable_to_egg(fn)[1], path))
+        self._state.run_program(bindings.Input(span(1), self._callable_to_egg(fn)[1], path))
 
     def _callable_to_egg(self, fn: ExprCallable) -> tuple[CallableRef, str]:
         ref, decls = resolve_callable(fn)
@@ -972,7 +1238,7 @@ class EGraph:
     def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
         self._add_decls(schedule)
         cmd = self._state.run_schedule_to_egg(schedule.schedule)
-        (command_output,) = self._run_program(cmd)
+        (command_output,) = self._state.run_program(cmd)
         assert isinstance(command_output, bindings.RunScheduleOutput)
         return command_output.report
 
@@ -980,7 +1246,7 @@ class EGraph:
         """
         Returns the overall run report for the egraph.
         """
-        (output,) = self._run_program(bindings.PrintOverallStatistics(span(1), None))
+        (output,) = self._state.run_program(bindings.PrintOverallStatistics(span(1), None))
         assert isinstance(output, bindings.OverallStatistics)
         return output.report
 
@@ -1002,18 +1268,18 @@ class EGraph:
         """
         Check if a fact is true in the egraph.
         """
-        self._run_program(self._facts_to_check(facts))
+        self._state.run_program(self._facts_to_check(facts))
 
     def check_fail(self, *facts: FactLike) -> None:
         """
         Checks that one of the facts is not true
         """
-        self._run_program(bindings.Fail(span(1), self._facts_to_check(facts)))
+        self._state.run_program(bindings.Fail(span(1), self._facts_to_check(facts)))
 
     def _facts_to_check(self, fact_likes: Iterable[FactLike]) -> bindings.Check:
         facts = _fact_likes(fact_likes)
         self._add_decls(*facts)
-        egg_facts = [self._state.fact_to_egg(f.fact) for f in _fact_likes(facts)]
+        egg_facts = [self._state.fact_to_egg(f.fact, expr_to_let=True) for f in _fact_likes(facts)]
         return bindings.Check(span(2), egg_facts)
 
     @overload
@@ -1047,8 +1313,8 @@ class EGraph:
             res = self._from_termdag(extract_report.termdag, extract_report.term, tp)
             cost = cast("COST", extract_report.cost)
         else:
-            # TODO: For some reason we need this or else it wont be registered. Not sure why
-            self.register(expr)
+            if not isinstance(runtime_expr.__egg_typed_expr__.expr, (LetRefDecl, UnboundVarDecl)):
+                self.register(expr)
             egg_cost_model = _CostModel(cost_model, self).to_bindings_cost_model()
             egg_sort = self._state.type_ref_to_egg(tp)
             extractor = call_with_current_trace(bindings.Extractor, [egg_sort], self._state.egraph, egg_cost_model)
@@ -1084,7 +1350,7 @@ class EGraph:
         else:
             cmd = bindings.Extract(span(2), *args)
         try:
-            return self._run_program(cmd)[0]
+            return self._state.run_program(cmd)[0]
         except BaseException as e:
             e.add_note("while extracting: " + str(expr))
             raise
@@ -1094,7 +1360,7 @@ class EGraph:
         """
         Push the current state of the egraph, so that it can be popped later and reverted back.
         """
-        self._run_program(bindings.Push(1))
+        self._state.run_program(bindings.Push(1))
         self._state_stack.append(self._state)
         self._state = self._state.copy()
 
@@ -1103,7 +1369,7 @@ class EGraph:
         """
         Pop the current state of the egraph, reverting back to the previous state.
         """
-        self._run_program(bindings.Pop(span(1), 1))
+        self._state.run_program(bindings.Pop(span(1), 1))
         self._state = self._state_stack.pop()
 
     def __enter__(self) -> Self:
@@ -1253,9 +1519,6 @@ class EGraph:
     def _egraph(self) -> bindings.EGraph:
         return self._state.egraph
 
-    def _run_program(self, *commands: bindings._Command) -> list[bindings._CommandOutput]:
-        return call_with_current_trace(self._egraph.run_program, *commands)
-
     @property
     def __egg_decls__(self) -> Declarations:
         return self._state.__egg_decls__
@@ -1285,7 +1548,7 @@ class EGraph:
     def _register_commands(self, cmds: list[Command]) -> None:
         self._add_decls(*cmds)
         egg_cmds = [egg_cmd for cmd in cmds if (egg_cmd := self._command_to_egg(cmd)) is not None]
-        self._run_program(*egg_cmds)
+        self._state.run_program(*egg_cmds)
 
     def _command_to_egg(self, cmd: Command) -> bindings._Command | None:
         ruleset_ident = Ident("")
@@ -1305,7 +1568,7 @@ class EGraph:
         Returns the number of rows in a certain function
         """
         egg_name = self._callable_to_egg(fn)[1]
-        (output,) = self._run_program(bindings.PrintSize(span(1), egg_name))
+        (output,) = self._state.run_program(bindings.PrintSize(span(1), egg_name))
         assert isinstance(output, bindings.PrintFunctionSize)
         return output.size
 
@@ -1313,14 +1576,14 @@ class EGraph:
         """
         Returns a list of all functions and their sizes.
         """
-        (output,) = self._run_program(bindings.PrintSize(span(1), None))
+        (output,) = self._state.run_program(bindings.PrintSize(span(1), None))
         assert isinstance(output, bindings.PrintAllFunctionsSize)
         return [(callables[0], size) for (name, size) in output.sizes if (callables := self._egg_fn_to_callables(name))]
 
     def _egg_fn_to_callables(self, egg_fn: str) -> list[ExprCallable]:
         return [
             cast("ExprCallable", create_callable(self._state.__egg_decls__, ref))
-            for ref in self._state.egg_fn_to_callable_refs[egg_fn]
+            for ref in self._state.egg_fn_to_callable_refs.get(egg_fn, ())
         ]
 
     def function_values(
@@ -1334,7 +1597,7 @@ class EGraph:
         """
         ref, egg_name = self._callable_to_egg(fn)
         cmd = bindings.PrintFunction(span(1), egg_name, length, None, bindings.DefaultPrintFunctionMode())
-        (output,) = self._run_program(cmd)
+        (output,) = self._state.run_program(cmd)
         assert isinstance(output, bindings.PrintFunctionOutput)
         signature = self.__egg_decls__.get_callable_decl(ref).signature
         assert isinstance(signature, FunctionSignature)
@@ -1407,9 +1670,10 @@ class EGraph:
             if is_subsumed:
                 subsumed.append((tp, call))
 
+        synthetic_let_names = self._state.synthetic_let_names()
         for name, fn in frozen.functions.items():
             if fn.is_let_binding:
-                if name.startswith("$__expr_"):
+                if name in synthetic_let_names:
                     continue
                 for row in fn.rows:
                     output_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
@@ -1455,8 +1719,8 @@ class EGraph:
                     case FunctionDecl():
                         set_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
                         sets[call] = TypedExprDecl(set_tp, self._state.value_to_expr(set_tp, row.output))
-                    case ConstantDecl(type_ref):
-                        if type_ref.ident.module == Ident.builtin("").module:
+                    case ConstantDecl(type_ref, _, _, merge):
+                        if type_ref.ident.module == Ident.builtin("").module or merge is not None:
                             set_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
                             sets[call] = TypedExprDecl(set_tp, self._state.value_to_expr(set_tp, row.output))
                             continue
@@ -1618,8 +1882,7 @@ class Ruleset(Schedule):
         To return the egg decls, we go through our deferred rules and add any we haven't yet
         """
         while self.deferred_rule_gens:
-            with set_current_ruleset(self):
-                rules = self.deferred_rule_gens.pop()()
+            rules = self.deferred_rule_gens.pop()()
             self._current_egg_decls.update(*rules)
             self.__egg_ruleset__.rules.extend(r.decl for r in rules)
         return self._current_egg_decls
@@ -1673,12 +1936,18 @@ class Ruleset(Schedule):
 
 @dataclass
 class UnstableCombinedRuleset(Schedule):
+    _next_generated_ident: ClassVar[int] = 0
+
     __egg_decls_thunk__: Callable[[], Declarations] = field(init=False)
     schedule: RunDecl = field(init=False)
     ident: Ident | None
+    _generated_ident: Ident | None = field(default=None, init=False, repr=False)
     rulesets: InitVar[list[Ruleset | UnstableCombinedRuleset]]
 
     def __post_init__(self, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
+        if self.ident is None:
+            self._generated_ident = Ident(f"_combined_ruleset_{UnstableCombinedRuleset._next_generated_ident}")
+            UnstableCombinedRuleset._next_generated_ident += 1
         self.schedule = RunDecl(self.__egg_ident__, ())
         # Don't use thunk so that this is re-evaluated each time its requsted, so that additions inside will
         # be added after its been evaluated once.
@@ -1686,7 +1955,10 @@ class UnstableCombinedRuleset(Schedule):
 
     @property
     def __egg_ident__(self) -> Ident:
-        return self.ident or Ident(f"combined_ruleset_{id(self)}")
+        if self.ident:
+            return self.ident
+        assert self._generated_ident is not None
+        return self._generated_ident
 
     def _create_egg_decls(self, *rulesets: Ruleset | UnstableCombinedRuleset) -> Declarations:
         decls = Declarations.create(*rulesets)
@@ -2063,7 +2335,9 @@ def to_runtime_expr(expr: BaseExpr) -> RuntimeExpr:
     return expr
 
 
-def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | None = None) -> Schedule:
+def run(
+    ruleset: Ruleset | UnstableCombinedRuleset | None = None, *until: FactLike, scheduler: BackOff | None = None
+) -> Schedule:
     """
     Create a run configuration.
     """
@@ -2078,21 +2352,41 @@ def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | N
     )
 
 
-def back_off(match_limit: None | int = None, ban_length: None | int = None) -> BackOff:
+def back_off(
+    match_limit: None | int = None,
+    ban_length: None | int = None,
+    *,
+    fresh_rematch: bool = False,
+) -> BackOff:
     """
     Create a backoff scheduler configuration.
 
     ```python
     schedule = run(analysis_ruleset).saturate() + run(ruleset, scheduler=back_off(match_limit=1000, ban_length=5)) * 10
     ```
-    This will run the `analysis_ruleset` until saturation, then run `ruleset` 10 times, using a backoff scheduler.
+    This will run the `analysis_ruleset` until saturation, then run `ruleset` 10 times,
+    using a backoff scheduler. Set `fresh_rematch=True` to use the fresh-rematch variant
+    that is closer to `egg`/`hegg`; the default keeps egglog's backlog behavior.
     """
-    return BackOff(BackOffDecl(id=uuid4(), match_limit=match_limit, ban_length=ban_length))
+    return BackOff(
+        BackOffDecl(
+            id=uuid4(),
+            match_limit=match_limit,
+            ban_length=ban_length,
+            fresh_rematch=fresh_rematch,
+        )
+    )
 
 
 @dataclass(frozen=True)
 class BackOff:
     scheduler: BackOffDecl
+
+    def persistent(self) -> BackOff:
+        """
+        Reuse this scheduler across repeated runs on the same egraph.
+        """
+        return BackOff(replace(self.scheduler, persistent=True))
 
     def scope(self, schedule: Schedule) -> Schedule:
         """
@@ -2179,22 +2473,6 @@ def _fact_like(fact_like: FactLike) -> Fact:
     if isinstance(fact_like, Fact):
         return fact_like
     return expr_fact(fact_like)
-
-
-_CURRENT_RULESET = ContextVar[Ruleset | None]("CURRENT_RULESET", default=None)
-
-
-def get_current_ruleset() -> Ruleset | None:
-    return _CURRENT_RULESET.get()
-
-
-@contextlib.contextmanager
-def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
-    token: Token[Ruleset | None] = _CURRENT_RULESET.set(r)
-    try:
-        yield
-    finally:
-        _CURRENT_RULESET.reset(token)
 
 
 def get_cost(expr: BaseExpr) -> i64:

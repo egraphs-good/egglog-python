@@ -12,7 +12,7 @@ import pytest
 from sklearn import config_context, datasets
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
-from egglog import greedy_dag_cost_model, set_current_ruleset
+from egglog import greedy_dag_cost_model
 from egglog.exp.array_api import *
 from egglog.exp.array_api import NDArray, Value
 from egglog.exp.array_api_jit import function_to_program, jit
@@ -110,8 +110,7 @@ class TestTupleInt:
         check_eq(TupleInt.range(4).filter(is_even), TupleInt(Vec(Int(0), Int(2))), array_api_schedule)
 
     def test_filter_lambda_length(self):
-        with set_current_ruleset(array_api_ruleset):
-            x = TupleInt.range(5).filter(lambda i: i < 2).length()
+        x = TupleInt.range(5).filter(lambda i: i < 2).length()
         check_eq(x, Int(2), array_api_schedule)
 
     def test_eq_true(self):
@@ -467,10 +466,11 @@ x, y, z, q, r = map(constant, ("x", "y", "z", "q", "r"), repeat(Value))
     ],
 )
 def test_polynomial_factoring(input_expr: Value, expected: Value):
-    egraph = EGraph()
+    egraph = EGraph(save_egglog_string=True)
     x = egraph.let("x", input_expr)
     egraph.run(polynomial_schedule)
     equiv_expr = egraph.extract(x)
+    print(egraph._state.egglog_file_state)
     # Normalized them both so that we don't have to worry about term order.
     normalized = EGraph()
     extracted_ref = normalized.let("extracted", equiv_expr)

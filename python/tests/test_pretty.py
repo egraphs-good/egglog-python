@@ -127,6 +127,8 @@ long_line = (
 r = ruleset(name="r")
 
 bo = back_off(ban_length=5)
+bo_fresh = back_off(ban_length=5, fresh_rematch=True)
+bo_persistent = back_off(ban_length=5).persistent()
 
 
 class BadRepr:
@@ -236,6 +238,13 @@ _A_2 + _A_3""",
         '_scheduler_1 = back_off(ban_length=5)\n_scheduler_1.scope(run(ruleset(name="r"), scheduler=_scheduler_1))',
         id="scoped scheduler",
     ),
+    pytest.param(bo_fresh, "back_off(ban_length=5, fresh_rematch=True)", id="fresh-rematch scheduler"),
+    pytest.param(
+        run(r, h(), scheduler=bo_fresh),
+        'run(ruleset(name="r"), h(), scheduler=back_off(ban_length=5, fresh_rematch=True))',
+        id="run with fresh-rematch scheduler",
+    ),
+    pytest.param(bo_persistent, "back_off(ban_length=5).persistent()", id="persistent scheduler"),
     # Functions
     pytest.param(f, "f", id="function"),
     pytest.param(A().method, "A().method", id="method"),

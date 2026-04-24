@@ -35,7 +35,8 @@ array = [
     "array_api_compat",
     "numba>=0.59.1",
     "llvmlite>=0.42.0",
-    "numpy>2"
+    "numpy>2",
+    "pandera",
 ]
 dev = [
     "ruff",
@@ -52,11 +53,18 @@ test = [
     "mypy",
     "syrupy>=5",
     "egglog[array]",
+    "pandas",
+    "altair",
+    "vl-convert-python",
+    "jupytext",
+    "nbclient",
+    "ipykernel",
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp-proto-http",
     "pytest-codspeed",
     "pytest-benchmark",
-    "pytest-xdist"
+    "pytest-xdist",
+    "hypothesis",
 ]
 
 docs = [
@@ -65,8 +73,11 @@ docs = [
     "sphinx-autodoc-typehints",
     "sphinx-gallery",
     "nbconvert",
+    "pandas",
     "matplotlib",
     "anywidget",
+    "altair",
+    "vl-convert-python",
     "seaborn",
     "egglog[array]",
     "line-profiler",
@@ -227,6 +238,7 @@ preview = true
 [tool.ruff.lint.per-file-ignores]
 # Don't require annotations for tests
 "python/tests/**" = ["ANN001", "ANN201", "INP001"]
+"python/egglog/exp/param_eq/test_*.py" = ["ANN001", "ANN201", "INP001"]
 "docs/**" = ["I001", "PLW0131"]
 
 # Disable these tests instead for now since ruff doesn't support including all method annotations of decorated class
@@ -258,10 +270,10 @@ features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib", "--doctest-modules"]
-testpaths = ["python"]
+testpaths = ["python/tests", "python/egglog/exp/param_eq"]
 python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
-norecursedirs = ["__snapshots__"]
+norecursedirs = ["__snapshots__", ".hypothesis"]
 filterwarnings = [
     "ignore::numba.core.errors.NumbaPerformanceWarning",
     "ignore::pytest_benchmark.logger.PytestBenchmarkWarning",
