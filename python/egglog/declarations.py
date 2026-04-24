@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "BUILTIN_EGG_FN_NAMES",
+    "BUILTIN_EGG_SORT_NAMES",
     "ActionCommandDecl",
     "ActionDecl",
     "BackOffDecl",
@@ -101,9 +103,25 @@ __all__ = [
     "UnnamedFunctionRef",
     "ValueDecl",
     "collect_unbound_vars",
+    "register_builtin_egg_fn",
+    "register_builtin_egg_sort",
     "replace_typed_expr",
     "upcast_declarations",
 ]
+
+
+BUILTIN_EGG_FN_NAMES: set[str] = {"!="}
+BUILTIN_EGG_SORT_NAMES: set[str] = set()
+
+
+def register_builtin_egg_fn(name: str | None) -> None:
+    if name is not None:
+        BUILTIN_EGG_FN_NAMES.add(name)
+
+
+def register_builtin_egg_sort(name: str | None) -> None:
+    if name is not None:
+        BUILTIN_EGG_SORT_NAMES.add(name)
 
 
 @dataclass(match_args=False)
@@ -160,24 +178,12 @@ class Ident:
         return cls(name, "egglog.builtins")
 
 
-default_ruleset_identifier = Ident("")
-
-
 @dataclass
 class Declarations:
-    _unnamed_functions: set[UnnamedFunctionRef] = field(default_factory=set)
     _functions: dict[Ident, FunctionDecl | RelationDecl | ConstructorDecl] = field(default_factory=dict)
     _constants: dict[Ident, ConstantDecl] = field(default_factory=dict)
     _classes: dict[Ident, ClassDecl] = field(default_factory=dict)
-    _rulesets: dict[Ident, RulesetDecl | CombinedRulesetDecl] = field(
-        default_factory=lambda: {default_ruleset_identifier: RulesetDecl([])}
-    )
-
-    @property
-    def default_ruleset(self) -> RulesetDecl:
-        ruleset = self._rulesets[default_ruleset_identifier]
-        assert isinstance(ruleset, RulesetDecl)
-        return ruleset
+    _rulesets: dict[Ident, RulesetDecl | CombinedRulesetDecl] = field(default_factory=dict)
 
     @classmethod
     def create(cls, *others: DeclarationsLike) -> Declarations:
@@ -220,11 +226,7 @@ class Declarations:
         other._functions |= self._functions
         other._classes |= self._classes
         other._constants |= self._constants
-        # Must combine rulesets bc the empty ruleset might be different, bc DefaultRewriteDecl
-        # is added to functions.
-        combined_default_rules: set[RewriteOrRuleDecl] = {*self.default_ruleset.rules, *other.default_ruleset.rules}
         other._rulesets |= self._rulesets
-        other._rulesets[default_ruleset_identifier] = RulesetDecl(list(combined_default_rules))
 
     def get_callable_decl(self, ref: CallableRef) -> CallableDecl:  # noqa: PLR0911
         match ref:
@@ -245,14 +247,14 @@ class Declarations:
                 assert init_fn, f"Class {class_name} does not have an init function."
                 return init_fn
             case UnnamedFunctionRef():
-                return ConstructorDecl(ref.signature)
+                return FunctionDecl(signature=ref.signature, body=None, builtin=False)
 
         assert_never(ref)
 
     def set_function_decl(
         self,
         ref: FunctionRef | MethodRef | ClassMethodRef | PropertyRef | InitRef,
-        decl: FunctionDecl | ConstructorDecl,
+        decl: FunctionCallableDecl,
     ) -> None:
         match ref:
             case FunctionRef(name):
@@ -324,12 +326,12 @@ class ClassDecl:
     egg_name: str | None = None
     type_vars: tuple[TypeVarRef, ...] = ()
     builtin: bool = False
-    init: ConstructorDecl | FunctionDecl | None = None
-    class_methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
+    init: FunctionCallableDecl | None = None
+    class_methods: dict[str, FunctionCallableDecl] = field(default_factory=dict)
     # These have to be separate from class_methods so that printing them can be done easily
     class_variables: dict[str, ConstantDecl] = field(default_factory=dict)
-    methods: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
-    properties: dict[str, FunctionDecl | ConstructorDecl] = field(default_factory=dict)
+    methods: dict[str, FunctionCallableDecl] = field(default_factory=dict)
+    properties: dict[str, FunctionCallableDecl] = field(default_factory=dict)
     preserved_methods: dict[str, Callable] = field(default_factory=dict)
     match_args: tuple[str, ...] = field(default=())
     doc: str | None = field(default=None)
@@ -739,11 +741,16 @@ class RelationDecl:
 @dataclass(frozen=True)
 class ConstantDecl:
     """
-    Same as `(declare)` in egglog
+    Same as `(declare)` in egglog.
+
+    `body is not None` means the constant lowers eagerly as a zero-arg primitive.
+    `merge is not None` means the constant lowers as a zero-arg function.
     """
 
     type_ref: JustTypeRef
     egg_name: str | None = None
+    body: TypedExprDecl | None = None
+    merge: ExprDecl | None = None
 
     @property
     def signature(self) -> FunctionSignature:
@@ -799,15 +806,31 @@ class FunctionSignature:
 
 @dataclass(frozen=True)
 class FunctionDecl:
+    """
+    Function-style callable declaration.
+
+    `builtin=True` is only used for builtin or special no-body callables.
+    `body is not None` means the callable lowers eagerly.
+    `merge is not None` is only used for no-body function-style declarations.
+    """
+
     signature: FunctionSignature | SpecialFunctions = field(default_factory=FunctionSignature)
-    builtin: bool = False
     egg_name: str | None = None
+    builtin: bool = False
+    body: TypedExprDecl | None = None
     merge: ExprDecl | None = None
     doc: str | None = None
 
 
 @dataclass(frozen=True)
 class ConstructorDecl:
+    """
+    Constructor-style callable declaration for eqsort-returning callables.
+
+    `cost` and `unextractable` only live on constructor declarations.
+    Rewrite-backed bodies are represented separately via explicit-ruleset rewrites.
+    """
+
     signature: FunctionSignature = field(default_factory=FunctionSignature)
     egg_name: str | None = None
     cost: int | None = None
@@ -815,7 +838,24 @@ class ConstructorDecl:
     doc: str | None = None
 
 
-CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionDecl | ConstructorDecl
+FunctionCallableDecl: TypeAlias = FunctionDecl | ConstructorDecl
+CallableDecl: TypeAlias = RelationDecl | ConstantDecl | FunctionCallableDecl
+
+
+def is_callable_decl_constructor(decl: CallableDecl) -> bool:
+    """
+    Check if a callable declaration will be compiled to a constructor in egglog, as opposed to a function or relation or primitive.
+    """
+    match decl:
+        case ConstructorDecl():
+            return True
+        case FunctionDecl() | RelationDecl():
+            return False
+        case ConstantDecl() as const_decl:
+            return const_decl.body is None and const_decl.merge is None
+        case _:
+            assert_never(decl)
+
 
 ##
 # Expressions
@@ -1171,7 +1211,7 @@ class RuleDecl:
 
 @dataclass(frozen=True)
 class DefaultRewriteDecl:
-    ref: CallableRef
+    ref: FunctionRef | ConstantRef | MethodRef | ClassMethodRef | InitRef | ClassVariableRef | PropertyRef
     expr: ExprDecl
     subsume: bool
 

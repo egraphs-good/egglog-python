@@ -3,63 +3,101 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import subprocess
 import tempfile
-from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from pathlib import Path
 import time
+from collections import Counter, defaultdict
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import get_context
+from pathlib import Path
 
-from egglog.exp.param_eq.pipeline import parse_expression, run_paper_pipeline
-from egglog.exp.param_eq.paths import ARTIFACT_DIR, llvm_bin_dir, param_eq_data_dir
+import pandas as pd
+import pandera.pandas as pa
+from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
 
-ARCHIVED_RUNTIME_PATH = ARTIFACT_DIR / "pagie_runtime_scatter.csv"
-RUNTIME_COMPARE_PATH = ARTIFACT_DIR / "pagie_runtime_compare.csv"
-HASKELL_ROOT = param_eq_data_dir()
-DEFAULT_BATCH_SIZE = 18
+from egglog.exp.param_eq.original_results import NA_REPR, load_archived_runtimes, load_dataset_results
+from egglog.exp.param_eq.paths import artifact_dir, llvm_bin_dir, param_eq_data_dir
+from egglog.exp.param_eq.resource_guard import (
+    DEFAULT_MEMORY_LIMIT_MB,
+    DEFAULT_SAMPLE_INTERVAL_SEC,
+    cap_workers_for_memory,
+    total_system_memory_mb,
+    watch_process,
+    watch_subprocess,
+)
+
+HASKELL_TIMEOUT_SECONDS = 10
+EGGLOG_TIMEOUT_SECONDS = 180
 DEFAULT_HASKELL_WORKERS = 2
-DEFAULT_EGGLOG_WORKERS = max(1, min(os.cpu_count() or 1, 4))
+DEFAULT_EGGLOG_WORKERS = 5
+SUCCESS_STATUS = "saturated"
 ALGORITHM_RENAMES = {"SRjl": "PySR", "GOMEA": "GP-GOMEA"}
+
+RUNTIME_COMPARE_SCHEMA = pa.DataFrameSchema(
+    {
+        "implementation": pa.Column(str),
+        "algorithm_raw": pa.Column(str, nullable=True),
+        "algorithm": pa.Column(str, nullable=True),
+        "algo_row": pa.Column(float, nullable=True),
+        "node_count": pa.Column(float, nullable=True),
+        "after_nodes": pa.Column(float, nullable=True),
+        "runtime_ms": pa.Column(float, nullable=True),
+        "peak_rss_mb": pa.Column(float, nullable=True),
+        "status": pa.Column(str),
+    },
+    strict=True,
+    ordered=True,
+    coerce=True,
+)
+
+
+def default_runtime_compare_path() -> Path:
+    return artifact_dir() / "runtime_compare.csv"
+
+
+def load_runtime_compare(path: Path | None = None) -> pd.DataFrame:
+    frame = pd.read_csv(path or default_runtime_compare_path(), na_values=[NA_REPR], keep_default_na=True)
+    return RUNTIME_COMPARE_SCHEMA.validate(frame)
+
+
+def write_runtime_compare(frame: pd.DataFrame, path: Path | None = None) -> None:
+    validated = RUNTIME_COMPARE_SCHEMA.validate(frame)
+    output = path or default_runtime_compare_path()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    validated.to_csv(output, index=False, na_rep=NA_REPR)
 
 
 def _clean_algorithm(name: str) -> str:
     return ALGORITHM_RENAMES.get(name, name)
 
 
-def _load_pagie_rows() -> list[dict[str, str]]:
-    results_path = HASKELL_ROOT / "results" / "pagie_results"
-    with results_path.open(newline="", encoding="utf-8") as handle:
-        raw_rows = list(csv.DictReader(handle))
+def _load_pagie_rows() -> list[dict[str, object]]:
+    raw_rows = load_dataset_results("pagie")
     counts: defaultdict[str, int] = defaultdict(int)
-    rows: list[dict[str, str]] = []
-    for raw_index, row in enumerate(raw_rows):
-        raw_algorithm = row["algorithm"]
+    rows: list[dict[str, object]] = []
+    for raw_index, row in enumerate(raw_rows.itertuples(index=False), start=0):
+        raw_algorithm = str(row.algorithm)
         counts[raw_algorithm] += 1
         rows.append(
             {
-                "raw_index": str(raw_index),
+                "raw_index": raw_index,
                 "algorithm_raw": raw_algorithm,
                 "algorithm": _clean_algorithm(raw_algorithm),
-                "algo_row": str(counts[raw_algorithm]),
-                "expr": row["expr"].strip(),
+                "algo_row": counts[raw_algorithm],
+                "expr": str(row.expr).strip(),
             }
         )
     return rows
 
 
-def _build_haskell_program(rows: list[dict[str, str]]) -> str:
-    case_lines: list[str] = []
-    for index, row in enumerate(rows):
-        algorithm = json.dumps(row["algorithm_raw"])
-        algo_row = json.dumps(row["algo_row"])
-        zero_index = int(row["algo_row"]) - 1
-        prefix = "  " if index == 0 else "  , "
-        case_lines.append(f"{prefix}({algorithm}, {algo_row}, {zero_index})")
-    joined_case_lines = "\n".join(case_lines)
+def _build_haskell_program(row: dict[str, object]) -> str:
+    algorithm = json.dumps(str(row["algorithm_raw"]))
+    zero_index = int(row["algo_row"]) - 1
     return "\n".join(
         [
             "import Control.Exception (evaluate)",
@@ -70,37 +108,73 @@ def _build_haskell_program(rows: list[dict[str, str]]) -> str:
             "import FixTree (simplifyE)",
             "import PagieSR (pagieSR)",
             "",
-            "type RowCase = (String, String, Int)",
-            "",
-            "cases :: [RowCase]",
-            "cases =",
-            "  [",
-            joined_case_lines,
-            "  ]",
-            "",
             "sanitize :: String -> String",
             "sanitize = map (\\c -> if c == '\\t' || c == '\\n' then ' ' else c)",
             "",
-            "emitCase :: RowCase -> IO ()",
-            "emitCase (algorithm, algoRow, rowIndex) = do",
+            "emitCase :: String -> Int -> IO ()",
+            "emitCase algorithm rowIndex = do",
             "  let expr = (pagieSR M.! algorithm) !! rowIndex",
             "      beforeNodes = countNodes expr",
             "  start <- getPOSIXTime",
             "  afterNodes <- evaluate (countNodes (simplifyE expr))",
             "  end <- getPOSIXTime",
             "  let runtimeMs = (realToFrac (end - start) :: Double) * 1000.0",
-            "      fields = [algorithm, algoRow, show beforeNodes, show afterNodes, show runtimeMs]",
+            "      fields = [show beforeNodes, show afterNodes, show runtimeMs]",
             "  putStrLn (intercalate \"\\t\" (map sanitize fields))",
             "",
             "main :: IO ()",
-            "main = mapM_ emitCase cases",
+            f"main = emitCase {algorithm} {zero_index}",
             "",
         ]
     )
 
 
-def _run_haskell_chunk(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    program = _build_haskell_program(rows)
+def _missing_haskell_runtime_row(row: dict[str, object], *, status: str) -> dict[str, object]:
+    return {
+        "implementation": "Live Haskell",
+        "algorithm_raw": row["algorithm_raw"],
+        "algorithm": row["algorithm"],
+        "algo_row": row["algo_row"],
+        "node_count": None,
+        "after_nodes": None,
+        "runtime_ms": None,
+        "peak_rss_mb": None,
+        "status": status,
+    }
+
+
+def _decode_process_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _short_error(text: str, *, limit: int = 260) -> str:
+    condensed = " ".join(text.split())
+    if not condensed:
+        return "no process output"
+    if len(condensed) <= limit:
+        return condensed
+    return f"{condensed[: limit - 1]}..."
+
+
+def _failure_status(stderr: str) -> str:
+    lowered = stderr.lower()
+    if "stack overflow" in lowered or "stack space overflow" in lowered:
+        return "missing_stack_overflow"
+    return "missing_haskell_error"
+
+
+def _run_haskell_row(
+    row: dict[str, object],
+    *,
+    memory_limit_mb: int,
+    sample_interval_sec: float,
+) -> tuple[dict[str, object], str | None]:
+    program = _build_haskell_program(row)
+    temp_path: Path | None = None
     with tempfile.NamedTemporaryFile("w", suffix=".hs", delete=False) as handle:
         handle.write(program)
         temp_path = Path(handle.name)
@@ -109,110 +183,316 @@ def _run_haskell_chunk(rows: list[dict[str, str]]) -> list[dict[str, str]]:
         llvm_bin = llvm_bin_dir()
         if llvm_bin is not None:
             env["PATH"] = f"{llvm_bin}:{env['PATH']}"
-        output = subprocess.check_output(
-            ["stack", "exec", "--", "runghc", "-isrc", str(temp_path), "+RTS", "-K3G", "-RTS"],
-            cwd=HASKELL_ROOT,
+        process = subprocess.Popen(  # noqa: S603,S607
+            ["stack", "exec", "--", "runghc", "-isrc", str(temp_path), "+RTS", "-K3G", "-RTS"],  # noqa: S607
+            cwd=param_eq_data_dir(),
             env=env,
             text=True,
-            timeout=3600,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
+        watch = watch_subprocess(
+            process,
+            timeout_sec=HASKELL_TIMEOUT_SECONDS,
+            memory_limit_mb=memory_limit_mb,
+            sample_interval_sec=sample_interval_sec,
+        )
+        stdout, stderr = process.communicate()
+    except OSError as error:
+        return _missing_haskell_runtime_row(row, status="missing_haskell_error"), _short_error(str(error))
     finally:
         temp_path.unlink(missing_ok=True)
 
-    results: list[dict[str, str]] = []
-    for line in output.splitlines():
-        algorithm_raw, algo_row, before_nodes, after_nodes, runtime_ms = line.split("\t", maxsplit=4)
-        results.append(
-            {
-                "implementation": "Live Haskell",
-                "algorithm_raw": algorithm_raw,
-                "algorithm": _clean_algorithm(algorithm_raw),
-                "algo_row": algo_row,
-                "node_count": before_nodes,
-                "after_nodes": after_nodes,
-                "runtime_ms": runtime_ms,
-                "status": "saturated",
-            }
-        )
-    return results
+    if watch.status == "timeout":
+        detail = f"peak_rss_mb={watch.peak_rss_mb:.1f}" if watch.peak_rss_mb is not None else "no rss sample"
+        result = _missing_haskell_runtime_row(row, status="missing_timeout")
+        result["peak_rss_mb"] = watch.peak_rss_mb
+        return result, detail
+    if watch.status == "memory_limit":
+        detail = f"peak_rss_mb={watch.peak_rss_mb:.1f}" if watch.peak_rss_mb is not None else "no rss sample"
+        result = _missing_haskell_runtime_row(row, status="missing_memory_limit")
+        result["peak_rss_mb"] = watch.peak_rss_mb
+        return result, detail
+
+    if process.returncode != 0:
+        stderr = stderr or stdout
+        status = _failure_status(stderr)
+        result = _missing_haskell_runtime_row(row, status=status)
+        result["peak_rss_mb"] = watch.peak_rss_mb
+        return result, _short_error(stderr)
+
+    lines = [line for line in stdout.splitlines() if line.strip()]
+    if len(lines) != 1:
+        result = _missing_haskell_runtime_row(row, status="missing_bad_output")
+        result["peak_rss_mb"] = watch.peak_rss_mb
+        return (result, f"expected one output row, got {len(lines)}: {_short_error(stdout)}")
+    try:
+        before_nodes, after_nodes, runtime_ms = lines[0].split("\t", maxsplit=2)
+    except ValueError:
+        result = _missing_haskell_runtime_row(row, status="missing_bad_output")
+        result["peak_rss_mb"] = watch.peak_rss_mb
+        return (result, f"could not parse output row: {_short_error(lines[0])}")
+    return (
+        {
+            "implementation": "Live Haskell",
+            "algorithm_raw": row["algorithm_raw"],
+            "algorithm": row["algorithm"],
+            "algo_row": row["algo_row"],
+            "node_count": float(before_nodes),
+            "after_nodes": float(after_nodes),
+            "runtime_ms": float(runtime_ms),
+            "peak_rss_mb": watch.peak_rss_mb,
+            "status": SUCCESS_STATUS,
+        },
+        None,
+    )
 
 
-def _run_haskell_rows_serial(rows: list[dict[str, str]], *, batch_size: int) -> list[dict[str, str]]:
-    results: list[dict[str, str]] = []
-    for start in range(0, len(rows), batch_size):
-        batch = rows[start : start + batch_size]
-        try:
-            results.extend(_run_haskell_chunk(batch))
-        except subprocess.CalledProcessError:
-            if len(batch) == 1:
-                row = batch[0]
-                print(
-                    f"live Haskell runtime sweep failed on {row['algorithm_raw']}#{row['algo_row']}",
-                    flush=True,
-                )
-                results.append(
-                    {
-                        "implementation": "Live Haskell",
-                        "algorithm_raw": row["algorithm_raw"],
-                        "algorithm": row["algorithm"],
-                        "algo_row": row["algo_row"],
-                        "node_count": "na",
-                        "after_nodes": "na",
-                        "runtime_ms": "na",
-                        "status": "stack_overflow",
-                    }
-                )
-                continue
-            mid = len(batch) // 2
-            results.extend(_run_haskell_rows_serial(batch[:mid], batch_size=max(1, mid)))
-            results.extend(_run_haskell_rows_serial(batch[mid:], batch_size=max(1, len(batch) - mid)))
-    return results
+def _runtime_row_label(row: dict[str, object]) -> str:
+    return f"{row['algorithm_raw']}#{row['algo_row']} raw={row['raw_index']}"
 
 
-def _run_haskell_rows(rows: list[dict[str, str]], *, batch_size: int, workers: int) -> list[dict[str, str]]:
-    if workers <= 1:
-        return _run_haskell_rows_serial(rows, batch_size=batch_size)
+def _log_missing(console: Console, row: dict[str, object], result: dict[str, object], detail: str | None) -> None:
+    if result["status"] == SUCCESS_STATUS:
+        return
+    console.log(f"[yellow]{_runtime_row_label(row)}[/yellow] {result['status']}: {detail or 'no detail'}")
 
-    batches = [rows[start : start + batch_size] for start in range(0, len(rows), batch_size)]
-    results: list[dict[str, str]] = []
+
+def _status_table(rows: list[dict[str, object]]) -> Table:
+    counts = Counter(str(row["status"]) for row in rows)
+    table = Table(title="Live Haskell Runtime Status")
+    table.add_column("Status")
+    table.add_column("Rows", justify="right")
+    for status, count in sorted(counts.items()):
+        style = "green" if status == SUCCESS_STATUS else "yellow"
+        table.add_row(f"[{style}]{status}[/{style}]", str(count))
+    return table
+
+
+def _progress_description(
+    *,
+    label: str,
+    completed: int,
+    total: int,
+    kill_count: int,
+    max_peak_rss_mb: float | None,
+    counts: Counter[str],
+) -> str:
+    peak = "na" if max_peak_rss_mb is None else f"{max_peak_rss_mb:.1f}MB"
+    status_summary = ", ".join(f"{status}={counts[status]}" for status in sorted(counts))
+    return f"{label} {completed}/{total} killed={kill_count} max_rss={peak} {status_summary}".strip()
+
+
+def _run_haskell_rows(
+    rows: list[dict[str, object]],
+    *,
+    workers: int,
+    memory_limit_mb: int,
+    sample_interval_sec: float,
+) -> list[dict[str, object]]:
+    console = Console()
+    workers = cap_workers_for_memory(workers, memory_limit_mb=memory_limit_mb)
+    results: list[dict[str, object] | None] = [None] * len(rows)
+    status_counts: Counter[str] = Counter()
+    killed_count = 0
+    max_peak_rss_mb = None
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
+        console=console,
     ) as progress:
-        task = progress.add_task("live Haskell runtime rows", total=len(rows))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(_run_haskell_rows_serial, batch, batch_size=batch_size): len(batch) for batch in batches
-            }
-            for future in as_completed(futures):
-                batch_results = future.result()
-                results.extend(batch_results)
-                progress.advance(task, futures[future])
-    return results
+        task = progress.add_task(
+            _progress_description(
+                label="live Haskell runtime rows",
+                completed=0,
+                total=len(rows),
+                kill_count=0,
+                max_peak_rss_mb=None,
+                counts=Counter(),
+            ),
+            total=len(rows),
+        )
+        if workers <= 1:
+            for index, row in enumerate(rows):
+                result, detail = _run_haskell_row(
+                    row,
+                    memory_limit_mb=memory_limit_mb,
+                    sample_interval_sec=sample_interval_sec,
+                )
+                results[index] = result
+                _log_missing(console, row, result, detail)
+                status_counts[str(result["status"])] += 1
+                killed_count += int(result["status"] == "missing_memory_limit")
+                peak_rss_mb = result["peak_rss_mb"]
+                if peak_rss_mb is not None:
+                    max_peak_rss_mb = peak_rss_mb if max_peak_rss_mb is None else max(max_peak_rss_mb, peak_rss_mb)
+                progress.advance(task)
+                progress.update(
+                    task,
+                    description=_progress_description(
+                        label="live Haskell runtime rows",
+                        completed=index + 1,
+                        total=len(rows),
+                        kill_count=killed_count,
+                        max_peak_rss_mb=max_peak_rss_mb,
+                        counts=status_counts,
+                    ),
+                )
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(
+                        _run_haskell_row,
+                        row,
+                        memory_limit_mb=memory_limit_mb,
+                        sample_interval_sec=sample_interval_sec,
+                    ): index
+                    for index, row in enumerate(rows)
+                }
+                for future in as_completed(futures):
+                    index = futures[future]
+                    row = rows[index]
+                    result, detail = future.result()
+                    results[index] = result
+                    _log_missing(console, row, result, detail)
+                    status_counts[str(result["status"])] += 1
+                    killed_count += int(result["status"] == "missing_memory_limit")
+                    peak_rss_mb = result["peak_rss_mb"]
+                    if peak_rss_mb is not None:
+                        max_peak_rss_mb = peak_rss_mb if max_peak_rss_mb is None else max(max_peak_rss_mb, peak_rss_mb)
+                    progress.advance(task)
+                    progress.update(
+                        task,
+                        description=_progress_description(
+                            label="live Haskell runtime rows",
+                            completed=sum(status_counts.values()),
+                            total=len(rows),
+                            kill_count=killed_count,
+                            max_peak_rss_mb=max_peak_rss_mb,
+                            counts=status_counts,
+                        ),
+                    )
+    materialized = [row for row in results if row is not None]
+    console.print(f"memory_limit_mb={memory_limit_mb} workers={workers} total_system_memory_mb={total_system_memory_mb():.1f}")
+    console.print(_status_table(materialized))
+    return materialized
 
 
-def _run_egglog_row(row: dict[str, str]) -> dict[str, str]:
-    num = parse_expression(row["expr"])
+def _run_egglog_row(row: dict[str, object]) -> dict[str, object]:
+    from egglog.exp.param_eq.domain import parse_expression
+    from egglog.exp.param_eq.pipeline import run_paper_pipeline
+
     start = time.perf_counter()
-    report = run_paper_pipeline(num)
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    try:
+        report = run_paper_pipeline(parse_expression(str(row["expr"])))
+    except Exception:
+        return {
+            "implementation": "Egglog",
+            "algorithm_raw": row["algorithm_raw"],
+            "algorithm": row["algorithm"],
+            "algo_row": row["algo_row"],
+            "node_count": None,
+            "after_nodes": None,
+            "runtime_ms": None,
+            "peak_rss_mb": None,
+            "status": "failed",
+        }
+
     return {
         "implementation": "Egglog",
         "algorithm_raw": row["algorithm_raw"],
         "algorithm": row["algorithm"],
         "algo_row": row["algo_row"],
-        "node_count": str(report.before_nodes),
-        "after_nodes": str(report.after_nodes),
-        "runtime_ms": f"{elapsed_ms:.6f}",
-        "status": report.status,
+        "node_count": float(report.before_nodes),
+        "after_nodes": float(report.extracted_nodes),
+        "runtime_ms": (time.perf_counter() - start) * 1000.0,
+        "peak_rss_mb": None,
+        "status": SUCCESS_STATUS,
     }
 
 
-def _run_egglog_rows(rows: list[dict[str, str]], *, workers: int) -> list[dict[str, str]]:
-    results: list[dict[str, str]] = []
+def _egglog_worker_entry(connection, row: dict[str, object]) -> None:
+    try:
+        connection.send(_run_egglog_row(row))
+    finally:
+        connection.close()
+
+
+def _run_egglog_row_isolated(
+    row: dict[str, object],
+    *,
+    memory_limit_mb: int,
+    sample_interval_sec: float,
+) -> dict[str, object]:
+    context = get_context("spawn")
+    parent_connection, child_connection = context.Pipe(duplex=False)
+    process = context.Process(target=_egglog_worker_entry, args=(child_connection, row))
+    process.start()
+    watch = watch_process(
+        process,
+        timeout_sec=EGGLOG_TIMEOUT_SECONDS,
+        memory_limit_mb=memory_limit_mb,
+        sample_interval_sec=sample_interval_sec,
+    )
+    child_connection.close()
+    if watch.status == "timeout":
+        result = {
+            "implementation": "Egglog",
+            "algorithm_raw": row["algorithm_raw"],
+            "algorithm": row["algorithm"],
+            "algo_row": row["algo_row"],
+            "node_count": None,
+            "after_nodes": None,
+            "runtime_ms": None,
+            "peak_rss_mb": watch.peak_rss_mb,
+            "status": "timeout",
+        }
+    elif watch.status == "memory_limit":
+        result = {
+            "implementation": "Egglog",
+            "algorithm_raw": row["algorithm_raw"],
+            "algorithm": row["algorithm"],
+            "algo_row": row["algo_row"],
+            "node_count": None,
+            "after_nodes": None,
+            "runtime_ms": None,
+            "peak_rss_mb": watch.peak_rss_mb,
+            "status": "memory_limit",
+        }
+    elif parent_connection.poll():
+        result = parent_connection.recv()
+        result["peak_rss_mb"] = watch.peak_rss_mb
+    else:
+        result = {
+            "implementation": "Egglog",
+            "algorithm_raw": row["algorithm_raw"],
+            "algorithm": row["algorithm"],
+            "algo_row": row["algo_row"],
+            "node_count": None,
+            "after_nodes": None,
+            "runtime_ms": None,
+            "peak_rss_mb": watch.peak_rss_mb,
+            "status": "failed",
+        }
+    parent_connection.close()
+    return result
+
+
+def _run_egglog_rows(
+    rows: list[dict[str, object]],
+    *,
+    workers: int,
+    memory_limit_mb: int,
+    sample_interval_sec: float,
+) -> list[dict[str, object]]:
+    results: list[dict[str, object]] = []
+    workers = cap_workers_for_memory(workers, memory_limit_mb=memory_limit_mb)
+    status_counts: Counter[str] = Counter()
+    killed_count = 0
+    max_peak_rss_mb = None
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -220,55 +500,97 @@ def _run_egglog_rows(rows: list[dict[str, str]], *, workers: int) -> list[dict[s
         MofNCompleteColumn(),
         TimeElapsedColumn(),
     ) as progress:
-        task = progress.add_task("egglog runtime rows", total=len(rows))
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_run_egglog_row, row) for row in rows]
+        task = progress.add_task(
+            _progress_description(
+                label="egglog runtime rows",
+                completed=0,
+                total=len(rows),
+                kill_count=0,
+                max_peak_rss_mb=None,
+                counts=Counter(),
+            ),
+            total=len(rows),
+        )
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    _run_egglog_row_isolated,
+                    row,
+                    memory_limit_mb=memory_limit_mb,
+                    sample_interval_sec=sample_interval_sec,
+                )
+                for row in rows
+            ]
             for future in as_completed(futures):
-                results.append(future.result())
+                result = future.result()
+                results.append(result)
+                status_counts[str(result["status"])] += 1
+                killed_count += int(result["status"] == "memory_limit")
+                peak_rss_mb = result["peak_rss_mb"]
+                if peak_rss_mb is not None:
+                    max_peak_rss_mb = peak_rss_mb if max_peak_rss_mb is None else max(max_peak_rss_mb, peak_rss_mb)
                 progress.advance(task)
+                progress.update(
+                    task,
+                    description=_progress_description(
+                        label="egglog runtime rows",
+                        completed=len(results),
+                        total=len(rows),
+                        kill_count=killed_count,
+                        max_peak_rss_mb=max_peak_rss_mb,
+                        counts=status_counts,
+                    ),
+                )
+    Console().print(f"memory_limit_mb={memory_limit_mb} workers={workers} total_system_memory_mb={total_system_memory_mb():.1f}")
     return results
 
 
-def _load_archived_runtime_rows() -> list[dict[str, str]]:
-    with ARCHIVED_RUNTIME_PATH.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
+def _load_archived_runtime_rows() -> list[dict[str, object]]:
+    rows = load_archived_runtimes().to_dict(orient="records")
     return [
         {
             "implementation": "Archived Haskell",
-            "algorithm_raw": "",
-            "algorithm": "",
-            "algo_row": "",
+            "algorithm_raw": None,
+            "algorithm": None,
+            "algo_row": None,
             "node_count": row["node_count"],
-            "after_nodes": "",
+            "after_nodes": None,
             "runtime_ms": row["runtime_ms"],
+            "peak_rss_mb": None,
             "status": "archived_benchmark",
         }
         for row in rows
     ]
 
 
-def _write_rows(path: Path, rows: list[dict[str, str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def main() -> None:
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=RUNTIME_COMPARE_PATH)
+    parser.add_argument("--output", type=Path, default=default_runtime_compare_path())
     parser.add_argument("--haskell-workers", type=int, default=DEFAULT_HASKELL_WORKERS)
     parser.add_argument("--egglog-workers", type=int, default=DEFAULT_EGGLOG_WORKERS)
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    args = parser.parse_args()
+    parser.add_argument("--memory-limit-mb", type=int, default=DEFAULT_MEMORY_LIMIT_MB)
+    parser.add_argument("--sample-interval-sec", type=float, default=DEFAULT_SAMPLE_INTERVAL_SEC)
+    return parser.parse_args(argv)
 
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = _parse_args(argv)
     rows = _load_pagie_rows()
     archived_rows = _load_archived_runtime_rows()
-    live_rows = _run_haskell_rows(rows, batch_size=args.batch_size, workers=args.haskell_workers)
-    egglog_rows = _run_egglog_rows(rows, workers=args.egglog_workers)
-    _write_rows(args.output, archived_rows + live_rows + egglog_rows)
-    print(args.output)
+    live_rows = _run_haskell_rows(
+        rows,
+        workers=args.haskell_workers,
+        memory_limit_mb=args.memory_limit_mb,
+        sample_interval_sec=args.sample_interval_sec,
+    )
+    egglog_rows = _run_egglog_rows(
+        rows,
+        workers=args.egglog_workers,
+        memory_limit_mb=args.memory_limit_mb,
+        sample_interval_sec=args.sample_interval_sec,
+    )
+    write_runtime_compare(pd.DataFrame.from_records(archived_rows + live_rows + egglog_rows), args.output)
+    Console().print(f"[green]wrote[/green] {args.output}")
 
 
 if __name__ == "__main__":

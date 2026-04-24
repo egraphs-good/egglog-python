@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING, TypeVar, overload
+from typing import TYPE_CHECKING, TypeIs, TypeVar, overload
 
 import cloudpickle
 from typing_extensions import TypeVarTuple, Unpack
@@ -30,6 +30,7 @@ __all__ = [
     "get_let_name",
     "get_literal_value",
     "get_var_name",
+    "is_expr_instance",
 ]
 
 
@@ -134,7 +135,7 @@ def get_callable_fn(x: T) -> Callable[..., T] | T | None:
 
 
 @overload
-def get_callable_args(x: T, fn: None = ...) -> tuple[BaseExpr, ...]: ...
+def get_callable_args(x: T, fn: None = ...) -> tuple[BaseExpr, ...] | None: ...
 
 
 @overload
@@ -194,3 +195,14 @@ def _deconstruct_call_decl(
     )
 
     return RuntimeFunction(decls_thunk, Thunk.value(call.callable), egg_bound), arg_exprs
+
+def is_expr_instance(x: BaseExpr, cls: type[T]) -> TypeIs[T]:
+    """
+    Checks if the expression is an instance of the given class. Can normally use isinstance for this, but this also works for
+    generic classes which are not supported by isinstance.
+    """
+    if not isinstance(x, RuntimeExpr):
+        raise TypeError(f"Expected Expression, got {type(x).__name__}")
+    if not isinstance(cls, RuntimeClass):
+        raise TypeError(f"Expected expression class, got {type(cls).__name__}")
+    return x.__egg_typed_expr__.tp == cls.__egg_tp__.to_just()

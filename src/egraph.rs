@@ -3,13 +3,12 @@
 use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
 use crate::freeze::FrozenEGraph;
-use crate::py_object_sort::{PyObjectSort, PyPickledValue, load};
+use crate::py_object_sort::{load, PyObjectSort, PyPickledValue};
 use crate::serialize::SerializedEGraph;
 use crate::tracing_otel;
 
-use egglog::prelude::{RustSpan, Span, add_base_sort};
-use egglog::{SerializeConfig, span};
-use log::info;
+use egglog::prelude::{add_base_sort, RustSpan, Span};
+use egglog::{span, SerializeConfig};
 use num_bigint::BigInt;
 use num_rational::{BigRational, Rational64};
 use pyo3::prelude::*;
@@ -23,22 +22,47 @@ use std::path::PathBuf;
 #[pyclass(unsendable)]
 pub struct EGraph {
     pub(crate) egraph: egglog_experimental::ExperimentalEGraph,
-    cmds: Option<String>,
+}
+
+impl EGraph {
+    fn run_parsed_commands(
+        &mut self,
+        py: Python<'_>,
+        commands: Vec<egglog::ast::Command>,
+        parsed_from_source: bool,
+    ) -> EggResult<Vec<CommandOutput>> {
+        let res = if parsed_from_source {
+            let span = tracing::info_span!(
+                "bindings.parse_and_run_program",
+                command_count = commands.len()
+            );
+            let _entered = span.enter();
+            py.detach(|| self.egraph.run_program(commands))
+        } else {
+            let span = tracing::info_span!("bindings.run_program", command_count = commands.len());
+            let _entered = span.enter();
+            py.detach(|| self.egraph.run_program(commands))
+        };
+        if let Some(err) = PyErr::take(py) {
+            return Err(WrappedError::Py(err));
+        }
+        match res {
+            Err(e) => Err(WrappedError::Egglog(e)),
+            Ok(outputs) => Ok(outputs.into_iter().map(|o| o.into()).collect()),
+        }
+    }
 }
 
 #[pymethods]
 impl EGraph {
     #[new]
-    #[pyo3(signature = (*, fact_directory=None, seminaive=true, record=false))]
-    fn new(fact_directory: Option<PathBuf>, seminaive: bool, record: bool) -> Self {
+    #[pyo3(signature = (*, fact_directory=None, seminaive=true))]
+    fn new(fact_directory: Option<PathBuf>, seminaive: bool) -> Self {
         let mut egraph = egglog_experimental::new_experimental_egraph();
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
         add_base_sort(&mut egraph, PyObjectSort {}, span!()).unwrap();
-        Self {
-            egraph,
-            cmds: if record { Some(String::new()) } else { None },
-        }
+        Self { egraph }
     }
 
     /// Parse a program into a list of commands.
@@ -49,6 +73,25 @@ impl EGraph {
             .parser
             .get_program_from_string(filename, input)?;
         Ok(commands.into_iter().map(|x| x.into()).collect())
+    }
+
+    /// Parse a program and immediately run the parsed commands on the EGraph.
+    #[pyo3(signature = (input, /, filename=None, traceparent=None, tracestate=None))]
+    fn parse_and_run_program(
+        &mut self,
+        py: Python<'_>,
+        input: &str,
+        filename: Option<String>,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
+    ) -> EggResult<Vec<CommandOutput>> {
+        let _context_guard =
+            tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
+        let commands = self
+            .egraph
+            .parser
+            .get_program_from_string(filename, input)?;
+        self.run_parsed_commands(py, commands, true)
     }
 
     /// Run a series of commands on the EGraph.
@@ -65,39 +108,7 @@ impl EGraph {
         let _context_guard =
             tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
         let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
-        let mut cmds_str = String::new();
-
-        for cmd in &commands {
-            let cmd_string = cmd.to_string();
-            cmds_str = cmds_str + &cmd_string + "\n";
-        }
-        let span = tracing::info_span!(
-            "bindings.run_program",
-            command_count = commands.len(),
-            commands = tracing::field::display(cmds_str.trim_end())
-        );
-        let _entered = span.enter();
-        info!("Running commands:\n{}", cmds_str);
-        let res = py.detach(|| self.egraph.run_program(commands));
-        if let Some(err) = PyErr::take(py) {
-            return Err(WrappedError::Py(err));
-        }
-        match res {
-            Err(e) => Err(WrappedError::Egglog(e)),
-            Ok(outputs) => {
-                if let Some(cmds) = &mut self.cmds {
-                    cmds.push_str(&cmds_str);
-                }
-                let outputs = outputs.into_iter().map(|o| o.into()).collect();
-                Ok(outputs)
-            }
-        }
-    }
-
-    /// Returns the text of the commands that have been run so far, if `record` was passed.
-    #[pyo3(signature = ())]
-    fn commands(&self) -> Option<String> {
-        self.cmds.clone()
+        self.run_parsed_commands(py, commands, false)
     }
 
     /// Serialize the EGraph to a SerializedEGraph object.

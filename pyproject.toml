@@ -35,7 +35,8 @@ array = [
     "array_api_compat",
     "numba>=0.59.1",
     "llvmlite>=0.42.0",
-    "numpy>2"
+    "numpy>2",
+    "pandera",
 ]
 dev = [
     "ruff",
@@ -62,7 +63,8 @@ test = [
     "opentelemetry-exporter-otlp-proto-http",
     "pytest-codspeed",
     "pytest-benchmark",
-    "pytest-xdist"
+    "pytest-xdist",
+    "hypothesis",
 ]
 
 docs = [
@@ -271,7 +273,7 @@ addopts = ["--import-mode=importlib", "--doctest-modules"]
 testpaths = ["python/tests", "python/egglog/exp/param_eq"]
 python_files = ["test_*.py", "test.py"]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
-norecursedirs = ["__snapshots__"]
+norecursedirs = ["__snapshots__", ".hypothesis"]
 filterwarnings = [
     "ignore::numba.core.errors.NumbaPerformanceWarning",
     "ignore::pytest_benchmark.logger.PytestBenchmarkWarning",

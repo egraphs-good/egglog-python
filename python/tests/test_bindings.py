@@ -70,7 +70,7 @@ GENERIC_FRESH_EGRAPH_RESOLVED = "(vec-of (int 1))"
 
 
 def extract_best_term(program: str) -> str:
-    egraph = EGraph(record=True)
+    egraph = EGraph()
     outputs = egraph.run_program(*egraph.parse_program(program))
     extract = next(output for output in outputs if isinstance(output, ExtractBest))
     return extract.termdag.to_string(extract.term)
@@ -98,6 +98,12 @@ class TestEGraph:
 
         assert egraph.run_program(*egraph.parse_program(program)) == []
 
+    def test_parse_and_run_program_binding(self):
+        program = "(check (= (+ 2 2) 4))"
+        egraph = EGraph()
+
+        assert egraph.parse_and_run_program(program) == []
+
     def test_parse_and_run_program_exception(self):
         program = "(check (= 1 1.0))"
         egraph = EGraph()
@@ -107,6 +113,16 @@ class TestEGraph:
             match="to have type",
         ):
             egraph.run_program(*egraph.parse_program(program))
+
+    def test_parse_and_run_program_binding_exception(self):
+        program = "(check (= 1 1.0))"
+        egraph = EGraph()
+
+        with pytest.raises(
+            EggSmolError,
+            match="to have type",
+        ):
+            egraph.parse_and_run_program(program)
 
     def test_run_rules(self):
         egraph = EGraph()
@@ -126,6 +142,70 @@ class TestEGraph:
 
         assert len(res) == 1
         assert isinstance(res[0], RunScheduleOutput)
+
+    @pytest.mark.parametrize(
+        ("label", "command"),
+        [
+            ("ruleset", AddRuleset(DUMMY_SPAN, "rs")),
+            ("relation", Relation(DUMMY_SPAN, "rel", ["i64"])),
+            ("function", FunctionCommand(DUMMY_SPAN, "f", Schema(["i64"], "i64"), None)),
+            ("constructor", Constructor(DUMMY_SPAN, "C", Schema(["i64"], "Expr"), None, False)),
+            ("let-action", ActionCommand(Let(DUMMY_SPAN, "$x", Lit(DUMMY_SPAN, Int(1))))),
+            ("set-action", ActionCommand(Set(DUMMY_SPAN, "f", [Lit(DUMMY_SPAN, Int(1))], Lit(DUMMY_SPAN, Int(2))))),
+            ("union-action", ActionCommand(Union(DUMMY_SPAN, Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(2))))),
+            (
+                "rewrite",
+                RewriteCommand(
+                    "",
+                    Rewrite(
+                        DUMMY_SPAN,
+                        Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "a"), Var(DUMMY_SPAN, "b")]),
+                        Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "b"), Var(DUMMY_SPAN, "a")]),
+                    ),
+                    False,
+                ),
+            ),
+            (
+                "rule",
+                RuleCommand(
+                    Rule(
+                        DUMMY_SPAN,
+                        [
+                            Union(
+                                DUMMY_SPAN,
+                                Var(DUMMY_SPAN, "lhs"),
+                                Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "a"), Var(DUMMY_SPAN, "a")]),
+                            )
+                        ],
+                        [
+                            Eq(
+                                DUMMY_SPAN,
+                                Var(DUMMY_SPAN, "lhs"),
+                                Call(DUMMY_SPAN, "Mul", [Var(DUMMY_SPAN, "a"), Lit(DUMMY_SPAN, Int(2))]),
+                            )
+                        ],
+                        "",
+                        "",
+                    )
+                ),
+            ),
+            ("run-schedule", RunSchedule(Repeat(DUMMY_SPAN, 2, Run(DUMMY_SPAN, RunConfig(""))))),
+            ("check", Check(DUMMY_SPAN, [Eq(DUMMY_SPAN, Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(1)))])),
+            (
+                "fail-check",
+                Fail(DUMMY_SPAN, Check(DUMMY_SPAN, [Eq(DUMMY_SPAN, Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(2)))])),
+            ),
+            (
+                "fail-let-action",
+                Fail(DUMMY_SPAN, ActionCommand(Let(DUMMY_SPAN, "$x", Call(DUMMY_SPAN, "map-empty", [])))),
+            ),
+        ],
+    )
+    def test_command_display_round_trip(self, label: str, command) -> None:
+        egraph = EGraph()
+        text = str(command)
+        (parsed,) = egraph.parse_program(text)
+        assert str(parsed) == text, label
 
     def test_extract(self):
         # Example from extraction-cost

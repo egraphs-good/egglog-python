@@ -363,7 +363,6 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "egglog"
 version = "2.0.0"
-source = "git+https://github.com/egraphs-good/egglog.git?rev=b5c211b9def133cad9540a11744e8a1e40bd2a29#b5c211b9def133cad9540a11744e8a1e40bd2a29"
 dependencies = [
  "csv",
  "dyn-clone",
@@ -390,7 +389,6 @@ dependencies = [
 [[package]]
 name = "egglog-add-primitive"
 version = "2.0.0"
-source = "git+https://github.com/egraphs-good/egglog.git?rev=b5c211b9def133cad9540a11744e8a1e40bd2a29#b5c211b9def133cad9540a11744e8a1e40bd2a29"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -399,7 +397,6 @@ dependencies = [
 [[package]]
 name = "egglog-ast"
 version = "2.0.0"
-source = "git+https://github.com/egraphs-good/egglog.git?rev=b5c211b9def133cad9540a11744e8a1e40bd2a29#b5c211b9def133cad9540a11744e8a1e40bd2a29"
 dependencies = [
  "ordered-float",
 ]
@@ -407,7 +404,6 @@ dependencies = [
 [[package]]
 name = "egglog-bridge"
 version = "2.0.0"
-source = "git+https://github.com/egraphs-good/egglog.git?rev=b5c211b9def133cad9540a11744e8a1e40bd2a29#b5c211b9def133cad9540a11744e8a1e40bd2a29"
 dependencies = [
  "anyhow",
  "dyn-clone",
@@ -431,7 +427,6 @@ dependencies = [
 [[package]]
 name = "egglog-concurrency"
 version = "2.0.0"
-source = "git+https://github.com/egraphs-good/egglog.git?rev=b5c211b9def133cad9540a11744e8a1e40bd2a29#b5c211b9def133cad9540a11744e8a1e40bd2a29"
 dependencies = [
  "arc-swap",
  "egglog-numeric-id",
@@ -442,7 +437,6 @@ dependencies = [
 [[package]]
 name = "egglog-core-relations"
 version = "2.0.0"
-source = "git+https://github.com/egraphs-good/egglog.git?rev=b5c211b9def133cad9540a11744e8a1e40bd2a29#b5c211b9def133cad9540a11744e8a1e40bd2a29"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -472,7 +466,6 @@ dependencies = [
 [[package]]
 name = "egglog-experimental"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=3f38efab7307b765bdb912b81e99736f27e00b1f#3f38efab7307b765bdb912b81e99736f27e00b1f"
 dependencies = [
  "egglog",
  "egglog-ast",
@@ -485,7 +478,6 @@ dependencies = [
 [[package]]
 name = "egglog-numeric-id"
 version = "2.0.0"
-source = "git+https://github.com/egraphs-good/egglog.git?rev=b5c211b9def133cad9540a11744e8a1e40bd2a29#b5c211b9def133cad9540a11744e8a1e40bd2a29"
 dependencies = [
  "rayon",
 ]
@@ -493,7 +485,6 @@ dependencies = [
 [[package]]
 name = "egglog-reports"
 version = "2.0.0"
-source = "git+https://github.com/egraphs-good/egglog.git?rev=b5c211b9def133cad9540a11744e8a1e40bd2a29#b5c211b9def133cad9540a11744e8a1e40bd2a29"
 dependencies = [
  "clap",
  "hashbrown 0.16.1",
@@ -507,7 +498,6 @@ dependencies = [
 [[package]]
 name = "egglog-union-find"
 version = "2.0.0"
-source = "git+https://github.com/egraphs-good/egglog.git?rev=b5c211b9def133cad9540a11744e8a1e40bd2a29#b5c211b9def133cad9540a11744e8a1e40bd2a29"
 dependencies = [
  "crossbeam",
  "egglog-concurrency",

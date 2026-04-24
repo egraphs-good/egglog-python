@@ -581,43 +581,14 @@ added_two
 
 ## Default Replacements
 
-When defining a function or a constant, you can also provide a default replacement value. This is useful when
-you might want both the original value and the replaced value in the e-graph, so that later rules could reference either.
+The full lowering matrix for functions, constructors, primitives, and defaults is documented in
+[Translation to/from egglog](egglog-translation.md#functions-vs-constructors). This section focuses on the
+Python-only ergonomics for the explicit-`ruleset` case: when you pass a `ruleset`, the body/default is added as
+a rewrite into that ruleset instead of being lowered eagerly.
 
-```{code-cell} python
-@function
-def math_float(f: f64Like) -> Math:
-    ...
+This is useful when you want the declared name and the replacement body to both remain available to later rewrite rules.
 
-
-# Can add a default replacement value for a constants
-pi = constant("pi", Math, math_float(3.14))
-
-
-# or for a function by providing a body
-@function
-def square(x: Math) -> Math:
-    return x * x
-
-# thse rewrites will be added to the e-graph under the default ruleset
-egraph = EGraph()
-egraph.register(pi)
-egraph.register(square(Math.var('x')))
-egraph.run(1)
-egraph.check(eq(pi).to(math_float(3.14)))
-egraph.check(eq(square(Math.var('x'))).to(Math.var('x') * Math.var('x')))
-egraph
-```
-
-This is equivalent to adding the rewrite rules to the e-graph directly, like this, but just more succinct:
-
-```python
-x  = var("x", Math)
-egraph.register(rewrite(pi).to(math_float(3.14)))
-egraph.register(rewrite(square(x)).to(x * x))
-```
-
-You can also specify a ruleset to add the rewrites to, by passing in the `ruleset` keyword argument:
+You can specify a ruleset for a default replacement by passing the `ruleset` keyword argument:
 
 ```{code-cell} python
 math_ruleset = ruleset()
@@ -636,9 +607,26 @@ egraph.check(eq(e_constant).to(math_float(2.71)))
 egraph.check(eq(cube(Math.var('x'))).to(Math.var('x') * Math.var('x') * Math.var('x')))
 ```
 
+This rewrite-backed path is only available for eqsort-returning bodies and defaults. Primitive-returning defaults lower
+eagerly and cannot use an explicit `ruleset`.
+
+When `subsume=True` is allowed for that callable shape, it applies on this rewrite-backed path as well.
+
+Constants without defaults can use merge functions because they lower as zero-argument function-style declarations:
+
+```{code-cell} python
+best_score = constant("best_score", i64, merge=lambda old, new: old.max(new))
+
+egraph = EGraph()
+egraph.register(set_(best_score).to(i64(1)), set_(best_score).to(i64(2)))
+egraph.check(eq(best_score).to(i64(2)))
+```
+
+Constants with eager or rewrite-backed defaults cannot also use `merge`.
+
 ### Default Replacement for Classes
 
-In classes, you can also provide a default replacement value for constants and methods, and an optional ruleset on the class constructor:
+In classes, a `ruleset=` on the class means default method and class-variable bodies are also added to that ruleset as rewrites:
 
 ```{code-cell} python
 other_math_ruleset = ruleset()

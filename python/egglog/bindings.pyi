@@ -127,11 +127,16 @@ class SerializedEGraph:
 
 @final
 class EGraph:
-    def __new__(
-        cls, *, fact_directory: str | Path | None = None, seminaive: bool = True, record: bool = False
-    ) -> EGraph: ...
+    def __new__(cls, *, fact_directory: str | Path | None = None, seminaive: bool = True) -> EGraph: ...
     def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
-    def commands(self) -> str | None: ...
+    def parse_and_run_program(
+        self,
+        __input: str,
+        /,
+        filename: str | None = None,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
+    ) -> list[_CommandOutput]: ...
     def run_program(
         self, *commands: _Command, traceparent: str | None = None, tracestate: str | None = None
     ) -> list[_CommandOutput]: ...

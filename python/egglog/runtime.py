@@ -549,6 +549,7 @@ class RuntimeFunction(DelayedDeclarations, metaclass=RuntimeFunctionMeta):
         bound.apply_defaults()
         assert not bound.kwargs
         args = bound.args
+        decls.update(*(arg for arg in args if isinstance(arg, RuntimeExpr)))
 
         tcs = TypeConstraintSolver()
         if isinstance(self.__egg_bound__, JustTypeRef) and self.__egg_bound__.args:
@@ -697,7 +698,7 @@ class RuntimeExpr(DelayedDeclarations):
         return self.__egg_pretty__(None)
 
     def __egg_pretty__(self, wrapping_fn: str | None) -> str:
-        return pretty_decl(self.__egg_decls__, self.__egg_typed_expr__.expr, wrapping_fn=wrapping_fn)
+        return pretty_decl(self.__egg_decls__, self.__egg_typed_expr__, wrapping_fn=wrapping_fn)
 
     def _ipython_display_(self) -> None:
         from IPython.display import Code, display  # noqa: PLC0415

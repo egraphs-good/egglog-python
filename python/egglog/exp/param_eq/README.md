@@ -1,206 +1,129 @@
 # Param-Eq Replication
 
-This directory is the canonical retained `param_eq` package for the symbolic
-regression simplification replication.
+This package keeps the retained `param_eq` replication in three layers:
 
-It keeps one baseline:
+- vendored raw archive sources in [artifacts/original](artifacts/original)
+- live Haskell results in `artifacts/live_results.csv`
+- Egglog results in `artifacts/egglog_results.csv`
 
-- archived Haskell paper rows as the published reference
-- live Haskell reruns as the primary behavioral baseline
-- Egglog as the retained replication implementation
+The source layer is the only checked-in paper archive source of truth. Live
+Haskell and Egglog CSVs store only generated metrics keyed back to those source
+rows.
 
-The notebook and checked-in artifacts are meant to answer one practical
-question:
+## Main Modules
 
-- do archived Haskell, live Haskell, and Egglog support the same qualitative
-  conclusions on the retained paper metrics?
-
-## What This Package Contains
-
-### Source files
-
-- [pipeline.py](pipeline.py)
-  - the retained Egglog translation of the simplification pipeline
-- [run_haskell_corpus.py](run_haskell_corpus.py)
-  - reruns the local Haskell implementation across the retained corpus rows
-- [run_egglog_corpus.py](run_egglog_corpus.py)
-  - runs the retained Egglog baseline across the same rows
+- [original_results.py](original_results.py)
+  - raw vendored-file schemas and the cleaned retained-paper source DataFrame
+- [live_results.py](live_results.py)
+  - minimal live-Haskell result schema, writer, and joined loader
+- [egglog_results.py](egglog_results.py)
+  - minimal Egglog result schema, writer, and joined loader
 - [normalize_archives.py](normalize_archives.py)
-  - converts the archived Haskell paper outputs into the checked-in CSV
-    artifacts used by the notebook
-- [generate_haskell_golden.py](generate_haskell_golden.py)
-  - regenerates the reduced Haskell-backed golden cases used in tests
+  - refreshes the vendored raw archive subset from a local `param-eq-haskell`
+    checkout
+- [run_runtime_compare.py](run_runtime_compare.py)
+  - builds the Pagie runtime comparison CSV from archived runtimes, live
+    Haskell, and Egglog
 - [replication.py](replication.py)
-  - jupytext notebook source for the thesis/check notebook
-- [paths.py](paths.py)
-  - shared local path helpers for this package
-- [__main__.py](__main__.py)
-  - one-off CLI entrypoint for simplifying a single expression
+  - jupytext notebook source for the comparison notebook
+- [summarize_corpus_comparison.py](summarize_corpus_comparison.py)
+  - Rich CLI for comparing two generated result files
 
-### Tests
+## Source Data
 
-- [test_pipeline.py](test_pipeline.py)
-  - replication-local behavioral tests for the retained baseline
-- [test_replication_notebook.py](test_replication_notebook.py)
-  - smoke test that the notebook source runs and writes an executed notebook
+The vendored raw archive subset lives under
+[artifacts/original](artifacts/original):
 
-### Checked-in artifacts
+- `results/{dataset}_table_counts.csv`
+- `results/{dataset}_results`
+- `results/exprs/*`
+- `results/exprs_simpl/*`
+- `runtimes`
 
-- [artifacts/haskell_paper_rows.csv](artifacts/haskell_paper_rows.csv)
-  - archived paper-era Haskell results for the retained rows
-- [artifacts/haskell_live_rows.csv](artifacts/haskell_live_rows.csv)
-  - current local Haskell rerun on the same retained rows
-- [artifacts/egglog_paper_rows.csv](artifacts/egglog_paper_rows.csv)
-  - current Egglog results on the same retained rows
-- [artifacts/pagie_runtime_scatter.csv](artifacts/pagie_runtime_scatter.csv)
-  - archived Haskell Figure 9 benchmark sweep, normalized from the original
-    Criterion output
-- [artifacts/pagie_runtime_compare.csv](artifacts/pagie_runtime_compare.csv)
-  - apples-to-apples Pagie runtime sweep used by the notebook for archived
-    Haskell, live Haskell, and Egglog
-- [haskell_golden.json](haskell_golden.json)
-  - reduced Haskell-backed golden cases used by
-    [test_pipeline.py](test_pipeline.py)
-- [replication.ipynb](replication.ipynb)
-  - executed notebook artifact generated from [replication.py](replication.py)
+`original_results.py` joins those files into one retained-paper DataFrame with:
 
-## Problem And Data Overview
+- stable row identity:
+  - `dataset`, `raw_index`, `algorithm_raw`, `algo_row`, `input_kind`
+- paper counts:
+  - `before_nodes`, `before_params`, `after_nodes`, `after_params`, `n_params`, `n_rank`
+- raw expressions:
+  - `orig_expr`, `simpl_expr`
+- parsed Python-normalized expressions:
+  - `orig_parsed_expr`, `simpl_parsed_expr`
+- parsed parameter counts:
+  - `orig_parsed_n_params`, `simpl_parsed_n_params`
+- rank gaps:
+  - `before_rank_difference`, `after_rank_difference`
+  - `before_parsed_rank_difference`, `after_parsed_rank_difference`
 
-This replication is about simplifying formulas that were already produced by
-symbolic-regression systems. It is not about training or rerunning those
-regressors.
+## Generated Result Files
 
-The retained benchmark families are:
+`live_results.csv` stores only:
 
-- `Pagie`
-- `Kotanchek`
+- row key columns
+- `status`, `runtime_ms`
+- `before_nodes`, `before_params`
+- `after_nodes`, `after_params`
+- `rendered`
 
-The formulas in those datasets were originally produced by several older
-symbolic-regression systems:
+`egglog_results.csv` stores only:
 
-- `Bingo`
-- `EPLEX`
-- `GOMEA`
-- `Operon`
-- `SBP`
-- `SRjl`
+- row key columns
+- `variant`
+- `status`, `runtime_ms`
+- `before_nodes`, `before_params`
+- `after_nodes`, `after_params`
+- `egraph_total_size`, `passes`, `extracted_cost`
+- `rendered`
 
-In the notebook displays, those names are normalized to the paper-facing
-labels:
-
-- `GOMEA -> GP-GOMEA`
-- `SRjl -> PySR`
-
-Useful columns in the row artifacts:
-
-- `original_expr`
-  - archived benchmark formula for the row
-- `sympy_expr`
-  - archived Sympy-normalized variant of that formula
-- `orig_params`
-  - parameter count before simplification
-- `simpl_params`
-  - parameter count after simplification
-- `n_rank`
-  - the paper's rank target for the row
-- `dataset`, `algorithm`, `algo_row`
-  - stable identifiers for matching the same row across artifacts
-
-## Artifact Roles
-
-The three main row artifacts serve different purposes:
-
-- [artifacts/haskell_paper_rows.csv](artifacts/haskell_paper_rows.csv)
-  - the published paper reference
-- [artifacts/haskell_live_rows.csv](artifacts/haskell_live_rows.csv)
-  - the current local Haskell behavior
-- [artifacts/egglog_paper_rows.csv](artifacts/egglog_paper_rows.csv)
-  - the current Egglog behavior
-
-The notebook compares all three side by side. In practice:
-
-- archived Haskell is the published reference
-- live Haskell is the primary comparison target for current behavior
-- Egglog is the retained replication being evaluated
-
-## Where To Find The Formulas
-
-For the exact formulas used by the notebook and corpus runners, start with the
-checked-in row artifacts:
-
-- [artifacts/haskell_paper_rows.csv](artifacts/haskell_paper_rows.csv)
-- [artifacts/haskell_live_rows.csv](artifacts/haskell_live_rows.csv)
-- [artifacts/egglog_paper_rows.csv](artifacts/egglog_paper_rows.csv)
-
-For the raw Haskell-side inputs and expression dumps, look in the sibling
-`param-eq-haskell` checkout:
-
-- `../param-eq-haskell/results/exprs/`
-- `../param-eq-haskell/results/exprs_simpl/`
-- `../param-eq-haskell/results/dataset/Pagie.csv`
-- `../param-eq-haskell/results/dataset/Kotanchek.csv`
+Consumers should load the joined DataFrames from `live_results.py` and
+`egglog_results.py`, not read those CSVs directly.
 
 ## Workflow
 
-The local [Makefile](Makefile) is the canonical entrypoint for this package:
+From this directory:
 
 ```bash
-cd python/egglog/exp/param_eq
-make all
+make archived-artifacts
+make live-haskell
+make artifacts
+make notebook
+make test
 ```
 
-Useful targets:
+The steps are:
 
-- `make archived-artifacts`
-  - regenerate the normalized archived paper artifacts
-- `make live-haskell`
-  - regenerate [artifacts/haskell_live_rows.csv](artifacts/haskell_live_rows.csv)
-- `make golden`
-  - regenerate [haskell_golden.json](haskell_golden.json)
-- `make artifacts`
-  - regenerate all checked-in CSV artifacts
-- `make notebook`
-  - execute [replication.py](replication.py) and refresh
-    [replication.ipynb](replication.ipynb)
-- `make test`
-  - run the replication-local pytest targets
+1. vendor the raw archive subset from `../param-eq-haskell`
+2. run the current local Haskell simplifier on the retained rows
+3. run the Egglog baseline on the same retained rows
+4. build the Pagie runtime comparison
+5. execute the notebook
 
-One-off CLI use:
-
-```bash
-uv run python -m egglog.exp.param_eq --expr='...'
-```
-
-After local engine changes, rebuild the package with:
-
-```bash
-uv sync --reinstall-package egglog --all-extras
-```
-
-## Data Root
-
-By default the live Haskell checkout is expected at the sibling path
-`../param-eq-haskell` relative to the `egg-smol-python` repository root.
-
-Override it with:
+Override the Haskell checkout path with:
 
 ```bash
 export EGGLOG_PARAM_EQ_DATA_DIR=/path/to/param-eq-haskell
 ```
 
-The notebook and tests do not shell out to Haskell during normal execution.
-They use the checked-in artifacts in [artifacts/](artifacts/) and
-[haskell_golden.json](haskell_golden.json).
+Override the artifact root used by tests or notebook execution with:
 
-## Notebook Scope
+```bash
+export EGGLOG_PARAM_EQ_ARTIFACT_DIR=/path/to/artifacts
+```
 
-The notebook in [replication.ipynb](replication.ipynb) is comparison-first.
+## CLI
 
-Its job is to show, using the same plots and the same table layouts, that:
+Single-expression simplification:
 
-- archived Haskell, live Haskell, and Egglog can be compared directly from one
-  shared data pipeline
-- the three result sets support similar qualitative conclusions on the retained
-  paper metrics
-- the remaining archive drift is modest but should still be reported
-  explicitly, rather than silently folded into Egglog-vs-Haskell comparisons
+```bash
+uv run python -m egglog.exp.param_eq --expr='x0 + 1'
+```
+
+Compare two generated result files:
+
+```bash
+uv run python -m egglog.exp.param_eq.summarize_corpus_comparison \
+  --old python/egglog/exp/param_eq/artifacts/live_results.csv \
+  --new python/egglog/exp/param_eq/artifacts/egglog_results.csv \
+  --new-variant baseline
+```

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 from io import StringIO
+from pathlib import Path
 from typing import Any
 
 import altair as alt
@@ -36,8 +37,11 @@ import pandas as pd
 from IPython.display import SVG, display
 from nbclient import NotebookClient
 
+from egglog.exp.param_eq.egglog_results import load_egglog_results
+from egglog.exp.param_eq.live_results import load_live_results
+from egglog.exp.param_eq.original_results import load_original_results
 from egglog.exp.param_eq.paths import ARTIFACT_DIR, PARAM_EQ_DIR
-
+from egglog.exp.param_eq.run_runtime_compare import load_runtime_compare
 
 alt.data_transformers.disable_max_rows()
 alt.renderers.enable("default")
@@ -54,85 +58,163 @@ BOX_COLOR = "#4C78A8"
 POINT_COLOR = "#F58518"
 TABLE_FILL = "#F7F7F7"
 
-ARCHIVED_HASKELL_PATH = ARTIFACT_DIR / "haskell_paper_rows.csv"
-LIVE_HASKELL_PATH = ARTIFACT_DIR / "haskell_live_rows.csv"
-EGGLOG_PATH = ARTIFACT_DIR / "egglog_paper_rows.csv"
-RUNTIME_PATH = ARTIFACT_DIR / "pagie_runtime_compare.csv"
+ARTIFACT_ROOT = Path(os.environ.get("EGGLOG_PARAM_EQ_ARTIFACT_DIR", str(ARTIFACT_DIR)))
+ORIGINAL_ROOT = ARTIFACT_ROOT / "original"
+LIVE_HASKELL_PATH = ARTIFACT_ROOT / "live_results.csv"
+EGGLOG_PATH = ARTIFACT_ROOT / "egglog_results.csv"
+RUNTIME_PATH = ARTIFACT_ROOT / "runtime_compare.csv"
 
-for required_path in [ARCHIVED_HASKELL_PATH, LIVE_HASKELL_PATH, EGGLOG_PATH, RUNTIME_PATH]:
+for required_path in [ORIGINAL_ROOT, LIVE_HASKELL_PATH, EGGLOG_PATH, RUNTIME_PATH]:
     if not required_path.exists():
         msg = f"Missing required artifact: {required_path}"
         raise FileNotFoundError(msg)
 
 
-def _coerce_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    for column in columns:
-        if column in frame.columns:
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    return frame
+LONG_COLUMNS = [
+    "dataset",
+    "raw_index",
+    "algorithm_raw",
+    "algorithm",
+    "algo_row",
+    "n_params",
+    "n_rank",
+    "input_kind",
+    "input_expr",
+    "implementation",
+    "variant",
+    "status",
+    "runtime_ms",
+    "before_nodes",
+    "before_params",
+    "before_params_adjusted",
+    "after_nodes",
+    "after_params",
+    "after_params_adjusted",
+    "rank_difference",
+    "egraph_total_size",
+    "passes",
+    "extracted_cost",
+    "rendered",
+    "baseline_source",
+]
 
 
-def _paper_haskell_frame(path: os.PathLike[str] | str) -> pd.DataFrame:
-    frame = pd.read_csv(path)
-    frame = frame[frame["is_paper_row"] == 1].copy()
-    return _coerce_numeric(
-        frame,
-        [
-            "raw_index",
-            "algo_row",
-            "orig_nodes",
-            "orig_params",
-            "simpl_nodes",
-            "simpl_params",
-            "orig_runtime_ms",
-            "orig_nodes_sympy",
-            "orig_params_sympy",
-            "simpl_nodes_sympy",
-            "simpl_params_sympy",
-            "sympy_runtime_ms",
-            "n_params",
-            "n_rank",
-        ],
+def _archived_long_frame() -> pd.DataFrame:
+    source = load_original_results(ORIGINAL_ROOT).copy()
+    source["input_expr"] = source["orig_parsed_expr"]
+    source["implementation"] = "haskell"
+    source["variant"] = "paper"
+    source["status"] = "archived"
+    source["runtime_ms"] = None
+    source["before_params_adjusted"] = source["orig_parsed_n_params"]
+    source["after_params_adjusted"] = source["simpl_parsed_n_params"]
+    source["rank_difference"] = source["after_parsed_rank_difference"]
+    source["egraph_total_size"] = None
+    source["passes"] = None
+    source["extracted_cost"] = None
+    source["rendered"] = source["simpl_parsed_expr"]
+    source["baseline_source"] = "paper_archive"
+    return source.loc[:, LONG_COLUMNS]
+
+
+def _joined_long_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.copy()
+    result["input_expr"] = result["source_orig_parsed_expr"]
+    result["before_params_adjusted"] = result["source_orig_parsed_n_params"]
+    result["after_params_adjusted"] = result["simpl_parsed_n_params"]
+    result["rank_difference"] = result["after_parsed_rank_difference"]
+    result["rendered"] = result["simpl_parsed_expr"]
+    return result.loc[:, LONG_COLUMNS]
+
+
+def _paper_corpus_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    merge_columns = [
+        "dataset",
+        "raw_index",
+        "algorithm_raw",
+        "algorithm",
+        "algo_row",
+        "implementation",
+        "variant",
+        "baseline_source",
+    ]
+    value_columns = [
+        "n_params",
+        "n_rank",
+        "input_expr",
+        "status",
+        "runtime_ms",
+        "before_nodes",
+        "before_params",
+        "before_params_adjusted",
+        "after_nodes",
+        "after_params",
+        "after_params_adjusted",
+        "rank_difference",
+        "egraph_total_size",
+        "passes",
+        "extracted_cost",
+        "rendered",
+    ]
+    original = frame[frame["input_kind"] == "original"].loc[:, [*merge_columns, *value_columns]]
+    sympy = frame[frame["input_kind"] == "sympy"].loc[:, [*merge_columns, *value_columns]]
+    paired = original.rename(
+        columns={
+            "input_expr": "original_expr",
+            "status": "orig_status",
+            "runtime_ms": "orig_runtime_ms",
+            "before_nodes": "orig_nodes",
+            "before_params": "orig_params",
+            "before_params_adjusted": "orig_params_adjusted",
+            "after_nodes": "simpl_nodes",
+            "after_params": "simpl_params",
+            "after_params_adjusted": "simpl_params_adjusted",
+            "rank_difference": "orig_rank_difference",
+            "egraph_total_size": "orig_total_size",
+            "passes": "orig_passes",
+            "extracted_cost": "orig_extracted_cost",
+            "rendered": "orig_rendered",
+        }
+    ).merge(
+        sympy.rename(
+            columns={
+                "input_expr": "sympy_expr",
+                "status": "sympy_status",
+                "runtime_ms": "sympy_runtime_ms",
+                "n_params": "n_params_sympy",
+                "n_rank": "n_rank_sympy",
+                "before_nodes": "orig_nodes_sympy",
+                "before_params": "orig_params_sympy",
+                "before_params_adjusted": "orig_params_adjusted_sympy",
+                "after_nodes": "simpl_nodes_sympy",
+                "after_params": "simpl_params_sympy",
+                "after_params_adjusted": "simpl_params_adjusted_sympy",
+                "rank_difference": "sympy_rank_difference",
+                "egraph_total_size": "sympy_total_size",
+                "passes": "sympy_passes",
+                "extracted_cost": "sympy_extracted_cost",
+                "rendered": "sympy_rendered",
+            }
+        ),
+        on=merge_columns,
+        how="inner",
+        validate="one_to_one",
     )
-
-
-def _paper_egglog_frame(path: os.PathLike[str] | str) -> pd.DataFrame:
-    frame = pd.read_csv(path)
-    frame = frame[frame["is_paper_row"] == 1].copy()
-    return _coerce_numeric(
-        frame,
-        [
-            "raw_index",
-            "algo_row",
-            "orig_runtime_ms",
-            "orig_nodes",
-            "orig_params",
-            "simpl_nodes",
-            "simpl_params",
-            "orig_total_size",
-            "orig_egraph_nodes",
-            "orig_eclass_count",
-            "orig_passes",
-            "orig_extracted_cost",
-            "sympy_runtime_ms",
-            "orig_nodes_sympy",
-            "orig_params_sympy",
-            "simpl_nodes_sympy",
-            "simpl_params_sympy",
-            "sympy_total_size",
-            "sympy_egraph_nodes",
-            "sympy_eclass_count",
-            "sympy_passes",
-            "sympy_extracted_cost",
-            "n_params",
-            "n_rank",
-        ],
-    )
+    paired = paired.drop(columns=["n_params_sympy", "n_rank_sympy"])
+    paired["implementation_label"] = [
+        {
+            ("haskell", "paper"): "Archived Haskell",
+            ("haskell", "live"): "Live Haskell",
+            ("egglog", "baseline"): "Egglog",
+            ("egglog", "container"): "Egglog Container",
+        }.get((implementation, variant), f"{implementation} {variant}")
+        for implementation, variant in zip(paired["implementation"], paired["variant"], strict=True)
+    ]
+    return paired.sort_values(["dataset", "raw_index", "algorithm", "algo_row"]).reset_index(drop=True)
 
 
 def _paper_runtime_frame() -> pd.DataFrame:
-    frame = pd.read_csv(RUNTIME_PATH)
-    return _coerce_numeric(frame, ["node_count", "runtime_ms"])
+    return load_runtime_compare(RUNTIME_PATH)
 
 
 def add_paper_metrics(frame: pd.DataFrame) -> pd.DataFrame:
@@ -142,9 +224,9 @@ def add_paper_metrics(frame: pd.DataFrame) -> pd.DataFrame:
     result["orig_x_sympyegg"] = (result["orig_params"] - result["simpl_params_sympy"]) / result["orig_params"]
     result["sympy_x_egg"] = (result["orig_params_sympy"] - result["simpl_params"]) / result["orig_params_sympy"]
     result["sympyegg_x_egg"] = (result["simpl_params_sympy"] - result["simpl_params"]) / result["simpl_params_sympy"]
-    result["orig_rank"] = result["n_params"] - result["n_rank"]
-    result["simpl_rank"] = result["simpl_params"] - result["n_rank"]
-    result["sympy_rank"] = result["orig_params_sympy"] - result["n_rank"]
+    result["orig_rank"] = result["orig_params_adjusted"] - result["n_rank"]
+    result["simpl_rank"] = result["simpl_params_adjusted"] - result["n_rank"]
+    result["sympy_rank"] = result["orig_params_adjusted_sympy"] - result["n_rank"]
     return result
 
 
@@ -153,6 +235,21 @@ def with_implementation(frame: pd.DataFrame, implementation: str) -> pd.DataFram
     result["implementation"] = implementation
     result["dataset_label"] = result["dataset"].map(DATASET_LABELS)
     return result
+
+
+def successful_live_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame[(frame["orig_status"] == "saturated") & (frame["sympy_status"] == "saturated")].copy()
+
+
+def excluded_live_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame[(frame["orig_status"] != "saturated") | (frame["sympy_status"] != "saturated")].copy()
+
+
+def max_gap(series: pd.Series) -> int | str:
+    value = series.max()
+    if pd.isna(value):
+        return "na"
+    return int(value)
 
 
 def melt_methods(frame: pd.DataFrame, *, columns: dict[str, str], value_name: str) -> pd.DataFrame:
@@ -288,12 +385,19 @@ def show_chart(chart: Any) -> None:
     display(SVG(buffer.getvalue()))
 
 
-archived_haskell = with_implementation(add_paper_metrics(_paper_haskell_frame(ARCHIVED_HASKELL_PATH)), "Archived Haskell")
-live_haskell = with_implementation(add_paper_metrics(_paper_haskell_frame(LIVE_HASKELL_PATH)), "Live Haskell")
-egglog = with_implementation(add_paper_metrics(_paper_egglog_frame(EGGLOG_PATH)), "Egglog")
+archived_haskell = with_implementation(add_paper_metrics(_paper_corpus_frame(_archived_long_frame())), "Archived Haskell")
+live_haskell = with_implementation(
+    add_paper_metrics(_paper_corpus_frame(_joined_long_frame(load_live_results(LIVE_HASKELL_PATH, source_root=ORIGINAL_ROOT)))),
+    "Live Haskell",
+)
+live_haskell_quant = successful_live_rows(live_haskell)
+egglog = with_implementation(
+    add_paper_metrics(_paper_corpus_frame(_joined_long_frame(load_egglog_results(EGGLOG_PATH, variant="baseline", source_root=ORIGINAL_ROOT)))),
+    "Egglog",
+)
 runtime_rows = _paper_runtime_frame()
 
-combined = pd.concat([archived_haskell, live_haskell, egglog], ignore_index=True)
+combined = pd.concat([archived_haskell, live_haskell_quant, egglog], ignore_index=True)
 
 haskell_columns = {
     "EqSat": "orig_x_egg",
@@ -306,7 +410,7 @@ comparison_columns = {
 }
 
 egglog_vs_live = egglog.merge(
-    live_haskell[
+    live_haskell_quant[
         [
             "dataset",
             "algorithm",
@@ -325,7 +429,7 @@ egglog_vs_live["sympy_gap"] = (
     egglog_vs_live["simpl_params_sympy_egglog"] - egglog_vs_live["simpl_params_sympy_live"]
 ).abs()
 
-archive_drift = live_haskell.merge(
+archive_drift = live_haskell_quant.merge(
     archived_haskell[
         [
             "dataset",
@@ -341,8 +445,8 @@ archive_drift = live_haskell.merge(
 archive_drift["orig_drift"] = archive_drift["simpl_params_live"] - archive_drift["simpl_params_archived"]
 archive_drift["sympy_drift"] = archive_drift["simpl_params_sympy_live"] - archive_drift["simpl_params_sympy_archived"]
 
-live_fallback_rows = live_haskell[live_haskell["baseline_source"] != "live_haskell"][
-    ["dataset", "algorithm", "algo_row", "baseline_source", "orig_live_status", "sympy_live_status"]
+live_missing_rows = excluded_live_rows(live_haskell)[
+    ["dataset", "algorithm", "algo_row", "baseline_source", "orig_status", "sympy_status"]
 ].drop_duplicates()
 
 runtime_compare = runtime_rows[["implementation", "node_count", "runtime_ms"]].copy()
@@ -350,7 +454,7 @@ runtime_compare = runtime_rows[["implementation", "node_count", "runtime_ms"]].c
 table4_source = pd.concat(
     [
         comparison_table(archived_haskell, implementation="Archived Haskell"),
-        comparison_table(live_haskell, implementation="Live Haskell"),
+        comparison_table(live_haskell_quant, implementation="Live Haskell"),
         comparison_table(egglog, implementation="Egglog"),
     ],
     ignore_index=True,
@@ -358,7 +462,47 @@ table4_source = pd.concat(
 
 # -
 
-# ## 1. Artifact Overview
+# ## 1. Overall Simplified Rank Summary
+
+# Lower simplified rank is better. A value of `0` means the simplified
+# expression reached the paper's target rank; negative values would be below the
+# target. Live-Haskell quantitative summaries use only rows where both the
+# original and SymPy reruns saturated; missing rows remain in the artifact and
+# are shown explicitly below.
+
+
+def _rank_readout(delta: float, comparison: str) -> str:
+    if delta == 0:
+        return f"same median as {comparison}"
+    direction = "better" if delta < 0 else "worse"
+    return f"{abs(delta):g} {direction} than {comparison}"
+
+
+def _rank_summary_row(label: str, column: str) -> dict[str, object]:
+    archived_median = float(archived_haskell[column].median())
+    live_median = float(live_haskell_quant[column].median())
+    egglog_median = float(egglog[column].median())
+    egglog_minus_live = egglog_median - live_median
+    egglog_minus_archived = egglog_median - archived_median
+    return {
+        "input": label,
+        "archived_haskell_median_rank": archived_median,
+        "live_haskell_median_rank": live_median,
+        "egglog_median_rank": egglog_median,
+        "egglog_minus_live_haskell": egglog_minus_live,
+        "egglog_minus_archived_haskell": egglog_minus_archived,
+        "readout_vs_live": _rank_readout(egglog_minus_live, "live Haskell"),
+        "readout_vs_archived": _rank_readout(egglog_minus_archived, "archived Haskell"),
+    }
+
+
+overall_rank_summary = pd.DataFrame(
+    [
+        _rank_summary_row("Original expression", "simpl_rank"),
+        _rank_summary_row("SymPy expression", "sympy_rank"),
+    ]
+)
+display(overall_rank_summary)
 
 artifact_summary = pd.DataFrame(
     [
@@ -371,8 +515,10 @@ artifact_summary = pd.DataFrame(
         {
             "implementation": "Live Haskell",
             "rows": len(live_haskell),
-            "original_median_simpl_rank": float(live_haskell["simpl_rank"].median()),
-            "sympy_median_simpl_rank": float(live_haskell["sympy_rank"].median()),
+            "quantitative_rows": len(live_haskell_quant),
+            "excluded_rows": len(live_missing_rows),
+            "original_median_simpl_rank": float(live_haskell_quant["simpl_rank"].median()),
+            "sympy_median_simpl_rank": float(live_haskell_quant["sympy_rank"].median()),
         },
         {
             "implementation": "Egglog",
@@ -390,25 +536,25 @@ display(
                 "comparison": "Egglog vs live Haskell (original)",
                 "exact_matches": int(egglog_vs_live["orig_exact"].sum()),
                 "total_rows": len(egglog_vs_live),
-                "max_gap": int(egglog_vs_live["orig_gap"].max()),
+                "max_gap": max_gap(egglog_vs_live["orig_gap"]),
             },
             {
                 "comparison": "Egglog vs live Haskell (sympy)",
                 "exact_matches": int(egglog_vs_live["sympy_exact"].sum()),
                 "total_rows": len(egglog_vs_live),
-                "max_gap": int(egglog_vs_live["sympy_gap"].max()),
+                "max_gap": max_gap(egglog_vs_live["sympy_gap"]),
             },
             {
                 "comparison": "Live vs archived Haskell (original)",
                 "exact_matches": int((archive_drift["orig_drift"] == 0).sum()),
                 "total_rows": len(archive_drift),
-                "max_gap": int(archive_drift["orig_drift"].abs().max()),
+                "max_gap": max_gap(archive_drift["orig_drift"].abs()),
             },
             {
                 "comparison": "Live vs archived Haskell (sympy)",
                 "exact_matches": int((archive_drift["sympy_drift"] == 0).sum()),
                 "total_rows": len(archive_drift),
-                "max_gap": int(archive_drift["sympy_drift"].abs().max()),
+                "max_gap": max_gap(archive_drift["sympy_drift"].abs()),
             },
         ]
     )
@@ -569,10 +715,13 @@ display(
 # live rerun still support the same qualitative story, and Egglog remains close
 # enough to the live rerun to support that same story too.
 
-# ### Live-Haskell fallback rows
+# ### Live-Haskell missing rows
+
+# These rows are present in the live-Haskell artifact but excluded from the
+# quantitative live-Haskell medians, exact-match counts, and drift gaps above.
 
 # +
-display(live_fallback_rows if not live_fallback_rows.empty else pd.DataFrame([{"status": "none"}]))
+display(live_missing_rows if not live_missing_rows.empty else pd.DataFrame([{"status": "none"}]))
 # -
 
 # ## 7. Conclusion
