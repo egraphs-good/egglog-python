@@ -353,6 +353,12 @@ def test_summarize_corpus_comparison_reads_layered_results(tmp_path, monkeypatch
     assert "param_eq Corpus Comparison" in output
     assert "Median e-graph nodes" not in output
     assert "Total e-graph size better / worse / same" in output
+    assert "Paired Metric Statistics" in output
+    assert "geo mean ratio" in output
+    assert "sign-test p" in output
+    assert "E-graph total size" in output
+    assert "After params" in output
+    assert "Extracted cost" in output
 
 
 def test_summarize_corpus_comparison_formats_nan_as_na() -> None:

@@ -420,6 +420,23 @@ def test_unnamed_lambda_returning_builtin_is_eager() -> None:
     )
 
 
+def test_vec_foldl_is_eager() -> None:
+    check_eq(vec_foldl(lambda acc, x: acc + x, i64(0), Vec(i64(1), i64(2), i64(3))), i64(6))
+    check_eq(vec_foldl(lambda acc, x: acc - x, i64(0), Vec(i64(1), i64(2), i64(3))), i64(-6))
+
+
+def test_vec_foldr_is_eager() -> None:
+    check_eq(vec_foldr(lambda x, acc: x - acc, i64(0), Vec(i64(1), i64(2), i64(3))), i64(2))
+
+
+def test_vec_fold_supports_non_element_accumulator_sort() -> None:
+    class Box(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    check_eq(vec_foldl(lambda _acc, x: Box(x), Box(i64(0)), Vec(i64(1), i64(2))), Box(i64(2)))
+    check_eq(vec_foldr(lambda x, _acc: Box(x), Box(i64(0)), Vec(i64(1), i64(2))), Box(i64(1)))
+
+
 def test_unnamed_lambda_returning_eqsort_is_eager() -> None:
     class Box(Expr):
         def __init__(self, value: i64Like) -> None: ...

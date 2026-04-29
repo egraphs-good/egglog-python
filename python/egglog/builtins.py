@@ -98,6 +98,8 @@ __all__ = [
     "py_eval_fn",
     "py_exec",
     "set_union_values",
+    "vec_foldl",
+    "vec_foldr",
 ]
 
 
@@ -1324,6 +1326,14 @@ for sequence_type in (list, tuple):
     )
 
 VecLike: TypeAlias = Vec[T] | tuple[TO, ...] | list[TO]
+
+
+@function(egg_fn="vec-foldl", builtin=True)
+def vec_foldl(f: Callable[[A, T], A], initial: A, xs: Vec[T]) -> A: ...
+
+
+@function(egg_fn="vec-foldr", builtin=True)
+def vec_foldr(f: Callable[[T, A], A], initial: A, xs: Vec[T]) -> A: ...
 
 
 TS = TypeVarTuple("TS")

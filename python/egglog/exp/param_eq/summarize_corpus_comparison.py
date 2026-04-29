@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -31,7 +32,8 @@ def _load_frame(path: Path, input_kind: str, *, variant: str | None) -> pd.DataF
     header = list(pd.read_csv(path, nrows=0).columns)
     if header == list(EGGLOG_RESULTS_SCHEMA.columns):
         frame = load_egglog_results(path, variant=variant)
-        if variant is None and frame["variant"].nunique(dropna=True) > 1:
+        variants = frame["variant"].dropna().unique()
+        if variant is None and len(variants) > 1:
             msg = f"{path} contains multiple Egglog variants; pass --old-variant/--new-variant"
             raise ValueError(msg)
     elif header == list(LIVE_RESULTS_SCHEMA.columns):
@@ -47,6 +49,34 @@ def _load_frame(path: Path, input_kind: str, *, variant: str | None) -> pd.DataF
 def _median(series: pd.Series) -> float | None:
     values = series.dropna()
     return None if values.empty else float(values.median())
+
+
+def _mean(series: pd.Series) -> float | None:
+    values = series.dropna()
+    return None if values.empty else float(values.mean())
+
+
+def _geomean(values: pd.Series) -> float | None:
+    positive = values.dropna()
+    positive = positive[positive > 0]
+    return None if positive.empty else float(math.exp(positive.map(math.log).mean()))
+
+
+def _geomean_ratio(old: pd.Series, new: pd.Series) -> tuple[float | None, int]:
+    paired = pd.DataFrame({"old": old, "new": new}).dropna()
+    paired = paired[(paired["old"] > 0) & (paired["new"] > 0)]
+    if paired.empty:
+        return None, 0
+    return _geomean(paired["new"] / paired["old"]), len(paired)
+
+
+def _exact_two_sided_sign_test_p_value(better: int, worse: int) -> float | None:
+    n = better + worse
+    if n == 0:
+        return None
+    observed = min(better, worse)
+    tail = sum(math.comb(n, k) for k in range(observed + 1)) / (2**n)
+    return min(1.0, 2.0 * tail)
 
 
 def _fmt_number(value: float | None, *, digits: int = 1) -> str:
@@ -89,6 +119,21 @@ def _fmt_pct(value: float | None, *, lower_is_better: bool) -> str:
     return f"[{_change_style(value, lower_is_better=lower_is_better)}]{value:+.1f}%[/]"
 
 
+def _fmt_ratio(value: float | None, *, lower_is_better: bool, digits: int = 3) -> str:
+    if value is None:
+        return "[dim]na[/dim]"
+    style = "dim" if value == 1 else ("green" if (value < 1) == lower_is_better else "red")
+    return f"[{style}]{value:.{digits}f}x[/]"
+
+
+def _fmt_p_value(value: float | None) -> str:
+    if value is None:
+        return "[dim]na[/dim]"
+    if value < 0.001:
+        return f"{value:.2e}"
+    return f"{value:.3f}"
+
+
 def _fmt_outcome(value: float | None, *, lower_is_better: bool) -> str:
     if value is None:
         return "[dim]unknown[/dim]"
@@ -120,6 +165,8 @@ def _comparison_frame(old: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     merged["runtime_delta_pct"] = (merged["runtime_delta_ms"] / merged["runtime_ms_old"]) * 100.0
     merged.loc[merged["runtime_ms_old"] == 0, "runtime_delta_pct"] = pd.NA
     merged["egraph_total_size_delta"] = merged["egraph_total_size_new"] - merged["egraph_total_size_old"]
+    merged["after_params_delta"] = merged["after_params_new"] - merged["after_params_old"]
+    merged["extracted_cost_delta"] = merged["extracted_cost_new"] - merged["extracted_cost_old"]
     merged["param_reduction_old"] = merged["before_params_old"] - merged["after_params_old"]
     merged["param_reduction_new"] = merged["before_params_new"] - merged["after_params_new"]
     merged["param_reduction_delta"] = merged["param_reduction_new"] - merged["param_reduction_old"]
@@ -139,7 +186,7 @@ def _summarize(frame: pd.DataFrame) -> dict[str, float | int | None]:
     param_deltas = frame["param_reduction_delta"].dropna()
     rank_deltas = frame["simplified_rank_delta"].dropna()
     return {
-        "examples": int(len(frame)),
+        "examples": len(frame),
         "status_changed": int(frame["status_changed"].sum()),
         "old_non_success": int((frame["status_old"] != "saturated").sum()),
         "new_non_success": int((frame["status_new"] != "saturated").sum()),
@@ -257,6 +304,96 @@ def _outcome_table(summary: dict[str, float | int | None]) -> Table:
     table.add_row("Rendered output changed (inspect)", f"[yellow]{summary['rendered_changed']}[/yellow]")
     table.add_row("Status changed (inspect)", f"[yellow]{summary['status_changed']}[/yellow]")
     table.add_row("Non-saturated status rows", f"{summary['old_non_success']} old / {summary['new_non_success']} new")
+    return table
+
+
+def _paired_metric_stats(
+    frame: pd.DataFrame,
+    *,
+    old_column: str,
+    new_column: str,
+    lower_is_better: bool,
+) -> dict[str, float | int | None]:
+    paired = frame[[old_column, new_column]].dropna()
+    if paired.empty:
+        return {
+            "n": 0,
+            "old_median": None,
+            "new_median": None,
+            "median_delta": None,
+            "mean_delta": None,
+            "geomean_ratio": None,
+            "geomean_ratio_n": 0,
+            "better": 0,
+            "worse": 0,
+            "same": 0,
+            "sign_test_p": None,
+        }
+    delta = paired[new_column] - paired[old_column]
+    better = int((delta < 0).sum() if lower_is_better else (delta > 0).sum())
+    worse = int((delta > 0).sum() if lower_is_better else (delta < 0).sum())
+    same = int((delta == 0).sum())
+    ratio, ratio_n = _geomean_ratio(paired[old_column], paired[new_column])
+    return {
+        "n": len(paired),
+        "old_median": _median(paired[old_column]),
+        "new_median": _median(paired[new_column]),
+        "median_delta": _median(delta),
+        "mean_delta": _mean(delta),
+        "geomean_ratio": ratio,
+        "geomean_ratio_n": ratio_n,
+        "better": better,
+        "worse": worse,
+        "same": same,
+        "sign_test_p": _exact_two_sided_sign_test_p_value(better, worse),
+    }
+
+
+def _paired_statistics_table(frame: pd.DataFrame, old_label: str, new_label: str) -> Table:
+    table = Table(title="Paired Metric Statistics")
+    table.add_column("Metric")
+    table.add_column("n", justify="right")
+    table.add_column(f"{old_label} median", justify="right")
+    table.add_column(f"{new_label} median", justify="right")
+    table.add_column("median Δ", justify="right")
+    table.add_column("mean Δ", justify="right")
+    table.add_column("geo mean ratio", justify="right")
+    table.add_column("better / worse / same", justify="right")
+    table.add_column("sign-test p", justify="right")
+
+    metrics = [
+        ("Runtime ms", "runtime_ms_old", "runtime_ms_new", True, 1),
+        ("E-graph total size", "egraph_total_size_old", "egraph_total_size_new", True, 1),
+        ("After params", "after_params_old", "after_params_new", True, 1),
+        ("Extracted cost", "extracted_cost_old", "extracted_cost_new", True, 1),
+    ]
+    for label, old_column, new_column, lower_is_better, digits in metrics:
+        stats = _paired_metric_stats(
+            frame,
+            old_column=old_column,
+            new_column=new_column,
+            lower_is_better=lower_is_better,
+        )
+        ratio_n = stats["geomean_ratio_n"]
+        ratio = _fmt_ratio(stats["geomean_ratio"], lower_is_better=lower_is_better)
+        if ratio_n != stats["n"]:
+            ratio = f"{ratio} [dim](n={ratio_n})[/dim]"
+        table.add_row(
+            f"{label} ({'lower' if lower_is_better else 'higher'} is better)",
+            str(stats["n"]),
+            _fmt_number(stats["old_median"], digits=digits),
+            _fmt_compared_number(
+                stats["new_median"],
+                stats["median_delta"],
+                lower_is_better=lower_is_better,
+                digits=digits,
+            ),
+            _fmt_delta(stats["median_delta"], lower_is_better=lower_is_better, digits=digits),
+            _fmt_delta(stats["mean_delta"], lower_is_better=lower_is_better, digits=digits),
+            ratio,
+            f"[green]{stats['better']}[/green] / [red]{stats['worse']}[/red] / [dim]{stats['same']}[/dim]",
+            _fmt_p_value(stats["sign_test_p"]),
+        )
     return table
 
 
@@ -410,12 +547,14 @@ def main() -> None:
                     f"[bold]rows:[/bold] {len(old)} old, {len(new)} new, {len(compared)} shared",
                     "Param reduction means before_params minus after_params; higher is better.",
                     "Simplified rank means after_parsed_n_params minus target rank; lower is better.",
+                    "Paired stats use shared non-null rows; geo mean ratio is new/old over positive pairs.",
                 )
             ),
             title="param_eq Corpus Comparison",
         )
     )
     console.print(_summary_table(summary, old_label, new_label))
+    console.print(_paired_statistics_table(compared, old_label, new_label))
     console.print(_outcome_table(summary))
     console.print(_gap_counts_table(compared, old_label, new_label))
     console.print(_status_counts_table(compared, old_label, new_label))

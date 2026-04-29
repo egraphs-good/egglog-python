@@ -80,6 +80,22 @@ def _test_expr(expr: str) -> Iterable[str]:
     yield (f"# n_params={container_cost.floats}")
     yield (f"{container}\n")
 
+
+def test_container_cost_counts_denominator_only_coefficients():
+    """
+    Normalized containers store `c / x` as a polynomial coefficient, not as a
+    `Num(c)` monomial factor, and the container cost should still match decode.
+    """
+    for exp in (-1, -2):
+        mono = ContainerMonomial.empty().insert(Num.var("x"), BigRat(exp, 1))
+        expr = polynomial(ContainerPolynomial.empty().insert(mono, 0.5))
+        container, container_cost = EGraph().extract(expr, include_cost=True, cost_model=container_cost_model)
+        decoded = validate_is_binary(containers_to_binary(container))
+        _, decoded_cost = EGraph().extract(decoded, include_cost=True, cost_model=param_cost_model)
+
+        assert container_cost == decoded_cost
+
+
 @example("x - y")
 @example("-x - y")
 @example("x - 2 * y")

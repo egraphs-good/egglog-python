@@ -389,7 +389,7 @@ def containers_to_binary(num: Num) -> Num:
     if fn in (Num, Num.var):
         return num
     args = get_callable_args(num)
-    return fn(*map(containers_to_binary, args))  # type: ignore
+    return fn(*map(containers_to_binary, args))  # type: ignore[misc]
 
 
 BASE_EXPR = TypeVar("BASE_EXPR", bound=BaseExpr)
@@ -496,7 +496,7 @@ def _normalize_expression_source(source: str) -> str:
     return normalized
 
 
-def _binary_to_containers(expr: Num) -> Num | ContainerPolynomial | ContainerMonomial:
+def _binary_to_containers(expr: Num) -> Num | ContainerPolynomial | ContainerMonomial:  # noqa: C901, PLR0911
     """
     Turn all instances of *, +, etc. into container expressions.
     """
@@ -580,7 +580,7 @@ def _render_float(value: float) -> str:
     return repr(value)
 
 
-def _render_num(num: Num) -> str:  # noqa: C901, PLR0911
+def _render_num(num: Num) -> str:  # noqa: C901, PLR0911, PLR0912
     match get_callable_args(num, polynomial):
         case (poly,) if isinstance(poly, Map):
             return _render_num(containers_to_binary(num))
@@ -779,9 +779,15 @@ def _decoded_polynomial_term_cost(
     if not mono:
         return coef_cost
     has_empty_numerator = all(exp.value < 0 for exp in mono.values())
-    # If we have an empty numerator, then the coefficient will end up there
-    if coef == 1.0 or has_empty_numerator:
+    if coef == 1.0:
         return mono_cost
+    if has_empty_numerator:
+        # mono_cost includes the synthetic numerator `1`; decoding replaces
+        # that with the coefficient, so charge the coefficient instead.
+        return ParamCost(
+            floats=mono_cost.floats + coef_cost.floats,
+            ops_and_ints=mono_cost.ops_and_ints + coef_cost.ops_and_ints - 1,
+        )
     # if we are multiplying them, add their costs and the cost of the mul
     return coef_cost + mono_cost + ParamCost(ops_and_ints=1)
 

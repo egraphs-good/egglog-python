@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 import rich.progress
 from syrupy import SnapshotAssertion
@@ -268,37 +266,39 @@ def test_container_rewrite_ruleset_shares_wrappers_but_not_binary_rules() -> Non
         binary_egraph.check(eq(binary_source).to(binary_target))
 
 
-def test_container_self_factor_cycle_leaves_root_unextractable() -> None:
+def test_container_self_factor_cycle_remains_extractable() -> None:
     source = "-14.792753236262874 * x1 + x0"
 
-    pre_failure_egraph, pre_failure_root = _run_container_rounds(source, rounds=3)
-    pre_failure_egraph.extract(pre_failure_root, cost_model=container_cost_model)
+    egraph, root = _run_container_rounds(source, rounds=4)
 
-    failing_egraph, failing_root = _run_container_rounds(source, rounds=4)
-    with pytest.raises(ValueError, match="Unextractable root"):
-        failing_egraph.extract(failing_root, cost_model=container_cost_model)
+    assert str(egraph.extract(root, cost_model=container_cost_model)) == (
+        'polynomial({{Num.var("x1"): 1}: -14.792753236262874, {Num.var("x0"): 1}: 1.0})'
+    )
 
-    serialized = json.loads(failing_egraph._serialize().to_json())
-    root_eclass = next(class_id for class_id, data in serialized["class_data"].items() if data.get("let") == "$root")
-    root_polynomials = [
-        node
-        for node in serialized["nodes"].values()
-        if node["eclass"] == root_eclass and node["op"] == "polynomial"
-    ]
-    non_subsumed_root_polynomials = [node for node in root_polynomials if not node["subsumed"]]
 
-    assert len(non_subsumed_root_polynomials) == 1
-
-    sole_root_polynomial = non_subsumed_root_polynomials[0]
-    outer_map = serialized["nodes"][sole_root_polynomial["children"][0]]
-    assert outer_map["op"] == "Map[Map[Num,BigRat],f64]"
-
-    monomial_map = serialized["nodes"][outer_map["children"][0]]
-    assert monomial_map["op"] == "Map[Num,BigRat]"
-
-    inner_polynomial = serialized["nodes"][monomial_map["children"][0]]
-    assert inner_polynomial["op"] == "polynomial"
-    assert inner_polynomial["eclass"] == root_eclass
+@pytest.mark.parametrize(
+    ("source", "expected_params"),
+    [
+        (
+            "(0.0077679147943854*x1 - 0.0477729775011539)"
+            "*(0.9088089466094971*x1 + 1.0031132698059082)",
+            3,
+        ),
+        ("1.4605207443237305*x0*(0.6846604943275452*x0 - 1.3692940473556519)", 2),
+        (
+            "(-1.0000044107437134*(0.0077679147943854*x1 - 0.0477729775011539)"
+            "*(0.9088089466094971*x1 + 1.0031132698059082) - "
+            "1.7344426624e-6*exp(1.4605207443237305*x0*(0.6846604943275452*x0 - 1.3692940473556519) - "
+            "exp((1.8745909929275513 - 0.6161273121833801*x1)*(0.9453756809234619*x1 - 1.842776894569397))))"
+            "*exp(-1.4605207443237305*x0*(0.6846604943275452*x0 - 1.3692940473556519) + "
+            "exp((1.8745909929275513 - 0.6161273121833801*x1)*(0.9453756809234619*x1 - 1.842776894569397)))",
+            14,
+        ),
+    ],
+)
+def test_container_flattens_scaled_polynomial_factors(source: str, expected_params: int) -> None:
+    res = run_paper_pipeline_container(parse_expression_container(source))
+    assert res.extracted_params <= expected_params, res.extracted
 
 
 EXPRS = [

@@ -4,6 +4,7 @@ import os
 import pathlib
 import subprocess
 from base64 import standard_b64encode
+from datetime import timedelta
 from fractions import Fraction
 
 import black
@@ -206,6 +207,31 @@ class TestEGraph:
         text = str(command)
         (parsed,) = egraph.parse_program(text)
         assert str(parsed) == text, label
+
+    def test_report_duration_round_trip(self):
+        duration = timedelta(days=1, seconds=2, microseconds=345_678)
+        rule_report = RuleReport(None, duration, 7)
+        ruleset_report = RuleSetReport(True, {"rule": [rule_report]}, duration, duration)
+        iteration_report = IterationReport(ruleset_report, duration)
+        run_report = RunReport(
+            [iteration_report],
+            True,
+            True,
+            {"rule": duration},
+            {"rule": 7},
+            {"ruleset": duration},
+            {"ruleset": duration},
+            {"ruleset": duration},
+        )
+
+        assert rule_report.search_and_apply_time == duration
+        assert ruleset_report.search_and_apply_time == duration
+        assert ruleset_report.merge_time == duration
+        assert iteration_report.rebuild_time == duration
+        assert run_report.search_and_apply_time_per_rule["rule"] == duration
+        assert run_report.search_and_apply_time_per_ruleset["ruleset"] == duration
+        assert run_report.merge_time_per_ruleset["ruleset"] == duration
+        assert run_report.rebuild_time_per_ruleset["ruleset"] == duration
 
     def test_extract(self):
         # Example from extraction-cost
@@ -451,6 +477,32 @@ class TestValues:
         v = egraph.value_to_vec(value)
         assert isinstance(v, list)
         assert [egraph.value_to_i64(vi) for vi in v] == [1, 2, 3]
+
+    def test_vec_fold(self):
+        local_egraph = EGraph()
+        program = """
+        (sort IVec (Vec i64))
+        (sort I64I64ToI64 (UnstableFn (i64 i64) i64))
+        (check (= (vec-foldl (unstable-fn "+") 0 (vec-of 1 2 3)) 6))
+        (check (= (vec-foldl (unstable-fn "-") 0 (vec-of 1 2 3)) -6))
+        (check (= (vec-foldr (unstable-fn "-") 0 (vec-of 1 2 3)) 2))
+        """
+        local_egraph.run_program(*local_egraph.parse_program(program))
+
+    def test_vec_fold_is_not_ambiguous_after_later_vec_sort(self):
+        local_egraph = EGraph()
+        program = """
+        (sort FoldNum)
+        (sort VFoldNum (Vec FoldNum))
+        (sort FoldNumFn (UnstableFn (FoldNum FoldNum) FoldNum))
+        (constructor fold-num () FoldNum)
+        (function fold-pick-right (FoldNum FoldNum) FoldNum :no-merge)
+        (set (fold-pick-right (fold-num) (fold-num)) (fold-num))
+        (sort VString (Vec String))
+        (check (= (vec-foldl (unstable-fn "fold-pick-right") (fold-num) (vec-of (fold-num))) (fold-num)))
+        (check (= (vec-foldr (unstable-fn "fold-pick-right") (fold-num) (vec-of (fold-num))) (fold-num)))
+        """
+        local_egraph.run_program(*local_egraph.parse_program(program))
 
     def test_fn(self):
         egraph.run_program(
