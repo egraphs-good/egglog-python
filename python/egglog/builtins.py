@@ -71,9 +71,11 @@ __all__ = [
     "map_contains_key_swapped",
     "map_divide_all_values_by_f64",
     "map_drop_zero_values",
+    "map_factor_coef_for_integer_residual_split",
     "map_filter_defined_kv",
     "map_filter_kv",
     "map_fold_kv",
+    "map_integer_residual_split_candidate",
     "map_intersect_with",
     "map_keys",
     "map_map_values",
@@ -573,10 +575,7 @@ class Map(BuiltinExpr, Generic[T, V], egg_sort="Map"):
             items.append((k, v))
         if get_callable_args(self, Map.empty) is None:
             raise ExprValueError(self, "Map.empty or Map.insert")
-        d = {}
-        for k, v in reversed(items):
-            d[k] = v
-        return d
+        return dict(reversed(items))
 
     __match_args__ = ("value",)
 
@@ -712,6 +711,14 @@ def map_nonconst_nonunit_f64_values(xs: Map[Map[T, V], f64]) -> MultiSet[f64]: .
 
 @function(egg_fn="map-divide-all-values-by-f64", builtin=True)
 def map_divide_all_values_by_f64(factor: f64, xs: Map[T, f64]) -> Map[T, f64]: ...
+
+
+@function(egg_fn="map-integer-residual-split-candidate", builtin=True)
+def map_integer_residual_split_candidate(xs: Map[Map[T, BigRat], f64]) -> Pair[Map[T, BigRat], Map[Map[T, BigRat], f64]]: ...
+
+
+@function(egg_fn="map-factor-coef-for-integer-residual-split", builtin=True)
+def map_factor_coef_for_integer_residual_split(xs: Map[Map[T, BigRat], f64]) -> f64: ...
 
 
 @function(egg_fn="map-shared-factor-atoms", builtin=True)

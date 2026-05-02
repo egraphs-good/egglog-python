@@ -10,9 +10,9 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import partial
+from typing import TypeVar
 
 from egglog import *
-from egglog.egraph import UnstableCombinedRuleset
 
 from .domain import *
 
@@ -21,6 +21,9 @@ HASKELL_INNER_ITERATION_LIMIT = 30
 BACKOFF_MATCH_LIMIT = 1000
 BACKOFF_BAN_LENGTH = 30
 CONST_MERGE_TOLERANCE = 1e-6
+
+T = TypeVar("T", bound=BaseExpr)
+V = TypeVar("V", bound=BaseExpr)
 
 
 # Active invariants live here; larger parked design notes are in
@@ -45,10 +48,33 @@ SOLE_MONOMIALS = constant(
     "SOLE_MONOMIALS", Map[Num, ContainerMonomial], merge=partial(map_merge_with, lambda old_value, new_value: old_value)
 )
 
-# Mapping of e-classes to polynomials, so that we can use this for distributing constants inside of polynomials.
-# POLYNOMIALS = constant(
-#     "POLYNOMIALS", Map[Num, ContainerPolynomial], merge=partial(map_merge_with, lambda old_value, new_value: old_value)
-# )
+# Map a monomial of the form `{polynomial(P): 1}` to one representative `P`.
+POLYNOMIAL_MONOMIALS = constant(
+    "POLYNOMIAL_MONOMIALS",
+    Map[ContainerMonomial, ContainerPolynomial],
+    merge=partial(map_merge_with, lambda old_value, new_value: old_value),
+)
+
+# Map polynomial e-classes to a current representative polynomial. Prefer the
+# newer value so analysis-normalized polynomials replace pre-normalized input
+# shapes.
+POLYNOMIALS = constant(
+    "POLYNOMIALS",
+    Map[Num, ContainerPolynomial],
+    merge=partial(map_merge_with, lambda old_value, new_value: new_value),
+)
+
+
+def if_defined(cond: Unit, then: T, otherwise: T) -> T:
+    return catch(lambda: cond).match(lambda _: then, otherwise)
+
+
+def try_match(expr: T, on_some: Callable[[T], V], default: V) -> V:
+    return catch(lambda: expr).match(on_some, default)
+
+
+def try_or(expr: T, default: T) -> T:
+    return catch(lambda: expr).unwrap_or(default)
 
 
 @ruleset
@@ -86,19 +112,28 @@ def binary_analysis_rules(x: Num, a: f64, b: f64) -> Iterable[RewriteOrRule]:
 
 @ruleset
 def container_analysis_rules(
-    n: Num, a: f64, poly: ContainerPolynomial, poly1: ContainerPolynomial, consts: Map[Num, f64], key: ContainerMonomial
+    n: Num,
+    a: f64,
+    coef: f64,
+    poly: ContainerPolynomial,
+    poly1: ContainerPolynomial,
+    consts: Map[Num, f64],
+    key: ContainerMonomial,
+    mono: ContainerMonomial,
 ) -> Iterable[RewriteOrRule]:
     # default values
     yield rule().then(
         set_(CONSTS).to(Map[Num, f64].empty()),
         set_(SOLE_MONOMIALS).to(Map[Num, ContainerMonomial].empty()),
-        # set_(POLYNOMIALS).to(Map[Num, ContainerPolynomial].empty()),
+        set_(POLYNOMIAL_MONOMIALS).to(Map[ContainerMonomial, ContainerPolynomial].empty()),
+        set_(POLYNOMIALS).to(Map[Num, ContainerPolynomial].empty()),
     )
     yield rule(n == Num(a)).then(set_(CONSTS).to(Map[Num, f64].empty().insert(n, a)))
     yield rule(
         polynomial(poly) == n,
         poly.length() == i64(1),
         key == poly.pick_key(),
+        key.not_contains(n),
     ).then(
         set_(SOLE_MONOMIALS).to(
             Map[Num, ContainerMonomial]
@@ -107,8 +142,14 @@ def container_analysis_rules(
             .insert(n, key.insert(Num(poly[key]), BigRat(1, 1)))
         )
     )
-    # yield rule(polynomial(poly) == n).then(set_(POLYNOMIALS).to(Map[Num, ContainerPolynomial].empty().insert(n, poly)))
-
+    yield rule(polynomial(poly) == n).then(
+        set_(POLYNOMIAL_MONOMIALS).to(
+            Map[ContainerMonomial, ContainerPolynomial]
+            .empty()
+            .insert(ContainerMonomial.empty().insert(n, BigRat(1, 1)), poly)
+        )
+    )
+    yield rule(polynomial(poly) == n).then(set_(POLYNOMIALS).to(Map[Num, ContainerPolynomial].empty().insert(n, poly)))
     # Constant fold polynomials so that in each monomial,
     # all constants terms are pulled into a co-efficient
     # and all empty terms are combined. Also drops terms with zero exponents.
@@ -123,11 +164,21 @@ def container_analysis_rules(
             lambda res_poly, mono, coef: (
                 # split monomial into non constants and constants (which are combined into the coefficient):
                 map_fold_kv(
-                    lambda res_mono_and_coef, term, exp: catch(lambda: exp != BigRat(0, 1)).match(
+                    lambda res_mono_and_coef, term, exp: if_defined(
+                        exp != BigRat(0, 1),
                         # if the exponent is not zero, process it
-                        lambda _: catch(lambda: consts[term]).match(
+                        try_match(
+                            consts[term],
                             # if it is a constant, multiply it into the coefficient and drop it from the monomial:
-                            lambda v: res_mono_and_coef.map_right(lambda prev_coef: prev_coef * v.pow_bigrat(exp)),
+                            lambda v: if_defined(
+                                exp != BigRat(-1, 1),
+                                res_mono_and_coef.map_right(lambda prev_coef: prev_coef * v.pow_bigrat(exp)),
+                                if_defined(
+                                    v != f64(0.0),
+                                    res_mono_and_coef.map_right(lambda prev_coef: prev_coef / v),
+                                    res_mono_and_coef.map_left(lambda mono: mono.insert(term, exp)),
+                                ),
+                            ),
                             # if it is not a constant, keep it in the monomial
                             res_mono_and_coef.map_left(lambda mono: mono.insert(term, exp)),
                         ),
@@ -136,15 +187,14 @@ def container_analysis_rules(
                     ),
                     Pair(ContainerMonomial.empty(), coef),
                     mono,
-                ).match(
-                    lambda mono, coef: res_poly.insert(mono, coef + catch(lambda: res_poly[mono]).unwrap_or(f64(0.0)))
-                )
+                ).match(lambda mono, coef: res_poly.insert(mono, coef + try_or(res_poly[mono], f64(0.0))))
             ),
             ContainerPolynomial.empty(),
             poly,
         ),
         poly != poly1,
     )
+
     # Turn polynomials that are actually just constant factors into constants, so they can be used in more rewrites.
     yield rewrite(polynomial(poly), subsume=True).to(
         Num(poly[ContainerMonomial.empty()]),
@@ -260,17 +310,26 @@ def container_basic_rules(
     poly: ContainerPolynomial,
     poly1: ContainerPolynomial,
     poly2: ContainerPolynomial,
+    poly3: ContainerPolynomial,
+    residual_poly: ContainerPolynomial,
+    nonconst_poly: ContainerPolynomial,
     coef: f64,
+    inner_coef: f64,
+    coef_counts: MultiSet[f64],
     sole_monomials: Map[Num, ContainerMonomial],
+    polynomial_monomials: Map[ContainerMonomial, ContainerPolynomial],
+    polynomials: Map[Num, ContainerPolynomial],
+    matching_polynomials: Map[Num, ContainerPolynomial],
     counts: MultiSet[Num],
     n: Num,
     poly_pair: Pair[ContainerPolynomial, ContainerPolynomial],
+    polynomial_factor: Pair[Num, ContainerPolynomial],
+    monomial_factor: Pair[ContainerMonomial, ContainerPolynomial],
     exp: BigRat,
-    # polynomials: Map[Num, ContainerPolynomial],
     mono: ContainerMonomial,
 ) -> Iterable[RewriteOrRule]:
-    # If a non one coefficient exists in the polynomial it has more than one monomial
-    # factor it out, as long as its not a constant. In a binary form this covers things like:
+    # If a non-one coefficient exists in the polynomial, factor out one
+    # representative coefficient. In a binary form this covers things like:
     #
     # a * x + b  -> a * (x + b / a)
     #
@@ -283,20 +342,279 @@ def container_basic_rules(
         # only apply to polynomials with more than one monomial
         poly.length() > i64(1),
         # filter to monomials with non one coefficients and with keys that are non empty (so we don't pull out constant factors)
-        poly2
-        == map_filter_kv(lambda k, v: v != f64(1.0), map_filter_kv(lambda k, v: k != ContainerMonomial.empty(), poly)),
-        # Pick the first one (stopping of course if there are none)
+        nonconst_poly == map_filter_kv(lambda k, v: k != ContainerMonomial.empty(), poly),
+        poly2 == map_filter_kv(lambda k, v: v != f64(1.0), nonconst_poly),
+        # Pick one representative coefficient, preserving the older rule's
+        # reachability for binary-style target expressions.
         coef == poly2[poly2.pick_key()],
-        # divide the terms by that coefficient
+        # If there is no non-constant term with coefficient 1, the polynomial is not already scaled.
+        poly2.length() == nonconst_poly.length(),  # divide the terms by that coefficient
         poly1 == map_map_values(lambda _, c: c / coef, poly),
+    )
+
+    # Add one alternate factor choice when a coefficient exposes integer ratios
+    # with other terms. This is the minimal container analogue of binary
+    # pairwise coefficient factoring needed for cases like
+    # `0.02889 * x - 0.00963 * z -> -0.00963 * (-3 * x + z)`.
+    yield rewrite(polynomial(poly)).to(
+        polynomial(
+            ContainerPolynomial.empty().insert(ContainerMonomial.empty().insert(polynomial(poly1), BigRat(1, 1)), coef)
+        ),
+        poly.length() > i64(1),
+        nonconst_poly == map_filter_kv(lambda k, v: k != ContainerMonomial.empty(), poly),
+        poly2 == map_filter_kv(lambda k, v: v != f64(1.0), nonconst_poly),
+        coef_counts
+        == map_fold_kv(
+            lambda counts, _candidate_mono, candidate_coef: if_defined(
+                candidate_coef != f64(0.0),
+                map_fold_kv(
+                    lambda counts, _other_mono, other_coef: if_defined(
+                        (other_coef / candidate_coef) != f64.from_i64((other_coef / candidate_coef).to_i64()),
+                        counts,
+                        counts.insert(candidate_coef),
+                    ),
+                    counts,
+                    poly2,
+                ),
+                counts,
+            ),
+            MultiSet[f64](),
+            poly2,
+        ),
+        coef == coef_counts.pick_max(),
+        coef_counts.count(coef) > i64(1),
+        # If there is no non-constant term with coefficient 1, the polynomial is not already scaled.
+        poly2.length() == nonconst_poly.length(),  # divide the terms by that coefficient
+        poly1 == map_map_values(lambda _, c: c / coef, poly),
+    )
+
+    # Add one factor choice when dividing by a coefficient exposes a later
+    # integer-residual split. This keeps the outer scale needed for cases where
+    # `b/a` is not itself an integer, but `b/a - k` matches another divided
+    # coefficient and `k` is free.
+    yield rewrite(polynomial(poly)).to(
+        polynomial(
+            ContainerPolynomial.empty().insert(ContainerMonomial.empty().insert(polynomial(poly1), BigRat(1, 1)), coef)
+        ),
+        poly.length() > i64(1),
+        poly.length() <= i64(6),
+        nonconst_poly == map_filter_kv(lambda k, _v: k != ContainerMonomial.empty(), poly),
+        poly2 == map_filter_kv(lambda k, v: v != f64(1.0), nonconst_poly),
+        coef == map_factor_coef_for_integer_residual_split(poly),
+        poly2.length() == nonconst_poly.length(),
+        poly1 == map_map_values(lambda _, c: c / coef, poly),
+    )
+
+    # Recover binary-style factoring after container lowering has already
+    # merged like monomials:
+    #
+    # a*M + b*N + R -> a*(M + N) + (b - a)*N + R
+    #
+    # This handles `-0.3*x0 + 0.7*x1 -> -0.3*(x0 + x1) + x1`
+    # without preserving the pre-normalized `-0.3*x1 + x1` shape.
+    yield rewrite(polynomial(poly)).to(
+        polynomial(poly3.insert(ContainerMonomial.empty().insert(polynomial(poly1), BigRat(1, 1)), coef)),
+        poly.length() <= i64(6),
+        monomial_factor == map_integer_residual_split_candidate(poly),
+        mono == monomial_factor.left,
+        poly1 == monomial_factor.right,
+        polynomials == POLYNOMIALS,
+        counts
+        == map_fold_kv(lambda counts, candidate_mono, _coef: counts + candidate_mono.keys(), MultiSet[Num](), poly),
+        map_restrict_keys(counts, polynomials).length() == i64(0),
+        coef == poly[mono],
+        residual_poly == map_drop_zero_values(map_intersect_with(lambda original, _one: original - coef, poly, poly1)),
+        poly2 == map_remove_keys(map_keys(poly1), poly),
+        poly3 == map_merge_with(lambda left, right: left + right, poly2, residual_poly),
+    )
+
+    # Factor a repeated scalar coefficient magnitude from a subset while
+    # preserving the remaining terms:
+    #
+    # c*M1 + c*M2 + R -> c*(M1 + M2) + R
+    # c*M1 - c*M2 + R -> c*(M1 - M2) + R
+    #
+    # Binary sees this through `(x * y) + (x * z) -> x * (y + z)`. In the
+    # container form numeric factors live as polynomial coefficients, so the
+    # ordinary monomial-key Horner rule cannot see them.
+    yield rewrite(polynomial(poly)).to(
+        polynomial(
+            poly_pair.right.insert(
+                ContainerMonomial.empty().insert(polynomial(poly_pair.left), BigRat(1, 1)),
+                coef,
+            )
+        ),
+        nonconst_poly == map_filter_kv(lambda k, _v: k != ContainerMonomial.empty(), poly),
+        coef_counts
+        == map_fold_kv(
+            lambda counts, _mono, candidate_coef: if_defined(
+                abs(candidate_coef) != f64(1.0),
+                counts.insert(abs(candidate_coef)),
+                counts,
+            ),
+            MultiSet[f64](),
+            nonconst_poly,
+        ),
+        coef == coef_counts.pick_max(),
+        coef != f64(0.0),
+        coef_counts.count(coef) > i64(1),
+        poly_pair
+        == map_fold_kv(
+            lambda selected_and_remainder, mono, candidate_coef: if_defined(
+                abs(candidate_coef) != coef,
+                selected_and_remainder.map_right(lambda remainder: remainder.insert(mono, candidate_coef)),
+                selected_and_remainder.map_left(lambda selected: selected.insert(mono, candidate_coef / coef)),
+            ),
+            Pair(ContainerPolynomial.empty(), ContainerPolynomial.empty()),
+            poly,
+        ),
+        poly_pair.left.length() > i64(1),
+        poly_pair.right.length() > i64(0),
+    )
+
+    # Factor a constant term and one equal-and-opposite non-constant term out
+    # of a larger polynomial:
+    #
+    # c - c*M + R -> c * (1 - M) + R
+    #
+    # `map_filter_kv` cannot express equality because its callback must return
+    # `Unit`, not a `Fact`, so equality is encoded as failed inequality.
+    yield rewrite(polynomial(poly)).to(
+        polynomial(
+            poly2.remove(mono).insert(
+                ContainerMonomial.empty().insert(
+                    polynomial(
+                        ContainerPolynomial.empty().insert(ContainerMonomial.empty(), f64(1.0)).insert(mono, f64(-1.0))
+                    ),
+                    BigRat(1, 1),
+                ),
+                coef,
+            )
+        ),
+        poly.length() > i64(2),
+        poly.contains(ContainerMonomial.empty()),
+        coef == poly[ContainerMonomial.empty()],
+        coef != f64(0.0),
+        poly2 == poly.remove(ContainerMonomial.empty()),
+        poly1
+        == map_fold_kv(
+            lambda selected, candidate_mono, candidate_coef: if_defined(
+                candidate_coef != -coef,
+                selected,
+                selected.insert(candidate_mono, candidate_coef),
+            ),
+            ContainerPolynomial.empty(),
+            poly2,
+        ),
+        poly1.length() > i64(0),
+        mono == poly1.pick_key(),
+    )
+
+    # If a polynomial contains both `P` and `c*M*P`, preserve the shared
+    # product instead of only keeping the expanded container presentation:
+    #
+    # P + c*M*P + R -> P * (1 + c*M) + R
+    #
+    # This is the container analogue of the binary path that keeps repeated
+    # subexpressions available for later reciprocal/log factoring.
+    yield rewrite(polynomial(poly)).to(
+        polynomial(
+            poly2.insert(
+                ContainerMonomial
+                .empty()
+                .insert(polynomial(poly1), BigRat(1, 1))
+                .insert(
+                    polynomial(
+                        ContainerPolynomial
+                        .empty()
+                        .insert(ContainerMonomial.empty(), f64(1.0))
+                        .insert(mono.remove(n), coef)
+                    ),
+                    BigRat(1, 1),
+                ),
+                f64(1.0),
+            )
+        ),
+        polynomials == POLYNOMIALS,
+        counts
+        == map_fold_kv(lambda counts, candidate_mono, _coef: counts + candidate_mono.keys(), MultiSet[Num](), poly),
+        matching_polynomials == map_restrict_keys(counts, polynomials),
+        matching_polynomials.length() > i64(0),
+        n == matching_polynomials.pick_key(),
+        poly1 == matching_polynomials[n],
+        mono
+        == map_fold_kv(
+            lambda selected, candidate_mono, _candidate_coef: try_match(
+                candidate_mono[n],
+                lambda exp: if_defined(exp != BigRat(1, 1), selected, candidate_mono),
+                selected,
+            ),
+            ContainerMonomial.empty(),
+            poly,
+        ),
+        mono.length() > i64(0),
+        map_restrict_keys(poly1.keys(), poly.remove(mono)) == poly1,
+        poly2 == map_remove_keys(poly1.keys(), poly.remove(mono)),
+        coef == poly[mono],
+    )
+
+    # If an outer `M * P - c` appears, choose the outer constant as the scale.
+    # This is more targeted than trying every coefficient of P and covers the
+    # binary path:
+    #
+    # (c*x + d*y + k) * M - c -> c * (M * (x + (d/c)*y + k/c) - 1)
+    yield rewrite(polynomial(poly)).to(
+        polynomial(
+            ContainerPolynomial.empty().insert(
+                ContainerMonomial.empty().insert(
+                    polynomial(
+                        ContainerPolynomial
+                        .empty()
+                        .insert(ContainerMonomial.empty(), f64(-1.0))
+                        .insert(
+                            mono.remove(n).insert(
+                                polynomial(map_divide_all_values_by_f64(inner_coef, poly1)),
+                                BigRat(1, 1),
+                            ),
+                            f64(1.0),
+                        )
+                    ),
+                    BigRat(1, 1),
+                ),
+                inner_coef,
+            )
+        ),
+        polynomials == POLYNOMIALS,
+        poly.length() == i64(2),
+        poly.contains(ContainerMonomial.empty()),
+        coef == poly[ContainerMonomial.empty()],
+        coef != f64(0.0),
+        inner_coef == -coef,
+        nonconst_poly == poly.remove(ContainerMonomial.empty()),
+        nonconst_poly.length() == i64(1),
+        mono == nonconst_poly.pick_key(),
+        poly[mono] == f64(1.0),
+        matching_polynomials == map_restrict_keys(mono.keys(), polynomials),
+        matching_polynomials.length() == i64(1),
+        n == matching_polynomials.pick_key(),
+        mono[n] == BigRat(1, 1),
+        poly1 == matching_polynomials[n],
+        map_nonconst_nonunit_f64_values(poly1).contains(inner_coef),
     )
     # Flatten nested polynomials, where a a monomial term is itself a polynomial, but just with a single monomial that has an integer exponent, like:
     #
     # (xy)^2 -> x^2 * y^2
     # polynomial({ M: c })^z -> c^z * M^z
+
     yield rewrite(polynomial(poly)).to(
         polynomial(poly1),
+        # Keep the flattening bounded to avoid fanning out every large equivalent
+        # presentation, but allow common scaled factors hidden in modest sums.
+        # poly.length() <= i64(5),
+        # Add this as a direct dependency, to work around current semi-naive bug where it won't know what's pulled in by higher order functions.
         sole_monomials == SOLE_MONOMIALS,
+        counts == map_fold_kv(lambda counts, mono, _coef: counts + mono.keys(), MultiSet[Num](), poly),
+        map_restrict_keys(counts, sole_monomials).length() > i64(0),
         poly1
         == map_fold_kv(
             lambda res_poly, mono, coef: res_poly.insert(
@@ -304,7 +622,8 @@ def container_basic_rules(
                     lambda res_mono, term, exp: (
                         # Only collapse monomials with integer exponents, so we don't end up with (-xy)^0.5 taking the sqrt of a negative number
                         # Also can fail if this term has no sole_monomials present for it
-                        catch(lambda: map_map_values(lambda _, c: c * exp.to_i64(), sole_monomials[term])).match(
+                        try_match(
+                            map_map_values(lambda _, c: c * exp.to_i64(), sole_monomials[term]),
                             lambda m: map_merge_with(lambda l, r: l + r, m, res_mono),
                             res_mono.insert(term, exp),
                         )
@@ -317,6 +636,97 @@ def container_basic_rules(
             ContainerPolynomial.empty(),
             poly,
         ),
+        poly != poly1,
+    )
+
+    # For inverse factors, use the current preferred singleton polynomial
+    # representation instead of the first SOLE_MONOMIALS representative. This
+    # preserves denominator coefficient choices such as
+    # `2.873*(exp(x) - 2*x + c)`, where the first singleton representative may
+    # have factored the opposite term and would leave an extra fitted scalar.
+    yield rewrite(polynomial(poly)).to(
+        polynomial(poly1),
+        polynomials == POLYNOMIALS,
+        poly1
+        == map_fold_kv(
+            lambda res_poly, mono, coef: map_fold_kv(
+                lambda res_mono_and_coef, term, term_exp: if_defined(
+                    term_exp != BigRat(-1, 1),
+                    res_mono_and_coef.map_left(lambda res_mono: res_mono.insert(term, term_exp)),
+                    try_match(
+                        polynomials[term],
+                        lambda term_poly: if_defined(
+                            term_poly.length() != i64(1),
+                            res_mono_and_coef.map_left(lambda res_mono: res_mono.insert(term, term_exp)),
+                            if_defined(
+                                term_poly[term_poly.pick_key()] != f64(0.0),
+                                res_mono_and_coef.map_left(
+                                    lambda res_mono: map_merge_with(
+                                        lambda l, r: l + r,
+                                        res_mono,
+                                        map_map_values(
+                                            lambda _nested_term, nested_exp: -nested_exp,
+                                            term_poly.pick_key(),
+                                        ),
+                                    )
+                                ).map_right(lambda res_coef: res_coef / term_poly[term_poly.pick_key()]),
+                                res_mono_and_coef.map_left(lambda res_mono: res_mono.insert(term, term_exp)),
+                            ),
+                        ),
+                        res_mono_and_coef.map_left(lambda res_mono: res_mono.insert(term, term_exp)),
+                    ),
+                ),
+                Pair(ContainerMonomial.empty(), coef),
+                mono,
+            ).match(
+                lambda res_mono, res_coef: res_poly.insert(
+                    res_mono,
+                    res_coef + try_or(res_poly[res_mono], f64(0.0)),
+                )
+            ),
+            ContainerPolynomial.empty(),
+            poly,
+        ),
+        poly != poly1,
+    )
+
+    # Container analogue of the binary `-(x + y) -> -x - y` rule.
+    # It only pushes an outer `-1` into one nested two-term polynomial factor,
+    # instead of expanding arbitrary scaled polynomial factors.
+    yield rewrite(polynomial(poly)).to(
+        polynomial(poly1),
+        polynomial_monomials == POLYNOMIAL_MONOMIALS,
+        poly.length() == i64(1),
+        mono == poly.pick_key(),
+        poly[mono] == f64(-1.0),
+        polynomial_factor
+        == map_fold_kv(
+            lambda selected, term, _exp: try_match(
+                polynomial_monomials[ContainerMonomial.empty().insert(term, BigRat(1, 1))],
+                lambda nested_poly: Pair(term, nested_poly),
+                selected,
+            ),
+            Pair(Num(0.0), ContainerPolynomial.empty()),
+            mono,
+        ),
+        n == polynomial_factor.left,
+        mono[n] == BigRat(1, 1),
+        poly2 == polynomial_factor.right,
+        poly2.length() == i64(2),
+        poly1
+        == map_fold_kv(
+            lambda res_poly, inner_mono, inner_coef: map_merge_with(
+                lambda l, r: l + r,
+                res_poly,
+                ContainerPolynomial.empty().insert(
+                    map_merge_with(lambda l, r: l + r, mono.remove(n), inner_mono),
+                    -inner_coef,
+                ),
+            ),
+            ContainerPolynomial.empty(),
+            poly2,
+        ),
+        poly != poly1,
     )
 
     # a variant of greedy multivariate horner factorization for rational exponents.
@@ -340,14 +750,15 @@ def container_basic_rules(
         exp
         == map_fold_kv(
             # Skips monomials that don't contain the term or where the term is greater than the current minimum exponent
-            lambda min_exp, mono, _coef: catch(lambda: mono[n] < min_exp).match(lambda _: mono[n], min_exp),
+            lambda min_exp, mono, _coef: try_match(mono[n] < min_exp, lambda _: mono[n], min_exp),
             BigRat(2**63 - 1, 1),  # start with a very large exponent, so any real exponent will be smaller
             poly,
         ),
         # Now we go through each term, and either add it to the remainder or keep it in the main factored part
         poly_pair
         == map_fold_kv(
-            lambda divided_and_remainder, mono, coef: catch(lambda: mono[n]).match(
+            lambda divided_and_remainder, mono, coef: try_match(
+                mono[n],
                 lambda current_exp: divided_and_remainder.map_left(
                     lambda divided: divided.insert(
                         mono.insert(n, current_exp - exp),
@@ -361,37 +772,44 @@ def container_basic_rules(
         ),
     )
 
-    # DISABLE THIS FOR NOW BECAUSE IT'S TOO BROAD AND REPLACE WITH SPECIAL CASE BELOW
-    # Distribute constants inside of polynomials. If we have a monomial that is just another polynomial,
-    # then we can distribute the coefficient of that monomial into the inner polynomial, multiplying it by each of the coefficients in the inner polynomial,
-    # and merge it into the outer one
-    # c * polynomial({ M: c2 })^1 -> polynomial({ M: c * c2 })
-    # yield rewrite(polynomial(poly)).to(
-    #     polynomial(poly1),
-    #     polynomials == POLYNOMIALS,
-    #     poly1
-    #     == map_fold_kv(
-    #         lambda res_poly, mono, coef: assume_not(
-    #             ContainerPolynomial,
-    #             catch(lambda: polynomials[mono.pick_key()]),
-    #             mono.length() != i64(1),
-    #             mono[mono.pick_key()] != BigRat(1, 1),
-    #         ).match(
-    #             lambda inner_poly: map_merge_with(
-    #                 lambda x, y: x + y, res_poly, map_map_values(lambda _, v: v * coef, inner_poly)
-    #             ),
-    #             res_poly.insert(mono, coef),
-    #         ),
-    #         ContainerPolynomial.empty(),
-    #         poly,
-    #     ),
-    # )
-
-    # a * polynomial(P) + b -> a * polynomial(P + b/a)
-    # special case this for only polynomials of size two, where one is a constant and the other is a polynomial with a coefficient
+    # Flatten an exact nested polynomial term inside a larger polynomial:
+    #
+    # a*polynomial(P) + R -> a*P + R
+    #
+    # This is intentionally narrower than full product distribution. It only
+    # applies when the whole monomial is the nested polynomial at exponent 1,
+    # which is enough to expose constants from rules like `log(a*P)` while
+    # avoiding the earlier blowup from distributing arbitrary products.
     yield rewrite(polynomial(poly)).to(
         polynomial(
-            ContainerPolynomial.empty().insert(
+            map_merge_with(
+                lambda x, y: x + y,
+                poly.remove(mono),
+                map_map_values(lambda _nested_mono, nested_coef: nested_coef * poly[mono], poly1),
+            )
+        ),
+        polynomial_monomials == POLYNOMIAL_MONOMIALS,
+        poly.length() > i64(1),
+        mono
+        == map_fold_kv(
+            lambda selected, candidate_mono, _candidate_coef: try_match(
+                polynomial_monomials[candidate_mono],
+                lambda _nested_poly: candidate_mono,
+                selected,
+            ),
+            ContainerMonomial.empty(),
+            poly,
+        ),
+        mono.length() > i64(0),
+        poly[mono] != f64(0.0),
+        poly1 == polynomial_monomials[mono],
+        poly1.length() > i64(1),
+    )
+
+    # a * polynomial(P) + b + R -> a * polynomial(P + b/a) + R
+    yield rewrite(polynomial(poly)).to(
+        polynomial(
+            poly2.remove(mono).insert(
                 ContainerMonomial.empty().insert(
                     polynomial(
                         map_merge_with(
@@ -405,26 +823,27 @@ def container_basic_rules(
                 poly[mono],
             )
         ),
-        poly.length() == i64(2),
+        polynomial_monomials == POLYNOMIAL_MONOMIALS,
+        poly.contains(ContainerMonomial.empty()),
         coef == poly[ContainerMonomial.empty()],
-        poly.remove(ContainerMonomial.empty()).pick_key() == mono,
+        poly2 == poly.remove(ContainerMonomial.empty()),
+        mono
+        == map_fold_kv(
+            lambda selected, candidate_mono, _candidate_coef: try_match(
+                polynomial_monomials[candidate_mono],
+                lambda _nested_poly: candidate_mono,
+                selected,
+            ),
+            ContainerMonomial.empty(),
+            poly2,
+        ),
+        mono.length() > i64(0),
         mono.length() == i64(1),
         mono.pick_key() == n,
         mono[n] == BigRat(1, 1),
-        n == polynomial(poly1),
+        poly[mono] != f64(0.0),
+        poly1 == polynomial_monomials[mono],
     )
-
-
-T = TypeVar("T", bound=BaseExpr)
-
-
-def assume_not(t: type[T], value: Maybe[T], *conds: Unit) -> Maybe[T]:
-    """
-    Assume that the condition is not true. If the condition is true, this will return Maybe.none() and block the rule from firing. If the condition is false, this will return the value as a Maybe.some and allow the rule to fire with that value.
-    """
-    for cond in conds:
-        value = catch(lambda: cond).match(lambda _: Maybe[t].none(), value)
-    return value
 
 
 @ruleset
@@ -798,30 +1217,24 @@ def parse_expression_container(source: str) -> Num:
     return binary_to_containers(parse_expression(source))
 
 
-rewrite_scheduler: BackOff | None = back_off(
+rewrite_scheduler: BackOff = back_off(
     match_limit=BACKOFF_MATCH_LIMIT,
     ban_length=BACKOFF_BAN_LENGTH,
     fresh_rematch=True,
 ).persistent()
 
+binary_schedule = run(binary_rewrite_ruleset, scheduler=rewrite_scheduler)
+container_schedule = run(container_rewrite_ruleset, scheduler=rewrite_scheduler)
 
-def _new_rewrite_scheduler() -> BackOff | None:
-    if rewrite_scheduler is None:
-        return None
-    scheduler = rewrite_scheduler.scheduler
-    return back_off(
-        match_limit=scheduler.match_limit,
-        ban_length=scheduler.ban_length,
-        fresh_rematch=scheduler.fresh_rematch,
-    ).persistent()
 
 
 def _run_single_pass(
+    egraph: EGraph,
     num: Num,
     cost_model: CostModel[ParamCost],
     analysis_schedule: Schedule,
-    active_rewrite_ruleset: Ruleset | UnstableCombinedRuleset,
-) -> tuple[Num, ParamCost, int, float]:
+    schedule: Schedule,
+) -> tuple[Num, ParamCost, int]:
     """
     Run one `rewriteTree`-like pass and return the populated e-graph.
 
@@ -831,69 +1244,64 @@ def _run_single_pass(
     - one saturated analysis round after each rewrite round
     - stop when total egraph size stops changing
     """
-    egraph = EGraph(save_egglog_string=True)
-    egraph.register(
-        num,
-        # so we can match against != 0
-        Num(0.0),
-    )
-
-    start = time.perf_counter()
-    previous_size = _graph_size(egraph)
+    egraph.run(schedule)
+    n = egraph.let("n", num)
     egraph.run(analysis_schedule)
-    scheduler = _new_rewrite_scheduler()
+    previous_size = _graph_size(egraph)
     for _ in range(HASKELL_INNER_ITERATION_LIMIT):
-        egraph.run(run(active_rewrite_ruleset, scheduler=scheduler))
         egraph.run(analysis_schedule)
+        egraph.run(schedule)
         current_size = _graph_size(egraph)
         if current_size == previous_size:
             break
         previous_size = current_size
-    egraph.extract(num)
-    extracted, cost = egraph.extract(num, include_cost=True, cost_model=cost_model)
-    elapsed = time.perf_counter() - start
-    print(egraph._state.egglog_file_state)
-    return extracted, cost, current_size, elapsed
+    extracted, cost = egraph.extract(n, include_cost=True, cost_model=cost_model)
+    # print(egraph._state.egglog_file_state)
+    return extracted, cost, current_size
 
 
 def run_paper_pipeline(
     initial: Num,
     decode: Callable[[Num], Num] = lambda x: x,
     cost_model: CostModel[ParamCost] = param_cost_model,
+    schedule: Schedule = binary_schedule,
     analysis_schedule: Schedule = binary_analysis_schedule,
-    active_rewrite_ruleset: Ruleset | UnstableCombinedRuleset = binary_rewrite_ruleset,
 ) -> PaperPipelineReport:
-    current, before_cost = EGraph().extract(initial, include_cost=True, cost_model=cost_model)
-    decoded_current = decode(current)
-    last_cost = ParamCost()
-    total_size = 0
-    total_sec = 0.0
+    current, before_cost = EGraph(save_egglog_string=False).extract(initial, include_cost=True, cost_model=cost_model)
+    # get schedule decls so that it's pre-cached
+    schedule.__egg_decls__
+    analysis_schedule.__egg_decls__
+    start = time.perf_counter()
+    # Add constants to the egraph so that they can be used in rules without needing to be registered each pass
+    # egraph = EGraph(Num(0.0), save_egglog_string=False)
+    # pre-run rulesets so that we don't have to register them each pipeline pass
+    # egraph.run(schedule)
+    last_cost = before_cost
+    max_size = 0
     passes = 0
     for pass_index in range(1, MAX_PASSES + 1):
-        extracted, last_cost, total_size, elapsed = _run_single_pass(
+        # with egraph:
+        extracted, last_cost, total_size = _run_single_pass(
+            EGraph(Num(0.0)),
             current,
             cost_model=cost_model,
+            schedule=schedule,
             analysis_schedule=analysis_schedule,
-            active_rewrite_ruleset=active_rewrite_ruleset,
         )
-        total_sec += elapsed
+        max_size = max(max_size, total_size)
         passes = pass_index
-        decoded_extracted = decode(extracted)
-        if render_num(decoded_extracted) == render_num(decoded_current):
-            current = extracted
-            decoded_current = decoded_extracted
+        if extracted == current:
             break
         current = extracted
-        decoded_current = decoded_extracted
     return PaperPipelineReport(
         passes=passes,
-        total_sec=total_sec,
-        total_size=total_size,
+        total_sec=time.perf_counter() - start,
+        total_size=max_size,
         before_nodes=before_cost.node_count,
         before_params=before_cost.floats,
         extracted_nodes=last_cost.node_count,
         extracted_params=last_cost.floats,
-        extracted=render_num(decoded_current),
+        extracted=render_num(decode(current)),
     )
 
 
@@ -902,8 +1310,8 @@ def run_paper_pipeline_container(initial: Num) -> PaperPipelineReport:
         initial,
         decode=containers_to_binary,
         cost_model=container_cost_model,
+        schedule=container_schedule,
         analysis_schedule=containers_analysis_schedule,
-        active_rewrite_ruleset=container_rewrite_ruleset,
     )
 
 

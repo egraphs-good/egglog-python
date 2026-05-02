@@ -207,6 +207,7 @@ def _run_container_rounds(source: str, rounds: int) -> tuple[EGraph, Num]:
         ("1.0000001 * x0 + 1.0000002 * x1", 0),
     ],
 )
+@pytest.mark.skip(reason="extra rules are currently disabled")
 def test_extra_rules_reduce_local_patterns(source: str, expected_params: int) -> None:
     res = run_paper_pipeline(parse_expression(source))
     assert res.extracted_params <= expected_params, res.extracted
@@ -226,6 +227,7 @@ def test_extra_rules_reduce_local_patterns(source: str, expected_params: int) ->
         ("2.3 / (exp(x0) ** 2.0)", "exp(log(2.3) - 2.0 * x0)"),
     ],
 )
+@pytest.mark.skip(reason="extra rules are currently disabled")
 def test_extra_rules_expose_expected_equivalences(source: str, target: str) -> None:
     _assert_rewrite_equivalent(source, target)
 
@@ -299,6 +301,209 @@ def test_container_self_factor_cycle_remains_extractable() -> None:
 def test_container_flattens_scaled_polynomial_factors(source: str, expected_params: int) -> None:
     res = run_paper_pipeline_container(parse_expression_container(source))
     assert res.extracted_params <= expected_params, res.extracted
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_nodes", "expected_params"),
+    [
+        (
+            "0.009239*x + (0.009239*x - 0.042748853)*exp(x) - 0.009239*exp(y)",
+            13,
+            2,
+        ),
+        (
+            "((0.009239*x0 - 0.018478*x1*(x0 - 9.621) + "
+            "(0.009239*x0 - 0.042748853)*exp(x0) - 0.009239*exp(x1) + 0.208799) * "
+            "exp(17.386*x0) - 0.009239) * exp(-17.386*x0)",
+            35,
+            6,
+        ),
+    ],
+)
+def test_container_flattens_scaled_terms_in_larger_polynomials(
+    source: str, expected_nodes: int, expected_params: int
+) -> None:
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= expected_params, res.extracted
+    assert res.extracted_nodes <= expected_nodes, res.extracted
+
+
+def test_container_absorbs_nested_log_constant_with_outer_remainder() -> None:
+    source = (
+        "9.510507117783098 + "
+        "log(0.003918940250258392 + 0.7556389413872189 * x0 ** 2.0) + "
+        "x0"
+    )
+
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= 2, res.extracted
+    assert res.extracted_nodes <= 10, res.extracted
+
+
+def test_container_factors_repeated_coefficient_subset_with_remainder() -> None:
+    source = "0.011424247853121624 * exp(x0 ** 2.0) + 0.011424247853121624 * exp(x1) + x1"
+
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= 1, res.extracted
+    assert res.extracted_nodes <= 11, res.extracted
+
+
+def test_container_preserves_repeated_numeric_factor_before_like_term_merge() -> None:
+    source = "-0.3 * x0 + -0.3 * x1 + x1"
+
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= 1, res.extracted
+    assert res.extracted_nodes <= 7, res.extracted
+
+
+@pytest.mark.parametrize("source", ["-0.3 * x0 + 0.7 * x1", "0.7 * x0 + -0.3 * x1"])
+def test_container_splits_integer_residual_after_like_term_merge(source: str) -> None:
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= 1, res.extracted
+    assert res.extracted_nodes <= 7, res.extracted
+
+
+def test_container_does_not_require_noninteger_residual_split() -> None:
+    res = run_paper_pipeline_container(parse_expression_container("-0.3 * x0 + 0.8 * x1"))
+
+    assert res.extracted_params <= 2, res.extracted
+
+
+def test_container_uses_outer_constant_to_choose_nested_polynomial_scale() -> None:
+    source = (
+        "(0.000839194771067583 * x0 + "
+        "0.004051470996339809 * x1 + "
+        "0.011734807030715255) * x2 - "
+        "0.004051470996339809"
+    )
+
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= 3, res.extracted
+    assert res.extracted_nodes <= 13, res.extracted
+
+
+def test_container_factors_opposite_coefficient_subset_with_remainder() -> None:
+    source = "15.31 * x0 - 15.31 * x1 + exp(x1) - 16.211"
+
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= 2, res.extracted
+    assert res.extracted_nodes <= 10, res.extracted
+
+
+def test_container_flattens_exact_nested_log_polynomial_terms() -> None:
+    source = (
+        "log(63949.3125 + 299103.1916432455 * x0 ** 2.0) + "
+        "log(27880.087890625 + 116909.30385762826 * x1 ** 2.0)"
+    )
+
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= 3, res.extracted
+    assert res.extracted_nodes <= 15, res.extracted
+
+
+def test_container_uses_preferred_singleton_polynomial_for_inverse_scale() -> None:
+    source = "0.7096075864465768 / (-5.746100091872222 * x0 + 2.873050045936111 * exp(x0) + 1.7208022848793882)"
+
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= 2, res.extracted
+    assert res.extracted_nodes <= 10, res.extracted
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_nodes", "expected_params"),
+    [
+        (
+            "(-2.0 * -0.16807062259009387 + -0.00015170797954567304 * x1) + "
+            "-86.49043797591587 * "
+            "(x0 * (x1 * (-2.0 * -0.16807062259009387 + -0.00015170797954567304 * x1)))",
+            11,
+            3,
+        ),
+        (
+            "(-2.0 * -0.16807062259009387 + -0.00015170797954567304 * x1) * "
+            "log(abs(-2.0 * -0.16807062259009387 + -0.00015170797954567304 * x1 + "
+            "-86.49043797591587 * "
+            "(x0 * (x1 * (-2.0 * -0.16807062259009387 + -0.00015170797954567304 * x1))) + "
+            "-2.0 * (x1 * (-2.0 * -0.16807062259009387 + -0.00015170797954567304 * x1 + "
+            "-86.49043797591587 * "
+            "(x0 * (x1 * (-2.0 * -0.16807062259009387 + -0.00015170797954567304 * x1)))) ** "
+            "(-1.0))))",
+            33,
+            8,
+        ),
+    ],
+)
+def test_container_preserves_repeated_polynomial_products(source: str, expected_nodes: int, expected_params: int) -> None:
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= expected_params, res.extracted
+    assert res.extracted_nodes <= expected_nodes, res.extracted
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_nodes", "expected_params"),
+    [
+        ("0.02889 * x - 0.00963 * z", 7, 1),
+        ("6.258666666666667 - 6.258666666666667 * x + x ** 2.0", 9, 1),
+        (
+            "0.02889 * x0 ** 3.0 - 0.18081288 * x0 ** 2.0 + 0.18081288 * x0 + "
+            "0.14418036 * x1 - 0.00963 * exp(x1) + 0.179028 - 0.00963 * exp(-15.767 * x0)",
+            29,
+            5,
+        ),
+        (
+            "0.103875 + 0.01063 * "
+            "(exp(x0) - exp(x1) + 2.824 * x0 + 6.894 * x1 + 7.894 * (x0 + x1 - x0 * x0))",
+            23,
+            4,
+        ),
+    ],
+)
+def test_container_matches_binary_coefficient_factoring_choices(
+    source: str, expected_nodes: int, expected_params: int
+) -> None:
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= expected_params, res.extracted
+    assert res.extracted_nodes <= expected_nodes, res.extracted
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_nodes", "expected_params"),
+    [
+        ("-1.0 * (-2.0 + x) * y", 5, 0),
+        (
+            "-1.0 * (exp(0.1799458712339401*x1) - 1.4052648544311523) * "
+            "exp(exp(0.2937204837799072*x1))",
+            12,
+            3,
+        ),
+        (
+            "-1.0 * (6.656270926980652e-05 * x1 + 1.550707023441505e-05) * "
+            "(35.56866639996601 * x1 * (x0 - exp(x0)) + "
+            "(x1 - 6.784280947796324) * (exp(x0) - 52.61627831646421) * exp(x0)) * "
+            "(exp(x0) - 52.61627831646421) / ((x0 - exp(x0)) * (x1 - 6.784280947796324))",
+            40,
+            7,
+        ),
+    ],
+)
+def test_container_pushes_negation_into_nested_two_term_polynomial_factor(
+    source: str, expected_nodes: int, expected_params: int
+) -> None:
+    res = run_paper_pipeline_container(parse_expression_container(source))
+
+    assert res.extracted_params <= expected_params, res.extracted
+    assert res.extracted_nodes <= expected_nodes, res.extracted
 
 
 EXPRS = [

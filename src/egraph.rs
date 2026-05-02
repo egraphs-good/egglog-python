@@ -3,12 +3,12 @@
 use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
 use crate::freeze::FrozenEGraph;
-use crate::py_object_sort::{load, PyObjectSort, PyPickledValue};
+use crate::py_object_sort::{PyObjectSort, PyPickledValue, load};
 use crate::serialize::SerializedEGraph;
 use crate::tracing_otel;
 
-use egglog::prelude::{add_base_sort, RustSpan, Span};
-use egglog::{span, SerializeConfig};
+use egglog::prelude::{RustSpan, Span, add_base_sort};
+use egglog::{SerializeConfig, span};
 use num_bigint::BigInt;
 use num_rational::{BigRational, Rational64};
 use pyo3::prelude::*;

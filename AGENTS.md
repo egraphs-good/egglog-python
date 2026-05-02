@@ -38,6 +38,7 @@
   - in facts / antecedent-style use, undefined partial primitive calls cause the rule to skip rather than firing
   - in higher-order container ops, the container primitive should define the policy for undefined callback results, for example skipping those entries or failing the whole op
 - Use partial builtins in antecedent/lookup positions by default; do not materialize them in actions unless definedness has already been proven.
+- For Python helper wrappers around `catch`, prefer accepting the symbolic Egglog expression directly and wrapping it inside the helper, for example `try_match(expr, on_some, default)` should internally use `catch(lambda: expr)`. Python still evaluates arguments eagerly, but Egglog DSL expressions such as `map[key]` are symbolic construction, not runtime lookup execution; keep an explicit caller-side thunk only when constructing the expression itself can fail or has side effects.
 - In Python, only pass exact builtins or partials of exact builtins into higher-order container ops for this workflow.
 - Do not add Python-bodied primitive/container helpers or anonymous lambda callbacks for these paths.
 - Prefer `x == y` over `eq(x).to(y)` for ordinary equality facts, checks, and rule antecedents when the sort uses the default equality relation.
