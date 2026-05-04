@@ -657,3 +657,285 @@ encoding is slower even when the final e-graph is smaller.
   python/egglog/exp/param_eq/test_pipeline.py::test_container_preserves_repeated_polynomial_products -q`
   passed.
   `uv run ruff check python/egglog/exp/param_eq/pipeline.py` passed.
+
+## 2026-05-04: remove `POLYNOMIALS` analysis table
+
+- Status:
+  accepted local fix candidate.
+- Question:
+  can the remaining `POLYNOMIALS: Map[Num, ContainerPolynomial]` analysis
+  table be removed without losing the parameter-quality parity that the
+  repeated-product and outer-scale container rules need?
+- Baseline dependency:
+  the table was used by two rules in `container_basic_rules`: the
+  repeated-polynomial product rule
+  `P + c*M*P + R -> P * (1 + c*M) + R`, and the outer-constant scale rule
+  `(c*x + d*y + k) * M - c -> c * (M * (...) - 1)`.
+  An integer-residual guard also used it only to reject nested polynomial
+  terms.
+- Failed probe 1:
+  replaced the two table lookups with `POLYNOMIAL_MONOMIALS`, keyed by
+  `{polynomial(P): 1}`. The focused repeated-product regression with the
+  `log(abs(...))` expression regressed from the expected `after_params <= 8`
+  to `after_params=9`.
+- Failed probe 2:
+  changed `POLYNOMIAL_MONOMIALS` to prefer the newer value. The same
+  repeated-product regression still extracted with `after_params=9`, so this
+  was not just a stale merge choice for that table.
+- Falsification probe:
+  restored `POLYNOMIALS` only for the outer-scale rule. The focused regression
+  still failed with `after_params=9`, proving the repeated-product rule was the
+  first missing dependency.
+- Accepted probe:
+  removed the table lookup entirely and bound the polynomial relation directly:
+  after collecting candidate keys, the repeated-product rule now uses
+  `counts.count(n) > 0` and `polynomial(poly1) == n`; the outer-scale rule now
+  uses `mono[n] == 1` and `polynomial(poly1) == n`. This gives the rule an
+  explicit relation dependency without storing a global `Num -> polynomial`
+  map.
+- Code removed:
+  deleted the `POLYNOMIALS` constant, its default analysis initialization, and
+  its population rule.
+- Focused validation:
+  `uv run pytest
+  python/egglog/exp/param_eq/test_pipeline.py::test_container_uses_preferred_singleton_polynomial_for_inverse_scale
+  python/egglog/exp/param_eq/test_pipeline.py::test_container_preserves_repeated_polynomial_products
+  python/egglog/exp/param_eq/test_pipeline.py::test_container_preserves_repeated_numeric_factor_before_like_term_merge
+  python/egglog/exp/param_eq/test_pipeline.py::test_container_splits_integer_residual_after_like_term_merge
+  python/egglog/exp/param_eq/test_pipeline.py::test_container_matches_binary_coefficient_factoring_choices
+  -q` passed with `10 passed`.
+  `uv run ruff check python/egglog/exp/param_eq/pipeline.py` passed.
+- Broader validation:
+  full `test_pipeline.py` still has unrelated existing failures: snapshot
+  drift and a test calling the removed `_new_rewrite_scheduler`. The targeted
+  POLYNOMIALS regressions are green.
+- Sample comparison:
+  `make -C python/egglog/exp/param_eq compare-binary-container-sample
+  SAMPLE_LIMIT_PER_DATASET=50` compared 100 shared rows. After params were
+  `9 better / 0 worse / 91 same` for containers. Extracted cost was
+  `46 better / 7 worse / 47 same`; total e-graph size was
+  `97 better / 3 worse / 0 same`.
+- Direct A/B against the old table:
+  temporarily reversed only the `pipeline.py` removal patch and ran
+  `run_egglog_corpus --variant container --limit-per-dataset 20` to
+  `/tmp/egglog_container_with_polynomials_first20.csv`, then restored the
+  patch and reran to `/tmp/egglog_container_no_polynomials_first20.csv`.
+  On the 40 shared rows, `after_params` was identical for all rows. Median
+  e-graph total size changed from `37` to `36`, with `39 / 1 / 0`
+  better / worse / same under the table-free version. Median runtime changed
+  from `189.5ms` to `191.8ms`, with `15 / 25 / 0` faster / slower / same,
+  so this sample supports a state-size win but not a measured runtime win.
+- Current conclusion:
+  `POLYNOMIALS` was a workaround for making polynomial-representation
+  dependencies visible through higher-order map-derived keys. The direct
+  `polynomial(poly1) == n` constraints now make those dependencies explicit
+  enough for the relevant rules, so the extra table can be removed.
+
+## 2026-05-04: keep `POLYNOMIAL_MONOMIALS` as a singleton-key index
+
+- Status:
+  rejected full removal.
+- Question:
+  can `POLYNOMIAL_MONOMIALS: Map[ContainerMonomial, ContainerPolynomial]` be
+  removed after `POLYNOMIALS` was removed?
+- Purpose of the table:
+  it maps the concrete singleton monomial key `{polynomial(P): 1}` back to `P`.
+  The remaining users are not asking for every polynomial representation of a
+  `Num`; they are asking whether an already-present monomial key is exactly a
+  nested polynomial term.
+- Direct replacement tested:
+  replaced lookups such as `polynomial_monomials[candidate_mono]` with
+  constraints like `mono == {n: 1}` and `polynomial(poly1) == n`.
+- Sample result:
+  on a first-20-per-dataset container sample, after params were identical on
+  all 40 rows compared with the version that kept `POLYNOMIAL_MONOMIALS`.
+  Median runtime looked better in that small sample (`172.5ms` vs `191.8ms`),
+  but this did not cover the worst focused canary.
+- Falsifying canary:
+  `test_container_matches_binary_coefficient_factoring_choices` for
+  `0.103875 + 0.01063 * (exp(x0) - exp(x1) + 2.824*x0 + 6.894*x1 +
+  7.894*(x0 + x1 - x0*x0))`.
+  With direct constraints, the test still passed but the single case took
+  about `120.8s`.
+- Isolation:
+  disabling all three direct singleton-polynomial rules made the same canary
+  fast but lost the expected node-count improvement. Re-enabling only the
+  exact nested polynomial flattening rule reproduced the slowdown, so the
+  expensive pattern is:
+  `a*polynomial(P) + R -> a*P + R` with direct
+  `mono == {n: 1}; polynomial(P) == n` matching.
+- Restored result:
+  restoring `POLYNOMIAL_MONOMIALS` reduced that canary to about `9.1s`, and the
+  focused 16-test bundle completed in `14.79s`.
+- Current conclusion:
+  `POLYNOMIAL_MONOMIALS` is still needed as a performance index. The direct
+  relation form is semantically valid, but it causes the matcher to enumerate
+  many polynomial e-classes before proving that the singleton monomial key is
+  present. The table keeps the join keyed by existing monomial keys.
+
+## 2026-05-04: `POLYNOMIALS` removal slowdown root cause
+
+- Status:
+  diagnosis only. Temporary guards were reverted.
+- Question:
+  why did some examples get slower after removing `POLYNOMIALS`, even though
+  params stayed equal and e-graph size usually got slightly smaller?
+- A/B command:
+  temporarily reversed only the current `pipeline.py` patch and ran
+  `run_egglog_corpus --variant container --limit-per-dataset 50` to
+  `/tmp/egglog_container_with_polynomials_first50.csv`, restored the patch, and
+  reran to `/tmp/egglog_container_no_polynomials_first50.csv`.
+- A/B result:
+  on 100 shared rows, median runtime was similar
+  (`169.9ms` with `POLYNOMIALS`, `167.9ms` without), but 51 rows were slower.
+  The largest slowdown was `pagie/Bingo/raw=17/algo_row=17/original`, from
+  `464ms` to `1077ms`, with after params unchanged at `8` and e-graph total
+  size changing from `546` to `545`.
+- Canary expression:
+  the repeated-product/log expression beginning
+  `(-2.0 * -0.16807062259009387 + -0.00015170797954567304*x1) *
+  log(abs(...))`.
+- Phase split on the canary:
+  with `POLYNOMIALS`, total was `0.353s`: analysis `0.063s`, rewrite
+  `0.170s`, extraction `0.112s`.
+  without `POLYNOMIALS`, total was `0.879s`: analysis `0.057s`, rewrite
+  `0.694s`, extraction `0.120s`.
+  The graph was not bigger; the slowdown is rewrite matching near convergence.
+- Rule attribution:
+  old repeated-product rule using `%POLYNOMIALS` took `0.009s` with
+  `67` matches.
+  new direct repeated-product rule using `counts.count(n) > 0` and
+  `polynomial(poly1) == n` took `0.465s` with `93` matches.
+  new direct outer-scale rule also took `0.073s` with `0` matches.
+- Falsification probe:
+  temporarily disabled only the direct repeated-product rule with an impossible
+  guard. The canary dropped to `0.191s` total and `0.136s` rewrite time, but
+  quality regressed from `after_params=8` to `after_params=10`.
+- Current conclusion:
+  removing `POLYNOMIALS` changed the join shape of the repeated-product rule.
+  The old table made the candidate polynomial keys available through
+  `map_restrict_keys(counts, polynomials)`, so the expensive relation join
+  happened inside a map primitive over terms already present in the polynomial.
+  The direct replacement exposes `polynomial(poly1) == n` as a normal e-matcher
+  join for each counted term, which is semantically correct but much more
+  expensive on examples with many polynomial presentations. The main slowdown
+  is therefore matcher join order/cardinality, not extraction, analysis, final
+  e-graph size, or parameter-quality work after extraction.
+
+## 2026-05-04: restore polynomial body cache with explicit index naming
+
+- Status:
+  accepted local fix candidate.
+- Change:
+  restored the old `Num -> ContainerPolynomial` cache as
+  `POLYNOMIAL_BODIES`, and documented it as a join-shaping index rather than
+  as independent semantic state. `SOLE_MONOMIALS` remains the preferred
+  singleton-alias cache, and `POLYNOMIAL_MONOMIALS` remains the singleton
+  monomial-key index.
+- Concrete comments added:
+  `POLYNOMIAL_BODIES` documents the repeated-product example
+  `P + c*M*P + R -> P * (1 + c*M) + R`, where candidates should be terms
+  already present in the polynomial rather than every `polynomial(body) == n`
+  relation in the e-graph.
+  `POLYNOMIAL_MONOMIALS` documents the exact nested-flatten example
+  `a*polynomial(P) + R -> a*P + R`, where candidates should be existing
+  singleton monomial keys rather than constructed `{n: 1}` keys for every
+  polynomial relation.
+- Canary result:
+  `pagie/Bingo/raw=17/algo_row=17/original` is back to the old shape:
+  total `0.355s`, rewrite `0.173s`, extraction `0.110s`,
+  e-graph total size `546`, `after_params=8`.
+  This matches the prior `POLYNOMIALS` behavior and removes the direct-rule
+  slowdown (`0.879s`, rewrite `0.694s`).
+- Focused validation:
+  `uv run pytest ... -q --durations=8` over the 16 container regressions passed
+  in `4.44s`; the slowest case was `1.56s`.
+- Sample comparison:
+  first-50-per-dataset container sample matched the old `POLYNOMIALS` cache on
+  all 100 `after_params` values. Median runtime was effectively similar
+  (`169.9ms` old, `170.8ms` renamed cache); remaining per-row timing deltas
+  look like benchmark noise because e-graph size and params are unchanged.
+
+## 2026-05-04: slow container outlier with small final e-graph
+
+- Status:
+  diagnosis only. No rule changes kept.
+- Question:
+  why does the row
+  `0.103875 + 0.01063 * (exp(x0) - (exp(x1) + (x0 + x1 - x0*x0) * -7.894 + (x1 * -7.894 - 2.824*x0 + x1)))`
+  take much longer in containers even though the container e-graph is smaller?
+- Direct run result:
+  binary ran in about `0.56s`, with `passes=2`, e-graph size `9168`,
+  `after_nodes=27`, and `after_params=4`.
+  containers ran in about `13.2s` to `14.0s`, with `passes=2`, e-graph size
+  `4017`, `after_nodes=23`, and `after_params=4`.
+- Phase split:
+  binary total was `0.570s`: analysis `0.010s`, rewrite `0.191s`,
+  extraction `0.359s`.
+  container total was `13.282s`: analysis `2.641s`, rewrite `9.357s`,
+  extraction `1.260s`.
+- Boundary evidence:
+  the slowest container phases were late rewrite rounds, not construction or
+  extraction: pass 1 rounds 26 through 30 each took about `0.79s` to `0.87s`
+  while the total size moved only from about `3633` to `4017`.
+- Rule attribution from the container run:
+  repeated scalar coefficient-magnitude factoring at `pipeline.py:518` took
+  `1.93s` with `8870` matches.
+  `SOLE_MONOMIALS` flattening at `pipeline.py:696` took `1.32s` with `6004`
+  matches.
+  Horner factoring at `pipeline.py:773` took `1.27s` with `4747` matches.
+  representative coefficient factoring at `pipeline.py:425` took `1.22s` with
+  `8128` matches.
+  integer-ratio coefficient factoring at `pipeline.py:442` took `1.17s` with
+  `3081` matches.
+- Falsified hypotheses:
+  the slowdown is not caused by a larger final e-graph: containers end smaller
+  (`4017` vs `9168`).
+  it is not primarily extraction: container extraction is large (`1.26s`) but
+  much smaller than container rewrite time (`9.36s`).
+  it is not the restored `POLYNOMIAL_BODIES` lookup: the repeated-product rule
+  using that table took only `0.35s` and the outer-scale lookup had `0`
+  matches.
+- Current hypothesis:
+  this row is slow because the container encoding exposes many equivalent
+  coefficient-factor presentations inside one polynomial. The broad scalar
+  coefficient factoring, sole-monomial flattening, Horner, and representative
+  coefficient rules keep finding legal alternate presentations through late
+  rounds. The result is smaller and reaches the same parameter count, but the
+  schedule pays for repeated map scans and rematching near convergence.
+
+## 2026-05-04: isolate unstaged hunk causing the slow container outlier
+
+- Status:
+  diagnosis only. Current `pipeline.py` was not changed by this probe.
+- Question:
+  which unstaged change made the row above slow?
+- Method:
+  used a detached `HEAD` worktree at `050e5fd`, copied the local compiled
+  `egglog` extension artifacts into it, and selected Python source with
+  `PYTHONPATH` so current and `HEAD` used the same runtime.
+- Results:
+  `HEAD` ran the container case in `1.06s`, with e-graph size `862`,
+  `after_nodes=23`, and `after_params=4`.
+  Current dirty source ran it in `13.41s`, with e-graph size `4017`,
+  `after_nodes=23`, and `after_params=4`.
+  Copying the full current `pipeline.py` into the `HEAD` worktree reproduced
+  the slow result: `13.35s`, size `4017`.
+  Reverting only the post-normalization integer-residual split guard in that
+  temp copy restored the fast result: `1.06s`, size `862`.
+- Isolated hunk:
+  the slow hunk is in the rule
+  `a*M + b*N + R -> a*polynomial(M + N) + (b - a)*N + R`.
+  The unstaged version changed the suppression guard from the polynomial body
+  cache to `SOLE_MONOMIALS`:
+  `map_restrict_keys(counts, POLYNOMIALS).length() == 0`
+  became
+  `map_restrict_keys(counts, SOLE_MONOMIALS).length() == 0`.
+- Mechanism:
+  the old guard suppresses integer-residual splitting when the current
+  polynomial already contains a nested polynomial term. The new guard only
+  suppresses when a term has a sole-monomial alias, so it lets the split rule
+  run on nested-polynomial presentations. On this row that creates many extra
+  coefficient-factor presentations, which then feed repeated scalar coefficient
+  factoring, `SOLE_MONOMIALS` flattening, Horner, and representative
+  coefficient factoring through late rounds.

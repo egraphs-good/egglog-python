@@ -58,21 +58,36 @@ SOLE_MONOMIALS = constant(
 )
 
 # Map a monomial of the form `{polynomial(P): 1}` to one representative `P`.
+# This acts as an index from concrete monomial keys back to nested polynomial
+# bodies. Directly matching `polynomial(P) == n` and then constructing
+# `{n: 1}` is semantically equivalent, but it can make matching enumerate many
+# unrelated polynomial e-classes before proving the singleton monomial exists.
+#
+# Concrete example:
+#   a*polynomial(P) + R -> a*P + R
+# should start from monomial keys already present in the outer polynomial, not
+# from every `polynomial(P) == n` relation in the e-graph.
 POLYNOMIAL_MONOMIALS = constant(
     "POLYNOMIAL_MONOMIALS",
     Map[ContainerMonomial, ContainerPolynomial],
     merge=partial(map_merge_with, lambda old_value, new_value: old_value),
 )
 
-# Map polynomial e-classes to a current representative polynomial. Prefer the
-# newer value so analysis-normalized polynomials replace pre-normalized input
-# shapes.
-POLYNOMIALS = constant(
-    "POLYNOMIALS",
+# Map polynomial e-classes to their current representative bodies. This is a
+# join-shaping cache for rules that first discover candidate `Num` terms from
+# monomial keys and then need the corresponding polynomial body.
+#
+# Concrete example:
+#   P + c*M*P + R -> P * (1 + c*M) + R
+# scans terms already present in `P + c*M*P + R`. Looking up those terms in
+# this map keeps the join keyed by present terms; directly matching
+# `polynomial(body) == n` made the same rule much slower on repeated-product
+# log examples.
+POLYNOMIAL_BODIES = constant(
+    "POLYNOMIAL_BODIES",
     Map[Num, ContainerPolynomial],
     merge=partial(map_merge_with, lambda old_value, new_value: new_value),
 )
-
 
 def if_defined(cond: Unit, then: T, otherwise: T) -> T:
     return catch(lambda: cond).match(lambda _: then, otherwise)
@@ -174,7 +189,7 @@ def container_analysis_rules(
         set_(CONSTS).to(Map[Num, f64].empty()),
         set_(SOLE_MONOMIALS).to(Map[Num, Pair[i64, ContainerMonomial]].empty()),
         set_(POLYNOMIAL_MONOMIALS).to(Map[ContainerMonomial, ContainerPolynomial].empty()),
-        set_(POLYNOMIALS).to(Map[Num, ContainerPolynomial].empty()),
+        set_(POLYNOMIAL_BODIES).to(Map[Num, ContainerPolynomial].empty()),
     )
     yield rule(n == Num(a)).then(set_(CONSTS).to(Map[Num, f64].empty().insert(n, a)))
     yield rule(
@@ -219,7 +234,9 @@ def container_analysis_rules(
             .insert(ContainerMonomial.empty().insert(n, BigRat(1, 1)), poly)
         )
     )
-    yield rule(polynomial(poly) == n).then(set_(POLYNOMIALS).to(Map[Num, ContainerPolynomial].empty().insert(n, poly)))
+    yield rule(polynomial(poly) == n).then(
+        set_(POLYNOMIAL_BODIES).to(Map[Num, ContainerPolynomial].empty().insert(n, poly))
+    )
     # Constant fold polynomials so that in each monomial,
     # all constants terms are pulled into a co-efficient
     # and all empty terms are combined. Also drops terms with zero exponents.
@@ -388,8 +405,8 @@ def container_basic_rules(
     coef_counts: MultiSet[f64],
     sole_monomials: Map[Num, Pair[i64, ContainerMonomial]],
     polynomial_monomials: Map[ContainerMonomial, ContainerPolynomial],
-    polynomials: Map[Num, ContainerPolynomial],
-    matching_polynomials: Map[Num, ContainerPolynomial],
+    polynomial_bodies: Map[Num, ContainerPolynomial],
+    matching_polynomial_bodies: Map[Num, ContainerPolynomial],
     counts: MultiSet[Num],
     n: Num,
     poly_pair: Pair[ContainerPolynomial, ContainerPolynomial],
@@ -488,10 +505,10 @@ def container_basic_rules(
         monomial_factor == map_integer_residual_split_candidate(poly),
         mono == monomial_factor.left,
         poly1 == monomial_factor.right,
-        polynomials == POLYNOMIALS,
+        polynomial_bodies == POLYNOMIAL_BODIES,
         counts
         == map_fold_kv(lambda counts, candidate_mono, _coef: counts + candidate_mono.keys(), MultiSet[Num](), poly),
-        map_restrict_keys(counts, polynomials).length() == i64(0),
+        map_restrict_keys(counts, polynomial_bodies).length() == i64(0),
         coef == poly[mono],
         residual_poly == map_drop_zero_values(map_intersect_with(lambda original, _one: original - coef, poly, poly1)),
         poly2 == map_remove_keys(map_keys(poly1), poly),
@@ -605,13 +622,13 @@ def container_basic_rules(
                 f64(1.0),
             )
         ),
-        polynomials == POLYNOMIALS,
+        polynomial_bodies == POLYNOMIAL_BODIES,
         counts
         == map_fold_kv(lambda counts, candidate_mono, _coef: counts + candidate_mono.keys(), MultiSet[Num](), poly),
-        matching_polynomials == map_restrict_keys(counts, polynomials),
-        matching_polynomials.length() > i64(0),
-        n == matching_polynomials.pick_key(),
-        poly1 == matching_polynomials[n],
+        matching_polynomial_bodies == map_restrict_keys(counts, polynomial_bodies),
+        matching_polynomial_bodies.length() > i64(0),
+        n == matching_polynomial_bodies.pick_key(),
+        poly1 == matching_polynomial_bodies[n],
         mono
         == map_fold_kv(
             lambda selected, candidate_mono, _candidate_coef: try_match(
@@ -654,7 +671,7 @@ def container_basic_rules(
                 inner_coef,
             )
         ),
-        polynomials == POLYNOMIALS,
+        polynomial_bodies == POLYNOMIAL_BODIES,
         poly.length() == i64(2),
         poly.contains(ContainerMonomial.empty()),
         coef == poly[ContainerMonomial.empty()],
@@ -664,11 +681,11 @@ def container_basic_rules(
         nonconst_poly.length() == i64(1),
         mono == nonconst_poly.pick_key(),
         poly[mono] == f64(1.0),
-        matching_polynomials == map_restrict_keys(mono.keys(), polynomials),
-        matching_polynomials.length() == i64(1),
-        n == matching_polynomials.pick_key(),
+        matching_polynomial_bodies == map_restrict_keys(mono.keys(), polynomial_bodies),
+        matching_polynomial_bodies.length() == i64(1),
+        n == matching_polynomial_bodies.pick_key(),
         mono[n] == BigRat(1, 1),
-        poly1 == matching_polynomials[n],
+        poly1 == matching_polynomial_bodies[n],
         map_nonconst_nonunit_f64_values(poly1).contains(inner_coef),
     )
     # Flatten nested polynomials, where a a monomial term is itself a polynomial, but just with a single monomial that has an integer exponent, like:
