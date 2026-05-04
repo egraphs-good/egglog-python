@@ -21,6 +21,7 @@ HASKELL_INNER_ITERATION_LIMIT = 30
 BACKOFF_MATCH_LIMIT = 1000
 BACKOFF_BAN_LENGTH = 30
 CONST_MERGE_TOLERANCE = 1e-6
+SOLE_MONOMIAL_GENERIC_TERM_PENALTY = 1000
 
 T = TypeVar("T", bound=BaseExpr)
 V = TypeVar("V", bound=BaseExpr)
@@ -41,11 +42,19 @@ CONSTS = constant(
     ),
 )
 
+def _choose_lower_scored_monomial(
+    old_value: Pair[i64, ContainerMonomial], new_value: Pair[i64, ContainerMonomial]
+) -> Pair[i64, ContainerMonomial]:
+    return catch(lambda: old_value.left <= new_value.left).match(lambda _: old_value, new_value)
+
+
 # Store a mapping from e-classes that are polynomials with a sole monomial
-# to one representative sole monomial. Don't store all of them at this time.
+# to one representative sole monomial, paired with a local float-count score.
 # Used for folding nested polynomials like turning (xy)^2 into x^2 * y^2, or polynomial({ M: c })^z into c^z * M^z.
 SOLE_MONOMIALS = constant(
-    "SOLE_MONOMIALS", Map[Num, ContainerMonomial], merge=partial(map_merge_with, lambda old_value, new_value: old_value)
+    "SOLE_MONOMIALS",
+    Map[Num, Pair[i64, ContainerMonomial]],
+    merge=partial(map_merge_with, _choose_lower_scored_monomial),
 )
 
 # Map a monomial of the form `{polynomial(P): 1}` to one representative `P`.
@@ -75,6 +84,43 @@ def try_match(expr: T, on_some: Callable[[T], V], default: V) -> V:
 
 def try_or(expr: T, default: T) -> T:
     return catch(lambda: expr).unwrap_or(default)
+
+
+def f64_param_score(value: f64) -> i64:
+    return if_defined(value != f64.from_i64(value.to_i64()), i64(1), i64(0))
+
+
+def bigrat_param_score(value: BigRat) -> i64:
+    return if_defined(value != BigRat(value.to_i64(), 1), i64(1), i64(0))
+
+
+def shallow_polynomial_param_score(poly: ContainerPolynomial) -> i64:
+    return map_fold_kv(
+        lambda score, mono, coef: score
+        + f64_param_score(coef)
+        + map_fold_kv(lambda mono_score, _term, exp: mono_score + bigrat_param_score(exp), i64(0), mono),
+        i64(0),
+        poly,
+    )
+
+
+def generic_sole_monomial_score(poly: ContainerPolynomial) -> i64:
+    # Generic aliases cannot see through polynomial-valued terms, so give each
+    # term a large penalty. A more specific one-level polynomial alias, when it
+    # exists, should beat this fallback using its decoded coefficient score.
+    return map_fold_kv(
+        lambda score, mono, coef: score
+        + f64_param_score(coef)
+        + map_fold_kv(
+            lambda mono_score, _term, exp: mono_score
+            + bigrat_param_score(exp)
+            + i64(SOLE_MONOMIAL_GENERIC_TERM_PENALTY),
+            i64(0),
+            mono,
+        ),
+        i64(0),
+        poly,
+    )
 
 
 @ruleset
@@ -120,11 +166,13 @@ def container_analysis_rules(
     consts: Map[Num, f64],
     key: ContainerMonomial,
     mono: ContainerMonomial,
+    score: i64,
+    term: Num,
 ) -> Iterable[RewriteOrRule]:
     # default values
     yield rule().then(
         set_(CONSTS).to(Map[Num, f64].empty()),
-        set_(SOLE_MONOMIALS).to(Map[Num, ContainerMonomial].empty()),
+        set_(SOLE_MONOMIALS).to(Map[Num, Pair[i64, ContainerMonomial]].empty()),
         set_(POLYNOMIAL_MONOMIALS).to(Map[ContainerMonomial, ContainerPolynomial].empty()),
         set_(POLYNOMIALS).to(Map[Num, ContainerPolynomial].empty()),
     )
@@ -134,12 +182,34 @@ def container_analysis_rules(
         poly.length() == i64(1),
         key == poly.pick_key(),
         key.not_contains(n),
+        score == generic_sole_monomial_score(poly),
     ).then(
         set_(SOLE_MONOMIALS).to(
-            Map[Num, ContainerMonomial]
+            Map[Num, Pair[i64, ContainerMonomial]]
             .empty()
             # add constant term into monomial
-            .insert(n, key.insert(Num(poly[key]), BigRat(1, 1)))
+            .insert(n, Pair(score, key.insert(Num(poly[key]), BigRat(1, 1))))
+        )
+    )
+    # When the sole monomial is itself a polynomial, score the decoded one-level
+    # shape. This chooses aliases like `a * polynomial(P)` based on the floats in
+    # `P`, instead of whichever scalar factor happened to be discovered first.
+    yield rule(
+        polynomial(poly) == n,
+        poly.length() == i64(1),
+        key == poly.pick_key(),
+        key.not_contains(n),
+        key.length() == i64(1),
+        term == key.pick_key(),
+        key[term] == BigRat(1, 1),
+        polynomial(poly1) == term,
+        score == f64_param_score(poly[key]) + shallow_polynomial_param_score(poly1),
+    ).then(
+        set_(SOLE_MONOMIALS).to(
+            Map[Num, Pair[i64, ContainerMonomial]]
+            .empty()
+            # add constant term into monomial
+            .insert(n, Pair(score, key.insert(Num(poly[key]), BigRat(1, 1))))
         )
     )
     yield rule(polynomial(poly) == n).then(
@@ -316,7 +386,7 @@ def container_basic_rules(
     coef: f64,
     inner_coef: f64,
     coef_counts: MultiSet[f64],
-    sole_monomials: Map[Num, ContainerMonomial],
+    sole_monomials: Map[Num, Pair[i64, ContainerMonomial]],
     polynomial_monomials: Map[ContainerMonomial, ContainerPolynomial],
     polynomials: Map[Num, ContainerPolynomial],
     matching_polynomials: Map[Num, ContainerPolynomial],
@@ -623,7 +693,7 @@ def container_basic_rules(
                         # Only collapse monomials with integer exponents, so we don't end up with (-xy)^0.5 taking the sqrt of a negative number
                         # Also can fail if this term has no sole_monomials present for it
                         try_match(
-                            map_map_values(lambda _, c: c * exp.to_i64(), sole_monomials[term]),
+                            map_map_values(lambda _, c: c * exp.to_i64(), sole_monomials[term].right),
                             lambda m: map_merge_with(lambda l, r: l + r, m, res_mono),
                             res_mono.insert(term, exp),
                         )
@@ -632,57 +702,6 @@ def container_basic_rules(
                     mono,
                 ),
                 coef,
-            ),
-            ContainerPolynomial.empty(),
-            poly,
-        ),
-        poly != poly1,
-    )
-
-    # For inverse factors, use the current preferred singleton polynomial
-    # representation instead of the first SOLE_MONOMIALS representative. This
-    # preserves denominator coefficient choices such as
-    # `2.873*(exp(x) - 2*x + c)`, where the first singleton representative may
-    # have factored the opposite term and would leave an extra fitted scalar.
-    yield rewrite(polynomial(poly)).to(
-        polynomial(poly1),
-        polynomials == POLYNOMIALS,
-        poly1
-        == map_fold_kv(
-            lambda res_poly, mono, coef: map_fold_kv(
-                lambda res_mono_and_coef, term, term_exp: if_defined(
-                    term_exp != BigRat(-1, 1),
-                    res_mono_and_coef.map_left(lambda res_mono: res_mono.insert(term, term_exp)),
-                    try_match(
-                        polynomials[term],
-                        lambda term_poly: if_defined(
-                            term_poly.length() != i64(1),
-                            res_mono_and_coef.map_left(lambda res_mono: res_mono.insert(term, term_exp)),
-                            if_defined(
-                                term_poly[term_poly.pick_key()] != f64(0.0),
-                                res_mono_and_coef.map_left(
-                                    lambda res_mono: map_merge_with(
-                                        lambda l, r: l + r,
-                                        res_mono,
-                                        map_map_values(
-                                            lambda _nested_term, nested_exp: -nested_exp,
-                                            term_poly.pick_key(),
-                                        ),
-                                    )
-                                ).map_right(lambda res_coef: res_coef / term_poly[term_poly.pick_key()]),
-                                res_mono_and_coef.map_left(lambda res_mono: res_mono.insert(term, term_exp)),
-                            ),
-                        ),
-                        res_mono_and_coef.map_left(lambda res_mono: res_mono.insert(term, term_exp)),
-                    ),
-                ),
-                Pair(ContainerMonomial.empty(), coef),
-                mono,
-            ).match(
-                lambda res_mono, res_coef: res_poly.insert(
-                    res_mono,
-                    res_coef + try_or(res_poly[res_mono], f64(0.0)),
-                )
             ),
             ContainerPolynomial.empty(),
             poly,
@@ -1244,9 +1263,7 @@ def _run_single_pass(
     - one saturated analysis round after each rewrite round
     - stop when total egraph size stops changing
     """
-    egraph.run(schedule)
     n = egraph.let("n", num)
-    egraph.run(analysis_schedule)
     previous_size = _graph_size(egraph)
     for _ in range(HASKELL_INNER_ITERATION_LIMIT):
         egraph.run(analysis_schedule)
@@ -1273,21 +1290,21 @@ def run_paper_pipeline(
     analysis_schedule.__egg_decls__
     start = time.perf_counter()
     # Add constants to the egraph so that they can be used in rules without needing to be registered each pass
-    # egraph = EGraph(Num(0.0), save_egglog_string=False)
+    egraph = EGraph(Num(0.0), save_egglog_string=False)
     # pre-run rulesets so that we don't have to register them each pipeline pass
-    # egraph.run(schedule)
+    egraph.run(analysis_schedule)
     last_cost = before_cost
     max_size = 0
     passes = 0
     for pass_index in range(1, MAX_PASSES + 1):
-        # with egraph:
-        extracted, last_cost, total_size = _run_single_pass(
-            EGraph(Num(0.0)),
-            current,
-            cost_model=cost_model,
-            schedule=schedule,
-            analysis_schedule=analysis_schedule,
-        )
+        with egraph:
+            extracted, last_cost, total_size = _run_single_pass(
+                egraph,
+                current,
+                cost_model=cost_model,
+                schedule=schedule,
+                analysis_schedule=analysis_schedule,
+            )
         max_size = max(max_size, total_size)
         passes = pass_index
         if extracted == current:

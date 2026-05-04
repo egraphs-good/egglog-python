@@ -481,3 +481,179 @@ encoding is slower even when the final e-graph is smaller.
   keeps producing new equivalent binary presentations until the fixed
   `HASKELL_INNER_ITERATION_LIMIT=30` cap, not because Python declaration
   materialization or `.egg` logging dominates.
+
+## 2026-05-02 follow-up: debug build was the wall-time regression
+
+- Status:
+  reran after the current changes were committed; rebuilt the Python extension
+  with `uv run maturin develop --release`.
+- Initial state:
+  the active `python/egglog/bindings.cpython-313-darwin.so` was `48M`, matching
+  `target/debug/libegglog.dylib`. The existing release artifacts were `15M`.
+- Experiment 1:
+  restored only `pipeline.py` from `HEAD~1` and reran
+  `kotanchek/96/GOMEA/7/sympy`.
+  This restored the old reported `egraph_total_size=398`, but wall time stayed
+  around `10.0s` before rebuilding release. Disabling saved `.egg` logging did
+  not materially change that.
+- Experiment 2:
+  after `uv run maturin develop --release`, the same `HEAD~1` pipeline shape
+  ran the canary in `0.837s`, `passes=2`, `egraph_total_size=398`,
+  `after_params=4`.
+- Experiment 3:
+  restored committed `HEAD` `pipeline.py` and reran with the release binding.
+  The canary ran in `0.844s`, `passes=2`, `after_params=4`, with
+  `total_size=8407`.
+- Top-five slow artifact rerun with committed `HEAD` plus release binding:
+  `kotanchek/96/GOMEA/7/sympy`: old `1088.9ms`, new `831.3ms`;
+  `kotanchek/180/SRjl/1/sympy`: old `971.1ms`, new `671.6ms`;
+  `pagie/27/Bingo/27/sympy`: old `897.7ms`, new `622.9ms`;
+  `kotanchek/181/SRjl/2/sympy`: old `855.8ms`, new `708.1ms`;
+  `pagie/163/SBP/13/sympy`: old `835.7ms`, new `710.8ms`.
+  All five preserved `after_params`.
+- Conclusion:
+  no last-commit code revert is needed to recover binary wall-time
+  performance; the wall-time regression was caused by running the debug
+  extension build. The remaining difference in `egraph_total_size` is a
+  reporting semantics change: committed `HEAD` tracks max size across passes,
+  while the old pipeline overwrote the value with the final pass size.
+
+## 2026-05-03: container inverse-factor normalization outlier
+
+- Status:
+  diagnosis only. Temporary rule edits used for falsification were reverted.
+- Canary:
+  large expression from the notebook/dashboard request beginning
+  `((((((((0.11064466475608078 + -0.010036545250561161 * ...`.
+  This is the case the user described as taking about `50x` longer on
+  containers.
+- Source-of-truth timing, direct production entrypoints:
+  `run_paper_pipeline(parse_expression(EXPR))` took about `0.86s` to `0.95s`,
+  `passes=2`, `egraph_total_size=10725`, `before_params=49`,
+  `after_params=37`.
+  `run_paper_pipeline_container(parse_expression_container(EXPR))` took about
+  `31s` to `33s`, `passes=2`, `egraph_total_size=4586`,
+  `before_params=49`, `after_params=32`.
+- Initial observation:
+  the container result is semantically better by the param metric and has a
+  smaller reported e-graph, so the slowdown is not explained by final graph
+  size.
+- Phase split, binary:
+  rewrite execution was about `0.28s`, extraction about `0.65s`, analysis
+  about `0.02s`.
+- Phase split, container:
+  rewrite execution was about `22.4s`, extraction about `2.3s`, analysis about
+  `1.5s`, initial extraction about `0.08s`, and graph-size checks were
+  effectively zero.
+- First meaningful divergence:
+  container pass 1 rewrite rounds dominate. The graph grows from about `160` to
+  about `4586`, but rewrite rounds remain expensive near convergence:
+  roughly `2.2s` per rewrite round after the graph has almost stopped changing.
+  Pass 2 is small.
+- Ruleset isolation:
+  running only `shared_rewrite_ruleset` or `container_fun_rules` is fast.
+  Running `container_basic_rules` alone reproduces the slowdown:
+  about `32s`, `16` rounds, `rewrite=28.5s`, `extract=2.3s`,
+  `after_params=32`.
+  `shared_rewrite_ruleset | container_basic_rules` and the full container
+  rewrite ruleset behave the same, so the issue is localized to
+  `container_basic_rules`.
+- Rule-level aggregation from `RunReport.search_and_apply_time_per_rule` over
+  the slow container pass:
+  `pipeline.py:647` inverse-factor polynomial normalization:
+  about `19.0s`, `328` matches.
+  `pipeline.py:609` singleton/sole-monomial flattening:
+  about `2.1s`, `2539` matches.
+  `pipeline.py:737` greedy Horner factorization:
+  about `1.5s`, `1951` matches.
+  `pipeline.py:359` integer-ratio coefficient factoring:
+  about `1.5s`, `847` matches.
+  `pipeline.py:338` representative coefficient factoring:
+  about `1.4s`, `7088` matches.
+  `pipeline.py:440` repeated scalar coefficient factoring:
+  about `0.9s`, `2016` matches.
+- Primary hypothesis:
+  `pipeline.py:647` is the main regression source. The rule is useful for
+  parameter quality, but operationally too broad. For every container
+  polynomial candidate it folds all monomials, checks every term, and probes
+  `POLYNOMIALS[term]` for reciprocal factors. The outlier combines enough
+  reciprocal and singleton-polynomial presentations that this full-polynomial
+  fold is expensive even with only hundreds of successful matches.
+- Falsification probe 1:
+  temporarily disabled only the `pipeline.py:647` rule with an impossible
+  guard. Container time dropped from about `26s` to about `12.2s`;
+  rewrite time dropped from about `22.4s` to about `8.6s`; `after_params`
+  stayed `32`. This confirms the rule is causal and contributes the largest
+  share of the slowdown, but it is not the only cost.
+- Falsification probe 2:
+  temporarily added a cheap eligibility guard so the rule only ran when the
+  polynomial had a `-1` exponent term whose base appeared in `POLYNOMIALS`.
+  Container time dropped to about `18.3s`; rewrite time dropped to about
+  `14.6s`; `after_params` stayed `32`. This validates the guard direction, but
+  the expression genuinely has many eligible reciprocal terms, so this guard is
+  not sufficient.
+- Reduction probe:
+  top-level fragments of the expression are individually fast. Several
+  fragments run faster in containers than binary. The slowdown appears when the
+  fragments are combined, consistent with cross-term accumulation of equivalent
+  polynomial and reciprocal presentations rather than a single isolated
+  arithmetic subexpression.
+- Current conclusion:
+  the inverse-factor normalization rule is the primary hotspot. A likely fix
+  should not remove it outright; it should narrow it from a whole-polynomial
+  fold over all candidates to a one-reciprocal-factor-at-a-time rewrite, or add
+  stronger eligibility/canonicality guards so it only runs when it can actually
+  change a reciprocal term and not repeatedly rescan stable presentations.
+
+## 2026-05-04: replace inverse-factor rule with scored `SOLE_MONOMIALS`
+
+- Status:
+  accepted local fix candidate.
+- Question:
+  can the expensive inverse-factor normalization rule be removed if
+  `SOLE_MONOMIALS` stops keeping a stale first alias?
+- Change tested:
+  removed the broad reciprocal normalization rewrite from
+  `container_basic_rules`. Changed `SOLE_MONOMIALS` from
+  `Map[Num, ContainerMonomial]` to `Map[Num, Pair[i64, ContainerMonomial]]`.
+  The merge now keeps the lower local score, with old-value tie breaking.
+- Witness after only removing the broad rule:
+  `0.7096075864465768 / (-5.746100091872222*x0 +
+  2.873050045936111*exp(x0) + 1.7208022848793882)` regressed to
+  `-0.12349377405560805 / (-0.2994730786735579 + x0 - 0.5*exp(x0))`,
+  `after_params=3`.
+- Alias evidence:
+  the stale `SOLE_MONOMIALS` value for the denominator was
+  `-5.746100091872222 * polynomial(-0.2994730786735579 + x0 -
+  0.5*exp(x0))`. The better alias was
+  `2.873050045936111 * polynomial(0.5989461573471158 - 2*x0 + exp(x0))`.
+  The second form has one fewer non-integer coefficient after decoding.
+- Failed probe:
+  latest-wins merge fixed the witness, but that is still scheduler-order based
+  rather than a preference rule.
+- Accepted probe:
+  a scored merge plus a specific one-level nested-polynomial score picked the
+  better alias with score `2`; the stale alias scored worse. The focused
+  witness now extracts
+  `0.2469875481112161 / (0.5989461573471158 - 2.0*x0 + exp(x0))`,
+  `after_params=2`.
+- Cycle regression:
+  the self-factor cycle canary `-14.792753236262874*x1 + x0` stayed
+  extractable through four container rewrite/analysis rounds.
+- Sample comparison:
+  `make -C python/egglog/exp/param_eq compare-binary-container-sample
+  SAMPLE_LIMIT_PER_DATASET=50` compared 100 shared rows. After params were
+  `9 better / 0 worse / 91 same` for containers. Param-reduction still showed
+  five worse rows because container lowering starts with fewer params on those
+  rows; after-param float count did not regress.
+- Large outlier timing:
+  rerunning `/tmp/param_eq_perf_expr.py` changed the prior container canary
+  from about `31s` to about `13.0s` wall/report time, with
+  `after_params=32` preserved and e-graph size about `4477`. Binary remained
+  about `0.76s` to `0.85s`, now extracting `after_params=36` in this checkout.
+- Validation:
+  `uv run pytest
+  python/egglog/exp/param_eq/test_pipeline.py::test_container_uses_preferred_singleton_polynomial_for_inverse_scale
+  python/egglog/exp/param_eq/test_pipeline.py::test_container_preserves_repeated_polynomial_products -q`
+  passed.
+  `uv run ruff check python/egglog/exp/param_eq/pipeline.py` passed.
