@@ -415,19 +415,22 @@ def container_basic_rules(
     exp: BigRat,
     mono: ContainerMonomial,
 ) -> Iterable[RewriteOrRule]:
-    # If a non-one coefficient exists in the polynomial, factor out one
+    # If a non-one coefficient exists in a small polynomial, factor out one
     # representative coefficient. In a binary form this covers things like:
     #
     # a * x + b  -> a * (x + b / a)
     #
-    # P = sum_i c_i * M_i
-    # P -> s * polynomial(sum_i (c_i / s) * M_i)
+    # Keep this bounded to small polynomials. Larger container polynomials get
+    # more targeted coefficient rules below; using an arbitrary representative
+    # scale on every large polynomial creates many equivalent but unhelpful
+    # presentations.
     yield rewrite(polynomial(poly)).to(
         polynomial(
             ContainerPolynomial.empty().insert(ContainerMonomial.empty().insert(polynomial(poly1), BigRat(1, 1)), coef)
         ),
         # only apply to polynomials with more than one monomial
         poly.length() > i64(1),
+        poly.length() <= i64(4),
         # filter to monomials with non one coefficients and with keys that are non empty (so we don't pull out constant factors)
         nonconst_poly == map_filter_kv(lambda k, v: k != ContainerMonomial.empty(), poly),
         poly2 == map_filter_kv(lambda k, v: v != f64(1.0), nonconst_poly),
@@ -439,10 +442,15 @@ def container_basic_rules(
         poly1 == map_map_values(lambda _, c: c / coef, poly),
     )
 
-    # Add one alternate factor choice when a coefficient exposes integer ratios
-    # with other terms. This is the minimal container analogue of binary
-    # pairwise coefficient factoring needed for cases like
+    # Add one alternate factor choice when a coefficient is a smaller exact
+    # integer divisor of another coefficient. This is the minimal container
+    # analogue of binary pairwise coefficient factoring needed for cases like
     # `0.02889 * x - 0.00963 * z -> -0.00963 * (-3 * x + z)`.
+    #
+    # Do not count the candidate against itself or against equal-magnitude
+    # coefficients; repeated/equal-and-opposite scalar factors are handled by
+    # the subset rule below. Counting those here makes large polynomials produce
+    # many whole-polynomial scale choices that later rules repeatedly flatten.
     yield rewrite(polynomial(poly)).to(
         polynomial(
             ContainerPolynomial.empty().insert(ContainerMonomial.empty().insert(polynomial(poly1), BigRat(1, 1)), coef)
@@ -458,7 +466,11 @@ def container_basic_rules(
                     lambda counts, _other_mono, other_coef: if_defined(
                         (other_coef / candidate_coef) != f64.from_i64((other_coef / candidate_coef).to_i64()),
                         counts,
-                        counts.insert(candidate_coef),
+                        if_defined(
+                            abs(other_coef) <= abs(candidate_coef),
+                            counts,
+                            counts.insert(candidate_coef),
+                        ),
                     ),
                     counts,
                     poly2,
@@ -469,7 +481,7 @@ def container_basic_rules(
             poly2,
         ),
         coef == coef_counts.pick_max(),
-        coef_counts.count(coef) > i64(1),
+        coef_counts.count(coef) > i64(0),
         # If there is no non-constant term with coefficient 1, the polynomial is not already scaled.
         poly2.length() == nonconst_poly.length(),  # divide the terms by that coefficient
         poly1 == map_map_values(lambda _, c: c / coef, poly),

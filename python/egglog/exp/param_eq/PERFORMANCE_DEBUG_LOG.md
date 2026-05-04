@@ -939,3 +939,104 @@ encoding is slower even when the final e-graph is smaller.
   coefficient-factor presentations, which then feed repeated scalar coefficient
   factoring, `SOLE_MONOMIALS` flattening, Horner, and representative
   coefficient factoring through late rounds.
+
+## 2026-05-04: coefficient-ratio outlier with large container e-graph
+
+- Status:
+  accepted local fix candidate.
+- Full expression:
+  `0.02889 * x0^3 - 0.18081288 * x0^2 + 0.18081288 * x0 +
+  0.14418036 * x1 - 0.00963 * exp(x1) + 0.179028 -
+  0.00963 * exp(-15.767 * x0)`.
+- Baseline observation:
+  binary ran in about `0.20s`, e-graph size `3443`, `after_nodes=29`,
+  `after_params=5`.
+  containers ran in about `1.35s`, e-graph size `1145`, `after_nodes=29`,
+  `after_params=5`.
+- Reduced reproducer:
+  replacing the exponentials with variables and dropping the unrelated `x1`
+  term preserves the container slowdown:
+  `0.02889*x0^3 - 0.18081288*x0^2 + 0.18081288*x0 +
+  0.179028 - 0.00963*x2 - 0.00963*x3`.
+  This ran in about `1.23s`, e-graph size `1035`, `after_nodes=21`,
+  `after_params=3`.
+- Rule attribution on the reduced reproducer:
+  `SOLE_MONOMIALS` flattening took `0.267s` with `4464` matches.
+  coefficient-count factoring took `0.172s` with `2914` matches.
+  Horner took `0.133s` with `1897` matches.
+  representative coefficient factoring took `0.064s` with `2456` matches.
+- Failed probe:
+  restoring the old `poly.length() <= 5` bound on `SOLE_MONOMIALS` flattening
+  did not help. The same rule still fired on smaller equivalent presentations,
+  and the full case got slightly slower (`1.35s -> 1.41s`).
+- Accepted changes:
+  tightened integer-ratio coefficient factoring so a coefficient is counted
+  only when it is a smaller exact integer divisor of another coefficient. This
+  removes self-counting and equal-magnitude counting from that whole-polynomial
+  scale rule; repeated/equal-and-opposite scalar subsets remain handled by the
+  dedicated subset rule.
+  also bounded the generic representative coefficient rule to polynomials with
+  at most four monomials, leaving larger polynomials to the targeted
+  coefficient rules.
+- Result:
+  reduced reproducer improved from `1.23s`, size `1035` to `0.79s`, size
+  `703`, with unchanged `after_nodes=21`, `after_params=3`.
+  full expression improved from `1.35s`, size `1145` to `1.12s`, size `788`,
+  with unchanged `after_nodes=29`, `after_params=5`.
+- Full corpus check:
+  a fresh 714-row container run saturated every row. Compared with the existing
+  container artifact, `after_params` was `0` better, `714` same, `0` worse.
+  Compared with the binary artifact, `after_params` was `81` better, `633`
+  same, `0` worse. Median runtime moved from `513.5ms` in the existing
+  container artifact to `192.1ms`; median `after_params` stayed `5`.
+
+## 2026-05-04: `pagie/144/Operon/25/original` exact-flatten slowdown
+
+- Status:
+  rejected local fix candidates and reverted exact-flatten edits. The row is
+  still slower than desired, but the only zero-regression variants found either
+  increased corpus runtime or depended on a shape-specific singleton rule.
+- Full expression:
+  `-5.5456266637e-06 + 1.0000027418136597 * ((exp(-4.225025177001953*x1*(1.425803780555725*x1)) + exp(-1.171636939048767*x0*(5.220480918884277*x0))) * 0.2746707499027252 - -1.9792732000350952 - (exp(-1.7990413904190063*x1*(0.5140095949172974*x1)) + exp(1.8088867664337158*x0*(-0.5105684995651245*x0))) * 1.2522673606872559)`.
+- Baseline observation:
+  current accepted container rules ran the row at about `1.19s` in the corpus
+  artifact, e-graph size `699`, `after_nodes=33`, `after_params=7`.
+  A direct trace measured about `0.76s` report time, with analysis `0.10s`,
+  rewrite `0.48s`, and extraction `0.17s`.
+- Reduced reproducer:
+  replacing the four exponentials with variables preserved the slowdown:
+  `-5.5456266637e-06 + 1.0000027418136597 *
+  (0.2746707499027252*(x0 + x1) - -1.9792732000350952 -
+  1.2522673606872559*(x2 + x3))`.
+  The reduced case ran at about `0.74s`, e-graph size `676`,
+  `after_nodes=13`, `after_params=3`.
+- Hypothesis:
+  the slowdown is caused by exact nested-polynomial flattening expanding
+  isolated grouped sums, after which repeated scalar coefficient factoring
+  recreates the groups. This creates a flatten/refactor cycle even though the
+  extracted expression does not improve.
+- Supporting probes:
+  disabling the repeated scalar coefficient subset rule made the target fast
+  (`~0.12s`, size `122`) but regressed focused parameter tests, so it was
+  rejected.
+  disabling exact nested flattening made the target fast (`~0.09s`, size `72`)
+  but regressed log-polynomial and coefficient canaries, so it was rejected.
+  limiting exact flattening to nested polynomials that contain constants made
+  the full corpus faster (`153.7s -> 148.2s`, size sum `54051 -> 48683`) but
+  introduced two `after_params` regressions:
+  `pagie/134/Operon/15/original` and `pagie/163/SBP/13/original`.
+- Rejected fix candidates:
+  adding a generic single-nested-group helper preserved parameters but made the
+  full corpus slower (`153.7s -> 158.1s`).
+  adding singleton exact flatten for all constant-bearing bodies preserved
+  parameters but was much slower (`153.7s -> 176.8s`) and grew the e-graph
+  size sum (`54051 -> 59022`).
+  bounding that singleton rule by body length still preserved parameters only
+  at the shape needed by `pagie/163` and remained slower (`153.7s -> 171.9s`).
+  A final `poly1.length() == 7` singleton probe fixed the known regression but
+  was rejected as too example-shaped.
+- Current decision:
+  keep the accepted baseline rules. Do not add a targeted exact-flatten rule
+  for this row. A future viable fix needs a general criterion for when
+  flattening a nested polynomial unlocks a downstream simplification, not a
+  body-length or row-shape condition.
