@@ -76,6 +76,8 @@ class EGraphState:
     type_ref_to_egg_sort: dict[JustTypeRef, str] = field(default_factory=dict)
     egg_sort_to_type_ref: dict[str, JustTypeRef] = field(default_factory=dict)
 
+    egg_rule_to_command_decl: dict[str, CommandDecl] = field(default_factory=dict)
+
     # Cache of egg expressions for converting to egg
     expr_to_egg_cache: dict[ExprDecl, bindings._Expr] = field(default_factory=dict)
 
@@ -247,6 +249,14 @@ class EGraphState:
             case _:
                 assert_never(schedule)
 
+    def translate_rule_key(self, egglog_key: str) -> str:
+        """
+        Translate an egglog rule name to its Python representation.
+        """
+        if egglog_key in self.egg_rule_to_command_decl:
+            return pretty_decl(self.__egg_decls__, self.egg_rule_to_command_decl[egglog_key])
+        return egglog_key
+
     def ruleset_to_egg(self, ident: Ident) -> None:
         """
         Registers a ruleset if it's not already registered.
@@ -289,13 +299,15 @@ class EGraphState:
                     self._expr_to_egg(rhs),
                     [self.fact_to_egg(c) for c in conditions],
                 )
-                return (
-                    bindings.RewriteCommand(str(ruleset), rewrite, cmd.subsume)
-                    if isinstance(cmd, RewriteDecl)
-                    else bindings.BiRewriteCommand(str(ruleset), rewrite)
-                )
+                if isinstance(cmd, RewriteDecl):
+                    egg_cmd = bindings.RewriteCommand(str(ruleset), rewrite, cmd.subsume)
+                else:
+                    egg_cmd = bindings.BiRewriteCommand(str(ruleset), rewrite)
+
+                self.egg_rule_to_command_decl[str(egg_cmd)] = cmd
+                return egg_cmd
             case RuleDecl(head, body, name):
-                return bindings.RuleCommand(
+                egg_cmd = bindings.RuleCommand(
                     bindings.Rule(
                         span(),
                         [self.action_to_egg(a) for a in head],
@@ -304,6 +316,8 @@ class EGraphState:
                         str(ruleset),
                     )
                 )
+                self.egg_rule_to_command_decl[str(egg_cmd)] = cmd
+                return egg_cmd
             # TODO: Replace with just constants value and looking at REF of function
             case DefaultRewriteDecl(ref, expr, subsume):
                 sig = self.__egg_decls__.get_callable_decl(ref).signature
