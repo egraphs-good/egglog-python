@@ -960,9 +960,7 @@ class EGraph:
     def run(self, schedule: Schedule, /) -> RunReport: ...
 
     @_TRACER.start_as_current_span("run")
-    def run(
-        self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
-    ) -> RunReport:
+    def run(self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None) -> RunReport:
         """
         Run the egraph until the given limit or until the given facts are true.
         """

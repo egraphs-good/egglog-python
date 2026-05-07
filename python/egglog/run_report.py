@@ -34,8 +34,7 @@ class RuleSetReport:
         return cls(
             changed=report.changed,
             rule_reports={
-                translate_key(k): [RuleReport.from_bindings(rr) for rr in v]
-                for k, v in report.rule_reports.items()
+                translate_key(k): [RuleReport.from_bindings(rr) for rr in v] for k, v in report.rule_reports.items()
             },
             search_and_apply_time=report.search_and_apply_time,
             merge_time=report.merge_time,
