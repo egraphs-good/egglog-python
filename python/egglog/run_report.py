@@ -8,13 +8,13 @@ from .egraph_state import EGraphState
 
 
 @dataclass
-class PrettyRuleReport:
+class RuleReport:
     plan: bindings.Plan | None
     search_and_apply_time: timedelta
     num_matches: int
 
     @classmethod
-    def from_bindings(cls, report: bindings.RuleReport) -> PrettyRuleReport:
+    def from_bindings(cls, report: bindings.RuleReport) -> RuleReport:
         return cls(
             plan=report.plan,
             search_and_apply_time=report.search_and_apply_time,
@@ -23,18 +23,18 @@ class PrettyRuleReport:
 
 
 @dataclass
-class PrettyRuleSetReport:
+class RuleSetReport:
     changed: bool
-    rule_reports: dict[str, list[PrettyRuleReport]]
+    rule_reports: dict[str, list[RuleReport]]
     search_and_apply_time: timedelta
     merge_time: timedelta
 
     @classmethod
-    def from_bindings(cls, report: bindings.RuleSetReport, translate_key: callable) -> PrettyRuleSetReport:
+    def from_bindings(cls, report: bindings.RuleSetReport, translate_key: callable) -> RuleSetReport:
         return cls(
             changed=report.changed,
             rule_reports={
-                translate_key(k): [PrettyRuleReport.from_bindings(rr) for rr in v]
+                translate_key(k): [RuleReport.from_bindings(rr) for rr in v]
                 for k, v in report.rule_reports.items()
             },
             search_and_apply_time=report.search_and_apply_time,
@@ -43,23 +43,23 @@ class PrettyRuleSetReport:
 
 
 @dataclass
-class PrettyIterationReport:
-    rule_set_report: PrettyRuleSetReport
+class IterationReport:
+    rule_set_report: RuleSetReport
     rebuild_time: timedelta
 
     @classmethod
-    def from_bindings(cls, report: bindings.IterationReport, translate_key: callable) -> PrettyIterationReport:
+    def from_bindings(cls, report: bindings.IterationReport, translate_key: callable) -> IterationReport:
         return cls(
-            rule_set_report=PrettyRuleSetReport.from_bindings(report.rule_set_report, translate_key),
+            rule_set_report=RuleSetReport.from_bindings(report.rule_set_report, translate_key),
             rebuild_time=report.rebuild_time,
         )
 
 
 @dataclass
-class PrettyRunReport:
+class RunReport:
     """Python-friendly wrapper around bindings.RunReport."""
 
-    iterations: list[PrettyIterationReport]
+    iterations: list[IterationReport]
     updated: bool
     search_and_apply_time_per_rule: dict[str, timedelta]
     num_matches_per_rule: dict[str, int]
@@ -68,9 +68,9 @@ class PrettyRunReport:
     rebuild_time_per_ruleset: dict[str, timedelta]
 
     @classmethod
-    def from_bindings(cls, report: bindings.RunReport, state: EGraphState) -> PrettyRunReport:
+    def from_bindings(cls, report: bindings.RunReport, state: EGraphState) -> RunReport:
         return cls(
-            iterations=[PrettyIterationReport.from_bindings(it, state.translate_rule_key) for it in report.iterations],
+            iterations=[IterationReport.from_bindings(it, state.translate_rule_key) for it in report.iterations],
             updated=report.updated,
             search_and_apply_time_per_rule={
                 state.translate_rule_key(k): v for k, v in report.search_and_apply_time_per_rule.items()

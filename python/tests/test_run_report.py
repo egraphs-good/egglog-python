@@ -6,7 +6,7 @@ from datetime import timedelta
 from egglog import *
 
 
-class TestPrettyRunReport:
+class TestRunReport:
     def _setup_simple_egraph(self):
         egraph = EGraph()
 
@@ -19,16 +19,16 @@ class TestPrettyRunReport:
         egraph.register(Num(1) + Num(2))
         return egraph
 
-    def test_run_returns_pretty_report(self):
+    def test_run_returns_report(self):
         egraph = self._setup_simple_egraph()
         report = egraph.run(10)
-        assert type(report).__name__ == "PrettyRunReport"
+        assert type(report).__name__ == "RunReport"
 
-    def test_stats_returns_pretty_report(self):
+    def test_stats_returns_report(self):
         egraph = self._setup_simple_egraph()
         egraph.run(10)
         report = egraph.stats()
-        assert type(report).__name__ == "PrettyRunReport"
+        assert type(report).__name__ == "RunReport"
 
     def test_rule_names_translated_in_top_level_dicts(self):
         egraph = self._setup_simple_egraph()
@@ -78,16 +78,16 @@ class TestPrettyRunReport:
         for v in report.rebuild_time_per_ruleset.values():
             assert isinstance(v, timedelta)
 
-    def test_iteration_reports_are_pretty(self):
+    def test_iteration_reports(self):
         egraph = self._setup_simple_egraph()
         report = egraph.run(10)
 
         for it in report.iterations:
-            assert type(it).__name__ == "PrettyIterationReport"
-            assert type(it.rule_set_report).__name__ == "PrettyRuleSetReport"
+            assert type(it).__name__ == "IterationReport"
+            assert type(it.rule_set_report).__name__ == "RuleSetReport"
             for rule_reports in it.rule_set_report.rule_reports.values():
                 for rr in rule_reports:
-                    assert type(rr).__name__ == "PrettyRuleReport"
+                    assert type(rr).__name__ == "RuleReport"
 
     def test_str_no_egglog_sexprs(self):
         egraph = self._setup_simple_egraph()
@@ -122,7 +122,7 @@ class TestPrettyRunReport:
     def test_empty_run(self):
         egraph = EGraph()
         report = egraph.run(1)
-        assert type(report).__name__ == "PrettyRunReport"
+        assert type(report).__name__ == "RunReport"
         assert isinstance(report.updated, bool)
 
     def test_named_rule(self):

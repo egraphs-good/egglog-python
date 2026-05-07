@@ -42,7 +42,7 @@ from .declarations import *
 from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_decl
-from .run_report import PrettyRunReport
+from .run_report import RunReport
 from .runtime import *
 from .thunk import *
 
@@ -954,15 +954,15 @@ class EGraph:
         raise NotImplementedError(msg)
 
     @overload
-    def run(self, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> PrettyRunReport: ...
+    def run(self, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> RunReport: ...
 
     @overload
-    def run(self, schedule: Schedule, /) -> PrettyRunReport: ...
+    def run(self, schedule: Schedule, /) -> RunReport: ...
 
     @_TRACER.start_as_current_span("run")
     def run(
         self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
-    ) -> PrettyRunReport:
+    ) -> RunReport:
         """
         Run the egraph until the given limit or until the given facts are true.
         """
@@ -970,20 +970,20 @@ class EGraph:
             limit_or_schedule = run(ruleset, *until) * limit_or_schedule
         return self._run_schedule(limit_or_schedule)
 
-    def _run_schedule(self, schedule: Schedule) -> PrettyRunReport:
+    def _run_schedule(self, schedule: Schedule) -> RunReport:
         self._add_decls(schedule)
         cmd = self._state.run_schedule_to_egg(schedule.schedule)
         (command_output,) = self._run_program(cmd)
         assert isinstance(command_output, bindings.RunScheduleOutput)
-        return PrettyRunReport.from_bindings(command_output.report, self._state)
+        return RunReport.from_bindings(command_output.report, self._state)
 
-    def stats(self) -> PrettyRunReport:
+    def stats(self) -> RunReport:
         """
         Returns the overall run report for the egraph.
         """
         (output,) = self._run_program(bindings.PrintOverallStatistics(span(1), None))
         assert isinstance(output, bindings.OverallStatistics)
-        return PrettyRunReport.from_bindings(output.report, self._state)
+        return RunReport.from_bindings(output.report, self._state)
 
     def check_bool(self, *facts: FactLike) -> bool:
         """
