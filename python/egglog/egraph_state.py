@@ -48,6 +48,12 @@ def _normalize_global_let_name(name: str) -> str:
     return name if name.startswith("$") else f"${name}"
 
 
+def _normalize_rule_key(key: str) -> str:
+    """Normalize an egglog rule string for consistent matching."""
+    key = key.replace("'", '"')
+    return re.sub(r"\s+", " ", key).strip()
+
+
 @dataclass
 class EGraphState:
     """
@@ -249,13 +255,12 @@ class EGraphState:
             case _:
                 assert_never(schedule)
 
-    def translate_rule_key(self, egglog_key: str) -> str:
+    def translate_rule_key(self, egglog_key: str) -> CommandDecl:
         """
-        Translate an egglog rule name to its Python representation.
+        Look up the original Python CommandDecl for an egglog rule key.
         """
-        if egglog_key in self.egg_rule_to_command_decl:
-            return pretty_decl(self.__egg_decls__, self.egg_rule_to_command_decl[egglog_key])
-        return egglog_key
+        normalized = _normalize_rule_key(egglog_key)
+        return self.egg_rule_to_command_decl[normalized]
 
     def ruleset_to_egg(self, ident: Ident) -> None:
         """
@@ -304,7 +309,11 @@ class EGraphState:
                 else:
                     egg_cmd = bindings.BiRewriteCommand(str(ruleset), rewrite)
 
-                self.egg_rule_to_command_decl[str(egg_cmd)] = cmd
+                normalized = _normalize_rule_key(str(egg_cmd))
+                self.egg_rule_to_command_decl[normalized] = cmd
+                if isinstance(cmd, BiRewriteDecl):
+                    self.egg_rule_to_command_decl[normalized + "=>"] = cmd
+                    self.egg_rule_to_command_decl[normalized + "<="] = cmd
                 return egg_cmd
             case RuleDecl(head, body, name):
                 egg_cmd = bindings.RuleCommand(
@@ -316,7 +325,9 @@ class EGraphState:
                         str(ruleset),
                     )
                 )
-                self.egg_rule_to_command_decl[str(egg_cmd)] = cmd
+                self.egg_rule_to_command_decl[_normalize_rule_key(str(egg_cmd))] = cmd
+                if name:
+                    self.egg_rule_to_command_decl[name] = cmd
                 return egg_cmd
             # TODO: Replace with just constants value and looking at REF of function
             case DefaultRewriteDecl(ref, expr, subsume):

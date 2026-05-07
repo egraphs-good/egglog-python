@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from egglog import *
+from egglog.declarations import BiRewriteDecl, RewriteDecl, RuleDecl
 
 
 class TestRunReport:
@@ -35,12 +36,10 @@ class TestRunReport:
         report = egraph.run(10)
 
         for key in report.search_and_apply_time_per_rule:
-            assert "rewrite" in key, f"Expected Python rewrite syntax, got: {key}"
-            assert "__main__" not in key, f"Key should not contain mangled egglog names: {key}"
+            assert isinstance(key, RewriteDecl)
 
         for key in report.num_matches_per_rule:
-            assert "rewrite" in key, f"Expected Python rewrite syntax, got: {key}"
-            assert "__main__" not in key, f"Key should not contain mangled egglog names: {key}"
+            assert isinstance(key, RewriteDecl)
 
     def test_rule_names_translated_in_iterations(self):
         egraph = self._setup_simple_egraph()
@@ -49,8 +48,7 @@ class TestRunReport:
         assert len(report.iterations) > 0
         for iteration in report.iterations:
             for key in iteration.rule_set_report.rule_reports:
-                assert "__main__" not in key, f"Iteration rule key not translated: {key}"
-                assert "rewrite" in key, f"Expected Python rewrite syntax, got: {key}"
+                assert isinstance(key, RewriteDecl)
 
     def test_updated_field(self):
         egraph = self._setup_simple_egraph()
@@ -117,7 +115,7 @@ class TestRunReport:
         rule_keys = list(report.search_and_apply_time_per_rule.keys())
         assert len(rule_keys) == 2
         for key in rule_keys:
-            assert "__main__" not in key, f"Key not translated: {key}"
+            assert isinstance(key, RewriteDecl)
 
     def test_empty_run(self):
         egraph = EGraph()
@@ -158,7 +156,7 @@ class TestRunReport:
         rule_keys = list(report.search_and_apply_time_per_rule.keys())
         assert len(rule_keys) > 0
         for key in rule_keys:
-            assert "__main__" not in key, f"RuleDecl key not translated: {key}"
+            assert isinstance(key, RuleDecl)
 
     def test_birewrite_decl(self):
         egraph = EGraph()
@@ -178,23 +176,4 @@ class TestRunReport:
         rule_keys = list(report.search_and_apply_time_per_rule.keys())
         assert len(rule_keys) > 0
         for key in rule_keys:
-            assert "__main__" not in key, f"BiRewriteDecl key not translated: {key}"
-            assert "birewrite" in key, f"Expected birewrite() syntax, got: {key}"
-
-    def test_rewrite_decl(self):
-        egraph = EGraph()
-
-        class Num(Expr):
-            def __init__(self, n: i64Like) -> None: ...
-            def __add__(self, other: Num) -> Num: ...
-
-        x, y = vars_("x y", Num)
-        egraph.register(rewrite(x + y).to(y + x))
-        egraph.register(Num(1) + Num(2))
-        report = egraph.run(10)
-
-        rule_keys = list(report.search_and_apply_time_per_rule.keys())
-        assert len(rule_keys) == 1
-        key = rule_keys[0]
-        assert "rewrite" in key, f"Expected rewrite() syntax, got: {key}"
-        assert "__main__" not in key, f"RewriteDecl key not translated: {key}"
+            assert isinstance(key, BiRewriteDecl)
