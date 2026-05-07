@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -20,7 +21,7 @@ class RuleReport:
     num_matches: int
 
     @classmethod
-    def from_bindings(cls, report: bindings.RuleReport) -> RuleReport:
+    def _from_bindings(cls, report: bindings.RuleReport) -> RuleReport:
         return cls(
             plan=report.plan,
             search_and_apply_time=report.search_and_apply_time,
@@ -37,13 +38,13 @@ class RuleSetReport:
     _decls: Declarations = field(repr=False, default=None)
 
     @classmethod
-    def from_bindings(
-        cls, report: bindings.RuleSetReport, translate_key: callable, decls: Declarations
+    def _from_bindings(
+        cls, report: bindings.RuleSetReport, translate_key: Callable[[str], CommandDecl], decls: Declarations
     ) -> RuleSetReport:
         return cls(
             changed=report.changed,
             rule_reports={
-                translate_key(k): [RuleReport.from_bindings(rr) for rr in v] for k, v in report.rule_reports.items()
+                translate_key(k): [RuleReport._from_bindings(rr) for rr in v] for k, v in report.rule_reports.items()
             },
             search_and_apply_time=report.search_and_apply_time,
             merge_time=report.merge_time,
@@ -66,11 +67,11 @@ class IterationReport:
     rebuild_time: timedelta
 
     @classmethod
-    def from_bindings(
-        cls, report: bindings.IterationReport, translate_key: callable, decls: Declarations
+    def _from_bindings(
+        cls, report: bindings.IterationReport, translate_key: Callable[[str], CommandDecl], decls: Declarations
     ) -> IterationReport:
         return cls(
-            rule_set_report=RuleSetReport.from_bindings(report.rule_set_report, translate_key, decls),
+            rule_set_report=RuleSetReport._from_bindings(report.rule_set_report, translate_key, decls),
             rebuild_time=report.rebuild_time,
         )
 
@@ -102,10 +103,10 @@ class RunReport:
         )
 
     @classmethod
-    def from_bindings(cls, report: bindings.RunReport, state: EGraphState) -> RunReport:
+    def _from_bindings(cls, report: bindings.RunReport, state: EGraphState) -> RunReport:
         return cls(
             iterations=[
-                IterationReport.from_bindings(it, state.translate_rule_key, state.__egg_decls__)
+                IterationReport._from_bindings(it, state.translate_rule_key, state.__egg_decls__)
                 for it in report.iterations
             ],
             updated=report.updated,

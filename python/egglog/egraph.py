@@ -973,7 +973,7 @@ class EGraph:
         cmd = self._state.run_schedule_to_egg(schedule.schedule)
         (command_output,) = self._run_program(cmd)
         assert isinstance(command_output, bindings.RunScheduleOutput)
-        return RunReport.from_bindings(command_output.report, self._state)
+        return RunReport._from_bindings(command_output.report, self._state)
 
     def stats(self) -> RunReport:
         """
@@ -981,7 +981,7 @@ class EGraph:
         """
         (output,) = self._run_program(bindings.PrintOverallStatistics(span(1), None))
         assert isinstance(output, bindings.OverallStatistics)
-        return RunReport.from_bindings(output.report, self._state)
+        return RunReport._from_bindings(output.report, self._state)
 
     def check_bool(self, *facts: FactLike) -> bool:
         """
