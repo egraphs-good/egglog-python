@@ -664,13 +664,11 @@ def container_basic_rules(
     yield rewrite(polynomial(poly)).to(
         polynomial(
             poly2.insert(
-                ContainerMonomial
-                .empty()
+                ContainerMonomial.empty()
                 .insert(polynomial(poly1), BigRat(1, 1))
                 .insert(
                     polynomial(
-                        ContainerPolynomial
-                        .empty()
+                        ContainerPolynomial.empty()
                         .insert(ContainerMonomial.empty(), f64(1.0))
                         .insert(mono.remove(n), coef)
                     ),
@@ -712,8 +710,7 @@ def container_basic_rules(
             ContainerPolynomial.empty().insert(
                 ContainerMonomial.empty().insert(
                     polynomial(
-                        ContainerPolynomial
-                        .empty()
+                        ContainerPolynomial.empty()
                         .insert(ContainerMonomial.empty(), f64(-1.0))
                         .insert(
                             mono.remove(n).insert(

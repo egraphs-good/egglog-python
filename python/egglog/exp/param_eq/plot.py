@@ -83,8 +83,8 @@ def truncate_text(value, limit=TEXT_TRUNCATE):
     text = str(value)
     return text if len(text) <= limit else text[:limit] + " ..."
 
-def plot_dashboard(df):
 
+def plot_dashboard(df):
     # ---------------------------------------------------------------------
     # Pair alternating binary/container rows.
     # ---------------------------------------------------------------------
@@ -108,8 +108,7 @@ def plot_dashboard(df):
     value_columns = [col for col in value_columns if col in work_df.columns]
 
     paired = (
-        work_df
-        .reset_index(drop=True)
+        work_df.reset_index(drop=True)
         .assign(pair_id=lambda d: d.index // 2)
         .pivot_table(index="pair_id", columns="variant", values=value_columns, aggfunc="first")
     )
@@ -152,11 +151,15 @@ def plot_dashboard(df):
     paired["egraph_size_delta"] = paired["total_size_container"] - paired["total_size_binary"]
     paired["egraph_size_ratio"] = safe_ratio(paired["total_size_container"], paired["total_size_binary"])
     paired["egraph_size_log10_ratio"] = np.log10(pd.to_numeric(paired["egraph_size_ratio"], errors="coerce"))
-    paired["egraph_size_outcome"] = [classify_delta(delta, lower_is_better=True) for delta in paired["egraph_size_delta"]]
+    paired["egraph_size_outcome"] = [
+        classify_delta(delta, lower_is_better=True) for delta in paired["egraph_size_delta"]
+    ]
 
     paired["after_params_delta"] = paired["after_params_container"] - paired["after_params_binary"]
     paired["after_params_ratio"] = safe_ratio(paired["after_params_container"], paired["after_params_binary"])
-    paired["after_params_outcome"] = [classify_delta(delta, lower_is_better=True) for delta in paired["after_params_delta"]]
+    paired["after_params_outcome"] = [
+        classify_delta(delta, lower_is_better=True) for delta in paired["after_params_delta"]
+    ]
 
     cost_base = None
     if {"extracted_cost_binary", "extracted_cost_container"}.issubset(paired.columns):
@@ -218,7 +221,6 @@ def plot_dashboard(df):
             "digits": 1,
             "lower_is_better": True,
         })
-
 
     # ---------------------------------------------------------------------
     # Summary frames.
@@ -322,14 +324,12 @@ def plot_dashboard(df):
     ).dropna(subset=["runtime_sec"])
     runtime_pair_long = runtime_pair_long[runtime_pair_long["runtime_sec"] > 0].copy()
 
-
     # ---------------------------------------------------------------------
     # Shared selections and chart helpers.
     # ---------------------------------------------------------------------
 
     hover = alt.selection_point(fields=["expr_id"], on="mouseover", clear="mouseout", empty=False, name="hover_expr")
     click = alt.selection_point(fields=["expr_id"], on="click", clear="dblclick", empty=False, name="click_expr")
-
 
     def text_table(table_df, columns, *, title, width=1180, row_height=24, font_size=12):
         table_df = table_df.reset_index(drop=True).copy()
@@ -346,8 +346,7 @@ def plot_dashboard(df):
 
         y_sort = [-1, *range(len(table_df))]
         header = (
-            alt
-            .Chart(pd.DataFrame(header_records))
+            alt.Chart(pd.DataFrame(header_records))
             .mark_text(align="left", baseline="middle", fontSize=font_size, fontWeight="bold")
             .encode(
                 x=alt.X("x:Q", axis=None, scale=alt.Scale(domain=[0, width])),
@@ -356,8 +355,7 @@ def plot_dashboard(df):
             )
         )
         body = (
-            alt
-            .Chart(pd.DataFrame(body_records))
+            alt.Chart(pd.DataFrame(body_records))
             .mark_text(align="left", baseline="middle", fontSize=font_size)
             .encode(
                 x=alt.X("x:Q", axis=None, scale=alt.Scale(domain=[0, width])),
@@ -367,11 +365,12 @@ def plot_dashboard(df):
         )
         return (header + body).properties(width=width, height=row_height * (len(table_df) + 1), title=title)
 
-
     def scatter_with_identity(frame, x_col, y_col, outcome_col, x_title, y_title, title):
         plot_df = frame.dropna(subset=[x_col, y_col]).copy()
         if plot_df.empty:
-            return alt.Chart(pd.DataFrame({"x": [], "y": []})).mark_point().properties(width=560, height=320, title=title)
+            return (
+                alt.Chart(pd.DataFrame({"x": [], "y": []})).mark_point().properties(width=560, height=320, title=title)
+            )
 
         lo = min(plot_df[x_col].min(), plot_df[y_col].min())
         hi = max(plot_df[x_col].max(), plot_df[y_col].max())
@@ -382,8 +381,7 @@ def plot_dashboard(df):
         scale = alt.Scale(type=scale_type)
 
         identity = (
-            alt
-            .Chart(pd.DataFrame({"v": [lo, hi]}))
+            alt.Chart(pd.DataFrame({"v": [lo, hi]}))
             .mark_line(strokeDash=[6, 4], color="black", opacity=0.65)
             .encode(x=alt.X("v:Q", scale=scale), y=alt.Y("v:Q", scale=scale))
         )
@@ -400,8 +398,7 @@ def plot_dashboard(df):
         ]
 
         base = (
-            alt
-            .Chart(plot_df)
+            alt.Chart(plot_df)
             .mark_circle(size=65, opacity=0.28)
             .encode(
                 x=alt.X(f"{x_col}:Q", title=x_title, scale=scale),
@@ -414,8 +411,7 @@ def plot_dashboard(df):
         )
 
         hover_focus = (
-            alt
-            .Chart(plot_df)
+            alt.Chart(plot_df)
             .transform_filter(hover)
             .mark_circle(size=170, opacity=0.95, stroke="black", strokeWidth=1.5)
             .encode(
@@ -428,8 +424,7 @@ def plot_dashboard(df):
         )
 
         click_focus = (
-            alt
-            .Chart(plot_df)
+            alt.Chart(plot_df)
             .transform_filter(click)
             .mark_circle(size=240, opacity=1.0, stroke="black", strokeWidth=2.5)
             .encode(
@@ -442,7 +437,6 @@ def plot_dashboard(df):
         )
 
         return (identity + base + hover_focus + click_focus).properties(width=560, height=320, title=title)
-
 
     # ---------------------------------------------------------------------
     # Summary charts.
@@ -506,8 +500,7 @@ def plot_dashboard(df):
     )
 
     outcome_bar = (
-        alt
-        .Chart(outcome_counts)
+        alt.Chart(outcome_counts)
         .mark_bar()
         .encode(
             y=alt.Y("metric:N", sort=list(summary_df["metric"]), title=None),
@@ -520,8 +513,7 @@ def plot_dashboard(df):
     )
 
     outcome_text = (
-        alt
-        .Chart(outcome_counts[outcome_counts["count"] > 0])
+        alt.Chart(outcome_counts[outcome_counts["count"] > 0])
         .mark_text(color="white", fontSize=12, fontWeight="bold")
         .encode(
             y=alt.Y("metric:N", sort=list(summary_df["metric"]), title=None),
@@ -534,14 +526,12 @@ def plot_dashboard(df):
 
     outcome_chart = outcome_bar + outcome_text
 
-
     # ---------------------------------------------------------------------
     # Runtime distribution charts.
     # ---------------------------------------------------------------------
 
     runtime_ecdf_chart = (
-        alt
-        .Chart(runtime_ecdf)
+        alt.Chart(runtime_ecdf)
         .mark_line(size=2)
         .encode(
             x=alt.X("runtime_sec:Q", title="runtime sec (log)", scale=alt.Scale(type="log")),
@@ -557,8 +547,7 @@ def plot_dashboard(df):
     )
 
     runtime_slope_base = (
-        alt
-        .Chart(runtime_pair_long)
+        alt.Chart(runtime_pair_long)
         .mark_line(opacity=0.08, color="#555")
         .encode(
             x=alt.X("variant:N", sort=VARIANT_DOMAIN, title=None),
@@ -568,13 +557,14 @@ def plot_dashboard(df):
     )
 
     runtime_slope_points = (
-        alt
-        .Chart(runtime_pair_long)
+        alt.Chart(runtime_pair_long)
         .mark_circle(size=25, opacity=0.25)
         .encode(
             x=alt.X("variant:N", sort=VARIANT_DOMAIN, title=None),
             y=alt.Y("runtime_sec:Q", scale=alt.Scale(type="log")),
-            color=alt.Color("runtime_outcome:N", scale=alt.Scale(domain=OUTCOME_DOMAIN, range=OUTCOME_RANGE), legend=None),
+            color=alt.Color(
+                "runtime_outcome:N", scale=alt.Scale(domain=OUTCOME_DOMAIN, range=OUTCOME_RANGE), legend=None
+            ),
             tooltip=[
                 alt.Tooltip("expr_label:N", title="id"),
                 alt.Tooltip("expr:N", title="expression"),
@@ -587,8 +577,7 @@ def plot_dashboard(df):
     )
 
     runtime_slope_hover = (
-        alt
-        .Chart(runtime_pair_long)
+        alt.Chart(runtime_pair_long)
         .transform_filter(hover)
         .mark_line(size=3, opacity=1, color="black")
         .encode(
@@ -599,8 +588,7 @@ def plot_dashboard(df):
     )
 
     runtime_slope_click = (
-        alt
-        .Chart(runtime_pair_long)
+        alt.Chart(runtime_pair_long)
         .transform_filter(click)
         .mark_line(size=5, opacity=1, color="black")
         .encode(
@@ -616,8 +604,7 @@ def plot_dashboard(df):
 
     ratio_hist_df = paired.dropna(subset=["runtime_log10_ratio"]).copy()
     runtime_ratio_hist = (
-        alt
-        .Chart(ratio_hist_df)
+        alt.Chart(ratio_hist_df)
         .mark_bar(opacity=0.75)
         .encode(
             x=alt.X("runtime_log10_ratio:Q", bin=alt.Bin(maxbins=36), title="log10(container / binary runtime)"),
@@ -646,8 +633,7 @@ def plot_dashboard(df):
     ).resolve_scale(color="independent")
 
     runtime_by_input_base = (
-        alt
-        .Chart(runtime_pair_long)
+        alt.Chart(runtime_pair_long)
         .mark_line(opacity=0.45, strokeWidth=2)
         .encode(
             x=alt.X("before_nodes:Q", title="input expression size (before nodes)"),
@@ -671,8 +657,7 @@ def plot_dashboard(df):
     )
 
     runtime_by_input_points = (
-        alt
-        .Chart(runtime_pair_long)
+        alt.Chart(runtime_pair_long)
         .mark_circle(size=45, opacity=0.55)
         .encode(
             x=alt.X("before_nodes:Q", title="input expression size (before nodes)"),
@@ -695,8 +680,7 @@ def plot_dashboard(df):
     )
 
     runtime_by_input_hover = (
-        alt
-        .Chart(runtime_pair_long)
+        alt.Chart(runtime_pair_long)
         .transform_filter(hover)
         .mark_circle(size=170, opacity=0.95, stroke="black", strokeWidth=1.5)
         .encode(
@@ -711,8 +695,7 @@ def plot_dashboard(df):
     )
 
     runtime_by_input_click = (
-        alt
-        .Chart(runtime_pair_long)
+        alt.Chart(runtime_pair_long)
         .transform_filter(click)
         .mark_circle(size=240, opacity=1.0, stroke="black", strokeWidth=2.5)
         .encode(
@@ -727,16 +710,12 @@ def plot_dashboard(df):
     )
 
     runtime_by_input_chart = (
-        runtime_by_input_base
-        + runtime_by_input_points
-        + runtime_by_input_hover
-        + runtime_by_input_click
+        runtime_by_input_base + runtime_by_input_points + runtime_by_input_hover + runtime_by_input_click
     ).properties(
         width=1180,
         height=340,
         title="Runtime vs Input Size (Before Nodes)",
     )
-
 
     # ---------------------------------------------------------------------
     # Ratio percentile chart.
@@ -744,8 +723,7 @@ def plot_dashboard(df):
 
     if ratio_stats.empty:
         ratio_chart = (
-            alt
-            .Chart(pd.DataFrame({"x": [], "y": []}))
+            alt.Chart(pd.DataFrame({"x": [], "y": []}))
             .mark_point()
             .properties(width=560, height=150, title="Ratio Percentiles")
         )
@@ -754,8 +732,7 @@ def plot_dashboard(df):
         ratio_sort = list(ratio_stats.sort_values("metric_order")["metric"])
 
         ratio_whisker = (
-            alt
-            .Chart(ratio_stats)
+            alt.Chart(ratio_stats)
             .mark_rule(size=2)
             .encode(
                 y=alt.Y("metric:N", sort=ratio_sort, title=None),
@@ -772,8 +749,7 @@ def plot_dashboard(df):
         )
 
         ratio_iqr = (
-            alt
-            .Chart(ratio_stats)
+            alt.Chart(ratio_stats)
             .mark_bar(height=14, opacity=0.55, color="#6baed6")
             .encode(
                 y=alt.Y("metric:N", sort=ratio_sort, title=None),
@@ -783,8 +759,7 @@ def plot_dashboard(df):
         )
 
         ratio_median = (
-            alt
-            .Chart(ratio_stats)
+            alt.Chart(ratio_stats)
             .mark_tick(thickness=3, size=26, color="black")
             .encode(
                 y=alt.Y("metric:N", sort=ratio_sort, title=None),
@@ -794,8 +769,7 @@ def plot_dashboard(df):
         )
 
         ratio_one_line = (
-            alt
-            .Chart(pd.DataFrame({"ratio": [1.0]}))
+            alt.Chart(pd.DataFrame({"ratio": [1.0]}))
             .mark_rule(strokeDash=[6, 4], color="black", opacity=0.65)
             .encode(x=alt.X("ratio:Q", scale=ratio_scale))
         )
@@ -806,14 +780,12 @@ def plot_dashboard(df):
             title="Ratio Percentiles (p10-p90, box=p25-p75, tick=median)",
         )
 
-
     # ---------------------------------------------------------------------
     # After-param delta bars and interactive scatters.
     # ---------------------------------------------------------------------
 
     params_bar_df = (
-        paired
-        .dropna(subset=["after_params_binary", "after_params_container"])
+        paired.dropna(subset=["after_params_binary", "after_params_container"])
         .sort_values(["after_params_delta", "expr_id"], ascending=[True, True])
         .reset_index(drop=True)
     )
@@ -837,12 +809,13 @@ def plot_dashboard(df):
     ]
 
     bars_base = (
-        alt
-        .Chart(params_bar_df)
+        alt.Chart(params_bar_df)
         .mark_bar(opacity=0.42)
         .encode(
             x=alt.X(
-                "delta_rank:O", title="expressions sorted by after-param delta", axis=alt.Axis(labels=False, ticks=False)
+                "delta_rank:O",
+                title="expressions sorted by after-param delta",
+                axis=alt.Axis(labels=False, ticks=False),
             ),
             y=alt.Y("after_params_delta:Q", title="container after params - binary after params"),
             color=alt.Color(
@@ -855,8 +828,7 @@ def plot_dashboard(df):
     )
 
     bars_hover = (
-        alt
-        .Chart(params_bar_df)
+        alt.Chart(params_bar_df)
         .transform_filter(hover)
         .mark_bar(opacity=0.95, stroke="black", strokeWidth=1.5)
         .encode(
@@ -869,8 +841,7 @@ def plot_dashboard(df):
     )
 
     bars_click = (
-        alt
-        .Chart(params_bar_df)
+        alt.Chart(params_bar_df)
         .transform_filter(click)
         .mark_bar(opacity=1.0, stroke="black", strokeWidth=2.5)
         .encode(
@@ -882,7 +853,9 @@ def plot_dashboard(df):
         )
     )
 
-    zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="black", strokeDash=[6, 4], opacity=0.7).encode(y="y:Q")
+    zero_line = (
+        alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="black", strokeDash=[6, 4], opacity=0.7).encode(y="y:Q")
+    )
 
     params_chart = (bars_base + bars_hover + bars_click + zero_line).properties(
         width=1180,
@@ -909,7 +882,6 @@ def plot_dashboard(df):
         "Container e-graph size",
         "E-Graph Size: Binary vs Container",
     )
-
 
     # ---------------------------------------------------------------------
     # Details and outliers.
@@ -946,8 +918,7 @@ def plot_dashboard(df):
     available_detail_fields = [(field, label) for field, label in available_detail_fields if field in paired.columns]
 
     detail_long = (
-        paired
-        .loc[:, ["expr_id", "expr_label"] + [field for field, _ in available_detail_fields]]
+        paired.loc[:, ["expr_id", "expr_label"] + [field for field, _ in available_detail_fields]]
         .copy()
         .melt(id_vars=["expr_id", "expr_label"], var_name="field", value_name="value")
     )
@@ -959,9 +930,10 @@ def plot_dashboard(df):
     detail_long["value_label"] = [truncate_text(value) for value in detail_long["value"]]
 
     instruction = (
-        alt
-        .Chart(
-            pd.DataFrame({"text": ["Hover to preview across charts. Click to pin one row. Double-click a chart to clear."]})
+        alt.Chart(
+            pd.DataFrame({
+                "text": ["Hover to preview across charts. Click to pin one row. Double-click a chart to clear."]
+            })
         )
         .mark_text(align="left", fontSize=13, color="#444")
         .encode(text="text:N")
@@ -989,24 +961,21 @@ def plot_dashboard(df):
     )
 
     runtime_bad = (
-        paired
-        .dropna(subset=["runtime_ratio"])
+        paired.dropna(subset=["runtime_ratio"])
         .sort_values(["runtime_ratio", "expr_id"], ascending=[False, True])
         .head(TOP_OUTLIERS)
         .assign(reason="runtime slowdown")
     )
 
     runtime_good = (
-        paired
-        .dropna(subset=["runtime_ratio"])
+        paired.dropna(subset=["runtime_ratio"])
         .sort_values(["runtime_ratio", "expr_id"], ascending=[True, True])
         .head(TOP_OUTLIERS)
         .assign(reason="runtime speedup")
     )
 
     params_bad = (
-        paired
-        .dropna(subset=["after_params_delta"])
+        paired.dropna(subset=["after_params_delta"])
         .query("after_params_delta > 0")
         .sort_values(["after_params_delta", "expr_id"], ascending=[False, True])
         .head(TOP_OUTLIERS)
@@ -1014,8 +983,7 @@ def plot_dashboard(df):
     )
 
     params_good = (
-        paired
-        .dropna(subset=["after_params_delta"])
+        paired.dropna(subset=["after_params_delta"])
         .query("after_params_delta < 0")
         .sort_values(["after_params_delta", "expr_id"], ascending=[True, True])
         .head(TOP_OUTLIERS)
@@ -1023,8 +991,7 @@ def plot_dashboard(df):
     )
 
     outliers = (
-        pd
-        .concat([runtime_bad, runtime_good, params_bad, params_good], ignore_index=True)
+        pd.concat([runtime_bad, runtime_good, params_bad, params_good], ignore_index=True)
         .drop_duplicates("expr_id")
         .head(TOP_OUTLIERS)
         .copy()
@@ -1051,22 +1018,24 @@ def plot_dashboard(df):
         font_size=11,
     )
 
-
     # ---------------------------------------------------------------------
     # Dashboard.
     # ---------------------------------------------------------------------
 
     return (
-        alt
-        .vconcat(
+        alt.vconcat(
             scoreboard,
             tail_scoreboard,
             ratio_scoreboard,
-            alt.hconcat(outcome_chart, ratio_chart).resolve_scale(x="independent", y="independent", color="independent"),
+            alt.hconcat(outcome_chart, ratio_chart).resolve_scale(
+                x="independent", y="independent", color="independent"
+            ),
             runtime_distribution_panel,
             runtime_by_input_chart,
             params_chart,
-            alt.hconcat(runtime_scatter, size_scatter).resolve_scale(x="independent", y="independent", color="independent"),
+            alt.hconcat(runtime_scatter, size_scatter).resolve_scale(
+                x="independent", y="independent", color="independent"
+            ),
             instruction,
             details_chart,
             outlier_table,

@@ -124,7 +124,9 @@ def test_repeated_initial_custom_cost_extraction_handles_appended_roots() -> Non
     ("parser", "schedule"),
     [
         pytest.param(
-            parse_expression, (binary_analysis_schedule + (binary_basic_rules | binary_fun_rules)).saturate(), id="binary"
+            parse_expression,
+            (binary_analysis_schedule + (binary_basic_rules | binary_fun_rules)).saturate(),
+            id="binary",
         ),
         pytest.param(
             parse_expression_container,
@@ -156,8 +158,7 @@ EXPRS = [
 
 def _stable_snapshot_text(value: str) -> str:
     return (
-        value
-        .replace("0.00019393257710548765", "0.00019393257710559848")
+        value.replace("0.00019393257710548765", "0.00019393257710559848")
         .replace(
             "1.95039 - exp(0.10413025920259658 - x1 * x1) - exp(0.10432419177970204 - x0 * x0)",
             "1.95039 - 1.109745 / exp(x1 * x1) - 1.1099602365777974 / exp(x0 * x0)",
@@ -296,8 +297,7 @@ def test_container_self_factor_cycle_remains_extractable() -> None:
     ("source", "expected_params"),
     [
         (
-            "(0.0077679147943854*x1 - 0.0477729775011539)"
-            "*(0.9088089466094971*x1 + 1.0031132698059082)",
+            "(0.0077679147943854*x1 - 0.0477729775011539)*(0.9088089466094971*x1 + 1.0031132698059082)",
             3,
         ),
         ("1.4605207443237305*x0*(0.6846604943275452*x0 - 1.3692940473556519)", 2),
@@ -344,11 +344,7 @@ def test_container_flattens_scaled_terms_in_larger_polynomials(
 
 
 def test_container_absorbs_nested_log_constant_with_outer_remainder() -> None:
-    source = (
-        "9.510507117783098 + "
-        "log(0.003918940250258392 + 0.7556389413872189 * x0 ** 2.0) + "
-        "x0"
-    )
+    source = "9.510507117783098 + log(0.003918940250258392 + 0.7556389413872189 * x0 ** 2.0) + x0"
 
     res = run_paper_pipeline_container(parse_expression_container(source))
 
@@ -390,10 +386,7 @@ def test_container_does_not_require_noninteger_residual_split() -> None:
 
 def test_container_uses_outer_constant_to_choose_nested_polynomial_scale() -> None:
     source = (
-        "(0.000839194771067583 * x0 + "
-        "0.004051470996339809 * x1 + "
-        "0.011734807030715255) * x2 - "
-        "0.004051470996339809"
+        "(0.000839194771067583 * x0 + 0.004051470996339809 * x1 + 0.011734807030715255) * x2 - 0.004051470996339809"
     )
 
     res = run_paper_pipeline_container(parse_expression_container(source))
@@ -412,10 +405,7 @@ def test_container_factors_opposite_coefficient_subset_with_remainder() -> None:
 
 
 def test_container_flattens_exact_nested_log_polynomial_terms() -> None:
-    source = (
-        "log(63949.3125 + 299103.1916432455 * x0 ** 2.0) + "
-        "log(27880.087890625 + 116909.30385762826 * x1 ** 2.0)"
-    )
+    source = "log(63949.3125 + 299103.1916432455 * x0 ** 2.0) + log(27880.087890625 + 116909.30385762826 * x1 ** 2.0)"
 
     res = run_paper_pipeline_container(parse_expression_container(source))
 
@@ -456,7 +446,9 @@ def test_container_uses_preferred_singleton_polynomial_for_inverse_scale() -> No
         ),
     ],
 )
-def test_container_preserves_repeated_polynomial_products(source: str, expected_nodes: int, expected_params: int) -> None:
+def test_container_preserves_repeated_polynomial_products(
+    source: str, expected_nodes: int, expected_params: int
+) -> None:
     res = run_paper_pipeline_container(parse_expression_container(source))
 
     assert res.extracted_params <= expected_params, res.extracted
@@ -469,8 +461,7 @@ def test_container_preserves_repeated_polynomial_products(source: str, expected_
         ("0.02889 * x - 0.00963 * z", 7, 1),
         ("6.258666666666667 - 6.258666666666667 * x + x ** 2.0", 9, 1),
         (
-            "0.02889 * x0 ** 3.0 - 0.18081288 * x0 ** 2.0 + 0.18081288 * x0 + "
-            "0.179028 - 0.00963 * x2 - 0.00963 * x3",
+            "0.02889 * x0 ** 3.0 - 0.18081288 * x0 ** 2.0 + 0.18081288 * x0 + 0.179028 - 0.00963 * x2 - 0.00963 * x3",
             21,
             3,
         ),
@@ -481,8 +472,7 @@ def test_container_preserves_repeated_polynomial_products(source: str, expected_
             5,
         ),
         (
-            "0.103875 + 0.01063 * "
-            "(exp(x0) - exp(x1) + 2.824 * x0 + 6.894 * x1 + 7.894 * (x0 + x1 - x0 * x0))",
+            "0.103875 + 0.01063 * (exp(x0) - exp(x1) + 2.824 * x0 + 6.894 * x1 + 7.894 * (x0 + x1 - x0 * x0))",
             23,
             4,
         ),
@@ -502,8 +492,7 @@ def test_container_matches_binary_coefficient_factoring_choices(
     [
         ("-1.0 * (-2.0 + x) * y", 5, 0),
         (
-            "-1.0 * (exp(0.1799458712339401*x1) - 1.4052648544311523) * "
-            "exp(exp(0.2937204837799072*x1))",
+            "-1.0 * (exp(0.1799458712339401*x1) - 1.4052648544311523) * exp(exp(0.2937204837799072*x1))",
             12,
             3,
         ),

@@ -12,7 +12,11 @@ from egglog.exp.param_eq.paths import original_artifact_dir, param_eq_data_dir
 RAW_RELATIVE_PATHS = [
     *(Path("results") / f"{dataset}_table_counts.csv" for dataset in DATASETS),
     *(Path("results") / f"{dataset}_results" for dataset in DATASETS),
-    *(Path("results") / "exprs" / f"{algorithm}_exprs_{dataset}" for dataset in DATASETS for algorithm in RAW_ALGORITHMS),
+    *(
+        Path("results") / "exprs" / f"{algorithm}_exprs_{dataset}"
+        for dataset in DATASETS
+        for algorithm in RAW_ALGORITHMS
+    ),
     *(
         Path("results") / "exprs_simpl" / f"{algorithm}_exprs_{dataset}"
         for dataset in DATASETS

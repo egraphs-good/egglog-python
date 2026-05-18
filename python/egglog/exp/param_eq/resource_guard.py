@@ -24,7 +24,7 @@ def total_system_memory_bytes() -> int:
     phys_pages_name = "SC_PHYS_PAGES"
     if page_size_name in os.sysconf_names and phys_pages_name in os.sysconf_names:
         return int(os.sysconf(page_size_name) * os.sysconf(phys_pages_name))
-    return int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip())  # noqa: S603,S607
+    return int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip())  # noqa: S607
 
 
 def total_system_memory_mb() -> float:
@@ -38,14 +38,16 @@ def cap_workers_for_memory(
     total_memory_bytes_value: int | None = None,
     safe_memory_fraction: float = SAFE_MEMORY_FRACTION,
 ) -> int:
-    total_memory_bytes_value = total_system_memory_bytes() if total_memory_bytes_value is None else total_memory_bytes_value
+    total_memory_bytes_value = (
+        total_system_memory_bytes() if total_memory_bytes_value is None else total_memory_bytes_value
+    )
     allowed_budget_mb = (total_memory_bytes_value / (1024.0 * 1024.0)) * safe_memory_fraction
     max_workers = max(1, int(allowed_budget_mb // memory_limit_mb))
     return max(1, min(requested_workers, max_workers))
 
 
 def _rss_mb(pid: int) -> float | None:
-    completed = subprocess.run(  # noqa: S603,S607
+    completed = subprocess.run(
         ["ps", "-o", "rss=", "-p", str(pid)],
         capture_output=True,
         check=False,

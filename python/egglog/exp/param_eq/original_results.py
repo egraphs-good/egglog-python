@@ -167,7 +167,9 @@ def load_dataset_results(dataset: str, root: Path | None = None) -> pd.DataFrame
     return DATASET_RESULTS_SCHEMA.validate(frame)
 
 
-def load_expr_lines(dataset: str, algorithm: str, *, simplified: bool = False, root: Path | None = None) -> pd.DataFrame:
+def load_expr_lines(
+    dataset: str, algorithm: str, *, simplified: bool = False, root: Path | None = None
+) -> pd.DataFrame:
     with open(_expr_lines_path(dataset, algorithm, simplified=simplified, root=root), encoding="utf-8") as handle:
         frame = pd.DataFrame({"expr": [line.strip() for line in handle if line.strip()]})
     return EXPR_LINES_SCHEMA.validate(frame)
@@ -198,13 +200,9 @@ def _load_original_results_cached(root_str: str) -> pd.DataFrame:
             algorithm: group.reset_index(drop=True)
             for algorithm, group in results_rows.groupby("algorithm", sort=False)
         }
-        exprs_by_algorithm = {
-            algorithm: load_expr_lines(dataset, algorithm, root=root)
-            for algorithm in RAW_ALGORITHMS
-        }
+        exprs_by_algorithm = {algorithm: load_expr_lines(dataset, algorithm, root=root) for algorithm in RAW_ALGORITHMS}
         simplified_exprs_by_algorithm = {
-            algorithm: load_expr_lines(dataset, algorithm, simplified=True, root=root)
-            for algorithm in RAW_ALGORITHMS
+            algorithm: load_expr_lines(dataset, algorithm, simplified=True, root=root) for algorithm in RAW_ALGORITHMS
         }
         algo_counts: defaultdict[str, int] = defaultdict(int)
         for raw_row in counts.itertuples(index=False):
@@ -217,42 +215,40 @@ def _load_original_results_cached(root_str: str) -> pd.DataFrame:
             original_expr = str(exprs_by_algorithm[raw_algorithm].iloc[algo_row - 1]["expr"]).strip()
             original_simpl_expr = str(simplified_exprs_by_algorithm[raw_algorithm].iloc[algo_row - 1]["expr"]).strip()
             sympy_expr = str(results_by_algorithm[raw_algorithm].iloc[algo_row - 1]["expr_sympy"]).strip()
-            rows.extend(
-                [
-                    {
-                        "dataset": dataset,
-                        "raw_index": raw_index,
-                        "algorithm_raw": raw_algorithm,
-                        "algorithm": _clean_algorithm(raw_algorithm),
-                        "algo_row": algo_row,
-                        "input_kind": "original",
-                        "n_params": raw_row.n_params,
-                        "n_rank": raw_row.n_rank,
-                        "before_nodes": raw_row.orig_nodes,
-                        "before_params": raw_row.orig_params,
-                        "after_nodes": raw_row.simpl_nodes,
-                        "after_params": raw_row.simpl_params,
-                        "orig_expr": original_expr,
-                        "simpl_expr": original_simpl_expr,
-                    },
-                    {
-                        "dataset": dataset,
-                        "raw_index": raw_index,
-                        "algorithm_raw": raw_algorithm,
-                        "algorithm": _clean_algorithm(raw_algorithm),
-                        "algo_row": algo_row,
-                        "input_kind": "sympy",
-                        "n_params": raw_row.n_params,
-                        "n_rank": raw_row.n_rank,
-                        "before_nodes": raw_row.orig_nodes_sympy,
-                        "before_params": raw_row.orig_params_sympy,
-                        "after_nodes": raw_row.simpl_nodes_sympy,
-                        "after_params": raw_row.simpl_params_sympy,
-                        "orig_expr": sympy_expr,
-                        "simpl_expr": None,
-                    },
-                ]
-            )
+            rows.extend([
+                {
+                    "dataset": dataset,
+                    "raw_index": raw_index,
+                    "algorithm_raw": raw_algorithm,
+                    "algorithm": _clean_algorithm(raw_algorithm),
+                    "algo_row": algo_row,
+                    "input_kind": "original",
+                    "n_params": raw_row.n_params,
+                    "n_rank": raw_row.n_rank,
+                    "before_nodes": raw_row.orig_nodes,
+                    "before_params": raw_row.orig_params,
+                    "after_nodes": raw_row.simpl_nodes,
+                    "after_params": raw_row.simpl_params,
+                    "orig_expr": original_expr,
+                    "simpl_expr": original_simpl_expr,
+                },
+                {
+                    "dataset": dataset,
+                    "raw_index": raw_index,
+                    "algorithm_raw": raw_algorithm,
+                    "algorithm": _clean_algorithm(raw_algorithm),
+                    "algo_row": algo_row,
+                    "input_kind": "sympy",
+                    "n_params": raw_row.n_params,
+                    "n_rank": raw_row.n_rank,
+                    "before_nodes": raw_row.orig_nodes_sympy,
+                    "before_params": raw_row.orig_params_sympy,
+                    "after_nodes": raw_row.simpl_nodes_sympy,
+                    "after_params": raw_row.simpl_params_sympy,
+                    "orig_expr": sympy_expr,
+                    "simpl_expr": None,
+                },
+            ])
     frame = pd.DataFrame.from_records(rows)
     frame["orig_parsed_expr"] = frame["orig_expr"].map(canonical_expr)
     frame["simpl_parsed_expr"] = frame["simpl_expr"].map(canonical_expr)
@@ -293,9 +289,5 @@ def load_archived_runtimes(root: Path | None = None) -> pd.DataFrame:
 
 def load_original_results_for_join(root: Path | None = None) -> pd.DataFrame:
     source = load_original_results(root)
-    rename_map = {
-        column: f"source_{column}"
-        for column in source.columns
-        if column not in SOURCE_METADATA_COLUMNS
-    }
+    rename_map = {column: f"source_{column}" for column in source.columns if column not in SOURCE_METADATA_COLUMNS}
     return source.rename(columns=rename_map)

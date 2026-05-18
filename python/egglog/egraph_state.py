@@ -410,7 +410,7 @@ class EGraphState:
     def command_to_egg(self, cmd: CommandDecl, ruleset: Ident) -> bindings._Command | None:
         match cmd:
             case ActionCommandDecl(action):
-                action_egg = self.action_to_egg(action)# , expr_to_let=False)
+                action_egg = self.action_to_egg(action)  # , expr_to_let=False)
                 if not action_egg:
                     return None
                 return bindings.ActionCommand(action_egg)
@@ -641,9 +641,9 @@ class EGraphState:
         signature: FunctionSignature,
         body: TypedExprDecl,
     ) -> bindings.UserDefined:
-        input_sort_expr = self._primitive_input_sorts_to_egg(
-            [self.type_ref_to_egg(arg_type.to_just()) for arg_type in signature.arg_types]
-        )
+        input_sort_expr = self._primitive_input_sorts_to_egg([
+            self.type_ref_to_egg(arg_type.to_just()) for arg_type in signature.arg_types
+        ])
         output_sort_expr = bindings.Var(span(), self.type_ref_to_egg(signature.semantic_return_type.to_just()))
         return bindings.UserDefined(
             span(),

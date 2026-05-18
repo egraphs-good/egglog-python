@@ -1,11 +1,12 @@
-
 from egglog.exp.param_eq.pipeline import *
 from egglog.exp.param_eq.pipeline import _graph_size
 
 TIMES: list[tuple[str, float]] = []
 
+
 def mark_time(event: str):
     TIMES.append((event, time.perf_counter()))
+
 
 def print_times():
     """
@@ -19,6 +20,7 @@ def print_times():
         duration = t - prev_t
         print(f"{event}: {duration:.2f}s ({(duration / total_time) * 100:.2f}%)")
     print(f"Total time: {total_time:.2f}s")
+
 
 container_schedule.__egg_decls__
 containers_analysis_schedule.__egg_decls__

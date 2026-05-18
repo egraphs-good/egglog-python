@@ -15,11 +15,13 @@ def _factor_example(expr):
     egraph.check(eq(x).to(factored))
     return factored, egraph.as_egglog_string
 
+
 class EgglogSnapshotExtension(SingleFileSnapshotExtension):
     file_extension = "egg"
 
     def serialize(self, data, **kwargs) -> bytes:
         return str(data).encode()
+
 
 def test_factor_multisets(benchmark, snapshot_py, snapshot: SnapshotAssertion):
     function_bending, _gradient_bending = symbolic_bending_examples()
@@ -32,6 +34,3 @@ def test_factor_multisets(benchmark, snapshot_py, snapshot: SnapshotAssertion):
     factored, egglog_str = benchmark(_factor_example, distributed)
     assert str(factored) == snapshot_py(name="code")
     assert egglog_str == snapshot.with_defaults(extension_class=EgglogSnapshotExtension)(name="egglog")
-
-
-

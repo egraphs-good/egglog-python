@@ -499,7 +499,6 @@ class Maybe(BuiltinExpr, Generic[T], egg_sort="Maybe"):
     # def flat_map(self, f: Callable[[T], Maybe[V]]) -> Maybe[V]: ...
 
 
-
 converter(type(None), Maybe, lambda _: Maybe[get_type_args()[0]].none())
 # converter(object, Maybe, lambda x: Maybe[get_type_args()[0]].some(convert(x, get_type_args()[0])))
 
@@ -719,7 +718,9 @@ def map_best_common_float_scale(xs: Map[T, f64]) -> f64: ...
 
 
 @function(egg_fn="map-integer-residual-split-candidate", builtin=True)
-def map_integer_residual_split_candidate(xs: Map[Map[T, BigRat], f64]) -> Pair[Map[T, BigRat], Map[Map[T, BigRat], f64]]: ...
+def map_integer_residual_split_candidate(
+    xs: Map[Map[T, BigRat], f64],
+) -> Pair[Map[T, BigRat], Map[Map[T, BigRat], f64]]: ...
 
 
 @function(egg_fn="map-factor-coef-for-integer-residual-split", builtin=True)

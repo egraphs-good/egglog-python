@@ -349,16 +349,14 @@ def comparison_table(frame: pd.DataFrame, *, implementation: str) -> pd.DataFram
                 percent = float("nan")
                 if not eligible.empty:
                     percent = 100.0 * (eligible["simpl_rank"] <= delta).sum() / len(eligible)
-                rows.append(
-                    {
-                        "implementation": implementation,
-                        "dataset": dataset,
-                        "dataset_label": DATASET_LABELS[dataset],
-                        "algorithm": algorithm,
-                        "delta": f"Δ {'==' if delta == 0 else '<='} {delta}",
-                        "percent": percent,
-                    }
-                )
+                rows.append({
+                    "implementation": implementation,
+                    "dataset": dataset,
+                    "dataset_label": DATASET_LABELS[dataset],
+                    "algorithm": algorithm,
+                    "delta": f"Δ {'==' if delta == 0 else '<='} {delta}",
+                    "percent": percent,
+                })
     result = pd.DataFrame(rows)
     result["percent_label"] = result["percent"].map(lambda value: "n/a" if pd.isna(value) else f"{value:.2f}%")
     return result
@@ -385,14 +383,22 @@ def show_chart(chart: Any) -> None:
     display(SVG(buffer.getvalue()))
 
 
-archived_haskell = with_implementation(add_paper_metrics(_paper_corpus_frame(_archived_long_frame())), "Archived Haskell")
+archived_haskell = with_implementation(
+    add_paper_metrics(_paper_corpus_frame(_archived_long_frame())), "Archived Haskell"
+)
 live_haskell = with_implementation(
-    add_paper_metrics(_paper_corpus_frame(_joined_long_frame(load_live_results(LIVE_HASKELL_PATH, source_root=ORIGINAL_ROOT)))),
+    add_paper_metrics(
+        _paper_corpus_frame(_joined_long_frame(load_live_results(LIVE_HASKELL_PATH, source_root=ORIGINAL_ROOT)))
+    ),
     "Live Haskell",
 )
 live_haskell_quant = successful_live_rows(live_haskell)
 egglog = with_implementation(
-    add_paper_metrics(_paper_corpus_frame(_joined_long_frame(load_egglog_results(EGGLOG_PATH, variant="baseline", source_root=ORIGINAL_ROOT)))),
+    add_paper_metrics(
+        _paper_corpus_frame(
+            _joined_long_frame(load_egglog_results(EGGLOG_PATH, variant="baseline", source_root=ORIGINAL_ROOT))
+        )
+    ),
     "Egglog",
 )
 runtime_rows = _paper_runtime_frame()
@@ -496,68 +502,62 @@ def _rank_summary_row(label: str, column: str) -> dict[str, object]:
     }
 
 
-overall_rank_summary = pd.DataFrame(
-    [
-        _rank_summary_row("Original expression", "simpl_rank"),
-        _rank_summary_row("SymPy expression", "sympy_rank"),
-    ]
-)
+overall_rank_summary = pd.DataFrame([
+    _rank_summary_row("Original expression", "simpl_rank"),
+    _rank_summary_row("SymPy expression", "sympy_rank"),
+])
 display(overall_rank_summary)
 
-artifact_summary = pd.DataFrame(
-    [
-        {
-            "implementation": "Archived Haskell",
-            "rows": len(archived_haskell),
-            "original_median_simpl_rank": float(archived_haskell["simpl_rank"].median()),
-            "sympy_median_simpl_rank": float(archived_haskell["sympy_rank"].median()),
-        },
-        {
-            "implementation": "Live Haskell",
-            "rows": len(live_haskell),
-            "quantitative_rows": len(live_haskell_quant),
-            "excluded_rows": len(live_missing_rows),
-            "original_median_simpl_rank": float(live_haskell_quant["simpl_rank"].median()),
-            "sympy_median_simpl_rank": float(live_haskell_quant["sympy_rank"].median()),
-        },
-        {
-            "implementation": "Egglog",
-            "rows": len(egglog),
-            "original_median_simpl_rank": float(egglog["simpl_rank"].median()),
-            "sympy_median_simpl_rank": float(egglog["sympy_rank"].median()),
-        },
-    ]
-)
+artifact_summary = pd.DataFrame([
+    {
+        "implementation": "Archived Haskell",
+        "rows": len(archived_haskell),
+        "original_median_simpl_rank": float(archived_haskell["simpl_rank"].median()),
+        "sympy_median_simpl_rank": float(archived_haskell["sympy_rank"].median()),
+    },
+    {
+        "implementation": "Live Haskell",
+        "rows": len(live_haskell),
+        "quantitative_rows": len(live_haskell_quant),
+        "excluded_rows": len(live_missing_rows),
+        "original_median_simpl_rank": float(live_haskell_quant["simpl_rank"].median()),
+        "sympy_median_simpl_rank": float(live_haskell_quant["sympy_rank"].median()),
+    },
+    {
+        "implementation": "Egglog",
+        "rows": len(egglog),
+        "original_median_simpl_rank": float(egglog["simpl_rank"].median()),
+        "sympy_median_simpl_rank": float(egglog["sympy_rank"].median()),
+    },
+])
 display(artifact_summary)
 display(
-    pd.DataFrame(
-        [
-            {
-                "comparison": "Egglog vs live Haskell (original)",
-                "exact_matches": int(egglog_vs_live["orig_exact"].sum()),
-                "total_rows": len(egglog_vs_live),
-                "max_gap": max_gap(egglog_vs_live["orig_gap"]),
-            },
-            {
-                "comparison": "Egglog vs live Haskell (sympy)",
-                "exact_matches": int(egglog_vs_live["sympy_exact"].sum()),
-                "total_rows": len(egglog_vs_live),
-                "max_gap": max_gap(egglog_vs_live["sympy_gap"]),
-            },
-            {
-                "comparison": "Live vs archived Haskell (original)",
-                "exact_matches": int((archive_drift["orig_drift"] == 0).sum()),
-                "total_rows": len(archive_drift),
-                "max_gap": max_gap(archive_drift["orig_drift"].abs()),
-            },
-            {
-                "comparison": "Live vs archived Haskell (sympy)",
-                "exact_matches": int((archive_drift["sympy_drift"] == 0).sum()),
-                "total_rows": len(archive_drift),
-                "max_gap": max_gap(archive_drift["sympy_drift"].abs()),
-            },
-        ]
-    )
+    pd.DataFrame([
+        {
+            "comparison": "Egglog vs live Haskell (original)",
+            "exact_matches": int(egglog_vs_live["orig_exact"].sum()),
+            "total_rows": len(egglog_vs_live),
+            "max_gap": max_gap(egglog_vs_live["orig_gap"]),
+        },
+        {
+            "comparison": "Egglog vs live Haskell (sympy)",
+            "exact_matches": int(egglog_vs_live["sympy_exact"].sum()),
+            "total_rows": len(egglog_vs_live),
+            "max_gap": max_gap(egglog_vs_live["sympy_gap"]),
+        },
+        {
+            "comparison": "Live vs archived Haskell (original)",
+            "exact_matches": int((archive_drift["orig_drift"] == 0).sum()),
+            "total_rows": len(archive_drift),
+            "max_gap": max_gap(archive_drift["orig_drift"].abs()),
+        },
+        {
+            "comparison": "Live vs archived Haskell (sympy)",
+            "exact_matches": int((archive_drift["sympy_drift"] == 0).sum()),
+            "total_rows": len(archive_drift),
+            "max_gap": max_gap(archive_drift["sympy_drift"].abs()),
+        },
+    ])
 )
 # -
 
@@ -656,7 +656,12 @@ show_chart(rank_boxplot(combined, title="Simplified parameters minus rank across
 # met.
 
 # +
-show_chart(runtime_chart(runtime_compare, title="Pagie runtime versus expression size (Figure 9 analog) across archived Haskell, live Haskell, and Egglog"))
+show_chart(
+    runtime_chart(
+        runtime_compare,
+        title="Pagie runtime versus expression size (Figure 9 analog) across archived Haskell, live Haskell, and Egglog",
+    )
+)
 # -
 
 # This faceted Figure 9 analog is now closer to the archived benchmark setup:

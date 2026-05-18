@@ -392,20 +392,14 @@ def test_higher_order_builtin_callback_materializes_rational_builtin_dummy_args(
 
 def test_map_best_common_float_scale() -> None:
     input_map = (
-        Map[i64, f64]
-        .empty()
-        .insert(i64(1), f64(0.2))
-        .insert(i64(2), f64(0.4))
-        .insert(i64(3), f64(0.6000000000000001))
+        Map[i64, f64].empty().insert(i64(1), f64(0.2)).insert(i64(2), f64(0.4)).insert(i64(3), f64(0.6000000000000001))
     )
 
     check_eq(map_best_common_float_scale(input_map), f64(0.2))
 
 
 def test_map_best_common_float_scale_uses_useful_pair() -> None:
-    input_map = (
-        Map[i64, f64].empty().insert(i64(1), f64(0.1)).insert(i64(2), f64(0.2)).insert(i64(3), f64(0.333))
-    )
+    input_map = Map[i64, f64].empty().insert(i64(1), f64(0.1)).insert(i64(2), f64(0.2)).insert(i64(3), f64(0.333))
 
     check_eq(map_best_common_float_scale(input_map), f64(0.1))
 
@@ -1015,7 +1009,7 @@ class TestEval:
         extracted = EGraph().extract(expr)
 
         assert "Map[String, BigRat].empty().insert" in str(extracted)
-        assert "Map[Map[String, BigRat], f64].empty().insert(String(\"x\")" not in str(extracted)
+        assert 'Map[Map[String, BigRat], f64].empty().insert(String("x")' not in str(extracted)
 
     def test_multiset(self):
         assert list(MultiSet(i64(1), i64(1))) == [i64(1), i64(1)]
@@ -1479,7 +1473,9 @@ class TestCallableValidation:
         def f() -> i64:
             return i64(1)
 
-        with pytest.raises(ValueError, match="Primitive-returning callables with bodies cannot use an explicit ruleset"):
+        with pytest.raises(
+            ValueError, match="Primitive-returning callables with bodies cannot use an explicit ruleset"
+        ):
             f()
 
     def test_eqsort_body_cannot_use_merge(self):
@@ -2086,9 +2082,7 @@ class TestScheduler:
         egraph.run(run(copy, scheduler=scheduler))
         egraph.run(run(copy, scheduler=scheduler))
 
-        scheduler_lines = [
-            line for line in egraph.as_egglog_string.splitlines() if line.startswith("(let-scheduler ")
-        ]
+        scheduler_lines = [line for line in egraph.as_egglog_string.splitlines() if line.startswith("(let-scheduler ")]
         run_with_lines = [line for line in egraph.as_egglog_string.splitlines() if "(run-with " in line]
 
         assert len(scheduler_lines) == 1
@@ -2113,6 +2107,7 @@ class TestScheduler:
         # Multiple until facts should error via high-level run
         with pytest.raises(ValueError, match="Can only have one until fact with custom scheduler"):
             egraph.run(run(r, rel(i64(0)), rel(i64(1)), scheduler=bo))
+
 
 @function
 def ff(x: i64Like, y: i64Like) -> E: ...
@@ -2248,7 +2243,9 @@ class TestCustomExtract:
         )
 
         map_expr = cast("Map[i64, String]", seen_expr)
-        flattened_item_costs = [self._small_leaf_cost(item) for key, value in map_expr.value.items() for item in (key, value)]
+        flattened_item_costs = [
+            self._small_leaf_cost(item) for key, value in map_expr.value.items() for item in (key, value)
+        ]
 
         assert flattened_item_costs == seen_children_costs
         assert flattened_item_costs == [11, 101, 22, 202]
@@ -2287,7 +2284,8 @@ class TestCustomExtract:
         extracted, _seen_expr, seen_children_costs = self._capture_container_children_costs(
             expr,
             leaf_cost=self._small_leaf_cost,
-            should_capture=lambda candidate, children_costs: isinstance(candidate, MultiSet) and len(children_costs) == 4,
+            should_capture=lambda candidate, children_costs: isinstance(candidate, MultiSet)
+            and len(children_costs) == 4,
         )
 
         extracted_multiset = cast("MultiSet[i64]", extracted)

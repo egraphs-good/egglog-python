@@ -226,14 +226,12 @@ def _report_rule_rows(report: Any, pass_index: int, iteration: int) -> list[dict
 def _function_size_rows(egraph: EGraph, pass_index: int, iteration: int) -> list[dict[str, Any]]:
     rows = []
     for function_name, size in egraph.all_function_sizes():
-        rows.append(
-            {
-                "pass": pass_index,
-                "iteration": iteration,
-                "function": str(function_name),
-                "size": int(size),
-            }
-        )
+        rows.append({
+            "pass": pass_index,
+            "iteration": iteration,
+            "function": str(function_name),
+            "size": int(size),
+        })
     return rows
 
 
@@ -270,16 +268,14 @@ def _run_instrumented(source: str) -> ProbeResult:
             total_size = current_size
             rule_rows.extend(_report_rule_rows(report, pass_index, iteration))
             function_size_rows.extend(_function_size_rows(egraph, pass_index, iteration))
-            trace_rows.append(
-                {
-                    "pass": pass_index,
-                    "iteration": iteration,
-                    "egraph_total_size": current_size,
-                    "size_delta": current_size - previous_size,
-                    "updated": bool(getattr(report, "updated", False)),
-                    "can_stop": bool(getattr(report, "can_stop", False)),
-                }
-            )
+            trace_rows.append({
+                "pass": pass_index,
+                "iteration": iteration,
+                "egraph_total_size": current_size,
+                "size_delta": current_size - previous_size,
+                "updated": bool(getattr(report, "updated", False)),
+                "can_stop": bool(getattr(report, "can_stop", False)),
+            })
             if current_size == previous_size:
                 break
             previous_size = current_size
@@ -288,20 +284,18 @@ def _run_instrumented(source: str) -> ProbeResult:
         elapsed = time.perf_counter() - pass_start
         total_runtime_sec += elapsed
         extracted_rendered = render_num(extracted)
-        trace_rows.append(
-            {
-                "pass": pass_index,
-                "iteration": iteration,
-                "egraph_total_size": total_size,
-                "size_delta": 0,
-                "updated": False,
-                "can_stop": True,
-                "pass_runtime_ms": elapsed * 1000.0,
-                "extracted_nodes": last_cost.node_count,
-                "extracted_params": last_cost.floats,
-                "extracted": extracted_rendered,
-            }
-        )
+        trace_rows.append({
+            "pass": pass_index,
+            "iteration": iteration,
+            "egraph_total_size": total_size,
+            "size_delta": 0,
+            "updated": False,
+            "can_stop": True,
+            "pass_runtime_ms": elapsed * 1000.0,
+            "extracted_nodes": last_cost.node_count,
+            "extracted_params": last_cost.floats,
+            "extracted": extracted_rendered,
+        })
         converged = extracted_rendered == current_rendered
         current = extracted
         current_rendered = extracted_rendered
@@ -372,20 +366,18 @@ def _run_true_container_lowering(source: str) -> None:
         return
     elapsed = time.perf_counter() - start
     print(
-        pd.DataFrame(
-            [
-                {
-                    "runtime_ms": elapsed * 1000.0,
-                    "passes": report.passes,
-                    "before_nodes": report.before_nodes,
-                    "before_params": report.before_params,
-                    "after_nodes": report.extracted_nodes,
-                    "after_params": report.extracted_params,
-                    "egraph_total_size": report.total_size,
-                    "rendered": report.extracted,
-                }
-            ]
-        ).to_string(index=False, max_colwidth=100)
+        pd.DataFrame([
+            {
+                "runtime_ms": elapsed * 1000.0,
+                "passes": report.passes,
+                "before_nodes": report.before_nodes,
+                "before_params": report.before_params,
+                "after_nodes": report.extracted_nodes,
+                "after_params": report.extracted_params,
+                "egraph_total_size": report.total_size,
+                "rendered": report.extracted,
+            }
+        ]).to_string(index=False, max_colwidth=100)
     )
 
 
