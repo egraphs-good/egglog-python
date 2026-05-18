@@ -390,6 +390,34 @@ def test_higher_order_builtin_callback_materializes_rational_builtin_dummy_args(
     check_eq(map_map_values(lambda k, v: v.to_f64() + 1.0, input_map), expected)
 
 
+def test_map_best_common_float_scale() -> None:
+    input_map = (
+        Map[i64, f64]
+        .empty()
+        .insert(i64(1), f64(0.2))
+        .insert(i64(2), f64(0.4))
+        .insert(i64(3), f64(0.6000000000000001))
+    )
+
+    check_eq(map_best_common_float_scale(input_map), f64(0.2))
+
+
+def test_map_best_common_float_scale_uses_useful_pair() -> None:
+    input_map = (
+        Map[i64, f64].empty().insert(i64(1), f64(0.1)).insert(i64(2), f64(0.2)).insert(i64(3), f64(0.333))
+    )
+
+    check_eq(map_best_common_float_scale(input_map), f64(0.1))
+
+
+def test_map_best_common_float_scale_fails_without_useful_scale() -> None:
+    input_map = Map[i64, f64].empty().insert(i64(1), f64(0.123456)).insert(i64(2), f64(0.789012))
+    egraph = EGraph()
+
+    with pytest.raises(EggSmolError, match="map-best-common-float-scale"):
+        egraph.extract(map_best_common_float_scale(input_map))
+
+
 def test_file_backed_errors_report_saved_file_line() -> None:
     egraph = EGraph()
     egraph.let("x", i64(1))

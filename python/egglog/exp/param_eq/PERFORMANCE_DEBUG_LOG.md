@@ -1040,3 +1040,698 @@ encoding is slower even when the final e-graph is smaller.
   for this row. A future viable fix needs a general criterion for when
   flattening a nested polynomial unlocks a downstream simplification, not a
   body-length or row-shape condition.
+
+## 2026-05-04: partial long expression runtime no-repro
+
+- Status:
+  no runtime slowdown reproduced on the current tree.
+- Input:
+  the partial expression ending at
+  `(x0 ** 2.0 * (-0.7990490259929379 * x1 * (x1 - 4.734655034994491) +
+  0.2566632469880581) - 0.01768299095097286 * exp(2.0 * x0)) *
+  exp(-2.0 * x0)`.
+- Observation:
+  five repeated direct runs were stable. Binary median report time was
+  `0.750s`, e-graph size `8352`, `after_nodes=170`, `after_params=25`.
+  Container median report time was `0.274s`, e-graph size `226`,
+  `after_nodes=164`, `after_params=26`.
+  A follow-up 30-pair alternating run and 100-run container-only stress loop
+  still did not show intermittent container slowdown. Container-only report
+  times were median `0.282s`, p95 `0.293s`, p99 `0.297s`, max `0.304s`,
+  with zero runs above `0.5s`.
+- Trace:
+  binary spent most time in extraction (`0.477s` of `0.754s` traced total)
+  after building a much larger graph. Container traced total was `0.271s`,
+  with analysis `0.026s`, rewrite `0.129s`, extraction `0.092s`, and let
+  `0.019s`. Top container rule family was `SOLE_MONOMIALS` flattening
+  (`0.023s`, `286` matches), which is not enough to explain a large slowdown.
+- Conclusion:
+  the reported container runtime issue is not reproduced by this exact prefix
+  under the current accepted rules. If a local notebook shows container much
+  slower, it is likely running a different/longer expression, stale rule state,
+  or a different checkout. The remaining current mismatch on this exact input is
+  quality, not runtime: container extracts one more parameter (`26` vs `25`).
+
+## 2026-05-04: recursive appended expression slowdown
+
+- Status:
+  diagnosed; no local rule change accepted.
+- Notebook construction detail:
+  `add_more_appended_exprs(5)` does not run appended indices `0..4`. Because
+  `LAST_ADDED` is incremented inside the loop while the index expression also
+  uses `LAST_ADDED + i`, it runs appended indices `[0, 2, 4, 6, 8]`.
+- Reproduced observation:
+  appended index `8` contains source rows `0..8` and is slow in container mode:
+  binary `0.846s`, e-graph size `10725`, `after_nodes=237`,
+  `after_params=37`; container `17.91s`, e-graph size `2107`,
+  `after_nodes=201`, `after_params=32`.
+- First divergence:
+  appended index `5` is fast in container mode (`0.301s`, size `226`).
+  appended index `6` is still moderate (`0.432s`, size `425`).
+  appended index `7` jumps to `6.708s`, size `1663`.
+  appended index `8` then jumps to `17.555s`, size `2107`.
+- Smallest reproducer found:
+  source rows `[6, 7]`, which are the `original` and `sympy` rows for
+  `kotanchek/raw_index=4/Bingo/algo_row=4`, already reproduce the rule-family
+  behavior: binary `0.636s`, size `6305`, `after_params=6`; container
+  `0.739s`, size `817`, `after_params=5`.
+  Adding row `0` amplifies the same mechanism: rows `[0, 6, 7]` run binary
+  `0.901s`, size `12634`, `after_params=11`; container `6.377s`, size `2551`,
+  `after_params=7`.
+- Rule attribution:
+  for rows `[6, 7]`, container rewrite time was `0.440s`; top families were
+  `SOLE_MONOMIALS` flattening (`0.111s`, `1759` matches), Horner (`0.077s`,
+  `1049` matches), coefficient-count factoring (`0.061s`, `436` matches),
+  representative coefficient factoring (`0.020s`, `1690` matches), and exact
+  nested flattening (`0.020s`, `2562` matches).
+  for rows `[0, 6, 7]`, the same families dominate at larger scale:
+  `SOLE_MONOMIALS` flattening (`1.700s`, `8738` matches), Horner (`1.245s`,
+  `6012` matches), coefficient-count factoring (`0.615s`, `2459` matches),
+  exact nested flattening (`0.201s`, `12518` matches).
+- Hypothesis:
+  the container encoding is slow here because the benchmark expression adds an
+  original expression and its expanded/sympy equivalent. Exact flattening and
+  coefficient factoring expose equivalent expanded and grouped presentations;
+  `SOLE_MONOMIALS` then records aliases and Horner repeatedly factors shared
+  terms. Row `0` shares terms such as `x0`, `x1`, and `x0^2/exp(x0^2)`, so it
+  greatly amplifies the same opportunities.
+- Falsified alternatives:
+  row `8` alone is not slow (`0.117s`, size `106`), and pairwise `row8` with
+  rows `0..7` is not enough to reproduce the large slowdown. Extraction is not
+  the root cause: appended index `8` container trace spent `17.451s` in rewrite
+  and only `0.745s` in extraction.
+- Next useful probe:
+  if this benchmark shape matters, optimize a general "original plus expanded
+  equivalent" cycle, not row-specific constants. A likely direction is a guard
+  that suppresses exact flattening or sole-monomial alias expansion when the
+  expanded terms already coexist with the grouped term and no new lower-cost
+  representation is introduced.
+
+## 2026-05-04: scale/flatten cycle in recursive appended slowdown
+
+- Status:
+  mechanism narrowed; no rule change accepted.
+- Smallest synthetic reproducer:
+  `0.1 * (1.0 + 2.0*x0 + 3.0*x1) + (0.1 + 0.2*x0 + 0.3*x1)`.
+  Binary runs in about `0.37s`, size `5029`, `after_params=1`.
+  Containers run in about `4.0s`, size `3507`, `after_params=1`.
+  The three-variable version
+  `0.1 * (1.0 + 2.0*x0 + 3.0*x1 + 4.0*x2) + (0.1 + 0.2*x0 + 0.3*x1 + 0.4*x2)`
+  is much worse: containers previously measured about `32.5s`, size `9521`,
+  still with `after_params=1`.
+- State inspection:
+  after bounded rounds on the two-variable reproducer, `function_values(polynomial)`
+  shows many rows with the same normalized value, including `P`,
+  `0.1*polynomial(2P)`, `0.2*polynomial(P)`, `2*polynomial(0.5P)`,
+  `4*polynomial(0.5P)`, and partially flattened mixtures. A serialized
+  round-4 snapshot was written to `/tmp/param_eq_simple2_round4_serialized.json`;
+  it had total size `99` with `80` serialized `polynomial` nodes in the
+  truncated view.
+- One-rule evidence:
+  the integer-ratio coefficient factor rule alone transforms the mixed shape
+  `0.1*P + 0.1 + 0.2*x0 + 0.3*x1` into
+  `0.1*polynomial(P + 1 + 2*x0 + 3*x1)`. Running exact nested flatten next,
+  then analysis, normalizes that into `0.1*polynomial(2 + 4*x0 + 6*x1)`.
+  This proves a real scale/flatten cycle, but the two-rule chain alone stops
+  after about `10` polynomial rows, so it is not the whole blowup.
+- Second one-rule evidence:
+  representative coefficient factoring alone transforms
+  `P = 1 + 2*x0 + 3*x1` into
+  `2*polynomial(0.5 + x0 + 1.5*x1)` and similarly creates fractional aliases
+  for the mixed outer polynomial. Exact flatten and analysis then make these
+  aliases equivalent to the original bodies. This explains the `0.5P` ladder
+  seen in the full e-graph.
+- Rejected semantic fix:
+  guarding representative coefficient factoring against integer `coef` was
+  not acceptable. It improved the recursive appended index `8` canary from
+  about `17.7s` to `2.5s` with the same `32` params, but it made the minimal
+  `simple_2` reproducer much worse: about `4.0s` to `47.9s`, size `3507` to
+  `16267`. This falsifies "never factor integer representative coefficients"
+  as a global fix; integer representative factoring can be an early compact
+  alias even though it is also part of the cycle.
+- Redundant-flatten guard probe:
+  a local guard that tried to skip exact nested flattening when the expanded
+  scaled body already exists did not match using `POLYNOMIAL_MONOMIALS`,
+  because that table preserves an older raw body with numeric constants still
+  in monomial keys. Using `POLYNOMIAL_BODIES` still could not prove the duplicate
+  for the `0.1` example because map equality is exact over `f64` coefficients:
+  `0.1 * 3.0` produces `0.30000000000000004`, while the flat input contains
+  `0.3`.
+- Floating-point evidence:
+  f64 exactness is an amplifier, but not the only cause. A quarter-scale exact
+  version ran in about `5.3s`, close to the `0.1` version, and a half-scale
+  version timed out at `20s` in a subprocess probe. Rationals or coefficient
+  rounding may help duplicate detection, but they will not by themselves remove
+  the grouped/flattened scale-presentation cycle.
+- Scheduler evidence:
+  reducing the container backoff match limit is a real lever but not a complete
+  semantic fix. For rows `[0, 6, 7]`, match limit `300` preserved `7` params and
+  reduced runtime to about `1.7s`; match limit `200` reduced runtime further but
+  regressed to `8` params. For appended index `8`, match limit `200` reduced
+  runtime to about `2.8s` and preserved `32` params, while match limit `100`
+  regressed to `33` params.
+- Current hypothesis:
+  the underlying cause is a cycle of equivalent presentations:
+  `a*P + expanded(a*P)` can be represented as a mixed polynomial, a flat
+  polynomial, a scaled nested polynomial, or nested scaled variants such as
+  `a*polynomial(kP)`. The parameter extractor eventually picks the desired
+  compact form, but saturation spends time materializing many equivalent
+  scale/group/flatten choices. Lowering the container scheduler budget can
+  avoid some of that search, but the safe budget appears case-dependent.
+- Next probes:
+  test a tolerance-aware or rounded coefficient subset detector for the
+  redundant-flatten case, and separately test a staged schedule that runs
+  broad scale factoring for a small fixed budget before the expensive
+  flatten/Horner rules. Keep any candidate only if it preserves all container
+  vs binary `after_params` outcomes on the artifact comparison.
+
+## 2026-05-04: option comparison for removing the scale/flatten cycle
+
+- Status:
+  compared candidate interventions; no code change accepted.
+- Option A, lower container backoff match limit:
+  this budgets the cycle rather than removing it. Prior measurements showed
+  rows `[0, 6, 7]` improved from about `5.96s` at limit `1000` to `1.72s` at
+  limit `300` with the same `7` params, but limit `200` regressed to `8`
+  params. appended index `8` improved from about `17.7s` to `2.8s` at limit
+  `200` with the same `32` params, but limit `100` regressed to `33` params.
+  This is plausible as a pragmatic scheduler override, but it does not prevent
+  the semantic cycle and needs a full artifact after-param check before use.
+- Option B, representative factor only when shallow param score decreases:
+  tested by binding `score == shallow_polynomial_param_score(poly)` and
+  `score1 == f64_param_score(coef) + shallow_polynomial_param_score(poly1)`.
+  This strongly fixed the minimal cycle: `simple2` went to about `0.064s`,
+  size `27`, `after_params=1`; `rows[6]+rows[7]` went to about `0.120s`,
+  size `118`, `after_params=5`.
+  Rejected because it lost real parameter wins: rows `[0, 6, 7]` regressed
+  `7 -> 8` params and appended index `8` regressed `32 -> 35` params. This
+  option is semantically clean, but only viable with compensating rules for the
+  downstream wins that currently require a locally non-improving factor alias.
+- Option C, block representative factoring only on all-free integer bodies:
+  tested with `shallow_polynomial_param_score(poly) > 0` as a guard. This
+  preserves the real appended params (`32`) and rows `[0, 6, 7]` params (`7`),
+  but it makes the reduced cycle worse: `simple2` about `17.3s`, size `6686`,
+  and `simple3` timed out at `30s`. Rejected. The all-free integer factor path
+  is part of the cycle, but it can also create an early compact alias that keeps
+  the reduced case from exploring even more.
+- Option D, tolerance-aware duplicate expanded-body subsumption:
+  tested a local rule for `a*P + expanded(a*P) -> 2a*P` using
+  `POLYNOMIAL_BODIES` and `CONST_MERGE_TOLERANCE`, with `subsume=True`.
+  The naive local rule was not sufficient: `simple2` worsened to about `9.6s`,
+  size `4735`; `simple3` improved versus the current `32s` case but still took
+  about `12s`; rows `[0, 6, 7]` improved to about `4.2s` with `7` params; and
+  appended index `8` was essentially unchanged at about `17.7s`.
+  This remains conceptually attractive, but the rule must be much more targeted
+  or integrated into normalization; as an added rewrite it adds matching work
+  and does not stop the later aliases soon enough.
+- Option E, rational or rounded polynomial coefficients:
+  evidence says this would help duplicate detection because exact `f64` map
+  equality fails on cases like `0.1 * 3.0` versus `0.3`. It is not a complete
+  fix: exact-scale variants such as the quarter and half examples still show
+  large slowdowns. Rationals/rounding should be viewed as a support mechanism
+  for canonical duplicate detection, not as the primary cycle breaker.
+- Current conclusion:
+  the cleanest route to preserving parameter quality while preventing blowup is
+  probably two-stage:
+  first, replace the broad representative coefficient rule with a local
+  score-decreasing rule; second, add explicit replacements for the small set of
+  downstream parameter wins that depended on locally non-improving aliases.
+  The scheduler-limit option is simpler and may be good enough empirically, but
+  it cannot guarantee the cycle is avoided. A duplicate-expanded subsumption
+  rule should only be revisited if it can be made normalization-like, cheap, and
+  proven to fire before exact flatten/Horner create further aliases.
+
+## 2026-05-04: subsumption-first versus explicit-rule replacement trial
+
+- Status:
+  tried both requested directions and reverted both. `pipeline.py` is unchanged.
+- Subsumption in analysis:
+  tested a `subsume=True` analysis normalization for the exact duplicate shape
+  `a*P + expanded(aP) + R -> 2a*P + R`, using `POLYNOMIAL_BODIES` plus
+  `CONST_MERGE_TOLERANCE`.
+  This is much stronger than the earlier naive rewrite form because the
+  subsumption runs from analysis and can hide the redundant presentation before
+  later rules match on it.
+- Subsumption evidence:
+  `simple2 = 0.1*(1 + 2*x0 + 3*x1) + (0.1 + 0.2*x0 + 0.3*x1)` improved to
+  about `0.066s`, size `23`, `after_params=1`.
+  `simple3 = 0.1*(1 + 2*x0 + 3*x1 + 4*x2) + (0.1 + 0.2*x0 + 0.3*x1 + 0.4*x2)`
+  improved to about `0.064s`, size `25`, `after_params=1`.
+  The real appended rows `[0, 6, 7]` improved from about `5.9s`, size `2551`,
+  to about `4.3s`, size `1857`, with the same `7` params.
+  The larger appended index `8` stayed essentially unchanged at about `17.3s`,
+  size about `2142`, and `32` params.
+  The smaller rows `[6, 7]` canary slowed slightly, about `0.74s -> 0.87s`,
+  with unchanged `5` params.
+- Subsumption conclusion:
+  this is a plausible narrow cleanup for the direct grouped/expanded duplicate
+  cycle, but it is not a complete fix for the large appended slowdown. The
+  remaining slowdown is not only `a*P + expanded(aP)`; it also involves deeper
+  global scale/factor aliases that the subsumption does not eliminate.
+- Explicit-rule replacement:
+  tested replacing broad representative coefficient factoring with local
+  score-decreasing variants, then relying on existing explicit rules. Also
+  tested combining that with the duplicate subsumption above.
+- Explicit-rule evidence:
+  the score-decreasing replacement made many runs fast:
+  `simple2` about `0.061s`, size `27`, `after_params=1`;
+  `rows[6]+rows[7]` about `0.107s`, size `118`, `after_params=5`;
+  appended index `8` about `0.44s`, size `368`.
+  It is not acceptable because it loses parameter reductions:
+  rows `[0, 6, 7]` regressed `7 -> 8` params, and appended index `8`
+  regressed `32 -> 35` params. Combining it with duplicate subsumption fixed
+  the synthetic duplicate cases but did not recover those real parameter wins.
+  A local score-scanning variant had the same issue: faster, but still `8`
+  params on rows `[0, 6, 7]` and `35` params on appended index `8`.
+- Explicit-rule conclusion:
+  the missing behavior is not a small local rule like "pick a better coefficient
+  in this polynomial." The accepted extraction for rows `[0, 6, 7]` depends on
+  a non-local/global scale factor, for example extracting a shared
+  `0.042813... * (...)` across heterogeneous nested terms. Replacing the broad
+  representative alias with a maintainable finite set of small explicit rules
+  would likely require a larger global beneficial-factor extraction rule, not
+  a handful of simple cases.
+
+## 2026-05-04: delayed-win and stop-condition research
+
+- Status:
+  investigated whether the current slowdown could be avoided by stopping on
+  extraction stability instead of e-graph size stability. No code change
+  accepted.
+- Reduced duplicate-cycle evidence:
+  On `simple2`, the extracted result reaches `after_params=1` by inner
+  iteration `3`, but the graph keeps growing:
+  iteration `3` size `62`, extract about `12ms`; iteration `10` size `3253`,
+  extract about `703ms`.
+  On `simple3`, the extracted result reaches `after_params=1` by inner
+  iteration `3`, but the graph still grows through iteration `10`:
+  size `66 -> 624`, extract about `16ms -> 158ms`.
+  This confirms that the synthetic duplicate cycle is mostly wasted closure
+  after the useful extraction is already present.
+- Naive extraction-stability stop:
+  stopping after two identical extracted results made the synthetic cases fast:
+  `simple2` about `0.15s` instead of about `4.0s`, and `simple3` about `0.15s`
+  instead of about `32s`.
+  Rejected as a general stop condition because it misses delayed real wins:
+  rows `[0, 6, 7]` stopped at `8` params instead of the accepted `7`;
+  appended index `8` stopped at `33` params instead of the accepted `32`.
+- Delayed real-win trace:
+  rows `[0, 6, 7]` improves from `11 -> 10 -> 9 -> 8` params by iteration `4`,
+  remains at `8` params through iteration `11`, and only reaches `7` params at
+  iteration `12` when the global scale factor appears. Size at the delayed win
+  is about `1306`.
+  appended index `8` improves from `39 -> 37 -> 34 -> 33`, remains at `33`
+  through iteration `8`, and only reaches `32` params at iteration `9`.
+- Current conclusion:
+  early extraction stability is useful as a diagnostic but unsafe as the main
+  algorithm. The useful delayed wins require keeping some globally factored
+  aliases alive long after the local expression has stabilized. A better fix
+  should either represent those global factored views without feeding them back
+  into generic polynomial rewrites, or compute the global factorization
+  deterministically outside broad e-matching.
+
+## 2026-05-04: rule-level best-scale and residual-scale experiments
+
+- Status:
+  tried the requested Python-rule implementation direction and reverted it.
+  `pipeline.py` is unchanged.
+- Best float-reducing scale as a rule:
+  implemented a deterministic selector using nested `map-fold-kv`: for each
+  coefficient candidate `c`, compute the coefficient paid-float gain from
+  `P -> c*(P/c)`, tie-breaking by the number of integer quotients, and emit
+  only one scale when the gain is positive.
+- Rule-level selector evidence:
+  unbounded and `poly.length <= 6` versions were too slow before the first
+  canary completed. With `poly.length <= 4`, the selector fixed `simple2`
+  (`~0.07s`, size `29`, `after_params=1`) and improved `rows[6]+rows[7]`
+  (`~0.14s`, size `156`, `after_params=5`), but it missed the known delayed
+  global wins: rows `[0, 6, 7]` stayed at `8` params and appended index `8`
+  stayed at `35` params.
+- Whole-polynomial residual scale as a rule:
+  added a second Python-rule selector that chooses a scale when the divided
+  coefficients contain a group whose residuals differ by exact integers, then
+  relies on the existing residual-split rule to factor that divided body.
+- Residual-scale evidence:
+  the rule recovered or improved some parameter counts:
+  rows `[0, 6, 7]` reached `6` params and rows `[6, 7]` reached `4` params.
+  It was not acceptable: `simple3` regressed to about `34s`, size `5517`, and
+  the extracted shape was suspicious (`0.4 * (1 + 2*x0 + 3*x1 + 4*x2)` for the
+  reduced duplicate case where the expected scale is `0.2`). Appended index `8`
+  still missed the accepted `32` params, reaching only `33`.
+- Current conclusion:
+  implementing the selector as nested Python-level map folds is the wrong
+  mechanism. The bounded float-reducing rule validates the ranking idea on
+  `simple2`, but the real delayed wins need a more global decoded-cost view.
+  The residual-scale idea is powerful enough to find extra params, but as a
+  broad rewrite it creates too many opportunities and needs either a carefully
+  audited primitive or an extraction/opaque-view implementation where the
+  chosen factored form does not feed back into generic polynomial rewrites.
+
+## 2026-05-04: primitive best-common-float-scale experiment
+
+- Status:
+  implemented `map-best-common-float-scale` as a partial Rust primitive over
+  `Map[_, f64]` and exposed it to Python as `map_best_common_float_scale`.
+  Kept the primitive-backed `param_eq` coefficient factoring rule in the
+  working tree for further investigation.
+- Primitive behavior:
+  the primitive rounds coefficients to a fixed decimal denominator, tries
+  pairwise gcd-derived scales, and returns only a non-integer scale that turns
+  at least two coefficients into small integer quotients while decreasing the
+  approximate paid-float count. Otherwise the primitive returns no value.
+- Focused validation:
+  `cargo test --test files --features bin map -- --nocapture` passed.
+  `uv run pytest python/tests/test_high_level.py::test_map_best_common_float_scale
+  python/tests/test_high_level.py::test_map_best_common_float_scale_uses_useful_pair
+  python/tests/test_high_level.py::test_map_best_common_float_scale_fails_without_useful_scale -q`
+  passed.
+- Pipeline failure list:
+  `uv run pytest python/egglog/exp/param_eq/test_pipeline.py -q --tb=no`
+  reported `26 failed, 122 passed, 15 skipped`. The failures are container-only
+  for the changed rule families, plus unrelated/stale snapshot/scheduler tests.
+- True primitive-related breakage:
+  fourteen `test_rules[containers-...]` cases fail for binary-style arbitrary
+  coefficient factoring such as `a*x+b -> a*(x+b/a)`, quotient-denominator
+  factoring, and `(b+a*x)/(c+d*y)` style quotient factoring.
+  Seven container simplification regressions lose parameter improvements:
+  scaled polynomial factors, scaled terms in larger polynomials, nested log
+  constant absorption, and exact nested log polynomial flattening.
+  Two repeated-polynomial-product tests keep the expected parameter count but
+  miss the expected node count.
+- Direct primitive probes:
+  `map_best_common_float_scale({3.14, 2.71})` fails, so the new rule cannot
+  produce the old `3.14*(x+2.71/3.14)` witness. It also fails for the
+  coefficient pairs in the scaled product and nested-log canaries:
+  `{0.0077679147943854, -0.0477729775011539}`,
+  `{0.003918940250258392, 0.7556389413872189}`, and the exact nested-log
+  coefficient pairs. It succeeds for the intended duplicate-scale canaries:
+  `{0.2, 0.4, 0.6000000000000001} -> 0.2`,
+  `{0.1, 0.2, 0.333} -> 0.1`, and
+  `{0.009239, -0.042748853, -0.009239} -> 0.009239`.
+- Current conclusion:
+  the primitive is correctly implementing the narrower "locally reduces paid
+  float count" heuristic, but the existing container rule suite relies on a
+  broader reachability rule that factors arbitrary representative coefficients
+  even when the local float count does not improve. Replacing the old rule
+  requires adding separate maintainable reachability rules for binary-style
+  factoring, or changing the primitive/heuristic to return non-improving scales
+  when those scales are needed for downstream rules.
+
+## 2026-05-04: two-term reachability rule after primitive scale
+
+- Status:
+  accepted a narrow two-term representative-coefficient reachability rule in
+  `container_basic_rules`, while keeping the profitable `map-best-common-float-scale`
+  primitive as the first scale choice.
+- Missing-case classification:
+  the primitive does not cover locally neutral two-term factoring:
+  `a*M + b*N -> a*(M + (b/a)*N)`. This broke binary-shaped container witnesses
+  such as `a*x+b`, `a*x+b*y`, two-term denominator factoring, and two-term
+  polynomial arguments under `log`. These cases are useful because later
+  quotient/log/scaled-polynomial rules can consume the factored two-term form
+  even though local float count does not improve.
+- Rule shape:
+  restored the old representative coefficient factoring only for
+  `poly.length() == 2`, with at least one non-constant monomial and no
+  non-constant coefficient already equal to `1.0`. Larger length-3/4
+  polynomials still use the primitive or targeted coefficient rules.
+- Focused test result:
+  `uv run pytest test_rules + scaled polynomial/log/repeated product families`
+  passed `95 passed`.
+- Full pipeline result:
+  `uv run pytest python/egglog/exp/param_eq/test_pipeline.py -q --tb=short`
+  now has only three non-rule failures left:
+  stale snapshot `test_end_to_end`, stale snapshot
+  `test_constant_folding_containers`, and
+  `test_container_self_factor_cycle_remains_extractable` referencing removed
+  helper `_new_rewrite_scheduler`.
+- Real-row samples:
+  first 20 canonical rows vs previous rule:
+  mean wall ratio `0.253`, mean report ratio `0.226`, mean size delta `-1.85`,
+  and `0` after-param regressions.
+  Spread sample of 16 rows across the corpus:
+  mean wall ratio `0.283`, mean report ratio `0.246`, mean size delta `-0.06`,
+  and `0` after-param regressions.
+- Cumulative canaries:
+  `simple2` improved from about `4.45s`, size `3507` to about `0.12s`, size
+  `29`, with `after_params=1`.
+  `simple3` improved from about `32.8s`, size `9521` to about `0.09s`, size
+  `54`, with `after_params=1`.
+  `rows_6_7` improved from `5` params to `4` params and from about `0.82s` to
+  about `0.68s`.
+  `appended8` preserved `32` params and similar runtime (`~18.6s` previous,
+  `~19.1s` current) while shrinking size from `2107` to `1950`.
+  `rows_0_6_7` remains the known gap: previous reached `7` params in about
+  `4.28s`; current reaches `8` params in about `3.24s`.
+- Current conclusion:
+  the two-term rule is the right first narrow reachability replacement. It
+  recovers the broad unit-test families and real-row param quality without
+  reopening the synthetic duplicate-scale blowup. The remaining uncovered
+  family is not local two-term factoring; it is a delayed global scale across
+  an already-composed larger polynomial. That needs a separate global-scale
+  rule or extraction-only view, and should not be folded into the two-term
+  reachability rule.
+
+## 2026-05-04: notebook appended run `Unextractable root`
+
+- Status:
+  investigated a notebook failure from `add_more_appended_exprs(10)` with
+  `LAST_ADDED == 16`. No current-checkout reproduction found.
+- Observed notebook error:
+  `Unextractable root Value(...) with sort EqSort { name: "Num" }` while the
+  progress bar was around 60%.
+- Exact current-checkout probes:
+  running container-only appended indices `16..25` in a fresh process succeeded.
+  Running the notebook-shaped sequence `binary_report = run_paper_pipeline(...)`
+  followed by `container_report = run_paper_pipeline_container(...)` for
+  appended indices `0..25` reproduced one transient failure at appended index
+  `18`, but repeated narrower probes did not reproduce it.
+  Fresh `run_paper_pipeline(parse_expression(appended18))` succeeds with
+  `before_params=94`.
+  Fresh `EGraph().extract(parse_expression_container(appended18),
+  include_cost=True, cost_model=container_cost_model)` succeeds with
+  `ParamCost(90, 482)`.
+  A longer history probe running all 714 source rows plus appended `0..17` in
+  the same process still left the appended18 container initial extraction
+  healthy.
+- Falsified hypotheses:
+  appended18 is not intrinsically unextractable in the current checkout.
+  container-only history does not poison extraction.
+  binary-only history does not poison extraction.
+  the full original-row notebook history does not poison extraction in a fresh
+  process.
+- Current hypothesis:
+  the saved notebook is using stale in-kernel function objects or scheduler
+  state from an earlier `pipeline.py` version. The notebook imports
+  `run_paper_pipeline` and `run_paper_pipeline_container` directly, so editing
+  `pipeline.py` on disk does not update those names until the cell is rerun or
+  the kernel is restarted.
+- Recommended recovery:
+  restart the notebook kernel and rerun the import/setup cells, or replace the
+  direct function imports with a module import plus `importlib.reload(pipeline)`
+  during experiments.
+
+## 2026-05-04: appended initial custom-cost extraction root
+
+- Status:
+  fixed the repeated appended-expression `Unextractable root` failure at the
+  initial `EGraph(...).extract(..., include_cost=True, cost_model=...)` step.
+- Smallest reliable repro:
+  in a fresh process, build recursive `APPENDED_EXPRS` from
+  `load_original_results()` and repeatedly run only:
+  `EGraph(save_egglog_string=False).extract(parse_expression(expr),
+  include_cost=True, cost_model=param_cost_model)`.
+  Before the fix this failed around appended index `13..19` with
+  `ValueError: Unextractable root`.
+- Falsified hypotheses:
+  the expression itself was not intrinsically unextractable:
+  `appended19` succeeded alone.
+  a cost-model callback rejection was not the cause:
+  a logging wrapper saw `0` callback exceptions before the extractor reported
+  an unextractable root.
+  the e-class was not missing entirely:
+  the default extractor could extract the same root after the custom-cost
+  extractor failed.
+- Confirmed mechanism:
+  disabling repeated-subexpression synthetic lets made the repeated initial
+  extraction pass through appended39. The failure also disappeared with
+  `save_egglog_string=True`, which uses the parse-and-run path rather than the
+  direct command API. The failing boundary was therefore the combination of
+  direct command registration, synthetic let factoring, and custom object-cost
+  extraction. The fix registers the exact structural extraction root for
+  custom-cost extraction instead of the synthetic-let optimized command form.
+- Validation:
+  added
+  `test_repeated_initial_custom_cost_extraction_handles_appended_roots`.
+  `uv run pytest
+  python/egglog/exp/param_eq/test_pipeline.py::test_repeated_initial_custom_cost_extraction_handles_appended_roots
+  -q` passed.
+  The direct repeated initial extraction probe now succeeds through appended39.
+- Appended performance after fix:
+  with the then-current `45/30` container scheduler, appended0..79 all ran
+  without extraction failures. No case approached the 5-minute timeout; by
+  appended79 binary was about `2.8s` report time and containers about `4.4s`.
+  Containers stayed much smaller (`~1.5k` total size vs binary `~17k`) and
+  usually had fewer params, but report time was often higher after appended11.
+- Scheduler budget probe:
+  `30/20` was tested as a lower container budget. On the 714 retained corpus
+  rows it had `0` failures and `0` after-param regressions, with mean runtime
+  about `161ms`. On appended0..79 it was substantially faster than `45/30`;
+  the max slowdown over binary was about `0.65s` at appended43, and many later
+  cases were close to binary time. Remaining appended param regressions under
+  `30/20` were indices `1..5` and `47`; indices `1..5` did not improve with
+  larger backoff, so those are missing-rule or cost/extraction differences
+  rather than search-budget differences.
+
+## 2026-05-04: larger appended expressions container slowdown
+
+- Status:
+  investigated why larger synthetic appended expressions still run slower in
+  container mode even though the container e-graph is much smaller and the
+  extracted parameter count is better.
+- Repro:
+  built recursive appended expressions from `load_original_results()` in
+  canonical row order and sampled appended indices `79, 100, 120, 140, 160,
+  180, 200` with `/tmp/param_eq_large_sample.py`.
+- Baseline observation with current `30/20` container scheduler:
+  appended79: binary report `3.05s`, container report `3.67s`; binary size
+  `16948`, container size `1456`; params `430 -> 419`.
+  appended100: binary report `4.22s`, container report `5.79s`; binary size
+  `17927`, container size `2347`; params `611 -> 594`.
+  appended120: binary report `5.41s`, container report `7.21s`; binary size
+  `21261`, container size `2863`; params `735 -> 704`.
+  appended140: binary report `7.47s`, container report `9.10s`; binary size
+  `21950`, container size `3028`; params `822 -> 774`.
+  appended160: binary report `8.33s`, container report `9.81s`; binary size
+  `22582`, container size `3195`; params `910 -> 851`.
+  appended180 hit Python recursion depth in both variants, and appended200 hit
+  Python parser nesting limits in both variants.
+- Phase probe:
+  `/tmp/param_eq_phase_probe.py --idx 100` and `--idx 140` split parse,
+  initial before-cost extraction, pass input registration, analysis,
+  rewrites, graph-size checks, pass extraction, pop, and render/decode.
+- Key measurement for appended140:
+  binary accounted wall `7.38s`, container accounted wall `11.01s`.
+  Binary pass extraction was slower (`4.85s`) than container pass extraction
+  (`2.28s`), so custom-cost extraction is not the relative container slowdown
+  for this case.
+  Container was slower in pass input registration (`2.20s` vs `0.70s`),
+  analysis (`1.63s` vs `0.03s`), rewrites (`1.49s` vs `0.64s`), parse
+  (`1.21s` vs `0.16s`), and before-cost extraction (`1.80s` vs `0.89s`).
+  Container RunReport totals had only `8146` matches vs binary `109202`, but
+  much higher merge/rebuild time (`0.99s` vs `0.02s`) and higher reported
+  search/apply (`1.25s` vs `0.60s`).
+- Falsified hypothesis:
+  "containers are slower because custom-cost extraction dominates" is false on
+  appended100 and appended140. Container extraction and callback time are lower
+  than binary; the slowdown is in registering/map-lowering the extracted
+  container current plus container analysis/rebuild/rewrite work.
+- Rule-level probe:
+  the top direct container rule cost was the whole-polynomial coefficient
+  divisor witness rule:
+  `a*M + b*N -> a * (M + (b/a)*N)`-style scaling generalized over a small
+  polynomial. It took about `0.29s` on appended100 and `0.56s` on appended140.
+  Temporarily disabling it reduced direct rewrite time but did not produce a
+  clean total win: appended100 container pipeline was about `5.11s` vs `5.14s`
+  baseline, while appended140 was about `7.87s` vs `7.71s` baseline and
+  regressed params from `774` to `775`. The temporary guard was reverted.
+- Secondary probe:
+  a private exact-root let path that binds the pass input with
+  `expr_to_let=False` reduced container `pass_let` substantially
+  (`1.15s -> 0.34s` on appended100, `2.20s -> 0.53s` on appended140), with
+  identical params in those probes. However it shifted some work into
+  analysis/rebuild/extraction, so net report improvement was modest:
+  appended100 container pipeline `5.14s -> 4.81s`;
+  appended140 `7.71s -> 7.37s`. This is a promising overhead reduction, not a
+  full explanation for the remaining slowdown.
+- Current conclusion:
+  the container representation helps the e-graph size and parameter quality,
+  but the large appended expressions stress a different cost center: each
+  container node carries larger map payloads, and the container analysis rules
+  repeatedly fold/merge those payloads. Total e-node count is therefore not a
+  good proxy for runtime on these cases. The next safe implementation target is
+  the exact-root pass input helper, because it attacks measured overhead without
+  changing rewrite semantics. The remaining larger issue is container
+  analysis/rebuild over map payloads; removing a single broad rewrite rule is
+  not supported by the evidence.
+
+## 2026-05-04: relaxed parameter-parity tradeoff probes
+
+- Status:
+  diagnosis only. Temporary rule guards were reverted.
+- Question:
+  if container results do not need to always match or beat binary parameter
+  counts, which levers most reduce runtime while keeping a reasonable
+  better/same/worse split?
+- Probe:
+  `/tmp/param_eq_tradeoff_eval.py` ran a mixed sample of 14 canonical rows
+  (`0,1,2,3,4,5,6,7,8,9,10,20,40,80`) and four synthetic appended rows
+  (`8,40,79,100`). It reports container-vs-binary parameter outcomes,
+  report-time ratios, and e-graph-size ratios.
+- Baseline current container scheduler `30/20`:
+  `5 / 13 / 0` parameter better/same/worse, mean report ratio `2.10`, total
+  report ratio `1.01`, mean size ratio `0.28`. Appended rows were still
+  parameter-better, but appended40/79/100 were about `1.10x`, `1.10x`, and
+  `1.16x` binary runtime.
+- Scheduler-only probes:
+  `10/10`: `4 / 13 / 1` better/same/worse, total report ratio `0.52`.
+  Appended runtime ratios dropped to about `0.26x`, `0.31x`, `0.57x`,
+  `0.77x`; appended40 was the only worse parameter case in this sample
+  (`+1` param).
+  `5/10`: also `4 / 13 / 1`, total report ratio `0.52`. Appended runtime
+  ratios were about `0.20x`, `0.33x`, `0.47x`, `0.65x`; appended40 again
+  regressed by `+1` param.
+  `1/5`: much faster (`0.43` total report ratio) but too lossy:
+  `1 / 11 / 6` better/same/worse, with all four appended rows worse
+  (`+2`, `+7`, `+8`, `+4` params).
+- Rule ablation probes:
+  narrowing broad representative coefficient factoring from `poly.length <= 4`
+  to `<= 2` did not help the mixed sample. It kept `5 / 13 / 0`
+  better/same/worse but total report ratio worsened to `1.09`; combined with
+  `5/10` it was effectively the same as scheduler-only `5/10`.
+  Temporarily disabling repeated scalar coefficient-subset factoring also did
+  not help this mixed sample. It kept `5 / 13 / 0`, total report ratio stayed
+  about `1.00`, and appended100 got slower (`1.40x` binary).
+- Current conclusion:
+  if parity can be relaxed, the highest-impact low-complexity lever is the
+  container scheduler budget, not deleting one of the current broad container
+  rules. `5/10` looks like the best measured starting point for "mostly keeps
+  quality, makes larger synthetic sums much faster": it gives one worse case
+  in this mixed sample while making all appended sample rows faster than
+  binary. `1/5` crosses the quality cliff. Rule removals are less attractive
+  because their costs are context-dependent: they can reduce direct match time
+  but often shift work into analysis/rebuild/extraction or lose parameter wins
+  without improving total runtime.
+
+## 2026-05-04: strict score-improving representative-scale probe
+
+- Status:
+  diagnosis only. Temporary rule swap was reverted.
+- Probe:
+  disabled the broad representative coefficient factoring rule
+  `poly.length <= 4; coef == poly2[poly2.pick_key()]` and enabled the parked
+  strict `map_best_common_float_scale(poly)` rule, which only returns a scale
+  when it locally decreases the approximate paid-float count.
+- Same mixed sample as the relaxed tradeoff probe:
+  14 canonical rows plus appended `8,40,79,100`.
+- Result with the normal `30/20` container scheduler:
+  current baseline: `5 / 13 / 0` parameter better/same/worse,
+  mean report ratio `2.10`, total report ratio `1.01`, mean size ratio `0.28`.
+  strict score-improving scale: `5 / 10 / 3`, mean report ratio `1.94`,
+  total report ratio `1.22`, mean size ratio `0.21`.
+  It made three canonical rows worse by `+1` param and made the total report
+  time worse on this sample despite a lower mean ratio.
+- Result with the faster `5/10` container scheduler:
+  scheduler-only `5/10`: `4 / 13 / 1`, mean report ratio `1.94`,
+  total report ratio `0.52`.
+  strict score-improving scale plus `5/10`: `4 / 10 / 4`, mean report ratio
+  `1.81`, total report ratio `0.52`.
+  It did not improve total time over scheduler-only `5/10`, and it increased
+  parameter regressions from one row to four rows.
+- Current conclusion:
+  the strict score-improving replacement is not a good performance tradeoff in
+  the current rule suite. It reduces some local e-graph size, but it removes
+  non-local reachability witnesses that later rules use, while not improving
+  total runtime beyond what a lower scheduler budget already achieves. If
+  parameter parity is relaxed, scheduler `5/10` is still the cleaner fast-mode
+  knob than this semantic cut.

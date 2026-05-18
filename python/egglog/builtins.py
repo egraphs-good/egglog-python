@@ -66,6 +66,7 @@ __all__ = [
     "i64",
     "i64Like",
     "join",
+    "map_best_common_float_scale",
     "map_bigrat_intersect_min",
     "map_bigrat_subtract",
     "map_contains_key_swapped",
@@ -711,6 +712,10 @@ def map_nonconst_nonunit_f64_values(xs: Map[Map[T, V], f64]) -> MultiSet[f64]: .
 
 @function(egg_fn="map-divide-all-values-by-f64", builtin=True)
 def map_divide_all_values_by_f64(factor: f64, xs: Map[T, f64]) -> Map[T, f64]: ...
+
+
+@function(egg_fn="map-best-common-float-scale", builtin=True)
+def map_best_common_float_scale(xs: Map[T, f64]) -> f64: ...
 
 
 @function(egg_fn="map-integer-residual-split-candidate", builtin=True)

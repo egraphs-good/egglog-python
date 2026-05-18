@@ -410,7 +410,7 @@ class EGraphState:
     def command_to_egg(self, cmd: CommandDecl, ruleset: Ident) -> bindings._Command | None:
         match cmd:
             case ActionCommandDecl(action):
-                action_egg = self.action_to_egg(action, expr_to_let=True)
+                action_egg = self.action_to_egg(action)# , expr_to_let=False)
                 if not action_egg:
                     return None
                 return bindings.ActionCommand(action_egg)

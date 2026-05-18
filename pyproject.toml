@@ -220,6 +220,8 @@ ignore = [
     "INP001",
     # don't replace lambdas with functions because we need them to defer resolution
     "PLW0108",
+    # unicode vars
+    "PLC2401"
 ]
 select = ["ALL"]
 
@@ -252,16 +254,19 @@ preview = true
 
 [tool.mypy]
 ignore_missing_imports = true
-allow_redefinition = true
+allow_redefinition_new = true
 exclude = ["__snapshots__", "_build", "^conftest.py$"]
 warn_unused_configs = true
 disallow_subclassing_any = true
 check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
+warn_unreachable = true
 strict_equality = true
 extra_checks = true
 strict_equality_for_none = true
+enable_incomplete_feature = ["TypeForm"]
+local_partial_types = true
 
 [tool.maturin]
 python-source = "python"

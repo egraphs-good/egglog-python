@@ -373,6 +373,7 @@ dependencies = [
  "egglog-numeric-id",
  "egglog-reports",
  "egraph-serialize",
+ "enum-map",
  "hashbrown 0.16.1",
  "im-rc",
  "indexmap",
@@ -417,7 +418,6 @@ dependencies = [
  "num-rational",
  "once_cell",
  "ordered-float",
- "petgraph",
  "rayon",
  "smallvec",
  "thiserror",
@@ -429,6 +429,7 @@ name = "egglog-concurrency"
 version = "2.0.0"
 dependencies = [
  "arc-swap",
+ "bumpalo",
  "egglog-numeric-id",
  "rayon",
  "smallvec",
@@ -454,7 +455,6 @@ dependencies = [
  "log",
  "num",
  "once_cell",
- "petgraph",
  "rand 0.9.2",
  "rayon",
  "rustc-hash",
@@ -555,6 +555,26 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "enum-map"
+version = "2.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6866f3bfdf8207509a033af1a75a7b08abda06bbaaeae6669323fd5a097df2e9"
+dependencies = [
+ "enum-map-derive",
+]
+
+[[package]]
+name = "enum-map-derive"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f282cfdfe92516eb26c2af8589c274c7c17681f5ecc03c18255fe741c6aa64eb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "equivalent"
@@ -1415,18 +1435,6 @@ checksum = "89815c69d36021a140146f26659a81d6c2afa33d216d736dd4be5381a7362220"
 dependencies = [
  "pest",
  "sha2",
-]
-
-[[package]]
-name = "petgraph"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
-dependencies = [
- "fixedbitset",
- "hashbrown 0.15.5",
- "indexmap",
- "serde",
 ]
 
 [[package]]

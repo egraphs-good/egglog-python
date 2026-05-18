@@ -31,7 +31,7 @@ from warnings import warn
 
 import graphviz
 from opentelemetry import trace
-from typing_extensions import ParamSpec, Unpack
+from typing_extensions import ParamSpec, TypeForm, Unpack
 
 from . import bindings
 from ._tracing import call_with_current_trace
@@ -1318,7 +1318,7 @@ class EGraph:
             cost = cast("COST", extract_report.cost)
         else:
             if not isinstance(runtime_expr.__egg_typed_expr__.expr, (LetRefDecl, UnboundVarDecl)):
-                self.register(expr)
+                self._register_extract_root(runtime_expr)
             egg_cost_model = _CostModel(cost_model, self).to_bindings_cost_model()
             egg_sort = self._state.type_ref_to_egg(tp)
             extractor = call_with_current_trace(bindings.Extractor, [egg_sort], self._state.egraph, egg_cost_model)
@@ -1553,6 +1553,20 @@ class EGraph:
         self._add_decls(*cmds)
         egg_cmds = [egg_cmd for cmd in cmds if (egg_cmd := self._command_to_egg(cmd)) is not None]
         self._state.run_program(*egg_cmds)
+
+    def _register_extract_root(self, runtime_expr: RuntimeExpr) -> None:
+        """
+        Register the exact extraction root without synthetic let factoring.
+
+        Synthetic lets are a command-size optimization for public registration,
+        but custom-cost extraction immediately evaluates the original root value.
+        Registering a let-factored presentation can leave the custom extractor
+        without a costed parent for that exact value in the direct command API.
+        """
+        self._add_decls(runtime_expr)
+        action_egg = self._state.action_to_egg(ExprActionDecl(runtime_expr.__egg_typed_expr__), expr_to_let=False)
+        if action_egg is not None:
+            self._state.run_program(bindings.ActionCommand(action_egg))
 
     def _command_to_egg(self, cmd: Command) -> bindings._Command | None:
         ruleset_ident = Ident("")
@@ -1835,7 +1849,7 @@ class Schedule(DelayedDeclarations):
     A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
     """
 
-    # Defer declerations so that we can have rule generators that used not yet defined yet
+    # Defer declarations so that we can have rule generators that used not yet defined yet
     schedule: ScheduleDecl
 
     def __str__(self) -> str:
@@ -2138,7 +2152,7 @@ def rule(*facts: FactLike, ruleset: None = None, name: str | None = None) -> _Ru
     return _RuleBuilder(facts=_fact_likes(facts), name=name, ruleset=ruleset)
 
 
-def var(name: str, bound: type[T], egg_name: str | None = None) -> T:
+def var(name: str, bound: TypeForm[T], egg_name: str | None = None) -> T:
     """Create a new variable with the given name and type."""
     return cast("T", _var(name, bound, egg_name=egg_name))
 

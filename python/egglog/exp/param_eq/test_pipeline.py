@@ -7,9 +7,9 @@ import rich.progress
 from syrupy import SnapshotAssertion
 from syrupy.extensions.json import JSONSnapshotExtension
 
-import egglog.exp.param_eq.pipeline as pipeline_module
 from egglog import *
 from egglog.exp.param_eq.domain import *
+from egglog.exp.param_eq.original_results import load_original_results
 from egglog.exp.param_eq.pipeline import *
 
 
@@ -50,6 +50,20 @@ def test_analysis_constant_folding(source: str, expected_value: float, parser: C
     check_eq(
         parser(source), Num(expected_value), schedule, Num(0.0), Num.var("x0") == (Num(1.0)), subsume(Num.var("x0"))
     )
+
+
+def test_repeated_initial_custom_cost_extraction_handles_appended_roots() -> None:
+    rows = load_original_results()
+    appended_exprs: list[str] = []
+    for i in range(20):
+        source = rows.iloc[i]["orig_parsed_expr"]
+        appended_exprs.append(source if i == 0 else f"({appended_exprs[-1]} + {source})")
+
+    for source in appended_exprs:
+        _, cost = EGraph(save_egglog_string=False).extract(
+            parse_expression(source), include_cost=True, cost_model=param_cost_model
+        )
+        assert cost.floats >= 0
 
 
 @pytest.mark.parametrize(
@@ -188,7 +202,7 @@ def _run_container_rounds(source: str, rounds: int) -> tuple[EGraph, Num]:
     root = egraph.let("root", parse_expression_container(source))
     egraph.run(containers_analysis_schedule)
     for _ in range(rounds):
-        egraph.run(run(container_rewrite_ruleset, scheduler=pipeline_module._new_rewrite_scheduler()))
+        egraph.run(container_schedule)
         egraph.run(containers_analysis_schedule)
     return egraph, root
 

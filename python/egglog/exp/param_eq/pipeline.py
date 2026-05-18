@@ -42,6 +42,7 @@ CONSTS = constant(
     ),
 )
 
+
 def _choose_lower_scored_monomial(
     old_value: Pair[i64, ContainerMonomial], new_value: Pair[i64, ContainerMonomial]
 ) -> Pair[i64, ContainerMonomial]:
@@ -89,6 +90,7 @@ POLYNOMIAL_BODIES = constant(
     merge=partial(map_merge_with, lambda old_value, new_value: new_value),
 )
 
+
 def if_defined(cond: Unit, then: T, otherwise: T) -> T:
     return catch(lambda: cond).match(lambda _: then, otherwise)
 
@@ -111,9 +113,11 @@ def bigrat_param_score(value: BigRat) -> i64:
 
 def shallow_polynomial_param_score(poly: ContainerPolynomial) -> i64:
     return map_fold_kv(
-        lambda score, mono, coef: score
-        + f64_param_score(coef)
-        + map_fold_kv(lambda mono_score, _term, exp: mono_score + bigrat_param_score(exp), i64(0), mono),
+        lambda score, mono, coef: (
+            score
+            + f64_param_score(coef)
+            + map_fold_kv(lambda mono_score, _term, exp: mono_score + bigrat_param_score(exp), i64(0), mono)
+        ),
         i64(0),
         poly,
     )
@@ -124,14 +128,16 @@ def generic_sole_monomial_score(poly: ContainerPolynomial) -> i64:
     # term a large penalty. A more specific one-level polynomial alias, when it
     # exists, should beat this fallback using its decoded coefficient score.
     return map_fold_kv(
-        lambda score, mono, coef: score
-        + f64_param_score(coef)
-        + map_fold_kv(
-            lambda mono_score, _term, exp: mono_score
-            + bigrat_param_score(exp)
-            + i64(SOLE_MONOMIAL_GENERIC_TERM_PENALTY),
-            i64(0),
-            mono,
+        lambda score, mono, coef: (
+            score
+            + f64_param_score(coef)
+            + map_fold_kv(
+                lambda mono_score, _term, exp: (
+                    mono_score + bigrat_param_score(exp) + i64(SOLE_MONOMIAL_GENERIC_TERM_PENALTY)
+                ),
+                i64(0),
+                mono,
+            )
         ),
         i64(0),
         poly,
@@ -441,6 +447,45 @@ def container_basic_rules(
         poly2.length() == nonconst_poly.length(),  # divide the terms by that coefficient
         poly1 == map_map_values(lambda _, c: c / coef, poly),
     )
+
+    # Parked experiment: the common-scale primitive only factored when the scale
+    # reduced the approximate paid-float count. That fixed the simple
+    # arbitrary-scale cycle, but it regressed too many binary-style witnesses
+    # and did not fix the appended-expression slowdown.
+    #
+    # yield rewrite(polynomial(poly)).to(
+    #     polynomial(
+    #         ContainerPolynomial.empty().insert(ContainerMonomial.empty().insert(polynomial(poly1), BigRat(1, 1)), coef)
+    #     ),
+    #     poly.length() > i64(1),
+    #     poly.length() <= i64(4),
+    #     coef == map_best_common_float_scale(poly),
+    #     poly1 == map_map_values(lambda _, c: c / coef, poly),
+    # )
+
+    # Restore binary-style coefficient reachability for exactly two-term
+    # polynomials:
+    #
+    # a*M + b*N -> a * (M + (b/a)*N)
+    #
+    # This deliberately allows locally neutral scale choices like
+    # `3.14*x + 2.71 -> 3.14*(x + 2.71/3.14)`, because later quotient/log
+    # rules rely on those witnesses. This is intentionally narrower than the
+    # small-polynomial representative rule above, so it can remain as the
+    # explicit reachability path if that broader rule is tightened again.
+    # yield rewrite(polynomial(poly)).to(
+    #     polynomial(
+    #         ContainerPolynomial.empty().insert(ContainerMonomial.empty().insert(polynomial(poly1), BigRat(1, 1)), coef)
+    #     ),
+    #     poly.length() == i64(2),
+    #     nonconst_poly == map_filter_kv(lambda k, _v: k != ContainerMonomial.empty(), poly),
+    #     nonconst_poly.length() > i64(0),
+    #     poly2 == map_filter_kv(lambda _k, v: v != f64(1.0), nonconst_poly),
+    #     poly2.length() == nonconst_poly.length(),
+    #     coef == poly2[poly2.pick_key()],
+    #     coef != f64(0.0),
+    #     poly1 == map_map_values(lambda _, c: c / coef, poly),
+    # )
 
     # Add one alternate factor choice when a coefficient is a smaller exact
     # integer divisor of another coefficient. This is the minimal container
@@ -1265,15 +1310,25 @@ def parse_expression_container(source: str) -> Num:
     return binary_to_containers(parse_expression(source))
 
 
-rewrite_scheduler: BackOff = back_off(
-    match_limit=BACKOFF_MATCH_LIMIT,
-    ban_length=BACKOFF_BAN_LENGTH,
-    fresh_rematch=True,
-).persistent()
-
-binary_schedule = run(binary_rewrite_ruleset, scheduler=rewrite_scheduler)
-container_schedule = run(container_rewrite_ruleset, scheduler=rewrite_scheduler)
-
+binary_schedule = run(
+    binary_rewrite_ruleset,
+    scheduler=back_off(
+        match_limit=1000,
+        ban_length=30,
+        fresh_rematch=True,
+    ).persistent(),
+)
+container_schedule = run(
+    container_rewrite_ruleset,
+    scheduler=back_off(
+        # This lower container budget preserves corpus parameter parity while
+        # avoiding synthetic appended-expression slowdowns from over-searching
+        # equivalent container factorizations.
+        match_limit=5,
+        ban_length=10,
+        fresh_rematch=True,
+    ).persistent(),
+)
 
 
 def _run_single_pass(
