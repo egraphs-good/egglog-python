@@ -71,11 +71,11 @@ def _int_program(i64_: i64, i: Int, j: Int, s: String, b: Boolean, ti: Callable[
 def program_if(b: BooleanLike, t: Callable[[], Program], f: Callable[[], Program]) -> Program: ...
 
 
-@function(ruleset=array_api_program_gen_ruleset)
+@function
 def tuple_int_foldl_program(xs: TupleIntLike, f: Callable[[Program, Int], Program], init: ProgramLike) -> Program: ...
 
 
-@function(ruleset=array_api_program_gen_ruleset)
+@function
 def tuple_int_program(x: TupleIntLike) -> Program: ...
 
 
@@ -186,7 +186,7 @@ def _value_program(i: Int, b: Boolean, f: Float, x: NDArray, v1: Value, v2: Valu
     yield rewrite(value_program(v1.conj())).to(Program("np.conj(") + value_program(v1) + ")")
 
 
-@function(ruleset=array_api_program_gen_ruleset)
+@function
 def tuple_value_foldl_program(
     xs: TupleValueLike, f: Callable[[Program, Value], Program], init: ProgramLike
 ) -> Program: ...

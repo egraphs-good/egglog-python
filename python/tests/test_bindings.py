@@ -4,6 +4,7 @@ import os
 import pathlib
 import subprocess
 from base64 import standard_b64encode
+from datetime import timedelta
 from fractions import Fraction
 
 import black
@@ -70,7 +71,7 @@ GENERIC_FRESH_EGRAPH_RESOLVED = "(vec-of (int 1))"
 
 
 def extract_best_term(program: str) -> str:
-    egraph = EGraph(record=True)
+    egraph = EGraph()
     outputs = egraph.run_program(*egraph.parse_program(program))
     extract = next(output for output in outputs if isinstance(output, ExtractBest))
     return extract.termdag.to_string(extract.term)
@@ -98,6 +99,12 @@ class TestEGraph:
 
         assert egraph.run_program(*egraph.parse_program(program)) == []
 
+    def test_parse_and_run_program_binding(self):
+        program = "(check (= (+ 2 2) 4))"
+        egraph = EGraph()
+
+        assert egraph.parse_and_run_program(program) == []
+
     def test_parse_and_run_program_exception(self):
         program = "(check (= 1 1.0))"
         egraph = EGraph()
@@ -107,6 +114,16 @@ class TestEGraph:
             match="to have type",
         ):
             egraph.run_program(*egraph.parse_program(program))
+
+    def test_parse_and_run_program_binding_exception(self):
+        program = "(check (= 1 1.0))"
+        egraph = EGraph()
+
+        with pytest.raises(
+            EggSmolError,
+            match="to have type",
+        ):
+            egraph.parse_and_run_program(program)
 
     def test_run_rules(self):
         egraph = EGraph()
@@ -126,6 +143,95 @@ class TestEGraph:
 
         assert len(res) == 1
         assert isinstance(res[0], RunScheduleOutput)
+
+    @pytest.mark.parametrize(
+        ("label", "command"),
+        [
+            ("ruleset", AddRuleset(DUMMY_SPAN, "rs")),
+            ("relation", Relation(DUMMY_SPAN, "rel", ["i64"])),
+            ("function", FunctionCommand(DUMMY_SPAN, "f", Schema(["i64"], "i64"), None)),
+            ("constructor", Constructor(DUMMY_SPAN, "C", Schema(["i64"], "Expr"), None, False)),
+            ("let-action", ActionCommand(Let(DUMMY_SPAN, "$x", Lit(DUMMY_SPAN, Int(1))))),
+            ("set-action", ActionCommand(Set(DUMMY_SPAN, "f", [Lit(DUMMY_SPAN, Int(1))], Lit(DUMMY_SPAN, Int(2))))),
+            ("union-action", ActionCommand(Union(DUMMY_SPAN, Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(2))))),
+            (
+                "rewrite",
+                RewriteCommand(
+                    "",
+                    Rewrite(
+                        DUMMY_SPAN,
+                        Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "a"), Var(DUMMY_SPAN, "b")]),
+                        Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "b"), Var(DUMMY_SPAN, "a")]),
+                    ),
+                    False,
+                ),
+            ),
+            (
+                "rule",
+                RuleCommand(
+                    Rule(
+                        DUMMY_SPAN,
+                        [
+                            Union(
+                                DUMMY_SPAN,
+                                Var(DUMMY_SPAN, "lhs"),
+                                Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "a"), Var(DUMMY_SPAN, "a")]),
+                            )
+                        ],
+                        [
+                            Eq(
+                                DUMMY_SPAN,
+                                Var(DUMMY_SPAN, "lhs"),
+                                Call(DUMMY_SPAN, "Mul", [Var(DUMMY_SPAN, "a"), Lit(DUMMY_SPAN, Int(2))]),
+                            )
+                        ],
+                        "",
+                        "",
+                    )
+                ),
+            ),
+            ("run-schedule", RunSchedule(Repeat(DUMMY_SPAN, 2, Run(DUMMY_SPAN, RunConfig(""))))),
+            ("check", Check(DUMMY_SPAN, [Eq(DUMMY_SPAN, Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(1)))])),
+            (
+                "fail-check",
+                Fail(DUMMY_SPAN, Check(DUMMY_SPAN, [Eq(DUMMY_SPAN, Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(2)))])),
+            ),
+            (
+                "fail-let-action",
+                Fail(DUMMY_SPAN, ActionCommand(Let(DUMMY_SPAN, "$x", Call(DUMMY_SPAN, "map-empty", [])))),
+            ),
+        ],
+    )
+    def test_command_display_round_trip(self, label: str, command) -> None:
+        egraph = EGraph()
+        text = str(command)
+        (parsed,) = egraph.parse_program(text)
+        assert str(parsed) == text, label
+
+    def test_report_duration_round_trip(self):
+        duration = timedelta(days=1, seconds=2, microseconds=345_678)
+        rule_report = RuleReport(None, duration, 7)
+        ruleset_report = RuleSetReport(True, {"rule": [rule_report]}, duration, duration)
+        iteration_report = IterationReport(ruleset_report, duration)
+        run_report = RunReport(
+            [iteration_report],
+            True,
+            True,
+            {"rule": duration},
+            {"rule": 7},
+            {"ruleset": duration},
+            {"ruleset": duration},
+            {"ruleset": duration},
+        )
+
+        assert rule_report.search_and_apply_time == duration
+        assert ruleset_report.search_and_apply_time == duration
+        assert ruleset_report.merge_time == duration
+        assert iteration_report.rebuild_time == duration
+        assert run_report.search_and_apply_time_per_rule["rule"] == duration
+        assert run_report.search_and_apply_time_per_ruleset["ruleset"] == duration
+        assert run_report.merge_time_per_ruleset["ruleset"] == duration
+        assert run_report.rebuild_time_per_ruleset["ruleset"] == duration
 
     def test_extract(self):
         # Example from extraction-cost
@@ -371,6 +477,32 @@ class TestValues:
         v = egraph.value_to_vec(value)
         assert isinstance(v, list)
         assert [egraph.value_to_i64(vi) for vi in v] == [1, 2, 3]
+
+    def test_vec_fold(self):
+        local_egraph = EGraph()
+        program = """
+        (sort IVec (Vec i64))
+        (sort I64I64ToI64 (UnstableFn (i64 i64) i64))
+        (check (= (vec-foldl (unstable-fn "+") 0 (vec-of 1 2 3)) 6))
+        (check (= (vec-foldl (unstable-fn "-") 0 (vec-of 1 2 3)) -6))
+        (check (= (vec-foldr (unstable-fn "-") 0 (vec-of 1 2 3)) 2))
+        """
+        local_egraph.run_program(*local_egraph.parse_program(program))
+
+    def test_vec_fold_is_not_ambiguous_after_later_vec_sort(self):
+        local_egraph = EGraph()
+        program = """
+        (sort FoldNum)
+        (sort VFoldNum (Vec FoldNum))
+        (sort FoldNumFn (UnstableFn (FoldNum FoldNum) FoldNum))
+        (constructor fold-num () FoldNum)
+        (function fold-pick-right (FoldNum FoldNum) FoldNum :no-merge)
+        (set (fold-pick-right (fold-num) (fold-num)) (fold-num))
+        (sort VString (Vec String))
+        (check (= (vec-foldl (unstable-fn "fold-pick-right") (fold-num) (vec-of (fold-num))) (fold-num)))
+        (check (= (vec-foldr (unstable-fn "fold-pick-right") (fold-num) (vec-of (fold-num))) (fold-num)))
+        """
+        local_egraph.run_program(*local_egraph.parse_program(program))
 
     def test_fn(self):
         egraph.run_program(

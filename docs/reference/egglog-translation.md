@@ -98,15 +98,17 @@ def fib(n: i64Like) -> i64:
 
 Note that instead of using `i64` as the argument type, we used `i64Like` which is `i64 | int`. This allows us statically to declare that this function can take integers as well which will be upcasted to `i64` automatically.
 
-The `function` decorator supports a number of options as well, which can be passed as keyword arguments, that correspond to the options in the egglog command:
+The `function` decorator also accepts keyword arguments that map to backend features. Which ones are valid depends on how
+the callable lowers, as described in [Functions vs Constructors](#functions-vs-constructors):
 
 - `egg_fn`: The name of the function in egglog. By default, this is the same as the Python function name.
-- `cost`: The cost of the function. By default, this is 1.
-- `merge`: A function to merge the results of the function. This must be a function that takes two arguments of the return type, the old and the new, and returns a single value of the return type.
+- `merge`: A function to merge the results of function-style declarations. This must take the old and new return values and
+  return a single value of the same type.
+- `cost`: The extraction cost for constructor-style declarations.
 
 ```{code-cell} python
-# egg: (function foo () i64 :cost 10 :merge (max old new))
-@function(egg_fn="foo", cost=10, merge=lambda old, new: old.max(new))
+# egg: (function foo () i64 :merge (max old new))
+@function(egg_fn="foo", merge=lambda old, new: old.max(new))
 def my_foo() -> i64:
     pass
 ```
@@ -115,13 +117,54 @@ The static types on the decorator preserve the type of the underlying function, 
 
 ### Functions vs Constructors
 
-Egglog has changed how it handles functions, seperating them into two seperate commands:
+The Python bindings follow the backend split in egglog:
 
-- `function` which can include a `merge` expression.
-- `constructor` which can include a cost and requires the result to be an "eqsort" aka a non builtin type.
+- primitive-returning callables use function-style lowering
+- eqsort-returning callables use constructor-style lowering
 
-Since this was added after the Python API was first created, we added support to automatically choose between the two based on the return type of the function and whether a merge function is provided. If the return type is a builtin type, it will be a `function`, otherwise it will be a `constructor`, unless it has a merge function
-provided then it will always be a `function`.
+That is not a Python-only policy choice. It comes from which backend features exist on each command:
+
+- function-style declarations support `merge`
+- constructor-style declarations support `cost` and `unextractable`
+- `subsume` only applies to rewrite-backed bodies, so it only makes sense with an explicit `ruleset`
+
+Python automatically infers which backend lowering to use from the callable shape. In practice, Python declarations can
+lower to a `function`, a `constructor`, or an eager `primitive` depending on the return kind and whether a body/default
+is present.
+
+For bodies and defaults, the canonical lowering mapping is:
+
+| Python shape | Lowering |
+| --- | --- |
+| primitive return, no body | lower to `function` |
+| primitive return, body | lower to eager `primitive` |
+| eqsort return, no body, no `merge` | lower to `constructor` |
+| eqsort return, no body, with `merge` | lower to `function` |
+| eqsort return, body, no `ruleset` | lower to eager `primitive` |
+| eqsort return, body, explicit `ruleset` | lower to `constructor` plus rewrite-backed body |
+
+Constants and class-variable defaults are just zero-arg bodies/defaults, so they follow the same split based on their
+declared return type:
+
+- no-default constants lower like zero-arg declarations, so primitive-returning constants lower as functions, while
+  eqsort-returning constants lower as constructors unless `merge` forces function-style lowering
+- eqsort-returning defaults lower eagerly without a `ruleset`, and lower to rewrite-backed defaults with an explicit `ruleset`
+- primitive-returning defaults lower eagerly, and cannot use an explicit `ruleset`
+
+Options follow that same backend split:
+
+- no-body function-style declarations may use `merge`
+- builtin declarations are primitive/function-style only
+- constructor-style declarations may use `cost` and `unextractable`
+- `subsume` is only valid when an eqsort-returning body is lowered through an explicit `ruleset`
+- `egg_fn` and mutating arguments are supported in every case
+- direct top-level `@function(ruleset=...)` declarations require a body
+- `constant(..., ruleset=...)` declarations require an eqsort-returning default
+- `constant(..., merge=...)` declarations must not provide a default
+- class-level `ruleset=` is still valid shorthand for attaching rewrite-backed eqsort method and class-variable defaults
+
+For the Python ergonomics of attaching rewrite-backed bodies/defaults to an explicit `ruleset`, see
+[Python Integration](python-integration.md#default-replacements).
 
 ### Datatype functions
 

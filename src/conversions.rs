@@ -641,6 +641,7 @@ convert_struct!(
     egglog_reports::RunReport: "{:?}" => RunReport(
         iterations: Vec<IterationReport>,
         updated: bool,
+        can_stop: bool,
         search_and_apply_time_per_rule: HashMap<String, WrappedDuration>,
         num_matches_per_rule: HashMap<String, usize>,
         search_and_apply_time_per_ruleset: HashMap<String, WrappedDuration>,
@@ -654,6 +655,7 @@ convert_struct!(
                 .map(|i| Arc::new(i.clone().into()))
                 .collect(),
             updated: r.updated,
+            can_stop: r.can_stop,
             search_and_apply_time_per_rule: r
                 .search_and_apply_time_per_rule
                 .iter()
@@ -683,6 +685,7 @@ convert_struct!(
         r -> RunReport {
             iterations: r.iterations.iter().map(|i| i.as_ref().into()).collect(),
             updated: r.updated,
+            can_stop: r.can_stop,
             search_and_apply_time_per_rule: r
                 .search_and_apply_time_per_rule
                 .iter()
@@ -802,13 +805,18 @@ impl<'py> IntoPyObject<'py> for WrappedDuration {
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let d = self.0;
+        let total_seconds = d.as_secs();
         Ok(pyo3::types::PyDelta::new(
             py,
-            0,
-            0,
-            d.as_millis()
+            (total_seconds / (24 * 60 * 60))
                 .try_into()
-                .expect("Failed to convert miliseconds to int32 when converting duration"),
+                .expect("Failed to convert days to int32 when converting duration"),
+            (total_seconds % (24 * 60 * 60))
+                .try_into()
+                .expect("Failed to convert seconds to int32 when converting duration"),
+            d.subsec_micros()
+                .try_into()
+                .expect("Failed to convert microseconds to int32 when converting duration"),
             true,
         )?
         .clone())

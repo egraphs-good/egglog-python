@@ -272,11 +272,11 @@ def test_console_export_smoke_uses_high_level_wrapper() -> None:
     result = _run_script(HIGH_LEVEL_TRACE_SCRIPT)
     assert '"name": "parent"' in result.stdout
     assert '"name": "extract"' in result.stdout
-    assert "bindings.run_program" in result.stdout
+    assert "bindings.parse_and_run_program" in result.stdout
 
     parent_trace_id, parent_span_id, parent_parent_id = _parse_python_span(result.stdout, "parent")
     extract_trace_id, extract_span_id, extract_parent_id = _parse_python_span(result.stdout, "extract")
-    rust_trace_id, rust_parent_id = _parse_rust_span(result.stdout, "bindings.run_program")
+    rust_trace_id, rust_parent_id = _parse_rust_span(result.stdout, "bindings.parse_and_run_program")
 
     assert parent_parent_id is None
     assert extract_trace_id == parent_trace_id

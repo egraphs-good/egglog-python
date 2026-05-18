@@ -1,0 +1,1461 @@
+benchmarking Egg/45
+time                 212.2 ms   (194.7 ms .. 240.8 ms)
+                     0.991 R²   (0.970 R² .. 1.000 R²)
+mean                 205.1 ms   (198.9 ms .. 216.2 ms)
+std dev              11.75 ms   (4.769 ms .. 16.62 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/41
+time                 16.15 ms   (15.53 ms .. 16.88 ms)
+                     0.991 R²   (0.985 R² .. 0.997 R²)
+mean                 15.88 ms   (15.60 ms .. 16.18 ms)
+std dev              727.4 μs   (563.1 μs .. 890.0 μs)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/34
+time                 193.6 ms   (192.9 ms .. 194.2 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 195.5 ms   (194.6 ms .. 197.0 ms)
+std dev              1.511 ms   (835.9 μs .. 2.014 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/48
+time                 717.9 ms   (597.0 ms .. 823.8 ms)
+                     0.997 R²   (0.987 R² .. 1.000 R²)
+mean                 641.2 ms   (602.9 ms .. 678.5 ms)
+std dev              43.06 ms   (36.58 ms .. 45.88 ms)
+variance introduced by outliers: 20% (moderately inflated)
+
+benchmarking Egg/37
+time                 26.04 ms   (23.82 ms .. 28.01 ms)
+                     0.936 R²   (0.860 R² .. 0.978 R²)
+mean                 22.92 ms   (21.17 ms .. 24.89 ms)
+std dev              4.291 ms   (3.503 ms .. 5.302 ms)
+variance introduced by outliers: 72% (severely inflated)
+
+benchmarking Egg/45
+time                 199.1 ms   (129.0 ms .. 236.8 ms)
+                     0.929 R²   (0.679 R² .. 1.000 R²)
+mean                 220.7 ms   (203.1 ms .. 249.1 ms)
+std dev              31.17 ms   (9.266 ms .. 47.52 ms)
+variance introduced by outliers: 32% (moderately inflated)
+
+benchmarking Egg/25
+time                 117.2 ms   (95.19 ms .. 148.8 ms)
+                     0.933 R²   (0.818 R² .. 0.991 R²)
+mean                 141.8 ms   (128.8 ms .. 159.5 ms)
+std dev              22.23 ms   (13.01 ms .. 32.68 ms)
+variance introduced by outliers: 48% (moderately inflated)
+
+benchmarking Egg/38
+time                 186.8 ms   (185.7 ms .. 187.6 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 188.0 ms   (187.4 ms .. 188.8 ms)
+std dev              1.019 ms   (759.8 μs .. 1.245 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/41
+time                 23.13 ms   (23.01 ms .. 23.26 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 23.28 ms   (23.23 ms .. 23.37 ms)
+std dev              147.4 μs   (72.56 μs .. 209.9 μs)
+
+benchmarking Egg/44
+time                 51.68 ms   (51.40 ms .. 52.01 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 51.63 ms   (51.50 ms .. 51.88 ms)
+std dev              341.9 μs   (193.8 μs .. 542.8 μs)
+
+benchmarking Egg/40
+time                 160.2 ms   (158.7 ms .. 161.6 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 160.5 ms   (159.9 ms .. 161.4 ms)
+std dev              1.038 ms   (596.2 μs .. 1.555 ms)
+variance introduced by outliers: 12% (moderately inflated)
+
+benchmarking Egg/25
+time                 5.692 ms   (5.653 ms .. 5.738 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 5.599 ms   (5.556 ms .. 5.634 ms)
+std dev              114.3 μs   (97.54 μs .. 127.7 μs)
+
+benchmarking Egg/43
+time                 92.39 ms   (91.88 ms .. 92.82 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 91.77 ms   (91.29 ms .. 92.13 ms)
+std dev              711.9 μs   (443.1 μs .. 944.9 μs)
+
+benchmarking Egg/44
+time                 271.0 ms   (268.2 ms .. 274.6 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 268.9 ms   (268.2 ms .. 270.2 ms)
+std dev              1.208 ms   (348.9 μs .. 1.706 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/32
+time                 89.71 ms   (89.46 ms .. 89.93 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 89.91 ms   (89.71 ms .. 90.27 ms)
+std dev              443.5 μs   (250.5 μs .. 667.5 μs)
+
+benchmarking Egg/45
+time                 35.77 ms   (35.60 ms .. 36.01 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 35.88 ms   (35.69 ms .. 36.38 ms)
+std dev              658.3 μs   (147.9 μs .. 1.232 ms)
+
+benchmarking Egg/37
+time                 35.70 ms   (35.53 ms .. 35.95 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 35.74 ms   (35.53 ms .. 36.23 ms)
+std dev              652.7 μs   (268.4 μs .. 1.189 ms)
+
+benchmarking Egg/45
+time                 23.80 ms   (23.62 ms .. 23.98 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 23.96 ms   (23.87 ms .. 24.12 ms)
+std dev              258.2 μs   (137.8 μs .. 451.2 μs)
+
+benchmarking Egg/28
+time                 4.230 ms   (4.200 ms .. 4.259 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 4.263 ms   (4.247 ms .. 4.276 ms)
+std dev              43.22 μs   (35.65 μs .. 52.16 μs)
+
+benchmarking Egg/41
+time                 188.8 ms   (187.1 ms .. 190.7 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 187.6 ms   (185.4 ms .. 188.6 ms)
+std dev              2.028 ms   (738.4 μs .. 3.040 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/41
+time                 74.22 ms   (73.61 ms .. 74.73 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 73.74 ms   (73.51 ms .. 73.95 ms)
+std dev              417.2 μs   (285.3 μs .. 559.5 μs)
+
+benchmarking Egg/40
+time                 15.48 ms   (15.36 ms .. 15.61 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 15.67 ms   (15.57 ms .. 16.01 ms)
+std dev              421.6 μs   (121.6 μs .. 836.1 μs)
+
+benchmarking Egg/45
+time                 204.6 ms   (204.2 ms .. 204.9 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 203.4 ms   (202.0 ms .. 203.9 ms)
+std dev              1.142 ms   (174.1 μs .. 1.617 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/33
+time                 285.5 ms   (284.4 ms .. 286.4 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 284.6 ms   (284.0 ms .. 285.0 ms)
+std dev              617.3 μs   (347.8 μs .. 888.8 μs)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/48
+time                 30.50 ms   (30.14 ms .. 30.82 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 30.97 ms   (30.43 ms .. 32.96 ms)
+std dev              2.090 ms   (199.2 μs .. 4.094 ms)
+variance introduced by outliers: 22% (moderately inflated)
+
+benchmarking Egg/45
+time                 109.4 ms   (108.2 ms .. 110.8 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 108.3 ms   (107.4 ms .. 108.8 ms)
+std dev              1.156 ms   (282.8 μs .. 1.899 ms)
+
+benchmarking Egg/43
+time                 27.12 ms   (23.45 ms .. 30.50 ms)
+                     0.946 R²   (0.914 R² .. 0.989 R²)
+mean                 25.61 ms   (24.40 ms .. 27.16 ms)
+std dev              3.141 ms   (2.305 ms .. 3.797 ms)
+variance introduced by outliers: 51% (severely inflated)
+
+benchmarking Egg/48
+time                 65.54 ms   (61.42 ms .. 70.59 ms)
+                     0.990 R²   (0.976 R² .. 0.997 R²)
+mean                 66.39 ms   (64.43 ms .. 69.10 ms)
+std dev              4.308 ms   (2.924 ms .. 6.293 ms)
+variance introduced by outliers: 17% (moderately inflated)
+
+benchmarking Egg/36
+time                 14.42 ms   (14.05 ms .. 14.79 ms)
+                     0.998 R²   (0.997 R² .. 0.999 R²)
+mean                 14.39 ms   (14.12 ms .. 15.37 ms)
+std dev              1.108 ms   (316.0 μs .. 2.101 ms)
+variance introduced by outliers: 38% (moderately inflated)
+
+benchmarking Egg/48
+time                 29.45 ms   (29.26 ms .. 29.70 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 29.66 ms   (29.38 ms .. 30.69 ms)
+std dev              1.047 ms   (215.9 μs .. 1.954 ms)
+variance introduced by outliers: 11% (moderately inflated)
+
+benchmarking Egg/19
+time                 442.1 ms   (317.0 ms .. 513.3 ms)
+                     0.989 R²   (0.979 R² .. 1.000 R²)
+mean                 370.2 ms   (337.2 ms .. 399.2 ms)
+std dev              36.62 ms   (18.82 ms .. 47.56 ms)
+variance introduced by outliers: 23% (moderately inflated)
+
+benchmarking Egg/17
+time                 52.57 ms   (45.75 ms .. 59.83 ms)
+                     0.956 R²   (0.904 R² .. 0.986 R²)
+mean                 66.18 ms   (59.83 ms .. 76.54 ms)
+std dev              13.81 ms   (8.909 ms .. 17.25 ms)
+variance introduced by outliers: 73% (severely inflated)
+
+benchmarking Egg/17
+time                 70.24 ms   (53.35 ms .. 84.95 ms)
+                     0.914 R²   (0.849 R² .. 0.983 R²)
+mean                 60.42 ms   (57.08 ms .. 67.04 ms)
+std dev              8.640 ms   (5.371 ms .. 13.22 ms)
+variance introduced by outliers: 48% (moderately inflated)
+
+benchmarking Egg/19
+time                 243.0 ms   (230.3 ms .. 276.1 ms)
+                     0.991 R²   (0.963 R² .. 1.000 R²)
+mean                 235.5 ms   (231.1 ms .. 247.3 ms)
+std dev              9.768 ms   (1.176 ms .. 14.53 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/19
+time                 340.2 ms   (183.7 ms .. 445.2 ms)
+                     0.977 R²   (0.920 R² .. 1.000 R²)
+mean                 371.6 ms   (348.6 ms .. 387.9 ms)
+std dev              22.46 ms   (7.086 ms .. 30.42 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/19
+time                 128.1 ms   (115.7 ms .. 145.4 ms)
+                     0.985 R²   (0.974 R² .. 1.000 R²)
+mean                 114.4 ms   (111.1 ms .. 121.9 ms)
+std dev              7.561 ms   (2.587 ms .. 12.27 ms)
+variance introduced by outliers: 12% (moderately inflated)
+
+benchmarking Egg/17
+time                 53.48 ms   (50.89 ms .. 54.98 ms)
+                     0.994 R²   (0.984 R² .. 1.000 R²)
+mean                 55.58 ms   (54.45 ms .. 57.60 ms)
+std dev              2.761 ms   (1.164 ms .. 3.966 ms)
+variance introduced by outliers: 15% (moderately inflated)
+
+benchmarking Egg/16
+time                 115.2 ms   (114.7 ms .. 115.9 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 114.9 ms   (114.6 ms .. 115.2 ms)
+std dev              468.1 μs   (321.9 μs .. 660.2 μs)
+variance introduced by outliers: 11% (moderately inflated)
+
+benchmarking Egg/19
+time                 237.2 ms   (227.8 ms .. 252.3 ms)
+                     0.998 R²   (0.993 R² .. 1.000 R²)
+mean                 232.0 ms   (227.8 ms .. 237.5 ms)
+std dev              6.375 ms   (4.601 ms .. 7.803 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/14
+time                 47.63 ms   (47.31 ms .. 47.95 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 47.65 ms   (47.49 ms .. 47.99 ms)
+std dev              432.1 μs   (212.1 μs .. 764.4 μs)
+
+benchmarking Egg/17
+time                 53.94 ms   (53.81 ms .. 54.21 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 53.86 ms   (53.69 ms .. 54.02 ms)
+std dev              317.1 μs   (210.5 μs .. 535.1 μs)
+
+benchmarking Egg/20
+time                 93.28 ms   (82.32 ms .. 133.7 ms)
+                     0.898 R²   (0.713 R² .. 1.000 R²)
+mean                 94.80 ms   (89.33 ms .. 107.7 ms)
+std dev              12.62 ms   (5.592 ms .. 20.08 ms)
+variance introduced by outliers: 43% (moderately inflated)
+
+benchmarking Egg/16
+time                 129.5 ms   (117.4 ms .. 138.0 ms)
+                     0.993 R²   (0.983 R² .. 1.000 R²)
+mean                 125.0 ms   (122.3 ms .. 128.1 ms)
+std dev              4.509 ms   (2.965 ms .. 6.561 ms)
+variance introduced by outliers: 11% (moderately inflated)
+
+benchmarking Egg/19
+time                 107.9 ms   (55.26 ms .. 131.0 ms)
+                     0.893 R²   (0.636 R² .. 0.989 R²)
+mean                 146.9 ms   (129.0 ms .. 166.2 ms)
+std dev              28.64 ms   (18.30 ms .. 38.62 ms)
+variance introduced by outliers: 55% (severely inflated)
+
+benchmarking Egg/19
+time                 327.0 ms   (192.0 ms .. 503.7 ms)
+                     0.968 R²   (0.909 R² .. 1.000 R²)
+mean                 423.3 ms   (377.5 ms .. 492.9 ms)
+std dev              75.71 ms   (8.921 ms .. 96.84 ms)
+variance introduced by outliers: 47% (moderately inflated)
+
+benchmarking Egg/19
+time                 317.2 ms   (232.7 ms .. 383.0 ms)
+                     0.983 R²   (0.961 R² .. 1.000 R²)
+mean                 302.8 ms   (280.4 ms .. 324.5 ms)
+std dev              29.03 ms   (17.82 ms .. 38.00 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/21
+time                 320.7 ms   (274.8 ms .. 382.7 ms)
+                     0.982 R²   (0.959 R² .. 1.000 R²)
+mean                 372.0 ms   (345.3 ms .. 385.7 ms)
+std dev              25.61 ms   (1.851 ms .. 31.74 ms)
+variance introduced by outliers: 20% (moderately inflated)
+
+benchmarking Egg/21
+time                 313.5 ms   (133.8 ms .. 432.8 ms)
+                     0.965 R²   (0.878 R² .. 1.000 R²)
+mean                 315.6 ms   (297.0 ms .. 344.1 ms)
+std dev              26.92 ms   (2.252 ms .. 34.03 ms)
+variance introduced by outliers: 22% (moderately inflated)
+
+benchmarking Egg/21
+time                 123.1 ms   (69.32 ms .. 147.0 ms)
+                     0.920 R²   (0.742 R² .. 0.999 R²)
+mean                 149.6 ms   (137.0 ms .. 176.5 ms)
+std dev              26.60 ms   (6.504 ms .. 39.93 ms)
+variance introduced by outliers: 55% (severely inflated)
+
+benchmarking Egg/17
+time                 57.44 ms   (48.24 ms .. 73.72 ms)
+                     0.891 R²   (0.741 R² .. 0.988 R²)
+mean                 58.49 ms   (54.66 ms .. 66.19 ms)
+std dev              9.466 ms   (3.080 ms .. 12.84 ms)
+variance introduced by outliers: 57% (severely inflated)
+
+benchmarking Egg/17
+time                 55.74 ms   (53.00 ms .. 61.22 ms)
+                     0.977 R²   (0.926 R² .. 0.999 R²)
+mean                 56.27 ms   (54.51 ms .. 59.08 ms)
+std dev              4.078 ms   (878.4 μs .. 5.561 ms)
+variance introduced by outliers: 23% (moderately inflated)
+
+benchmarking Egg/17
+time                 54.74 ms   (52.69 ms .. 57.37 ms)
+                     0.997 R²   (0.994 R² .. 1.000 R²)
+mean                 55.37 ms   (54.51 ms .. 56.62 ms)
+std dev              1.938 ms   (1.317 ms .. 2.887 ms)
+
+benchmarking Egg/19
+time                 336.2 ms   (212.3 ms .. 437.0 ms)
+                     0.985 R²   (0.944 R² .. 1.000 R²)
+mean                 347.6 ms   (334.6 ms .. 362.7 ms)
+std dev              17.43 ms   (6.093 ms .. 22.90 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/18
+time                 134.9 ms   (133.9 ms .. 136.9 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 131.9 ms   (130.4 ms .. 133.2 ms)
+std dev              2.155 ms   (1.510 ms .. 2.929 ms)
+variance introduced by outliers: 11% (moderately inflated)
+
+benchmarking Egg/16
+time                 53.96 ms   (53.61 ms .. 54.47 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 53.99 ms   (53.84 ms .. 54.23 ms)
+std dev              339.5 μs   (165.2 μs .. 479.0 μs)
+
+benchmarking Egg/1
+time                 146.8 μs   (146.1 μs .. 147.5 μs)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 146.8 μs   (146.4 μs .. 147.2 μs)
+std dev              1.472 μs   (1.232 μs .. 1.679 μs)
+
+benchmarking Egg/1
+time                 147.2 μs   (146.5 μs .. 147.9 μs)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 147.2 μs   (146.7 μs .. 147.7 μs)
+std dev              1.556 μs   (1.384 μs .. 1.730 μs)
+
+benchmarking Egg/21
+time                 270.1 ms   (268.0 ms .. 272.6 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 270.9 ms   (270.4 ms .. 271.6 ms)
+std dev              699.5 μs   (323.1 μs .. 964.0 μs)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/19
+time                 56.22 ms   (54.07 ms .. 60.51 ms)
+                     0.986 R²   (0.954 R² .. 1.000 R²)
+mean                 54.86 ms   (53.77 ms .. 57.99 ms)
+std dev              3.250 ms   (990.1 μs .. 5.564 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/17
+time                 53.84 ms   (51.50 ms .. 55.24 ms)
+                     0.995 R²   (0.984 R² .. 0.999 R²)
+mean                 57.55 ms   (56.08 ms .. 60.24 ms)
+std dev              3.652 ms   (1.936 ms .. 5.793 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/63
+time                 6.460 ms   (6.268 ms .. 6.699 ms)
+                     0.992 R²   (0.988 R² .. 0.996 R²)
+mean                 6.563 ms   (6.439 ms .. 6.730 ms)
+std dev              452.4 μs   (297.2 μs .. 732.8 μs)
+variance introduced by outliers: 39% (moderately inflated)
+
+benchmarking Egg/77
+time                 3.451 ms   (3.359 ms .. 3.598 ms)
+                     0.989 R²   (0.974 R² .. 0.999 R²)
+mean                 3.492 ms   (3.447 ms .. 3.591 ms)
+std dev              193.8 μs   (124.4 μs .. 346.0 μs)
+variance introduced by outliers: 35% (moderately inflated)
+
+benchmarking Egg/40
+time                 105.0 ms   (99.29 ms .. 110.1 ms)
+                     0.990 R²   (0.954 R² .. 1.000 R²)
+mean                 106.8 ms   (104.6 ms .. 112.8 ms)
+std dev              5.851 ms   (1.079 ms .. 9.690 ms)
+variance introduced by outliers: 10% (moderately inflated)
+
+benchmarking Egg/29
+time                 86.17 ms   (85.71 ms .. 87.02 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 85.93 ms   (85.57 ms .. 86.30 ms)
+std dev              621.8 μs   (362.7 μs .. 963.7 μs)
+
+benchmarking Egg/89
+time                 1.360 ms   (1.320 ms .. 1.423 ms)
+                     0.995 R²   (0.989 R² .. 1.000 R²)
+mean                 1.343 ms   (1.336 ms .. 1.361 ms)
+std dev              34.80 μs   (9.387 μs .. 77.32 μs)
+variance introduced by outliers: 15% (moderately inflated)
+
+benchmarking Egg/64
+time                 52.33 ms   (48.68 ms .. 54.66 ms)
+                     0.987 R²   (0.962 R² .. 0.999 R²)
+mean                 53.56 ms   (51.90 ms .. 59.21 ms)
+std dev              5.285 ms   (1.365 ms .. 9.369 ms)
+variance introduced by outliers: 37% (moderately inflated)
+
+benchmarking Egg/58
+time                 1.405 ms   (1.397 ms .. 1.413 ms)
+                     0.999 R²   (0.998 R² .. 1.000 R²)
+mean                 1.431 ms   (1.419 ms .. 1.457 ms)
+std dev              54.67 μs   (31.55 μs .. 92.04 μs)
+variance introduced by outliers: 25% (moderately inflated)
+
+benchmarking Egg/67
+time                 4.851 ms   (4.807 ms .. 4.938 ms)
+                     0.999 R²   (0.997 R² .. 1.000 R²)
+mean                 4.836 ms   (4.810 ms .. 4.876 ms)
+std dev              95.69 μs   (69.99 μs .. 140.3 μs)
+
+benchmarking Egg/71
+time                 46.37 ms   (45.56 ms .. 47.22 ms)
+                     0.999 R²   (0.997 R² .. 1.000 R²)
+mean                 46.26 ms   (45.93 ms .. 46.93 ms)
+std dev              895.5 μs   (606.0 μs .. 1.155 ms)
+
+benchmarking Egg/66
+time                 4.088 ms   (3.967 ms .. 4.275 ms)
+                     0.990 R²   (0.979 R² .. 1.000 R²)
+mean                 4.019 ms   (3.981 ms .. 4.114 ms)
+std dev              177.8 μs   (47.52 μs .. 302.3 μs)
+variance introduced by outliers: 25% (moderately inflated)
+
+benchmarking Egg/51
+time                 3.149 ms   (3.125 ms .. 3.167 ms)
+                     0.999 R²   (0.999 R² .. 1.000 R²)
+mean                 3.244 ms   (3.219 ms .. 3.287 ms)
+std dev              101.7 μs   (70.18 μs .. 150.1 μs)
+variance introduced by outliers: 15% (moderately inflated)
+
+benchmarking Egg/83
+time                 37.77 ms   (35.46 ms .. 41.38 ms)
+                     0.984 R²   (0.971 R² .. 1.000 R²)
+mean                 36.24 ms   (35.74 ms .. 37.68 ms)
+std dev              1.617 ms   (229.7 μs .. 2.762 ms)
+variance introduced by outliers: 12% (moderately inflated)
+
+benchmarking Egg/37
+time                 2.279 ms   (2.258 ms .. 2.308 ms)
+                     0.999 R²   (0.998 R² .. 0.999 R²)
+mean                 2.267 ms   (2.256 ms .. 2.288 ms)
+std dev              50.91 μs   (42.01 μs .. 66.58 μs)
+variance introduced by outliers: 10% (moderately inflated)
+
+benchmarking Egg/78
+time                 226.8 ms   (218.7 ms .. 235.9 ms)
+                     0.998 R²   (0.994 R² .. 1.000 R²)
+mean                 208.4 ms   (196.9 ms .. 216.2 ms)
+std dev              12.90 ms   (9.502 ms .. 15.60 ms)
+variance introduced by outliers: 15% (moderately inflated)
+
+benchmarking Egg/67
+time                 24.29 ms   (23.43 ms .. 25.53 ms)
+                     0.993 R²   (0.987 R² .. 0.997 R²)
+mean                 24.58 ms   (23.84 ms .. 26.59 ms)
+std dev              2.619 ms   (1.140 ms .. 4.597 ms)
+variance introduced by outliers: 46% (moderately inflated)
+
+benchmarking Egg/29
+time                 540.8 μs   (535.3 μs .. 544.0 μs)
+                     0.999 R²   (0.999 R² .. 1.000 R²)
+mean                 526.0 μs   (522.4 μs .. 530.1 μs)
+std dev              13.11 μs   (11.03 μs .. 15.59 μs)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/72
+time                 2.782 ms   (2.663 ms .. 2.911 ms)
+                     0.985 R²   (0.975 R² .. 0.998 R²)
+mean                 2.692 ms   (2.653 ms .. 2.756 ms)
+std dev              161.9 μs   (84.06 μs .. 239.9 μs)
+variance introduced by outliers: 41% (moderately inflated)
+
+benchmarking Egg/55
+time                 14.23 ms   (13.75 ms .. 15.07 ms)
+                     0.988 R²   (0.974 R² .. 0.998 R²)
+mean                 14.66 ms   (14.32 ms .. 15.37 ms)
+std dev              1.157 ms   (642.7 μs .. 1.888 ms)
+variance introduced by outliers: 38% (moderately inflated)
+
+benchmarking Egg/33
+time                 783.7 μs   (779.3 μs .. 788.2 μs)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 780.3 μs   (777.8 μs .. 782.5 μs)
+std dev              7.687 μs   (6.194 μs .. 10.25 μs)
+
+benchmarking Egg/67
+time                 219.5 ms   (213.1 ms .. 228.8 ms)
+                     0.999 R²   (0.997 R² .. 1.000 R²)
+mean                 216.1 ms   (212.8 ms .. 218.8 ms)
+std dev              4.202 ms   (2.497 ms .. 5.919 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/59
+time                 6.614 ms   (6.482 ms .. 6.790 ms)
+                     0.993 R²   (0.986 R² .. 0.998 R²)
+mean                 6.608 ms   (6.509 ms .. 6.730 ms)
+std dev              308.6 μs   (223.4 μs .. 401.7 μs)
+variance introduced by outliers: 24% (moderately inflated)
+
+benchmarking Egg/25
+time                 4.901 ms   (4.825 ms .. 4.973 ms)
+                     0.998 R²   (0.997 R² .. 0.999 R²)
+mean                 4.959 ms   (4.904 ms .. 5.067 ms)
+std dev              231.0 μs   (130.7 μs .. 371.4 μs)
+variance introduced by outliers: 26% (moderately inflated)
+
+benchmarking Egg/66
+time                 27.15 ms   (26.62 ms .. 27.83 ms)
+                     0.998 R²   (0.997 R² .. 0.999 R²)
+mean                 27.07 ms   (26.84 ms .. 27.35 ms)
+std dev              559.0 μs   (433.7 μs .. 747.3 μs)
+
+benchmarking Egg/43
+time                 160.5 ms   (154.3 ms .. 170.0 ms)
+                     0.997 R²   (0.990 R² .. 1.000 R²)
+mean                 156.7 ms   (154.9 ms .. 161.0 ms)
+std dev              3.806 ms   (1.132 ms .. 5.684 ms)
+variance introduced by outliers: 12% (moderately inflated)
+
+benchmarking Egg/32
+time                 2.992 ms   (2.968 ms .. 3.027 ms)
+                     0.998 R²   (0.993 R² .. 1.000 R²)
+mean                 3.043 ms   (3.019 ms .. 3.085 ms)
+std dev              100.4 μs   (55.59 μs .. 182.2 μs)
+variance introduced by outliers: 17% (moderately inflated)
+
+benchmarking Egg/29
+time                 2.482 ms   (2.467 ms .. 2.503 ms)
+                     0.999 R²   (0.999 R² .. 1.000 R²)
+mean                 2.491 ms   (2.480 ms .. 2.504 ms)
+std dev              38.74 μs   (29.59 μs .. 53.13 μs)
+
+benchmarking Egg/85
+time                 7.570 ms   (7.432 ms .. 7.762 ms)
+                     0.997 R²   (0.994 R² .. 0.999 R²)
+mean                 7.646 ms   (7.552 ms .. 7.817 ms)
+std dev              376.4 μs   (221.2 μs .. 567.9 μs)
+variance introduced by outliers: 25% (moderately inflated)
+
+benchmarking Egg/69
+time                 13.31 ms   (12.08 ms .. 14.87 ms)
+                     0.954 R²   (0.923 R² .. 0.988 R²)
+mean                 12.59 ms   (12.23 ms .. 13.20 ms)
+std dev              1.197 ms   (789.2 μs .. 1.655 ms)
+variance introduced by outliers: 50% (severely inflated)
+
+benchmarking Egg/56
+time                 1.331 ms   (1.304 ms .. 1.361 ms)
+                     0.996 R²   (0.994 R² .. 0.998 R²)
+mean                 1.387 ms   (1.358 ms .. 1.451 ms)
+std dev              134.7 μs   (79.33 μs .. 207.9 μs)
+variance introduced by outliers: 71% (severely inflated)
+
+benchmarking Egg/32
+time                 7.101 ms   (6.752 ms .. 7.340 ms)
+                     0.980 R²   (0.961 R² .. 0.992 R²)
+mean                 8.472 ms   (8.084 ms .. 8.952 ms)
+std dev              1.155 ms   (965.3 μs .. 1.407 ms)
+variance introduced by outliers: 71% (severely inflated)
+
+benchmarking Egg/79
+time                 13.28 ms   (13.03 ms .. 13.61 ms)
+                     0.996 R²   (0.992 R² .. 0.998 R²)
+mean                 13.41 ms   (13.21 ms .. 13.69 ms)
+std dev              591.9 μs   (411.7 μs .. 1.002 ms)
+variance introduced by outliers: 18% (moderately inflated)
+
+benchmarking Egg/55
+time                 4.221 ms   (4.130 ms .. 4.313 ms)
+                     0.998 R²   (0.997 R² .. 0.999 R²)
+mean                 4.150 ms   (4.121 ms .. 4.191 ms)
+std dev              108.9 μs   (85.02 μs .. 146.8 μs)
+variance introduced by outliers: 11% (moderately inflated)
+
+benchmarking Egg/89
+time                 109.2 ms   (106.7 ms .. 111.3 ms)
+                     0.999 R²   (0.999 R² .. 1.000 R²)
+mean                 109.5 ms   (108.4 ms .. 112.0 ms)
+std dev              2.436 ms   (1.019 ms .. 3.974 ms)
+
+benchmarking Egg/217
+time                 410.0 ms   (336.4 ms .. 490.1 ms)
+                     0.993 R²   (0.992 R² .. 1.000 R²)
+mean                 431.5 ms   (414.6 ms .. 446.7 ms)
+std dev              18.98 ms   (4.022 ms .. 24.29 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/116
+time                 1.039 s    (849.2 ms .. 1.182 s)
+                     0.995 R²   (0.993 R² .. 1.000 R²)
+mean                 1.058 s    (1.018 s .. 1.092 s)
+std dev              42.41 ms   (33.73 ms .. 48.74 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/194
+time                 379.4 ms   (340.8 ms .. 415.0 ms)
+                     0.999 R²   (0.995 R² .. 1.000 R²)
+mean                 370.4 ms   (361.6 ms .. 377.9 ms)
+std dev              8.895 ms   (7.134 ms .. 10.15 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/142
+time                 473.5 ms   (442.4 ms .. NaN s)
+                     0.998 R²   (0.997 R² .. 1.000 R²)
+mean                 477.6 ms   (466.4 ms .. 488.6 ms)
+std dev              14.51 ms   (6.232 ms .. 19.69 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/269
+time                 380.2 ms   (288.1 ms .. 493.6 ms)
+                     0.990 R²   (0.967 R² .. 1.000 R²)
+mean                 401.8 ms   (388.0 ms .. 427.8 ms)
+std dev              25.82 ms   (1.144 ms .. 30.68 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/191
+time                 590.7 ms   (522.1 ms .. 662.6 ms)
+                     0.998 R²   (0.993 R² .. 1.000 R²)
+mean                 542.0 ms   (507.5 ms .. 565.2 ms)
+std dev              33.72 ms   (7.656 ms .. 43.67 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/191
+time                 377.1 ms   (371.4 ms .. 381.2 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 370.1 ms   (366.1 ms .. 372.9 ms)
+std dev              3.898 ms   (1.492 ms .. 4.879 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/241
+time                 440.9 ms   (391.8 ms .. 495.8 ms)
+                     0.997 R²   (0.997 R² .. 1.000 R²)
+mean                 458.8 ms   (448.9 ms .. 468.4 ms)
+std dev              12.86 ms   (5.387 ms .. 17.50 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/202
+time                 358.8 ms   (270.2 ms .. 478.7 ms)
+                     0.988 R²   (0.963 R² .. 1.000 R²)
+mean                 380.0 ms   (364.6 ms .. 407.9 ms)
+std dev              27.17 ms   (1.925 ms .. 33.63 ms)
+variance introduced by outliers: 20% (moderately inflated)
+
+benchmarking Egg/223
+time                 663.9 ms   (NaN s .. 778.4 ms)
+                     0.995 R²   (0.983 R² .. 1.000 R²)
+mean                 669.7 ms   (656.0 ms .. 690.1 ms)
+std dev              19.29 ms   (262.6 μs .. 23.76 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/357
+time                 531.9 ms   (306.1 ms .. 662.2 ms)
+                     0.976 R²   (0.949 R² .. 1.000 R²)
+mean                 546.9 ms   (504.5 ms .. 584.8 ms)
+std dev              44.51 ms   (35.60 ms .. 51.12 ms)
+variance introduced by outliers: 21% (moderately inflated)
+
+benchmarking Egg/154
+time                 493.2 ms   (422.4 ms .. 575.5 ms)
+                     0.997 R²   (0.988 R² .. 1.000 R²)
+mean                 446.9 ms   (422.6 ms .. 469.9 ms)
+std dev              28.07 ms   (23.92 ms .. 29.43 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/134
+time                 555.7 ms   (508.5 ms .. 660.2 ms)
+                     0.996 R²   (0.992 R² .. 1.000 R²)
+mean                 522.7 ms   (513.4 ms .. 540.7 ms)
+std dev              17.79 ms   (160.6 μs .. 21.33 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/184
+time                 329.3 ms   (319.9 ms .. 337.8 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 324.9 ms   (322.7 ms .. 326.7 ms)
+std dev              2.684 ms   (1.650 ms .. 3.541 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/416
+time                 707.5 ms   (629.8 ms .. 744.3 ms)
+                     0.999 R²   (NaN R² .. 1.000 R²)
+mean                 701.6 ms   (682.0 ms .. 713.3 ms)
+std dev              19.51 ms   (7.305 ms .. 26.87 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/129
+time                 527.9 ms   (433.8 ms .. 637.9 ms)
+                     0.995 R²   (0.982 R² .. 1.000 R²)
+mean                 580.8 ms   (553.8 ms .. 607.1 ms)
+std dev              31.49 ms   (20.32 ms .. 37.18 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/174
+time                 339.7 ms   (304.0 ms .. 391.0 ms)
+                     0.991 R²   (0.983 R² .. 1.000 R²)
+mean                 310.0 ms   (302.3 ms .. 331.2 ms)
+std dev              15.84 ms   (1.086 ms .. 20.37 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/160
+time                 590.3 ms   (565.1 ms .. NaN s)
+                     0.999 R²   (0.998 R² .. 1.000 R²)
+mean                 593.2 ms   (583.2 ms .. 601.2 ms)
+std dev              10.61 ms   (4.639 ms .. 14.40 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/196
+time                 463.5 ms   (325.8 ms .. 593.4 ms)
+                     0.989 R²   (0.959 R² .. 1.000 R²)
+mean                 534.2 ms   (495.8 ms .. 567.5 ms)
+std dev              43.21 ms   (36.80 ms .. 48.65 ms)
+variance introduced by outliers: 21% (moderately inflated)
+
+benchmarking Egg/151
+time                 643.6 ms   (531.6 ms .. 753.0 ms)
+                     0.996 R²   (0.985 R² .. 1.000 R²)
+mean                 630.9 ms   (617.2 ms .. 652.7 ms)
+std dev              20.73 ms   (2.886 ms .. 26.63 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/125
+time                 709.8 ms   (635.1 ms .. 747.6 ms)
+                     0.999 R²   (0.997 R² .. 1.000 R²)
+mean                 708.3 ms   (691.9 ms .. 719.7 ms)
+std dev              16.20 ms   (7.887 ms .. 20.79 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/168
+time                 1.315 s    (1.048 s .. 1.511 s)
+                     0.995 R²   (0.984 R² .. 1.000 R²)
+mean                 1.170 s    (1.093 s .. 1.238 s)
+std dev              80.52 ms   (61.47 ms .. 95.96 ms)
+variance introduced by outliers: 20% (moderately inflated)
+
+benchmarking Egg/155
+time                 305.2 ms   (298.1 ms .. 312.1 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 336.4 ms   (322.9 ms .. 364.2 ms)
+std dev              22.82 ms   (6.237 ms .. 30.69 ms)
+variance introduced by outliers: 17% (moderately inflated)
+
+benchmarking Egg/170
+time                 373.5 ms   (307.1 ms .. 460.6 ms)
+                     0.994 R²   (0.980 R² .. 1.000 R²)
+mean                 349.7 ms   (337.2 ms .. 362.2 ms)
+std dev              15.69 ms   (7.213 ms .. 19.71 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/138
+time                 309.2 ms   (305.1 ms .. 321.6 ms)
+                     0.999 R²   (0.998 R² .. 1.000 R²)
+mean                 309.3 ms   (307.7 ms .. 312.1 ms)
+std dev              2.876 ms   (674.0 μs .. 3.931 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/179
+time                 663.6 ms   (597.6 ms .. 781.5 ms)
+                     0.996 R²   (0.994 R² .. 1.000 R²)
+mean                 624.0 ms   (610.8 ms .. 646.4 ms)
+std dev              21.50 ms   (2.750 ms .. 27.41 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/133
+time                 594.1 ms   (346.0 ms .. 777.7 ms)
+                     0.974 R²   (0.957 R² .. 1.000 R²)
+mean                 658.8 ms   (610.7 ms .. 697.4 ms)
+std dev              48.01 ms   (21.78 ms .. 61.80 ms)
+variance introduced by outliers: 20% (moderately inflated)
+
+benchmarking Egg/186
+time                 423.5 ms   (374.6 ms .. 474.4 ms)
+                     0.998 R²   (0.993 R² .. 1.000 R²)
+mean                 446.6 ms   (434.3 ms .. 458.6 ms)
+std dev              14.53 ms   (6.098 ms .. 17.18 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/165
+time                 453.1 ms   (437.7 ms .. 467.3 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 449.6 ms   (446.9 ms .. 453.3 ms)
+std dev              3.562 ms   (986.7 μs .. 4.746 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/131
+time                 1.150 s    (1.035 s .. 1.357 s)
+                     0.996 R²   (0.994 R² .. 1.000 R²)
+mean                 1.064 s    (1.038 s .. 1.109 s)
+std dev              43.15 ms   (992.7 μs .. 52.46 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/1
+time                 139.7 μs   (138.7 μs .. 140.8 μs)
+                     0.998 R²   (0.996 R² .. 0.999 R²)
+mean                 143.5 μs   (141.4 μs .. 147.7 μs)
+std dev              9.935 μs   (5.575 μs .. 17.72 μs)
+variance introduced by outliers: 67% (severely inflated)
+
+benchmarking Egg/30
+time                 253.5 ms   (246.8 ms .. 261.8 ms)
+                     0.999 R²   (0.999 R² .. 1.000 R²)
+mean                 247.6 ms   (245.1 ms .. 250.6 ms)
+std dev              3.326 ms   (1.467 ms .. 5.042 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/28
+time                 274.6 ms   (261.3 ms .. 300.6 ms)
+                     0.997 R²   (0.988 R² .. 1.000 R²)
+mean                 305.1 ms   (291.6 ms .. 328.4 ms)
+std dev              24.47 ms   (2.541 ms .. 34.75 ms)
+variance introduced by outliers: 18% (moderately inflated)
+
+benchmarking Egg/10
+time                 954.4 μs   (945.4 μs .. 969.0 μs)
+                     0.995 R²   (0.986 R² .. 0.999 R²)
+mean                 970.7 μs   (954.4 μs .. 1.006 ms)
+std dev              75.48 μs   (32.64 μs .. 141.4 μs)
+variance introduced by outliers: 62% (severely inflated)
+
+benchmarking Egg/31
+time                 435.0 ms   (364.0 ms .. 503.2 ms)
+                     0.997 R²   (0.987 R² .. 1.000 R²)
+mean                 444.5 ms   (434.2 ms .. 461.8 ms)
+std dev              16.53 ms   (289.7 μs .. 20.17 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/1
+time                 166.9 μs   (152.8 μs .. 178.5 μs)
+                     0.978 R²   (0.973 R² .. 0.996 R²)
+mean                 157.2 μs   (153.9 μs .. 162.8 μs)
+std dev              14.23 μs   (9.871 μs .. 18.93 μs)
+variance introduced by outliers: 76% (severely inflated)
+
+benchmarking Egg/28
+time                 157.9 ms   (156.5 ms .. 159.5 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 162.2 ms   (160.2 ms .. 166.5 ms)
+std dev              4.246 ms   (1.357 ms .. 6.331 ms)
+variance introduced by outliers: 12% (moderately inflated)
+
+benchmarking Egg/29
+time                 5.302 ms   (5.096 ms .. 5.589 ms)
+                     0.972 R²   (0.946 R² .. 0.996 R²)
+mean                 5.131 ms   (5.019 ms .. 5.355 ms)
+std dev              453.4 μs   (270.2 μs .. 731.0 μs)
+variance introduced by outliers: 53% (severely inflated)
+
+benchmarking Egg/29
+time                 73.57 ms   (68.38 ms .. 76.80 ms)
+                     0.992 R²   (0.979 R² .. 0.999 R²)
+mean                 85.18 ms   (80.22 ms .. 92.16 ms)
+std dev              9.771 ms   (6.830 ms .. 11.37 ms)
+variance introduced by outliers: 38% (moderately inflated)
+
+benchmarking Egg/28
+time                 393.9 ms   (382.0 ms .. 399.3 ms)
+                     1.000 R²   (NaN R² .. 1.000 R²)
+mean                 388.7 ms   (385.8 ms .. 390.9 ms)
+std dev              2.942 ms   (1.516 ms .. 4.025 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/29
+time                 262.8 ms   (258.1 ms .. 271.5 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 254.8 ms   (250.8 ms .. 258.3 ms)
+std dev              5.073 ms   (3.942 ms .. 6.046 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/29
+time                 393.6 ms   (329.6 ms .. 448.1 ms)
+                     0.997 R²   (0.989 R² .. 1.000 R²)
+mean                 406.6 ms   (395.9 ms .. 415.8 ms)
+std dev              10.91 ms   (8.986 ms .. 12.49 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/29
+time                 225.2 ms   (203.3 ms .. 247.2 ms)
+                     0.996 R²   (0.993 R² .. 1.000 R²)
+mean                 197.4 ms   (185.6 ms .. 208.4 ms)
+std dev              15.48 ms   (10.04 ms .. 22.11 ms)
+variance introduced by outliers: 15% (moderately inflated)
+
+benchmarking Egg/26
+time                 4.449 ms   (4.237 ms .. 4.799 ms)
+                     0.957 R²   (0.929 R² .. 0.977 R²)
+mean                 4.732 ms   (4.552 ms .. 4.959 ms)
+std dev              591.6 μs   (494.2 μs .. 703.4 μs)
+variance introduced by outliers: 73% (severely inflated)
+
+benchmarking Egg/29
+time                 173.7 ms   (161.5 ms .. 192.3 ms)
+                     0.990 R²   (0.966 R² .. 0.999 R²)
+mean                 180.3 ms   (173.2 ms .. 189.6 ms)
+std dev              12.22 ms   (9.197 ms .. 16.04 ms)
+variance introduced by outliers: 13% (moderately inflated)
+
+benchmarking Egg/26
+time                 81.57 ms   (75.02 ms .. 86.66 ms)
+                     0.991 R²   (0.981 R² .. 1.000 R²)
+mean                 82.97 ms   (80.57 ms .. 84.50 ms)
+std dev              3.192 ms   (1.579 ms .. 4.361 ms)
+
+benchmarking Egg/29
+time                 294.5 ms   (193.0 ms .. 378.2 ms)
+                     0.961 R²   (0.766 R² .. 1.000 R²)
+mean                 304.5 ms   (287.3 ms .. 323.8 ms)
+std dev              23.13 ms   (15.31 ms .. 31.34 ms)
+variance introduced by outliers: 18% (moderately inflated)
+
+benchmarking Egg/27
+time                 53.53 ms   (45.01 ms .. 65.92 ms)
+                     0.920 R²   (0.858 R² .. 0.998 R²)
+mean                 46.55 ms   (44.42 ms .. 52.82 ms)
+std dev              6.268 ms   (1.523 ms .. 10.98 ms)
+variance introduced by outliers: 52% (severely inflated)
+
+benchmarking Egg/28
+time                 3.177 ms   (3.082 ms .. 3.353 ms)
+                     0.980 R²   (0.952 R² .. 0.997 R²)
+mean                 3.263 ms   (3.180 ms .. 3.396 ms)
+std dev              336.5 μs   (210.9 μs .. 475.6 μs)
+variance introduced by outliers: 66% (severely inflated)
+
+benchmarking Egg/28
+time                 221.1 ms   (178.7 ms .. 317.5 ms)
+                     0.911 R²   (0.700 R² .. 1.000 R²)
+mean                 209.1 ms   (195.7 ms .. 243.6 ms)
+std dev              27.36 ms   (5.919 ms .. 39.87 ms)
+variance introduced by outliers: 32% (moderately inflated)
+
+benchmarking Egg/28
+time                 4.708 ms   (4.498 ms .. 4.980 ms)
+                     0.953 R²   (0.900 R² .. 0.984 R²)
+mean                 5.503 ms   (5.201 ms .. 5.856 ms)
+std dev              977.1 μs   (748.0 μs .. 1.151 ms)
+variance introduced by outliers: 84% (severely inflated)
+
+benchmarking Egg/31
+time                 262.3 ms   (225.9 ms .. 295.7 ms)
+                     0.994 R²   (0.986 R² .. 1.000 R²)
+mean                 255.3 ms   (245.6 ms .. 264.9 ms)
+std dev              11.99 ms   (8.459 ms .. 15.18 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/29
+time                 130.8 ms   (120.0 ms .. 138.7 ms)
+                     0.997 R²   (0.991 R² .. 1.000 R²)
+mean                 123.8 ms   (121.3 ms .. 127.1 ms)
+std dev              4.537 ms   (3.466 ms .. 5.799 ms)
+variance introduced by outliers: 11% (moderately inflated)
+
+benchmarking Egg/27
+time                 65.00 ms   (61.16 ms .. 68.03 ms)
+                     0.996 R²   (0.993 R² .. 0.999 R²)
+mean                 60.57 ms   (59.48 ms .. 62.17 ms)
+std dev              2.416 ms   (1.462 ms .. 3.314 ms)
+
+benchmarking Egg/29
+time                 24.89 ms   (22.40 ms .. 27.01 ms)
+                     0.959 R²   (0.906 R² .. 0.986 R²)
+mean                 28.04 ms   (26.62 ms .. 29.51 ms)
+std dev              3.235 ms   (2.535 ms .. 4.609 ms)
+variance introduced by outliers: 48% (moderately inflated)
+
+benchmarking Egg/28
+time                 5.798 ms   (4.897 ms .. 6.742 ms)
+                     0.908 R²   (0.872 R² .. 0.995 R²)
+mean                 6.153 ms   (5.850 ms .. 6.641 ms)
+std dev              1.195 ms   (783.4 μs .. 1.785 ms)
+variance introduced by outliers: 86% (severely inflated)
+
+benchmarking Egg/27
+time                 20.73 ms   (19.55 ms .. 21.66 ms)
+                     0.988 R²   (0.973 R² .. 0.997 R²)
+mean                 22.15 ms   (21.37 ms .. 24.16 ms)
+std dev              2.594 ms   (1.322 ms .. 4.119 ms)
+variance introduced by outliers: 53% (severely inflated)
+
+benchmarking Egg/28
+time                 306.4 ms   (276.0 ms .. 316.5 ms)
+                     0.999 R²   (0.995 R² .. 1.000 R²)
+mean                 307.6 ms   (303.2 ms .. 311.8 ms)
+std dev              5.702 ms   (4.121 ms .. 7.389 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/28
+time                 85.76 ms   (64.35 ms .. 97.14 ms)
+                     0.947 R²   (0.854 R² .. 0.987 R²)
+mean                 113.7 ms   (99.68 ms .. 128.7 ms)
+std dev              23.69 ms   (18.88 ms .. 30.99 ms)
+variance introduced by outliers: 65% (severely inflated)
+
+benchmarking Egg/28
+time                 23.42 ms   (23.31 ms .. 23.55 ms)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 23.64 ms   (23.54 ms .. 23.76 ms)
+std dev              237.2 μs   (180.9 μs .. 333.0 μs)
+
+benchmarking Egg/43
+time                 14.50 ms   (13.50 ms .. 15.65 ms)
+                     0.959 R²   (0.896 R² .. 0.998 R²)
+mean                 13.83 ms   (13.53 ms .. 14.88 ms)
+std dev              1.263 ms   (344.9 μs .. 2.500 ms)
+variance introduced by outliers: 45% (moderately inflated)
+
+benchmarking Egg/23
+time                 25.42 ms   (24.96 ms .. 25.86 ms)
+                     0.999 R²   (0.999 R² .. 1.000 R²)
+mean                 25.14 ms   (25.05 ms .. 25.31 ms)
+std dev              260.2 μs   (151.8 μs .. 424.6 μs)
+
+benchmarking Egg/27
+time                 3.468 ms   (3.225 ms .. 3.944 ms)
+                     0.950 R²   (0.926 R² .. 0.973 R²)
+mean                 3.570 ms   (3.436 ms .. 3.709 ms)
+std dev              422.0 μs   (369.4 μs .. 547.1 μs)
+variance introduced by outliers: 71% (severely inflated)
+
+benchmarking Egg/49
+time                 31.47 ms   (28.51 ms .. 34.51 ms)
+                     0.965 R²   (0.929 R² .. 0.990 R²)
+mean                 33.84 ms   (32.37 ms .. 35.89 ms)
+std dev              3.546 ms   (2.552 ms .. 4.469 ms)
+variance introduced by outliers: 42% (moderately inflated)
+
+benchmarking Egg/23
+time                 2.993 ms   (2.793 ms .. 3.323 ms)
+                     0.972 R²   (0.954 R² .. 0.999 R²)
+mean                 2.944 ms   (2.892 ms .. 3.025 ms)
+std dev              213.1 μs   (149.7 μs .. 353.4 μs)
+variance introduced by outliers: 50% (severely inflated)
+
+benchmarking Egg/53
+time                 36.18 ms   (32.87 ms .. 41.39 ms)
+                     0.957 R²   (0.913 R² .. 0.987 R²)
+mean                 34.01 ms   (32.64 ms .. 35.96 ms)
+std dev              3.493 ms   (2.549 ms .. 4.534 ms)
+variance introduced by outliers: 42% (moderately inflated)
+
+benchmarking Egg/21
+time                 8.431 ms   (8.185 ms .. 8.600 ms)
+                     0.989 R²   (0.973 R² .. 0.999 R²)
+mean                 8.872 ms   (8.649 ms .. 9.343 ms)
+std dev              865.4 μs   (449.3 μs .. 1.324 ms)
+variance introduced by outliers: 55% (severely inflated)
+
+benchmarking Egg/20
+time                 225.5 ms   (217.9 ms .. 235.8 ms)
+                     0.999 R²   (0.997 R² .. 1.000 R²)
+mean                 216.6 ms   (213.4 ms .. 221.0 ms)
+std dev              4.970 ms   (3.179 ms .. 6.603 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/31
+time                 102.6 ms   (94.51 ms .. 109.5 ms)
+                     0.993 R²   (0.984 R² .. 1.000 R²)
+mean                 94.00 ms   (90.70 ms .. 98.17 ms)
+std dev              5.674 ms   (4.056 ms .. 7.818 ms)
+variance introduced by outliers: 11% (moderately inflated)
+
+benchmarking Egg/25
+time                 5.126 ms   (4.823 ms .. 5.600 ms)
+                     0.947 R²   (0.906 R² .. 0.984 R²)
+mean                 5.495 ms   (5.287 ms .. 5.875 ms)
+std dev              840.0 μs   (600.5 μs .. 1.099 ms)
+variance introduced by outliers: 79% (severely inflated)
+
+benchmarking Egg/24
+time                 294.0 ms   (291.7 ms .. 295.5 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 292.9 ms   (291.7 ms .. 293.7 ms)
+std dev              1.301 ms   (502.7 μs .. 1.829 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/15
+time                 130.6 ms   (116.0 ms .. 141.1 ms)
+                     0.984 R²   (0.945 R² .. 0.998 R²)
+mean                 135.5 ms   (129.8 ms .. 143.3 ms)
+std dev              10.68 ms   (8.091 ms .. 14.39 ms)
+variance introduced by outliers: 23% (moderately inflated)
+
+benchmarking Egg/33
+time                 5.123 ms   (4.968 ms .. 5.416 ms)
+                     0.984 R²   (0.960 R² .. 1.000 R²)
+mean                 5.060 ms   (5.003 ms .. 5.299 ms)
+std dev              287.2 μs   (61.26 μs .. 578.2 μs)
+variance introduced by outliers: 33% (moderately inflated)
+
+benchmarking Egg/29
+time                 281.4 ms   (234.2 ms .. 324.1 ms)
+                     0.992 R²   (0.961 R² .. 1.000 R²)
+mean                 284.8 ms   (278.2 ms .. 302.3 ms)
+std dev              13.31 ms   (885.2 μs .. 17.01 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/45
+time                 36.26 ms   (33.29 ms .. 37.37 ms)
+                     0.971 R²   (0.887 R² .. 1.000 R²)
+mean                 37.16 ms   (36.05 ms .. 41.36 ms)
+std dev              4.058 ms   (430.9 μs .. 7.723 ms)
+variance introduced by outliers: 45% (moderately inflated)
+
+benchmarking Egg/47
+time                 126.0 ms   (120.5 ms .. 140.4 ms)
+                     0.990 R²   (0.965 R² .. 1.000 R²)
+mean                 124.2 ms   (122.1 ms .. 130.1 ms)
+std dev              5.369 ms   (695.9 μs .. 8.255 ms)
+variance introduced by outliers: 11% (moderately inflated)
+
+benchmarking Egg/49
+time                 111.5 ms   (108.3 ms .. 115.5 ms)
+                     0.998 R²   (0.995 R² .. 1.000 R²)
+mean                 113.6 ms   (111.6 ms .. 115.3 ms)
+std dev              2.807 ms   (2.257 ms .. 3.373 ms)
+variance introduced by outliers: 11% (moderately inflated)
+
+benchmarking Egg/23
+time                 6.700 ms   (5.878 ms .. 7.784 ms)
+                     0.897 R²   (0.857 R² .. 0.954 R²)
+mean                 5.923 ms   (5.629 ms .. 6.336 ms)
+std dev              1.040 ms   (724.4 μs .. 1.476 ms)
+variance introduced by outliers: 83% (severely inflated)
+
+benchmarking Egg/25
+time                 13.98 ms   (11.80 ms .. 15.82 ms)
+                     0.884 R²   (0.806 R² .. 0.939 R²)
+mean                 13.24 ms   (12.20 ms .. 14.54 ms)
+std dev              2.934 ms   (2.293 ms .. 3.791 ms)
+variance introduced by outliers: 84% (severely inflated)
+
+benchmarking Egg/39
+time                 45.59 ms   (43.48 ms .. 49.61 ms)
+                     0.977 R²   (0.937 R² .. 1.000 R²)
+mean                 46.00 ms   (44.82 ms .. 48.67 ms)
+std dev              3.359 ms   (1.563 ms .. 4.957 ms)
+variance introduced by outliers: 27% (moderately inflated)
+
+benchmarking Egg/43
+time                 5.005 ms   (4.558 ms .. 5.506 ms)
+                     0.947 R²   (0.914 R² .. 0.984 R²)
+mean                 4.539 ms   (4.403 ms .. 4.768 ms)
+std dev              556.6 μs   (348.9 μs .. 805.2 μs)
+variance introduced by outliers: 70% (severely inflated)
+
+benchmarking Egg/27
+time                 4.470 ms   (4.229 ms .. 4.809 ms)
+                     0.950 R²   (0.918 R² .. 0.974 R²)
+mean                 5.098 ms   (4.860 ms .. 5.355 ms)
+std dev              731.7 μs   (591.2 μs .. 901.9 μs)
+variance introduced by outliers: 77% (severely inflated)
+
+benchmarking Egg/27
+time                 268.9 ms   (168.8 ms .. 335.8 ms)
+                     0.964 R²   (0.906 R² .. 1.000 R²)
+mean                 273.5 ms   (253.7 ms .. 307.9 ms)
+std dev              31.64 ms   (12.05 ms .. 42.24 ms)
+variance introduced by outliers: 36% (moderately inflated)
+
+benchmarking Egg/29
+time                 2.533 ms   (2.516 ms .. 2.550 ms)
+                     0.997 R²   (0.994 R² .. 1.000 R²)
+mean                 2.552 ms   (2.527 ms .. 2.606 ms)
+std dev              119.4 μs   (70.81 μs .. 202.7 μs)
+variance introduced by outliers: 31% (moderately inflated)
+
+benchmarking Egg/20
+time                 1.174 ms   (1.149 ms .. 1.219 ms)
+                     0.987 R²   (0.973 R² .. 0.998 R²)
+mean                 1.219 ms   (1.195 ms .. 1.256 ms)
+std dev              101.9 μs   (71.41 μs .. 144.7 μs)
+variance introduced by outliers: 64% (severely inflated)
+
+benchmarking Egg/16
+time                 1.082 ms   (1.077 ms .. 1.090 ms)
+                     0.998 R²   (0.994 R² .. 1.000 R²)
+mean                 1.092 ms   (1.082 ms .. 1.114 ms)
+std dev              46.87 μs   (23.02 μs .. 90.89 μs)
+variance introduced by outliers: 32% (moderately inflated)
+
+benchmarking Egg/53
+time                 254.4 ms   (253.1 ms .. 255.6 ms)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 253.8 ms   (252.5 ms .. 254.3 ms)
+std dev              982.9 μs   (5.936 μs .. 1.244 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/41
+time                 8.862 ms   (8.720 ms .. 9.102 ms)
+                     0.994 R²   (0.987 R² .. 0.999 R²)
+mean                 8.890 ms   (8.787 ms .. 9.065 ms)
+std dev              364.7 μs   (209.5 μs .. 543.9 μs)
+variance introduced by outliers: 18% (moderately inflated)
+
+benchmarking Egg/17
+time                 1.122 ms   (1.067 ms .. 1.224 ms)
+                     0.951 R²   (0.931 R² .. 0.974 R²)
+mean                 1.286 ms   (1.235 ms .. 1.336 ms)
+std dev              170.3 μs   (142.1 μs .. 203.7 μs)
+variance introduced by outliers: 83% (severely inflated)
+
+benchmarking Egg/27
+time                 11.14 ms   (10.21 ms .. 12.16 ms)
+                     0.945 R²   (0.898 R² .. 0.979 R²)
+mean                 11.03 ms   (10.63 ms .. 11.69 ms)
+std dev              1.329 ms   (873.0 μs .. 1.997 ms)
+variance introduced by outliers: 64% (severely inflated)
+
+benchmarking Egg/44
+time                 233.9 ms   (225.8 ms .. 245.5 ms)
+                     0.998 R²   (0.994 R² .. 1.000 R²)
+mean                 230.7 ms   (227.4 ms .. 235.4 ms)
+std dev              5.373 ms   (3.518 ms .. 7.361 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/39
+time                 266.9 ms   (192.7 ms .. 371.4 ms)
+                     0.924 R²   (0.883 R² .. 1.000 R²)
+mean                 203.0 ms   (186.9 ms .. 245.4 ms)
+std dev              34.93 ms   (4.132 ms .. 49.41 ms)
+variance introduced by outliers: 48% (moderately inflated)
+
+benchmarking Egg/35
+time                 11.92 ms   (11.76 ms .. 12.08 ms)
+                     0.996 R²   (0.991 R² .. 0.999 R²)
+mean                 12.11 ms   (11.99 ms .. 12.33 ms)
+std dev              443.2 μs   (255.0 μs .. 738.9 μs)
+variance introduced by outliers: 13% (moderately inflated)
+
+benchmarking Egg/41
+time                 461.7 ms   (383.2 ms .. 503.5 ms)
+                     0.996 R²   (0.993 R² .. 1.000 R²)
+mean                 421.3 ms   (401.4 ms .. 438.4 ms)
+std dev              21.18 ms   (9.419 ms .. 28.46 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/44
+time                 59.14 ms   (48.73 ms .. 68.13 ms)
+                     0.961 R²   (0.933 R² .. 0.990 R²)
+mean                 59.58 ms   (55.29 ms .. 65.00 ms)
+std dev              9.227 ms   (5.828 ms .. 11.91 ms)
+variance introduced by outliers: 56% (severely inflated)
+
+benchmarking Egg/31
+time                 275.6 ms   (237.3 ms .. 295.8 ms)
+                     0.990 R²   (0.950 R² .. NaN R²)
+mean                 289.5 ms   (277.9 ms .. 320.4 ms)
+std dev              22.97 ms   (2.778 ms .. 31.12 ms)
+variance introduced by outliers: 18% (moderately inflated)
+
+benchmarking Egg/28
+time                 107.9 ms   (90.96 ms .. 120.8 ms)
+                     0.956 R²   (0.811 R² .. 0.995 R²)
+mean                 104.5 ms   (96.87 ms .. 113.2 ms)
+std dev              13.04 ms   (9.402 ms .. 18.10 ms)
+variance introduced by outliers: 42% (moderately inflated)
+
+benchmarking Egg/37
+time                 112.2 ms   (74.04 ms .. 146.7 ms)
+                     0.914 R²   (0.859 R² .. 0.982 R²)
+mean                 91.11 ms   (81.93 ms .. 103.5 ms)
+std dev              17.06 ms   (13.01 ms .. 23.63 ms)
+variance introduced by outliers: 54% (severely inflated)
+
+benchmarking Egg/35
+time                 515.9 ms   (395.0 ms .. 789.7 ms)
+                     0.967 R²   (0.947 R² .. 1.000 R²)
+mean                 367.6 ms   (308.9 ms .. 439.0 ms)
+std dev              74.75 ms   (28.10 ms .. 103.3 ms)
+variance introduced by outliers: 48% (moderately inflated)
+
+benchmarking Egg/36
+time                 155.0 ms   (139.7 ms .. 173.9 ms)
+                     0.984 R²   (0.935 R² .. 1.000 R²)
+mean                 148.8 ms   (143.3 ms .. 156.1 ms)
+std dev              9.372 ms   (5.723 ms .. 14.03 ms)
+variance introduced by outliers: 13% (moderately inflated)
+
+benchmarking Egg/33
+time                 11.26 ms   (10.38 ms .. 12.25 ms)
+                     0.943 R²   (0.891 R² .. 0.980 R²)
+mean                 12.56 ms   (11.98 ms .. 13.25 ms)
+std dev              1.711 ms   (1.330 ms .. 2.150 ms)
+variance introduced by outliers: 65% (severely inflated)
+
+benchmarking Egg/41
+time                 283.9 ms   (275.0 ms .. 298.2 ms)
+                     0.999 R²   (0.998 R² .. 1.000 R²)
+mean                 270.5 ms   (265.0 ms .. 275.4 ms)
+std dev              6.968 ms   (3.757 ms .. 10.24 ms)
+variance introduced by outliers: 16% (moderately inflated)
+
+benchmarking Egg/42
+time                 532.3 ms   (483.1 ms .. 591.9 ms)
+                     0.999 R²   (0.995 R² .. 1.000 R²)
+mean                 497.8 ms   (476.5 ms .. 510.6 ms)
+std dev              21.24 ms   (8.378 ms .. 29.46 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/43
+time                 149.6 ms   (112.1 ms .. 184.7 ms)
+                     0.952 R²   (0.913 R² .. 1.000 R²)
+mean                 133.8 ms   (122.2 ms .. 142.5 ms)
+std dev              14.99 ms   (9.336 ms .. 25.23 ms)
+variance introduced by outliers: 27% (moderately inflated)
+
+benchmarking Egg/41
+time                 241.4 ms   (223.2 ms .. 263.2 ms)
+                     0.996 R²   (0.994 R² .. 1.000 R²)
+mean                 293.6 ms   (271.3 ms .. 315.9 ms)
+std dev              29.26 ms   (19.65 ms .. 39.12 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/34
+time                 143.2 ms   (134.6 ms .. 160.5 ms)
+                     0.987 R²   (0.971 R² .. 0.999 R²)
+mean                 132.8 ms   (128.4 ms .. 139.6 ms)
+std dev              8.655 ms   (4.846 ms .. 13.17 ms)
+variance introduced by outliers: 12% (moderately inflated)
+
+benchmarking Egg/42
+time                 28.95 ms   (24.62 ms .. 32.39 ms)
+                     0.943 R²   (0.910 R² .. 0.974 R²)
+mean                 23.01 ms   (21.72 ms .. 25.05 ms)
+std dev              3.592 ms   (2.609 ms .. 4.491 ms)
+variance introduced by outliers: 67% (severely inflated)
+
+benchmarking Egg/43
+time                 371.3 ms   (339.7 ms .. 407.7 ms)
+                     0.999 R²   (0.996 R² .. 1.000 R²)
+mean                 355.1 ms   (344.1 ms .. 364.7 ms)
+std dev              11.65 ms   (6.284 ms .. 14.79 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/42
+time                 339.4 ms   (311.9 ms .. 369.9 ms)
+                     0.996 R²   (0.981 R² .. 1.000 R²)
+mean                 301.8 ms   (264.3 ms .. 320.0 ms)
+std dev              31.93 ms   (10.09 ms .. 43.12 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/35
+time                 101.4 ms   (91.73 ms .. 115.6 ms)
+                     0.977 R²   (0.945 R² .. 0.998 R²)
+mean                 111.9 ms   (105.1 ms .. 127.3 ms)
+std dev              15.85 ms   (5.214 ms .. 25.89 ms)
+variance introduced by outliers: 43% (moderately inflated)
+
+benchmarking Egg/31
+time                 339.8 ms   (303.2 ms .. 376.6 ms)
+                     0.998 R²   (0.994 R² .. 1.000 R²)
+mean                 333.2 ms   (327.5 ms .. 341.3 ms)
+std dev              7.705 ms   (57.06 μs .. 9.455 ms)
+variance introduced by outliers: 19% (moderately inflated)
+
+benchmarking Egg/31
+time                 200.3 ms   (168.4 ms .. 238.3 ms)
+                     0.982 R²   (0.971 R² .. 1.000 R²)
+mean                 178.5 ms   (172.7 ms .. 190.7 ms)
+std dev              12.16 ms   (2.420 ms .. 17.07 ms)
+variance introduced by outliers: 15% (moderately inflated)
+
+benchmarking Egg/37
+time                 198.2 ms   (158.4 ms .. 238.2 ms)
+                     0.984 R²   (0.939 R² .. 1.000 R²)
+mean                 201.8 ms   (192.5 ms .. 215.1 ms)
+std dev              14.25 ms   (3.744 ms .. 16.17 ms)
+variance introduced by outliers: 15% (moderately inflated)
+
+benchmarking Egg/26
+time                 4.090 ms   (3.996 ms .. 4.216 ms)
+                     0.992 R²   (0.982 R² .. 0.999 R²)
+mean                 4.066 ms   (4.017 ms .. 4.158 ms)
+std dev              212.1 μs   (97.09 μs .. 330.8 μs)
+variance introduced by outliers: 30% (moderately inflated)
+
+benchmarking Egg/41
+time                 231.5 ms   (195.5 ms .. 277.4 ms)
+                     0.982 R²   (0.931 R² .. 1.000 R²)
+mean                 232.9 ms   (225.2 ms .. 251.2 ms)
+std dev              15.42 ms   (3.120 ms .. 22.01 ms)
+variance introduced by outliers: 15% (moderately inflated)
+
+benchmarking Egg/43
+time                 90.39 ms   (84.71 ms .. 98.49 ms)
+                     0.990 R²   (0.975 R² .. 0.998 R²)
+mean                 92.57 ms   (87.35 ms .. 101.2 ms)
+std dev              11.17 ms   (6.119 ms .. 17.38 ms)
+variance introduced by outliers: 38% (moderately inflated)
+
+benchmarking Egg/42
+time                 129.6 ms   (107.0 ms .. 152.3 ms)
+                     0.983 R²   (0.967 R² .. 0.999 R²)
+mean                 154.2 ms   (137.9 ms .. 194.5 ms)
+std dev              36.01 ms   (4.810 ms .. 53.25 ms)
+variance introduced by outliers: 69% (severely inflated)
+
+benchmarking Egg/44
+time                 203.5 ms   (182.9 ms .. 223.4 ms)
+                     0.991 R²   (0.970 R² .. 1.000 R²)
+mean                 190.2 ms   (185.6 ms .. 199.2 ms)
+std dev              8.667 ms   (3.103 ms .. 12.20 ms)
+variance introduced by outliers: 14% (moderately inflated)
+
+benchmarking Egg/35
+time                 42.31 ms   (39.73 ms .. 44.75 ms)
+                     0.989 R²   (0.971 R² .. 0.997 R²)
+mean                 46.95 ms   (44.26 ms .. 51.53 ms)
+std dev              6.746 ms   (3.484 ms .. 9.502 ms)
+variance introduced by outliers: 55% (severely inflated)
+
+benchmarking Egg/28
+time                 11.36 ms   (11.06 ms .. 11.70 ms)
+                     0.996 R²   (0.994 R² .. 0.999 R²)
+mean                 10.97 ms   (10.87 ms .. 11.12 ms)
+std dev              319.0 μs   (213.2 μs .. 415.9 μs)
+

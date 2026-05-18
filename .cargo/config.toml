@@ -2,3 +2,6 @@
 [build]
 # debug symbols https://pyo3.rs/main/debugging#common-setup
 rustflags = ["-g"]
+
+[net]
+git-fetch-with-cli = true

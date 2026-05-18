@@ -102,7 +102,6 @@ class TypeConstraintSolver:
         If this fails and we have an UnstableFn type and a function value, we can try to infer the typevars by calling
         it with the input types, if we can resolve those
         """
-        from .egraph import set_current_ruleset  # noqa: PLC0415
         from .runtime import RuntimeExpr  # noqa: PLC0415
 
         try:
@@ -114,15 +113,11 @@ class TypeConstraintSolver:
         # unnamed-function rewrites created while inferring types are discarded after the probe.
         probe_decls = decls().copy()
         dummy_args = [
-            RuntimeExpr.__from_values__(
-                probe_decls,
-                TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()),
-            )
+            RuntimeExpr.__from_values__(probe_decls, TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()))
             for arg_tp in tp.args[1:]
         ]
         try:
-            with set_current_ruleset(None):
-                result = value(*dummy_args)
+            result = value(*dummy_args)
         except Exception as e:
             e.add_note(f"While trying to infer return type of {value} by calling it")
             raise
