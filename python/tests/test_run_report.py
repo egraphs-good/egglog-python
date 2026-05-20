@@ -94,6 +94,7 @@ class TestRunReport:
 
         assert "(rewrite" not in output, f"str() still contains egglog s-expressions:\n{output}"
         assert "__main__" not in output, f"str() still contains mangled names:\n{output}"
+        assert "rewrite(" in output, f"Expected 'rewrite(' in:\n{output}"
 
     def test_multiple_rules(self):
         egraph = EGraph()
@@ -137,6 +138,8 @@ class TestRunReport:
 
         output = str(report)
         assert "__main__" not in output, f"str() still contains mangled names:\n{output}"
+        assert "rule(" in output, f"Expected 'rule(' in:\n{output}"
+        assert "comm" in output, f"Expected rule name 'comm' in:\n{output}"
 
     def test_unnamed_rule_decl(self):
         egraph = EGraph()
@@ -152,6 +155,7 @@ class TestRunReport:
 
         output = str(report)
         assert "__main__" not in output, f"Unnamed RuleDecl key not translated:\n{output}"
+        assert "rule(" in output, f"Expected 'rule(' in:\n{output}"
         # Should contain Python rule() syntax somewhere in the keys
         rule_keys = list(report.search_and_apply_time_per_rule.keys())
         assert len(rule_keys) > 0
@@ -173,6 +177,7 @@ class TestRunReport:
 
         output = str(report)
         assert "__main__" not in output, f"BiRewriteDecl key not translated:\n{output}"
+        assert "birewrite(" in output, f"Expected 'birewrite(' in:\n{output}"
         rule_keys = list(report.search_and_apply_time_per_rule.keys())
         assert len(rule_keys) > 0
         for key in rule_keys:
