@@ -499,7 +499,7 @@ convert_struct!(
         conditions: Vec<Fact_> = Vec::new(),
         name: String = String::new()
     )
-        r -> egglog::ast::GenericRewrite {span: r.span.clone().into(), lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect(), name: String::new()},
+        r -> egglog::ast::GenericRewrite {span: r.span.clone().into(), lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect(), name: (&r.name).into()},
         r -> Rewrite {span: r.span.clone().into(), lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect(), name: r.name.to_string()};
     egglog::ast::RunConfig: "{:?}" => RunConfig(
         ruleset: String,

@@ -48,12 +48,6 @@ def _normalize_global_let_name(name: str) -> str:
     return name if name.startswith("$") else f"${name}"
 
 
-def _normalize_rule_key(key: str) -> str:
-    """Normalize an egglog rule string for consistent matching."""
-    key = key.replace("'", '"')
-    return re.sub(r"\s+", " ", key).strip()
-
-
 @dataclass
 class EGraphState:
     """
@@ -94,6 +88,11 @@ class EGraphState:
     # Counter for deterministic synthetic names assigned to unnamed functions.
     unnamed_function_counter: int = 0
 
+    # Counter for numeric rule names
+    rule_name_counter: int = 0
+    # Mapping from numeric name (str) to command decl
+    rule_name_to_command_decl: dict[str, CommandDecl] = field(default_factory=dict)
+
     def copy(self) -> EGraphState:
         """
         Returns a copy of the state. The egraph reference is kept the same. Used for pushing/popping.
@@ -110,6 +109,8 @@ class EGraphState:
             cost_callables=self.cost_callables.copy(),
             expr_to_let_counter=self.expr_to_let_counter,
             unnamed_function_counter=self.unnamed_function_counter,
+            rule_name_counter=self.rule_name_counter,
+            rule_name_to_command_decl=self.rule_name_to_command_decl.copy(),
         )
 
     def _run_program(self, *commands: bindings._Command) -> list[bindings._CommandOutput]:
@@ -259,8 +260,12 @@ class EGraphState:
         """
         Look up the original Python CommandDecl for an egglog rule key.
         """
-        normalized = _normalize_rule_key(egglog_key)
-        return self.egg_rule_to_command_decl[normalized]
+        clean_key = egglog_key.removesuffix("=>").removesuffix("<=")
+        if clean_key in self.rule_name_to_command_decl:
+            return self.rule_name_to_command_decl[clean_key]
+        if egglog_key in self.egg_rule_to_command_decl:
+            return self.egg_rule_to_command_decl[egglog_key]
+        return egglog_key
 
     def ruleset_to_egg(self, ident: Ident) -> None:
         """
@@ -298,37 +303,35 @@ class EGraphState:
                 return bindings.ActionCommand(action_egg)
             case RewriteDecl(tp, lhs, rhs, conditions) | BiRewriteDecl(tp, lhs, rhs, conditions):
                 self.type_ref_to_egg(tp)
+                name = str(self.rule_name_counter)
+                self.rule_name_counter += 1
+                self.rule_name_to_command_decl[name] = cmd
                 rewrite = bindings.Rewrite(
                     span(),
                     self._expr_to_egg(lhs),
                     self._expr_to_egg(rhs),
                     [self.fact_to_egg(c) for c in conditions],
+                    name,
                 )
                 if isinstance(cmd, RewriteDecl):
                     egg_cmd = bindings.RewriteCommand(str(ruleset), rewrite, cmd.subsume)
                 else:
                     egg_cmd = bindings.BiRewriteCommand(str(ruleset), rewrite)
-
-                normalized = _normalize_rule_key(str(egg_cmd))
-                self.egg_rule_to_command_decl[normalized] = cmd
-                if isinstance(cmd, BiRewriteDecl):
-                    self.egg_rule_to_command_decl[normalized + "=>"] = cmd
-                    self.egg_rule_to_command_decl[normalized + "<="] = cmd
                 return egg_cmd
             case RuleDecl(head, body, name):
-                egg_cmd = bindings.RuleCommand(
+                if not name:
+                    name = str(self.rule_name_counter)
+                    self.rule_name_counter += 1
+                self.rule_name_to_command_decl[name] = cmd
+                return bindings.RuleCommand(
                     bindings.Rule(
                         span(),
                         [self.action_to_egg(a) for a in head],
                         [self.fact_to_egg(f) for f in body],
-                        name or "",
+                        name,
                         str(ruleset),
                     )
                 )
-                self.egg_rule_to_command_decl[_normalize_rule_key(str(egg_cmd))] = cmd
-                if name:
-                    self.egg_rule_to_command_decl[name] = cmd
-                return egg_cmd
             # TODO: Replace with just constants value and looking at REF of function
             case DefaultRewriteDecl(ref, expr, subsume):
                 sig = self.__egg_decls__.get_callable_decl(ref).signature
