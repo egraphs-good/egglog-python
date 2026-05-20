@@ -256,7 +256,7 @@ class EGraphState:
             case _:
                 assert_never(schedule)
 
-    def translate_rule_key(self, egglog_key: str) -> CommandDecl:
+    def translate_rule_key(self, egglog_key: str) -> CommandDecl | str:
         """
         Look up the original Python CommandDecl for an egglog rule key.
         """
@@ -313,6 +313,7 @@ class EGraphState:
                     [self.fact_to_egg(c) for c in conditions],
                     name,
                 )
+                egg_cmd: bindings._Command
                 if isinstance(cmd, RewriteDecl):
                     egg_cmd = bindings.RewriteCommand(str(ruleset), rewrite, cmd.subsume)
                 else:

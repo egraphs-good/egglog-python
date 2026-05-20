@@ -403,8 +403,11 @@ class Rewrite:
     lhs: _Expr
     rhs: _Expr
     conditions: list[_Fact]
+    name: str
 
-    def __new__(cls, span: _Span, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = ...) -> Rewrite: ...
+    def __new__(
+        cls, span: _Span, lhs: _Expr, rhs: _Expr, conditions: list[_Fact] = ..., name: str = ...
+    ) -> Rewrite: ...
 
 @final
 class RunConfig:
