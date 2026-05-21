@@ -76,8 +76,6 @@ class EGraphState:
     type_ref_to_egg_sort: dict[JustTypeRef, str] = field(default_factory=dict)
     egg_sort_to_type_ref: dict[str, JustTypeRef] = field(default_factory=dict)
 
-    egg_rule_to_command_decl: dict[str, CommandDecl] = field(default_factory=dict)
-
     # Cache of egg expressions for converting to egg
     expr_to_egg_cache: dict[ExprDecl, bindings._Expr] = field(default_factory=dict)
 
@@ -91,7 +89,7 @@ class EGraphState:
     # Counter for numeric rule names
     rule_name_counter: int = 0
     # Mapping from numeric name (str) to command decl
-    rule_name_to_command_decl: dict[str, CommandDecl] = field(default_factory=dict)
+    rule_name_to_command_decl: dict[str, RuleDecl | BiRewriteDecl | RewriteDecl] = field(default_factory=dict)
 
     def copy(self) -> EGraphState:
         """
@@ -256,17 +254,6 @@ class EGraphState:
             case _:
                 assert_never(schedule)
 
-    def translate_rule_key(self, egglog_key: str) -> CommandDecl | str:
-        """
-        Look up the original Python CommandDecl for an egglog rule key.
-        """
-        clean_key = egglog_key.removesuffix("=>").removesuffix("<=")
-        if clean_key in self.rule_name_to_command_decl:
-            return self.rule_name_to_command_decl[clean_key]
-        if egglog_key in self.egg_rule_to_command_decl:
-            return self.egg_rule_to_command_decl[egglog_key]
-        return egglog_key
-
     def ruleset_to_egg(self, ident: Ident) -> None:
         """
         Registers a ruleset if it's not already registered.
@@ -305,7 +292,6 @@ class EGraphState:
                 self.type_ref_to_egg(tp)
                 name = str(self.rule_name_counter)
                 self.rule_name_counter += 1
-                self.rule_name_to_command_decl[name] = cmd
                 rewrite = bindings.Rewrite(
                     span(),
                     self._expr_to_egg(lhs),
@@ -315,8 +301,11 @@ class EGraphState:
                 )
                 egg_cmd: bindings._Command
                 if isinstance(cmd, RewriteDecl):
+                    self.rule_name_to_command_decl[name] = cmd
                     egg_cmd = bindings.RewriteCommand(str(ruleset), rewrite, cmd.subsume)
                 else:
+                    self.rule_name_to_command_decl[f"{name}=>"] = cmd
+                    self.rule_name_to_command_decl[f"{name}<="] = cmd
                     egg_cmd = bindings.BiRewriteCommand(str(ruleset), rewrite)
                 return egg_cmd
             case RuleDecl(head, body, name):

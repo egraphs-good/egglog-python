@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 
 from . import bindings
-from .declarations import CommandDecl, Declarations
+from .declarations import BiRewriteDecl, Declarations, RewriteDecl, RuleDecl
 from .egraph_state import EGraphState
 from .pretty import pretty_decl
 
+RewriteOrRuleDecl = RuleDecl | BiRewriteDecl | RewriteDecl
 
-def _format_rule_key(decls: Declarations, key: CommandDecl | str) -> str:
-    if isinstance(key, str):
-        return key
+
+def _format_rule_key(decls: Declarations, key: RewriteOrRuleDecl) -> str:
     return pretty_decl(decls, key)
 
 
@@ -35,20 +34,26 @@ class RuleReport:
 class RuleSetReport:
     _decls: Declarations = field(repr=False)
     changed: bool = False
-    rule_reports: dict[CommandDecl | str, list[RuleReport]] = field(default_factory=dict)
+    rule_reports: dict[RewriteOrRuleDecl, list[RuleReport]] = field(default_factory=dict)
     search_and_apply_time: timedelta = field(default_factory=timedelta)
     merge_time: timedelta = field(default_factory=timedelta)
 
     @classmethod
     def _from_bindings(
-        cls, report: bindings.RuleSetReport, translate_key: Callable[[str], CommandDecl | str], decls: Declarations
+        cls, report: bindings.RuleSetReport, rule_map: dict[str, RewriteOrRuleDecl], decls: Declarations
     ) -> RuleSetReport:
+        rule_reports: dict[RewriteOrRuleDecl, list[RuleReport]] = {}
+        for k, v in report.rule_reports.items():
+            translated = rule_map[k]
+            reports = [RuleReport._from_bindings(rr) for rr in v]
+            if translated in rule_reports:
+                rule_reports[translated].extend(reports)
+            else:
+                rule_reports[translated] = reports
         return cls(
             _decls=decls,
             changed=report.changed,
-            rule_reports={
-                translate_key(k): [RuleReport._from_bindings(rr) for rr in v] for k, v in report.rule_reports.items()
-            },
+            rule_reports=rule_reports,
             search_and_apply_time=report.search_and_apply_time,
             merge_time=report.merge_time,
         )
@@ -70,10 +75,10 @@ class IterationReport:
 
     @classmethod
     def _from_bindings(
-        cls, report: bindings.IterationReport, translate_key: Callable[[str], CommandDecl | str], decls: Declarations
+        cls, report: bindings.IterationReport, rule_map: dict[str, RewriteOrRuleDecl], decls: Declarations
     ) -> IterationReport:
         return cls(
-            rule_set_report=RuleSetReport._from_bindings(report.rule_set_report, translate_key, decls),
+            rule_set_report=RuleSetReport._from_bindings(report.rule_set_report, rule_map, decls),
             rebuild_time=report.rebuild_time,
         )
 
@@ -85,8 +90,8 @@ class RunReport:
     _decls: Declarations = field(repr=False)
     iterations: list[IterationReport] = field(default_factory=list)
     updated: bool = False
-    search_and_apply_time_per_rule: dict[CommandDecl | str, timedelta] = field(default_factory=dict)
-    num_matches_per_rule: dict[CommandDecl | str, int] = field(default_factory=dict)
+    search_and_apply_time_per_rule: dict[RewriteOrRuleDecl, timedelta] = field(default_factory=dict)
+    num_matches_per_rule: dict[RewriteOrRuleDecl, int] = field(default_factory=dict)
     search_and_apply_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
     merge_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
     rebuild_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
@@ -106,17 +111,31 @@ class RunReport:
 
     @classmethod
     def _from_bindings(cls, report: bindings.RunReport, state: EGraphState) -> RunReport:
+        rule_map = state.rule_name_to_command_decl
+        decls = state.__egg_decls__
+
+        search_and_apply_time_per_rule: dict[RewriteOrRuleDecl, timedelta] = {}
+        for k, v in report.search_and_apply_time_per_rule.items():
+            translated = rule_map[k]
+            if translated in search_and_apply_time_per_rule:
+                search_and_apply_time_per_rule[translated] += v
+            else:
+                search_and_apply_time_per_rule[translated] = v
+
+        num_matches_per_rule: dict[RewriteOrRuleDecl, int] = {}
+        for k, v in report.num_matches_per_rule.items():
+            translated = rule_map[k]
+            if translated in num_matches_per_rule:
+                num_matches_per_rule[translated] += v
+            else:
+                num_matches_per_rule[translated] = v
+
         return cls(
-            _decls=state.__egg_decls__,
-            iterations=[
-                IterationReport._from_bindings(it, state.translate_rule_key, state.__egg_decls__)
-                for it in report.iterations
-            ],
+            _decls=decls,
+            iterations=[IterationReport._from_bindings(it, rule_map, decls) for it in report.iterations],
             updated=report.updated,
-            search_and_apply_time_per_rule={
-                state.translate_rule_key(k): v for k, v in report.search_and_apply_time_per_rule.items()
-            },
-            num_matches_per_rule={state.translate_rule_key(k): v for k, v in report.num_matches_per_rule.items()},
+            search_and_apply_time_per_rule=search_and_apply_time_per_rule,
+            num_matches_per_rule=num_matches_per_rule,
             search_and_apply_time_per_ruleset=report.search_and_apply_time_per_ruleset,
             merge_time_per_ruleset=report.merge_time_per_ruleset,
             rebuild_time_per_ruleset=report.rebuild_time_per_ruleset,

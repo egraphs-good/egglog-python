@@ -71,6 +71,7 @@ __all__ = [
     "GreedyDagCost",
     "RewriteOrRule",
     "Ruleset",
+    "RunReport",
     "Schedule",
     "_BirewriteBuilder",
     "_EqBuilder",
