@@ -11,10 +11,6 @@ from .pretty import pretty_decl
 RewriteOrRuleDecl = RuleDecl | BiRewriteDecl | RewriteDecl
 
 
-def _format_rule_key(decls: Declarations, key: RewriteOrRuleDecl) -> str:
-    return pretty_decl(decls, key)
-
-
 @dataclass
 class RuleReport:
     plan: bindings.Plan | None
@@ -59,7 +55,7 @@ class RuleSetReport:
         )
 
     def __repr__(self) -> str:
-        rule_reports_str = {_format_rule_key(self._decls, k): v for k, v in self.rule_reports.items()}
+        rule_reports_str = {pretty_decl(self._decls, k): v for k, v in self.rule_reports.items()}
         return (
             f"RuleSetReport(changed={self.changed}, "
             f"rule_reports={rule_reports_str}, "
@@ -97,8 +93,8 @@ class RunReport:
     rebuild_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
 
     def __repr__(self) -> str:
-        time_per_rule = {_format_rule_key(self._decls, k): v for k, v in self.search_and_apply_time_per_rule.items()}
-        matches_per_rule = {_format_rule_key(self._decls, k): v for k, v in self.num_matches_per_rule.items()}
+        time_per_rule = {pretty_decl(self._decls, k): v for k, v in self.search_and_apply_time_per_rule.items()}
+        matches_per_rule = {pretty_decl(self._decls, k): v for k, v in self.num_matches_per_rule.items()}
         return (
             f"RunReport(iterations={self.iterations}, "
             f"updated={self.updated}, "
