@@ -42,6 +42,7 @@ from .declarations import *
 from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_decl
+from .run_report import RunReport
 from .runtime import *
 from .thunk import *
 
@@ -70,6 +71,7 @@ __all__ = [
     "GreedyDagCost",
     "RewriteOrRule",
     "Ruleset",
+    "RunReport",
     "Schedule",
     "_BirewriteBuilder",
     "_EqBuilder",
@@ -953,15 +955,13 @@ class EGraph:
         raise NotImplementedError(msg)
 
     @overload
-    def run(self, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> bindings.RunReport: ...
+    def run(self, limit: int, /, *until: Fact, ruleset: Ruleset | None = None) -> RunReport: ...
 
     @overload
-    def run(self, schedule: Schedule, /) -> bindings.RunReport: ...
+    def run(self, schedule: Schedule, /) -> RunReport: ...
 
     @_TRACER.start_as_current_span("run")
-    def run(
-        self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None
-    ) -> bindings.RunReport:
+    def run(self, limit_or_schedule: int | Schedule, /, *until: Fact, ruleset: Ruleset | None = None) -> RunReport:
         """
         Run the egraph until the given limit or until the given facts are true.
         """
@@ -969,20 +969,20 @@ class EGraph:
             limit_or_schedule = run(ruleset, *until) * limit_or_schedule
         return self._run_schedule(limit_or_schedule)
 
-    def _run_schedule(self, schedule: Schedule) -> bindings.RunReport:
+    def _run_schedule(self, schedule: Schedule) -> RunReport:
         self._add_decls(schedule)
         cmd = self._state.run_schedule_to_egg(schedule.schedule)
         (command_output,) = self._run_program(cmd)
         assert isinstance(command_output, bindings.RunScheduleOutput)
-        return command_output.report
+        return RunReport._from_bindings(command_output.report, self._state)
 
-    def stats(self) -> bindings.RunReport:
+    def stats(self) -> RunReport:
         """
         Returns the overall run report for the egraph.
         """
         (output,) = self._run_program(bindings.PrintOverallStatistics(span(1), None))
         assert isinstance(output, bindings.OverallStatistics)
-        return output.report
+        return RunReport._from_bindings(output.report, self._state)
 
     def check_bool(self, *facts: FactLike) -> bool:
         """

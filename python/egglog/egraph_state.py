@@ -86,6 +86,11 @@ class EGraphState:
     # Counter for deterministic synthetic names assigned to unnamed functions.
     unnamed_function_counter: int = 0
 
+    # Counter for numeric rule names
+    rule_name_counter: int = 0
+    # Mapping from numeric name (str) to command decl
+    rule_name_to_command_decl: dict[str, RuleDecl | BiRewriteDecl | RewriteDecl] = field(default_factory=dict)
+
     def copy(self) -> EGraphState:
         """
         Returns a copy of the state. The egraph reference is kept the same. Used for pushing/popping.
@@ -102,6 +107,8 @@ class EGraphState:
             cost_callables=self.cost_callables.copy(),
             expr_to_let_counter=self.expr_to_let_counter,
             unnamed_function_counter=self.unnamed_function_counter,
+            rule_name_counter=self.rule_name_counter,
+            rule_name_to_command_decl=self.rule_name_to_command_decl.copy(),
         )
 
     def _run_program(self, *commands: bindings._Command) -> list[bindings._CommandOutput]:
@@ -283,24 +290,35 @@ class EGraphState:
                 return bindings.ActionCommand(action_egg)
             case RewriteDecl(tp, lhs, rhs, conditions) | BiRewriteDecl(tp, lhs, rhs, conditions):
                 self.type_ref_to_egg(tp)
+                name = str(self.rule_name_counter)
+                self.rule_name_counter += 1
                 rewrite = bindings.Rewrite(
                     span(),
                     self._expr_to_egg(lhs),
                     self._expr_to_egg(rhs),
                     [self.fact_to_egg(c) for c in conditions],
+                    name,
                 )
-                return (
-                    bindings.RewriteCommand(str(ruleset), rewrite, cmd.subsume)
-                    if isinstance(cmd, RewriteDecl)
-                    else bindings.BiRewriteCommand(str(ruleset), rewrite)
-                )
+                egg_cmd: bindings._Command
+                if isinstance(cmd, RewriteDecl):
+                    self.rule_name_to_command_decl[name] = cmd
+                    egg_cmd = bindings.RewriteCommand(str(ruleset), rewrite, cmd.subsume)
+                else:
+                    self.rule_name_to_command_decl[f"{name}=>"] = cmd
+                    self.rule_name_to_command_decl[f"{name}<="] = cmd
+                    egg_cmd = bindings.BiRewriteCommand(str(ruleset), rewrite)
+                return egg_cmd
             case RuleDecl(head, body, name):
+                if not name:
+                    name = str(self.rule_name_counter)
+                    self.rule_name_counter += 1
+                self.rule_name_to_command_decl[name] = cmd
                 return bindings.RuleCommand(
                     bindings.Rule(
                         span(),
                         [self.action_to_egg(a) for a in head],
                         [self.fact_to_egg(f) for f in body],
-                        name or "",
+                        name,
                         str(ruleset),
                     )
                 )

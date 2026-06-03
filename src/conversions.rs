@@ -158,7 +158,9 @@ convert_enums!(
                 schema: (&f.schema).into(),
                 merge: f.merge.as_ref().map(|e| e.into()),
                 hidden: false,
-                let_binding: false
+                let_binding: false,
+                term_constructor: None,
+                unextractable: false
             },
             egglog::ast::Command::Function {span, name, schema, merge, .. } => FunctionCommand {
                 span: span.into(),
@@ -494,10 +496,11 @@ convert_struct!(
         span: Span,
         lhs: Expr,
         rhs: Expr,
-        conditions: Vec<Fact_> = Vec::new()
+        conditions: Vec<Fact_> = Vec::new(),
+        name: String = String::new()
     )
-        r -> egglog::ast::GenericRewrite {span: r.span.clone().into(), lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()},
-        r -> Rewrite {span: r.span.clone().into(), lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect()};
+        r -> egglog::ast::GenericRewrite {span: r.span.clone().into(), lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect(), name: (&r.name).into()},
+        r -> Rewrite {span: r.span.clone().into(), lhs: (&r.lhs).into(), rhs: (&r.rhs).into(), conditions: r.conditions.iter().map(|v| v.into()).collect(), name: r.name.to_string()};
     egglog::ast::RunConfig: "{:?}" => RunConfig(
         ruleset: String,
         until: Option<Vec<Fact_>> = None

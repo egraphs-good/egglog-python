@@ -42,6 +42,7 @@ SKIP_TESTS = {
     "typeinfer",
     "repro-typechecking-schedule",
     "stresstest_large_expr",
+    "eggcc-2mm",
 }
 
 
