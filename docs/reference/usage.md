@@ -2,22 +2,55 @@
 
 ## Installation
 
-You can install this package with `pip`:
+`egglog` supports Python 3.11 and newer. The examples below create an isolated
+environment first so that new installs do not depend on packages already present
+on your machine.
+
+With `pip`:
 
 ```shell
-pip install egglog
+python3.13 -m venv .venv  # or any supported Python 3.11+
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install egglog
+python -c "from egglog import EGraph; EGraph(); print('egglog ok')"
 ```
 
-To be able to run the array demos:
+With `uv` in a project:
 
 ```shell
-pip install egglog[array]
+uv init egglog-demo
+cd egglog-demo
+uv add egglog
+uv run python -c "from egglog import EGraph; EGraph(); print('egglog ok')"
 ```
 
-To see interactive widgets:
+With `uv` in a standalone virtual environment:
 
 ```shell
-pip install anywidget
+uv venv --python 3.13 .venv  # or any supported Python 3.11+
+uv pip install --python .venv/bin/python egglog
+.venv/bin/python -c "from egglog import EGraph; EGraph(); print('egglog ok')"
+```
+
+If you already have an active environment, the install command is simply:
+
+```shell
+python -m pip install egglog
+```
+
+To run the array demos, install the optional array dependencies:
+
+```shell
+python -m pip install "egglog[array]"
+uv add "egglog[array]"
+```
+
+From a source checkout for development, use the repo's uv workflow:
+
+```shell
+uv sync --all-extras
+uv run python -c "from egglog import EGraph; EGraph(); print('egglog ok')"
 ```
 
 It follows [SPEC 0](https://scientific-python.org/specs/spec-0000/) in terms of what Python versions are supported.

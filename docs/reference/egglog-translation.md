@@ -395,12 +395,38 @@ After a run, you get a run report, with some timing information as well as wheth
 
 ### Schedules
 
-The `egraph.run` function also takes a `schedule` argument, which corresponds to the `(run-schedule ...)` command in egglog. A schedule can be either:
+`EGraph.run` can run either a bounded number of iterations or a full schedule.
+The bounded form:
 
-- A run configuration, created with `run(limit=..., ruleset=..., *until)`, corresponding to `(run ...)` in egglog
-- Saturating an existing schedule, by calling the `schedule.saturate()` method, corresponding to `(saturate ...)` in egglog
-- A sequence of sequences run one after the other, created with `seq(*schedules)`, corresponding to `(seq ...)` in egglog
-- Repeating a schedule some number of times, created with `schedule * n`, corresponding to `(repeat ...)` in egglog
+```python
+egraph.run(5)
+```
+
+is shorthand for running the default ruleset five times. You can also pass a
+ruleset and optional stop facts:
+
+```python
+egraph.run(10, ruleset=path_ruleset)
+egraph.run(10000, fib(7))
+```
+
+For more control, pass a `Schedule` object. Schedules correspond to egglog's
+`(run-schedule ...)` command and are composed from these Python forms:
+
+| Python | egglog | Meaning |
+| --- | --- | --- |
+| `run()` | `(run)` | Run the default ruleset once. |
+| `run(ruleset)` | `(run ruleset)` | Run one named ruleset once. |
+| `run(ruleset, fact)` | `(run ruleset :until fact)` | Run until the fact is reached. |
+| `schedule.saturate()` | `(saturate schedule)` | Repeat until the schedule stops changing the e-graph. |
+| `schedule * n` | `(repeat n schedule)` | Repeat a schedule exactly `n` times. |
+| `left + right` | `(seq left right)` | Run two schedules in order. |
+| `seq(a, b, c)` | `(seq a b c)` | Run any number of schedules in order. |
+
+Rulesets are schedules, so `egraph.run(path_ruleset)` runs `path_ruleset` once.
+For readability, prefer `run(path_ruleset)` when you are composing a larger
+schedule and `egraph.run(10, ruleset=path_ruleset)` when all you need is a
+bounded run.
 
 We can show an example of this by translating the `schedule-demo.egg` to Python:
 
@@ -470,15 +496,19 @@ step_egraph.check(left(i64(10)), right(i64(9)))
 step_egraph.check_fail(left(i64(11)), right(i64(10)))
 ```
 
-#### Custom Schedulers
+#### Backoff Scheduler
 
-Custom backoff scheduler from egglog-experimental is supported. Create a custom backoff scheduler with `bo = BackOff(match_limit: None | int=None, ban_length: None | int=None)`, then run using `run(ruleset, *facts, scheduler=bo)`:
+The custom backoff scheduler can delay rules that produce too many matches in a
+single scheduler iteration. Create one with
+`bo = back_off(match_limit=None, ban_length=None)`, then pass it to
+`run(ruleset, *facts, scheduler=bo)`.
 
 - `match_limit`: per-rule threshold of matches allowed in a single scheduler iteration. If a rule produces more matches than the threshold, that rule is temporarily banned.
 - `ban_length`: initial ban duration (in scheduler iterations). While banned, that rule is skipped.
-- Exponential backoff: each time a rule is banned, both the threshold and ban length double for that rule (threshold = match_limit << times_banned; ban = ban_length << times_banned).
+- Exponential backoff: each time a rule is banned, both the threshold and ban length double for that rule. After `times_banned` bans, the effective threshold is `match_limit << times_banned` and the ban duration is `ban_length << times_banned`.
 - Fast-forwarding: when any rule is banned, the scheduler fast-forwards by the minimum remaining ban to unban at least one rule before checking for termination again.
 - Defaults: match_limit defaults to 1000; ban_length defaults to 5.
+- `:until` support: custom scheduler runs can use at most one non-equality fact as the stop condition. Equality stop facts and multiple stop facts raise `ValueError`.
 
 For example, this egglog code:
 
@@ -497,7 +527,7 @@ step_egraph.run(
 ```
 
 By default the scheduler will be created before any other schedules are run.
-To control where is instantiated explicitly, use `bo.scope(<schedule>)`, where it will be created before everything in `<schedule>`.
+To control where it is instantiated explicitly, use `bo.scope(<schedule>)`, where it will be created before everything in `<schedule>`.
 
 So the previous is equivalent to:
 
@@ -525,6 +555,11 @@ This would be equivalent to this egglog:
         (let-scheduler bo (back-off :match-limit 10))
         (run-with bo step_right)))
 ```
+
+That distinction matters because a scheduler carries state. Hoisting one
+scheduler outside `* 10` lets its `times_banned` counters accumulate across all
+ten runs. Placing `bo.scope(...)` inside `* 10` creates a fresh scheduler each
+time, so every iteration starts with the initial `match_limit` and `ban_length`.
 
 ## Check
 

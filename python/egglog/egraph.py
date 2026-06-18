@@ -1560,7 +1560,11 @@ def ruleset(
 @dataclass
 class Schedule(DelayedDeclarations):
     """
-    A composition of some rulesets, either composing them sequentially, running them repeatedly, running them till saturation, or running until some facts are met
+    A composable e-graph schedule.
+
+    Use ``left + right`` to run schedules in sequence, ``schedule * n`` to
+    repeat a schedule a fixed number of times, and ``schedule.saturate()`` to
+    repeat until the schedule stops changing the e-graph.
     """
 
     # Defer declerations so that we can have rule generators that used not yet defined yet
@@ -2065,7 +2069,11 @@ def to_runtime_expr(expr: BaseExpr) -> RuntimeExpr:
 
 def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | None = None) -> Schedule:
     """
-    Create a run configuration.
+    Create a one-step run schedule.
+
+    ``run()`` runs the default ruleset once. ``run(ruleset)`` runs one named
+    ruleset once. Additional facts become ``:until`` stop conditions. A custom
+    ``scheduler`` currently supports at most one non-equality stop fact.
     """
     facts = _fact_likes(until)
     return Schedule(
@@ -2086,6 +2094,9 @@ def back_off(match_limit: None | int = None, ban_length: None | int = None) -> B
     schedule = run(analysis_ruleset).saturate() + run(ruleset, scheduler=back_off(match_limit=1000, ban_length=5)) * 10
     ```
     This will run the `analysis_ruleset` until saturation, then run `ruleset` 10 times, using a backoff scheduler.
+
+    The backend defaults are ``match_limit=1000`` and ``ban_length=5``. Each time
+    a rule is banned, both effective values double for that rule.
     """
     return BackOff(BackOffDecl(id=uuid4(), match_limit=match_limit, ban_length=ban_length))
 
@@ -2110,7 +2121,9 @@ class BackOff:
 
 def seq(*schedules: Schedule) -> Schedule:
     """
-    Run a sequence of schedules.
+    Run any number of schedules in order.
+
+    For two schedules, ``left + right`` is equivalent to ``seq(left, right)``.
     """
     return Schedule(partial(Declarations.create, *schedules), SequenceDecl(tuple(s.schedule for s in schedules)))
 

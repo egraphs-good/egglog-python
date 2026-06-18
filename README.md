@@ -9,6 +9,27 @@ Please see the [documentation](https://egglog-python.readthedocs.io/) for more i
 
 Come say hello [on the e-graphs Zulip](https://egraphs.zulipchat.com/#narrow/stream/375765-egglog/) or [open an issue](https://github.com/egraphs-good/egglog-python/issues/new/choose)!
 
+## Install
+
+With pip:
+
+```shell
+python -m pip install egglog
+```
+
+With uv in a project:
+
+```shell
+uv add egglog
+```
+
+For array examples, install the optional array dependencies:
+
+```shell
+python -m pip install "egglog[array]"
+uv add "egglog[array]"
+```
+
 ## How to cite
 
 If you use **egglog-python** in academic work, please cite the paper:

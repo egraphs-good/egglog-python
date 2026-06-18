@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "egglog_python"
-version = "13.1.0"
+version = "13.2.0"
 dependencies = [
  "base64",
  "egglog",
