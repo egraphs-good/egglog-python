@@ -228,7 +228,7 @@ egraph.run(run(optimizations, scheduler=back_off()) * 10)
 egraph.function_size(Num.__mul__)
 
 
-# Note that any scheudler which doesn't have an explicit scope is bound to the outer loop like:
+# Note that any scheduler which doesn't have an explicit scope is bound to the outer loop like:
 #
 # ```python
 # bo = back_off()
