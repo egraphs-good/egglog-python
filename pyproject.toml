@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "egglog"
-description = "e-graphs in Python built around the the egglog rust library"
+description = "e-graphs in Python built around the egglog rust library"
 readme = "README.md"
 dynamic = ["version"]
 license = { text = "MIT" }
