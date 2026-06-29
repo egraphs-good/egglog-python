@@ -263,11 +263,14 @@ def linalg_norm(X: NDArray, axis: TupleIntLike) -> NDArray:
     return NDArray.fn(
         outshape,
         X.dtype,
-        lambda k: LoopNestAPI.from_tuple(reduce_axis)
-        .unwrap()
-        .indices()
-        .foldl_value(lambda carry, i: carry + ((x := X.index(i + k)).conj() * x).real(), init=0.0)
-        .sqrt(),
+        lambda k: (
+            LoopNestAPI
+            .from_tuple(reduce_axis)
+            .unwrap()
+            .indices()
+            .foldl_value(lambda carry, i: carry + ((x := X.index(i + k)).conj() * x).real(), init=0.0)
+            .sqrt()
+        ),
     )
 
 
@@ -277,9 +280,11 @@ def linalg_norm_v2(X: NDArrayLike, axis: TupleIntLike) -> NDArray:
     return NDArray.fn(
         X.shape.deselect(axis),
         X.dtype,
-        lambda k: ndindex(X.shape.select(axis))
-        .foldl_value(lambda carry, i: carry + ((x := X.index(i + k)).conj() * x).real(), init=0.0)
-        .sqrt(),
+        lambda k: (
+            ndindex(X.shape.select(axis))
+            .foldl_value(lambda carry, i: carry + ((x := X.index(i + k)).conj() * x).real(), init=0.0)
+            .sqrt()
+        ),
     )
 
 
