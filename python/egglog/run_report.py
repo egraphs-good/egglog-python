@@ -86,6 +86,7 @@ class RunReport:
     _decls: Declarations = field(repr=False)
     iterations: list[IterationReport] = field(default_factory=list)
     updated: bool = False
+    can_stop: bool = False
     search_and_apply_time_per_rule: dict[RewriteOrRuleDecl, timedelta] = field(default_factory=dict)
     num_matches_per_rule: dict[RewriteOrRuleDecl, int] = field(default_factory=dict)
     search_and_apply_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
@@ -98,6 +99,7 @@ class RunReport:
         return (
             f"RunReport(iterations={self.iterations}, "
             f"updated={self.updated}, "
+            f"can_stop={self.can_stop}, "
             f"search_and_apply_time_per_rule={time_per_rule}, "
             f"num_matches_per_rule={matches_per_rule}, "
             f"search_and_apply_time_per_ruleset={self.search_and_apply_time_per_ruleset}, "
@@ -130,6 +132,7 @@ class RunReport:
             _decls=decls,
             iterations=[IterationReport._from_bindings(it, rule_map, decls) for it in report.iterations],
             updated=report.updated,
+            can_stop=report.can_stop,
             search_and_apply_time_per_rule=search_and_apply_time_per_rule,
             num_matches_per_rule=num_matches_per_rule,
             search_and_apply_time_per_ruleset=report.search_and_apply_time_per_ruleset,

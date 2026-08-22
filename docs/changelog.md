@@ -4,6 +4,39 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Upgrade the Python extension to Egglog 3 and the matching
+  `egglog-experimental` APIs [#414](https://github.com/egraphs-good/egglog-python/pull/414)
+  - BREAKING: remove `Map.rebuild()`, `Set.rebuild()`, and `Vec.rebuild()`;
+    rebuilding is now handled by the backend container sorts.
+  - Preserve the Egglog 3 sort, constructor, function, and proof metadata that
+    its source syntax can round-trip in the low-level AST bindings; support
+    arbitrary-size `BigInt` values, generic value extraction,
+    constructor/relation lookup, microsecond-resolution
+    run-report durations, program filenames, and all-or-nothing command
+    recording for parsed batches.
+  - Add generic `Pair` and `Maybe` values, undefined-result `catch`, map
+    folding and fold-derived map operations, map/set lengths, `f64` math
+    primitives and integer coercion, `i64`-to-`BigRat` coercion, and exact
+    `BigRat.to_i64()` conversion.
+  - Let Python function, method, and constant bodies lower as eager
+    primitives, preserving Python argument order for `reverse_args` callables,
+    while bodies attached to an explicit ruleset remain rewrite-backed; allow
+    `constant(..., merge=...)` for merged function-backed constants.
+    Higher-order callable probing is isolated from the active ruleset, and
+    `rule(..., eval_mode=...)` exposes safe `naive` and explicit
+    `unsafe-seminaive` rule evaluation when callbacks read mutable tables.
+  - Add persistent ordinary backoff schedules, expose `RunReport.can_stop`,
+    and keep high-level saturation running while a scheduler has deferred work.
+  - Improve source transcripts, diagnostics, generated-name collision
+    handling, shared-expression factoring without leaking synthetic bindings
+    into rules or checks, large-program AST parsing, custom-cost extraction of
+    literal roots, typed pretty/freeze round trips, map duplicate-key behavior,
+    and set iteration deduplication.
+  - Preserve the paused Param-Eq research as a small reusable experimental
+    module and CLI, three bounded public CI stress cases, and an optional
+    aggregate-only external-corpus harness with explicit iteration-limit,
+    timeout, and error accounting plus loaded-extension provenance.
+
 ## 13.2.0 (2026-06-03)
 
 - Add Python-friendly `RunReport` wrapper that returns `CommandDecl` objects as rule keys instead of raw egglog s-expression strings, with pretty-printed Python syntax in `str()` output [#416](https://github.com/egraphs-good/egglog-python/pull/416)

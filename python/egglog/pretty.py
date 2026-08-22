@@ -7,7 +7,7 @@ from __future__ import annotations
 import ast
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeAlias, assert_never
+from typing import TYPE_CHECKING, TypeAlias, assert_never, cast
 
 import black
 import cloudpickle
@@ -16,6 +16,9 @@ from .declarations import *
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from .builtins import BigRat, Map, Maybe, Pair
+    from .egraph import BaseExpr
 
 
 __all__ = [
@@ -86,6 +89,7 @@ AllDecls: TypeAlias = (
     | ScheduleDecl
     | BackOffDecl
     | EGraphDecl
+    | TypedExprDecl
 )
 
 
@@ -121,7 +125,7 @@ def pretty_decl(
 def pretty_callable_ref(
     decls: Declarations,
     ref: CallableRef,
-    first_arg: ExprDecl | None = None,
+    first_arg: TypedExprDecl | None = None,
     bound_tp_params: tuple[JustTypeRef, ...] | None = None,
     include_all_args: bool = False,
 ) -> str:
@@ -131,11 +135,28 @@ def pretty_callable_ref(
 
     To be used in the visualization.
     """
+    if ref == FunctionRef(Ident.builtin("!=")):
+        return "!="
+
     # Pass in three dummy args, which are the max used for any operation that
     # is not a generic function call
-    args: list[ExprDecl] = [UnboundVarDecl(ARG_STR)] * 3
-    if first_arg:
-        args.insert(0, first_arg)
+    signature = decls.get_callable_decl(ref).signature
+
+    def concrete_type(tp: TypeOrVarRef) -> JustTypeRef:
+        match tp:
+            case TypeVarRef():
+                return JustTypeRef(Ident.builtin("Unit"))
+            case TypeRefWithVars(ident, type_args):
+                return JustTypeRef(ident, tuple(concrete_type(arg) for arg in type_args))
+
+    if isinstance(signature, FunctionSignature):
+        args = [TypedExprDecl(concrete_type(tp), UnboundVarDecl(ARG_STR)) for tp in signature.arg_types]
+    else:
+        args = [TypedExprDecl(JustTypeRef(Ident.builtin("Unit")), UnboundVarDecl(ARG_STR)) for _ in range(3)]
+    while len(args) < 3:
+        args.append(TypedExprDecl(JustTypeRef(Ident.builtin("Unit")), UnboundVarDecl(ARG_STR)))
+    if first_arg is not None:
+        args[0] = first_arg
     context = PrettyContext(decls, defaultdict(lambda: 0))
     res = context._call_inner(ref, args, bound_tp_params=bound_tp_params, parens=False)
     # Either returns a function or a function with args. If args are provided, they would just be called,
@@ -144,10 +165,9 @@ def pretty_callable_ref(
         # If we want to include all args as ARG_STR, then we need to figure out how many to use
         # used for set_cost so that `cost(E(...))` will show up as a call
         if include_all_args:
-            signature = decls.get_callable_decl(ref).signature
             assert isinstance(signature, FunctionSignature)
-            correct_args: list[ExprDecl] = [UnboundVarDecl(ARG_STR)] * len(signature.arg_types)
-            return f"{res[0]}({', '.join(context(a, parens=False, unwrap_lit=True) for a in correct_args)})"
+            correct_args = args[: len(signature.arg_types)]
+            return f"{res[0]}({', '.join(context(a, parens=False, unwrap_lit=res[2]) for a in correct_args)})"
         return res[0]
     return res
 
@@ -187,7 +207,7 @@ class TraverseContext:
                 self(rhs)
                 for cond in conditions:
                     self(cond)
-            case RuleDecl(head, body, _):
+            case RuleDecl(head, body, _, _):
                 for action in head:
                     self(action)
                 for fact in body:
@@ -196,7 +216,7 @@ class TraverseContext:
                 self(lhs)
                 self(rhs)
             case LetDecl(_, d) | ExprActionDecl(d) | ExprFactDecl(d):
-                self(d.expr)
+                self(d)
             case ChangeDecl(_, d, _) | SaturateDecl(d) | RepeatDecl(d, _) | ActionCommandDecl(d):
                 self(d)
             case PanicDecl(_) | UnboundVarDecl(_) | LetRefDecl(_) | LitDecl(_) | PyObjectDecl(_):
@@ -208,11 +228,11 @@ class TraverseContext:
                     self(de)
             case CallDecl(ref, exprs, _) | GetCostDecl(ref, exprs):
                 match ref:
-                    case FunctionRef(UnnamedFunctionRef(_, res)):
-                        self(res.expr)
+                    case UnnamedFunctionRef(_, res):
+                        self(res)
                     case _:
                         for e in exprs:
-                            self(e.expr)
+                            self(e)
             case RunDecl(_, until, scheduler):
                 if until:
                     for f in until:
@@ -233,13 +253,13 @@ class TraverseContext:
             case LetSchedulerDecl(scheduler, schedule):
                 self(scheduler)
                 self(schedule)
-            case GetCostDecl(ref, args):
-                self(CallDecl(ref, args))
             case DummyDecl():
                 pass
             case EGraphDecl() as eg:
                 for a in eg.to_actions:
                     self(a)
+            case TypedExprDecl():
+                self(decl.expr)
             case _:
                 assert_never(decl)
 
@@ -312,7 +332,7 @@ class PrettyContext:
             case CallDecl(_, _, _):
                 return self._call(decl, parens)
             case PartialCallDecl(CallDecl(ref, typed_args, _)):
-                return self._pretty_partial(ref, [a.expr for a in typed_args], parens), "fn"
+                return self._pretty_partial(ref, list(typed_args), parens), "fn"
             case PyObjectDecl(pickled):
                 value = cloudpickle.loads(pickled)
                 value_str = repr(value)
@@ -326,12 +346,14 @@ class PrettyContext:
                 args = ", ".join(map(self, (rhs, *conditions)))
                 fn = "rewrite" if isinstance(decl, RewriteDecl) else "birewrite"
                 return f"{fn}({self(lhs)}).to({args})", "rewrite"
-            case RuleDecl(head, body, name):
-                l = ", ".join(map(self, body))
+            case RuleDecl(head, body, name, eval_mode):
+                args = list(map(self, body))
                 if name:
-                    l += f", name={name}"
+                    args.append(f"name={name!r}")
+                if eval_mode != "seminaive":
+                    args.append(f"eval_mode={eval_mode!r}")
                 r = ", ".join(map(self, head))
-                return f"rule({l}).then({r})", "rule"
+                return f"rule({', '.join(args)}).then({r})", "rule"
             case SetDecl(_, lhs, rhs):
                 return f"set_({self(lhs)}).to({self(rhs)})", "action"
             case UnionDecl(_, lhs, rhs):
@@ -372,24 +394,30 @@ class PrettyContext:
             case LetSchedulerDecl(scheduler, schedule):
                 return f"{self(scheduler, parens=True)}.scope({self(schedule, parens=True)})", "schedule"
             case RunDecl(ruleset_ident, until, scheduler):
-                ruleset = self.decls._rulesets[ruleset_ident]
-                ruleset_str = self(ruleset, ruleset_ident=ruleset_ident)
+                if ruleset_ident.name == "" and ruleset_ident not in self.decls._rulesets:
+                    ruleset_str = None
+                else:
+                    ruleset = self.decls._rulesets[ruleset_ident]
+                    ruleset_str = self(ruleset, ruleset_ident=ruleset_ident)
                 if not until and not scheduler:
-                    return ruleset_str, "schedule"
-                arg_lst = list(map(self, until or []))
+                    return "run()" if ruleset_str is None else ruleset_str, "schedule"
+                arg_lst = ["None" if ruleset_str is None else ruleset_str, *map(self, until or [])]
                 if scheduler:
                     arg_lst.append(f"scheduler={self(scheduler)}")
-                return f"run({ruleset_str}, {', '.join(arg_lst)})", "schedule"
+                return f"run({', '.join(arg_lst)})", "schedule"
             case DefaultRewriteDecl():
-                msg = "default rewrites should not be pretty printed"
+                msg = "implicit rewrites should not be pretty printed"
                 raise TypeError(msg)
-            case BackOffDecl(_, match_limit, ban_length):
+            case BackOffDecl(_, match_limit, ban_length, persistent):
                 list_args = []
                 if match_limit is not None:
                     list_args.append(f"match_limit={match_limit}")
                 if ban_length is not None:
                     list_args.append(f"ban_length={ban_length}")
-                return f"back_off({', '.join(list_args)})", "scheduler"
+                rendered = f"back_off({', '.join(list_args)})"
+                if persistent:
+                    rendered += ".persistent()"
+                return rendered, "scheduler"
             case ValueDecl(value):
                 return str(value), "value"
             case DummyDecl():
@@ -398,6 +426,57 @@ class PrettyContext:
                 return f"get_cost({self(CallDecl(ref, args))})", "get_cost"
             case EGraphDecl() as eg:
                 return f"EGraph({', '.join(map(self, eg.to_actions))}).freeze()", "egraph"
+            case TypedExprDecl(tp, expr):
+                from .builtins import ExprValueError  # noqa: PLC0415 - avoid a module import cycle
+                from .runtime import RuntimeExpr  # noqa: PLC0415 - avoid a module import cycle
+
+                if tp.ident == Ident.builtin("Map"):
+                    runtime_expr = RuntimeExpr.__from_values__(self.decls, decl)
+                    try:
+                        as_dict = cast("Map[BaseExpr, BaseExpr]", runtime_expr).value
+                    except ExprValueError:
+                        return self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens), "expr"
+                    if unwrap_lit:
+                        items = ", ".join(
+                            f"{self(cast('RuntimeExpr', k).__egg_typed_expr__, unwrap_lit=True)}: {self(cast('RuntimeExpr', v).__egg_typed_expr__, unwrap_lit=True)}"
+                            for k, v in as_dict.items()
+                        )
+                        return f"{{{items}}}", "Map"
+                    map_str = f"{tp}.empty()"
+                    for key, value in as_dict.items():
+                        key_str = self(cast("RuntimeExpr", key).__egg_typed_expr__)
+                        value_str = self(cast("RuntimeExpr", value).__egg_typed_expr__)
+                        map_str += f".insert({key_str}, {value_str})"
+                    return map_str, "Map"
+                if tp.ident == Ident.builtin("BigRat"):
+                    runtime_expr = RuntimeExpr.__from_values__(self.decls, decl)
+                    try:
+                        as_fraction = cast("BigRat", runtime_expr).value
+                    except ExprValueError:
+                        return self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens), "expr"
+                    return f"BigRat({as_fraction.numerator}, {as_fraction.denominator})", "BigRat"
+                if tp.ident == Ident.builtin("Pair"):
+                    runtime_expr = RuntimeExpr.__from_values__(self.decls, decl)
+                    try:
+                        left, right = cast("Pair[BaseExpr, BaseExpr]", runtime_expr).value
+                    except ExprValueError:
+                        return self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens), "expr"
+                    left_str = self(cast("RuntimeExpr", left).__egg_typed_expr__)
+                    right_str = self(cast("RuntimeExpr", right).__egg_typed_expr__)
+                    return f"{tp}({left_str}, {right_str})", "Pair"
+                if tp.ident == Ident.builtin("Maybe"):
+                    runtime_expr = RuntimeExpr.__from_values__(self.decls, decl)
+                    try:
+                        value = cast("Maybe[BaseExpr]", runtime_expr).value
+                    except ExprValueError:
+                        return self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens), "expr"
+                    if value is None:
+                        return f"{tp}.none()", "Maybe"
+                    return f"{tp}.some({self(cast('RuntimeExpr', value).__egg_typed_expr__)})", "Maybe"
+                return (
+                    self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens),
+                    tp.ident.name,
+                )
         assert_never(decl)
 
     def _call(
@@ -410,7 +489,7 @@ class PrettyContext:
 
         :param parens: If true, wrap the call in parens if it is a binary method call.
         """
-        args = [a.expr for a in decl.args]
+        args = list(decl.args)
         ref = decl.callable
         # Special case !=
         if decl.callable == FunctionRef(Ident.builtin("!=")):
@@ -425,7 +504,7 @@ class PrettyContext:
             for arg, default in zip(
                 reversed(args), reversed(signature.arg_defaults), strict=not signature.var_arg_type
             ):
-                if arg != default:
+                if arg.expr != default:
                     break
                 n_defaults += 1
         if n_defaults:
@@ -444,12 +523,12 @@ class PrettyContext:
             has_multiple_parents = self.parents[first_arg] > 1
             self.names[decl] = expr_name = self._name_expr(tp_name, expr_str, copy_identifier=has_multiple_parents)
             # Set the first arg to be the name of the mutated arg and return the name
-            args[0] = LetRefDecl(expr_name)
+            args[0] = TypedExprDecl(args[0].tp, LetRefDecl(expr_name))
         else:
             expr_name = None
         res = self._call_inner(ref, args, decl.bound_tp_params, parens)
         expr = (
-            (f"{res[0]}({', '.join(self(a, parens=False, unwrap_lit=True) for a in res[1])})")
+            (f"{res[0]}({', '.join(self(a, parens=False, unwrap_lit=res[2]) for a in res[1])})")
             if isinstance(res, tuple)
             else res
         )
@@ -462,44 +541,49 @@ class PrettyContext:
     def _call_inner(  # noqa: C901, PLR0911, PLR0912
         self,
         ref: CallableRef,
-        args: list[ExprDecl],
+        args: list[TypedExprDecl],
         bound_tp_params: tuple[JustTypeRef, ...] | None,
         parens: bool,
-    ) -> tuple[str, list[ExprDecl]] | str:
+    ) -> tuple[str, list[TypedExprDecl], bool] | str:
         """
         Pretty print the call, returning either the full function call or a tuple of the function and the args.
         """
         match ref:
             case FunctionRef(Ident(name)):
-                return name, args
+                return name, args, True
             case ClassMethodRef(class_name, method_name):
                 tp_ref = JustTypeRef(class_name, bound_tp_params or ())
-                return f"{tp_ref}.{method_name}", args
-            case MethodRef(_class_name, method_name):
+                return f"{tp_ref}.{method_name}", args, True
+            case MethodRef(class_name, method_name):
                 slf, *args = args
                 non_str_slf = slf
                 slf = self(slf, parens=True)
+                cls_has_generic_params = self.decls.get_class_decl(class_name).type_vars
+                # only unwrap literals if the class doesn't have generic params, otherwise we might lose type information that is needed for the method call
+                unwrap_lit = not cls_has_generic_params
                 match method_name:
                     case _ if method_name in UNARY_METHODS:
                         expr = f"{UNARY_METHODS[method_name]}{slf}"
                         return f"({expr})" if parens else expr
                     case _ if method_name in BINARY_METHODS:
-                        expr = f"{slf} {BINARY_METHODS[method_name]} {self(args[0], parens=True, unwrap_lit=True)}"
+                        expr = (
+                            f"{slf} {BINARY_METHODS[method_name]} {self(args[0], parens=True, unwrap_lit=unwrap_lit)}"
+                        )
                         return f"({expr})" if parens else expr
                     case "__getitem__":
-                        return f"{slf}[{self(args[0], unwrap_lit=True)}]"
+                        return f"{slf}[{self(args[0], unwrap_lit=unwrap_lit)}]"
                     case "__call__":
-                        return slf, args
+                        return slf, args, unwrap_lit
                     case "__delitem__":
-                        return f"del {slf}[{self(args[0], unwrap_lit=True)}]"
+                        return f"del {slf}[{self(args[0], unwrap_lit=unwrap_lit)}]"
                     case "__setitem__":
-                        return f"{slf}[{self(args[0], unwrap_lit=True)}] = {self(args[1], unwrap_lit=True)}"
+                        return f"{slf}[{self(args[0], unwrap_lit=unwrap_lit)}] = {self(args[1], unwrap_lit=unwrap_lit)}"
                     case _ if method_name in NAMED_UNARY_METHODS:
-                        return NAMED_UNARY_METHODS[method_name], [non_str_slf, *args]
-                    case "__getattr__" if isinstance(args[0], LitDecl) and isinstance(args[0].value, str):
-                        return f"{slf}.{args[0].value}"
+                        return NAMED_UNARY_METHODS[method_name], [non_str_slf, *args], unwrap_lit
+                    case "__getattr__" if isinstance(args[0].expr, LitDecl) and isinstance(args[0].expr.value, str):
+                        return f"{slf}.{args[0].expr.value}"
                     case _:
-                        return f"{slf}.{method_name}", args
+                        return f"{slf}.{method_name}", args, unwrap_lit
             case ConstantRef(Ident(name)):
                 return name
             case ClassVariableRef(Ident(class_name), variable_name):
@@ -508,10 +592,10 @@ class PrettyContext:
                 return f"{self(args[0], parens=True)}.{property_name}"
             case InitRef(class_name):
                 tp_ref = JustTypeRef(class_name, bound_tp_params or ())
-                return str(tp_ref), args
+                return str(tp_ref), args, True
             case UnnamedFunctionRef():
                 expr = self._pretty_function_body(ref, [])
-                return f"({expr})", args
+                return f"({expr})", args, True
         assert_never(ref)
 
     def _generate_name(self, typ: str) -> str:
@@ -532,7 +616,7 @@ class PrettyContext:
             self.statements.append(f"{name} = {expr_str}")
         return name
 
-    def _pretty_partial(self, ref: CallableRef, args: list[ExprDecl], parens: bool) -> str:
+    def _pretty_partial(self, ref: CallableRef, args: list[TypedExprDecl], parens: bool) -> str:
         """
         Returns a partial function call as a string.
         """
@@ -566,19 +650,19 @@ class PrettyContext:
         )
         return f"partial({', '.join(arg_strs)})"
 
-    def _pretty_function_body(self, fn: UnnamedFunctionRef, args: list[ExprDecl]) -> str:
+    def _pretty_function_body(self, fn: UnnamedFunctionRef, args: list[TypedExprDecl]) -> str:
         """
         Pretty print the body of a function, partially applying some arguments.
         """
         var_args = fn.args
-        replacements = {var_arg: TypedExprDecl(var_arg.tp, arg) for var_arg, arg in zip(var_args, args, strict=False)}
+        replacements = dict(zip(var_args, args, strict=False))
         var_args = var_args[len(args) :]
         res = replace_typed_expr(fn.res, replacements)
         arg_names = fn.args[len(args) :]
         prefix = "lambda"
         if arg_names:
-            prefix += f" {', '.join(self(a.expr) for a in arg_names)}"
-        return f"{prefix}: {self(res.expr)}"
+            prefix += f" {', '.join(self(a) for a in arg_names)}"
+        return f"{prefix}: {self(res)}"
 
 
 def is_valid_python_expr(s: str) -> bool:

@@ -19,8 +19,16 @@ from typing_extensions import TypeVarTuple, Unpack, deprecated
 from .conversion import convert, converter, get_type_args, resolve_literal
 from .declarations import *
 from .deconstruct import get_callable_args, get_literal_value
-from .egraph import BaseExpr, BuiltinExpr, _add_default_rewrite_inner, expr_fact, function, get_current_ruleset, method
-from .runtime import RuntimeExpr, RuntimeFunction, resolve_type_annotation_mutate
+from .egraph import (
+    BaseExpr,
+    BuiltinExpr,
+    expr_fact,
+    function,
+    method,
+    set_current_ruleset,
+    to_runtime_expr,
+)
+from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, resolve_type_annotation_mutate
 from .thunk import Thunk
 
 if TYPE_CHECKING:
@@ -38,8 +46,10 @@ __all__ = [
     "ExprValueError",
     "Map",
     "MapLike",
+    "Maybe",
     "MultiSet",
     "MultiSetLike",
+    "Pair",
     "Primitive",
     "PyObject",
     "Rational",
@@ -51,11 +61,16 @@ __all__ = [
     "UnstableFn",
     "Vec",
     "VecLike",
+    "catch",
     "f64",
     "f64Like",
     "i64",
     "i64Like",
     "join",
+    "map_filter_kv",
+    "map_fold_kv",
+    "map_map_values",
+    "map_merge_with",
     "multiset_contains_swapped",
     "multiset_flat_map",
     "multiset_fold",
@@ -366,6 +381,15 @@ class f64(BuiltinExpr, egg_sort="f64"):  # noqa: N801
     @method(egg_fn="abs")
     def __abs__(self) -> f64: ...
 
+    @method(egg_fn="exp")
+    def exp(self) -> f64: ...
+
+    @method(egg_fn="log")
+    def log(self) -> f64: ...
+
+    @method(egg_fn="sqrt")
+    def sqrt(self) -> f64: ...
+
     @method(egg_fn="<")
     def __lt__(self, other: f64Like) -> Unit:  # type: ignore[has-type]
         ...
@@ -397,14 +421,109 @@ class f64(BuiltinExpr, egg_sort="f64"):  # noqa: N801
     def to_string(self) -> String: ...
 
 
-f64Like: TypeAlias = f64 | float  # noqa: N816, PYI042
+f64Like: TypeAlias = f64 | float | int  # noqa: N816, PYI042
 
-
+converter(int, f64, lambda i: f64(float(i)))
 converter(float, f64, f64)
 
 
 T = TypeVar("T", bound=BaseExpr)
 V = TypeVar("V", bound=BaseExpr)
+
+
+class Maybe(BuiltinExpr, Generic[T], egg_sort="Maybe"):
+    @method(preserve=True)
+    @deprecated("use .value")
+    def eval(self) -> T | None:
+        return self.value
+
+    @method(preserve=True)  # type: ignore[prop-decorator]
+    @property
+    def value(self) -> T | None:
+        if get_callable_args(self, Maybe.none) is not None:
+            return None
+        match get_callable_args(self, Maybe.some):
+            case (value,):
+                return value  # type: ignore[unreachable]
+        raise ExprValueError(self, "Maybe.none() or Maybe.some(value)")
+
+    __match_args__ = ("value",)
+
+    @method(egg_fn="maybe-none")
+    @classmethod
+    def none(cls) -> Maybe[T]: ...
+
+    @method(egg_fn="maybe-some")
+    @classmethod
+    def some(cls, value: T) -> Maybe[T]: ...
+
+    @method(egg_fn="maybe-unwrap")
+    def unwrap(self) -> T: ...
+
+    @method(egg_fn="maybe-unwrap-or")
+    def unwrap_or(self, default: T) -> T: ...
+
+    @method(egg_fn="unstable-maybe-match")
+    def match(self, f: Callable[[T], V], n: V) -> V: ...
+
+
+converter(type(None), Maybe, lambda _: Maybe[get_type_args()[0]].none())  # type: ignore[misc]
+
+
+L = TypeVar("L", bound=BaseExpr)
+R = TypeVar("R", bound=BaseExpr)
+L2 = TypeVar("L2", bound=BaseExpr)
+R2 = TypeVar("R2", bound=BaseExpr)
+
+
+class Pair(BuiltinExpr, Generic[L, R], egg_sort="Pair"):
+    @method(preserve=True)  # type: ignore[prop-decorator]
+    @property
+    def value(self) -> tuple[L, R]:
+        match get_callable_args(self, Pair[L, R]):
+            case (left, right):
+                return (left, right)
+        raise ExprValueError(self, "Pair(left, right)")
+
+    __match_args__ = ("value",)
+
+    @method(egg_fn="pair")
+    def __init__(self, left: L, right: R) -> None: ...
+
+    @method(egg_fn="pair-first")  # type: ignore[prop-decorator]
+    @property
+    def left(self) -> L: ...
+
+    @method(egg_fn="pair-second")  # type: ignore[prop-decorator]
+    @property
+    def right(self) -> R: ...
+
+    @method(preserve=True)
+    def match(self, f: Callable[[L, R], V]) -> V:
+        return f(self.left, self.right)
+
+    @method(preserve=True)
+    def map_left(self, f: Callable[[L], L2]) -> Pair[L2, R]:
+        return Pair(f(self.left), self.right)
+
+    @method(preserve=True)
+    def map_right(self, f: Callable[[R], R2]) -> Pair[L, R2]:
+        return Pair(self.left, f(self.right))
+
+
+def _tuple_to_pair(value: tuple[object, ...]) -> Pair:
+    if len(value) != 2:
+        raise ValueError(f"Expected a tuple of length 2 for Pair conversion, got length {len(value)}")
+    left, right = value
+    left_type, right_type = get_type_args()
+    return Pair(convert(left, left_type), convert(right, right_type))
+
+
+converter(tuple, Pair, _tuple_to_pair)
+
+
+@function(egg_fn="unstable-catch", builtin=True)
+def catch(f: Callable[[], T]) -> Maybe[T]: ...
 
 
 class Map(BuiltinExpr, Generic[T, V], egg_sort="Map"):
@@ -416,13 +535,13 @@ class Map(BuiltinExpr, Generic[T, V], egg_sort="Map"):
     @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> dict[T, V]:
-        d = {}
+        items = []
         while args := get_callable_args(self, Map.insert):  # type: ignore[var-annotated]
             self, k, v = args  # noqa: PLW0642
-            d[k] = v
+            items.append((k, v))
         if get_callable_args(self, Map.empty) is None:
             raise ExprValueError(self, "Map.empty or Map.insert")
-        return d
+        return dict(reversed(items))
 
     __match_args__ = ("value",)
 
@@ -457,12 +576,41 @@ class Map(BuiltinExpr, Generic[T, V], egg_sort="Map"):
     @method(egg_fn="map-remove")
     def remove(self, key: T) -> Map[T, V]: ...
 
-    @method(egg_fn="rebuild")
-    def rebuild(self) -> Map[T, V]: ...
+    @method(egg_fn="map-length")
+    def length(self) -> i64: ...
+
+    @method(preserve=True)
+    def pick_key(self) -> T:
+        runtime_self = to_runtime_expr(self)
+        key_type, _value_type = runtime_self.__egg_typed_expr__.tp.args
+        maybe_type = RuntimeClass(
+            Thunk.value(Declarations.create(runtime_self, cast("HasDeclarations", Maybe))),
+            TypeRefWithVars(Ident.builtin("Maybe"), (key_type.to_var(),)),
+            _egg_has_params=True,
+        )
+        initial = cast("Maybe[T]", maybe_type.none())
+        return map_fold_kv(
+            lambda picked, key, _value: picked.match(lambda _: picked, cast("Maybe[T]", maybe_type.some(key))),
+            initial,
+            self,
+        ).unwrap()
+
+    @method(preserve=True)
+    def keys(self) -> Set[T]:
+        runtime_self = to_runtime_expr(self)
+        key_type, _value_type = runtime_self.__egg_typed_expr__.tp.args
+        set_type = RuntimeClass(
+            Thunk.value(Declarations.create(runtime_self, cast("HasDeclarations", Set))),
+            TypeRefWithVars(Ident.builtin("Set"), (key_type.to_var(),)),
+            _egg_has_params=True,
+        )
+        return map_fold_kv(lambda keys, key, _value: keys.insert(key), cast("Set[T]", set_type.empty()), self)
 
 
 TO = TypeVar("TO")
 VO = TypeVar("VO")
+A = TypeVar("A", bound=BaseExpr)
+V2 = TypeVar("V2", bound=BaseExpr)
 
 converter(
     dict,
@@ -475,6 +623,57 @@ converter(
 )
 
 MapLike: TypeAlias = Map[T, V] | dict[TO, VO]
+
+
+@function(egg_fn="map-fold-kv", builtin=True)
+def map_fold_kv(f: Callable[[A, T, V], A], initial: A, xs: Map[T, V]) -> A: ...
+
+
+def map_filter_kv(f: Callable[[T, V], Unit], xs: Map[T, V]) -> Map[T, V]:
+    runtime_xs = to_runtime_expr(xs)
+    map_type = RuntimeClass(
+        Thunk.value(Declarations.create(runtime_xs, cast("HasDeclarations", Map))),
+        runtime_xs.__egg_typed_expr__.tp.to_var(),
+        _egg_has_params=True,
+    )
+    return map_fold_kv(
+        lambda result, key, value: catch(lambda: f(key, value)).match(lambda _: result.insert(key, value), result),
+        cast("Map[T, V]", map_type.empty()),
+        xs,
+    )
+
+
+def map_map_values(f: Callable[[T, V], V2], xs: Map[T, V]) -> Map[T, V2]:
+    runtime_xs = to_runtime_expr(xs)
+    key_type, value_type = runtime_xs.__egg_typed_expr__.tp.args
+    probe_decls = runtime_xs.__egg_decls__.copy()
+    dummy_key = RuntimeExpr.__from_values__(probe_decls, TypedExprDecl(key_type, DummyDecl()))
+    dummy_value = RuntimeExpr.__from_values__(probe_decls, TypedExprDecl(value_type, DummyDecl()))
+    with set_current_ruleset(None):
+        transformed = cast("Callable[[RuntimeExpr, RuntimeExpr], object]", f)(dummy_key, dummy_value)
+    if not isinstance(transformed, RuntimeExpr):
+        raise TypeError(f"Map value transform must return an egglog expression, got {type(transformed)}")
+    output_type = transformed.__egg_typed_expr__.tp
+    map_type = RuntimeClass(
+        Thunk.value(Declarations.create(runtime_xs, transformed, cast("HasDeclarations", Map))),
+        TypeRefWithVars(Ident.builtin("Map"), (key_type.to_var(), output_type.to_var())),
+        _egg_has_params=True,
+    )
+    return map_fold_kv(
+        lambda result, key, value: result.insert(key, f(key, value)),
+        cast("Map[T, V2]", map_type.empty()),
+        xs,
+    )
+
+
+def map_merge_with(f: Callable[[V, V], V], left: Map[T, V], right: Map[T, V]) -> Map[T, V]:
+    return map_fold_kv(
+        lambda result, key, value: catch(lambda: result[key]).match(
+            lambda old: result.insert(key, f(old, value)), result.insert(key, value)
+        ),
+        left,
+        right,
+    )
 
 
 class Set(BuiltinExpr, Generic[T], egg_sort="Set"):
@@ -494,6 +693,8 @@ class Set(BuiltinExpr, Generic[T], egg_sort="Set"):
 
     @method(preserve=True)
     def __iter__(self) -> Iterator[T]:
+        if (args := get_callable_args(self, Set[T])) is not None:
+            return iter(dict.fromkeys(args))
         return iter(self.value)
 
     @method(preserve=True)
@@ -532,8 +733,8 @@ class Set(BuiltinExpr, Generic[T], egg_sort="Set"):
     @method(egg_fn="set-intersect")
     def __and__(self, other: Set[T]) -> Set[T]: ...
 
-    @method(egg_fn="rebuild")
-    def rebuild(self) -> Set[T]: ...
+    @method(egg_fn="set-length")
+    def length(self) -> i64: ...
 
 
 converter(
@@ -910,6 +1111,9 @@ class BigRat(BuiltinExpr, egg_sort="BigRat"):
     @method(egg_fn="to-f64")
     def to_f64(self) -> f64: ...
 
+    @method(egg_fn="to-i64")
+    def to_i64(self) -> i64: ...
+
     @method(egg_fn="+")
     def __add__(self, other: BigRatLike) -> BigRat: ...
 
@@ -976,8 +1180,9 @@ class BigRat(BuiltinExpr, egg_sort="BigRat"):
     def __le__(self, other: BigRatLike) -> Unit: ...
 
 
+converter(i64, BigRat, lambda i: BigRat(BigInt(i), BigInt(1)))
 converter(Fraction, BigRat, lambda f: BigRat(f.numerator, f.denominator))
-BigRatLike: TypeAlias = BigRat | Fraction
+BigRatLike: TypeAlias = BigRat | Fraction | i64Like
 
 
 class Vec(BuiltinExpr, Generic[T], egg_sort="Vec"):
@@ -1036,9 +1241,6 @@ class Vec(BuiltinExpr, Generic[T], egg_sort="Vec"):
 
     @method(egg_fn="vec-get")
     def __getitem__(self, index: i64Like) -> T: ...
-
-    @method(egg_fn="rebuild")
-    def rebuild(self) -> Vec[T]: ...
 
     @method(egg_fn="vec-remove")
     def remove(self, index: i64Like) -> Vec[T]: ...
@@ -1126,7 +1328,7 @@ def _convert_function(fn: FunctionType) -> UnstableFn:
     Would just be UnstableFn(function(a)) but we have to account for unbound vars within the body.
 
     This means that we have to turn all of those unbound vars into args to the function, and then
-    partially apply them, alongside creating a default rewrite for the function.
+    partially apply them, alongside storing the eager primitive body for the function.
     """
     decls = Declarations()
     return_type, *arg_types = [resolve_type_annotation_mutate(decls, tp) for tp in get_type_args()]
@@ -1134,19 +1336,25 @@ def _convert_function(fn: FunctionType) -> UnstableFn:
     arg_decls = [
         TypedExprDecl(tp.to_just(), UnboundVarDecl(name)) for name, tp in zip(arg_names, arg_types, strict=True)
     ]
-    res = resolve_literal(
-        return_type, fn(*(RuntimeExpr.__from_values__(decls, a) for a in arg_decls)), Thunk.value(decls)
-    )
+    with set_current_ruleset(None):
+        res = resolve_literal(
+            return_type, fn(*(RuntimeExpr.__from_values__(decls, a) for a in arg_decls)), Thunk.value(decls)
+        )
     res_expr = res.__egg_typed_expr__
     decls |= res
     # these are all the args that appear in the body that are not bound by the args of the function
     unbound_vars = list(collect_unbound_vars(res_expr) - set(arg_decls))
     # prefix the args with them
-    fn_ref = UnnamedFunctionRef(tuple(unbound_vars + arg_decls), res_expr)
-    rewrite_decl = DefaultRewriteDecl(fn_ref, res_expr.expr, subsume=True)
-    ruleset_decls = _add_default_rewrite_inner(decls, rewrite_decl, get_current_ruleset())
-    ruleset_decls |= res
-
+    all_args = tuple(unbound_vars + arg_decls)
+    normalized_args = tuple(
+        TypedExprDecl(
+            typed_arg.tp,
+            UnboundVarDecl(cast("UnboundVarDecl", typed_arg.expr).name, f"_{i}"),
+        )
+        for i, typed_arg in enumerate(all_args)
+    )
+    res_expr = replace_typed_expr(res_expr, dict(zip(all_args, normalized_args, strict=True)))
+    fn_ref = UnnamedFunctionRef(normalized_args, res_expr)
     fn = RuntimeFunction(Thunk.value(decls), Thunk.value(fn_ref))
     return UnstableFn(fn, *(RuntimeExpr.__from_values__(decls, v) for v in unbound_vars))
 
@@ -1232,5 +1440,5 @@ def py_exec(code: StringLike, globals_: object = PyObject.dict(), locals_: objec
     """
 
 
-Container: TypeAlias = Map | Set | MultiSet | Vec | UnstableFn
+Container: TypeAlias = Map | Maybe | Pair | Set | MultiSet | Vec | UnstableFn
 Primitive: TypeAlias = String | Bool | i64 | f64 | Rational | BigInt | BigRat | PyObject | Unit

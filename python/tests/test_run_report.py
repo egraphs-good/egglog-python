@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
+
 from egglog import *
 from egglog.declarations import BiRewriteDecl, RewriteDecl, RuleDecl
 
@@ -59,6 +61,13 @@ def test_updated_field():
     report = egraph.run(10)
     assert isinstance(report.updated, bool)
     assert report.updated is True
+
+
+def test_can_stop_field():
+    report = EGraph().run(1)
+
+    assert report.can_stop is True
+    assert "can_stop=True" in repr(report)
 
 
 def test_num_matches():
@@ -152,6 +161,17 @@ def test_named_rule():
     assert "comm" in output, f"Expected rule name 'comm' in:\n{output}"
 
 
+@pytest.mark.parametrize("name", ['a"b', r"a\b", 'a"b\\c'])
+def test_saved_named_rule_round_trips_escaped_name(name: str) -> None:
+    egraph = EGraph(save_egglog_string=True)
+    seen = relation("seen", i64)
+    x = var("x", i64)
+    egraph.register(rule(seen(x), name=name).then(seen(x)), seen(i64(1)))
+    report = egraph.run(1)
+
+    assert any(isinstance(decl, RuleDecl) and decl.name == name for decl in report.num_matches_per_rule)
+
+
 def test_unnamed_rule_decl():
     egraph = EGraph()
 
@@ -193,3 +213,33 @@ def test_birewrite_decl():
     assert len(rule_keys) > 0
     for key in rule_keys:
         assert isinstance(key, BiRewriteDecl)
+
+
+def test_saved_transcript_report_translates_rewrite_with_string_literal() -> None:
+    class Word(Expr):
+        @classmethod
+        def named(cls, value: StringLike) -> Word: ...
+
+    egraph = EGraph(save_egglog_string=True)
+    egraph.register(rewrite(Word.named("input")).to(Word.named("fixed")))
+    egraph.register(Word.named("input"))
+
+    report = egraph.run(1)
+
+    assert report.search_and_apply_time_per_rule
+    assert all(isinstance(key, RewriteDecl) for key in report.search_and_apply_time_per_rule)
+
+
+def test_saved_transcript_report_translates_birewrite_directions() -> None:
+    class Word(Expr):
+        @classmethod
+        def named(cls, value: StringLike) -> Word: ...
+
+    egraph = EGraph(save_egglog_string=True)
+    egraph.register(birewrite(Word.named("input")).to(Word.named("fixed")))
+    egraph.register(Word.named("input"))
+
+    report = egraph.run(1)
+
+    assert report.search_and_apply_time_per_rule
+    assert all(isinstance(key, BiRewriteDecl) for key in report.search_and_apply_time_per_rule)

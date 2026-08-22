@@ -250,6 +250,8 @@ Registering a conversion from A to B will also register all transitively reachab
 Math(2) + 30 + "x"
 ```
 
+When defining converters for a custom `Expr` sort, prefer registering conversions from egglog primitive sorts such as `i64`, `f64`, and `String` rather than directly from Python builtins like `int`, `float`, and `str`. The builtin promotions already handle those Python values transitively, so keeping the custom converters at the egglog-sort layer makes the promotion path clearer and usually leads to cleaner `...Like` aliases such as `Math | i64Like | f64Like | StringLike`.
+
 If you want to have this work with the static type checker, you can define your own `Union` type, which MUST include
 the `Expr` class as the first item in the union. For example, in this case you could then define:
 
@@ -456,7 +458,7 @@ assert str(-1.0 + Int.var("x")) == "Float(-1.0) + Float.from_int(Int.var(\"x\"))
 
 ### Mutating arguments
 
-In order to support Python functions and methods which mutate their arguments, use the `mutates_first_arg` keyword argument on `@function` and the `mutates_self` keyword argument on `@method`. The runtime treats the mutated receiver as the return value of the egglog call, so the default rewrite points the call expression at the updated argument.
+In order to support Python functions and methods which mutate their arguments, use the `mutates_first_arg` keyword argument on `@function` and the `mutates_self` keyword argument on `@method`. The runtime treats the mutated receiver as the semantic return value of the egglog call. A body lowers eagerly unless it is attached to an explicit `ruleset`, in which case the updated expression becomes that callable's default rewrite.
 
 Inside the Python implementation you can call `__replace_expr__` on an `Expr` instance to swap out its underlying egglog expression in-place. This keeps any existing Python references in sync while still allowing the e-graph to reason about the mutated value. The same helper works for methods that run immediately with `@method(preserve=True)`.
 
@@ -489,18 +491,22 @@ mutate_egraph.register(rewrite(incr_i).to(i + Int(1)), x)
 mutate_egraph.run(10)
 mutate_egraph.check(eq(x).to(Int(10) + Int(1)))
 
-# incr with the rewrite could also be written like this:
+# The update can instead be defined as an eager body:
 @function(mutates_first_arg=True)
 def incr_other(x: Int) -> None:
     x.__replace_expr__(x + Int(1))
 x = Int(10)
 incr_other(x)
 mutate_egraph = EGraph()
-mutate_egraph.register(x)
-mutate_egraph.run(10)
-mutate_egraph.check(eq(x).to(Int(10) + Int(1)))
+incremented = mutate_egraph.let("incremented", x)
+mutate_egraph.check(eq(incremented).to(Int(10) + Int(1)))
 mutate_egraph
 ```
+
+The bodyful form lowers to an eager primitive. Because this example constructs
+an e-class value, bind its result through an action before using that value in
+a read-only check. Use an explicit `ruleset=` when the body should remain a
+rewrite instead.
 
 Note that dunder methods such as `__setitem__` will automatically be marked as mutating their first argument.
 
@@ -549,11 +555,14 @@ We also support using normal python functions, either named or anonymous, as val
 ```{code-cell} python
 x = MathList.EMPTY.append(Math(1))
 added_two = x.map(lambda x: x + Math(2))
-check_eq(added_two, MathList.EMPTY.append(Math(1) + Math(2)), (math_list_ruleset + run()) * 10)
+check_eq(added_two, MathList.EMPTY.append(Math(1) + Math(2)), math_list_ruleset.saturate())
 ```
 
-Their definition will be added to the default rulset, unless they are defined in the body of a function themselves or
-in a rule function:
+Converting the callback to `Callable`/`UnstableFn` materializes its body as an
+eager anonymous primitive. It does not add a rewrite to the default ruleset or
+require a separate `run()` step. An enclosing declared function still follows
+the ordinary lowering rules; for example, an explicit `ruleset` makes this
+outer body rewrite-backed:
 
 ```{code-cell} python
 @function(ruleset=math_list_ruleset)
@@ -563,54 +572,25 @@ def map_add_two(x: MathList) -> MathList:
 check_eq(map_add_two(MathList.EMPTY.append(Math(1))), MathList.EMPTY.append(Math(1) + Math(2)), math_list_ruleset.saturate())
 ```
 
-Their name will just be the body of the function, so that two anonymous functions with the same body will be considered equal.
-
-```{code-cell} python
-added_two
-```
+Generated primitive names are internal implementation details.
 
 ## Default Replacements
 
-When defining a function or a constant, you can also provide a default replacement value. This is useful when
-you might want both the original value and the replaced value in the e-graph, so that later rules could reference either.
+The full lowering matrix for functions, constructors, primitives, and defaults is documented in
+[Translation to/from egglog](egglog-translation.md#functions-vs-constructors). This section focuses on the
+Python-only ergonomics for the explicit-`ruleset` case: when you pass a `ruleset`, the body/default is added as
+a rewrite into that ruleset instead of being lowered eagerly.
 
-```{code-cell} python
-@function
-def math_float(f: f64Like) -> Math:
-    ...
+This is useful when you want the declared name and the replacement body to both remain available to later rewrite rules.
 
-
-# Can add a default replacement value for a constants
-pi = constant("pi", Math, math_float(3.14))
-
-
-# or for a function by providing a body
-@function
-def square(x: Math) -> Math:
-    return x * x
-
-# thse rewrites will be added to the e-graph under the default ruleset
-egraph = EGraph()
-egraph.register(pi)
-egraph.register(square(Math.var('x')))
-egraph.run(1)
-egraph.check(eq(pi).to(math_float(3.14)))
-egraph.check(eq(square(Math.var('x'))).to(Math.var('x') * Math.var('x')))
-egraph
-```
-
-This is equivalent to adding the rewrite rules to the e-graph directly, like this, but just more succinct:
-
-```python
-x  = var("x", Math)
-egraph.register(rewrite(pi).to(math_float(3.14)))
-egraph.register(rewrite(square(x)).to(x * x))
-```
-
-You can also specify a ruleset to add the rewrites to, by passing in the `ruleset` keyword argument:
+You can specify a ruleset for a default replacement by passing the `ruleset` keyword argument:
 
 ```{code-cell} python
 math_ruleset = ruleset()
+
+@function
+def math_float(value: f64Like) -> Math: ...
+
 
 e_constant = constant("e", Math, math_float(2.71), ruleset=math_ruleset)
 
@@ -626,9 +606,26 @@ egraph.check(eq(e_constant).to(math_float(2.71)))
 egraph.check(eq(cube(Math.var('x'))).to(Math.var('x') * Math.var('x') * Math.var('x')))
 ```
 
+This rewrite-backed path is only available for eqsort-returning bodies and defaults. Primitive-returning defaults lower
+eagerly and cannot use an explicit `ruleset`.
+
+When `subsume=True` is allowed for that callable shape, it applies on this rewrite-backed path as well.
+
+Constants without defaults can use merge functions because they lower as zero-argument function-style declarations:
+
+```{code-cell} python
+best_score = constant("best_score", i64, merge=lambda old, new: old.max(new))
+
+egraph = EGraph()
+egraph.register(set_(best_score).to(i64(1)), set_(best_score).to(i64(2)))
+egraph.check(eq(best_score).to(i64(2)))
+```
+
+Constants with eager or rewrite-backed defaults cannot also use `merge`.
+
 ### Default Replacement for Classes
 
-In classes, you can also provide a default replacement value for constants and methods, and an optional ruleset on the class constructor:
+In classes, a `ruleset=` on the class means default method and class-variable bodies are also added to that ruleset as rewrites:
 
 ```{code-cell} python
 other_math_ruleset = ruleset()
@@ -651,6 +648,25 @@ egraph.run(other_math_ruleset * 2)
 egraph.check(eq(x).to(WrappedMath(math_float(3.14)) + WrappedMath(math_float(3.14))))
 egraph
 ```
+
+## Param-Eq Stress Demo
+
+The experimental `egglog.exp.param_eq` module preserves a bounded
+parameter-reducing symbolic-regression pipeline. Its CLI runs either retained
+representation and emits a JSON report:
+
+```{code-block} console
+$ python -m egglog.exp.param_eq --expr '2.3 * (3.7*x0 + 5.1*x1) / 7.9' --variant container
+```
+
+Expressions use finite numeric literals, variables, Python arithmetic with
+literal exponents, and `abs`, `exp`, `log`, `sqrt`, `plog`, `square`, or
+`cube`. A `saturated` status means every inner schedule could stop;
+`iteration_limit` means the retained 30-round boundary was reached. The rules
+target real inputs where every relevant subexpression is defined, and the
+included finite sample checks are regression tests rather than a proof of
+universal equivalence. The container variant rejects inputs whose coefficient
+normalization produces a non-finite `f64` value.
 
 ## Debugging and Inspection
 
@@ -696,6 +712,10 @@ report = egraph.run(debug_rules)
 report.num_matches_per_rule
 ```
 
+`report.updated` records whether the run changed the database. The separate
+`report.can_stop` flag is true only when the run observed no changes and its
+scheduler has no deferred work that requires another iteration.
+
 ### `stats`
 
 Use {meth}`egglog.egraph.EGraph.stats` when you want cumulative counters for the
@@ -709,7 +729,8 @@ stats.num_matches_per_rule
 ### `function_values`
 
 Use {meth}`egglog.egraph.EGraph.function_values` to inspect the current rows in a
-function table:
+function table. This accepts relations, constructors, and bodyless functions;
+eager and builtin primitives do not have tables to inspect:
 
 ```{code-cell} python
 egraph.function_values(score)
@@ -738,7 +759,8 @@ egraph.display()
 ### `saturate`
 
 Use {meth}`egglog.egraph.EGraph.saturate` to keep running until the schedule
-stops changing the graph while printing the extracted form after each step:
+reports no graph changes or deferred scheduler work, while printing the
+extracted form after each step:
 
 ```{code-cell} python
 egraph = EGraph()

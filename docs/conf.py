@@ -34,6 +34,7 @@ myst_enable_extensions = [
     "deflist",
 ]
 myst_fence_as_directive = ["mermaid"]
+myst_heading_anchors = 3
 
 ##
 # Built presentation in sphinx

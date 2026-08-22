@@ -235,19 +235,22 @@ to do the constant folding:
 @ruleset
 def constant_fold_index(xs: MultiSet[Num], i: i64, k: i64):
     # For all sums, fill in the index function
-    yield rule(sum_(xs)).then(xs.fill_index(ms_num_index))
+    yield rule(sum_(xs), eval_mode="naive").then(xs.fill_index(ms_num_index))
 
     # Try replacing any sum with the folded version
-    yield rewrite(sum_(xs)).to(
-        # Replace the two numbers with their sum, by removing
-        # them and then inserting their sum back in
-        sum_(xs.remove(Num(i)).remove(Num(k)).insert(Num(i + k))),
+    yield rule(
+        sum_(xs),
         # These are conditions for the rewrite to match:
         # Look for a multiset that contains two numbers that
         # are not the same one
         ms_num_index(xs, Num(i)),
         ms_num_index(xs, Num(k)),
         i != k,
+        eval_mode="naive",
+    ).then(
+        # Replace the two numbers with their sum, by removing
+        # them and then inserting their sum back in
+        union(sum_(xs)).with_(sum_(xs.remove(Num(i)).remove(Num(k)).insert(Num(i + k))))
     )
 
 
@@ -297,12 +300,15 @@ def constant_fold_sum(xs: MultiSet[Num]):
     remaining = xs - constants.map(UnstableFn(Num))
     # Sum all the constants to fold them together
     folded = multiset_fold(i64.__add__, i64(0), constants)
-    yield rewrite(sum_(xs)).to(
-        # replace it with the non constants plus the folded
-        sum_(remaining.insert(Num(folded))),
+    yield rule(
+        sum_(xs),
         # Only run this rule if there are more than one
         # constant to fold together
         constants.length() > 1,
+        eval_mode="naive",
+    ).then(
+        # replace it with the non constants plus the folded
+        union(sum_(xs)).with_(sum_(remaining.insert(Num(folded))))
     )
 
 
@@ -334,13 +340,11 @@ to the semantics of the your use case, compared to say a tree of binary operatio
 
 This work also highlights some of the current limitations of egglog.
 
-One issue is that composing functions of primitives is currently very limited. The only tool we have is currying, but
-it is not possible to reorder arguments or compose them in more complicated manners. This inevitably leads to
-creating more bespoke functions. For example, I had to add a `multiset_contains_swapped` function that swaps the order
-of the `contains` method, since I needed to partially apply it with the second argument. Further exploring this line of
-work might lead to trying out different ways of enriching primitive functions, possibly by allowing a way at runtime
-to create new ones by composing others, either through a DSL/JIT or a higher order composition approach like the
-[compiling to categories](http://conal.net/papers/compiling-to-categories/) work.
+The original version of this post identified primitive composition as a major
+limitation: argument-order adapters required bespoke flipped backend
+primitives. The current Python bindings can lower body-defined functions and
+lambdas to primitives, so those adapters can now be expressed at the call site.
+The retained examples therefore do not add new flipped container APIs.
 
 Implementing these higher order functional primitives on containers is also challenging, due to the lack of built-in
 generic type support in Egglog. Adding them currently is fiddly and requires careful thought over how to implement

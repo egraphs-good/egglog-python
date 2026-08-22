@@ -3,6 +3,7 @@
 use crate::utils::*;
 use egglog::extract::DefaultCost;
 use ordered_float::OrderedFloat;
+use pyo3::exceptions::{PyOverflowError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDelta, PyDeltaAccess};
 use std::collections::HashMap;
@@ -125,6 +126,17 @@ convert_enums!(
             _d -> egglog::ast::PrintFunctionMode::CSV,
             egglog::ast::PrintFunctionMode::CSV => CSVPrintFunctionMode {}
     };
+    egglog::ast::RuleEvalMode: "{:?}" => RuleEvalMode {
+        Seminaive()
+            _s -> egglog::ast::RuleEvalMode::Seminaive,
+            egglog::ast::RuleEvalMode::Seminaive => Seminaive {};
+        Naive()
+            _n -> egglog::ast::RuleEvalMode::Naive,
+            egglog::ast::RuleEvalMode::Naive => Naive {};
+        UnsafeSeminaive()
+            _u -> egglog::ast::RuleEvalMode::UnsafeSeminaive,
+            egglog::ast::RuleEvalMode::UnsafeSeminaive => UnsafeSeminaive {}
+    };
     egglog::ast::Command: "{}" => Command {
         Datatype(span: Span, name: String, variants: Vec<Variant>)
             d -> egglog::ast::Command::Datatype {
@@ -137,36 +149,81 @@ convert_enums!(
                 name: name.to_string(),
                 variants: variants.iter().map(|v| v.into()).collect()
             };
-        Sort(span: Span, name: String, presort_and_args: Option<(String, Vec<Expr>)>)
+        Sort(
+            span: Span,
+            name: String,
+            presort_and_args: Option<(String, Vec<Expr>)>,
+            uf: Option<(String, Option<String>)> = None,
+            proof_func: Option<String> = None,
+            container_rebuild: Option<ContainerRebuildSpec> = None,
+            proof_constructors: Option<ProofConstructorNames> = None
+        )
             s -> egglog::ast::Command::Sort {
                 span: s.span.clone().into(),
                 name: (&s.name).into(),
                 presort_and_args: s.presort_and_args.as_ref().map(|(p, a)| (p.into(), a.iter().map(|e| e.into()).collect())),
-                uf: None,
-                proof_func: None,
+                uf: s.uf.clone(),
+                proof_func: s.proof_func.clone(),
+                container_rebuild: s.container_rebuild.as_ref().map(Into::into),
+                proof_constructors: s.proof_constructors.as_ref().map(Into::into),
                 unionable: true
             },
-            egglog::ast::Command::Sort { span, name, presort_and_args, .. } => Sort {
+            egglog::ast::Command::Sort {
+                span,
+                name,
+                presort_and_args,
+                uf,
+                proof_func,
+                container_rebuild,
+                proof_constructors,
+                unionable: _
+            } => Sort {
                 name: name.to_string(),
                 presort_and_args: presort_and_args.as_ref().map(|(p, a)| (p.to_string(), a.iter().map(|e| e.into()).collect())),
-                span: span.into()
+                span: span.into(),
+                uf: uf.clone(),
+                proof_func: proof_func.clone(),
+                container_rebuild: container_rebuild.as_ref().map(Into::into),
+                proof_constructors: proof_constructors.as_ref().map(Into::into)
             };
-        FunctionCommand(span: Span, name: String, schema: Schema, merge: Option<Expr>)
+        FunctionCommand(
+            span: Span,
+            name: String,
+            schema: Schema,
+            merge: Option<Expr>,
+            term_constructor: Option<String> = None,
+            unextractable: bool = false,
+            hidden: bool = false,
+            let_binding: bool = false
+        )
             f -> egglog::ast::Command::Function{
                 span: f.span.clone().into(),
                 name: (&f.name).into(),
                 schema: (&f.schema).into(),
                 merge: f.merge.as_ref().map(|e| e.into()),
-                hidden: false,
-                let_binding: false,
-                term_constructor: None,
-                unextractable: false
+                hidden: f.hidden,
+                let_binding: f.let_binding,
+                term_constructor: f.term_constructor.clone(),
+                unextractable: f.unextractable
             },
-            egglog::ast::Command::Function {span, name, schema, merge, .. } => FunctionCommand {
+            egglog::ast::Command::Function {
+                span,
+                name,
+                schema,
+                merge,
+                hidden,
+                let_binding,
+                term_constructor,
+                unextractable
+            } => FunctionCommand {
                 span: span.into(),
                 name: name.to_string(),
                 schema: schema.into(),
-                merge: merge.as_ref().map(|e| e.into())
+                merge: merge.as_ref().map(|e| e.into()),
+                term_constructor: term_constructor.clone(),
+                unextractable: *unextractable,
+                hidden: *hidden,
+                let_binding: *let_binding
             };
         AddRuleset(span: Span, name: String)
             a -> egglog::ast::Command::AddRuleset(
@@ -275,23 +332,42 @@ convert_enums!(
         Include(span: Span, path: String)
             i -> egglog::ast::Command::Include(i.span.clone().into(), (&i.path).into()),
             egglog::ast::Command::Include(span, p) => Include { span: span.into(), path: p.to_string() };
-        Constructor(span: Span, name: String, schema: Schema, cost: Option<DefaultCost>, unextractable: bool)
+        Constructor(
+            span: Span,
+            name: String,
+            schema: Schema,
+            cost: Option<DefaultCost>,
+            unextractable: bool,
+            hidden: bool = false,
+            let_binding: bool = false
+        )
             c -> egglog::ast::Command::Constructor {
                 span: c.span.clone().into(),
                 name: (&c.name).into(),
                 schema: (&c.schema).into(),
                 cost: c.cost,
                 unextractable: c.unextractable,
-                hidden: false,
-                let_binding: false,
+                hidden: c.hidden,
+                let_binding: c.let_binding,
                 term_constructor: None
             },
-            egglog::ast::Command::Constructor {span, name, schema, cost, unextractable, .. } => Constructor {
+            egglog::ast::Command::Constructor {
+                span,
+                name,
+                schema,
+                cost,
+                unextractable,
+                hidden,
+                let_binding,
+                term_constructor: _
+            } => Constructor {
                 span: span.into(),
                 name: name.to_string(),
                 schema: schema.into(),
                 cost: *cost,
-                unextractable: *unextractable
+                unextractable: *unextractable,
+                hidden: *hidden,
+                let_binding: *let_binding
             };
         Relation(span: Span, name: String, inputs: Vec<String>)
             r -> egglog::ast::Command::Relation {
@@ -441,13 +517,13 @@ convert_enums!(
         EgglogSpan(file: SrcFile, i: usize, j: usize)
             e -> egglog_ast::span::Span::Egglog(Arc::new({
                 egglog_ast::span::EgglogSpan {
-                    file: Arc::new(e.file.clone().into()),
+                    file: e.file.0.clone(),
                     i: e.i,
                     j: e.j
                 }
             })),
             egglog_ast::span::Span::Egglog(e) => EgglogSpan {
-                file: (*e.file.clone()).clone().into(),
+                file: SrcFile(e.file.clone()),
                 i: e.i,
                 j: e.j
             };
@@ -461,13 +537,90 @@ convert_enums!(
     }
 );
 
+impl Default for RuleEvalMode {
+    fn default() -> Self {
+        Self::Seminaive(Seminaive {})
+    }
+}
+
+#[pyclass(frozen)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct SrcFile(Arc<egglog_ast::span::SrcFile>);
+
+#[pymethods]
+impl SrcFile {
+    #[new]
+    fn new(name: Option<String>, contents: String) -> Self {
+        Self(Arc::new(egglog_ast::span::SrcFile { name, contents }))
+    }
+
+    #[getter]
+    fn name(&self) -> Option<&str> {
+        self.0.name.as_deref()
+    }
+
+    #[getter]
+    fn contents(&self) -> &str {
+        &self.0.contents
+    }
+
+    fn __repr__(slf: PyRef<'_, Self>, py: Python) -> PyResult<String> {
+        data_repr(py, slf, vec!["name", "contents"])
+    }
+
+    fn __str__(&self) -> String {
+        format!("{:?}", self.0)
+    }
+
+    fn __richcmp__(
+        &self,
+        other: &Self,
+        op: pyo3::basic::CompareOp,
+        py: Python<'_>,
+    ) -> PyResult<Py<PyAny>> {
+        Ok(match op {
+            pyo3::basic::CompareOp::Eq => {
+                (self == other).into_pyobject(py)?.as_any().clone().unbind()
+            }
+            pyo3::basic::CompareOp::Ne => {
+                (self != other).into_pyobject(py)?.as_any().clone().unbind()
+            }
+            _ => py.NotImplemented(),
+        })
+    }
+}
+
 convert_struct!(
-    egglog_ast::span::SrcFile: "{:?}" => SrcFile(
-        name: Option<String>,
-        contents: String
+    egglog::ast::ContainerRebuildSpec: "{}" => ContainerRebuildSpec(
+        internal_rebuild_prim: String,
+        internal_rebuild_proof_prim: Option<String> = None
     )
-        s -> egglog_ast::span::SrcFile {name: s.name.clone(), contents: s.contents.clone()},
-        s -> SrcFile {name: s.name.clone(), contents: s.contents.clone()};
+        s -> egglog::ast::ContainerRebuildSpec {
+            internal_rebuild_prim: s.internal_rebuild_prim.clone(),
+            internal_rebuild_proof_prim: s.internal_rebuild_proof_prim.clone()
+        },
+        s -> ContainerRebuildSpec {
+            internal_rebuild_prim: s.internal_rebuild_prim.clone(),
+            internal_rebuild_proof_prim: s.internal_rebuild_proof_prim.clone()
+        };
+    egglog::ast::ProofConstructorNames: "{:?}" => ProofConstructorNames(
+        congr: String,
+        trans: String,
+        sym: String,
+        normalize: String
+    )
+        n -> egglog::ast::ProofConstructorNames {
+            congr: n.congr.clone(),
+            trans: n.trans.clone(),
+            sym: n.sym.clone(),
+            normalize: n.normalize.clone()
+        },
+        n -> ProofConstructorNames {
+            congr: n.congr.clone(),
+            trans: n.trans.clone(),
+            sym: n.sym.clone(),
+            normalize: n.normalize.clone()
+        };
     egglog::ast::Variant: "{:?}" => Variant(
         span: Span,
         name: String,
@@ -488,10 +641,31 @@ convert_struct!(
         head: Vec<Action>,
         body: Vec<Fact_>,
         name: String,
-        ruleset: String
+        ruleset: String,
+        eval_mode: RuleEvalMode = RuleEvalMode::default(),
+        no_decomp: bool = false,
+        include_subsumed: bool = false
     )
-        r -> egglog::ast::GenericRule {span: r.span.clone().into(), head: egglog::ast::GenericActions(r.head.iter().map(|v| v.into()).collect()), body: r.body.iter().map(|v| v.into()).collect(), name: (&r.name).into(), ruleset: (&r.ruleset).into()},
-        r -> Rule {span: r.span.clone().into(), head: r.head.0.iter().map(|v| v.into()).collect(), body: r.body.iter().map(|v| v.into()).collect(), name: r.name.to_string(), ruleset: r.ruleset.to_string()};
+        r -> egglog::ast::GenericRule {
+            span: r.span.clone().into(),
+            head: egglog::ast::GenericActions(r.head.iter().map(|v| v.into()).collect()),
+            body: r.body.iter().map(|v| v.into()).collect(),
+            name: (&r.name).into(),
+            ruleset: (&r.ruleset).into(),
+            eval_mode: (&r.eval_mode).into(),
+            no_decomp: r.no_decomp,
+            include_subsumed: r.include_subsumed
+        },
+        r -> Rule {
+            span: r.span.clone().into(),
+            head: r.head.0.iter().map(|v| v.into()).collect(),
+            body: r.body.iter().map(|v| v.into()).collect(),
+            name: r.name.to_string(),
+            ruleset: r.ruleset.to_string(),
+            eval_mode: (&r.eval_mode).into(),
+            no_decomp: r.no_decomp,
+            include_subsumed: r.include_subsumed
+        };
     egglog::ast::GenericRewrite<String, String>: "{:?}" => Rewrite(
         span: Span,
         lhs: Expr,
@@ -644,6 +818,7 @@ convert_struct!(
     egglog_reports::RunReport: "{:?}" => RunReport(
         iterations: Vec<IterationReport>,
         updated: bool,
+        can_stop: bool,
         search_and_apply_time_per_rule: HashMap<String, WrappedDuration>,
         num_matches_per_rule: HashMap<String, usize>,
         search_and_apply_time_per_ruleset: HashMap<String, WrappedDuration>,
@@ -657,6 +832,7 @@ convert_struct!(
                 .map(|i| Arc::new(i.clone().into()))
                 .collect(),
             updated: r.updated,
+            can_stop: r.can_stop,
             search_and_apply_time_per_rule: r
                 .search_and_apply_time_per_rule
                 .iter()
@@ -686,6 +862,7 @@ convert_struct!(
         r -> RunReport {
             iterations: r.iterations.iter().map(|i| i.as_ref().into()).collect(),
             updated: r.updated,
+            can_stop: r.can_stop,
             search_and_apply_time_per_rule: r
                 .search_and_apply_time_per_rule
                 .iter()
@@ -791,30 +968,64 @@ impl<'py> FromPyObject<'_, 'py> for WrappedDuration {
     type Error = PyErr;
     fn extract(obj: Borrowed<'_, 'py, PyAny>) -> Result<Self, Self::Error> {
         let py_delta = obj.cast::<pyo3::types::PyDelta>()?;
+        let days = py_delta.get_days();
+        let seconds = py_delta.get_seconds();
+        let microseconds = py_delta.get_microseconds();
+        if days < 0 {
+            return Err(PyValueError::new_err(
+                "negative timedeltas cannot be converted to Rust Duration",
+            ));
+        }
+        if seconds < 0 || microseconds < 0 {
+            return Err(PyValueError::new_err("invalid timedelta components"));
+        }
 
+        let seconds = (days as u64)
+            .checked_mul(SECONDS_PER_DAY)
+            .and_then(|day_seconds| day_seconds.checked_add(seconds as u64))
+            .ok_or_else(|| PyOverflowError::new_err("timedelta is too large for Rust Duration"))?;
+        let nanoseconds = (microseconds as u32).checked_mul(1_000).ok_or_else(|| {
+            PyOverflowError::new_err("timedelta is too precise for Rust Duration")
+        })?;
         Ok(WrappedDuration(std::time::Duration::new(
-            py_delta.get_days() as u64 * 24 * 60 * 60 + py_delta.get_seconds() as u64,
-            py_delta.get_microseconds() as u32 * 1000,
+            seconds,
+            nanoseconds,
         )))
     }
 }
+
+const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
+
+fn duration_to_py_parts(duration: std::time::Duration) -> Option<(i32, i32, i32)> {
+    let total_seconds = duration.as_secs();
+    Some((
+        (total_seconds / SECONDS_PER_DAY).try_into().ok()?,
+        (total_seconds % SECONDS_PER_DAY).try_into().ok()?,
+        duration.subsec_micros().try_into().ok()?,
+    ))
+}
+
 impl<'py> IntoPyObject<'py> for WrappedDuration {
     type Target = PyDelta; // the Python type
     type Output = Bound<'py, Self::Target>; // in most cases this will be `Bound`
     type Error = pyo3::PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
-        let d = self.0;
-        Ok(pyo3::types::PyDelta::new(
-            py,
-            0,
-            0,
-            d.as_millis()
-                .try_into()
-                .expect("Failed to convert miliseconds to int32 when converting duration"),
-            true,
-        )?
-        .clone())
+        let (days, seconds, microseconds) = duration_to_py_parts(self.0).ok_or_else(|| {
+            PyOverflowError::new_err("Rust Duration is too large for datetime.timedelta")
+        })?;
+        Ok(pyo3::types::PyDelta::new(py, days, seconds, microseconds, true)?.clone())
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_duration_with_too_many_days_for_python() {
+        let seconds = (i32::MAX as u64 + 1) * SECONDS_PER_DAY;
+        assert!(duration_to_py_parts(std::time::Duration::from_secs(seconds)).is_none());
     }
 }
 
@@ -862,3 +1073,33 @@ impl PartialEq for Function {
 }
 
 impl std::cmp::Eq for Function {}
+
+#[cfg(test)]
+mod span_tests {
+    use super::*;
+
+    #[test]
+    fn egglog_span_conversion_shares_its_source_file() {
+        let file = Arc::new(egglog_ast::span::SrcFile {
+            name: Some("large.egg".to_owned()),
+            contents: "(relation R (i64))\n".repeat(1_000),
+        });
+        let span = egglog_ast::span::Span::Egglog(Arc::new(egglog_ast::span::EgglogSpan {
+            file: file.clone(),
+            i: 0,
+            j: 18,
+        }));
+
+        let Span::EgglogSpan(converted) = Span::from(&span) else {
+            panic!("expected an egglog span");
+        };
+        assert!(Arc::ptr_eq(&converted.file.0, &file));
+
+        let egglog_ast::span::Span::Egglog(round_tripped) =
+            egglog_ast::span::Span::from(&Span::EgglogSpan(converted))
+        else {
+            panic!("expected an egglog span");
+        };
+        assert!(Arc::ptr_eq(&round_tripped.file, &file));
+    }
+}

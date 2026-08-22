@@ -5,12 +5,12 @@ use crate::error::{EggResult, WrappedError};
 use crate::freeze::FrozenEGraph;
 use crate::py_object_sort::{PyObjectSort, PyPickledValue, load};
 use crate::serialize::SerializedEGraph;
+use crate::termdag::TermDag;
 use crate::tracing_otel;
 
-use egglog::prelude::{RustSpan, Span, add_base_sort};
-use egglog::{SerializeConfig, span};
+use egglog::prelude::add_base_sort;
+use egglog::{RawValues, Read as _, SerializeConfig, span};
 use log::info;
-use num_bigint::BigInt;
 use num_rational::{BigRational, Rational64};
 use pyo3::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,6 +26,51 @@ pub struct EGraph {
     cmds: Option<String>,
 }
 
+impl EGraph {
+    fn run_parsed_commands(
+        &mut self,
+        py: Python<'_>,
+        commands: Vec<egglog::ast::Command>,
+        parsed_from_source: bool,
+    ) -> EggResult<Vec<CommandOutput>> {
+        let cmds_str = commands
+            .iter()
+            .map(|command| format!("{command}\n"))
+            .collect::<String>();
+        let res = if parsed_from_source {
+            let span = tracing::info_span!(
+                "bindings.parse_and_run_program",
+                command_count = commands.len(),
+                commands = tracing::field::display(cmds_str.trim_end())
+            );
+            let _entered = span.enter();
+            info!("Running commands:\n{}", cmds_str);
+            py.detach(|| self.egraph.run_program(commands))
+        } else {
+            let span = tracing::info_span!(
+                "bindings.run_program",
+                command_count = commands.len(),
+                commands = tracing::field::display(cmds_str.trim_end())
+            );
+            let _entered = span.enter();
+            info!("Running commands:\n{}", cmds_str);
+            py.detach(|| self.egraph.run_program(commands))
+        };
+        if let Some(err) = PyErr::take(py) {
+            return Err(WrappedError::Py(err));
+        }
+        match res {
+            Err(e) => Err(WrappedError::Egglog(e)),
+            Ok(outputs) => {
+                if let Some(cmds) = &mut self.cmds {
+                    cmds.push_str(&cmds_str);
+                }
+                Ok(outputs.into_iter().map(|o| o.into()).collect())
+            }
+        }
+    }
+}
+
 #[pymethods]
 impl EGraph {
     #[new]
@@ -37,7 +82,7 @@ impl EGraph {
         add_base_sort(&mut egraph, PyObjectSort {}, span!()).unwrap();
         Self {
             egraph,
-            cmds: if record { Some(String::new()) } else { None },
+            cmds: record.then(String::new),
         }
     }
 
@@ -49,6 +94,25 @@ impl EGraph {
             .parser
             .get_program_from_string(filename, input)?;
         Ok(commands.into_iter().map(|x| x.into()).collect())
+    }
+
+    /// Parse a program and immediately run the parsed commands on the EGraph.
+    #[pyo3(signature = (input, /, filename=None, traceparent=None, tracestate=None))]
+    fn parse_and_run_program(
+        &mut self,
+        py: Python<'_>,
+        input: &str,
+        filename: Option<String>,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
+    ) -> EggResult<Vec<CommandOutput>> {
+        let _context_guard =
+            tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
+        let commands = self
+            .egraph
+            .parser
+            .get_program_from_string(filename, input)?;
+        self.run_parsed_commands(py, commands, true)
     }
 
     /// Run a series of commands on the EGraph.
@@ -65,37 +129,10 @@ impl EGraph {
         let _context_guard =
             tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
         let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
-        let mut cmds_str = String::new();
-
-        for cmd in &commands {
-            let cmd_string = cmd.to_string();
-            cmds_str = cmds_str + &cmd_string + "\n";
-        }
-        let span = tracing::info_span!(
-            "bindings.run_program",
-            command_count = commands.len(),
-            commands = tracing::field::display(cmds_str.trim_end())
-        );
-        let _entered = span.enter();
-        info!("Running commands:\n{}", cmds_str);
-        let res = py.detach(|| self.egraph.run_program(commands));
-        if let Some(err) = PyErr::take(py) {
-            return Err(WrappedError::Py(err));
-        }
-        match res {
-            Err(e) => Err(WrappedError::Egglog(e)),
-            Ok(outputs) => {
-                if let Some(cmds) = &mut self.cmds {
-                    cmds.push_str(&cmds_str);
-                }
-                let outputs = outputs.into_iter().map(|o| o.into()).collect();
-                Ok(outputs)
-            }
-        }
+        self.run_parsed_commands(py, commands, false)
     }
 
-    /// Returns the text of the commands that have been run so far, if `record` was passed.
-    #[pyo3(signature = ())]
+    /// Returns the text of successfully run commands when recording is enabled.
     fn commands(&self) -> Option<String> {
         self.cmds.clone()
     }
@@ -146,13 +183,29 @@ impl EGraph {
         self.egraph.set_report_level(level.into());
     }
 
-    fn lookup_function(&self, name: &str, key: Vec<Value>) -> Option<Value> {
-        self.egraph
-            .lookup_function(
-                name,
-                key.into_iter().map(|v| v.0).collect::<Vec<_>>().as_slice(),
-            )
-            .map(Value)
+    fn lookup_function(&self, name: &str, key: Vec<Value>) -> EggResult<Option<Value>> {
+        let is_constructor = self.egraph.get_function(name).is_some_and(|function| {
+            function.func_type().subtype == egglog::ast::FunctionSubtype::Constructor
+        });
+        let value = self.egraph.read(|state| {
+            let key = RawValues(key.into_iter().map(|value| value.0).collect());
+            if is_constructor {
+                state.eclass_of(name, key)
+            } else {
+                state.lookup(name, key)
+            }
+        })?;
+        Ok(value.map(Value))
+    }
+
+    /// Extract `value` using its runtime sort. `sort` must match the sort returned with `value`
+    /// by `eval_expr`; passing a different existing sort is unsupported.
+    fn extract_value(&self, value: Value, sort: &str) -> EggResult<(TermDag, usize, u64)> {
+        let sort = self.egraph.get_sort_by_name(sort).ok_or_else(|| {
+            WrappedError::Egglog(egglog::TypeError::UndefinedSort(sort.to_owned(), span!()).into())
+        })?;
+        let (termdag, term, cost) = self.egraph.extract_value(sort, value.0)?;
+        Ok((TermDag(termdag), term, cost))
     }
 
     #[pyo3(signature = (expr, *, traceparent=None, tracestate=None))]
@@ -184,9 +237,9 @@ impl EGraph {
         self.egraph.value_to_base(v.0)
     }
 
-    fn value_to_bigint(&self, v: Value) -> BigInt {
+    fn value_to_bigint<'py>(&self, py: Python<'py>, v: Value) -> PyResult<Bound<'py, PyAny>> {
         let bi: egglog::sort::Z = self.egraph.value_to_base(v.0);
-        bi.0
+        Ok(bi.0.into_pyobject(py)?.into_any())
     }
 
     fn value_to_bigrat(&self, v: Value) -> BigRational {
@@ -266,22 +319,6 @@ impl EGraph {
     fn freeze(&self) -> FrozenEGraph {
         FrozenEGraph::from_egraph(&self.egraph)
     }
-
-    // fn dynamic_cost_model_enode_cost(
-    //     &self,
-    //     func: String,
-    //     args: Vec<Value>,
-    // ) -> EggResult<DefaultCost> {
-    //     let func = self.egraph.get_function(&func).ok_or_else(|| {
-    //         WrappedError::Py(PyRuntimeError::new_err(format!("No such function: {func}")))
-    //     })?;
-    //     let vals: Vec<egglog::Value> = args.into_iter().map(|v| v.0).collect();
-    //     let row = FunctionRow {
-    //         vals: &vals,
-    //         subsumed: false,
-    //     };
-    //     Ok(egglog_experimental::DynamicCostModel {}.enode_cost(&self.egraph, &func, &row))
-    // }
 }
 
 /// Wrapper around Egglog Value. Represents either a primitive base value or a reference to an e-class.

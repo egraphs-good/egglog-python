@@ -14,6 +14,7 @@ __all__ = [
     "Change",
     "Check",
     "Constructor",
+    "ContainerRebuildSpec",
     "CostModel",
     "Datatype",
     "Datatypes",
@@ -45,6 +46,7 @@ __all__ = [
     "IterationReport",
     "Let",
     "Lit",
+    "Naive",
     "NewSort",
     "Output",
     "OverallStatistics",
@@ -58,6 +60,7 @@ __all__ = [
     "PrintFunctionSize",
     "PrintOverallStatistics",
     "PrintSize",
+    "ProofConstructorNames",
     "Prove",
     "ProveExists",
     "ProveExistsOutput",
@@ -79,6 +82,7 @@ __all__ = [
     "Saturate",
     "Scan",
     "Schema",
+    "Seminaive",
     "Sequence",
     "SerializedEGraph",
     "Set",
@@ -97,6 +101,7 @@ __all__ = [
     "TimeOnly",
     "Union",
     "Unit",
+    "UnsafeSeminaive",
     "UnstableCombinedRuleset",
     "UserDefined",
     "UserDefinedCommandOutput",
@@ -131,10 +136,18 @@ class EGraph:
         cls, *, fact_directory: str | Path | None = None, seminaive: bool = True, record: bool = False
     ) -> EGraph: ...
     def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
-    def commands(self) -> str | None: ...
+    def parse_and_run_program(
+        self,
+        __input: str,
+        /,
+        filename: str | None = None,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
+    ) -> list[_CommandOutput]: ...
     def run_program(
         self, *commands: _Command, traceparent: str | None = None, tracestate: str | None = None
     ) -> list[_CommandOutput]: ...
+    def commands(self) -> str | None: ...
     def serialize(
         self,
         root_eclasses: list[_Expr],
@@ -147,6 +160,8 @@ class EGraph:
     ) -> SerializedEGraph: ...
     def set_report_level(self, level: _ReportLevel) -> None: ...
     def lookup_function(self, name: str, key: list[Value]) -> Value | None: ...
+    # `sort` must match the runtime sort returned with `value` by `eval_expr`.
+    def extract_value(self, value: Value, sort: str) -> tuple[TermDag, int, int]: ...
     def eval_expr(
         self, expr: _Expr, *, traceparent: str | None = None, tracestate: str | None = None
     ) -> tuple[str, Value]: ...
@@ -169,11 +184,11 @@ class EGraph:
 @final
 class Value:
     def __hash__(self) -> int: ...
-    def __eq__(self, value: object) -> bool: ...
-    def __lt__(self, other: object) -> bool: ...
-    def __le__(self, other: object) -> bool: ...
-    def __gt__(self, other: object) -> bool: ...
-    def __ge__(self, other: object) -> bool: ...
+    def __eq__(self, value: object, /) -> bool: ...
+    def __lt__(self, other: object, /) -> bool: ...
+    def __le__(self, other: object, /) -> bool: ...
+    def __gt__(self, other: object, /) -> bool: ...
+    def __ge__(self, other: object, /) -> bool: ...
 
 @final
 class EggSmolError(Exception):
@@ -395,7 +410,20 @@ class Rule:
     body: list[_Fact]
     name: str
     ruleset: str
-    def __new__(cls, span: _Span, head: list[_Action], body: list[_Fact], name: str, ruleset: str) -> Rule: ...
+    eval_mode: _RuleEvalMode
+    no_decomp: bool
+    include_subsumed: bool
+    def __new__(
+        cls,
+        span: _Span,
+        head: list[_Action],
+        body: list[_Fact],
+        name: str,
+        ruleset: str,
+        eval_mode: _RuleEvalMode = ...,
+        no_decomp: bool = ...,
+        include_subsumed: bool = ...,
+    ) -> Rule: ...
 
 @final
 class Rewrite:
@@ -518,6 +546,7 @@ class Function:
 class RunReport:
     iterations: list[IterationReport]
     updated: bool
+    can_stop: bool
     search_and_apply_time_per_rule: dict[str, timedelta]
     num_matches_per_rule: dict[str, int]
     search_and_apply_time_per_ruleset: dict[str, timedelta]
@@ -528,6 +557,7 @@ class RunReport:
         cls,
         iterations: list[IterationReport],
         updated: bool,
+        can_stop: bool,
         search_and_apply_time_per_rule: dict[str, timedelta],
         num_matches_per_rule: dict[str, int],
         search_and_apply_time_per_ruleset: dict[str, timedelta],
@@ -616,6 +646,17 @@ class CSVPrintFunctionMode: ...
 
 _PrintFunctionMode: TypeAlias = DefaultPrintFunctionMode | CSVPrintFunctionMode
 
+@final
+class Seminaive: ...
+
+@final
+class Naive: ...
+
+@final
+class UnsafeSeminaive: ...
+
+_RuleEvalMode: TypeAlias = Seminaive | Naive | UnsafeSeminaive
+
 ##
 # Schedules
 ##
@@ -682,11 +723,40 @@ class Datatypes:
     def __new__(cls, span: _Span, datatypes: list[tuple[_Span, str, _Subdatatypes]]) -> Datatypes: ...
 
 @final
+class ContainerRebuildSpec:
+    internal_rebuild_prim: str
+    internal_rebuild_proof_prim: str | None
+    def __new__(
+        cls, internal_rebuild_prim: str, internal_rebuild_proof_prim: str | None = ...
+    ) -> ContainerRebuildSpec: ...
+
+@final
+class ProofConstructorNames:
+    congr: str
+    trans: str
+    sym: str
+    normalize: str
+    def __new__(cls, congr: str, trans: str, sym: str, normalize: str) -> ProofConstructorNames: ...
+
+@final
 class Sort:
     span: _Span
     name: str
     presort_and_args: tuple[str, list[_Expr]] | None
-    def __new__(cls, span: _Span, name: str, presort_and_args: tuple[str, list[_Expr]] | None) -> Sort: ...
+    uf: tuple[str, str | None] | None
+    proof_func: str | None
+    container_rebuild: ContainerRebuildSpec | None
+    proof_constructors: ProofConstructorNames | None
+    def __new__(
+        cls,
+        span: _Span,
+        name: str,
+        presort_and_args: tuple[str, list[_Expr]] | None,
+        uf: tuple[str, str | None] | None = ...,
+        proof_func: str | None = ...,
+        container_rebuild: ContainerRebuildSpec | None = ...,
+        proof_constructors: ProofConstructorNames | None = ...,
+    ) -> Sort: ...
 
 @final
 class FunctionCommand:
@@ -694,7 +764,21 @@ class FunctionCommand:
     name: str
     schema: Schema
     merge: _Expr | None
-    def __new__(cls, span: _Span, name: str, schema: Schema, merge: _Expr | None) -> FunctionCommand: ...
+    term_constructor: str | None
+    unextractable: bool
+    hidden: bool
+    let_binding: bool
+    def __new__(
+        cls,
+        span: _Span,
+        name: str,
+        schema: Schema,
+        merge: _Expr | None,
+        term_constructor: str | None = ...,
+        unextractable: bool = ...,
+        hidden: bool = ...,
+        let_binding: bool = ...,
+    ) -> FunctionCommand: ...
 
 @final
 class AddRuleset:
@@ -826,7 +910,18 @@ class Constructor:
     schema: Schema
     cost: int | None
     unextractable: bool
-    def __new__(cls, span: _Span, name: str, schema: Schema, cost: int | None, unextractable: bool) -> Constructor: ...
+    hidden: bool
+    let_binding: bool
+    def __new__(
+        cls,
+        span: _Span,
+        name: str,
+        schema: Schema,
+        cost: int | None,
+        unextractable: bool,
+        hidden: bool = ...,
+        let_binding: bool = ...,
+    ) -> Constructor: ...
 
 @final
 class PrintOverallStatistics:

@@ -54,6 +54,7 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::freeze::FrozenRow>()?;
     m.add_class::<crate::freeze::FrozenFunction>()?;
     m.add_class::<crate::freeze::FrozenEGraph>()?;
+    m.add_class::<crate::conversions::SrcFile>()?;
     m.add_function(wrap_pyfunction!(setup_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(shutdown_tracing, m)?)?;
     crate::conversions::add_structs_to_module(m)?;

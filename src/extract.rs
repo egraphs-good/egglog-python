@@ -118,14 +118,10 @@ impl egglog::extract::CostModel<Cost> for CostModel {
         &self,
         _egraph: &egglog::EGraph,
         func: &egglog::Function,
-        row: &egglog::FunctionRow<'_>,
+        enode: &egglog::Enode<'_>,
     ) -> Cost {
         Python::attach(|py| {
-            let mut values = row.vals.iter().map(|v| Value(*v)).collect::<Vec<_>>();
-            // Remove last element which is the output
-            // this is not needed because the only thing we can do with the output is look up an analysis
-            // which we can also do with the original function
-            values.pop().unwrap();
+            let values = enode.children.iter().map(|v| Value(*v)).collect::<Vec<_>>();
             Cost(self.enode_cost.call1(py, (func.name(), values)).unwrap())
         })
     }

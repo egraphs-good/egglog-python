@@ -37,10 +37,7 @@ _NDArray_11[IndexKey.ndarray(_NDArray_10 == NDArray(RecursiveValue(Value.from_in
 _TupleNDArray_1 = svd_(
     sqrt(
         asarray(
-            NDArray(RecursiveValue(Value.from_float(Float.rational(BigRat(BigInt.from_string("1"), BigInt.from_string("147")))))),
-            OptionalDType.some(DType.float64),
-            OptionalBool.none,
-            OptionalDevice.some(_NDArray_1.device),
+            NDArray(RecursiveValue(Value.from_float(Float.rational(BigRat(1, 147))))), OptionalDType.some(DType.float64), OptionalBool.none, OptionalDevice.some(_NDArray_1.device)
         )
     )
     * (_NDArray_8 / _NDArray_11),
@@ -54,11 +51,7 @@ _NDArray_12 = (
 ).T / _TupleNDArray_1[Int(1)][IndexKey.slice(_Slice_1)]
 _TupleNDArray_2 = svd_(
     (
-        sqrt(
-            NDArray(RecursiveValue(Value.from_int(Int(150))))
-            * _NDArray_3
-            * NDArray(RecursiveValue(Value.from_float(Float.rational(BigRat(BigInt.from_string("1"), BigInt.from_string("2"))))))
-        )
+        sqrt(NDArray(RecursiveValue(Value.from_int(Int(150)))) * _NDArray_3 * NDArray(RecursiveValue(Value.from_float(Float.rational(BigRat(1, 2))))))
         * (_NDArray_4 - _NDArray_3 @ _NDArray_4).T
     ).T
     @ _NDArray_12,

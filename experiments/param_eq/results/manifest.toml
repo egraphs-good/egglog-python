@@ -1,0 +1,6 @@
+schema_version = 5
+status = "paused-before-final-dependency-compatible-rerun"
+paper_replication_rows = 0
+representation_comparison_rows = 0
+note = "Run make -C experiments/param_eq aggregate after rebuilding the final dependency stack."
+archive_identity = "Canonical archive hash is kept in private research records and required by the runner."

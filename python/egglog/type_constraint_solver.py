@@ -114,10 +114,7 @@ class TypeConstraintSolver:
         # unnamed-function rewrites created while inferring types are discarded after the probe.
         probe_decls = decls().copy()
         dummy_args = [
-            RuntimeExpr.__from_values__(
-                probe_decls,
-                TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()),
-            )
+            RuntimeExpr.__from_values__(probe_decls, TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()))
             for arg_tp in tp.args[1:]
         ]
         try:

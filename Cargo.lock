@@ -362,8 +362,8 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "egglog"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=0476e56345f52e6fcba4b0c93f5d6d60a2b9e318#0476e56345f52e6fcba4b0c93f5d6d60a2b9e318"
 dependencies = [
  "csv",
  "dyn-clone",
@@ -374,23 +374,24 @@ dependencies = [
  "egglog-numeric-id",
  "egglog-reports",
  "egraph-serialize",
+ "enum-map",
  "hashbrown 0.16.1",
  "im-rc",
  "indexmap",
  "log",
  "num",
  "ordered-float",
- "rayon",
  "rustc-hash",
  "serde_json",
+ "smallvec",
  "thiserror",
  "web-time",
 ]
 
 [[package]]
 name = "egglog-add-primitive"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=0476e56345f52e6fcba4b0c93f5d6d60a2b9e318#0476e56345f52e6fcba4b0c93f5d6d60a2b9e318"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -398,19 +399,20 @@ dependencies = [
 
 [[package]]
 name = "egglog-ast"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=0476e56345f52e6fcba4b0c93f5d6d60a2b9e318#0476e56345f52e6fcba4b0c93f5d6d60a2b9e318"
 dependencies = [
  "ordered-float",
 ]
 
 [[package]]
 name = "egglog-bridge"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=0476e56345f52e6fcba4b0c93f5d6d60a2b9e318#0476e56345f52e6fcba4b0c93f5d6d60a2b9e318"
 dependencies = [
  "anyhow",
  "dyn-clone",
+ "egglog-concurrency",
  "egglog-core-relations",
  "egglog-numeric-id",
  "egglog-reports",
@@ -421,7 +423,6 @@ dependencies = [
  "num-rational",
  "once_cell",
  "ordered-float",
- "rayon",
  "smallvec",
  "thiserror",
  "web-time",
@@ -429,20 +430,20 @@ dependencies = [
 
 [[package]]
 name = "egglog-concurrency"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=0476e56345f52e6fcba4b0c93f5d6d60a2b9e318#0476e56345f52e6fcba4b0c93f5d6d60a2b9e318"
 dependencies = [
  "arc-swap",
  "bumpalo",
+ "crossbeam",
  "egglog-numeric-id",
- "rayon",
  "smallvec",
 ]
 
 [[package]]
 name = "egglog-core-relations"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=0476e56345f52e6fcba4b0c93f5d6d60a2b9e318#0476e56345f52e6fcba4b0c93f5d6d60a2b9e318"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -461,7 +462,6 @@ dependencies = [
  "num",
  "once_cell",
  "rand 0.9.4",
- "rayon",
  "rustc-hash",
  "smallvec",
  "thiserror",
@@ -470,8 +470,8 @@ dependencies = [
 
 [[package]]
 name = "egglog-experimental"
-version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-experimental?branch=main#d443c29a58fd3affe5fcf92e6878168e89273752"
+version = "3.0.0"
+source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=78cdfa543de9e282c86f446f69943965119c2afe#78cdfa543de9e282c86f446f69943965119c2afe"
 dependencies = [
  "egglog",
  "egglog-ast",
@@ -483,16 +483,13 @@ dependencies = [
 
 [[package]]
 name = "egglog-numeric-id"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
-dependencies = [
- "rayon",
-]
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=0476e56345f52e6fcba4b0c93f5d6d60a2b9e318#0476e56345f52e6fcba4b0c93f5d6d60a2b9e318"
 
 [[package]]
 name = "egglog-reports"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=0476e56345f52e6fcba4b0c93f5d6d60a2b9e318#0476e56345f52e6fcba4b0c93f5d6d60a2b9e318"
 dependencies = [
  "clap",
  "hashbrown 0.16.1",
@@ -505,8 +502,8 @@ dependencies = [
 
 [[package]]
 name = "egglog-union-find"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=0476e56345f52e6fcba4b0c93f5d6d60a2b9e318#0476e56345f52e6fcba4b0c93f5d6d60a2b9e318"
 dependencies = [
  "crossbeam",
  "egglog-concurrency",
@@ -564,6 +561,26 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "enum-map"
+version = "2.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6866f3bfdf8207509a033af1a75a7b08abda06bbaaeae6669323fd5a097df2e9"
+dependencies = [
+ "enum-map-derive",
+]
+
+[[package]]
+name = "enum-map-derive"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f282cfdfe92516eb26c2af8589c274c7c17681f5ecc03c18255fe741c6aa64eb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "equivalent"
