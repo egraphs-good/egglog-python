@@ -26,6 +26,8 @@
 
 - Prefer relative imports inside `python/egglog`.
 - When changing public high-level APIs, update the public docs, stubs, and pretty/freeze round-trip expectations together.
+- Keep `builtins.py` limited to operations implemented by Egglog primitives. Compose derived expressions at their domain call sites, without private runtime plumbing in public APIs.
+- Pretty-print declaration structure directly; do not evaluate runtime expressions merely to canonicalize their output.
 - Higher-order callable type probing should stay isolated from the live ruleset: copy declarations and run with no current ruleset so inference does not register temporary unnamed functions or rewrites.
 
 ## Array API
@@ -41,6 +43,7 @@
 ## Verification
 
 - Prefer the minimal code change and the minimal diff that solves the task; only broaden the change if the smaller fix is not sufficient.
+- High-level tests should assert observable behavior through public APIs. Avoid private `_` APIs and exact generated names unless serialized output is itself the public contract.
 - Run `make mypy` for typing changes.
 - Run targeted pytest for touched modules.
 - Run `make docs` for docs or public API changes.

@@ -7,6 +7,8 @@ isolated row execution, resource limits, aggregation, and the research handoff.
 
 The work is paused. The bounded public demonstrations remain maintained in CI,
 while the private 714-row corpus is not run automatically.
+The checked-in result CSVs contain headers only as schema examples; a manifest
+is created only by a final dependency-compatible aggregate run.
 
 ## Provenance and redistribution boundary
 

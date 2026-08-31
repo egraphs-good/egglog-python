@@ -6,7 +6,7 @@ from datetime import timedelta
 import pytest
 
 from egglog import *
-from egglog.declarations import BiRewriteDecl, RewriteDecl, RuleDecl
+from egglog.declarations import BiRewriteDecl, Declarations, RewriteDecl, RuleDecl
 
 
 def _setup_simple_egraph():
@@ -68,6 +68,12 @@ def test_can_stop_field():
 
     assert report.can_stop is True
     assert "can_stop=True" in repr(report)
+
+
+def test_can_stop_preserves_positional_constructor():
+    report = RunReport(Declarations(), [], False, {}, {}, {}, {}, {})
+
+    assert report.can_stop is False
 
 
 def test_num_matches():

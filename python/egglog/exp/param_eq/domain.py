@@ -271,17 +271,25 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
         return expr
     match get_callable_args(expr, Num.__add__):
         case (lhs, rhs):
-            return map_merge_with(
-                lambda a, b: a + b,
+            return map_fold_kv(
+                lambda result, mono, coef: catch(lambda: result[mono]).match(
+                    lambda old_coef: result.insert(mono, old_coef + coef), result.insert(mono, coef)
+                ),
                 _to_container_poly(_binary_to_containers(lhs)),
                 _to_container_poly(_binary_to_containers(cast("Num", rhs))),
             )
     match get_callable_args(expr, Num.__sub__):
         case (lhs, rhs):
-            return map_merge_with(
-                lambda a, b: a + b,
+            return map_fold_kv(
+                lambda result, mono, coef: catch(lambda: result[mono]).match(
+                    lambda old_coef: result.insert(mono, old_coef + coef), result.insert(mono, coef)
+                ),
                 _to_container_poly(_binary_to_containers(lhs)),
-                map_map_values(lambda _, v: -v, _to_container_poly(_binary_to_containers(cast("Num", rhs)))),
+                map_fold_kv(
+                    lambda result, mono, coef: result.insert(mono, -coef),
+                    ContainerPolynomial.empty(),
+                    _to_container_poly(_binary_to_containers(cast("Num", rhs))),
+                ),
             )
     match get_callable_args(expr, Num.__mul__):
         case (lhs, rhs):
@@ -293,17 +301,32 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
                 lhs_poly = cast("ContainerPolynomial", lhs_mapped)
                 match get_callable_args(rhs_mapped, Num):
                     case (f64(scalar),):
-                        return map_map_values(lambda _mono, coef: coef * scalar, lhs_poly)
+                        return map_fold_kv(
+                            lambda result, mono, coef: result.insert(mono, coef * scalar),
+                            ContainerPolynomial.empty(),
+                            lhs_poly,
+                        )
                 if not rhs_is_polynomial:
                     return _multiply_container_polynomial_by_monomial(lhs_poly, _to_container_mono(rhs_mapped))
             if rhs_is_polynomial:
                 rhs_poly = cast("ContainerPolynomial", rhs_mapped)
                 match get_callable_args(lhs_mapped, Num):
                     case (f64(scalar),):
-                        return map_map_values(lambda _mono, coef: coef * scalar, rhs_poly)
+                        return map_fold_kv(
+                            lambda result, mono, coef: result.insert(mono, coef * scalar),
+                            ContainerPolynomial.empty(),
+                            rhs_poly,
+                        )
                 if not lhs_is_polynomial:
                     return _multiply_container_polynomial_by_monomial(rhs_poly, _to_container_mono(lhs_mapped))
-            return map_merge_with(lambda a, b: a + b, _to_container_mono(lhs_mapped), _to_container_mono(rhs_mapped))
+            return map_fold_kv(
+                lambda result, term, exponent: catch(lambda: result[term]).match(
+                    lambda old_exponent: result.insert(term, old_exponent + exponent),
+                    result.insert(term, exponent),
+                ),
+                _to_container_mono(lhs_mapped),
+                _to_container_mono(rhs_mapped),
+            )
     match get_callable_args(expr, Num.__truediv__):
         case (lhs, rhs):
             lhs_mapped = _binary_to_containers(lhs)
@@ -314,15 +337,30 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
                 lhs_poly = cast("ContainerPolynomial", lhs_mapped)
                 match get_callable_args(rhs_mapped, Num):
                     case (f64(scalar),):
-                        return map_map_values(lambda _mono, coef: coef / scalar, lhs_poly)
-            denom = map_map_values(lambda _term, exponent: -exponent, _to_container_mono(rhs_mapped))
+                        return map_fold_kv(
+                            lambda result, mono, coef: result.insert(mono, coef / scalar),
+                            ContainerPolynomial.empty(),
+                            lhs_poly,
+                        )
+            denom = map_fold_kv(
+                lambda result, term, exponent: result.insert(term, -exponent),
+                ContainerMonomial.empty(),
+                _to_container_mono(rhs_mapped),
+            )
             if lhs_is_polynomial and not rhs_is_polynomial:
                 return _multiply_container_polynomial_by_monomial(cast("ContainerPolynomial", lhs_mapped), denom)
             # If the numerator is just one, then dont add this as a term to the polynomial
             if _is_expr_instance(lhs_mapped, Num) and lhs_mapped == Num(1.0):
                 return denom
             num = _to_container_mono(lhs_mapped)
-            return map_merge_with(lambda a, b: a + b, num, denom)
+            return map_fold_kv(
+                lambda result, term, exponent: catch(lambda: result[term]).match(
+                    lambda old_exponent: result.insert(term, old_exponent + exponent),
+                    result.insert(term, exponent),
+                ),
+                num,
+                denom,
+            )
     match get_callable_args(expr, Num.__pow__):
         case (n, Num(f64(f))):
             n_mapped = _to_num(_binary_to_containers(n))
@@ -349,11 +387,21 @@ def _multiply_container_polynomial_by_monomial(
 ) -> ContainerPolynomial:
     """Distribute one monomial into a polynomial and combine coefficient collisions."""
     return map_fold_kv(
-        lambda result, mono, coef: map_merge_with(
-            lambda old_coef, new_coef: old_coef + new_coef,
+        lambda result, mono, coef: map_fold_kv(
+            lambda merged_poly, merged_mono, new_coef: catch(lambda: merged_poly[merged_mono]).match(
+                lambda old_coef: merged_poly.insert(merged_mono, old_coef + new_coef),
+                merged_poly.insert(merged_mono, new_coef),
+            ),
             result,
             ContainerPolynomial.empty().insert(
-                map_merge_with(lambda left_exp, right_exp: left_exp + right_exp, mono, factor),
+                map_fold_kv(
+                    lambda merged_mono, term, exponent: catch(lambda: merged_mono[term]).match(
+                        lambda old_exponent: merged_mono.insert(term, old_exponent + exponent),
+                        merged_mono.insert(term, exponent),
+                    ),
+                    mono,
+                    factor,
+                ),
                 coef,
             ),
         ),

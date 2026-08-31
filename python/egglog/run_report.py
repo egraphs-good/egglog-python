@@ -86,12 +86,12 @@ class RunReport:
     _decls: Declarations = field(repr=False)
     iterations: list[IterationReport] = field(default_factory=list)
     updated: bool = False
-    can_stop: bool = False
     search_and_apply_time_per_rule: dict[RewriteOrRuleDecl, timedelta] = field(default_factory=dict)
     num_matches_per_rule: dict[RewriteOrRuleDecl, int] = field(default_factory=dict)
     search_and_apply_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
     merge_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
     rebuild_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
+    can_stop: bool = False
 
     def __repr__(self) -> str:
         time_per_rule = {pretty_decl(self._decls, k): v for k, v in self.search_and_apply_time_per_rule.items()}

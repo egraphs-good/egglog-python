@@ -730,10 +730,10 @@ class RelationDecl:
 @dataclass(frozen=True)
 class ConstantDecl:
     """
-    Same as `(declare)` in egglog.
+    Python's zero-argument callable declaration.
 
-    `body is not None` means the constant lowers eagerly as a zero-arg primitive.
-    `merge is not None` means the constant lowers as a zero-arg function.
+    Depending on its return type and whether `body` or `merge` is present, it
+    lowers to a zero-argument constructor, function, or eager primitive.
     """
 
     type_ref: JustTypeRef

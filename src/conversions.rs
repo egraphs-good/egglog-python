@@ -818,12 +818,12 @@ convert_struct!(
     egglog_reports::RunReport: "{:?}" => RunReport(
         iterations: Vec<IterationReport>,
         updated: bool,
-        can_stop: bool,
         search_and_apply_time_per_rule: HashMap<String, WrappedDuration>,
         num_matches_per_rule: HashMap<String, usize>,
         search_and_apply_time_per_ruleset: HashMap<String, WrappedDuration>,
         merge_time_per_ruleset: HashMap<String, WrappedDuration>,
-        rebuild_time_per_ruleset: HashMap<String, WrappedDuration>
+        rebuild_time_per_ruleset: HashMap<String, WrappedDuration>,
+        can_stop: bool = false
     )
         r -> egglog_reports::RunReport {
             iterations: r

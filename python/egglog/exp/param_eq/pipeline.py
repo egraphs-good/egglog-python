@@ -7,8 +7,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from functools import partial
-from typing import Literal, TypeVar
+from typing import Literal
 
 from egglog import *
 
@@ -19,14 +18,13 @@ HASKELL_INNER_ITERATION_LIMIT = 30
 BACKOFF_MATCH_LIMIT = 1000
 BACKOFF_BAN_LENGTH = 30
 
-T = TypeVar("T", bound=BaseExpr)
-V = TypeVar("V", bound=BaseExpr)
-
 
 @function(builtin=True, egg_fn="f64-is-finite")
 def _f64_is_finite(value: f64) -> Unit: ...
 
 
+# Keep derived map operations as explicitly typed folds in this research
+# module; only map_fold_kv is a backend primitive and public builtin.
 # Store discovered constants in a global map so semi-naive analysis can join
 # them with polynomial terms. If two singleton updates collide, keep the first
 # representative; tolerant float canonicalization is not part of this paused
@@ -34,7 +32,13 @@ def _f64_is_finite(value: f64) -> Unit: ...
 CONSTS = constant(
     "CONSTS",
     Map[Num, f64],
-    merge=partial(map_merge_with, lambda old_value, _new_value: old_value),
+    merge=lambda left, right: map_fold_kv(
+        lambda result, key, value: catch(lambda: result[key]).match(
+            lambda old_value: result.insert(key, old_value), result.insert(key, value)
+        ),
+        left,
+        right,
+    ),
 )
 
 # Map a monomial of the form `{polynomial(P): 1}` to one representative `P`.
@@ -50,16 +54,14 @@ CONSTS = constant(
 POLYNOMIAL_MONOMIALS = constant(
     "POLYNOMIAL_MONOMIALS",
     Map[ContainerMonomial, ContainerPolynomial],
-    merge=partial(map_merge_with, lambda old_value, new_value: old_value),
+    merge=lambda left, right: map_fold_kv(
+        lambda result, key, value: catch(lambda: result[key]).match(
+            lambda old_value: result.insert(key, old_value), result.insert(key, value)
+        ),
+        left,
+        right,
+    ),
 )
-
-
-def if_defined(cond: Unit, then: T, otherwise: T) -> T:
-    return catch(lambda: cond).match(lambda _: then, otherwise)
-
-
-def try_match(expr: T, on_some: Callable[[T], V], default: V) -> V:
-    return catch(lambda: expr).match(on_some, default)
 
 
 @ruleset
@@ -120,35 +122,44 @@ def container_analysis_rules(
         consts == CONSTS,
         poly1
         == map_fold_kv(
-            lambda res_poly, mono, coef: (
+            lambda res_poly, mono, coef: res_poly.insert(
                 # split monomial into non constants and constants (which are combined into the coefficient):
-                map_fold_kv(
-                    lambda res_mono_and_coef, term, exp: if_defined(
-                        exp != BigRat(0, 1),
-                        # if the exponent is not zero, process it
-                        try_match(
-                            consts[term],
-                            # if it is a constant, multiply it into the coefficient and drop it from the monomial:
-                            lambda v: if_defined(
-                                exp != BigRat(-1, 1),
-                                res_mono_and_coef.map_right(lambda prev_coef: prev_coef * (v ** exp.to_f64())),
-                                if_defined(
-                                    v != f64(0.0),
-                                    res_mono_and_coef.map_right(lambda prev_coef: prev_coef / v),
-                                    res_mono_and_coef.map_left(lambda mono: mono.insert(term, exp)),
+                (
+                    mono_and_coef := map_fold_kv(
+                        lambda res_mono_and_coef, term, exp: catch(lambda: exp != BigRat(0, 1)).match(
+                            # if the exponent is not zero, process it
+                            lambda _: catch(lambda: consts[term]).match(
+                                # if it is a constant, multiply it into the coefficient and drop it from the monomial:
+                                lambda v: catch(lambda: exp != BigRat(-1, 1)).match(
+                                    lambda _: Pair(
+                                        res_mono_and_coef.left,
+                                        res_mono_and_coef.right * (v ** exp.to_f64()),
+                                    ),
+                                    catch(lambda: v != f64(0.0)).match(
+                                        lambda _: Pair(
+                                            res_mono_and_coef.left,
+                                            res_mono_and_coef.right / v,
+                                        ),
+                                        Pair(
+                                            res_mono_and_coef.left.insert(term, exp),
+                                            res_mono_and_coef.right,
+                                        ),
+                                    ),
+                                ),
+                                # if it is not a constant, keep it in the monomial
+                                Pair(
+                                    res_mono_and_coef.left.insert(term, exp),
+                                    res_mono_and_coef.right,
                                 ),
                             ),
-                            # if it is not a constant, keep it in the monomial
-                            res_mono_and_coef.map_left(lambda mono: mono.insert(term, exp)),
+                            # if the exponent is zero, the term is just 1 and can be dropped from the monomial, so keep the monomial as is
+                            res_mono_and_coef,
                         ),
-                        # if the exponent is zero, the term is just 1 and can be dropped from the monomial, so keep the monomial as is
-                        res_mono_and_coef,
-                    ),
-                    Pair(ContainerMonomial.empty(), coef),
-                    mono,
-                ).match(
-                    lambda mono, coef: res_poly.insert(mono, coef + catch(lambda: res_poly[mono]).unwrap_or(f64(0.0)))
-                )
+                        Pair(ContainerMonomial.empty(), coef),
+                        mono,
+                    )
+                ).left,
+                mono_and_coef.right + catch(lambda: res_poly[mono_and_coef.left]).unwrap_or(f64(0.0)),
             ),
             ContainerPolynomial.empty(),
             poly,
@@ -161,13 +172,25 @@ def container_analysis_rules(
         Num(poly[ContainerMonomial.empty()]),
         poly.length() == i64(1),
         # The only key is an empty monomial, so the polynomial is just a constant term:
-        ContainerMonomial.empty() == poly.pick_key(),
+        ContainerMonomial.empty()
+        == map_fold_kv(
+            lambda picked, key, _value: picked.match(lambda _: picked, Maybe[ContainerMonomial].some(key)),
+            Maybe[ContainerMonomial].none(),
+            poly,
+        ).unwrap(),
     )
 
     # remove monomials with zero coefficients
     yield rewrite(polynomial(poly), subsume=True).to(
         polynomial(poly1),
-        poly1 == map_filter_kv(lambda _key, value: value != f64(0.0), poly),
+        poly1
+        == map_fold_kv(
+            lambda result, key, value: catch(lambda: value != f64(0.0)).match(
+                lambda _: result.insert(key, value), result
+            ),
+            ContainerPolynomial.empty(),
+            poly,
+        ),
         poly != poly1,
     )
 
@@ -252,11 +275,37 @@ def container_basic_rules(
         ),
         poly.length() > i64(1),
         poly.length() <= i64(4),
-        nonconst_poly == map_filter_kv(lambda key, _value: key != ContainerMonomial.empty(), poly),
-        poly2 == map_filter_kv(lambda _key, value: value != f64(1.0), nonconst_poly),
-        coef == poly2[poly2.pick_key()],
+        nonconst_poly
+        == map_fold_kv(
+            lambda result, key, value: catch(lambda: key != ContainerMonomial.empty()).match(
+                lambda _: result.insert(key, value), result
+            ),
+            ContainerPolynomial.empty(),
+            poly,
+        ),
+        poly2
+        == map_fold_kv(
+            lambda result, key, value: catch(lambda: value != f64(1.0)).match(
+                lambda _: result.insert(key, value), result
+            ),
+            ContainerPolynomial.empty(),
+            nonconst_poly,
+        ),
+        coef
+        == poly2[
+            map_fold_kv(
+                lambda picked, key, _value: picked.match(lambda _: picked, Maybe[ContainerMonomial].some(key)),
+                Maybe[ContainerMonomial].none(),
+                poly2,
+            ).unwrap()
+        ],
         poly2.length() == nonconst_poly.length(),
-        poly1 == map_map_values(lambda _key, value: value / coef, poly),
+        poly1
+        == map_fold_kv(
+            lambda result, key, value: result.insert(key, value / coef),
+            ContainerPolynomial.empty(),
+            poly,
+        ),
     )
 
     # Greedy multivariate Horner factorization for rational exponents. Choose
@@ -285,18 +334,21 @@ def container_basic_rules(
         counts.count(n) > i64(1),
         exp
         == map_fold_kv(
-            lambda min_exp, mono, _coef: try_match(mono[n] < min_exp, lambda _: mono[n], min_exp),
+            lambda min_exp, mono, _coef: catch(lambda: mono[n] < min_exp).match(lambda _: mono[n], min_exp),
             BigRat(2**63 - 1, 1),
             poly,
         ),
         poly_pair
         == map_fold_kv(
-            lambda divided_and_remainder, mono, coef: try_match(
-                mono[n],
-                lambda current_exp: divided_and_remainder.map_left(
-                    lambda divided: divided.insert(mono.insert(n, current_exp - exp), coef)
+            lambda divided_and_remainder, mono, coef: catch(lambda: mono[n]).match(
+                lambda current_exp: Pair(
+                    divided_and_remainder.left.insert(mono.insert(n, current_exp - exp), coef),
+                    divided_and_remainder.right,
                 ),
-                divided_and_remainder.map_right(lambda remainder: remainder.insert(mono, coef)),
+                Pair(
+                    divided_and_remainder.left,
+                    divided_and_remainder.right.insert(mono, coef),
+                ),
             ),
             Pair(ContainerPolynomial.empty(), ContainerPolynomial.empty()),
             poly,
@@ -311,18 +363,23 @@ def container_basic_rules(
     # avoids distributing arbitrary products.
     yield rewrite(polynomial(poly)).to(
         polynomial(
-            map_merge_with(
-                lambda left, right: left + right,
+            map_fold_kv(
+                lambda result, key, value: catch(lambda: result[key]).match(
+                    lambda old_value: result.insert(key, old_value + value), result.insert(key, value)
+                ),
                 poly.remove(mono),
-                map_map_values(lambda _nested_mono, nested_coef: nested_coef * poly[mono], poly1),
+                map_fold_kv(
+                    lambda result, nested_mono, nested_coef: result.insert(nested_mono, nested_coef * poly[mono]),
+                    ContainerPolynomial.empty(),
+                    poly1,
+                ),
             )
         ),
         polynomial_monomials == POLYNOMIAL_MONOMIALS,
         poly.length() > i64(1),
         mono
         == map_fold_kv(
-            lambda selected, candidate_mono, _candidate_coef: try_match(
-                polynomial_monomials[candidate_mono],
+            lambda selected, candidate_mono, _candidate_coef: catch(lambda: polynomial_monomials[candidate_mono]).match(
                 lambda _nested_poly: candidate_mono,
                 selected,
             ),
@@ -364,8 +421,10 @@ def container_fun_rules(poly: ContainerPolynomial, m: ContainerMonomial, term: N
     yield rewrite(log(polynomial(poly))).to(
         polynomial(
             map_fold_kv(
-                lambda res_poly, term, exp: map_merge_with(
-                    lambda old_coef, new_coef: old_coef + new_coef,
+                lambda res_poly, term, exp: map_fold_kv(
+                    lambda result, mono, coef: catch(lambda: result[mono]).match(
+                        lambda old_coef: result.insert(mono, old_coef + coef), result.insert(mono, coef)
+                    ),
                     res_poly,
                     ContainerPolynomial.empty().insert(
                         ContainerMonomial.empty().insert(log(term), BigRat(1, 1)),
@@ -377,10 +436,20 @@ def container_fun_rules(poly: ContainerPolynomial, m: ContainerMonomial, term: N
             )
         ),
         poly.length() == i64(1),
-        m == poly.pick_key(),
+        m
+        == map_fold_kv(
+            lambda picked, key, _value: picked.match(lambda _: picked, Maybe[ContainerMonomial].some(key)),
+            Maybe[ContainerMonomial].none(),
+            poly,
+        ).unwrap(),
         poly[m] > f64(0.0),
         m.length() == i64(1),
-        term == m.pick_key(),
+        term
+        == map_fold_kv(
+            lambda picked, key, _value: picked.match(lambda _: picked, Maybe[Num].some(key)),
+            Maybe[Num].none(),
+            m,
+        ).unwrap(),
         m[term] == BigRat(1, 1),
     )
 

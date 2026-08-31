@@ -546,23 +546,23 @@ class Function:
 class RunReport:
     iterations: list[IterationReport]
     updated: bool
-    can_stop: bool
     search_and_apply_time_per_rule: dict[str, timedelta]
     num_matches_per_rule: dict[str, int]
     search_and_apply_time_per_ruleset: dict[str, timedelta]
     merge_time_per_ruleset: dict[str, timedelta]
     rebuild_time_per_ruleset: dict[str, timedelta]
+    can_stop: bool
 
     def __new__(
         cls,
         iterations: list[IterationReport],
         updated: bool,
-        can_stop: bool,
         search_and_apply_time_per_rule: dict[str, timedelta],
         num_matches_per_rule: dict[str, int],
         search_and_apply_time_per_ruleset: dict[str, timedelta],
         merge_time_per_ruleset: dict[str, timedelta],
         rebuild_time_per_ruleset: dict[str, timedelta],
+        can_stop: bool = ...,
     ) -> RunReport: ...
 
 ##

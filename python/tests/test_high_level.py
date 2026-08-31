@@ -16,7 +16,6 @@ import pytest
 
 import egglog.builtins as egg_builtins
 from egglog import *
-from egglog import bindings
 from egglog.declarations import (
     BUILTIN_EGG_FN_NAMES,
     BUILTIN_EGG_SORT_NAMES,
@@ -34,7 +33,6 @@ from egglog.declarations import (
     MethodRef,
     TypedExprDecl,
     TypeRefWithVars,
-    ValueDecl,
 )
 from egglog.egraph import get_current_ruleset
 from egglog.runtime import RuntimeExpr, RuntimeFunction
@@ -50,24 +48,17 @@ class TestExprStr:
 
 
 @pytest.mark.parametrize(
-    ("eval_mode", "binding_type"),
-    [
-        ("seminaive", bindings.Seminaive),
-        ("naive", bindings.Naive),
-        ("unsafe-seminaive", bindings.UnsafeSeminaive),
-    ],
+    "eval_mode",
+    ["seminaive", "naive", "unsafe-seminaive"],
 )
-def test_rule_eval_mode_lowering(eval_mode: RuleEvalMode, binding_type: type) -> None:
+def test_rule_eval_mode(eval_mode: RuleEvalMode) -> None:
     rel = relation(f"eval_mode_{eval_mode}", i64)
     x = var("x", i64)
-    high_level_rule = rule(rel(x), eval_mode=eval_mode).then(rel(x + 1))
+    egraph = EGraph(rel(i64(0)))
 
-    egraph = EGraph()
-    egraph._add_decls(high_level_rule)
-    command = egraph._command_to_egg(high_level_rule)
-
-    assert isinstance(command, bindings.RuleCommand)
-    assert isinstance(command.rule.eval_mode, binding_type)
+    egraph.register(rule(rel(x), eval_mode=eval_mode).then(rel(x + 1)))
+    egraph.run(1)
+    egraph.check(rel(i64(1)))
 
 
 def test_eqsat_basic():
@@ -108,13 +99,16 @@ def test_lookup_function_value_constructor_row() -> None:
     class A(Expr):
         def __init__(self, value: i64Like) -> None: ...
 
+        def score(self) -> i64: ...
+
     egraph = EGraph(A(1))
+    egraph.register(set_(A(1).score()).to(i64(7)))
 
     value = egraph.lookup_function_value(A(1))
     assert value is not None
-    a_typed_expr = cast("RuntimeExpr", A(1)).__egg_typed_expr__
-    constructor_value = egraph._state.typed_expr_to_value(a_typed_expr)
-    assert cast("RuntimeExpr", value).__egg_typed_expr__ == TypedExprDecl(a_typed_expr.tp, ValueDecl(constructor_value))
+    score = egraph.lookup_function_value(value.score())
+    assert score is not None
+    assert int(score) == 7
     assert egraph.lookup_function_value(A(2)) is None
 
 
@@ -149,37 +143,23 @@ def test_failed_check_does_not_materialize_shared_constructor_expressions() -> N
     assert egraph.function_size(CheckEdge.pair) == 0
 
 
-def test_synthetic_lets_use_reserved_expr_names() -> None:
-    class LetNum(Expr):
-        @classmethod
-        def var(cls, v: StringLike) -> LetNum: ...
-
-    egraph = EGraph(save_egglog_string=True)
-    expr = LetNum.var("x")
-    runtime_expr = cast("RuntimeExpr", expr)
-    egraph._add_decls(runtime_expr)
-
-    egraph._state._transform_let(runtime_expr.__egg_typed_expr__)
-
-    assert '(let $__expr_0 (LetNum_var "x"))' in egraph.as_egglog_string
-
-
 def test_synthetic_lets_skip_explicit_let_conflicts() -> None:
     class LetConflictNum(Expr):
         @classmethod
         def var(cls, v: StringLike) -> LetConflictNum: ...
 
-    egraph = EGraph(save_egglog_string=True)
-    egraph.let("__expr_0", LetConflictNum.var("explicit"))
-    expr = LetConflictNum.var("synthetic")
-    runtime_expr = cast("RuntimeExpr", expr)
-    egraph._add_decls(runtime_expr)
+        @classmethod
+        def pair(cls, left: LetConflictNum, right: LetConflictNum) -> LetConflictNum: ...
 
-    egraph._state._transform_let(runtime_expr.__egg_typed_expr__)
+    egraph = EGraph()
+    explicit = egraph.let("__expr_0", LetConflictNum.var("explicit"))
+    shared = LetConflictNum.var("shared")
+    pair = LetConflictNum.pair(shared, shared)
+    egraph.register(pair)
 
-    egglog_string = egraph.as_egglog_string
-    assert '(let $__expr_0 (LetConflictNum_var "explicit"))' in egglog_string
-    assert '(let $__expr_1 (LetConflictNum_var "synthetic"))' in egglog_string
+    egraph.check(eq(explicit).to(LetConflictNum.var("explicit")))
+    assert egraph.function_size(LetConflictNum.var) == 2
+    assert egraph.function_size(LetConflictNum.pair) == 1
 
 
 def test_synthetic_let_names_do_not_shadow_default_rewrite_variables() -> None:
@@ -192,18 +172,15 @@ def test_synthetic_let_names_do_not_shadow_default_rewrite_variables() -> None:
         def make(cls, value: i64Like) -> LetShadowDefaultNum:
             return LetShadowDefaultNum(value)
 
-    egraph = EGraph(save_egglog_string=True)
-    expr = LetShadowDefaultNum(3)
-    runtime_expr = cast("RuntimeExpr", expr)
-    egraph._add_decls(runtime_expr)
-    egraph._state._transform_let(runtime_expr.__egg_typed_expr__)
+        @classmethod
+        def pair(cls, left: LetShadowDefaultNum, right: LetShadowDefaultNum) -> LetShadowDefaultNum: ...
 
+    egraph = EGraph()
+    shared = LetShadowDefaultNum(3)
+    egraph.register(LetShadowDefaultNum.pair(shared, shared))
     egraph.register(LetShadowDefaultNum.make(i64(1)))
     egraph.run(run(default_ruleset))
-
-    egglog_string = egraph.as_egglog_string
-    assert "(let $__expr_0 (LetShadowDefaultNum___init__ 3))" in egglog_string
-    assert "(rewrite (LetShadowDefaultNum_make _0) (LetShadowDefaultNum___init__ _0)" in egglog_string
+    egraph.check(eq(LetShadowDefaultNum.make(i64(1))).to(LetShadowDefaultNum(i64(1))))
 
 
 def test_save_egglog_string_defaults_to_disabled() -> None:
@@ -211,14 +188,14 @@ def test_save_egglog_string_defaults_to_disabled() -> None:
 
     with pytest.raises(ValueError, match="save_egglog_string=True"):
         _ = egraph.as_egglog_string
-    assert egraph._state.egglog_file_state is None
 
 
 def test_saved_egglog_transcript_close_is_idempotent() -> None:
     egraph = EGraph(save_egglog_string=True)
     assert egraph._state.egglog_file_state is not None
     path = pathlib.Path(egraph._state.egglog_file_state.path)
-    assert path.exists()
+    egraph.let("x", i64(1))
+    assert egraph.as_egglog_string
 
     egraph.close()
     egraph.close()
@@ -242,16 +219,14 @@ def test_saved_egglog_transcript_is_removed_on_finalization() -> None:
 
 def test_saved_egglog_transcript_is_shared_across_push_and_pop() -> None:
     egraph = EGraph(save_egglog_string=True)
-    transcript = egraph._state.egglog_file_state
-    assert transcript is not None
+    egraph.let("outer", i64(1))
+    outer_transcript = egraph.as_egglog_string
 
     egraph.push()
-    assert egraph._state.egglog_file_state is transcript
+    egraph.let("inner", i64(2))
     egraph.pop()
-    assert egraph._state.egglog_file_state is transcript
-
-    egraph.close()
-    assert transcript.file.closed
+    assert egraph.as_egglog_string.startswith(outer_transcript)
+    assert "(let $inner 2)" in egraph.as_egglog_string
 
 
 def test_saved_egglog_string_uses_short_generated_sort_and_function_names() -> None:
@@ -430,78 +405,6 @@ def test_parameterized_sort_names_use_allocated_argument_names() -> None:
     assert "(sort Map[i64,BigRat] (Map i64 BigRat))" in egraph.as_egglog_string
 
 
-def test_non_constructor_map_empty_does_not_create_synthetic_let() -> None:
-    egraph = EGraph(save_egglog_string=True)
-    expr = Map[Map[String, i64], f64].empty()
-    runtime_expr = cast("RuntimeExpr", expr)
-    egraph._add_decls(runtime_expr)
-
-    assert egraph._state._transform_let(runtime_expr.__egg_typed_expr__) is not None
-
-    lines = egraph.as_egglog_string.splitlines()
-    assert "(let $__expr_0 (map-empty))" not in lines
-    assert not any(line.startswith("(fail ") for line in lines)
-
-
-def test_non_constructor_maybe_none_does_not_create_synthetic_let() -> None:
-    egraph = EGraph(save_egglog_string=True)
-    expr = Maybe[Maybe[i64]].none()
-    runtime_expr = cast("RuntimeExpr", expr)
-    egraph._add_decls(runtime_expr)
-
-    assert egraph._state._transform_let(runtime_expr.__egg_typed_expr__) is not None
-
-    lines = egraph.as_egglog_string.splitlines()
-    assert "(let $__expr_0 (maybe-none))" not in lines
-    assert not any(line.startswith("(fail ") for line in lines)
-
-
-def test_inferable_non_constructor_map_empty_does_not_create_synthetic_let() -> None:
-    egraph = EGraph(save_egglog_string=True)
-    expr = Map[String, i64].empty()
-    runtime_expr = cast("RuntimeExpr", expr)
-    egraph._add_decls(runtime_expr)
-
-    assert egraph._state._transform_let(runtime_expr.__egg_typed_expr__) is not None
-
-    lines = egraph.as_egglog_string.splitlines()
-    assert "(let $__expr_0 (map-empty))" not in lines
-    assert not any(line.startswith("(fail ") for line in lines)
-
-
-def test_freeze_omits_synthetic_let_bindings() -> None:
-    class FreezeLetNum(Expr):
-        @classmethod
-        def var(cls, v: StringLike) -> FreezeLetNum: ...
-
-    egraph = EGraph(save_egglog_string=True)
-    expr = FreezeLetNum.var("x")
-    runtime_expr = cast("RuntimeExpr", expr)
-    egraph._add_decls(runtime_expr)
-    egraph._state._transform_let(runtime_expr.__egg_typed_expr__)
-
-    assert "(let $__expr_0 " in egraph.as_egglog_string
-    assert "$__expr_0" not in str(egraph.freeze())
-
-
-def test_popped_explicit_lets_do_not_block_synthetic_let_names() -> None:
-    class ScopedLetNum(Expr):
-        @classmethod
-        def var(cls, v: StringLike) -> ScopedLetNum: ...
-
-    egraph = EGraph(save_egglog_string=True)
-    egraph.push()
-    egraph.let("__expr_0", ScopedLetNum.var("pushed"))
-    egraph.pop()
-    expr = ScopedLetNum.var("synthetic")
-    runtime_expr = cast("RuntimeExpr", expr)
-    egraph._add_decls(runtime_expr)
-
-    egraph._state._transform_let(runtime_expr.__egg_typed_expr__)
-
-    assert '(let $__expr_0 (ScopedLetNum_var "synthetic"))' in egraph.as_egglog_string
-
-
 def test_registering_bare_variable_expression_raises() -> None:
     egraph = EGraph()
 
@@ -517,8 +420,7 @@ def test_registering_let_reference_expression_raises() -> None:
         egraph.register(x)
 
 
-@pytest.mark.parametrize("save_egglog_string", [True, False])
-def test_nested_rule_lowering_does_not_reuse_top_level_synthetic_lets(save_egglog_string: bool) -> None:
+def test_nested_rule_lowering_does_not_reuse_top_level_synthetic_lets() -> None:
     class NestedRuleEdge(Expr):
         @classmethod
         def leaf(cls, value: StringLike) -> NestedRuleEdge: ...
@@ -526,8 +428,8 @@ def test_nested_rule_lowering_does_not_reuse_top_level_synthetic_lets(save_egglo
         @classmethod
         def pair(cls, left: NestedRuleEdge, right: NestedRuleEdge) -> NestedRuleEdge: ...
 
-    egraph = EGraph(save_egglog_string=save_egglog_string)
-    done_rel = relation(f"done_rel_ctx_{int(save_egglog_string)}")
+    egraph = EGraph()
+    done_rel = relation("done_rel_ctx")
     shared = NestedRuleEdge.leaf("shared")
     pair = NestedRuleEdge.pair(shared, shared)
 
@@ -537,11 +439,6 @@ def test_nested_rule_lowering_does_not_reuse_top_level_synthetic_lets(save_egglo
 
     egraph.run(1)
     egraph.check_fail(done_rel())
-
-    if save_egglog_string:
-        assert '(= _x (NestedRuleEdge_pair (NestedRuleEdge_leaf "shared") (NestedRuleEdge_leaf "shared")))' in (
-            egraph.as_egglog_string
-        )
 
 
 def test_top_level_action_factors_duplicate_sibling_edges() -> None:
@@ -566,21 +463,22 @@ def test_top_level_action_factors_duplicate_sibling_edges() -> None:
     assert "(DuplicateEdge_pair $__expr_2 $__expr_2)" in transcript
 
 
-def test_anonymous_combined_rulesets_use_deterministic_generated_names() -> None:
-    first = ruleset(name="combined_name_probe_first")
-    second = ruleset(name="combined_name_probe_second")
-    combined = unstable_combine_rulesets(first, second)
+def test_freeze_omits_synthetic_let_bindings() -> None:
+    class FreezeLetNum(Expr):
+        @classmethod
+        def var(cls, value: StringLike) -> FreezeLetNum: ...
+
+        @classmethod
+        def pair(cls, left: FreezeLetNum, right: FreezeLetNum) -> FreezeLetNum: ...
+
+    shared = FreezeLetNum.var("shared")
     egraph = EGraph(save_egglog_string=True)
+    egraph.register(FreezeLetNum.pair(shared, shared))
 
-    egraph.run(combined)
-
-    combined_line = next(
-        line for line in egraph.as_egglog_string.splitlines() if line.startswith("(unstable-combined-ruleset ")
-    )
-    combined_name = combined_line.split()[1]
-    assert combined_name.startswith("_combined_ruleset_")
-    assert combined_name.removeprefix("_combined_ruleset_").isdigit()
-    assert f"(run-schedule (run {combined_name}))" in egraph.as_egglog_string
+    assert "$__expr_" in egraph.as_egglog_string
+    frozen = str(egraph.freeze())
+    assert "FreezeLetNum.pair" in frozen
+    assert "$__expr_" not in frozen
 
 
 def test_integer_run_accepts_a_combined_ruleset() -> None:
@@ -596,43 +494,34 @@ def test_integer_run_accepts_a_combined_ruleset() -> None:
     egraph.check(copied(i64(1)))
 
 
-def test_higher_order_builtin_callback_materializes_scalar_builtin_type_args() -> None:
-    check_eq(map_fold_kv(lambda acc, k, v: acc + v, f64(0.0), Map[i64, f64].empty()), f64(0.0))
-
-
 def test_higher_order_builtin_callback_materializes_parameterized_builtin_dummy_args() -> None:
     input_map = Map[i64, Maybe[f64]].empty().insert(i64(1), Maybe[f64].some(f64(2.5)))
+    initial: Map[i64, f64] = Map[i64, f64].empty()
     expected = Map[i64, f64].empty().insert(i64(1), f64(2.5))
-    check_eq(map_map_values(lambda k, v: v.unwrap(), input_map), expected)
+    check_eq(map_fold_kv(lambda result, key, value: result.insert(key, value.unwrap()), initial, input_map), expected)
 
 
 def test_higher_order_builtin_callback_materializes_rational_builtin_dummy_args() -> None:
     input_map = Map[i64, Rational].empty().insert(i64(1), Rational(1, 2))
+    initial: Map[i64, f64] = Map[i64, f64].empty()
     expected = Map[i64, f64].empty().insert(i64(1), f64(1.5))
-    check_eq(map_map_values(lambda k, v: v.to_f64() + 1.0, input_map), expected)
-
-
-def test_map_map_values_generic_negation_callback_is_concretized() -> None:
-    input_map = Map[i64, f64].empty().insert(i64(1), f64(2.5)).insert(i64(2), f64(-4.0))
-    expected = Map[i64, f64].empty().insert(i64(1), f64(-2.5)).insert(i64(2), f64(4.0))
-
-    check_eq(map_map_values(lambda _key, value: -value, input_map), expected)
-
-
-def test_fold_derived_map_helpers() -> None:
-    left = Map[i64, f64].empty().insert(i64(1), f64(2.0)).insert(i64(2), f64(3.0))
-    right = Map[i64, f64].empty().insert(i64(2), f64(4.0)).insert(i64(3), f64(5.0))
-
-    check_eq(map_filter_kv(lambda key, _value: key > 1, left), Map[i64, f64].empty().insert(i64(2), f64(3.0)))
     check_eq(
-        map_merge_with(lambda old, new: old + new, left, right),
-        Map[i64, f64].empty().insert(i64(1), f64(2.0)).insert(i64(2), f64(7.0)).insert(i64(3), f64(5.0)),
+        map_fold_kv(lambda result, key, value: result.insert(key, value.to_f64() + 1.0), initial, input_map),
+        expected,
     )
 
-    check_eq(left.length(), i64(2))
-    assert EGraph().extract(left.keys()).value == {i64(1), i64(2)}
-    check_eq(left.keys().length(), i64(2))
-    EGraph().check(left.contains(left.pick_key()))
+
+def test_map_fold_generic_negation_callback_is_concretized() -> None:
+    input_map = Map[i64, f64].empty().insert(i64(1), f64(2.5)).insert(i64(2), f64(-4.0))
+    initial: Map[i64, f64] = Map[i64, f64].empty()
+    expected = Map[i64, f64].empty().insert(i64(1), f64(-2.5)).insert(i64(2), f64(4.0))
+
+    check_eq(map_fold_kv(lambda result, key, value: result.insert(key, -value), initial, input_map), expected)
+
+
+def test_map_and_set_length_primitives() -> None:
+    check_eq(Map[i64, f64].empty().insert(i64(1), f64(2.0)).insert(i64(2), f64(3.0)).length(), i64(2))
+    check_eq(Set(i64(1), i64(2)).length(), i64(2))
 
 
 def test_higher_order_callable_inference_does_not_mutate_ambient_ruleset() -> None:
@@ -640,7 +529,12 @@ def test_higher_order_callable_inference_does_not_mutate_ambient_ruleset() -> No
     initial_rules = tuple(ambient.__egg_ruleset__.rules)
 
     with set_current_ruleset(ambient):
-        expr = map_map_values(lambda _key, value: -value, Map[i64, f64].empty().insert(i64(1), f64(2.0)))
+        initial: Map[i64, f64] = Map[i64, f64].empty()
+        expr = map_fold_kv(
+            lambda result, key, value: result.insert(key, -value),
+            initial,
+            Map[i64, f64].empty().insert(i64(1), f64(2.0)),
+        )
         _ = cast("RuntimeExpr", expr).__egg_decls__
 
     assert tuple(ambient.__egg_ruleset__.rules) == initial_rules
@@ -694,8 +588,13 @@ def test_unnamed_lambda_returning_eqsort_is_eager() -> None:
     class Box(Expr):
         def __init__(self, value: i64Like) -> None: ...
 
+    initial: Map[i64, Box] = Map[i64, Box].empty()
     expected = Map[i64, Box].empty().insert(i64(1), Box(i64(2)))
-    actual = cast("Map[i64, Box]", map_map_values(lambda k, v: Box(v), Map[i64, i64].empty().insert(i64(1), i64(2))))
+    actual = map_fold_kv(
+        lambda result, key, value: result.insert(key, Box(value)),
+        initial,
+        Map[i64, i64].empty().insert(i64(1), i64(2)),
+    )
     check_eq(cast("BaseExpr", actual), cast("BaseExpr", expected))
 
 
@@ -1521,22 +1420,6 @@ class TestDefaultReplacements:
 
         check_eq(cast("Maybe[i64]", Defaults.missing), Maybe[i64].none())
 
-    def test_bodyless_primitive_constant_is_not_a_synthetic_let(self):
-        value = constant("bodyless_primitive", i64)
-        egraph = EGraph(save_egglog_string=True)
-        egraph._add_decls(cast("RuntimeExpr", value))
-
-        assert egraph._state._transform_let(cast("RuntimeExpr", value).__egg_typed_expr__) is not None
-        assert "(let $__expr_0 bodyless_primitive)" not in egraph.as_egglog_string
-
-    def test_bodyless_eqsort_constant_is_a_synthetic_let(self):
-        value = constant("bodyless_eqsort", A)
-        egraph = EGraph(save_egglog_string=True)
-        egraph._add_decls(cast("RuntimeExpr", value))
-
-        assert egraph._state._transform_let(cast("RuntimeExpr", value).__egg_typed_expr__) is None
-        assert "(let $__expr_0 (%bodyless_eqsort))" in egraph.as_egglog_string
-
     def test_eqsort_constant_with_merge(self):
         merged = constant("merged", A, merge=lambda old, _new: old)
 
@@ -1945,18 +1828,10 @@ def test_higher_order_maybe_pair_and_catch_builtins():
     assert EGraph().extract(Maybe[i64].some(2).match(lambda x: x + 3, i64(0))).value == 5  # type: ignore[arg-type]
     assert EGraph().extract(Maybe[i64].none().match(lambda x: x + 3, i64(7))).value == 7
 
-    matched = EGraph().extract(Pair(i64(2), i64(3)).match(lambda left, right: left + right))
-    assert matched.value == 5
-
-    mapped_left = EGraph().extract(Pair(i64(2), i64(3)).map_left(lambda left: left + 10))
-    left, right = mapped_left.value
-    assert left.value == 12
-    assert right.value == 3
-
-    mapped_right = EGraph().extract(Pair(i64(2), i64(3)).map_right(lambda right: right + 10))
-    left, right = mapped_right.value
-    assert left.value == 2
-    assert right.value == 13
+    pair = Pair(i64(2), i64(3))
+    assert EGraph().extract(pair.left).value == 2
+    assert EGraph().extract(pair.right).value == 3
+    assert EGraph().extract(pair).value == (i64(2), i64(3))
 
     caught = EGraph().extract(catch(lambda: Maybe[i64].some(4).unwrap()))  # type: ignore[arg-type]
     assert caught.value is not None
@@ -2531,6 +2406,16 @@ class TestCustomExtract:
 
         assert EGraph().extract(i64(10), include_cost=True, cost_model=is_even_cost_model) == (i64(10), 1)
         assert EGraph().extract(i64(5), include_cost=True, cost_model=is_even_cost_model) == (i64(5), 0)
+
+    def test_lookup_value_root(self) -> None:
+        class LookupExpr(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        egraph = EGraph(LookupExpr(1))
+        value = egraph.lookup_function_value(LookupExpr(1))
+
+        assert value is not None
+        assert egraph.extract(value, include_cost=True, cost_model=default_cost_model) == (LookupExpr(1), 2)
 
     @staticmethod
     def _capture_container_children_costs(

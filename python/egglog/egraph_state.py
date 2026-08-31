@@ -663,8 +663,8 @@ class EGraphState:
                 if body is not None:
                     self.run_program(self._primitive_command_to_egg(egg_name, decl.signature, body))
                 else:
-                    # Use constructor declaration instead of constant b/c constants cannot be extracted
-                    # https://github.com/egraphs-good/egglog/issues/334
+                    # Egglog v3 has no constant command, so lower Python constants
+                    # and class variables as zero-argument functions or constructors.
                     is_function = self.__egg_decls__._classes[tp.ident].builtin or merge is not None
                     schema = bindings.Schema([], self.type_ref_to_egg(tp))
                     if is_function:

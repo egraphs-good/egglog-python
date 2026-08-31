@@ -26,9 +26,8 @@ from .egraph import (
     function,
     method,
     set_current_ruleset,
-    to_runtime_expr,
 )
-from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, resolve_type_annotation_mutate
+from .runtime import RuntimeExpr, RuntimeFunction, resolve_type_annotation_mutate
 from .thunk import Thunk
 
 if TYPE_CHECKING:
@@ -67,10 +66,7 @@ __all__ = [
     "i64",
     "i64Like",
     "join",
-    "map_filter_kv",
     "map_fold_kv",
-    "map_map_values",
-    "map_merge_with",
     "multiset_contains_swapped",
     "multiset_flat_map",
     "multiset_fold",
@@ -472,8 +468,6 @@ converter(type(None), Maybe, lambda _: Maybe[get_type_args()[0]].none())  # type
 
 L = TypeVar("L", bound=BaseExpr)
 R = TypeVar("R", bound=BaseExpr)
-L2 = TypeVar("L2", bound=BaseExpr)
-R2 = TypeVar("R2", bound=BaseExpr)
 
 
 class Pair(BuiltinExpr, Generic[L, R], egg_sort="Pair"):
@@ -497,18 +491,6 @@ class Pair(BuiltinExpr, Generic[L, R], egg_sort="Pair"):
     @method(egg_fn="pair-second")  # type: ignore[prop-decorator]
     @property
     def right(self) -> R: ...
-
-    @method(preserve=True)
-    def match(self, f: Callable[[L, R], V]) -> V:
-        return f(self.left, self.right)
-
-    @method(preserve=True)
-    def map_left(self, f: Callable[[L], L2]) -> Pair[L2, R]:
-        return Pair(f(self.left), self.right)
-
-    @method(preserve=True)
-    def map_right(self, f: Callable[[R], R2]) -> Pair[L, R2]:
-        return Pair(self.left, f(self.right))
 
 
 def _tuple_to_pair(value: tuple[object, ...]) -> Pair:
@@ -579,38 +561,10 @@ class Map(BuiltinExpr, Generic[T, V], egg_sort="Map"):
     @method(egg_fn="map-length")
     def length(self) -> i64: ...
 
-    @method(preserve=True)
-    def pick_key(self) -> T:
-        runtime_self = to_runtime_expr(self)
-        key_type, _value_type = runtime_self.__egg_typed_expr__.tp.args
-        maybe_type = RuntimeClass(
-            Thunk.value(Declarations.create(runtime_self, cast("HasDeclarations", Maybe))),
-            TypeRefWithVars(Ident.builtin("Maybe"), (key_type.to_var(),)),
-            _egg_has_params=True,
-        )
-        initial = cast("Maybe[T]", maybe_type.none())
-        return map_fold_kv(
-            lambda picked, key, _value: picked.match(lambda _: picked, cast("Maybe[T]", maybe_type.some(key))),
-            initial,
-            self,
-        ).unwrap()
-
-    @method(preserve=True)
-    def keys(self) -> Set[T]:
-        runtime_self = to_runtime_expr(self)
-        key_type, _value_type = runtime_self.__egg_typed_expr__.tp.args
-        set_type = RuntimeClass(
-            Thunk.value(Declarations.create(runtime_self, cast("HasDeclarations", Set))),
-            TypeRefWithVars(Ident.builtin("Set"), (key_type.to_var(),)),
-            _egg_has_params=True,
-        )
-        return map_fold_kv(lambda keys, key, _value: keys.insert(key), cast("Set[T]", set_type.empty()), self)
-
 
 TO = TypeVar("TO")
 VO = TypeVar("VO")
 A = TypeVar("A", bound=BaseExpr)
-V2 = TypeVar("V2", bound=BaseExpr)
 
 converter(
     dict,
@@ -627,53 +581,6 @@ MapLike: TypeAlias = Map[T, V] | dict[TO, VO]
 
 @function(egg_fn="map-fold-kv", builtin=True)
 def map_fold_kv(f: Callable[[A, T, V], A], initial: A, xs: Map[T, V]) -> A: ...
-
-
-def map_filter_kv(f: Callable[[T, V], Unit], xs: Map[T, V]) -> Map[T, V]:
-    runtime_xs = to_runtime_expr(xs)
-    map_type = RuntimeClass(
-        Thunk.value(Declarations.create(runtime_xs, cast("HasDeclarations", Map))),
-        runtime_xs.__egg_typed_expr__.tp.to_var(),
-        _egg_has_params=True,
-    )
-    return map_fold_kv(
-        lambda result, key, value: catch(lambda: f(key, value)).match(lambda _: result.insert(key, value), result),
-        cast("Map[T, V]", map_type.empty()),
-        xs,
-    )
-
-
-def map_map_values(f: Callable[[T, V], V2], xs: Map[T, V]) -> Map[T, V2]:
-    runtime_xs = to_runtime_expr(xs)
-    key_type, value_type = runtime_xs.__egg_typed_expr__.tp.args
-    probe_decls = runtime_xs.__egg_decls__.copy()
-    dummy_key = RuntimeExpr.__from_values__(probe_decls, TypedExprDecl(key_type, DummyDecl()))
-    dummy_value = RuntimeExpr.__from_values__(probe_decls, TypedExprDecl(value_type, DummyDecl()))
-    with set_current_ruleset(None):
-        transformed = cast("Callable[[RuntimeExpr, RuntimeExpr], object]", f)(dummy_key, dummy_value)
-    if not isinstance(transformed, RuntimeExpr):
-        raise TypeError(f"Map value transform must return an egglog expression, got {type(transformed)}")
-    output_type = transformed.__egg_typed_expr__.tp
-    map_type = RuntimeClass(
-        Thunk.value(Declarations.create(runtime_xs, transformed, cast("HasDeclarations", Map))),
-        TypeRefWithVars(Ident.builtin("Map"), (key_type.to_var(), output_type.to_var())),
-        _egg_has_params=True,
-    )
-    return map_fold_kv(
-        lambda result, key, value: result.insert(key, f(key, value)),
-        cast("Map[T, V2]", map_type.empty()),
-        xs,
-    )
-
-
-def map_merge_with(f: Callable[[V, V], V], left: Map[T, V], right: Map[T, V]) -> Map[T, V]:
-    return map_fold_kv(
-        lambda result, key, value: catch(lambda: result[key]).match(
-            lambda old: result.insert(key, f(old, value)), result.insert(key, value)
-        ),
-        left,
-        right,
-    )
 
 
 class Set(BuiltinExpr, Generic[T], egg_sort="Set"):

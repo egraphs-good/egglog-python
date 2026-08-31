@@ -108,21 +108,23 @@ missing = catch(lambda: Map[i64, String].empty()[1])
 present, missing
 ```
 
-Maps have a general `map_fold_kv` primitive. The higher-level
-`map_filter_kv`, `map_map_values`, `map_merge_with`, `Map.keys()`, and
-`Map.pick_key()` operations are composed from that fold and ordinary
-container operations, so callbacks may be regular Egglog lambdas:
+Maps have a general `map_fold_kv` primitive. Derived operations can be written
+as ordinary expressions at their use sites. Give the fold an explicitly typed
+initial value when its result is another container:
 
 ```{code-cell} python
 numbers = Map[i64, i64].empty().insert(1, 10).insert(2, 20)
-map_map_values(lambda _key, value: value + 1, numbers)
+map_fold_kv(
+    lambda result, key, value: result.insert(key, value + 1),
+    Map[i64, i64].empty(),
+    numbers,
+)
 ```
 
 Map folding uses opaque, e-graph-local `Value` order, not a semantic ordering
 promised for arbitrary e-class keys. Prefer order-independent callbacks. An
-undefined filter predicate skips that entry;
-an undefined transform, merge callback, or fold callback makes the whole
-operation undefined.
+undefined callback makes the fold undefined; use `catch` in the callback when
+undefined values should instead select a fallback expression.
 
 ## Declaring Functions
 

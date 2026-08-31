@@ -11,11 +11,12 @@ _This project uses semantic versioning_
   - Preserve the Egglog 3 sort, constructor, function, and proof metadata that
     its source syntax can round-trip in the low-level AST bindings; support
     arbitrary-size `BigInt` values, generic value extraction,
-    constructor/relation lookup, microsecond-resolution
-    run-report durations, program filenames, and all-or-nothing command
-    recording for parsed batches.
+    constructor/relation lookup, correct run-report duration units with
+    microsecond resolution, direct parse-and-run execution with source
+    filenames, and batch-level command recording that omits failed parsed
+    batches.
   - Add generic `Pair` and `Maybe` values, undefined-result `catch`, map
-    folding and fold-derived map operations, map/set lengths, `f64` math
+    folding, map/set lengths, `f64` math
     primitives and integer coercion, `i64`-to-`BigRat` coercion, and exact
     `BigRat.to_i64()` conversion.
   - Let Python function, method, and constant bodies lower as eager

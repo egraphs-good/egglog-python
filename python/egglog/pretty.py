@@ -7,7 +7,7 @@ from __future__ import annotations
 import ast
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeAlias, assert_never, cast
+from typing import TYPE_CHECKING, TypeAlias, assert_never
 
 import black
 import cloudpickle
@@ -16,9 +16,6 @@ from .declarations import *
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-
-    from .builtins import BigRat, Map, Maybe, Pair
-    from .egraph import BaseExpr
 
 
 __all__ = [
@@ -427,52 +424,6 @@ class PrettyContext:
             case EGraphDecl() as eg:
                 return f"EGraph({', '.join(map(self, eg.to_actions))}).freeze()", "egraph"
             case TypedExprDecl(tp, expr):
-                from .builtins import ExprValueError  # noqa: PLC0415 - avoid a module import cycle
-                from .runtime import RuntimeExpr  # noqa: PLC0415 - avoid a module import cycle
-
-                if tp.ident == Ident.builtin("Map"):
-                    runtime_expr = RuntimeExpr.__from_values__(self.decls, decl)
-                    try:
-                        as_dict = cast("Map[BaseExpr, BaseExpr]", runtime_expr).value
-                    except ExprValueError:
-                        return self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens), "expr"
-                    if unwrap_lit:
-                        items = ", ".join(
-                            f"{self(cast('RuntimeExpr', k).__egg_typed_expr__, unwrap_lit=True)}: {self(cast('RuntimeExpr', v).__egg_typed_expr__, unwrap_lit=True)}"
-                            for k, v in as_dict.items()
-                        )
-                        return f"{{{items}}}", "Map"
-                    map_str = f"{tp}.empty()"
-                    for key, value in as_dict.items():
-                        key_str = self(cast("RuntimeExpr", key).__egg_typed_expr__)
-                        value_str = self(cast("RuntimeExpr", value).__egg_typed_expr__)
-                        map_str += f".insert({key_str}, {value_str})"
-                    return map_str, "Map"
-                if tp.ident == Ident.builtin("BigRat"):
-                    runtime_expr = RuntimeExpr.__from_values__(self.decls, decl)
-                    try:
-                        as_fraction = cast("BigRat", runtime_expr).value
-                    except ExprValueError:
-                        return self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens), "expr"
-                    return f"BigRat({as_fraction.numerator}, {as_fraction.denominator})", "BigRat"
-                if tp.ident == Ident.builtin("Pair"):
-                    runtime_expr = RuntimeExpr.__from_values__(self.decls, decl)
-                    try:
-                        left, right = cast("Pair[BaseExpr, BaseExpr]", runtime_expr).value
-                    except ExprValueError:
-                        return self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens), "expr"
-                    left_str = self(cast("RuntimeExpr", left).__egg_typed_expr__)
-                    right_str = self(cast("RuntimeExpr", right).__egg_typed_expr__)
-                    return f"{tp}({left_str}, {right_str})", "Pair"
-                if tp.ident == Ident.builtin("Maybe"):
-                    runtime_expr = RuntimeExpr.__from_values__(self.decls, decl)
-                    try:
-                        value = cast("Maybe[BaseExpr]", runtime_expr).value
-                    except ExprValueError:
-                        return self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens), "expr"
-                    if value is None:
-                        return f"{tp}.none()", "Maybe"
-                    return f"{tp}.some({self(cast('RuntimeExpr', value).__egg_typed_expr__)})", "Maybe"
                 return (
                     self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens),
                     tp.ident.name,
@@ -553,7 +504,9 @@ class PrettyContext:
                 return name, args, True
             case ClassMethodRef(class_name, method_name):
                 tp_ref = JustTypeRef(class_name, bound_tp_params or ())
-                return f"{tp_ref}.{method_name}", args, True
+                # Generic calls retain wrappers so their class parameters remain inferable from the arguments.
+                unwrap_lit = not self.decls.get_class_decl(class_name).type_vars
+                return f"{tp_ref}.{method_name}", args, unwrap_lit
             case MethodRef(class_name, method_name):
                 slf, *args = args
                 non_str_slf = slf
@@ -592,7 +545,8 @@ class PrettyContext:
                 return f"{self(args[0], parens=True)}.{property_name}"
             case InitRef(class_name):
                 tp_ref = JustTypeRef(class_name, bound_tp_params or ())
-                return str(tp_ref), args, True
+                unwrap_lit = not self.decls.get_class_decl(class_name).type_vars
+                return str(tp_ref), args, unwrap_lit
             case UnnamedFunctionRef():
                 expr = self._pretty_function_body(ref, [])
                 return f"({expr})", args, True

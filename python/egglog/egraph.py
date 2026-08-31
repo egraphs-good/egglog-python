@@ -1338,12 +1338,23 @@ class EGraph:
             cost = cast("COST", extract_report.cost)
         else:
             if isinstance(runtime_expr.__egg_typed_expr__.expr, CallDecl):
-                self._register_extract_root(runtime_expr)
+                # Register the root through the normal command path before computing costs, so shared subexpressions
+                # use synthetic lets and the extractor sees the already-materialized root value.
+                self.register(expr)
             egg_cost_model = _CostModel(cost_model, self).to_bindings_cost_model()
             egg_sort = self._state.type_ref_to_egg(tp)
             extractor = call_with_current_trace(bindings.Extractor, [egg_sort], self._state.egraph, egg_cost_model)
             termdag = bindings.TermDag()
-            value = self._state.typed_expr_to_value(runtime_expr.__egg_typed_expr__)
+            typed_expr = runtime_expr.__egg_typed_expr__
+            if isinstance(typed_expr.expr, ValueDecl):
+                # Values returned by lookup_function_value already identify an e-graph value and cannot be lowered
+                # back into Egglog syntax.
+                value = self._state.typed_expr_to_value(typed_expr)
+            else:
+                # For call roots, evaluate the same let-factored presentation registered above. Keep
+                # typed_expr_to_value's direct lowering for non-registering callers such as lookup_function_value.
+                egg_expr = self._state.typed_expr_to_egg(typed_expr, expr_to_let=True)
+                value = call_with_current_trace(self._state.egraph.eval_expr, egg_expr)[1]
             cost, term = call_with_current_trace(extractor.extract_best, self._state.egraph, termdag, value, egg_sort)
             res = self._from_termdag(termdag, term, tp)
         return (res, cost) if include_cost else res
@@ -1576,20 +1587,6 @@ class EGraph:
         self._add_decls(*cmds)
         egg_cmds = [egg_cmd for cmd in cmds if (egg_cmd := self._command_to_egg(cmd)) is not None]
         self._state.run_program(*egg_cmds)
-
-    def _register_extract_root(self, runtime_expr: RuntimeExpr) -> None:
-        """
-        Register the exact extraction root without synthetic let factoring.
-
-        Synthetic lets are a command-size optimization for public registration,
-        but custom-cost extraction immediately evaluates the original root value.
-        Registering a let-factored presentation can leave the custom extractor
-        without a costed parent for that exact value in the direct command API.
-        """
-        self._add_decls(runtime_expr)
-        action_egg = self._state.action_to_egg(ExprActionDecl(runtime_expr.__egg_typed_expr__), expr_to_let=False)
-        if action_egg is not None:
-            self._state.run_program(bindings.ActionCommand(action_egg))
 
     def _command_to_egg(self, cmd: Command) -> bindings._Command | None:
         ruleset_ident = Ident("")

@@ -358,12 +358,12 @@ class TestEGraph:
         run_report = RunReport(
             [iteration_report],
             True,
-            True,
             {"rule": duration},
             {"rule": 7},
             {"ruleset": duration},
             {"ruleset": duration},
             {"ruleset": duration},
+            can_stop=True,
         )
 
         assert rule_report.search_and_apply_time == duration
@@ -374,6 +374,11 @@ class TestEGraph:
         assert run_report.search_and_apply_time_per_ruleset["ruleset"] == duration
         assert run_report.merge_time_per_ruleset["ruleset"] == duration
         assert run_report.rebuild_time_per_ruleset["ruleset"] == duration
+
+    def test_run_report_can_stop_preserves_positional_constructor(self):
+        report = RunReport([], False, {}, {}, {}, {}, {})
+
+        assert report.can_stop is False
 
     @pytest.mark.parametrize("duration", [timedelta(microseconds=-1), timedelta.min])
     def test_report_rejects_negative_duration(self, duration: timedelta):

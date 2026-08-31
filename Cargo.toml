@@ -18,6 +18,8 @@ opentelemetry = "0.28"
 opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "trace"] }
 opentelemetry-stdout = { version = "0.28", features = ["trace"] }
 opentelemetry_sdk = "0.28"
+# egglog-experimental 78cdfa5 targets Egglog 8879605. This pin is PR #1008's rule-name fix
+# backported onto that compatible base, rather than the same patch on current Egglog main.
 egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318", default-features = false }
 egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
 egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
