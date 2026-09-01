@@ -19,10 +19,6 @@ BACKOFF_MATCH_LIMIT = 1000
 BACKOFF_BAN_LENGTH = 30
 
 
-@function(builtin=True, egg_fn="f64-is-finite")
-def _f64_is_finite(value: f64) -> Unit: ...
-
-
 # Keep derived map operations as explicitly typed folds in this research
 # module; only map_fold_kv is a backend primitive and public builtin.
 # Store discovered constants in a global map so semi-naive analysis can join
@@ -66,22 +62,22 @@ POLYNOMIAL_MONOMIALS = constant(
 
 @ruleset
 def shared_analysis_rules(a: f64) -> Iterable[RewriteOrRule]:
-    yield rewrite(exp(Num(a)), subsume=True).to(Num(a.exp()), _f64_is_finite(a.exp()))
-    yield rewrite(log(Num(a)), subsume=True).to(Num(a.log()), a > 0.0, _f64_is_finite(a.log()))
+    yield rewrite(exp(Num(a)), subsume=True).to(Num(a.exp()), a.exp().is_finite())
+    yield rewrite(log(Num(a)), subsume=True).to(Num(a.log()), a > 0.0, a.log().is_finite())
     yield rule(log(Num(a)), a <= 0.0).then(panic("Log of non-positive number"))
-    yield rewrite(abs(Num(a)), subsume=True).to(Num(abs(a)), _f64_is_finite(abs(a)))
+    yield rewrite(abs(Num(a)), subsume=True).to(Num(abs(a)), abs(a).is_finite())
 
 
 @ruleset
 def binary_analysis_rules(x: Num, a: f64, b: f64) -> Iterable[RewriteOrRule]:
-    yield rewrite(Num(a) / Num(b), subsume=True).to(Num(a / b), b != f64(0.0), _f64_is_finite(a / b))
+    yield rewrite(Num(a) / Num(b), subsume=True).to(Num(a / b), b != f64(0.0), (a / b).is_finite())
     yield rule(x / Num(0.0)).then(panic("Division by zero"))
-    yield rewrite(Num(a) - Num(b), subsume=True).to(Num(a - b), _f64_is_finite(a - b))
-    yield rewrite(Num(a) * Num(b), subsume=True).to(Num(a * b), _f64_is_finite(a * b))
-    yield rewrite(Num(a) + Num(b), subsume=True).to(Num(a + b), _f64_is_finite(a + b))
+    yield rewrite(Num(a) - Num(b), subsume=True).to(Num(a - b), (a - b).is_finite())
+    yield rewrite(Num(a) * Num(b), subsume=True).to(Num(a * b), (a * b).is_finite())
+    yield rewrite(Num(a) + Num(b), subsume=True).to(Num(a + b), (a + b).is_finite())
 
-    yield rewrite(Num(a) ** Num(b), subsume=True).to(Num(a**b), _f64_is_finite(a**b))
-    yield rewrite(sqrt(Num(a)), subsume=True).to(Num(a.sqrt()), a >= 0.0, _f64_is_finite(a.sqrt()))
+    yield rewrite(Num(a) ** Num(b), subsume=True).to(Num(a**b), (a**b).is_finite())
+    yield rewrite(sqrt(Num(a)), subsume=True).to(Num(a.sqrt()), a >= 0.0, a.sqrt().is_finite())
     yield rule(sqrt(Num(a)), a < 0.0).then(panic("Sqrt of negative number"))
 
     # cancellations

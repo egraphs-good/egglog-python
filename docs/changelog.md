@@ -16,9 +16,11 @@ _This project uses semantic versioning_
     filenames, and batch-level command recording that omits failed parsed
     batches.
   - Add generic `Pair` and `Maybe` values, undefined-result `catch`, map
-    folding, map/set lengths, `f64` math
-    primitives and integer coercion, `i64`-to-`BigRat` coercion, and exact
-    `BigRat.to_i64()` conversion.
+    folding, map/set lengths, `f64` math primitives, `f64.is_finite()`, and
+    integer coercion; expand the experimental `Rational` Python API with
+    public `RationalLike` conversions, reflected arithmetic, powers,
+    `min`/`max`, and `Unit` comparisons; add `i64`-to-`BigRat` coercion and
+    exact `BigRat.to_i64()` conversion.
   - Let Python function, method, and constant bodies lower as eager
     primitives, preserving Python argument order for `reverse_args` callables,
     while bodies attached to an explicit ruleset remain rewrite-backed; allow
@@ -28,6 +30,29 @@ _This project uses semantic versioning_
     `unsafe-seminaive` rule evaluation when callbacks read mutable tables.
   - Add persistent ordinary backoff schedules, expose `RunReport.can_stop`,
     and keep high-level saturation running while a scheduler has deferred work.
+  - Configure worker threads and rule decomposition per `EGraph`, allow
+    `rule(..., no_decomp=True)` for individual rules, and expose getters and
+    setters for both settings.
+    - BREAKING: stop reading `RAYON_NUM_THREADS`; pass `num_threads` to
+      `EGraph` or call `set_num_threads(...)` instead.
+  - Add `tree` and true `greedy-dag` extraction modes to `extract` and
+    `extract_multiple`; add destructive `keep_best`; allow multi-root variant
+    extraction while preserving input order.
+    - Use the experimental dynamic cost model consistently across the default
+      extraction paths, including canonical `set_cost` tables. A compatible raw
+      cost table already occupying the canonical name is reused, while an
+      incompatible callable or overload occupying that name when the cost table
+      is created now raises instead of allocating an ignored suffix. Frozen
+      snapshots preserve both views of a reused raw cost table.
+    - Name the existing custom callback protocol `TreeCostModel`, retaining
+      `CostModel` as a compatibility alias, and add frozen additive
+      `DagCostModel` values that work with tree or greedy-DAG extraction.
+      The low-level `bindings.Extractor` compatibility facade now prepares
+      costs on each extraction call, so construction no longer invokes cost
+      callbacks and later e-graph mutations are observed safely.
+    - BREAKING: remove `GreedyDagCost`, `GreedyDagCostModel`, and
+      `greedy_dag_cost_model`; use `DagCostModel` with
+      `extractor="greedy-dag"` instead.
   - Improve source transcripts, diagnostics, generated-name collision
     handling, shared-expression factoring without leaking synthetic bindings
     into rules or checks, large-program AST parsing, custom-cost extraction of

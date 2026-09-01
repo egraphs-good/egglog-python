@@ -370,13 +370,17 @@ You can also set the cost of individual values, like the egglog experimental fea
 egraph.register(set_cost(fib(0), 1))
 ```
 
-This will be taken into account when extracting. Any value that can be converted to an `i64` is supported as a cost,
-so dynamic costs can be created in rules.
+This will be taken into account when extracting. Any value that can be
+converted to an `i64` is supported, so dynamic costs can be created in rules;
+the resulting cost must be nonnegative.
 
-It does this by creating a new table for each function you set the cost for that maps the arguments to an i64.
+Python creates a canonical table on demand for each backend function symbol
+whose cost is set. The table maps the function's arguments to an `i64`.
+Compatible aliases of that symbol share the table. Incompatible overloads are
+rejected because one backend symbol cannot have multiple cost-table schemas.
 
-_Note: Unlike in egglog, where you have to declare which functions support custom costs, in Python all functions
-are automatically registered to create a custom cost table when they are constructed_
+_Note: Unlike in Egglog source, Python does not require a separate declaration
+that a callable supports custom costs; calling `set_cost` creates its table._
 
 You can also get the cost of a function with `get_cost`, which will return an `i64` if one has already been set.
 

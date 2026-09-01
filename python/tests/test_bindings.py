@@ -79,6 +79,23 @@ def extract_best_term(program: str) -> str:
 
 
 class TestEGraph:
+    def test_per_egraph_configuration(self):
+        configured = EGraph(num_threads=2, no_decomp=True)
+        default = EGraph()
+
+        assert configured.num_threads() == 2
+        assert configured.no_decomp()
+        assert default.num_threads() == 1
+        assert not default.no_decomp()
+
+        configured.set_num_threads(1)
+        configured.set_no_decomp(False)
+
+        assert configured.num_threads() == 1
+        assert not configured.no_decomp()
+        assert default.num_threads() == 1
+        assert not default.no_decomp()
+
     def test_parse_program(self, snapshot_py):
         res = EGraph().parse_program(
             """(datatype Math
@@ -421,6 +438,77 @@ class TestEGraph:
 
         with pytest.raises(EggSmolError, match="Unable to find any valid extraction"):
             egraph.extract_value(value, sort)
+
+    @pytest.mark.parametrize("extractor", ["tree", "greedy-dag"])
+    def test_dag_cost_model_batch_extraction(self, extractor):
+        egraph = EGraph()
+        egraph.parse_and_run_program("(datatype Expr (Num i64)) (let root (Num 1)) (union root (Num 2))")
+        sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))
+        model = DagCostModel(
+            0,
+            lambda name, args: 1,
+            lambda name, value: 0,
+            lambda name, value: 1,
+        )
+
+        termdag, best = extract_best_with_dag_cost_model(egraph, [(sort, value)], model, extractor=extractor)
+        assert best[0] is not None
+        cost, term = best[0]
+        assert cost == 2
+        assert termdag.to_string(term) in {"(Num 1)", "(Num 2)"}
+
+    def test_tree_extractor_observes_post_construction_mutation(self):
+        egraph = EGraph()
+        egraph.parse_and_run_program("(datatype Expr (Num i64)) (let root (Num 1))")
+        sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))
+        callback_count = 0
+
+        def enode_cost(name, args):
+            nonlocal callback_count
+            callback_count += 1
+            return 0 if name == "Num" and egraph.value_to_i64(args[0]) == 2 else 1
+
+        model = CostModel(
+            lambda name, annotation, children: annotation + sum(children),
+            enode_cost,
+            lambda name, value, children: sum(children),
+            lambda name, value: 0,
+        )
+        extractor = Extractor([sort], egraph, model)
+
+        assert callback_count == 0
+        first_dag = TermDag()
+        _, first = extractor.extract_best(egraph, first_dag, value, sort)
+        assert first_dag.to_string(first) == "(Num 1)"
+        first_callback_count = callback_count
+
+        egraph.parse_and_run_program("(union root (Num 2))")
+        second_dag = TermDag()
+        _, second = extractor.extract_best(egraph, second_dag, value, sort)
+
+        assert second_dag.to_string(second) == "(Num 2)"
+        assert callback_count > first_callback_count
+
+    def test_tree_cost_callback_failure_does_not_mutate_termdag(self):
+        egraph = EGraph()
+        sort, value = egraph.eval_expr(Lit(DUMMY_SPAN, Int(1)))
+
+        def fail(name, value):
+            msg = "base cost failed"
+            raise LookupError(msg)
+
+        model = CostModel(
+            lambda name, annotation, children: annotation,
+            lambda name, args: 0,
+            lambda name, value, children: 0,
+            fail,
+        )
+        extractor = Extractor([sort], egraph, model)
+        termdag = TermDag()
+
+        with pytest.raises(LookupError, match="base cost failed"):
+            extractor.extract_best(egraph, termdag, value, sort)
+        assert termdag.size() == 0
 
     def test_sort_alias(self):
         # From map example

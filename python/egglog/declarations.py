@@ -1203,6 +1203,7 @@ class RuleDecl:
     body: tuple[FactDecl, ...]
     name: str | None
     eval_mode: RuleEvalMode = "seminaive"
+    no_decomp: bool = False
 
 
 @dataclass(frozen=True)

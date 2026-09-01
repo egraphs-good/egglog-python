@@ -5,7 +5,7 @@ import inspect
 import pathlib
 import sys
 import tempfile
-from collections.abc import Callable, Generator, Iterable
+from collections.abc import Callable, Generator, Iterable, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field, replace
 from functools import partial
@@ -64,18 +64,20 @@ __all__ = [
     "Command",
     "Command",
     "CostModel",
+    "DagCostModel",
     "EGraph",
     "Expr",
     "ExprCallable",
+    "ExtractionMode",
     "Fact",
     "Fact",
     "GraphvizKwargs",
-    "GreedyDagCost",
     "RewriteOrRule",
     "RuleEvalMode",
     "Ruleset",
     "RunReport",
     "Schedule",
+    "TreeCostModel",
     "_BirewriteBuilder",
     "_EqBuilder",
     "_NeBuilder",
@@ -95,7 +97,6 @@ __all__ = [
     "expr_parts",
     "function",
     "get_cost",
-    "greedy_dag_cost_model",
     "let",
     "method",
     "ne",
@@ -1159,10 +1160,15 @@ class EGraph:
         *actions: ActionLike,
         seminaive: bool = True,
         save_egglog_string: bool = False,
+        num_threads: int = 1,
+        no_decomp: bool = False,
     ) -> None:
         with _TRACER.start_as_current_span("create"):
             with _TRACER.start_as_current_span("create_bindings"):
-                self._state = EGraphState(bindings.EGraph(seminaive=seminaive), save_egglog_string=save_egglog_string)
+                self._state = EGraphState(
+                    bindings.EGraph(seminaive=seminaive, num_threads=num_threads, no_decomp=no_decomp),
+                    save_egglog_string=save_egglog_string,
+                )
             self._state_stack = []
             self._token_stack = []
             if actions:
@@ -1177,6 +1183,27 @@ class EGraph:
         Set the level of detail recorded in subsequent run reports.
         """
         self._egraph.set_report_level(level)
+
+    def num_threads(self) -> int:
+        """Return the number of worker threads configured for this e-graph."""
+        return self._egraph.num_threads()
+
+    def set_num_threads(self, num_threads: int) -> None:
+        """
+        Set the number of worker threads used by this e-graph.
+
+        Passing ``1`` keeps execution serial. Passing ``0`` uses available
+        parallelism.
+        """
+        self._egraph.set_num_threads(num_threads)
+
+    def no_decomp(self) -> bool:
+        """Return whether rule decomposition is disabled for this e-graph."""
+        return self._egraph.no_decomp()
+
+    def set_no_decomp(self, no_decomp: bool) -> None:
+        """Set whether subsequently registered rules skip decomposition."""
+        self._egraph.set_no_decomp(no_decomp)
 
     @property
     def as_egglog_string(self) -> str:
@@ -1308,43 +1335,79 @@ class EGraph:
 
     @overload
     def extract(
-        self, expr: BASE_EXPR, /, include_cost: Literal[False] = False, cost_model: CostModel | None = None
+        self,
+        expr: BASE_EXPR,
+        /,
+        include_cost: Literal[False] = False,
+        cost_model: TreeCostModel | DagCostModel | None = None,
+        *,
+        extractor: ExtractionMode = "tree",
     ) -> BASE_EXPR: ...
 
     @overload
     def extract(
-        self, expr: BASE_EXPR, /, include_cost: Literal[True], cost_model: None = None
+        self,
+        expr: BASE_EXPR,
+        /,
+        include_cost: Literal[True],
+        cost_model: None = None,
+        *,
+        extractor: ExtractionMode = "tree",
     ) -> tuple[BASE_EXPR, int]: ...
 
     @overload
     def extract(
-        self, expr: BASE_EXPR, /, include_cost: Literal[True], cost_model: CostModel[COST]
+        self,
+        expr: BASE_EXPR,
+        /,
+        include_cost: Literal[True],
+        cost_model: TreeCostModel[COST],
+        *,
+        extractor: ExtractionMode = "tree",
     ) -> tuple[BASE_EXPR, COST]: ...
+
+    @overload
+    def extract(
+        self,
+        expr: BASE_EXPR,
+        /,
+        include_cost: Literal[True],
+        cost_model: DagCostModel[DAG_COST],
+        *,
+        extractor: ExtractionMode = "tree",
+    ) -> tuple[BASE_EXPR, DAG_COST]: ...
 
     @_TRACER.start_as_current_span("extract")
     def extract(
-        self, expr: BASE_EXPR, /, include_cost: bool = False, cost_model: CostModel[COST] | None = None
-    ) -> BASE_EXPR | tuple[BASE_EXPR, COST]:
+        self,
+        expr: BASE_EXPR,
+        /,
+        include_cost: bool = False,
+        cost_model: TreeCostModel[Any] | DagCostModel[Any] | None = None,
+        *,
+        extractor: ExtractionMode = "tree",
+    ) -> BASE_EXPR | tuple[BASE_EXPR, Any]:
         """
         Extract the lowest cost expression from the egraph.
         """
+        _extractor_options(extractor)
+        if extractor == "greedy-dag" and cost_model is not None and not isinstance(cost_model, DagCostModel):
+            msg = "The greedy-dag extractor requires a DagCostModel; a general TreeCostModel cannot be adapted"
+            raise TypeError(msg)
         runtime_expr = to_runtime_expr(expr)
         self._add_decls(runtime_expr)
         tp = runtime_expr.__egg_typed_expr__.tp
         if cost_model is None:
-            extract_report = self._run_extract(runtime_expr, 0)
+            extract_report = self._run_extract(runtime_expr, 0, extractor)
             assert isinstance(extract_report, bindings.ExtractBest)
             res = self._from_termdag(extract_report.termdag, extract_report.term, tp)
-            cost = cast("COST", extract_report.cost)
+            cost = extract_report.cost
         else:
             if isinstance(runtime_expr.__egg_typed_expr__.expr, CallDecl):
                 # Register the root through the normal command path before computing costs, so shared subexpressions
                 # use synthetic lets and the extractor sees the already-materialized root value.
                 self.register(expr)
-            egg_cost_model = _CostModel(cost_model, self).to_bindings_cost_model()
             egg_sort = self._state.type_ref_to_egg(tp)
-            extractor = call_with_current_trace(bindings.Extractor, [egg_sort], self._state.egraph, egg_cost_model)
-            termdag = bindings.TermDag()
             typed_expr = runtime_expr.__egg_typed_expr__
             if isinstance(typed_expr.expr, ValueDecl):
                 # Values returned by lookup_function_value already identify an e-graph value and cannot be lowered
@@ -1355,7 +1418,28 @@ class EGraph:
                 # typed_expr_to_value's direct lowering for non-registering callers such as lookup_function_value.
                 egg_expr = self._state.typed_expr_to_egg(typed_expr, expr_to_let=True)
                 value = call_with_current_trace(self._state.egraph.eval_expr, egg_expr)[1]
-            cost, term = call_with_current_trace(extractor.extract_best, self._state.egraph, termdag, value, egg_sort)
+            if isinstance(cost_model, DagCostModel):
+                termdag, extracted = call_with_current_trace(
+                    bindings.extract_best_with_dag_cost_model,
+                    self._state.egraph,
+                    [(egg_sort, value)],
+                    _DagCostModel(cost_model, self).to_bindings_cost_model(),
+                    extractor=extractor,
+                )
+                extracted_root = extracted[0]
+                if extracted_root is None:
+                    msg = "Unextractable root"
+                    raise ValueError(msg)
+                cost, term = extracted_root
+            else:
+                egg_cost_model = _CostModel(cost_model, self).to_bindings_cost_model()
+                tree_extractor = call_with_current_trace(
+                    bindings.Extractor, [egg_sort], self._state.egraph, egg_cost_model
+                )
+                termdag = bindings.TermDag()
+                cost, term = call_with_current_trace(
+                    tree_extractor.extract_best, self._state.egraph, termdag, value, egg_sort
+                )
             res = self._from_termdag(termdag, term, tp)
         return (res, cost) if include_cost else res
 
@@ -1363,24 +1447,113 @@ class EGraph:
         (new_typed_expr,) = self._state.exprs_from_egg(termdag, [term], tp)
         return RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr)
 
-    def extract_multiple(self, expr: BASE_EXPR, n: int) -> list[BASE_EXPR]:
+    @overload
+    def extract_multiple(self, expr: BASE_EXPR, n: int, *, extractor: ExtractionMode = "tree") -> list[BASE_EXPR]: ...
+
+    @overload
+    def extract_multiple(
+        self, expr: Sequence[BASE_EXPR], n: int, *, extractor: ExtractionMode = "tree"
+    ) -> list[list[BASE_EXPR]]: ...
+
+    def extract_multiple(
+        self,
+        expr: BASE_EXPR | Sequence[BASE_EXPR],
+        n: int,
+        *,
+        extractor: ExtractionMode = "tree",
+    ) -> list[BASE_EXPR] | list[list[BASE_EXPR]]:
         """
-        Extract multiple expressions from the egraph.
+        Extract up to ``n`` variants of one expression or each expression in a sequence.
+
+        Sequence results preserve the roots' order and may contain an empty
+        list when a root has no extractable representation.
         """
+        if n <= 0:
+            msg = "The number of variants must be positive"
+            raise ValueError(msg)
+        extractor_options = _extractor_options(extractor)
+        if isinstance(expr, Sequence):
+            if not expr:
+                msg = "extract_multiple requires at least one expression"
+                raise ValueError(msg)
+            runtime_exprs = [to_runtime_expr(item) for item in expr]
+            self._add_decls(*runtime_exprs)
+            egg_exprs = [self._state.typed_expr_to_egg(item.__egg_typed_expr__) for item in runtime_exprs]
+            cmd = bindings.UserDefined(
+                span(2),
+                "multi-extract",
+                [bindings.Lit(span(2), bindings.Int(n)), *egg_exprs, *extractor_options],
+            )
+            try:
+                outputs = self._state.run_program(cmd)
+            except BaseException as e:
+                e.add_note("while extracting: " + ", ".join(map(str, runtime_exprs)))
+                raise
+            if len(outputs) != len(runtime_exprs) or not all(
+                isinstance(output, bindings.ExtractVariants) for output in outputs
+            ):
+                msg = "multi-extract returned unexpected command outputs"
+                raise RuntimeError(msg)
+            results: list[list[BASE_EXPR]] = []
+            for runtime_expr, output in zip(runtime_exprs, outputs, strict=True):
+                assert isinstance(output, bindings.ExtractVariants)
+                typed_exprs = self._state.exprs_from_egg(
+                    output.termdag, output.terms, runtime_expr.__egg_typed_expr__.tp
+                )
+                results.append([
+                    cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, typed_expr))
+                    for typed_expr in typed_exprs
+                ])
+            return results
+
         runtime_expr = to_runtime_expr(expr)
         self._add_decls(runtime_expr)
-        extract_report = self._run_extract(runtime_expr, n)
+        extract_report = self._run_extract(runtime_expr, n, extractor)
         assert isinstance(extract_report, bindings.ExtractVariants)
         new_exprs = self._state.exprs_from_egg(
             extract_report.termdag, extract_report.terms, runtime_expr.__egg_typed_expr__.tp
         )
         return [cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, expr)) for expr in new_exprs]
 
-    def _run_extract(self, expr: RuntimeExpr, n: int) -> bindings._CommandOutput:
+    def keep_best(
+        self,
+        fn: ExprCallable,
+        /,
+        *fns: ExprCallable,
+        extractor: ExtractionMode = "tree",
+    ) -> None:
+        """
+        Keep the best rows of selected callables and clear every other table.
+
+        This destructively compacts the e-graph. Declarations and dynamic-cost
+        table identities remain available for subsequent iteration, but their
+        rows are cleared unless selected by the command.
+        """
+        extractor_options = _extractor_options(extractor)
+        resolved = [resolve_callable(callable_) for callable_ in (fn, *fns)]
+        self._add_decls(*(decls for _, decls in resolved))
+        for ref, _ in resolved:
+            self._require_table_backed(ref)
+        table_names = [self._state.callable_ref_to_egg(ref)[0] for ref, _ in resolved]
+        args: list[bindings._Expr] = [bindings.Lit(span(2), bindings.String(table_name)) for table_name in table_names]
+        self._state.run_program(bindings.UserDefined(span(2), "keep-best", [*args, *extractor_options]))
+
+        # keep-best clears every table, including synthetic and user let rows.
+        # Do not let later lowering reuse references to those now-empty tables.
+        self._state.expr_to_letref_cache.clear()
+        self._state.expr_to_let_egg_cache.clear()
+        self._state.expr_to_egg_cache = {
+            expr: egg_expr
+            for expr, egg_expr in self._state.expr_to_egg_cache.items()
+            if not isinstance(expr, LetRefDecl)
+        }
+
+    def _run_extract(self, expr: RuntimeExpr, n: int, extractor: ExtractionMode = "tree") -> bindings._CommandOutput:
         egg_expr = self._state.typed_expr_to_egg(expr.__egg_typed_expr__)
         # If we have defined any cost tables use the custom extraction
-        args = (egg_expr, bindings.Lit(span(2), bindings.Int(n)))
-        if self._state.cost_table_names:
+        args: tuple[bindings._Expr, ...] = (egg_expr, bindings.Lit(span(2), bindings.Int(n)))
+        args += _extractor_options(extractor)
+        if self._state.cost_table_names or extractor == "greedy-dag":
             cmd: bindings._Command = bindings.UserDefined(span(2), "extract", list(args))
         else:
             cmd = bindings.Extract(span(2), *args)
@@ -1662,15 +1835,48 @@ class EGraph:
 
         Cost lookups use their associated cost table. Eager and builtin
         primitive calls cannot be inspected with this method.
+
+        During a custom cost-model callback, same-e-graph lookups may use
+        values supplied to that callback but cannot evaluate newly derived
+        arguments while extraction holds the e-graph read-only.
         """
         runtime_expr = to_runtime_expr(expr)
-        self._add_decls(runtime_expr)
         typed_expr = runtime_expr.__egg_typed_expr__
         assert isinstance(typed_expr.expr, CallDecl | GetCostDecl)
+        callback_context = _COST_MODEL_CALLBACK_VALUES.get()
+        in_cost_model_callback = callback_context is not None and callback_context[0] is self
+        if in_cost_model_callback:
+            ref = typed_expr.expr.callable
+            table_is_registered = (
+                ref in self._state.callable_ref_to_egg_fn
+                if isinstance(typed_expr.expr, CallDecl)
+                else ref in self._state.cost_table_names
+            )
+            if not table_is_registered:
+                msg = "Tables queried by cost-model callbacks must be registered before extraction starts"
+                raise ValueError(msg)
+        else:
+            self._add_decls(runtime_expr)
         if isinstance(typed_expr.expr, CallDecl):
             self._require_table_backed(typed_expr.expr.callable)
         egg_fn, typed_args = self._state.translate_call(typed_expr.expr)
-        values_args = [self._state.typed_expr_to_value(a) for a in typed_args]
+        if in_cost_model_callback:
+            assert callback_context is not None
+            callback_values = callback_context[1]
+            values_args = []
+            for arg in typed_args:
+                if arg in callback_values:
+                    values_args.append(callback_values[arg])
+                elif isinstance(arg.expr, ValueDecl):
+                    values_args.append(arg.expr.value)
+                else:
+                    msg = (
+                        "Cost-model callbacks can only look up tables using values supplied to the callback; "
+                        "evaluating new expressions would require mutating the borrowed e-graph"
+                    )
+                    raise ValueError(msg)
+        else:
+            values_args = [self._state.typed_expr_to_value(arg) for arg in typed_args]
         possible_value = self._egraph.lookup_function(egg_fn, values_args)
         if possible_value is None:
             return None
@@ -1752,12 +1958,15 @@ class EGraph:
                     output_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
                     let_bindings[name] = TypedExprDecl(output_tp, self._state.value_to_expr(output_tp, row.output))
                 continue
-            is_cost = False
-            if name in self._state.egg_fn_to_callable_refs:
-                (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
+            is_cost = name in self._state.cost_table_names.values()
+            cost_callable_refs = tuple(
+                ref for ref, cost_name in self._state.cost_table_names.items() if name == cost_name
+            )
+            raw_callable_refs = self._state.egg_fn_to_callable_refs.get(name, set())
+            if is_cost and not raw_callable_refs:
+                callable_ref = cost_callable_refs[0]
             else:
-                (callable_ref,) = (ref for ref, cost_name in self._state.cost_table_names.items() if name == cost_name)
-                is_cost = True
+                (callable_ref,) = raw_callable_refs
             callable_decl = self.__egg_decls__.get_callable_decl(callable_ref)
             signature = callable_decl.signature
             assert isinstance(signature, FunctionSignature), (
@@ -1772,17 +1981,30 @@ class EGraph:
                     for arg_type, value in zip(signature.arg_types, row.inputs, strict=True)
                     for tp in (arg_type.to_just(),)
                 )
-                call = CallDecl(callable_ref, arg_exprs)
                 if is_cost:
                     cost_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
                     cost_expr = TypedExprDecl(cost_tp, self._state.value_to_expr(cost_tp, row.output))
-                    match cost_expr.expr:
-                        case LitDecl(int(value)):
-                            costs[call] = (signature.semantic_return_type.to_just(), value)
-                        case _:
-                            raise TypeError(f"Expected integer cost for {callable_ref}, got {cost_expr.expr}")
-                    continue
+                    for cost_callable_ref in cost_callable_refs:
+                        cost_signature = self.__egg_decls__.get_callable_decl(cost_callable_ref).signature
+                        assert isinstance(cost_signature, FunctionSignature)
+                        cost_arg_exprs = tuple(
+                            TypedExprDecl(tp, self._state.value_to_expr(tp, value))
+                            for arg_type, value in zip(cost_signature.arg_types, row.inputs, strict=True)
+                            for tp in (arg_type.to_just(),)
+                        )
+                        cost_call = CallDecl(cost_callable_ref, cost_arg_exprs)
+                        match cost_expr.expr:
+                            case LitDecl(int(value)):
+                                costs[cost_call] = (cost_signature.semantic_return_type.to_just(), value)
+                            case _:
+                                raise TypeError(f"Expected integer cost for {cost_callable_ref}, got {cost_expr.expr}")
+                    # A user-declared bodyless function may intentionally own the
+                    # canonical table that also serves as the dynamic-cost table.
+                    # Preserve its public rows as ordinary sets as well as costs.
+                    if not raw_callable_refs:
+                        continue
 
+                call = CallDecl(callable_ref, arg_exprs)
                 output_tp = signature.semantic_return_type.to_just()
                 match callable_decl:
                     case ConstructorDecl():
@@ -1815,21 +2037,28 @@ class EGraph:
             ),
         )
 
-    def _values_to_expr(self, args: list[bindings.Value], name: str) -> RuntimeExpr | None:
+    def _values_to_expr_and_callback_values(
+        self, args: list[bindings.Value], name: str
+    ) -> tuple[RuntimeExpr, dict[TypedExprDecl, bindings.Value]] | None:
+        """Reconstruct a callback call and map its Python-order arguments to raw backend values."""
         if name not in self._state.egg_fn_to_callable_refs:
             return None
         (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
         signature = self.__egg_decls__.get_callable_decl(callable_ref).signature
         assert isinstance(signature, FunctionSignature)
+        python_args = args[::-1] if signature.reverse_args else args
         arg_exprs = tuple(
             TypedExprDecl(tp, self._state.value_to_expr(tp, arg))
-            for arg_type, arg in zip(signature.arg_types, args, strict=True)
+            for arg_type, arg in zip(signature.arg_types, python_args, strict=True)
             for tp in (arg_type.to_just(),)
         )
         res_type = signature.semantic_return_type.to_just()
-        return RuntimeExpr.__from_values__(
-            self.__egg_decls__,
-            TypedExprDecl(res_type, CallDecl(callable_ref, arg_exprs)),
+        return (
+            RuntimeExpr.__from_values__(
+                self.__egg_decls__,
+                TypedExprDecl(res_type, CallDecl(callable_ref, arg_exprs)),
+            ),
+            dict(zip(arg_exprs, python_args, strict=True)),
         )
 
 
@@ -2149,11 +2378,15 @@ def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
     expr_runtime = to_runtime_expr(expr)
     cost_runtime = to_runtime_expr(convert(cost, i64))
     typed_expr_decl = expr_runtime.__egg_typed_expr__
+    cost_decl = cost_runtime.__egg_typed_expr__.expr
     expr_decl = typed_expr_decl.expr
     assert isinstance(expr_decl, CallDecl), "Can only set cost of calls, not literals or vars"
+    if isinstance(cost_decl, LitDecl) and isinstance(cost_decl.value, int) and cost_decl.value < 0:
+        msg = "Dynamic extraction costs must be nonnegative"
+        raise ValueError(msg)
     return Action(
         Declarations.create(expr_runtime, cost_runtime),
-        SetCostDecl(typed_expr_decl.tp, expr_decl, cost_runtime.__egg_typed_expr__.expr),
+        SetCostDecl(typed_expr_decl.tp, expr_decl, cost_decl),
     )
 
 
@@ -2206,9 +2439,16 @@ def rule(
     ruleset: None = None,
     name: str | None = None,
     eval_mode: RuleEvalMode = "seminaive",
+    no_decomp: bool = False,
 ) -> _RuleBuilder:
     """Create a rule with the given facts."""
-    return _RuleBuilder(facts=_fact_likes(facts), name=name, ruleset=ruleset, eval_mode=eval_mode)
+    return _RuleBuilder(
+        facts=_fact_likes(facts),
+        name=name,
+        ruleset=ruleset,
+        eval_mode=eval_mode,
+        no_decomp=no_decomp,
+    )
 
 
 def var(name: str, bound: TypeForm[T], egg_name: str | None = None) -> T:
@@ -2381,6 +2621,7 @@ class _RuleBuilder:
     name: str | None
     ruleset: Ruleset | None
     eval_mode: RuleEvalMode
+    no_decomp: bool
 
     def then(self, *actions: ActionLike) -> RewriteOrRule:
         actions = _action_likes(actions)
@@ -2391,6 +2632,7 @@ class _RuleBuilder:
                 tuple(f.fact for f in self.facts),
                 self.name,
                 self.eval_mode,
+                self.no_decomp,
             ),
         )
         if self.ruleset:
@@ -2404,6 +2646,8 @@ class _RuleBuilder:
             args.append(f"name={self.name!r}")
         if self.eval_mode != "seminaive":
             args.append(f"eval_mode={self.eval_mode!r}")
+        if self.no_decomp:
+            args.append("no_decomp=True")
         if self.ruleset is not None:
             args.append(f"ruleset={self.ruleset}")
         return f"rule({', '.join(args)})"
@@ -2560,6 +2804,9 @@ def _fact_like(fact_like: FactLike) -> Fact:
 
 
 _CURRENT_RULESET = ContextVar[Ruleset | None]("CURRENT_RULESET", default=None)
+_COST_MODEL_CALLBACK_VALUES = ContextVar[tuple[EGraph, dict[TypedExprDecl, bindings.Value]] | None](
+    "COST_MODEL_CALLBACK_VALUES", default=None
+)
 
 
 def get_current_ruleset() -> Ruleset | None:
@@ -2573,6 +2820,19 @@ def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
         yield
     finally:
         _CURRENT_RULESET.reset(token)
+
+
+@contextlib.contextmanager
+def _cost_model_callback_values(
+    egraph: EGraph,
+    values: dict[TypedExprDecl, bindings.Value],
+) -> Generator[None, None, None]:
+    """Make raw callback values available to read-only table lookups without evaluating expressions."""
+    token = _COST_MODEL_CALLBACK_VALUES.set((egraph, values))
+    try:
+        yield
+    finally:
+        _COST_MODEL_CALLBACK_VALUES.reset(token)
 
 
 def get_cost(expr: BaseExpr) -> i64:
@@ -2601,9 +2861,22 @@ class Comparable(Protocol):
 
 
 COST = TypeVar("COST", bound=Comparable)
+ExtractionMode: TypeAlias = Literal["tree", "greedy-dag"]
 
 
-class CostModel(Protocol, Generic[COST]):
+def _extractor_options(extractor: str) -> tuple[bindings._Expr, ...]:
+    """Validate an extraction mode and lower its optional command selector."""
+    match extractor:
+        case "tree":
+            return ()
+        case "greedy-dag":
+            return (bindings.Var(span(2), ":extractor"), bindings.Var(span(2), "greedy-dag"))
+        case _:
+            msg = f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'"
+            raise ValueError(msg)
+
+
+class TreeCostModel(Protocol, Generic[COST]):
     """
     A cost model for an e-graph. Used to determine the cost of an expression based on its structure and the costs of its sub-expressions.
 
@@ -2621,6 +2894,31 @@ class CostModel(Protocol, Generic[COST]):
         The total cost of a term given the cost of the root e-node and its immediate children's total costs.
         """
         raise NotImplementedError
+
+
+CostModel: TypeAlias = TreeCostModel
+
+
+class ComparableAdd(Comparable, Protocol):
+    def __add__(self, other: Self) -> Self: ...
+
+
+DAG_COST = TypeVar("DAG_COST", bound=ComparableAdd)
+
+
+@dataclass(frozen=True)
+class DagCostModel(Generic[DAG_COST]):
+    """
+    An additive marginal cost model for tree or greedy-DAG extraction.
+
+    ``marginal_cost`` excludes selected children and container elements.
+    Costs are combined with Python ``+``. The operation must be associative,
+    commutative, monotone, and have ``identity`` as a two-sided identity.
+    Cost values must also have a total order and be effectively immutable.
+    """
+
+    marginal_cost: Callable[[EGraph, BaseExpr], DAG_COST]
+    identity: DAG_COST
 
 
 def default_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
@@ -2648,84 +2946,6 @@ def default_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]
     return sum(children_costs, start=self_cost)
 
 
-class ComparableAddSub(Comparable, Protocol):
-    def __add__(self, other: Self) -> Self: ...
-    def __sub__(self, other: Self) -> Self: ...
-
-
-DAG_COST = TypeVar("DAG_COST", bound=ComparableAddSub)
-
-
-@dataclass
-class GreedyDagCost(Generic[DAG_COST]):
-    """
-    Cost of a DAG, which stores children costs. Use `.total` to get the underlying cost.
-    """
-
-    total: DAG_COST
-    _costs: dict[TypedExprDecl, DAG_COST] = field(repr=False)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, GreedyDagCost):
-            return NotImplemented
-        return self.total == other.total
-
-    def __lt__(self, other: Self) -> bool:
-        return self.total < other.total
-
-    def __le__(self, other: Self) -> bool:
-        return self.total <= other.total
-
-    def __gt__(self, other: Self) -> bool:
-        return self.total > other.total
-
-    def __ge__(self, other: Self) -> bool:
-        return self.total >= other.total
-
-    def __hash__(self) -> int:
-        return hash(self.total)
-
-
-@dataclass
-class GreedyDagCostModel(CostModel[GreedyDagCost[DAG_COST]]):
-    """
-    A cost model which will count duplicate nodes only once.
-
-    Should have similar behavior as https://github.com/egraphs-good/extraction-gym/blob/main/src/extract/greedy_dag.rs
-    but implemented as a cost model that will be used with the default extractor.
-    """
-
-    base: CostModel[DAG_COST]
-
-    def __call__(
-        self, egraph: EGraph, expr: BaseExpr, children_costs: list[GreedyDagCost[DAG_COST]]
-    ) -> GreedyDagCost[DAG_COST]:
-        cost = self.base(egraph, expr, [c.total for c in children_costs])
-        for c in children_costs:
-            cost -= c.total
-        costs = {}
-        for c in children_costs:
-            costs.update(c._costs)
-        total = sum(costs.values(), start=cost)
-        costs[to_runtime_expr(expr).__egg_typed_expr__] = cost
-        return GreedyDagCost(total, costs)
-
-
-@overload
-def greedy_dag_cost_model() -> CostModel[GreedyDagCost[int]]: ...
-
-
-@overload
-def greedy_dag_cost_model(base: CostModel[DAG_COST]) -> CostModel[GreedyDagCost[DAG_COST]]: ...
-
-
-def greedy_dag_cost_model(base: CostModel[Any] = default_cost_model) -> CostModel[GreedyDagCost[Any]]:
-    """
-    Creates a greedy dag cost model from a base cost model.
-    """
-    return GreedyDagCostModel(base or default_cost_model)
-
-
 def get_callable_cost(fn: ExprCallable) -> int | None:
     """
     Returns the cost of a callable, if it has one set. Otherwise returns None.
@@ -2745,9 +2965,8 @@ class _CostModel(Generic[COST]):
     egraph: EGraph
     enode_cost_results: dict[tuple[str, tuple[bindings.Value, ...]], int] = field(default_factory=dict)
     enode_cost_expressions: list[RuntimeExpr] = field(default_factory=list)
-    fold_results: dict[tuple[int, tuple[COST, ...]], COST] = field(default_factory=dict)
+    enode_cost_argument_values: list[dict[TypedExprDecl, bindings.Value]] = field(default_factory=list)
     base_value_cost_results: dict[tuple[str, bindings.Value], COST] = field(default_factory=dict)
-    container_cost_results: dict[tuple[str, bindings.Value, tuple[COST, ...]], COST] = field(default_factory=dict)
 
     def call_model(self, expr: RuntimeExpr, children_costs: list[COST]) -> COST:
         return self.model(self.egraph, cast("BaseExpr", expr), children_costs)
@@ -2758,13 +2977,9 @@ class _CostModel(Generic[COST]):
         #             raise ValueError(msg)
 
     def fold(self, _fn: str, index: int, children_costs: list[COST]) -> COST:
-        try:
-            return self.fold_results[(index, tuple(children_costs))]
-        except KeyError:
-            pass
-
         expr = self.enode_cost_expressions[index]
-        return self.call_model(expr, children_costs)
+        with _cost_model_callback_values(self.egraph, self.enode_cost_argument_values[index]):
+            return self.call_model(expr, children_costs)
 
     # enode cost is only ever called right before fold, for the head_cost
     def enode_cost(self, name: str, args: list[bindings.Value]) -> int:
@@ -2772,12 +2987,14 @@ class _CostModel(Generic[COST]):
             return self.enode_cost_results[(name, tuple(args))]
         except KeyError:
             pass
-        res = self.egraph._values_to_expr(args, name)
-        if res is None:
+        callback = self.egraph._values_to_expr_and_callback_values(args, name)
+        if callback is None:
             msg = f"Cannot compute custom cost for unknown egg function {name!r}"
             raise ValueError(msg)
+        res, argument_values = callback
         index = len(self.enode_cost_expressions)
         self.enode_cost_expressions.append(res)
+        self.enode_cost_argument_values.append(argument_values)
         self.enode_cost_results[(name, tuple(args))] = index
         return index
 
@@ -2791,13 +3008,54 @@ class _CostModel(Generic[COST]):
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        res = self.call_model(expr, [])
+        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
+            res = self.call_model(expr, [])
         self.base_value_cost_results[(tp, value)] = res
         return res
 
     def container_cost(self, tp: str, value: bindings.Value, element_costs: list[COST]) -> COST:
+        type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
+        expr = RuntimeExpr.__from_values__(
+            self.egraph.__egg_decls__,
+            TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
+        )
+        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
+            return self.call_model(expr, element_costs)
+
+    def to_bindings_cost_model(self) -> bindings.CostModel[COST, int]:
+        return bindings.CostModel(self.fold, self.enode_cost, self.container_cost, self.base_value_cost)
+
+
+@dataclass
+class _DagCostModel(Generic[DAG_COST]):
+    """Adapts a high-level marginal model to the raw binding callbacks."""
+
+    model: DagCostModel[DAG_COST]
+    egraph: EGraph
+    enode_cost_results: dict[tuple[str, tuple[bindings.Value, ...]], DAG_COST] = field(default_factory=dict)
+    base_value_cost_results: dict[tuple[str, bindings.Value], DAG_COST] = field(default_factory=dict)
+    container_cost_results: dict[tuple[str, bindings.Value], DAG_COST] = field(default_factory=dict)
+
+    def enode_cost(self, name: str, args: list[bindings.Value]) -> DAG_COST:
+        key = (name, tuple(args))
         try:
-            return self.container_cost_results[(tp, value, tuple(element_costs))]
+            return self.enode_cost_results[key]
+        except KeyError:
+            pass
+        callback = self.egraph._values_to_expr_and_callback_values(args, name)
+        if callback is None:
+            msg = f"Cannot compute custom cost for unknown egg function {name!r}"
+            raise ValueError(msg)
+        expr, argument_values = callback
+        with _cost_model_callback_values(self.egraph, argument_values):
+            result = self.model.marginal_cost(self.egraph, cast("BaseExpr", expr))
+        self.enode_cost_results[key] = result
+        return result
+
+    def base_value_cost(self, tp: str, value: bindings.Value) -> DAG_COST:
+        key = (tp, value)
+        try:
+            return self.base_value_cost_results[key]
         except KeyError:
             pass
         type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
@@ -2805,9 +3063,31 @@ class _CostModel(Generic[COST]):
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        res = self.call_model(expr, element_costs)
-        self.container_cost_results[(tp, value, tuple(element_costs))] = res
-        return res
+        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
+            result = self.model.marginal_cost(self.egraph, cast("BaseExpr", expr))
+        self.base_value_cost_results[key] = result
+        return result
 
-    def to_bindings_cost_model(self) -> bindings.CostModel[COST, int]:
-        return bindings.CostModel(self.fold, self.enode_cost, self.container_cost, self.base_value_cost)
+    def container_cost(self, tp: str, value: bindings.Value) -> DAG_COST:
+        key = (tp, value)
+        try:
+            return self.container_cost_results[key]
+        except KeyError:
+            pass
+        type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
+        expr = RuntimeExpr.__from_values__(
+            self.egraph.__egg_decls__,
+            TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
+        )
+        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
+            result = self.model.marginal_cost(self.egraph, cast("BaseExpr", expr))
+        self.container_cost_results[key] = result
+        return result
+
+    def to_bindings_cost_model(self) -> bindings.DagCostModel[DAG_COST]:
+        return bindings.DagCostModel(
+            self.model.identity,
+            self.enode_cost,
+            self.container_cost,
+            self.base_value_cost,
+        )

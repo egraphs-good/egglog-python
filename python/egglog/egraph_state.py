@@ -496,7 +496,7 @@ class EGraphState:
                         self.rule_name_to_command_decl[f"{serialized_name}{suffix}"] = cmd
                         self.rule_name_to_command_decl[f"{reported_name}{suffix}"] = cmd
                 return egg_cmd
-            case RuleDecl(head, body, name, eval_mode):
+            case RuleDecl(head, body, name, eval_mode, no_decomp):
                 if not name:
                     name = str(self.rule_name_counter)
                     self.rule_name_counter += 1
@@ -517,6 +517,7 @@ class EGraphState:
                         name or "",
                         str(ruleset),
                         binding_eval_mode,
+                        no_decomp,
                     )
                 )
             case DefaultRewriteDecl(ref, expr, subsume):
@@ -620,14 +621,61 @@ class EGraphState:
         """
         if ref in self.cost_table_names:
             return self.cost_table_names[ref]
-        base_name = f"cost_table_{self.callable_ref_to_egg(ref)[0]}"
-        name = self._allocate_name((base_name,), self._backend_symbol_is_occupied)
+        name = f"cost_table_{self.callable_ref_to_egg(ref)[0]}"
         signature = self.__egg_decls__.get_callable_decl(ref).signature
         assert isinstance(signature, FunctionSignature), "Can only add cost tables for functions"
-        signature = replace(signature, return_type=TypeRefWithVars(Ident.builtin("i64")))
-        self.run_program(bindings.FunctionCommand(span(), name, self._signature_to_egg_schema(signature), None))
+        target_schema = self._signature_to_egg_schema(signature)
+        schema = self._signature_to_egg_schema(replace(signature, return_type=TypeRefWithVars(Ident.builtin("i64"))))
+
+        # egglog-experimental's DynamicCostModel probes this exact canonical
+        # name, so choosing a generated suffix would silently ignore costs.
+        # Aliases of the same backend callable share a cost table, but overloaded
+        # callables with incompatible schemas cannot: the backend protocol names
+        # cost tables only by the callable's backend symbol. A user-declared raw
+        # cost table can also be reused, but only when it is a bodyless function
+        # with the protocol's input sorts and i64 output.
+        if not self._has_compatible_cost_table_target(name, target_schema):
+            existing_refs = self.egg_fn_to_callable_refs.get(name, set())
+            compatible_raw_table = bool(existing_refs)
+            for existing_ref in existing_refs:
+                existing_decl = self.__egg_decls__.get_callable_decl(existing_ref)
+                if not (
+                    isinstance(existing_decl, FunctionDecl)
+                    and not existing_decl.builtin
+                    and existing_decl.body is None
+                    and isinstance(existing_decl.signature, FunctionSignature)
+                ):
+                    compatible_raw_table = False
+                    break
+                existing_schema = self._signature_to_egg_schema(existing_decl.signature)
+                if existing_schema.input != schema.input or existing_schema.output != schema.output:
+                    compatible_raw_table = False
+                    break
+            if existing_refs and not compatible_raw_table:
+                msg = (
+                    f"Canonical dynamic-cost table {name!r} is already used by an incompatible callable; "
+                    "it must be a bodyless function with the target's input sorts and i64 output"
+                )
+                raise ValueError(msg)
+            if not compatible_raw_table:
+                if self._backend_symbol_is_occupied(name):
+                    raise ValueError(f"Canonical dynamic-cost table name {name!r} is already in use")
+                self.run_program(bindings.FunctionCommand(span(), name, schema, None))
         self.cost_table_names[ref] = name
         return name
+
+    def _has_compatible_cost_table_target(self, name: str, target_schema: bindings.Schema) -> bool:
+        """Validate every callable already sharing a canonical dynamic-cost table."""
+        existing_cost_refs = [ref for ref, existing_name in self.cost_table_names.items() if existing_name == name]
+        for existing_ref in existing_cost_refs:
+            existing_signature = self.__egg_decls__.get_callable_decl(existing_ref).signature
+            assert isinstance(existing_signature, FunctionSignature)
+            existing_schema = self._signature_to_egg_schema(existing_signature)
+            if existing_schema.input != target_schema.input or existing_schema.output != target_schema.output:
+                raise ValueError(
+                    f"Canonical dynamic-cost table {name!r} already serves a callable with an incompatible schema"
+                )
+        return bool(existing_cost_refs)
 
     def fact_to_egg(self, fact: FactDecl, *, expr_to_let: bool = False) -> bindings._Fact:
         match fact:

@@ -74,11 +74,19 @@ impl EGraph {
 #[pymethods]
 impl EGraph {
     #[new]
-    #[pyo3(signature = (*, fact_directory=None, seminaive=true, record=false))]
-    fn new(fact_directory: Option<PathBuf>, seminaive: bool, record: bool) -> Self {
+    #[pyo3(signature = (*, fact_directory=None, seminaive=true, record=false, num_threads=1, no_decomp=false))]
+    fn new(
+        fact_directory: Option<PathBuf>,
+        seminaive: bool,
+        record: bool,
+        num_threads: usize,
+        no_decomp: bool,
+    ) -> Self {
         let mut egraph = egglog_experimental::new_experimental_egraph();
         egraph.fact_directory = fact_directory;
         egraph.seminaive = seminaive;
+        egraph.set_num_threads(num_threads);
+        egraph.no_decomp = no_decomp;
         add_base_sort(&mut egraph, PyObjectSort {}, span!()).unwrap();
         Self {
             egraph,
@@ -135,6 +143,26 @@ impl EGraph {
     /// Returns the text of successfully run commands when recording is enabled.
     fn commands(&self) -> Option<String> {
         self.cmds.clone()
+    }
+
+    /// Return the number of worker threads configured for this EGraph.
+    fn num_threads(&self) -> usize {
+        self.egraph.num_threads()
+    }
+
+    /// Set the number of worker threads used by this EGraph.
+    fn set_num_threads(&mut self, num_threads: usize) {
+        self.egraph.set_num_threads(num_threads);
+    }
+
+    /// Return whether rule decomposition is disabled globally for this EGraph.
+    fn no_decomp(&self) -> bool {
+        self.egraph.no_decomp
+    }
+
+    /// Set whether rule decomposition is disabled for subsequently registered rules.
+    fn set_no_decomp(&mut self, no_decomp: bool) {
+        self.egraph.no_decomp = no_decomp;
     }
 
     /// Serialize the EGraph to a SerializedEGraph object.

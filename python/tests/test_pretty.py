@@ -276,6 +276,14 @@ def test_rule_eval_mode_pretty_round_trip(eval_mode: RuleEvalMode, option: str) 
     assert eval(rendered, globals()).decl == original.decl
 
 
+def test_rule_no_decomp_pretty_round_trip() -> None:
+    original = rule(rel(g()), name="no decomp rule", no_decomp=True).then(rel(h()))
+    rendered = 'rule(rel(g()), name="no decomp rule", no_decomp=True).then(rel(h()))'
+
+    assert str(original) == rendered
+    assert eval(rendered, globals()).decl == original.decl
+
+
 FREEZE_PARAMS = [
     pytest.param((A(),), "EGraph(A()).freeze()", id="freeze add"),
     pytest.param((b,), "EGraph(b).freeze()", id="freeze constant"),

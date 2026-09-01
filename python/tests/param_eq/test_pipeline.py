@@ -91,6 +91,14 @@ def test_nonfinite_constant_results_are_not_folded(source: str) -> None:
 
 
 @pytest.mark.param_eq_smoke
+@pytest.mark.parametrize(("source", "expected"), [("exp(1.0)", math.e), ("sqrt(4.0)", 2.0)])
+def test_finite_constant_results_are_folded(source: str, expected: float) -> None:
+    report = run_paper_pipeline(parse_expression(source))
+
+    assert parse_expression(report.extracted) == Num(expected)
+
+
+@pytest.mark.param_eq_smoke
 @pytest.mark.parametrize("source", ["(-1.5) ** 0.25", "1e308 * 1e308", "(1e308 * x0) * 1e308"])
 def test_container_pipeline_rejects_nonfinite_coefficient_normalization(source: str) -> None:
     with pytest.raises(

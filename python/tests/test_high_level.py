@@ -7,6 +7,7 @@ import math
 import pathlib
 from collections.abc import Callable, Iterator
 from copy import copy
+from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
 from typing import ClassVar, TypeAlias, TypeVar, cast
@@ -59,6 +60,27 @@ def test_rule_eval_mode(eval_mode: RuleEvalMode) -> None:
     egraph.register(rule(rel(x), eval_mode=eval_mode).then(rel(x + 1)))
     egraph.run(1)
     egraph.check(rel(i64(1)))
+
+
+def test_per_egraph_configuration() -> None:
+    egraph = EGraph(num_threads=2, no_decomp=True)
+
+    assert egraph.num_threads() == 2
+    assert egraph.no_decomp()
+    egraph.set_num_threads(1)
+    egraph.set_no_decomp(False)
+    assert egraph.num_threads() == 1
+    assert not egraph.no_decomp()
+
+
+def test_rule_no_decomp_reaches_backend() -> None:
+    rel = relation("no_decomp_rel", i64)
+    x = var("x", i64)
+    egraph = EGraph(save_egglog_string=True)
+
+    egraph.register(rule(rel(x), no_decomp=True).then(rel(x + 1)))
+
+    assert ":no-decomp" in egraph.as_egglog_string
 
 
 def test_eqsat_basic():
@@ -308,7 +330,7 @@ def test_generated_callable_name_avoids_an_existing_cost_table() -> None:
     assert state.callable_ref_to_egg(FunctionRef(conflict))[0] == "pkg_cost_cost_table_f"
 
 
-def test_generated_cost_table_name_avoids_an_existing_callable() -> None:
+def test_canonical_cost_table_rejects_an_incompatible_callable() -> None:
     state = EGraph(save_egglog_string=True)._state
     state.__egg_decls__ |= cast("HasDeclarations", i64)
     ret = Ident("CostRet", "pkg.cost")
@@ -323,7 +345,27 @@ def test_generated_cost_table_name_avoids_an_existing_callable() -> None:
     )
 
     assert state.callable_ref_to_egg(FunctionRef(conflict))[0] == "cost_table_f"
-    assert state.create_cost_table(FunctionRef(fn)) == "cost_table_f_1"
+    with pytest.raises(ValueError, match="already used by an incompatible callable"):
+        state.create_cost_table(FunctionRef(fn))
+
+
+def test_canonical_cost_table_reuses_a_compatible_raw_table() -> None:
+    state = EGraph(save_egglog_string=True)._state
+    state.__egg_decls__ |= cast("HasDeclarations", i64)
+    ret = Ident("CostRet", "pkg.cost")
+    fn = Ident("f", "pkg.cost")
+    raw_cost = Ident("cost_table_f", "pkg.cost")
+    state.__egg_decls__ |= Declarations(
+        _classes={ret: ClassDecl()},
+        _functions={
+            fn: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(ret))),
+            raw_cost: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(Ident.builtin("i64")))),
+        },
+    )
+
+    assert state.callable_ref_to_egg(FunctionRef(raw_cost))[0] == "cost_table_f"
+    assert state.create_cost_table(FunctionRef(fn)) == "cost_table_f"
+    assert state.cost_table_names[FunctionRef(fn)] == "cost_table_f"
 
 
 @pytest.mark.parametrize(
@@ -979,6 +1021,45 @@ def test_f64_math_primitives() -> None:
     assert egraph.extract(f64(1.0).exp()).value == pytest.approx(math.e)
     assert egraph.extract(f64(math.e).log()).value == pytest.approx(1.0)
     assert egraph.extract(f64(4.0).sqrt()).value == pytest.approx(2.0)
+
+
+def test_f64_is_finite_predicate() -> None:
+    egraph = EGraph()
+    egraph.check(f64(1.0).is_finite())
+    for value in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(EggSmolError):
+            egraph.check(f64(value).is_finite())
+
+
+def test_rational_like_operations() -> None:
+    assert "RationalLike" in egg_builtins.__all__
+    assert EGraph().extract(Rational(1, 2) + Fraction(1, 3)).value == Fraction(5, 6)
+    assert EGraph().extract(Fraction(1, 3) + Rational(1, 2)).value == Fraction(5, 6)
+    assert EGraph().extract(Rational(1, 2) - 1).value == Fraction(-1, 2)
+    assert EGraph().extract(1 - Rational(1, 2)).value == Fraction(1, 2)
+    assert EGraph().extract(Rational(2, 3) * Fraction(3, 4)).value == Fraction(1, 2)
+    assert EGraph().extract(Fraction(3, 4) * Rational(2, 3)).value == Fraction(1, 2)
+    assert EGraph().extract(Rational(1, 2) / 2).value == Fraction(1, 4)
+    assert EGraph().extract(1 / Rational(1, 2)).value == Fraction(2, 1)
+    assert EGraph().extract(Rational(2, 1) ** 3).value == Fraction(8, 1)
+    assert EGraph().extract(2 ** Rational(3, 1)).value == Fraction(8, 1)
+    assert EGraph().extract(Rational(1, 2).min(Fraction(1, 3))).value == Fraction(1, 3)
+    assert EGraph().extract(Rational(1, 2).max(1)).value == Fraction(1, 1)
+
+    egraph = EGraph()
+    egraph.check(Rational(1, 2) < Fraction(2, 3))
+    egraph.check(Rational(2, 3) > Fraction(1, 2))
+    egraph.check(Rational(1, 2) <= Fraction(1, 2))
+    egraph.check(Rational(1, 2) >= Fraction(1, 2))
+
+
+def test_rational_partial_operations_remain_undefined() -> None:
+    with pytest.raises(EggSmolError):
+        EGraph().extract(Rational(1, 2) / 0)
+    with pytest.raises(EggSmolError):
+        EGraph().extract(Rational(2, 1) ** -1)
+    with pytest.raises(EggSmolError):
+        EGraph().check(Rational(2, 3) < Fraction(1, 2))
 
 
 def test_bigrat_to_i64_is_exact_and_bounded() -> None:
@@ -2189,6 +2270,90 @@ def test_dynamic_cost():
     assert egraph.extract(E(2), include_cost=True) == (E(1) + E(1), 203)
     egraph.register(set_cost(E(5) - E(3), 198))
     assert egraph.extract(E(2), include_cost=True) == (E(5) - E(3), 202)
+    assert egraph.extract(E(2), include_cost=True, extractor="greedy-dag") == (E(1) + E(1), 102)
+
+
+def test_dynamic_cost_reuses_a_compatible_canonical_table() -> None:
+    @function(egg_fn="canonical_cost_target")
+    def target(x: i64Like) -> i64: ...
+
+    @function(egg_fn="cost_table_canonical_cost_target")
+    def raw_cost(x: i64Like) -> i64: ...
+
+    egraph = EGraph()
+    egraph.register(
+        set_(raw_cost(2)).to(i64(5)),
+        set_(target(1)).to(i64(2)),
+        set_cost(target(1), 7),
+    )
+
+    assert egraph.lookup_function_value(raw_cost(1)) == i64(7)
+    assert egraph.lookup_function_value(raw_cost(2)) == i64(5)
+    assert egraph.has_custom_cost(target)
+
+
+def test_freeze_preserves_a_reused_canonical_cost_table_as_raw_rows_and_costs() -> None:
+    @function(egg_fn="freeze_cost_target")
+    def target(x: i64Like) -> i64: ...
+
+    @function(egg_fn="cost_table_freeze_cost_target")
+    def raw_cost(x: i64Like) -> i64: ...
+
+    egraph = EGraph(
+        set_(raw_cost(2)).to(i64(5)),
+        set_(target(1)).to(i64(2)),
+        set_cost(target(1), 7),
+    )
+
+    rendered = str(egraph.freeze())
+    assert "set_(raw_cost(2)).to(i64(5))" in rendered
+    assert "set_(raw_cost(1)).to(i64(7))" in rendered
+    assert "set_cost(target(2), 5)" in rendered
+    assert "set_cost(target(1), 7)" in rendered
+
+    replayed = eval(rendered.removesuffix(".freeze()"), globals(), locals())
+    assert isinstance(replayed, EGraph)
+    assert replayed.lookup_function_value(raw_cost(1)) == i64(7)
+    assert replayed.lookup_function_value(raw_cost(2)) == i64(5)
+    assert replayed.lookup_function_value(target(1)) == i64(2)
+    assert replayed.has_custom_cost(target)
+
+
+def test_freeze_preserves_every_callable_alias_for_a_shared_cost_table() -> None:
+    @function(egg_fn="+", builtin=True)
+    def plus_alias(left: i64Like, right: i64Like) -> i64: ...
+
+    egraph = EGraph(
+        set_cost(i64(1) + i64(2), 5),
+        set_cost(plus_alias(3, 4), 6),
+    )
+
+    rendered = str(egraph.freeze())
+    replayed = eval(rendered.removesuffix(".freeze()"), globals(), locals())
+    assert isinstance(replayed, EGraph)
+    assert replayed.has_custom_cost(i64.__add__)
+    assert replayed.has_custom_cost(plus_alias)
+    assert replayed.lookup_function_value(get_cost(i64(1) + i64(2))) == i64(5)
+    assert replayed.lookup_function_value(get_cost(plus_alias(3, 4))) == i64(6)
+
+
+def test_dynamic_cost_rejects_an_incompatible_overload_without_recording_it() -> None:
+    egraph = EGraph()
+    egraph.register(set_cost(i64(1) + i64(2), 5))
+
+    with pytest.raises(ValueError, match="already serves a callable with an incompatible schema"):
+        egraph.register(set_cost(Rational(1, 2) + Rational(1, 3), 6))
+
+    assert egraph.has_custom_cost(i64.__add__)
+    assert not egraph.has_custom_cost(Rational.__add__)
+
+
+def test_dynamic_cost_rejects_a_negative_literal() -> None:
+    class Costed(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    with pytest.raises(ValueError, match="must be nonnegative"):
+        set_cost(Costed(1), -1)
 
 
 class TestScheduler:
@@ -2396,6 +2561,89 @@ def ff(x: i64Like, y: i64Like) -> E: ...
 
 @function
 def gg() -> E: ...
+
+
+@pytest.mark.parametrize("extractor", ["tree", "greedy-dag"])
+def test_extract_multiple_sequence_preserves_heterogeneous_roots(extractor: ExtractionMode) -> None:
+    class MultiRoot(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+        def __add__(self, other: MultiRoot) -> MultiRoot: ...
+
+        @method(unextractable=True)
+        def opaque(self) -> MultiRoot: ...
+
+    egraph = EGraph()
+    opaque = egraph.let("opaque_multi_root", MultiRoot(1).opaque())
+    repeated = MultiRoot(0) + MultiRoot(0)
+    egraph.register(
+        union(MultiRoot(2)).with_(repeated),
+        set_cost(MultiRoot(2), 100),
+        set_cost(MultiRoot(0), 1),
+    )
+
+    extracted = egraph.extract_multiple([String("first"), opaque, MultiRoot(2)], 1, extractor=extractor)
+
+    assert extracted == [[String("first")], [], [repeated]]
+    assert egraph.extract_multiple(i64(4), 1, extractor=extractor) == [i64(4)]
+    homogeneous: list[list[MultiRoot]] = egraph.extract_multiple([MultiRoot(2)], 1, extractor=extractor)
+    assert homogeneous == [[repeated]]
+
+
+def test_extract_multiple_validates_batch_arguments() -> None:
+    with pytest.raises(ValueError, match="must be positive"):
+        EGraph().extract_multiple(i64(1), 0)
+    with pytest.raises(ValueError, match="at least one expression"):
+        EGraph().extract_multiple([], 1)
+    with pytest.raises(ValueError, match="Unknown extractor"):
+        EGraph().extract_multiple(i64(1), 1, extractor="unknown")  # type: ignore[call-overload]
+
+
+@pytest.mark.parametrize("extractor", ["tree", "greedy-dag"])
+def test_keep_best_compacts_and_allows_continued_iteration(extractor: ExtractionMode) -> None:
+    class CompactExpr(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+        def __add__(self, other: CompactExpr) -> CompactExpr: ...
+
+    @function(merge=lambda old, new: new)
+    def target(key: i64Like) -> CompactExpr: ...
+
+    @function(merge=lambda old, new: new)
+    def discarded(key: i64Like) -> CompactExpr: ...
+
+    direct = CompactExpr(2)
+    shared = CompactExpr(1)
+    repeated = shared + shared
+    egraph = EGraph(save_egglog_string=True)
+    egraph.register(
+        union(direct).with_(repeated),
+        set_(target(0)).to(direct),
+        set_(discarded(0)).to(CompactExpr(9)),
+        set_cost(direct, 100),
+        set_cost(CompactExpr(1), 4),
+    )
+
+    egraph.keep_best(target, extractor=extractor)
+
+    assert egraph.function_size(target) == 1
+    assert egraph.function_size(discarded) == 0
+    assert egraph.has_custom_cost(CompactExpr)
+    assert egraph.extract(target(0)) == repeated
+
+    # Reusing an expression that was factored through a synthetic let must not
+    # reference the row that keep-best cleared.
+    egraph.register(repeated, set_(target(1)).to(repeated))
+    assert egraph.function_size(target) == 2
+
+
+def test_keep_best_rejects_non_table_callable_before_compaction() -> None:
+    @function
+    def eager(value: i64Like) -> i64:
+        return cast("i64", value) + 1
+
+    with pytest.raises(ValueError, match="table-backed"):
+        EGraph().keep_best(eager)
 
 
 class TestCustomExtract:
@@ -2633,7 +2881,6 @@ class TestCustomExtract:
         assert cast("Maybe[i64]", extracted_none).value is None
         assert seen_none_children_costs == []
 
-    @pytest.mark.xfail(reason="Errors dont bubble, just panic")
     def test_errors_bubble(self):
         def my_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
             msg = "bad"
@@ -2645,15 +2892,21 @@ class TestCustomExtract:
             egraph.extract(i64(10), cost_model=my_cost_model)
 
     def test_dag_cost_model(self):
+        model = DagCostModel(
+            marginal_cost=lambda egraph, expr: default_cost_model(egraph, expr, []),
+            identity=0,
+        )
         egraph = EGraph()
         expr = ff(1, 2)
-        res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
-        assert cost.total == 3
+        res, cost = egraph.extract(expr, include_cost=True, cost_model=model, extractor="greedy-dag")
+        assert cost == 3
         assert expr == res
 
         expr = ff(1, 1)
-        res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
-        assert cost.total == 2
+        _, tree_cost = egraph.extract(expr, include_cost=True, cost_model=model)
+        res, cost = egraph.extract(expr, include_cost=True, cost_model=model, extractor="greedy-dag")
+        assert tree_cost == 3
+        assert cost == 2
         assert expr == res
 
         @function
@@ -2663,9 +2916,275 @@ class TestCustomExtract:
         y = constant("y", E)
         expr = bin(x, bin(x, y))
         egraph.register(expr)
-        res, cost = egraph.extract(expr, include_cost=True, cost_model=greedy_dag_cost_model())
-        assert cost.total == 4
+        res, cost = egraph.extract(expr, include_cost=True, cost_model=model, extractor="greedy-dag")
+        assert cost == 4
         assert expr == res
+
+    @pytest.mark.parametrize(
+        ("model_kind", "extractor", "expected_cost"),
+        [
+            pytest.param("tree", "tree", 7, id="tree-model"),
+            pytest.param("dag", "tree", 7, id="dag-model-tree-extractor"),
+            pytest.param("dag", "greedy-dag", 4, id="dag-model-greedy-dag-extractor"),
+        ],
+    )
+    def test_default_cost_model_reads_dynamic_costs_during_callbacks(
+        self,
+        model_kind: str,
+        extractor: ExtractionMode,
+        expected_cost: int,
+    ) -> None:
+        class DynamicCostExpr(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+            def __add__(self, other: DynamicCostExpr) -> DynamicCostExpr: ...
+
+        egraph = EGraph()
+        egraph.register(
+            union(DynamicCostExpr(2)).with_(DynamicCostExpr(1) + DynamicCostExpr(1)),
+            set_cost(DynamicCostExpr(2), 50),
+            set_cost(DynamicCostExpr(1), 2),
+        )
+
+        if model_kind == "tree":
+            result, cost = egraph.extract(
+                DynamicCostExpr(2), include_cost=True, cost_model=default_cost_model, extractor=extractor
+            )
+        else:
+            model = DagCostModel(
+                marginal_cost=lambda callback_egraph, node: default_cost_model(callback_egraph, node, []),
+                identity=0,
+            )
+            result, cost = egraph.extract(DynamicCostExpr(2), include_cost=True, cost_model=model, extractor=extractor)
+
+        assert result == DynamicCostExpr(1) + DynamicCostExpr(1)
+        assert cost == expected_cost
+
+    def test_tree_cost_model_can_lookup_table_with_a_primitive_callback_argument(self) -> None:
+        class LookupByPrimitive(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        @function
+        def score(value: i64Like) -> i64: ...
+
+        egraph = EGraph()
+        egraph.register(set_(score(3)).to(i64(17)))
+
+        def lookup_cost(callback_egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            if isinstance(expr, LookupByPrimitive):
+                args = get_callable_args(expr)
+                assert args is not None
+                value = callback_egraph.lookup_function_value(score(cast("i64", args[0])))
+                assert value is not None
+                return int(value) + sum(children_costs)
+            return sum(children_costs)
+
+        assert egraph.extract(
+            LookupByPrimitive(3), include_cost=True, cost_model=cast("TreeCostModel[int]", lookup_cost)
+        ) == (
+            LookupByPrimitive(3),
+            17,
+        )
+
+    def test_cost_model_callback_rejects_evaluating_new_lookup_arguments(self) -> None:
+        class LookupByPrimitive(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        @function
+        def score(value: i64Like) -> i64: ...
+
+        egraph = EGraph()
+        egraph.register(set_(score(99)).to(i64(17)))
+
+        def lookup_cost(callback_egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            if isinstance(expr, LookupByPrimitive):
+                callback_egraph.lookup_function_value(score(99))
+            return sum(children_costs)
+
+        with pytest.raises(ValueError, match="only look up tables using values supplied to the callback"):
+            egraph.extract(LookupByPrimitive(3), cost_model=cast("TreeCostModel[int]", lookup_cost))
+
+        assert egraph.lookup_function_value(score(99)) == i64(17)
+
+    def test_cost_model_callback_requires_lookup_table_to_be_registered(self) -> None:
+        class LookupByPrimitive(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        @function
+        def never_registered(value: i64Like) -> i64: ...
+
+        def lookup_cost(callback_egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            if isinstance(expr, LookupByPrimitive):
+                args = get_callable_args(expr)
+                assert args is not None
+                callback_egraph.lookup_function_value(never_registered(cast("i64", args[0])))
+            return sum(children_costs)
+
+        with pytest.raises(ValueError, match="must be registered before extraction starts"):
+            EGraph().extract(LookupByPrimitive(3), cost_model=cast("TreeCostModel[int]", lookup_cost))
+
+    def test_cost_model_callback_values_are_scoped_to_their_egraph(self) -> None:
+        class LookupByString(Expr):
+            def __init__(self, value: StringLike) -> None: ...
+
+        @function
+        def score(value: StringLike) -> i64: ...
+
+        lookup_egraph = EGraph()
+        lookup_egraph.register(
+            set_(score("padding")).to(i64(1)),
+            set_(score("needle")).to(i64(17)),
+        )
+
+        def lookup_cost(_callback_egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            if isinstance(expr, LookupByString):
+                args = get_callable_args(expr)
+                assert args is not None
+                value = lookup_egraph.lookup_function_value(score(cast("String", args[0])))
+                assert value is not None
+                return int(value) + sum(children_costs)
+            return sum(children_costs)
+
+        source_egraph = EGraph()
+        assert source_egraph.extract(
+            LookupByString("needle"), include_cost=True, cost_model=cast("TreeCostModel[int]", lookup_cost)
+        ) == (LookupByString("needle"), 17)
+
+    @pytest.mark.parametrize(
+        ("model_kind", "extractor"),
+        [
+            pytest.param("tree", "tree", id="tree-model"),
+            pytest.param("dag", "greedy-dag", id="dag-model"),
+        ],
+    )
+    def test_cost_model_callbacks_preserve_reverse_argument_order(
+        self, model_kind: str, extractor: ExtractionMode
+    ) -> None:
+        class ReverseCostResult(Expr): ...
+
+        class ReverseCostSource(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+            @method(reverse_args=True)
+            def make(self, label: StringLike) -> ReverseCostResult: ...
+
+        source = ReverseCostSource(3)
+        expr = source.make("label")
+        egraph = EGraph()
+        egraph.register(set_cost(expr, 9))
+        seen_args: list[BaseExpr] = []
+
+        def marginal_cost(callback_egraph: EGraph, node: BaseExpr) -> int:
+            if get_callable_fn(node) != ReverseCostSource.make:
+                return 0
+            args = get_callable_args(node)
+            assert args is not None
+            seen_args.extend(args)
+            return default_cost_model(callback_egraph, node, [])
+
+        if model_kind == "tree":
+
+            def tree_cost(callback_egraph: EGraph, node: BaseExpr, children_costs: list[int]) -> int:
+                return marginal_cost(callback_egraph, node) + sum(children_costs)
+
+            result, cost = egraph.extract(
+                expr,
+                include_cost=True,
+                cost_model=cast("TreeCostModel[int]", tree_cost),
+                extractor=extractor,
+            )
+        else:
+            result, cost = egraph.extract(
+                expr,
+                include_cost=True,
+                cost_model=DagCostModel(marginal_cost, 0),
+                extractor=extractor,
+            )
+
+        assert result == expr
+        assert cost == 9
+        assert seen_args
+        assert len(seen_args) % 2 == 0
+        for source_arg, label_arg in zip(seen_args[::2], seen_args[1::2], strict=True):
+            assert isinstance(source_arg, ReverseCostSource)
+            assert isinstance(label_arg, String)
+            assert label_arg.value == "label"
+
+    def test_tree_cost_model_rejected_by_greedy_dag(self):
+        with pytest.raises(TypeError, match="requires a DagCostModel"):
+            EGraph().extract(i64(1), cost_model=default_cost_model, extractor="greedy-dag")
+
+    def test_dag_marginal_error_bubbles(self):
+        def marginal_cost(egraph: EGraph, expr: BaseExpr) -> int:
+            del egraph, expr
+            msg = "marginal failed"
+            raise LookupError(msg)
+
+        with pytest.raises(LookupError, match="marginal failed"):
+            EGraph().extract(i64(1), cost_model=DagCostModel(marginal_cost, 0))
+
+    def test_dag_add_error_bubbles(self):
+        @dataclass(frozen=True)
+        class AddErrorCost:
+            value: int
+
+            def __add__(self, other: AddErrorCost) -> AddErrorCost:
+                del other
+                msg = "addition failed"
+                raise ArithmeticError(msg)
+
+            def __lt__(self, other: AddErrorCost) -> bool:
+                return self.value < other.value
+
+            def __le__(self, other: AddErrorCost) -> bool:
+                return self.value <= other.value
+
+            def __gt__(self, other: AddErrorCost) -> bool:
+                return self.value > other.value
+
+            def __ge__(self, other: AddErrorCost) -> bool:
+                return self.value >= other.value
+
+        model = DagCostModel(lambda egraph, expr: AddErrorCost(1), AddErrorCost(0))
+        with pytest.raises(ArithmeticError, match="addition failed"):
+            EGraph().extract(ff(1, 2), cost_model=model)
+
+    def test_dag_comparison_error_bubbles(self):
+        @dataclass(frozen=True)
+        class CompareErrorCost:
+            value: int
+
+            def __add__(self, other: CompareErrorCost) -> CompareErrorCost:
+                return CompareErrorCost(self.value + other.value)
+
+            def __eq__(self, other: object) -> bool:
+                return False
+
+            def __lt__(self, other: CompareErrorCost) -> bool:
+                del other
+                msg = "comparison failed"
+                raise RuntimeError(msg)
+
+            def __le__(self, other: CompareErrorCost) -> bool:
+                del other
+                msg = "comparison failed"
+                raise RuntimeError(msg)
+
+            def __gt__(self, other: CompareErrorCost) -> bool:
+                del other
+                msg = "comparison failed"
+                raise RuntimeError(msg)
+
+            def __ge__(self, other: CompareErrorCost) -> bool:
+                del other
+                msg = "comparison failed"
+                raise RuntimeError(msg)
+
+        model = DagCostModel(lambda egraph, expr: CompareErrorCost(1), CompareErrorCost(0))
+        egraph = EGraph()
+        egraph.register(union(ff(1, 2)).with_(gg()))
+        with pytest.raises(RuntimeError, match="comparison failed"):
+            egraph.extract(ff(1, 2), cost_model=model, extractor="greedy-dag")
 
 
 def test_class_module():

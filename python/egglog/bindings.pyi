@@ -2,7 +2,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar, final
+from typing import Any, Generic, Literal, Protocol, Self, TypeAlias, TypeVar, final
 
 __all__ = [
     "ActionCommand",
@@ -16,6 +16,7 @@ __all__ = [
     "Constructor",
     "ContainerRebuildSpec",
     "CostModel",
+    "DagCostModel",
     "Datatype",
     "Datatypes",
     "DefaultPrintFunctionMode",
@@ -110,6 +111,7 @@ __all__ = [
     "Var",
     "Variant",
     "WithPlan",
+    "extract_best_with_dag_cost_model",
     "setup_tracing",
     "shutdown_tracing",
 ]
@@ -133,7 +135,13 @@ class SerializedEGraph:
 @final
 class EGraph:
     def __new__(
-        cls, *, fact_directory: str | Path | None = None, seminaive: bool = True, record: bool = False
+        cls,
+        *,
+        fact_directory: str | Path | None = None,
+        seminaive: bool = True,
+        record: bool = False,
+        num_threads: int = 1,
+        no_decomp: bool = False,
     ) -> EGraph: ...
     def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
     def parse_and_run_program(
@@ -148,6 +156,10 @@ class EGraph:
         self, *commands: _Command, traceparent: str | None = None, tracestate: str | None = None
     ) -> list[_CommandOutput]: ...
     def commands(self) -> str | None: ...
+    def num_threads(self) -> int: ...
+    def set_num_threads(self, num_threads: int) -> None: ...
+    def no_decomp(self) -> bool: ...
+    def set_no_decomp(self, no_decomp: bool) -> None: ...
     def serialize(
         self,
         root_eclasses: list[_Expr],
@@ -994,12 +1006,17 @@ class TermDag:
 # Extraction
 ##
 class _Cost(Protocol):
-    def __lt__(self, other: _Cost) -> bool: ...
-    def __le__(self, other: _Cost) -> bool: ...
-    def __gt__(self, other: _Cost) -> bool: ...
-    def __ge__(self, other: _Cost) -> bool: ...
+    def __lt__(self, other: Self) -> bool: ...
+    def __le__(self, other: Self) -> bool: ...
+    def __gt__(self, other: Self) -> bool: ...
+    def __ge__(self, other: Self) -> bool: ...
 
 _COST = TypeVar("_COST", bound=_Cost)
+
+class _DagCost(_Cost, Protocol):
+    def __add__(self, other: Self) -> Self: ...
+
+_DAG_COST = TypeVar("_DAG_COST", bound=_DagCost)
 
 _ENODE_COST = TypeVar("_ENODE_COST")
 
@@ -1012,6 +1029,26 @@ class CostModel(Generic[_COST, _ENODE_COST]):
         container_cost: Callable[[str, Value, list[_COST]], _COST],
         base_value_cost: Callable[[str, Value], _COST],
     ) -> CostModel[_COST, _ENODE_COST]: ...
+
+@final
+class DagCostModel(Generic[_DAG_COST]):
+    def __new__(
+        cls,
+        identity: _DAG_COST,
+        enode_cost: Callable[[str, list[Value]], _DAG_COST],
+        container_cost: Callable[[str, Value], _DAG_COST],
+        base_value_cost: Callable[[str, Value], _DAG_COST],
+    ) -> DagCostModel[_DAG_COST]: ...
+
+def extract_best_with_dag_cost_model(
+    egraph: EGraph,
+    roots: list[tuple[str, Value]],
+    cost_model: DagCostModel[_DAG_COST],
+    *,
+    extractor: Literal["tree", "greedy-dag"] = "tree",
+    traceparent: str | None = None,
+    tracestate: str | None = None,
+) -> tuple[TermDag, list[tuple[_DAG_COST, _TermId] | None]]: ...
 
 @final
 class Extractor(Generic[_COST]):

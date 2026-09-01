@@ -90,6 +90,30 @@ match MyExpr("hello"):
         print(f"Matched MyExpr with value: {value}")
 ```
 
+## Numeric Predicates and Exact Rationals
+
+The `f64.is_finite()` method returns a `Unit` fact when its value is neither
+infinite nor NaN. This makes it suitable for guarding rules that evaluate
+partial floating-point operations.
+
+The experimental exact `Rational` sort accepts `fractions.Fraction` and
+`i64Like` values in arithmetic, reflected arithmetic, powers, `min`/`max`, and
+ordering predicates. `RationalLike` is the corresponding public type alias.
+
+```{code-cell} python
+from fractions import Fraction
+
+numeric_egraph = EGraph()
+numeric_egraph.check(f64(1.0).is_finite())
+result = numeric_egraph.extract(Rational(1, 2) + Fraction(1, 3))
+assert result.value == Fraction(5, 6)
+numeric_egraph.check(Rational(1, 2) < 1)
+```
+
+Rational comparisons return `Unit`, not a Python boolean. A false comparison
+is therefore undefined, as are operations such as division by zero and powers
+that the backend cannot represent.
+
 ## Python Object Sort
 
 We define a custom "primitive sort" (i.e. a builtin type) for `PyObject`s. This allows us to store any Python object in the e-graph.
@@ -775,25 +799,72 @@ Common pitfalls when authoring rules:
 - Ensure rules that subtract from lengths only fire when the length is proven
   positive.
 
-## Custom Cost Models
+## Extraction and Cost Models
 
-By default, when extracting from the e-graph, we use a simple cost model, that looks at the costs assigned to each
-function and any custom costs set with `set_cost`, and finds the lowest cost expression looking at the total tree size.
+{meth}`egglog.egraph.EGraph.extract` accepts `extractor="tree"` (the
+default) or `extractor="greedy-dag"`. Tree extraction charges each occurrence
+of a subexpression. Greedy-DAG extraction charges shared subexpressions once
+within the result; it is a heuristic rather than a globally optimal DAG
+extractor. The public `ExtractionMode` alias contains these two values.
+With `include_cost=True`, `extract` returns `(expression, cost)`; custom model
+costs are returned directly rather than through a wrapper object.
 
-Custom cost models are also supported, which can be passed into `extract` as the `cost_model` keyword argument. They
-are defined as functions followed the `CostModel` protocol, that take in an e-graph, an expression, and the costs of the children, and return the total cost of that expression. Costs don't have to be integers, they can be any type that supports comparison.
+### Dynamic Costs
 
-There are a few builtin cost models:
+Without a custom `cost_model`, tree and greedy-DAG extraction use the
+experimental dynamic cost model. A row cost registered by `set_cost` overrides
+that node's marginal cost; otherwise the model falls back to costs declared on
+callables and then the backend default. The same model is used by
+`extract_multiple` and `keep_best`. Dynamic row costs must be nonnegative.
 
-- `default_cost_model`: The default cost model, which uses integer costs and sums them up.
-- `greedy_dag_cost_model(inner_cost_model=default_cost_model)`: A cost model which uses a greedy DAG algorithm to find the lowest cost expression, allowing for shared sub-expressions. It takes in another cost model to use for the base costs of each expression.
+Dynamic row costs live in a canonical table named
+`cost_table_<egg-function-name>`. If a compatible, bodyless raw function with
+the same input sorts and `i64` output already has that name when the cost table
+is created, it is reused. An incompatible callable already occupying the name,
+or an incompatible overload that would map to the same canonical table, raises
+an error instead of making the cost table use a generated suffix, because the
+backend only consults the canonical name. Ordinary generated-name collision
+handling still applies to callables registered after the cost table.
 
-Note that when passed into your cost model, the expression won't be a full tree. Instead, only the top level call be present, and all of it's arguments will be opaque "value" expressions, representing e-classes in the e-graph. You can't do much with them except use them to construct other expression to pass into `egraph.lookup_function_value` to get the resulting value of a call with those arguments. The only exception is all builtin types, like ints, vecs, strings, etc. will be fully evaluated recursively, so they can be matched against.
+### Multiple Roots
 
-For example, here is a cost model that has a boolean cost if the value is even or not:
+{meth}`egglog.egraph.EGraph.extract_multiple` returns up to `n` variants for
+one expression. Passing a non-empty sequence performs one extraction for all
+roots and returns one variant list per root in the same order:
+
+```{code-block} python
+variants = egraph.extract_multiple(expr, 3, extractor="tree")
+variants_by_root = egraph.extract_multiple([expr1, expr2], 3, extractor="greedy-dag")
+```
+
+An inner list may be empty when its root has no extractable variant. The
+variant count must be positive, and the sequence form rejects an empty input.
+The roots share extraction preparation, but every root and variant is costed
+independently; sharing between separate roots does not reduce either cost.
+This API always uses dynamic costs; custom Python cost models are supported
+only by single-root `extract`.
+
+### Custom Tree Cost Models
+
+A `TreeCostModel` is a callable that receives the e-graph, one expression
+node, and the total costs of its immediate children, then returns the total
+cost of that expression. Cost values may be any totally ordered type. The old
+`CostModel` name remains as a compatibility alias for this protocol.
+Models should normally return a cost no smaller than any child; non-monotone
+models are responsible for avoiding cycles in the extracted term.
+
+The expression passed to a custom model contains only its top-level call.
+Arguments representing e-classes are opaque value expressions, although
+builtin values such as numbers and containers are reconstructed recursively.
+Use {meth}`egglog.egraph.EGraph.lookup_function_value` when a model needs to
+inspect a table registered before extraction using those callback arguments
+directly. A same-e-graph lookup cannot evaluate a newly derived key while
+extraction is holding the graph read-only; such a lookup raises `ValueError`.
+
+For example, this model uses a boolean cost for whether an `i64` is even:
 
 ```{code-cell} python
-def is_even_cost_model(egraph: EGraph, expr: Expr, children_costs: list[bool]) -> bool:
+def is_even_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[bool]) -> bool:
     from egglog import i64  # noqa: PLC0415
 
     match expr:
@@ -804,3 +875,56 @@ assert EGraph().extract(i64(10), include_cost=True, cost_model=is_even_cost_mode
 
 assert EGraph().extract(i64(5), include_cost=True, cost_model=is_even_cost_model) == (i64(5), False)
 ```
+
+A `TreeCostModel` can only be used with the tree extractor. Passing one with
+`extractor="greedy-dag"` raises `TypeError`, because a callback that returns
+total child costs does not expose the marginal costs needed to account for
+sharing.
+
+### Additive DAG Cost Models
+
+`DagCostModel(marginal_cost, identity)` is a frozen model that can be used with
+either extraction mode. Its callback returns the cost of the current node
+without its children or container elements. The backend combines those values
+with Python `+`.
+
+Cost values must be effectively immutable and totally ordered. Addition must
+be associative, commutative, and monotone, with `identity` as a two-sided
+identity. Under tree extraction the values are added once per occurrence;
+under greedy-DAG extraction they are added once per selected shared node.
+
+```{code-block} python
+model = DagCostModel(
+    marginal_cost=lambda egraph, node: default_cost_model(egraph, node, []),
+    identity=0,
+)
+
+tree_result, tree_cost = egraph.extract(expr, include_cost=True, cost_model=model)
+dag_result, dag_cost = egraph.extract(
+    expr,
+    include_cost=True,
+    cost_model=model,
+    extractor="greedy-dag",
+)
+```
+
+### Keeping Only the Best Representatives
+
+{meth}`egglog.egraph.EGraph.keep_best` compacts table-backed callables using
+dynamic costs:
+
+```{code-block} python
+egraph.keep_best(target, other_target, extractor="greedy-dag")
+```
+
+Each target must be a constructor, relation, or bodyless function with a
+backend table; eager and builtin primitives are rejected.
+
+This operation is destructive. It clears every table in the e-graph, then
+reinserts only the extracted rows of the requested callables. Declarations and
+cost-table identities remain available, although their rows are cleared unless
+selected. Existing handles returned by {meth}`egglog.egraph.EGraph.let` become
+invalid because their rows have been cleared. Internal let caches are
+invalidated, so the same `EGraph` can safely continue registering new actions
+and running rules. Call it only when dropping all unselected table state is
+intended.

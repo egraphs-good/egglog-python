@@ -204,7 +204,7 @@ class TraverseContext:
                 self(rhs)
                 for cond in conditions:
                     self(cond)
-            case RuleDecl(head, body, _, _):
+            case RuleDecl(head, body, _, _, _):
                 for action in head:
                     self(action)
                 for fact in body:
@@ -343,12 +343,14 @@ class PrettyContext:
                 args = ", ".join(map(self, (rhs, *conditions)))
                 fn = "rewrite" if isinstance(decl, RewriteDecl) else "birewrite"
                 return f"{fn}({self(lhs)}).to({args})", "rewrite"
-            case RuleDecl(head, body, name, eval_mode):
+            case RuleDecl(head, body, name, eval_mode, no_decomp):
                 args = list(map(self, body))
                 if name:
                     args.append(f"name={name!r}")
                 if eval_mode != "seminaive":
                     args.append(f"eval_mode={eval_mode!r}")
+                if no_decomp:
+                    args.append("no_decomp=True")
                 r = ", ".join(map(self, head))
                 return f"rule({', '.join(args)}).then({r})", "rule"
             case SetDecl(_, lhs, rhs):

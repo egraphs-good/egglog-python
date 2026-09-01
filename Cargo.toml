@@ -18,14 +18,13 @@ opentelemetry = "0.28"
 opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "trace"] }
 opentelemetry-stdout = { version = "0.28", features = ["trace"] }
 opentelemetry_sdk = "0.28"
-# egglog-experimental 78cdfa5 targets Egglog 8879605. This pin is PR #1008's rule-name fix
-# backported onto that compatible base, rather than the same patch on current Egglog main.
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318", default-features = false }
-egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
-egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
-egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
-egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
-egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "78cdfa543de9e282c86f446f69943965119c2afe", default-features = false }
+# Egglog main at integration plus the rule-name round-trip fix used by this branch.
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "69177f4f37db9bc6c23899375988dc8b8ecedfc3", default-features = false }
+egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "69177f4f37db9bc6c23899375988dc8b8ecedfc3" }
+egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "69177f4f37db9bc6c23899375988dc8b8ecedfc3" }
+egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "69177f4f37db9bc6c23899375988dc8b8ecedfc3" }
+egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "69177f4f37db9bc6c23899375988dc8b8ecedfc3" }
+egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "6bfb589d1c4695232fc24e9bdf097c49af451823", default-features = false }
 egraph-serialize = { version = "0.3", features = ["serde", "graphviz"] }
 serde_json = "1"
 pyo3-log =  "*"
@@ -36,7 +35,6 @@ tracing = "0.1"
 tracing-opentelemetry = "0.29"
 tracing-subscriber = "0.3"
 uuid = { version = "1.18", features = ["v4"] }
-rayon = "1.11"
 base64 = "0.22.1"
 
 # enable debug symbols for easier profiling
@@ -44,8 +42,8 @@ base64 = "0.22.1"
 debug = true
 
 [patch."https://github.com/egraphs-good/egglog.git"]
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
-egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
-egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
-egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
-egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "0476e56345f52e6fcba4b0c93f5d6d60a2b9e318" }
+egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "69177f4f37db9bc6c23899375988dc8b8ecedfc3" }
+egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "69177f4f37db9bc6c23899375988dc8b8ecedfc3" }
+egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "69177f4f37db9bc6c23899375988dc8b8ecedfc3" }
+egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "69177f4f37db9bc6c23899375988dc8b8ecedfc3" }
+egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "69177f4f37db9bc6c23899375988dc8b8ecedfc3" }
