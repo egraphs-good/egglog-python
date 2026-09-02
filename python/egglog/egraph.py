@@ -1489,17 +1489,21 @@ class EGraph:
             except BaseException as e:
                 e.add_note("while extracting: " + ", ".join(map(str, runtime_exprs)))
                 raise
-            if len(outputs) != len(runtime_exprs) or not all(
-                isinstance(output, bindings.ExtractVariants) for output in outputs
-            ):
+            if len(outputs) != 1 or not isinstance(outputs[0], bindings.UserDefinedOutput):
                 msg = "multi-extract returned unexpected command outputs"
                 raise RuntimeError(msg)
+            output = outputs[0].output.as_multi_extract()
+            if output is None:
+                msg = "multi-extract returned an unexpected user-defined output"
+                raise RuntimeError(msg)
+            termdag = output.termdag
+            terms_by_root = output.terms
+            if len(terms_by_root) != len(runtime_exprs):
+                msg = "multi-extract returned an unexpected user-defined output"
+                raise RuntimeError(msg)
             results: list[list[BASE_EXPR]] = []
-            for runtime_expr, output in zip(runtime_exprs, outputs, strict=True):
-                assert isinstance(output, bindings.ExtractVariants)
-                typed_exprs = self._state.exprs_from_egg(
-                    output.termdag, output.terms, runtime_expr.__egg_typed_expr__.tp
-                )
+            for runtime_expr, terms in zip(runtime_exprs, terms_by_root, strict=True):
+                typed_exprs = self._state.exprs_from_egg(termdag, terms, runtime_expr.__egg_typed_expr__.tp)
                 results.append([
                     cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, typed_expr))
                     for typed_expr in typed_exprs

@@ -47,6 +47,7 @@ __all__ = [
     "IterationReport",
     "Let",
     "Lit",
+    "MultiExtractOutput",
     "Naive",
     "NewSort",
     "Output",
@@ -462,7 +463,13 @@ class IdentSort:
     def __new__(cls, ident: str, sort: str) -> IdentSort: ...
 
 @final
-class UserDefinedCommandOutput: ...
+class MultiExtractOutput:
+    termdag: TermDag
+    terms: list[list[_TermId]]
+
+@final
+class UserDefinedCommandOutput:
+    def as_multi_extract(self) -> MultiExtractOutput | None: ...
 
 @final
 class SingleScan:

@@ -117,6 +117,22 @@ class TestEGraph:
 
         assert egraph.run_program(*egraph.parse_program(program)) == []
 
+    def test_downcast_multi_extract_output(self):
+        egraph = EGraph()
+        (output,) = egraph.parse_and_run_program("(datatype Expr (Num i64)) (multi-extract 1 (Num 1) 2)")
+
+        assert isinstance(output, UserDefinedOutput)
+        multi_extract = output.output.as_multi_extract()
+        assert isinstance(multi_extract, MultiExtractOutput)
+        assert [[multi_extract.termdag.to_string(term) for term in terms] for terms in multi_extract.terms] == [
+            ["(Num 1)"],
+            ["2"],
+        ]
+
+        (other_output,) = egraph.parse_and_run_program("(print-table-stats Num)")
+        assert isinstance(other_output, UserDefinedOutput)
+        assert other_output.output.as_multi_extract() is None
+
     def test_parse_program_preserves_uf_extraction_behavior(self):
         program = (EGG_SMOL_FOLDER / "tests" / "uf-extraction.egg").read_text()
 

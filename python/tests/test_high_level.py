@@ -2585,6 +2585,11 @@ def test_extract_multiple_sequence_preserves_heterogeneous_roots(extractor: Extr
     extracted = egraph.extract_multiple([String("first"), opaque, MultiRoot(2)], 1, extractor=extractor)
 
     assert extracted == [[String("first")], [], [repeated]]
+    assert egraph.extract_multiple([String("first"), opaque, MultiRoot(2)], 2, extractor=extractor) == [
+        [String("first")],
+        [],
+        [repeated, MultiRoot(2)],
+    ]
     assert egraph.extract_multiple(i64(4), 1, extractor=extractor) == [i64(4)]
     homogeneous: list[list[MultiRoot]] = egraph.extract_multiple([MultiRoot(2)], 1, extractor=extractor)
     assert homogeneous == [[repeated]]

@@ -1033,8 +1033,34 @@ mod duration_tests {
 #[derive(Clone)]
 pub struct UserDefinedCommandOutput(Arc<dyn egglog::UserDefinedCommandOutput>);
 
+#[pyclass(eq, frozen, get_all)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct MultiExtractOutput {
+    termdag: TermDag,
+    terms: Vec<Vec<egglog::TermId>>,
+}
+
+#[pymethods]
+impl MultiExtractOutput {
+    fn __repr__(slf: PyRef<'_, Self>, py: Python) -> PyResult<String> {
+        data_repr(py, slf, vec!["termdag", "terms"])
+    }
+}
+
 #[pymethods]
 impl UserDefinedCommandOutput {
+    /// Return this output as a structured experimental multi-extraction, if it is one.
+    fn as_multi_extract(&self) -> Option<MultiExtractOutput> {
+        self.0
+            .as_ref()
+            .as_any()
+            .downcast_ref::<egglog_experimental::MultiExtractOutput>()
+            .map(|output| MultiExtractOutput {
+                termdag: TermDag(output.termdag.clone()),
+                terms: output.terms.clone(),
+            })
+    }
+
     fn __str__(&self) -> String {
         format!("{}", self.0)
     }

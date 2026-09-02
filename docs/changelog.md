@@ -37,7 +37,9 @@ _This project uses semantic versioning_
       `EGraph` or call `set_num_threads(...)` instead.
   - Add `tree` and true `greedy-dag` extraction modes to `extract` and
     `extract_multiple`; add destructive `keep_best`; allow multi-root variant
-    extraction while preserving input order.
+    extraction while preserving input order. Low-level bindings can recover the
+    structured aggregate returned by experimental `multi-extract` with
+    `UserDefinedCommandOutput.as_multi_extract()`.
     - Use the experimental dynamic cost model consistently across the default
       extraction paths, including canonical `set_cost` tables. A compatible raw
       cost table already occupying the canonical name is reused, while an

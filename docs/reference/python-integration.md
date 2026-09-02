@@ -844,6 +844,14 @@ independently; sharing between separate roots does not reduce either cost.
 This API always uses dynamic costs; custom Python cost models are supported
 only by single-root `extract`.
 
+At the low-level bindings layer, the experimental `multi-extract` command
+returns one {class}`egglog.bindings.UserDefinedOutput`.
+{meth}`egglog.bindings.UserDefinedCommandOutput.as_multi_extract` returns a
+{class}`egglog.bindings.MultiExtractOutput` whose `termdag` stores the shared
+term DAG and whose `terms` groups the variant term IDs in root order. It
+returns `None` for a different user-defined output. The high-level method
+performs this conversion automatically.
+
 ### Custom Tree Cost Models
 
 A `TreeCostModel` is a callable that receives the e-graph, one expression

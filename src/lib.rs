@@ -38,6 +38,7 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::error::EggSmolError>()?;
     m.add_class::<crate::termdag::TermDag>()?;
     m.add_class::<crate::conversions::UserDefinedCommandOutput>()?;
+    m.add_class::<crate::conversions::MultiExtractOutput>()?;
     m.add_class::<crate::conversions::Function>()?;
     m.add_class::<crate::extract::Extractor>()?;
     m.add_class::<crate::extract::CostModel>()?;
