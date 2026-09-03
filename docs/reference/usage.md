@@ -60,7 +60,7 @@ It follows [SPEC 0](https://scientific-python.org/specs/spec-0000/) in terms of 
 Configure worker threads per e-graph with `num_threads`. The default of `1`
 keeps execution serial; `0` uses the machine's available parallelism. You can
 change the setting later with `set_num_threads` and inspect it with
-`num_threads`. The bindings no longer read `RAYON_NUM_THREADS`.
+`num_threads`.
 
 ```python
 from egglog import EGraph
@@ -69,15 +69,6 @@ egraph = EGraph(num_threads=4)
 egraph.set_num_threads(0)
 assert egraph.num_threads() >= 1
 ```
-
-## Rule decomposition
-
-Egglog normally decomposes rules before execution. `EGraph` defaults to
-`no_decomp=False`; pass `no_decomp=True` to disable decomposition for
-subsequently registered rules, and use `no_decomp()` or
-`set_no_decomp(...)` to inspect or change that setting. For a single rule,
-pass `no_decomp=True` to `rule(...)` instead. This is an advanced execution
-control.
 
 (community)=
 

@@ -144,6 +144,8 @@ def test_haskell_program_forces_results_and_parser_keeps_expression_text_out() -
         source_n_rank=1.0,
     )
     program = _build_haskell_program()
+    # CI does not run the generated Haskell, so inspect its source to guard
+    # explicit forcing and expression-free metadata lookup.
     assert "beforeNodes <- evaluate (countNodes expr)" in program
     assert "beforeParams <- evaluate (recountParams (replaceConstsWithParams expr))" in program
     assert "afterNodes <- evaluate (countNodes simplified)" in program

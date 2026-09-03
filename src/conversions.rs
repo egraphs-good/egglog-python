@@ -383,7 +383,7 @@ convert_enums!(
         PrintOverallStatistics(span: Span, file: Option<String>)
             c -> egglog::ast::Command::PrintOverallStatistics(
                 c.span.clone().into(),
-                c.file.as_ref().map(|f| f.clone().into())
+                c.file.clone()
             ),
             egglog::ast::Command::PrintOverallStatistics(span, file) => PrintOverallStatistics {
                 span: span.into(),
@@ -764,7 +764,7 @@ convert_struct!(
         },
         r -> RuleReport {
             plan: r.plan.as_ref().map(|p| p.clone().into()),
-            search_and_apply_time: r.search_and_apply_time.clone().into(),
+            search_and_apply_time: r.search_and_apply_time.into(),
             num_matches: r.num_matches
         };
     egglog_reports::RuleSetReport: "{:?}" => RuleSetReport(
@@ -800,8 +800,8 @@ convert_struct!(
                     )
                 })
                 .collect(),
-            search_and_apply_time: r.search_and_apply_time.clone().into(),
-            merge_time: r.merge_time.clone().into(),
+            search_and_apply_time: r.search_and_apply_time.into(),
+            merge_time: r.merge_time.into(),
         };
     egglog_reports::IterationReport: "{:?}" => IterationReport(
         rule_set_report: RuleSetReport,
@@ -813,7 +813,7 @@ convert_struct!(
         },
         r -> IterationReport {
             rule_set_report: (&r.rule_set_report).into(),
-            rebuild_time: r.rebuild_time.clone().into()
+            rebuild_time: r.rebuild_time.into()
         };
     egglog_reports::RunReport: "{:?}" => RunReport(
         iterations: Vec<IterationReport>,
@@ -1051,6 +1051,8 @@ impl MultiExtractOutput {
 impl UserDefinedCommandOutput {
     /// Return this output as a structured experimental multi-extraction, if it is one.
     fn as_multi_extract(&self) -> Option<MultiExtractOutput> {
+        // Dispatch through the wrapped trait object (rather than Arc's blanket
+        // Any implementation), then clone so the Python result outlives this borrow.
         self.0
             .as_ref()
             .as_any()

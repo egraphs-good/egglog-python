@@ -7,16 +7,35 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeVar
 
 from egglog import *
 
 from .domain import *
 
+# The authors' prototype applies `rewriteTree` at most twice in `FixTree.simplifyE`;
+# its Hegg `runEqualitySaturation` stops after 30 inner rounds.
 MAX_PASSES = 2
-HASKELL_INNER_ITERATION_LIMIT = 30
+MAX_INNER_ITERATIONS = 30
+
 BACKOFF_MATCH_LIMIT = 1000
 BACKOFF_BAN_LENGTH = 30
+
+_MAP_KEY = TypeVar("_MAP_KEY", bound=BaseExpr)
+_MAP_VALUE = TypeVar("_MAP_VALUE", bound=BaseExpr)
+
+
+def _left_biased_map_merge(
+    left: Map[_MAP_KEY, _MAP_VALUE], right: Map[_MAP_KEY, _MAP_VALUE]
+) -> Map[_MAP_KEY, _MAP_VALUE]:
+    """Merge maps while retaining the left value for every duplicate key."""
+    return map_fold_kv(
+        lambda result, key, value: catch(lambda: result[key]).match(
+            lambda old_value: result.insert(key, old_value), result.insert(key, value)
+        ),
+        left,
+        right,
+    )
 
 
 # Keep derived map operations as explicitly typed folds in this research
@@ -28,13 +47,7 @@ BACKOFF_BAN_LENGTH = 30
 CONSTS = constant(
     "CONSTS",
     Map[Num, f64],
-    merge=lambda left, right: map_fold_kv(
-        lambda result, key, value: catch(lambda: result[key]).match(
-            lambda old_value: result.insert(key, old_value), result.insert(key, value)
-        ),
-        left,
-        right,
-    ),
+    merge=_left_biased_map_merge,
 )
 
 # Map a monomial of the form `{polynomial(P): 1}` to one representative `P`.
@@ -50,13 +63,7 @@ CONSTS = constant(
 POLYNOMIAL_MONOMIALS = constant(
     "POLYNOMIAL_MONOMIALS",
     Map[ContainerMonomial, ContainerPolynomial],
-    merge=lambda left, right: map_fold_kv(
-        lambda result, key, value: catch(lambda: result[key]).match(
-            lambda old_value: result.insert(key, old_value), result.insert(key, value)
-        ),
-        left,
-        right,
-    ),
+    merge=_left_biased_map_merge,
 )
 
 
@@ -80,15 +87,9 @@ def binary_analysis_rules(x: Num, a: f64, b: f64) -> Iterable[RewriteOrRule]:
     yield rewrite(sqrt(Num(a)), subsume=True).to(Num(a.sqrt()), a >= 0.0, a.sqrt().is_finite())
     yield rule(sqrt(Num(a)), a < 0.0).then(panic("Sqrt of negative number"))
 
-    # cancellations
+    # Identities that do not require a nonzero assumption.
     yield rewrite(x - x, subsume=True).to(Num(0.0))
-    yield rewrite(x / x, subsume=True).to(Num(1.0), x != Num(0.0))
-
-    # multiplicative of inverse
-    yield rewrite(x * (1 / x), subsume=True).to(Num(1.0), x != Num(0.0))
-
     yield rewrite(0 * x, subsume=True).to(Num(0.0))
-    yield rewrite(0 / x, subsume=True).to(Num(0.0), x != Num(0.0))
 
 
 @ruleset
@@ -208,15 +209,16 @@ def binary_basic_rules(x: Num, y: Num, z: Num, af: f64, bf: f64, cf: f64, df: f6
     yield rewrite(x * (y / z)).to((x * y) / z)  # no-op
     yield rewrite((x * y) / z).to(x * (y / z))  # no-op
     yield rewrite((a * x) * (b * y)).to((a * b) * (x * y))  # no-op
-    yield rewrite(a * x + b).to(a * (x + b / a))  # no-op
-    yield rewrite(a * x - b).to(a * (x - b / a))  # no-op
-    yield rewrite(b - (a * x)).to(a * ((b / a) - x))  # no-op
+    yield rewrite(a * x + b).to(a * (x + b / a), af != f64(0.0))  # no-op
+    yield rewrite(a * x - b).to(a * (x - b / a), af != f64(0.0))  # no-op
+    yield rewrite(b - (a * x)).to(a * ((b / a) - x), af != f64(0.0))  # no-op
     yield rewrite(a * x + b * y).to(
-        a * (x + (b / a) * y)
+        a * (x + (b / a) * y),
+        af != f64(0.0),
     )  # factoring out one constant from one term, and dividing the others who have constant terms to compensate
-    yield rewrite(a * x - b * y).to(a * (x - (b / a) * y))  # same as above
-    yield rewrite(a * x + b / y).to(a * (x + (b / a) / y))  # same as above
-    yield rewrite(a * x - b / y).to(a * (x - (b / a) / y))  # same as above
+    yield rewrite(a * x - b * y).to(a * (x - (b / a) * y), af != f64(0.0))  # same as above
+    yield rewrite(a * x + b / y).to(a * (x + (b / a) / y), af != f64(0.0))  # same as above
+    yield rewrite(a * x - b / y).to(a * (x - (b / a) / y), af != f64(0.0))  # same as above
 
     yield rewrite(a / (b * x)).to((a / b) / x)  # no-op
     yield rewrite(x / (b * y)).to((1 / b) * x / y)  # no-op
@@ -225,8 +227,8 @@ def binary_basic_rules(x: Num, y: Num, z: Num, af: f64, bf: f64, cf: f64, df: f6
     yield rewrite(b - x / a).to(((b * a) - x) / a)  # same as above
     yield rewrite(x / a + b * y).to((x + (b * a) * y) / a)  # same as above
     yield rewrite(x / a - b * y).to((x - (b * a) * y) / a)  # same as above
-    yield rewrite((b + a * x) / (c + d * y)).to((a / d) * (b / a + x) / (c / d + y))
-    yield rewrite((b + x) / (c + d * y)).to((1 / d) * (b + x) / (c / d + y))
+    yield rewrite((b + a * x) / (c + d * y)).to((a / d) * (b / a + x) / (c / d + y), af != f64(0.0), df != f64(0.0))
+    yield rewrite((b + x) / (c + d * y)).to((1 / d) * (b + x) / (c / d + y), df != f64(0.0))
 
     # identities
     yield rewrite(0 + x).to(x)
@@ -295,6 +297,7 @@ def container_basic_rules(
                 poly2,
             ).unwrap()
         ],
+        coef != f64(0.0),
         poly2.length() == nonconst_poly.length(),
         poly1
         == map_fold_kv(
@@ -519,7 +522,7 @@ def _run_single_pass(
     n = egraph.let("n", num)
     current_size = _graph_size(egraph)
     saturated = False
-    for _ in range(HASKELL_INNER_ITERATION_LIMIT):
+    for _ in range(MAX_INNER_ITERATIONS):
         analysis_report = egraph.run(analysis_schedule)
         rewrite_report = egraph.run(schedule)
         current_size = _graph_size(egraph)
@@ -530,12 +533,13 @@ def _run_single_pass(
     return extracted, cost, current_size, saturated
 
 
-def run_paper_pipeline(
+def _run_pipeline(
     initial: Num,
-    decode: Callable[[Num], Num] = lambda x: x,
-    cost_model: CostModel[ParamCost] = param_cost_model,
-    schedule: Schedule = binary_schedule,
-    analysis_schedule: Schedule = binary_analysis_schedule,
+    *,
+    decode: Callable[[Num], Num],
+    cost_model: CostModel[ParamCost],
+    schedule: Schedule,
+    analysis_schedule: Schedule,
 ) -> PaperPipelineReport:
     current, before_cost = EGraph(save_egglog_string=False).extract(initial, include_cost=True, cost_model=cost_model)
     # get schedule decls so that it's pre-cached
@@ -581,9 +585,21 @@ def run_paper_pipeline(
     )
 
 
+def run_paper_pipeline(initial: Num) -> PaperPipelineReport:
+    """Run the retained paper pipeline with the binary representation."""
+    return _run_pipeline(
+        initial,
+        decode=lambda num: num,
+        cost_model=param_cost_model,
+        schedule=binary_schedule,
+        analysis_schedule=binary_analysis_schedule,
+    )
+
+
 def run_paper_pipeline_container(initial: Num) -> PaperPipelineReport:
+    """Run the retained paper pipeline with the container representation."""
     try:
-        return run_paper_pipeline(
+        return _run_pipeline(
             initial,
             decode=containers_to_binary,
             cost_model=container_cost_model,

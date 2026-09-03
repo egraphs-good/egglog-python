@@ -196,8 +196,33 @@ class TestEGraph:
         with pytest.raises(
             EggSmolError,
             match="to have type",
-        ):
+        ) as exc_info:
             egraph.run_program(*egraph.parse_program(program))
+
+        assert not exc_info.value.replayable_by_fail
+
+    @pytest.mark.parametrize(
+        "program",
+        [
+            pytest.param("(check (= 1 2))", id="check"),
+            pytest.param('(panic "expected")', id="action"),
+        ],
+    )
+    def test_runtime_command_error_is_replayable_by_fail(self, program: str):
+        with pytest.raises(EggSmolError) as exc_info:
+            EGraph().parse_and_run_program(program)
+
+        assert exc_info.value.replayable_by_fail
+
+    def test_parse_error_is_not_replayable_by_fail(self):
+        with pytest.raises(EggSmolError) as exc_info:
+            EGraph().parse_and_run_program("(")
+
+        assert not exc_info.value.replayable_by_fail
+
+    def test_egglog_error_constructor_defaults_to_non_replayable(self):
+        assert not EggSmolError("expected").replayable_by_fail
+        assert EggSmolError("expected", True).replayable_by_fail
 
     def test_parse_and_run_program_error_keeps_recording_transactional(self):
         program = """(function f (i64) i64 :no-merge)
@@ -455,6 +480,27 @@ class TestEGraph:
         with pytest.raises(EggSmolError, match="Unable to find any valid extraction"):
             egraph.extract_value(value, sort)
 
+    def test_tree_extractor_extract_variants(self):
+        egraph = EGraph()
+        egraph.parse_and_run_program(
+            "(datatype Expr (Num i64)) (let root (Num 1)) (union root (Num 2)) (union root (Num 3))"
+        )
+        sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))
+        model = CostModel(
+            lambda _name, annotation, children: annotation + sum(children),
+            lambda _name, _args: 1,
+            lambda _name, _value, children: sum(children),
+            lambda _name, _value: 1,
+        )
+        extractor = Extractor([sort], egraph, model)
+        termdag = TermDag()
+
+        variants = extractor.extract_variants(egraph, termdag, value, 2, sort)
+
+        assert len(variants) == 2
+        assert {termdag.to_string(term) for _cost, term in variants} <= {"(Num 1)", "(Num 2)", "(Num 3)"}
+        assert all(cost == 2 for cost, _term in variants)
+
     @pytest.mark.parametrize("extractor", ["tree", "greedy-dag"])
     def test_dag_cost_model_batch_extraction(self, extractor):
         egraph = EGraph()
@@ -466,6 +512,7 @@ class TestEGraph:
             lambda name, value: 0,
             lambda name, value: 1,
         )
+        assert str(model).endswith(")")
 
         termdag, best = extract_best_with_dag_cost_model(egraph, [(sort, value)], model, extractor=extractor)
         assert best[0] is not None

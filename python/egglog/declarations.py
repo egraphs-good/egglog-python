@@ -32,8 +32,6 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "BUILTIN_EGG_FN_NAMES",
-    "BUILTIN_EGG_SORT_NAMES",
     "ActionCommandDecl",
     "ActionDecl",
     "BackOffDecl",
@@ -109,8 +107,8 @@ __all__ = [
 ]
 
 
-BUILTIN_EGG_FN_NAMES: set[str] = {"!="}
-BUILTIN_EGG_SORT_NAMES: set[str] = set()
+_BUILTIN_EGG_FN_NAMES: set[str] = {"!="}
+_BUILTIN_EGG_SORT_NAMES: set[str] = set()
 
 
 @dataclass(match_args=False)
@@ -972,6 +970,7 @@ class GetCostDecl:
 @dataclass(frozen=True)
 class ValueDecl:
     value: Value
+    owner: object = field(repr=False)
 
 
 ExprDecl: TypeAlias = (

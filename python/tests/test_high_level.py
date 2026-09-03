@@ -1,7 +1,6 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
-import gc
 import importlib
 import math
 import pathlib
@@ -15,28 +14,22 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import egglog.bindings as egg_bindings
 import egglog.builtins as egg_builtins
 from egglog import *
 from egglog.declarations import (
-    BUILTIN_EGG_FN_NAMES,
-    BUILTIN_EGG_SORT_NAMES,
-    CallableDecl,
+    BiRewriteDecl,
     CallDecl,
-    ClassDecl,
-    Declarations,
-    FunctionDecl,
     FunctionRef,
-    FunctionSignature,
-    HasDeclarations,
     Ident,
     JustTypeRef,
-    LitDecl,
     MethodRef,
+    RewriteDecl,
     TypedExprDecl,
-    TypeRefWithVars,
 )
-from egglog.egraph import get_current_ruleset
 from egglog.runtime import RuntimeExpr, RuntimeFunction
+
+_BuiltinExprT = TypeVar("_BuiltinExprT", bound=BaseExpr)
 
 
 class TestExprStr:
@@ -62,6 +55,16 @@ def test_rule_eval_mode(eval_mode: RuleEvalMode) -> None:
     egraph.check(rel(i64(1)))
 
 
+@pytest.mark.parametrize("seminaive", [False, True])
+def test_rule_eval_mode_rejects_unknown_value(seminaive: bool) -> None:
+    rel = relation(f"invalid_eval_mode_{seminaive}", i64)
+    x = var("x", i64)
+    invalid = cast("RuleEvalMode", "unknown")
+
+    with pytest.raises(ValueError, match="Unknown rule evaluation mode"):
+        EGraph(seminaive=seminaive).register(rule(rel(x), eval_mode=invalid).then(rel(x)))
+
+
 def test_per_egraph_configuration() -> None:
     egraph = EGraph(num_threads=2, no_decomp=True)
 
@@ -73,14 +76,309 @@ def test_per_egraph_configuration() -> None:
     assert not egraph.no_decomp()
 
 
-def test_rule_no_decomp_reaches_backend() -> None:
-    rel = relation("no_decomp_rel", i64)
-    x = var("x", i64)
-    egraph = EGraph(save_egglog_string=True)
+@pytest.mark.parametrize("use_setter", [False, True], ids=["constructor", "setter"])
+def test_zero_threads_uses_available_parallelism(*, use_setter: bool) -> None:
+    egraph = EGraph(num_threads=1 if use_setter else 0)
+    if use_setter:
+        egraph.set_num_threads(0)
 
-    egraph.register(rule(rel(x), no_decomp=True).then(rel(x + 1)))
+    assert egraph.num_threads() >= 1
+
+
+@pytest.mark.parametrize("use_setter", [False, True], ids=["constructor", "setter"])
+def test_egraph_no_decomp_reaches_saved_rules(*, use_setter: bool) -> None:
+    rel = relation(f"no_decomp_rel_{use_setter}", i64)
+    x = var("x", i64)
+    egraph = EGraph(save_egglog_string=True, no_decomp=not use_setter)
+    if use_setter:
+        egraph.set_no_decomp(True)
+
+    egraph.register(rule(rel(x)).then(rel(x + 1)))
 
     assert ":no-decomp" in egraph.as_egglog_string
+
+
+def test_global_naive_mode_reaches_saved_rules() -> None:
+    rel = relation("global_naive_saved_rule", i64)
+    x = var("x", i64)
+    egraph = EGraph(save_egglog_string=True, seminaive=False)
+
+    egraph.register(rule(rel(x)).then(rel(x + 1)))
+
+    assert ":naive" in egraph.as_egglog_string
+
+
+@pytest.mark.parametrize("bidirectional", [False, True], ids=["rewrite", "birewrite"])
+def test_global_rule_options_reach_saved_rewrites(*, bidirectional: bool) -> None:
+    class RewriteConfigExpr(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    @function
+    def rewrite_config_lookup(value: i64) -> i64: ...
+
+    @function
+    def rewrite_config_read(value: i64) -> i64:
+        return rewrite_config_lookup(value)
+
+    grounded = relation("rewrite_config_grounded", i64)
+    x = var("x", i64, egg_name="__expr_0")
+    rewrite_builder = birewrite if bidirectional else rewrite
+    registered = rewrite_builder(RewriteConfigExpr(x)).to(RewriteConfigExpr(rewrite_config_read(x)), grounded(x))
+    egraph = EGraph(
+        set_(rewrite_config_lookup(i64(1))).to(i64(2)),
+        grounded(i64(1)),
+        RewriteConfigExpr(i64(1)),
+        save_egglog_string=True,
+        seminaive=False,
+        no_decomp=True,
+    )
+
+    egraph.register(registered)
+    report = egraph.run(1)
+    egraph.check(eq(RewriteConfigExpr(i64(1))).to(RewriteConfigExpr(i64(2))))
+
+    transcript = egraph.as_egglog_string
+    expected_rule_count = 2 if bidirectional else 1
+    expected_decl_type = BiRewriteDecl if bidirectional else RewriteDecl
+    assert report.num_matches_per_rule
+    assert all(isinstance(decl, expected_decl_type) for decl in report.num_matches_per_rule)
+    assert transcript.count(":naive") == expected_rule_count
+    assert transcript.count(":no-decomp") == expected_rule_count
+    egg_bindings.EGraph().parse_and_run_program(transcript)
+
+
+@pytest.mark.parametrize("egg_name", ["check", "true", "_", "@internal"])
+def test_saved_transcript_rejects_parser_sensitive_explicit_callable_name(egg_name: str) -> None:
+    rel = relation(f"python_name_{egg_name}", egg_fn=egg_name)
+    egraph = EGraph(save_egglog_string=True)
+
+    with pytest.raises(ValueError, match="Explicit Egglog callable name"):
+        egraph.register(rel())
+
+    assert not egraph.as_egglog_string
+
+
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+def test_empty_explicit_backend_names_are_treated_as_unspecified(*, save_egglog_string: bool) -> None:
+    class EmptyNamed(Expr, egg_sort=""):
+        def __init__(self) -> None: ...
+
+    marker = relation("empty_explicit_backend_name", EmptyNamed, egg_fn="")
+    egraph = EGraph(marker(EmptyNamed()), save_egglog_string=save_egglog_string)
+
+    egraph.check(marker(EmptyNamed()))
+    if save_egglog_string:
+        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
+@pytest.mark.parametrize(
+    ("value", "normalized"),
+    [
+        pytest.param("a\rb", "a\nb", id="cr"),
+        pytest.param("a\r\nb", "a\nb", id="crlf"),
+    ],
+)
+def test_saved_transcript_preserves_string_newlines(value: str, normalized: str) -> None:
+    marker = relation(f"transcript_newline_{value.count(chr(13))}_{len(value)}", String)
+    egraph = EGraph(marker(String(value)), save_egglog_string=True)
+
+    with pytest.raises(EggSmolError):
+        egraph.check(marker(String(normalized)))
+
+    transcript = egraph.as_egglog_string
+    assert value in transcript
+    egg_bindings.EGraph().parse_and_run_program(transcript)
+
+
+@pytest.mark.parametrize("message", ['bad "quote"', "bad \\ slash"])
+def test_saved_transcript_escapes_panic_message(message: str) -> None:
+    trigger = relation("escaped_panic_message_trigger")
+    panic_rules = ruleset(rule(trigger()).then(panic(message)), name="escaped-panic-message")
+    egraph = EGraph(trigger(), save_egglog_string=True)
+
+    with pytest.raises(EggSmolError) as exc_info:
+        egraph.run(panic_rules)
+
+    assert message in str(exc_info.value)
+    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
+def test_saved_transcript_allows_reserved_callable_name_in_nested_expression() -> None:
+    @function(egg_fn="check")
+    def nested_check(value: i64Like) -> i64: ...
+
+    egraph = EGraph(save_egglog_string=True)
+    egraph.register(set_(nested_check(1)).to(i64(7)))
+
+    assert egraph.lookup_function_value(nested_check(1)) == i64(7)
+    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string + "\n(check (= (check 1) 7))")
+
+
+def test_saved_transcript_allows_command_head_name_in_rule_action() -> None:
+    source = relation("rule_action_command_head_source")
+    target = relation("rule_action_command_head_target", egg_fn="check")
+    action_rules = ruleset(rule(source()).then(target()), name="rule-action-command-head")
+    egraph = EGraph(source(), save_egglog_string=True)
+
+    egraph.run(action_rules)
+
+    egraph.check(target())
+    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
+def test_saved_transcript_rejects_equality_head_name_in_rule_fact() -> None:
+    source = relation("equality_head_source", i64, i64)
+    claimed = relation("equality_head_claimed", i64, i64, egg_fn="=")  # type: ignore[call-overload]
+    target = relation("equality_head_target")
+    x, y = vars_("x y", i64)
+    equality_head_rules = ruleset(rule(source(x, y), claimed(x, y)).then(target()), name="equality-head")
+
+    direct = EGraph(source(i64(1), i64(2)))
+    direct.run(equality_head_rules)
+    assert not direct.check_bool(target())
+
+    recorded = EGraph(source(i64(1), i64(2)), save_egglog_string=True)
+    with pytest.raises(ValueError, match="cannot be used as a fact"):
+        recorded.run(equality_head_rules)
+
+
+def test_saved_transcript_allows_equality_head_name_as_standalone_action() -> None:
+    claimed = relation("standalone_equality_head", i64, i64, egg_fn="=")  # type: ignore[call-overload]
+    egraph = EGraph(save_egglog_string=True)
+
+    egraph.register(claimed(i64(1), i64(2)))
+
+    assert egraph.function_size(claimed) == 1
+    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
+def test_saved_transcript_rejects_literal_explicit_sort_name() -> None:
+    class LiteralNamed(Expr, egg_sort="true"):
+        def __init__(self) -> None: ...
+
+    egraph = EGraph(save_egglog_string=True)
+
+    with pytest.raises(ValueError, match="Explicit Egglog sort name"):
+        egraph.register(LiteralNamed())
+
+    assert not egraph.as_egglog_string
+
+
+def test_saved_transcript_rejects_unparseable_explicit_sort_name() -> None:
+    class UnparseableNamed(Expr, egg_sort="has space"):
+        def __init__(self) -> None: ...
+
+    egraph = EGraph(save_egglog_string=True)
+
+    with pytest.raises(ValueError, match="Explicit Egglog sort name"):
+        egraph.register(UnparseableNamed())
+
+    assert not egraph.as_egglog_string
+
+
+@pytest.mark.parametrize("egg_name", ["_", "@internal"])
+def test_saved_transcript_rejects_context_sensitive_explicit_sort_name(egg_name: str) -> None:
+    class ContextSensitiveNamed(Expr, egg_sort=egg_name):
+        def __init__(self) -> None: ...
+
+    egraph = EGraph(save_egglog_string=True)
+
+    with pytest.raises(ValueError, match="Explicit Egglog sort name"):
+        egraph.register(Map[ContextSensitiveNamed, i64].empty())
+
+    assert not egraph.as_egglog_string
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("has space", id="space"),
+        pytest.param("x)", id="parenthesis"),
+        pytest.param("x;y", id="comment"),
+        pytest.param("x\ny", id="newline"),
+    ],
+)
+def test_saved_transcript_rejects_unparseable_let_name(name: str) -> None:
+    egraph = EGraph(save_egglog_string=True)
+
+    with pytest.raises(ValueError, match="does not serialize as one Egglog symbol"):
+        egraph.let(name, i64(1))
+
+    assert not egraph.as_egglog_string
+
+
+def test_direct_egraph_still_accepts_non_source_let_name() -> None:
+    egraph = EGraph()
+
+    value = egraph.let("has space", i64(1))
+
+    egraph.check(eq(value).to(i64(1)))
+
+
+@pytest.mark.parametrize("name", ["has space", "x;y", "x\ny"])
+def test_saved_transcript_rejects_unparseable_ruleset_name(name: str) -> None:
+    named_ruleset = ruleset(name=name)
+
+    EGraph().run(named_ruleset)
+
+    recorded = EGraph(save_egglog_string=True)
+    with pytest.raises(ValueError, match="Ruleset name"):
+        recorded.run(named_ruleset)
+    assert not recorded.as_egglog_string
+
+
+def test_saved_transcript_rejects_literal_explicit_variable_name() -> None:
+    source = relation("literal_variable_source", i64)
+    destination = relation("literal_variable_destination", i64)
+    x = var("x", i64, egg_name="0")
+
+    direct = EGraph(source(i64(7)))
+    direct.register(rule(source(x)).then(destination(x)))
+    direct.run(1)
+    direct.check(destination(i64(7)))
+
+    recorded = EGraph(source(i64(7)), save_egglog_string=True)
+    with pytest.raises(ValueError, match="Egglog variable name"):
+        recorded.register(rule(source(x)).then(destination(x)))
+
+
+@pytest.mark.parametrize(
+    ("python_name", "egg_name"),
+    [
+        pytest.param("", None, id="default-wildcard"),
+        pytest.param("has space", None, id="default-space"),
+        pytest.param("x", "@x", id="internal"),
+    ],
+)
+def test_saved_transcript_rejects_non_source_variable_name(python_name: str, egg_name: str | None) -> None:
+    source = relation("non_source_variable_source", i64)
+    destination = relation("non_source_variable_destination", i64)
+    x = var(python_name, i64, egg_name=egg_name)
+
+    direct = EGraph(source(i64(7)))
+    direct.register(rule(source(x)).then(destination(x)))
+    direct.run(1)
+    direct.check(destination(i64(7)))
+
+    recorded = EGraph(source(i64(7)), save_egglog_string=True)
+    with pytest.raises(ValueError, match="Egglog variable name"):
+        recorded.register(rule(source(x)).then(destination(x)))
+
+
+def test_saved_transcript_rejects_variable_wildcard_semantic_drift() -> None:
+    source = relation("wildcard_variable_source", i64, i64)
+    destination = relation("wildcard_variable_destination")
+    x = var("x", i64, egg_name="_")
+    repeated_variable_rule = rule(source(x, x)).then(destination())
+
+    direct = EGraph(source(i64(1), i64(2)))
+    direct.register(repeated_variable_rule)
+    direct.run(1)
+    assert not direct.check_bool(destination())
+
+    recorded = EGraph(source(i64(1), i64(2)), save_egglog_string=True)
+    with pytest.raises(ValueError, match="Egglog variable name"):
+        recorded.register(repeated_variable_rule)
 
 
 def test_eqsat_basic():
@@ -184,6 +482,32 @@ def test_synthetic_lets_skip_explicit_let_conflicts() -> None:
     assert egraph.function_size(LetConflictNum.pair) == 1
 
 
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+@pytest.mark.parametrize("explicit_first", [False, True], ids=["generated-first", "explicit-first"])
+def test_synthetic_let_names_reserve_explicit_lets_in_a_batch(
+    *, save_egglog_string: bool, explicit_first: bool
+) -> None:
+    class BatchedLetConflict(Expr):
+        @classmethod
+        def leaf(cls, value: i64Like) -> BatchedLetConflict: ...
+
+        @classmethod
+        def pair(cls, left: BatchedLetConflict, right: BatchedLetConflict) -> BatchedLetConflict: ...
+
+    explicit = let("__expr_0", BatchedLetConflict.leaf(2))
+    shared = BatchedLetConflict.leaf(1)
+    pair = BatchedLetConflict.pair(shared, shared)
+    actions = (explicit, pair) if explicit_first else (pair, explicit)
+    egraph = EGraph(save_egglog_string=save_egglog_string)
+
+    egraph.register(*actions)
+
+    assert egraph.function_size(BatchedLetConflict.leaf) == 2
+    assert egraph.function_size(BatchedLetConflict.pair) == 1
+    if save_egglog_string:
+        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
 def test_synthetic_let_names_do_not_shadow_default_rewrite_variables() -> None:
     default_ruleset = ruleset(name="synthetic-let-shadow-default-rewrite")
 
@@ -205,6 +529,28 @@ def test_synthetic_let_names_do_not_shadow_default_rewrite_variables() -> None:
     egraph.check(eq(LetShadowDefaultNum.make(i64(1))).to(LetShadowDefaultNum(i64(1))))
 
 
+def test_shared_expression_discovery_handles_deep_dags() -> None:
+    class DeepDag(Expr):
+        @classmethod
+        def leaf(cls) -> DeepDag: ...
+
+        @classmethod
+        def wrap(cls, value: DeepDag) -> DeepDag: ...
+
+        @classmethod
+        def pair(cls, left: DeepDag, right: DeepDag) -> DeepDag: ...
+
+    expr = DeepDag.leaf()
+    for index in range(1_050):
+        expr = DeepDag.wrap(expr)
+        if index % 100 == 99:
+            expr = DeepDag.pair(expr, expr)
+
+    egraph = EGraph(expr)
+
+    assert egraph.function_size(DeepDag.wrap) == 1_050
+
+
 def test_save_egglog_string_defaults_to_disabled() -> None:
     egraph = EGraph()
 
@@ -212,31 +558,270 @@ def test_save_egglog_string_defaults_to_disabled() -> None:
         _ = egraph.as_egglog_string
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",
+        "true",
+        "false",
+        "123",
+        "-1",
+        "1e3",
+        "NaN",
+        "inf",
+        "-inf",
+        "=",
+        "sort",
+        "datatype",
+        "datatype*",
+        "function",
+        "constructor",
+        "relation",
+        "ruleset",
+        "unstable-combined-ruleset",
+        "rule",
+        "rewrite",
+        "birewrite",
+        "run",
+        "run-schedule",
+        "extract",
+        "check",
+        "prove",
+        "prove-exists",
+        "push",
+        "pop",
+        "print-stats",
+        "print-function",
+        "print-size",
+        "input",
+        "output",
+        "include",
+        "fail",
+        "let",
+        "set",
+        "delete",
+        "subsume",
+        "union",
+        "panic",
+        "for",
+        "with-ruleset",
+        "with-dynamic-cost",
+        "set-cost",
+        "let-scheduler",
+        "multi-extract",
+        "keep-best",
+        "print-table-stats",
+        "primitive",
+    ],
+)
+def test_generated_relation_names_avoid_egglog_parser_tokens(name: str) -> None:
+    relation_with_parser_token_name = relation(name)
+    egraph = EGraph(save_egglog_string=True)
+
+    egraph.register(relation_with_parser_token_name())
+
+    egraph.check(relation_with_parser_token_name())
+
+
+@pytest.mark.parametrize("generated_first", [True, False], ids=["generated-first", "explicit-first"])
+def test_generated_relation_names_reserve_explicit_backend_names(generated_first: bool) -> None:
+    generated = relation("batch_generated_backend_name", i64)
+    generated_candidate = f"{__name__.replace('.', '_')}_batch_generated_backend_name"
+    explicit = relation("explicit_relation", i64, egg_fn=generated_candidate)
+    generated_action = generated(i64(1))
+    explicit_action = explicit(i64(2))
+    actions = (generated_action, explicit_action) if generated_first else (explicit_action, generated_action)
+    egraph = EGraph(save_egglog_string=True)
+
+    egraph.register(*actions)
+
+    egraph.check(generated(i64(1)), explicit(i64(2)))
+    egraph.check_fail(generated(i64(2)))
+    egraph.check_fail(explicit(i64(1)))
+
+
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+@pytest.mark.parametrize("explicit_first", [False, True], ids=["generated-first", "explicit-first"])
+def test_synthetic_let_names_reserve_explicit_backend_names(*, save_egglog_string: bool, explicit_first: bool) -> None:
+    class SyntheticLetNode(Expr):
+        @classmethod
+        def leaf(cls, value: i64Like) -> SyntheticLetNode: ...
+
+        @classmethod
+        def pair(cls, left: SyntheticLetNode, right: SyntheticLetNode) -> SyntheticLetNode: ...
+
+    explicit = relation("synthetic_let_explicit", egg_fn="$__expr_0")
+    shared = SyntheticLetNode.leaf(1)
+    pair = SyntheticLetNode.pair(shared, shared)
+    actions = (explicit(), pair) if explicit_first else (pair, explicit())
+    egraph = EGraph(save_egglog_string=save_egglog_string)
+
+    egraph.register(*actions)
+
+    egraph.check(explicit())
+    assert egraph.function_size(SyntheticLetNode.pair) == 1
+    if save_egglog_string:
+        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+def test_synthetic_lets_do_not_capture_unbound_variables(*, save_egglog_string: bool) -> None:
+    class SyntheticLetVariable(Expr):
+        @classmethod
+        def leaf(cls, value: i64Like) -> SyntheticLetVariable: ...
+
+        @classmethod
+        def pair(cls, left: SyntheticLetVariable, right: SyntheticLetVariable) -> SyntheticLetVariable: ...
+
+    x = var("synthetic_let_x", i64)
+    shared = SyntheticLetVariable.leaf(x)
+    egraph = EGraph(save_egglog_string=save_egglog_string)
+
+    with pytest.raises(EggSmolError, match="Unbound symbol"):
+        egraph.register(SyntheticLetVariable.pair(shared, shared))
+
+    if save_egglog_string:
+        with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
+            egraph.register(SyntheticLetVariable.leaf(1))
+    else:
+        egraph.register(SyntheticLetVariable.leaf(1))
+
+
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+def test_late_explicit_backend_name_cannot_replace_registered_generated_relation(*, save_egglog_string: bool) -> None:
+    generated = relation("late_explicit_backend_name", i64)
+    egraph = EGraph(save_egglog_string=save_egglog_string)
+    egraph.register(generated(i64(1)))
+    transcript = egraph.as_egglog_string if save_egglog_string else None
+
+    generated_name = f"{__name__.replace('.', '_')}_late_explicit_backend_name"
+    explicit = relation("late_explicit_relation", i64, egg_fn=generated_name)
+    with pytest.raises(ValueError, match="already registered"):
+        egraph.register(explicit(i64(2)))
+
+    egraph.check(generated(i64(1)))
+    if transcript is not None:
+        assert egraph.as_egglog_string.startswith(transcript)
+
+
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+def test_duplicate_explicit_backend_name_does_not_publish_a_failed_alias(*, save_egglog_string: bool) -> None:
+    @function(egg_fn="duplicate_explicit_backend")
+    def first(value: i64Like) -> i64: ...
+
+    @function(egg_fn="duplicate_explicit_backend")
+    def second(value: i64Like) -> i64: ...
+
+    egraph = EGraph(set_(first(1)).to(i64(10)), save_egglog_string=save_egglog_string)
+    transcript = egraph.as_egglog_string if save_egglog_string else None
+
+    with pytest.raises(ValueError, match="already registered"):
+        egraph.register(set_(second(2)).to(i64(20)))
+
+    assert egraph.lookup_function_value(first(1)) == i64(10)
+    assert "first" in str(egraph.freeze())
+    if transcript is not None:
+        assert egraph.as_egglog_string == transcript
+        egg_bindings.EGraph().parse_and_run_program(transcript)
+
+
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+def test_late_explicit_backend_name_cannot_replace_registered_generated_sort(*, save_egglog_string: bool) -> None:
+    class GeneratedLateSort(Expr):
+        def __init__(self) -> None: ...
+
+    egraph = EGraph(save_egglog_string=save_egglog_string)
+    egraph.register(GeneratedLateSort())
+    transcript = egraph.as_egglog_string if save_egglog_string else None
+
+    class ExplicitLateSort(Expr, egg_sort=f"{__name__}.GeneratedLateSort"):
+        def __init__(self) -> None: ...
+
+    with pytest.raises(ValueError, match="already registered"):
+        egraph.register(ExplicitLateSort())
+
+    egraph.check(GeneratedLateSort())
+    if transcript is not None:
+        assert egraph.as_egglog_string.startswith(transcript)
+
+
+def test_generated_relation_names_avoid_command_macro_heads() -> None:
+    source = relation("command_macro_source")
+    generated = relation("unstable-fresh!")
+    copy = ruleset(rule(source()).then(generated()))
+    egraph = EGraph(source(), save_egglog_string=True)
+
+    egraph.run(copy)
+
+    egraph.check(generated())
+
+
+@pytest.mark.parametrize("name", ["1.0", "-1.0", "+.5", "1.", "1E+3"])
+def test_generated_sort_names_avoid_egglog_float_literals(name: str) -> None:
+    def init(_self: object) -> None: ...
+
+    numeric_name_expr = type(name, (Expr,), {"__module__": __name__, "__init__": init})
+    expr = numeric_name_expr()
+    egraph = EGraph(save_egglog_string=True)
+
+    egraph.register(expr)
+
+    egraph.check(expr)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("has space", id="space"),
+        pytest.param("x;y", id="comment"),
+        pytest.param("x(y)", id="parentheses"),
+        pytest.param("x\ny", id="newline"),
+    ],
+)
+def test_generated_sort_names_are_safe_in_saved_source(name: str) -> None:
+    def init(_self: object) -> None: ...
+
+    generated_expr = type(name, (Expr,), {"__module__": __name__, "__init__": init})
+    expr = generated_expr()
+    egraph = EGraph(expr, save_egglog_string=True)
+
+    egraph.check(expr)
+    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
 def test_saved_egglog_transcript_close_is_idempotent() -> None:
     egraph = EGraph(save_egglog_string=True)
-    assert egraph._state.egglog_file_state is not None
-    path = pathlib.Path(egraph._state.egglog_file_state.path)
     egraph.let("x", i64(1))
     assert egraph.as_egglog_string
 
     egraph.close()
     egraph.close()
 
-    assert not path.exists()
     with pytest.raises(ValueError, match="has been closed"):
         _ = egraph.as_egglog_string
 
 
-def test_saved_egglog_transcript_is_removed_on_finalization() -> None:
-    egraph = EGraph(save_egglog_string=True)
-    assert egraph._state.egglog_file_state is not None
-    path = pathlib.Path(egraph._state.egglog_file_state.path)
-    assert path.exists()
+def test_saved_egglog_transcript_close_rejects_commands_before_mutation() -> None:
+    class ClosedExpr(Expr):
+        def __init__(self, value: i64Like) -> None: ...
 
-    del egraph
-    gc.collect()
+    egraph = EGraph(ClosedExpr(1), save_egglog_string=True)
+    before = egraph.freeze()
+    egraph.close()
 
-    assert not path.exists()
+    with pytest.raises(ValueError, match="transcript has been closed"):
+        egraph.register(ClosedExpr(2))
+
+    assert egraph.freeze() == before
+
+
+def test_close_without_a_saved_transcript_is_a_noop() -> None:
+    egraph = EGraph()
+
+    egraph.close()
+    value = egraph.let("after_close", i64(1))
+
+    egraph.check(eq(value).to(i64(1)))
 
 
 def test_saved_egglog_transcript_is_shared_across_push_and_pop() -> None:
@@ -251,7 +836,7 @@ def test_saved_egglog_transcript_is_shared_across_push_and_pop() -> None:
     assert "(let $inner 2)" in egraph.as_egglog_string
 
 
-def test_saved_egglog_string_uses_short_generated_sort_and_function_names() -> None:
+def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() -> None:
     class Num(Expr):
         @classmethod
         def var(cls, v: StringLike) -> Num: ...
@@ -260,183 +845,24 @@ def test_saved_egglog_string_uses_short_generated_sort_and_function_names() -> N
     egraph.register(Num.var("x"))
     egglog_string = egraph.as_egglog_string
 
-    assert "(sort Num)" in egglog_string
-    assert "(constructor Num_var (String) Num)" in egglog_string
-    assert "test_high_level" not in egglog_string
+    qualified_sort = f"{__name__}.Num"
+    qualified_var = f"{__name__.replace('.', '_')}_Num_var"
+    assert f"(sort {qualified_sort})" in egglog_string
+    assert f"(constructor {qualified_var} (String) {qualified_sort})" in egglog_string
 
 
-def test_generated_names_fall_back_to_full_name_on_conflict() -> None:
-    state = EGraph(save_egglog_string=True)._state
-    ret1 = Ident("Ret", "pkg.one")
-    ret2 = Ident("Ret", "pkg.two")
-    fn1 = Ident("make", "pkg.one")
-    fn2 = Ident("make", "pkg.two")
-    state.__egg_decls__ |= Declarations(
-        _classes={ret1: ClassDecl(), ret2: ClassDecl()},
-        _functions={
-            fn1: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(ret1))),
-            fn2: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(ret2))),
-        },
-    )
+def test_generated_names_do_not_collide_with_lazy_builtin_declarations() -> None:
+    class String(Expr):
+        def __init__(self, value: i64Like) -> None: ...
 
-    assert state.callable_ref_to_egg(FunctionRef(fn1))[0] == "make"
-    assert state.callable_ref_to_egg(FunctionRef(fn2))[0] == "pkg_two_make"
-    assert state.type_ref_to_egg(JustTypeRef(ret1)) == "Ret"
-    assert state.type_ref_to_egg(JustTypeRef(ret2)) == "pkg.two.Ret"
+    @function
+    def log(value: i64Like) -> i64: ...
 
+    egraph = EGraph()
+    user_string = String(1)
+    egraph.register(user_string, set_(log(1)).to(i64(2)))
 
-def test_missing_function_lookup_does_not_reserve_generated_name() -> None:
-    state = EGraph(save_egglog_string=True)._state
-    ret = Ident("LookupRet", "pkg.lookup")
-    fn = Ident("lookup_short_name", "pkg.lookup")
-    state.__egg_decls__ |= Declarations(
-        _classes={ret: ClassDecl()},
-        _functions={fn: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(ret)))},
-    )
-
-    assert list(state.possible_egglog_functions(["lookup_short_name"])) == []
-    assert state.callable_ref_to_egg(FunctionRef(fn))[0] == "lookup_short_name"
-
-
-def test_generated_names_fall_back_from_builtin_names() -> None:
-    state = EGraph(save_egglog_string=True)._state
-    ret = Ident("BuiltinConflictRet", "pkg.builtin_conflict")
-    fn = Ident("exp", "pkg.builtin_conflict")
-    sort = Ident("Map", "pkg.builtin_conflict")
-    state.__egg_decls__ |= Declarations(
-        _classes={ret: ClassDecl(), sort: ClassDecl()},
-        _functions={fn: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(ret)))},
-    )
-
-    assert state.callable_ref_to_egg(FunctionRef(fn))[0] == "pkg_builtin_conflict_exp"
-    assert state.type_ref_to_egg(JustTypeRef(sort)) == "pkg.builtin_conflict.Map"
-
-
-def test_generated_callable_name_avoids_an_existing_cost_table() -> None:
-    state = EGraph(save_egglog_string=True)._state
-    state.__egg_decls__ |= cast("HasDeclarations", i64)
-    ret = Ident("CostRet", "pkg.cost")
-    fn = Ident("f", "pkg.cost")
-    conflict = Ident("cost_table_f", "pkg.cost")
-    state.__egg_decls__ |= Declarations(
-        _classes={ret: ClassDecl()},
-        _functions={
-            fn: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(ret))),
-            conflict: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(ret))),
-        },
-    )
-
-    assert state.create_cost_table(FunctionRef(fn)) == "cost_table_f"
-    assert state.callable_ref_to_egg(FunctionRef(conflict))[0] == "pkg_cost_cost_table_f"
-
-
-def test_canonical_cost_table_rejects_an_incompatible_callable() -> None:
-    state = EGraph(save_egglog_string=True)._state
-    state.__egg_decls__ |= cast("HasDeclarations", i64)
-    ret = Ident("CostRet", "pkg.cost")
-    fn = Ident("f", "pkg.cost")
-    conflict = Ident("cost_table_f", "pkg.cost")
-    state.__egg_decls__ |= Declarations(
-        _classes={ret: ClassDecl()},
-        _functions={
-            fn: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(ret))),
-            conflict: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(ret))),
-        },
-    )
-
-    assert state.callable_ref_to_egg(FunctionRef(conflict))[0] == "cost_table_f"
-    with pytest.raises(ValueError, match="already used by an incompatible callable"):
-        state.create_cost_table(FunctionRef(fn))
-
-
-def test_canonical_cost_table_reuses_a_compatible_raw_table() -> None:
-    state = EGraph(save_egglog_string=True)._state
-    state.__egg_decls__ |= cast("HasDeclarations", i64)
-    ret = Ident("CostRet", "pkg.cost")
-    fn = Ident("f", "pkg.cost")
-    raw_cost = Ident("cost_table_f", "pkg.cost")
-    state.__egg_decls__ |= Declarations(
-        _classes={ret: ClassDecl()},
-        _functions={
-            fn: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(ret))),
-            raw_cost: FunctionDecl(signature=FunctionSignature(return_type=TypeRefWithVars(Ident.builtin("i64")))),
-        },
-    )
-
-    assert state.callable_ref_to_egg(FunctionRef(raw_cost))[0] == "cost_table_f"
-    assert state.create_cost_table(FunctionRef(fn)) == "cost_table_f"
-    assert state.cost_table_names[FunctionRef(fn)] == "cost_table_f"
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        pytest.param(None, id="bodyless-function"),
-        pytest.param(
-            TypedExprDecl(JustTypeRef(Ident.builtin("i64")), LitDecl(1)),
-            id="eager-primitive",
-        ),
-    ],
-)
-@pytest.mark.parametrize("sort_first", [True, False], ids=["sort-first", "callable-first"])
-def test_generated_names_share_the_backend_sort_and_callable_namespace(
-    body: TypedExprDecl | None, *, sort_first: bool
-) -> None:
-    state = EGraph(save_egglog_string=True)._state
-    state.__egg_decls__ |= cast("HasDeclarations", i64)
-    sort_ident = Ident("Node", "pkg.sort")
-    fn_ident = Ident("Node", "pkg.fn")
-    sort_ref = JustTypeRef(sort_ident)
-    fn_ref = FunctionRef(fn_ident)
-    state.__egg_decls__ |= Declarations(
-        _classes={sort_ident: ClassDecl()},
-        _functions={
-            fn_ident: FunctionDecl(
-                signature=FunctionSignature(return_type=TypeRefWithVars(Ident.builtin("i64"))),
-                body=body,
-            )
-        },
-    )
-
-    if sort_first:
-        assert state.type_ref_to_egg(sort_ref) == "Node"
-        assert state.callable_ref_to_egg(fn_ref)[0] == "pkg_fn_Node"
-    else:
-        assert state.callable_ref_to_egg(fn_ref)[0] == "Node"
-        assert state.type_ref_to_egg(sort_ref) == "pkg.sort.Node"
-
-
-def test_builtin_name_reservations_cover_builtins_module_declarations() -> None:
-    expected_fn_names = set[str]()
-    expected_sort_names = set[str]()
-
-    def add_callable_name(decl: CallableDecl | None) -> None:
-        if decl is not None and decl.egg_name is not None:
-            expected_fn_names.add(decl.egg_name)
-
-    for name in egg_builtins.__all__:
-        obj = getattr(egg_builtins, name, None)
-        if not isinstance(obj, HasDeclarations):
-            continue
-        decls = obj.__egg_decls__
-        for decl in decls._functions.values():
-            add_callable_name(decl)
-        for decl in decls._constants.values():
-            add_callable_name(decl)
-        for decl in decls._classes.values():
-            if decl.builtin and decl.egg_name is not None:
-                expected_sort_names.add(decl.egg_name)
-            add_callable_name(decl.init)
-            for callable_decl in (
-                *decl.class_methods.values(),
-                *decl.class_variables.values(),
-                *decl.methods.values(),
-                *decl.properties.values(),
-            ):
-                add_callable_name(callable_decl)
-
-    assert expected_fn_names <= BUILTIN_EGG_FN_NAMES
-    assert expected_sort_names <= BUILTIN_EGG_SORT_NAMES
+    egraph.check(eq(user_string).to(String(1)), eq(log(1)).to(i64(2)))
 
 
 def test_parameterized_sort_names_use_allocated_argument_names() -> None:
@@ -498,11 +924,16 @@ def test_top_level_action_factors_duplicate_sibling_edges() -> None:
 
     egraph.register(DuplicateEdge.pair(second_pair, second_pair))
 
-    transcript = egraph.as_egglog_string
-    assert transcript.count('(let $__expr_0 (DuplicateEdge_leaf "shared"))') == 1
-    assert transcript.count("(let $__expr_1 (DuplicateEdge_pair $__expr_0 $__expr_0))") == 1
-    assert transcript.count("(let $__expr_2 (DuplicateEdge_pair $__expr_1 $__expr_1))") == 1
-    assert "(DuplicateEdge_pair $__expr_2 $__expr_2)" in transcript
+    lines = egraph.as_egglog_string.splitlines()
+    let_lines = [line for line in lines if line.startswith("(let $__expr_")]
+    assert len(let_lines) == 3
+    assert let_lines[0].startswith("(let $__expr_0 (")
+    assert let_lines[0].endswith(' "shared"))')
+    assert let_lines[1].startswith("(let $__expr_1 (")
+    assert let_lines[1].endswith(" $__expr_0 $__expr_0))")
+    assert let_lines[2].startswith("(let $__expr_2 (")
+    assert let_lines[2].endswith(" $__expr_1 $__expr_1))")
+    assert sum(line.endswith(" $__expr_2 $__expr_2)") for line in lines) == 1
 
 
 def test_freeze_omits_synthetic_let_bindings() -> None:
@@ -564,55 +995,6 @@ def test_map_fold_generic_negation_callback_is_concretized() -> None:
 def test_map_and_set_length_primitives() -> None:
     check_eq(Map[i64, f64].empty().insert(i64(1), f64(2.0)).insert(i64(2), f64(3.0)).length(), i64(2))
     check_eq(Set(i64(1), i64(2)).length(), i64(2))
-
-
-def test_higher_order_callable_inference_does_not_mutate_ambient_ruleset() -> None:
-    ambient = ruleset(name="hof-inference-ambient")
-    initial_rules = tuple(ambient.__egg_ruleset__.rules)
-
-    with set_current_ruleset(ambient):
-        initial: Map[i64, f64] = Map[i64, f64].empty()
-        expr = map_fold_kv(
-            lambda result, key, value: result.insert(key, -value),
-            initial,
-            Map[i64, f64].empty().insert(i64(1), f64(2.0)),
-        )
-        _ = cast("RuntimeExpr", expr).__egg_decls__
-
-    assert tuple(ambient.__egg_ruleset__.rules) == initial_rules
-
-
-def test_set_current_ruleset_restores_nested_contexts() -> None:
-    outer = ruleset(name="current-ruleset-outer")
-    inner = ruleset(name="current-ruleset-inner")
-    initial = get_current_ruleset()
-
-    with set_current_ruleset(outer):
-        assert get_current_ruleset() is outer
-        with set_current_ruleset(inner):
-            assert get_current_ruleset() is inner
-        assert get_current_ruleset() is outer
-
-    assert get_current_ruleset() is initial
-
-
-def test_file_backed_errors_report_saved_file_line() -> None:
-    egraph = EGraph(save_egglog_string=True)
-    egraph.let("x", i64(1))
-    egraph.let("y", i64(2))
-    expected_line = len(egraph.as_egglog_string.splitlines()) + 1
-    assert egraph._state.egglog_file_state is not None
-    path = egraph._state.egglog_file_state.path
-
-    with pytest.raises(EggSmolError) as exc_info:
-        egraph.check(eq(i64(1)).to(i64(2)))
-
-    error_text = exc_info.value.context
-    assert path in error_text
-    assert f"In {expected_line}:" in error_text
-    lines = egraph.as_egglog_string.splitlines()
-    assert "(fail (check (= 1 2))) ; Check failed:" in lines
-    assert "(check (= 1 2))" not in lines
 
 
 def test_unnamed_lambda_returning_builtin_is_eager() -> None:
@@ -1045,6 +1427,12 @@ def test_rational_like_operations() -> None:
     assert EGraph().extract(2 ** Rational(3, 1)).value == Fraction(8, 1)
     assert EGraph().extract(Rational(1, 2).min(Fraction(1, 3))).value == Fraction(1, 3)
     assert EGraph().extract(Rational(1, 2).max(1)).value == Fraction(1, 1)
+    assert EGraph().extract(Rational(1, 1).log()).value == Fraction(0, 1)
+    assert EGraph().extract(Rational(0, 1).sqrt()).value == Fraction(0, 1)
+    assert EGraph().extract(Rational(4, 9).sqrt()).value == Fraction(2, 3)
+    assert EGraph().extract(Rational(-8, 27).cbrt()).value == Fraction(-2, 3)
+    assert EGraph().extract(Rational(-(2**63), 1).floor()).value == Fraction(-(2**63), 1)
+    assert EGraph().extract(Rational(2**63 - 1, 1).ceil()).value == Fraction(2**63 - 1, 1)
 
     egraph = EGraph()
     egraph.check(Rational(1, 2) < Fraction(2, 3))
@@ -1054,10 +1442,22 @@ def test_rational_like_operations() -> None:
 
 
 def test_rational_partial_operations_remain_undefined() -> None:
-    with pytest.raises(EggSmolError):
-        EGraph().extract(Rational(1, 2) / 0)
-    with pytest.raises(EggSmolError):
-        EGraph().extract(Rational(2, 1) ** -1)
+    expressions = [
+        Rational(1, 0),
+        Rational(1, -(2**63)),
+        Rational(-(2**63), -1),
+        -Rational(-(2**63), 1),
+        abs(Rational(-(2**63), 1)),
+        Rational(1, 2) / 0,
+        Rational(2, 1) ** -1,
+        Rational(0, 1) ** Fraction(1, 2),
+        Rational(2, 1).log(),
+        Rational(2, 1).sqrt(),
+        Rational(2, 1).cbrt(),
+    ]
+    for expression in expressions:
+        with pytest.raises(EggSmolError):
+            EGraph().extract(expression)
     with pytest.raises(EggSmolError):
         EGraph().check(Rational(2, 3) < Fraction(1, 2))
 
@@ -1699,6 +2099,41 @@ def test_helpful_error_function_class():
 
 
 class TestCallableValidation:
+    @pytest.mark.parametrize(
+        ("options", "message"),
+        [
+            pytest.param({"cost": 1}, "Cost can only be set for constructors", id="cost"),
+            pytest.param({"unextractable": True}, "Unextractable can only be set for constructors", id="unextractable"),
+            pytest.param(
+                {"cost": 1, "unextractable": True},
+                "Cost can only be set for constructors",
+                id="cost-before-unextractable",
+            ),
+        ],
+    )
+    def test_eqsort_merge_rejects_constructor_options_before_body(
+        self, options: dict[str, object], message: str
+    ) -> None:
+        body_calls = 0
+        merge_calls = 0
+
+        def merge(old: A, _new: A) -> A:
+            nonlocal merge_calls
+            merge_calls += 1
+            return old
+
+        @function(merge=merge, **options)  # type: ignore[call-overload]
+        def f() -> A:
+            nonlocal body_calls
+            body_calls += 1
+            return A()
+
+        with pytest.raises(ValueError, match=message):
+            f()
+
+        assert body_calls == 0
+        assert merge_calls == 0
+
     def test_primitive_function_ruleset_subsume_rejected(self):
         r = ruleset()
 
@@ -1733,10 +2168,18 @@ class TestCallableValidation:
             )
 
     def test_eqsort_constant_default_cannot_use_merge(self):
+        merge_calls = 0
+
+        def merge(old: A, _new: A) -> A:
+            nonlocal merge_calls
+            merge_calls += 1
+            return old
+
         with pytest.raises(ValueError, match="Eqsort-returning callables with bodies cannot use merge"):
             EGraph().register(
-                constant("default_merge", A, A(), merge=lambda old, _new: old)  # type: ignore[call-overload]
+                constant("default_merge", A, A(), merge=merge)  # type: ignore[call-overload]
             )
+        assert merge_calls == 0
 
     def test_primitive_constant_default_cannot_use_merge(self):
         with pytest.raises(ValueError, match="Primitive-returning callables with bodies cannot use merge"):
@@ -1751,12 +2194,24 @@ class TestCallableValidation:
             EGraph().register(constant("unit_merge", Unit, merge=lambda old, _new: old))
 
     def test_eqsort_eager_body_cannot_use_merge(self):
-        @function(merge=lambda old, new: old)
+        body_calls = 0
+        merge_calls = 0
+
+        def merge(old: A, _new: A) -> A:
+            nonlocal merge_calls
+            merge_calls += 1
+            return old
+
+        @function(merge=merge)
         def f() -> A:
+            nonlocal body_calls
+            body_calls += 1
             return A()
 
         with pytest.raises(ValueError, match="Eqsort-returning callables with bodies cannot use merge"):
             f()
+        assert body_calls == 0
+        assert merge_calls == 0
 
     def test_primitive_returning_functions_cannot_use_cost(self):
         @function(cost=1)  # type: ignore[type-var]  # Deliberately invalid runtime API call.
@@ -1780,12 +2235,39 @@ class TestCallableValidation:
             f()
 
     def test_primitive_body_cannot_use_builtin(self):
+        body_calls = 0
+
         @function(builtin=True)
         def f() -> i64:
+            nonlocal body_calls
+            body_calls += 1
             return i64(1)
 
         with pytest.raises(ValueError, match="Builtin callables cannot have a body"):
             f()
+        assert body_calls == 0
+
+    def test_generic_primitive_body_cannot_use_builtin(self):
+        body_calls = 0
+
+        @function(builtin=True)
+        def f(value: Vec[_BuiltinExprT]) -> i64:
+            nonlocal body_calls
+            body_calls += 1
+            return value.length()
+
+        with pytest.raises(ValueError, match="Builtin callables cannot have a body"):
+            f(Vec(i64(1)))
+        assert body_calls == 0
+
+    def test_generic_builtin_cannot_use_explicit_ruleset(self):
+        r = ruleset()
+
+        @function(builtin=True, ruleset=r)  # type: ignore[call-overload]  # Deliberately invalid runtime API call.
+        def f(value: Vec[_BuiltinExprT]) -> i64: ...
+
+        with pytest.raises(ValueError, match="Builtin callables cannot use an explicit ruleset"):
+            f(Vec(i64(1)))
 
     def test_primitive_body_cannot_use_merge(self):
         @function(merge=lambda old, new: old)
@@ -1806,6 +2288,32 @@ class TestCallableValidation:
             ValueError, match="Primitive-returning callables with bodies cannot use an explicit ruleset"
         ):
             f()
+
+    def test_primitive_body_must_return_a_value(self):
+        body_calls = 0
+
+        @function
+        def f() -> i64:
+            nonlocal body_calls
+            body_calls += 1
+            return None  # type: ignore[return-value]  # Exercise a genuine body with a missing symbolic result.
+
+        with pytest.raises(ValueError, match="Callable bodies must return a value"):
+            f()
+        assert body_calls == 1
+
+    def test_eqsort_body_must_return_a_value(self):
+        body_calls = 0
+
+        @function
+        def f() -> A:
+            nonlocal body_calls
+            body_calls += 1
+            return None  # type: ignore[return-value]  # Exercise a genuine body with a missing symbolic result.
+
+        with pytest.raises(ValueError, match="Callable bodies must return a value"):
+            f()
+        assert body_calls == 1
 
     def test_eqsort_body_cannot_use_merge(self):
         r = ruleset()
@@ -2219,6 +2727,41 @@ def test_function_values():
     assert values == {f(i64(1)): i64(2)}
 
 
+def test_lookup_function_value_records_materialized_constructor_arguments() -> None:
+    class LookupReplayValue(Expr, egg_sort="LookupReplayValueSort"):
+        @method(egg_fn="LookupReplayValue")
+        def __init__(self, value: i64Like) -> None: ...
+
+    @function(egg_fn="lookup-replay-result")
+    def result(value: LookupReplayValue) -> i64: ...
+
+    egraph = EGraph(save_egglog_string=True)
+    egraph.register(set_(result(LookupReplayValue(1))).to(i64(10)))
+
+    assert egraph.lookup_function_value(result(LookupReplayValue(2))) is None
+    assert egraph.function_size(LookupReplayValue) == 2
+
+    replayed = egg_bindings.EGraph()
+    outputs = replayed.parse_and_run_program(egraph.as_egglog_string + "\n(print-size)")
+    sizes = outputs[-1]
+    assert isinstance(sizes, egg_bindings.PrintAllFunctionsSize)
+    assert dict(sizes.sizes)["LookupReplayValue"] == 2
+
+
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+def test_lookup_function_value_with_unstable_fn_argument(*, save_egglog_string: bool) -> None:
+    @function
+    def add_one(value: i64) -> i64: ...
+
+    @function
+    def score(fn: UnstableFn[i64, i64]) -> i64: ...
+
+    fn = UnstableFn[i64, i64](add_one)
+    egraph = EGraph(set_(score(fn)).to(i64(7)), save_egglog_string=save_egglog_string)
+
+    assert egraph.lookup_function_value(score(fn)) == i64(7)
+
+
 def test_table_inspection_rejects_eager_primitives() -> None:
     @function
     def eager_plus_one(x: i64Like) -> i64:
@@ -2240,6 +2783,24 @@ def test_table_inspection_rejects_eager_primitives() -> None:
 
     with pytest.raises(ValueError, match="table-backed"):
         egraph.input(eager_text, "unused.csv")
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ['input\r"\\.csv', "input\u0300.csv"],
+    ids=["control-and-escapes", "combining-unicode"],
+)
+def test_saved_transcript_preserves_input_path(tmp_path: pathlib.Path, filename: str) -> None:
+    @function
+    def loaded() -> String: ...
+
+    path = tmp_path / filename
+    path.write_text("value\n")
+    recorded = EGraph(save_egglog_string=True)
+
+    recorded.input(loaded, str(path))
+    recorded.check(eq(loaded()).to(String("value")))
+    egg_bindings.EGraph().parse_and_run_program(recorded.as_egglog_string)
 
 
 def test_dynamic_cost():
@@ -2273,7 +2834,83 @@ def test_dynamic_cost():
     assert egraph.extract(E(2), include_cost=True, extractor="greedy-dag") == (E(1) + E(1), 102)
 
 
-def test_dynamic_cost_reuses_a_compatible_canonical_table() -> None:
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+def test_dynamic_cost_materializes_constructor_before_storing_cost(*, save_egglog_string: bool) -> None:
+    class MaterializedCost(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    expression = MaterializedCost(7)
+    egraph = EGraph(save_egglog_string=save_egglog_string)
+
+    egraph.register(set_cost(expression, 9))
+
+    assert egraph.function_size(MaterializedCost) == 1
+    assert egraph.lookup_function_value(get_cost(expression)) == i64(9)
+    if save_egglog_string:
+        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+def test_dynamic_cost_rule_materializes_constructor_without_shadowing(*, save_egglog_string: bool) -> None:
+    class RuleMaterializedCost(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    source = relation("dynamic_cost_materialize_source", i64)
+    # Exercise a name used by compiler-generated rule lets: lowering must
+    # allocate a distinct binding instead of shadowing this variable.
+    value = var("value", i64, egg_name="__expr_0")
+    materialize = ruleset(
+        rule(source(value)).then(set_cost(RuleMaterializedCost(value), 11)),
+        name="dynamic-cost-materialize",
+    )
+    expression = RuleMaterializedCost(8)
+    egraph = EGraph(source(i64(8)), save_egglog_string=save_egglog_string)
+
+    egraph.run(materialize)
+
+    assert egraph.function_size(RuleMaterializedCost) == 1
+    assert egraph.lookup_function_value(get_cost(expression)) == i64(11)
+    if save_egglog_string:
+        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+def test_dynamic_cost_does_not_create_a_missing_function_row(*, save_egglog_string: bool) -> None:
+    @function
+    def missing_target(value: i64Like) -> i64: ...
+
+    expression = missing_target(1)
+    egraph = EGraph(save_egglog_string=save_egglog_string)
+
+    with pytest.raises(EggSmolError, match=r"lookup .* failed"):
+        egraph.register(set_cost(expression, 7))
+
+    assert egraph.function_size(missing_target) == 0
+    assert egraph.lookup_function_value(get_cost(expression)) is None
+    if save_egglog_string:
+        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
+def test_dynamic_cost_evaluates_each_argument_once(tmp_path: pathlib.Path) -> None:
+    marker = tmp_path / "set-cost-calls"
+
+    def record_call(value: int) -> int:
+        marker.write_text(marker.read_text() + "x" if marker.exists() else "x")
+        return value
+
+    class SingleEvaluationCost(Expr):
+        def __init__(self, value: PyObject) -> None: ...
+
+    egraph = EGraph(save_egglog_string=True)
+    egraph.register(set_cost(SingleEvaluationCost(PyObject(record_call)(PyObject(7))), 9))
+
+    assert marker.read_text() == "x"
+    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+    assert marker.read_text() == "xx"
+
+
+@pytest.mark.parametrize("cost_first", [False, True], ids=["raw-table-first", "cost-first"])
+def test_dynamic_cost_reuses_a_compatible_canonical_table(cost_first: bool) -> None:
     @function(egg_fn="canonical_cost_target")
     def target(x: i64Like) -> i64: ...
 
@@ -2281,15 +2918,64 @@ def test_dynamic_cost_reuses_a_compatible_canonical_table() -> None:
     def raw_cost(x: i64Like) -> i64: ...
 
     egraph = EGraph()
+    cost_action = set_cost(target(1), 7)
+    raw_table_action = set_(raw_cost(2)).to(i64(5))
+    cost_actions = (cost_action, raw_table_action) if cost_first else (raw_table_action, cost_action)
     egraph.register(
-        set_(raw_cost(2)).to(i64(5)),
         set_(target(1)).to(i64(2)),
-        set_cost(target(1), 7),
+        *cost_actions,
     )
 
     assert egraph.lookup_function_value(raw_cost(1)) == i64(7)
     assert egraph.lookup_function_value(raw_cost(2)) == i64(5)
     assert egraph.has_custom_cost(target)
+
+
+@pytest.mark.parametrize("cost_first", [False, True], ids=["raw-table-first", "cost-first"])
+def test_dynamic_cost_rejects_a_merged_canonical_table(cost_first: bool) -> None:
+    @function(egg_fn="merged_cost_target")
+    def target(x: i64Like) -> i64: ...
+
+    @function(egg_fn="cost_table_merged_cost_target", merge=lambda old, _new: old)
+    def raw_cost(x: i64Like) -> i64: ...
+
+    cost_action = set_cost(target(1), 7)
+    raw_table_action = set_(raw_cost(2)).to(i64(5))
+    actions = (cost_action, raw_table_action) if cost_first else (raw_table_action, cost_action)
+
+    with pytest.raises(ValueError, match="already used by an incompatible callable"):
+        EGraph().register(*actions)
+
+
+def test_dynamic_cost_rejects_multiple_raw_canonical_table_aliases() -> None:
+    @function(egg_fn="aliased_cost_target")
+    def target(x: i64Like) -> i64: ...
+
+    @function(egg_fn="cost_table_aliased_cost_target")
+    def first_raw_cost(x: i64Like) -> i64: ...
+
+    @function(egg_fn="cost_table_aliased_cost_target")
+    def second_raw_cost(x: i64Like) -> i64: ...
+
+    with pytest.raises(ValueError, match="already has a raw callable alias"):
+        EGraph().register(
+            set_cost(target(1), 7),
+            set_(first_raw_cost(2)).to(i64(5)),
+            set_(second_raw_cost(3)).to(i64(6)),
+        )
+
+
+@pytest.mark.parametrize("cost_first", [False, True], ids=["raw-table-first", "cost-first"])
+def test_dynamic_cost_rejects_a_raw_table_alias_for_a_primitive(cost_first: bool) -> None:
+    @function(egg_fn="cost_table_/")
+    def raw_cost(left: i64Like, right: i64Like) -> i64: ...
+
+    cost_action = set_cost(i64(4) / i64(2), 7)
+    raw_table_action = set_(raw_cost(1, 0)).to(i64(5))
+    actions = (cost_action, raw_table_action) if cost_first else (raw_table_action, cost_action)
+
+    with pytest.raises(ValueError, match="eager or builtin primitive"):
+        EGraph(*actions)
 
 
 def test_freeze_preserves_a_reused_canonical_cost_table_as_raw_rows_and_costs() -> None:
@@ -2308,7 +2994,7 @@ def test_freeze_preserves_a_reused_canonical_cost_table_as_raw_rows_and_costs() 
     rendered = str(egraph.freeze())
     assert "set_(raw_cost(2)).to(i64(5))" in rendered
     assert "set_(raw_cost(1)).to(i64(7))" in rendered
-    assert "set_cost(target(2), 5)" in rendered
+    assert "set_cost(target(2), 5)" not in rendered
     assert "set_cost(target(1), 7)" in rendered
 
     replayed = eval(rendered.removesuffix(".freeze()"), globals(), locals())
@@ -2337,6 +3023,23 @@ def test_freeze_preserves_every_callable_alias_for_a_shared_cost_table() -> None
     assert replayed.lookup_function_value(get_cost(plus_alias(3, 4))) == i64(6)
 
 
+def test_freeze_preserves_reverse_argument_order_for_rows_and_costs() -> None:
+    class ReverseFreeze(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+        @method(reverse_args=True)
+        def label(self, value: StringLike) -> i64: ...
+
+    expression = ReverseFreeze(1).label("key")
+    egraph = EGraph(set_(expression).to(i64(3)), set_cost(expression, 7))
+
+    replayed = eval(str(egraph.freeze()).removesuffix(".freeze()"), globals(), locals())
+
+    assert isinstance(replayed, EGraph)
+    assert replayed.lookup_function_value(expression) == i64(3)
+    assert replayed.lookup_function_value(get_cost(expression)) == i64(7)
+
+
 def test_dynamic_cost_rejects_an_incompatible_overload_without_recording_it() -> None:
     egraph = EGraph()
     egraph.register(set_cost(i64(1) + i64(2), 5))
@@ -2356,6 +3059,62 @@ def test_dynamic_cost_rejects_a_negative_literal() -> None:
         set_cost(Costed(1), -1)
 
 
+@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
+def test_dynamic_cost_rejects_a_negative_computed_value_without_storing_it(*, save_egglog_string: bool) -> None:
+    class Costed(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    egraph = EGraph(save_egglog_string=save_egglog_string)
+    with pytest.raises(EggSmolError, match="@validate-dynamic-cost"):
+        egraph.register(set_cost(Costed(1), i64(0) - i64(1)))
+
+    assert egraph.function_size(Costed) == 1
+    assert egraph.lookup_function_value(get_cost(Costed(1))) is None
+    assert egraph.extract(Costed(1)) == Costed(1)
+    if save_egglog_string:
+        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+
+
+def test_cost_models_ignore_negative_values_written_through_a_raw_cost_table() -> None:
+    class RawNegativeCost(Expr):
+        @method(egg_fn="raw-negative-cost-node")
+        def __init__(self, value: i64Like) -> None: ...
+
+    @function(egg_fn="cost_table_raw-negative-cost-node")
+    def raw_cost(value: i64Like) -> i64: ...
+
+    expression = RawNegativeCost(1)
+    egraph = EGraph(
+        set_(raw_cost(1)).to(i64(-7)),
+        set_cost(RawNegativeCost(2), 5),
+        expression,
+    )
+    expected = expression, 2
+
+    assert egraph.extract(expression, include_cost=True) == expected
+    assert egraph.extract(expression, include_cost=True, cost_model=default_cost_model) == expected
+    assert (
+        egraph.extract(
+            expression,
+            include_cost=True,
+            cost_model=DagCostModel(
+                marginal_cost=lambda callback_egraph, node: default_cost_model(callback_egraph, node, []),
+                identity=0,
+            ),
+            extractor="greedy-dag",
+        )
+        == expected
+    )
+
+    rendered = str(egraph.freeze())
+    assert "set_(raw_cost(1)).to(i64(-7))" in rendered
+    assert "set_cost(RawNegativeCost(1), -7)" not in rendered
+    replayed = eval(rendered.removesuffix(".freeze()"), globals(), locals())
+    assert isinstance(replayed, EGraph)
+    assert replayed.lookup_function_value(raw_cost(1)) == i64(-7)
+    assert replayed.extract(expression, include_cost=True) == expected
+
+
 class TestScheduler:
     def test_seq_schedule_decls_track_ruleset_updates(self):
         egraph = EGraph()
@@ -2363,7 +3122,7 @@ class TestScheduler:
         rel = relation("rel_live", i64)
         live_rules = ruleset(name="live-rules")
         schedule = seq(live_rules, run()).saturate()
-        _ = schedule.__egg_decls__
+        _ = str(schedule)
 
         live_rules.register(rule(rel(i64(0))).then(rel(i64(1))))
 
@@ -2512,13 +3271,6 @@ class TestScheduler:
         assert len(scheduler_lines) == 1
         assert len(run_with_lines) == 2
 
-    def test_persistent_scheduler_gets_a_fresh_identity(self):
-        scheduler = back_off(match_limit=2, ban_length=2)
-
-        persistent = scheduler.persistent()
-
-        assert persistent.scheduler.id != scheduler.scheduler.id
-
     def test_scheduler_scope_does_not_leak_to_sequence_sibling(self):
         r = ruleset(name="scheduler-lexical-scope")
         scheduler = back_off(match_limit=2, ban_length=2)
@@ -2528,7 +3280,7 @@ class TestScheduler:
 
         run_schedule = next(line for line in egraph.as_egglog_string.splitlines() if line.startswith("(run-schedule "))
         assert run_schedule.count("(let-scheduler ") == 2
-        ruleset_name = str(r.__egg_ident__)
+        ruleset_name = f"{__name__}.scheduler-lexical-scope"
         assert f"(run-with _scheduler_0 {ruleset_name})" in run_schedule
         assert f"(run-with _scheduler_1 {ruleset_name})" in run_schedule
 
@@ -2649,6 +3401,36 @@ def test_keep_best_rejects_non_table_callable_before_compaction() -> None:
 
     with pytest.raises(ValueError, match="table-backed"):
         EGraph().keep_best(eager)
+
+
+def test_keep_best_invalidates_opaque_values_until_a_parent_scope_is_restored() -> None:
+    class CompactKey(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    @function
+    def score(key: CompactKey) -> i64: ...
+
+    egraph = EGraph(CompactKey(1), set_(score(CompactKey(1))).to(i64(11)))
+    parent_key = egraph.lookup_function_value(CompactKey(1))
+    assert parent_key is not None
+
+    egraph.push()
+    egraph.keep_best(score)
+    fresh_key = egraph.lookup_function_value(CompactKey(1))
+    assert fresh_key is not None
+    assert egraph.lookup_function_value(score(fresh_key)) == i64(11)
+    with pytest.raises(ValueError, match="inactive push scope"):
+        egraph.lookup_function_value(score(parent_key))
+
+    egraph.pop()
+    assert egraph.lookup_function_value(score(parent_key)) == i64(11)
+
+    egraph.keep_best(score)
+    with pytest.raises(ValueError, match="inactive push scope"):
+        egraph.lookup_function_value(score(parent_key))
+    root_fresh_key = egraph.lookup_function_value(CompactKey(1))
+    assert root_fresh_key is not None
+    assert egraph.lookup_function_value(score(root_fresh_key)) == i64(11)
 
 
 class TestCustomExtract:
@@ -2925,6 +3707,27 @@ class TestCustomExtract:
         assert cost == 4
         assert expr == res
 
+    def test_dag_cost_model_supports_nonzero_typed_identity(self) -> None:
+        @dataclass(frozen=True, order=True)
+        class OffsetCost:
+            value: int
+
+            def __add__(self, other: OffsetCost) -> OffsetCost:
+                return OffsetCost(self.value + other.value - 10)
+
+        model = DagCostModel(
+            marginal_cost=lambda _egraph, _expr: OffsetCost(11),
+            identity=OffsetCost(10),
+        )
+        egraph = EGraph()
+        expr = ff(1, 1)
+
+        assert egraph.extract(expr, include_cost=True, cost_model=model) == (expr, OffsetCost(13))
+        assert egraph.extract(expr, include_cost=True, cost_model=model, extractor="greedy-dag") == (
+            expr,
+            OffsetCost(12),
+        )
+
     @pytest.mark.parametrize(
         ("model_kind", "extractor", "expected_cost"),
         [
@@ -3028,6 +3831,100 @@ class TestCustomExtract:
         with pytest.raises(ValueError, match="must be registered before extraction starts"):
             EGraph().extract(LookupByPrimitive(3), cost_model=cast("TreeCostModel[int]", lookup_cost))
 
+    def test_cost_model_callback_rejects_value_from_another_egraph(self) -> None:
+        class Key(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        class Root(Expr):
+            def __init__(self) -> None: ...
+
+        @function
+        def score(value: Key) -> i64: ...
+
+        foreign_egraph = EGraph(Key(3))
+        foreign_key = foreign_egraph.lookup_function_value(Key(3))
+        assert foreign_key is not None
+
+        egraph = EGraph()
+        egraph.register(set_(score(Key(3))).to(i64(17)))
+
+        def lookup_cost(callback_egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            if isinstance(expr, Root):
+                callback_egraph.lookup_function_value(score(foreign_key))
+            return sum(children_costs)
+
+        with pytest.raises(ValueError, match="only look up tables using values supplied to the callback"):
+            egraph.extract(Root(), cost_model=cast("TreeCostModel[int]", lookup_cost))
+
+    def test_lookup_rejects_value_from_another_egraph(self) -> None:
+        class Key(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        @function
+        def score(value: Key) -> i64: ...
+
+        foreign_egraph = EGraph(Key(3))
+        foreign_key = foreign_egraph.lookup_function_value(Key(3))
+        assert foreign_key is not None
+
+        egraph = EGraph()
+        egraph.register(set_(score(Key(3))).to(i64(17)))
+
+        with pytest.raises(ValueError, match="belongs to a different EGraph"):
+            egraph.lookup_function_value(score(foreign_key))
+
+    def test_lookup_values_follow_push_scope_lifetimes(self) -> None:
+        class Key(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        @function
+        def score(value: Key) -> i64: ...
+
+        egraph = EGraph(Key(1), set_(score(Key(1))).to(i64(11)))
+        parent_key = egraph.lookup_function_value(Key(1))
+        assert parent_key is not None
+
+        egraph.push()
+        assert egraph.lookup_function_value(score(parent_key)) == i64(11)
+        egraph.register(Key(2), set_(score(Key(2))).to(i64(22)))
+        child_key = egraph.lookup_function_value(Key(2))
+        assert child_key is not None
+        egraph.pop()
+
+        assert egraph.lookup_function_value(score(parent_key)) == i64(11)
+        egraph.register(Key(3), set_(score(Key(3))).to(i64(33)))
+        with pytest.raises(ValueError, match="inactive push scope"):
+            egraph.lookup_function_value(score(child_key))
+
+    def test_cost_model_callback_can_lookup_nested_value_from_container_argument(self) -> None:
+        class Key(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        class Root(Expr):
+            def __init__(self, values: Map[Key, i64]) -> None: ...
+
+        @function
+        def score(value: Key) -> i64: ...
+
+        egraph = EGraph()
+        egraph.register(set_(score(Key(3))).to(i64(17)))
+
+        def lookup_cost(callback_egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            if not isinstance(expr, Root):
+                return sum(children_costs)
+            args = get_callable_args(expr)
+            assert args is not None
+            (key,) = cast("Map[Key, i64]", args[0]).value
+            value = callback_egraph.lookup_function_value(score(key))
+            assert value is not None
+            return int(value) + sum(children_costs)
+
+        expr = Root(Map[Key, i64].empty().insert(Key(3), i64(0)))
+        assert egraph.extract(expr, include_cost=True, cost_model=cast("TreeCostModel[int]", lookup_cost)) == (
+            expr,
+            17,
+        )
+
     def test_cost_model_callback_values_are_scoped_to_their_egraph(self) -> None:
         class LookupByString(Expr):
             def __init__(self, value: StringLike) -> None: ...
@@ -3054,6 +3951,44 @@ class TestCustomExtract:
         assert source_egraph.extract(
             LookupByString("needle"), include_cost=True, cost_model=cast("TreeCostModel[int]", lookup_cost)
         ) == (LookupByString("needle"), 17)
+
+    def test_nested_cost_model_callback_preserves_outer_egraph_values(self) -> None:
+        class Outer(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        class Inner(Expr):
+            def __init__(self) -> None: ...
+
+        @function
+        def score(value: i64Like) -> i64: ...
+
+        outer_egraph = EGraph()
+        outer_egraph.register(set_(score(3)).to(i64(17)))
+        inner_egraph = EGraph()
+
+        def outer_cost(callback_egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+            if not isinstance(expr, Outer):
+                return sum(children_costs)
+            args = get_callable_args(expr)
+            assert args is not None
+            outer_value = cast("i64", args[0])
+
+            def inner_cost(_inner_egraph: EGraph, inner_expr: BaseExpr, inner_children: list[int]) -> int:
+                if not isinstance(inner_expr, Inner):
+                    return sum(inner_children)
+                value = callback_egraph.lookup_function_value(score(outer_value))
+                assert value is not None
+                return int(value)
+
+            _, cost = inner_egraph.extract(
+                Inner(), include_cost=True, cost_model=cast("TreeCostModel[int]", inner_cost)
+            )
+            return cost + sum(children_costs)
+
+        assert outer_egraph.extract(Outer(3), include_cost=True, cost_model=cast("TreeCostModel[int]", outer_cost)) == (
+            Outer(3),
+            17,
+        )
 
     @pytest.mark.parametrize(
         ("model_kind", "extractor"),

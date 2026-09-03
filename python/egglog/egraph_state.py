@@ -5,13 +5,14 @@ Implement conversion to/from egglog.
 from __future__ import annotations
 
 import contextlib
+import math
 import re
 import tempfile
 import weakref
 from base64 import standard_b64decode, standard_b64encode
 from dataclasses import InitVar, dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TextIO, assert_never, cast, overload
+from typing import TYPE_CHECKING, TextIO, assert_never, cast, overload
 from uuid import UUID
 
 import cloudpickle
@@ -20,17 +21,77 @@ from opentelemetry import trace
 from . import bindings
 from ._tracing import call_with_current_trace
 from .declarations import *
-from .declarations import ConstructorDecl, is_callable_decl_constructor
+from .declarations import (
+    _BUILTIN_EGG_FN_NAMES,
+    _BUILTIN_EGG_SORT_NAMES,
+    ConstructorDecl,
+    is_callable_decl_constructor,
+)
 from .pretty import *
 from .type_constraint_solver import *
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Iterable
 
 __all__ = ["EGraphState", "span"]
 
 
 _TRACER = trace.get_tracer(__name__)
+_VALIDATE_COST_PRIMITIVE = "@validate-dynamic-cost"
+
+# These heads are interpreted as syntax before Egglog falls back to parsing a
+# generic top-level call. Keep this aligned with Parser::parse_command,
+# Parser::parse_action, Parser::parse_fact, and the extensions installed by
+# egglog_experimental::new_experimental_egraph.
+_EGGLOG_RESERVED_CALL_HEADS = frozenset({
+    "=",
+    "birewrite",
+    "check",
+    "constructor",
+    "datatype",
+    "datatype*",
+    "delete",
+    "extract",
+    "fail",
+    "for",
+    "function",
+    "include",
+    "input",
+    "keep-best",
+    "let",
+    "let-scheduler",
+    "multi-extract",
+    "output",
+    "panic",
+    "pop",
+    "primitive",
+    "print-function",
+    "print-size",
+    "print-stats",
+    "print-table-stats",
+    "prove",
+    "prove-exists",
+    "push",
+    "relation",
+    "rewrite",
+    "rule",
+    "ruleset",
+    "run",
+    "run-schedule",
+    "set",
+    "set-cost",
+    "sort",
+    "subsume",
+    "union",
+    "unstable-combined-ruleset",
+    "unstable-fresh!",
+    "with-dynamic-cost",
+    "with-ruleset",
+})
+_EGGLOG_RESERVED_ACTION_HEADS = frozenset({"delete", "let", "panic", "set", "set-cost", "subsume", "union"})
+_EGGLOG_RESERVED_COMMAND_OR_ACTION_HEADS = _EGGLOG_RESERVED_CALL_HEADS - {"="}
+_EGGLOG_LITERAL_NAMES = frozenset({"false", "NaN", "inf", "-inf", "true"})
+_EGGLOG_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 
 
 @dataclass
@@ -45,13 +106,16 @@ class _SavedEgglogFile:
     cumulative source log.
 
     We keep the append handle open for performance and for easy post-failure
-    inspection. Successful commands are saved normally; failed commands are
-    saved as expected failures with trailing error comments.
+    inspection. Successful commands are saved normally; Egglog-reported
+    failures are saved as expected failures with trailing error comments.
+    Other execution failures invalidate the transcript because their partial
+    effects cannot be represented by a replayable command.
     """
 
     path: str
     file: TextIO
     line_count: int = 0
+    poisoned: bool = False
     _finalizer: weakref.finalize = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -73,6 +137,16 @@ def _normalize_global_let_name(name: str) -> str:
     return name if name.startswith("$") else f"${name}"
 
 
+def _egg_name_is_source_safe_symbol(name: str) -> bool:
+    """Return whether a name is safe to emit as an ordinary Egglog symbol."""
+    return (
+        bool(name)
+        and name != "_"
+        and not name.startswith(('"', "@"))
+        and not any(c.isspace() or c in ";()" for c in name)
+    )
+
+
 def _saved_egglog_failure_message(error: bindings.EggSmolError) -> str:
     lines = [line.strip() for line in error.context.splitlines() if line.strip()]
     for message in lines:
@@ -83,6 +157,59 @@ def _saved_egglog_failure_message(error: bindings.EggSmolError) -> str:
     if lines:
         return lines[-1]
     return str(error)
+
+
+def _rule_variable_names(rule: RuleDecl) -> set[str]:  # noqa: C901, PLR0912
+    """Collect source-level names that compiler-generated rule lets must not shadow."""
+    names: set[str] = set()
+
+    def visit_expr(expr: ExprDecl) -> None:
+        match expr:
+            case UnboundVarDecl(name, egg_name):
+                emitted_name = egg_name or f"_{name}"
+                names.add(emitted_name.removeprefix("$"))
+            case LetRefDecl(name):
+                names.add(_normalize_global_let_name(name).removeprefix("$"))
+            case CallDecl(_, args) | GetCostDecl(_, args) | PartialCallDecl(CallDecl(_, args)):
+                for arg in args:
+                    visit_expr(arg.expr)
+            case LitDecl() | PyObjectDecl() | ValueDecl() | DummyDecl():
+                pass
+            case _:
+                assert_never(expr)
+
+    for fact in rule.body:
+        match fact:
+            case EqDecl(_, left, right):
+                visit_expr(left)
+                visit_expr(right)
+            case ExprFactDecl(typed_expr):
+                visit_expr(typed_expr.expr)
+            case _:
+                assert_never(fact)
+    for action in rule.head:
+        match action:
+            case LetDecl(name, typed_expr):
+                names.add(_normalize_global_let_name(name).removeprefix("$"))
+                visit_expr(typed_expr.expr)
+            case SetDecl(_, call, rhs):
+                visit_expr(call)
+                visit_expr(rhs)
+            case ExprActionDecl(typed_expr):
+                visit_expr(typed_expr.expr)
+            case ChangeDecl(_, call, _):
+                visit_expr(call)
+            case UnionDecl(_, left, right):
+                visit_expr(left)
+                visit_expr(right)
+            case SetCostDecl(_, call, cost):
+                visit_expr(call)
+                visit_expr(cost)
+            case PanicDecl():
+                pass
+            case _:
+                assert_never(action)
+    return names
 
 
 def span(frame_index: int = 0) -> bindings.RustSpan:
@@ -108,6 +235,12 @@ class EGraphState:
     """
 
     egraph: bindings.EGraph
+    seminaive: bool = True
+    # Opaque identity for values created in the current push scope. Descendant
+    # scopes may use ancestor values, but values from a popped scope must not be
+    # accepted if the backend later reuses their raw IDs.
+    value_owner: object = field(default_factory=object, repr=False)
+    valid_value_owners: frozenset[object] = field(default_factory=frozenset, repr=False)
     save_egglog_string: InitVar[bool] = False
     egglog_file_state: _SavedEgglogFile | None = field(default=None, repr=False)
     # The declarations we have added.
@@ -146,6 +279,9 @@ class EGraphState:
     cost_table_names: dict[CallableRef, str] = field(default_factory=dict)
     # Counter for deterministic synthetic let bindings created while lowering expressions to egg.
     expr_to_let_counter: int = 0
+    # Explicit top-level lets waiting to be lowered in the current registration batch.
+    # Synthetic lets must avoid them regardless of command order within that batch.
+    pending_let_names: frozenset[str] = field(default_factory=frozenset, repr=False)
     # Counter for deterministic synthetic names assigned to unnamed functions.
     unnamed_function_counter: int = 0
 
@@ -155,11 +291,13 @@ class EGraphState:
     rule_name_to_command_decl: dict[str, RuleDecl | BiRewriteDecl | RewriteDecl] = field(default_factory=dict)
 
     def __post_init__(self, save_egglog_string: bool) -> None:
+        if not self.valid_value_owners:
+            self.valid_value_owners = frozenset((self.value_owner,))
         if save_egglog_string and self.egglog_file_state is None:
             # Keep one persistent temp `.egg` file per high-level egraph so parse errors
             # can point at a stable filename the user can open after a failure.
             egglog_file = tempfile.NamedTemporaryFile(  # noqa: SIM115 - kept open for incremental appends
-                mode="w+", encoding="utf-8", suffix=".egg", delete=False
+                mode="w+", encoding="utf-8", newline="", suffix=".egg", delete=False
             )
             self.egglog_file_state = _SavedEgglogFile(egglog_file.name, cast("TextIO", egglog_file))
 
@@ -167,8 +305,12 @@ class EGraphState:
         """
         Returns a copy of the state. The egraph reference is kept the same. Used for pushing/popping.
         """
+        value_owner = object()
         return EGraphState(
             egraph=self.egraph,
+            seminaive=self.seminaive,
+            value_owner=value_owner,
+            valid_value_owners=self.valid_value_owners | {value_owner},
             save_egglog_string=self.egglog_file_state is not None,
             egglog_file_state=self.egglog_file_state,
             __egg_decls__=self.__egg_decls__.copy(),
@@ -183,6 +325,7 @@ class EGraphState:
             expr_to_letref_cache=self.expr_to_letref_cache.copy(),
             cost_table_names=self.cost_table_names.copy(),
             expr_to_let_counter=self.expr_to_let_counter,
+            pending_let_names=self.pending_let_names,
             unnamed_function_counter=self.unnamed_function_counter,
             rule_name_counter=self.rule_name_counter,
             rule_name_to_command_decl=self.rule_name_to_command_decl.copy(),
@@ -195,18 +338,30 @@ class EGraphState:
         if self.egglog_file_state.file.closed:
             msg = "Can't get egglog string after the saved transcript has been closed"
             raise ValueError(msg)
+        if self.egglog_file_state.poisoned:
+            msg = "Can't use the saved Egglog transcript after an execution failure whose partial effects cannot be replayed"
+            raise RuntimeError(msg)
         # The append handle stays open for execution, so flush before reading the saved source.
         self.egglog_file_state.file.flush()
-        with open(self.egglog_file_state.path, encoding="utf-8") as saved_file:
+        with open(self.egglog_file_state.path, encoding="utf-8", newline="") as saved_file:
             return saved_file.read()
 
     def close(self) -> None:
         if self.egglog_file_state is not None:
             self.egglog_file_state.close()
 
+    def ensure_open(self) -> None:
+        if self.egglog_file_state is not None and self.egglog_file_state.file.closed:
+            msg = "Cannot run commands after the saved Egglog transcript has been closed"
+            raise ValueError(msg)
+        if self.egglog_file_state is not None and self.egglog_file_state.poisoned:
+            msg = "Cannot run commands after an execution failure whose partial effects cannot be replayed"
+            raise RuntimeError(msg)
+
     def run_program(self, *commands: bindings._Command) -> list[bindings._CommandOutput]:
         if not commands:
             return []
+        self.ensure_open()
         if self.egglog_file_state is None:
             return call_with_current_trace(self.egraph.run_program, *commands)
 
@@ -223,14 +378,36 @@ class EGraphState:
                     self.egraph.parse_and_run_program, padded_command, filename=self.egglog_file_state.path
                 )
             except bindings.EggSmolError as error:
+                if not error.replayable_by_fail:
+                    # Parsing, expansion, and typechecking can mutate backend
+                    # metadata before they fail, while `(fail ...)` cannot
+                    # reproduce those failures. Do not claim a replayable log.
+                    self.egglog_file_state.poisoned = True
+                    raise
                 fail_command_text = str(bindings.Fail(span(), command)).rstrip("\n")
                 saved_text = f"{fail_command_text} ; {_saved_egglog_failure_message(error)}\n"
-                self.egglog_file_state.file.write(saved_text)
-                self.egglog_file_state.file.flush()
+                try:
+                    self.egglog_file_state.file.write(saved_text)
+                    self.egglog_file_state.file.flush()
+                except BaseException:
+                    self.egglog_file_state.poisoned = True
+                    raise
                 self.egglog_file_state.line_count += saved_text.count("\n")
                 raise
-            self.egglog_file_state.file.write(command_text)
-            self.egglog_file_state.file.flush()
+            except BaseException:
+                # A Python primitive or unrelated runtime failure can interrupt
+                # a command after some actions have committed. There is no
+                # replayable Egglog command for that partial state.
+                self.egglog_file_state.poisoned = True
+                raise
+            try:
+                self.egglog_file_state.file.write(command_text)
+                self.egglog_file_state.file.flush()
+            except BaseException:
+                # Execution already succeeded, so omitting even part of this
+                # command would make the cumulative source diverge.
+                self.egglog_file_state.poisoned = True
+                raise
             self.egglog_file_state.line_count += command_text.count("\n")
             outputs.extend(command_outputs)
         return outputs
@@ -242,6 +419,22 @@ class EGraphState:
     @staticmethod
     def _local_scheduler_name(index: int) -> str:
         return f"_scheduler_{index}"
+
+    @staticmethod
+    def _back_off_scheduler_to_egg(scheduler: BackOffDecl) -> bindings.Call:
+        """Serialize the shared option protocol for local and persistent backoff schedulers."""
+        args: list[bindings._Expr] = []
+        if scheduler.match_limit is not None:
+            args.extend((
+                bindings.Var(span(), ":match-limit"),
+                bindings.Lit(span(), bindings.Int(scheduler.match_limit)),
+            ))
+        if scheduler.ban_length is not None:
+            args.extend((
+                bindings.Var(span(), ":ban-length"),
+                bindings.Lit(span(), bindings.Int(scheduler.ban_length)),
+            ))
+        return bindings.Call(span(), "back-off", args)
 
     @_TRACER.start_as_current_span("run_schedule_to_egg")
     def run_schedule_to_egg(self, schedule: ScheduleDecl) -> bindings._Command:
@@ -346,26 +539,20 @@ class EGraphState:
         """
         match schedule:
             case LetSchedulerDecl(scheduler, inner):
-                match_limit = scheduler.match_limit
-                ban_length = scheduler.ban_length
                 name = self._local_scheduler_name(len(bound_schedulers))
                 bound_schedulers.append(scheduler)
-                args: list[bindings._Expr] = []
-                if match_limit is not None:
-                    args.append(bindings.Var(span(), ":match-limit"))
-                    args.append(bindings.Lit(span(), bindings.Int(match_limit)))
-                if ban_length is not None:
-                    args.append(bindings.Var(span(), ":ban-length"))
-                    args.append(bindings.Lit(span(), bindings.Int(ban_length)))
-                back_off_decl = bindings.Call(span(), "back-off", args)
-                let_decl = bindings.Call(span(), "let-scheduler", [bindings.Var(span(), name), back_off_decl])
+                let_decl = bindings.Call(
+                    span(),
+                    "let-scheduler",
+                    [bindings.Var(span(), name), self._back_off_scheduler_to_egg(scheduler)],
+                )
                 try:
                     inner_exprs = self._schedule_with_scheduler_to_egg(inner, bound_schedulers)
                 finally:
                     bound_schedulers.pop()
                 return [bindings.Call(span(), "seq", [let_decl, *inner_exprs])]
             case RunDecl(ruleset_ident, until, scheduler):
-                args = [bindings.Var(span(), str(ruleset_ident))]
+                args: list[bindings._Expr] = [bindings.Var(span(), str(ruleset_ident))]
                 if scheduler:
                     name = "run-with"
                     scheduler_name = self._persistent_scheduler_name(scheduler)
@@ -411,18 +598,13 @@ class EGraphState:
                 assert_never(schedule)
 
     def _persistent_scheduler_to_egg(self, scheduler: BackOffDecl) -> bindings._Command:
-        args: list[bindings._Expr] = []
-        if scheduler.match_limit is not None:
-            args.append(bindings.Var(span(), ":match-limit"))
-            args.append(bindings.Lit(span(), bindings.Int(scheduler.match_limit)))
-        if scheduler.ban_length is not None:
-            args.append(bindings.Var(span(), ":ban-length"))
-            args.append(bindings.Lit(span(), bindings.Int(scheduler.ban_length)))
-        back_off_decl = bindings.Call(span(), "back-off", args)
         return bindings.UserDefined(
             span(),
             "let-scheduler",
-            [bindings.Var(span(), self._persistent_scheduler_name(scheduler)), back_off_decl],
+            [
+                bindings.Var(span(), self._persistent_scheduler_name(scheduler)),
+                self._back_off_scheduler_to_egg(scheduler),
+            ],
         )
 
     def ruleset_to_egg(self, ident: Ident) -> None:  # noqa: C901
@@ -432,6 +614,15 @@ class EGraphState:
         if ident.name == "" and ident not in self.__egg_decls__._rulesets:
             self.rulesets.setdefault(ident, set())
             return
+        egg_name = str(ident)
+        if self.egglog_file_state is not None and (
+            not _egg_name_is_source_safe_symbol(egg_name) or _egg_name_is_parser_literal(egg_name)
+        ):
+            msg = (
+                f"Ruleset name {egg_name!r} cannot be used with save_egglog_string=True because "
+                "it does not serialize as one Egglog symbol"
+            )
+            raise ValueError(msg)
         match self.__egg_decls__._rulesets[ident]:
             case RulesetDecl(rules):
                 if ident not in self.rulesets:
@@ -443,9 +634,8 @@ class EGraphState:
                 for rule in rules:
                     if rule in added_rules:
                         continue
-                    cmd = self.command_to_egg(rule, ident)
-                    if cmd is not None:
-                        self.run_program(cmd)
+                    commands = self.commands_to_egg(rule, ident)
+                    self.run_program(*commands)
                     added_rules.add(rule)
             case CombinedRulesetDecl(rulesets):
                 if ident in self.rulesets:
@@ -455,13 +645,15 @@ class EGraphState:
                     self.ruleset_to_egg(ruleset)
                 self.run_program(bindings.UnstableCombinedRuleset(span(), str(ident), list(map(str, rulesets))))
 
-    def command_to_egg(self, cmd: CommandDecl, ruleset: Ident) -> bindings._Command | None:
+    def commands_to_egg(  # noqa: C901, PLR0912
+        self, cmd: CommandDecl, ruleset: Ident
+    ) -> list[bindings._Command]:
         match cmd:
             case ActionCommandDecl(action):
-                action_egg = self.action_to_egg(action, expr_to_let=True)
-                if not action_egg:
-                    return None
-                return bindings.ActionCommand(action_egg)
+                return [
+                    bindings.ActionCommand(action_egg)
+                    for action_egg in self.actions_to_egg(action, expr_to_let=True, standalone=True)
+                ]
             case RewriteDecl(tp, lhs, rhs, conditions) | BiRewriteDecl(tp, lhs, rhs, conditions):
                 self.type_ref_to_egg(tp)
                 name = str(self.rule_name_counter)
@@ -475,51 +667,88 @@ class EGraphState:
                 )
                 egg_cmd: bindings._Command
                 if isinstance(cmd, RewriteDecl):
-                    self.rule_name_to_command_decl[name] = cmd
                     egg_cmd = bindings.RewriteCommand(str(ruleset), rewrite, cmd.subsume)
+                    serialized_name = str(egg_cmd)
+                    reported_name = serialized_name.replace('"', "'")
+                    if (
+                        self.egglog_file_state is not None
+                        and (not self.seminaive or self.egraph.no_decomp())
+                        and (not cmd.subsume or isinstance(lhs, CallDecl))
+                    ):
+                        rule = self._rewrite_to_rule_decl(tp, lhs, rhs, conditions, reported_name, cmd.subsume)
+                        commands = self.commands_to_egg(rule, ruleset)
+                        self.rule_name_to_command_decl[reported_name] = cmd
+                        return commands
+                    self.rule_name_to_command_decl[name] = cmd
                     # Saving a transcript executes the serialized command, whose syntax does not
                     # preserve the internal rewrite name. The engine then reports the serialized
                     # rewrite itself as its name, so retain that alias for RunReport translation.
-                    serialized_name = str(egg_cmd)
                     self.rule_name_to_command_decl[serialized_name] = cmd
                     # Backend report names render every Symbol with single quotes, while
                     # command serialization accepts symbols as double-quoted literals.
-                    reported_name = serialized_name.replace('"', "'")
                     self.rule_name_to_command_decl[reported_name] = cmd
                 else:
-                    self.rule_name_to_command_decl[f"{name}=>"] = cmd
-                    self.rule_name_to_command_decl[f"{name}<="] = cmd
                     egg_cmd = bindings.BiRewriteCommand(str(ruleset), rewrite)
                     serialized_name = str(egg_cmd)
                     reported_name = serialized_name.replace('"', "'")
+                    if self.egglog_file_state is not None and (not self.seminaive or self.egraph.no_decomp()):
+                        report_names = (f"{reported_name}=>", f"{reported_name}<=")
+                        rules = (
+                            self._rewrite_to_rule_decl(tp, lhs, rhs, conditions, report_names[0], False),
+                            self._rewrite_to_rule_decl(tp, rhs, lhs, conditions, report_names[1], False),
+                        )
+                        commands = [command for rule in rules for command in self.commands_to_egg(rule, ruleset)]
+                        for report_name in report_names:
+                            self.rule_name_to_command_decl[report_name] = cmd
+                        return commands
+                    self.rule_name_to_command_decl[f"{name}=>"] = cmd
+                    self.rule_name_to_command_decl[f"{name}<="] = cmd
                     for suffix in ("=>", "<="):
                         self.rule_name_to_command_decl[f"{serialized_name}{suffix}"] = cmd
                         self.rule_name_to_command_decl[f"{reported_name}{suffix}"] = cmd
-                return egg_cmd
+                return [egg_cmd]
             case RuleDecl(head, body, name, eval_mode, no_decomp):
                 if not name:
                     name = str(self.rule_name_counter)
                     self.rule_name_counter += 1
                 self.rule_name_to_command_decl[name] = cmd
-                binding_eval_mode = cast(
-                    "bindings.Seminaive | bindings.Naive | bindings.UnsafeSeminaive",
-                    {
-                        "seminaive": bindings.Seminaive(),
-                        "naive": bindings.Naive(),
-                        "unsafe-seminaive": bindings.UnsafeSeminaive(),
-                    }[eval_mode],
-                )
-                return bindings.RuleCommand(
-                    bindings.Rule(
-                        span(),
-                        [self.action_to_egg(a) for a in head],
-                        [self.fact_to_egg(f, expr_to_let=False) for f in body],
-                        name or "",
-                        str(ruleset),
-                        binding_eval_mode,
-                        no_decomp,
+                eval_modes = {
+                    "seminaive": bindings.Seminaive(),
+                    "naive": bindings.Naive(),
+                    "unsafe-seminaive": bindings.UnsafeSeminaive(),
+                }
+                if eval_mode not in eval_modes:
+                    msg = (
+                        f"Unknown rule evaluation mode {eval_mode!r}; expected "
+                        "'seminaive', 'naive', or 'unsafe-seminaive'"
+                    )
+                    raise ValueError(msg)
+                binding_eval_mode = (
+                    bindings.Naive()
+                    if not self.seminaive
+                    else cast(
+                        "bindings.Seminaive | bindings.Naive | bindings.UnsafeSeminaive",
+                        eval_modes[eval_mode],
                     )
                 )
+                used_variable_names = _rule_variable_names(cmd)
+                return [
+                    bindings.RuleCommand(
+                        bindings.Rule(
+                            span(),
+                            [
+                                action_egg
+                                for action in head
+                                for action_egg in self.actions_to_egg(action, used_variable_names=used_variable_names)
+                            ],
+                            [self.fact_to_egg(f, expr_to_let=False) for f in body],
+                            name or "",
+                            str(ruleset),
+                            binding_eval_mode,
+                            no_decomp or self.egraph.no_decomp(),
+                        )
+                    )
+                ]
             case DefaultRewriteDecl(ref, expr, subsume):
                 sig = self.__egg_decls__.get_callable_decl(ref).signature
                 assert isinstance(sig, FunctionSignature)
@@ -531,56 +760,93 @@ class EGraphState:
                 rewrite_decl = RewriteDecl(
                     sig.semantic_return_type.to_just(), CallDecl(ref, arg_mapping), expr, (), subsume
                 )
-                return self.command_to_egg(rewrite_decl, ruleset)
+                return self.commands_to_egg(rewrite_decl, ruleset)
             case _:
                 assert_never(cmd)
 
-    @overload
-    def action_to_egg(self, action: ActionDecl) -> bindings._Action: ...
-
-    @overload
-    def action_to_egg(
+    def _rewrite_to_rule_decl(
         self,
-        action: ActionDecl,
-        expr_to_let: Literal[True] = ...,
-    ) -> bindings._Action | None: ...
+        tp: JustTypeRef,
+        lhs: ExprDecl,
+        rhs: ExprDecl,
+        conditions: tuple[FactDecl, ...],
+        name: str,
+        subsume: bool,
+    ) -> RuleDecl:
+        """Desugar a rewrite while retaining rule options that rewrite syntax cannot encode."""
+        used_variable_names = _rule_variable_names(RuleDecl((), (EqDecl(tp, lhs, rhs), *conditions), None))
+        fresh_name = self._allocate_synthetic_let_name().removeprefix("$")
+        while fresh_name in used_variable_names:
+            fresh_name = self._allocate_synthetic_let_name().removeprefix("$")
+        fresh = UnboundVarDecl(fresh_name, fresh_name)
+        head: list[ActionDecl] = [UnionDecl(tp, fresh, rhs)]
+        if subsume:
+            if not isinstance(lhs, CallDecl):
+                msg = "subsumed rewrite must have a function call on the lhs"
+                raise ValueError(msg)
+            head.append(ChangeDecl(tp, lhs, "subsume"))
+        return RuleDecl(tuple(head), (EqDecl(tp, fresh, lhs), *conditions), name)
 
-    @overload
-    def action_to_egg(self, action: ActionDecl, expr_to_let: bool) -> bindings._Action | None: ...
-
-    def action_to_egg(  # noqa: C901, PLR0911, PLR0912
+    def actions_to_egg(  # noqa: C901, PLR0911, PLR0912
         self,
         action: ActionDecl,
         expr_to_let: bool = False,
-    ) -> bindings._Action | None:
+        *,
+        standalone: bool = False,
+        used_variable_names: set[str] | None = None,
+    ) -> list[bindings._Action]:
         match action:
             case LetDecl(name, typed_expr):
+                normalized_name = _normalize_global_let_name(name)
+                if self.egglog_file_state is not None and not _egg_name_is_source_safe_symbol(normalized_name):
+                    msg = (
+                        f"Let name {name!r} cannot be used with save_egglog_string=True because "
+                        "it does not serialize as one Egglog symbol"
+                    )
+                    raise ValueError(msg)
                 var_decl = LetRefDecl(name)
                 var_egg = self._expr_to_egg(var_decl)
                 self.expr_to_egg_cache[var_decl] = var_egg
-                return bindings.Let(
-                    span(),
-                    var_egg.name,
-                    self.typed_expr_to_egg(typed_expr, expr_to_let=expr_to_let),
-                )
+                return [
+                    bindings.Let(
+                        span(),
+                        var_egg.name,
+                        self.typed_expr_to_egg(typed_expr, expr_to_let=expr_to_let),
+                    )
+                ]
             case SetDecl(tp, call, rhs):
                 self.type_ref_to_egg(tp)
                 egg_fn, typed_args = self.translate_call(call)
-                return bindings.Set(
-                    span(),
-                    egg_fn,
-                    [self.typed_expr_to_egg(arg, expr_to_let) for arg in typed_args],
-                    self._expr_to_egg(rhs, expr_to_let=expr_to_let),
-                )
+                return [
+                    bindings.Set(
+                        span(),
+                        egg_fn,
+                        [self.typed_expr_to_egg(arg, expr_to_let) for arg in typed_args],
+                        self._expr_to_egg(rhs, expr_to_let=expr_to_let),
+                    )
+                ]
             case ExprActionDecl(typed_expr):
                 if not isinstance(typed_expr.expr, CallDecl):
                     msg = "Top-level egglog expr commands must be calls"
                     raise ValueError(msg)  # noqa: TRY004 - preserve the public validation error
+                callable_decl = self.__egg_decls__.get_callable_decl(typed_expr.expr.callable)
+                if (
+                    self.egglog_file_state is not None
+                    and callable_decl.egg_name is not None
+                    and callable_decl.egg_name
+                    in (_EGGLOG_RESERVED_COMMAND_OR_ACTION_HEADS if standalone else _EGGLOG_RESERVED_ACTION_HEADS)
+                ):
+                    context = "top-level action" if standalone else "rule action"
+                    msg = (
+                        f"Explicit Egglog callable name {callable_decl.egg_name!r} cannot be used as a {context} "
+                        "with save_egglog_string=True because it is parsed as Egglog syntax"
+                    )
+                    raise ValueError(msg)
                 egg_expr = self.typed_expr_to_egg(typed_expr, expr_to_let=expr_to_let)
                 if isinstance(egg_expr, bindings.Var):
-                    return None
+                    return []
                 assert isinstance(egg_expr, bindings.Call)
-                return bindings.Expr_(span(), egg_expr)
+                return [bindings.Expr_(span(), egg_expr)]
             case ChangeDecl(tp, call, change):
                 self.type_ref_to_egg(tp)
                 egg_fn, typed_args = self.translate_call(call)
@@ -592,26 +858,57 @@ class EGraphState:
                         egg_change = bindings.Subsume()
                     case _:
                         assert_never(change)
-                return bindings.Change(
-                    span(),
-                    egg_change,
-                    egg_fn,
-                    [self.typed_expr_to_egg(arg, expr_to_let) for arg in typed_args],
-                )
+                return [
+                    bindings.Change(
+                        span(),
+                        egg_change,
+                        egg_fn,
+                        [self.typed_expr_to_egg(arg, expr_to_let) for arg in typed_args],
+                    )
+                ]
             case UnionDecl(tp, lhs, rhs):
                 self.type_ref_to_egg(tp)
-                return bindings.Union(
-                    span(),
-                    self._expr_to_egg(lhs, expr_to_let=expr_to_let),
-                    self._expr_to_egg(rhs, expr_to_let=expr_to_let),
-                )
+                return [
+                    bindings.Union(
+                        span(),
+                        self._expr_to_egg(lhs, expr_to_let=expr_to_let),
+                        self._expr_to_egg(rhs, expr_to_let=expr_to_let),
+                    )
+                ]
             case PanicDecl(name):
-                return bindings.Panic(span(), name)
+                return [bindings.Panic(span(), name)]
             case SetCostDecl(tp, expr, cost):
                 self.type_ref_to_egg(tp)
-                cost_table, typed_args = self.translate_call(GetCostDecl(expr.callable, expr.args))
-                args_egg = [self.typed_expr_to_egg(x, expr_to_let) for x in typed_args]
-                return bindings.Set(span(), cost_table, args_egg, self._expr_to_egg(cost, expr_to_let=expr_to_let))
+                egg_fn, typed_args = self.translate_call(expr)
+                cost_table = self.create_cost_table(expr.callable)
+                # Match egglog-experimental's set-cost action macro: bind each
+                # argument once, materialize the target call, then write its
+                # validated cost. Structural lowering here avoids evaluating a
+                # cost expression early through top-level factoring.
+                lowered: list[bindings._Action] = []
+                args_egg: list[bindings._Expr] = []
+                for typed_arg in typed_args:
+                    name = self._allocate_synthetic_let_name()
+                    if standalone:
+                        # Mark implementation-only globals so freeze() omits them
+                        # without making later expressions reuse their values.
+                        var_egg = bindings.Var(span(), name)
+                        self.expr_to_letref_cache[LetRefDecl(name)] = var_egg
+                        self.expr_to_egg_cache[LetRefDecl(name)] = var_egg
+                    else:
+                        name = name.removeprefix("$")
+                        while used_variable_names is not None and name in used_variable_names:
+                            name = self._allocate_synthetic_let_name().removeprefix("$")
+                        if used_variable_names is not None:
+                            used_variable_names.add(name)
+                        var_egg = bindings.Var(span(), name)
+                    lowered.append(bindings.Let(span(), name, self.typed_expr_to_egg(typed_arg, False)))
+                    args_egg.append(var_egg)
+                lowered.append(bindings.Expr_(span(), bindings.Call(span(), egg_fn, args_egg)))
+                cost_expr = self._expr_to_egg(cost, expr_to_let=False)
+                validated_cost = bindings.Call(span(), _VALIDATE_COST_PRIMITIVE, [cost_expr])
+                lowered.append(bindings.Set(span(), cost_table, args_egg, validated_cost))
+                return lowered
             case _:
                 assert_never(action)
 
@@ -636,21 +933,14 @@ class EGraphState:
         # with the protocol's input sorts and i64 output.
         if not self._has_compatible_cost_table_target(name, target_schema):
             existing_refs = self.egg_fn_to_callable_refs.get(name, set())
-            compatible_raw_table = bool(existing_refs)
-            for existing_ref in existing_refs:
-                existing_decl = self.__egg_decls__.get_callable_decl(existing_ref)
-                if not (
-                    isinstance(existing_decl, FunctionDecl)
-                    and not existing_decl.builtin
-                    and existing_decl.body is None
-                    and isinstance(existing_decl.signature, FunctionSignature)
-                ):
-                    compatible_raw_table = False
-                    break
-                existing_schema = self._signature_to_egg_schema(existing_decl.signature)
-                if existing_schema.input != schema.input or existing_schema.output != schema.output:
-                    compatible_raw_table = False
-                    break
+            compatible_raw_table = bool(existing_refs) and all(
+                self._raw_cost_table_matches_schema(existing_ref, schema) for existing_ref in existing_refs
+            )
+            if compatible_raw_table and not self._callable_is_table_backed(ref):
+                raise ValueError(
+                    f"Canonical dynamic-cost table {name!r} for an eager or builtin primitive "
+                    "cannot also be a user-declared function"
+                )
             if existing_refs and not compatible_raw_table:
                 msg = (
                     f"Canonical dynamic-cost table {name!r} is already used by an incompatible callable; "
@@ -663,6 +953,33 @@ class EGraphState:
                 self.run_program(bindings.FunctionCommand(span(), name, schema, None))
         self.cost_table_names[ref] = name
         return name
+
+    def _callable_is_table_backed(self, ref: CallableRef) -> bool:
+        """Return whether Egglog stores rows for this callable."""
+        decl = self.__egg_decls__.get_callable_decl(ref)
+        match decl:
+            case RelationDecl() | ConstructorDecl() | ConstantDecl(body=None):
+                return True
+            case FunctionDecl(body=None, builtin=False):
+                return not isinstance(ref, UnnamedFunctionRef)
+            case ConstantDecl() | FunctionDecl():
+                return False
+            case _:
+                assert_never(decl)
+
+    def _raw_cost_table_matches_schema(self, ref: CallableRef, schema: bindings.Schema) -> bool:
+        """Check the complete public declaration contract for a raw dynamic-cost table."""
+        decl = self.__egg_decls__.get_callable_decl(ref)
+        if not (
+            isinstance(decl, FunctionDecl)
+            and not decl.builtin
+            and decl.body is None
+            and decl.merge is None
+            and isinstance(decl.signature, FunctionSignature)
+        ):
+            return False
+        existing_schema = self._signature_to_egg_schema(decl.signature)
+        return existing_schema.input == schema.input and existing_schema.output == schema.output
 
     def _has_compatible_cost_table_target(self, name: str, target_schema: bindings.Schema) -> bool:
         """Validate every callable already sharing a canonical dynamic-cost table."""
@@ -687,6 +1004,20 @@ class EGraphState:
                     self._expr_to_egg(right, expr_to_let=expr_to_let),
                 )
             case ExprFactDecl(typed_expr):
+                if isinstance(typed_expr.expr, CallDecl) and typed_expr.expr.callable != FunctionRef(
+                    Ident.builtin("!=")
+                ):
+                    callable_decl = self.__egg_decls__.get_callable_decl(typed_expr.expr.callable)
+                    if (
+                        self.egglog_file_state is not None
+                        and callable_decl.egg_name is not None
+                        and callable_decl.egg_name == "="
+                    ):
+                        msg = (
+                            "Explicit Egglog callable name '=' cannot be used as a fact with "
+                            "save_egglog_string=True because it is parsed as equality syntax"
+                        )
+                        raise ValueError(msg)
                 return bindings.Fact(self.typed_expr_to_egg(typed_expr, expr_to_let=expr_to_let))
             case _:
                 assert_never(fact)
@@ -700,8 +1031,47 @@ class EGraphState:
         if ref in self.callable_ref_to_egg_fn:
             return self.callable_ref_to_egg_fn[ref]
         decl = self.__egg_decls__.get_callable_decl(ref)
-        egg_name = decl.egg_name or self._allocate_callable_egg_name(ref)
-        self.egg_fn_to_callable_refs.setdefault(egg_name, set()).add(ref)
+        if (
+            self.egglog_file_state is not None
+            and decl.egg_name
+            and (not _egg_name_is_source_safe_symbol(decl.egg_name) or _egg_name_is_parser_literal(decl.egg_name))
+        ):
+            msg = (
+                f"Explicit Egglog callable name {decl.egg_name!r} cannot be used with "
+                "save_egglog_string=True because it is parsed as Egglog syntax"
+            )
+            raise ValueError(msg)
+        egg_name = decl.egg_name or self._allocate_name(
+            self._generate_callable_egg_name(ref), avoid_reserved_call_heads=True
+        )
+        cost_table_targets = tuple(
+            target_ref for target_ref, cost_table_name in self.cost_table_names.items() if cost_table_name == egg_name
+        )
+        reuse_cost_table = bool(cost_table_targets)
+        existing_refs = self.egg_fn_to_callable_refs.get(egg_name, set())
+        if existing_refs and not reuse_cost_table and not (isinstance(decl, FunctionDecl) and decl.builtin):
+            msg = f"Explicit Egglog callable name {egg_name!r} is already registered"
+            raise ValueError(msg)
+        for target_ref in cost_table_targets:
+            if not self._callable_is_table_backed(target_ref):
+                raise ValueError(
+                    f"Canonical dynamic-cost table {egg_name!r} for an eager or builtin primitive "
+                    "cannot also be a user-declared function"
+                )
+            target_signature = self.__egg_decls__.get_callable_decl(target_ref).signature
+            assert isinstance(target_signature, FunctionSignature)
+            cost_schema = self._signature_to_egg_schema(
+                replace(target_signature, return_type=TypeRefWithVars(Ident.builtin("i64")))
+            )
+            if not self._raw_cost_table_matches_schema(ref, cost_schema):
+                msg = (
+                    f"Canonical dynamic-cost table {egg_name!r} is already used by an incompatible callable; "
+                    "it must be a bodyless function with the target's input sorts and i64 output"
+                )
+                raise ValueError(msg)
+        if reuse_cost_table and self.egg_fn_to_callable_refs.get(egg_name):
+            msg = f"Canonical dynamic-cost table {egg_name!r} already has a raw callable alias"
+            raise ValueError(msg)
         callable_signature = decl.signature
         reverse_args = callable_signature.reverse_args if isinstance(callable_signature, FunctionSignature) else False
         match decl:
@@ -727,7 +1097,7 @@ class EGraphState:
                     else:
                         self.run_program(bindings.Constructor(span(), egg_name, schema, None, False))
             case FunctionDecl(signature=signature, builtin=builtin, body=body, merge=merge):
-                if not builtin:
+                if not builtin and not reuse_cost_table:
                     assert isinstance(signature, FunctionSignature), "Cannot turn special function to egg"
                     if body is None and isinstance(ref, UnnamedFunctionRef):
                         body = ref.res
@@ -763,6 +1133,10 @@ class EGraphState:
                 )
             case _:
                 assert_never(decl)
+        # Publish the reverse mapping only after any backend declaration has
+        # succeeded; otherwise a failed registration corrupts extraction and
+        # freeze by claiming an alias the backend never accepted.
+        self.egg_fn_to_callable_refs.setdefault(egg_name, set()).add(ref)
         self.callable_ref_to_egg_fn[ref] = egg_name, reverse_args
         return egg_name, reverse_args
 
@@ -813,9 +1187,22 @@ class EGraphState:
         except KeyError:
             pass
         decl = self.__egg_decls__._classes[ref.ident]
+        if (
+            self.egglog_file_state is not None
+            and decl.egg_name
+            and (not _egg_name_is_source_safe_symbol(decl.egg_name) or _egg_name_is_parser_literal(decl.egg_name))
+        ):
+            msg = (
+                f"Explicit Egglog sort name {decl.egg_name!r} cannot be used with "
+                "save_egglog_string=True because it is not parsed as an Egglog symbol"
+            )
+            raise ValueError(msg)
+        if not decl.builtin and not ref.args and decl.egg_name and self._backend_symbol_is_occupied(decl.egg_name):
+            msg = f"Explicit Egglog sort name {decl.egg_name!r} is already registered"
+            raise ValueError(msg)
         arg_names = [self.type_ref_to_egg(arg) for arg in ref.args]
-        self.type_ref_to_egg_sort[ref] = egg_name = (not ref.args and decl.egg_name) or self._allocate_type_egg_name(
-            ref, decl, arg_names
+        self.type_ref_to_egg_sort[ref] = egg_name = (not ref.args and decl.egg_name) or self._allocate_name(
+            self._generate_type_egg_name(ref, decl, arg_names)
         )
         self.egg_sort_to_type_ref[egg_name] = ref
 
@@ -899,16 +1286,17 @@ class EGraphState:
             self.__egg_decls__, self.__egg_decls__.get_callable_decl(typed_expr.expr.callable)
         ):
             return typed_expr
+        # A synthetic let is a top-level binding, so it cannot capture a rule
+        # variable (or an invalid top-level unbound variable). Leave those
+        # expressions inline for their enclosing command to validate instead.
+        if _contains_unbound_var(typed_expr):
+            return typed_expr
         if typed_expr.expr in self.expr_to_letref_cache:
             return None
         var_decl = LetRefDecl(self._allocate_synthetic_let_name())
         var_egg = self._expr_to_egg(var_decl)
         cmd = bindings.ActionCommand(bindings.Let(span(), var_egg.name, self.typed_expr_to_egg(typed_expr, True)))
-        try:
-            self.run_program(cmd)
-        # errors when creating let bindings for things like `(vec-empty)`
-        except bindings.EggSmolError:
-            return typed_expr
+        self.run_program(cmd)
         self.expr_to_letref_cache[typed_expr.expr] = var_egg
         self.expr_to_egg_cache[var_decl] = var_egg
         return None
@@ -941,7 +1329,19 @@ class EGraphState:
             case LetRefDecl(name):
                 res = bindings.Var(span(), _normalize_global_let_name(name))
             case UnboundVarDecl(name, egg_name):
-                res = bindings.Var(span(), egg_name or f"_{name}")
+                emitted_name = egg_name or f"_{name}"
+                if self.egglog_file_state is not None and (
+                    emitted_name == "_"
+                    or emitted_name.startswith("@")
+                    or not _egg_name_is_source_safe_symbol(emitted_name)
+                    or _egg_name_is_parser_literal(emitted_name)
+                ):
+                    msg = (
+                        f"Egglog variable name {emitted_name!r} cannot be used with "
+                        "save_egglog_string=True because it is not parsed as an Egglog symbol"
+                    )
+                    raise ValueError(msg)
+                res = bindings.Var(span(), emitted_name)
             case LitDecl(value):
                 l: bindings._Literal
                 match value:
@@ -1019,93 +1419,123 @@ class EGraphState:
         """
         return frozenset(tp for tp in self.type_ref_to_egg_sort if tp.ident == cls_ident)
 
-    def _allocate_callable_egg_name(self, ref: CallableRef) -> str:
-        return self._allocate_name(self._generate_callable_egg_name_candidates(ref), self._backend_symbol_is_occupied)
-
-    def _generate_callable_egg_name_candidates(self, ref: CallableRef) -> tuple[str, ...]:
+    def _generate_callable_egg_name(self, ref: CallableRef) -> str:
         """
-        Generates short and fully-qualified egg function name candidates for a callable reference.
+        Generate a fully-qualified Egglog name for a callable reference.
+
+        Qualification separates same-named Python declarations; explicit names
+        in the same registration batch are reserved by `_allocate_name`.
         """
         match ref:
             case FunctionRef(ident):
-                return _name_candidates(ident.name, str(ident), sanitize=True)
+                return _sanitize_egg_ident(str(ident))
             case ConstantRef(ident):
                 # Prefix to avoid name collisions with local vars
-                return _name_candidates(f"%{ident.name}", f"%{ident}", sanitize=True)
+                return _sanitize_egg_ident(f"%{ident}")
             case (
                 MethodRef(cls_ident, name)
                 | ClassMethodRef(cls_ident, name)
                 | ClassVariableRef(cls_ident, name)
                 | PropertyRef(cls_ident, name)
             ):
-                return _name_candidates(f"{cls_ident.name}.{name}", f"{cls_ident}.{name}", sanitize=True)
+                return _sanitize_egg_ident(f"{cls_ident}.{name}")
             case InitRef(cls_ident):
-                return _name_candidates(f"{cls_ident.name}.__init__", f"{cls_ident}.__init__", sanitize=True)
+                return _sanitize_egg_ident(f"{cls_ident}.__init__")
             case UnnamedFunctionRef():
                 name = f"_lambda_{self.unnamed_function_counter}"
                 self.unnamed_function_counter += 1
-                return (name,)
+                return name
             case _:
                 assert_never(ref)
 
-    def _allocate_type_egg_name(self, ref: JustTypeRef, decl: ClassDecl, arg_names: list[str]) -> str:
-        return self._allocate_name(
-            self._generate_type_egg_name_candidates(ref, decl, arg_names), self._backend_symbol_is_occupied
-        )
-
     def _backend_symbol_is_occupied(self, name: str) -> bool:
-        """Check Egglog's shared namespace for sorts, tables, and primitives."""
+        """Check Egglog's shared namespace and replay-sensitive syntax names."""
         return (
-            bool(self.egg_fn_to_callable_refs.get(name))
+            not _egg_name_is_source_safe_symbol(name)
+            or _egg_name_is_parser_literal(name)
+            or bool(self.egg_fn_to_callable_refs.get(name))
             or name in self.egg_sort_to_type_ref
             or name in self.cost_table_names.values()
-            or name in BUILTIN_EGG_FN_NAMES
-            or name in BUILTIN_EGG_SORT_NAMES
+            or name in _BUILTIN_EGG_FN_NAMES
+            or name in _BUILTIN_EGG_SORT_NAMES
         )
 
-    def _generate_type_egg_name_candidates(
-        self, ref: JustTypeRef, decl: ClassDecl, arg_names: list[str]
-    ) -> tuple[str, ...]:
-        base_short = decl.egg_name or ref.ident.name
-        base_full = decl.egg_name or str(ref.ident)
+    def _generate_type_egg_name(self, ref: JustTypeRef, decl: ClassDecl, arg_names: list[str]) -> str:
+        if decl.egg_name:
+            base = decl.egg_name
+        else:
+            # Preserve the readable dotted qualification while sanitizing each
+            # Python identifier component into a source-safe Egglog symbol.
+            parts = (*ref.ident.module.split("."), ref.ident.name) if ref.ident.module else (ref.ident.name,)
+            base = ".".join(_sanitize_egg_ident(part) or "_" for part in parts)
         if not ref.args:
-            return _name_candidates(base_short, base_full, sanitize=False)
+            return base
         args = ",".join(arg_names)
-        return _name_candidates(f"{base_short}[{args}]", f"{base_full}[{args}]", sanitize=False)
+        return f"{base}[{args}]"
 
     def _allocate_synthetic_let_name(self) -> str:
+        existing_let_names = self.pending_let_names | {
+            egg_expr.name
+            for decl, egg_expr in self.expr_to_egg_cache.items()
+            if isinstance(decl, LetRefDecl) and isinstance(egg_expr, bindings.Var)
+        }
         while True:
-            name = f"$__expr_{self.expr_to_let_counter}"
+            candidate = f"$__expr_{self.expr_to_let_counter}"
             self.expr_to_let_counter += 1
-            if name not in {
-                egg_expr.name
-                for decl, egg_expr in self.expr_to_egg_cache.items()
-                if isinstance(decl, LetRefDecl) and isinstance(egg_expr, bindings.Var)
-            }:
+            name = self._allocate_name(candidate)
+            if name not in existing_let_names:
                 return name
 
-    @staticmethod
-    def _allocate_name(candidates: Iterable[str], is_taken: Callable[[str], bool]) -> str:
-        candidate_list = tuple(dict.fromkeys(candidates))
-        for candidate in candidate_list:
-            if not is_taken(candidate):
-                return candidate
+    def _allocate_name(self, candidate: str, *, avoid_reserved_call_heads: bool = False) -> str:
+        # All declarations for a register(...) batch are merged before any
+        # command is lowered. Reserve their explicit backend names up front so
+        # generated names do not depend on action order within that batch.
+        explicit_backend_names = {
+            decl.egg_name
+            for decl in (*self.__egg_decls__._functions.values(), *self.__egg_decls__._constants.values())
+            if decl.egg_name is not None
+        }
+        for class_decl in self.__egg_decls__._classes.values():
+            if class_decl.egg_name is not None:
+                explicit_backend_names.add(class_decl.egg_name)
+            class_callables = (
+                *class_decl.class_methods.values(),
+                *class_decl.class_variables.values(),
+                *class_decl.methods.values(),
+                *class_decl.properties.values(),
+            )
+            explicit_backend_names.update(decl.egg_name for decl in class_callables if decl.egg_name is not None)
+            if class_decl.init is not None and class_decl.init.egg_name is not None:
+                explicit_backend_names.add(class_decl.init.egg_name)
 
-        fallback = candidate_list[-1]
+        if (
+            candidate not in explicit_backend_names
+            and not self._backend_symbol_is_occupied(candidate)
+            and (not avoid_reserved_call_heads or candidate not in _EGGLOG_RESERVED_CALL_HEADS)
+        ):
+            return candidate
+
         index = 1
-        while is_taken(f"{fallback}_{index}"):
+        while (
+            f"{candidate}_{index}" in explicit_backend_names
+            or self._backend_symbol_is_occupied(f"{candidate}_{index}")
+            or (avoid_reserved_call_heads and f"{candidate}_{index}" in _EGGLOG_RESERVED_CALL_HEADS)
+        ):
             index += 1
-        return f"{fallback}_{index}"
+        return f"{candidate}_{index}"
 
     def typed_expr_to_value(self, typed_expr: TypedExprDecl) -> bindings.Value:
         if isinstance(typed_expr.expr, ValueDecl):
+            if typed_expr.expr.owner not in self.valid_value_owners:
+                msg = "Cannot use a value that belongs to a different EGraph or inactive push scope"
+                raise ValueError(msg)
             return typed_expr.expr.value
         egg_expr = self.typed_expr_to_egg(typed_expr, False)
         return call_with_current_trace(self.egraph.eval_expr, egg_expr)[1]
 
     def value_to_expr(self, tp: JustTypeRef, value: bindings.Value) -> ExprDecl:  # noqa: C901, PLR0911, PLR0912
         if tp.ident.module != Ident.builtin("").module:
-            return ValueDecl(value)
+            return ValueDecl(value, self.value_owner)
 
         match tp.ident.name:
             # Should match list in egraph bindings
@@ -1214,7 +1644,7 @@ class EGraphState:
                 return FromEggState(self, termdag).resolve_term(term, tp).expr
             case _:
                 # If this is not a builtin type, or we don't know how to convert it, just return as value
-                return ValueDecl(value)
+                return ValueDecl(value, self.value_owner)
 
     def _unstable_fn_value_to_expr(
         self, name: str, partial_args: list[bindings.Value], return_tp: JustTypeRef, _arg_types: list[JustTypeRef]
@@ -1242,18 +1672,19 @@ class EGraphState:
 _EGGLOG_INVALID_IDENT = re.compile(r"[^\w\-+*/?!=<>&|^/%]")
 
 
+def _egg_name_is_parser_literal(name: str) -> bool:
+    if not name or name in _EGGLOG_LITERAL_NAMES:
+        return True
+    # Egglog parses every finite Rust f64 spelling as a literal rather than an
+    # atom. Callable names are sanitized first, but sort names can retain dots.
+    return bool(_EGGLOG_NUMBER.fullmatch(name)) and math.isfinite(float(name))
+
+
 def _sanitize_egg_ident(input_string: str) -> str:
     """
     Replaces all invalid characters in an egg identifier with an underscore.
     """
     return _EGGLOG_INVALID_IDENT.sub("_", input_string)
-
-
-def _name_candidates(short: str, full: str, *, sanitize: bool) -> tuple[str, ...]:
-    if sanitize:
-        short = _sanitize_egg_ident(short)
-        full = _sanitize_egg_ident(full)
-    return short, full
 
 
 def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
@@ -1263,23 +1694,42 @@ def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
     parent_counts: dict[TypedExprDecl, int] = {}
     traversal_order: list[TypedExprDecl] = []
     traversed: set[TypedExprDecl] = set()
-
-    def visit(node: TypedExprDecl) -> None:
+    stack = [typed_expr]
+    while stack:
+        node = stack.pop()
         if node in traversed:
-            return
+            continue
         traversed.add(node)
+        if node is not typed_expr:
+            traversal_order.append(node)
         match node.expr:
             case CallDecl(args=args) | PartialCallDecl(CallDecl(args=args)):
                 for child in args:
                     parent_counts[child] = parent_counts.get(child, 0) + 1
-                    if child not in traversed:
-                        traversal_order.append(child)
-                        visit(child)
+                stack.extend(reversed(args))
             case _:
                 pass
-
-    visit(typed_expr)
     return [node for node in traversal_order if parent_counts[node] > 1]
+
+
+def _contains_unbound_var(typed_expr: TypedExprDecl) -> bool:
+    """Check for an unbound variable without recursively hashing a deep expression DAG."""
+    seen: set[int] = set()
+    stack = [typed_expr]
+    while stack:
+        node = stack.pop()
+        node_id = id(node)
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        match node.expr:
+            case UnboundVarDecl():
+                return True
+            case CallDecl(args=args) | PartialCallDecl(CallDecl(args=args)):
+                stack.extend(args)
+            case _:
+                pass
+    return False
 
 
 @dataclass

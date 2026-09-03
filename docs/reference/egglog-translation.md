@@ -7,6 +7,16 @@ file_format: mystnb
 The high level bindings available at the top module (`egglog`) expose most of the functionality of the `egglog` text format. This guide explains how to translate between the two.
 
 Any EGraph can also be converted to egglog with the `egraph.as_egglog_string` property, as long as it was created with `EGraph(save_egglog_string=True)`.
+Call `egraph.close()` to remove that saved transcript when it is no longer
+needed. A recorded e-graph does not accept further commands after it is closed.
+If a failure cannot be represented by Egglog's `(fail ...)` command—for
+example, a Python exception or a parse, expansion, or typechecking error—the
+transcript can no longer be guaranteed to replay the live state. Later
+commands and transcript reads then raise `RuntimeError`.
+Because the transcript is Egglog source, explicit callable, sort, variable,
+ruleset, and `let` names must also be unambiguous Egglog symbols. Names that are
+valid only through the direct AST API are rejected before executing the saved
+command; direct e-graphs continue to accept them.
 
 ## Builtin Types
 
@@ -42,11 +52,20 @@ i64(10) + 2
 BigRat(1, 2) / BigRat(2, 1)
 ```
 
-The floating-point sort also exposes the backend's `exp()`, `log()`, and
-`sqrt()` primitives. `BigRat.to_i64()` is partial: it is defined only when the
-rational value is an integer that fits in `i64`. As with other partial
+The floating-point sort also exposes the backend's `exp()`, `log()`, `sqrt()`,
+and `is_finite()` primitives. `BigRat.to_i64()` is partial: it is defined only
+when the rational value is an integer that fits in `i64`. As with other partial
 primitives, undefined use in a rule fact skips that match, while undefined use
 in an action is an error.
+
+The experimental `Rational` sort stores canonical fractions with i64
+numerators and denominators and accepts `fractions.Fraction` and integer inputs
+whose components fit in i64. Those values work in arithmetic, powers,
+`min`/`max`, and comparisons. Construction, arithmetic, negation, and absolute
+value are undefined when the canonical result cannot be represented. Powers
+require nonnegative integer exponents (`0 ** 0` is undefined); square and cube
+roots require exact rational results; and `log()` is defined only at one. Its
+comparisons return a `Unit` fact rather than a Python `bool`.
 
 ### `!=` Operator
 
@@ -69,7 +88,9 @@ class Math(Expr):
     pass
 ```
 
-By default, the egg sort name is generated from the Python class name. You can override this if you wish with the `egg_sort` keyword argument:
+By default, the Egglog sort name is generated from the module-qualified Python
+class name and made safe for Egglog source. You can override it with the
+`egg_sort` keyword argument:
 
 ```{code-cell} python
 class Math(Expr, egg_sort="Math2"):
@@ -142,7 +163,9 @@ Note that instead of using `i64` as the argument type, we used `i64Like` which i
 The `function` decorator also accepts keyword arguments that map to backend features. Which ones are valid depends on how
 the callable lowers, as described in [Functions vs Constructors](#functions-vs-constructors):
 
-- `egg_fn`: The name of the function in egglog. By default, this is the same as the Python function name.
+- `egg_fn`: The name of the function in Egglog. By default, this is generated
+  from the module-qualified Python function name and made safe for Egglog
+  source.
 - `merge`: A function to merge the results of function-style declarations. This must take the old and new return values and
   return a single value of the same type.
 - `cost`: The extraction cost for constructor-style declarations.
@@ -160,7 +183,8 @@ The static types on the decorator preserve the type of the underlying function, 
 
 The Python bindings follow the backend split in egglog:
 
-- primitive-returning callables use function-style lowering
+- non-`Unit` primitive-returning callables use function-style lowering
+- bodyless `Unit`-returning callables use relation-style lowering
 - eqsort-returning callables use constructor-style lowering
 
 That is not a Python-only policy choice. It comes from which backend features exist on each command:
@@ -177,7 +201,8 @@ For bodies and defaults, the canonical lowering mapping is:
 
 | Python shape | Lowering |
 | --- | --- |
-| primitive return, no body | lower to `function` |
+| non-`Unit` primitive return, no body | lower to `function` |
+| `Unit` return, no body | lower to `relation` |
 | primitive return, body | lower to eager `primitive` |
 | eqsort return, no body, no `merge` | lower to `constructor` |
 | eqsort return, no body, with `merge` | lower to `function` |
@@ -212,7 +237,10 @@ For the Python ergonomics of attaching rewrite-backed bodies/defaults to an expl
 In egglog, the `(datatype ...)` command can also be used to declare functions. All of the functions declared in this block return the type of the declared datatype. Similarly, in Python, any methods of an `Expr` will be registered automatically. These
 can be either instance methods (including any supported `__` method), class methods, or the `__init__` method. The return type of these functions is inferred from the return type of the function. Additionally, any supported keyword argument for the `@function` decorator can be used here as well, by using the `@method` decorator to add values.
 
-Note that by default, the egg name for any method is the Python class name combined with the method name. This allows us to define two classes with the same method name, with different signatures, that map to different egglog functions.
+By default, a method's Egglog name is generated from its module-qualified
+Python class name and method name, then made safe for Egglog source. This lets
+classes define methods with the same Python name and different signatures
+without mapping them to the same Egglog function.
 
 ```{code-cell} python
 # egg:
@@ -374,13 +402,9 @@ This will be taken into account when extracting. Any value that can be
 converted to an `i64` is supported, so dynamic costs can be created in rules;
 the resulting cost must be nonnegative.
 
-Python creates a canonical table on demand for each backend function symbol
-whose cost is set. The table maps the function's arguments to an `i64`.
-Compatible aliases of that symbol share the table. Incompatible overloads are
-rejected because one backend symbol cannot have multiple cost-table schemas.
-
 _Note: Unlike in Egglog source, Python does not require a separate declaration
-that a callable supports custom costs; calling `set_cost` creates its table._
+that a callable supports custom costs; calling `set_cost` enables them
+automatically._
 
 You can also get the cost of a function with `get_cost`, which will return an `i64` if one has already been set.
 
@@ -407,6 +431,13 @@ must read tables populated during the same run can opt into naive evaluation
 with `rule(..., eval_mode="naive")`. The third mode,
 `eval_mode="unsafe-seminaive"`, skips semi-naive validation and should only be
 used when the rule is known to be valid under that evaluation strategy.
+
+Egglog normally decomposes rules before execution. `EGraph` defaults to
+`no_decomp=False`; pass `no_decomp=True` to disable decomposition for
+subsequently registered rules, and use `no_decomp()` or
+`set_no_decomp(...)` to inspect or change that setting. For a single rule,
+pass `no_decomp=True` to `rule(...)` instead. This is an advanced execution
+control.
 
 ### Variables
 
@@ -717,9 +748,7 @@ egraph.register(
 # (extract y :variants 2)
 y = egraph.let("y", Math(6) + Math(2) * Math.var("x"))
 egraph.run(10)
-# TODO: For some reason this is extracting temp vars
-# egraph.extract_multiple(y, 2)
-egraph
+egraph.extract_multiple(y, 2)
 ```
 
 ## Push/Pop
@@ -744,7 +773,7 @@ egraph.check_fail(eq(Math(0)).to(Math(1)))
 
 The `(print-size <function name>?)` command is translated into either `egraph.function_size(fn)` to get the number of
 rows in one table-backed callable or `egraph.all_function_sizes()` to list the sizes of all registered function tables.
-Relations, constructors, and bodyless functions have tables; eager and builtin primitives do not:
+Relations, constructors, bodyless functions, and bodyless constants have tables; eager and builtin primitives do not:
 
 ```{code-cell} python
 # (function-size Math)

@@ -6,6 +6,11 @@ _ = i64(0) == i64(0)
 from egglog import *
 _ = i64(0) != i64(0)
 
+[case parameterizedVar]
+from egglog import *
+value = var("value", Vec[i64])
+reveal_type(value)  # N: Revealed type is "egglog.builtins.Vec[egglog.builtins.i64]"
+
 [case eqToAllowed]
 from egglog import *
 _ = eq(i64(0)).to(i64(0))

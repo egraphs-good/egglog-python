@@ -6,9 +6,9 @@ as part of `egglog`. The reusable expression domain and simplifier live in
 isolated row execution, resource limits, aggregation, and the research handoff.
 
 The work is paused. The bounded public demonstrations remain maintained in CI,
-while the private 714-row corpus is not run automatically.
-The checked-in result CSVs contain headers only as schema examples; a manifest
-is created only by a final dependency-compatible aggregate run.
+while the filtered private corpus is not run automatically.
+No result CSVs are checked in while the work is paused. A verified,
+dependency-compatible aggregate run writes the CSVs and manifest.
 
 ## Provenance and redistribution boundary
 
@@ -19,8 +19,8 @@ Fabrício provided the original Haskell experiment repository and a separate
 `pandoc-symreg` archive in personal correspondence. Those private files were
 used for behavioral validation but are not redistributed here. The Python
 implementation reproduces the published method without copying the prototype's
-source text; checked-in result artifacts contain only aggregate measurements
-and no source expressions.
+source text. Any future checked-in result artifacts must contain only aggregate
+measurements and no source expressions.
 
 The supplied archive has placeholder copyright/author metadata, so attribution
 alone is not sufficient redistribution permission. Keep it outside this
@@ -55,9 +55,9 @@ The restricted Python-like syntax accepts finite numeric literals, variables,
 `saturated` when every inner schedule can stop, or `iteration_limit` when the
 retained 30-round boundary is reached. In either case the extracted expression
 is available for independent checking; only saturated corpus rows contribute
-to aggregates. The container variant rejects inputs whose coefficient
-normalization produces a non-finite `f64` value. See `NOTES.md` for fidelity
-and semantic limits.
+to numeric aggregate summaries, while every row contributes to status counts.
+The container variant rejects inputs whose coefficient normalization produces
+a non-finite `f64` value. See `NOTES.md` for fidelity and semantic limits.
 
 ## External corpus commands
 
@@ -72,9 +72,10 @@ make -C experiments/param_eq aggregate
 `binary` and `container` are useful for focused work and write expression-free
 row metrics only under the ignored `results/raw/` directory. `aggregate` runs
 the paired mode, alternating variant order by stable row hash, validates
-identities, configuration, and input hashes, then replaces the tracked
-aggregate CSVs and manifest. Never add files from `results/raw/`, the external
-archive, source expressions, extracted expressions, or private absolute paths.
+identities, configuration, and input hashes, then writes the aggregate CSVs and
+manifest. Do not check in those results until that verification succeeds. Never
+add files from `results/raw/`, the external archive, source expressions,
+extracted expressions, or private absolute paths.
 
 The raw `external_archive_sha256` column intentionally repeats one hash of the
 corpus inputs, Haskell source modules, and Stack/Cabal lock/configuration files;
@@ -91,11 +92,12 @@ command only when the installed extension was actually built in debug mode;
 the default is `release`.
 
 Full timing comparisons are single-machine exploratory measurements. The
-runner isolates each row, records iteration limits, timeouts, and errors instead
-of dropping them, and alternates binary/container order by stable row hash when
-`--variant both` is used. Aggregate rows retain separate counts for iteration,
-timeout, memory, and execution failures. Ratio summaries omit pairs whose
-binary denominator is zero and expose the remaining sample as `n_ratio`.
+runner isolates each row, records iteration limits, timeouts, memory limits,
+and errors instead of dropping them, and alternates binary/container order by
+stable row hash when `--variant both` is used. Aggregate rows retain separate
+counts for iteration, timeout, memory, and execution failures. Ratio summaries
+omit pairs whose binary denominator is zero and expose the remaining sample as
+`n_ratio`.
 
 The optional `haskell` target compiles one temporary runner against the
 author-supplied implementation, then executes it once per isolated row. The

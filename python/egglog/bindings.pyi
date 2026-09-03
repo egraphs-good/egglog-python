@@ -173,7 +173,7 @@ class EGraph:
     ) -> SerializedEGraph: ...
     def set_report_level(self, level: _ReportLevel) -> None: ...
     def lookup_function(self, name: str, key: list[Value]) -> Value | None: ...
-    # `sort` must match the runtime sort returned with `value` by `eval_expr`.
+    # `value` must come from this EGraph's `eval_expr` and use the returned runtime sort.
     def extract_value(self, value: Value, sort: str) -> tuple[TermDag, int, int]: ...
     def eval_expr(
         self, expr: _Expr, *, traceparent: str | None = None, tracestate: str | None = None
@@ -206,7 +206,8 @@ class Value:
 @final
 class EggSmolError(Exception):
     context: str
-    def __new__(cls, context: str) -> EggSmolError: ...
+    replayable_by_fail: bool
+    def __new__(cls, context: str, replayable_by_fail: bool = ...) -> EggSmolError: ...
     def __init__(self, /, *args: Any, **kwargs: Any) -> None: ...
 
 ##
@@ -1047,6 +1048,7 @@ class DagCostModel(Generic[_DAG_COST]):
         base_value_cost: Callable[[str, Value], _DAG_COST],
     ) -> DagCostModel[_DAG_COST]: ...
 
+# Each value must come from this EGraph's `eval_expr` and use the returned runtime sort.
 def extract_best_with_dag_cost_model(
     egraph: EGraph,
     roots: list[tuple[str, Value]],
@@ -1068,6 +1070,7 @@ class Extractor(Generic[_COST]):
         traceparent: str | None = None,
         tracestate: str | None = None,
     ) -> Extractor[_COST]: ...
+    # `value` must come from this EGraph's `eval_expr` and use the returned runtime sort.
     def extract_best(
         self,
         egraph: EGraph,
@@ -1078,6 +1081,7 @@ class Extractor(Generic[_COST]):
         traceparent: str | None = None,
         tracestate: str | None = None,
     ) -> tuple[_COST, _TermId]: ...
+    # `value` must come from this EGraph's `eval_expr` and use the returned runtime sort.
     def extract_variants(
         self,
         egraph: EGraph,

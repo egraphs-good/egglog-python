@@ -297,7 +297,10 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
             rhs_mapped = _binary_to_containers(cast("Num", rhs))
             lhs_is_polynomial = _is_expr_instance(lhs_mapped, ContainerPolynomial)
             rhs_is_polynomial = _is_expr_instance(rhs_mapped, ContainerPolynomial)
-            if lhs_is_polynomial:
+            if rhs_is_polynomial and not lhs_is_polynomial:
+                lhs_mapped, rhs_mapped = rhs_mapped, lhs_mapped
+                lhs_is_polynomial, rhs_is_polynomial = rhs_is_polynomial, lhs_is_polynomial
+            if lhs_is_polynomial and not rhs_is_polynomial:
                 lhs_poly = cast("ContainerPolynomial", lhs_mapped)
                 match get_callable_args(rhs_mapped, Num):
                     case (f64(scalar),):
@@ -306,19 +309,7 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
                             ContainerPolynomial.empty(),
                             lhs_poly,
                         )
-                if not rhs_is_polynomial:
-                    return _multiply_container_polynomial_by_monomial(lhs_poly, _to_container_mono(rhs_mapped))
-            if rhs_is_polynomial:
-                rhs_poly = cast("ContainerPolynomial", rhs_mapped)
-                match get_callable_args(lhs_mapped, Num):
-                    case (f64(scalar),):
-                        return map_fold_kv(
-                            lambda result, mono, coef: result.insert(mono, coef * scalar),
-                            ContainerPolynomial.empty(),
-                            rhs_poly,
-                        )
-                if not lhs_is_polynomial:
-                    return _multiply_container_polynomial_by_monomial(rhs_poly, _to_container_mono(lhs_mapped))
+                return _multiply_container_polynomial_by_monomial(lhs_poly, _to_container_mono(rhs_mapped))
             return map_fold_kv(
                 lambda result, term, exponent: catch(lambda: result[term]).match(
                     lambda old_exponent: result.insert(term, old_exponent + exponent),
@@ -594,6 +585,7 @@ def _decoded_monomial_cost(mono: ContainerMonomial, children_costs: list[ParamCo
     Like _decode_container_mono_term. Assumes that if we have an empty numerator we include the 1.0
     """
     items = list(mono.value.items())
+    # Cost-model callbacks receive Map children in Map.value.items() order: key, value, key, value, ...
     if len(children_costs) != len(items) * 2:
         msg = f"Expected {len(items) * 2} monomial child costs, got {len(children_costs)}"
         raise ValueError(msg)
@@ -654,6 +646,7 @@ def _decoded_polynomial_cost(poly: ContainerPolynomial, children_costs: list[Par
     Should correspond to getting the cost from the return value of _decode_container_polynomial
     """
     items = list(poly.value.items())
+    # Cost-model callbacks receive Map children in Map.value.items() order: key, value, key, value, ...
     if len(children_costs) != len(items) * 2:
         msg = f"Expected {len(items) * 2} polynomial child costs, got {len(children_costs)}"
         raise ValueError(msg)

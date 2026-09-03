@@ -154,14 +154,15 @@ two expression `f(a)` and `f(b)` in the e-graph, and then you make `a == b`, the
 this same property to hold for something like a vector, so if you have `Vec(a, c)` and `Vec(b, c)` in the e-graph, and you make `a == b`,
 then these two vecs should also be equal `Vec(a, c) == Vec(b, c)`.
 
-We do this by implementing one additional operation on containers, rebuilding. This is called whenever we want to renormalize
-the e-graph to preserve congruence. We defer it so we don't do it after every union operation, to reduce the amount of work.
+Egglog's container primitives implement an internal rebuilding operation. The backend calls it whenever it renormalizes
+the e-graph to preserve congruence; there is no public Python `.rebuild()` method. Rebuilding is deferred so it does not run
+after every union operation, reducing the amount of work.
 Since containers "contain" references to other e-classes, we need to update those references. That what this rebuilding
 operation does, so that when its time to rebuild, the `Vec` type calls rebuilding on each of its inner values, updating them with
 new names for each e-class.
 So then when we check for equality after that, it will preserve congruence.
 
-Egglog doesn't know anything more about the structures of containers besides how to rebuild them and any primitive functions you define on them.
+Egglog doesn't know anything more about the structures of containers besides their backend rebuilding support and any primitive functions you define on them.
 This both makes them relatively easy to implement and add, but also limits the ability to "match" over them, which will see how to work around
 in the next section.
 
@@ -191,7 +192,7 @@ z = egraph.let("z", sum_(MultiSet(x, y)))
 egraph.check(z == sum_(MultiSet(y, x)))
 ```
 
-We have the rebuilding property we talked about above as well, to maintain congruence. If we now union `x` with `y`,
+The backend rebuilding described above also maintains congruence. If we now union `x` with `y`,
 the sum will reflect this to become `sum_(MultiSet(x, x))`:
 
 ```{code-cell} python
@@ -240,7 +241,7 @@ def constant_fold_index(xs: MultiSet[Num], i: i64, k: i64):
     # Try replacing any sum with the folded version
     yield rule(
         sum_(xs),
-        # These are conditions for the rewrite to match:
+        # These are conditions for the rule to match:
         # Look for a multiset that contains two numbers that
         # are not the same one
         ms_num_index(xs, Num(i)),
@@ -340,7 +341,7 @@ to the semantics of the your use case, compared to say a tree of binary operatio
 
 This work also highlights some of the current limitations of egglog.
 
-The original version of this post identified primitive composition as a major
+**Update (September 2026):** The original version of this post identified primitive composition as a major
 limitation: argument-order adapters required bespoke flipped backend
 primitives. The current Python bindings can lower body-defined functions and
 lambdas to primitives, so those adapters can now be expressed at the call site.
@@ -365,9 +366,9 @@ since we can use their reference implementation in Mathematica to verify that ou
 
 ![meme from tim and eric TV show with someone miming their mind being blown, with the text "yarn = polynomials" imposed](./2026_02_yarn-polynomials.gif)
 
-*Note that all code for this case study is reproducible in [this notebook](https://github.com/egraphs-good/egglog-python/blob/270a1876b6dbea37e441c132adbfdc8c11cbb319/docs/explanation/2026_02_containers_code.ipynb).*
-*It is currently based on a branch of the Python bindings and Rust source, that adds additional multiset operations.*
-For this docs version, the notebook content is reproduced later in this page in a folded appendix block.
+*The [commit-linked notebook](https://github.com/egraphs-good/egglog-python/blob/270a1876b6dbea37e441c132adbfdc8c11cbb319/docs/explanation/2026_02_containers_code.ipynb)
+is the historical original. The maintained reproduction appears below in
+Appendix 1.*
 
 We define define a function to produce the amount of bending for a certain point over the [Python Array API Specification](https://data-apis.org/array-api/latest/API_specification/),
 so that it works on both concrete NumPy arrays and symbolic arrays. It takes in a number of 1D arrays and returns a 0D array.
@@ -719,7 +720,7 @@ to never saturating:
 
 Instead, if we represented this as a product of a multiset, we could simply have a rule that looked for a zero element
 in the multiset and replaced that with zero. Then there would be no associativity needed, and so no chance for this to blow up. A `product(MultiSet(...))`
-operation can handle associativity and commutativity and the rebuilding handles merges.
+operation can handle associativity and commutativity while backend rebuilding handles merges.
 
 When I asked on the EGraph's Zulip for more examples, Sophia B also [shared another example with me](https://egraphs.zulipchat.com/#narrow/channel/328972-general/topic/A.2FC.20Blowup.20Example/near/573091425). If you have the rule `f(a + b) + 1 = f(a) + f(b)` plus A/C, you can derive equalities like `f(x) + (f(y) + f(z)) = f(x + (y + z)) + 2`, but it can take a large number of nodes.
 Instead in this system, we would have to encode that rule over multisets and add constant propagation to the sum function, to see how it could be found more directly, through normalization.

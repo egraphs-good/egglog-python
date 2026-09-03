@@ -432,11 +432,6 @@ V = TypeVar("V", bound=BaseExpr)
 
 
 class Maybe(BuiltinExpr, Generic[T], egg_sort="Maybe"):
-    @method(preserve=True)
-    @deprecated("use .value")
-    def eval(self) -> T | None:
-        return self.value
-
     @method(preserve=True)  # type: ignore[prop-decorator]
     @property
     def value(self) -> T | None:

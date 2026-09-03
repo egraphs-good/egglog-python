@@ -90,30 +90,6 @@ match MyExpr("hello"):
         print(f"Matched MyExpr with value: {value}")
 ```
 
-## Numeric Predicates and Exact Rationals
-
-The `f64.is_finite()` method returns a `Unit` fact when its value is neither
-infinite nor NaN. This makes it suitable for guarding rules that evaluate
-partial floating-point operations.
-
-The experimental exact `Rational` sort accepts `fractions.Fraction` and
-`i64Like` values in arithmetic, reflected arithmetic, powers, `min`/`max`, and
-ordering predicates. `RationalLike` is the corresponding public type alias.
-
-```{code-cell} python
-from fractions import Fraction
-
-numeric_egraph = EGraph()
-numeric_egraph.check(f64(1.0).is_finite())
-result = numeric_egraph.extract(Rational(1, 2) + Fraction(1, 3))
-assert result.value == Fraction(5, 6)
-numeric_egraph.check(Rational(1, 2) < 1)
-```
-
-Rational comparisons return `Unit`, not a Python boolean. A false comparison
-is therefore undefined, as are operations such as division by zero and powers
-that the backend cannot represent.
-
 ## Python Object Sort
 
 We define a custom "primitive sort" (i.e. a builtin type) for `PyObject`s. This allows us to store any Python object in the e-graph.
@@ -369,9 +345,16 @@ if the need arises:
 
 ### "Preserved" methods
 
-You can use the `@method(preserve=True)` decorator to mark a method as "preserved", meaning that calling it will actually execute the body of the function and a corresponding egglog function will not be created,
+You can use the `@method(preserve=True)` decorator to mark a method as
+"preserved", meaning that calling it executes ordinary Python behavior and no
+corresponding egglog function is created.
 
-Normally, all methods defined on a egglog `Expr` will ignore their bodies and simply build an expression object based on the arguments.
+A bodyless method written with `...` builds an egglog call. A body-defined
+method is lowered eagerly, or as a rewrite when an eqsort method has an
+explicit ruleset, as described in the
+[function translation rules](egglog-translation.md#functions-vs-constructors).
+Use `preserve=True` when the method must instead return an ordinary Python
+value or perform ordinary Python behavior.
 
 However, there are times in Python when you need the return type of a method to be an instance of a particular Python type, and some similar acting expression won't cut it.
 
@@ -527,10 +510,9 @@ mutate_egraph.check(eq(incremented).to(Int(10) + Int(1)))
 mutate_egraph
 ```
 
-The bodyful form lowers to an eager primitive. Because this example constructs
-an e-class value, bind its result through an action before using that value in
-a read-only check. Use an explicit `ruleset=` when the body should remain a
-rewrite instead.
+The body executes eagerly, so it does not add a rewrite or require a `run()`.
+The `let` action registers the resulting e-class value before the read-only
+check. Use an explicit `ruleset=` when the body should remain a rewrite.
 
 Note that dunder methods such as `__setitem__` will automatically be marked as mutating their first argument.
 
@@ -595,8 +577,6 @@ def map_add_two(x: MathList) -> MathList:
 
 check_eq(map_add_two(MathList.EMPTY.append(Math(1))), MathList.EMPTY.append(Math(1) + Math(2)), math_list_ruleset.saturate())
 ```
-
-Generated primitive names are internal implementation details.
 
 ## Default Replacements
 
@@ -673,25 +653,6 @@ egraph.check(eq(x).to(WrappedMath(math_float(3.14)) + WrappedMath(math_float(3.1
 egraph
 ```
 
-## Param-Eq Stress Demo
-
-The experimental `egglog.exp.param_eq` module preserves a bounded
-parameter-reducing symbolic-regression pipeline. Its CLI runs either retained
-representation and emits a JSON report:
-
-```{code-block} console
-$ python -m egglog.exp.param_eq --expr '2.3 * (3.7*x0 + 5.1*x1) / 7.9' --variant container
-```
-
-Expressions use finite numeric literals, variables, Python arithmetic with
-literal exponents, and `abs`, `exp`, `log`, `sqrt`, `plog`, `square`, or
-`cube`. A `saturated` status means every inner schedule could stop;
-`iteration_limit` means the retained 30-round boundary was reached. The rules
-target real inputs where every relevant subexpression is defined, and the
-included finite sample checks are regression tests rather than a proof of
-universal equivalence. The container variant rejects inputs whose coefficient
-normalization produces a non-finite `f64` value.
-
 ## Debugging and Inspection
 
 When a rule does not fire or an equality appears unexpectedly, the most useful
@@ -753,8 +714,8 @@ stats.num_matches_per_rule
 ### `function_values`
 
 Use {meth}`egglog.egraph.EGraph.function_values` to inspect the current rows in a
-function table. This accepts relations, constructors, and bodyless functions;
-eager and builtin primitives do not have tables to inspect:
+function table. This accepts relations, constructors, bodyless functions, and
+bodyless constants; eager and builtin primitives do not have tables to inspect:
 
 ```{code-cell} python
 egraph.function_values(score)
@@ -811,20 +772,16 @@ costs are returned directly rather than through a wrapper object.
 
 ### Dynamic Costs
 
-Without a custom `cost_model`, tree and greedy-DAG extraction use the
-experimental dynamic cost model. A row cost registered by `set_cost` overrides
-that node's marginal cost; otherwise the model falls back to costs declared on
-callables and then the backend default. The same model is used by
-`extract_multiple` and `keep_best`. Dynamic row costs must be nonnegative.
-
-Dynamic row costs live in a canonical table named
-`cost_table_<egg-function-name>`. If a compatible, bodyless raw function with
-the same input sorts and `i64` output already has that name when the cost table
-is created, it is reused. An incompatible callable already occupying the name,
-or an incompatible overload that would map to the same canonical table, raises
-an error instead of making the cost table use a generated suffix, because the
-backend only consults the canonical name. Ordinary generated-name collision
-handling still applies to callables registered after the cost table.
+Ordinary single-root tree extraction uses Egglog's default tree cost model.
+When no explicit `cost_model` is supplied, registering a row cost with
+`set_cost`, selecting greedy-DAG extraction, or using multi-root extraction or
+`keep_best` selects the experimental dynamic cost model. A row cost then
+overrides that node's marginal cost; otherwise the model falls back to costs
+declared on callables and then the backend default. An explicit `TreeCostModel`
+or `DagCostModel` takes precedence over those dynamic row costs.
+Dynamic row costs must be nonnegative. Literal negatives are rejected when
+`set_cost` is constructed; a computed negative fails when the action runs and
+is not stored.
 
 ### Multiple Roots
 
@@ -840,17 +797,10 @@ variants_by_root = egraph.extract_multiple([expr1, expr2], 3, extractor="greedy-
 An inner list may be empty when its root has no extractable variant. The
 variant count must be positive, and the sequence form rejects an empty input.
 The roots share extraction preparation, but every root and variant is costed
-independently; sharing between separate roots does not reduce either cost.
-This API always uses dynamic costs; custom Python cost models are supported
-only by single-root `extract`.
-
-At the low-level bindings layer, the experimental `multi-extract` command
-returns one {class}`egglog.bindings.UserDefinedOutput`.
-{meth}`egglog.bindings.UserDefinedCommandOutput.as_multi_extract` returns a
-{class}`egglog.bindings.MultiExtractOutput` whose `termdag` stores the shared
-term DAG and whose `terms` groups the variant term IDs in root order. It
-returns `None` for a different user-defined output. The high-level method
-performs this conversion automatically.
+independently; sharing between separate roots does not reduce either cost. The
+sequence form uses dynamic costs; the single-expression form follows the
+ordinary `extract` selection described above. Custom Python cost models are
+supported only by single-root `extract`.
 
 ### Custom Tree Cost Models
 
@@ -868,6 +818,8 @@ Use {meth}`egglog.egraph.EGraph.lookup_function_value` when a model needs to
 inspect a table registered before extraction using those callback arguments
 directly. A same-e-graph lookup cannot evaluate a newly derived key while
 extraction is holding the graph read-only; such a lookup raises `ValueError`.
+Opaque user-sort values returned by a lookup belong to that e-graph and are
+rejected if passed to a different one.
 
 For example, this model uses a boolean cost for whether an `i64` is even:
 
@@ -900,6 +852,8 @@ Cost values must be effectively immutable and totally ordered. Addition must
 be associative, commutative, and monotone, with `identity` as a two-sided
 identity. Under tree extraction the values are added once per occurrence;
 under greedy-DAG extraction they are added once per selected shared node.
+When using tree extraction, recursive e-classes must not contain a
+cost-improving cycle or cost computation may not terminate.
 
 ```{code-block} python
 model = DagCostModel(
@@ -925,14 +879,16 @@ dynamic costs:
 egraph.keep_best(target, other_target, extractor="greedy-dag")
 ```
 
-Each target must be a constructor, relation, or bodyless function with a
-backend table; eager and builtin primitives are rejected.
+Each target must be a constructor, relation, bodyless function, or bodyless
+constant with a backend table; eager and builtin primitives are rejected.
 
-This operation is destructive. It clears every table in the e-graph, then
-reinserts only the extracted rows of the requested callables. Declarations and
-cost-table identities remain available, although their rows are cleared unless
-selected. Existing handles returned by {meth}`egglog.egraph.EGraph.let` become
-invalid because their rows have been cleared. Internal let caches are
-invalidated, so the same `EGraph` can safely continue registering new actions
-and running rules. Call it only when dropping all unselected table state is
-intended.
+This operation is destructive. It clears all old rows, then rebuilds the
+extracted rows of the requested callables and any constructor rows needed to
+represent their values. Unreferenced rows remain absent. Declarations and
+cost-table identities remain available, although their rows are cleared.
+Existing handles returned by {meth}`egglog.egraph.EGraph.let` become invalid
+because their rows have been cleared. Opaque values previously returned by
+{meth}`egglog.egraph.EGraph.lookup_function_value` are also invalid because
+compaction assigns fresh backend value identities. The same `EGraph` can
+continue registering new actions and running rules afterward. Call this method
+only when dropping all unselected table state is intended.

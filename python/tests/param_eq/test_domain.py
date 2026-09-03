@@ -69,6 +69,36 @@ def test_lowering_distributes_scalar_products_into_a_polynomial() -> None:
     assert all(all(get_callable_fn(term) != polynomial for term in monomial.value) for monomial in poly.value)
 
 
+@pytest.mark.parametrize(
+    "source",
+    ["(x0 + x1) * 2.3", "2.3 * (x0 + x1)", "(x0 + x1) * x0", "x0 * (x0 + x1)"],
+)
+def test_lowering_distributes_when_exactly_one_factor_is_polynomial(source: str) -> None:
+    lowered = EGraph().extract(binary_to_containers(parse_expression(source)))
+    poly_args = get_callable_args(lowered, polynomial)
+    assert poly_args is not None
+    (poly_expr,) = poly_args
+    poly = EGraph().extract(cast("ContainerPolynomial", poly_expr))
+
+    assert len(poly.value) == 2
+    assert all(all(get_callable_fn(term) != polynomial for term in monomial.value) for monomial in poly.value)
+    decoded = render_num(containers_to_binary(lowered))
+    assert math.isclose(evaluate(decoded, x0=1.25, x1=-0.5), evaluate(source, x0=1.25, x1=-0.5))
+
+
+def test_lowering_keeps_polynomial_by_polynomial_products_nested() -> None:
+    lowered = EGraph().extract(binary_to_containers(parse_expression("(x0 + x1) * (x0 + x1)")))
+    poly_args = get_callable_args(lowered, polynomial)
+    assert poly_args is not None
+    (poly_expr,) = poly_args
+    poly = EGraph().extract(cast("ContainerPolynomial", poly_expr))
+    (monomial,) = poly.value
+    ((term, exponent),) = monomial.value.items()
+
+    assert get_callable_fn(term) == polynomial
+    assert exponent.value == Fraction(2, 1)
+
+
 def test_parser_rejects_unsupported_calls() -> None:
     with pytest.raises(ValueError, match="Unsupported function call"):
         parse_expression("sin(x0)")

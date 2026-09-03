@@ -37,16 +37,6 @@ fn catch_python_cost_error<T>(f: impl FnOnce() -> T) -> PyResult<T> {
 #[derive(Debug)]
 struct Cost(Arc<Py<PyAny>>);
 
-impl Cost {
-    fn from_py(value: Py<PyAny>) -> Self {
-        Self(Arc::new(value))
-    }
-
-    fn to_py(&self, py: Python<'_>) -> Py<PyAny> {
-        self.0.as_ref().clone_ref(py)
-    }
-}
-
 impl Ord for Cost {
     fn cmp(&self, other: &Self) -> Ordering {
         Python::attach(|py| python_or_unwind(self.0.bind(py).compare(other.0.bind(py))))
@@ -143,12 +133,12 @@ impl EggTreeCostModel<Cost> for CostModel {
         Python::attach(|py| {
             let children_cost = children_cost
                 .iter()
-                .map(|cost| cost.to_py(py))
+                .map(|cost| cost.0.as_ref().clone_ref(py))
                 .collect::<Vec<_>>();
-            Cost::from_py(python_or_unwind(
-                self.fold
-                    .call1(py, (enode_cost.head, enode_cost.annotation, children_cost)),
-            ))
+            Cost(Arc::new(python_or_unwind(self.fold.call1(
+                py,
+                (enode_cost.head, enode_cost.annotation, children_cost),
+            ))))
         })
     }
 
@@ -179,12 +169,12 @@ impl EggTreeCostModel<Cost> for CostModel {
         Python::attach(|py| {
             let element_costs = element_costs
                 .iter()
-                .map(|cost| cost.to_py(py))
+                .map(|cost| cost.0.as_ref().clone_ref(py))
                 .collect::<Vec<_>>();
-            Cost::from_py(python_or_unwind(self.container_cost.call1(
+            Cost(Arc::new(python_or_unwind(self.container_cost.call1(
                 py,
                 (container_cost.sort, container_cost.value, element_costs),
-            )))
+            ))))
         })
     }
 
@@ -208,16 +198,16 @@ impl EggTreeCostModel<Cost> for CostModel {
         value: egglog::Value,
     ) -> Cost {
         Python::attach(|py| {
-            Cost::from_py(python_or_unwind(
+            Cost(Arc::new(python_or_unwind(
                 self.base_value_cost.call1(py, (sort.name(), Value(value))),
-            ))
+            )))
         })
     }
 }
 
 #[derive(Debug)]
 struct DagCostContext {
-    identity: Arc<Py<PyAny>>,
+    identity: Py<PyAny>,
 }
 
 #[derive(Clone, Debug)]
@@ -239,13 +229,9 @@ impl DagCost {
 
     fn to_py(&self, py: Python<'_>, context: &Arc<DagCostContext>) -> Py<PyAny> {
         match self {
-            Self::Identity => context.identity.as_ref().clone_ref(py),
+            Self::Identity => context.identity.clone_ref(py),
             Self::Value { value, .. } => value.as_ref().clone_ref(py),
         }
-    }
-
-    fn compare_values(left: &Arc<Py<PyAny>>, right: &Arc<Py<PyAny>>) -> Ordering {
-        Python::attach(|py| python_or_unwind(left.bind(py).compare(right.bind(py))))
     }
 
     fn ensure_same_context(left: &Arc<DagCostContext>, right: &Arc<DagCostContext>) {
@@ -272,14 +258,14 @@ impl Ord for DagCost {
                 },
             ) => {
                 Self::ensure_same_context(left_context, right_context);
-                Self::compare_values(left, right)
+                Python::attach(|py| python_or_unwind(left.bind(py).compare(right.bind(py))))
             }
-            (Self::Identity, Self::Value { value, context }) => {
-                Self::compare_values(&context.identity, value)
-            }
-            (Self::Value { value, context }, Self::Identity) => {
-                Self::compare_values(value, &context.identity)
-            }
+            (Self::Identity, Self::Value { value, context }) => Python::attach(|py| {
+                python_or_unwind(context.identity.bind(py).compare(value.bind(py)))
+            }),
+            (Self::Value { value, context }, Self::Identity) => Python::attach(|py| {
+                python_or_unwind(value.bind(py).compare(context.identity.bind(py)))
+            }),
         }
     }
 }
@@ -332,7 +318,7 @@ impl MonoidCost for DagCost {
 #[derive(Debug)]
 #[pyclass(
     frozen,
-    str = "DagCostModel({identity:?}, {enode_cost:?}, {container_cost:?}, {base_value_cost:?}"
+    str = "DagCostModel({identity:?}, {enode_cost:?}, {container_cost:?}, {base_value_cost:?})"
 )]
 pub struct DagCostModel {
     identity: Py<PyAny>,
@@ -363,7 +349,7 @@ impl DagCostModel {
     fn runtime(&self, py: Python<'_>) -> RuntimeDagCostModel {
         RuntimeDagCostModel {
             context: Arc::new(DagCostContext {
-                identity: Arc::new(self.identity.clone_ref(py)),
+                identity: self.identity.clone_ref(py),
             }),
             enode_cost: Arc::new(self.enode_cost.clone_ref(py)),
             container_cost: Arc::new(self.container_cost.clone_ref(py)),
@@ -541,6 +527,10 @@ impl Extractor {
     }
 
     /// Extract the best term of a value from a given sort.
+    ///
+    /// `value` must come from `EGraph.eval_expr` on the supplied e-graph, and
+    /// `sort` must be the sort returned with it. Values from another e-graph or
+    /// paired with another existing sort are unsupported.
     #[pyo3(signature = (egraph, termdag, value, sort, *, traceparent=None, tracestate=None))]
     fn extract_best(
         &self,
@@ -576,10 +566,14 @@ impl Extractor {
         .ok_or_else(|| PyValueError::new_err("unextractable root"))?;
         let (local_termdag, cost, term) = extracted;
         let term = copy_termdag(&local_termdag, &mut termdag.0)[term];
-        Ok((cost.to_py(py), term))
+        Ok((cost.0.as_ref().clone_ref(py), term))
     }
 
     /// Extract variants of an e-class.
+    ///
+    /// `value` must come from `EGraph.eval_expr` on the supplied e-graph, and
+    /// `sort` must be the sort returned with it. Values from another e-graph or
+    /// paired with another existing sort are unsupported.
     #[pyo3(signature = (egraph, termdag, value, nvariants, sort, *, traceparent=None, tracestate=None))]
     fn extract_variants(
         &self,
@@ -616,12 +610,16 @@ impl Extractor {
         let copied = copy_termdag(&local_termdag, &mut termdag.0);
         Ok(variants
             .into_iter()
-            .map(|variant| (variant.cost.to_py(py), copied[variant.term]))
+            .map(|variant| (variant.cost.0.as_ref().clone_ref(py), copied[variant.term]))
             .collect())
     }
 }
 
 /// Extract the best term for each root with a custom additive marginal model.
+///
+/// Every value must come from `EGraph.eval_expr` on the supplied e-graph and
+/// be paired with the sort returned with it. Values from another e-graph or
+/// paired with another existing sort are unsupported.
 #[pyfunction]
 #[pyo3(signature = (egraph, roots, cost_model, *, extractor="tree", traceparent=None, tracestate=None))]
 pub fn extract_best_with_dag_cost_model(

@@ -3,7 +3,7 @@
 use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
 use crate::freeze::FrozenEGraph;
-use crate::py_object_sort::{PyObjectSort, PyPickledValue, load};
+use crate::py_object_sort::{PyObjectErrorState, PyObjectSort, PyPickledValue, load};
 use crate::serialize::SerializedEGraph;
 use crate::termdag::TermDag;
 use crate::tracing_otel;
@@ -14,7 +14,47 @@ use log::info;
 use num_rational::{BigRational, Rational64};
 use pyo3::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::PathBuf;
+
+fn run_with_py_error<T>(py_error: &PyObjectErrorState, f: impl FnOnce() -> T) -> PyResult<T> {
+    py_error.lock().unwrap().take();
+    let result = catch_unwind(AssertUnwindSafe(f));
+    if let Some(error) = py_error.lock().unwrap().take() {
+        return Err(error);
+    }
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => resume_unwind(error),
+    }
+}
+
+fn error_is_replayable_by_fail(command: &egglog::ast::Command, error: &egglog::Error) -> bool {
+    use egglog::Error;
+    use egglog::ast::Command;
+
+    matches!(
+        (command, error),
+        (
+            Command::Check(..),
+            Error::CheckError(..) | Error::BackendError(_)
+        ) | (
+            Command::Action(_),
+            Error::BackendError(_) | Error::SubsumeMergeError(..)
+        ) | (
+            Command::RunSchedule(_),
+            Error::BackendError(_) | Error::NoSuchRuleset(..) | Error::ParseError(_)
+        ) | (
+            Command::Extract(..),
+            Error::ExtractError(_) | Error::BackendError(_)
+        ) | (Command::Pop(..), Error::Pop(_))
+            | (Command::Fail(..), Error::ExpectFail(_))
+            // Registered commands are resolved and typechecked by their
+            // implementation during `run_command`, so any error from a sole
+            // user-defined command can be reproduced by wrapping it in `fail`.
+            | (Command::UserDefined(..), _)
+    )
+}
 
 /// EGraph()
 /// --
@@ -24,6 +64,7 @@ use std::path::PathBuf;
 pub struct EGraph {
     pub(crate) egraph: egglog::EGraph,
     cmds: Option<String>,
+    py_error: PyObjectErrorState,
 }
 
 impl EGraph {
@@ -33,34 +74,40 @@ impl EGraph {
         commands: Vec<egglog::ast::Command>,
         parsed_from_source: bool,
     ) -> EggResult<Vec<CommandOutput>> {
+        let failed_command = (commands.len() == 1).then(|| commands[0].clone());
         let cmds_str = commands
             .iter()
             .map(|command| format!("{command}\n"))
             .collect::<String>();
-        let res = if parsed_from_source {
-            let span = tracing::info_span!(
+        let span = if parsed_from_source {
+            tracing::info_span!(
                 "bindings.parse_and_run_program",
                 command_count = commands.len(),
                 commands = tracing::field::display(cmds_str.trim_end())
-            );
-            let _entered = span.enter();
-            info!("Running commands:\n{}", cmds_str);
-            py.detach(|| self.egraph.run_program(commands))
+            )
         } else {
-            let span = tracing::info_span!(
+            tracing::info_span!(
                 "bindings.run_program",
                 command_count = commands.len(),
                 commands = tracing::field::display(cmds_str.trim_end())
-            );
-            let _entered = span.enter();
-            info!("Running commands:\n{}", cmds_str);
-            py.detach(|| self.egraph.run_program(commands))
+            )
         };
-        if let Some(err) = PyErr::take(py) {
-            return Err(WrappedError::Py(err));
-        }
+        let _entered = span.enter();
+        info!("Running commands:\n{}", cmds_str);
+        let res = run_with_py_error(&self.py_error, || {
+            py.detach(|| self.egraph.run_program(commands))
+        })?;
         match res {
-            Err(e) => Err(WrappedError::Egglog(e)),
+            Err(error) => {
+                if failed_command
+                    .as_ref()
+                    .is_some_and(|command| error_is_replayable_by_fail(command, &error))
+                {
+                    Err(WrappedError::ReplayableEgglog(error))
+                } else {
+                    Err(WrappedError::Egglog(error))
+                }
+            }
             Ok(outputs) => {
                 if let Some(cmds) = &mut self.cmds {
                     cmds.push_str(&cmds_str);
@@ -87,10 +134,19 @@ impl EGraph {
         egraph.seminaive = seminaive;
         egraph.set_num_threads(num_threads);
         egraph.no_decomp = no_decomp;
-        add_base_sort(&mut egraph, PyObjectSort {}, span!()).unwrap();
+        let py_error = PyObjectErrorState::default();
+        add_base_sort(
+            &mut egraph,
+            PyObjectSort {
+                py_error: py_error.clone(),
+            },
+            span!(),
+        )
+        .unwrap();
         Self {
             egraph,
             cmds: record.then(String::new),
+            py_error,
         }
     }
 
@@ -178,7 +234,7 @@ impl EGraph {
         include_temporary_functions: bool,
         traceparent: Option<String>,
         tracestate: Option<String>,
-    ) -> SerializedEGraph {
+    ) -> EggResult<SerializedEGraph> {
         let _context_guard =
             tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
         let span = tracing::info_span!(
@@ -186,24 +242,26 @@ impl EGraph {
             root_eclass_count = root_eclasses.len()
         );
         let _entered = span.enter();
-        Python::attach(|py| {
-            py.detach(|| {
-                let root_eclasses: Vec<_> = root_eclasses
-                    .into_iter()
-                    .map(|x| self.egraph.eval_expr(&egglog::ast::Expr::from(x)).unwrap())
-                    .collect();
-                let res = self.egraph.serialize(SerializeConfig {
-                    max_functions,
-                    max_calls_per_function,
-                    include_temporary_functions,
-                    root_eclasses,
-                });
-                SerializedEGraph {
-                    egraph: res.egraph,
-                    truncated_functions: res.truncated_functions,
-                    discarded_functions: res.discarded_functions,
-                }
+        let res = Python::attach(|py| {
+            run_with_py_error(&self.py_error, || {
+                py.detach(|| -> Result<_, egglog::Error> {
+                    let root_eclasses: Vec<_> = root_eclasses
+                        .into_iter()
+                        .map(|x| self.egraph.eval_expr(&egglog::ast::Expr::from(x)))
+                        .collect::<Result<_, _>>()?;
+                    Ok(self.egraph.serialize(SerializeConfig {
+                        max_functions,
+                        max_calls_per_function,
+                        include_temporary_functions,
+                        root_eclasses,
+                    }))
+                })
             })
+        })??;
+        Ok(SerializedEGraph {
+            egraph: res.egraph,
+            truncated_functions: res.truncated_functions,
+            discarded_functions: res.discarded_functions,
         })
     }
 
@@ -226,8 +284,9 @@ impl EGraph {
         Ok(value.map(Value))
     }
 
-    /// Extract `value` using its runtime sort. `sort` must match the sort returned with `value`
-    /// by `eval_expr`; passing a different existing sort is unsupported.
+    /// Extract `value` using its runtime sort. The value must come from `eval_expr`
+    /// on this e-graph, and `sort` must be the sort returned with it. Values from
+    /// another e-graph or paired with another existing sort are unsupported.
     fn extract_value(&self, value: Value, sort: &str) -> EggResult<(TermDag, usize, u64)> {
         let sort = self.egraph.get_sort_by_name(sort).ok_or_else(|| {
             WrappedError::Egglog(egglog::TypeError::UndefinedSort(sort.to_owned(), span!()).into())
@@ -249,16 +308,10 @@ impl EGraph {
         let span = tracing::info_span!("bindings.eval_expr");
         let _entered = span.enter();
         let expr: egglog::ast::Expr = expr.into();
-        let res = py.detach(|| {
-            self.egraph
-                .eval_expr(&expr)
-                .map(|(s, v)| (s.name().to_string(), Value(v)))
-                .map_err(|e| WrappedError::Egglog(e))
-        });
-        if let Some(err) = PyErr::take(py) {
-            return Err(WrappedError::Py(err));
-        }
-        res
+        let res = run_with_py_error(&self.py_error, || {
+            py.detach(|| self.egraph.eval_expr(&expr))
+        })??;
+        Ok((res.0.name().to_string(), Value(res.1)))
     }
 
     fn value_to_i64(&self, v: Value) -> i64 {
@@ -353,3 +406,34 @@ impl EGraph {
 #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Clone)]
 #[pyclass(eq, frozen, ord, hash, str = "{0:?}")]
 pub struct Value(pub egglog::Value);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::exceptions::PyValueError;
+
+    #[test]
+    fn python_error_from_worker_precedes_backend_panic() {
+        Python::initialize();
+        let error = PyObjectErrorState::default();
+        *error.lock().unwrap() = Some(PyValueError::new_err("stale"));
+
+        let worker_error = error.clone();
+        let result = run_with_py_error(&error, || {
+            assert!(worker_error.lock().unwrap().is_none());
+            std::thread::spawn(move || {
+                *worker_error.lock().unwrap() = Some(PyValueError::new_err("worker boom"));
+            })
+            .join()
+            .unwrap();
+            panic!("secondary backend panic");
+        });
+
+        let captured = result.unwrap_err();
+        assert!(error.lock().unwrap().is_none());
+        Python::attach(|py| {
+            assert!(captured.is_instance_of::<PyValueError>(py));
+            assert_eq!(captured.value(py).to_string(), "worker boom");
+        });
+    }
+}

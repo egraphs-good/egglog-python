@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import threading
 from base64 import standard_b64decode, standard_b64encode
 from typing import TYPE_CHECKING
 
+import pytest
 from cloudpickle import dumps, loads
 
 from egglog.bindings import *
@@ -71,6 +73,14 @@ class TestDictUpdate:
 
 def my_add(a, b):
     return a + b
+
+
+def _raise_worker_error(caller_thread_id: int) -> object:
+    if threading.get_ident() == caller_thread_id:
+        message = "primitive did not run on a worker thread"
+        raise AssertionError(message)
+    message = "parallel primitive failed"
+    raise ValueError(message)
 
 
 class TestEval:
@@ -148,6 +158,36 @@ def test_call():
         ),
         Check(DUMMY_SPAN, [Eq(DUMMY_SPAN, Var(DUMMY_SPAN, "res"), py_object_to_expr(3))]),
     )
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "(rule ((target fn arg) (= value (py-call fn arg))) ((hit arg)))",
+        "(rule ((target fn arg)) ((hit (py-call fn arg))))",
+    ],
+    ids=["query", "action"],
+)
+def test_parallel_py_object_primitive_error_is_propagated(rule: str):
+    egraph = EGraph(num_threads=2)
+    # Cross Egglog's default 10,000-row cutoff so rule evaluation uses its worker pool.
+    noise = "\n".join(f"(noise {i})" for i in range(10_001))
+    egraph.parse_and_run_program(
+        f"""
+        (relation noise (i64))
+        {noise}
+        (relation target (PyObject PyObject))
+        (target {py_object_to_expr(_raise_worker_error)} {py_object_to_expr(threading.get_ident())})
+        (relation hit (PyObject))
+        """
+    )
+
+    with pytest.raises(ValueError, match="parallel primitive failed"):
+        egraph.parse_and_run_program(f"{rule} (run 1)")
+
+    # Draining the worker error leaves the same graph usable by later Python primitives.
+    recovered = py_object_to_expr("recovered")
+    egraph.parse_and_run_program(f'(check (= (py-to-string {recovered}) "recovered"))')
 
 
 def test_serialize_string():

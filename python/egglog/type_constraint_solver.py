@@ -110,11 +110,14 @@ class TypeConstraintSolver:
         except TypeConstraintError:
             if isinstance(tp, TypeVarRef) or tp.ident != Ident.builtin("UnstableFn") or not callable(value):
                 raise
-        # Probe against an isolated copy of the declarations with no ambient ruleset so any temporary
-        # unnamed-function rewrites created while inferring types are discarded after the probe.
+        # Probe against an isolated copy of the declarations with no ambient ruleset so temporary
+        # unnamed-function declarations and bodies are discarded after type inference.
         probe_decls = decls().copy()
         dummy_args = [
-            RuntimeExpr.__from_values__(probe_decls, TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()))
+            RuntimeExpr.__from_values__(
+                probe_decls,
+                TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()),
+            )
             for arg_tp in tp.args[1:]
         ]
         try:

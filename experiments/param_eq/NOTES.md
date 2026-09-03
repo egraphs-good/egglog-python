@@ -37,11 +37,12 @@ Both variants now use ordinary persistent upstream backoff. This is close to,
 but not identical to, the prototype scheduler and is a documented fidelity
 boundary rather than an unverified claim of exact replication.
 
-The binary repeated-monomial public stress case currently reaches the retained
-30-round inner limit. CI still verifies every sample point of its extracted
-expression, but the corpus runner records it as `iteration_limit` and excludes
-it from successful aggregates. Revisit scheduler parity before resuming corpus
-measurements.
+The binary repeated-monomial public stress case is the known boundary for the
+retained 30-round inner limit. When it reaches that limit, CI still verifies
+every sample point of its extracted expression, and the corpus runner records
+it as `iteration_limit` instead of including it in numeric summaries. CI also
+accepts saturation if scheduler behavior improves. Revisit scheduler parity
+before resuming corpus measurements if the limit still recurs.
 
 ## Semantic limits
 
@@ -50,9 +51,17 @@ and every introduced subexpression are defined. Guards cover the literal and
 structural domain boundaries needed by the retained cases, but the pipeline has
 no general sign or interval analysis. CI compares every configured finite
 sample point; those checks are regression evidence, not a universal proof of
-equivalence. The container variant fails explicitly if coefficient
-normalization becomes non-finite. Treat external-corpus measurements the same
-way.
+equivalence. The binary rules omit cancellations whose only justification is
+current e-class disequality: a later merge could invalidate that test while
+leaving an incorrect finite result. The remaining guarded logarithm rules have
+the same positive-input domain on both sides; their disequality guard only
+avoids introducing an already undefined term. The container representation
+still combines equal bases algebraically, so expressions with no defined
+inputs, such as `(x - x) / (x - x)`, are outside the comparison contract and
+may normalize differently between representations. Before broadening that
+contract, add monotone per-e-class definedness/nonzero tracking. The container
+variant fails explicitly if coefficient normalization becomes non-finite.
+Treat external-corpus measurements the same way.
 
 ## Performance evidence worth preserving
 
@@ -70,8 +79,9 @@ testing later:
 
 These are hypotheses supported by local probes, not causal or portable
 performance conclusions. The stale row-level artifacts and chronological debug
-transcript were deliberately removed. A final dependency-compatible rerun is
-required before publishing numerical corpus results.
+transcript were deliberately removed, and no result CSVs remain checked in. A
+final dependency-compatible aggregation must write and verify them before
+publishing numerical corpus results.
 
 ## Rejected or parked directions
 
@@ -92,14 +102,14 @@ required before publishing numerical corpus results.
    hashes the loaded native extension; the hash detects a changed executable
    but does not itself prove which checkout produced it.
 2. Run the three public cases in both variants and keep their independent
-   numeric checks green. Confirm the documented status boundary: binary
-   `repeated_monomial` reaches `iteration_limit`, while the other reports are
-   `saturated`. Resolve that limit before publishing new corpus measurements.
+   numeric checks green. Record whether binary `repeated_monomial` still reaches
+   `iteration_limit`; the other reports should be `saturated`. Resolve a
+   recurring limit before publishing new corpus measurements.
 3. Set `EGGLOG_PARAM_EQ_DATA_DIR` to the private archive and
    `EGGLOG_PARAM_EQ_EXPECTED_ARCHIVE_SHA256` to the stable value recovered from
    private research records. The runner refuses an absent or mismatched hash.
 4. Run binary and container rows with the same time/memory limits and inspect
-   every iteration-limit/timeout/error count.
+   every iteration-limit/timeout/memory-limit/error count.
    Optionally run `make -C experiments/param_eq haskell`; this live baseline
    compiles its temporary runner once, forces both result counts inside the
    timed region, and requires Stack plus the external Haskell checkout. Its raw

@@ -4,66 +4,52 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
-- Upgrade the Python extension to Egglog 3 and the matching
-  `egglog-experimental` APIs [#414](https://github.com/egraphs-good/egglog-python/pull/414)
-  - BREAKING: remove `Map.rebuild()`, `Set.rebuild()`, and `Vec.rebuild()`;
-    rebuilding is now handled by the backend container sorts.
-  - Preserve the Egglog 3 sort, constructor, function, and proof metadata that
-    its source syntax can round-trip in the low-level AST bindings; support
-    arbitrary-size `BigInt` values, generic value extraction,
-    constructor/relation lookup, correct run-report duration units with
-    microsecond resolution, direct parse-and-run execution with source
-    filenames, and batch-level command recording that omits failed parsed
-    batches.
-  - Add generic `Pair` and `Maybe` values, undefined-result `catch`, map
-    folding, map/set lengths, `f64` math primitives, `f64.is_finite()`, and
-    integer coercion; expand the experimental `Rational` Python API with
-    public `RationalLike` conversions, reflected arithmetic, powers,
-    `min`/`max`, and `Unit` comparisons; add `i64`-to-`BigRat` coercion and
-    exact `BigRat.to_i64()` conversion.
-  - Let Python function, method, and constant bodies lower as eager
-    primitives, preserving Python argument order for `reverse_args` callables,
-    while bodies attached to an explicit ruleset remain rewrite-backed; allow
-    `constant(..., merge=...)` for merged function-backed constants.
-    Higher-order callable probing is isolated from the active ruleset, and
-    `rule(..., eval_mode=...)` exposes safe `naive` and explicit
-    `unsafe-seminaive` rule evaluation when callbacks read mutable tables.
-  - Add persistent ordinary backoff schedules, expose `RunReport.can_stop`,
-    and keep high-level saturation running while a scheduler has deferred work.
-  - Configure worker threads and rule decomposition per `EGraph`, allow
-    `rule(..., no_decomp=True)` for individual rules, and expose getters and
-    setters for both settings.
-    - BREAKING: stop reading `RAYON_NUM_THREADS`; pass `num_threads` to
-      `EGraph` or call `set_num_threads(...)` instead.
-  - Add `tree` and true `greedy-dag` extraction modes to `extract` and
-    `extract_multiple`; add destructive `keep_best`; allow multi-root variant
-    extraction while preserving input order. Low-level bindings can recover the
-    structured aggregate returned by experimental `multi-extract` with
-    `UserDefinedCommandOutput.as_multi_extract()`.
-    - Use the experimental dynamic cost model consistently across the default
-      extraction paths, including canonical `set_cost` tables. A compatible raw
-      cost table already occupying the canonical name is reused, while an
-      incompatible callable or overload occupying that name when the cost table
-      is created now raises instead of allocating an ignored suffix. Frozen
-      snapshots preserve both views of a reused raw cost table.
-    - Name the existing custom callback protocol `TreeCostModel`, retaining
-      `CostModel` as a compatibility alias, and add frozen additive
-      `DagCostModel` values that work with tree or greedy-DAG extraction.
-      The low-level `bindings.Extractor` compatibility facade now prepares
-      costs on each extraction call, so construction no longer invokes cost
-      callbacks and later e-graph mutations are observed safely.
-    - BREAKING: remove `GreedyDagCost`, `GreedyDagCostModel`, and
-      `greedy_dag_cost_model`; use `DagCostModel` with
-      `extractor="greedy-dag"` instead.
-  - Improve source transcripts, diagnostics, generated-name collision
-    handling, shared-expression factoring without leaking synthetic bindings
-    into rules or checks, large-program AST parsing, custom-cost extraction of
-    literal roots, typed pretty/freeze round trips, map duplicate-key behavior,
-    and set iteration deduplication.
-  - Preserve the paused Param-Eq research as a small reusable experimental
-    module and CLI, three bounded public CI stress cases, and an optional
-    aggregate-only external-corpus harness with explicit iteration-limit,
-    timeout, and error accounting plus loaded-extension provenance.
+- Upgrade to Egglog 3 and matching `egglog-experimental` APIs
+  [#414](https://github.com/egraphs-good/egglog-python/pull/414).
+  - BREAKING: container rebuilding is now handled by Egglog, so `Map.rebuild()`,
+    `Set.rebuild()`, and `Vec.rebuild()` are removed; configure threads through
+    `EGraph(num_threads=...)` instead of `RAYON_NUM_THREADS`; and replace the
+    removed greedy-DAG cost helpers with `DagCostModel` and
+    `extractor="greedy-dag"`.
+  - BREAKING: function, method, constant, and class-variable bodies now execute
+    eagerly unless an explicit `ruleset` keeps an eqsort body rewrite-backed.
+    Add merged constants, `reverse_args` support for bodies, per-rule evaluation
+    modes and decomposition control, and clear errors for invalid callable
+    option combinations and non-call top-level expression actions.
+  - Add generic `Pair` and `Maybe` values, `catch`, map folding, map/set lengths,
+    more `f64` operations including `is_finite()`, integer coercions, exact
+    `BigRat.to_i64()`, and an expanded overflow-safe experimental `Rational` API
+    with clearly partial powers, logarithms, and exact roots. Also fix duplicate
+    map keys and duplicate set iteration values.
+  - Add tree and greedy-DAG extraction modes, ordered multi-root variant
+    extraction, destructive `keep_best`, consistent dynamic `set_cost` support,
+    and custom `TreeCostModel` and additive `DagCostModel` callbacks. Custom-cost
+    failures now propagate without partially updating output term DAGs, and
+    opaque lookup values from another e-graph, a popped scope, or before
+    compaction are rejected. Computed negative dynamic costs now fail when
+    written instead of panicking during later extraction. User-declared raw
+    cost tables can be reused for table-backed callables, but not for eager or
+    builtin primitives whose valid rows cannot be recovered from a snapshot;
+    frozen snapshots preserve negative raw rows without replaying them as valid
+    dynamic costs.
+  - Add persistent backoff schedules, `RunReport.can_stop`, per-e-graph thread
+    and decomposition settings, constructor/relation table inspection, generic
+    value extraction, and `var()` typing for parameterized expression types.
+    Correct run-report durations that were previously 1,000 times too small.
+    Add removable source transcripts that preserve rule evaluation and
+    decomposition settings, use replay-safe names, report source-aware parse
+    errors, and reject use after non-replayable failures.
+    Python exceptions raised by `PyObject` primitives on worker threads now
+    propagate to the caller, and the low-level bindings round-trip Egglog 3
+    AST/report data, parse and run source programs directly, and expose
+    structured experimental multi-extraction results. Generated backend names
+    remain fully qualified, avoid spellings parsed as Egglog syntax, and
+    reserve explicit names before lowering so ordinary explicit names remain
+    available regardless of action order within one registration batch.
+  - Preserve the paused Param-Eq work as a reusable experimental module and CLI,
+    three bounded CI stress cases, and an optional external-corpus harness with
+    explicit iteration-limit, timeout, memory-limit, error, and provenance
+    reporting.
 
 ## 13.2.0 (2026-06-03)
 
