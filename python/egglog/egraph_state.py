@@ -137,6 +137,28 @@ def _normalize_global_let_name(name: str) -> str:
     return name if name.startswith("$") else f"${name}"
 
 
+def _collect_explicit_backend_names(declarations: Declarations) -> set[str]:
+    """Collect names that declarations explicitly reserve in Egglog's shared symbol namespace."""
+    names = {
+        decl.egg_name
+        for decl in (*declarations._functions.values(), *declarations._constants.values())
+        if decl.egg_name is not None
+    }
+    for class_decl in declarations._classes.values():
+        if class_decl.egg_name is not None:
+            names.add(class_decl.egg_name)
+        class_callables = (
+            *class_decl.class_methods.values(),
+            *class_decl.class_variables.values(),
+            *class_decl.methods.values(),
+            *class_decl.properties.values(),
+        )
+        names.update(decl.egg_name for decl in class_callables if decl.egg_name is not None)
+        if class_decl.init is not None and class_decl.init.egg_name is not None:
+            names.add(class_decl.init.egg_name)
+    return names
+
+
 def _egg_name_is_source_safe_symbol(name: str) -> bool:
     """Return whether a name is safe to emit as an ordinary Egglog symbol."""
     return (
@@ -245,6 +267,11 @@ class EGraphState:
     egglog_file_state: _SavedEgglogFile | None = field(default=None, repr=False)
     # The declarations we have added.
     __egg_decls__: Declarations = field(default_factory=Declarations)
+    # Explicit names are cached as declarations are merged. Generated names
+    # consult this set so a registration batch reserves all user-selected
+    # backend symbols without rescanning the complete declaration graph for
+    # every generated callable, sort, cost table, and synthetic let.
+    _explicit_backend_names: set[str] = field(default_factory=set, init=False, repr=False)
     # Mapping of added rulesets to the added rules
     rulesets: dict[Ident, set[RewriteOrRuleDecl]] = field(default_factory=dict)
     # Persistent schedulers live outside a single run-schedule command; only emit their let once per active scope.
@@ -293,6 +320,7 @@ class EGraphState:
     def __post_init__(self, save_egglog_string: bool) -> None:
         if not self.valid_value_owners:
             self.valid_value_owners = frozenset((self.value_owner,))
+        self._explicit_backend_names = _collect_explicit_backend_names(self.__egg_decls__)
         if save_egglog_string and self.egglog_file_state is None:
             # Keep one persistent temp `.egg` file per high-level egraph so parse errors
             # can point at a stable filename the user can open after a failure.
@@ -330,6 +358,24 @@ class EGraphState:
             rule_name_counter=self.rule_name_counter,
             rule_name_to_command_decl=self.rule_name_to_command_decl.copy(),
         )
+
+    def add_declarations(self, *declarations_like: DeclarationsLike) -> None:
+        """Merge declarations while maintaining the explicit backend-name index."""
+        attempted_update = False
+        try:
+            for declarations in declarations_like:
+                if declarations is None:
+                    continue
+                attempted_update = True
+                self.__egg_decls__ |= declarations
+        finally:
+            if attempted_update:
+                # Rebuild after the batch rather than accumulating names: declaration
+                # merges may replace an earlier declaration and release its explicit
+                # name for later generated symbols. The finally path also keeps the
+                # index aligned when a later lazy declaration fails to resolve after
+                # an earlier declaration has already been merged.
+                self._explicit_backend_names = _collect_explicit_backend_names(self.__egg_decls__)
 
     def egglog_string(self) -> str:
         if self.egglog_file_state is None:
@@ -1490,26 +1536,8 @@ class EGraphState:
         # All declarations for a register(...) batch are merged before any
         # command is lowered. Reserve their explicit backend names up front so
         # generated names do not depend on action order within that batch.
-        explicit_backend_names = {
-            decl.egg_name
-            for decl in (*self.__egg_decls__._functions.values(), *self.__egg_decls__._constants.values())
-            if decl.egg_name is not None
-        }
-        for class_decl in self.__egg_decls__._classes.values():
-            if class_decl.egg_name is not None:
-                explicit_backend_names.add(class_decl.egg_name)
-            class_callables = (
-                *class_decl.class_methods.values(),
-                *class_decl.class_variables.values(),
-                *class_decl.methods.values(),
-                *class_decl.properties.values(),
-            )
-            explicit_backend_names.update(decl.egg_name for decl in class_callables if decl.egg_name is not None)
-            if class_decl.init is not None and class_decl.init.egg_name is not None:
-                explicit_backend_names.add(class_decl.init.egg_name)
-
         if (
-            candidate not in explicit_backend_names
+            candidate not in self._explicit_backend_names
             and not self._backend_symbol_is_occupied(candidate)
             and (not avoid_reserved_call_heads or candidate not in _EGGLOG_RESERVED_CALL_HEADS)
         ):
@@ -1517,7 +1545,7 @@ class EGraphState:
 
         index = 1
         while (
-            f"{candidate}_{index}" in explicit_backend_names
+            f"{candidate}_{index}" in self._explicit_backend_names
             or self._backend_symbol_is_occupied(f"{candidate}_{index}")
             or (avoid_reserved_call_heads and f"{candidate}_{index}" in _EGGLOG_RESERVED_CALL_HEADS)
         ):

@@ -1141,8 +1141,7 @@ class EGraph:
 
     def _add_decls(self, *decls: DeclarationsLike) -> None:
         self._state.ensure_open()
-        for d in decls:
-            self._state.__egg_decls__ |= d
+        self._state.add_declarations(*decls)
 
     def set_report_level(self, level: bindings._ReportLevel) -> None:
         """

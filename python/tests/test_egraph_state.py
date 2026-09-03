@@ -26,6 +26,7 @@ from egglog import (
 from egglog.declarations import (
     ClassDecl,
     Declarations,
+    DelayedDeclarations,
     FunctionDecl,
     FunctionRef,
     FunctionSignature,
@@ -249,6 +250,28 @@ def test_generated_names_are_fully_qualified() -> None:
     assert state.callable_ref_to_egg(FunctionRef(fn2))[0] == "pkg_two_make"
     assert state.type_ref_to_egg(JustTypeRef(ret1)) == "pkg.one.Ret"
     assert state.type_ref_to_egg(JustTypeRef(ret2)) == "pkg.two.Ret"
+
+
+def test_explicit_backend_names_remain_reserved_after_a_later_declaration_fails() -> None:
+    state = EGraph(save_egglog_string=True)._state
+    reserved_name = "reserved_before_declaration_failure"
+    declarations = Declarations(
+        _functions={
+            Ident("explicit_before_failure"): FunctionDecl(
+                signature=FunctionSignature(return_type=TypeRefWithVars(Ident.builtin("i64"))),
+                egg_name=reserved_name,
+            )
+        }
+    )
+
+    def fail_to_resolve() -> Declarations:
+        msg = "declaration resolution failed"
+        raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError, match="declaration resolution failed"):
+        state.add_declarations(declarations, DelayedDeclarations(fail_to_resolve))
+
+    assert state._allocate_name(reserved_name) == f"{reserved_name}_1"
 
 
 def test_missing_function_lookup_does_not_reserve_generated_name() -> None:
