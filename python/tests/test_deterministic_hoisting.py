@@ -1,4 +1,5 @@
-"""Expression hoisting must be deterministic across processes.
+"""
+Expression hoisting must be deterministic across processes.
 
 `_exprs_multiple_parents` used to traverse the expression DAG with a set of
 ``TypedExprDecl`` objects and ``.pop()`` from it, so the traversal order --
