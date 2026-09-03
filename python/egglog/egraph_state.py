@@ -858,8 +858,12 @@ def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
     """
     Returns all expressions that have multiple parents (a list but semantically just an ordered set).
     """
-    to_traverse = {typed_expr}
-    traversed = set[TypedExprDecl]()
+    # Traverse with a deterministic LIFO worklist instead of a set of objects:
+    # popping from a set iterates in id()-hash order (memory addresses), which
+    # varies per process and made the hoisting order (and hence the $__expr_N
+    # let numbering and e-class ids) nondeterministic across runs.
+    to_traverse = [typed_expr]
+    traversed: set[TypedExprDecl] = set()
     traversed_twice = list[TypedExprDecl]()
     while to_traverse:
         typed_expr = to_traverse.pop()
@@ -869,9 +873,9 @@ def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
         traversed.add(typed_expr)
         expr = typed_expr.expr
         if isinstance(expr, CallDecl):
-            to_traverse.update(expr.args)
+            to_traverse.extend(expr.args)
         elif isinstance(expr, PartialCallDecl):
-            to_traverse.update(expr.call.args)
+            to_traverse.extend(expr.call.args)
     return traversed_twice
 
 
