@@ -210,15 +210,18 @@ a linalg function (in [an example inspired by Siu](https://gist.github.com/sklam
 ```python
 from egglog.exp.array_api import *
 
+
 @function(ruleset=array_api_ruleset, subsume=True)
 def linalg_norm(X: NDArrayLike, axis: TupleIntLike) -> NDArray:
     X = cast(NDArray, X)
     return NDArray(
         X.shape.deselect(axis),
         X.dtype,
-        lambda k: ndindex(X.shape.select(axis))
-        .foldl_value(lambda carry, i: carry + ((x := X.index(i + k)).conj() * x).real(), init=0.0)
-        .sqrt(),
+        lambda k: (
+            ndindex(X.shape.select(axis))
+            .foldl_value(lambda carry, i: carry + ((x := X.index(i + k)).conj() * x).real(), init=0.0)
+            .sqrt()
+        ),
     )
 ```
 
@@ -372,8 +375,8 @@ rule or expression. For example:
 class A(Expr):
     def __init__(self, b: B) -> None: ...
 
-class B(Expr):
-    ...
+
+class B(Expr): ...
 ```
 
 ### Top level commands

@@ -60,12 +60,10 @@ __all__ = [
     "BaseExpr",
     "BuiltinExpr",
     "Command",
-    "Command",
     "CostModel",
     "EGraph",
     "Expr",
     "ExprCallable",
-    "Fact",
     "Fact",
     "GraphvizKwargs",
     "GreedyDagCost",
@@ -1538,7 +1536,7 @@ class _WrappedMethod:
 def ruleset(
     rule_or_generator: RewriteOrRule | RewriteOrRuleGenerator | None = None,
     *rules: RewriteOrRule,
-    name: None | str = None,
+    name: str | None = None,
 ) -> Ruleset:
     """
     Creates a ruleset with the following rules.
@@ -2086,7 +2084,7 @@ def run(ruleset: Ruleset | None = None, *until: FactLike, scheduler: BackOff | N
     )
 
 
-def back_off(match_limit: None | int = None, ban_length: None | int = None) -> BackOff:
+def back_off(match_limit: int | None = None, ban_length: int | None = None) -> BackOff:
     """
     Create a backoff scheduler configuration.
 

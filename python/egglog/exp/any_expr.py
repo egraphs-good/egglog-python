@@ -753,8 +753,8 @@ def any_eval(self: A) -> Any:
     return res
 
 
-_CURRENT_EGRAPH: None | EGraph = None
-_LAST_ASSERT: None | A = None
+_CURRENT_EGRAPH: EGraph | None = None
+_LAST_ASSERT: A | None = None
 
 
 @contextlib.contextmanager
