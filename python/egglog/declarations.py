@@ -49,7 +49,6 @@ __all__ = [
     "ConstantRef",
     "ConstructorDecl",
     "Declarations",
-    "Declarations",
     "DeclarationsLike",
     "DefaultRewriteDecl",
     "DelayedDeclarations",
@@ -128,7 +127,7 @@ class HasDeclarations(Protocol):
     def __egg_decls__(self) -> Declarations: ...
 
 
-DeclarationsLike: TypeAlias = Union[HasDeclarations, None, "Declarations"]
+DeclarationsLike: TypeAlias = Union[HasDeclarations, "Declarations", None]
 
 
 def upcast_declarations(declarations_like: Iterable[DeclarationsLike]) -> list[Declarations]:
@@ -659,7 +658,7 @@ class UnnamedFunctionRef:
         )
 
     @property
-    def egg_name(self) -> None | str:
+    def egg_name(self) -> str | None:
         return None
 
 

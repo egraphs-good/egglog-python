@@ -649,7 +649,7 @@ def to_py_signature(sig: FunctionSignature, decls: Declarations, optional_args: 
     return Signature(parameters)
 
 
-ON_CREATE_EXPR: None | Callable[[Callable[[], TypedExprDecl]], None] = None
+ON_CREATE_EXPR: Callable[[Callable[[], TypedExprDecl]], None] | None = None
 
 
 @dataclass

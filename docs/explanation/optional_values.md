@@ -28,14 +28,9 @@ Let's see what happens if we call check on something that is not true:
 
 ```python
 from egglog.bindings import *
-egraph = EGraph()
-egraph.check_fact(Fact(
-    Call(
-        "<",
-        [Lit(Int(2)), Lit(Int(1))]
-    )
 
-))
+egraph = EGraph()
+egraph.check_fact(Fact(Call("<", [Lit(Int(2)), Lit(Int(1))])))
 ```
 
 We get:
@@ -48,14 +43,9 @@ And what if we call check with a non-unit value?
 
 ```python
 from egglog.bindings import *
-egraph = EGraph()
-egraph.check_fact(Fact(
-    Call(
-        "+",
-        [Lit(Int(2)), Lit(Int(1))]
-    )
 
-))
+egraph = EGraph()
+egraph.check_fact(Fact(Call("+", [Lit(Int(2)), Lit(Int(1))])))
 ```
 
 Yep, it fails on us:
