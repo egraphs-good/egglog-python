@@ -1427,12 +1427,6 @@ def test_rational_like_operations() -> None:
     assert EGraph().extract(2 ** Rational(3, 1)).value == Fraction(8, 1)
     assert EGraph().extract(Rational(1, 2).min(Fraction(1, 3))).value == Fraction(1, 3)
     assert EGraph().extract(Rational(1, 2).max(1)).value == Fraction(1, 1)
-    assert EGraph().extract(Rational(1, 1).log()).value == Fraction(0, 1)
-    assert EGraph().extract(Rational(0, 1).sqrt()).value == Fraction(0, 1)
-    assert EGraph().extract(Rational(4, 9).sqrt()).value == Fraction(2, 3)
-    assert EGraph().extract(Rational(-8, 27).cbrt()).value == Fraction(-2, 3)
-    assert EGraph().extract(Rational(-(2**63), 1).floor()).value == Fraction(-(2**63), 1)
-    assert EGraph().extract(Rational(2**63 - 1, 1).ceil()).value == Fraction(2**63 - 1, 1)
 
     egraph = EGraph()
     egraph.check(Rational(1, 2) < Fraction(2, 3))
@@ -1442,22 +1436,10 @@ def test_rational_like_operations() -> None:
 
 
 def test_rational_partial_operations_remain_undefined() -> None:
-    expressions = [
-        Rational(1, 0),
-        Rational(1, -(2**63)),
-        Rational(-(2**63), -1),
-        -Rational(-(2**63), 1),
-        abs(Rational(-(2**63), 1)),
-        Rational(1, 2) / 0,
-        Rational(2, 1) ** -1,
-        Rational(0, 1) ** Fraction(1, 2),
-        Rational(2, 1).log(),
-        Rational(2, 1).sqrt(),
-        Rational(2, 1).cbrt(),
-    ]
-    for expression in expressions:
-        with pytest.raises(EggSmolError):
-            EGraph().extract(expression)
+    with pytest.raises(EggSmolError):
+        EGraph().extract(Rational(1, 2) / 0)
+    with pytest.raises(EggSmolError):
+        EGraph().extract(Rational(2, 1) ** -1)
     with pytest.raises(EggSmolError):
         EGraph().check(Rational(2, 3) < Fraction(1, 2))
 
@@ -3057,62 +3039,6 @@ def test_dynamic_cost_rejects_a_negative_literal() -> None:
 
     with pytest.raises(ValueError, match="must be nonnegative"):
         set_cost(Costed(1), -1)
-
-
-@pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
-def test_dynamic_cost_rejects_a_negative_computed_value_without_storing_it(*, save_egglog_string: bool) -> None:
-    class Costed(Expr):
-        def __init__(self, value: i64Like) -> None: ...
-
-    egraph = EGraph(save_egglog_string=save_egglog_string)
-    with pytest.raises(EggSmolError, match="@validate-dynamic-cost"):
-        egraph.register(set_cost(Costed(1), i64(0) - i64(1)))
-
-    assert egraph.function_size(Costed) == 1
-    assert egraph.lookup_function_value(get_cost(Costed(1))) is None
-    assert egraph.extract(Costed(1)) == Costed(1)
-    if save_egglog_string:
-        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
-
-
-def test_cost_models_ignore_negative_values_written_through_a_raw_cost_table() -> None:
-    class RawNegativeCost(Expr):
-        @method(egg_fn="raw-negative-cost-node")
-        def __init__(self, value: i64Like) -> None: ...
-
-    @function(egg_fn="cost_table_raw-negative-cost-node")
-    def raw_cost(value: i64Like) -> i64: ...
-
-    expression = RawNegativeCost(1)
-    egraph = EGraph(
-        set_(raw_cost(1)).to(i64(-7)),
-        set_cost(RawNegativeCost(2), 5),
-        expression,
-    )
-    expected = expression, 2
-
-    assert egraph.extract(expression, include_cost=True) == expected
-    assert egraph.extract(expression, include_cost=True, cost_model=default_cost_model) == expected
-    assert (
-        egraph.extract(
-            expression,
-            include_cost=True,
-            cost_model=DagCostModel(
-                marginal_cost=lambda callback_egraph, node: default_cost_model(callback_egraph, node, []),
-                identity=0,
-            ),
-            extractor="greedy-dag",
-        )
-        == expected
-    )
-
-    rendered = str(egraph.freeze())
-    assert "set_(raw_cost(1)).to(i64(-7))" in rendered
-    assert "set_cost(RawNegativeCost(1), -7)" not in rendered
-    replayed = eval(rendered.removesuffix(".freeze()"), globals(), locals())
-    assert isinstance(replayed, EGraph)
-    assert replayed.lookup_function_value(raw_cost(1)) == i64(-7)
-    assert replayed.extract(expression, include_cost=True) == expected
 
 
 class TestScheduler:

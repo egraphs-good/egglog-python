@@ -490,7 +490,7 @@ dependencies = [
 [[package]]
 name = "egglog-experimental"
 version = "3.0.0"
-source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=e0a20ce67bbfedf4ace91f4235293165dbb098bc#e0a20ce67bbfedf4ace91f4235293165dbb098bc"
+source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=5449a5a1bbf612ce312839b2128cdfae012f8578#5449a5a1bbf612ce312839b2128cdfae012f8578"
 dependencies = [
  "egglog",
  "egglog-ast",

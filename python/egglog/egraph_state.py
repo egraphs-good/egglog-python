@@ -37,7 +37,6 @@ __all__ = ["EGraphState", "span"]
 
 
 _TRACER = trace.get_tracer(__name__)
-_VALIDATE_COST_PRIMITIVE = "@validate-dynamic-cost"
 
 # These heads are interpreted as syntax before Egglog falls back to parsing a
 # generic top-level call. Keep this aligned with Parser::parse_command,
@@ -929,7 +928,7 @@ class EGraphState:
                 cost_table = self.create_cost_table(expr.callable)
                 # Match egglog-experimental's set-cost action macro: bind each
                 # argument once, materialize the target call, then write its
-                # validated cost. Structural lowering here avoids evaluating a
+                # cost. Structural lowering here avoids evaluating a
                 # cost expression early through top-level factoring.
                 lowered: list[bindings._Action] = []
                 args_egg: list[bindings._Expr] = []
@@ -952,8 +951,7 @@ class EGraphState:
                     args_egg.append(var_egg)
                 lowered.append(bindings.Expr_(span(), bindings.Call(span(), egg_fn, args_egg)))
                 cost_expr = self._expr_to_egg(cost, expr_to_let=False)
-                validated_cost = bindings.Call(span(), _VALIDATE_COST_PRIMITIVE, [cost_expr])
-                lowered.append(bindings.Set(span(), cost_table, args_egg, validated_cost))
+                lowered.append(bindings.Set(span(), cost_table, args_egg, cost_expr))
                 return lowered
             case _:
                 assert_never(action)

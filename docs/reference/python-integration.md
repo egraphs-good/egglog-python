@@ -779,9 +779,7 @@ When no explicit `cost_model` is supplied, registering a row cost with
 overrides that node's marginal cost; otherwise the model falls back to costs
 declared on callables and then the backend default. An explicit `TreeCostModel`
 or `DagCostModel` takes precedence over those dynamic row costs.
-Dynamic row costs must be nonnegative. Literal negatives are rejected when
-`set_cost` is constructed; a computed negative fails when the action runs and
-is not stored.
+Dynamic row costs must be nonnegative.
 
 ### Multiple Roots
 

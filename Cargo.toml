@@ -26,7 +26,7 @@ egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1e
 egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
 egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
 egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
-egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "e0a20ce67bbfedf4ace91f4235293165dbb098bc", default-features = false }
+egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "5449a5a1bbf612ce312839b2128cdfae012f8578", default-features = false }
 egraph-serialize = { version = "0.3", features = ["serde", "graphviz"] }
 serde_json = "1"
 pyo3-log =  "*"

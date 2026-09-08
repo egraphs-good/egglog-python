@@ -58,14 +58,11 @@ when the rational value is an integer that fits in `i64`. As with other partial
 primitives, undefined use in a rule fact skips that match, while undefined use
 in an action is an error.
 
-The experimental `Rational` sort stores canonical fractions with i64
-numerators and denominators and accepts `fractions.Fraction` and integer inputs
-whose components fit in i64. Those values work in arithmetic, powers,
-`min`/`max`, and comparisons. Construction, arithmetic, negation, and absolute
-value are undefined when the canonical result cannot be represented. Powers
-require nonnegative integer exponents (`0 ** 0` is undefined); square and cube
-roots require exact rational results; and `log()` is defined only at one. Its
-comparisons return a `Unit` fact rather than a Python `bool`.
+The experimental `Rational` sort accepts `fractions.Fraction` and integer
+inputs through the `RationalLike` type. Those values work in arithmetic,
+powers, `min`/`max`, and comparisons, including reflected operations such as
+`1 - Rational(1, 2)`. Comparisons return a `Unit` fact rather than a Python
+`bool`.
 
 ### `!=` Operator
 

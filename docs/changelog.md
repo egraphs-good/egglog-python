@@ -18,20 +18,17 @@ _This project uses semantic versioning_
     option combinations and non-call top-level expression actions.
   - Add generic `Pair` and `Maybe` values, `catch`, map folding, map/set lengths,
     more `f64` operations including `is_finite()`, integer coercions, exact
-    `BigRat.to_i64()`, and an expanded overflow-safe experimental `Rational` API
-    with clearly partial powers, logarithms, and exact roots. Also fix duplicate
-    map keys and duplicate set iteration values.
+    `BigRat.to_i64()`, and `RationalLike` inputs, reflected arithmetic, and
+    comparisons for the experimental `Rational` API. Also fix duplicate map
+    keys and duplicate set iteration values.
   - Add tree and greedy-DAG extraction modes, ordered multi-root variant
     extraction, destructive `keep_best`, consistent dynamic `set_cost` support,
     and custom `TreeCostModel` and additive `DagCostModel` callbacks. Custom-cost
     failures now propagate without partially updating output term DAGs, and
     opaque lookup values from another e-graph, a popped scope, or before
-    compaction are rejected. Computed negative dynamic costs now fail when
-    written instead of panicking during later extraction. User-declared raw
-    cost tables can be reused for table-backed callables, but not for eager or
-    builtin primitives whose valid rows cannot be recovered from a snapshot;
-    frozen snapshots preserve negative raw rows without replaying them as valid
-    dynamic costs.
+    compaction are rejected. User-declared raw cost tables can be reused for
+    table-backed callables, but not for eager or builtin primitives whose valid
+    rows cannot be recovered from a snapshot.
   - Add persistent backoff schedules, `RunReport.can_stop`, per-e-graph thread
     and decomposition settings, constructor/relation table inspection, generic
     value extraction, and `var()` typing for parameterized expression types.

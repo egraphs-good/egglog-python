@@ -2032,11 +2032,7 @@ class EGraph:
                         cost_call = CallDecl(cost_callable_ref, cost_arg_exprs)
                         match cost_expr.expr:
                             case LitDecl(int(value)):
-                                # Raw aliases may contain negative rows. Dynamic
-                                # extraction ignores them, and replaying them as
-                                # validated set_cost actions would fail.
-                                if value >= 0:
-                                    costs[cost_call] = (cost_signature.semantic_return_type.to_just(), value)
+                                costs[cost_call] = (cost_signature.semantic_return_type.to_just(), value)
                             case _:
                                 raise TypeError(f"Expected integer cost for {cost_callable_ref}, got {cost_expr.expr}")
                     # A user-declared bodyless function may intentionally own the
@@ -2991,9 +2987,8 @@ def default_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]
         (callable_fn := get_callable_fn(expr)) is not None
         and egraph.has_custom_cost(callable_fn)
         and (i := egraph.lookup_function_value(get_cost(expr))) is not None
-        and (row_cost := int(i)) >= 0
     ):
-        self_cost = row_cost
+        self_cost = int(i)
     # 2. Else, check if this is a callable and it has a cost set on its declaration
     elif callable_fn is not None and (callable_cost := get_callable_cost(callable_fn)) is not None:
         self_cost = callable_cost
