@@ -4,6 +4,7 @@ import os
 import pathlib
 import subprocess
 from base64 import standard_b64encode
+from datetime import timedelta
 from fractions import Fraction
 
 import black
@@ -71,13 +72,30 @@ GENERIC_FRESH_EGRAPH_RESOLVED = "(vec-of (int 1))"
 
 
 def extract_best_term(program: str) -> str:
-    egraph = EGraph(record=True)
+    egraph = EGraph()
     outputs = egraph.run_program(*egraph.parse_program(program))
     extract = next(output for output in outputs if isinstance(output, ExtractBest))
     return extract.termdag.to_string(extract.term)
 
 
 class TestEGraph:
+    def test_per_egraph_configuration(self):
+        configured = EGraph(num_threads=2, no_decomp=True)
+        default = EGraph()
+
+        assert configured.num_threads() == 2
+        assert configured.no_decomp()
+        assert default.num_threads() == 1
+        assert not default.no_decomp()
+
+        configured.set_num_threads(1)
+        configured.set_no_decomp(False)
+
+        assert configured.num_threads() == 1
+        assert not configured.no_decomp()
+        assert default.num_threads() == 1
+        assert not default.no_decomp()
+
     def test_parse_program(self, snapshot_py):
         res = EGraph().parse_program(
             """(datatype Math
@@ -99,6 +117,78 @@ class TestEGraph:
 
         assert egraph.run_program(*egraph.parse_program(program)) == []
 
+    def test_downcast_multi_extract_output(self):
+        egraph = EGraph()
+        (output,) = egraph.parse_and_run_program("(datatype Expr (Num i64)) (multi-extract 1 (Num 1) 2)")
+
+        assert isinstance(output, UserDefinedOutput)
+        multi_extract = output.output.as_multi_extract()
+        assert isinstance(multi_extract, MultiExtractOutput)
+        assert [[multi_extract.termdag.to_string(term) for term in terms] for terms in multi_extract.terms] == [
+            ["(Num 1)"],
+            ["2"],
+        ]
+
+        (other_output,) = egraph.parse_and_run_program("(print-table-stats Num)")
+        assert isinstance(other_output, UserDefinedOutput)
+        assert other_output.output.as_multi_extract() is None
+
+    def test_parse_program_preserves_uf_extraction_behavior(self):
+        program = (EGG_SMOL_FOLDER / "tests" / "uf-extraction.egg").read_text()
+
+        direct_egraph = EGraph()
+        direct_outputs = direct_egraph.parse_and_run_program(program)
+        direct_extract = next(output for output in direct_outputs if isinstance(output, ExtractBest))
+
+        converted_egraph = EGraph()
+        converted_outputs = converted_egraph.run_program(*converted_egraph.parse_program(program))
+        converted_extract = next(output for output in converted_outputs if isinstance(output, ExtractBest))
+
+        assert direct_extract.termdag.to_string(direct_extract.term) == "(Foo)"
+        assert converted_extract.termdag.to_string(converted_extract.term) == "(Foo)"
+
+    def test_parse_program_preserves_internal_hidden_behavior(self):
+        program = """
+        (sort Expr)
+        (constructor Visible () Expr)
+        (constructor Hidden () Expr :internal-hidden)
+        (function visible-f () i64 :no-merge)
+        (function hidden-f () i64 :no-merge :internal-hidden)
+        (Visible)
+        (Hidden)
+        (set (visible-f) 1)
+        (set (hidden-f) 2)
+        (print-size)
+        """
+
+        direct_egraph = EGraph()
+        direct_outputs = direct_egraph.parse_and_run_program(program)
+        direct_sizes = next(output for output in direct_outputs if isinstance(output, PrintAllFunctionsSize))
+
+        converted_egraph = EGraph()
+        converted_outputs = converted_egraph.run_program(*converted_egraph.parse_program(program))
+        converted_sizes = next(output for output in converted_outputs if isinstance(output, PrintAllFunctionsSize))
+
+        assert direct_sizes.sizes == [("Visible", 1), ("visible-f", 1)]
+        assert converted_sizes.sizes == direct_sizes.sizes
+
+    @pytest.mark.parametrize("parse_and_run", [False, True])
+    def test_command_recording(self, parse_and_run: bool):
+        program = """(function f (i64) i64 :no-merge)
+        (set (f 1) 2)
+        (check (= (f 1) 2))"""
+        assert EGraph().commands() is None
+
+        egraph = EGraph(record=True)
+        assert egraph.commands() == ""
+        commands = egraph.parse_program(program)
+        expected = "".join(f"{command}\n" for command in commands)
+        if parse_and_run:
+            egraph.parse_and_run_program(program)
+        else:
+            egraph.run_program(*commands)
+        assert egraph.commands() == expected
+
     def test_parse_and_run_program_exception(self):
         program = "(check (= 1 1.0))"
         egraph = EGraph()
@@ -106,8 +196,48 @@ class TestEGraph:
         with pytest.raises(
             EggSmolError,
             match="to have type",
-        ):
+        ) as exc_info:
             egraph.run_program(*egraph.parse_program(program))
+
+        assert not exc_info.value.replayable_by_fail
+
+    @pytest.mark.parametrize(
+        "program",
+        [
+            pytest.param("(check (= 1 2))", id="check"),
+            pytest.param('(panic "expected")', id="action"),
+        ],
+    )
+    def test_runtime_command_error_is_replayable_by_fail(self, program: str):
+        with pytest.raises(EggSmolError) as exc_info:
+            EGraph().parse_and_run_program(program)
+
+        assert exc_info.value.replayable_by_fail
+
+    def test_parse_error_is_not_replayable_by_fail(self):
+        with pytest.raises(EggSmolError) as exc_info:
+            EGraph().parse_and_run_program("(")
+
+        assert not exc_info.value.replayable_by_fail
+
+    def test_egglog_error_constructor_defaults_to_non_replayable(self):
+        assert not EggSmolError("expected").replayable_by_fail
+        assert EggSmolError("expected", True).replayable_by_fail
+
+    def test_parse_and_run_program_error_keeps_recording_transactional(self):
+        program = """(function f (i64) i64 :no-merge)
+        (set (f 1) 2)
+        (check (= 1 1.0))"""
+        egraph = EGraph(record=True)
+
+        with pytest.raises(EggSmolError, match=r"In 3:.*recording-error\.egg"):
+            egraph.parse_and_run_program(program, filename="recording-error.egg")
+
+        assert egraph.commands() == ""
+        _, key = egraph.eval_expr(Lit(DUMMY_SPAN, Int(1)))
+        value = egraph.lookup_function("f", [key])
+        assert value is not None
+        assert egraph.value_to_i64(value) == 2
 
     def test_run_rules(self):
         egraph = EGraph()
@@ -128,6 +258,191 @@ class TestEGraph:
         assert len(res) == 1
         assert isinstance(res[0], RunScheduleOutput)
 
+    @pytest.mark.parametrize(
+        ("label", "command"),
+        [
+            ("ruleset", AddRuleset(DUMMY_SPAN, "rs")),
+            ("relation", Relation(DUMMY_SPAN, "rel", ["i64"])),
+            (
+                "function",
+                FunctionCommand(DUMMY_SPAN, "f", Schema(["i64"], "i64"), None, "term-f", True),
+            ),
+            ("constructor", Constructor(DUMMY_SPAN, "C", Schema(["i64"], "Expr"), None, False)),
+            ("let-action", ActionCommand(Let(DUMMY_SPAN, "$x", Lit(DUMMY_SPAN, Int(1))))),
+            ("set-action", ActionCommand(Set(DUMMY_SPAN, "f", [Lit(DUMMY_SPAN, Int(1))], Lit(DUMMY_SPAN, Int(2))))),
+            ("union-action", ActionCommand(Union(DUMMY_SPAN, Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(2))))),
+            (
+                "rewrite",
+                RewriteCommand(
+                    "",
+                    Rewrite(
+                        DUMMY_SPAN,
+                        Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "a"), Var(DUMMY_SPAN, "b")]),
+                        Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "b"), Var(DUMMY_SPAN, "a")]),
+                    ),
+                    False,
+                ),
+            ),
+            (
+                "rule",
+                RuleCommand(
+                    Rule(
+                        DUMMY_SPAN,
+                        [
+                            Union(
+                                DUMMY_SPAN,
+                                Var(DUMMY_SPAN, "lhs"),
+                                Call(DUMMY_SPAN, "Add", [Var(DUMMY_SPAN, "a"), Var(DUMMY_SPAN, "a")]),
+                            )
+                        ],
+                        [
+                            Eq(
+                                DUMMY_SPAN,
+                                Var(DUMMY_SPAN, "lhs"),
+                                Call(DUMMY_SPAN, "Mul", [Var(DUMMY_SPAN, "a"), Lit(DUMMY_SPAN, Int(2))]),
+                            )
+                        ],
+                        "",
+                        "",
+                    )
+                ),
+            ),
+            ("run-schedule", RunSchedule(Repeat(DUMMY_SPAN, 2, Run(DUMMY_SPAN, RunConfig(""))))),
+            ("check", Check(DUMMY_SPAN, [Eq(DUMMY_SPAN, Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(1)))])),
+            (
+                "fail-check",
+                Fail(DUMMY_SPAN, Check(DUMMY_SPAN, [Eq(DUMMY_SPAN, Lit(DUMMY_SPAN, Int(1)), Lit(DUMMY_SPAN, Int(2)))])),
+            ),
+            (
+                "fail-let-action",
+                Fail(DUMMY_SPAN, ActionCommand(Let(DUMMY_SPAN, "$x", Call(DUMMY_SPAN, "map-empty", [])))),
+            ),
+        ],
+    )
+    def test_command_display_round_trip(self, label: str, command) -> None:
+        egraph = EGraph()
+        text = str(command)
+        (parsed,) = egraph.parse_program(text)
+        assert str(parsed) == text, label
+
+    @pytest.mark.parametrize(
+        ("option", "mode_type"),
+        [("", Seminaive), (":naive", Naive), (":unsafe-seminaive", UnsafeSeminaive)],
+    )
+    def test_rule_options_round_trip(self, option: str, mode_type: type) -> None:
+        text = f"(rule ((rel x)) ((rel x)) {option} :no-decomp :internal-include-subsumed)"
+        (parsed,) = EGraph().parse_program(text)
+        assert isinstance(parsed, RuleCommand)
+        assert isinstance(parsed.rule.eval_mode, mode_type)
+        assert parsed.rule.no_decomp
+        assert parsed.rule.include_subsumed
+
+        (reparsed,) = EGraph().parse_program(str(parsed))
+        assert str(reparsed) == str(parsed)
+
+    def test_rewrite_name_conversion(self) -> None:
+        (parsed,) = EGraph().parse_program('(rewrite x x :name "binding-rewrite-name")')
+        assert isinstance(parsed, RewriteCommand)
+        assert parsed.rewrite.name == "binding-rewrite-name"
+        assert 'name: "binding-rewrite-name"' in str(parsed.rewrite)
+
+    def test_function_command_defaults_and_metadata_round_trip(self) -> None:
+        default = FunctionCommand(DUMMY_SPAN, "default-f", Schema(["i64"], "i64"), None)
+        assert default.term_constructor is None
+        assert not default.unextractable
+        assert not default.hidden
+        assert not default.let_binding
+
+        explicit = FunctionCommand(DUMMY_SPAN, "f", Schema(["i64"], "i64"), None, "term-f", True)
+        (parsed,) = EGraph().parse_program(str(explicit))
+        assert isinstance(parsed, FunctionCommand)
+        assert parsed.term_constructor == "term-f"
+        assert parsed.unextractable
+        assert not parsed.hidden
+        assert not parsed.let_binding
+
+    def test_internal_command_metadata_round_trip(self) -> None:
+        program = """
+        (sort Expr :internal-uf UFExpr UFExprIndex :internal-proof-func ExprProof
+                   :internal-proof-names Congr Trans Sym Normalize)
+        (sort ExprVec (Vec Expr) :internal-proof-func ExprVecProof
+                      :internal-container-rebuild
+                        (container-rebuild-spec rebuild-vec rebuild-vec-proof))
+        (function view (Expr) Expr :no-merge :unextractable :internal-hidden
+                       :internal-let :internal-term-constructor View)
+        (constructor Hidden () Expr :unextractable :internal-hidden :internal-let)
+        """
+        sort, container_sort, function, constructor = EGraph().parse_program(program)
+
+        assert isinstance(sort, Sort)
+        assert sort.uf == ("UFExpr", "UFExprIndex")
+        assert sort.proof_func == "ExprProof"
+        assert sort.proof_constructors == ProofConstructorNames("Congr", "Trans", "Sym", "Normalize")
+        assert sort.container_rebuild is None
+
+        assert isinstance(container_sort, Sort)
+        assert container_sort.proof_func == "ExprVecProof"
+        assert container_sort.container_rebuild == ContainerRebuildSpec("rebuild-vec", "rebuild-vec-proof")
+
+        assert isinstance(function, FunctionCommand)
+        assert function.hidden
+        assert function.let_binding
+        assert function.term_constructor == "View"
+        assert function.unextractable
+
+        assert isinstance(constructor, Constructor)
+        assert constructor.hidden
+        assert constructor.let_binding
+        assert constructor.unextractable
+
+        for command in (sort, container_sort, function, constructor):
+            (reparsed,) = EGraph().parse_program(str(command))
+            assert str(reparsed) == str(command)
+
+        default_sort = Sort(DUMMY_SPAN, "Default", None)
+        assert default_sort.uf is None
+        assert default_sort.proof_func is None
+        assert default_sort.container_rebuild is None
+        assert default_sort.proof_constructors is None
+
+    @pytest.mark.parametrize(
+        "duration",
+        [timedelta(days=1, seconds=2, microseconds=345_678), timedelta.max],
+    )
+    def test_report_duration_round_trip(self, duration: timedelta):
+        rule_report = RuleReport(None, duration, 7)
+        ruleset_report = RuleSetReport(True, {"rule": [rule_report]}, duration, duration)
+        iteration_report = IterationReport(ruleset_report, duration)
+        run_report = RunReport(
+            [iteration_report],
+            True,
+            {"rule": duration},
+            {"rule": 7},
+            {"ruleset": duration},
+            {"ruleset": duration},
+            {"ruleset": duration},
+            can_stop=True,
+        )
+
+        assert rule_report.search_and_apply_time == duration
+        assert ruleset_report.search_and_apply_time == duration
+        assert ruleset_report.merge_time == duration
+        assert iteration_report.rebuild_time == duration
+        assert run_report.search_and_apply_time_per_rule["rule"] == duration
+        assert run_report.search_and_apply_time_per_ruleset["ruleset"] == duration
+        assert run_report.merge_time_per_ruleset["ruleset"] == duration
+        assert run_report.rebuild_time_per_ruleset["ruleset"] == duration
+
+    def test_run_report_can_stop_preserves_positional_constructor(self):
+        report = RunReport([], False, {}, {}, {}, {}, {})
+
+        assert report.can_stop is False
+
+    @pytest.mark.parametrize("duration", [timedelta(microseconds=-1), timedelta.min])
+    def test_report_rejects_negative_duration(self, duration: timedelta):
+        with pytest.raises(ValueError, match="negative timedeltas"):
+            RuleReport(None, duration, 7)
+
     def test_extract(self):
         # Example from extraction-cost
         egraph = EGraph()
@@ -144,6 +459,119 @@ class TestEGraph:
         assert extract_report.termdag.term_to_expr(extract_report.term, DUMMY_SPAN) == Call(
             DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]
         )
+
+    def test_extract_value(self):
+        egraph = EGraph()
+        egraph.parse_and_run_program("(sort Expr) (constructor Num (i64) Expr)")
+        sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(42))]))
+
+        termdag, term, cost = egraph.extract_value(value, sort)
+        assert termdag.to_string(term) == "(Num 42)"
+        assert cost > 0
+
+        with pytest.raises(EggSmolError, match="Undefined sort Missing"):
+            egraph.extract_value(value, "Missing")
+
+    def test_extract_value_reports_extraction_failure(self):
+        egraph = EGraph()
+        egraph.parse_and_run_program("(sort Expr) (constructor Hidden (i64) Expr :unextractable)")
+        sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "Hidden", [Lit(DUMMY_SPAN, Int(42))]))
+
+        with pytest.raises(EggSmolError, match="Unable to find any valid extraction"):
+            egraph.extract_value(value, sort)
+
+    def test_tree_extractor_extract_variants(self):
+        egraph = EGraph()
+        egraph.parse_and_run_program(
+            "(datatype Expr (Num i64)) (let root (Num 1)) (union root (Num 2)) (union root (Num 3))"
+        )
+        sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))
+        model = CostModel(
+            lambda _name, annotation, children: annotation + sum(children),
+            lambda _name, _args: 1,
+            lambda _name, _value, children: sum(children),
+            lambda _name, _value: 1,
+        )
+        extractor = Extractor([sort], egraph, model)
+        termdag = TermDag()
+
+        variants = extractor.extract_variants(egraph, termdag, value, 2, sort)
+
+        assert len(variants) == 2
+        assert {termdag.to_string(term) for _cost, term in variants} <= {"(Num 1)", "(Num 2)", "(Num 3)"}
+        assert all(cost == 2 for cost, _term in variants)
+
+    @pytest.mark.parametrize("extractor", ["tree", "greedy-dag"])
+    def test_dag_cost_model_batch_extraction(self, extractor):
+        egraph = EGraph()
+        egraph.parse_and_run_program("(datatype Expr (Num i64)) (let root (Num 1)) (union root (Num 2))")
+        sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))
+        model = DagCostModel(
+            0,
+            lambda name, args: 1,
+            lambda name, value: 0,
+            lambda name, value: 1,
+        )
+        assert str(model).endswith(")")
+
+        termdag, best = extract_best_with_dag_cost_model(egraph, [(sort, value)], model, extractor=extractor)
+        assert best[0] is not None
+        cost, term = best[0]
+        assert cost == 2
+        assert termdag.to_string(term) in {"(Num 1)", "(Num 2)"}
+
+    def test_tree_extractor_observes_post_construction_mutation(self):
+        egraph = EGraph()
+        egraph.parse_and_run_program("(datatype Expr (Num i64)) (let root (Num 1))")
+        sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "Num", [Lit(DUMMY_SPAN, Int(1))]))
+        callback_count = 0
+
+        def enode_cost(name, args):
+            nonlocal callback_count
+            callback_count += 1
+            return 0 if name == "Num" and egraph.value_to_i64(args[0]) == 2 else 1
+
+        model = CostModel(
+            lambda name, annotation, children: annotation + sum(children),
+            enode_cost,
+            lambda name, value, children: sum(children),
+            lambda name, value: 0,
+        )
+        extractor = Extractor([sort], egraph, model)
+
+        assert callback_count == 0
+        first_dag = TermDag()
+        _, first = extractor.extract_best(egraph, first_dag, value, sort)
+        assert first_dag.to_string(first) == "(Num 1)"
+        first_callback_count = callback_count
+
+        egraph.parse_and_run_program("(union root (Num 2))")
+        second_dag = TermDag()
+        _, second = extractor.extract_best(egraph, second_dag, value, sort)
+
+        assert second_dag.to_string(second) == "(Num 2)"
+        assert callback_count > first_callback_count
+
+    def test_tree_cost_callback_failure_does_not_mutate_termdag(self):
+        egraph = EGraph()
+        sort, value = egraph.eval_expr(Lit(DUMMY_SPAN, Int(1)))
+
+        def fail(name, value):
+            msg = "base cost failed"
+            raise LookupError(msg)
+
+        model = CostModel(
+            lambda name, annotation, children: annotation,
+            lambda name, args: 0,
+            lambda name, value, children: 0,
+            fail,
+        )
+        extractor = Extractor([sort], egraph, model)
+        termdag = TermDag()
+
+        with pytest.raises(LookupError, match="base cost failed"):
+            extractor.extract_best(egraph, termdag, value, sort)
+        assert termdag.size() == 0
 
     def test_sort_alias(self):
         # From map example
@@ -188,6 +616,37 @@ class TestEGraph:
             ),
             Extract(DUMMY_SPAN, Var(DUMMY_SPAN, "my_map2"), Lit(DUMMY_SPAN, Int(0))),
         )
+
+    def test_freeze_constructor_and_function_rows(self):
+        egraph = EGraph()
+        egraph.parse_and_run_program(
+            """
+            (sort Expr)
+            (constructor Num (i64) Expr)
+            (function f (i64) i64 :no-merge)
+            (let $x (Num 1))
+            (set (f 2) 3)
+            """
+        )
+
+        functions = egraph.freeze().functions
+        num = functions["Num"]
+        function = functions["f"]
+        global_x = functions["$x"]
+
+        assert num.input_sorts == ["i64"]
+        assert num.output_sort == "Expr"
+        assert len(num.rows) == 1
+        assert egraph.value_to_i64(num.rows[0].inputs[0]) == 1
+
+        assert function.input_sorts == ["i64"]
+        assert function.output_sort == "i64"
+        assert len(function.rows) == 1
+        assert egraph.value_to_i64(function.rows[0].inputs[0]) == 2
+        assert egraph.value_to_i64(function.rows[0].output) == 3
+
+        assert global_x.is_let_binding
+        assert global_x.rows[0].output == num.rows[0].output
 
 
 class TestVariant:
@@ -258,6 +717,15 @@ class TestValues:
         sort, value = egraph.eval_expr(Call(DUMMY_SPAN, "bigint", [Lit(DUMMY_SPAN, Int(100))]))
         assert sort == "BigInt"
         assert egraph.value_to_bigint(value) == 100
+
+        _, large_value = egraph.eval_expr(
+            Call(
+                DUMMY_SPAN,
+                "<<",
+                [Call(DUMMY_SPAN, "bigint", [Lit(DUMMY_SPAN, Int(1))]), Lit(DUMMY_SPAN, Int(200))],
+            )
+        )
+        assert egraph.value_to_bigint(large_value) == 1 << 200
 
     def test_bigrat(self):
         sort, value = egraph.eval_expr(
@@ -397,7 +865,33 @@ class TestValues:
 def test_lookup_function():
     egraph = EGraph()
     egraph.run_program(*egraph.parse_program("(function hi (i64) i64 :no-merge)\n(set (hi 1) 2)"))
-    assert (
-        egraph.lookup_function("hi", [egraph.eval_expr(Lit(DUMMY_SPAN, Int(1)))[1]])
-        == egraph.eval_expr(Lit(DUMMY_SPAN, Int(2)))[1]
-    )
+    _, one = egraph.eval_expr(Lit(DUMMY_SPAN, Int(1)))
+    _, two = egraph.eval_expr(Lit(DUMMY_SPAN, Int(2)))
+    _, absent = egraph.eval_expr(Lit(DUMMY_SPAN, Int(3)))
+
+    assert egraph.lookup_function("hi", [one]) == two
+    assert egraph.lookup_function("hi", [absent]) is None
+    with pytest.raises(EggSmolError, match="no table named `missing`"):
+        egraph.lookup_function("missing", [one])
+
+
+def test_lookup_constructor():
+    egraph = EGraph()
+    egraph.parse_and_run_program("(sort Expr) (constructor A (i64) Expr)")
+    _, one = egraph.eval_expr(Lit(DUMMY_SPAN, Int(1)))
+    _, two = egraph.eval_expr(Lit(DUMMY_SPAN, Int(2)))
+    _, a_one = egraph.eval_expr(Call(DUMMY_SPAN, "A", [Lit(DUMMY_SPAN, Int(1))]))
+
+    assert egraph.lookup_function("A", [one]) == a_one
+    assert egraph.lookup_function("A", [two]) is None
+
+
+def test_lookup_relation():
+    egraph = EGraph()
+    egraph.parse_and_run_program("(relation R (i64)) (R 1)")
+    _, one = egraph.eval_expr(Lit(DUMMY_SPAN, Int(1)))
+    _, two = egraph.eval_expr(Lit(DUMMY_SPAN, Int(2)))
+    _, unit = egraph.eval_expr(Lit(DUMMY_SPAN, Unit()))
+
+    assert egraph.lookup_function("R", [one]) == unit
+    assert egraph.lookup_function("R", [two]) is None

@@ -74,6 +74,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "ar_archive_writer"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73cd58deff2140a0a8eae87e417bd01db68a33e148aa93d1e8cd837e55e312b6"
+dependencies = [
+ "object",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -146,6 +155,16 @@ name = "bytes"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
+
+[[package]]
+name = "cc"
+version = "1.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
+dependencies = [
+ "find-msvc-tools",
+ "shlex",
+]
 
 [[package]]
 name = "cfg-if"
@@ -362,8 +381,8 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "egglog"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=1eea60a14f214505741d22bdd6c9b501b21c04ee#1eea60a14f214505741d22bdd6c9b501b21c04ee"
 dependencies = [
  "csv",
  "dyn-clone",
@@ -374,23 +393,24 @@ dependencies = [
  "egglog-numeric-id",
  "egglog-reports",
  "egraph-serialize",
+ "enum-map",
  "hashbrown 0.16.1",
  "im-rc",
  "indexmap",
  "log",
  "num",
  "ordered-float",
- "rayon",
  "rustc-hash",
  "serde_json",
+ "smallvec",
  "thiserror",
  "web-time",
 ]
 
 [[package]]
 name = "egglog-add-primitive"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=1eea60a14f214505741d22bdd6c9b501b21c04ee#1eea60a14f214505741d22bdd6c9b501b21c04ee"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -398,19 +418,20 @@ dependencies = [
 
 [[package]]
 name = "egglog-ast"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=1eea60a14f214505741d22bdd6c9b501b21c04ee#1eea60a14f214505741d22bdd6c9b501b21c04ee"
 dependencies = [
  "ordered-float",
 ]
 
 [[package]]
 name = "egglog-bridge"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=1eea60a14f214505741d22bdd6c9b501b21c04ee#1eea60a14f214505741d22bdd6c9b501b21c04ee"
 dependencies = [
  "anyhow",
  "dyn-clone",
+ "egglog-concurrency",
  "egglog-core-relations",
  "egglog-numeric-id",
  "egglog-reports",
@@ -421,7 +442,6 @@ dependencies = [
  "num-rational",
  "once_cell",
  "ordered-float",
- "rayon",
  "smallvec",
  "thiserror",
  "web-time",
@@ -429,20 +449,20 @@ dependencies = [
 
 [[package]]
 name = "egglog-concurrency"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=1eea60a14f214505741d22bdd6c9b501b21c04ee#1eea60a14f214505741d22bdd6c9b501b21c04ee"
 dependencies = [
  "arc-swap",
  "bumpalo",
+ "crossbeam",
  "egglog-numeric-id",
- "rayon",
  "smallvec",
 ]
 
 [[package]]
 name = "egglog-core-relations"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=1eea60a14f214505741d22bdd6c9b501b21c04ee#1eea60a14f214505741d22bdd6c9b501b21c04ee"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -461,7 +481,6 @@ dependencies = [
  "num",
  "once_cell",
  "rand 0.9.4",
- "rayon",
  "rustc-hash",
  "smallvec",
  "thiserror",
@@ -470,29 +489,29 @@ dependencies = [
 
 [[package]]
 name = "egglog-experimental"
-version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-experimental?branch=main#d443c29a58fd3affe5fcf92e6878168e89273752"
+version = "3.0.0"
+source = "git+https://github.com/egraphs-good/egglog-experimental.git?rev=d99f5e4906e46f92b9948676e62fd445c4bcda1d#d99f5e4906e46f92b9948676e62fd445c4bcda1d"
 dependencies = [
  "egglog",
  "egglog-ast",
  "egglog-reports",
+ "fixedbitset",
+ "hashbrown 0.16.1",
  "lazy_static",
  "log",
  "num",
+ "stacker",
 ]
 
 [[package]]
 name = "egglog-numeric-id"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
-dependencies = [
- "rayon",
-]
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=1eea60a14f214505741d22bdd6c9b501b21c04ee#1eea60a14f214505741d22bdd6c9b501b21c04ee"
 
 [[package]]
 name = "egglog-reports"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=1eea60a14f214505741d22bdd6c9b501b21c04ee#1eea60a14f214505741d22bdd6c9b501b21c04ee"
 dependencies = [
  "clap",
  "hashbrown 0.16.1",
@@ -505,8 +524,8 @@ dependencies = [
 
 [[package]]
 name = "egglog-union-find"
-version = "2.0.0"
-source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=2e5657b#2e5657bbb2c1a90fba31002da61381815f891b6f"
+version = "3.0.0"
+source = "git+https://github.com/saulshanabrook/egg-smol.git?rev=1eea60a14f214505741d22bdd6c9b501b21c04ee#1eea60a14f214505741d22bdd6c9b501b21c04ee"
 dependencies = [
  "crossbeam",
  "egglog-concurrency",
@@ -537,7 +556,6 @@ dependencies = [
  "ordered-float",
  "pyo3",
  "pyo3-log",
- "rayon",
  "serde_json",
  "tracing",
  "tracing-opentelemetry",
@@ -566,6 +584,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
+name = "enum-map"
+version = "2.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6866f3bfdf8207509a033af1a75a7b08abda06bbaaeae6669323fd5a097df2e9"
+dependencies = [
+ "enum-map-derive",
+]
+
+[[package]]
+name = "enum-map-derive"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f282cfdfe92516eb26c2af8589c274c7c17681f5ecc03c18255fe741c6aa64eb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -586,6 +624,12 @@ name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+
+[[package]]
+name = "find-msvc-tools"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "fixedbitset"
@@ -1245,6 +1289,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1515,6 +1568,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "psm"
+version = "0.1.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
+dependencies = [
+ "ar_archive_writer",
+ "cc",
+]
+
+[[package]]
 name = "pyo3"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1679,26 +1742,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f97cdb2a36ed4183de61b2f824cc45c9f1037f28afe0a322e9fff4c108b5aaa"
 dependencies = [
  "rand_core 0.6.4",
-]
-
-[[package]]
-name = "rayon"
-version = "1.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
-dependencies = [
- "either",
- "rayon-core",
-]
-
-[[package]]
-name = "rayon-core"
-version = "1.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
-dependencies = [
- "crossbeam-deque",
- "crossbeam-utils",
 ]
 
 [[package]]
@@ -1881,6 +1924,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "shlex"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
 name = "sized-chunks"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1917,6 +1966,19 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "stacker"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "707f49d46706bacf8a2b00d51dace3f9de527c13eec3778f570c411f89e69967"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "psm",
+ "windows-sys",
+]
 
 [[package]]
 name = "strsim"

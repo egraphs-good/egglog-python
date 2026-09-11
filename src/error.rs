@@ -6,13 +6,25 @@ use pyo3::prelude::*;
 pub struct EggSmolError {
     #[pyo3(get)]
     context: String,
+    /// Whether replaying the failed command inside `(fail ...)` preserves the
+    /// command's partial effects. This is deliberately conservative.
+    #[pyo3(get)]
+    replayable_by_fail: bool,
 }
 
 #[pymethods]
 impl EggSmolError {
     #[new]
-    fn new(context: String) -> Self {
-        EggSmolError { context }
+    #[pyo3(signature = (context, replayable_by_fail=false))]
+    fn new(context: String, replayable_by_fail: bool) -> Self {
+        EggSmolError {
+            context,
+            replayable_by_fail,
+        }
+    }
+
+    fn __str__(&self) -> &str {
+        &self.context
     }
 }
 
@@ -22,6 +34,7 @@ impl EggSmolError {
 // TODO: Create classes for each of these errors
 pub enum WrappedError {
     Egglog(egglog::Error),
+    ReplayableEgglog(egglog::Error),
     ParseError(egglog::ast::ParseError),
     Py(PyErr),
 }
@@ -30,9 +43,16 @@ pub enum WrappedError {
 impl From<WrappedError> for PyErr {
     fn from(error: WrappedError) -> Self {
         match error {
-            WrappedError::Egglog(error) => PyErr::new::<EggSmolError, _>(error.to_string()),
+            WrappedError::Egglog(error) => {
+                PyErr::new::<EggSmolError, _>((error.to_string(), false))
+            }
+            WrappedError::ReplayableEgglog(error) => {
+                PyErr::new::<EggSmolError, _>((error.to_string(), true))
+            }
             WrappedError::Py(error) => error,
-            WrappedError::ParseError(error) => PyErr::new::<EggSmolError, _>(error.to_string()),
+            WrappedError::ParseError(error) => {
+                PyErr::new::<EggSmolError, _>((error.to_string(), false))
+            }
         }
     }
 }

@@ -29,7 +29,7 @@ jobs:
         with:
           enable-cache: true
           python-version: ${{ matrix.py }}
-      - uses: dtolnay/rust-toolchain@1.79.0
+      - uses: dtolnay/rust-toolchain@1.91.0
       - uses: Swatinem/rust-cache@v2
       - run: uv sync --extra test --locked
       - run: uv run pytest --benchmark-disable -vvv --durations=10
@@ -41,11 +41,12 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: dtolnay/rust-toolchain@1.79.0
+      - uses: dtolnay/rust-toolchain@1.91.0
       - uses: Swatinem/rust-cache@v2
       - run: uv sync --extra test --locked
       - run: make mypy
       - run: make stubtest
+      - run: cargo test --locked --lib
 
   benchmark:
     runs-on: ${{ matrix.runner }}
@@ -64,7 +65,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@1.79.0
+      - uses: dtolnay/rust-toolchain@1.91.0
       - uses: Swatinem/rust-cache@v2
       - run: |
           export UV_PROJECT_ENVIRONMENT="${pythonLocation}"
@@ -83,7 +84,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: dtolnay/rust-toolchain@1.79.0
+      - uses: dtolnay/rust-toolchain@1.91.0
       - uses: Swatinem/rust-cache@v2
       - name: Install graphviz
         run: |

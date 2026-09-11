@@ -20,6 +20,7 @@ use std::{
     fmt::Debug,
     fs::File,
     io::Write,
+    sync::{Arc, Mutex},
 };
 use uuid::Uuid;
 
@@ -53,8 +54,17 @@ pub fn load<'py>(py: Python<'py>, pickled: &PyPickledValue) -> PyResult<Bound<'p
     cloudpickle.getattr("loads")?.call1((&pickled.0,))
 }
 
-#[derive(Debug)]
-pub struct PyObjectSort {}
+pub(crate) type PyObjectErrorState = Arc<Mutex<Option<PyErr>>>;
+
+pub struct PyObjectSort {
+    pub(crate) py_error: PyObjectErrorState,
+}
+
+impl Debug for PyObjectSort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PyObjectSort").finish_non_exhaustive()
+    }
+}
 
 impl BaseSort for PyObjectSort {
     type Base = PyPickledValue;
@@ -72,8 +82,8 @@ impl BaseSort for PyObjectSort {
             }
         );
         // Supports calling (py-eval <str-obj> <globals-obj> <locals-obj>)
-        add_primitive!(eg, "py-eval" = |code: S, globals: PyPickledValue, locals: PyPickledValue| -?> PyPickledValue {
-            attach("py-eval", |py| {
+        add_primitive!(eg, "py-eval" = {self.py_error.clone(): PyObjectErrorState} |code: S, globals: PyPickledValue, locals: PyPickledValue| -?> PyPickledValue {
+            attach(&self.ctx, "py-eval", |py| {
                 dump(py.eval(
                     CString::new(code.to_string()).unwrap().as_c_str(),
                     Some(load(py, &globals)?.cast::<PyDict>()?),
@@ -86,8 +96,9 @@ impl BaseSort for PyObjectSort {
         add_primitive!(
             eg,
             "py-exec" =
+                {self.py_error.clone(): PyObjectErrorState}
                 |code: S, globals: PyPickledValue, locals: PyPickledValue| -?> PyPickledValue {
-                    attach("py-exec", |py| {
+                    attach(&self.ctx, "py-exec", |py| {
                         let locals = load(py, &locals)?;
                         // Copy code into temporary file
                         // Keep it around so that if errors occur we can debug them after the program exits
@@ -109,8 +120,8 @@ impl BaseSort for PyObjectSort {
                 }
         );
         // (py-call <fn-obj> [<arg-object>]*)
-        add_primitive!(eg, "py-call" = [xs: PyPickledValue] -?> PyPickledValue {
-            attach("py-call", |py| {
+        add_primitive!(eg, "py-call" = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
+            attach(&self.ctx, "py-call", |py| {
                 let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>().map_err(|e| {e.add_note(py, "Loading arguments").unwrap(); e})?;
                 let fn_obj = &xs[0];
                 let args = PyTuple::new(py, xs[1..].to_vec()).map_err(|e| {e.add_note(py, "Creating tuple").unwrap(); e})?;
@@ -119,8 +130,8 @@ impl BaseSort for PyObjectSort {
         });
 
         // (py-call-extended <fn-obj> <args-obj> <kwargs-obj>)
-        add_primitive!(eg, "py-call-extended" = |fn_: PyPickledValue, args: PyPickledValue, kwargs: PyPickledValue| -?> PyPickledValue {
-            attach("py-call-extended", |py| {
+        add_primitive!(eg, "py-call-extended" = {self.py_error.clone(): PyObjectErrorState} |fn_: PyPickledValue, args: PyPickledValue, kwargs: PyPickledValue| -?> PyPickledValue {
+            attach(&self.ctx, "py-call-extended", |py| {
                 let fn_ = load(py, &fn_)?;
                 let args = load(py, &args)?;
                 let kwargs = load(py, &kwargs)?;
@@ -129,8 +140,8 @@ impl BaseSort for PyObjectSort {
         });
 
         // (py-dict [<key-object> <value-object>]*)
-        add_primitive!(eg, "py-dict" = [xs: PyPickledValue] -?> PyPickledValue {
-            attach("py-dict", |py| {
+        add_primitive!(eg, "py-dict" = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
+            attach(&self.ctx, "py-dict", |py| {
                 let dict = PyDict::new(py);
                 for i in xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>()?.chunks_exact(2) {
                     dict.set_item(i[0].clone(), i[1].clone())?;
@@ -139,8 +150,8 @@ impl BaseSort for PyObjectSort {
             })
         });
         // Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
-        add_primitive!(eg, "py-dict-update" = [xs: PyPickledValue] -?> PyPickledValue {{
-            attach("py-dict-update", |py| {
+        add_primitive!(eg, "py-dict-update" = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {{
+            attach(&self.ctx, "py-dict-update", |py| {
                 let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>()?;
                 // Copy the dict so we can mutate it and return it
                 let dict = xs[0].cast::<PyDict>()?;
@@ -154,9 +165,9 @@ impl BaseSort for PyObjectSort {
         // (py-to-string <obj>)
         add_primitive!(
             eg,
-            "py-to-string" = |x: PyPickledValue| -?> S {
+            "py-to-string" = {self.py_error.clone(): PyObjectErrorState} |x: PyPickledValue| -?> S {
                 {
-                    let s: String = attach("py-to-string", move |py| load(py, &x)?.extract())?;
+                    let s: String = attach(&self.ctx, "py-to-string", move |py| load(py, &x)?.extract())?;
                     Some(s.into())
                 }
             }
@@ -164,17 +175,17 @@ impl BaseSort for PyObjectSort {
         // (py-to-bool <obj>)
         add_primitive!(
             eg,
-            "py-to-bool" = |x: PyPickledValue| -?> bool {
+            "py-to-bool" = {self.py_error.clone(): PyObjectErrorState} |x: PyPickledValue| -?> bool {
                 {
-                    attach("py-to-bool", move |py| load(py, &x)?.extract())
+                    attach(&self.ctx, "py-to-bool", move |py| load(py, &x)?.extract())
                 }
             }
         );
         // (py-from-string <str>)
         add_primitive!(
             eg,
-            "py-from-string" = |x: S| -?> PyPickledValue {
-                attach("py-from-string", |py| {
+            "py-from-string" = {self.py_error.clone(): PyObjectErrorState} |x: S| -?> PyPickledValue {
+                attach(&self.ctx, "py-from-string", |py| {
                     dump(x.to_string().into_pyobject(py)?)
                 })
             }
@@ -182,8 +193,8 @@ impl BaseSort for PyObjectSort {
         // (py-from-int <int>)
         add_primitive!(
             eg,
-            "py-from-int" = |x: i64| -?> PyPickledValue {
-                attach("py-from-int", |py| {
+            "py-from-int" = {self.py_error.clone(): PyObjectErrorState} |x: i64| -?> PyPickledValue {
+                attach(&self.ctx, "py-from-int", |py| {
                     dump(x.into_pyobject(py)?)
                 })
             }
@@ -204,13 +215,13 @@ impl BaseSort for PyObjectSort {
 
 /// Attaches to the Python interpreter and runs the given closure.
 ///
-/// Also handles errors, by saving them on the interpreter and returning None.
-fn attach<F, R>(name: &str, f: F) -> Option<R>
+/// Also handles errors, by saving the first one for the binding thread and returning None.
+fn attach<F, R>(py_error: &PyObjectErrorState, name: &str, f: F) -> Option<R>
 where
     F: for<'py> FnOnce(Python<'py>) -> PyResult<R>,
 {
     Python::attach(|py| {
-        if PyErr::occurred(py) {
+        if py_error.lock().unwrap().is_some() {
             return None;
         };
         match f(py) {
@@ -218,7 +229,10 @@ where
             Err(err) => {
                 err.add_note(py, format!("While calling primitive '{}'", name))
                     .unwrap();
-                err.restore(py);
+                let mut first_error = py_error.lock().unwrap();
+                if first_error.is_none() {
+                    *first_error = Some(err);
+                }
                 None
             }
         }
@@ -238,4 +252,50 @@ fn run_path<'py>(
     code.run(globals, locals).map(|obj| {
         debug_assert!(obj.is_none());
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::exceptions::PyValueError;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn shares_only_the_first_primitive_error_across_threads() {
+        Python::initialize();
+        let error = PyObjectErrorState::default();
+        let worker_error = error.clone();
+        let called_after_error = Arc::new(AtomicBool::new(false));
+        let worker_called_after_error = called_after_error.clone();
+
+        std::thread::spawn(move || {
+            let result: Option<()> = attach(&worker_error, "py-call", |_py| {
+                Err(PyValueError::new_err("worker boom"))
+            });
+            assert!(result.is_none());
+
+            let result = attach(&worker_error, "py-call", |_py| {
+                worker_called_after_error.store(true, Ordering::Relaxed);
+                Ok(())
+            });
+            assert!(result.is_none());
+            Python::attach(|py| assert!(!PyErr::occurred(py)));
+        })
+        .join()
+        .unwrap();
+
+        assert!(!called_after_error.load(Ordering::Relaxed));
+        let captured = error.lock().unwrap().take().unwrap();
+        Python::attach(|py| {
+            assert!(captured.is_instance_of::<PyValueError>(py));
+            assert_eq!(captured.value(py).to_string(), "worker boom");
+            let notes: Vec<String> = captured
+                .value(py)
+                .getattr("__notes__")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(notes, ["While calling primitive 'py-call'"]);
+        });
+    }
 }

@@ -91,6 +91,7 @@ class RunReport:
     search_and_apply_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
     merge_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
     rebuild_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
+    can_stop: bool = False
 
     def __repr__(self) -> str:
         time_per_rule = {pretty_decl(self._decls, k): v for k, v in self.search_and_apply_time_per_rule.items()}
@@ -98,6 +99,7 @@ class RunReport:
         return (
             f"RunReport(iterations={self.iterations}, "
             f"updated={self.updated}, "
+            f"can_stop={self.can_stop}, "
             f"search_and_apply_time_per_rule={time_per_rule}, "
             f"num_matches_per_rule={matches_per_rule}, "
             f"search_and_apply_time_per_ruleset={self.search_and_apply_time_per_ruleset}, "
@@ -130,6 +132,7 @@ class RunReport:
             _decls=decls,
             iterations=[IterationReport._from_bindings(it, rule_map, decls) for it in report.iterations],
             updated=report.updated,
+            can_stop=report.can_stop,
             search_and_apply_time_per_rule=search_and_apply_time_per_rule,
             num_matches_per_rule=num_matches_per_rule,
             search_and_apply_time_per_ruleset=report.search_and_apply_time_per_ruleset,

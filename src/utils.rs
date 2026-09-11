@@ -29,7 +29,7 @@ macro_rules! convert_enums {
     ($(
         $from_type:ty: $str:literal $($trait_outer:ty)? => $to_type:ident {
             $(
-                $variant:ident$([name=$py_name:literal])?$([trait=$trait_inner:ty])?($($field:ident: $field_type:ty),*)
+                $variant:ident$([name=$py_name:literal])?$([trait=$trait_inner:ty])?($($field:ident: $field_type:ty$( = $default:expr)?),*)
                 $from_ident:ident -> $from:expr,
                 $to_pat:pat => $to:expr
             );*
@@ -48,7 +48,7 @@ macro_rules! convert_enums {
             #[pymethods]
             impl $variant {
                 #[new]
-                #[pyo3(signature=($($field),*))]
+                #[pyo3(signature=($($field $(= $default)?),*))]
                 fn new($($field: $field_type),*) -> Self {
                     Self {
                         $($field),*

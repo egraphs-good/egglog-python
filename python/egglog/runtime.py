@@ -197,8 +197,10 @@ class BaseClassFactoryMeta(type):
     """
 
     def __instancecheck__(cls, instance: object) -> bool:
-        assert isinstance(cls, RuntimeClass)
-        return isinstance(instance, RuntimeExpr) and cls.__egg_tp__.ident == instance.__egg_typed_expr__.tp.ident
+        runtime_cls = cast("RuntimeClass", cls)
+        return (
+            isinstance(instance, RuntimeExpr) and runtime_cls.__egg_tp__.ident == instance.__egg_typed_expr__.tp.ident
+        )
 
 
 class ClassFactory(type):
@@ -549,6 +551,7 @@ class RuntimeFunction(DelayedDeclarations, metaclass=RuntimeFunctionMeta):
         bound.apply_defaults()
         assert not bound.kwargs
         args = bound.args
+        decls.update(*(arg for arg in args if isinstance(arg, RuntimeExpr)))
 
         tcs = TypeConstraintSolver()
         if isinstance(self.__egg_bound__, JustTypeRef) and self.__egg_bound__.args:
@@ -605,7 +608,7 @@ class RuntimeFunction(DelayedDeclarations, metaclass=RuntimeFunctionMeta):
         first_arg, bound_tp_params = None, None
         match self.__egg_bound__:
             case RuntimeExpr(_):
-                first_arg = self.__egg_bound__.__egg_typed_expr__.expr
+                first_arg = self.__egg_bound__.__egg_typed_expr__
             case JustTypeRef(_, args):
                 bound_tp_params = args
         return pretty_callable_ref(self.__egg_decls__, self.__egg_ref__, first_arg, bound_tp_params)
@@ -697,7 +700,7 @@ class RuntimeExpr(DelayedDeclarations):
         return self.__egg_pretty__(None)
 
     def __egg_pretty__(self, wrapping_fn: str | None) -> str:
-        return pretty_decl(self.__egg_decls__, self.__egg_typed_expr__.expr, wrapping_fn=wrapping_fn)
+        return pretty_decl(self.__egg_decls__, self.__egg_typed_expr__, wrapping_fn=wrapping_fn)
 
     def _ipython_display_(self) -> None:
         from IPython.display import Code, display  # noqa: PLC0415

@@ -2867,6 +2867,7 @@ def to_polynomial_ruleset(
         mss1 == mss.map(partial(multiset_flat_map, get_monomial)),
         mss != mss1,  # skip if this is a no-op
         name="unwrap monomial",
+        eval_mode="naive",
     ).then(
         union(n1).with_(polynomial(mss1)),
         delete(polynomial(mss)),
@@ -2878,6 +2879,7 @@ def to_polynomial_ruleset(
         mss1 == multiset_flat_map(UnstableFn(get_sole_polynomial), mss),
         mss != mss1,
         name="unwrap polynomial",
+        eval_mode="naive",
     ).then(
         union(n1).with_(polynomial(mss1)),
         delete(polynomial(mss)),

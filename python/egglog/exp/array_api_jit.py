@@ -5,7 +5,7 @@ from typing import TypeVar, cast
 import numpy as np
 from opentelemetry import trace
 
-from egglog import EGraph, bindings, greedy_dag_cost_model
+from egglog import EGraph, bindings
 from egglog.exp.array_api import NDArray, set_array_api_egraph
 from egglog.exp.array_api_numba import array_api_numba_schedule
 from egglog.exp.array_api_program_gen import EvalProgram, array_api_program_gen_schedule, ndarray_function_two_program
@@ -58,7 +58,7 @@ def function_to_program(fn: Callable, save_egglog_string: bool) -> tuple[EGraph,
             res = fn(NDArray.var(arg1), NDArray.var(arg2))
         egraph.register(res)
         egraph.run(array_api_numba_schedule)
-        res_optimized = egraph.extract(res, cost_model=greedy_dag_cost_model())
+        res_optimized = egraph.extract(res, extractor="greedy-dag")
 
     return (
         egraph,

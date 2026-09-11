@@ -19,6 +19,7 @@
 
 - Use the Context7 MCP server for egglog documentation instead of copying external doc summaries into this file.
 - Keep general workflows in the how-to guides, and keep Python-specific runtime/reference examples in `docs/reference/python-integration.md`.
+- Keep high-level docs focused on current public APIs and observable behavior. Put low-level binding details in `docs/reference/bindings.md`, and migration-only details in `docs/changelog.md`.
 - If a PR adds or updates a changelog entry in `docs/changelog.md`, keep it aligned with the final code changes.
 - For a clean docs rebuild, clear `docs/_build/`; the MyST-NB execution cache lives in `docs/_build/.jupyter_cache`.
 
@@ -26,7 +27,11 @@
 
 - Prefer relative imports inside `python/egglog`.
 - When changing public high-level APIs, update the public docs, stubs, and pretty/freeze round-trip expectations together.
-- Higher-order callable type probing should stay isolated from the live ruleset: copy declarations and run with no current ruleset so inference does not register temporary unnamed functions or rewrites.
+- Keep `builtins.py` limited to operations implemented by Egglog primitives. Compose derived expressions at their domain call sites, without private runtime plumbing in public APIs.
+- Pretty-print declaration structure directly; do not evaluate runtime expressions merely to canonicalize their output.
+- Higher-order callable type probing should stay isolated from the live ruleset:
+  copy declarations and run with no current ruleset so inference does not
+  register temporary unnamed declarations or eager bodies.
 
 ## Array API
 
@@ -41,6 +46,8 @@
 ## Verification
 
 - Prefer the minimal code change and the minimal diff that solves the task; only broaden the change if the smaller fix is not sufficient.
+- High-level tests should assert observable behavior through public APIs. Avoid private `_` APIs and exact generated names unless serialized output is itself the public contract.
+- Keep white-box `EGraphState` transcript, cleanup, and fault-injection tests in `python/tests/test_egraph_state.py`; keep `test_high_level.py` focused on public behavior.
 - Run `make mypy` for typing changes.
 - Run targeted pytest for touched modules.
 - Run `make docs` for docs or public API changes.

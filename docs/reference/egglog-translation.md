@@ -6,11 +6,22 @@ file_format: mystnb
 
 The high level bindings available at the top module (`egglog`) expose most of the functionality of the `egglog` text format. This guide explains how to translate between the two.
 
-Any EGraph can also be converted to egglog with the `egraph.as_egglog_string` property, as long as it was created with `Egraph(save_egglog_string=True)`.
+Any EGraph can also be converted to egglog with the `egraph.as_egglog_string` property, as long as it was created with `EGraph(save_egglog_string=True)`.
+Call `egraph.close()` to remove that saved transcript when it is no longer
+needed. A recorded e-graph does not accept further commands after it is closed.
+If a failure cannot be represented by Egglog's `(fail ...)` command—for
+example, a Python exception or a parse, expansion, or typechecking error—the
+transcript can no longer be guaranteed to replay the live state. Later
+commands and transcript reads then raise `RuntimeError`.
+Because the transcript is Egglog source, explicit callable, sort, variable,
+ruleset, and `let` names must also be unambiguous Egglog symbols. Names that are
+valid only through the direct AST API are rejected before executing the saved
+command; direct e-graphs continue to accept them.
 
 ## Builtin Types
 
-The builtin types of Unit, String, Int, Map, and Rational are all exposed as Python classes.
+Builtin sorts including `Unit`, `String`, `i64`, `f64`, `BigInt`, `BigRat`,
+`Map`, `Set`, and `Vec` are exposed as Python classes.
 
 These can be imported from `egglog` can be instantiated using the class constructor from the equivalent Python type. Many of the functions on them are mapped to Python operators. For example, the `>>` operator is mapped to `__rshift__` so it can be used as `a >> b` in Python.
 
@@ -41,6 +52,18 @@ i64(10) + 2
 BigRat(1, 2) / BigRat(2, 1)
 ```
 
+The floating-point sort also exposes the backend's `exp()`, `log()`, `sqrt()`,
+and `is_finite()` primitives. `BigRat.to_i64()` is partial: it is defined only
+when the rational value is an integer that fits in `i64`. As with other partial
+primitives, undefined use in a rule fact skips that match, while undefined use
+in an action is an error.
+
+The experimental `Rational` sort accepts `fractions.Fraction` and integer
+inputs through the `RationalLike` type. Those values work in arithmetic,
+powers, `min`/`max`, and comparisons, including reflected operations such as
+`1 - Rational(1, 2)`. Comparisons return a `Unit` fact rather than a Python
+`bool`.
+
 ### `!=` Operator
 
 The `!=` function in egglog works on any two types with the same sort. In Python, this is mapped to the `ne` function:
@@ -62,7 +85,9 @@ class Math(Expr):
     pass
 ```
 
-By default, the egg sort name is generated from the Python class name. You can override this if you wish with the `egg_sort` keyword argument:
+By default, the Egglog sort name is generated from the module-qualified Python
+class name and made safe for Egglog source. You can override it with the
+`egg_sort` keyword argument:
 
 ```{code-cell} python
 class Math(Expr, egg_sort="Math2"):
@@ -85,6 +110,40 @@ Since the generic types in the `Map` sort as specified with the `Generic` class,
 
 This doesn't require any custom type analysis on our part, only using Python's built in annotations with generic types.
 
+### Generic container operations
+
+`Pair[L, R]` and `Maybe[T]` expose Egglog's generic product and optional-value
+patterns in Python. `catch(lambda: expression)` converts an undefined partial
+primitive call, such as a missing map lookup, into `Maybe.none()` instead of
+failing the surrounding expression.
+
+```{code-cell} python
+pair = Pair(i64(1), String("one"))
+pair.left, pair.right
+
+present = Maybe[i64].some(1)
+missing = catch(lambda: Map[i64, String].empty()[1])
+present, missing
+```
+
+Maps have a general `map_fold_kv` primitive. Derived operations can be written
+as ordinary expressions at their use sites. Give the fold an explicitly typed
+initial value when its result is another container:
+
+```{code-cell} python
+numbers = Map[i64, i64].empty().insert(1, 10).insert(2, 20)
+map_fold_kv(
+    lambda result, key, value: result.insert(key, value + 1),
+    Map[i64, i64].empty(),
+    numbers,
+)
+```
+
+Map folding uses opaque, e-graph-local `Value` order, not a semantic ordering
+promised for arbitrary e-class keys. Prefer order-independent callbacks. An
+undefined callback makes the fold undefined; use `catch` in the callback when
+undefined values should instead select a fallback expression.
+
 ## Declaring Functions
 
 In egglog, the most general way to declare a function is with the `(function ...)` command. In Python, we can use the `@function` decorator on a function with no body. The arg and return types are inferred from the function signature:
@@ -98,15 +157,19 @@ def fib(n: i64Like) -> i64:
 
 Note that instead of using `i64` as the argument type, we used `i64Like` which is `i64 | int`. This allows us statically to declare that this function can take integers as well which will be upcasted to `i64` automatically.
 
-The `function` decorator supports a number of options as well, which can be passed as keyword arguments, that correspond to the options in the egglog command:
+The `function` decorator also accepts keyword arguments that map to backend features. Which ones are valid depends on how
+the callable lowers, as described in [Functions vs Constructors](#functions-vs-constructors):
 
-- `egg_fn`: The name of the function in egglog. By default, this is the same as the Python function name.
-- `cost`: The cost of the function. By default, this is 1.
-- `merge`: A function to merge the results of the function. This must be a function that takes two arguments of the return type, the old and the new, and returns a single value of the return type.
+- `egg_fn`: The name of the function in Egglog. By default, this is generated
+  from the module-qualified Python function name and made safe for Egglog
+  source.
+- `merge`: A function to merge the results of function-style declarations. This must take the old and new return values and
+  return a single value of the same type.
+- `cost`: The extraction cost for constructor-style declarations.
 
 ```{code-cell} python
-# egg: (function foo () i64 :cost 10 :merge (max old new))
-@function(egg_fn="foo", cost=10, merge=lambda old, new: old.max(new))
+# egg: (function foo () i64 :merge (max old new))
+@function(egg_fn="foo", merge=lambda old, new: old.max(new))
 def my_foo() -> i64:
     pass
 ```
@@ -115,20 +178,66 @@ The static types on the decorator preserve the type of the underlying function, 
 
 ### Functions vs Constructors
 
-Egglog has changed how it handles functions, seperating them into two seperate commands:
+The Python bindings follow the backend split in egglog:
 
-- `function` which can include a `merge` expression.
-- `constructor` which can include a cost and requires the result to be an "eqsort" aka a non builtin type.
+- non-`Unit` primitive-returning callables use function-style lowering
+- bodyless `Unit`-returning callables use relation-style lowering
+- eqsort-returning callables use constructor-style lowering
 
-Since this was added after the Python API was first created, we added support to automatically choose between the two based on the return type of the function and whether a merge function is provided. If the return type is a builtin type, it will be a `function`, otherwise it will be a `constructor`, unless it has a merge function
-provided then it will always be a `function`.
+That is not a Python-only policy choice. It comes from which backend features exist on each command:
+
+- function-style declarations support `merge`
+- constructor-style declarations support `cost` and `unextractable`
+- `subsume` only applies to rewrite-backed bodies, so it only makes sense with an explicit `ruleset`
+
+Python automatically infers which backend lowering to use from the callable shape. In practice, Python declarations can
+lower to a `function`, a `constructor`, or an eager `primitive` depending on the return kind and whether a body/default
+is present.
+
+For bodies and defaults, the canonical lowering mapping is:
+
+| Python shape | Lowering |
+| --- | --- |
+| non-`Unit` primitive return, no body | lower to `function` |
+| `Unit` return, no body | lower to `relation` |
+| primitive return, body | lower to eager `primitive` |
+| eqsort return, no body, no `merge` | lower to `constructor` |
+| eqsort return, no body, with `merge` | lower to `function` |
+| eqsort return, body, no `ruleset` | lower to eager `primitive` |
+| eqsort return, body, explicit `ruleset` | lower to `constructor` plus rewrite-backed body |
+
+Constants and class-variable defaults are just zero-arg bodies/defaults, so they follow the same split based on their
+declared return type:
+
+- no-default constants lower like zero-arg declarations, so primitive-returning constants lower as functions, while
+  eqsort-returning constants lower as constructors unless `merge` forces function-style lowering
+- eqsort-returning defaults lower eagerly without a `ruleset`, and lower to rewrite-backed defaults with an explicit `ruleset`
+- primitive-returning defaults lower eagerly, and cannot use an explicit `ruleset`
+
+Options follow that same backend split:
+
+- no-body function-style declarations may use `merge`
+- builtin declarations are primitive/function-style only
+- constructor-style declarations may use `cost` and `unextractable`
+- `subsume` is only valid when an eqsort-returning body is lowered through an explicit `ruleset`
+- `egg_fn` and mutating arguments are supported in every case
+- direct top-level `@function(ruleset=...)` declarations require a body
+- `constant(..., ruleset=...)` declarations require an eqsort-returning default
+- `constant(..., merge=...)` declarations must not provide a default
+- class-level `ruleset=` is still valid shorthand for attaching rewrite-backed eqsort method and class-variable defaults
+
+For the Python ergonomics of attaching rewrite-backed bodies/defaults to an explicit `ruleset`, see
+[Python Integration](python-integration.md#default-replacements).
 
 ### Datatype functions
 
 In egglog, the `(datatype ...)` command can also be used to declare functions. All of the functions declared in this block return the type of the declared datatype. Similarly, in Python, any methods of an `Expr` will be registered automatically. These
 can be either instance methods (including any supported `__` method), class methods, or the `__init__` method. The return type of these functions is inferred from the return type of the function. Additionally, any supported keyword argument for the `@function` decorator can be used here as well, by using the `@method` decorator to add values.
 
-Note that by default, the egg name for any method is the Python class name combined with the method name. This allows us to define two classes with the same method name, with different signatures, that map to different egglog functions.
+By default, a method's Egglog name is generated from its module-qualified
+Python class name and method name, then made safe for Egglog source. This lets
+classes define methods with the same Python name and different signatures
+without mapping them to the same Egglog function.
 
 ```{code-cell} python
 # egg:
@@ -286,13 +395,13 @@ You can also set the cost of individual values, like the egglog experimental fea
 egraph.register(set_cost(fib(0), 1))
 ```
 
-This will be taken into account when extracting. Any value that can be converted to an `i64` is supported as a cost,
-so dynamic costs can be created in rules.
+This will be taken into account when extracting. Any value that can be
+converted to an `i64` is supported, so dynamic costs can be created in rules;
+the resulting cost must be nonnegative.
 
-It does this by creating a new table for each function you set the cost for that maps the arguments to an i64.
-
-_Note: Unlike in egglog, where you have to declare which functions support custom costs, in Python all functions
-are automatically registered to create a custom cost table when they are constructed_
+_Note: Unlike in Egglog source, Python does not require a separate declaration
+that a callable supports custom costs; calling `set_cost` enables them
+automatically._
 
 You can also get the cost of a function with `get_cost`, which will return an `i64` if one has already been set.
 
@@ -313,6 +422,19 @@ egraph.register(
     ).then(set_(fib(x + 2)).to(f0 + f1))
 )
 ```
+
+Rules use semi-naive evaluation by default. A rule whose higher-order callback
+must read tables populated during the same run can opt into naive evaluation
+with `rule(..., eval_mode="naive")`. The third mode,
+`eval_mode="unsafe-seminaive"`, skips semi-naive validation and should only be
+used when the rule is known to be valid under that evaluation strategy.
+
+Egglog normally decomposes rules before execution. `EGraph` defaults to
+`no_decomp=False`; pass `no_decomp=True` to disable decomposition for
+subsequently registered rules, and use `no_decomp()` or
+`set_no_decomp(...)` to inspect or change that setting. For a single rule,
+pass `no_decomp=True` to `rule(...)` instead. This is an advanced execution
+control.
 
 ### Variables
 
@@ -561,6 +683,22 @@ scheduler outside `* 10` lets its `times_banned` counters accumulate across all
 ten runs. Placing `bo.scope(...)` inside `* 10` creates a fresh scheduler each
 time, so every iteration starts with the initial `match_limit` and `ban_length`.
 
+The scheduler bindings above are local to one call to `EGraph.run`. To carry a
+scheduler's ban state across separate calls on the same e-graph, mark it as
+persistent:
+
+```{code-cell} python
+bo = back_off(match_limit=10).persistent()
+step_egraph.run(run(step_right, scheduler=bo))
+step_egraph.run(run(step_right, scheduler=bo))
+```
+
+The scheduler is registered once on that e-graph and reused by both calls. A
+persistent scheduler has its own identity, so deriving it from another
+scheduler configuration does not alias that configuration's local state.
+High-level `EGraph.saturate()` also waits for `RunReport.can_stop`, so a
+no-change round does not discard work deferred by a persistent scheduler.
+
 ## Check
 
 The `(check ...)` command to verify that some facts are true, can be translated to Python with the `egraph.check` function:
@@ -607,9 +745,7 @@ egraph.register(
 # (extract y :variants 2)
 y = egraph.let("y", Math(6) + Math(2) * Math.var("x"))
 egraph.run(10)
-# TODO: For some reason this is extracting temp vars
-# egraph.extract_multiple(y, 2)
-egraph
+egraph.extract_multiple(y, 2)
 ```
 
 ## Push/Pop
@@ -633,7 +769,8 @@ egraph.check_fail(eq(Math(0)).to(Math(1)))
 ## Function Sizes
 
 The `(print-size <function name>?)` command is translated into either `egraph.function_size(fn)` to get the number of
-rows of one function or `egraph.all_function_sizes()` to get a list of all the function sizes:
+rows in one table-backed callable or `egraph.all_function_sizes()` to list the sizes of all registered function tables.
+Relations, constructors, bodyless functions, and bodyless constants have tables; eager and builtin primitives do not:
 
 ```{code-cell} python
 # (function-size Math)
@@ -656,7 +793,8 @@ egraph.stats()
 
 ## Function Values
 
-The `print-function` command is translated into `egraph.function_values(fn, [length]?)` to get the values of a specific function. Note that the function provided must either return a primitive or be created with a merge function.
+The `print-function` command is translated into `egraph.function_values(fn, [length]?)` to get the rows of a
+table-backed callable. As with `function_size`, eager and builtin primitives cannot be inspected this way.
 
 ```{code-cell} python
 # (print-function fib 3)

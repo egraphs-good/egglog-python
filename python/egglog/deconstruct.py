@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING, TypeVar, overload
+from typing import TYPE_CHECKING, TypeVar, cast, overload
 
 import cloudpickle
 from typing_extensions import TypeVarTuple, Unpack
@@ -86,9 +86,9 @@ def get_constant_name(x: BaseExpr) -> Ident | None:
     Check if the expression is a constant and return its name.
     If it is not a constant, return None.
     """
-    if not isinstance(x, RuntimeExpr):
+    if not isinstance(cast("object", x), RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    match x.__egg_typed_expr__.expr:
+    match cast("RuntimeExpr", x).__egg_typed_expr__.expr:
         case CallDecl(ConstantRef(ident)):
             return ident
     return None
@@ -99,9 +99,9 @@ def get_let_name(x: BaseExpr) -> str | None:
     Check if the expression is a `let` expression and return the name of the variable.
     If it is not a `let` expression, return None.
     """
-    if not isinstance(x, RuntimeExpr):
+    if not isinstance(cast("object", x), RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    match x.__egg_typed_expr__.expr:
+    match cast("RuntimeExpr", x).__egg_typed_expr__.expr:
         case LetRefDecl(name):
             return name
     return None
@@ -112,9 +112,9 @@ def get_var_name(x: BaseExpr) -> str | None:
     Check if the expression is a variable and return its name.
     If it is not a variable, return None.
     """
-    if not isinstance(x, RuntimeExpr):
+    if not isinstance(cast("object", x), RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    match x.__egg_typed_expr__.expr:
+    match cast("RuntimeExpr", x).__egg_typed_expr__.expr:
         case UnboundVarDecl(name, _egg_name):
             return name
     return None
@@ -124,17 +124,18 @@ def get_callable_fn(x: T) -> Callable[..., T] | T | None:
     """
     Gets the function of an expression, or if it's a constant or classvar, return that.
     """
-    if not isinstance(x, RuntimeExpr):
+    if not isinstance(cast("object", x), RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    match x.__egg_typed_expr__.expr:
+    runtime_x = cast("RuntimeExpr", x)
+    match runtime_x.__egg_typed_expr__.expr:
         case CallDecl() as call:
-            fn, _ = _deconstruct_call_decl(x.__egg_decls_thunk__, call)
+            fn, _ = _deconstruct_call_decl(runtime_x.__egg_decls_thunk__, call)
             return fn
     return None
 
 
 @overload
-def get_callable_args(x: T, fn: None = ...) -> tuple[BaseExpr, ...]: ...
+def get_callable_args(x: T, fn: None = ...) -> tuple[BaseExpr, ...] | None: ...
 
 
 @overload
@@ -149,27 +150,30 @@ def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T] | None = None) -> tupl
 
     Note that recursively calling the arguments is the safe way to walk the expression tree.
     """
-    if not isinstance(x, RuntimeExpr):
+    if not isinstance(cast("object", x), RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    match x.__egg_typed_expr__.expr:
+    runtime_x = cast("RuntimeExpr", x)
+    match runtime_x.__egg_typed_expr__.expr:
         case CallDecl() as call:
-            actual_fn, args = _deconstruct_call_decl(x.__egg_decls_thunk__, call)
+            actual_fn, args = _deconstruct_call_decl(runtime_x.__egg_decls_thunk__, call)
             if fn is None:
-                return args
+                return cast("tuple[*TS]", args)
             # Compare functions and classes without considering bound type parameters, so that you can pass
             # in a binding like Vec[i64] and match Vec[i64](...) or Vec(...) calls.
-            if (
-                isinstance(actual_fn, RuntimeFunction)
-                and isinstance(fn, RuntimeFunction)
-                and actual_fn.__egg_ref__ == fn.__egg_ref__
-            ):
-                return args
-            if (
-                isinstance(actual_fn, RuntimeClass)
-                and isinstance(fn, RuntimeClass)
-                and actual_fn.__egg_tp__.ident == fn.__egg_tp__.ident
-            ):
-                return args
+            if isinstance(cast("object", actual_fn), RuntimeFunction):
+                runtime_actual_fn = cast("RuntimeFunction", actual_fn)
+                if (
+                    isinstance(cast("object", fn), RuntimeFunction)
+                    and runtime_actual_fn.__egg_ref__ == cast("RuntimeFunction", fn).__egg_ref__
+                ):
+                    return cast("tuple[*TS]", args)
+            if isinstance(cast("object", actual_fn), RuntimeClass):
+                runtime_actual_cls = cast("RuntimeClass", actual_fn)
+                if (
+                    isinstance(cast("object", fn), RuntimeClass)
+                    and runtime_actual_cls.__egg_tp__.ident == cast("RuntimeClass", fn).__egg_tp__.ident
+                ):
+                    return cast("tuple[*TS]", args)
     return None
 
 

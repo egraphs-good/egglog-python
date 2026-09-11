@@ -30,16 +30,6 @@ fn shutdown_tracing(py: Python<'_>) -> PyResult<()> {
 /// Bindings for egglog rust library
 #[pymodule]
 fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Configure Rayon thread pool from env var, defaulting to 1 if unset/invalid.
-    let num_threads = std::env::var("RAYON_NUM_THREADS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(1);
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(num_threads)
-        .build_global()
-        .unwrap();
-
     pyo3_log::init();
 
     m.add_class::<crate::serialize::SerializedEGraph>()?;
@@ -48,14 +38,21 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::error::EggSmolError>()?;
     m.add_class::<crate::termdag::TermDag>()?;
     m.add_class::<crate::conversions::UserDefinedCommandOutput>()?;
+    m.add_class::<crate::conversions::MultiExtractOutput>()?;
     m.add_class::<crate::conversions::Function>()?;
     m.add_class::<crate::extract::Extractor>()?;
     m.add_class::<crate::extract::CostModel>()?;
+    m.add_class::<crate::extract::DagCostModel>()?;
     m.add_class::<crate::freeze::FrozenRow>()?;
     m.add_class::<crate::freeze::FrozenFunction>()?;
     m.add_class::<crate::freeze::FrozenEGraph>()?;
+    m.add_class::<crate::conversions::SrcFile>()?;
     m.add_function(wrap_pyfunction!(setup_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(shutdown_tracing, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::extract::extract_best_with_dag_cost_model,
+        m
+    )?)?;
     crate::conversions::add_structs_to_module(m)?;
     crate::conversions::add_enums_to_module(m)?;
 

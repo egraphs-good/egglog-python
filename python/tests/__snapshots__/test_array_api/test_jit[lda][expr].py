@@ -33,7 +33,9 @@ _NDArray_8 = concat(TupleNDArray(Vec(_NDArray_5 - _NDArray_4[_IndexKey_1], _NDAr
 _NDArray_9 = square(_NDArray_8 - expand_dims(sum(_NDArray_8, OptionalIntOrTuple.int(Int(0))) / NDArray(RecursiveValue(Value.from_int(_NDArray_8.shape[Int(0)])))))
 _NDArray_10 = sqrt(sum(_NDArray_9, OptionalIntOrTuple.int(Int(0))) / NDArray(RecursiveValue(Value.from_int(_NDArray_9.shape[Int(0)]))))
 _NDArray_11 = copy(_NDArray_10)
-_NDArray_11[IndexKey.ndarray(_NDArray_10 == NDArray(RecursiveValue(Value.from_int(Int(0)))))] = NDArray(RecursiveValue(Value.from_int(Int(150)) / Value.from_int(Int(150))))
+_NDArray_11[IndexKey.ndarray(_NDArray_10 == NDArray(RecursiveValue(Value.from_int(Int(0)))))] = NDArray(
+    RecursiveValue(Value.from_float(Float.rational(BigRat(BigInt.from_string("1"), BigInt.from_string("1")))))
+)
 _TupleNDArray_1 = svd_(
     sqrt(
         asarray(

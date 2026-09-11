@@ -2,7 +2,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar, final
+from typing import Any, Generic, Literal, Protocol, Self, TypeAlias, TypeVar, final
 
 __all__ = [
     "ActionCommand",
@@ -14,7 +14,9 @@ __all__ = [
     "Change",
     "Check",
     "Constructor",
+    "ContainerRebuildSpec",
     "CostModel",
+    "DagCostModel",
     "Datatype",
     "Datatypes",
     "DefaultPrintFunctionMode",
@@ -45,6 +47,8 @@ __all__ = [
     "IterationReport",
     "Let",
     "Lit",
+    "MultiExtractOutput",
+    "Naive",
     "NewSort",
     "Output",
     "OverallStatistics",
@@ -58,6 +62,7 @@ __all__ = [
     "PrintFunctionSize",
     "PrintOverallStatistics",
     "PrintSize",
+    "ProofConstructorNames",
     "Prove",
     "ProveExists",
     "ProveExistsOutput",
@@ -79,6 +84,7 @@ __all__ = [
     "Saturate",
     "Scan",
     "Schema",
+    "Seminaive",
     "Sequence",
     "SerializedEGraph",
     "Set",
@@ -97,6 +103,7 @@ __all__ = [
     "TimeOnly",
     "Union",
     "Unit",
+    "UnsafeSeminaive",
     "UnstableCombinedRuleset",
     "UserDefined",
     "UserDefinedCommandOutput",
@@ -105,6 +112,7 @@ __all__ = [
     "Var",
     "Variant",
     "WithPlan",
+    "extract_best_with_dag_cost_model",
     "setup_tracing",
     "shutdown_tracing",
 ]
@@ -128,13 +136,31 @@ class SerializedEGraph:
 @final
 class EGraph:
     def __new__(
-        cls, *, fact_directory: str | Path | None = None, seminaive: bool = True, record: bool = False
+        cls,
+        *,
+        fact_directory: str | Path | None = None,
+        seminaive: bool = True,
+        record: bool = False,
+        num_threads: int = 1,
+        no_decomp: bool = False,
     ) -> EGraph: ...
     def parse_program(self, __input: str, /, filename: str | None = None) -> list[_Command]: ...
-    def commands(self) -> str | None: ...
+    def parse_and_run_program(
+        self,
+        __input: str,
+        /,
+        filename: str | None = None,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
+    ) -> list[_CommandOutput]: ...
     def run_program(
         self, *commands: _Command, traceparent: str | None = None, tracestate: str | None = None
     ) -> list[_CommandOutput]: ...
+    def commands(self) -> str | None: ...
+    def num_threads(self) -> int: ...
+    def set_num_threads(self, num_threads: int) -> None: ...
+    def no_decomp(self) -> bool: ...
+    def set_no_decomp(self, no_decomp: bool) -> None: ...
     def serialize(
         self,
         root_eclasses: list[_Expr],
@@ -147,6 +173,8 @@ class EGraph:
     ) -> SerializedEGraph: ...
     def set_report_level(self, level: _ReportLevel) -> None: ...
     def lookup_function(self, name: str, key: list[Value]) -> Value | None: ...
+    # `value` must come from this EGraph's `eval_expr` and use the returned runtime sort.
+    def extract_value(self, value: Value, sort: str) -> tuple[TermDag, int, int]: ...
     def eval_expr(
         self, expr: _Expr, *, traceparent: str | None = None, tracestate: str | None = None
     ) -> tuple[str, Value]: ...
@@ -169,16 +197,17 @@ class EGraph:
 @final
 class Value:
     def __hash__(self) -> int: ...
-    def __eq__(self, value: object) -> bool: ...
-    def __lt__(self, other: object) -> bool: ...
-    def __le__(self, other: object) -> bool: ...
-    def __gt__(self, other: object) -> bool: ...
-    def __ge__(self, other: object) -> bool: ...
+    def __eq__(self, value: object, /) -> bool: ...
+    def __lt__(self, other: object, /) -> bool: ...
+    def __le__(self, other: object, /) -> bool: ...
+    def __gt__(self, other: object, /) -> bool: ...
+    def __ge__(self, other: object, /) -> bool: ...
 
 @final
 class EggSmolError(Exception):
     context: str
-    def __new__(cls, context: str) -> EggSmolError: ...
+    replayable_by_fail: bool
+    def __new__(cls, context: str, replayable_by_fail: bool = ...) -> EggSmolError: ...
     def __init__(self, /, *args: Any, **kwargs: Any) -> None: ...
 
 ##
@@ -395,7 +424,20 @@ class Rule:
     body: list[_Fact]
     name: str
     ruleset: str
-    def __new__(cls, span: _Span, head: list[_Action], body: list[_Fact], name: str, ruleset: str) -> Rule: ...
+    eval_mode: _RuleEvalMode
+    no_decomp: bool
+    include_subsumed: bool
+    def __new__(
+        cls,
+        span: _Span,
+        head: list[_Action],
+        body: list[_Fact],
+        name: str,
+        ruleset: str,
+        eval_mode: _RuleEvalMode = ...,
+        no_decomp: bool = ...,
+        include_subsumed: bool = ...,
+    ) -> Rule: ...
 
 @final
 class Rewrite:
@@ -422,7 +464,13 @@ class IdentSort:
     def __new__(cls, ident: str, sort: str) -> IdentSort: ...
 
 @final
-class UserDefinedCommandOutput: ...
+class MultiExtractOutput:
+    termdag: TermDag
+    terms: list[list[_TermId]]
+
+@final
+class UserDefinedCommandOutput:
+    def as_multi_extract(self) -> MultiExtractOutput | None: ...
 
 @final
 class SingleScan:
@@ -523,6 +571,7 @@ class RunReport:
     search_and_apply_time_per_ruleset: dict[str, timedelta]
     merge_time_per_ruleset: dict[str, timedelta]
     rebuild_time_per_ruleset: dict[str, timedelta]
+    can_stop: bool
 
     def __new__(
         cls,
@@ -533,6 +582,7 @@ class RunReport:
         search_and_apply_time_per_ruleset: dict[str, timedelta],
         merge_time_per_ruleset: dict[str, timedelta],
         rebuild_time_per_ruleset: dict[str, timedelta],
+        can_stop: bool = ...,
     ) -> RunReport: ...
 
 ##
@@ -616,6 +666,17 @@ class CSVPrintFunctionMode: ...
 
 _PrintFunctionMode: TypeAlias = DefaultPrintFunctionMode | CSVPrintFunctionMode
 
+@final
+class Seminaive: ...
+
+@final
+class Naive: ...
+
+@final
+class UnsafeSeminaive: ...
+
+_RuleEvalMode: TypeAlias = Seminaive | Naive | UnsafeSeminaive
+
 ##
 # Schedules
 ##
@@ -682,11 +743,40 @@ class Datatypes:
     def __new__(cls, span: _Span, datatypes: list[tuple[_Span, str, _Subdatatypes]]) -> Datatypes: ...
 
 @final
+class ContainerRebuildSpec:
+    internal_rebuild_prim: str
+    internal_rebuild_proof_prim: str | None
+    def __new__(
+        cls, internal_rebuild_prim: str, internal_rebuild_proof_prim: str | None = ...
+    ) -> ContainerRebuildSpec: ...
+
+@final
+class ProofConstructorNames:
+    congr: str
+    trans: str
+    sym: str
+    normalize: str
+    def __new__(cls, congr: str, trans: str, sym: str, normalize: str) -> ProofConstructorNames: ...
+
+@final
 class Sort:
     span: _Span
     name: str
     presort_and_args: tuple[str, list[_Expr]] | None
-    def __new__(cls, span: _Span, name: str, presort_and_args: tuple[str, list[_Expr]] | None) -> Sort: ...
+    uf: tuple[str, str | None] | None
+    proof_func: str | None
+    container_rebuild: ContainerRebuildSpec | None
+    proof_constructors: ProofConstructorNames | None
+    def __new__(
+        cls,
+        span: _Span,
+        name: str,
+        presort_and_args: tuple[str, list[_Expr]] | None,
+        uf: tuple[str, str | None] | None = ...,
+        proof_func: str | None = ...,
+        container_rebuild: ContainerRebuildSpec | None = ...,
+        proof_constructors: ProofConstructorNames | None = ...,
+    ) -> Sort: ...
 
 @final
 class FunctionCommand:
@@ -694,7 +784,21 @@ class FunctionCommand:
     name: str
     schema: Schema
     merge: _Expr | None
-    def __new__(cls, span: _Span, name: str, schema: Schema, merge: _Expr | None) -> FunctionCommand: ...
+    term_constructor: str | None
+    unextractable: bool
+    hidden: bool
+    let_binding: bool
+    def __new__(
+        cls,
+        span: _Span,
+        name: str,
+        schema: Schema,
+        merge: _Expr | None,
+        term_constructor: str | None = ...,
+        unextractable: bool = ...,
+        hidden: bool = ...,
+        let_binding: bool = ...,
+    ) -> FunctionCommand: ...
 
 @final
 class AddRuleset:
@@ -826,7 +930,18 @@ class Constructor:
     schema: Schema
     cost: int | None
     unextractable: bool
-    def __new__(cls, span: _Span, name: str, schema: Schema, cost: int | None, unextractable: bool) -> Constructor: ...
+    hidden: bool
+    let_binding: bool
+    def __new__(
+        cls,
+        span: _Span,
+        name: str,
+        schema: Schema,
+        cost: int | None,
+        unextractable: bool,
+        hidden: bool = ...,
+        let_binding: bool = ...,
+    ) -> Constructor: ...
 
 @final
 class PrintOverallStatistics:
@@ -899,12 +1014,17 @@ class TermDag:
 # Extraction
 ##
 class _Cost(Protocol):
-    def __lt__(self, other: _Cost) -> bool: ...
-    def __le__(self, other: _Cost) -> bool: ...
-    def __gt__(self, other: _Cost) -> bool: ...
-    def __ge__(self, other: _Cost) -> bool: ...
+    def __lt__(self, other: Self) -> bool: ...
+    def __le__(self, other: Self) -> bool: ...
+    def __gt__(self, other: Self) -> bool: ...
+    def __ge__(self, other: Self) -> bool: ...
 
 _COST = TypeVar("_COST", bound=_Cost)
+
+class _DagCost(_Cost, Protocol):
+    def __add__(self, other: Self) -> Self: ...
+
+_DAG_COST = TypeVar("_DAG_COST", bound=_DagCost)
 
 _ENODE_COST = TypeVar("_ENODE_COST")
 
@@ -919,6 +1039,27 @@ class CostModel(Generic[_COST, _ENODE_COST]):
     ) -> CostModel[_COST, _ENODE_COST]: ...
 
 @final
+class DagCostModel(Generic[_DAG_COST]):
+    def __new__(
+        cls,
+        identity: _DAG_COST,
+        enode_cost: Callable[[str, list[Value]], _DAG_COST],
+        container_cost: Callable[[str, Value], _DAG_COST],
+        base_value_cost: Callable[[str, Value], _DAG_COST],
+    ) -> DagCostModel[_DAG_COST]: ...
+
+# Each value must come from this EGraph's `eval_expr` and use the returned runtime sort.
+def extract_best_with_dag_cost_model(
+    egraph: EGraph,
+    roots: list[tuple[str, Value]],
+    cost_model: DagCostModel[_DAG_COST],
+    *,
+    extractor: Literal["tree", "greedy-dag"] = "tree",
+    traceparent: str | None = None,
+    tracestate: str | None = None,
+) -> tuple[TermDag, list[tuple[_DAG_COST, _TermId] | None]]: ...
+
+@final
 class Extractor(Generic[_COST]):
     def __new__(
         cls,
@@ -929,6 +1070,7 @@ class Extractor(Generic[_COST]):
         traceparent: str | None = None,
         tracestate: str | None = None,
     ) -> Extractor[_COST]: ...
+    # `value` must come from this EGraph's `eval_expr` and use the returned runtime sort.
     def extract_best(
         self,
         egraph: EGraph,
@@ -939,6 +1081,7 @@ class Extractor(Generic[_COST]):
         traceparent: str | None = None,
         tracestate: str | None = None,
     ) -> tuple[_COST, _TermId]: ...
+    # `value` must come from this EGraph's `eval_expr` and use the returned runtime sort.
     def extract_variants(
         self,
         egraph: EGraph,
