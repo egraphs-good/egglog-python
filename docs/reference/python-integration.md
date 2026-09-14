@@ -85,6 +85,7 @@ class MyExpr(Expr):
                 return value
         raise ExprValueError(self, "MyExpr")
 
+
 match MyExpr("hello"):
     case MyExpr(value):
         print(f"Matched MyExpr with value: {value}")
@@ -602,7 +603,7 @@ egraph
 This is equivalent to adding the rewrite rules to the e-graph directly, like this, but just more succinct:
 
 ```python
-x  = var("x", Math)
+x = var("x", Math)
 egraph.register(rewrite(pi).to(math_float(3.14)))
 egraph.register(rewrite(square(x)).to(x * x))
 ```
