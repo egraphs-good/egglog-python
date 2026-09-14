@@ -1459,7 +1459,7 @@ converter(type(None), MultiAxisIndexKeyItem, lambda _: MultiAxisIndexKeyItem.NON
 converter(Int, MultiAxisIndexKeyItem, lambda i: MultiAxisIndexKeyItem.int(i))
 converter(Slice, MultiAxisIndexKeyItem, lambda s: MultiAxisIndexKeyItem.slice(s))
 
-MultiAxisIndexKeyItemLike: TypeAlias = MultiAxisIndexKeyItem | EllipsisType | None | IntLike | SliceLike
+MultiAxisIndexKeyItemLike: TypeAlias = MultiAxisIndexKeyItem | EllipsisType | IntLike | SliceLike | None
 
 
 class MultiAxisIndexKey(Expr, ruleset=array_api_ruleset):
@@ -2123,7 +2123,7 @@ class OptionalIntOrTuple(Expr, ruleset=array_api_ruleset):
     def tuple(cls, value: TupleIntLike) -> OptionalIntOrTuple: ...
 
 
-OptionalIntOrTupleLike: TypeAlias = OptionalIntOrTuple | None | IntLike | TupleIntLike
+OptionalIntOrTupleLike: TypeAlias = OptionalIntOrTuple | IntLike | TupleIntLike | None
 
 converter(type(None), OptionalIntOrTuple, lambda _: OptionalIntOrTuple.none)
 converter(Int, OptionalIntOrTuple, lambda v: OptionalIntOrTuple.int(v))
@@ -2379,7 +2379,8 @@ def vecdot(x1: NDArrayLike, x2: NDArrayLike) -> NDArray:
         x1.shape.drop_last(),
         x1.dtype,
         lambda idx: (
-            TupleInt.range(x1.shape.last())
+            TupleInt
+            .range(x1.shape.last())
             .map_value(lambda i: x1.index(idx.append(i)) * x2.index((i,)))
             .foldl_value(Value.__add__, Value.from_float(0))
         ),
@@ -2740,7 +2741,8 @@ def unravel_index(flat_index: IntLike, shape: TupleIntLike) -> TupleInt:
     shape = cast("TupleInt", shape)
 
     return (
-        shape.reverse()
+        shape
+        .reverse()
         .foldl_tuple_int(
             # Store remainder as last item in accumulator
             lambda acc, dim: acc.drop_last().append((r := acc.last()) % dim).append(r // dim),
@@ -2754,7 +2756,7 @@ def unravel_index(flat_index: IntLike, shape: TupleIntLike) -> TupleInt:
 array_api_combined_ruleset = array_api_ruleset
 array_api_schedule = (array_api_combined_ruleset + run()).saturate()
 
-_CURRENT_EGRAPH: None | EGraph = None
+_CURRENT_EGRAPH: EGraph | None = None
 
 
 @contextlib.contextmanager
