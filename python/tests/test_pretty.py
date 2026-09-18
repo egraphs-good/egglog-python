@@ -127,6 +127,7 @@ long_line = (
 r = ruleset(name="r")
 
 bo = back_off(ban_length=5)
+bo_persistent = back_off(ban_length=5).persistent()
 
 
 class BadRepr:
@@ -226,6 +227,12 @@ _A_2 + _A_3""",
     pytest.param(r + r, 'ruleset(name="r") + ruleset(name="r")', id="sequence"),
     pytest.param(seq(r, r, r), 'seq(ruleset(name="r"), ruleset(name="r"), ruleset(name="r"))', id="seq"),
     pytest.param(run(r, h()), 'run(ruleset(name="r"), h())', id="run"),
+    pytest.param(run(None, h()), "run(None, h())", id="default run with until"),
+    pytest.param(
+        run(None, h(), scheduler=bo),
+        "run(None, h(), scheduler=back_off(ban_length=5))",
+        id="default run with scheduler",
+    ),
     pytest.param(
         run(r, h(), scheduler=bo),
         'run(ruleset(name="r"), h(), scheduler=back_off(ban_length=5))',
@@ -236,6 +243,7 @@ _A_2 + _A_3""",
         '_scheduler_1 = back_off(ban_length=5)\n_scheduler_1.scope(run(ruleset(name="r"), scheduler=_scheduler_1))',
         id="scoped scheduler",
     ),
+    pytest.param(bo_persistent, "back_off(ban_length=5).persistent()", id="persistent scheduler"),
     # Functions
     pytest.param(f, "f", id="function"),
     pytest.param(A().method, "A().method", id="method"),
@@ -250,6 +258,30 @@ _A_2 + _A_3""",
 @pytest.mark.parametrize(("x", "s"), PARAMS)
 def test_str(x: RuntimeExpr, s: str) -> None:
     assert str(x) == s
+
+
+@pytest.mark.parametrize(
+    ("eval_mode", "option"),
+    [
+        ("seminaive", ""),
+        ("naive", ', eval_mode="naive"'),
+        ("unsafe-seminaive", ', eval_mode="unsafe-seminaive"'),
+    ],
+)
+def test_rule_eval_mode_pretty_round_trip(eval_mode: RuleEvalMode, option: str) -> None:
+    original = rule(rel(g()), name="mode rule", eval_mode=eval_mode).then(rel(h()))
+    rendered = f'rule(rel(g()), name="mode rule"{option}).then(rel(h()))'
+
+    assert str(original) == rendered
+    assert eval(rendered, globals()).decl == original.decl
+
+
+def test_rule_no_decomp_pretty_round_trip() -> None:
+    original = rule(rel(g()), name="no decomp rule", no_decomp=True).then(rel(h()))
+    rendered = 'rule(rel(g()), name="no decomp rule", no_decomp=True).then(rel(h()))'
+
+    assert str(original) == rendered
+    assert eval(rendered, globals()).decl == original.decl
 
 
 FREEZE_PARAMS = [
@@ -295,3 +327,39 @@ def test_frozen_egraph_str_nested_vec_constructor() -> None:
     assert isinstance(frozen.decl, EGraphDecl)
     assert "Value(" not in str(frozen)
     assert str(frozen) == "EGraph(Wrapper(Box(Vec(A())))).freeze()"
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        pytest.param(BigRat(2, 1), id="integer BigRat"),
+        pytest.param(BigRat(1, 2), id="fractional BigRat"),
+        pytest.param(Map[String, BigRat].empty().insert(String("x"), BigRat(1, 2)), id="Map"),
+        pytest.param(Maybe[String].some(String("value")), id="Maybe some"),
+        pytest.param(Maybe[String].none(), id="Maybe none"),
+        pytest.param(
+            Pair[Map[String, BigRat], Maybe[String]](
+                Map[String, BigRat].empty().insert(String("x"), BigRat(1, 2)),
+                Maybe[String].some(String("value")),
+            ),
+            id="Pair",
+        ),
+    ],
+)
+def test_extracted_typed_pretty_is_executable(expr: BaseExpr) -> None:
+    extracted = EGraph().extract(expr)
+
+    rebuilt = eval(str(extracted), globals())
+
+    check_eq(extracted, rebuilt)
+
+
+def test_frozen_typed_container_pretty_is_executable() -> None:
+    expr = Pair[Map[String, BigRat], Maybe[String]](
+        Map[String, BigRat].empty().insert(String("x"), BigRat(1, 2)), Maybe[String].some(String("value"))
+    )
+    frozen = EGraph(expr).freeze()
+
+    rebuilt = eval(str(frozen), globals())
+
+    assert str(rebuilt) == str(frozen)

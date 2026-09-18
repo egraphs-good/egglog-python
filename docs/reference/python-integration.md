@@ -250,6 +250,8 @@ Registering a conversion from A to B will also register all transitively reachab
 Math(2) + 30 + "x"
 ```
 
+When defining converters for a custom `Expr` sort, prefer registering conversions from egglog primitive sorts such as `i64`, `f64`, and `String` rather than directly from Python builtins like `int`, `float`, and `str`. The builtin promotions already handle those Python values transitively, so keeping the custom converters at the egglog-sort layer makes the promotion path clearer and usually leads to cleaner `...Like` aliases such as `Math | i64Like | f64Like | StringLike`.
+
 If you want to have this work with the static type checker, you can define your own `Union` type, which MUST include
 the `Expr` class as the first item in the union. For example, in this case you could then define:
 
@@ -343,9 +345,16 @@ if the need arises:
 
 ### "Preserved" methods
 
-You can use the `@method(preserve=True)` decorator to mark a method as "preserved", meaning that calling it will actually execute the body of the function and a corresponding egglog function will not be created,
+You can use the `@method(preserve=True)` decorator to mark a method as
+"preserved", meaning that calling it executes ordinary Python behavior and no
+corresponding egglog function is created.
 
-Normally, all methods defined on a egglog `Expr` will ignore their bodies and simply build an expression object based on the arguments.
+A bodyless method written with `...` builds an egglog call. A body-defined
+method is lowered eagerly, or as a rewrite when an eqsort method has an
+explicit ruleset, as described in the
+[function translation rules](egglog-translation.md#functions-vs-constructors).
+Use `preserve=True` when the method must instead return an ordinary Python
+value or perform ordinary Python behavior.
 
 However, there are times in Python when you need the return type of a method to be an instance of a particular Python type, and some similar acting expression won't cut it.
 
@@ -456,7 +465,7 @@ assert str(-1.0 + Int.var("x")) == "Float(-1.0) + Float.from_int(Int.var(\"x\"))
 
 ### Mutating arguments
 
-In order to support Python functions and methods which mutate their arguments, use the `mutates_first_arg` keyword argument on `@function` and the `mutates_self` keyword argument on `@method`. The runtime treats the mutated receiver as the return value of the egglog call, so the default rewrite points the call expression at the updated argument.
+In order to support Python functions and methods which mutate their arguments, use the `mutates_first_arg` keyword argument on `@function` and the `mutates_self` keyword argument on `@method`. The runtime treats the mutated receiver as the semantic return value of the egglog call. A body lowers eagerly unless it is attached to an explicit `ruleset`, in which case the updated expression becomes that callable's default rewrite.
 
 Inside the Python implementation you can call `__replace_expr__` on an `Expr` instance to swap out its underlying egglog expression in-place. This keeps any existing Python references in sync while still allowing the e-graph to reason about the mutated value. The same helper works for methods that run immediately with `@method(preserve=True)`.
 
@@ -489,18 +498,21 @@ mutate_egraph.register(rewrite(incr_i).to(i + Int(1)), x)
 mutate_egraph.run(10)
 mutate_egraph.check(eq(x).to(Int(10) + Int(1)))
 
-# incr with the rewrite could also be written like this:
+# The update can instead be defined as an eager body:
 @function(mutates_first_arg=True)
 def incr_other(x: Int) -> None:
     x.__replace_expr__(x + Int(1))
 x = Int(10)
 incr_other(x)
 mutate_egraph = EGraph()
-mutate_egraph.register(x)
-mutate_egraph.run(10)
-mutate_egraph.check(eq(x).to(Int(10) + Int(1)))
+incremented = mutate_egraph.let("incremented", x)
+mutate_egraph.check(eq(incremented).to(Int(10) + Int(1)))
 mutate_egraph
 ```
+
+The body executes eagerly, so it does not add a rewrite or require a `run()`.
+The `let` action registers the resulting e-class value before the read-only
+check. Use an explicit `ruleset=` when the body should remain a rewrite.
 
 Note that dunder methods such as `__setitem__` will automatically be marked as mutating their first argument.
 
@@ -549,11 +561,14 @@ We also support using normal python functions, either named or anonymous, as val
 ```{code-cell} python
 x = MathList.EMPTY.append(Math(1))
 added_two = x.map(lambda x: x + Math(2))
-check_eq(added_two, MathList.EMPTY.append(Math(1) + Math(2)), (math_list_ruleset + run()) * 10)
+check_eq(added_two, MathList.EMPTY.append(Math(1) + Math(2)), math_list_ruleset.saturate())
 ```
 
-Their definition will be added to the default rulset, unless they are defined in the body of a function themselves or
-in a rule function:
+Converting the callback to `Callable`/`UnstableFn` materializes its body as an
+eager anonymous primitive. It does not add a rewrite to the default ruleset or
+require a separate `run()` step. An enclosing declared function still follows
+the ordinary lowering rules; for example, an explicit `ruleset` makes this
+outer body rewrite-backed:
 
 ```{code-cell} python
 @function(ruleset=math_list_ruleset)
@@ -563,54 +578,23 @@ def map_add_two(x: MathList) -> MathList:
 check_eq(map_add_two(MathList.EMPTY.append(Math(1))), MathList.EMPTY.append(Math(1) + Math(2)), math_list_ruleset.saturate())
 ```
 
-Their name will just be the body of the function, so that two anonymous functions with the same body will be considered equal.
-
-```{code-cell} python
-added_two
-```
-
 ## Default Replacements
 
-When defining a function or a constant, you can also provide a default replacement value. This is useful when
-you might want both the original value and the replaced value in the e-graph, so that later rules could reference either.
+The full lowering matrix for functions, constructors, primitives, and defaults is documented in
+[Translation to/from egglog](egglog-translation.md#functions-vs-constructors). This section focuses on the
+Python-only ergonomics for the explicit-`ruleset` case: when you pass a `ruleset`, the body/default is added as
+a rewrite into that ruleset instead of being lowered eagerly.
 
-```{code-cell} python
-@function
-def math_float(f: f64Like) -> Math:
-    ...
+This is useful when you want the declared name and the replacement body to both remain available to later rewrite rules.
 
-
-# Can add a default replacement value for a constants
-pi = constant("pi", Math, math_float(3.14))
-
-
-# or for a function by providing a body
-@function
-def square(x: Math) -> Math:
-    return x * x
-
-# thse rewrites will be added to the e-graph under the default ruleset
-egraph = EGraph()
-egraph.register(pi)
-egraph.register(square(Math.var('x')))
-egraph.run(1)
-egraph.check(eq(pi).to(math_float(3.14)))
-egraph.check(eq(square(Math.var('x'))).to(Math.var('x') * Math.var('x')))
-egraph
-```
-
-This is equivalent to adding the rewrite rules to the e-graph directly, like this, but just more succinct:
-
-```python
-x  = var("x", Math)
-egraph.register(rewrite(pi).to(math_float(3.14)))
-egraph.register(rewrite(square(x)).to(x * x))
-```
-
-You can also specify a ruleset to add the rewrites to, by passing in the `ruleset` keyword argument:
+You can specify a ruleset for a default replacement by passing the `ruleset` keyword argument:
 
 ```{code-cell} python
 math_ruleset = ruleset()
+
+@function
+def math_float(value: f64Like) -> Math: ...
+
 
 e_constant = constant("e", Math, math_float(2.71), ruleset=math_ruleset)
 
@@ -626,9 +610,26 @@ egraph.check(eq(e_constant).to(math_float(2.71)))
 egraph.check(eq(cube(Math.var('x'))).to(Math.var('x') * Math.var('x') * Math.var('x')))
 ```
 
+This rewrite-backed path is only available for eqsort-returning bodies and defaults. Primitive-returning defaults lower
+eagerly and cannot use an explicit `ruleset`.
+
+When `subsume=True` is allowed for that callable shape, it applies on this rewrite-backed path as well.
+
+Constants without defaults can use merge functions because they lower as zero-argument function-style declarations:
+
+```{code-cell} python
+best_score = constant("best_score", i64, merge=lambda old, new: old.max(new))
+
+egraph = EGraph()
+egraph.register(set_(best_score).to(i64(1)), set_(best_score).to(i64(2)))
+egraph.check(eq(best_score).to(i64(2)))
+```
+
+Constants with eager or rewrite-backed defaults cannot also use `merge`.
+
 ### Default Replacement for Classes
 
-In classes, you can also provide a default replacement value for constants and methods, and an optional ruleset on the class constructor:
+In classes, a `ruleset=` on the class means default method and class-variable bodies are also added to that ruleset as rewrites:
 
 ```{code-cell} python
 other_math_ruleset = ruleset()
@@ -696,6 +697,10 @@ report = egraph.run(debug_rules)
 report.num_matches_per_rule
 ```
 
+`report.updated` records whether the run changed the database. The separate
+`report.can_stop` flag is true only when the run observed no changes and its
+scheduler has no deferred work that requires another iteration.
+
 ### `stats`
 
 Use {meth}`egglog.egraph.EGraph.stats` when you want cumulative counters for the
@@ -709,7 +714,8 @@ stats.num_matches_per_rule
 ### `function_values`
 
 Use {meth}`egglog.egraph.EGraph.function_values` to inspect the current rows in a
-function table:
+function table. This accepts relations, constructors, bodyless functions, and
+bodyless constants; eager and builtin primitives do not have tables to inspect:
 
 ```{code-cell} python
 egraph.function_values(score)
@@ -738,7 +744,8 @@ egraph.display()
 ### `saturate`
 
 Use {meth}`egglog.egraph.EGraph.saturate` to keep running until the schedule
-stops changing the graph while printing the extracted form after each step:
+reports no graph changes or deferred scheduler work, while printing the
+extracted form after each step:
 
 ```{code-cell} python
 egraph = EGraph()
@@ -753,25 +760,69 @@ Common pitfalls when authoring rules:
 - Ensure rules that subtract from lengths only fire when the length is proven
   positive.
 
-## Custom Cost Models
+## Extraction and Cost Models
 
-By default, when extracting from the e-graph, we use a simple cost model, that looks at the costs assigned to each
-function and any custom costs set with `set_cost`, and finds the lowest cost expression looking at the total tree size.
+{meth}`egglog.egraph.EGraph.extract` accepts `extractor="tree"` (the
+default) or `extractor="greedy-dag"`. Tree extraction charges each occurrence
+of a subexpression. Greedy-DAG extraction charges shared subexpressions once
+within the result; it is a heuristic rather than a globally optimal DAG
+extractor. The public `ExtractionMode` alias contains these two values.
+With `include_cost=True`, `extract` returns `(expression, cost)`; custom model
+costs are returned directly rather than through a wrapper object.
 
-Custom cost models are also supported, which can be passed into `extract` as the `cost_model` keyword argument. They
-are defined as functions followed the `CostModel` protocol, that take in an e-graph, an expression, and the costs of the children, and return the total cost of that expression. Costs don't have to be integers, they can be any type that supports comparison.
+### Dynamic Costs
 
-There are a few builtin cost models:
+Ordinary single-root tree extraction uses Egglog's default tree cost model.
+When no explicit `cost_model` is supplied, registering a row cost with
+`set_cost`, selecting greedy-DAG extraction, or using multi-root extraction or
+`keep_best` selects the experimental dynamic cost model. A row cost then
+overrides that node's marginal cost; otherwise the model falls back to costs
+declared on callables and then the backend default. An explicit `TreeCostModel`
+or `DagCostModel` takes precedence over those dynamic row costs.
+Dynamic row costs must be nonnegative.
 
-- `default_cost_model`: The default cost model, which uses integer costs and sums them up.
-- `greedy_dag_cost_model(inner_cost_model=default_cost_model)`: A cost model which uses a greedy DAG algorithm to find the lowest cost expression, allowing for shared sub-expressions. It takes in another cost model to use for the base costs of each expression.
+### Multiple Roots
 
-Note that when passed into your cost model, the expression won't be a full tree. Instead, only the top level call be present, and all of it's arguments will be opaque "value" expressions, representing e-classes in the e-graph. You can't do much with them except use them to construct other expression to pass into `egraph.lookup_function_value` to get the resulting value of a call with those arguments. The only exception is all builtin types, like ints, vecs, strings, etc. will be fully evaluated recursively, so they can be matched against.
+{meth}`egglog.egraph.EGraph.extract_multiple` returns up to `n` variants for
+one expression. Passing a non-empty sequence performs one extraction for all
+roots and returns one variant list per root in the same order:
 
-For example, here is a cost model that has a boolean cost if the value is even or not:
+```{code-block} python
+variants = egraph.extract_multiple(expr, 3, extractor="tree")
+variants_by_root = egraph.extract_multiple([expr1, expr2], 3, extractor="greedy-dag")
+```
+
+An inner list may be empty when its root has no extractable variant. The
+variant count must be positive, and the sequence form rejects an empty input.
+The roots share extraction preparation, but every root and variant is costed
+independently; sharing between separate roots does not reduce either cost. The
+sequence form uses dynamic costs; the single-expression form follows the
+ordinary `extract` selection described above. Custom Python cost models are
+supported only by single-root `extract`.
+
+### Custom Tree Cost Models
+
+A `TreeCostModel` is a callable that receives the e-graph, one expression
+node, and the total costs of its immediate children, then returns the total
+cost of that expression. Cost values may be any totally ordered type. The old
+`CostModel` name remains as a compatibility alias for this protocol.
+Models should normally return a cost no smaller than any child; non-monotone
+models are responsible for avoiding cycles in the extracted term.
+
+The expression passed to a custom model contains only its top-level call.
+Arguments representing e-classes are opaque value expressions, although
+builtin values such as numbers and containers are reconstructed recursively.
+Use {meth}`egglog.egraph.EGraph.lookup_function_value` when a model needs to
+inspect a table registered before extraction using those callback arguments
+directly. A same-e-graph lookup cannot evaluate a newly derived key while
+extraction is holding the graph read-only; such a lookup raises `ValueError`.
+Opaque user-sort values returned by a lookup belong to that e-graph and are
+rejected if passed to a different one.
+
+For example, this model uses a boolean cost for whether an `i64` is even:
 
 ```{code-cell} python
-def is_even_cost_model(egraph: EGraph, expr: Expr, children_costs: list[bool]) -> bool:
+def is_even_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[bool]) -> bool:
     from egglog import i64  # noqa: PLC0415
 
     match expr:
@@ -782,3 +833,60 @@ assert EGraph().extract(i64(10), include_cost=True, cost_model=is_even_cost_mode
 
 assert EGraph().extract(i64(5), include_cost=True, cost_model=is_even_cost_model) == (i64(5), False)
 ```
+
+A `TreeCostModel` can only be used with the tree extractor. Passing one with
+`extractor="greedy-dag"` raises `TypeError`, because a callback that returns
+total child costs does not expose the marginal costs needed to account for
+sharing.
+
+### Additive DAG Cost Models
+
+`DagCostModel(marginal_cost, identity)` is a frozen model that can be used with
+either extraction mode. Its callback returns the cost of the current node
+without its children or container elements. The backend combines those values
+with Python `+`.
+
+Cost values must be effectively immutable and totally ordered. Addition must
+be associative, commutative, and monotone, with `identity` as a two-sided
+identity. Under tree extraction the values are added once per occurrence;
+under greedy-DAG extraction they are added once per selected shared node.
+When using tree extraction, recursive e-classes must not contain a
+cost-improving cycle or cost computation may not terminate.
+
+```{code-block} python
+model = DagCostModel(
+    marginal_cost=lambda egraph, node: default_cost_model(egraph, node, []),
+    identity=0,
+)
+
+tree_result, tree_cost = egraph.extract(expr, include_cost=True, cost_model=model)
+dag_result, dag_cost = egraph.extract(
+    expr,
+    include_cost=True,
+    cost_model=model,
+    extractor="greedy-dag",
+)
+```
+
+### Keeping Only the Best Representatives
+
+{meth}`egglog.egraph.EGraph.keep_best` compacts table-backed callables using
+dynamic costs:
+
+```{code-block} python
+egraph.keep_best(target, other_target, extractor="greedy-dag")
+```
+
+Each target must be a constructor, relation, bodyless function, or bodyless
+constant with a backend table; eager and builtin primitives are rejected.
+
+This operation is destructive. It clears all old rows, then rebuilds the
+extracted rows of the requested callables and any constructor rows needed to
+represent their values. Unreferenced rows remain absent. Declarations and
+cost-table identities remain available, although their rows are cleared.
+Existing handles returned by {meth}`egglog.egraph.EGraph.let` become invalid
+because their rows have been cleared. Opaque values previously returned by
+{meth}`egglog.egraph.EGraph.lookup_function_value` are also invalid because
+compaction assigns fresh backend value identities. The same `EGraph` can
+continue registering new actions and running rules afterward. Call this method
+only when dropping all unselected table state is intended.

@@ -6,6 +6,11 @@ _ = i64(0) == i64(0)
 from egglog import *
 _ = i64(0) != i64(0)
 
+[case parameterizedVar]
+from egglog import *
+value = var("value", Vec[i64])
+reveal_type(value)  # N: Revealed type is "egglog.builtins.Vec[egglog.builtins.i64]"
+
 [case eqToAllowed]
 from egglog import *
 _ = eq(i64(0)).to(i64(0))
@@ -13,3 +18,32 @@ _ = eq(i64(0)).to(i64(0))
 [case eqToNotAllowed]
 from egglog import *
 _ = eq(i64(0)).to(Unit()) # E: Argument 1 to "to" of "_EqBuilder" has incompatible type "Unit"; expected "i64"
+
+[case functionPrimitiveMergeAllowed]
+from egglog import *
+@function(merge=lambda old, new: old)
+def f(x: i64Like) -> i64: ...
+
+[case functionEqsortCostAllowed]
+from egglog import *
+class A(Expr): ...
+@function(cost=1)
+def f() -> A: ...
+
+[case functionEqsortRulesetSubsumeAllowed]
+from egglog import *
+class A(Expr): ...
+r = ruleset()
+@function(ruleset=r, subsume=True)
+def f() -> A: ...
+
+[case functionPrimitiveCostRejected]
+from egglog import *
+@function(cost=1)  # E: Value of type variable "CONSTRUCTOR_CALLABLE" of function cannot be "Callable[[], i64]"
+def f() -> i64: ...
+
+[case functionPrimitiveRulesetSubsumeRejected]
+from egglog import *
+r = ruleset()
+@function(ruleset=r, subsume=True)  # E: Value of type variable "CONSTRUCTOR_CALLABLE" of function cannot be "Callable[[], i64]"
+def f() -> i64: ...

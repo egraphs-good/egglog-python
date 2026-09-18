@@ -38,5 +38,5 @@ if IN_IPYTHON:
         if "output" in line:
             print("\n".join(res))
         if "graph" in line:
-            return graphviz.Source(e.to_graphviz_string())
+            return graphviz.Source(e.serialize([]).to_dot())
         return None

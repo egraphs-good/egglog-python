@@ -53,13 +53,13 @@ MathListLike: TypeAlias = MathList | None
 converter(type(None), MathList, lambda _: MathList.NIL)
 
 
-class Pair(Expr):
+class Adder(Expr):
     def __init__(self, x: i64Like) -> None: ...
 
-    def add(self, y: i64Like) -> Pair: ...
+    def add(self, y: i64Like) -> Adder: ...
 
 
-converter(i64, Pair, Pair)
+converter(i64, Adder, Adder)
 
 
 @function
@@ -84,9 +84,9 @@ def test_string_fn_partial():
 
 
 def test_bound_runtime_function_partial():
-    pair = Pair(2)
-    assert expr_parts(UnstableFn(pair.add)) == expr_parts(UnstableFn(Pair.add, pair))
-    assert expr_parts(UnstableFn(pair.add, 3)) == expr_parts(UnstableFn(Pair.add, pair, 3))
+    adder = Adder(2)
+    assert expr_parts(UnstableFn(adder.add)) == expr_parts(UnstableFn(Adder.add, adder))
+    assert expr_parts(UnstableFn(adder.add, 3)) == expr_parts(UnstableFn(Adder.add, adder, 3))
 
 
 @ruleset
@@ -117,6 +117,26 @@ def test_partial_application():
         MathList(2, MathList(4, MathList(6, None))),
         (math_ruleset | list_multiple_ruleset | map_ruleset).saturate(),
     )
+
+
+def test_partial_application_does_not_reuse_synthetic_let_for_its_call() -> None:
+    class PartialLet(Expr):
+        @classmethod
+        def value(cls, value: i64Like) -> PartialLet: ...
+
+        @classmethod
+        def pair(cls, left: PartialLet, right: PartialLet) -> PartialLet: ...
+
+    @function
+    def apply0(f: UnstableFn[PartialLet]) -> PartialLet: ...
+
+    shared = PartialLet.value(1)
+    egraph = EGraph()
+
+    egraph.register(PartialLet.pair(shared, shared))
+    egraph.register(apply0(UnstableFn(PartialLet.value, i64(1))))
+
+    assert egraph.function_size(apply0) == 1
 
 
 @function
@@ -186,14 +206,16 @@ def test_callable_accepted_as_type():
     @function
     def func(f: UnstableFn[C, A, B]) -> C: ...
 
-    assert isinstance(func, RuntimeFunction)
-    original = func.__egg_decls__, func.__egg_ref__
+    original_func: object = func
+    assert isinstance(original_func, RuntimeFunction)
+    original = original_func.__egg_decls__, original_func.__egg_ref__
 
     @function  # type: ignore[no-redef]
     def func(f: Callable[[A, B], C]) -> C: ...
 
-    assert isinstance(func, RuntimeFunction)
-    converted = func.__egg_decls__, func.__egg_ref__
+    converted_func: object = func
+    assert isinstance(converted_func, RuntimeFunction)
+    converted = converted_func.__egg_decls__, converted_func.__egg_ref__
 
     assert converted == original
 

@@ -12,7 +12,7 @@ import pytest
 from sklearn import config_context, datasets
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
-from egglog import greedy_dag_cost_model, set_current_ruleset
+from egglog import set_current_ruleset
 from egglog.exp.array_api import *
 from egglog.exp.array_api import NDArray, Value
 from egglog.exp.array_api_jit import function_to_program, jit
@@ -379,7 +379,7 @@ def test_program_compile(program: Program, snapshot_py):
     egraph = EGraph()
     egraph.register(program)
     egraph.run(array_api_numba_schedule)
-    simplified_program = egraph.extract(program, cost_model=greedy_dag_cost_model())
+    simplified_program = egraph.extract(program, extractor="greedy-dag")
     assert str(simplified_program) == snapshot_py(name="expr")
     egraph = EGraph()
     egraph.register(simplified_program.compile())
