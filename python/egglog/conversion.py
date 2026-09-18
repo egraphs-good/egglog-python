@@ -118,8 +118,9 @@ def convert(source: object, target: type[V]) -> V:
     """
     Convert a source object to a target type.
     """
-    assert isinstance(target, RuntimeClass)
-    return cast("V", resolve_literal(target.__egg_tp__, source, target.__egg_decls_thunk__))
+    runtime_target: object = target
+    assert isinstance(runtime_target, RuntimeClass)
+    return cast("V", resolve_literal(runtime_target.__egg_tp__, source, runtime_target.__egg_decls_thunk__))
 
 
 def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:

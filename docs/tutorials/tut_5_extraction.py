@@ -20,7 +20,7 @@
 #  Let's first see a simple example of setting costs with the `cost` argument.
 
 
-#  Here we have the same `Num`` language but annotated with `cost` keywords.
+#  Here we have the same `Num` language but annotated with `cost` keywords.
 
 # +
 # mypy: disable-error-code="empty-body"
