@@ -26,6 +26,7 @@ from experiments.param_eq.corpus import (
     external_archive_hash,
     load_corpus_rows,
 )
+from experiments.param_eq.resource_guard import WatchResult
 from experiments.param_eq.run import RAW_COLUMNS, _build_haskell_program, _parse_haskell_output
 
 from egglog.exp.param_eq import PaperPipelineReport
@@ -202,6 +203,70 @@ def test_iteration_limited_worker_result_has_no_publishable_metrics(monkeypatch:
 
     connection.send.assert_called_once_with({"status": "iteration_limit"})
     connection.close.assert_called_once_with()
+
+
+def test_worker_sanitizes_pipeline_errors_and_closes_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    sentinel = "PRIVATE_EXPR_SENTINEL(x0)"
+
+    def fail_pipeline(_expr: object) -> None:
+        raise RuntimeError(sentinel)
+
+    monkeypatch.setattr("egglog.exp.param_eq.run_paper_pipeline", fail_pipeline)
+    connection = Mock()
+
+    param_eq_run._worker(connection, "x0", "binary")
+
+    connection.send.assert_called_once_with({"status": "error"})
+    assert sentinel not in repr(connection.send.call_args)
+    connection.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("failure", ["nonzero", "invalid_output", "spawn_error"])
+def test_haskell_row_failures_are_sanitized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    sentinel = "PRIVATE_EXPR_SENTINEL(x0)"
+    row = CorpusRow(
+        row_id="pagie/0/Bingo/1/original",
+        dataset="pagie",
+        raw_index=0,
+        algorithm_raw="Bingo",
+        algorithm="Bingo",
+        algorithm_row=1,
+        input_kind="original",
+        source=sentinel,
+        source_n_rank=1.0,
+    )
+    process = Mock()
+    process.returncode = 1 if failure == "nonzero" else 0
+    process.communicate.return_value = (sentinel, sentinel)
+    popen = Mock(side_effect=OSError(sentinel)) if failure == "spawn_error" else Mock(return_value=process)
+    monkeypatch.setattr(param_eq_run.subprocess, "Popen", popen)
+    monkeypatch.setattr(param_eq_run, "watch_subprocess", lambda *_args, **_kwargs: WatchResult("completed", 3.0))
+
+    result = param_eq_run._run_haskell_one(
+        row,
+        archive_root=tmp_path,
+        executable=tmp_path / "runner",
+        external_archive_sha256="a" * 64,
+        timeout_sec=5.0,
+        memory_limit_mb=2048,
+        sample_interval_sec=0.01,
+        provenance={},
+    )
+
+    assert result["status"] == "error"
+    assert sentinel not in repr(result)
+    assert all(
+        result[column] == ""
+        for column in (
+            "runtime_ms",
+            "passes",
+            "total_size",
+            "before_nodes",
+            "before_params",
+            "after_nodes",
+            "after_params",
+        )
+    )
 
 
 def test_run_rows_records_error_when_worker_exits_without_sending(

@@ -7,6 +7,7 @@ from typing import Literal, TextIO, cast
 import pytest
 
 import egglog.bindings as egg_bindings
+import egglog.egraph as egraph_module
 from egglog import (
     EggSmolError,
     EGraph,
@@ -69,6 +70,30 @@ def test_closing_saved_transcript_inside_context_restores_scope() -> None:
 
     with egraph:
         egraph.close()
+
+    assert egraph._state is parent_state
+    assert not egraph._state_stack
+
+
+def test_cleanup_failure_does_not_mask_propagating_base_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    class BodyError(BaseException):
+        pass
+
+    def fail_cleanup(*args: object, **kwargs: object) -> None:
+        message = "cleanup failed"
+        raise RuntimeError(message)
+
+    egraph = EGraph(save_egglog_string=True)
+    parent_state = egraph._state
+
+    def enter_and_fail() -> None:
+        with egraph:
+            egraph.close()
+            monkeypatch.setattr(egraph_module, "call_with_current_trace", fail_cleanup)
+            raise BodyError
+
+    with pytest.raises(BodyError):
+        enter_and_fail()
 
     assert egraph._state is parent_state
     assert not egraph._state_stack

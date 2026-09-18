@@ -334,7 +334,7 @@ def _worker(connection: Connection, source: str, variant: str) -> None:
                 "after_params": report.extracted_params,
             })
         connection.send(payload)
-    except BaseException:  # worker errors are accounted for without publishing private input text
+    except Exception:  # worker errors are accounted for without publishing private input text
         connection.send({"status": "error"})
     finally:
         connection.close()
@@ -439,7 +439,7 @@ def _run_haskell_one(
     provenance: Mapping[str, str],
 ) -> dict[str, Any]:
     peak_rss_mb = None
-    payload: dict[str, Any] = {"status": "error"}
+    payload: dict[str, Any]
     try:
         process = subprocess.Popen(
             [
@@ -468,10 +468,12 @@ def _run_haskell_one(
         peak_rss_mb = watched.peak_rss_mb
         if watched.status != "completed":
             payload = {"status": watched.status}
-        elif process.returncode == 0:
+        elif process.returncode != 0:
+            payload = {"status": "error"}
+        else:
             payload = _parse_haskell_output(stdout)
     except (OSError, ValueError):
-        pass
+        payload = {"status": "error"}
     return _raw_result(
         row,
         "haskell",

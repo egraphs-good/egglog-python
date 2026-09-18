@@ -290,11 +290,8 @@ class EGraphState:
     type_ref_to_egg_sort: dict[JustTypeRef, str] = field(default_factory=dict)
     egg_sort_to_type_ref: dict[str, JustTypeRef] = field(default_factory=dict)
 
-    # Cache of direct structural egg expressions for converting to egg.
+    # Cache of direct structural egg expressions lowered without synthetic let substitutions.
     expr_to_egg_cache: dict[ExprDecl, bindings._Expr] = field(default_factory=dict)
-    # Cache of top-level expressions lowered with any available synthetic let
-    # references. Rules and rewrites must never read from this cache.
-    expr_to_let_egg_cache: dict[ExprDecl, bindings._Expr] = field(default_factory=dict)
     # Cache of synthetic let references introduced for top-level command lowering.
     # This stays separate from `expr_to_egg_cache` so nested rule/rewrite lowering
     # can always rebuild structural surface syntax instead of leaking a previously
@@ -348,7 +345,6 @@ class EGraphState:
             type_ref_to_egg_sort=self.type_ref_to_egg_sort.copy(),
             egg_sort_to_type_ref=self.egg_sort_to_type_ref.copy(),
             expr_to_egg_cache=self.expr_to_egg_cache.copy(),
-            expr_to_let_egg_cache=self.expr_to_let_egg_cache.copy(),
             expr_to_letref_cache=self.expr_to_letref_cache.copy(),
             cost_table_names=self.cost_table_names.copy(),
             expr_to_let_counter=self.expr_to_let_counter,
@@ -1363,11 +1359,11 @@ class EGraphState:
                 return self.expr_to_letref_cache[expr_decl]
             except KeyError:
                 pass
-        cache = self.expr_to_let_egg_cache if expr_to_let else self.expr_to_egg_cache
-        try:
-            return cache[expr_decl]
-        except KeyError:
-            pass
+        else:
+            try:
+                return self.expr_to_egg_cache[expr_decl]
+            except KeyError:
+                pass
         res: bindings._Expr
         match expr_decl:
             case LetRefDecl(name):
@@ -1430,7 +1426,8 @@ class EGraphState:
                 raise ValueError(msg)
             case _:
                 assert_never(expr_decl.expr)
-        cache[expr_decl] = res
+        if not expr_to_let:
+            self.expr_to_egg_cache[expr_decl] = res
         return res
 
     def translate_call(self, expr: CallDecl | GetCostDecl) -> tuple[str, list[TypedExprDecl]]:

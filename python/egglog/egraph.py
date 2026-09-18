@@ -1527,7 +1527,6 @@ class EGraph:
         # keep-best clears every table, including synthetic and user let rows.
         # Do not let later lowering reuse references to those now-empty tables.
         self._state.expr_to_letref_cache.clear()
-        self._state.expr_to_let_egg_cache.clear()
         self._state.expr_to_egg_cache = {
             expr: egg_expr
             for expr, egg_expr in self._state.expr_to_egg_cache.items()
@@ -1583,10 +1582,10 @@ class EGraph:
 
         # A closed or poisoned transcript rejects ordinary commands, but the
         # backend scope still has to be restored. If another exception is
-        # already propagating, do not replace it with a cleanup failure.
+        # already propagating, do not replace it with an ordinary cleanup failure.
         try:
             call_with_current_trace(self._state.egraph.run_program, bindings.Pop(span(1), 1))
-        except BaseException:
+        except Exception:
             if exc_type is None:
                 raise
         finally:
