@@ -1711,9 +1711,7 @@ def _sanitize_egg_ident(input_string: str) -> str:
 
 
 def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
-    """
-    Returns all expressions that have multiple parents (a list but semantically just an ordered set).
-    """
+    """Return multiply-parented expressions in deterministic preorder for stable synthetic let names."""
     parent_counts: dict[TypedExprDecl, int] = {}
     traversal_order: list[TypedExprDecl] = []
     traversed: set[TypedExprDecl] = set()

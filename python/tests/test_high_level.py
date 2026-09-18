@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import importlib
 import math
+import os
 import pathlib
+import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from copy import copy
 from dataclasses import dataclass
@@ -934,6 +937,47 @@ def test_top_level_action_factors_duplicate_sibling_edges() -> None:
     assert let_lines[2].startswith("(let $__expr_2 (")
     assert let_lines[2].endswith(" $__expr_1 $__expr_1))")
     assert sum(line.endswith(" $__expr_2 $__expr_2)") for line in lines) == 1
+
+
+_DETERMINISTIC_HOISTING_SCRIPT = """
+from __future__ import annotations
+
+from egglog import EGraph, Expr, StringLike
+
+
+class B(Expr):
+    @classmethod
+    def var(cls, name: StringLike) -> B: ...
+
+    def __and__(self, other: B) -> B: ...
+
+    def __or__(self, other: B) -> B: ...
+
+
+egraph = EGraph(save_egglog_string=True)
+x, y = B.var("x"), B.var("y")
+shared = x & y
+expr = shared | y
+for _ in range(24):
+    expr = (shared & expr) | (expr & (shared | x))
+egraph.let("$e", expr)
+print(egraph.as_egglog_string, end="")
+"""
+
+
+def test_shared_subexpression_lowering_is_deterministic_across_processes() -> None:
+    transcripts = [
+        subprocess.run(
+            [sys.executable, "-c", _DETERMINISTIC_HOISTING_SCRIPT],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "PYTHONHASHSEED": str(seed)},
+        ).stdout
+        for seed in (1, 2, 3)
+    ]
+
+    assert transcripts[1:] == transcripts[:-1]
 
 
 def test_freeze_omits_synthetic_let_bindings() -> None:

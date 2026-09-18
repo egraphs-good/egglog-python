@@ -4,6 +4,10 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Make shared-subexpression hoisting deterministic across Python processes,
+  stabilizing generated `let` bindings and serialized e-graph output
+  [#422](https://github.com/egraphs-good/egglog-python/pull/422).
+
 - Upgrade to Egglog 3 and matching `egglog-experimental` APIs
   [#414](https://github.com/egraphs-good/egglog-python/pull/414).
   - BREAKING: container rebuilding is now handled by Egglog, so `Map.rebuild()`,
