@@ -84,6 +84,22 @@ one thread to another for sequential use. Callers must serialize simultaneous
 access to the same `EGraph`, for example by protecting all operations on it with
 a `threading.Lock`.
 
+Define expression classes, functions, and converters, and register rules during
+setup. Before a worker first resolves a local expression class, egglog function,
+or rule generator, its defining frame must have returned. Complete module
+initialization before starting workers, and return local DSL objects from a
+setup helper. Internal serialization protects metadata publication; it cannot
+make another thread's [still-executing frame safe to
+inspect](https://docs.python.org/3.14/howto/free-threading-python.html#frame-objects).
+Definition and rule-generation callbacks must not wait for another thread that
+may access egglog DSL metadata. Python callbacks from independent e-graphs may
+run concurrently, so callers must synchronize any shared mutable callback
+state.
+
+This guarantee covers core `EGraph` operations. The experimental
+`set_array_api_egraph` and `set_any_expr_egraph` context managers use
+process-global ambient state and must not overlap across threads.
+
 (community)=
 
 ## Community

@@ -1,4 +1,8 @@
+import pickle
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from copy import copy, deepcopy
 from dataclasses import replace
 from threading import Event
 from weakref import WeakValueDictionary
@@ -39,6 +43,35 @@ def test_call_decl_validates_bound_type_parameters() -> None:
     callable = ClassMethodRef(Ident("Generic"), "create")
     call = CallDecl(callable, bound_tp_params=(tp,))
     assert CallDecl(callable, (), (tp,)) is call
+
+
+def test_call_decl_copy_and_pickle_preserve_interning() -> None:
+    call = CallDecl(FunctionRef(Ident("serialized")))
+
+    assert copy(call) is call
+    assert deepcopy(call) is call
+    assert pickle.loads(pickle.dumps(call)) is call  # noqa: S301
+
+
+def test_call_decl_interning_allows_reentrant_literal_hashing() -> None:
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+from egglog import i64
+
+class ReentrantInt(int):
+    def __hash__(self):
+        i64(1) + 2
+        return super().__hash__()
+
+i64(ReentrantInt(3)) + 4
+""",
+        ],
+        check=True,
+        timeout=10,
+    )
 
 
 def test_call_decl_publishes_initialized_canonical_instance(monkeypatch: pytest.MonkeyPatch) -> None:

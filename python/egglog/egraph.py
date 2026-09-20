@@ -11,7 +11,6 @@ from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field, replace
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
-from threading import Condition, Lock, get_ident
 from types import FrameType, FunctionType
 from typing import (
     TYPE_CHECKING,
@@ -39,6 +38,7 @@ from opentelemetry import trace
 from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
+from ._threading import INITIALIZE_LOCK, initialize
 from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
@@ -338,6 +338,8 @@ def function(*args, **kwargs) -> Any:
     provide a body to lower as a rewrite. `subsume` is only valid for eqsort-
     returning bodies on that explicit-ruleset rewrite path.
     """
+    # This is a live proxy on Python 3.14, so cross-thread first use must follow
+    # the defining-frame contract in docs/reference/usage.md.
     fn_locals = currentframe().f_back.f_locals  # type: ignore[union-attr]
 
     # If we have any positional args, then we are calling it directly on a function
@@ -384,8 +386,11 @@ class _ExprMetaclass(type):
         # we can update them eagerly so that we can access the methods in the class body
         runtime_cls = RuntimeClass(None, TypeRefWithVars(cls_ident))  # type: ignore[arg-type]
 
-        # Store frame so that we can get live access to updated locals/globals
-        # Otherwise, f_locals returns a copy
+        # Store frame so that we can get live access to updated locals/globals.
+        # On free-threaded Python, another thread may only read this frame after
+        # it returns or after declarations are materialized on this thread (see
+        # docs/reference/usage.md).
+        # Otherwise, f_locals returns a copy.
         # https://peps.python.org/pep-0667/
         runtime_cls.__egg_decls_thunk__ = Thunk.fn(
             _generate_class_decls,
@@ -469,6 +474,8 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     ##
     # Create a dummy type to pass to get_type_hints to resolve the annotations we have
     _Dummytype = type("_DummyType", (), {"__annotations__": namespace.get("__annotations__", {})})
+    # The defining frame must not be executing in another thread; see the
+    # free-threaded setup contract in docs/reference/usage.md.
     for k, v in get_type_hints(_Dummytype, globalns=frame.f_globals, localns=frame.f_locals).items():
         if getattr(v, "__origin__", None) == ClassVar:
             (inner_tp,) = v.__args__
@@ -526,6 +533,8 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         if preserve or method_name in ALWAYS_PRESERVED:
             cls_decl.preserved_methods[method_name] = fn
             continue
+        # The defining frame must not be executing in another thread; see the
+        # free-threaded setup contract in docs/reference/usage.md.
         locals = frame.f_locals
         ref: ClassMethodRef | MethodRef | PropertyRef | InitRef
         # TODO: Store deprecated message so we can get at runtime
@@ -1067,7 +1076,10 @@ def _add_default_rewrite(
     """
     resolved_value = resolve_literal(type_ref, default_rewrite, Thunk.value(decls))
     rewrite_decl = DefaultRewriteDecl(ref, resolved_value.__egg_typed_expr__.expr, subsume)
-    ruleset.append(RewriteOrRule(Declarations.create(decls, resolved_value), rewrite_decl))
+    ruleset_decls = ruleset._current_egg_decls
+    ruleset.__egg_ruleset__.rules.append(rewrite_decl)
+    ruleset_decls |= decls
+    ruleset_decls |= resolved_value
 
 
 def _last_param_variable(params: list[Parameter]) -> bool:
@@ -2224,8 +2236,6 @@ class Ruleset(Schedule):
     __egg_ruleset__: RulesetDecl = field(init=False)
     # Rule generator functions that have been deferred, to allow for late type binding
     deferred_rule_gens: list[Callable[[], Iterable[RewriteOrRule]]] = field(default_factory=list)
-    _condition: Condition = field(default_factory=Condition, init=False, repr=False, compare=False)
-    _materializing_thread: int | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.schedule = RunDecl(self.__egg_ident__, ())
@@ -2236,53 +2246,20 @@ class Ruleset(Schedule):
         """
         To return the egg decls, we go through our deferred rules and add any we haven't yet
         """
-        thread_id = get_ident()
-        with self._condition:
-            while self._materializing_thread is not None and self._materializing_thread != thread_id:
-                self._condition.wait()
-            reentrant = self._materializing_thread == thread_id
-            self._materializing_thread = thread_id
-
-        try:
-            while True:
-                with self._condition:
-                    if not self.deferred_rule_gens:
-                        return self._snapshot_egg_decls()
-                    generate_rules = self.deferred_rule_gens.pop()
-                # Never hold the condition while calling declaration thunks.
-                # Another thread resolving a class can append its default
-                # rewrites before this generator finishes waiting for that class.
-                try:
-                    with set_current_ruleset(self):
-                        rules = tuple(generate_rules())
-                    decls = Declarations.create(*rules)
-                except BaseException:
-                    with self._condition:
-                        self.deferred_rule_gens.append(generate_rules)
-                    raise
-                with self._condition:
-                    self._current_egg_decls.update(decls)
-                    self.__egg_ruleset__.rules.extend(r.decl for r in rules)
-        finally:
-            if not reentrant:
-                with self._condition:
-                    self._materializing_thread = None
-                    self._condition.notify_all()
-
-    def _snapshot_egg_decls(self) -> Declarations:
-        # Called under the condition: readers must not iterate a rules list
-        # which a later append or materialization can mutate concurrently.
-        decls = self._current_egg_decls.copy()
-        decls._rulesets[self.__egg_ident__] = RulesetDecl(self.__egg_ruleset__.rules.copy())
-        return decls
+        with initialize():
+            while self.deferred_rule_gens:
+                with set_current_ruleset(self):
+                    rules = self.deferred_rule_gens.pop()()
+                self._current_egg_decls.update(*rules)
+                self.__egg_ruleset__.rules.extend(r.decl for r in rules)
+            return self._current_egg_decls
 
     def append(self, rule: RewriteOrRule) -> None:
         """
         Register a rule with the ruleset.
         """
-        with self._condition:
-            self._current_egg_decls.update(rule.__egg_decls__)
-            self.__egg_ruleset__.rules.append(rule.decl)
+        self._current_egg_decls |= rule
+        self.__egg_ruleset__.rules.append(rule.decl)
 
     def register(
         self,
@@ -2293,12 +2270,13 @@ class Ruleset(Schedule):
     ) -> None:
         """
         Register rewrites or rules, either as a function or as values.
+
+        Registration is setup-time activity and must not race e-graph execution.
         """
         if isinstance(rule_or_generator, RewriteOrRule):
-            with self._condition:
-                self.append(rule_or_generator)
-                for r in rules:
-                    self.append(r)
+            self.append(rule_or_generator)
+            for r in rules:
+                self.append(r)
         else:
             assert not rules
             current_frame = inspect.currentframe()
@@ -2308,14 +2286,10 @@ class Ruleset(Schedule):
             if _increase_frame:
                 original_frame = original_frame.f_back
                 assert original_frame
-            generator = Thunk.fn(_rewrite_or_rule_generator, rule_or_generator, original_frame)
-            with self._condition:
-                self.deferred_rule_gens.append(generator)
+            self.deferred_rule_gens.append(Thunk.fn(_rewrite_or_rule_generator, rule_or_generator, original_frame))
 
     def __str__(self) -> str:
-        with self._condition:
-            decls = self._snapshot_egg_decls()
-        return pretty_decl(decls, decls._rulesets[self.__egg_ident__], ruleset_ident=self.ident)
+        return pretty_decl(self._current_egg_decls, self.__egg_ruleset__, ruleset_ident=self.ident)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2332,7 +2306,6 @@ class Ruleset(Schedule):
 @dataclass
 class UnstableCombinedRuleset(Schedule):
     _next_generated_ident: ClassVar[int] = 0
-    _ident_lock: ClassVar[Lock] = Lock()
 
     __egg_decls_thunk__: Callable[[], Declarations] = field(init=False)
     schedule: RunDecl = field(init=False)
@@ -2342,7 +2315,7 @@ class UnstableCombinedRuleset(Schedule):
 
     def __post_init__(self, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
         if self.ident is None:
-            with UnstableCombinedRuleset._ident_lock:
+            with INITIALIZE_LOCK:
                 self._generated_ident = Ident(f"_combined_ruleset_{UnstableCombinedRuleset._next_generated_ident}")
                 UnstableCombinedRuleset._next_generated_ident += 1
         self.schedule = RunDecl(self.__egg_ident__, ())
@@ -2874,6 +2847,8 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     # combine locals and globals so that they are the same dict. Otherwise get_type_hints will go through the wrong
     # path and give an error for the test
     # python/tests/test_no_import_star.py::test_no_import_star_rulesset
+    # The registering frame must not be executing in another thread; see the
+    # free-threaded setup contract in docs/reference/usage.md.
     combined = {**gen.__globals__, **frame.f_locals}
     hints = get_type_hints(gen, combined, combined)
     args = [_var(p.name, hints[p.name], egg_name=None) for p in signature(gen).parameters.values()]

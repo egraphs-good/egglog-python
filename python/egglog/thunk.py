@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from threading import RLock
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar, Unpack
 
 from typing_extensions import TypeVarTuple
+
+from ._threading import INITIALIZATION_ACTIVE, initialize
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -40,9 +41,6 @@ class Thunk(Generic[T, *TS]):
     """
 
     state: Resolved[T] | Unresolved[T, *TS] | Resolving[T] | Error
-    # Resolved value thunks are a hot path and never need synchronization.
-    # Allocate a lock only for thunks which can transition out of Unresolved.
-    _lock: RLock | None = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
     def fn(cls, fn: Callable[[Unpack[TS]], T], *args: *TS, context: str | None = None) -> Thunk[T, *TS]:
@@ -51,9 +49,7 @@ class Thunk(Generic[T, *TS]):
 
         Recursive calls raise an exception unless the resolver has supplied a partial value.
         """
-        thunk = cls(Unresolved(fn, args, context))
-        thunk._lock = RLock()
-        return thunk
+        return cls(Unresolved(fn, args, context))
 
     @classmethod
     def value(cls, value: T) -> Thunk[T]:
@@ -61,25 +57,18 @@ class Thunk(Generic[T, *TS]):
 
     def set_partial(self, value: T) -> None:
         """Allow recursive calls on the resolving thread to access an unfinished value."""
-        lock = self._lock
-        if lock is None:
-            msg = "Cannot set a partial value outside thunk resolution"
-            raise ValueError(msg)
-        with lock:
+        with initialize():
             if not isinstance(self.state, Resolving):
                 msg = "Cannot set a partial value outside thunk resolution"
                 raise ValueError(msg)  # noqa: TRY004
             self.state = Resolving(Resolved(value))
 
     def __call__(self) -> T:
-        # Resolved values never change, so cached calls do not need the lock.
-        if isinstance(state := self.state, Resolved):
+        if isinstance(state := self.state, Resolved) and not INITIALIZATION_ACTIVE.locked():
             return state.value
-        # Other threads wait for resolution; recursive calls on this thread
-        # can reenter the lock and still detect the Resolving state.
-        lock = self._lock
-        assert lock is not None
-        with lock:
+        # A resolved value can transitively contain a declaration owned by the
+        # active initializer, so readers wait and recheck while it is partial.
+        with initialize():
             match self.state:
                 case Resolved(value):
                     return value

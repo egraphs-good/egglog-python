@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import cache, cached_property
 from itertools import chain, repeat
-from threading import RLock
 from typing import (
     TYPE_CHECKING,
     ClassVar,
@@ -26,6 +25,7 @@ from typing import (
 from uuid import UUID
 from weakref import WeakValueDictionary
 
+from ._threading import INITIALIZE_LOCK
 from .bindings import Value
 
 if TYPE_CHECKING:
@@ -908,7 +908,6 @@ class CallDecl:
 
     # pool objects for faster __eq__
     _args_to_value: ClassVar[WeakValueDictionary[tuple[object, ...], CallDecl]] = WeakValueDictionary({})
-    _pool_lock: ClassVar[RLock] = RLock()
 
     def __new__(
         cls,
@@ -926,7 +925,9 @@ class CallDecl:
             msg = "Cannot bind type parameters to a non-class method callable."
             raise ValueError(msg)
         normalized_args = (callable, args, bound_tp_params)
-        with cls._pool_lock:
+        # Literal hashing can construct declarations recursively, so use the
+        # shared reentrant lock rather than introduce another lock order.
+        with INITIALIZE_LOCK:
             try:
                 return cast("Self", cls._args_to_value[normalized_args])
             except KeyError:
@@ -938,6 +939,9 @@ class CallDecl:
                 object.__setattr__(res, "bound_tp_params", bound_tp_params)
                 cls._args_to_value[normalized_args] = res
                 return res
+
+    def __getnewargs__(self) -> tuple[CallableRef, tuple[TypedExprDecl, ...], tuple[JustTypeRef, ...]]:
+        return self.callable, self.args, self.bound_tp_params
 
     def __hash__(self) -> int:
         return self._cached_hash
