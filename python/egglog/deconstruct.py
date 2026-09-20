@@ -6,10 +6,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING, TypeVar, cast, overload
+from typing import TYPE_CHECKING, TypeVar, Unpack, cast, overload
 
 import cloudpickle
-from typing_extensions import TypeVarTuple, Unpack
+from typing_extensions import TypeVarTuple
 
 from .declarations import *
 from .egraph import BaseExpr, Expr

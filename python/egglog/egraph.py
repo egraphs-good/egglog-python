@@ -24,6 +24,7 @@ from typing import (
     TypeAlias,
     TypedDict,
     TypeVar,
+    Unpack,
     assert_never,
     cast,
     get_type_hints,
@@ -34,7 +35,7 @@ from warnings import warn
 
 import graphviz
 from opentelemetry import trace
-from typing_extensions import ParamSpec, TypeForm, Unpack
+from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
 from ._tracing import call_with_current_trace
@@ -63,14 +64,12 @@ __all__ = [
     "BaseExpr",
     "BuiltinExpr",
     "Command",
-    "Command",
     "CostModel",
     "DagCostModel",
     "EGraph",
     "Expr",
     "ExprCallable",
     "ExtractionMode",
-    "Fact",
     "Fact",
     "GraphvizKwargs",
     "RewriteOrRule",

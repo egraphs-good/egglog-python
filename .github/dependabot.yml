@@ -4,7 +4,6 @@
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 
 version: 2
-enable-beta-ecosystems: true
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
@@ -20,6 +19,22 @@ updates:
       interval: "daily"
     groups:
       actions:
+        patterns:
+          - "*"
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    groups:
+      pre-commit:
+        patterns:
+          - "*"
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    groups:
+      rust:
         patterns:
           - "*"
   - package-ecosystem: "uv"

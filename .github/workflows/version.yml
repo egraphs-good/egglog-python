@@ -35,7 +35,7 @@ jobs:
     outputs:
       version: ${{ steps.bump.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
@@ -59,20 +59,23 @@ jobs:
     needs: [bump]
     if: ${{ always() }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: ${{ needs.bump.result == 'success' }}
         with:
           ref: version-${{ needs.bump.outputs.version }}
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: ${{ needs.bump.result == 'skipped' }}
-      - uses: PyO3/maturin-action@v1.49.4
+      - uses: PyO3/maturin-action@v1.51.0
         with:
           target: ${{ matrix.target }}
           manylinux: auto
           command: build
-          args: --release --sdist -o dist --find-interpreter
+          # Build only the supported GIL-enabled CPython versions. Recent
+          # manylinux images also contain free-threaded interpreters, which
+          # --find-interpreter would otherwise publish wheels for.
+          args: --release --locked --sdist -o dist -i python3.12 python3.13 python3.14
       - name: Upload wheels
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist
@@ -83,45 +86,52 @@ jobs:
     needs: [bump]
     if: ${{ always() }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: ${{ needs.bump.result == 'success' }}
         with:
           ref: version-${{ needs.bump.outputs.version }}
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: ${{ needs.bump.result == 'skipped' }}
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
-      - uses: PyO3/maturin-action@v1.49.4
+        uses: docker/setup-qemu-action@v4
+      - uses: PyO3/maturin-action@v1.51.0
         with:
           manylinux: auto
           command: build
-          args: --release --sdist -o dist --find-interpreter
+          args: --release --locked --sdist -o dist -i python3.12 python3.13 python3.14
       - name: Upload wheels
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-linux
           path: dist
 
   windows:
-    name: build windows
+    name: build windows ${{ matrix.python }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
     needs: [bump]
     if: ${{ always() }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: ${{ needs.bump.result == 'success' }}
         with:
           ref: version-${{ needs.bump.outputs.version }}
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: ${{ needs.bump.result == 'skipped' }}
-      - uses: PyO3/maturin-action@v1.49.4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: PyO3/maturin-action@v1.51.0
         with:
           command: build
-          args: --release -o dist --find-interpreter
+          args: --release --locked -o dist -i python
       - name: Upload wheels
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
-          name: wheels-windows
+          name: wheels-windows-${{ matrix.python }}
           path: dist
 
   macos:
@@ -130,19 +140,26 @@ jobs:
     needs: [bump]
     if: ${{ always() }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: ${{ needs.bump.result == 'success' }}
         with:
           ref: version-${{ needs.bump.outputs.version }}
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: ${{ needs.bump.result == 'skipped' }}
-      - uses: PyO3/maturin-action@v1.49.4
+      - name: Set up supported Python interpreters
+        uses: actions/setup-python@v7
+        with:
+          python-version: |
+            3.12
+            3.13
+            3.14
+      - uses: PyO3/maturin-action@v1.51.0
         with:
           command: build
           target: universal2-apple-darwin
-          args: --release -o dist --find-interpreter
+          args: --release --locked -o dist -i python3.12 python3.13 python3.14
       - name: Upload wheels
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-macos
           path: dist
@@ -153,12 +170,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch')
     needs: [macos, windows, linux, linux-cross, bump]
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
           merge-multiple: true
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1.49.4
+        uses: PyO3/maturin-action@v1.51.0
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         with:
@@ -169,7 +186,7 @@ jobs:
     permissions: write-all
     needs: [release, bump]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: version-${{ needs.bump.outputs.version }}
       - run: |

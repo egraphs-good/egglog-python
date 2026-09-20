@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Get PR details
         id: pr-details
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const { data: pullRequest } = await github.rest.pulls.get({
@@ -30,14 +30,14 @@ jobs:
             core.setOutput('head_ref', pullRequest.head.ref);
       
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           # Checkout the PR head ref
           ref: ${{ steps.pr-details.outputs.head_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       

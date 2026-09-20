@@ -49,7 +49,6 @@ __all__ = [
     "ConstantRef",
     "ConstructorDecl",
     "Declarations",
-    "Declarations",
     "DeclarationsLike",
     "DefaultRewriteDecl",
     "DelayedDeclarations",

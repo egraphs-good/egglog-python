@@ -562,9 +562,15 @@ def to_polynomial_ruleset(
 
 When applying this ruleset we will replace binary operations with multiset values, but they will be unnecessarily
 nested. For example, we might end up with a term like `polynomial(MultiSet(MultiSet(polynomial(xs))))`, which should be replaced
-with just `polynomial(xs)`. We define two additional rules to cover cases like this:
+with just `polynomial(xs)`. We define two additional rules and register them on the same ruleset:
 
 ```python
+@to_polynomial_ruleset.register
+def _flatten_polynomial_rules(
+    n1: Value,
+    mss: MultiSet[MultiSet[Value]],
+    mss1: MultiSet[MultiSet[Value]],
+):
     yield rule(
         eq(n1).to(polynomial(mss)),
         # For each monomial, if any of its terms is a polynomial with a single monomial, flatten

@@ -192,6 +192,8 @@ ignore = [
     "D105",
     # Allow lots of args for functions
     "PLR0913",
+    # Allow DSL declarations with positional arguments
+    "PLR0917",
     # Allow non imperative docstrings
     "D401",
     # Allow private member refs
@@ -208,6 +210,15 @@ ignore = [
     "INP001",
     # don't replace lambdas with functions because we need them to defer resolution
     "PLW0108",
+    # There is no project-wide copyright header policy
+    "CPY001",
+    # Preserve annotation order because it can be semantically significant
+    "RUF036",
+    # Keep runtime typing objects until the declaration/type resolver supports
+    # PEP 695 aliases and generic syntax.
+    "UP040",
+    "UP046",
+    "UP047",
 ]
 select = ["ALL"]
 

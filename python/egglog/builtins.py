@@ -11,10 +11,10 @@ from fractions import Fraction
 from functools import partial, reduce
 from inspect import signature
 from types import FunctionType, MethodType
-from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Generic, Protocol, TypeAlias, TypeVar, Unpack, cast, overload
 
 import cloudpickle
-from typing_extensions import TypeVarTuple, Unpack, deprecated
+from typing_extensions import TypeVarTuple, deprecated
 
 from .conversion import convert, converter, get_type_args, resolve_literal
 from .declarations import *
