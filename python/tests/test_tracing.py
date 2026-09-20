@@ -202,7 +202,7 @@ def _parse_python_span(stdout: str, name: str) -> tuple[str, str, str | None]:
 
 def _parse_rust_span(stdout: str, name: str) -> tuple[str, str | None]:
     match = re.search(
-        rf"Name\s*: {re.escape(name)}\s+TraceId\s*: ([0-9a-f]+)\s+SpanId\s*: [0-9a-f]+\s+TraceFlags\s*: .*?\s+ParentSpanId: ([0-9a-f]+|None)",
+        rf"Name\s*: {re.escape(name)}\s+TraceId\s*: ([0-9a-f]+)\s+SpanId\s*: [0-9a-f]+\s+TraceFlags\s*: .*?\s+ParentSpanId\s*:\s*([0-9a-f]+|None)",
         stdout,
         re.DOTALL,
     )

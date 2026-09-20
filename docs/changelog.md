@@ -4,6 +4,13 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Modernize dependencies and CI [#425](https://github.com/egraphs-good/egglog-python/pull/425).
+  - BREAKING: Drop Python 3.11 support; supported CPython versions are now 3.12-3.14.
+  - Add beta support for free-threaded CPython 3.14t; see
+    [thread safety](reference/python-integration.md#thread-safety).
+  - Add `Device.cpu`, returned by `NDArray.device` in the experimental array API.
+  - Fix table lookups from custom extraction-cost callbacks when expressions are reused.
+
 - Make shared-subexpression hoisting deterministic across Python processes,
   stabilizing generated `let` bindings and serialized e-graph output
   [#422](https://github.com/egraphs-good/egglog-python/pull/422).
@@ -85,7 +92,7 @@ _This project uses semantic versioning_
 - Add support for setting report level with `egraph.set_report_level` [#375](https://github.com/egraphs-good/egglog-python/pull/375)
 - Make docs builds fail on notebook execution errors and fix all doc issues [#369](https://github.com/egraphs-good/egglog-python/pull/369)
 - Add WIP `egglog.exp.any_expr` code for tracing arbitrary expressions with Python fallback [#366](https://github.com/egraphs-good/egglog-python/pull/366)
-  - BREAKING: Remove support for Python 3.11 now that pyo3 has dropped support.
+  - BREAKING: Remove support for Python 3.10.
   - Allow mutating methods to update their underlying expression via `Expr.__replace_expr__`, and ensure default rewrites return the mutated receiver when using `mutates_self` or `mutates_first_arg`.
   - BREAKING: Store `PyObject` values as `cloudpickle` bytes instead of live references so duplicates merge by value; `.value` now returns a fresh copy and the sort accepts objects like `None` that previously failed.
   - Adds a `__call__` method (and `call_extended` for kwargs) to `PyObject` to replace `py_eval_fn`, which is now deprecated.
@@ -258,15 +265,18 @@ a linalg function (in [an example inspired by Siu](https://gist.github.com/sklam
 ```python
 from egglog.exp.array_api import *
 
+
 @function(ruleset=array_api_ruleset, subsume=True)
 def linalg_norm(X: NDArrayLike, axis: TupleIntLike) -> NDArray:
     X = cast(NDArray, X)
     return NDArray(
         X.shape.deselect(axis),
         X.dtype,
-        lambda k: ndindex(X.shape.select(axis))
-        .foldl_value(lambda carry, i: carry + ((x := X.index(i + k)).conj() * x).real(), init=0.0)
-        .sqrt(),
+        lambda k: (
+            ndindex(X.shape.select(axis))
+            .foldl_value(lambda carry, i: carry + ((x := X.index(i + k)).conj() * x).real(), init=0.0)
+            .sqrt()
+        ),
     )
 ```
 
@@ -420,8 +430,8 @@ rule or expression. For example:
 class A(Expr):
     def __init__(self, b: B) -> None: ...
 
-class B(Expr):
-    ...
+
+class B(Expr): ...
 ```
 
 ### Top level commands

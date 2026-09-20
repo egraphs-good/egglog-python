@@ -60,7 +60,7 @@ fn error_is_replayable_by_fail(command: &egglog::ast::Command, error: &egglog::E
 /// --
 ///
 /// Create an empty EGraph.
-#[pyclass(unsendable)]
+#[pyclass]
 pub struct EGraph {
     pub(crate) egraph: egglog::EGraph,
     cmds: Option<String>,
@@ -404,7 +404,7 @@ impl EGraph {
 
 /// Wrapper around Egglog Value. Represents either a primitive base value or a reference to an e-class.
 #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Clone)]
-#[pyclass(eq, frozen, ord, hash, str = "{0:?}")]
+#[pyclass(eq, frozen, from_py_object, ord, hash, str = "{0:?}")]
 pub struct Value(pub egglog::Value);
 
 #[cfg(test)]

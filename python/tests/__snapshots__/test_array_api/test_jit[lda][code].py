@@ -25,7 +25,7 @@ def __fn(X, y):
     _8[2, :,] = _14
     _15 = _7 @ _8
     _16 = X - _15
-    _17 = np.sqrt(np.asarray(np.array(float(1 / 147)), np.dtype(np.float64)))
+    _17 = np.sqrt(np.asarray(np.array(float(1 / 150)), np.dtype(np.float64)))
     _18 = X[_0] - _8[0, :,]
     _19 = X[_2] - _8[1, :,]
     _20 = X[_4] - _8[2, :,]

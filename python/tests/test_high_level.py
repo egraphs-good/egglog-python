@@ -79,6 +79,65 @@ def test_per_egraph_configuration() -> None:
     assert not egraph.no_decomp()
 
 
+def test_independent_egraphs_run_concurrently_after_setup() -> None:
+    # A fresh process verifies that the public setup below resolves lazy declarations.
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+from egglog import EGraph, function, i64, relation, rule, ruleset
+
+
+def make_identity():
+    local_i64 = i64
+
+    @function
+    def identity(value: "local_i64") -> "local_i64":
+        return value
+
+    return identity
+
+
+identity = make_identity()
+seen = relation("concurrent_seen", i64)
+
+@ruleset
+def advance(value: i64):
+    yield rule(seen(value)).then(seen(value + 1))
+
+# Definitions alone leave lazy declarations and rule generators unresolved.
+setup_graph = EGraph()
+assert setup_graph.extract(identity(i64(0)) + 1).value == 1
+setup_graph.run(0, ruleset=advance)
+
+workers = 32
+barrier = Barrier(workers, timeout=30)
+
+def extract(worker):
+    barrier.wait()
+    for iteration in range(4):
+        number = worker * 100 + iteration
+        value = identity(i64(number)) + 1
+        egraph = EGraph(seen(number))
+        egraph.run(2, ruleset=advance)
+        egraph.check(seen(number + 2))
+        assert egraph.extract(value).value == number + 1
+
+with ThreadPoolExecutor(max_workers=workers) as executor:
+    list(executor.map(extract, range(workers)))
+""",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
 @pytest.mark.parametrize("use_setter", [False, True], ids=["constructor", "setter"])
 def test_zero_threads_uses_available_parallelism(*, use_setter: bool) -> None:
     egraph = EGraph(num_threads=1 if use_setter else 0)
@@ -3591,8 +3650,9 @@ class TestCustomExtract:
         extracted, _seen_expr, seen_children_costs = self._capture_container_children_costs(
             expr,
             leaf_cost=self._small_leaf_cost,
-            should_capture=lambda candidate, children_costs: isinstance(candidate, MultiSet)
-            and len(children_costs) == 4,
+            should_capture=lambda candidate, children_costs: (
+                isinstance(candidate, MultiSet) and len(children_costs) == 4
+            ),
         )
 
         extracted_multiset = cast("MultiSet[i64]", extracted)

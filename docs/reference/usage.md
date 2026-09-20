@@ -2,14 +2,16 @@
 
 ## Installation
 
-`egglog` supports Python 3.11 and newer. The examples below create an isolated
-environment first so that new installs do not depend on packages already present
-on your machine.
+`egglog` supports CPython 3.12, 3.13, and 3.14, with beta support for
+free-threaded CPython 3.14t. Python version support follows
+[SPEC 0](https://scientific-python.org/specs/spec-0000/). The examples below
+create an isolated environment first so that new installs do not depend on
+packages already present on your machine.
 
 With `pip`:
 
 ```shell
-python3.13 -m venv .venv  # or any supported Python 3.11+
+python3.14 -m venv .venv  # or any supported Python 3.12-3.14
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install egglog
@@ -28,7 +30,7 @@ uv run python -c "from egglog import EGraph; EGraph(); print('egglog ok')"
 With `uv` in a standalone virtual environment:
 
 ```shell
-uv venv --python 3.13 .venv  # or any supported Python 3.11+
+uv venv --python 3.14 .venv  # or any supported Python 3.12-3.14
 uv pip install --python .venv/bin/python egglog
 .venv/bin/python -c "from egglog import EGraph; EGraph(); print('egglog ok')"
 ```
@@ -46,6 +48,10 @@ python -m pip install "egglog[array]"
 uv add "egglog[array]"
 ```
 
+[Numba 0.63 and later](https://numba.readthedocs.io/en/0.64.0/reference/deprecation.html#deprecation-of-macos-x86-64-intel-platform-support)
+no longer publish Intel macOS binaries. This affects `egglog[array]`, not the
+base `egglog` installation.
+
 From a source checkout for development, use the repo's uv workflow:
 
 ```shell
@@ -53,11 +59,9 @@ uv sync --all-extras
 uv run python -c "from egglog import EGraph; EGraph(); print('egglog ok')"
 ```
 
-It follows [SPEC 0](https://scientific-python.org/specs/spec-0000/) in terms of what Python versions are supported.
-
 ## Parallelism and threads
 
-Configure worker threads per e-graph with `num_threads`. The default of `1`
+Configure Rust worker threads per e-graph with `num_threads`. The default of `1`
 keeps execution serial; `0` uses the machine's available parallelism. You can
 change the setting later with `set_num_threads` and inspect it with
 `num_threads`.
@@ -69,6 +73,9 @@ egraph = EGraph(num_threads=4)
 egraph.set_num_threads(0)
 assert egraph.num_threads() >= 1
 ```
+
+For concurrent use from Python threads, see
+[thread safety](python-integration.md#thread-safety).
 
 (community)=
 

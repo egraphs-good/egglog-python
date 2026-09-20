@@ -8,7 +8,7 @@ description = "e-graphs in Python built around the egglog rust library"
 readme = "README.md"
 dynamic = ["version"]
 license = { text = "MIT" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "Environment :: MacOS X",
     "Environment :: Win32 (MS Windows)",
@@ -16,12 +16,12 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Natural Language :: English",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Free Threading :: 2 - Beta",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
     "Topic :: Software Development :: Compilers",
     "Topic :: Software Development :: Interpreters",
     "Typing :: Typed",
@@ -193,6 +193,8 @@ ignore = [
     "D105",
     # Allow lots of args for functions
     "PLR0913",
+    # Allow DSL declarations with positional arguments
+    "PLR0917",
     # Allow non imperative docstrings
     "D401",
     # Allow private member refs
@@ -209,6 +211,15 @@ ignore = [
     "INP001",
     # don't replace lambdas with functions because we need them to defer resolution
     "PLW0108",
+    # There is no project-wide copyright header policy
+    "CPY001",
+    # Preserve annotation order because it can be semantically significant
+    "RUF036",
+    # Keep runtime typing objects until the declaration/type resolver supports
+    # PEP 695 aliases and generic syntax.
+    "UP040",
+    "UP046",
+    "UP047",
 ]
 select = ["ALL"]
 

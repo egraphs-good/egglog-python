@@ -58,6 +58,17 @@ for command in commands:
     print(command)
 ```
 
+## Thread safety
+
+Independent `EGraph` and `Extractor` instances can run concurrently. Serialize
+access to shared mutable objects, including `EGraph` and `TermDag`; overlapping
+accesses involving mutation raise an error instead of waiting. Python callbacks
+must synchronize shared mutable state. The
+[high-level API](python-integration.md#thread-safety) also requires initialization
+before concurrent use.
+
+## API
+
 ```{eval-rst}
 .. automodule:: egglog.bindings
    :members:

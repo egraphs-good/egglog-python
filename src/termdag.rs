@@ -2,7 +2,7 @@ use crate::conversions::{Expr, Literal, Span, Term};
 use egglog::TermId;
 use pyo3::prelude::*;
 
-#[pyclass(eq, str = "{0:?}")]
+#[pyclass(eq, from_py_object, str = "{0:?}")]
 #[derive(PartialEq, Eq, Clone)]
 pub struct TermDag(pub egglog::TermDag);
 

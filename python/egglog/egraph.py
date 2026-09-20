@@ -24,6 +24,7 @@ from typing import (
     TypeAlias,
     TypedDict,
     TypeVar,
+    Unpack,
     assert_never,
     cast,
     get_type_hints,
@@ -34,7 +35,7 @@ from warnings import warn
 
 import graphviz
 from opentelemetry import trace
-from typing_extensions import ParamSpec, TypeForm, Unpack
+from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
 from ._tracing import call_with_current_trace
@@ -63,14 +64,12 @@ __all__ = [
     "BaseExpr",
     "BuiltinExpr",
     "Command",
-    "Command",
     "CostModel",
     "DagCostModel",
     "EGraph",
     "Expr",
     "ExprCallable",
     "ExtractionMode",
-    "Fact",
     "Fact",
     "GraphvizKwargs",
     "RewriteOrRule",
@@ -338,6 +337,9 @@ def function(*args, **kwargs) -> Any:
     provide a body to lower as a rewrite. `subsume` is only valid for eqsort-
     returning bodies on that explicit-ruleset rewrite path.
     """
+    # Resolve annotations on the defining thread: reading its live locals from
+    # another thread is unsafe on free-threaded Python.
+    # https://docs.python.org/3.14/howto/free-threading-python.html#frame-objects
     fn_locals = currentframe().f_back.f_locals  # type: ignore[union-attr]
 
     # If we have any positional args, then we are calling it directly on a function
@@ -470,6 +472,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     ##
     # Create a dummy type to pass to get_type_hints to resolve the annotations we have
     _Dummytype = type("_DummyType", (), {"__annotations__": namespace.get("__annotations__", {})})
+    # Resolve annotations before sharing this class with worker threads.
     for k, v in get_type_hints(_Dummytype, globalns=frame.f_globals, localns=frame.f_locals).items():
         if getattr(v, "__origin__", None) == ClassVar:
             (inner_tp,) = v.__args__
@@ -1116,7 +1119,9 @@ class EGraph:
     # For storing the global "current" egraph
     _token_stack: list[EGraph] = field(default_factory=list, repr=False)
     # Raw values supplied while extraction holds this e-graph read-only.
-    _cost_callback_values: dict[int, bindings.Value] | None = field(default=None, init=False, repr=False, compare=False)
+    _cost_callback_values: dict[TypedExprDecl, bindings.Value] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __init__(
         self,
@@ -1887,7 +1892,7 @@ class EGraph:
     def _lookup_argument_values(
         self,
         typed_args: list[TypedExprDecl],
-        callback_values: dict[int, bindings.Value] | None,
+        callback_values: dict[TypedExprDecl, bindings.Value] | None,
     ) -> list[bindings.Value]:
         """Resolve lookup keys without mutating an e-graph borrowed by extraction."""
         if callback_values is None:
@@ -1905,8 +1910,8 @@ class EGraph:
 
         values = []
         for arg in typed_args:
-            if id(arg) in callback_values:
-                values.append(callback_values[id(arg)])
+            if arg in callback_values:
+                values.append(callback_values[arg])
                 continue
             if isinstance(arg.expr, ValueDecl) and arg.expr.owner in self._state.valid_value_owners:
                 values.append(arg.expr.value)
@@ -2075,7 +2080,7 @@ class EGraph:
 
     def _values_to_expr_and_callback_values(
         self, args: list[bindings.Value], name: str
-    ) -> tuple[RuntimeExpr, dict[int, bindings.Value]] | None:
+    ) -> tuple[RuntimeExpr, dict[TypedExprDecl, bindings.Value]] | None:
         """Reconstruct a callback call and map its Python-order arguments to raw backend values."""
         if name not in self._state.egg_fn_to_callable_refs:
             return None
@@ -2088,7 +2093,9 @@ class EGraph:
             for arg_type, arg in zip(signature.arg_types, python_args, strict=True)
             for tp in (arg_type.to_just(),)
         )
-        callback_values = dict(zip(map(id, arg_exprs), python_args, strict=True))
+        # Interned calls retain structurally equal argument declarations from
+        # earlier uses, so callback values cannot be keyed by Python identity.
+        callback_values = dict(zip(arg_exprs, python_args, strict=True))
         stack = list(arg_exprs)
         while stack:
             arg = stack.pop()
@@ -2098,7 +2105,7 @@ class EGraph:
                     # callback borrow, but structurally equal values from
                     # another e-graph must not be accepted.
                     if owner in self._state.valid_value_owners:
-                        callback_values[id(arg)] = value
+                        callback_values[arg] = value
                 case CallDecl(args=nested_args) | PartialCallDecl(CallDecl(args=nested_args)):
                     stack.extend(nested_args)
         res_type = signature.semantic_return_type.to_just()
@@ -2831,6 +2838,7 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     # combine locals and globals so that they are the same dict. Otherwise get_type_hints will go through the wrong
     # path and give an error for the test
     # python/tests/test_no_import_star.py::test_no_import_star_rulesset
+    # Materialize shared rulesets before starting worker threads.
     combined = {**gen.__globals__, **frame.f_locals}
     hints = get_type_hints(gen, combined, combined)
     args = [_var(p.name, hints[p.name], egg_name=None) for p in signature(gen).parameters.values()]
@@ -2871,7 +2879,7 @@ def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
 @contextlib.contextmanager
 def _cost_model_callback_values(
     egraph: EGraph,
-    values: dict[int, bindings.Value],
+    values: dict[TypedExprDecl, bindings.Value],
 ) -> Generator[None, None, None]:
     """Make raw callback values available to read-only table lookups without evaluating expressions."""
     # Values belong to the physical e-graph borrow, not Python's ambient context.
@@ -3018,7 +3026,7 @@ class _CostModel(Generic[COST]):
     egraph: EGraph
     enode_cost_results: dict[tuple[str, tuple[bindings.Value, ...]], int] = field(default_factory=dict)
     enode_cost_expressions: list[RuntimeExpr] = field(default_factory=list)
-    enode_cost_argument_values: list[dict[int, bindings.Value]] = field(default_factory=list)
+    enode_cost_argument_values: list[dict[TypedExprDecl, bindings.Value]] = field(default_factory=list)
     base_value_cost_results: dict[tuple[str, bindings.Value], COST] = field(default_factory=dict)
 
     def call_model(self, expr: RuntimeExpr, children_costs: list[COST]) -> COST:
@@ -3061,7 +3069,7 @@ class _CostModel(Generic[COST]):
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        with _cost_model_callback_values(self.egraph, {id(expr.__egg_typed_expr__): value}):
+        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
             res = self.call_model(expr, [])
         self.base_value_cost_results[(tp, value)] = res
         return res
@@ -3072,7 +3080,7 @@ class _CostModel(Generic[COST]):
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        with _cost_model_callback_values(self.egraph, {id(expr.__egg_typed_expr__): value}):
+        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
             return self.call_model(expr, element_costs)
 
     def to_bindings_cost_model(self) -> bindings.CostModel[COST, int]:
@@ -3115,7 +3123,7 @@ class _DagCostModel(Generic[DAG_COST]):
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        with _cost_model_callback_values(self.egraph, {id(expr.__egg_typed_expr__): value}):
+        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
             result = self.model.marginal_cost(self.egraph, cast("BaseExpr", expr))
         self.value_cost_results[key] = result
         return result

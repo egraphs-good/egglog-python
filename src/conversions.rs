@@ -543,7 +543,7 @@ impl Default for RuleEvalMode {
     }
 }
 
-#[pyclass(frozen)]
+#[pyclass(frozen, from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct SrcFile(Arc<egglog_ast::span::SrcFile>);
 
@@ -1029,11 +1029,11 @@ mod duration_tests {
     }
 }
 
-#[pyclass()]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct UserDefinedCommandOutput(Arc<dyn egglog::UserDefinedCommandOutput>);
 
-#[pyclass(eq, frozen, get_all)]
+#[pyclass(eq, frozen, get_all, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct MultiExtractOutput {
     termdag: TermDag,
@@ -1079,7 +1079,7 @@ impl PartialEq for UserDefinedCommandOutput {
 
 impl std::cmp::Eq for UserDefinedCommandOutput {}
 
-#[pyclass()]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct Function(egglog::Function);
 

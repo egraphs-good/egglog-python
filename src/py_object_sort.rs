@@ -25,7 +25,7 @@ use std::{
 use uuid::Uuid;
 
 use pyo3::{
-    PyAny, PyErr, PyResult, Python,
+    PyAny, PyErr, PyResult, PyTypeCheck, Python,
     prelude::*,
     types::{PyCode, PyCodeMethods as _, PyDict, PyTuple},
 };
@@ -42,7 +42,7 @@ impl Debug for PyPickledValue {
 
 impl BaseValue for PyPickledValue {}
 
-pub fn dump<X>(obj: Bound<X>) -> PyResult<PyPickledValue> {
+pub fn dump<X: PyTypeCheck>(obj: Bound<'_, X>) -> PyResult<PyPickledValue> {
     let cloudpickle = PyModule::import(obj.py(), "cloudpickle")?;
 
     let bytes: Vec<u8> = cloudpickle.getattr("dumps")?.call1((obj,))?.extract()?;

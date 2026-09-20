@@ -3,6 +3,9 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
+import sysconfig
+import threading
 from base64 import standard_b64encode
 from datetime import timedelta
 from fractions import Fraction
@@ -670,8 +673,27 @@ class TestVariant:
 
 class TestThreads:
     """
-    Verify that objects can be accessed from multiple threads at the same time.
+    Independent EGraphs can run concurrently, including Python cost callbacks.
+
+    Access to the same EGraph during mutation requires caller serialization.
     """
+
+    @pytest.mark.skipif(sysconfig.get_config_var("Py_GIL_DISABLED") != 1, reason="requires free-threaded CPython")
+    def test_import_keeps_gil_disabled(self):
+        # Isolated mode ignores PYTHON_GIL, so forcing it off in the test runner
+        # cannot conceal an extension that enables the GIL during import.
+        subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                "import sys; assert not sys._is_gil_enabled(); import egglog; assert not sys._is_gil_enabled()",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
 
     def test_cmds(self):
         cmds = (
@@ -690,12 +712,51 @@ class TestThreads:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             executor.submit(print, cmds).result()
 
-    @pytest.mark.xfail(reason="egraphs are unsendable")
-    def test_egraph(self):
+    def test_egraph_sequential_handoff(self):
+        egraph = EGraph()
+        egraph.parse_and_run_program("(datatype Math (Num i64)) (let $root (Num 1))")
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            executor.submit(
-                EGraph().run_program, Datatype(DUMMY_SPAN, "Math", [Variant(DUMMY_SPAN, "Add", ["Math", "Math"])])
-            ).result()
+            executor.submit(egraph.parse_and_run_program, "(union $root (Num 2))").result(timeout=30)
+
+        assert egraph.parse_and_run_program("(check (= $root (Num 2)))") == []
+
+    def test_independent_egraphs_and_cost_callbacks_run_concurrently(self):
+        workers = 4
+        barrier = threading.Barrier(workers, timeout=30)
+
+        def enode_cost(name, args):
+            # Each graph contains one Num node. Reaching this barrier inside
+            # extraction requires all four binding calls to overlap.
+            barrier.wait()
+            return 1
+
+        model = CostModel(
+            lambda name, annotation, children: annotation + sum(children),
+            enode_cost,
+            lambda name, value, children: sum(children),
+            lambda name, value: 1,
+        )
+        graphs = [EGraph() for _ in range(workers)]
+        for egraph in graphs:
+            egraph.parse_and_run_program("(datatype Expr (Num i64))")
+        extractors = [Extractor(["Expr"], egraph, model) for egraph in graphs]
+
+        def run(egraph, extractor, number):
+            egraph.parse_and_run_program(f"(let $root (Num {number}))")
+            sort, value = egraph.eval_expr(Var(DUMMY_SPAN, "$root"))
+            termdag = TermDag()
+            cost, term = extractor.extract_best(egraph, termdag, value, sort)
+            return cost, termdag.to_string(term)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(run, egraph, extractor, i)
+                for i, (egraph, extractor) in enumerate(zip(graphs, extractors, strict=True))
+            ]
+            results = [future.result(timeout=30) for future in futures]
+
+        assert results == [(2, f"(Num {number})") for number in range(workers)]
 
     def test_serialized_egraph(self):
         egraph = EGraph()

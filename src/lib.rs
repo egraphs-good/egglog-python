@@ -28,7 +28,9 @@ fn shutdown_tracing(py: Python<'_>) -> PyResult<()> {
 }
 
 /// Bindings for egglog rust library
-#[pymodule]
+// Callers serialize access to shared mutable instances; PyO3 rejects overlapping
+// borrows involving mutation rather than waiting for them.
+#[pymodule(gil_used = false)]
 fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
 

@@ -15,7 +15,7 @@ _NDArray_4 = zeros(
         )
     ),
     OptionalDType.some(asarray(_NDArray_1).dtype),
-    OptionalDevice.some(asarray(_NDArray_1).device),
+    OptionalDevice.some(Device.cpu),
 )
 _MultiAxisIndexKeyItem_1 = MultiAxisIndexKeyItem.slice(Slice())
 _IndexKey_1 = IndexKey.multi_axis(MultiAxisIndexKey.from_vec(Vec(MultiAxisIndexKeyItem.int(Int(0)), _MultiAxisIndexKeyItem_1)))
@@ -30,7 +30,6 @@ _NDArray_4[_IndexKey_3] = mean(
     asarray(_NDArray_1)[IndexKey.ndarray(unique_inverse_inverse_indices(_NDArray_2) == NDArray(RecursiveValue(Value.from_int(Int(2)))))], OptionalIntOrTuple.int(Int(0))
 )
 _NDArray_6 = asarray(reshape(asarray(_NDArray_2), TupleInt(Vec(Int(-1)))))
-_Int_1 = unique_values(concat(TupleNDArray(Vec(unique_values(asarray(_NDArray_6)))))).shape[Int(0)]
 _NDArray_7 = concat(
     TupleNDArray(
         Vec(
@@ -46,10 +45,10 @@ _NDArray_8[IndexKey.ndarray(std(_NDArray_7, OptionalIntOrTuple.int(Int(0))) == _
 _TupleNDArray_1 = svd_(
     sqrt(
         asarray(
-            NDArray(RecursiveValue(Value.from_float(Float(1.0) / Float.from_int(Int(150) - _Int_1)))),
+            NDArray(RecursiveValue(Value.from_float(Float(1.0) / Float.from_int(Int(150))))),
             OptionalDType.some(asarray(_NDArray_1).dtype),
             OptionalBool.none,
-            OptionalDevice.some(asarray(_NDArray_1).device),
+            OptionalDevice.some(Device.cpu),
         )
     )
     * (_NDArray_7 / _NDArray_8),
@@ -63,7 +62,13 @@ _NDArray_9 = (
 ).T / _TupleNDArray_1[Int(1)][IndexKey.slice(_Slice_1)]
 _TupleNDArray_2 = svd_(
     (
-        sqrt(NDArray(RecursiveValue(Value.from_int(Int(150)))) * _NDArray_3 * NDArray(RecursiveValue(Value.from_float(Float(1.0) / Float.from_int(_Int_1 - Int(1))))))
+        sqrt(
+            NDArray(RecursiveValue(Value.from_int(Int(150))))
+            * _NDArray_3
+            * NDArray(
+                RecursiveValue(Value.from_float(Float(1.0) / Float.from_int(unique_values(concat(TupleNDArray(Vec(unique_values(asarray(_NDArray_6)))))).shape[Int(0)] - Int(1))))
+            )
+        )
         * (_NDArray_4 - _NDArray_3 @ _NDArray_4).T
     ).T
     @ _NDArray_9,
