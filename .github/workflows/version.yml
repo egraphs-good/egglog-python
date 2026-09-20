@@ -2,11 +2,9 @@
 # 1. bumping the version number in the changelog and cargo
 # 2. Creates a new branch for this version
 # 3. makes a new commit
-# 4. Opens a PR for the new version
-# 5. Pulls that branch and builds it for different platforms
-# 6. Once all those build, makes a release
-# 7. Creates a tag for that release
-# 7. merges that PR when tests pass and removes the branch
+# 4. Builds that commit for different platforms
+# 5. Once all those build, publishes to PyPI
+# 6. Creates a tag and fast-forwards main to the release commit
 
 # This seperates the release process from the test process, so we can still release if we need to and tests are failing
 name: Bump Version
@@ -31,27 +29,37 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     permissions: write-all
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     outputs:
       version: ${{ steps.bump.outputs.version }}
+      base: ${{ steps.bump.outputs.base }}
+      commit: ${{ steps.bump.outputs.commit }}
     steps:
+      - name: Check release push token
+        run: |
+          if [ -z "$RELEASE_GITHUB_TOKEN" ]; then
+            echo "::error::Set RELEASE_GITHUB_TOKEN to a token whose actor can bypass main's pull-request and required-check rules."
+            exit 1
+          fi
+        env:
+          RELEASE_GITHUB_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
       - run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           VERSION=$(python modify_changelog.py bump_version "$TYPE")
           # Update the workspace version without changing dependency pins.
           cargo update --workspace
           git checkout -b "version-$VERSION"
-          git commit -am "Version $VERSION"
+          git commit -am "Version $VERSION [skip ci]"
           git push -u origin HEAD
-          gh pr create --fill
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         id: bump
         env:
           TYPE: ${{ inputs.type }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   linux-cross:
     name: build linux
@@ -65,7 +73,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ needs.bump.result == 'success' }}
         with:
-          ref: version-${{ needs.bump.outputs.version }}
+          ref: ${{ needs.bump.outputs.commit }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ needs.bump.result == 'skipped' }}
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
@@ -89,7 +97,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ needs.bump.result == 'success' }}
         with:
-          ref: version-${{ needs.bump.outputs.version }}
+          ref: ${{ needs.bump.outputs.commit }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ needs.bump.result == 'skipped' }}
       - name: Setup QEMU
@@ -118,7 +126,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ needs.bump.result == 'success' }}
         with:
-          ref: version-${{ needs.bump.outputs.version }}
+          ref: ${{ needs.bump.outputs.commit }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ needs.bump.result == 'skipped' }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -143,17 +151,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ needs.bump.result == 'success' }}
         with:
-          ref: version-${{ needs.bump.outputs.version }}
+          ref: ${{ needs.bump.outputs.commit }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ needs.bump.result == 'skipped' }}
       - name: Set up supported Python interpreters
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          # Keep regular 3.14 last so it takes precedence over the free-threaded alias.
           python-version: |
             3.12
             3.13
-            3.14
             3.14t
+            3.14
+      - name: Verify Python 3.14 variants
+        run: |
+          python3.14 -c 'import sysconfig; assert not sysconfig.get_config_var("Py_GIL_DISABLED")'
+          python3.14t -c 'import sysconfig; assert sysconfig.get_config_var("Py_GIL_DISABLED") == 1'
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: build
@@ -168,32 +181,47 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: [macos, windows, linux, linux-cross, bump]
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.bump.outputs.commit }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: wheels-*
           merge-multiple: true
-      - name: Publish to PyPI
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          path: dist
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          command: upload
-          args: --skip-existing *
-  tag-and-merge:
+          enable-cache: false
+      - name: Check main before publishing
+        run: |
+          MAIN=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$MAIN" != "$BASE_SHA" ] && [ "$MAIN" != "$RELEASE_SHA" ]; then
+            echo "::error::main changed since this release was prepared."
+            exit 1
+          fi
+        env:
+          BASE_SHA: ${{ needs.bump.outputs.base }}
+          RELEASE_SHA: ${{ needs.bump.outputs.commit }}
+      - name: Publish to PyPI
+        run: uv publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+  tag-and-push:
     runs-on: ubuntu-latest
     permissions: write-all
     needs: [release, bump]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: version-${{ needs.bump.outputs.version }}
+          ref: ${{ needs.bump.outputs.commit }}
+          token: ${{ secrets.RELEASE_GITHUB_TOKEN }}
+          fetch-depth: 0
       - run: |
-          git tag "v$VERSION"
-          git push --tags
-          gh pr merge --delete-branch --merge --admin
+          # Neither ref changes if main advanced or the tag points to a different commit.
+          git push --atomic origin "$RELEASE_SHA:refs/heads/main" "$RELEASE_SHA:refs/tags/v$VERSION"
         env:
           VERSION: ${{ needs.bump.outputs.version }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ needs.bump.outputs.commit }}

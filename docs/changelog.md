@@ -4,6 +4,9 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Publish releases with `uv`, then tag and fast-forward `main` directly without a release PR or redundant CI.
+- Fix missing macOS wheels for standard CPython 3.14 when building alongside free-threaded Python.
+
 ## 14.0.0 (2026-09-20)
 
 - Fix release version bumps to update `Cargo.lock` before building locked wheels.
