@@ -3591,8 +3591,9 @@ class TestCustomExtract:
         extracted, _seen_expr, seen_children_costs = self._capture_container_children_costs(
             expr,
             leaf_cost=self._small_leaf_cost,
-            should_capture=lambda candidate, children_costs: isinstance(candidate, MultiSet)
-            and len(children_costs) == 4,
+            should_capture=lambda candidate, children_costs: (
+                isinstance(candidate, MultiSet) and len(children_costs) == 4
+            ),
         )
 
         extracted_multiset = cast("MultiSet[i64]", extracted)

@@ -520,6 +520,7 @@ def get_sole_polynomial(xs: MultiSet[Value]) -> MultiSet[MultiSet[Value]]:
         get_sole_polynomial(MultiSet(polynomial(xss))) => xss
     """
 
+
 @ruleset
 def to_polynomial_ruleset(
     n1: Value,
@@ -576,7 +577,7 @@ def _flatten_polynomial_rules(
         # For each monomial, if any of its terms is a polynomial with a single monomial, flatten
         # that into the monomial, otherwise keep it as is
         mss1 == mss.map(partial(multiset_flat_map, get_monomial)),
-        mss != mss1, # skip if this is a no-op
+        mss != mss1,  # skip if this is a no-op
         name="unwrap monomial",
     ).then(
         union(n1).with_(polynomial(mss1)),
@@ -654,12 +655,12 @@ def factor_ruleset(
         eq(n).to(polynomial(mss)),
         # Find factor that shows up in most monomials, at least two of them
         counts == MultiSet.sum_multisets(mss.map(MultiSet.reset_counts)),
-        eq(picked_term).to(counts.pick_max()), # on ties pick an arbitrary one
+        eq(picked_term).to(counts.pick_max()),  # on ties pick an arbitrary one
         # Only factor out if it appears in more than one monomial
         counts.count(picked_term) > 1,
         # The factor we choose is the largest intersection between all the monomials that have that that factored term
         picked == mss.filter(partial(multiset_contains_swapped, picked_term)),
-        factor == multiset_fold(MultiSet.__and__, picked.pick(), picked), # intersection
+        factor == multiset_fold(MultiSet.__and__, picked.pick(), picked),  # intersection
         divided == picked.map(partial(multiset_subtract_swapped, factor)),
         # remainder is those monomials that do not contain the factor
         remainder == mss.filter(partial(multiset_not_contains_swapped, picked_term)),

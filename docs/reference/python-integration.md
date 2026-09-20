@@ -85,6 +85,7 @@ class MyExpr(Expr):
                 return value
         raise ExprValueError(self, "MyExpr")
 
+
 match MyExpr("hello"):
     case MyExpr(value):
         print(f"Matched MyExpr with value: {value}")
