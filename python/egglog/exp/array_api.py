@@ -1527,7 +1527,10 @@ converter(Slice, IndexKey, lambda s: IndexKey.slice(s))
 converter(MultiAxisIndexKey, IndexKey, lambda m: IndexKey.multi_axis(m))
 
 
-class Device(Expr, ruleset=array_api_ruleset): ...
+class Device(Expr, ruleset=array_api_ruleset):
+    """Array device; the current CPU-only backend exposes ``Device.cpu``."""
+
+    cpu: ClassVar[Device]
 
 
 ALL_INDICES: TupleInt = constant("ALL_INDICES", TupleInt)
@@ -1766,8 +1769,10 @@ class NDArray(Expr, ruleset=array_api_ruleset):
     @property
     def dtype(self) -> DType: ...
 
+    @method(preserve=True)  # type: ignore[prop-decorator]
     @property
-    def device(self) -> Device: ...
+    def device(self) -> Device:
+        return Device.cpu
 
     @property
     def shape(self) -> TupleInt: ...

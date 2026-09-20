@@ -4,6 +4,13 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Modernize dependencies and supported Python versions.
+  - BREAKING: raise the minimum to GIL-enabled CPython 3.12, support Python
+    3.12-3.14 under the rolling SPEC 0 window, and drop Python 3.11.
+    Free-threaded Python remains unsupported.
+  - Add `Device.cpu` as the canonical CPU device returned by CPU-backed
+    experimental arrays.
+
 - Make shared-subexpression hoisting deterministic across Python processes,
   stabilizing generated `let` bindings and serialized e-graph output
   [#422](https://github.com/egraphs-good/egglog-python/pull/422).
@@ -85,7 +92,8 @@ _This project uses semantic versioning_
 - Add support for setting report level with `egraph.set_report_level` [#375](https://github.com/egraphs-good/egglog-python/pull/375)
 - Make docs builds fail on notebook execution errors and fix all doc issues [#369](https://github.com/egraphs-good/egglog-python/pull/369)
 - Add WIP `egglog.exp.any_expr` code for tracing arbitrary expressions with Python fallback [#366](https://github.com/egraphs-good/egglog-python/pull/366)
-  - BREAKING: Remove support for Python 3.11 now that pyo3 has dropped support.
+  - BREAKING: Remove support for Python 3.10 so exception reporting can use
+    `BaseException.add_note`.
   - Allow mutating methods to update their underlying expression via `Expr.__replace_expr__`, and ensure default rewrites return the mutated receiver when using `mutates_self` or `mutates_first_arg`.
   - BREAKING: Store `PyObject` values as `cloudpickle` bytes instead of live references so duplicates merge by value; `.value` now returns a fresh copy and the sort accepts objects like `None` that previously failed.
   - Adds a `__call__` method (and `call_extended` for kwargs) to `PyObject` to replace `py_eval_fn`, which is now deprecated.

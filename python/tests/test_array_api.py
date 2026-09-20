@@ -47,6 +47,10 @@ def test_vecdot_eval_numpy_uses_fresh_egraph():
     assert vecdot(v, n).eval_numpy(np.dtype("float64")).tolist() == pytest.approx([3.0, 8.0, 10.0])
 
 
+def test_ndarray_device_is_cpu():
+    check_eq(NDArray((1, 2, 3)).device, Device.cpu, array_api_schedule)
+
+
 @function(ruleset=array_api_ruleset)
 def is_even(x: Int) -> Boolean:
     return x % 2 == 0
