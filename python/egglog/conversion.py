@@ -5,6 +5,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from threading import Condition, RLock, get_ident
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from .declarations import *
@@ -25,12 +26,72 @@ _CONVERSION_DECLS = Declarations.create()
 # Defer a list of declarations to be added to the global declarations, so that we can not trigger them processing
 # until we need them
 _TO_PROCESS_DECLS: list[DeclarationsLike] = []
+# Registering a converter recursively updates the transitive closure. Declaration
+# thunks are resolved outside this lock. The in-flight batch lets the owner
+# re-enter for partial declarations, while its pending list keeps dependencies
+# registered by that thread separate from unrelated concurrent registrations.
+_CONVERSION_LOCK = RLock()
+_CONVERSION_DECLS_CONDITION = Condition(_CONVERSION_LOCK)
+_CONVERSION_DECLS_OWNER: int | None = None
+_CONVERSION_DECLS_IN_FLIGHT: tuple[DeclarationsLike, ...] = ()
+_CONVERSION_DECLS_OWNER_PENDING: list[DeclarationsLike] = []
 
 
 def retrieve_conversion_decls() -> Declarations:
-    _CONVERSION_DECLS.update(*_TO_PROCESS_DECLS)
-    _TO_PROCESS_DECLS.clear()
-    return _CONVERSION_DECLS
+    """Resolve queued declarations and return a stable snapshot for lock-free readers."""
+    global _CONVERSION_DECLS_IN_FLIGHT, _CONVERSION_DECLS_OWNER
+
+    thread_id = get_ident()
+    with _CONVERSION_DECLS_CONDITION:
+        while _CONVERSION_DECLS_OWNER is not None and thread_id != _CONVERSION_DECLS_OWNER:
+            _CONVERSION_DECLS_CONDITION.wait()
+
+        reentrant = thread_id == _CONVERSION_DECLS_OWNER
+        if reentrant:
+            pending = (*_CONVERSION_DECLS_IN_FLIGHT, *_CONVERSION_DECLS_OWNER_PENDING)
+        else:
+            if not _TO_PROCESS_DECLS:
+                return _CONVERSION_DECLS.copy()
+            pending = tuple(_TO_PROCESS_DECLS)
+            _TO_PROCESS_DECLS.clear()
+            _CONVERSION_DECLS_OWNER = thread_id
+            _CONVERSION_DECLS_IN_FLIGHT = pending
+            _CONVERSION_DECLS_OWNER_PENDING.clear()
+
+    try:
+        pending_decls = Declarations.create(*pending)
+        if not reentrant:
+            while True:
+                with _CONVERSION_DECLS_CONDITION:
+                    if not _CONVERSION_DECLS_OWNER_PENDING:
+                        break
+                    owner_pending = tuple(_CONVERSION_DECLS_OWNER_PENDING)
+                    _CONVERSION_DECLS_OWNER_PENDING.clear()
+                    _CONVERSION_DECLS_IN_FLIGHT += owner_pending
+                pending_decls.update(Declarations.create(*owner_pending))
+    except BaseException:
+        if not reentrant:
+            with _CONVERSION_DECLS_CONDITION:
+                _TO_PROCESS_DECLS[:0] = (*_CONVERSION_DECLS_IN_FLIGHT, *_CONVERSION_DECLS_OWNER_PENDING)
+                _CONVERSION_DECLS_OWNER = None
+                _CONVERSION_DECLS_IN_FLIGHT = ()
+                _CONVERSION_DECLS_OWNER_PENDING.clear()
+                _CONVERSION_DECLS_CONDITION.notify_all()
+        raise
+
+    with _CONVERSION_DECLS_CONDITION:
+        if reentrant:
+            result = _CONVERSION_DECLS.copy()
+            result.update(pending_decls)
+            return result
+        try:
+            _CONVERSION_DECLS.update(pending_decls)
+            return _CONVERSION_DECLS.copy()
+        finally:
+            _CONVERSION_DECLS_OWNER = None
+            _CONVERSION_DECLS_IN_FLIGHT = ()
+            _CONVERSION_DECLS_OWNER_PENDING.clear()
+            _CONVERSION_DECLS_CONDITION.notify_all()
 
 
 T = TypeVar("T")
@@ -45,10 +106,11 @@ def converter(from_type: type[T], to_type: type[V], fn: Callable[[T], V], cost: 
     """
     Register a converter from some type to an egglog type.
     """
-    to_type_name = process_tp(to_type)
-    if not isinstance(to_type_name, JustTypeRef):
-        raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
-    _register_converter(process_tp(from_type), to_type_name, cast("Callable[[Any], RuntimeExpr]", fn), cost)
+    with _CONVERSION_LOCK:
+        to_type_name = process_tp(to_type)
+        if not isinstance(to_type_name, JustTypeRef):
+            raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
+        _register_converter(process_tp(from_type), to_type_name, cast("Callable[[Any], RuntimeExpr]", fn), cost)
 
 
 def _register_converter(a: type | JustTypeRef, b: JustTypeRef, a_b: Callable[[Any], RuntimeExpr], cost: int) -> None:
@@ -58,20 +120,21 @@ def _register_converter(a: type | JustTypeRef, b: JustTypeRef, a_b: Callable[[An
     Also adds transitive converters, i.e. if registering A->B and there is already B->C, then A->C will be registered.
     Also, if registering A->B and there is already D->A, then D->B will be registered.
     """
-    if a == b:
-        return
-    if (a, b) in CONVERSIONS and CONVERSIONS[(a, b)][0] <= cost:
-        return
-    CONVERSIONS[(a, b)] = (cost, a_b)
-    for (c, d), (other_cost, c_d) in list(CONVERSIONS.items()):
-        if _is_type_compatible(b, c):
-            _register_converter(
-                a, d, _ComposedConverter(a_b, c_d, c.args if isinstance(c, JustTypeRef) else ()), cost + other_cost
-            )
-        if _is_type_compatible(a, d):
-            _register_converter(
-                c, b, _ComposedConverter(c_d, a_b, a.args if isinstance(a, JustTypeRef) else ()), cost + other_cost
-            )
+    with _CONVERSION_LOCK:
+        if a == b:
+            return
+        if (a, b) in CONVERSIONS and CONVERSIONS[(a, b)][0] <= cost:
+            return
+        CONVERSIONS[(a, b)] = (cost, a_b)
+        for (c, d), (other_cost, c_d) in list(CONVERSIONS.items()):
+            if _is_type_compatible(b, c):
+                _register_converter(
+                    a, d, _ComposedConverter(a_b, c_d, c.args if isinstance(c, JustTypeRef) else ()), cost + other_cost
+                )
+            if _is_type_compatible(a, d):
+                _register_converter(
+                    c, b, _ComposedConverter(c_d, a_b, a.args if isinstance(a, JustTypeRef) else ()), cost + other_cost
+                )
 
 
 def _is_type_compatible(source: type | JustTypeRef, target: type | JustTypeRef) -> bool:
@@ -136,7 +199,11 @@ def process_tp(tp: type | RuntimeClass) -> JustTypeRef | type:
     Process a type before converting it, to add it to the global declarations and resolve to a ref.
     """
     if isinstance(tp, RuntimeClass):
-        _TO_PROCESS_DECLS.append(tp)
+        with _CONVERSION_LOCK:
+            if get_ident() == _CONVERSION_DECLS_OWNER:
+                _CONVERSION_DECLS_OWNER_PENDING.append(tp)
+            else:
+                _TO_PROCESS_DECLS.append(tp)
         egg_tp = tp.__egg_tp__
         return egg_tp.to_just()
     return tp
@@ -185,9 +252,11 @@ def _all_conversions_from(tp: JustTypeRef | type) -> list[tuple[int, JustTypeRef
 
     Returns a list of tuples of (cost, target type, conversion function).
     """
+    with _CONVERSION_LOCK:
+        conversions = tuple(CONVERSIONS.items())
     return [
         (cost, target, fn)
-        for (source, target), (cost, fn) in CONVERSIONS.items()
+        for (source, target), (cost, fn) in conversions
         if (issubclass(tp, source) if isinstance(tp, type) and isinstance(source, type) else source == tp)
     ]
 
@@ -244,11 +313,13 @@ def _lookup_conversion(lhs: type | JustTypeRef, rhs: JustTypeRef) -> tuple[int, 
 
     Also looks up all parent types of the lhs if it is a Python type and looks up more general not parametrized types for rhs.
     """
+    with _CONVERSION_LOCK:
+        conversions = CONVERSIONS.copy()
     for lhs_type in lhs.__mro__ if isinstance(lhs, type) else [lhs]:
-        if (key := (lhs_type, rhs)) in CONVERSIONS:
-            return CONVERSIONS[key]
-        if rhs.args and (key := (lhs_type, JustTypeRef(rhs.ident))) in CONVERSIONS:
-            return CONVERSIONS[key]
+        if (key := (lhs_type, rhs)) in conversions:
+            return conversions[key]
+        if rhs.args and (key := (lhs_type, JustTypeRef(rhs.ident))) in conversions:
+            return conversions[key]
     return None
 
 
@@ -257,7 +328,9 @@ def _debug_print_converters():
     Prints a mapping of all source types to target types that have a conversion function.
     """
     source_to_targets = defaultdict(list)
-    for source, target in CONVERSIONS:
+    with _CONVERSION_LOCK:
+        conversions = tuple(CONVERSIONS)
+    for source, target in conversions:
         source_to_targets[source].append(target)
 
 

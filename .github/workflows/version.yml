@@ -70,10 +70,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: auto
           command: build
-          # Build only the supported GIL-enabled CPython versions. Recent
-          # manylinux images also contain free-threaded interpreters, which
-          # --find-interpreter would otherwise publish wheels for.
-          args: --release --locked --sdist -o dist -i python3.12 python3.13 python3.14
+          args: --release --locked --sdist -o dist -i python3.12 python3.13 python3.14 python3.14t
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
@@ -98,7 +95,7 @@ jobs:
         with:
           manylinux: auto
           command: build
-          args: --release --locked --sdist -o dist -i python3.12 python3.13 python3.14
+          args: --release --locked --sdist -o dist -i python3.12 python3.13 python3.14 python3.14t
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
@@ -111,7 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.12", "3.13", "3.14"]
+        python: ["3.12", "3.13", "3.14", "3.14t"]
     needs: [bump]
     if: ${{ always() }}
     steps:
@@ -153,11 +150,12 @@ jobs:
             3.12
             3.13
             3.14
+            3.14t
       - uses: PyO3/maturin-action@v1.51.0
         with:
           command: build
           target: universal2-apple-darwin
-          args: --release --locked -o dist -i python3.12 python3.13 python3.14
+          args: --release --locked -o dist -i python3.12 python3.13 python3.14 python3.14t
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:

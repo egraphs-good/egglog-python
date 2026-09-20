@@ -486,7 +486,7 @@ fn copy_termdag(source: &egglog::TermDag, target: &mut egglog::TermDag) -> Vec<T
 /// Compatibility facade for the former owned core extractor. The current core
 /// extractor borrows its e-graph, so this object stores preparation inputs and
 /// prepares locally for each extraction call.
-#[pyclass(unsendable)]
+#[pyclass]
 pub struct Extractor {
     rootsorts: Option<Vec<String>>,
     cost_model: CostModel,

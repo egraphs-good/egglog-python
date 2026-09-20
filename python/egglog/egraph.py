@@ -11,6 +11,7 @@ from contextvars import ContextVar, Token
 from dataclasses import InitVar, dataclass, field, replace
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
+from threading import Condition, Lock, get_ident
 from types import FrameType, FunctionType
 from typing import (
     TYPE_CHECKING,
@@ -457,12 +458,11 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()), doc=namespace.pop("__doc__", None)
     )
     decls = Declarations(_classes={cls_ident: cls_decl})
-    # Update class thunk eagerly when resolving so that lookups work in methods.
-    runtime_cls.__egg_decls_thunk__ = Thunk.value(decls)
-    # Cached RuntimeFunction/RuntimeExpr wrappers capture the current decl thunk, so
-    # swapping in the concrete declarations must invalidate any wrappers created while
-    # the class was still pointing at the lazy declaration builder.
-    runtime_cls.__egg_attr_cache__.clear()
+    # Recursive lookups in methods need the declarations being built. Keep the
+    # original thunk so other threads and cached wrappers wait until it finishes.
+    thunk = runtime_cls.__egg_decls_thunk__
+    assert isinstance(thunk, Thunk)
+    thunk.set_partial(decls)
 
     ##
     # Register class variables
@@ -1067,10 +1067,7 @@ def _add_default_rewrite(
     """
     resolved_value = resolve_literal(type_ref, default_rewrite, Thunk.value(decls))
     rewrite_decl = DefaultRewriteDecl(ref, resolved_value.__egg_typed_expr__.expr, subsume)
-    ruleset_decls = ruleset._current_egg_decls
-    ruleset.__egg_ruleset__.rules.append(rewrite_decl)
-    ruleset_decls |= decls
-    ruleset_decls |= resolved_value
+    ruleset.append(RewriteOrRule(Declarations.create(decls, resolved_value), rewrite_decl))
 
 
 def _last_param_variable(params: list[Parameter]) -> bool:
@@ -1115,7 +1112,9 @@ class EGraph:
     # For storing the global "current" egraph
     _token_stack: list[EGraph] = field(default_factory=list, repr=False)
     # Raw values supplied while extraction holds this e-graph read-only.
-    _cost_callback_values: dict[int, bindings.Value] | None = field(default=None, init=False, repr=False, compare=False)
+    _cost_callback_values: dict[TypedExprDecl, bindings.Value] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __init__(
         self,
@@ -1886,7 +1885,7 @@ class EGraph:
     def _lookup_argument_values(
         self,
         typed_args: list[TypedExprDecl],
-        callback_values: dict[int, bindings.Value] | None,
+        callback_values: dict[TypedExprDecl, bindings.Value] | None,
     ) -> list[bindings.Value]:
         """Resolve lookup keys without mutating an e-graph borrowed by extraction."""
         if callback_values is None:
@@ -1904,8 +1903,8 @@ class EGraph:
 
         values = []
         for arg in typed_args:
-            if id(arg) in callback_values:
-                values.append(callback_values[id(arg)])
+            if arg in callback_values:
+                values.append(callback_values[arg])
                 continue
             if isinstance(arg.expr, ValueDecl) and arg.expr.owner in self._state.valid_value_owners:
                 values.append(arg.expr.value)
@@ -2074,7 +2073,7 @@ class EGraph:
 
     def _values_to_expr_and_callback_values(
         self, args: list[bindings.Value], name: str
-    ) -> tuple[RuntimeExpr, dict[int, bindings.Value]] | None:
+    ) -> tuple[RuntimeExpr, dict[TypedExprDecl, bindings.Value]] | None:
         """Reconstruct a callback call and map its Python-order arguments to raw backend values."""
         if name not in self._state.egg_fn_to_callable_refs:
             return None
@@ -2087,7 +2086,9 @@ class EGraph:
             for arg_type, arg in zip(signature.arg_types, python_args, strict=True)
             for tp in (arg_type.to_just(),)
         )
-        callback_values = dict(zip(map(id, arg_exprs), python_args, strict=True))
+        # Interned calls retain structurally equal argument declarations from
+        # earlier uses, so callback values cannot be keyed by Python identity.
+        callback_values = dict(zip(arg_exprs, python_args, strict=True))
         stack = list(arg_exprs)
         while stack:
             arg = stack.pop()
@@ -2097,7 +2098,7 @@ class EGraph:
                     # callback borrow, but structurally equal values from
                     # another e-graph must not be accepted.
                     if owner in self._state.valid_value_owners:
-                        callback_values[id(arg)] = value
+                        callback_values[arg] = value
                 case CallDecl(args=nested_args) | PartialCallDecl(CallDecl(args=nested_args)):
                     stack.extend(nested_args)
         res_type = signature.semantic_return_type.to_just()
@@ -2223,6 +2224,8 @@ class Ruleset(Schedule):
     __egg_ruleset__: RulesetDecl = field(init=False)
     # Rule generator functions that have been deferred, to allow for late type binding
     deferred_rule_gens: list[Callable[[], Iterable[RewriteOrRule]]] = field(default_factory=list)
+    _condition: Condition = field(default_factory=Condition, init=False, repr=False, compare=False)
+    _materializing_thread: int | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.schedule = RunDecl(self.__egg_ident__, ())
@@ -2233,19 +2236,53 @@ class Ruleset(Schedule):
         """
         To return the egg decls, we go through our deferred rules and add any we haven't yet
         """
-        while self.deferred_rule_gens:
-            with set_current_ruleset(self):
-                rules = self.deferred_rule_gens.pop()()
-            self._current_egg_decls.update(*rules)
-            self.__egg_ruleset__.rules.extend(r.decl for r in rules)
-        return self._current_egg_decls
+        thread_id = get_ident()
+        with self._condition:
+            while self._materializing_thread is not None and self._materializing_thread != thread_id:
+                self._condition.wait()
+            reentrant = self._materializing_thread == thread_id
+            self._materializing_thread = thread_id
+
+        try:
+            while True:
+                with self._condition:
+                    if not self.deferred_rule_gens:
+                        return self._snapshot_egg_decls()
+                    generate_rules = self.deferred_rule_gens.pop()
+                # Never hold the condition while calling declaration thunks.
+                # Another thread resolving a class can append its default
+                # rewrites before this generator finishes waiting for that class.
+                try:
+                    with set_current_ruleset(self):
+                        rules = tuple(generate_rules())
+                    decls = Declarations.create(*rules)
+                except BaseException:
+                    with self._condition:
+                        self.deferred_rule_gens.append(generate_rules)
+                    raise
+                with self._condition:
+                    self._current_egg_decls.update(decls)
+                    self.__egg_ruleset__.rules.extend(r.decl for r in rules)
+        finally:
+            if not reentrant:
+                with self._condition:
+                    self._materializing_thread = None
+                    self._condition.notify_all()
+
+    def _snapshot_egg_decls(self) -> Declarations:
+        # Called under the condition: readers must not iterate a rules list
+        # which a later append or materialization can mutate concurrently.
+        decls = self._current_egg_decls.copy()
+        decls._rulesets[self.__egg_ident__] = RulesetDecl(self.__egg_ruleset__.rules.copy())
+        return decls
 
     def append(self, rule: RewriteOrRule) -> None:
         """
         Register a rule with the ruleset.
         """
-        self._current_egg_decls |= rule
-        self.__egg_ruleset__.rules.append(rule.decl)
+        with self._condition:
+            self._current_egg_decls.update(rule.__egg_decls__)
+            self.__egg_ruleset__.rules.append(rule.decl)
 
     def register(
         self,
@@ -2258,9 +2295,10 @@ class Ruleset(Schedule):
         Register rewrites or rules, either as a function or as values.
         """
         if isinstance(rule_or_generator, RewriteOrRule):
-            self.append(rule_or_generator)
-            for r in rules:
-                self.append(r)
+            with self._condition:
+                self.append(rule_or_generator)
+                for r in rules:
+                    self.append(r)
         else:
             assert not rules
             current_frame = inspect.currentframe()
@@ -2270,10 +2308,14 @@ class Ruleset(Schedule):
             if _increase_frame:
                 original_frame = original_frame.f_back
                 assert original_frame
-            self.deferred_rule_gens.append(Thunk.fn(_rewrite_or_rule_generator, rule_or_generator, original_frame))
+            generator = Thunk.fn(_rewrite_or_rule_generator, rule_or_generator, original_frame)
+            with self._condition:
+                self.deferred_rule_gens.append(generator)
 
     def __str__(self) -> str:
-        return pretty_decl(self._current_egg_decls, self.__egg_ruleset__, ruleset_ident=self.ident)
+        with self._condition:
+            decls = self._snapshot_egg_decls()
+        return pretty_decl(decls, decls._rulesets[self.__egg_ident__], ruleset_ident=self.ident)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2290,6 +2332,7 @@ class Ruleset(Schedule):
 @dataclass
 class UnstableCombinedRuleset(Schedule):
     _next_generated_ident: ClassVar[int] = 0
+    _ident_lock: ClassVar[Lock] = Lock()
 
     __egg_decls_thunk__: Callable[[], Declarations] = field(init=False)
     schedule: RunDecl = field(init=False)
@@ -2299,8 +2342,9 @@ class UnstableCombinedRuleset(Schedule):
 
     def __post_init__(self, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
         if self.ident is None:
-            self._generated_ident = Ident(f"_combined_ruleset_{UnstableCombinedRuleset._next_generated_ident}")
-            UnstableCombinedRuleset._next_generated_ident += 1
+            with UnstableCombinedRuleset._ident_lock:
+                self._generated_ident = Ident(f"_combined_ruleset_{UnstableCombinedRuleset._next_generated_ident}")
+                UnstableCombinedRuleset._next_generated_ident += 1
         self.schedule = RunDecl(self.__egg_ident__, ())
         # Don't use thunk so that this is re-evaluated each time its requsted, so that additions inside will
         # be added after its been evaluated once.
@@ -2870,7 +2914,7 @@ def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
 @contextlib.contextmanager
 def _cost_model_callback_values(
     egraph: EGraph,
-    values: dict[int, bindings.Value],
+    values: dict[TypedExprDecl, bindings.Value],
 ) -> Generator[None, None, None]:
     """Make raw callback values available to read-only table lookups without evaluating expressions."""
     # Values belong to the physical e-graph borrow, not Python's ambient context.
@@ -3017,7 +3061,7 @@ class _CostModel(Generic[COST]):
     egraph: EGraph
     enode_cost_results: dict[tuple[str, tuple[bindings.Value, ...]], int] = field(default_factory=dict)
     enode_cost_expressions: list[RuntimeExpr] = field(default_factory=list)
-    enode_cost_argument_values: list[dict[int, bindings.Value]] = field(default_factory=list)
+    enode_cost_argument_values: list[dict[TypedExprDecl, bindings.Value]] = field(default_factory=list)
     base_value_cost_results: dict[tuple[str, bindings.Value], COST] = field(default_factory=dict)
 
     def call_model(self, expr: RuntimeExpr, children_costs: list[COST]) -> COST:
@@ -3060,7 +3104,7 @@ class _CostModel(Generic[COST]):
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        with _cost_model_callback_values(self.egraph, {id(expr.__egg_typed_expr__): value}):
+        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
             res = self.call_model(expr, [])
         self.base_value_cost_results[(tp, value)] = res
         return res
@@ -3071,7 +3115,7 @@ class _CostModel(Generic[COST]):
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        with _cost_model_callback_values(self.egraph, {id(expr.__egg_typed_expr__): value}):
+        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
             return self.call_model(expr, element_costs)
 
     def to_bindings_cost_model(self) -> bindings.CostModel[COST, int]:
@@ -3114,7 +3158,7 @@ class _DagCostModel(Generic[DAG_COST]):
             self.egraph.__egg_decls__,
             TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
         )
-        with _cost_model_callback_values(self.egraph, {id(expr.__egg_typed_expr__): value}):
+        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
             result = self.model.marginal_cost(self.egraph, cast("BaseExpr", expr))
         self.value_cost_results[key] = result
         return result

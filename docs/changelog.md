@@ -5,9 +5,11 @@ _This project uses semantic versioning_
 ## UNRELEASED
 
 - Modernize dependencies and supported Python versions.
-  - BREAKING: raise the minimum to GIL-enabled CPython 3.12, support Python
+  - BREAKING: raise the minimum to CPython 3.12, support Python
     3.12-3.14 under the rolling SPEC 0 window, and drop Python 3.11.
-    Free-threaded Python remains unsupported.
+  - Add beta support for free-threaded CPython 3.14t without re-enabling the
+    GIL on import. See the [thread-safety contract](reference/usage.md#parallelism-and-threads)
+    for concurrent execution and cross-thread handoff.
   - Add `Device.cpu` as the canonical CPU device returned by CPU-backed
     experimental arrays.
 

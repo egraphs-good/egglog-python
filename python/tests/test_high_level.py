@@ -8,10 +8,12 @@ import pathlib
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from copy import copy
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
+from threading import Barrier, Event
 from typing import ClassVar, TypeAlias, TypeVar, cast
 from unittest.mock import MagicMock
 
@@ -77,6 +79,207 @@ def test_per_egraph_configuration() -> None:
     egraph.set_no_decomp(False)
     assert egraph.num_threads() == 1
     assert not egraph.no_decomp()
+
+
+def test_independent_egraphs_run_on_different_threads() -> None:
+    # A fresh process leaves the shared builtin declaration thunks unresolved.
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+from egglog import EGraph, i64
+
+workers = 32
+barrier = Barrier(workers, timeout=30)
+
+def extract(worker):
+    barrier.wait()
+    for iteration in range(4):
+        number = worker * 100 + iteration
+        egraph = EGraph()
+        value = egraph.let("value", i64(number) + 1)
+        assert egraph.extract(value).value == number + 1
+
+with ThreadPoolExecutor(max_workers=workers) as executor:
+    list(executor.map(extract, range(workers)))
+""",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def test_concurrent_class_resolution_waits_for_complete_declarations() -> None:
+    entered = Event()
+    release = Event()
+    calling = Event()
+
+    def slow_annotation() -> type[i64]:
+        entered.set()
+        assert release.wait(10)
+        return i64
+
+    class Cold(Expr):
+        def __init__(self, value: slow_annotation()) -> None: ...  # type: ignore[valid-type]
+
+    def extract(number: int) -> str:
+        if number == 2:
+            calling.set()
+        egraph = EGraph()
+        value = Cold(number)
+        egraph.register(value)
+        return str(egraph.extract(value))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(extract, 1)
+        try:
+            assert entered.wait(10)
+            second = executor.submit(extract, 2)
+            assert calling.wait(10)
+            with pytest.raises(TimeoutError):
+                second.result(timeout=0.1)
+        finally:
+            release.set()
+
+        assert first.result(timeout=10) == "Cold(1)"
+        assert second.result(timeout=10) == "Cold(2)"
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["complete", "error"])
+def test_concurrent_ruleset_materialization_waits_for_complete_rules(*, fail: bool) -> None:
+    entered = Event()
+    release = Event()
+    registered = Event()
+    done = relation("concurrent_ruleset_done")()
+    added = relation("concurrent_ruleset_added")()
+    extra_rule = rule().then(added)
+    first_graph, second_graph = EGraph(), EGraph()
+
+    @ruleset
+    def delayed_rules():
+        entered.set()
+        assert release.wait(10)
+        if fail:
+            msg = "rule generation failed"
+            raise ValueError(msg)
+        yield rule().then(done)
+
+    def run_second() -> None:
+        # Registration must remain possible while a generator is resolving:
+        # class declaration thunks can publish default rewrites this way.
+        delayed_rules.register(extra_rule)
+        registered.set()
+        second_graph.run(delayed_rules)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(first_graph.run, delayed_rules)
+        try:
+            assert entered.wait(10)
+            second = executor.submit(run_second)
+            assert registered.wait(10)
+            with pytest.raises(TimeoutError):
+                second.result(timeout=0.1)
+        finally:
+            release.set()
+
+        if fail:
+            error = first.exception(timeout=10)
+            assert isinstance(error, ValueError)
+            assert str(error) == "rule generation failed"
+            assert second.exception(timeout=10) is error
+        else:
+            first.result(timeout=10)
+            second.result(timeout=10)
+
+    if not fail:
+        first_graph.check(done, added)
+        second_graph.check(done, added)
+
+
+def test_ruleset_materialization_does_not_lock_out_class_defaults() -> None:
+    # A timeout bounds the regression if a generator holds its ruleset lock
+    # while waiting for the class thunk that must append a default rewrite.
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from egglog import EGraph, Expr, i64, relation, rule, ruleset
+
+entered, release, generating = Event(), Event(), Event()
+shared = ruleset()
+
+class Cold(Expr, ruleset=shared):
+    def __init__(self, value: i64) -> None: ...
+
+    def default(self) -> Cold:
+        entered.set()
+        assert release.wait(10)
+        return Cold(0)
+
+seen = relation("seen", Cold)
+
+@shared.register
+def populate():
+    generating.set()
+    yield rule().then(seen(Cold(1)))
+
+first_graph, second_graph = EGraph(), EGraph()
+
+def resolve_class():
+    first_graph.register(Cold(1))
+
+with ThreadPoolExecutor(max_workers=2) as executor:
+    first = executor.submit(resolve_class)
+    try:
+        assert entered.wait(10)
+        second = executor.submit(second_graph.run, shared)
+        assert generating.wait(10)
+    finally:
+        release.set()
+    first.result(timeout=10)
+    second.result(timeout=10)
+second_graph.check(seen(Cold(1)))
+""",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_concurrent_combined_rulesets_preserve_distinct_rules() -> None:
+    workers, per_worker = 16, 32
+    seen = relation("concurrent_combined_seen", i64)
+    sources = [ruleset(rule().then(seen(i64(i)))) for i in range(workers * per_worker)]
+    empty = ruleset()
+    barrier = Barrier(workers, timeout=10)
+
+    def combine(worker: int) -> list[Schedule]:
+        barrier.wait()
+        start = worker * per_worker
+        return [source | empty for source in sources[start : start + per_worker]]
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(combine, worker) for worker in range(workers)]
+        combined = [item for future in futures for item in future.result(timeout=10)]
+
+    egraph = EGraph(save_egglog_string=True)
+    egraph.run(seq(*combined))
+    egraph.check(*(seen(i64(i)) for i in range(workers * per_worker)))
+    # Every combination must receive its own backend declaration, even when
+    # all combinations are later used together in one graph.
+    assert egraph.as_egglog_string.count("(unstable-combined-ruleset ") == len(combined)
 
 
 @pytest.mark.parametrize("use_setter", [False, True], ids=["constructor", "setter"])

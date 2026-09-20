@@ -2,10 +2,10 @@
 
 ## Installation
 
-`egglog` supports GIL-enabled CPython 3.12, 3.13, and 3.14. Free-threaded Python
-builds are not currently supported. The examples below create an isolated
-environment first so that new installs do not depend on packages already
-present on your machine.
+`egglog` supports GIL-enabled CPython 3.12, 3.13, and 3.14, and free-threaded
+CPython 3.14t. Importing `egglog` does not re-enable the GIL on a free-threaded
+build. The examples below create an isolated environment first so that new
+installs do not depend on packages already present on your machine.
 
 With `pip`:
 
@@ -77,6 +77,12 @@ egraph = EGraph(num_threads=4)
 egraph.set_num_threads(0)
 assert egraph.num_threads() >= 1
 ```
+
+On free-threaded CPython 3.14t, independent `EGraph` instances may execute
+concurrently in different Python threads. An `EGraph` may also be passed from
+one thread to another for sequential use. Callers must serialize simultaneous
+access to the same `EGraph`, for example by protecting all operations on it with
+a `threading.Lock`.
 
 (community)=
 

@@ -60,7 +60,7 @@ fn error_is_replayable_by_fail(command: &egglog::ast::Command, error: &egglog::E
 /// --
 ///
 /// Create an empty EGraph.
-#[pyclass(unsendable)]
+#[pyclass]
 pub struct EGraph {
     pub(crate) egraph: egglog::EGraph,
     cmds: Option<String>,

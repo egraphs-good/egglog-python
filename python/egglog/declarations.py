@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import cache, cached_property
 from itertools import chain, repeat
+from threading import RLock
 from typing import (
     TYPE_CHECKING,
     ClassVar,
@@ -896,7 +897,7 @@ class LitDecl:
         return (type(self.value), self.value)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class CallDecl:
     callable: CallableRef
     # TODO: Can I make these not typed expressions?
@@ -907,31 +908,36 @@ class CallDecl:
 
     # pool objects for faster __eq__
     _args_to_value: ClassVar[WeakValueDictionary[tuple[object, ...], CallDecl]] = WeakValueDictionary({})
+    _pool_lock: ClassVar[RLock] = RLock()
 
-    def __new__(cls, *args: object, **kwargs: object) -> Self:
+    def __new__(
+        cls,
+        callable: CallableRef,
+        args: tuple[TypedExprDecl, ...] = (),
+        bound_tp_params: tuple[JustTypeRef, ...] = (),
+    ) -> Self:
         """
         Pool CallDecls so that they can be compared by identity more quickly.
 
         Necessary bc we search for common parents when serializing CallDecl trees to egglog to
         only serialize each sub-tree once.
         """
-        # normalize the args/kwargs to a tuple so that they can be compared
-        callable = args[0] if args else kwargs["callable"]
-        args_ = args[1] if len(args) > 1 else kwargs.get("args", ())
-        bound_tp_params = args[2] if len(args) > 2 else kwargs.get("bound_tp_params", ())
-
-        normalized_args = (callable, args_, bound_tp_params)
-        try:
-            return cast("Self", cls._args_to_value[normalized_args])
-        except KeyError:
-            res = super().__new__(cls)
-            cls._args_to_value[normalized_args] = res
-            return res
-
-    def __post_init__(self) -> None:
-        if self.bound_tp_params and not isinstance(self.callable, ClassMethodRef | InitRef):
+        if bound_tp_params and not isinstance(callable, ClassMethodRef | InitRef):
             msg = "Cannot bind type parameters to a non-class method callable."
             raise ValueError(msg)
+        normalized_args = (callable, args, bound_tp_params)
+        with cls._pool_lock:
+            try:
+                return cast("Self", cls._args_to_value[normalized_args])
+            except KeyError:
+                res = super().__new__(cls)
+                # Initialize before publishing, and do not rerun a dataclass
+                # initializer when an interned instance is returned.
+                object.__setattr__(res, "callable", callable)
+                object.__setattr__(res, "args", args)
+                object.__setattr__(res, "bound_tp_params", bound_tp_params)
+                cls._args_to_value[normalized_args] = res
+                return res
 
     def __hash__(self) -> int:
         return self._cached_hash

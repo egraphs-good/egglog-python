@@ -28,7 +28,10 @@ fn shutdown_tracing(py: Python<'_>) -> PyResult<()> {
 }
 
 /// Bindings for egglog rust library
-#[pymodule(gil_used = true)]
+// Exposed classes are Send, so importing this module on CPython 3.14t does not
+// need to re-enable the GIL. PyO3 still rejects overlapping mutable borrows of
+// one class instance; callers serialize those as documented.
+#[pymodule(gil_used = false)]
 fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
 
