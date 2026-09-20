@@ -7,7 +7,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from ._threading import initialize
 from .declarations import *
 from .pretty import *
 from .runtime import *
@@ -29,12 +28,9 @@ _TO_PROCESS_DECLS: list[DeclarationsLike] = []
 
 
 def retrieve_conversion_decls() -> Declarations:
-    if not _TO_PROCESS_DECLS:
-        return _CONVERSION_DECLS
-    with initialize():
-        _CONVERSION_DECLS.update(*_TO_PROCESS_DECLS)
-        _TO_PROCESS_DECLS.clear()
-        return _CONVERSION_DECLS
+    _CONVERSION_DECLS.update(*_TO_PROCESS_DECLS)
+    _TO_PROCESS_DECLS.clear()
+    return _CONVERSION_DECLS
 
 
 T = TypeVar("T")
@@ -48,14 +44,11 @@ class ConvertError(Exception):
 def converter(from_type: type[T], to_type: type[V], fn: Callable[[T], V], cost: int = 1) -> None:
     """
     Register a converter from some type to an egglog type.
-
-    Registration is setup-time activity and must not race e-graph execution.
     """
-    with initialize():
-        to_type_name = process_tp(to_type)
-        if not isinstance(to_type_name, JustTypeRef):
-            raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
-        _register_converter(process_tp(from_type), to_type_name, cast("Callable[[Any], RuntimeExpr]", fn), cost)
+    to_type_name = process_tp(to_type)
+    if not isinstance(to_type_name, JustTypeRef):
+        raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
+    _register_converter(process_tp(from_type), to_type_name, cast("Callable[[Any], RuntimeExpr]", fn), cost)
 
 
 def _register_converter(a: type | JustTypeRef, b: JustTypeRef, a_b: Callable[[Any], RuntimeExpr], cost: int) -> None:

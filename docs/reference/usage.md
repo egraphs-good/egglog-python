@@ -78,27 +78,24 @@ egraph.set_num_threads(0)
 assert egraph.num_threads() >= 1
 ```
 
-On free-threaded CPython 3.14t, independent `EGraph` instances may execute
-concurrently in different Python threads. An `EGraph` may also be passed from
-one thread to another for sequential use. Callers must serialize simultaneous
-access to the same `EGraph`, for example by protecting all operations on it with
-a `threading.Lock`.
+The high-level Python API is not thread-safe, including on free-threaded
+CPython. Use it from one thread, or protect **all** high-level egglog operations
+with one caller-owned `threading.Lock`, even when using separate `EGraph`
+instances. This includes expression construction, converter and rule
+registration, and the entire duration of experimental ambient-egraph contexts.
+Declarations, conversion tables, and expression caches are shared across
+e-graphs.
 
-Define expression classes, functions, and converters, and register rules during
-setup. Before a worker first resolves a local expression class, egglog function,
-or rule generator, its defining frame must have returned. Complete module
-initialization before starting workers, and return local DSL objects from a
-setup helper. Internal serialization protects metadata publication; it cannot
-make another thread's [still-executing frame safe to
-inspect](https://docs.python.org/3.14/howto/free-threading-python.html#frame-objects).
-Definition and rule-generation callbacks must not wait for another thread that
-may access egglog DSL metadata. Python callbacks from independent e-graphs may
-run concurrently, so callers must synchronize any shared mutable callback
-state.
+Complete module initialization before starting workers, and return local DSL
+objects from a setup helper before handing them to another thread. Lazy
+annotation resolution must not inspect another thread's
+[still-executing defining frame](https://docs.python.org/3.14/howto/free-threading-python.html#frame-objects).
 
-This guarantee covers core `EGraph` operations. The experimental
-`set_array_api_egraph` and `set_any_expr_egraph` context managers use
-process-global ambient state and must not overlap across threads.
+This limitation does not prevent the Rust engine from using `num_threads`.
+Python callbacks running on engine workers must not concurrently use the
+high-level API, and callers must synchronize any shared mutable callback state.
+Independent [low-level binding instances](bindings.md#thread-safety) can run
+concurrently without a shared caller lock.
 
 (community)=
 

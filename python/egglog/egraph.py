@@ -38,7 +38,6 @@ from opentelemetry import trace
 from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
-from ._threading import INITIALIZE_LOCK, initialize
 from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
@@ -386,11 +385,8 @@ class _ExprMetaclass(type):
         # we can update them eagerly so that we can access the methods in the class body
         runtime_cls = RuntimeClass(None, TypeRefWithVars(cls_ident))  # type: ignore[arg-type]
 
-        # Store frame so that we can get live access to updated locals/globals.
-        # On free-threaded Python, another thread may only read this frame after
-        # it returns or after declarations are materialized on this thread (see
-        # docs/reference/usage.md).
-        # Otherwise, f_locals returns a copy.
+        # Store frame so that we can get live access to updated locals/globals
+        # Otherwise, f_locals returns a copy
         # https://peps.python.org/pep-0667/
         runtime_cls.__egg_decls_thunk__ = Thunk.fn(
             _generate_class_decls,
@@ -463,11 +459,12 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()), doc=namespace.pop("__doc__", None)
     )
     decls = Declarations(_classes={cls_ident: cls_decl})
-    # Recursive lookups in methods need the declarations being built. Keep the
-    # original thunk so other threads and cached wrappers wait until it finishes.
-    thunk = runtime_cls.__egg_decls_thunk__
-    assert isinstance(thunk, Thunk)
-    thunk.set_partial(decls)
+    # Update class thunk eagerly when resolving so that lookups work in methods.
+    runtime_cls.__egg_decls_thunk__ = Thunk.value(decls)
+    # Cached RuntimeFunction/RuntimeExpr wrappers capture the current decl thunk, so
+    # swapping in the concrete declarations must invalidate any wrappers created while
+    # the class was still pointing at the lazy declaration builder.
+    runtime_cls.__egg_attr_cache__.clear()
 
     ##
     # Register class variables
@@ -533,8 +530,6 @@ def _generate_class_decls(  # noqa: C901,PLR0912
         if preserve or method_name in ALWAYS_PRESERVED:
             cls_decl.preserved_methods[method_name] = fn
             continue
-        # The defining frame must not be executing in another thread; see the
-        # free-threaded setup contract in docs/reference/usage.md.
         locals = frame.f_locals
         ref: ClassMethodRef | MethodRef | PropertyRef | InitRef
         # TODO: Store deprecated message so we can get at runtime
@@ -2246,13 +2241,12 @@ class Ruleset(Schedule):
         """
         To return the egg decls, we go through our deferred rules and add any we haven't yet
         """
-        with initialize():
-            while self.deferred_rule_gens:
-                with set_current_ruleset(self):
-                    rules = self.deferred_rule_gens.pop()()
-                self._current_egg_decls.update(*rules)
-                self.__egg_ruleset__.rules.extend(r.decl for r in rules)
-            return self._current_egg_decls
+        while self.deferred_rule_gens:
+            with set_current_ruleset(self):
+                rules = self.deferred_rule_gens.pop()()
+            self._current_egg_decls.update(*rules)
+            self.__egg_ruleset__.rules.extend(r.decl for r in rules)
+        return self._current_egg_decls
 
     def append(self, rule: RewriteOrRule) -> None:
         """
@@ -2270,8 +2264,6 @@ class Ruleset(Schedule):
     ) -> None:
         """
         Register rewrites or rules, either as a function or as values.
-
-        Registration is setup-time activity and must not race e-graph execution.
         """
         if isinstance(rule_or_generator, RewriteOrRule):
             self.append(rule_or_generator)
@@ -2315,9 +2307,8 @@ class UnstableCombinedRuleset(Schedule):
 
     def __post_init__(self, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
         if self.ident is None:
-            with INITIALIZE_LOCK:
-                self._generated_ident = Ident(f"_combined_ruleset_{UnstableCombinedRuleset._next_generated_ident}")
-                UnstableCombinedRuleset._next_generated_ident += 1
+            self._generated_ident = Ident(f"_combined_ruleset_{UnstableCombinedRuleset._next_generated_ident}")
+            UnstableCombinedRuleset._next_generated_ident += 1
         self.schedule = RunDecl(self.__egg_ident__, ())
         # Don't use thunk so that this is re-evaluated each time its requsted, so that additions inside will
         # be added after its been evaluated once.
