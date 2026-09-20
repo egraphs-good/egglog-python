@@ -891,3 +891,23 @@ because their rows have been cleared. Opaque values previously returned by
 compaction assigns fresh backend value identities. The same `EGraph` can
 continue registering new actions and running rules afterward. Call this method
 only when dropping all unselected table state is intended.
+
+## Thread safety
+
+Python threads can construct expressions concurrently and run independent
+`EGraph` instances after single-threaded setup. Importing `egglog` on
+free-threaded CPython does not re-enable the GIL.
+
+On the defining thread, register representative expressions with a setup
+e-graph, including the conversions, parameterized types, and constants workers
+will use. Load each shared ruleset with `setup_graph.run(0, ruleset=rules)`.
+This resolves lazy declarations and rule generators without running the rules.
+Do not define or update classes, functions, converters, or rulesets during
+concurrent use.
+
+Serialize all access to a shared e-graph. Serialize access to shared expressions
+when any thread mutates them. Python callbacks must synchronize shared mutable state.
+The experimental `set_array_api_egraph` and `set_any_expr_egraph` contexts affect
+all threads: other threads must not use the corresponding API while a context
+is active. See the [low-level bindings](bindings.md#thread-safety) for their
+thread-safety requirements.

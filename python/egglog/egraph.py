@@ -337,8 +337,9 @@ def function(*args, **kwargs) -> Any:
     provide a body to lower as a rewrite. `subsume` is only valid for eqsort-
     returning bodies on that explicit-ruleset rewrite path.
     """
-    # This is a live proxy on Python 3.14, so cross-thread first use must follow
-    # the defining-frame contract in docs/reference/usage.md.
+    # Resolve annotations on the defining thread: reading its live locals from
+    # another thread is unsafe on free-threaded Python.
+    # https://docs.python.org/3.14/howto/free-threading-python.html#frame-objects
     fn_locals = currentframe().f_back.f_locals  # type: ignore[union-attr]
 
     # If we have any positional args, then we are calling it directly on a function
@@ -471,8 +472,7 @@ def _generate_class_decls(  # noqa: C901,PLR0912
     ##
     # Create a dummy type to pass to get_type_hints to resolve the annotations we have
     _Dummytype = type("_DummyType", (), {"__annotations__": namespace.get("__annotations__", {})})
-    # The defining frame must not be executing in another thread; see the
-    # free-threaded setup contract in docs/reference/usage.md.
+    # Resolve annotations before sharing this class with worker threads.
     for k, v in get_type_hints(_Dummytype, globalns=frame.f_globals, localns=frame.f_locals).items():
         if getattr(v, "__origin__", None) == ClassVar:
             (inner_tp,) = v.__args__
@@ -2838,8 +2838,7 @@ def _rewrite_or_rule_generator(gen: RewriteOrRuleGenerator, frame: FrameType) ->
     # combine locals and globals so that they are the same dict. Otherwise get_type_hints will go through the wrong
     # path and give an error for the test
     # python/tests/test_no_import_star.py::test_no_import_star_rulesset
-    # The registering frame must not be executing in another thread; see the
-    # free-threaded setup contract in docs/reference/usage.md.
+    # Materialize shared rulesets before starting worker threads.
     combined = {**gen.__globals__, **frame.f_locals}
     hints = get_type_hints(gen, combined, combined)
     args = [_var(p.name, hints[p.name], egg_name=None) for p in signature(gen).parameters.values()]

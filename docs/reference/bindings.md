@@ -60,13 +60,12 @@ for command in commands:
 
 ## Thread safety
 
-Independent low-level `EGraph` and `Extractor` instances can run concurrently
-on free-threaded CPython. Serialize access to shared mutable instances,
-including `TermDag` objects; PyO3 rejects overlapping mutable borrows rather
-than waiting for them. Python callbacks must synchronize any shared mutable
-state. The [high-level API](usage.md#parallelism-and-threads) additionally requires
-single-threaded definition and initialization of shared Python metadata before
-concurrent expression construction and independent e-graph execution.
+Independent `EGraph` and `Extractor` instances can run concurrently. Serialize
+access to shared mutable objects, including `EGraph` and `TermDag`; overlapping
+accesses involving mutation raise an error instead of waiting. Python callbacks
+must synchronize shared mutable state. The
+[high-level API](python-integration.md#thread-safety) also requires initialization
+before concurrent use.
 
 ## API
 
