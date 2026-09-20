@@ -12,40 +12,31 @@ crate-type = ["cdylib"]
 [dependencies]
 # Maturin enables `pyo3/extension-module` through pyproject.toml. Keep it out of
 # the base feature set so `cargo test` links against libpython on Unix.
-pyo3 = { version = "0.27", features = ["num-bigint", "num-rational", "indexmap"] }
-num-bigint = "*"
+pyo3 = { version = "0.29", features = ["num-bigint", "num-rational", "indexmap"] }
 num-rational = "*"
 indexmap = "2.12"
-opentelemetry = "0.28"
-opentelemetry-otlp = { version = "0.28", features = ["http-proto", "reqwest-blocking-client", "trace"] }
-opentelemetry-stdout = { version = "0.28", features = ["trace"] }
-opentelemetry_sdk = "0.28"
-# Egglog main plus the core compatibility fixes required by this branch.
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee", default-features = false }
-egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
-egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
-egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
-egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
-egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "2dd19e58a68efad8ac97045ba894e0046efaf22f", default-features = false }
+opentelemetry = "0.32"
+opentelemetry-otlp = { version = "0.32", features = ["http-proto", "reqwest-blocking-client", "trace"] }
+opentelemetry-stdout = { version = "0.32", features = ["trace"] }
+opentelemetry_sdk = "0.32"
+egglog = { git = "https://github.com/egraphs-good/egglog", rev = "90635860397ce710f8c0a4eeb04154a8ebc3ac05", default-features = false }
+egglog-ast = { git = "https://github.com/egraphs-good/egglog", rev = "90635860397ce710f8c0a4eeb04154a8ebc3ac05" }
+egglog-core-relations = { git = "https://github.com/egraphs-good/egglog", rev = "90635860397ce710f8c0a4eeb04154a8ebc3ac05" }
+egglog-reports = { git = "https://github.com/egraphs-good/egglog", rev = "90635860397ce710f8c0a4eeb04154a8ebc3ac05" }
+egglog-bridge = { git = "https://github.com/egraphs-good/egglog", rev = "90635860397ce710f8c0a4eeb04154a8ebc3ac05" }
+egglog-experimental = { git = "https://github.com/egraphs-good/egglog-experimental.git", rev = "3d35f37a4befbfa75608aa6998408334e19b6180", default-features = false }
 egraph-serialize = { version = "0.3", features = ["serde", "graphviz"] }
 serde_json = "1"
 pyo3-log =  "*"
 log = "0.4"
-lalrpop-util = { version = "0.22", features = ["lexer"] }
+lalrpop-util = { version = "0.23", features = ["lexer"] }
 ordered-float = "5"
 tracing = "0.1"
-tracing-opentelemetry = "0.29"
+tracing-opentelemetry = "0.33"
 tracing-subscriber = "0.3"
 uuid = { version = "1.18", features = ["v4"] }
-base64 = "0.22.1"
+base64 = "0.23"
 
 # enable debug symbols for easier profiling
 [profile.release]
 debug = true
-
-[patch."https://github.com/egraphs-good/egglog.git"]
-egglog = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
-egglog-ast = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
-egglog-core-relations = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
-egglog-reports = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }
-egglog-bridge = { git = "https://github.com/saulshanabrook/egg-smol.git", rev = "1eea60a14f214505741d22bdd6c9b501b21c04ee" }

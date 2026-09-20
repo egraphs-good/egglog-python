@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 
 use crate::egraph::Value;
 
-#[pyclass(eq, frozen, get_all)]
+#[pyclass(eq, frozen, get_all, skip_from_py_object)]
 #[derive(PartialEq, Eq, Clone, Hash)]
 pub struct FrozenRow {
     subsumed: bool,
@@ -14,7 +14,7 @@ pub struct FrozenRow {
     output: Value,
 }
 
-#[pyclass(eq, frozen, hash, get_all)]
+#[pyclass(eq, frozen, hash, get_all, skip_from_py_object)]
 #[derive(PartialEq, Eq, Clone, Hash)]
 pub struct FrozenFunction {
     input_sorts: Vec<String>,
@@ -23,7 +23,7 @@ pub struct FrozenFunction {
     rows: Vec<FrozenRow>,
 }
 
-#[pyclass(eq, frozen, get_all)]
+#[pyclass(eq, frozen, get_all, skip_from_py_object)]
 #[derive(PartialEq, Eq, Clone)]
 pub struct FrozenEGraph {
     functions: IndexMap<String, FrozenFunction>,

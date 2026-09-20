@@ -36,7 +36,7 @@ macro_rules! convert_enums {
         }
     );*) => {
         $($(
-            #[pyclass(frozen$(, name=$py_name)?)]
+            #[pyclass(frozen, from_py_object$(, name=$py_name)?)]
             #[derive(Clone, PartialEq, Eq$(, $trait_inner)?)]
             pub struct $variant {
                 $(
@@ -180,7 +180,7 @@ macro_rules! convert_struct {
             $to_ident:ident -> $to:expr
     );*) => {
         $(
-            #[pyclass(frozen)]
+            #[pyclass(frozen, from_py_object)]
             #[derive(Clone, PartialEq, Eq$(, $struct_trait)?)]
             pub struct $to_type {
                 $(

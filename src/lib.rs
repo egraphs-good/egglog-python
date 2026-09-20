@@ -28,7 +28,7 @@ fn shutdown_tracing(py: Python<'_>) -> PyResult<()> {
 }
 
 /// Bindings for egglog rust library
-#[pymodule]
+#[pymodule(gil_used = true)]
 fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
 

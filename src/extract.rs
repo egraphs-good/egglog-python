@@ -79,6 +79,7 @@ struct TreeContainerCost {
 #[derive(Debug)]
 #[pyclass(
     frozen,
+    from_py_object,
     str = "CostModel({fold:?}, {enode_cost:?}, {container_cost:?}, {base_value_cost:?}"
 )]
 pub struct CostModel {
