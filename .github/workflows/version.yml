@@ -6,7 +6,7 @@
 # 5. Pulls that branch and builds it for different platforms
 # 6. Once all those build, makes a release
 # 7. Creates a tag for that release
-# 7. merges that PR when tests pass and removes the branch
+# 8. queues the PR to merge when required checks pass and removes the branch
 
 # This seperates the release process from the test process, so we can still release if we need to and tests are failing
 name: Bump Version
@@ -46,7 +46,9 @@ jobs:
           git checkout -b "version-$VERSION"
           git commit -am "Version $VERSION"
           git push -u origin HEAD
-          gh pr create --fill
+          PR_URL=$(gh pr create --fill)
+          # GITHUB_TOKEN-created PRs need approval before their checks run.
+          echo "Release PR: $PR_URL. Approve both the CI and Bump Version workflows on the PR to allow auto-merge." >> "$GITHUB_STEP_SUMMARY"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         id: bump
         env:
@@ -149,11 +151,16 @@ jobs:
       - name: Set up supported Python interpreters
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          # Keep regular 3.14 last so it takes precedence over the free-threaded alias.
           python-version: |
             3.12
             3.13
-            3.14
             3.14t
+            3.14
+      - name: Verify Python 3.14 variants
+        run: |
+          python3.14 -c 'import sysconfig; assert not sysconfig.get_config_var("Py_GIL_DISABLED")'
+          python3.14t -c 'import sysconfig; assert sysconfig.get_config_var("Py_GIL_DISABLED") == 1'
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: build
@@ -175,13 +182,14 @@ jobs:
         with:
           pattern: wheels-*
           merge-multiple: true
-      - name: Publish to PyPI
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          path: dist
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          command: upload
-          args: --skip-existing *
+          enable-cache: false
+      - name: Publish to PyPI
+        run: uv publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
   tag-and-merge:
     runs-on: ubuntu-latest
     permissions: write-all
@@ -191,9 +199,9 @@ jobs:
         with:
           ref: version-${{ needs.bump.outputs.version }}
       - run: |
-          git tag "v$VERSION"
-          git push --tags
-          gh pr merge --delete-branch --merge --admin
+          # Retrying accepts the same tag, but never overwrites a different commit.
+          git push origin "HEAD:refs/tags/v$VERSION"
+          gh pr merge "version-$VERSION" --delete-branch --merge --auto --match-head-commit "$(git rev-parse HEAD)"
         env:
           VERSION: ${{ needs.bump.outputs.version }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
