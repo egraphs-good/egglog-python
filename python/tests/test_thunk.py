@@ -7,6 +7,7 @@ from egglog.thunk import Thunk
 
 
 def test_recursive_resolution_still_raises() -> None:
+    thunk: Thunk[None]
     thunk = Thunk.fn(lambda: thunk())
 
     with pytest.raises(ValueError, match="Recursively resolving thunk") as first:
