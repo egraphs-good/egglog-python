@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 14.0.0 (2026-09-20)
+
 - Fix release version bumps to update `Cargo.lock` before building locked wheels.
 
 - Modernize dependencies and CI [#425](https://github.com/egraphs-good/egglog-python/pull/425).

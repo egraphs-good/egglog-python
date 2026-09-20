@@ -502,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "egglog_python"
-version = "13.2.0"
+version = "14.0.0"
 dependencies = [
  "base64 0.23.1",
  "egglog",
