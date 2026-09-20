@@ -79,17 +79,17 @@ def test_per_egraph_configuration() -> None:
     assert not egraph.no_decomp()
 
 
-def test_high_level_egraphs_with_caller_serialization() -> None:
-    # A fresh process leaves the shared builtin declaration thunks unresolved.
+def test_independent_egraphs_run_concurrently_after_setup() -> None:
+    # A fresh process verifies that the public setup below resolves lazy declarations.
     subprocess.run(
         [
             sys.executable,
             "-c",
             """
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier, Lock
+from threading import Barrier
 
-from egglog import EGraph, function, i64
+from egglog import EGraph, function, i64, relation, rule, ruleset
 
 
 def make_identity():
@@ -103,19 +103,29 @@ def make_identity():
 
 
 identity = make_identity()
+seen = relation("concurrent_seen", i64)
+
+@ruleset
+def advance(value: i64):
+    yield rule(seen(value)).then(seen(value + 1))
+
+# Definitions alone leave lazy declarations and rule generators unresolved.
+setup_graph = EGraph()
+assert setup_graph.extract(identity(i64(0)) + 1).value == 1
+setup_graph.run(0, ruleset=advance)
 
 workers = 32
 barrier = Barrier(workers, timeout=30)
-egglog_lock = Lock()
 
 def extract(worker):
     barrier.wait()
     for iteration in range(4):
         number = worker * 100 + iteration
-        with egglog_lock:
-            egraph = EGraph()
-            value = egraph.let("value", identity(i64(number)) + 1)
-            assert egraph.extract(value).value == number + 1
+        value = identity(i64(number)) + 1
+        egraph = EGraph(seen(number))
+        egraph.run(2, ruleset=advance)
+        egraph.check(seen(number + 2))
+        assert egraph.extract(value).value == number + 1
 
 with ThreadPoolExecutor(max_workers=workers) as executor:
     list(executor.map(extract, range(workers)))

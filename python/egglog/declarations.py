@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import cache, cached_property
 from itertools import chain, repeat
+from threading import RLock
 from typing import (
     TYPE_CHECKING,
     ClassVar,
@@ -896,8 +897,19 @@ class LitDecl:
         return (type(self.value), self.value)
 
 
+_CALL_DECL_LOCK = RLock()
+
+
+class _CallDeclMeta(type):
+    def __call__(cls, *args: object, **kwargs: object) -> CallDecl:
+        # Guard both pool publication in __new__ and the generated dataclass __init__.
+        # Literal hashing can construct other expressions on the same thread.
+        with _CALL_DECL_LOCK:
+            return super().__call__(*args, **kwargs)
+
+
 @dataclass(frozen=True)
-class CallDecl:
+class CallDecl(metaclass=_CallDeclMeta):
     callable: CallableRef
     # TODO: Can I make these not typed expressions?
     args: tuple[TypedExprDecl, ...] = ()

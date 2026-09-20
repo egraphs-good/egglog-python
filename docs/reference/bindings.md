@@ -64,9 +64,9 @@ Independent low-level `EGraph` and `Extractor` instances can run concurrently
 on free-threaded CPython. Serialize access to shared mutable instances,
 including `TermDag` objects; PyO3 rejects overlapping mutable borrows rather
 than waiting for them. Python callbacks must synchronize any shared mutable
-state. The [high-level API](usage.md#parallelism-and-threads) additionally shares
-Python metadata across e-graphs and requires caller serialization even for
-independent instances.
+state. The [high-level API](usage.md#parallelism-and-threads) additionally requires
+single-threaded definition and initialization of shared Python metadata before
+concurrent expression construction and independent e-graph execution.
 
 ## API
 

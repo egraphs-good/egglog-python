@@ -78,24 +78,33 @@ egraph.set_num_threads(0)
 assert egraph.num_threads() >= 1
 ```
 
-The high-level Python API is not thread-safe, including on free-threaded
-CPython. Use it from one thread, or protect **all** high-level egglog operations
-with one caller-owned `threading.Lock`, even when using separate `EGraph`
-instances. This includes expression construction, converter and rule
-registration, and the entire duration of experimental ambient-egraph contexts.
-Declarations, conversion tables, and expression caches are shared across
-e-graphs.
+After single-threaded setup, expressions can be constructed concurrently and
+independent `EGraph` instances can run in different Python threads, including
+on free-threaded CPython. Callers must still serialize access to the same
+e-graph, and must not read or use a shared expression while another thread
+mutates it.
 
-Complete module initialization before starting workers, and return local DSL
-objects from a setup helper before handing them to another thread. Lazy
-annotation resolution must not inspect another thread's
+Setup includes defining classes, sorts, functions, and converters, constructing
+and updating rulesets, and resolving their deferred declarations. A class
+statement or `@ruleset` alone does not finish initialization: annotations and
+rule generators are resolved lazily. Before starting workers, construct
+representative expressions with the required conversions, and materialize each
+shared ruleset with `setup_graph.run(0, ruleset=rules)` without running its rules.
+Shared parameterized types and constants also need their first use during
+setup. Do not define or update this shared metadata while workers are using it.
+
+Complete module initialization before starting workers. Resolve local DSL
+definitions on their defining thread; lazy annotation resolution must not
+inspect another thread's
 [still-executing defining frame](https://docs.python.org/3.14/howto/free-threading-python.html#frame-objects).
 
-This limitation does not prevent the Rust engine from using `num_threads`.
-Python callbacks running on engine workers must not concurrently use the
-high-level API, and callers must synchronize any shared mutable callback state.
-Independent [low-level binding instances](bindings.md#thread-safety) can run
-concurrently without a shared caller lock.
+Rust engine parallelism via `num_threads` is also supported. Python callbacks
+must follow the same setup requirement and synchronize their own shared
+mutable state. The experimental `set_array_api_egraph` and
+`set_any_expr_egraph` contexts use process-global state: no other thread may use
+the corresponding experimental API during an active context, even without
+entering a context itself. See the [low-level bindings](bindings.md#thread-safety)
+for their separate thread-safety contract.
 
 (community)=
 

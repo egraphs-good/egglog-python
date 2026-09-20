@@ -9,7 +9,8 @@ _This project uses semantic versioning_
     3.12-3.14 under the rolling SPEC 0 window, and drop Python 3.11.
   - Add beta support for free-threaded CPython 3.14t without re-enabling the
     GIL on import. See the [thread-safety contract](reference/usage.md#parallelism-and-threads)
-    for caller-serialized high-level use and concurrent low-level bindings.
+    for concurrent expression construction and independent e-graphs after
+    single-threaded setup.
   - Add `Device.cpu` as the canonical CPU device returned by CPU-backed
     experimental arrays.
 
