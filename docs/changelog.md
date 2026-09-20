@@ -4,6 +4,8 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+## 14.0.0 (2026-09-20)
+
 - Modernize dependencies and CI [#425](https://github.com/egraphs-good/egglog-python/pull/425).
   - BREAKING: Drop Python 3.11 support; supported CPython versions are now 3.12-3.14.
   - Add beta support for free-threaded CPython 3.14t; see
