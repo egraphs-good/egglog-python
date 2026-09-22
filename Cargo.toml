@@ -15,10 +15,10 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.29", features = ["num-bigint", "num-rational", "indexmap"] }
 num-rational = "*"
 indexmap = "2.12"
-opentelemetry = "0.32"
-opentelemetry-otlp = { version = "0.32", features = ["http-proto", "reqwest-blocking-client", "trace"] }
-opentelemetry-stdout = { version = "0.32", features = ["trace"] }
-opentelemetry_sdk = "0.32"
+opentelemetry = "0.33"
+opentelemetry-otlp = { version = "0.33", features = ["http-proto", "reqwest-blocking-client", "trace"] }
+opentelemetry-stdout = { version = "0.33", features = ["trace"] }
+opentelemetry_sdk = "0.33"
 egglog = { git = "https://github.com/egraphs-good/egglog", rev = "90635860397ce710f8c0a4eeb04154a8ebc3ac05", default-features = false }
 egglog-ast = { git = "https://github.com/egraphs-good/egglog", rev = "90635860397ce710f8c0a4eeb04154a8ebc3ac05" }
 egglog-core-relations = { git = "https://github.com/egraphs-good/egglog", rev = "90635860397ce710f8c0a4eeb04154a8ebc3ac05" }
