@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import json
 import pathlib
 from typing import Literal, TextIO, cast
 
@@ -145,6 +146,59 @@ def test_non_replayable_egglog_error_invalidates_saved_transcript() -> None:
 def _raise_after_partial_write(_: object) -> object:
     message = "callback failed"
     raise ValueError(message)
+
+
+def test_shared_record_retains_python_callback_failure() -> None:
+    trigger = relation("shared_record_trigger", i64)
+    done = relation("shared_record_done", i64)
+    x = var("x", i64)
+    failing_rules = ruleset(
+        rule(trigger(x)).then(done(x), PyObject(_raise_after_partial_write)(PyObject(None))),
+        name="shared_record_failure",
+    )
+    graph = EGraph(trigger(i64(1)), record_program=True)
+    with pytest.raises(ValueError, match="callback failed"):
+        graph.run(run(failing_rules))
+    record = graph._state.egraph.stop_recording()
+    assert record is not None
+    entries = json.loads(record.to_json())["entries"]
+    assert entries[-1]["command"]["type"] == "RunSchedule"
+    assert entries[-1]["outcome"]["type"] in {"Pending", "Failure"}
+    # A host exception may follow committed rule actions; the record never
+    # represents this attempted run as successfully completed.
+    graph.check(done(i64(1)))
+
+
+@pytest.mark.parametrize("record_program", [False, True])
+def test_shared_record_attributes_premise_callback_error_to_its_command(record_program: bool) -> None:
+    trigger = relation("shared_record_premise_trigger", i64)
+    done = relation("shared_record_premise_done", i64)
+    x = var("x", i64)
+    failing_rules = ruleset(
+        rule(trigger(x), eq(PyObject(_raise_after_partial_write)(PyObject(None))).to(PyObject(True))).then(done(x)),
+        name="shared_record_premise_failure",
+    )
+    graph = EGraph(trigger(i64(1)), record_program=True)
+    with pytest.raises(ValueError, match="callback failed"):
+        graph.run(run(failing_rules))
+    payload = json.loads(graph.recorded_program.to_json())
+    suffix = egg_bindings.Program.parse("(function after_callback () i64 :no-merge)\n(set (after_callback) 99)")
+    payload["commands"].extend(json.loads(suffix.to_json())["commands"])
+    replay = egg_bindings.EGraph(record_program=record_program)
+    with pytest.raises(ValueError, match="callback failed"):
+        replay.run_shared_program(egg_bindings.Program.from_json(json.dumps(payload)))
+    record = replay.stop_recording()
+    # A query callback returns native no-match, so the existing binding batch
+    # executes its suffix before raising the latched Python exception.
+    replay.parse_and_run_program("(check (= (after_callback) 99))")
+    if record_program:
+        assert record is not None
+        entries = json.loads(record.to_json())["entries"]
+        assert [entry["command"]["type"] for entry in entries[-3:]] == ["RunSchedule", "Function", "Action"]
+        assert [entry["outcome"]["type"] for entry in entries[-3:]] == ["Failure", "Success", "Success"]
+        assert "callback failed" in entries[-3]["outcome"]["value"]["message"]
+    else:
+        assert record is None
 
 
 def test_non_egglog_failure_invalidates_saved_transcript() -> None:

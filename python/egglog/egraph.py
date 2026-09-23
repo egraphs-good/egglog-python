@@ -1128,13 +1128,19 @@ class EGraph:
         *actions: ActionLike,
         seminaive: bool = True,
         save_egglog_string: bool = False,
+        record_program: bool = False,
         num_threads: int = 1,
         no_decomp: bool = False,
     ) -> None:
         with _TRACER.start_as_current_span("create"):
             with _TRACER.start_as_current_span("create_bindings"):
                 self._state = EGraphState(
-                    bindings.EGraph(seminaive=seminaive, num_threads=num_threads, no_decomp=no_decomp),
+                    bindings.EGraph(
+                        seminaive=seminaive,
+                        num_threads=num_threads,
+                        no_decomp=no_decomp,
+                        record_program=record_program,
+                    ),
                     seminaive=seminaive,
                     save_egglog_string=save_egglog_string,
                 )
@@ -1174,6 +1180,20 @@ class EGraph:
     def set_no_decomp(self, no_decomp: bool) -> None:
         """Set whether subsequently registered rules skip decomposition."""
         self._egraph.set_no_decomp(no_decomp)
+
+    @property
+    def recorded_program(self) -> bindings.Program:
+        """
+        Return submitted commands, including automatically installed declarations.
+
+        Enable with ``EGraph(record_program=True)``. Failed attempts remain in
+        the program and can fail again on replay; this is not an e-graph snapshot.
+        """
+        program = self._state.egraph.recorded_program()
+        if program is None:
+            msg = "Enable command recording with EGraph(record_program=True)"
+            raise ValueError(msg)
+        return program
 
     @property
     def as_egglog_string(self) -> str:

@@ -529,7 +529,7 @@ convert_enums!(
             };
         RustSpan(file: String, line: u32, column: u32)
             r -> egglog_ast::span::Span::Rust(Arc::new(egglog::ast::RustSpan {
-                file: Box::leak(r.file.clone().into_boxed_str()),
+                file: r.file.clone().into(),
                 line: r.line,
                 column: r.column
             })),

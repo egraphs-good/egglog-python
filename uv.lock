@@ -768,6 +768,7 @@ dev = [
     { name = "anywidget", extra = ["dev"] },
     { name = "array-api-compat" },
     { name = "ipykernel" },
+    { name = "jsonschema" },
     { name = "jupyterlab" },
     { name = "jupytext" },
     { name = "line-profiler" },
@@ -815,6 +816,7 @@ docs = [
 ]
 test = [
     { name = "array-api-compat" },
+    { name = "jsonschema" },
     { name = "llvmlite" },
     { name = "mypy" },
     { name = "numba" },
@@ -849,6 +851,7 @@ requires-dist = [
     { name = "egglog", extras = ["docs", "test"], marker = "extra == 'dev'" },
     { name = "graphviz" },
     { name = "ipykernel", marker = "extra == 'dev'" },
+    { name = "jsonschema", marker = "extra == 'test'" },
     { name = "jupyterlab", marker = "extra == 'dev'" },
     { name = "jupytext", marker = "extra == 'docs'" },
     { name = "line-profiler", marker = "extra == 'docs'" },

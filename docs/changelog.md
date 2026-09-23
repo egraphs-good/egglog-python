@@ -4,6 +4,10 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Add `SharedProgram` (`bindings.Program`) for Rust-owned program JSON, generated
+  JSON Schema, checked source export, and native program execution. Add
+  `EGraph(record_program=True).recorded_program` and low-level command outcome
+  records, including implicit declarations and failed attempts.
 - Publish releases with `uv`, then tag and fast-forward `main` directly without a release PR or redundant CI.
 - Fix missing macOS wheels for standard CPython 3.14 when building alongside free-threaded Python.
 

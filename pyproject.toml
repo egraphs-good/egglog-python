@@ -48,6 +48,7 @@ dev = [
 ]
 
 test = [
+    "jsonschema",
     "pytest",
     "mypy",
     "syrupy>=5",

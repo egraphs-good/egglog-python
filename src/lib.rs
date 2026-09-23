@@ -3,6 +3,7 @@ mod egraph;
 mod error;
 mod extract;
 mod freeze;
+mod program;
 mod py_object_sort;
 mod serialize;
 mod termdag;
@@ -36,6 +37,8 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_class::<crate::serialize::SerializedEGraph>()?;
     m.add_class::<crate::egraph::EGraph>()?;
+    m.add_class::<crate::program::Program>()?;
+    m.add_class::<crate::program::CommandRecord>()?;
     m.add_class::<crate::egraph::Value>()?;
     m.add_class::<crate::error::EggSmolError>()?;
     m.add_class::<crate::termdag::TermDag>()?;

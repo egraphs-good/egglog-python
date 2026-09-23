@@ -58,6 +58,59 @@ for command in commands:
     print(command)
 ```
 
+## Shared programs
+
+`Program` owns the same versioned command records used by Rust. It can be built
+from binding commands, parsed from Egglog source, or imported from JSON:
+
+```{code-cell} python
+from egglog.bindings import EGraph, Program
+
+program = Program.parse("(function answer () i64 :no-merge)\n(set (answer) 42)\n(check (= (answer) 42))")
+payload = program.to_json()
+restored = Program.from_json(payload)
+EGraph().run_shared_program(restored)
+assert restored.to_json() == payload
+print(restored.to_replayable_egglog())
+```
+
+`Program.json_schema()` returns JSON Schema generated from the Rust definitions.
+JSON preserves native fields that the legacy Python command classes do not
+expose. Imported programs retain their native records throughout execution and
+export; they are not converted back through those classes. JSON import/export
+enforces the core wire format's size and nesting limits, raising `ValueError`
+when exceeded. Native execution does not require the program to fit those limits.
+
+`to_egglog()` renders diagnostic source. `to_replayable_egglog()` additionally
+parses and compares the result, ignoring source locations and redundant
+single-element schedule sequences, and raises
+`ValueError` when the text syntax cannot preserve the records. This check does
+not guarantee execution will succeed. The ordinary `run_program(*commands)`
+API also executes through shared records. Programs remain surface commands:
+the engine still expands, resolves, and typechecks them.
+
+Enable `EGraph(record_program=True)` to record submitted commands in order.
+`recorded_program()` exports the commands; `stop_recording()` returns a
+`CommandRecord` whose `to_json()` includes each command's outcome and whose
+`program()` exports its attempted command stream. `start_recording()` resets
+and enables recording. Unlike legacy `record=True`/`commands()`, this record
+retains failed attempts and successful prefixes of failing batches.
+
+A command record is not a state snapshot or a rollback mechanism. Failed
+commands may have partial effects, and replay stops at errors. It does not
+record outputs, direct value queries, extraction callbacks, runtime settings,
+or external file contents. It retains push/pop history rather than deleting
+commands when a scope is popped. A Python callback exception can be reported
+after later commands in its native batch have executed; the record attributes
+that exception to its originating command without rolling back the suffix.
+
+Structurally valid commands may require extensions or external resources.
+Python's bindings install experimental commands and the `PyObject` sort; a
+plain Rust engine must install equivalent capabilities to execute programs
+that use them. JSON contains Python pickle payloads when `PyObject` is used,
+and executing these payloads requires a trusted Python environment. Live
+custom extraction-cost callbacks are outside the portable program format.
+
 ## Thread safety
 
 Independent `EGraph` and `Extractor` instances can run concurrently. Serialize

@@ -6,6 +6,46 @@ file_format: mystnb
 
 Alongside [the support for builtin `egglog` functionality](./egglog-translation.md), `egglog` also provides functionality to more easily integrate with the Python ecosystem.
 
+## Exporting a program
+
+Use `EGraph(record_program=True)` to retain the commands submitted by ordinary
+Python operations, including automatically installed sort, function, and rule
+declarations. Export the resulting `Program` as versioned JSON or checked
+Egglog source, then execute it through the low-level bindings in a fresh graph:
+
+```{code-cell} python
+from egglog import EGraph, SharedProgram, i64, relation
+from egglog import bindings
+
+seen = relation("program_example_seen", i64)
+graph = EGraph(record_program=True)
+graph.register(seen(i64(42)))
+graph.check(seen(i64(42)))
+program = graph.recorded_program
+payload = program.to_json()
+bindings.EGraph().run_shared_program(SharedProgram.from_json(payload))
+print(program.to_replayable_egglog())
+```
+
+The record describes submitted commands, including failed attempts. It is not
+an e-graph snapshot and does not capture Python classes, declaration providers,
+custom extraction-cost callbacks, direct value queries, or external file
+contents. A fresh low-level graph can execute it, but importing the record does
+not recreate the original high-level Python classes. Continue using
+`freeze()` for the existing high-level expression/state representation.
+
+`save_egglog_string=True` retains its separate replayable-source transcript
+behavior, including its failure handling. Shared JSON preserves command
+fields that Egglog text cannot express; checked source export raises when a
+command cannot round-trip through text. See [shared programs](bindings.md#shared-programs)
+for the schema, recording outcomes, and host-specific capability boundaries.
+
+For a complete Python-authored addition rule with a checked result, run
+`python -m egglog.examples.shared_program program.json`. The example exports
+sort/constructor declarations, a rule, its schedule, and a check that adding
+two and three produces five. The JSON can be loaded by Rust's shared-program
+API with the standard runtime capabilities.
+
 ## Retrieving Values
 
 If you have an egglog value, you might want to convert it from an expression to a native Python object. This is done through a number of helper functions:

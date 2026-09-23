@@ -3,6 +3,7 @@
 use crate::conversions::*;
 use crate::error::{EggResult, WrappedError};
 use crate::freeze::FrozenEGraph;
+use crate::program::{CommandRecord, Program};
 use crate::py_object_sort::{PyObjectErrorState, PyObjectSort, PyPickledValue, load};
 use crate::serialize::SerializedEGraph;
 use crate::termdag::TermDag;
@@ -71,9 +72,10 @@ impl EGraph {
     fn run_parsed_commands(
         &mut self,
         py: Python<'_>,
-        commands: Vec<egglog::ast::Command>,
+        program: egglog::program::Program,
         parsed_from_source: bool,
     ) -> EggResult<Vec<CommandOutput>> {
+        let commands = &program.commands;
         let failed_command = (commands.len() == 1).then(|| commands[0].clone());
         let cmds_str = commands
             .iter()
@@ -95,7 +97,22 @@ impl EGraph {
         let _entered = span.enter();
         info!("Running commands:\n{}", cmds_str);
         let res = run_with_py_error(&self.py_error, || {
-            py.detach(|| self.egraph.run_program(commands))
+            // Query primitives can latch a Python exception while returning
+            // native no-match. Preserve batch execution, but attribute that
+            // exception to its command rather than a later successful suffix.
+            let mut observed_py_error = false;
+            py.detach(|| {
+                self.egraph
+                    .run_shared_program_with_command_error(program, || {
+                        if observed_py_error {
+                            return None;
+                        }
+                        self.py_error.lock().unwrap().as_ref().map(|error| {
+                            observed_py_error = true;
+                            error.to_string()
+                        })
+                    })
+            })
         })?;
         match res {
             Err(error) => {
@@ -121,13 +138,14 @@ impl EGraph {
 #[pymethods]
 impl EGraph {
     #[new]
-    #[pyo3(signature = (*, fact_directory=None, seminaive=true, record=false, num_threads=1, no_decomp=false))]
+    #[pyo3(signature = (*, fact_directory=None, seminaive=true, record=false, num_threads=1, no_decomp=false, record_program=false))]
     fn new(
         fact_directory: Option<PathBuf>,
         seminaive: bool,
         record: bool,
         num_threads: usize,
         no_decomp: bool,
+        record_program: bool,
     ) -> Self {
         let mut egraph = egglog_experimental::new_experimental_egraph();
         egraph.fact_directory = fact_directory;
@@ -143,6 +161,9 @@ impl EGraph {
             span!(),
         )
         .unwrap();
+        if record_program {
+            egraph.start_recording();
+        }
         Self {
             egraph,
             cmds: record.then(String::new),
@@ -176,7 +197,9 @@ impl EGraph {
             .egraph
             .parser
             .get_program_from_string(filename, input)?;
-        self.run_parsed_commands(py, commands, true)
+        let program = egglog::program::Program::new(commands)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        self.run_parsed_commands(py, program, true)
     }
 
     /// Run a series of commands on the EGraph.
@@ -192,13 +215,46 @@ impl EGraph {
     ) -> EggResult<Vec<CommandOutput>> {
         let _context_guard =
             tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
-        let commands: Vec<egglog::ast::Command> = commands.into_iter().map(|x| x.into()).collect();
-        self.run_parsed_commands(py, commands, false)
+        let program = egglog::program::Program::new(commands.into_iter().map(Into::into).collect())
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        self.run_parsed_commands(py, program, false)
+    }
+
+    /// Execute native shared records, preserving fields absent from legacy AST wrappers.
+    #[pyo3(signature = (program, /, *, traceparent=None, tracestate=None))]
+    fn run_shared_program(
+        &mut self,
+        py: Python<'_>,
+        program: &Program,
+        traceparent: Option<String>,
+        tracestate: Option<String>,
+    ) -> EggResult<Vec<CommandOutput>> {
+        let _context_guard =
+            tracing_otel::attach_parent_context(traceparent.as_deref(), tracestate.as_deref());
+        self.run_parsed_commands(py, program.0.clone(), false)
     }
 
     /// Returns the text of successfully run commands when recording is enabled.
     fn commands(&self) -> Option<String> {
         self.cmds.clone()
+    }
+
+    /// Reset and enable the core command recorder.
+    fn start_recording(&mut self) {
+        self.egraph.start_recording();
+    }
+
+    /// Stop recording and return the commands with their execution outcomes.
+    fn stop_recording(&mut self) -> Option<CommandRecord> {
+        self.egraph.stop_recording().map(CommandRecord)
+    }
+
+    /// Export submitted commands, including failed attempts. This is not a state snapshot.
+    fn recorded_program(&self) -> PyResult<Option<Program>> {
+        self.egraph
+            .recorded_program()
+            .map(|program| program.map(Program))
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
     }
 
     /// Return the number of worker threads configured for this EGraph.
