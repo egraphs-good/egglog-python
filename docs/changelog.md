@@ -9,6 +9,115 @@ _This project uses semantic versioning_
 
 ## 14.0.0 (2026-09-20)
 
+This release brings Egglog 3 to Python, with sharing-aware extraction, additive
+custom cost models, and beta support for free-threaded Python. Here are a few
+examples to try with `pip install egglog==14.0.0` or `uv pip install egglog==14.0.0`.
+
+### Greedy-DAG extraction
+
+The default tree extractor counts repeated subexpressions each time they occur.
+Use `extractor="greedy-dag"` to charge shared subexpressions only once. For example,
+adding an expensive expression to itself can be cheaper than multiplying it by two:
+
+```python
+from __future__ import annotations
+
+from egglog import EGraph, Expr, i64Like, method, union
+
+
+class Math(Expr):
+    def __init__(self, value: i64Like) -> None: ...
+
+    @method(cost=10)
+    def exp(self) -> Math: ...
+
+    @method(cost=1)
+    def __add__(self, other: Math) -> Math: ...
+
+    @method(cost=3)
+    def __mul__(self, other: Math) -> Math: ...
+
+
+egraph = EGraph()
+shared = Math(1).exp()
+expr = shared + shared
+egraph.register(union(expr).with_(Math(2) * shared))
+
+print(egraph.extract(expr, include_cost=True, extractor="tree"))
+# (Math(2) * Math(1).exp(), 17)
+print(egraph.extract(expr, include_cost=True, extractor="greedy-dag"))
+# (Math(1).exp() + Math(1).exp(), 13)
+```
+
+The tree extractor avoids paying for `exp()` twice; the DAG extractor shares it.
+The printed Python expression repeats the call, but the DAG cost counts it once.
+Greedy-DAG extraction is a heuristic, not a guarantee of the globally cheapest DAG.
+
+### Custom costs
+
+A `DagCostModel` works with either extractor. Its callback gives the cost of one
+node, without its children; the extractor accounts for repetition or sharing.
+Continuing the example, making addition expensive changes the DAG result:
+
+```python
+from egglog import BaseExpr, DagCostModel, default_cost_model, get_callable_fn
+
+
+def expensive_addition(egraph: EGraph, node: BaseExpr) -> int:
+    if get_callable_fn(node) == Math.__add__:
+        return 100
+    return default_cost_model(egraph, node, [])
+
+
+model = DagCostModel(expensive_addition, identity=0)
+print(egraph.extract(expr, include_cost=True, extractor="greedy-dag", cost_model=model))
+# (Math(2) * Math(1).exp(), 17)
+```
+
+More general callbacks that combine child costs remain available as `TreeCostModel`
+for tree extraction. See [extraction and cost models](reference/python-integration.md#extraction-and-cost-models).
+
+### Eager functions and optional values
+
+By default, function bodies now evaluate in Egglog without needing a ruleset run.
+Combine them with `catch` and the new `Maybe[T]` sort to handle undefined primitive
+calls, such as missing map entries:
+
+```python
+from egglog import EGraph, Map, String, catch, function, i64
+
+
+@function
+def lookup_or_zero(values: Map[String, i64], key: String) -> i64:
+    return catch(lambda: values[key]).unwrap_or(i64(0))
+
+
+values = Map[String, i64].empty().insert("answer", 42)
+egraph = EGraph()
+print(egraph.extract(lookup_or_zero(values, "answer")).value)  # 42
+print(egraph.extract(lookup_or_zero(values, "missing")).value)  # 0
+```
+
+See [generic container operations](reference/egglog-translation.md#generic-container-operations)
+for `Pair`, `Maybe`, and map folding, and [function declarations](reference/egglog-translation.md#functions-vs-constructors)
+for when a body remains rewrite-backed.
+
+### More highlights
+
+- [Multi-root extraction](reference/python-integration.md#multiple-roots):
+  `egraph.extract_multiple([expr1, expr2], 3, extractor="greedy-dag")` returns up to
+  three variants per root, in input order. Each root is costed independently.
+- [Persistent backoff](reference/egglog-translation.md#schedules):
+  `back_off(match_limit=1000).persistent()` keeps rule bans across separate
+  `EGraph.run()` calls. `RunReport.can_stop` distinguishes saturation from a round
+  with temporarily deferred work.
+- [Parallelism](reference/usage.md#parallelism-and-threads): `EGraph(num_threads=4)`
+  configures Rust workers per e-graph. CPython 3.12–3.14 are supported, with beta
+  support for 3.14t; concurrent Python use requires the documented
+  [thread-safety setup](reference/python-integration.md#thread-safety).
+
+### Changes and compatibility
+
 - Fix release version bumps to update `Cargo.lock` before building locked wheels.
 
 - Modernize dependencies and CI [#425](https://github.com/egraphs-good/egglog-python/pull/425).
