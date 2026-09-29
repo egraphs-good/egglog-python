@@ -19,6 +19,7 @@ import pytest
 
 import egglog.bindings as egg_bindings
 import egglog.builtins as egg_builtins
+import egglog.egraph_state as egraph_state_module
 from egglog import *
 from egglog.declarations import (
     BiRewriteDecl,
@@ -1037,6 +1038,49 @@ def test_shared_subexpression_lowering_is_deterministic_across_processes() -> No
     ]
 
     assert transcripts[1:] == transcripts[:-1]
+
+
+def test_shared_subexpression_scan_runs_once_per_let(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Converting a deep term scans it for shared subexpressions once, plus once per synthetic let
+    body, instead of once per subterm (which made lowering quadratic in the depth of the term).
+    """
+
+    class ScanLeaf(Expr):
+        def __init__(self, name: StringLike) -> None: ...
+
+    class ScanList(Expr):
+        @classmethod
+        def nil(cls) -> ScanList: ...
+
+        @classmethod
+        def cons(cls, left: ScanLeaf, right: ScanLeaf, tail: ScanList) -> ScanList: ...
+
+    original_scan = egraph_state_module._exprs_multiple_parents
+    scans = 0
+
+    def counting_scan(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
+        nonlocal scans
+        scans += 1
+        return original_scan(typed_expr)
+
+    monkeypatch.setattr(egraph_state_module, "_exprs_multiple_parents", counting_scan)
+
+    def scans_to_let(n: int) -> int:
+        nonlocal scans
+        shared = ScanLeaf("shared")
+        term = ScanList.nil()
+        for i in range(n):
+            term = ScanList.cons(shared, ScanLeaf(f"x{i}"), term)
+        egraph = EGraph(save_egglog_string=True)
+        scans = 0
+        egraph.let("root", term)
+        # Only the shared leaf is hoisted, and every cons cell refers to it.
+        assert egraph.as_egglog_string.count("(let $__expr_") == 1
+        assert egraph.as_egglog_string.count("$__expr_0") == n + 1
+        return scans
+
+    assert scans_to_let(100) == scans_to_let(5)
 
 
 def test_freeze_omits_synthetic_let_bindings() -> None:
