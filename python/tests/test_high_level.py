@@ -1083,6 +1083,37 @@ def test_shared_subexpression_scan_runs_once_per_let(monkeypatch: pytest.MonkeyP
     assert scans_to_let(100) == scans_to_let(5)
 
 
+def test_shared_subexpression_inside_cost_lookup_is_hoisted() -> None:
+    """
+    The scan for shared subexpressions also looks inside a cost lookup's arguments, since they are
+    converted without scanning again (see `test_shared_subexpression_scan_runs_once_per_let`).
+    """
+
+    class CostLeaf(Expr):
+        def __init__(self, name: StringLike) -> None: ...
+
+    class CostPair(Expr):
+        def __init__(self, left: CostLeaf, right: CostLeaf) -> None: ...
+
+    class CostRoot(Expr):
+        def __init__(self, pair: CostPair) -> None: ...
+
+    class CostBox(Expr):
+        def __init__(self, cost: i64Like) -> None: ...
+
+    shared = CostLeaf("shared")
+    root = CostRoot(CostPair(shared, shared))
+    egraph = EGraph(save_egglog_string=True)
+    egraph.register(set_cost(root, i64(3)))
+    start = len(egraph.as_egglog_string)
+    egraph.register(CostBox(get_cost(root)))
+    commands = egraph.as_egglog_string[start:]
+    # The shared leaf is hoisted into one synthetic let, which the pair refers to twice.
+    assert commands.count("(let $__expr_") == 1
+    let_name = commands.split("(let ", 1)[1].split(" ", 1)[0]
+    assert commands.count(let_name) == 3
+
+
 def test_freeze_omits_synthetic_let_bindings() -> None:
     class FreezeLetNum(Expr):
         @classmethod

@@ -1730,7 +1730,12 @@ def _sanitize_egg_ident(input_string: str) -> str:
 
 
 def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
-    """Return multiply-parented expressions in deterministic preorder for stable synthetic let names."""
+    """
+    Return multiply-parented expressions in deterministic preorder for stable synthetic let names.
+
+    Visits every child that `_expr_to_egg` converts with `lets_hoisted`, so the arguments of calls,
+    cost lookups and partial calls are not scanned again when they are converted.
+    """
     parent_counts: dict[TypedExprDecl, int] = {}
     traversal_order: list[TypedExprDecl] = []
     traversed: set[TypedExprDecl] = set()
@@ -1743,7 +1748,7 @@ def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
         if node is not typed_expr:
             traversal_order.append(node)
         match node.expr:
-            case CallDecl(args=args) | PartialCallDecl(CallDecl(args=args)):
+            case CallDecl(args=args) | GetCostDecl(args=args) | PartialCallDecl(CallDecl(args=args)):
                 for child in args:
                     parent_counts[child] = parent_counts.get(child, 0) + 1
                 stack.extend(reversed(args))
@@ -1765,7 +1770,7 @@ def _contains_unbound_var(typed_expr: TypedExprDecl) -> bool:
         match node.expr:
             case UnboundVarDecl():
                 return True
-            case CallDecl(args=args) | PartialCallDecl(CallDecl(args=args)):
+            case CallDecl(args=args) | GetCostDecl(args=args) | PartialCallDecl(CallDecl(args=args)):
                 stack.extend(args)
             case _:
                 pass
