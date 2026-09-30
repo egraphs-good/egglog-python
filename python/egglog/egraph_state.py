@@ -1305,16 +1305,25 @@ class EGraphState:
         self,
         typed_expr_decl: TypedExprDecl,
         expr_to_let: bool = True,
+        *,
+        lets_hoisted: bool = False,
     ) -> bindings._Expr:
+        """
+        Convert a typed expression to an egg expression.
+
+        If `lets_hoisted` is set, an enclosing call has already hoisted this expression's shared
+        subexpressions into let bindings, so they are not searched for again. Searching once per
+        subterm would make converting a term quadratic in its depth.
+        """
         # transform all expressions with multiple parents into a let binding, so that less expressions
         # are sent to egglog. Only for performance reasons.
-        if expr_to_let:
+        if expr_to_let and not lets_hoisted:
             have_multiple_parents = _exprs_multiple_parents(typed_expr_decl)
             for expr in reversed(have_multiple_parents):
                 self._transform_let(expr)
 
         self.type_ref_to_egg(typed_expr_decl.tp)
-        return self._expr_to_egg(typed_expr_decl.expr, expr_to_let=expr_to_let)
+        return self._expr_to_egg(typed_expr_decl.expr, expr_to_let=expr_to_let, lets_hoisted=expr_to_let)
 
     def _transform_let(self, typed_expr: TypedExprDecl) -> TypedExprDecl | None:
         """
@@ -1342,17 +1351,27 @@ class EGraphState:
         return None
 
     @overload
-    def _expr_to_egg(self, expr_decl: CallDecl, *, expr_to_let: bool = ...) -> bindings.Call: ...
+    def _expr_to_egg(
+        self, expr_decl: CallDecl, *, expr_to_let: bool = ..., lets_hoisted: bool = ...
+    ) -> bindings.Call: ...
 
     @overload
-    def _expr_to_egg(self, expr_decl: UnboundVarDecl | LetRefDecl, *, expr_to_let: bool = ...) -> bindings.Var: ...
+    def _expr_to_egg(
+        self, expr_decl: UnboundVarDecl | LetRefDecl, *, expr_to_let: bool = ..., lets_hoisted: bool = ...
+    ) -> bindings.Var: ...
 
     @overload
-    def _expr_to_egg(self, expr_decl: ExprDecl, *, expr_to_let: bool = ...) -> bindings._Expr: ...
+    def _expr_to_egg(
+        self, expr_decl: ExprDecl, *, expr_to_let: bool = ..., lets_hoisted: bool = ...
+    ) -> bindings._Expr: ...
 
-    def _expr_to_egg(self, expr_decl: ExprDecl, *, expr_to_let: bool = False) -> bindings._Expr:  # noqa: PLR0912,C901
+    def _expr_to_egg(  # noqa: PLR0912,C901
+        self, expr_decl: ExprDecl, *, expr_to_let: bool = False, lets_hoisted: bool = False
+    ) -> bindings._Expr:
         """
         Convert an ExprDecl to an egg expression.
+
+        `lets_hoisted` is passed on to the arguments, see `typed_expr_to_egg`.
         """
         if expr_to_let:
             try:
@@ -1400,7 +1419,7 @@ class EGraphState:
                 res = bindings.Lit(span(), l)
             case CallDecl() | GetCostDecl():
                 egg_fn, typed_args = self.translate_call(expr_decl)
-                egg_args = [self.typed_expr_to_egg(a, expr_to_let) for a in typed_args]
+                egg_args = [self.typed_expr_to_egg(a, expr_to_let, lets_hoisted=lets_hoisted) for a in typed_args]
                 res = bindings.Call(span(), egg_fn, egg_args)
             case PyObjectDecl(value):
                 res = bindings.Call(
@@ -1415,7 +1434,7 @@ class EGraphState:
                     "unstable-fn",
                     [
                         bindings.Lit(span(), bindings.String(egg_fn)),
-                        *[self.typed_expr_to_egg(arg, expr_to_let) for arg in typed_args],
+                        *[self.typed_expr_to_egg(arg, expr_to_let, lets_hoisted=lets_hoisted) for arg in typed_args],
                     ],
                 )
             case ValueDecl():
@@ -1711,7 +1730,12 @@ def _sanitize_egg_ident(input_string: str) -> str:
 
 
 def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
-    """Return multiply-parented expressions in deterministic preorder for stable synthetic let names."""
+    """
+    Return multiply-parented expressions in deterministic preorder for stable synthetic let names.
+
+    Visits every child that `_expr_to_egg` converts with `lets_hoisted`, so the arguments of calls,
+    cost lookups and partial calls are not scanned again when they are converted.
+    """
     parent_counts: dict[TypedExprDecl, int] = {}
     traversal_order: list[TypedExprDecl] = []
     traversed: set[TypedExprDecl] = set()
@@ -1724,7 +1748,7 @@ def _exprs_multiple_parents(typed_expr: TypedExprDecl) -> list[TypedExprDecl]:
         if node is not typed_expr:
             traversal_order.append(node)
         match node.expr:
-            case CallDecl(args=args) | PartialCallDecl(CallDecl(args=args)):
+            case CallDecl(args=args) | GetCostDecl(args=args) | PartialCallDecl(CallDecl(args=args)):
                 for child in args:
                     parent_counts[child] = parent_counts.get(child, 0) + 1
                 stack.extend(reversed(args))
@@ -1746,7 +1770,7 @@ def _contains_unbound_var(typed_expr: TypedExprDecl) -> bool:
         match node.expr:
             case UnboundVarDecl():
                 return True
-            case CallDecl(args=args) | PartialCallDecl(CallDecl(args=args)):
+            case CallDecl(args=args) | GetCostDecl(args=args) | PartialCallDecl(CallDecl(args=args)):
                 stack.extend(args)
             case _:
                 pass
