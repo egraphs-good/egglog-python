@@ -33,7 +33,7 @@ dependencies = [
     "anywidget",
     "cloudpickle>=3",
     "opentelemetry-api",
-    "egglog-proto @ git+https://github.com/egraphs-good/egglog-experimental.git@57f052f70b9f02916ea288ca66480b6380c0c3dc#subdirectory=gen/python",
+    "egglog-proto @ git+https://github.com/egraphs-good/egglog-experimental.git@6e0dbc97fbe9f3868c4662b9a6d73b5d01913c9d#subdirectory=gen/python",
 ]
 
 [project.optional-dependencies]

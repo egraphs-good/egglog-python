@@ -66,4 +66,12 @@ impl ProtoEngine {
     ) -> PyResult<Bound<'py, PyBytes>> {
         self.request(py, request, Engine::destroy)
     }
+
+    fn configure_resources<'py>(
+        &mut self,
+        py: Python<'py>,
+        request: &Bound<'py, PyBytes>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.request(py, request, Engine::configure_resources)
+    }
 }

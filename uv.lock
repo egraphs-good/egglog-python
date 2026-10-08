@@ -848,7 +848,7 @@ requires-dist = [
     { name = "egglog", extras = ["array"], marker = "extra == 'docs'" },
     { name = "egglog", extras = ["array"], marker = "extra == 'test'" },
     { name = "egglog", extras = ["docs", "test"], marker = "extra == 'dev'" },
-    { name = "egglog-proto", git = "https://github.com/egraphs-good/egglog-experimental.git?subdirectory=gen%2Fpython&rev=57f052f70b9f02916ea288ca66480b6380c0c3dc" },
+    { name = "egglog-proto", git = "https://github.com/egraphs-good/egglog-experimental.git?subdirectory=gen%2Fpython&rev=6e0dbc97fbe9f3868c4662b9a6d73b5d01913c9d" },
     { name = "graphviz" },
     { name = "ipykernel", marker = "extra == 'dev'" },
     { name = "jupyterlab", marker = "extra == 'dev'" },
@@ -891,7 +891,7 @@ dev = [
 [[package]]
 name = "egglog-proto"
 version = "0.1.0"
-source = { git = "https://github.com/egraphs-good/egglog-experimental.git?subdirectory=gen%2Fpython&rev=57f052f70b9f02916ea288ca66480b6380c0c3dc#57f052f70b9f02916ea288ca66480b6380c0c3dc" }
+source = { git = "https://github.com/egraphs-good/egglog-experimental.git?subdirectory=gen%2Fpython&rev=6e0dbc97fbe9f3868c4662b9a6d73b5d01913c9d#6e0dbc97fbe9f3868c4662b9a6d73b5d01913c9d" }
 dependencies = [
     { name = "protobuf-py" },
 ]

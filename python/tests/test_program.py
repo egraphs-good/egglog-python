@@ -330,6 +330,48 @@ def test_inventory_covers_all_program_message_fields():
     _program._check_inventory()
 
 
+def test_proof_command_relocation_and_constructor_closure():
+    builder = Builder()
+    unused = builder.import_ref(literal(999))
+    fact = builder.import_ref(literal(7))
+    builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Box")))
+    builder.add(
+        "declarations", pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Box")))
+    )
+    builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name="box", output=0))
+        ),
+    )
+    prove = builder.add(
+        "commands", pb.Command(kind=Oneof[Literal["prove"], pb.Prove]("prove", pb.Prove(facts=[fact, fact])))
+    )
+    exists = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["prove_exists"], pb.ProveExists]("prove_exists", pb.ProveExists(constructor="box"))
+        ),
+    )
+    missing = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["prove_exists"], pb.ProveExists]("prove_exists", pb.ProveExists(constructor="missing"))
+        ),
+    )
+    owner = builder.publish()
+    result = pack(commands=[owner.ref("commands", prove), owner.ref("commands", exists)], ambient=AMBIENT).program
+    assert result.commands[0].kind.value.facts == [0, 0]
+    assert unused != fact == 1
+    assert len(result.nodes) == 1
+    assert result.nodes[0].kind.value.value.value == 7
+    assert result.commands[1].kind.value.constructor == "box"
+    assert {declaration.kind.value.name for declaration in result.declarations} == {"box", "Box"}
+    assert pb.Program.from_binary(result.to_binary()) == result
+    with pytest.raises(ValueError, match=r"missing.*missing"):
+        pack(commands=[owner.ref("commands", missing)])
+
+
 @pytest.mark.parametrize(("message", "field", "role"), _program._index_fields())
 def test_each_index_role_remaps_zero_and_preserves_presence(message, field, role):
     record = message()

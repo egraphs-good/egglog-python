@@ -1158,8 +1158,7 @@ class EGraph:
 
     def num_threads(self) -> int:
         """Return the number of worker threads configured for this e-graph."""
-        msg = "Reading the resolved native thread count requires the shared byte configuration protocol"
-        raise NotImplementedError(msg)
+        return self._state.configure_resources()
 
     def set_num_threads(self, num_threads: int) -> None:
         """
@@ -1168,7 +1167,7 @@ class EGraph:
         Passing ``1`` keeps execution serial. Passing ``0`` uses available
         parallelism.
         """
-        self._egraph.set_num_threads(num_threads)
+        self._state.configure_resources(num_threads)
 
     def no_decomp(self) -> bool:
         """Return whether rule decomposition is disabled for this e-graph."""
