@@ -277,6 +277,7 @@ local_partial_types = true
 python-source = "python"
 module-name = "egglog.bindings"
 features = ["pyo3/extension-module"]
+include = ["egglog/_builtin_catalog.pb"]
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib", "--doctest-modules"]

@@ -34,10 +34,13 @@ from uuid import uuid4
 from warnings import warn
 
 import graphviz
+from egglog_proto.egglog.v1 import egglog_pb as pb
 from opentelemetry import trace
+from protobuf import Oneof
 from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
+from ._program import Builder, Ref, StructuralView
 from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
@@ -45,7 +48,7 @@ from .declarations import *
 from .declarations import _BUILTIN_EGG_FN_NAMES, _BUILTIN_EGG_SORT_NAMES, is_callable_decl_constructor
 from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
-from .pretty import pretty_decl
+from .pretty import pretty_decl, pretty_ref
 from .run_report import RunReport
 from .runtime import *
 from .thunk import *
@@ -1131,13 +1134,12 @@ class EGraph:
         num_threads: int = 1,
         no_decomp: bool = False,
     ) -> None:
+        if not seminaive or no_decomp or save_egglog_string:
+            msg = "Nondefault native execution flags and source transcripts are not migrated to the shared adapter"
+            raise NotImplementedError(msg)
         with _TRACER.start_as_current_span("create"):
             with _TRACER.start_as_current_span("create_bindings"):
-                self._state = EGraphState(
-                    bindings.EGraph(seminaive=seminaive, num_threads=num_threads, no_decomp=no_decomp),
-                    seminaive=seminaive,
-                    save_egglog_string=save_egglog_string,
-                )
+                self._state = EGraphState(num_threads=num_threads)
             self._state_stack = []
             self._token_stack = []
             self._cost_callback_values = None
@@ -1145,8 +1147,8 @@ class EGraph:
                 self.register(*actions)
 
     def _add_decls(self, *decls: DeclarationsLike) -> None:
-        self._state.ensure_open()
-        self._state.add_declarations(*decls)
+        msg = "Legacy declaration submission is removed; this operation is not migrated"
+        raise NotImplementedError(msg)
 
     def set_report_level(self, level: bindings._ReportLevel) -> None:
         """
@@ -1156,7 +1158,8 @@ class EGraph:
 
     def num_threads(self) -> int:
         """Return the number of worker threads configured for this e-graph."""
-        return self._egraph.num_threads()
+        msg = "Reading the resolved native thread count requires the shared byte configuration protocol"
+        raise NotImplementedError(msg)
 
     def set_num_threads(self, num_threads: int) -> None:
         """
@@ -1169,7 +1172,7 @@ class EGraph:
 
     def no_decomp(self) -> bool:
         """Return whether rule decomposition is disabled for this e-graph."""
-        return self._egraph.no_decomp()
+        return False
 
     def set_no_decomp(self, no_decomp: bool) -> None:
         """Set whether subsequently registered rules skip decomposition."""
@@ -1194,7 +1197,8 @@ class EGraph:
         commands are rejected because they could no longer be recorded.
         Otherwise this method has no effect and the e-graph remains usable.
         """
-        self._state.close()
+        # With transcripts disabled, close historically leaves the graph usable.
+        # Native handles are released when their owning state is disposed.
 
     def _ipython_display_(self) -> None:
         self.display()
@@ -1299,7 +1303,12 @@ class EGraph:
         """
         Check if a fact is true in the egraph.
         """
-        self._state.run_program(self._facts_to_check(facts))
+        builder = Builder()
+        indices = [builder.import_ref(fact.__egg_ref__) for fact in _fact_likes(facts)]
+        command = builder.add(
+            "commands", pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=indices)))
+        )
+        self._state.run_program([builder.publish().ref("commands", command)])
 
     def check_fail(self, *facts: FactLike) -> None:
         """
@@ -1371,57 +1380,47 @@ class EGraph:
         Extract the lowest cost expression from the egraph.
         """
         _extractor_options(extractor)
-        if extractor == "greedy-dag" and cost_model is not None and not isinstance(cost_model, DagCostModel):
-            msg = "The greedy-dag extractor requires a DagCostModel; a general TreeCostModel cannot be adapted"
-            raise TypeError(msg)
+        if cost_model is not None or extractor != "tree":
+            msg = "Custom Python cost models and non-tree extraction are not migrated"
+            raise NotImplementedError(msg)
         runtime_expr = to_runtime_expr(expr)
-        self._add_decls(runtime_expr)
-        tp = runtime_expr.__egg_typed_expr__.tp
-        if cost_model is None:
-            extract_report = self._run_extract(runtime_expr, 0, extractor)
-            assert isinstance(extract_report, bindings.ExtractBest)
-            res = self._from_termdag(extract_report.termdag, extract_report.term, tp)
-            cost = extract_report.cost
-        else:
-            if isinstance(runtime_expr.__egg_typed_expr__.expr, CallDecl):
-                # Register the root through the normal command path before computing costs, so shared subexpressions
-                # use synthetic lets and the extractor sees the already-materialized root value.
-                self.register(expr)
-            egg_sort = self._state.type_ref_to_egg(tp)
-            typed_expr = runtime_expr.__egg_typed_expr__
-            if isinstance(typed_expr.expr, ValueDecl):
-                # Values returned by lookup_function_value already identify an e-graph value and cannot be lowered
-                # back into Egglog syntax.
-                value = self._state.typed_expr_to_value(typed_expr)
-            else:
-                # For call roots, evaluate the same let-factored presentation registered above. Keep
-                # typed_expr_to_value's direct lowering for non-registering callers such as lookup_function_value.
-                egg_expr = self._state.typed_expr_to_egg(typed_expr, expr_to_let=True)
-                value = call_with_current_trace(self._state.egraph.eval_expr, egg_expr)[1]
-            if isinstance(cost_model, DagCostModel):
-                termdag, extracted = call_with_current_trace(
-                    bindings.extract_best_with_dag_cost_model,
-                    self._state.egraph,
-                    [(egg_sort, value)],
-                    _DagCostModel(cost_model, self).to_bindings_cost_model(),
-                    extractor=extractor,
+        builder = Builder()
+        root = builder.import_ref(runtime_expr.__egg_ref__)
+        index = builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["extract"], pb.Extract](
+                    "extract",
+                    pb.Extract(roots=[root], variants=1, extractor=pb.Extractor.TREE),
                 )
-                extracted_root = extracted[0]
-                if extracted_root is None:
-                    msg = "Unextractable root"
-                    raise ValueError(msg)
-                cost, term = extracted_root
-            else:
-                egg_cost_model = _CostModel(cost_model, self).to_bindings_cost_model()
-                tree_extractor = call_with_current_trace(
-                    bindings.Extractor, [egg_sort], self._state.egraph, egg_cost_model
-                )
-                termdag = bindings.TermDag()
-                cost, term = call_with_current_trace(
-                    tree_extractor.extract_best, self._state.egraph, termdag, value, egg_sort
-                )
-            res = self._from_termdag(termdag, term, tp)
-        return (res, cost) if include_cost else res
+            ),
+        )
+        response, owner = self._state.run_program([builder.publish().ref("commands", index)])
+        if (
+            len(response.outputs) != 1
+            or response.outputs[0].kind is None
+            or response.outputs[0].kind.field != "extraction"
+        ):
+            msg = "Shared adapter did not return the requested extraction"
+            raise ValueError(msg)
+        roots = response.outputs[0].kind.value.roots
+        if len(roots) != 1 or not roots[0].variants:
+            msg = "Unextractable root"
+            raise ValueError(msg)
+        variant = roots[0].variants[0]
+        result = cast("BASE_EXPR", RuntimeExpr(owner.ref("nodes", variant.term)))
+        if not include_cost:
+            return result
+        if not variant.has_field("cost"):
+            msg = "The extraction cost has no portable value"
+            raise ValueError(msg)
+        from .deconstruct import get_literal_value  # noqa: PLC0415
+
+        cost = get_literal_value(RuntimeExpr(owner.ref("nodes", variant.cost)))
+        if not isinstance(cost, int):
+            msg = "Expected an i64 extraction cost"
+            raise TypeError(msg)
+        return result, cost
 
     def _from_termdag(self, termdag: bindings.TermDag, term: int, tp: JustTypeRef) -> Any:
         (new_typed_expr,) = self._state.exprs_from_egg(termdag, [term], tp)
@@ -1558,17 +1557,21 @@ class EGraph:
         """
         Push the current state of the egraph, so that it can be popped later and reverted back.
         """
-        self._state.run_program(bindings.Push(1))
+        copied = self._state.copy()
         self._state_stack.append(self._state)
-        self._state = self._state.copy()
+        self._state = copied
 
     @_TRACER.start_as_current_span("pop")
     def pop(self) -> None:
         """
         Pop the current state of the egraph, reverting back to the previous state.
         """
-        self._state.run_program(bindings.Pop(span(1), 1))
+        if not self._state_stack:
+            msg = "Cannot pop an EGraph without a pushed state"
+            raise IndexError(msg)
+        temporary = self._state
         self._state = self._state_stack.pop()
+        temporary.destroy()
 
     def __enter__(self) -> Self:
         """
@@ -1580,21 +1583,11 @@ class EGraph:
         return self
 
     def __exit__(self, exc_type, exc, exc_tb) -> None:
-        egglog_file_state = self._state.egglog_file_state
-        if egglog_file_state is None or (not egglog_file_state.poisoned and not egglog_file_state.file.closed):
-            self.pop()
-            return
-
-        # A closed or poisoned transcript rejects ordinary commands, but the
-        # backend scope still has to be restored. If another exception is
-        # already propagating, do not replace it with an ordinary cleanup failure.
         try:
-            call_with_current_trace(self._state.egraph.run_program, bindings.Pop(span(1), 1))
+            self.pop()
         except Exception:
             if exc_type is None:
                 raise
-        finally:
-            self._state = self._state_stack.pop()
 
     def _serialize(
         self,
@@ -1732,11 +1725,13 @@ class EGraph:
 
     @property
     def _egraph(self) -> bindings.EGraph:
-        return self._state.egraph
+        msg = "Direct native-AST access is removed; this operation is not migrated"
+        raise NotImplementedError(msg)
 
     @property
     def __egg_decls__(self) -> Declarations:
-        return self._state.__egg_decls__
+        msg = "Legacy declaration projections are removed"
+        raise NotImplementedError(msg)
 
     @_TRACER.start_as_current_span("register")
     def register(
@@ -2352,17 +2347,21 @@ class RewriteOrRule:
         return str(self)
 
 
-@dataclass
 class Fact:
     """
     A query on an EGraph, either by an expression or an equivalence between multiple expressions.
     """
 
-    __egg_decls__: Declarations
-    fact: FactDecl
+    __slots__ = ("__egg_ref__",)
+
+    def __init__(self, reference: Ref) -> None:
+        if reference.role != "nodes":
+            msg = "Facts require an owned protobuf node"
+            raise TypeError(msg)
+        self.__egg_ref__ = reference
 
     def __str__(self) -> str:
-        return pretty_decl(self.__egg_decls__, self.fact)
+        return pretty_ref(self.__egg_ref__)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2371,13 +2370,12 @@ class Fact:
         """
         Returns True if the two sides of an equality are structurally equal.
         """
-        match self.fact:
-            case EqDecl(_, left, right):
-                return left == right
-            case ExprFactDecl(TypedExprDecl(_, CallDecl(FunctionRef(name), (left_tp, right_tp)))) if (
-                name == Ident.builtin("!=")
-            ):
-                return left_tp != right_tp
+        node: pb.Node = self.__egg_ref__.read()
+        if node.kind is not None and node.kind.field == "union" and len(node.kind.value.members) == 2:
+            left, right = node.kind.value.members
+            return StructuralView(self.__egg_ref__.owner.ref("nodes", left)) == StructuralView(
+                self.__egg_ref__.owner.ref("nodes", right)
+            )
         msg = f"Can only check equality for == or != not {self}"
         raise ValueError(msg)
 
@@ -2477,7 +2475,7 @@ def subsume(expr: Expr) -> Action:
 
 def expr_fact(expr: BaseExpr) -> Fact:
     runtime_expr = to_runtime_expr(expr)
-    return Fact(runtime_expr.__egg_decls__, ExprFactDecl(runtime_expr.__egg_typed_expr__))
+    return Fact(runtime_expr.__egg_ref__)
 
 
 def union(lhs: EXPR) -> _UnionBuilder[EXPR]:
@@ -2590,17 +2588,26 @@ class _EqBuilder(Generic[BASE_EXPR]):
     def to(self, other: BASE_EXPR) -> Fact:
         expr = to_runtime_expr(self.expr)
         other = convert_to_same_type(other, expr)
-        return Fact(
-            Declarations.create(expr, other),
-            EqDecl(expr.__egg_typed_expr__.tp, expr.__egg_typed_expr__.expr, other.__egg_typed_expr__.expr),
+        node: pb.Node = expr.__egg_ref__.read()
+        builder = Builder()
+        index = builder.add(
+            "nodes",
+            pb.Node(
+                sort_id=builder.import_ref(expr.__egg_ref__.owner.ref("sorts", node.sort_id)),
+                kind=Oneof[Literal["union"], pb.Union](
+                    "union",
+                    pb.Union(members=[builder.import_ref(expr.__egg_ref__), builder.import_ref(other.__egg_ref__)]),
+                ),
+            ),
         )
+        return Fact(builder.publish().ref("nodes", index))
 
     def __repr__(self) -> str:
         return str(self)
 
     def __str__(self) -> str:
         expr = to_runtime_expr(self.expr)
-        return expr.__egg_pretty__("eq")
+        return f"eq({expr})"
 
 
 @dataclass
@@ -2709,13 +2716,13 @@ class _RuleBuilder:
         return f"rule({', '.join(args)})"
 
 
-def expr_parts(expr: BaseExpr) -> TypedExprDecl:
+def expr_parts(expr: BaseExpr) -> StructuralView:
     """
     Returns the underlying type and decleration of the expression. Useful for testing structural equality or debugging.
     """
     if not isinstance(cast("object", expr), RuntimeExpr):
         raise TypeError(f"Expected a RuntimeExpr not {expr}")
-    return cast("RuntimeExpr", expr).__egg_typed_expr__
+    return StructuralView(cast("RuntimeExpr", expr).__egg_ref__)
 
 
 def to_runtime_expr(expr: BaseExpr) -> RuntimeExpr:

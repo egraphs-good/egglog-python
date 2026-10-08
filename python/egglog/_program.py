@@ -11,8 +11,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
+from math import isnan
+from struct import unpack
+from threading import RLock
 from types import MappingProxyType
 from typing import Any, cast
+from weakref import WeakKeyDictionary
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Message, ScalarType
@@ -232,12 +236,111 @@ class Ref:
         return _copy_record(cast("Message", canonical.owner._slots[canonical.role][canonical.index]))
 
 
+_STRUCTURAL_HASHES: WeakKeyDictionary[Owner, dict[tuple[str, int], int]] = WeakKeyDictionary()
+_STRUCTURAL_LOCK = RLock()
+
+
+def _structural_parts(reference: Ref) -> tuple[tuple[object, ...], list[Ref]]:  # noqa: C901
+    """Read comparison data directly; only arena addresses become child refs."""
+    ref = reference.owner.ref(reference.role, reference.index)
+    record = cast("Message", ref.owner._slots[ref.role][ref.index])
+    if ref.role in {"rules", "rulesets"} or (
+        isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "union"
+    ):
+        return (ref.role, ref), []
+    shape: list[object] = [ref.role]
+    children = []
+    pending: list[tuple[Message, str]] = [(record, "")]
+    while pending:
+        message, path = pending.pop()
+        shape.extend((path, message.desc().type_name))
+        inline = []
+        for field in message.desc().fields:
+            if field.name == "span" or (field.presence.name != "IMPLICIT" and field not in message):
+                continue
+            value = message[field]
+            if value is None:
+                continue
+            repeated = isinstance(field.value, DescFieldValueList)
+            values = value if repeated else [value]
+            shape.extend((field.name, len(values)))
+            role = _FIELD_ROLES[message.desc().name][field.name]
+            for index, item in enumerate(values):
+                if role and not role.startswith("@"):
+                    children.append(ref.owner.ref(role, item))
+                    shape.append(("ref", role))
+                elif isinstance(item, Message):
+                    inline.append((item, f"{path}/{field.name}/{index}"))
+                elif isinstance(message, pb.PrimitiveValue) and field.name == "f64_bits":
+                    number = unpack("!d", item.to_bytes(8, "big"))[0]
+                    if isnan(number):
+                        msg = "NaN structural comparison requires the pending Python identity decision"
+                        raise NotImplementedError(msg)
+                    shape.append(number)
+                else:
+                    shape.append(item)
+        pending.extend(reversed(inline))
+    return tuple(shape), children
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class StructuralView:
+    """Read-only structural inspection; Ref itself retains address identity."""
+
+    ref: Ref
+
+    def __hash__(self) -> int:
+        root = self.ref.owner.ref(self.ref.role, self.ref.index)
+        with _STRUCTURAL_LOCK:
+            pending = [(root, False)]
+            active: set[Ref] = set()
+            while pending:
+                ref, leaving = pending.pop()
+                cache = _STRUCTURAL_HASHES.setdefault(ref.owner, {})
+                key = (ref.role, ref.index)
+                if key in cache:
+                    continue
+                shape, children = _structural_parts(ref)
+                if leaving:
+                    active.remove(ref)
+                    cache[key] = hash((shape, tuple(_STRUCTURAL_HASHES[c.owner][c.role, c.index] for c in children)))
+                    continue
+                if ref in active:
+                    msg = "Cyclic protobuf structure without an identity-bearing node"
+                    raise ValueError(msg)
+                active.add(ref)
+                pending.append((ref, True))
+                pending.extend((child, False) for child in reversed(children))
+            return _STRUCTURAL_HASHES[root.owner][root.role, root.index]
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, StructuralView):
+            return NotImplemented
+        pending = [(self.ref, other.ref)]
+        seen = set()
+        while pending:
+            left, right = pending.pop()
+            left = left.owner.ref(left.role, left.index)
+            right = right.owner.ref(right.role, right.index)
+            if left == right or (left, right) in seen:
+                continue
+            seen.add((left, right))
+            left_shape, left_children = _structural_parts(left)
+            right_shape, right_children = _structural_parts(right)
+            if left_shape != right_shape or len(left_children) != len(right_children):
+                return False
+            pending.extend(zip(left_children, right_children, strict=True))
+        return True
+
+
 class Owner:
     """Published protobuf records; imported slots resolve directly to their owner."""
 
     __slots__ = ("__weakref__", "_slots")
 
     def __init__(self, slots: Mapping[str, tuple[Message | Ref, ...]]) -> None:
+        # Internal transfer from Builder.publish; caller-owned messages must
+        # enter through Builder.add/fill/from_program so they are detached.
         self._slots = MappingProxyType(dict(slots))
 
     def ref(self, role: str, index: int) -> Ref:
@@ -334,6 +437,62 @@ class Builder:
 class Packed:
     program: pb.Program
     indices: tuple[int, ...]
+    # Canonical source declarations let response owners retain the same
+    # presentations without manufacturing another semantic declaration copy.
+    definitions: tuple[Ref, ...]
+
+
+def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
+    """
+    Expand templates with fresh node identities and shared canonical definitions.
+
+    All roots share one relocation map. Sorts, files and declarations are
+    immutable imports; only reachable nodes are copied. This does not evaluate
+    defaults or merge the independent binders of lambda bodies and captures.
+    """
+    builder = Builder()
+    indices: dict[Ref, int] = {}
+    pending: list[Ref] = []
+    definitions: dict[Owner, dict[tuple[str, str], set[Ref]]] = {}
+
+    def allocate(source: Ref) -> int:
+        source = source.owner.ref(source.role, source.index)
+        if source.role != "nodes":
+            return builder.import_ref(source)
+        if source not in indices:
+            indices[source] = builder.reserve("nodes")
+            pending.append(source)
+        return indices[source]
+
+    roots = tuple(roots)
+    if any(root.role != "nodes" for root in roots):
+        msg = "Template roots must be node references"
+        raise TypeError(msg)
+    root_indices = tuple(allocate(root) for root in roots)
+    while pending:
+        source = pending.pop()
+
+        def dependency(namespace: str, name: str, origin: Owner = source.owner) -> None:
+            if origin not in definitions:
+                table: dict[tuple[str, str], set[Ref]] = {}
+                for index in range(len(origin._slots["declarations"])):
+                    ref = origin.ref("declarations", index)
+                    key = _definition_key(ref.read())
+                    if key is not None:
+                        table.setdefault(key, set()).add(ref)
+                definitions[origin] = table
+            matches = definitions[origin].get((namespace, name), set())
+            if len(matches) != 1:
+                raise ValueError(f"Template requires one canonical definition for {namespace} {name!r}")
+            builder.import_ref(next(iter(matches)))
+
+        def relocate(role: str, index: int, origin: Owner = source.owner) -> int:
+            return allocate(origin.ref(role, index))
+
+        record = _copy_record(source.read(), relocate=relocate, dependency=dependency)
+        builder.fill("nodes", indices[source], record)
+    owner = builder.publish()
+    return tuple(owner.ref("nodes", index) for index in root_indices)
 
 
 def _definition_key(record: Message) -> tuple[str, str] | None:
@@ -445,7 +604,7 @@ def pack(  # noqa: C901, PLR0912
             if missing:
                 raise ValueError(f"missing definitions: {sorted(missing)}")
             break
-    return Packed(program, indices)
+    return Packed(program, indices, tuple(emitted.values()))
 
 
 _check_inventory()

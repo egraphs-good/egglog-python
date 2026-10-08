@@ -5,13 +5,16 @@ Pretty printing for declarations.
 from __future__ import annotations
 
 import ast
+import struct
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias, assert_never
 
 import black
 import cloudpickle
+from egglog_proto.egglog.v1 import egglog_pb as pb
 
+from ._program import Ref, StructuralView
 from .declarations import *
 
 if TYPE_CHECKING:
@@ -23,6 +26,7 @@ __all__ = [
     "UNARY_METHODS",
     "pretty_callable_ref",
     "pretty_decl",
+    "pretty_ref",
 ]
 MAX_LINE_LENGTH = 110
 LINE_DIFFERENCE = 10
@@ -75,6 +79,173 @@ NAMED_UNARY_METHODS = {
     "__floor__": "floor",
     "__ceil__": "ceil",
 }
+
+
+def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
+    """Print the canonical records directly, using supplied Python bindings."""
+    from .runtime import _definition_at  # noqa: PLC0415
+
+    # Frames stream output rather than recursively copying each child's string.
+    # The Boolean asks scalar arguments to omit their inferred wrapper.
+    frames: list[str | Ref | tuple[Ref, bool, bool]] = [(root, False, False)]
+    output: list[str] = []
+    active: set[Ref] = set()
+    while frames:
+        frame = frames.pop()
+        if isinstance(frame, str):
+            output.append(frame)
+            continue
+        if isinstance(frame, Ref):
+            active.remove(frame)
+            continue
+        reference, bare, parentheses = frame
+        if reference in active:
+            msg = "Cyclic expression presentation is not migrated"
+            raise ValueError(msg)
+        active.add(reference)
+        frames.append(reference)
+        record = reference.read()
+        owner = reference.owner
+        pieces: list[str | tuple[Ref, bool, bool]]
+        if isinstance(record, pb.Sort):
+            if record.kind is None:
+                msg = "Cannot print a sort without a kind"
+                raise ValueError(msg)
+            if record.kind.field not in {"eq", "family"}:
+                raise NotImplementedError(f"Sort presentation is not migrated: {record.kind.field}")
+            name = record.kind.value if record.kind.field == "eq" else record.kind.value.name
+            sort_declaration: pb.Declaration = _definition_at(reference, "sort", name).read()
+            assert sort_declaration.kind is not None
+            assert isinstance(sort_declaration.kind.value, pb.EqSort | pb.HostSortFamily)
+            bindings = sort_declaration.kind.value.bindings
+            path = bindings.python.path if bindings is not None and bindings.python is not None else [name]
+            pieces = [path[-1]]
+            if record.kind.field == "family" and record.kind.value.args:
+                pieces.append("[")
+                for index, argument in enumerate(record.kind.value.args):
+                    if index:
+                        pieces.append(", ")
+                    pieces.append((owner.ref("sorts", argument), False, False))
+                pieces.append("]")
+        elif isinstance(record, pb.Node):
+            if record.kind is None:
+                msg = "Cannot print a node without a kind"
+                raise ValueError(msg)
+            sort = owner.ref("sorts", record.sort_id)
+            match record.kind.field:
+                case "var":
+                    pieces = [record.kind.value]
+                case "primitive_value":
+                    primitive = record.kind.value.value
+                    if primitive is None:
+                        msg = "Cannot print a primitive without a value"
+                        raise ValueError(msg)
+                    if primitive.field == "f64_bits":
+                        value = repr(struct.unpack("!d", struct.pack("!Q", primitive.value))[0])
+                    elif primitive.field in {"i64", "string", "bool"}:
+                        value = repr(primitive.value)
+                    elif primitive.field == "unit":
+                        value = ""
+                    else:
+                        raise NotImplementedError(f"Value presentation is not migrated: {primitive.field}")
+                    pieces = [value] if bare else [(sort, False, False), "(", value, ")"]
+                case "call":
+                    call = record.kind.value
+                    declaration = _definition_at(reference, "callable", call.func)
+                    declared: pb.Declaration = declaration.read()
+                    view = (
+                        declared.bindings.python.views[0]
+                        if declared.bindings is not None
+                        and declared.bindings.python is not None
+                        and declared.bindings.python.views
+                        else None
+                    )
+                    args = [owner.ref("nodes", index) for index in call.args]
+                    if view is None:
+                        pieces = [call.func, "("]
+                        selected = [(argument, False, False) for argument in args]
+                    else:
+                        assert declared.kind is not None
+                        kind = declared.kind.value
+                        fixed = (
+                            len(kind.typing.value.inputs)
+                            if isinstance(kind, pb.HostPrimitive)
+                            and kind.typing is not None
+                            and kind.typing.field == "signature"
+                            else len(args)
+                        )
+                        selected = []
+                        defaults: list[Ref | None] = []
+                        for parameter in view.params:
+                            for argument in (
+                                args[parameter.core_input :]
+                                if parameter.core_input == fixed
+                                else [args[parameter.core_input]]
+                            ):
+                                selected.append((argument, True, False))
+                                defaults.append(
+                                    declaration.owner.ref("nodes", parameter.default_expr)
+                                    if parameter.has_field("default_expr")
+                                    else None
+                                )
+                        while (
+                            selected
+                            and defaults[-1] is not None
+                            and StructuralView(selected[-1][0]) == StructuralView(defaults[-1])
+                        ):
+                            selected.pop()
+                            defaults.pop()
+                        name = view.path[-1] if view.path else "__init__"
+                        if view.kind == pb.PythonCallKind.METHOD and name in BINARY_METHODS and len(selected) == 1:
+                            pieces = [
+                                (args[view.receiver], False, True),
+                                f" {BINARY_METHODS[name]} ",
+                                (selected[0][0], True, True),
+                            ]
+                            if parentheses:
+                                pieces = ["(", *pieces, ")"]
+                            frames.extend(reversed(pieces))
+                            continue
+                        if view.kind == pb.PythonCallKind.INITIALIZER:
+                            pieces = [(sort, False, False), "("]
+                        elif view.kind in {pb.PythonCallKind.METHOD, pb.PythonCallKind.PROPERTY}:
+                            pieces = [(args[view.receiver], False, True), ".", name]
+                            if view.kind == pb.PythonCallKind.PROPERTY:
+                                frames.extend(reversed(pieces))
+                                continue
+                            pieces.append("(")
+                        elif view.kind in {pb.PythonCallKind.CLASS_METHOD, pb.PythonCallKind.CLASS_VARIABLE}:
+                            assert view.owner is not None
+                            assert view.owner.kind is not None
+                            if view.owner.kind.field != "sort":
+                                msg = "Function-type class member presentation is not migrated"
+                                raise NotImplementedError(msg)
+                            pieces = [(declaration.owner.ref("sorts", view.owner.kind.value), False, False), ".", name]
+                            if view.kind == pb.PythonCallKind.CLASS_VARIABLE:
+                                frames.extend(reversed(pieces))
+                                continue
+                            pieces.append("(")
+                        else:
+                            pieces = [name, "("]
+                    for index, argument_frame in enumerate(selected):
+                        if index:
+                            pieces.append(", ")
+                        pieces.append(argument_frame)
+                    pieces.append(")")
+                case "union":
+                    pieces = ["eq("]
+                    for index, argument in enumerate(record.kind.value.members):
+                        if index:
+                            pieces.append(").to(" if index == 1 else ", ")
+                        pieces.append((owner.ref("nodes", argument), False, False))
+                    pieces.append(")")
+                case _:
+                    raise NotImplementedError(f"Node presentation is not migrated: {record.kind.field}")
+        else:
+            raise NotImplementedError(f"Record presentation is not migrated: {reference.role}")
+        frames.extend(reversed(pieces))
+    return "".join(output)
+
 
 AllDecls: TypeAlias = (
     RulesetDecl

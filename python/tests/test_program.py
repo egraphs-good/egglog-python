@@ -11,7 +11,7 @@ from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import DescFieldValueList, Oneof
 
 from egglog import _program
-from egglog._program import Builder, pack
+from egglog._program import Builder, StructuralView, clone_nodes, pack
 
 
 def literal(value: int):
@@ -29,6 +29,34 @@ def literal(value: int):
 
 
 AMBIENT = frozenset({("sort", "i64"), ("callable", "f"), ("callable", "g")})
+
+
+def test_template_expansion_freshens_nodes_not_definition_identity():
+    builder = Builder()
+    builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Box")))
+    builder.add(
+        "declarations", pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Box")))
+    )
+    declaration = builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name="box", output=0))
+        ),
+    )
+    call = builder.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="box"))))
+    group = builder.add("nodes", pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[call]))))
+    owner = builder.publish()
+    first, alias = clone_nodes([owner.ref("nodes", group), owner.ref("nodes", group)])
+    (second,) = clone_nodes([owner.ref("nodes", group)])
+    assert first == alias
+    assert first != second
+    assert first != owner.ref("nodes", group)
+    cloned_call = first.owner.ref("nodes", first.read().kind.value.members[0])
+    assert cloned_call != owner.ref("nodes", call)
+    assert first.owner.ref("declarations", 0) == owner.ref("declarations", declaration)
+    combined = pack([first, second, owner.ref("nodes", call)])
+    assert len(combined.program.declarations) == 2
+    assert sum(node.kind is not None and node.kind.field == "union" for node in combined.program.nodes) == 2
 
 
 @pytest.fixture(autouse=True)
@@ -460,3 +488,71 @@ def test_distinct_same_name_ruleset_roots_are_rejected():
         refs.append(builder.publish().ref("rulesets", root))
     with pytest.raises(ValueError, match="same-name"):
         pack(refs)
+
+
+def test_structural_view_ignores_addresses_and_preserves_identity():
+    first, second = literal(10), literal(10)
+    assert first != second
+    assert StructuralView(first) == StructuralView(second)
+    assert hash(StructuralView(first)) == hash(StructuralView(second))
+    assert StructuralView(first) != StructuralView(literal(20))
+    builder = Builder()
+    builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E")))
+    for _ in range(2):
+        builder.add("nodes", pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
+    owner = builder.publish()
+    assert StructuralView(owner.ref("nodes", 0)) == StructuralView(owner.ref("nodes", 0))
+    assert StructuralView(owner.ref("nodes", 0)) != StructuralView(owner.ref("nodes", 1))
+
+
+def test_structural_view_zero_hash_and_origin_are_distinct_from_wire_bits():
+    refs = []
+    for bits in (0, 1 << 63):
+        builder = Builder()
+        builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="f64"))))
+        root = builder.add(
+            "nodes",
+            pb.Node(
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["f64_bits"], int]("f64_bits", bits))
+                )
+            ),
+        )
+        refs.append(builder.publish().ref("nodes", root))
+    assert refs[0].read() != refs[1].read()
+    assert StructuralView(refs[0]) == StructuralView(refs[1])
+    assert hash(StructuralView(refs[0])) == hash(StructuralView(refs[1]))
+
+
+def test_structural_view_deep_hash_cache_is_erasable_and_does_not_retain_owners(monkeypatch):
+    original = _program._structural_parts
+    visits = 0
+
+    def counted(reference):
+        nonlocal visits
+        visits += 1
+        return original(reference)
+
+    monkeypatch.setattr(_program, "_structural_parts", counted)
+    _program._STRUCTURAL_HASHES.clear()
+    root = literal(1)
+    owners = []
+    for _ in range(10_000):
+        builder = Builder()
+        builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+        child = builder.import_ref(root)
+        index = builder.add(
+            "nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f", args=[child, child])))
+        )
+        root = builder.publish().ref("nodes", index)
+        owners.append(weakref(root.owner))
+        hash(StructuralView(root))
+    assert visits == 4 * 10_001
+    first_hash = hash(StructuralView(root))
+    assert visits == 4 * 10_001
+    _program._STRUCTURAL_HASHES.clear()
+    assert hash(StructuralView(root)) == first_hash
+    assert visits == 8 * 10_001
+    del root
+    gc.collect()
+    assert all(owner() is None for owner in owners)

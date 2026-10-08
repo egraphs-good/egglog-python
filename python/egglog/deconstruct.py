@@ -1,27 +1,14 @@
-"""
-Utility functions to deconstruct expressions in Python.
-"""
+"""Inspect owned expression records locally, without evaluating expressions."""
 
 from __future__ import annotations
 
+import struct
 from collections.abc import Callable
-from functools import partial
-from typing import TYPE_CHECKING, TypeVar, Unpack, cast, overload
+from typing import Any
 
-import cloudpickle
-from typing_extensions import TypeVarTuple
+from egglog_proto.egglog.v1 import egglog_pb as pb
 
-from .declarations import *
-from .egraph import BaseExpr, Expr
-from .runtime import *
-from .thunk import *
-
-if TYPE_CHECKING:
-    from .builtins import Bool, PyObject, String, UnstableFn, f64, i64
-
-
-T = TypeVar("T", bound=BaseExpr)
-TS = TypeVarTuple("TS", default=Unpack[tuple[BaseExpr, ...]])
+from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, _class_for_sort, _definition_at
 
 __all__ = [
     "get_callable_args",
@@ -33,168 +20,111 @@ __all__ = [
 ]
 
 
-@overload
-def get_literal_value(x: String) -> str | None: ...
-
-
-@overload
-def get_literal_value(x: Bool) -> bool | None: ...
-
-
-@overload
-def get_literal_value(x: i64) -> int | None: ...
-
-
-@overload
-def get_literal_value(x: f64) -> float | None: ...
-
-
-@overload
-def get_literal_value(x: PyObject) -> object: ...
-
-
-@overload
-def get_literal_value(x: UnstableFn[T, *TS]) -> Callable[[Unpack[TS]], T] | None: ...
-
-
-@overload
-def get_literal_value(x: Expr) -> None: ...
-
-
 def get_literal_value(x: object) -> object:
-    """
-    Returns the literal value of an expression if it is a literal.
-    If it is not a literal, returns None.
-    """
+    """Return a local literal payload, or None for symbolic expressions."""
     if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    match x.__egg_typed_expr__.expr:
-        case LitDecl(v):
-            return v
-        case PyObjectDecl(obj):
-            return cloudpickle.loads(obj)
-        case PartialCallDecl(call):
-            fn, args = _deconstruct_call_decl(x.__egg_decls_thunk__, call)
-            if not args:
-                return fn
-            return partial(fn, *args)
-    return None
+    node: pb.Node = x.__egg_ref__.read()
+    if node.kind is None or node.kind.field != "primitive_value":
+        return None
+    value = node.kind.value.value
+    if value is None:
+        msg = "Primitive value has no payload"
+        raise ValueError(msg)
+    match value.field:
+        case "i64" | "string" | "bool":
+            return value.value
+        case "f64_bits":
+            return struct.unpack("!d", struct.pack("!Q", value.value))[0]
+        case "unit":
+            return None
+        case _:
+            # Containers have their own .value protocols, retaining symbolic
+            # children. They are not scalar literals.
+            return None
 
 
-def get_constant_name(x: BaseExpr) -> Ident | None:
-    """
-    Check if the expression is a constant and return its name.
-    If it is not a constant, return None.
-    """
-    if not isinstance(cast("object", x), RuntimeExpr):
+def get_constant_name(x: object) -> object:
+    """Inspect a retained constant name (constant presentation is not migrated)."""
+    if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    match cast("RuntimeExpr", x).__egg_typed_expr__.expr:
-        case CallDecl(ConstantRef(ident)):
-            return ident
-    return None
+    msg = "Constant presentation is not migrated"
+    raise NotImplementedError(msg)
 
 
-def get_let_name(x: BaseExpr) -> str | None:
-    """
-    Check if the expression is a `let` expression and return the name of the variable.
-    If it is not a `let` expression, return None.
-    """
-    if not isinstance(cast("object", x), RuntimeExpr):
+def get_let_name(x: object) -> str | None:
+    """Inspect a retained local name (the local-let policy is not migrated)."""
+    if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    match cast("RuntimeExpr", x).__egg_typed_expr__.expr:
-        case LetRefDecl(name):
-            return name
-    return None
+    msg = "Retained local-let presentation is not migrated"
+    raise NotImplementedError(msg)
 
 
-def get_var_name(x: BaseExpr) -> str | None:
-    """
-    Check if the expression is a variable and return its name.
-    If it is not a variable, return None.
-    """
-    if not isinstance(cast("object", x), RuntimeExpr):
+def get_var_name(x: object) -> str | None:
+    """Return a variable node's canonical name, or None for other node kinds."""
+    if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    match cast("RuntimeExpr", x).__egg_typed_expr__.expr:
-        case UnboundVarDecl(name, _egg_name):
-            return name
-    return None
+    node: pb.Node = x.__egg_ref__.read()
+    return node.kind.value if node.kind is not None and node.kind.field == "var" else None
 
 
-def get_callable_fn(x: T) -> Callable[..., T] | T | None:
-    """
-    Gets the function of an expression, or if it's a constant or classvar, return that.
-    """
-    if not isinstance(cast("object", x), RuntimeExpr):
-        raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    runtime_x = cast("RuntimeExpr", x)
-    match runtime_x.__egg_typed_expr__.expr:
-        case CallDecl() as call:
-            fn, _ = _deconstruct_call_decl(runtime_x.__egg_decls_thunk__, call)
-            return fn
-    return None
-
-
-@overload
-def get_callable_args(x: T, fn: None = ...) -> tuple[BaseExpr, ...] | None: ...
-
-
-@overload
-def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T]) -> tuple[*TS] | None: ...
-
-
-def get_callable_args(x: T, fn: Callable[[Unpack[TS]], T] | None = None) -> tuple[*TS] | None:
-    """
-    Gets all the arguments of an expression.
-    If a function is provided, it will only return the arguments if the expression is a call
-    to that function.
-
-    Note that recursively calling the arguments is the safe way to walk the expression tree.
-    """
-    if not isinstance(cast("object", x), RuntimeExpr):
-        raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    runtime_x = cast("RuntimeExpr", x)
-    match runtime_x.__egg_typed_expr__.expr:
-        case CallDecl() as call:
-            actual_fn, args = _deconstruct_call_decl(runtime_x.__egg_decls_thunk__, call)
-            if fn is None:
-                return cast("tuple[*TS]", args)
-            # Compare functions and classes without considering bound type parameters, so that you can pass
-            # in a binding like Vec[i64] and match Vec[i64](...) or Vec(...) calls.
-            if isinstance(cast("object", actual_fn), RuntimeFunction):
-                runtime_actual_fn = cast("RuntimeFunction", actual_fn)
-                if (
-                    isinstance(cast("object", fn), RuntimeFunction)
-                    and runtime_actual_fn.__egg_ref__ == cast("RuntimeFunction", fn).__egg_ref__
-                ):
-                    return cast("tuple[*TS]", args)
-            if isinstance(cast("object", actual_fn), RuntimeClass):
-                runtime_actual_cls = cast("RuntimeClass", actual_fn)
-                if (
-                    isinstance(cast("object", fn), RuntimeClass)
-                    and runtime_actual_cls.__egg_tp__.ident == cast("RuntimeClass", fn).__egg_tp__.ident
-                ):
-                    return cast("tuple[*TS]", args)
-    return None
-
-
-def _deconstruct_call_decl(
-    decls_thunk: Callable[[], Declarations], call: CallDecl
-) -> tuple[Callable, tuple[object, ...]]:
-    """
-    Deconstructs a CallDecl into a runtime callable and its arguments.
-    """
-    args = call.args
-    arg_exprs = tuple(RuntimeExpr(decls_thunk, Thunk.value(a)) for a in args)
-    # TODO: handle values? Like constants
-    if isinstance(call.callable, InitRef):
-        return RuntimeClass(
-            decls_thunk,
-            TypeRefWithVars(call.callable.ident, tuple(tp.to_var() for tp in (call.bound_tp_params or []))),
-        ), arg_exprs
-    egg_bound = (
-        JustTypeRef(call.callable.ident, call.bound_tp_params)
-        if isinstance(call.callable, (ClassMethodRef, MethodRef)) and call.bound_tp_params
-        else None
+def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, tuple[RuntimeExpr, ...]] | None:
+    """Select a declaration's Python view and restore its argument ordering."""
+    node: pb.Node = x.__egg_ref__.read()
+    if node.kind is None or node.kind.field != "call":
+        return None
+    call = node.kind.value
+    declaration = _definition_at(x.__egg_ref__, "callable", call.func)
+    record: pb.Declaration = declaration.read()
+    arguments = tuple(RuntimeExpr(x.__egg_ref__.owner.ref("nodes", index)) for index in call.args)
+    if record.bindings is None or record.bindings.python is None or not record.bindings.python.views:
+        return RuntimeFunction(declaration), arguments
+    view = record.bindings.python.views[0]
+    ordered: list[RuntimeExpr] = []
+    if view.has_field("receiver"):
+        ordered.append(arguments[view.receiver])
+    kind = record.kind.value if record.kind is not None else None
+    fixed = (
+        len(kind.typing.value.inputs)
+        if isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "signature"
+        else len(arguments)
     )
+    for parameter in view.params:
+        ordered.extend(
+            arguments[parameter.core_input :] if parameter.core_input == fixed else (arguments[parameter.core_input],)
+        )
+    if view.kind == pb.PythonCallKind.INITIALIZER:
+        return _class_for_sort(x.__egg_ref__.owner.ref("sorts", node.sort_id)), tuple(ordered)
+    owner = None
+    if view.owner is not None and view.owner.kind is not None and view.owner.kind.field == "sort":
+        if view.has_field("receiver"):
+            receiver = arguments[view.receiver].__egg_ref__
+            owner = _class_for_sort(receiver.owner.ref("sorts", receiver.read().sort_id))
+        else:
+            owner = _class_for_sort(declaration.owner.ref("sorts", view.owner.kind.value))
+    return RuntimeFunction(declaration, 0, owner), tuple(ordered)
 
-    return RuntimeFunction(decls_thunk, Thunk.value(call.callable), egg_bound), arg_exprs
+
+def get_callable_fn(x: object) -> Callable[..., Any] | None:
+    """Get the generated callable responsible for a call expression."""
+    if not isinstance(x, RuntimeExpr):
+        raise TypeError(f"Expected Expression, got {type(x).__name__}")
+    result = _deconstruct_call(x)
+    return None if result is None else result[0]
+
+
+def get_callable_args(x: object, fn: object = None) -> tuple[RuntimeExpr, ...] | None:
+    """Return symbolic children in Python argument order, without evaluation."""
+    if not isinstance(x, RuntimeExpr):
+        raise TypeError(f"Expected Expression, got {type(x).__name__}")
+    result = _deconstruct_call(x)
+    if result is None:
+        return None
+    actual, arguments = result
+    if fn is None:
+        return arguments
+    if isinstance(actual, RuntimeClass) and isinstance(fn, RuntimeClass):
+        return arguments if actual.__egg_definition__ == fn.__egg_definition__ else None
+    if isinstance(actual, RuntimeFunction) and isinstance(fn, RuntimeFunction):
+        return arguments if actual.__egg_ref__ == fn.__egg_ref__ else None
+    return None

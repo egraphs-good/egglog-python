@@ -1,14 +1,39 @@
 from __future__ import annotations
 
 import doctest
+import math
+import struct
+from copy import copy
 
 import pytest
 
+from egglog import expr_parts, f64
 from egglog.declarations import *
 from egglog.exp import array_api
 from egglog.runtime import *
 from egglog.thunk import *
 from egglog.type_constraint_solver import *
+
+
+def test_public_f64_structural_identity_and_signed_zero():
+    source = float("nan")
+    left, same_source, fresh = f64(source), f64(source), f64(float("nan"))
+    assert expr_parts(left) == expr_parts(same_source)
+    assert bool(left == same_source)
+    assert hash(left) == hash(same_source)
+    assert expr_parts(left) != expr_parts(fresh)
+    assert not bool(left == fresh)
+    assert expr_parts(left) == expr_parts(copy(left))
+    assert hash(left) == hash(copy(left))
+    assert left.value is source
+    assert math.isnan(fresh.value)
+    assert struct.pack("!d", left.value) == struct.pack("!d", fresh.value)
+
+    positive, negative = f64(0.0), f64(-0.0)
+    assert expr_parts(positive) == expr_parts(negative)
+    assert bool(positive == negative)
+    assert hash(positive) == hash(negative)
+    assert struct.pack("!d", positive.value) != struct.pack("!d", negative.value)
 
 
 def test_type_str():

@@ -1,134 +1,147 @@
-"""Provides a class for solving type constraints."""
+"""Solve generic signatures directly over canonical sort records."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from itertools import chain, repeat
-from typing import TYPE_CHECKING, assert_never
+from egglog_proto.egglog.v1 import egglog_pb as pb
 
-from .declarations import *
+from ._program import Builder, Ref, StructuralView, _copy_record
 
-if TYPE_CHECKING:
-    from collections.abc import Collection, Iterable
-
-
-__all__ = ["TypeConstraintError", "TypeConstraintSolver"]
+__all__ = ["TypeConstraintError", "infer_sort", "substitute_sort"]
 
 
 class TypeConstraintError(RuntimeError):
     """Typing error when trying to infer the return type."""
 
 
-@dataclass
-class TypeConstraintSolver:
-    """
-    Given some typevars and types, solves the constraints to resolve the typevars.
-    """
+def infer_sort(pattern: Ref, actual: Ref, binder_size: int, bindings: dict[int, Ref]) -> None:  # noqa: C901, PLR0912
+    """Unify canonical sort records transactionally within one signature binder."""
+    pending = [(pattern, actual)]
+    visited: set[tuple[Ref, Ref]] = set()
+    staged = bindings.copy()
+    while pending:
+        expected, received = pending.pop()
+        if expected.role != "sorts" or received.role != "sorts":
+            msg = "Type inference requires sort references"
+            raise TypeConstraintError(msg)
+        expected = expected.owner.ref("sorts", expected.index)
+        received = received.owner.ref("sorts", received.index)
+        if (expected, received) in visited:
+            continue
+        visited.add((expected, received))
+        lhs: pb.Sort = expected.read()
+        rhs: pb.Sort = received.read()
+        if lhs.kind is None or rhs.kind is None:
+            msg = "Cannot infer an absent sort kind"
+            raise TypeConstraintError(msg)
+        if rhs.kind.field == "var":
+            msg = "Actual argument sorts must be closed"
+            raise TypeConstraintError(msg)
+        if lhs.kind.field == "var":
+            variable = lhs.kind.value
+            if variable >= binder_size:
+                raise TypeConstraintError(f"Sort variable {variable} is outside the signature binder")
+            if variable in staged:
+                if StructuralView(staged[variable]) != StructuralView(received):
+                    raise TypeConstraintError(f"Inconsistent sort for type parameter {variable}")
+            else:
+                # Check the entire candidate, including nested function/family args.
+                concrete = [received]
+                seen: set[Ref] = set()
+                while concrete:
+                    child = concrete.pop()
+                    if child in seen:
+                        continue
+                    seen.add(child)
+                    record: pb.Sort = child.read()
+                    if record.kind is None or record.kind.field == "var":
+                        msg = "Actual argument sorts must be closed"
+                        raise TypeConstraintError(msg)
+                    match record.kind.field:
+                        case "family":
+                            indices = record.kind.value.args
+                        case "func":
+                            indices = [*record.kind.value.params, record.kind.value.result]
+                        case "eq":
+                            indices = []
+                    concrete.extend(child.owner.ref("sorts", index) for index in indices)
+                staged[variable] = received
+            continue
+        if lhs.kind.field != rhs.kind.field:
+            raise TypeConstraintError(f"Expected {lhs.kind.field} sort, got {rhs.kind.field}")
+        match lhs.kind.field:
+            case "eq":
+                if lhs.kind.value != rhs.kind.value:
+                    raise TypeConstraintError(f"Expected {lhs.kind.value}, got {rhs.kind.value}")
+                continue
+            case "family":
+                assert rhs.kind.field == "family"
+                if lhs.kind.value.name != rhs.kind.value.name:
+                    raise TypeConstraintError(f"Expected {lhs.kind.value.name}, got {rhs.kind.value.name}")
+                expected_children = lhs.kind.value.args
+                received_children = rhs.kind.value.args
+            case "func":
+                assert rhs.kind.field == "func"
+                expected_children = [*lhs.kind.value.params, lhs.kind.value.result]
+                received_children = [*rhs.kind.value.params, rhs.kind.value.result]
+        if len(expected_children) != len(received_children):
+            msg = "Sort arity mismatch"
+            raise TypeConstraintError(msg)
+        pending.extend(
+            (expected.owner.ref("sorts", left), received.owner.ref("sorts", right))
+            for left, right in zip(expected_children, received_children, strict=True)
+        )
+    bindings.clear()
+    bindings.update(staged)
 
-    # Mapping of typevar index to inferred type for each class
-    _typevar_to_type: dict[Ident, JustTypeRef] = field(default_factory=dict, init=False)
 
-    def bind_class(self, ref: JustTypeRef, decls: Declarations) -> None:
-        """
-        Bind the typevars of a class to the given types.
-        Used for a situation like Map[int, str].create().
+def substitute_sort(pattern: Ref, bindings: dict[int, Ref]) -> Ref:  # noqa: C901
+    """Instantiate sort records iteratively, preserving closed imported records."""
+    builder = Builder()
+    resolved: dict[Ref, int] = {}
+    active: set[Ref] = set()
+    pending = [(pattern, False)]
+    while pending:
+        current, exiting = pending.pop()
+        current = current.owner.ref(current.role, current.index)
+        if current.role != "sorts":
+            msg = "Type substitution requires sort references"
+            raise TypeConstraintError(msg)
+        if current in resolved:
+            continue
+        record: pb.Sort = current.read()
+        if record.kind is None:
+            msg = "Cannot substitute an absent sort kind"
+            raise TypeConstraintError(msg)
+        if record.kind.field == "var":
+            try:
+                replacement = bindings[record.kind.value]
+            except KeyError as exc:
+                raise TypeConstraintError(f"Unresolved type variable: {record.kind.value}") from exc
+            resolved[current] = builder.import_ref(replacement)
+            continue
+        match record.kind.field:
+            case "family":
+                children = record.kind.value.args
+            case "func":
+                children = [*record.kind.value.params, record.kind.value.result]
+            case "eq":
+                children = []
+        if not children:
+            resolved[current] = builder.import_ref(current)
+            continue
+        if exiting:
 
-        This is the same as binding the typevars of the class to the given types.
-        """
-        try:
-            cls_typevars = decls.get_class_decl(ref.ident).type_vars
-        except KeyError:
-            cls_typevars = ()
-        for typevar, arg in zip(cls_typevars, ref.args, strict=True):
-            self.infer_typevars(typevar, arg)
+            def relocate(role: str, index: int, origin: Ref = current) -> int:
+                reference = origin.owner.ref(role, index)
+                return resolved[reference] if role == "sorts" else builder.import_ref(reference)
 
-    def infer_arg_types(
-        self,
-        fn_args: Collection[TypeOrVarRef],
-        fn_return: TypeOrVarRef,
-        fn_var_args: TypeOrVarRef | None,
-        return_: JustTypeRef,
-    ) -> Iterable[JustTypeRef]:
-        """
-        Given a return type, infer the argument types. If there is a variable arg, it returns an infinite iterable.
-        """
-        self.infer_typevars(fn_return, return_)
-        arg_types = [self.substitute_typevars(fn_arg) for fn_arg in fn_args]
-        if fn_var_args is None:
-            return arg_types
-        var_arg_type = self.substitute_typevars(fn_var_args)
-        return chain(arg_types, repeat(var_arg_type))
-
-    def infer_typevars(self, fn_arg: TypeOrVarRef, arg: JustTypeRef) -> None:
-        """
-        Infer typevars from a function argument and a given type, raises TypeConstraintError if they are incompatible.
-        """
-        match fn_arg:
-            case TypeRefWithVars(cls_ident, fn_args):
-                if cls_ident != arg.ident:
-                    raise TypeConstraintError(f"Expected {cls_ident}, got {arg.ident}")
-                for inner_fn_arg, inner_arg in zip(fn_args, arg.args, strict=True):
-                    self.infer_typevars(inner_fn_arg, inner_arg)
-            case TypeVarRef(typevar_ident):
-                if typevar_ident in self._typevar_to_type:
-                    if self._typevar_to_type[typevar_ident] != arg:
-                        raise TypeConstraintError(f"Expected {self._typevar_to_type[typevar_ident]}, got {arg}")
-                else:
-                    self._typevar_to_type[typevar_ident] = arg
-            case _:
-                assert_never(fn_arg)
-
-    def substitute_typevars(self, tp: TypeOrVarRef) -> JustTypeRef:
-        """
-        Substitute typevars in a type with their inferred types, raises TypeConstraintError if a typevar is unresolved.
-        """
-        match tp:
-            case TypeVarRef(typevar_ident):
-                try:
-                    return self._typevar_to_type[typevar_ident]
-                except KeyError as e:
-                    raise TypeConstraintError(f"Unresolved type variable: {typevar_ident}") from e
-            case TypeRefWithVars(name, args):
-                return JustTypeRef(name, tuple(self.substitute_typevars(arg) for arg in args))
-        assert_never(tp)
-
-    def substitute_typevars_try_function(
-        self, tp: TypeOrVarRef, value: Callable, decls: Callable[[], Declarations]
-    ) -> JustTypeRef:
-        """
-        Try to substitute typevars in a type with their inferred types.
-
-        If this fails and we have an UnstableFn type and a function value, we can try to infer the typevars by calling
-        it with the input types, if we can resolve those
-        """
-        from .egraph import set_current_ruleset  # noqa: PLC0415
-        from .runtime import RuntimeExpr  # noqa: PLC0415
-
-        try:
-            return self.substitute_typevars(tp)
-        except TypeConstraintError:
-            if isinstance(tp, TypeVarRef) or tp.ident != Ident.builtin("UnstableFn") or not callable(value):
-                raise
-        # Probe against an isolated copy of the declarations with no ambient ruleset so temporary
-        # unnamed-function declarations and bodies are discarded after type inference.
-        probe_decls = decls().copy()
-        dummy_args = [
-            RuntimeExpr.__from_values__(
-                probe_decls,
-                TypedExprDecl(self.substitute_typevars(arg_tp), DummyDecl()),
-            )
-            for arg_tp in tp.args[1:]
-        ]
-        try:
-            with set_current_ruleset(None):
-                result = value(*dummy_args)
-        except Exception as e:
-            e.add_note(f"While trying to infer return type of {value} by calling it")
-            raise
-        if not isinstance(result, RuntimeExpr):
-            raise TypeConstraintError(
-                f"Function {value} did not return a RuntimeExpr, got {type(result)}, so cannot infer return type"
-            )
-        self.infer_typevars(tp.args[0], result.__egg_typed_expr__.tp)
-        return self.substitute_typevars(tp)
+            resolved[current] = builder.add("sorts", _copy_record(record, relocate=relocate))
+            active.remove(current)
+            continue
+        if current in active:
+            msg = "Sort patterns cannot contain cycles"
+            raise TypeConstraintError(msg)
+        active.add(current)
+        pending.append((current, True))
+        pending.extend((current.owner.ref("sorts", index), False) for index in children)
+    return builder.publish().ref("sorts", resolved[pattern.owner.ref(pattern.role, pattern.index)])

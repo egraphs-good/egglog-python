@@ -1,267 +1,113 @@
+"""Python conversion policy over canonical protobuf sort references."""
+
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import Any, TypeVar, cast
 
-from .declarations import *
-from .pretty import *
-from .runtime import *
-from .thunk import *
+from egglog_proto.egglog.v1 import egglog_pb as pb
 
-if TYPE_CHECKING:
-    from collections.abc import Generator
-
-    from .egraph import BaseExpr
+from ._program import Ref, StructuralView
+from .runtime import RuntimeClass, RuntimeExpr, _class_for_sort
 
 __all__ = ["ConvertError", "convert", "converter", "get_type_args"]
-# Mapping from (source type, target type) to and function which takes in the runtimes values of the source and return the target
-CONVERSIONS: dict[tuple[type | JustTypeRef, JustTypeRef], tuple[int, Callable[[Any], RuntimeExpr]]] = {}
-# Global declarations to store all convertible types so we can query if they have certain methods or not
-_CONVERSION_DECLS = Declarations.create()
-# Defer a list of declarations to be added to the global declarations, so that we can not trigger them processing
-# until we need them
-_TO_PROCESS_DECLS: list[DeclarationsLike] = []
 
-
-def retrieve_conversion_decls() -> Declarations:
-    _CONVERSION_DECLS.update(*_TO_PROCESS_DECLS)
-    _TO_PROCESS_DECLS.clear()
-    return _CONVERSION_DECLS
-
-
-T = TypeVar("T")
-V = TypeVar("V", bound="BaseExpr")
+V = TypeVar("V")
+CONVERSIONS: dict[tuple[type | RuntimeClass, RuntimeClass], tuple[int, Callable[[Any], RuntimeExpr]]] = {}
+TYPE_ARGS = ContextVar[tuple[RuntimeClass, ...]]("TYPE_ARGS", default=())
 
 
 class ConvertError(Exception):
     pass
 
 
-def converter(from_type: type[T], to_type: type[V], fn: Callable[[T], V], cost: int = 1) -> None:
-    """
-    Register a converter from some type to an egglog type.
-    """
-    to_type_name = process_tp(to_type)
-    if not isinstance(to_type_name, JustTypeRef):
-        raise TypeError(f"Expected return type to be a egglog type, got {to_type_name}")
-    _register_converter(process_tp(from_type), to_type_name, cast("Callable[[Any], RuntimeExpr]", fn), cost)
-
-
-def _register_converter(a: type | JustTypeRef, b: JustTypeRef, a_b: Callable[[Any], RuntimeExpr], cost: int) -> None:
-    """
-    Registers a converter from some type to an egglog type, if not already registered.
-
-    Also adds transitive converters, i.e. if registering A->B and there is already B->C, then A->C will be registered.
-    Also, if registering A->B and there is already D->A, then D->B will be registered.
-    """
-    if a == b:
+def converter(from_type: type | RuntimeClass, to_type: type | RuntimeClass, fn: Callable, cost: int = 1) -> None:
+    """Register a Python converter; target semantics remain owned sort records."""
+    if not isinstance(to_type, RuntimeClass):
+        raise TypeError(f"Expected an egglog return type, got {to_type!r}")
+    if from_type == to_type:
         return
-    if (a, b) in CONVERSIONS and CONVERSIONS[(a, b)][0] <= cost:
+    key = from_type, to_type
+    if key in CONVERSIONS and CONVERSIONS[key][0] <= cost:
         return
-    CONVERSIONS[(a, b)] = (cost, a_b)
-    for (c, d), (other_cost, c_d) in list(CONVERSIONS.items()):
-        if _is_type_compatible(b, c):
-            _register_converter(
-                a, d, _ComposedConverter(a_b, c_d, c.args if isinstance(c, JustTypeRef) else ()), cost + other_cost
-            )
-        if _is_type_compatible(a, d):
-            _register_converter(
-                c, b, _ComposedConverter(c_d, a_b, a.args if isinstance(a, JustTypeRef) else ()), cost + other_cost
-            )
+    CONVERSIONS[key] = cost, fn
+    # Preserve the existing transitive conversion policy without storing type
+    # trees or synthesizing a callable signature.
+    for (source, target), (other_cost, other_fn) in tuple(CONVERSIONS.items()):
+        if target == from_type:
+
+            def composed(value: Any, first=other_fn, second=fn) -> RuntimeExpr:
+                return second(first(value))
+
+            converter(source, to_type, composed, cost + other_cost)
+        if to_type == source:
+
+            def composed(value: Any, first=fn, second=other_fn) -> RuntimeExpr:
+                return second(first(value))
+
+            converter(from_type, target, composed, cost + other_cost)
 
 
-def _is_type_compatible(source: type | JustTypeRef, target: type | JustTypeRef) -> bool:
-    """
-    Types must be equal or also support unbound to bound typevar like B -> B[C]
-    """
-    if source == target:
-        return True
-    if isinstance(source, JustTypeRef) and isinstance(target, JustTypeRef) and source.args and not target.args:
-        return source.ident == target.ident
-        # TODO: Support case where B[T] where T is typevar is mapped to B[C]
-    return False
-
-
-@dataclass
-class _ComposedConverter:
-    """
-    A converter which is composed of multiple converters.
-
-    _ComposeConverter(a_b, b_c) is equivalent to lambda x: b_c(a_b(x))
-
-    We use the dataclass instead of the lambda to make it easier to debug.
-    """
-
-    a_b: Callable[[Any], RuntimeExpr]
-    b_c: Callable[[Any], RuntimeExpr]
-    b_args: tuple[JustTypeRef, ...]
-
-    def __call__(self, x: Any) -> RuntimeExpr:
-        # if we have A -> B and B[C] -> D then we should use (C,) as the type args
-        # when converting from A -> B
-        if self.b_args:
-            with with_type_args(self.b_args, retrieve_conversion_decls):
-                first_res = self.a_b(x)
-        else:
-            first_res = self.a_b(x)
-        return self.b_c(first_res)
-
-    def __str__(self) -> str:
-        return f"{self.b_c} ∘ {self.a_b}"
+def resolve_literal(sort: Ref, value: object) -> RuntimeExpr:
+    """Resolve Python values against a canonical concrete expected sort."""
+    if not isinstance(sort, Ref) or sort.role != "sorts":
+        msg = "Conversions require a canonical sort reference"
+        raise TypeError(msg)
+    if isinstance(value, RuntimeExpr):
+        node: pb.Node = value.__egg_ref__.read()
+        actual = value.__egg_ref__.owner.ref("sorts", node.sort_id)
+        if StructuralView(actual) == StructuralView(sort):
+            return value
+        source: type | RuntimeClass = _class_for_sort(actual)
+    else:
+        source = type(value)
+    target = _class_for_sort(sort)
+    candidates = source.__mro__ if isinstance(source, type) and not isinstance(source, RuntimeClass) else (source,)
+    source_sort: pb.Sort = sort.read()
+    assert source_sort.kind is not None
+    arguments = (
+        tuple(_class_for_sort(sort.owner.ref("sorts", index)) for index in source_sort.kind.value.args)
+        if source_sort.kind.field == "family"
+        else ()
+    )
+    for candidate in candidates:
+        conversion = CONVERSIONS.get((candidate, target))
+        if conversion is not None:
+            with with_type_args(arguments):
+                result = conversion[1](value)
+            if not isinstance(result, RuntimeExpr):
+                raise ConvertError(f"Converter to {target} returned {type(result).__name__}, not an expression")
+            payload: pb.Node = result.__egg_ref__.read()
+            actual = result.__egg_ref__.owner.ref("sorts", payload.sort_id)
+            if StructuralView(actual) != StructuralView(sort):
+                raise ConvertError(f"Converter to {target} returned the wrong canonical sort")
+            return result
+    raise ConvertError(f"Cannot convert {value} of type {source} to {target}")
 
 
 def convert(source: object, target: type[V]) -> V:
-    """
-    Convert a source object to a target type.
-    """
-    runtime_target: object = target
-    assert isinstance(runtime_target, RuntimeClass)
-    return cast("V", resolve_literal(runtime_target.__egg_tp__, source, runtime_target.__egg_decls_thunk__))
+    runtime_target = cast("object", target)
+    if not isinstance(runtime_target, RuntimeClass) or runtime_target.__egg_sort__ is None:
+        msg = "Conversion target must be a concrete egglog type"
+        raise TypeError(msg)
+    return cast("V", resolve_literal(runtime_target.__egg_sort__, source))
 
 
 def convert_to_same_type(source: object, target: RuntimeExpr) -> RuntimeExpr:
-    """
-    Convert a source object to the same type as the target.
-    """
-    tp = target.__egg_typed_expr__.tp
-    return resolve_literal(tp.to_var(), source, Thunk.value(target.__egg_decls__))
-
-
-def process_tp(tp: type | RuntimeClass) -> JustTypeRef | type:
-    """
-    Process a type before converting it, to add it to the global declarations and resolve to a ref.
-    """
-    if isinstance(tp, RuntimeClass):
-        _TO_PROCESS_DECLS.append(tp)
-        egg_tp = tp.__egg_tp__
-        return egg_tp.to_just()
-    return tp
-
-
-def min_binary_conversion(
-    method_name: str, lhs: type | JustTypeRef, rhs: type | JustTypeRef
-) -> tuple[Callable[[Any], RuntimeExpr], Callable[[Any], RuntimeExpr]] | None:
-    """
-    Given a binary method and two starting types for the LHS and RHS, return a pair of callable which will convert
-    the LHS and RHS to appropriate types which support this method. If no such conversion is possible, return None.
-
-    It should return the types which minimize the total conversion cost. If one of the types is a Python type, then
-    both of them can be converted. However, if both are egglog types, then only one of them can be converted.
-    """
-    decls = retrieve_conversion_decls()
-    # tuple of (cost, convert lhs, convert rhs)
-    best_method: tuple[int, Callable[[Any], RuntimeExpr], Callable[[Any], RuntimeExpr]] | None = None
-
-    possible_lhs = _all_conversions_from(lhs) if isinstance(lhs, type) else [(0, lhs, identity)]
-    possible_rhs = _all_conversions_from(rhs) if isinstance(rhs, type) else [(0, rhs, identity)]
-    for lhs_cost, lhs_converted_type, lhs_convert in possible_lhs:
-        # Start by checking if we have a LHS that matches exactly and a RHS which can be converted
-        if (desired_other_type := decls.check_binary_method_with_self_type(method_name, lhs_converted_type)) and (
-            converter := _lookup_conversion(rhs, desired_other_type)
-        ):
-            cost = lhs_cost + converter[0]
-            if best_method is None or best_method[0] > cost:
-                best_method = (cost, lhs_convert, converter[1])
-
-    for rhs_cost, rhs_converted_type, rhs_convert in possible_rhs:
-        # Next see if it's possible to convert the LHS and keep the RHS as is
-        for desired_self_type in decls.check_binary_method_with_other_type(method_name, rhs_converted_type):
-            if converter := _lookup_conversion(lhs, desired_self_type):
-                cost = rhs_cost + converter[0]
-                if best_method is None or best_method[0] > cost:
-                    best_method = (cost, converter[1], rhs_convert)
-    if best_method is None:
-        return None
-    return best_method[1], best_method[2]
-
-
-def _all_conversions_from(tp: JustTypeRef | type) -> list[tuple[int, JustTypeRef, Callable[[Any], RuntimeExpr]]]:
-    """
-    Get all conversions from a type to other types.
-
-    Returns a list of tuples of (cost, target type, conversion function).
-    """
-    return [
-        (cost, target, fn)
-        for (source, target), (cost, fn) in CONVERSIONS.items()
-        if (issubclass(tp, source) if isinstance(tp, type) and isinstance(source, type) else source == tp)
-    ]
-
-
-def identity(x: Any) -> Any:
-    return x
-
-
-TYPE_ARGS = ContextVar[tuple[RuntimeClass, ...]]("TYPE_ARGS")
-
-
-def get_type_args() -> tuple[type, ...]:
-    """
-    Get the type args for the type being converted.
-    """
-    return cast("tuple[type, ...]", TYPE_ARGS.get())
+    node: pb.Node = target.__egg_ref__.read()
+    return resolve_literal(target.__egg_ref__.owner.ref("sorts", node.sort_id), source)
 
 
 @contextmanager
-def with_type_args(args: tuple[JustTypeRef, ...], decls: Callable[[], Declarations]) -> Generator[None, None, None]:
-    token = TYPE_ARGS.set(tuple(RuntimeClass(decls, a.to_var()) for a in args))
+def with_type_args(arguments: tuple[RuntimeClass, ...]) -> Generator[None, None, None]:
+    token = TYPE_ARGS.set(arguments)
     try:
         yield
     finally:
         TYPE_ARGS.reset(token)
 
 
-def resolve_literal(
-    tp: TypeOrVarRef,
-    arg: object,
-    decls: Callable[[], Declarations] = retrieve_conversion_decls,
-) -> RuntimeExpr:
-    """
-    Try to convert an object to a type, raising a ConvertError if it is not possible.
-
-    If it cannot be resolved, we assume that the value passed in will resolve it.
-    """
-    # If this is a runtime expression that could match the type already, just return it
-    if isinstance(arg, RuntimeExpr) and tp.matches_just({}, arg.__egg_typed_expr__.tp):
-        return arg
-    tp_just = tp.to_just()
-    if arg is DUMMY_VALUE:
-        return RuntimeExpr.__from_values__(decls(), TypedExprDecl(tp_just, DummyDecl()))
-    arg_type = resolve_type(arg)
-    if (conversion := _lookup_conversion(arg_type, tp_just)) is not None:
-        with with_type_args(tp_just.args, decls):
-            return conversion[1](arg)
-    raise ConvertError(f"Cannot convert {arg} of type {arg_type} to {tp_just}")
-
-
-def _lookup_conversion(lhs: type | JustTypeRef, rhs: JustTypeRef) -> tuple[int, Callable[[Any], RuntimeExpr]] | None:
-    """
-    Looks up a conversion function for the given types.
-
-    Also looks up all parent types of the lhs if it is a Python type and looks up more general not parametrized types for rhs.
-    """
-    for lhs_type in lhs.__mro__ if isinstance(lhs, type) else [lhs]:
-        if (key := (lhs_type, rhs)) in CONVERSIONS:
-            return CONVERSIONS[key]
-        if rhs.args and (key := (lhs_type, JustTypeRef(rhs.ident))) in CONVERSIONS:
-            return CONVERSIONS[key]
-    return None
-
-
-def _debug_print_converters():
-    """
-    Prints a mapping of all source types to target types that have a conversion function.
-    """
-    source_to_targets = defaultdict(list)
-    for source, target in CONVERSIONS:
-        source_to_targets[source].append(target)
-
-
-def resolve_type(x: object) -> JustTypeRef | type:
-    if isinstance(x, RuntimeExpr):
-        return x.__egg_typed_expr__.tp
-    return type(x)
+def get_type_args() -> tuple[RuntimeClass, ...]:
+    return TYPE_ARGS.get()
