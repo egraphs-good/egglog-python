@@ -338,12 +338,14 @@ class StructuralView:
 class Owner:
     """Published protobuf records; imported slots resolve directly to their owner."""
 
-    __slots__ = ("__weakref__", "_slots")
+    __slots__ = ("__weakref__", "_keepalive", "_slots")
 
-    def __init__(self, slots: Mapping[str, tuple[Message | Ref, ...]]) -> None:
+    def __init__(self, slots: Mapping[str, tuple[Message | Ref, ...]], keepalive: tuple[object, ...] = ()) -> None:
         # Internal transfer from Builder.publish; caller-owned messages must
         # enter through Builder.add/fill/from_program so they are detached.
         self._slots = MappingProxyType(dict(slots))
+        # Language-local callbacks/lifetimes are never semantic edges or wire data.
+        self._keepalive = tuple(keepalive)
 
     def ref(self, role: str, index: int) -> Ref:
         if (
@@ -408,7 +410,7 @@ class Builder:
         self._imports[canonical] = index
         return index
 
-    def publish(self) -> Owner:
+    def publish(self, *, keepalive: tuple[object, ...] = ()) -> Owner:
         if self._slots is None:
             msg = "Builder already published"
             raise RuntimeError(msg)
@@ -418,7 +420,7 @@ class Builder:
         slots = {role: tuple(cast("list[Message | Ref]", records)) for role, records in self._slots.items()}
         self._slots = None
         self._imports.clear()
-        return Owner(slots)
+        return Owner(slots, keepalive)
 
     @classmethod
     def from_program(cls, program: pb.Program) -> Builder:

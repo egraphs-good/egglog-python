@@ -7,14 +7,15 @@ import struct
 from collections.abc import Callable
 from contextlib import suppress
 from inspect import Parameter, Signature
+from threading import RLock
 from typing import Any, Literal, TypeVar, Union, cast, get_args, get_origin
-from weakref import WeakValueDictionary
+from weakref import WeakKeyDictionary, WeakValueDictionary
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
-from ._catalog import builtin_catalog
-from ._program import Builder, Ref, StructuralView, _definition_key, clone_nodes
+from ._catalog import Catalog, builtin_catalog
+from ._program import Builder, Owner, Ref, StructuralView, _definition_key, clone_nodes
 from .type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
 
 __all__ = [
@@ -264,8 +265,47 @@ def _author_call(  # noqa: C901, PLR0912
 _LITERAL_ARMS = {"i64": "i64", "f64": "f64_bits", "String": "string", "bool": "bool", "Unit": "unit"}
 LIT_IDENTS = frozenset(_LITERAL_ARMS)
 DUMMY_VALUE = object()
-_CLASS_CACHE: WeakValueDictionary[StructuralView, RuntimeClass] = WeakValueDictionary()
+_CLASS_CACHE: WeakKeyDictionary[Owner, WeakValueDictionary[int, RuntimeClass]] = WeakKeyDictionary()
 _BASE_CLASSES: dict[str, RuntimeClass] = {}
+
+
+class _ClassContext:
+    """Owner-retained Python lifecycle/hooks; all declaration semantics remain refs."""
+
+    def __init__(
+        self, prepare: Callable[[RuntimeClass], Catalog], hooks: dict[str, Any], match_args: tuple[str, ...]
+    ) -> None:
+        self.prepare: Callable[[RuntimeClass], Catalog] | None = prepare
+        self.hooks = hooks
+        self.match_args = match_args
+        self.runtime_class: RuntimeClass
+        self.catalog: Catalog | None = None
+        self.resolving = False
+        self.error: Exception | None = None
+        self.lock = RLock()
+
+    def resolve(self) -> None:
+        """Publish the whole member scope once, never a partially usable signature."""
+        with self.lock:
+            if self.error is not None:
+                raise self.error
+            if self.resolving:
+                msg = "Recursively resolving class declarations"
+                raise RuntimeError(msg)
+            if self.prepare is None:
+                return
+            self.resolving = True
+            try:
+                catalog = self.prepare(self.runtime_class)
+            except Exception as error:
+                self.error = error
+                raise
+            else:
+                self.catalog = catalog
+                self.runtime_class.__egg_attr_cache__.clear()
+            finally:
+                self.prepare = None
+                self.resolving = False
 
 
 def _definition_at(origin: Ref, namespace: str, name: str) -> Ref:
@@ -287,8 +327,9 @@ def _definition_at(origin: Ref, namespace: str, name: str) -> Ref:
 
 def _class_for_sort(sort: Ref) -> RuntimeClass:
     """Recover a Python wrapper from its canonical concrete sort record."""
-    key = StructuralView(sort)
-    if (existing := _CLASS_CACHE.get(key)) is not None:
+    sort = sort.owner.ref("sorts", sort.index)
+    cache = _CLASS_CACHE.setdefault(sort.owner, WeakValueDictionary())
+    if (existing := cache.get(sort.index)) is not None:
         return existing
     record: pb.Sort = sort.read()
     if record.kind is None:
@@ -303,8 +344,11 @@ def _class_for_sort(sort: Ref) -> RuntimeClass:
             msg = "Function/pattern runtime class projection is not migrated yet"
             raise NotImplementedError(msg)
     definition = _definition_at(sort, "sort", name)
+    for context in definition.owner._keepalive:
+        if isinstance(context, _ClassContext):
+            return context.runtime_class
     result = RuntimeClass(definition, sort=sort)
-    _CLASS_CACHE[key] = result
+    cache[sort.index] = result
     return result
 
 
@@ -350,6 +394,13 @@ class RuntimeClass(type):
         result.__egg_attr_cache__ = {}
         result.__egg_hooks__ = {}
         result.__egg_pending__ = None
+        result.__egg_context__ = next(
+            (context for context in definition.owner._keepalive if isinstance(context, _ClassContext)), None
+        )
+        if result.__egg_context__ is not None:
+            result.__egg_context__.runtime_class = result
+            result.__egg_hooks__ = result.__egg_context__.hooks
+            result.__egg_pending__ = result.__egg_context__.resolve
         if sort is None and not arguments:
             arity = kind.value.arity if isinstance(kind.value, pb.HostSortFamily) else 0
             if arity:
@@ -367,12 +418,14 @@ class RuntimeClass(type):
                 )
                 index = builder.add("sorts", pb.Sort(kind=sort_kind))
                 result.__egg_sort__ = builder.publish().ref("sorts", index)
-            _BASE_CLASSES[kind.value.name] = result
-        if sort is not None and kind.value.name in _BASE_CLASSES:
+            if isinstance(kind.value, pb.HostSortFamily):
+                _BASE_CLASSES[kind.value.name] = result
+        if sort is not None and isinstance(kind.value, pb.HostSortFamily) and kind.value.name in _BASE_CLASSES:
             result.__egg_hooks__ = _BASE_CLASSES[kind.value.name].__egg_hooks__
             result.__egg_pending__ = _BASE_CLASSES[kind.value.name].__egg_pending__
         if result.__egg_sort__ is not None:
-            _CLASS_CACHE[StructuralView(result.__egg_sort__)] = result
+            actual = result.__egg_sort__
+            _CLASS_CACHE.setdefault(actual.owner, WeakValueDictionary())[actual.index] = result
         return result
 
     def __init__(cls, definition: Ref, *, sort: Ref | None = None, arguments: tuple[object, ...] = ()) -> None:
@@ -385,6 +438,7 @@ class RuntimeClass(type):
     __egg_attr_cache__: dict[str, object]
     __egg_hooks__: dict[str, Any]
     __egg_pending__: Callable[[], None] | None
+    __egg_context__: _ClassContext | None
 
     def __instancecheck__(cls, instance: object) -> bool:
         if not isinstance(instance, RuntimeExpr):
@@ -397,7 +451,7 @@ class RuntimeClass(type):
         declaration: pb.Declaration = cls.__egg_definition__.read()
         assert declaration.kind is not None
         name = declaration.kind.value.name
-        if name in _LITERAL_ARMS:
+        if isinstance(declaration.kind.value, pb.HostSortFamily) and name in _LITERAL_ARMS:
             if kwargs or len(args) != (0 if name == "Unit" else 1):
                 raise TypeError(f"{cls} expects {'zero' if name == 'Unit' else 'one'} positional literal argument")
             if cls.__egg_sort__ is None:
@@ -426,6 +480,8 @@ class RuntimeClass(type):
                 ),
             )
             return RuntimeExpr(builder.publish().ref("nodes", index))
+        if cls.__egg_pending__ is not None:
+            cls.__egg_pending__()
         return cast("RuntimeFunction", RuntimeClass.__getattr__(cls, "__init__"))(*args, **kwargs)
 
     def __getitem__(cls, arguments: object) -> RuntimeClass:
@@ -452,10 +508,14 @@ class RuntimeClass(type):
     def __getattr__(cls, name: str) -> object:
         if name.startswith("__egg_"):
             raise AttributeError(name)
-        if name == "__origin__" and cls.__egg_arguments__:
-            declaration: pb.Declaration = cls.__egg_definition__.read()
-            assert declaration.kind is not None
-            return _BASE_CLASSES[declaration.kind.value.name]
+        if name == "__origin__":
+            if cls.__egg_arguments__:
+                declaration: pb.Declaration = cls.__egg_definition__.read()
+                assert declaration.kind is not None
+                return _BASE_CLASSES[declaration.kind.value.name]
+            # typing probes a concrete class's origin while resolving another
+            # signature; absence must not recursively compile either class.
+            raise AttributeError(name)
         if name in cls.__egg_hooks__:
             return cls.__egg_hooks__[name]
         if name in cls.__egg_attr_cache__:
@@ -465,8 +525,14 @@ class RuntimeClass(type):
         declaration = cls.__egg_definition__.read()
         assert declaration.kind is not None
         key = declaration.kind.value.name, name
+        catalog = builtin_catalog()
+        if cls.__egg_context__ is not None:
+            catalog = cls.__egg_context__.catalog
+            assert catalog is not None
+        elif cls.__egg_definition__ != catalog.definitions.get(("sort", key[0])):
+            raise AttributeError(f"{cls} has no canonical Python member {name!r}")
         try:
-            reference, view = builtin_catalog().members[key]
+            reference, view = catalog.members[key]
         except KeyError as exc:
             raise AttributeError(f"{cls} has no generated Python member {name!r}") from exc
         function = RuntimeFunction(reference, view, cls)
@@ -512,6 +578,8 @@ class RuntimeClass(type):
 
     @property
     def __match_args__(cls) -> tuple[str, ...]:
+        if cls.__egg_context__ is not None:
+            return cls.__egg_context__.match_args
         return ("value",) if "value" in cls.__egg_hooks__ else ()
 
 
@@ -607,17 +675,35 @@ class RuntimeExpr:
         return result
 
     def __str__(self) -> str:
+        node: pb.Node = self.__egg_ref__.read()
+        cls = _class_for_sort(self.__egg_ref__.owner.ref("sorts", node.sort_id))
+        if "__str__" in cls.__egg_hooks__:
+            return cls.__egg_hooks__["__str__"].__get__(self, cls)()
         from .pretty import pretty_ref  # noqa: PLC0415
 
         return pretty_ref(self.__egg_ref__)
 
     def __repr__(self) -> str:
+        node: pb.Node = self.__egg_ref__.read()
+        cls = _class_for_sort(self.__egg_ref__.owner.ref("sorts", node.sort_id))
+        if "__repr__" in cls.__egg_hooks__:
+            return cls.__egg_hooks__["__repr__"].__get__(self, cls)()
         return str(self)
 
     def __hash__(self) -> int:
+        node: pb.Node = self.__egg_ref__.read()
+        cls = _class_for_sort(self.__egg_ref__.owner.ref("sorts", node.sort_id))
+        if "__hash__" in cls.__egg_hooks__:
+            if cls.__egg_hooks__["__hash__"] is None:
+                raise TypeError(f"unhashable type: {cls.__name__!r}")
+            return cls.__egg_hooks__["__hash__"].__get__(self, cls)()
         return hash(StructuralView(self.__egg_ref__))
 
     def __eq__(self, other: object) -> Any:
+        node: pb.Node = self.__egg_ref__.read()
+        cls = _class_for_sort(self.__egg_ref__.owner.ref("sorts", node.sort_id))
+        if "__eq__" in cls.__egg_hooks__:
+            return cls.__egg_hooks__["__eq__"].__get__(self, cls)(other)
         if not isinstance(other, RuntimeExpr):
             return NotImplemented
         left: pb.Node = self.__egg_ref__.read()
@@ -631,6 +717,10 @@ class RuntimeExpr:
         return eq(cast("Any", self)).to(other)
 
     def __ne__(self, other: object) -> Any:
+        node: pb.Node = self.__egg_ref__.read()
+        cls = _class_for_sort(self.__egg_ref__.owner.ref("sorts", node.sort_id))
+        if "__ne__" in cls.__egg_hooks__:
+            return cls.__egg_hooks__["__ne__"].__get__(self, cls)(other)
         from .egraph import ne  # noqa: PLC0415
 
         return ne(cast("Any", self)).to(other)

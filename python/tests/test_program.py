@@ -330,6 +330,24 @@ def test_inventory_covers_all_program_message_fields():
     _program._check_inventory()
 
 
+def test_owner_keepalive_is_lifetime_only_not_semantic_storage():
+    class LocalContext:
+        pass
+
+    context = LocalContext()
+    watched = weakref(context)
+    builder = Builder()
+    builder.import_ref(literal(7))
+    owner = builder.publish(keepalive=(context,))
+    del context
+    gc.collect()
+    assert watched() is not None
+    assert pack([owner.ref("nodes", 0)], ambient=AMBIENT).program == pack([literal(7)], ambient=AMBIENT).program
+    del owner
+    gc.collect()
+    assert watched() is None
+
+
 def test_proof_command_relocation_and_constructor_closure():
     builder = Builder()
     unused = builder.import_ref(literal(999))

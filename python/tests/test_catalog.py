@@ -77,6 +77,17 @@ def test_explicit_index_does_not_persist_invented_python_bindings():
     assert declaration.bindings is None
 
 
+def test_local_scope_indexes_canonical_refs_without_adopting_them_again():
+    source = Catalog(catalog_fixture())
+    scoped = Catalog.from_refs([*source.roots, source.roots[0]])
+    assert scoped.roots == source.roots
+    assert scoped.members == source.members
+    scoped.members.clear()
+    scoped.reindex()
+    assert scoped.members == source.members
+    assert all(ref.owner is source.owner for ref in scoped.roots)
+
+
 def test_catalog_rejects_ambiguous_presentation_and_invalid_paths():
     source = catalog_fixture()
     duplicate = pb.Declaration.from_binary(source.declarations[1].to_binary())

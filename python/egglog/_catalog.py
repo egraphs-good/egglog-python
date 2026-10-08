@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import keyword
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from functools import cache
 from importlib.resources import files
 
@@ -42,11 +42,19 @@ class Catalog:
 
     def __init__(self, program: pb.Program) -> None:
         self.owner = Builder.from_program(program).publish()
-        self.definitions: dict[tuple[str, str], Ref] = {}
-        self.types: dict[tuple[str, ...], Ref] = {}
-        self.functions: dict[tuple[str, ...], tuple[Ref, int]] = {}
-        self.members: dict[tuple[str | None, str], tuple[Ref, int]] = {}
+        self.roots = tuple(self.owner.ref("declarations", index) for index in range(len(program.declarations)))
         self.reindex()
+
+    @classmethod
+    def from_refs(cls, declarations: Iterable[Ref]) -> Catalog:
+        """Index already-published definitions without copying their owners/identity."""
+        result = object.__new__(cls)
+        result.roots = tuple(dict.fromkeys(ref.owner.ref(ref.role, ref.index) for ref in declarations))
+        if any(reference.role != "declarations" for reference in result.roots):
+            msg = "Catalog roots must be canonical declaration references"
+            raise TypeError(msg)
+        result.reindex()
+        return result
 
     def reindex(self) -> None:  # noqa: C901, PLR0912
         """Discard all language indexes and derive them solely from owned records."""
@@ -54,8 +62,7 @@ class Catalog:
         types: dict[tuple[str, ...], Ref] = {}
         functions: dict[tuple[str, ...], tuple[Ref, int]] = {}
         members: dict[tuple[str | None, str], tuple[Ref, int]] = {}
-        for index in range(len(self.owner._slots["declarations"])):
-            ref = self.owner.ref("declarations", index)
+        for ref in self.roots:
             declaration: pb.Declaration = ref.read()
             key = _definition_key(declaration)
             assert key is not None
@@ -90,7 +97,7 @@ class Catalog:
                     raise ValueError(msg)
                 owner_name = None
                 if view.owner.kind.field == "sort":
-                    owner_sort: pb.Sort = self.owner.ref("sorts", view.owner.kind.value).read()
+                    owner_sort: pb.Sort = ref.owner.ref("sorts", view.owner.kind.value).read()
                     if owner_sort.kind is None:
                         msg = "Python member owner has no sort kind"
                         raise ValueError(msg)

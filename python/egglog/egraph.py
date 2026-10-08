@@ -4,6 +4,7 @@ import contextlib
 import dis
 import inspect
 import pathlib
+import re
 import sys
 import tempfile
 from collections.abc import Callable, Generator, Iterable, Sequence
@@ -40,17 +41,19 @@ from protobuf import Oneof
 from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
+from ._catalog import Catalog
 from ._program import Builder, Ref, StructuralView
 from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
 from .declarations import *
-from .declarations import _BUILTIN_EGG_FN_NAMES, _BUILTIN_EGG_SORT_NAMES, is_callable_decl_constructor
+from .declarations import _BUILTIN_EGG_FN_NAMES, is_callable_decl_constructor
 from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_decl, pretty_ref
 from .run_report import RunReport
 from .runtime import *
+from .runtime import _ClassContext
 from .thunk import *
 
 if TYPE_CHECKING:
@@ -360,7 +363,7 @@ class _ExprMetaclass(type):
     Used to override isistance checks, so that runtime expressions are instances of Expr at runtime.
     """
 
-    def __new__(  # type: ignore[misc]
+    def __new__(
         cls: type[_ExprMetaclass],
         name: str,
         bases: tuple[type, ...],
@@ -371,38 +374,36 @@ class _ExprMetaclass(type):
         # If this is the Expr subclass, just return the class
         if not bases or bases == (BaseExpr,):
             return super().__new__(cls, name, bases, namespace)
-        builtin = BuiltinExpr in bases
-        if builtin and egg_sort is not None:
-            _BUILTIN_EGG_SORT_NAMES.add(egg_sort)
-            # Reserve explicit builtin names before declarations are lazily
-            # materialized so generated user names cannot claim them first.
-            for method in namespace.values():
-                if isinstance(method, _WrappedMethod) and method.egg_fn is not None:
-                    _BUILTIN_EGG_FN_NAMES.add(method.egg_fn)
-
         frame = currentframe()
         assert frame
         prev_frame = frame.f_back
         assert prev_frame
-        cls_ident = Ident(name, _get_module(prev_frame))
-        # Pass in an instance of the class so that when we are generating the decls
-        # we can update them eagerly so that we can access the methods in the class body
-        runtime_cls = RuntimeClass(None, TypeRefWithVars(cls_ident))  # type: ignore[arg-type]
-
-        # Store frame so that we can get live access to updated locals/globals
-        # Otherwise, f_locals returns a copy
-        # https://peps.python.org/pep-0667/
-        runtime_cls.__egg_decls_thunk__ = Thunk.fn(
-            _generate_class_decls,
-            namespace,
-            prev_frame,
-            builtin,
-            egg_sort,
-            cls_ident,
-            ruleset,
-            runtime_cls,
+        hooks = {
+            key: value.fn if isinstance(value, _WrappedMethod) else value
+            for key, value in namespace.items()
+            if key in ALWAYS_PRESERVED or (isinstance(value, _WrappedMethod) and value.preserve)
+        }
+        context = _ClassContext(
+            partial(_prepare_expr_class, namespace=namespace, frame=prev_frame, bases=bases, ruleset=ruleset),
+            hooks,
+            namespace.get("__match_args__", ()),
         )
-        return runtime_cls
+        module = namespace.get("__module__", "")
+        path = [*module.split("."), name] if module else [name]
+        builder = Builder()
+        definition = builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof[Literal["eq_sort"], pb.EqSort](
+                    "eq_sort",
+                    pb.EqSort(
+                        name=egg_sort or ".".join(path), bindings=pb.SortBindings(python=pb.TypeBinding(path=path))
+                    ),
+                ),
+                doc=namespace.get("__doc__") or "",
+            ),
+        )
+        return RuntimeClass(builder.publish(keepalive=(context,)).ref("declarations", definition))
 
     def __instancecheck__(cls, instance: object) -> bool:
         return isinstance(instance, RuntimeExpr)
@@ -441,151 +442,98 @@ class Expr(BaseExpr, metaclass=_ExprMetaclass):
     """
 
 
-def _generate_class_decls(  # noqa: C901,PLR0912
+def _prepare_expr_class(  # noqa: C901, PLR0912
+    runtime_cls: RuntimeClass,
+    *,
     namespace: dict[str, Any],
     frame: FrameType,
-    builtin: bool,
-    egg_sort: str | None,
-    cls_ident: Ident,
+    bases: tuple[type, ...],
     ruleset: Ruleset | None,
-    runtime_cls: RuntimeClass,
-) -> Declarations:
-    """
-    Lazy constructor for class declarations to support classes with methods whose types are not yet defined.
-    """
-    parameters: list[TypeVar] = (
-        # Get the generic params from the orig bases generic class
-        namespace["__orig_bases__"][1].__parameters__ if "__orig_bases__" in namespace else []
-    )
-    type_vars = tuple(TypeVarRef.from_type_var(p) for p in parameters)
-    del parameters
-    cls_decl = ClassDecl(
-        egg_sort, type_vars, builtin, match_args=namespace.pop("__match_args__", ()), doc=namespace.pop("__doc__", None)
-    )
-    decls = Declarations(_classes={cls_ident: cls_decl})
-    # Update class thunk eagerly when resolving so that lookups work in methods.
-    runtime_cls.__egg_decls_thunk__ = Thunk.value(decls)
-    # Cached RuntimeFunction/RuntimeExpr wrappers capture the current decl thunk, so
-    # swapping in the concrete declarations must invalidate any wrappers created while
-    # the class was still pointing at the lazy declaration builder.
-    runtime_cls.__egg_attr_cache__.clear()
-
-    ##
-    # Register class variables
-    ##
-    # Create a dummy type to pass to get_type_hints to resolve the annotations we have
-    _Dummytype = type("_DummyType", (), {"__annotations__": namespace.get("__annotations__", {})})
-    # Resolve annotations before sharing this class with worker threads.
-    for k, v in get_type_hints(_Dummytype, globalns=frame.f_globals, localns=frame.f_locals).items():
-        if getattr(v, "__origin__", None) == ClassVar:
-            (inner_tp,) = v.__args__
-            type_ref = resolve_type_annotation_mutate(decls, inner_tp)
-            default_value = namespace.pop(k, _MISSING)
-            has_default = default_value is not _MISSING
-            return_type_is_eqsort = isinstance(type_ref, TypeRefWithVars) and not decls._classes[type_ref.ident].builtin
-            if has_default and ruleset is not None and not return_type_is_eqsort:
-                msg = "Primitive-returning defaults cannot use an explicit ruleset"
-                raise ValueError(msg)
-            resolved_default = (
-                resolve_literal(type_ref, default_value, Thunk.value(decls))
-                if has_default and ruleset is None
-                else None
-            )
-            if resolved_default is not None:
-                decls |= resolved_default
-            cls_decl.class_variables[k] = ConstantDecl(
-                type_ref.to_just(),
-                body=resolved_default.__egg_typed_expr__ if resolved_default is not None else None,
-            )
-            if has_default and ruleset is not None:
-                _add_default_rewrite(
-                    decls, ClassVariableRef(cls_ident, k), type_ref, default_value, ruleset, subsume=False
-                )
+) -> Catalog:
+    """Compile one complete concrete constructor scope directly into protobuf."""
+    if bases != (Expr,) or ruleset is not None or namespace.get("__annotations__"):
+        msg = "Only direct nongeneric Expr classes without class variables or rulesets are migrated"
+        raise NotImplementedError(msg)
+    initializer = None
+    egg_name = None
+    # Validate the complete source surface before publishing any member records.
+    for name, value in namespace.items():
+        if name in IGNORED_ATTRIBUTES and not isinstance(value, _WrappedMethod):
+            continue
+        if isinstance(value, _WrappedMethod):
+            if (
+                value.cost is not None
+                or value.merge is not None
+                or value.mutates_self
+                or value.unextractable
+                or value.subsume
+                or value.reverse_args
+                or (value.preserve and (value.egg_fn is not None or name == "__init__"))
+            ):
+                raise NotImplementedError(f"Method options for {runtime_cls}.{name} are not migrated")
+            fn = value.fn
+            preserve = value.preserve
+            supplied_name = value.egg_fn
         else:
-            msg = f"On class {cls_ident}, for attribute '{k}', expected a ClassVar, but got {v}"
-            raise NotImplementedError(msg)
-
-    ##
-    # Register methods, classmethods, preserved methods, and properties
-    ##
-    # Get all the methods from the class
-    filtered_namespace: list[tuple[str, Any]] = [
-        (k, v) for k, v in namespace.items() if k not in IGNORED_ATTRIBUTES or isinstance(v, _WrappedMethod)
-    ]
-
-    # all methods we should try adding default functions for
-    add_default_funcs: list[Callable[[], None]] = []
-    # Then register each of its methods
-    for method_name, method in filtered_namespace:
-        is_init = method_name == "__init__"
-        # Don't register the init methods for literals, since those don't use the type checking mechanisms
-        if is_init and cls_ident in LIT_IDENTS:
+            fn, preserve, supplied_name = value, False, None
+        if preserve or name in ALWAYS_PRESERVED:
             continue
-        match method:
-            case _WrappedMethod(egg_fn, cost, merge, fn, preserve, mutates, unextractable, subsume, reverse_args):
-                pass
-            case _:
-                egg_fn, cost, merge = None, None, None
-                fn = method
-                unextractable, preserve, subsume = False, False, False
-                mutates = method_name in ALWAYS_MUTATES_SELF
-                reverse_args = False
-        if preserve or method_name in ALWAYS_PRESERVED:
-            cls_decl.preserved_methods[method_name] = fn
-            continue
-        locals = frame.f_locals
-        ref: ClassMethodRef | MethodRef | PropertyRef | InitRef
-        # TODO: Store deprecated message so we can get at runtime
-        if (getattr(fn, "__deprecated__", None)) is not None:
-            fn = fn.__wrapped__  # type: ignore[union-attr]
-        match fn:
-            case classmethod():
-                ref = ClassMethodRef(cls_ident, method_name)
-                fn = fn.__func__
-            case property():
-                ref = PropertyRef(cls_ident, method_name)
-                fn = fn.fget
-            case _:
-                ref = InitRef(cls_ident) if is_init else MethodRef(cls_ident, method_name)
-        if isinstance(fn, _WrappedMethod):
-            msg = f"{cls_ident}.{method_name} Add the @method(...) decorator above @classmethod or @property"
-
-            raise ValueError(msg)  # noqa: TRY004
-        special_function_name: SpecialFunctions | None = (
-            "fn-partial" if egg_fn == "unstable-fn" else "fn-app" if egg_fn == "unstable-app" else None
-        )
-        if special_function_name:
-            decl = FunctionDecl(special_function_name, builtin=True, egg_name=egg_fn)
-            decls.set_function_decl(ref, decl)
-            continue
-        try:
-            add_rewrite = _fn_decl(
-                decls,
-                egg_fn,
-                ref,
-                fn,
-                locals,
-                cost,
-                merge,
-                mutates,
-                builtin,
-                ruleset=ruleset,
-                unextractable=unextractable,
-                subsume=subsume,
-                reverse_args=reverse_args,
+        if name != "__init__" or not isinstance(fn, FunctionType) or _function_has_body(fn):
+            raise NotImplementedError(
+                f"Only bodyless initializers and preserved methods are migrated: {runtime_cls}.{name}"
             )
-        except Exception as e:
-            e.add_note(f"Error processing {cls_ident}.{method_name}")
-            raise
-
-        if not builtin:
-            add_default_funcs.append(add_rewrite)
-
-    # Add all rewrite methods at the end so that all methods are registered first and can be accessed
-    # in the bodies
-    for add_rewrite in add_default_funcs:
-        add_rewrite()
-    return decls
+        initializer, egg_name = fn, supplied_name
+    if initializer is None:
+        return Catalog.from_refs([runtime_cls.__egg_definition__])
+    parameters = list(signature(initializer).parameters.values())
+    if not parameters or any(parameter.kind != Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters):
+        msg = "Constructor parameters must be fixed positional-or-keyword parameters including self"
+        raise NotImplementedError(msg)
+    parameters = parameters[1:]
+    hints_namespace = {**initializer.__globals__, **frame.f_locals, runtime_cls.__name__: runtime_cls}
+    hints = get_type_hints(initializer, globalns=hints_namespace, localns=hints_namespace)
+    builder = Builder()
+    builder.import_ref(runtime_cls.__egg_definition__)
+    assert runtime_cls.__egg_sort__ is not None
+    output = builder.import_ref(runtime_cls.__egg_sort__)
+    inputs = []
+    surface = []
+    for index, parameter in enumerate(parameters):
+        sort = resolve_type_annotation(hints[parameter.name])
+        if not isinstance(sort, Ref) or sort.role != "sorts":
+            raise NotImplementedError(f"Constructor input {parameter.name!r} requires a concrete sort")
+        inputs.append(pb.Arg(sort=builder.import_ref(sort), name=parameter.name))
+        parameter_record = pb.PythonParameter(core_input=index, name=parameter.name)
+        if parameter.default is not Parameter.empty:
+            default = resolve_literal(sort, parameter.default)
+            parameter_record.default_expr = builder.import_ref(default.__egg_ref__)
+        surface.append(parameter_record)
+    qualified = f"{runtime_cls.__module__}.{runtime_cls.__name__}.__init__"
+    definition = builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["constructor"], pb.Constructor](
+                "constructor",
+                pb.Constructor(
+                    name=egg_name or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", qualified), inputs=inputs, output=output
+                ),
+            ),
+            bindings=pb.CallableBindings(
+                python=pb.PythonBindings(
+                    views=[
+                        pb.PythonCallable(
+                            kind=pb.PythonCallKind.INITIALIZER,
+                            owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", output)),
+                            params=surface,
+                        )
+                    ]
+                )
+            ),
+            doc=initializer.__doc__ or "",
+        ),
+    )
+    owner = builder.publish()
+    return Catalog.from_refs([runtime_cls.__egg_definition__, owner.ref("declarations", definition)])
 
 
 @dataclass

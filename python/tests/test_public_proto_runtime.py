@@ -4,7 +4,7 @@ from copy import copy
 
 import pytest
 
-from egglog import EGraph, ExprValueError, Fact, _program, bindings, eq, expr_parts, f64, i64
+from egglog import EGraph, Expr, ExprValueError, Fact, _program, bindings, eq, expr_parts, f64, i64, method
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_literal_value
 from egglog.runtime import RuntimeExpr
 
@@ -61,6 +61,52 @@ def test_normal_scalar_bytes_boundary() -> None:
     assert graph.extract(expression).value == 3
     assert graph.extract(f64(1.0) + 2.0).value == 3.0
     graph.check(eq(expression).to(i64(3)))
+
+
+def test_user_constructor_public_bytes() -> None:
+    class Num(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+        @method(preserve=True)
+        @property
+        def value(self) -> int:
+            args = get_callable_args(self, Num)
+            assert args is not None
+            return args[0].value
+
+    expression = Num(i64(1) + 2)
+    assert str(expression) == "Num(i64(1) + 2)"
+    with pytest.raises(ExprValueError):
+        _ = expression.value
+    graph = EGraph()
+    result = graph.extract(expression)
+    assert isinstance(result, Num)
+    assert get_callable_fn(result) == Num
+    assert get_callable_args(result, Num)[0].value == result.value == 3
+    assert str(result) == "Num(3)"
+    graph.check(eq(result).to(Num(3)))
+    assert graph.extract(Num(value=3)).value == 3
+
+
+def test_user_constructor_exact_names_and_retained_local_hooks() -> None:
+    def make():
+        class Num(Expr, egg_sort="sort with spaces"):
+            @method(egg_fn="constructor with spaces")
+            def __init__(self, value: i64 = i64(7)) -> None: ...
+
+            @method(preserve=True)
+            def tag(self) -> str:
+                return "retained local method"
+
+        return Num()
+
+    graph = EGraph()
+    expression = make()
+    result = graph.extract(expression)
+    graph.check(eq(result).to(expression))
+    graph._state.destroy()
+    assert result.tag() == expression.tag() == "retained local method"
+    assert get_callable_args(result)[0].value == 7
 
 
 def test_scalar_equality_dispatch_respects_operand_sorts() -> None:
