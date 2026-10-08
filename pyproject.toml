@@ -26,7 +26,15 @@ classifiers = [
     "Topic :: Software Development :: Interpreters",
     "Typing :: Typed",
 ]
-dependencies = ["typing-extensions>=4.13", "black", "graphviz", "anywidget", "cloudpickle>=3", "opentelemetry-api"]
+dependencies = [
+    "typing-extensions>=4.13",
+    "black",
+    "graphviz",
+    "anywidget",
+    "cloudpickle>=3",
+    "opentelemetry-api",
+    "egglog-proto @ git+https://github.com/egraphs-good/egglog-experimental.git@57f052f70b9f02916ea288ca66480b6380c0c3dc#subdirectory=gen/python",
+]
 
 [project.optional-dependencies]
 
