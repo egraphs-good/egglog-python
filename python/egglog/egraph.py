@@ -455,13 +455,15 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
     bases: tuple[type, ...],
     ruleset: Ruleset | None,
 ) -> Catalog:
-    """Compile a complete concrete bodyless member scope directly into protobuf."""
+    """Publish canonical headers in order, then author explicit rewrite defaults."""
     if bases != (Expr,):
         msg = "Only direct nongeneric Expr classes are migrated"
         raise NotImplementedError(msg)
-    if ruleset is not None:
-        msg = "Class ruleset binding is not migrated"
-        raise NotImplementedError(msg)
+    context = runtime_cls.__egg_context__
+    assert context is not None
+    definitions = [runtime_cls.__egg_definition__]
+    context.catalog = Catalog.from_refs(definitions)
+    runtime_cls.__egg_attr_cache__.clear()
     hint_locals = {**frame.f_locals, runtime_cls.__name__: runtime_cls}
     annotations = namespace.get("__annotations__", {})
     if (
@@ -474,19 +476,22 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         globalns=frame.f_globals,
         localns=hint_locals,
     )
-    definitions = [runtime_cls.__egg_definition__]
     assert runtime_cls.__egg_sort__ is not None
     for name, annotation in hints.items():
         if getattr(annotation, "__origin__", None) is not ClassVar:
             raise NotImplementedError(f"On class {runtime_cls}, for attribute {name!r}, expected a ClassVar")
-        if name in namespace:
-            raise NotImplementedError(f"Class variable defaults are not migrated: {runtime_cls}.{name}")
         sort = resolve_type_annotation(annotation.__args__[0])
         if not isinstance(sort, Ref) or sort.role != "sorts":
             raise NotImplementedError(f"Class variable {runtime_cls}.{name} requires a concrete sort")
         builder = Builder()
         output = builder.import_ref(sort)
         sort_record: pb.Sort = sort.read()
+        if name in namespace:
+            if ruleset is None:
+                raise NotImplementedError(f"Class variable defaults are not migrated: {runtime_cls}.{name}")
+            if sort_record.kind is None or sort_record.kind.field != "eq":
+                msg = "Primitive-returning defaults cannot use an explicit ruleset"
+                raise ValueError(msg)
         qualified = f"{runtime_cls.__module__}.{runtime_cls.__name__}.{name}"
         egg_name = re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", qualified)
         kind = (
@@ -516,8 +521,15 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             ),
         )
         definitions.append(builder.publish().ref("declarations", index))
-    # Validate the complete source surface before publishing the member catalog.
+        context.catalog = Catalog.from_refs(definitions)
+        if name in namespace:
+            default = resolve_literal(sort, namespace[name])
+            lhs = RuntimeFunction(definitions[-1], 0)()
+            rewrite(cast("Expr", lhs), ruleset=ruleset).to(cast("Expr", default))
+    bodies: list[tuple[FunctionType, Ref, bool]] = []
     for name, value in namespace.items():
+        if name in hints:
+            continue
         if name in {"__annotate__", "__annotate_func__"} and not isinstance(value, _WrappedMethod):
             continue
         if name in IGNORED_ATTRIBUTES and not isinstance(value, _WrappedMethod):
@@ -548,10 +560,11 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
                 mutates_first_arg=value.mutates_self,
                 unextractable=value.unextractable,
                 subsume=value.subsume,
+                ruleset=ruleset,
             )
         else:
             fn, preserve = value, False
-            compiler = _FunctionConstructor(hint_locals, mutates_first_arg=name in ALWAYS_MUTATES_SELF)
+            compiler = _FunctionConstructor(hint_locals, mutates_first_arg=name in ALWAYS_MUTATES_SELF, ruleset=ruleset)
         if preserve or name in ALWAYS_PRESERVED:
             continue
         if name in IGNORED_ATTRIBUTES:
@@ -565,7 +578,54 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             msg = f"{runtime_cls}.{name} Add the @method(...) decorator above @classmethod or @property"
             raise ValueError(msg)  # noqa: TRY004 -- preserve the public decorator-order error
         definitions.append(compiler.prepare(fn, owner=runtime_cls, view_kind=view_kind, member_name=name))
-    return Catalog.from_refs(definitions)
+        context.catalog = Catalog.from_refs(definitions)
+        assert isinstance(fn, FunctionType)
+        if _function_has_body(fn):
+            bodies.append((fn, definitions[-1], compiler.subsume))
+    for fn, reference, subsume_body in bodies:
+        assert ruleset is not None
+        declaration: pb.Declaration = reference.read()
+        assert declaration.kind is not None
+        assert isinstance(declaration.kind.value, pb.Constructor)
+        assert declaration.bindings is not None
+        assert declaration.bindings.python is not None
+        view = declaration.bindings.python.views[0]
+        builder = Builder()
+        arguments: list[int] = []
+        for argument in declaration.kind.value.inputs:
+            index = builder.add(
+                "nodes",
+                pb.Node(
+                    sort_id=builder.import_ref(reference.owner.ref("sorts", argument.sort)),
+                    kind=Oneof[Literal["var"], str]("var", argument.name),
+                ),
+            )
+            # All callback arguments are views over the canonical input sorts.
+            arguments.append(index)
+        owner = builder.publish()
+        values = [RuntimeExpr(owner.ref("nodes", index)) for index in arguments]
+        callback_args: list[RuntimeExpr | RuntimeClass] = [values[parameter.core_input] for parameter in view.params]
+        if view.has_field("receiver"):
+            callback_args.insert(0, values[view.receiver])
+        elif view.kind == pb.PythonCallKind.CLASS_METHOD:
+            callback_args.insert(0, runtime_cls)
+        with set_current_ruleset(ruleset):
+            result = fn(*callback_args)
+        if result is None:
+            msg = "Callable bodies must return a value"
+            raise ValueError(msg)
+        output_sort = reference.owner.ref("sorts", declaration.kind.value.output)
+        rhs = resolve_literal(output_sort, result)
+        # A body may replace its argument wrappers. The pattern still binds the
+        # original variables; reconstruct it only after body/result validation.
+        values = [RuntimeExpr(owner.ref("nodes", index)) for index in arguments]
+        # Calling the selected view reuses its canonical receiver/slot ordering.
+        lhs = RuntimeFunction(reference, 0)(
+            *([values[view.receiver]] if view.has_field("receiver") else []),
+            *(values[parameter.core_input] for parameter in view.params),
+        )
+        rewrite(cast("Expr", lhs), ruleset=ruleset, subsume=subsume_body).to(cast("Expr", rhs))
+    return context.catalog
 
 
 @dataclass
@@ -690,12 +750,13 @@ class _FunctionConstructor:
                 if has_merge:
                     msg = "Primitive-returning callables with bodies cannot use merge"
                     raise ValueError(msg)
-            msg = "Free function bodies are not migrated"
-            raise NotImplementedError(msg)
-        if self.ruleset is not None:
+            if owner is None or self.ruleset is None or view_kind == pb.PythonCallKind.INITIALIZER:
+                msg = "Free function and initializer bodies are not migrated"
+                raise NotImplementedError(msg)
+        if self.ruleset is not None and owner is None:
             msg = "Explicit rulesets require a body"
             raise ValueError(msg)
-        if self.subsume:
+        if self.subsume and not has_body:
             msg = "subsume requires a body"
             raise ValueError(msg)
         if (

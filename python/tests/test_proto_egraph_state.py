@@ -10,6 +10,7 @@ from protobuf import Oneof
 from egglog import EGraph, Expr, bindings, constant, eq, i64, method, set_
 from egglog._catalog import builtin_catalog
 from egglog._program import pack
+from egglog.runtime import resolve_callable
 
 
 def _run_ruleset_step(graph, selected=None):
@@ -228,6 +229,61 @@ def test_ruleset_append_preserves_native_cursor(tmp_path):
     graph.check(Old(1), New(1))
     assert _run_ruleset_step(graph, selected) == {}
     assert any(response.ruleset_publication.names for response in responses)
+
+
+@pytest.mark.parametrize("seeded", [False, True])
+def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded):
+    """Default authoring reaches real bytes; public report projection is separate."""
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from egglog import ruleset  # noqa: PLC0415
+
+    class Result(Expr, egg_sort=f"NativeDefaultResult_{seeded}"):
+        def __init__(self, value: i64) -> None: ...
+
+    selected = ruleset()
+    callbacks = []
+
+    class Source(Expr, ruleset=selected):
+        def __init__(self, value: i64) -> None: ...
+
+        def wrapped(self, value: i64) -> Result:
+            callbacks.append(1)
+            return Result(value)
+
+    expression = Source(1).wrapped(2)
+    assert callbacks == [1]
+    graph = EGraph()
+    transport = graph._state.transport
+    requests, responses = [], []
+
+    def audited_run(encoded):
+        index = len(requests)
+        request = pb.RunProgramRequest.from_binary(encoded)
+        assert request.to_binary() == encoded
+        requests.append(request)
+        (tmp_path / f"request-{index}.pb").write_bytes(encoded)
+        returned = transport.run(encoded)
+        (tmp_path / f"response-{index}.pb").write_bytes(returned)
+        response = pb.RunProgramResponse.from_binary(returned)
+        assert response.ruleset_publication is not None
+        responses.append(response)
+        return returned
+
+    graph._state.transport = SimpleNamespace(run=audited_run, destroy=transport.destroy)
+    if seeded:
+        graph.register(expression)
+    matches = _run_ruleset_step(graph, selected)
+    assert matches == ({"": 1} if seeded else {})
+    if seeded:
+        graph.check(eq(expression).to(Result(2)))
+    else:
+        assert _run_ruleset_step(graph, selected) == {}
+    assert callbacks == [1]
+    assert any(response.ruleset_publication.names for response in responses)
+    declared = {declaration.kind.value.name for request in requests for declaration in request.program.declarations}
+    assert resolve_callable(Source.wrapped).read().kind.value.name in declared
+    assert resolve_callable(Result).read().kind.value.name in declared
 
 
 @pytest.fixture

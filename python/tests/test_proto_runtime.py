@@ -5,9 +5,11 @@ import math
 import operator
 import struct
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from fractions import Fraction
+from threading import Event
 from time import sleep
 from typing import ClassVar, Literal, TypeVar, get_type_hints
 from weakref import ref as weakref
@@ -46,6 +48,7 @@ from egglog import (
     method,
     rewrite,
     rule,
+    ruleset,
     runtime,
     set_,
     var,
@@ -2580,12 +2583,12 @@ def test_unmigrated_constructor_options_never_publish_members(options):
 
     with pytest.raises(NotImplementedError, match="options"):
         Invalid()
-    assert Invalid.__egg_context__.catalog is None
+    assert not Invalid.__egg_context__.catalog.members
     assert not Invalid.__egg_attr_cache__
 
 
 @pytest.mark.parametrize("options", [{"cost": 1}, {}])
-def test_wrapped_ignored_name_rejects_unsupported_members_before_publication(options):
+def test_wrapped_ignored_name_rejects_but_retains_prior_members(options):
     class Num(Expr):
         def __init__(self) -> None: ...
 
@@ -2594,8 +2597,11 @@ def test_wrapped_ignored_name_rejects_unsupported_members_before_publication(opt
 
     with pytest.raises(NotImplementedError, match="__radd__"):
         Num()
-    assert Num.__egg_context__.catalog is None
+    assert {name for _, name in Num.__egg_context__.catalog.members} == {"__init__"}
     assert not Num.__egg_attr_cache__
+    assert isinstance(Num(), Num)
+    with pytest.raises(AttributeError):
+        _ = Num.__radd__
 
 
 def test_preserved_wrapped_ignored_name_remains_a_local_hook():
@@ -2624,7 +2630,8 @@ def test_unsupported_class_members_and_parameter_kinds_are_not_ignored():
     for cls in (HasBody, KeywordOnly):
         with pytest.raises(NotImplementedError):
             cls()
-        assert cls.__egg_context__.catalog is None
+        expected = {"__init__"} if cls is HasBody else set()
+        assert {name for _, name in cls.__egg_context__.catalog.members} == expected
         assert not cls.__egg_attr_cache__
 
 
@@ -2720,8 +2727,11 @@ def test_member_decorator_order_preserves_value_error(descriptor):
 
     with pytest.raises(ValueError, match="above @classmethod or @property"):
         Invalid()
-    assert Invalid.__egg_context__.catalog is None
+    assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
     assert not Invalid.__egg_attr_cache__
+    assert isinstance(Invalid(), Invalid)
+    with pytest.raises(AttributeError):
+        _ = Invalid.member
 
 
 @pytest.mark.parametrize("doc", [None, "", "member documentation"])
@@ -2748,7 +2758,7 @@ def test_concrete_member_documentation_presence(doc):
         assert resolve_callable(fn).read().has_field("doc") == (doc is not None)
 
 
-def test_member_scope_failure_does_not_publish_or_execute_body():
+def test_member_scope_failure_keeps_prefix_without_executing_body():
     calls = []
 
     class Invalid(Expr):
@@ -2764,8 +2774,13 @@ def test_member_scope_failure_does_not_publish_or_execute_body():
     with pytest.raises(NotImplementedError, match="bodies"):
         Invalid.valid
     assert calls == []
-    assert Invalid.__egg_context__.catalog is None
+    assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"VALUE", "__init__", "valid"}
     assert not Invalid.__egg_attr_cache__
+    assert isinstance(Invalid.VALUE, i64)
+    assert isinstance(Invalid().valid(), i64)
+    with pytest.raises(AttributeError):
+        _ = Invalid.body
+    assert calls == []
 
 
 @pytest.mark.parametrize("annotation", ["i64", "ClassVar[i64] = None", "ClassVar[i64] = i64(1)"])
@@ -2775,7 +2790,9 @@ def test_invalid_or_unmigrated_class_annotations_are_explicit(annotation):
     cls = namespace["Invalid"]
     with pytest.raises(NotImplementedError, match=r"expected a ClassVar|defaults"):
         cls.VALUE
-    assert cls.__egg_context__.catalog is None
+    assert not cls.__egg_context__.catalog.members
+    with pytest.raises(AttributeError):
+        _ = cls.VALUE
 
 
 def test_retained_member_context_lifetime_and_local_hooks():
@@ -2845,18 +2862,370 @@ def test_primitive_member_option_errors_are_not_constructor_restrictions(options
 
     with pytest.raises(ValueError, match=r"Primitive-returning callables cannot (use|be)"):
         Invalid()
-    assert Invalid.__egg_context__.catalog is None
+    assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
+    assert isinstance(Invalid(), Invalid)
+    with pytest.raises(AttributeError):
+        _ = Invalid.primitive
 
 
-def test_class_ruleset_binding_remains_unsupported_not_invalid():
-    from egglog import ruleset  # noqa: PLC0415
+def test_class_ruleset_bodyless_members_do_not_create_rewrites():
+    destination = ruleset(name="class-rules")
 
-    class ValidButUnmigrated(Expr, ruleset=ruleset(name="class-rules")):
+    class Bodyless(Expr, ruleset=destination):
         def __init__(self) -> None: ...
         def value(self) -> i64: ...
 
-    with pytest.raises(NotImplementedError, match="Class ruleset binding"):
-        ValidButUnmigrated()
+    assert isinstance(Bodyless().value(), i64)
+    assert destination._snapshot({}).read().kind.value.rules == []
+
+
+@pytest.fixture
+def class_authoring_without_engine(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Class authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+
+
+def test_class_ruleset_bodyless_callable_headers(class_authoring_without_engine):
+    destination = ruleset()
+
+    class Boolean(Expr, ruleset=destination):
+        NEVER: ClassVar["Boolean"]
+
+        def __init__(self, value: BoolLike) -> None: ...
+        def __invert__(self) -> "Boolean": ...
+
+        @method(preserve=True)
+        def local(self):
+            return "host hook"
+
+        @classmethod
+        def if_(cls, condition: BoolLike, yes: Callable[[], "Boolean"], no: Callable[[], "Boolean"]) -> "Boolean":
+            """Docstring-only declarations do not create rewrites."""
+
+    expression = Boolean(True)
+    assert get_callable_args(expression, Boolean)[0].value is True
+    assert isinstance(Boolean.NEVER, Boolean)
+    assert isinstance(~expression, Boolean)
+    assert expression.local() == "host hook"
+    reference = resolve_callable(Boolean.if_)
+    inputs = reference.read().kind.value.inputs
+    for argument in inputs[1:]:
+        sort = reference.owner.ref("sorts", argument.sort)
+        assert sort.read().kind.field == "func"
+        function_sort = sort.read().kind.value
+        assert function_sort.params == []
+        assert StructuralView(sort.owner.ref("sorts", function_sort.result)) == StructuralView(Boolean.__egg_sort__)
+    assert destination._snapshot({}).read().kind.value.rules == []
+
+    @function(ruleset=destination)
+    def bodyless() -> Boolean: ...
+
+    with pytest.raises(ValueError, match="Explicit rulesets require a body"):
+        resolve_callable(bodyless)
+
+
+@pytest.mark.parametrize("formed_default", [False, True])
+def test_class_late_header_failure_keeps_prefix(class_authoring_without_engine, formed_default):
+    class HeaderResult(Expr, egg_sort=f"HeaderResult_{formed_default}"):
+        def __init__(self, value: i64) -> None: ...
+
+    destination = ruleset()
+    events = []
+
+    class Source:
+        pass
+
+    def convert_source(value):
+        events.append("convert")
+        return HeaderResult(1)
+
+    converter(Source, HeaderResult, convert_source)
+
+    class Partial(Expr, ruleset=destination):
+        FIRST: ClassVar[HeaderResult] = HeaderResult(1) if formed_default else Source()
+
+        def __init__(self) -> None: ...
+
+        def early(self) -> HeaderResult:
+            events.append("body")
+            return HeaderResult(2)
+
+        @method(cost=1)
+        def bad(self) -> i64: ...
+
+        def later(self) -> HeaderResult: ...
+
+    with pytest.raises(ValueError, match="Primitive-returning callables cannot use cost"):
+        Partial()
+    expected = [] if formed_default else ["convert"]
+    assert events == expected
+    assert isinstance(Partial.FIRST, HeaderResult)
+    assert isinstance(Partial().early(), HeaderResult)
+    assert len(destination._snapshot({}).read().kind.value.rules) == 1
+    for name in ("bad", "later"):
+        with pytest.raises(AttributeError):
+            getattr(Partial, name)
+    assert events == expected
+    assert Partial.__egg_context__.prepare is None
+
+
+def test_class_first_header_failure_is_terminal_without_poison(class_authoring_without_engine):
+    class Partial(Expr):
+        @method(cost=1)
+        def bad(self) -> i64: ...
+
+        def later(self) -> i64: ...
+
+    with pytest.raises(ValueError, match="Primitive-returning callables cannot use cost"):
+        _ = Partial.bad
+    assert Partial.__egg_context__.catalog.roots == (Partial.__egg_definition__,)
+    for name in ("bad", "later"):
+        with pytest.raises(AttributeError):
+            getattr(Partial, name)
+
+
+def test_classvar_header_precedes_failing_default_conversion(class_authoring_without_engine):
+    class ConversionResult(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    class Source:
+        pass
+
+    events = []
+    destination = ruleset()
+
+    def convert_source(value):
+        events.append(Partial.FIRST)
+        msg = "conversion marker"
+        raise ValueError(msg)
+
+    converter(Source, ConversionResult, convert_source)
+
+    class Partial(Expr, ruleset=destination):
+        FIRST: ClassVar[ConversionResult] = Source()
+
+        def __init__(self) -> None: ...
+
+    with pytest.raises(ValueError, match="conversion marker"):
+        _ = Partial.FIRST
+    assert events == [Partial.FIRST]
+    assert isinstance(Partial.FIRST, ConversionResult)
+    assert destination._snapshot({}).read().kind.value.rules == []
+    with pytest.raises(AttributeError):
+        Partial()
+    assert len(events) == 1
+
+
+def test_class_default_bodies_see_all_headers_and_keep_failure_prefix(class_authoring_without_engine):
+    class BodyResult(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    destination = ruleset()
+    events = []
+
+    class Partial(Expr, ruleset=destination):
+        FIRST: ClassVar[BodyResult] = BodyResult(1)
+
+        def __init__(self) -> None: ...
+
+        def early(self, value: i64) -> BodyResult:
+            events.append(("early", len(destination._snapshot({}).read().kind.value.rules)))
+            return self.later(value)
+
+        def later(self, value: i64) -> BodyResult:
+            events.append(("later", len(destination._snapshot({}).read().kind.value.rules)))
+            msg = "body marker"
+            raise ValueError(msg)
+
+        def unvisited(self) -> BodyResult:
+            pytest.fail("Body after failure ran")
+
+    with pytest.raises(ValueError, match="body marker"):
+        Partial()
+    assert events == [("early", 1), ("later", 2)]
+    value = Partial()
+    assert isinstance(value.early(2), BodyResult)
+    assert isinstance(value.later(3), BodyResult)
+    assert isinstance(value.unvisited(), BodyResult)
+    assert events == [("early", 1), ("later", 2)]
+    snapshot = destination._snapshot({})
+    assert len(snapshot.read().kind.value.rules) == 2
+    encoded = pack(roots=[snapshot]).program.to_binary()
+    assert pb.Program.from_binary(encoded).to_binary() == encoded
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_class_cached_member_lookup_waits_for_authoring_attempt(class_authoring_without_engine, fail):
+    entered, release, requested, returned = Event(), Event(), Event(), Event()
+    destination = ruleset()
+    cached = []
+
+    class Partial(Expr, ruleset=destination):
+        def __init__(self) -> None: ...
+
+        def earlier(self) -> "Partial": ...
+
+        def body(self) -> "Partial":
+            cached.append(Partial.earlier)
+            entered.set()
+            assert release.wait(5)
+            if fail:
+                msg = "thread body marker"
+                raise ValueError(msg)
+            return self
+
+    def read_cached():
+        requested.set()
+        result = Partial.earlier
+        returned.set()
+        return result
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        compilation = executor.submit(Partial)
+        try:
+            assert entered.wait(5)
+            lookup = executor.submit(read_cached)
+            assert requested.wait(5)
+            assert not returned.wait(0.05)
+        finally:
+            release.set()
+        if fail:
+            with pytest.raises(ValueError, match="thread body marker"):
+                compilation.result()
+        else:
+            assert isinstance(compilation.result(), Partial)
+        assert lookup.result() is cached[0]
+
+
+def test_class_default_views_share_canonical_parameter_binding(class_authoring_without_engine):
+    from egglog.egraph import get_current_ruleset  # noqa: PLC0415
+
+    destination = ruleset()
+    callbacks = []
+
+    class Defaults(Expr, ruleset=destination):
+        def __init__(self, value: i64) -> None: ...
+
+        @classmethod
+        def named(cls, value: i64 = 3) -> "Defaults":
+            callbacks.append(("named", cls, get_current_ruleset()))
+            return cls(value)
+
+        @property
+        def own(self) -> "Defaults":
+            callbacks.append(("own", get_current_ruleset()))
+            return self
+
+        @method(subsume=True)
+        def wrapped(self, value: i64 = 4) -> "Defaults":
+            callbacks.append(("wrapped", get_current_ruleset()))
+            return Defaults(value)
+
+    expression = Defaults(2)
+    assert callbacks == [("named", Defaults, destination), ("own", destination), ("wrapped", destination)]
+    assert get_current_ruleset() is None
+    assert get_callable_args(Defaults.named())[0].value == 3
+    assert get_callable_args(expression.wrapped())[1].value == 4
+    assert isinstance(expression.own, Defaults)
+    snapshot = destination._snapshot({})
+    records = [snapshot.owner.ref("rules", index) for index in snapshot.read().kind.value.rules]
+    assert [record.read().kind.value.subsume for record in records] == [False, False, True]
+    for record in records:
+        rewrite_record = record.read().kind.value
+        lhs_ref = record.owner.ref("nodes", rewrite_record.lhs)
+        rhs_ref = record.owner.ref("nodes", rewrite_record.rhs)
+        lhs = lhs_ref.read().kind.value
+        rhs = rhs_ref.read()
+        if lhs.func.endswith("named"):
+            assert lhs_ref.owner.ref("nodes", lhs.args[0]).read().kind.value == "value"
+            assert [StructuralView(rhs_ref.owner.ref("nodes", arg)) for arg in rhs.kind.value.args] == [
+                StructuralView(lhs_ref.owner.ref("nodes", arg)) for arg in lhs.args
+            ]
+        elif lhs.func.endswith("own"):
+            assert rhs.kind.field == "var"
+            assert rhs.kind.value == "self"
+        else:
+            assert lhs_ref.owner.ref("nodes", lhs.args[0]).read().kind.value == "self"
+            assert lhs_ref.owner.ref("nodes", lhs.args[1]).read().kind.value == "value"
+            assert [StructuralView(rhs_ref.owner.ref("nodes", arg)) for arg in rhs.kind.value.args] == [
+                StructuralView(lhs_ref.owner.ref("nodes", lhs.args[1]))
+            ]
+    assert len(pack(roots=[snapshot]).program.rules) == 3
+
+
+@pytest.mark.parametrize("replace_receiver", [False, True])
+def test_class_default_lhs_keeps_original_binders_after_wrapper_replacement(
+    class_authoring_without_engine, replace_receiver
+):
+    destination = ruleset()
+
+    class Binders(Expr, ruleset=destination, egg_sort=f"DefaultBinders_{replace_receiver}"):
+        def __init__(self, value: i64) -> None: ...
+
+        def body(self, value: i64) -> "Binders":
+            if replace_receiver:
+                self.__replace_expr__(Binders(9))
+                return self
+            value.__replace_expr__(i64(7))
+            return Binders(value)
+
+    expression = Binders(1).body(2)
+    assert get_callable_args(expression)[1].value == 2
+    snapshot = destination._snapshot({})
+    assert len(snapshot.read().kind.value.rules) == 1
+    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    rewrite_record = reference.read().kind.value
+    lhs = reference.owner.ref("nodes", rewrite_record.lhs)
+    lhs_args = [lhs.owner.ref("nodes", index) for index in lhs.read().kind.value.args]
+    assert [argument.read().kind.field for argument in lhs_args] == ["var", "var"]
+    assert [argument.read().kind.value for argument in lhs_args] == ["self", "value"]
+    rhs = RuntimeExpr(reference.owner.ref("nodes", rewrite_record.rhs))
+    assert get_callable_args(rhs, Binders)[0].value == (9 if replace_receiver else 7)
+    assert len(pack(roots=[snapshot]).program.rules) == 1
+
+
+@pytest.mark.parametrize("result", [None, i64(2)])
+def test_class_invalid_default_body_result_does_not_poison_headers(class_authoring_without_engine, result):
+    destination = ruleset()
+    calls = []
+
+    class InvalidResult(Expr, ruleset=destination):
+        def __init__(self) -> None: ...
+
+        def body(self) -> "InvalidResult":
+            calls.append(1)
+            return result
+
+    error = ValueError if result is None else ConvertError
+    with pytest.raises(error):
+        InvalidResult()
+    assert isinstance(InvalidResult().body(), InvalidResult)
+    assert calls == [1]
+    assert destination._snapshot({}).read().kind.value.rules == []
+
+
+@pytest.mark.parametrize("default", [None, i64(1)])
+def test_class_primitive_default_with_ruleset_remains_invalid(class_authoring_without_engine, default):
+    destination = ruleset()
+
+    class InvalidDefault(Expr, ruleset=destination):
+        FIRST: ClassVar[i64] = default
+
+    with pytest.raises(ValueError, match="Primitive-returning defaults cannot use an explicit ruleset"):
+        _ = InvalidDefault.FIRST
+    assert not InvalidDefault.__egg_context__.catalog.members
+    assert destination._snapshot({}).read().kind.value.rules == []
+    with pytest.raises(AttributeError):
+        _ = InvalidDefault.FIRST
+
+
+@pytest.mark.parametrize("annotation", [Callable, Callable[..., i64], Callable[[TypeVar("Argument")], i64]])
+def test_unresolved_callable_annotations_remain_explicit(class_authoring_without_engine, annotation):
+    with pytest.raises(NotImplementedError, match="Callable annotations require"):
+        runtime.resolve_type_annotation(annotation)
 
 
 def test_user_sort_cannot_borrow_builtin_codec_or_members_by_name():
@@ -2876,8 +3245,10 @@ def test_unresolved_constructor_annotation_does_not_publish_members():
 
     with pytest.raises(NameError, match="NotDefinedHere"):
         Missing(1)
-    assert Missing.__egg_context__.catalog is None
+    assert not Missing.__egg_context__.catalog.members
     assert not Missing.__egg_attr_cache__
+    with pytest.raises(AttributeError):
+        Missing(1)
 
 
 def test_user_default_expansion_has_fresh_union_identity_and_retains_sharing():

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import ClassVar, assert_type
 
 from egglog import (
@@ -65,3 +65,34 @@ assert_type(rewrite(variable, ruleset=destination).to(node), RewriteOrRule)
 assert_type(rule(variable, ruleset=destination).then(node), RewriteOrRule)
 destination.append(rewrite(variable).to(node))
 assert_type(rewrite(variable).to(node) == rewrite(variable).to(node), bool)
+
+
+class Defaults(Expr, ruleset=destination):
+    FIRST: ClassVar[Node] = Node()
+
+    def __init__(self) -> None: ...
+
+    def later(self, value: i64Like) -> Node: ...
+
+    def earlier(self, value: i64Like = 1) -> Node:
+        return self.later(value)
+
+    @property
+    def own(self) -> Defaults:
+        return self
+
+    @classmethod
+    def named(cls) -> Defaults:
+        return cls()
+
+    @classmethod
+    def choose(cls, thunk: Callable[[], Node]) -> Node: ...
+
+
+defaults = Defaults()
+assert_type(Defaults.FIRST, Node)
+assert_type(defaults.earlier(), Node)
+assert_type(Defaults.earlier(defaults, 1), Node)
+assert_type(defaults.own, Defaults)
+assert_type(Defaults.named(), Defaults)
+assert_type(Defaults.choose(Node), Node)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import ClassVar
 
 from egglog import Expr, Pair, Vec, f64, i64, i64Like, rewrite, rule, ruleset, var, vars_
@@ -44,3 +44,24 @@ rule().then("not an action")  # error: arg-type
 ruleset().append(node)  # error: arg-type
 rewrite(node, ruleset="not a ruleset")  # error: arg-type
 rule(node, ruleset=i64(1))  # error: arg-type
+
+
+class Defaults(Expr, ruleset=ruleset()):
+    FIRST: ClassVar[Node] = Node()
+
+    def __init__(self) -> None: ...
+
+    def later(self, value: i64Like) -> Node: ...
+
+    def earlier(self, value: i64Like = 1) -> Node:
+        return self.later(value)
+
+    @classmethod
+    def choose(cls, thunk: Callable[[], Node]) -> Node: ...
+
+
+Defaults().earlier(f64(1))  # error: arg-type
+Defaults.earlier(node, 1)  # error: arg-type
+wrong_default: i64 = Defaults.FIRST  # error: assignment
+wrong_body_result: i64 = Defaults().earlier()  # error: assignment
+Defaults.choose(i64)  # error: arg-type

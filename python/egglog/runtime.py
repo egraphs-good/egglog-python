@@ -298,11 +298,13 @@ class _ClassContext:
         self.lock = RLock()
 
     def resolve(self) -> None:
-        """Publish the whole member scope once, never a partially usable signature."""
+        """Complete one class attempt, retaining its immutable published prefix."""
         with self.lock:
             if self.error is not None:
                 raise self.error
             if self.resolving:
+                if self.catalog is not None:
+                    return
                 msg = "Recursively resolving class declarations"
                 raise RuntimeError(msg)
             if self.prepare is None:
@@ -311,11 +313,11 @@ class _ClassContext:
             try:
                 catalog = self.prepare(self.runtime_class)
             except Exception as error:
-                self.error = error
+                if self.catalog is None:
+                    self.error = error
                 raise
             else:
                 self.catalog = catalog
-                self.runtime_class.__egg_attr_cache__.clear()
             finally:
                 self.prepare = None
                 self.resolving = False
@@ -545,10 +547,12 @@ class RuntimeClass(type):
             raise AttributeError(name)
         if name in cls.__egg_hooks__:
             return cls.__egg_hooks__[name]
-        if name in cls.__egg_attr_cache__:
-            return cls.__egg_attr_cache__[name]
+        # Even a cached prefix member must wait for another thread's active
+        # attempt. Same-thread reentry uses the already-published declarations.
         if cls.__egg_pending__ is not None:
             cls.__egg_pending__()
+        if name in cls.__egg_attr_cache__:
+            return cls.__egg_attr_cache__[name]
         declaration = cls.__egg_definition__.read()
         assert declaration.kind is not None
         definition_key = _definition_key(declaration)
@@ -858,6 +862,24 @@ def resolve_type_annotation(tp: object) -> Ref | TypeVar | RuntimeClass:
         return tp
     if get_origin(tp) is Union:
         return resolve_type_annotation(get_args(tp)[0])
+    if tp is Callable or get_origin(tp) is Callable:
+        arguments = get_args(tp)
+        if len(arguments) != 2 or not isinstance(arguments[0], list):
+            msg = "Callable annotations require a fixed parameter list"
+            raise NotImplementedError(msg)
+        sorts = [resolve_type_annotation(argument) for argument in [*arguments[0], arguments[1]]]
+        if any(not isinstance(sort, Ref) or sort.role != "sorts" for sort in sorts):
+            msg = "Callable annotations require concrete parameter and result sorts"
+            raise NotImplementedError(msg)
+        builder = Builder()
+        indices = [builder.import_ref(cast("Ref", sort)) for sort in sorts]
+        index = builder.add(
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=indices[:-1], result=indices[-1]))
+            ),
+        )
+        return builder.publish().ref("sorts", index)
     if isinstance(origin := get_origin(tp), RuntimeClass):
         return resolve_type_annotation(origin[get_args(tp)])
     if isinstance(tp, RuntimeClass):
