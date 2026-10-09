@@ -46,7 +46,16 @@ from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
 from ._catalog import Catalog
-from ._program import Builder, Ref, StructuralView, _copy_record, _definition_key, _structural_parts, pack, rule_equal
+from ._program import (
+    Builder,
+    Ref,
+    StructuralView,
+    _copy_record,
+    _structural_parts,
+    action_equal,
+    pack,
+    rule_equal,
+)
 from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
@@ -2625,18 +2634,7 @@ class Action:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Action):
             return NotImplemented
-        if StructuralView(self.__egg_ref__) != StructuralView(other.__egg_ref__):
-            return False
-        # Reuse packing's named closure, but compare original refs so Union
-        # identity survives and unrelated declarations/local hooks stay out.
-        closures = [
-            {
-                _definition_key(declaration.read()): StructuralView(declaration)
-                for declaration in pack(commands=[reference]).definitions
-            }
-            for reference in (self.__egg_ref__, other.__egg_ref__)
-        ]
-        return closures[0] == closures[1]
+        return action_equal(self.__egg_ref__, other.__egg_ref__)
 
     def __str__(self) -> str:
         return pretty_ref(self.__egg_ref__)
@@ -2939,15 +2937,36 @@ class _UnionBuilder(Generic[EXPR]):
     lhs: EXPR
 
     def with_(self, rhs: EXPR) -> Action:
-        msg = "Union action authoring is not migrated"
-        raise NotImplementedError(msg)
+        lhs = to_runtime_expr(self.lhs)
+        rhs_expr = convert_to_same_type(rhs, lhs)
+        node: pb.Node = lhs.__egg_ref__.read()
+        builder = Builder()
+        union = builder.add(
+            "nodes",
+            pb.Node(
+                sort_id=builder.import_ref(lhs.__egg_ref__.owner.ref("sorts", node.sort_id)),
+                kind=Oneof[Literal["union"], pb.Union](
+                    "union",
+                    pb.Union(members=[builder.import_ref(lhs.__egg_ref__), builder.import_ref(rhs_expr.__egg_ref__)]),
+                ),
+            ),
+        )
+        command = builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action", pb.Action(kind=Oneof[Literal["term"], int]("term", union))
+                )
+            ),
+        )
+        return Action(builder.publish().ref("commands", command))
 
     def __repr__(self) -> str:
         return str(self)
 
     def __str__(self) -> str:
         lhs = to_runtime_expr(self.lhs)
-        return lhs.__egg_pretty__("union")
+        return f"union({pretty_ref(lhs.__egg_ref__)})"
 
 
 @dataclass

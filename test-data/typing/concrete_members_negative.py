@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import ClassVar
 
-from egglog import EGraph, Expr, Pair, Vec, f64, i64, i64Like, rewrite, rule, ruleset, run, seq, var, vars_
+from egglog import EGraph, Expr, Pair, Vec, f64, i64, i64Like, rewrite, rule, ruleset, run, seq, union, var, vars_
 from egglog.run_report import RuleKey
 
 
@@ -45,6 +45,9 @@ rule().then("not an action")  # error: arg-type
 ruleset().append(node)  # error: arg-type
 rewrite(node, ruleset="not a ruleset")  # error: arg-type
 rule(node, ruleset=i64(1))  # error: arg-type
+union(node).with_(i64(1))  # error: arg-type
+union(i64(1))  # error: type-var
+wrong_union: i64 = union(node).with_(node)  # error: assignment
 
 
 class Defaults(Expr, ruleset=ruleset()):

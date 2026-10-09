@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 from typing import ClassVar, assert_type
 
 from egglog import (
+    Action,
     EGraph,
     Expr,
     Pair,
@@ -24,6 +25,7 @@ from egglog import (
     ruleset,
     run,
     seq,
+    union,
     var,
     vars_,
 )
@@ -65,6 +67,8 @@ assert_type(vars_("left right", Node), Iterable[Node])
 assert_type(var("number", i64), i64)
 assert_type(rewrite(variable).to(node), RewriteOrRule)
 assert_type(rule(eq(variable).to(node)).then(node), RewriteOrRule)
+assert_type(union(variable).with_(node), Action)
+assert_type(rule(variable).then(union(variable).with_(node)), RewriteOrRule)
 destination = ruleset(name="typed_rules")
 assert_type(destination, Ruleset)
 assert_type(rewrite(variable, ruleset=destination).to(node), RewriteOrRule)

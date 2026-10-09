@@ -333,6 +333,64 @@ class StructuralView:
         return True
 
 
+def action_equal(left: Ref, right: Ref) -> bool:  # noqa: C901
+    """
+    Prove ordered Action syntax equality without identifying execution nodes.
+
+    Exact refs are axioms; empty Unions and rule/ruleset identities have no
+    structural proof. A repeated active distinct pair has no finite proof.
+    Only completed proofs are reusable, including in the named closure.
+    """
+    if left.role != "commands" or right.role != "commands":
+        msg = "Action comparison requires command references"
+        raise TypeError(msg)
+    active: set[tuple[Ref, Ref]] = set()
+    completed: set[tuple[Ref, Ref]] = set()
+    for closure in (False, True):
+        if closure:
+            definitions = [
+                {_definition_key(ref.read()): ref for ref in pack(commands=[root]).definitions}
+                for root in (left, right)
+            ]
+            if definitions[0].keys() != definitions[1].keys():
+                return False
+            pending = [(definitions[0][key], definitions[1][key], False) for key in definitions[0]]
+        else:
+            pending = [(left, right, False)]
+        while pending:
+            first, second, leaving = pending.pop()
+            first = first.owner.ref(first.role, first.index)
+            second = second.owner.ref(second.role, second.index)
+            pair = first, second
+            if leaving:
+                active.remove(pair)
+                completed.add(pair)
+                continue
+            if first == second or pair in completed:
+                continue
+            if pair in active:
+                return False
+            for ref in pair:
+                record = ref.owner._slots[ref.role][ref.index]
+                if ref.role in {"rules", "rulesets"} or (
+                    isinstance(record, pb.Node)
+                    and record.kind is not None
+                    and record.kind.field == "union"
+                    and not record.kind.value.members
+                ):
+                    return False
+            first_shape, first_children = _structural_parts(first, identity=False)
+            second_shape, second_children = _structural_parts(second, identity=False)
+            if first_shape != second_shape or len(first_children) != len(second_children):
+                return False
+            active.add(pair)
+            pending.append((first, second, True))
+            pending.extend(
+                (a[0], b[0], False) for a, b in zip(reversed(first_children), reversed(second_children), strict=True)
+            )
+    return True
+
+
 def _rule_key(root: Ref) -> tuple[object, ...]:  # noqa: C901
     """
     Derive comparison/hash tokens, preserving allocation topology per use unit.

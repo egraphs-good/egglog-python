@@ -420,6 +420,54 @@ def test_mixed_registration_cut_distinguishes_query_from_action_identity(monkeyp
         assert len(requests[1].program.rules) == 1
 
 
+@pytest.mark.parametrize("reuse", ["separate", "same", "copy"])
+def test_native_public_union_occurrence_boundary(tmp_path, reuse):
+    from copy import copy  # noqa: PLC0415
+
+    from egglog import union  # noqa: PLC0415
+
+    class UnionNode(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    graph = EGraph()
+    lhs, rhs = UnionNode(1), UnionNode(2)
+    graph.register(lhs, rhs)
+    first = union(lhs).with_(rhs)
+    second = union(lhs).with_(rhs) if reuse == "separate" else first if reuse == "same" else copy(first)
+    transport = graph._state.transport
+    requests = []
+    responses = []
+
+    class AuditedTransport:
+        def run(self, encoded):
+            index = len(requests)
+            (tmp_path / f"request-{index}.pb").write_bytes(encoded)
+            requests.append(pb.RunProgramRequest.from_binary(encoded))
+            returned = transport.run(encoded)
+            (tmp_path / f"response-{index}.pb").write_bytes(returned)
+            responses.append(pb.RunProgramResponse.from_binary(returned))
+            return returned
+
+        def destroy(self, encoded):
+            return transport.destroy(encoded)
+
+    graph._state.transport = AuditedTransport()
+    if reuse == "separate":
+        graph.register(first, second)
+        assert responses[0].error is None
+        graph.check(eq(lhs).to(rhs))
+    else:
+        with pytest.raises(bindings.EggSmolError, match="repeated action Union occurrence"):
+            graph.register(first, second)
+        assert responses[0].error.code == pb.ErrorCode.INVALID_PROGRAM
+        assert responses[0].error.location is None
+        graph.check_fail(eq(lhs).to(rhs))
+    assert len(requests[0].program.commands) == 2
+    roots = [command.kind.value.kind.value for command in requests[0].program.commands]
+    assert (roots[0] == roots[1]) is (reuse != "separate")
+    assert all(requests[0].program.nodes[index].kind.field == "union" for index in roots)
+
+
 def test_ruleset_append_preserves_native_cursor(tmp_path):
     """Real encoded execution; raw summaries are not a public RunReport."""
     from egglog import rule, ruleset, var  # noqa: PLC0415

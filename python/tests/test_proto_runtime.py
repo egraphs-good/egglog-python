@@ -24,6 +24,7 @@ from egglog import (
     BoolLike,
     ConvertError,
     Expr,
+    Fact,
     Map,
     MapLike,
     Pair,
@@ -51,6 +52,7 @@ from egglog import (
     ruleset,
     runtime,
     set_,
+    union,
     var,
     vars_,
 )
@@ -577,8 +579,8 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     expected = (
         "rule(eq(RuleBox(1)).to(RuleBox(2)), eq(RuleBox(1)).to(RuleBox(2)), "
         "name='direct', eval_mode='naive', no_decomp=True).then("
-        "set_(rule_slot()).to(i64(7)), eq(RuleBox(1)).to(RuleBox(2)), "
-        "eq(RuleBox(1)).to(RuleBox(2)), RuleBox(1))"
+        "set_(rule_slot()).to(i64(7)), union(RuleBox(1)).with_(RuleBox(2)), "
+        "union(RuleBox(1)).with_(RuleBox(2)), RuleBox(1))"
     )
     assert str(authored) == repr(authored) == expected
     record.kind.value.head.clear()
@@ -2409,6 +2411,88 @@ def test_free_function_retains_local_output_hooks_then_collects():
     assert callable_ref() is None
 
 
+def test_public_union_action_freezes_canonical_operands_and_conversion(class_authoring_without_engine):
+    class UnionNode(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    converted = []
+
+    def from_int(value):
+        converted.append(value)
+        return UnionNode(value)
+
+    converter(int, UnionNode, from_int)
+    lhs = UnionNode(1)
+    action = union(lhs).with_(2)
+    assert converted == [2]
+    command = action.__egg_ref__.read()
+    assert command.kind.field == "action"
+    assert command.kind.value.kind.field == "term"
+    root = action.__egg_ref__.owner.ref("nodes", command.kind.value.kind.value)
+    node = root.read()
+    assert node.kind.field == "union"
+    assert len(node.kind.value.members) == 2
+    assert StructuralView(root.owner.ref("sorts", node.sort_id)) == StructuralView(UnionNode.__egg_sort__)
+    for index in node.kind.value.members:
+        assert root.owner.ref("nodes", index).read().sort_id == node.sort_id
+    lhs.__replace_expr__(UnionNode(9))
+    assert str(action) == "union(UnionNode(1)).with_(UnionNode(2))"
+    assert str(union(lhs)) == "union(UnionNode(9))"
+    with pytest.raises(ConvertError):
+        union(lhs).with_(String("wrong sort"))
+    with pytest.raises(TypeError, match="unhashable type: 'Action'"):
+        hash(action)
+    packed = pack(commands=[action.__egg_ref__]).program
+    assert pb.Program.from_binary(packed.to_binary()) == packed
+
+
+def test_public_union_reuse_and_separate_constructions_retain_identity(class_authoring_without_engine):
+    from egglog.run_report import RuleKey  # noqa: PLC0415
+
+    class UnionNode(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    lhs, rhs = UnionNode(1), UnionNode(2)
+    action = union(lhs).with_(rhs)
+    wrapped, cloned = Action(action.__egg_ref__), copy(action)
+    separate = union(lhs).with_(rhs)
+    assert action == wrapped == cloned
+    assert action == separate
+    assert cloned.__egg_ref__ == wrapped.__egg_ref__ == action.__egg_ref__
+    packed = pack(commands=[item.__egg_ref__ for item in (action, action, cloned, separate)]).program
+    roots = [command.kind.value.kind.value for command in packed.commands]
+    assert roots[0] == roots[1] == roots[2]
+    assert roots[0] != roots[3]
+    authored = rule().then(action, action, cloned, separate)
+    head = authored.__egg_ref__.read().kind.value.head
+    assert head[0].kind.value == head[1].kind.value == head[2].kind.value
+    assert head[0].kind.value != head[3].kind.value
+    assert RuleKey(rule().then(action).__egg_ref__) == RuleKey(rule().then(separate).__egg_ref__)
+    assert hash(RuleKey(rule().then(action).__egg_ref__)) == hash(RuleKey(rule().then(separate).__egg_ref__))
+    assert RuleKey(rule().then(action, action).__egg_ref__) != RuleKey(rule().then(action, separate).__egg_ref__)
+
+
+def test_public_union_contextual_rule_and_fact_presentation(class_authoring_without_engine):
+    from egglog.run_report import RuleKey  # noqa: PLC0415
+
+    class UnionNode(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    x, y = vars_("x y", UnionNode)
+    action = union(x).with_(y)
+    command = action.__egg_ref__.read()
+    query = Fact(action.__egg_ref__.owner.ref("nodes", command.kind.value.kind.value))
+    assert str(query) == "eq(x).to(y)"
+    assert str(action) == "union(x).with_(y)"
+    authored = rule(query, name="union-context").then(action)
+    expected = "rule(eq(x).to(y), name='union-context').then(union(x).with_(y))"
+    assert str(authored) == repr(RuleKey(authored.__egg_ref__)) == expected
+    packed = pack([authored.__egg_ref__]).program
+    canonical = packed.rules[0].kind.value
+    assert canonical.query == [canonical.head[0].kind.value]
+    assert pb.Program.from_binary(packed.to_binary()) == packed
+
+
 def test_set_and_term_authoring_own_commands_without_evaluating(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Action authoring cannot create an engine")
@@ -2515,11 +2599,13 @@ def test_action_equality_preserves_numeric_zero_and_nan_payloads():
     assert expr_action(value) == expr_action(f64(float("nan")))
 
 
-def test_action_equality_preserves_union_identity_and_order():
+def test_action_equality_compares_nonempty_union_syntax_in_order():
     union = eq(i64(1)).to(i64(2))
     assert expr_action(RuntimeExpr(union.__egg_ref__)) == expr_action(RuntimeExpr(union.__egg_ref__))
     independent = eq(i64(1)).to(i64(2))
-    assert expr_action(RuntimeExpr(union.__egg_ref__)) != expr_action(RuntimeExpr(independent.__egg_ref__))
+    assert expr_action(RuntimeExpr(union.__egg_ref__)) == expr_action(RuntimeExpr(independent.__egg_ref__))
+    reversed_union = eq(i64(2)).to(i64(1))
+    assert expr_action(RuntimeExpr(union.__egg_ref__)) != expr_action(RuntimeExpr(reversed_union.__egg_ref__))
     left = i64(1)
     assert expr_action(left + left) == expr_action(i64(1) + i64(1))
     assert expr_action(i64(1) + i64(2)) != expr_action(i64(2) + i64(1))

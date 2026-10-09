@@ -577,7 +577,22 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                 msg = "Cannot print an action without a kind"
                 raise ValueError(msg)
             if action.kind.field == "term":
-                pieces = [(owner.ref("nodes", action.kind.value), False, False)]
+                term = owner.ref("nodes", action.kind.value)
+                node: pb.Node = term.read()
+                if node.kind is not None and node.kind.field == "union":
+                    if len(node.kind.value.members) != 2:
+                        msg = "Only binary Union action presentation is migrated"
+                        raise NotImplementedError(msg)
+                    lhs, rhs = node.kind.value.members
+                    pieces = [
+                        "union(",
+                        (term.owner.ref("nodes", lhs), False, False),
+                        ").with_(",
+                        (term.owner.ref("nodes", rhs), False, False),
+                        ")",
+                    ]
+                else:
+                    pieces = [(term, False, False)]
             elif action.kind.field == "set":
                 assignment = action.kind.value
                 if assignment.target is None or not assignment.has_field("value"):

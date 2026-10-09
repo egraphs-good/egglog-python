@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import struct
+from copy import copy
 from typing import Literal
 from weakref import ref as weakref
 
@@ -286,15 +287,159 @@ def test_action_equality_observes_referenced_declaration_closure(action_program,
     assert first != Action(Builder.from_program(action_program).publish().ref("commands", 0))
 
 
-def test_action_equality_keeps_union_identity_in_declaration_closure(action_program):
+@pytest.mark.parametrize("kind", ["ordinary", "empty", "cycle"])
+def test_action_equality_compares_union_syntax_in_declaration_closure(action_program, kind):
     action_program.nodes.append(
-        pb.Node(sort_id=0, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[0, 1])))
+        pb.Node(
+            sort_id=0,
+            kind=Oneof[Literal["union"], pb.Union](
+                "union", pb.Union(members=[0, 1] if kind == "ordinary" else [4] if kind == "cycle" else [])
+            ),
+        )
     )
     action_program.declarations[2].kind.value.merge = 4
     owner = Builder.from_program(action_program).publish()
     first = Action(owner.ref("commands", 0))
     assert first == Action(owner.ref("commands", 0))
-    assert first != Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    second = Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    assert (first == second) is (kind == "ordinary")
+    assert (second == first) is (kind == "ordinary")
+
+
+@pytest.fixture
+def union_action_graph():
+    return pb.Program(
+        ir_version=1,
+        sorts=[pb.Sort(kind=Oneof("eq", "E"))],
+        declarations=[pb.Declaration(kind=Oneof("eq_sort", pb.EqSort(name="E")))]
+        + [
+            pb.Declaration(
+                kind=Oneof(
+                    "constructor", pb.Constructor(name=name, inputs=[pb.Arg(sort=0) for _ in range(arity)], output=0)
+                )
+            )
+            for name, arity in (("F", 1), ("Pair", 2), ("C", 0), ("D", 0))
+        ],
+    )
+
+
+def test_action_equality_has_finite_shared_cycle_proofs(union_action_graph):
+    union_action_graph.nodes = [
+        pb.Node(kind=Oneof("union", pb.Union(members=[1]))),
+        pb.Node(kind=Oneof("call", pb.Call(func="F", args=[0]))),
+    ]
+    union_action_graph.commands = [
+        pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", index)))) for index in range(2)
+    ]
+    source = Builder.from_program(union_action_graph).publish()
+    builder = Builder()
+    sort = builder.import_ref(source.ref("sorts", 0))
+    u, f = [builder.import_ref(source.ref("nodes", index)) for index in range(2)]
+    g0 = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("call", pb.Call(func="F", args=[u]))))
+    v = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("union", pb.Union(members=[f]))))
+    g = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("call", pb.Call(func="F", args=[v]))))
+    w = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("union", pb.Union(members=[g]))))
+    for index in (u, f, g0, v, g, w):
+        builder.add("commands", pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", index)))))
+    owner = builder.publish()
+    actions = [Action(owner.ref("commands", index)) for index in range(6)]
+    for group in ([actions[index] for index in (0, 3, 5)], [actions[index] for index in (1, 2, 4)]):
+        for left in reversed(group):
+            for right in group:
+                assert left == right
+                assert right == left
+    for index in range(2):
+        assert actions[index] == Action(source.ref("commands", index)) == copy(actions[index])
+    packed = pack(commands=[action.__egg_ref__ for action in actions]).program
+    assert len({command.kind.value.kind.value for command in packed.commands}) == 6
+    assert pb.Program.from_binary(packed.to_binary()) == packed
+    independent = Builder.from_program(union_action_graph).publish()
+    for index in (0, 3, 5):
+        assert actions[index] != Action(independent.ref("commands", 0))
+        assert Action(independent.ref("commands", 0)) != actions[index]
+    for index in (1, 2, 4):
+        assert actions[index] != Action(independent.ref("commands", 1))
+
+    def merge_action(merge):
+        declaration = Builder()
+        output = declaration.import_ref(source.ref("sorts", 0))
+        merge_index = declaration.import_ref(owner.ref("nodes", merge))
+        declaration.add(
+            "declarations",
+            pb.Declaration(kind=Oneof("function", pb.Function(name="slot", output=output, merge=merge_index))),
+        )
+        root = declaration.add("nodes", pb.Node(sort_id=output, kind=Oneof("call", pb.Call(func="slot"))))
+        command = declaration.add("commands", pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", root)))))
+        return Action(declaration.publish().ref("commands", command))
+
+    first, second, third = [merge_action(index) for index in (u, v, w)]
+    assert first == second == third
+    assert third == first
+
+
+def test_action_equality_keeps_empty_anchors_under_structural_parents(union_action_graph):
+    union_action_graph.nodes = [pb.Node(kind=Oneof("union", pb.Union())) for _ in range(2)] + [
+        pb.Node(kind=Oneof("call", pb.Call(func="F", args=[index]))) for index in (0, 1, 0)
+    ]
+    union_action_graph.commands = [
+        pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", index)))) for index in range(5)
+    ]
+    owner = Builder.from_program(union_action_graph).publish()
+    empty, other, first, different, same = [Action(owner.ref("commands", index)) for index in range(5)]
+    assert empty != other
+    assert empty == copy(empty)
+    assert first != different
+    assert first == same
+    assert same == first
+    imported = Builder()
+    alias = imported.import_ref(empty.__egg_ref__)
+    assert Action(imported.publish().ref("commands", alias)) == empty
+
+
+@pytest.mark.parametrize("length", [1, 2])
+def test_action_equality_does_not_validate_or_coinductively_merge_cycles(union_action_graph, length):
+    # Addressable but native-invalid: comparison is not submission validation.
+    union_action_graph.nodes = [
+        pb.Node(kind=Oneof("call", pb.Call(func="F", args=[(index + 1) % length]))) for index in range(length)
+    ]
+    union_action_graph.commands = [pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", 0))))]
+    left, right = [Action(Builder.from_program(union_action_graph).publish().ref("commands", 0)) for _ in range(2)]
+    assert left == copy(left)
+    assert left != right
+    assert right != left
+
+
+@pytest.mark.parametrize("arity", [1, 2])
+def test_action_equality_is_iterative_and_dag_safe(union_action_graph, monkeypatch, arity):
+    depth = 2_000
+    actions = []
+    node_counts = []
+    for width in (1, 2):
+        builder = Builder.from_program(union_action_graph)
+        roots = [builder.add("nodes", pb.Node(kind=Oneof("call", pb.Call(func="C"))))]
+        for _ in range(depth):
+            children = [roots[index % len(roots)] for index in range(arity)]
+            roots = [
+                builder.add(
+                    "nodes", pb.Node(kind=Oneof("call", pb.Call(func="F" if arity == 1 else "Pair", args=children)))
+                )
+                for _ in range(width)
+            ]
+        node_counts.append(1 + depth * width)
+        command = builder.add("commands", pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", roots[0])))))
+        actions.append(Action(builder.publish().ref("commands", command)))
+    visits = 0
+    original = _program._structural_parts
+
+    def counted(reference, **kwargs):
+        nonlocal visits
+        visits += 1
+        return original(reference, **kwargs)
+
+    monkeypatch.setattr(_program, "_structural_parts", counted)
+    assert actions[0] == actions[1]
+    assert actions[1] == actions[0]
+    assert visits <= 8 * sum(node_counts)
 
 
 @pytest.mark.parametrize("reverse", [False, True])
