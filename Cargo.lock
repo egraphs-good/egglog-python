@@ -531,6 +531,7 @@ dependencies = [
  "opentelemetry-stdout",
  "opentelemetry_sdk",
  "ordered-float",
+ "prost",
  "pyo3",
  "pyo3-log",
  "serde_json",

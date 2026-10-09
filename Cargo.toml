@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 # Maturin enables `pyo3/extension-module` through pyproject.toml. Keep it out of
 # the base feature set so `cargo test` links against libpython on Unix.
 pyo3 = { version = "0.29", features = ["num-bigint", "num-rational", "indexmap"] }
+prost = "=0.14.4"
 num-rational = "*"
 indexmap = "2.12"
 opentelemetry = "0.32"

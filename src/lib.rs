@@ -54,6 +54,10 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(setup_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(shutdown_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(
+        crate::protobuf::_export_pyobject_catalog,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
         crate::extract::extract_best_with_dag_cost_model,
         m
     )?)?;
