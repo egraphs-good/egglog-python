@@ -9,6 +9,83 @@ from protobuf import Oneof
 from egglog import bindings
 
 
+def test_table_cell_reader_preserves_availability_and_ownership_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("Table response inspection accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    available = pb.TableCell(kind=Oneof[Literal["term"], int]("term", 0))
+    unavailable = pb.TableCell(kind=Oneof[Literal["unavailable_sort"], int]("unavailable_sort", 1))
+    response = pb.RunProgramResponse(
+        sorts=[
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+            pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Hidden")),
+        ],
+        nodes=[
+            pb.Node(
+                sort_id=0,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 7))
+                ),
+            )
+        ],
+        outputs=[
+            pb.CommandOutput(
+                kind=Oneof[Literal["printed_function"], pb.PrintedFunction](
+                    "printed_function",
+                    pb.PrintedFunction(
+                        table="table",
+                        rows=[
+                            pb.FunctionRow(args=[available, unavailable, available], output=unavailable, subsumed=True),
+                            pb.FunctionRow(args=[unavailable, available, unavailable], output=available),
+                        ],
+                    ),
+                ),
+                location=pb.CommandLocation(path=[0]),
+            )
+        ],
+        ruleset_publication=pb.RulesetPublication(),
+    )
+    encoded = response.to_binary()
+    decoded = pb.RunProgramResponse.from_binary(encoded)
+    assert decoded == response
+    assert decoded.to_binary() == encoded
+    # Returned data own their values. Mutating the constructed input cannot
+    # supply an unavailable cell with a fake representative in the decoded data.
+    unavailable.kind = Oneof[Literal["term"], int]("term", 0)
+    response.nodes.clear()
+    output = decoded.outputs[0]
+    assert output.location == pb.CommandLocation(path=[0])
+    assert output.kind is not None
+    assert output.kind.field == "printed_function"
+    assert output.kind.value.table == "table"
+    first, second = output.kind.value.rows
+    assert first.subsumed
+    assert not second.subsumed
+    assert first.output is not None
+    assert second.output is not None
+    assert first.args[0] == first.args[2] == second.args[1] == second.output
+    assert first.args[1] == first.output == second.args[0] == second.args[2]
+    term = second.output.kind
+    missing = first.output.kind
+    assert term is not None
+    assert term.field == "term"
+    assert missing is not None
+    assert missing.field == "unavailable_sort"
+    assert term.value == 0  # oneof presence must retain index zero
+    assert missing.value == 1
+    assert decoded.nodes[term.value].kind == Oneof(
+        "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 7))
+    )
+    assert decoded.sorts[decoded.nodes[term.value].sort_id].kind == Oneof("family", pb.HostSort(name="i64"))
+    assert decoded.sorts[missing.value].kind == Oneof("eq", "Hidden")
+    assert len(decoded.nodes) == 1
+    assert pb.TableCell().kind is None  # absence is neither term zero nor unavailable
+    assert pb.FunctionRow().output is None
+    assert pb.RunProgramResponse.from_binary(decoded.to_binary()) == decoded
+
+
 def test_binary_engine_lifecycle_and_scalar_extract():
     engine = bindings._ProtoEngine()
     sort = pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
@@ -349,13 +426,17 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
         assert root.lhs == root.rhs
 
 
-@pytest.mark.parametrize("observation", ["extract", "print_function"])
+@pytest.mark.parametrize(
+    ("observation", "max_rows"),
+    [("extract", None), ("print_function", None), ("print_function", 0)],
+    ids=["extract", "print-all-rows", "print-zero-rows"],
+)
 @pytest.mark.parametrize(
     "proof_engine",
     [pb.ExecutionMode.TERM_ENCODING, pb.ExecutionMode.PROOFS, pb.ExecutionMode.PROOF_TESTING],
     indirect=True,
 )
-def test_binary_encoded_observations_stay_explicitly_unsupported(proof_engine, observation):
+def test_binary_encoded_observations_stay_explicitly_unsupported(proof_engine, observation, max_rows):
     engine, handles, _mode = proof_engine
     program = _proof_program()
     program.commands = [
@@ -368,7 +449,7 @@ def test_binary_encoded_observations_stay_explicitly_unsupported(proof_engine, o
         if observation == "extract"
         else pb.Command(
             kind=Oneof[Literal["print_function"], pb.PrintFunction](
-                "print_function", pb.PrintFunction(table="N", max_rows=0)
+                "print_function", pb.PrintFunction(table="N", max_rows=max_rows)
             )
         ),
     ]

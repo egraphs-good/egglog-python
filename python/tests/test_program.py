@@ -34,6 +34,45 @@ def literal(value: int):
 AMBIENT = frozenset({("host_sort_family", "i64"), ("callable", "f"), ("callable", "g")})
 
 
+def test_print_function_limit_presence_survives_copy_and_pack_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("Table command authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    views = []
+    encodings = []
+    for limit in (None, 0, 1):
+        requested = pb.PrintFunction(table="f")
+        if limit is not None:
+            requested.max_rows = limit
+        builder = Builder()
+        index = builder.add(
+            "commands", pb.Command(kind=Oneof[Literal["print_function"], pb.PrintFunction]("print_function", requested))
+        )
+        reference = builder.publish().ref("commands", index)
+        requested.max_rows = 99
+        imported = Builder()
+        imported_index = imported.import_ref(reference)
+        imported_reference = imported.publish().ref("commands", imported_index)
+        program = pack(commands=[imported_reference], ambient=AMBIENT).program
+        encoded = program.to_binary()
+        decoded = pb.Program.from_binary(encoded)
+        assert decoded == program
+        for command in (reference.read(), imported_reference.read(), program.commands[0], decoded.commands[0]):
+            kind = command.kind
+            assert kind is not None
+            assert kind.field == "print_function"
+            request = kind.value
+            assert isinstance(request, pb.PrintFunction)
+            assert request.table == "f"
+            assert request.has_field("max_rows") == (limit is not None)
+            assert request.max_rows == (0 if limit is None else limit)
+        views.append(StructuralView(reference))
+        encodings.append(encoded)
+    assert len(set(views)) == len(set(encodings)) == 3
+
+
 def test_schedule_composition_relocates_owned_inline_spans_without_engine(monkeypatch):
     from egglog import Schedule, seq  # noqa: PLC0415
 
