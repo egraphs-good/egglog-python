@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import ClassVar, assert_type
 
-from egglog import Expr, Pair, Vec, f64, i64, i64Like, method
+from egglog import Expr, Pair, RewriteOrRule, Vec, eq, f64, i64, i64Like, method, rewrite, rule, var, vars_
 
 
 class Node(Expr):
@@ -35,3 +36,10 @@ assert_type(node.weight, f64)
 assert_type(Node.make(), Node)
 assert_type(Node.make(value=3), Node)
 assert_type(node.pairs(Vec(Pair(i64(1), f64(2)))), Vec[Pair[i64, f64]])
+
+variable = var("node", Node)
+assert_type(variable, Node)
+assert_type(vars_("left right", Node), Iterable[Node])
+assert_type(var("number", i64), i64)
+assert_type(rewrite(variable).to(node), RewriteOrRule)
+assert_type(rule(eq(variable).to(node)).then(node), RewriteOrRule)

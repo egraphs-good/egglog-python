@@ -88,7 +88,7 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
 
     # Frames stream output rather than recursively copying each child's string.
     # The Boolean asks scalar arguments to omit their inferred wrapper.
-    frames: list[str | Ref | tuple[Ref, bool, bool]] = [(root, False, False)]
+    frames: list[str | Ref | tuple[Ref, bool, bool] | tuple[Ref, pb.Action]] = [(root, False, False)]
     output: list[str] = []
     active: set[Ref] = set()
     while frames:
@@ -99,15 +99,23 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
         if isinstance(frame, Ref):
             active.remove(frame)
             continue
-        reference, bare, parentheses = frame
-        if reference in active:
-            msg = "Cyclic expression presentation is not migrated"
-            raise ValueError(msg)
-        active.add(reference)
-        frames.append(reference)
-        record = reference.read()
+        if len(frame) == 2:
+            # Inline Rule.head actions borrow the rule owner, not its arena
+            # identity: re-entering that Ref would falsely signal a cycle.
+            reference, record = frame
+            bare = parentheses = False
+        else:
+            reference, bare, parentheses = frame
+            if reference in active:
+                msg = "Cyclic expression presentation is not migrated"
+                raise ValueError(msg)
+            active.add(reference)
+            frames.append(reference)
+            record = reference.read()
         owner = reference.owner
-        pieces: list[str | tuple[Ref, bool, bool]]
+        if isinstance(record, pb.Command) and record.kind is not None and record.kind.field == "action":
+            record = record.kind.value
+        pieces: list[str | tuple[Ref, bool, bool] | tuple[Ref, pb.Action]]
         if isinstance(record, pb.Sort):
             if record.kind is None:
                 msg = "Cannot print a sort without a kind"
@@ -449,8 +457,51 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                     pieces.append(")")
                 case _:
                     raise NotImplementedError(f"Node presentation is not migrated: {record.kind.field}")
-        elif isinstance(record, pb.Command) and record.kind is not None and record.kind.field == "action":
-            action = record.kind.value
+        elif isinstance(record, pb.RuleDecl):
+            if record.kind is None or record.eval_mode == pb.RuleEvalMode.UNSPECIFIED:
+                msg = "Cannot print a rule without kind and evaluation mode"
+                raise ValueError(msg)
+            if record.include_subsumed:
+                msg = "include_subsumed rule presentation is not migrated"
+                raise NotImplementedError(msg)
+            if record.kind.field == "rewrite":
+                if record.has_field("name") or record.no_decomp or record.eval_mode != pb.RuleEvalMode.SEMINAIVE:
+                    msg = "Rewrite option presentation is not migrated"
+                    raise NotImplementedError(msg)
+                rewrite = record.kind.value
+                pieces = ["rewrite(", (owner.ref("nodes", rewrite.lhs), False, False)]
+                if rewrite.subsume:
+                    pieces.append(", subsume=True")
+                pieces.extend([").to(", (owner.ref("nodes", rewrite.rhs), False, False)])
+                for condition in rewrite.conditions:
+                    pieces.extend([", ", (owner.ref("nodes", condition), False, False)])
+                pieces.append(")")
+            elif record.kind.field == "rule":
+                rule = record.kind.value
+                pieces = ["rule("]
+                for index, fact in enumerate(rule.query):
+                    if index:
+                        pieces.append(", ")
+                    pieces.append((owner.ref("nodes", fact), False, False))
+                options = []
+                if record.has_field("name"):
+                    options.append(f"name={record.name!r}")
+                if record.eval_mode != pb.RuleEvalMode.SEMINAIVE:
+                    options.append(f"eval_mode={record.eval_mode.name.lower().replace('_', '-')!r}")
+                if record.no_decomp:
+                    options.append("no_decomp=True")
+                if options:
+                    pieces.append((", " if rule.query else "") + ", ".join(options))
+                pieces.append(").then(")
+                for index, action in enumerate(rule.head):
+                    if index:
+                        pieces.append(", ")
+                    pieces.append((reference, action))
+                pieces.append(")")
+            else:
+                raise NotImplementedError(f"Rule presentation is not migrated: {record.kind.field}")
+        elif isinstance(record, pb.Action):
+            action = record
             if action.kind is None:
                 msg = "Cannot print an action without a kind"
                 raise ValueError(msg)

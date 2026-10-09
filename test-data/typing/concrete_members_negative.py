@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import ClassVar
 
-from egglog import Expr, Pair, Vec, f64, i64, i64Like
+from egglog import Expr, Pair, Vec, f64, i64, i64Like, rewrite, rule, var, vars_
 
 
 class Node(Expr):
@@ -34,3 +35,9 @@ wrong_weight: i64 = node.weight  # error: assignment
 wrong_result: i64 = Node.make()  # error: assignment
 swapped = Vec(Pair(f64(1), i64(2)))
 node.pairs(swapped)  # error: arg-type
+wrong_variable: i64 = var("node", Node)  # error: assignment
+wrong_variables: Iterable[i64] = vars_("left right", Node)  # error: arg-type
+wrong_rule: i64 = rule().then()  # error: assignment
+rewrite(var("node", Node)).to(i64(1))  # error: arg-type
+rule("not a fact")  # error: arg-type
+rule().then("not an action")  # error: arg-type

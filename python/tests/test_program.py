@@ -11,9 +11,9 @@ import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import DescFieldValueList, Oneof
 
-from egglog import Bool, String, Unit, _program, join
+from egglog import Bool, String, Unit, _program, bindings, join, rule, ruleset
 from egglog._program import Builder, StructuralView, clone_nodes, pack
-from egglog.egraph import Action
+from egglog.egraph import Action, RewriteOrRule
 
 
 def literal(value: int):
@@ -31,6 +31,70 @@ def literal(value: int):
 
 
 AMBIENT = frozenset({("host_sort_family", "i64"), ("callable", "f"), ("callable", "g")})
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("seminaive", pb.RuleEvalMode.SEMINAIVE),
+        ("naive", pb.RuleEvalMode.NAIVE),
+        ("unsafe-seminaive", pb.RuleEvalMode.UNSAFE_SEMINAIVE),
+    ],
+)
+def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Rule storage accessed the engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
+    authored = rule(eval_mode=mode).then()
+    record = authored.__egg_ref__.read()
+    assert record.eval_mode == expected
+    assert not record.has_field("name")
+    assert not record.no_decomp
+    assert not record.include_subsumed
+    assert record.kind.value.query == record.kind.value.head == []
+    expected_str = "rule().then()" if mode == "seminaive" else f"rule(eval_mode={mode!r}).then()"
+    assert str(authored) == expected_str
+    program = pack([authored.__egg_ref__]).program
+    assert not program.nodes
+    assert not program.commands
+    assert not program.rulesets
+    assert pb.Program.from_binary(program.to_binary()).rules == [record]
+    with pytest.raises(TypeError, match="canonical rule reference"):
+        RewriteOrRule(literal(1))
+    with pytest.raises(ValueError, match="evaluation mode"):
+        rule(eval_mode="unknown").then()
+    assert not rule(name="").then().__egg_ref__.read().has_field("name")
+    assert str(rule(name="").then()) == "rule().then()"
+    with pytest.raises(TypeError, match="strings"):
+        rule(name=42).then()
+    with pytest.raises(NotImplementedError, match="Ruleset-bound"):
+        rule(ruleset=object()).then()
+    assert authored == authored  # noqa: PLR0124 -- preserve reflexivity without inventing structural comparison
+    assert authored.__eq__(object()) is NotImplemented
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(authored)
+    with pytest.raises(NotImplementedError, match="Structural rule comparison"):
+        assert authored == rule(eval_mode=mode).then()
+    destination = ruleset()
+    initial = destination.__egg_decls__
+    with pytest.raises(NotImplementedError, match="Ruleset rule installation"):
+        destination.append(authored)
+    assert destination.__egg_decls__ is initial
+    assert destination.__egg_ruleset__.rules == []
+    calls = []
+
+    def deferred():
+        calls.append("called")
+        return [authored]
+
+    destination.register(deferred)
+    pending = tuple(destination.deferred_rule_gens)
+    with pytest.raises(NotImplementedError, match="Deferred ruleset materialization"):
+        _ = destination.__egg_decls__
+    assert not calls
+    assert tuple(destination.deferred_rule_gens) == pending
 
 
 def test_nested_fail_pack_relocates_child_facts_and_all_spans():

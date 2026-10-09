@@ -45,7 +45,7 @@ from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
 from ._catalog import Catalog
-from ._program import Builder, Ref, StructuralView, _definition_key, pack
+from ._program import Builder, Ref, StructuralView, _copy_record, _definition_key, pack
 from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
@@ -2170,19 +2170,17 @@ class Ruleset(Schedule):
         """
         To return the egg decls, we go through our deferred rules and add any we haven't yet
         """
-        while self.deferred_rule_gens:
-            with set_current_ruleset(self):
-                rules = self.deferred_rule_gens.pop()()
-            self._current_egg_decls.update(*rules)
-            self.__egg_ruleset__.rules.extend(r.decl for r in rules)
+        if self.deferred_rule_gens:
+            msg = "Deferred ruleset materialization is not migrated"
+            raise NotImplementedError(msg)
         return self._current_egg_decls
 
     def append(self, rule: RewriteOrRule) -> None:
         """
         Register a rule with the ruleset.
         """
-        self._current_egg_decls |= rule
-        self.__egg_ruleset__.rules.append(rule.decl)
+        msg = "Ruleset rule installation is not migrated"
+        raise NotImplementedError(msg)
 
     def register(
         self,
@@ -2268,14 +2266,26 @@ def unstable_combine_rulesets(
     return UnstableCombinedRuleset(Ident(name, _get_module()) if name else None, list(rulesets))
 
 
-@dataclass
 class RewriteOrRule:
-    __egg_decls__: Declarations
-    decl: RewriteOrRuleDecl
-    ruleset: Ruleset | None = None
+    __slots__ = ("__egg_ref__",)
+    __hash__ = None  # type: ignore[assignment]
+
+    def __init__(self, reference: Ref) -> None:
+        if not isinstance(reference, Ref) or reference.role != "rules":
+            msg = "Rules require a canonical rule reference"
+            raise TypeError(msg)
+        self.__egg_ref__ = reference.owner.ref(reference.role, reference.index)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, RewriteOrRule):
+            return NotImplemented
+        if self is other:
+            return True
+        msg = "Structural rule comparison is not migrated"
+        raise NotImplementedError(msg)
 
     def __str__(self) -> str:
-        return pretty_decl(self.__egg_decls__, self.decl)
+        return pretty_ref(self.__egg_ref__)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2463,11 +2473,25 @@ def var(name: str, bound: TypeForm[T], egg_name: str | None = None) -> T:
 
 def _var(name: str, bound: object, egg_name: str | None) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
-    decls_like, type_ref = resolve_type_annotation(bound)
-    return RuntimeExpr(
-        Thunk.fn(Declarations.create, decls_like),
-        Thunk.value(TypedExprDecl(type_ref.to_just(), UnboundVarDecl(name, egg_name))),
+    if egg_name is not None:
+        msg = "Variable backend aliases are not migrated"
+        raise NotImplementedError(msg)
+    if not isinstance(cast("object", name), str):
+        msg = "Variable names must be strings"
+        raise TypeError(msg)
+    if not name:
+        msg = "Empty variable names are not migrated"
+        raise NotImplementedError(msg)
+    sort = resolve_type_annotation(bound)
+    if not isinstance(sort, Ref) or sort.role != "sorts":
+        msg = "Variables require a concrete sort"
+        raise TypeError(msg)
+    builder = Builder()
+    index = builder.add(
+        "nodes",
+        pb.Node(sort_id=builder.import_ref(sort), kind=Oneof[Literal["var"], str]("var", name)),
     )
+    return RuntimeExpr(builder.publish().ref("nodes", index))
 
 
 def vars_(names: str, bound: type[BASE_EXPR]) -> Iterable[BASE_EXPR]:
@@ -2483,26 +2507,33 @@ class _RewriteBuilder(Generic[EXPR]):
     subsume: bool
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> RewriteOrRule:
+        if self.ruleset is not None:
+            msg = "Ruleset-bound rewrite authoring is not migrated"
+            raise NotImplementedError(msg)
         lhs = to_runtime_expr(self.lhs)
         facts = _fact_likes(conditions)
         rhs = convert_to_same_type(rhs, lhs)
-        rule = RewriteOrRule(
-            Declarations.create(lhs, rhs, *facts, self.ruleset),
-            RewriteDecl(
-                lhs.__egg_typed_expr__.tp,
-                lhs.__egg_typed_expr__.expr,
-                rhs.__egg_typed_expr__.expr,
-                tuple(f.fact for f in facts),
-                self.subsume,
+        builder = Builder()
+        index = builder.add(
+            "rules",
+            pb.RuleDecl(
+                kind=Oneof[Literal["rewrite"], pb.Rewrite](
+                    "rewrite",
+                    pb.Rewrite(
+                        lhs=builder.import_ref(lhs.__egg_ref__),
+                        rhs=builder.import_ref(rhs.__egg_ref__),
+                        conditions=[builder.import_ref(fact.__egg_ref__) for fact in facts],
+                        subsume=self.subsume,
+                    ),
+                ),
+                eval_mode=pb.RuleEvalMode.SEMINAIVE,
             ),
         )
-        if self.ruleset:
-            self.ruleset.append(rule)
-        return rule
+        return RewriteOrRule(builder.publish().ref("rules", index))
 
     def __str__(self) -> str:
         lhs = to_runtime_expr(self.lhs)
-        return lhs.__egg_pretty__("rewrite")
+        return f"rewrite({lhs})"
 
 
 @dataclass
@@ -2511,25 +2542,12 @@ class _BirewriteBuilder(Generic[EXPR]):
     ruleset: Ruleset | None
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> RewriteOrRule:
-        lhs = to_runtime_expr(self.lhs)
-        facts = _fact_likes(conditions)
-        rhs = convert_to_same_type(rhs, lhs)
-        rule = RewriteOrRule(
-            Declarations.create(lhs, rhs, *facts, self.ruleset),
-            BiRewriteDecl(
-                lhs.__egg_typed_expr__.tp,
-                lhs.__egg_typed_expr__.expr,
-                rhs.__egg_typed_expr__.expr,
-                tuple(f.fact for f in facts),
-            ),
-        )
-        if self.ruleset:
-            self.ruleset.append(rule)
-        return rule
+        msg = "Birewrite authoring is not migrated"
+        raise NotImplementedError(msg)
 
     def __str__(self) -> str:
         lhs = to_runtime_expr(self.lhs)
-        return lhs.__egg_pretty__("birewrite")
+        return f"birewrite({lhs})"
 
 
 @dataclass
@@ -2658,20 +2676,51 @@ class _RuleBuilder:
     no_decomp: bool
 
     def then(self, *actions: ActionLike) -> RewriteOrRule:
-        actions = _action_likes(actions)
-        rule = RewriteOrRule(
-            Declarations.create(self.ruleset, *actions, *self.facts),
-            RuleDecl(
-                tuple(a.action for a in actions),
-                tuple(f.fact for f in self.facts),
-                self.name,
-                self.eval_mode,
-                self.no_decomp,
-            ),
+        if self.ruleset is not None:
+            msg = "Ruleset-bound rule authoring is not migrated"
+            raise NotImplementedError(msg)
+        modes = {
+            "seminaive": pb.RuleEvalMode.SEMINAIVE,
+            "naive": pb.RuleEvalMode.NAIVE,
+            "unsafe-seminaive": pb.RuleEvalMode.UNSAFE_SEMINAIVE,
+        }
+        if self.eval_mode not in modes:
+            raise ValueError(f"Unknown rule evaluation mode: {self.eval_mode!r}")
+        if self.name is not None and not isinstance(cast("object", self.name), str):
+            msg = "Rule names must be strings when supplied"
+            raise TypeError(msg)
+        builder = Builder()
+        query = [builder.import_ref(fact.__egg_ref__) for fact in self.facts]
+        head: list[pb.Action] = []
+        dependencies: set[tuple[str, str]] = set()
+        for action in _action_likes(actions):
+            reference = action.__egg_ref__
+            command: pb.Command = reference.read()
+            assert command.kind is not None
+            assert command.kind.field == "action"
+            # Inline actions must retain both their owner-local indices and
+            # named closure, even for a Set target with no argument nodes.
+            head.append(
+                _copy_record(
+                    command.kind.value,
+                    # _copy_record invokes this synchronously; it never retains
+                    # the callback beyond this action's owner.
+                    relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index)),  # noqa: B023
+                    dependency=lambda namespace, name: dependencies.add((namespace, name)),
+                )
+            )
+            for namespace, name in dependencies:
+                builder.import_ref(_definition_at(reference, namespace, name))
+            dependencies.clear()
+        record = pb.RuleDecl(
+            kind=Oneof[Literal["rule"], pb.Rule]("rule", pb.Rule(query=query, head=head)),
+            eval_mode=modes[self.eval_mode],
+            no_decomp=self.no_decomp,
         )
-        if self.ruleset:
-            self.ruleset.append(rule)
-        return rule
+        if self.name:
+            record.name = self.name
+        index = builder.add("rules", record)
+        return RewriteOrRule(builder.publish().ref("rules", index))
 
     def __str__(self) -> str:
         # TODO: Figure out how to stringify rulebuilder that preserves statements

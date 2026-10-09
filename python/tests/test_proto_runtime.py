@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from fractions import Fraction
 from time import sleep
-from typing import ClassVar, Literal, get_type_hints
+from typing import ClassVar, Literal, TypeVar, get_type_hints
 from weakref import ref as weakref
 
 import pytest
@@ -17,6 +17,7 @@ from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
 from egglog import (
+    Action,
     Bool,
     BoolLike,
     ConvertError,
@@ -30,6 +31,7 @@ from egglog import (
     Vec,
     VecLike,
     bindings,
+    birewrite,
     constant,
     convert,
     converter,
@@ -42,14 +44,194 @@ from egglog import (
     i64,
     join,
     method,
+    rewrite,
+    rule,
     runtime,
     set_,
+    var,
+    vars_,
 )
 from egglog._program import Builder, Ref, StructuralView, pack
 from egglog.builtins import ExprValueError, _container_items, _map_entries, _pair_value
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name
 from egglog.runtime import _CLASS_CACHE, RuntimeExpr, RuntimeFunction, _author_call, resolve_callable
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
+
+
+def test_direct_variables_are_canonical_without_an_engine(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Variable authoring accessed the engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
+
+    class VariableBox(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    for sort in (i64, VariableBox, Vec[i64]):
+        first, second = var("x", sort), var("x", sort)
+        assert first.__egg_ref__ != second.__egg_ref__
+        assert str(first) == "x"
+        for expression in (first, second):
+            record = expression.__egg_ref__.read()
+            assert record.kind == Oneof[Literal["var"], str]("var", "x")
+            assert StructuralView(expression.__egg_ref__.owner.ref("sorts", record.sort_id)) == StructuralView(
+                sort.__egg_sort__
+            )
+        packed = pack([first.__egg_ref__, second.__egg_ref__])
+        decoded = pb.Program.from_binary(packed.program.to_binary())
+        owner = Builder.from_program(decoded).publish()
+        assert pack([owner.ref("nodes", index) for index in packed.indices]).program.to_binary() == decoded.to_binary()
+        detached = first.__egg_ref__.read()
+        detached.kind = Oneof[Literal["var"], str]("var", "changed")
+        assert str(first) == "x"
+    assert [str(value) for value in vars_("x y", i64)] == ["x", "y"]
+    with pytest.raises(NotImplementedError, match="aliases"):
+        var("x", i64, egg_name="backend")
+    with pytest.raises(NotImplementedError, match="aliases"):
+        var("x", i64, egg_name="x")
+    with pytest.raises(TypeError, match="concrete"):
+        var("x", Vec)
+    with pytest.raises(TypeError, match="concrete"):
+        var("x", TypeVar("T"))
+    with pytest.raises(NotImplementedError, match="Empty variable"):
+        var("", i64)
+
+
+def test_direct_rewrite_owns_records_without_an_engine(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Rewrite authoring accessed the engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
+
+    class RewriteBox(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    lhs, rhs = RewriteBox(1), RewriteBox(2)
+    condition = eq(i64(3)).to(i64(3))
+    authored = rewrite(lhs, subsume=True).to(rhs, condition)
+    assert authored.__egg_ref__.role == "rules"
+    record = authored.__egg_ref__.read()
+    assert record.eval_mode == pb.RuleEvalMode.SEMINAIVE
+    assert not record.has_field("name")
+    assert record.kind.field == "rewrite"
+    body = record.kind.value
+    assert body.subsume
+    assert authored.__egg_ref__.owner.ref("nodes", body.lhs) == lhs.__egg_ref__
+    assert authored.__egg_ref__.owner.ref("nodes", body.rhs) == rhs.__egg_ref__
+    assert [authored.__egg_ref__.owner.ref("nodes", index) for index in body.conditions] == [condition.__egg_ref__]
+    expected = "rewrite(RewriteBox(1), subsume=True).to(RewriteBox(2), eq(i64(3)).to(i64(3)))"
+    assert str(authored) == repr(authored) == expected
+    with pytest.raises(ConvertError):
+        rewrite(lhs).to(i64(2))
+    with pytest.raises(NotImplementedError, match="Ruleset-bound"):
+        rewrite(lhs, ruleset=object()).to(rhs)
+    with pytest.raises(NotImplementedError, match="Birewrite"):
+        birewrite(lhs).to(rhs)
+    with pytest.raises(NotImplementedError, match="Fact-to-action"):
+        rule().then(condition)
+    lhs.__egg_ref__ = RewriteBox(9).__egg_ref__
+    rhs.__egg_ref__ = RewriteBox(10).__egg_ref__
+    body.conditions.clear()
+    assert str(authored) == expected
+    packed = pack([authored.__egg_ref__])
+    assert not packed.program.commands
+    decoded = pb.Program.from_binary(packed.program.to_binary())
+    owner = Builder.from_program(decoded).publish()
+    assert pack([owner.ref("rules", packed.indices[0])]).program.to_binary() == decoded.to_binary()
+
+
+def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Rule variable authoring accessed the engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
+
+    @function
+    def row(key: i64) -> i64: ...
+
+    variable = var("x", i64)
+    query = eq(row(variable)).to(variable)
+    authored = rule(query).then(set_(row(variable)).to(variable))
+    packed = pack([authored.__egg_ref__]).program
+    variables = [index for index, node in enumerate(packed.nodes) if node.kind.field == "var"]
+    assert len(variables) == 1
+    index = variables[0]
+    assert packed.nodes[index].kind.value == "x"
+    rule_record = packed.rules[0].kind.value
+    members = packed.nodes[rule_record.query[0]].kind.value.members
+    assert members[1] == index
+    assert packed.nodes[members[0]].kind.value.args == [index]
+    assert rule_record.head[0].kind.value.target.args == [index]
+    assert rule_record.head[0].kind.value.value == index
+    assert str(authored) == "rule(eq(row(x)).to(x)).then(set_(row(x)).to(x))"
+
+
+def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Rule authoring accessed the engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
+
+    class RuleBox(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    @function
+    def rule_slot() -> i64: ...
+
+    left, right = RuleBox(1), RuleBox(2)
+    shared, distinct = eq(left).to(right), eq(left).to(right)
+    builder = Builder()
+    builder.import_ref(i64(99).__egg_ref__)
+    term = builder.import_ref(shared.__egg_ref__)
+    assert term == 1  # Deliberately different from this query's first packed node.
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action", pb.Action(kind=Oneof[Literal["term"], int]("term", term))
+            )
+        ),
+    )
+    shared_action = Action(builder.publish().ref("commands", command))
+    assignment = set_(rule_slot()).to(7)
+    authored = rule(shared, distinct, name="direct", eval_mode="naive", no_decomp=True).then(
+        assignment, shared_action, shared_action, left
+    )
+    record = authored.__egg_ref__.read()
+    assert record.name == "direct"
+    assert record.has_field("name")
+    assert record.eval_mode == pb.RuleEvalMode.NAIVE
+    assert record.no_decomp
+    assert [action.kind.field for action in record.kind.value.head] == ["set", "term", "term", "term"]
+    packed = pack([authored.__egg_ref__])
+    assert not packed.program.commands
+    body = packed.program.rules[packed.indices[0]].kind.value
+    assert body.query[0] != body.query[1]  # Distinct equal Union occurrences stay distinct.
+    assert body.head[1].kind.value == body.head[2].kind.value == body.query[0]
+    assignment_record = body.head[0].kind.value
+    assert assignment_record.target.args == []
+    assert packed.program.nodes[assignment_record.value].kind.value.value.value == 7
+    assert any(
+        declaration.kind.field == "function" and declaration.kind.value.name == assignment_record.target.func
+        for declaration in packed.program.declarations
+    )
+    expected = (
+        "rule(eq(RuleBox(1)).to(RuleBox(2)), eq(RuleBox(1)).to(RuleBox(2)), "
+        "name='direct', eval_mode='naive', no_decomp=True).then("
+        "set_(rule_slot()).to(i64(7)), eq(RuleBox(1)).to(RuleBox(2)), "
+        "eq(RuleBox(1)).to(RuleBox(2)), RuleBox(1))"
+    )
+    assert str(authored) == repr(authored) == expected
+    record.kind.value.head.clear()
+    left.__egg_ref__ = RuleBox(9).__egg_ref__
+    assert str(authored) == expected
+    decoded = pb.Program.from_binary(packed.program.to_binary())
+    owner = Builder.from_program(decoded).publish()
+    assert pack([owner.ref("rules", packed.indices[0])]).program.to_binary() == decoded.to_binary()
 
 
 def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(set_runtime):
