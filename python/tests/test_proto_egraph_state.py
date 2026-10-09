@@ -12,6 +12,154 @@ from egglog._catalog import builtin_catalog
 from egglog._program import pack
 
 
+def test_check_fail_authors_one_canonical_nested_command(monkeypatch):
+    requests = []
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            requests.append(pb.RunProgramRequest.from_binary(encoded))
+            return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication()).to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    graph.check_fail(eq(i64(1)).to(i64(2)))
+    program = requests[0].program
+    assert len(program.commands) == 1
+    assert program.commands[0].kind.field == "fail"
+    check = program.commands[0].kind.value
+    assert check.kind.field == "check"
+    assert len(check.kind.value.facts) == 1
+    fact = program.nodes[check.kind.value.facts[0]]
+    assert fact.kind.field == "union"
+    assert [program.nodes[index].kind.value.value.value for index in fact.kind.value.members] == [1, 2]
+    graph.check_fail()
+    assert requests[1].program.commands[0].kind.value.kind.value.facts == []
+
+
+@pytest.mark.parametrize("operation", ["check", "check_bool", "check_fail"])
+@pytest.mark.parametrize(
+    ("code", "location"),
+    [
+        (pb.ErrorCode.CHECK_FAILED, pb.CommandLocation(path=[0])),
+        (pb.ErrorCode.CHECK_FAILED, None),
+        (pb.ErrorCode.CHECK_FAILED, pb.CommandLocation(path=[1])),
+        (pb.ErrorCode.EVALUATION_FAILED, pb.CommandLocation(path=[0])),
+        (pb.ErrorCode.PROOF_FAILED, pb.CommandLocation(path=[0])),
+        (pb.ErrorCode.INVALID_PROGRAM, None),
+    ],
+)
+def test_check_errors_use_codes_and_locations_not_messages(monkeypatch, operation, code, location):
+    record = pb.Error(code=code, message="Check failed: same diagnostic", location=location)
+    if code == pb.ErrorCode.PROOF_FAILED:
+        record.proof_failure = pb.ProofFailure(reason=pb.ProofFailureReason.PROOFS_NOT_ENABLED)
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            return pb.RunProgramResponse(error=record, ruleset_publication=pb.RulesetPublication()).to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    method = getattr(graph, operation)
+    if (
+        operation == "check_bool"
+        and code == pb.ErrorCode.CHECK_FAILED
+        and location is not None
+        and location.path == [0]
+    ):
+        assert method(eq(i64(1)).to(i64(1))) is False
+    else:
+        with pytest.raises(bindings.EggSmolError) as caught:
+            method(eq(i64(1)).to(i64(1)))
+        assert type(caught.value) is bindings.EggSmolError
+        assert caught.value.__dict__["_egglog_proto_error"] == record
+        assert str(caught.value) == record.message
+        assert caught.value.args == (record.message,)
+        if operation == "check_bool":
+            traceback = caught.value.__traceback__
+            frames = []
+            while traceback is not None:
+                frames.append(traceback.tb_frame.f_code.co_name)
+                traceback = traceback.tb_next
+            assert frames.count("check_bool") == 1
+            assert frames.count("run_program") == 1
+
+
+@pytest.mark.parametrize("located", [False, True])
+def test_execution_error_retains_only_confirmed_declaration_refs(monkeypatch, located):
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            return pb.RunProgramResponse(
+                error=pb.Error(
+                    code=pb.ErrorCode.EVALUATION_FAILED,
+                    message="installation or command failed",
+                    location=pb.CommandLocation(path=[0]) if located else None,
+                ),
+                ruleset_publication=pb.RulesetPublication(),
+            ).to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    current = constant("failed_request_definition", i64)
+    graph = EGraph()
+    action = set_(current).to(i64(1))
+    from egglog._program import _definition_key  # noqa: PLC0415
+
+    expected = {
+        _definition_key(reference.read()): reference
+        for reference in pack(commands=[action.__egg_ref__]).definitions
+        if reference.role == "declarations"
+    }
+    before = graph._state.definitions.copy()
+    with pytest.raises(bindings.EggSmolError):
+        graph.register(action)
+    assert graph._state.definitions == (before | expected if located else before)
+
+
+@pytest.mark.parametrize("error_type", [ValueError, bindings.EggSmolError])
+@pytest.mark.parametrize("misleading_record", [False, True])
+def test_check_bool_preserves_transport_exception_and_traceback(monkeypatch, error_type, misleading_record):
+    sentinel = error_type("Check failed is only text")
+    if misleading_record:
+        sentinel.__dict__["_egglog_proto_error"] = {"code": pb.ErrorCode.CHECK_FAILED}
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            raise sentinel
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    with pytest.raises(error_type) as caught:
+        graph.check_bool(eq(i64(1)).to(i64(1)))
+    assert caught.value is sentinel
+    traceback = caught.value.__traceback__
+    while traceback.tb_next is not None:
+        traceback = traceback.tb_next
+    assert traceback.tb_frame.f_code is InertTransport.run.__code__
+
+
 def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
     requests = []
 

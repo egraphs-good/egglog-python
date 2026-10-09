@@ -33,6 +33,39 @@ def literal(value: int):
 AMBIENT = frozenset({("host_sort_family", "i64"), ("callable", "f"), ("callable", "g")})
 
 
+def test_nested_fail_pack_relocates_child_facts_and_all_spans():
+    builder = Builder()
+    builder.import_ref(literal(99))
+    value = builder.import_ref(literal(7))
+    builder.add("files", pb.SourceFile(name="unused"))
+    file = builder.add("files", pb.SourceFile(name="fail.egg", contents="(fail (fail (check 7)))"))
+    command = pb.Command(
+        kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[value])),
+        span=pb.Span(file=file, start=12, end=21),
+    )
+    for start, end in [(6, 22), (0, 23)]:
+        command = pb.Command(
+            kind=Oneof[Literal["fail"], pb.Command]("fail", command),
+            span=pb.Span(file=file, start=start, end=end),
+        )
+    index = builder.add("commands", command)
+    reference = builder.publish().ref("commands", index)
+    packed = pack(commands=[reference], ambient=AMBIENT).program
+    decoded = pb.Program.from_binary(packed.to_binary())
+    assert decoded == packed
+    assert len(decoded.nodes) == 1
+    assert len(decoded.files) == 1
+    child = decoded.commands[0]
+    for start, end in [(0, 23), (6, 22), (12, 21)]:
+        assert child.span == pb.Span(file=0, start=start, end=end)
+        if child.kind.field == "fail":
+            child = child.kind.value
+    assert child.kind.field == "check"
+    assert child.kind.value.facts == [0]
+    assert decoded.nodes[0].kind.value.value.value == 7
+    assert reference.read().kind.value.kind.value.span.file == file
+
+
 @pytest.mark.parametrize(
     ("left_bits", "right_bits", "equal"),
     [

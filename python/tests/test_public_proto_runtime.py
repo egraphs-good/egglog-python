@@ -61,7 +61,7 @@ def test_set_public_native_bytes() -> None:
         assert expression.__egg_ref__.read().kind.field == "call"
         extracted = graph.extract(expression)
         assert extracted.__egg_ref__.read().kind.value.value.field == "set"
-        if expression is original or isinstance(expression, Set[i64]):
+        if not expected or isinstance(next(iter(expected)), i64):
             assert extracted.value == expected
         else:
             # Nested children become formed values rather than constructor Calls.

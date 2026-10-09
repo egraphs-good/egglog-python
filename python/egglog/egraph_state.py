@@ -81,12 +81,20 @@ class EGraphState:
         packed = pack(commands=commands)
         request = pb.RunProgramRequest(egraph_id=self.handle, program=packed.program, profile=True)
         response = pb.RunProgramResponse.from_binary(self.transport.run(request.to_binary()))
+        # A command location confirms that declaration installation finished,
+        # even when execution failed. An absent location proves no such thing.
+        if response.error is None or response.error.location is not None:
+            for reference in packed.definitions:
+                key = _definition_key(reference.read())
+                if key is not None and reference.role == "declarations":
+                    self.definitions[key] = reference
         if response.error is not None:
-            raise bindings.EggSmolError(response.error.message)
-        for reference in packed.definitions:
-            key = _definition_key(reference.read())
-            if key is not None and reference.role == "declarations":
-                self.definitions[key] = reference
+            error = bindings.EggSmolError(response.error.message)
+            # The binding exception is not subclassable. Its inherited dict
+            # keeps the actual generated record without changing public type,
+            # message or args, or using a parallel error registry.
+            error.__dict__["_egglog_proto_error"] = response.error
+            raise error
         builder = Builder.from_program(
             pb.Program(
                 ir_version=1,

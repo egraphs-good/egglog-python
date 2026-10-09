@@ -1240,9 +1240,15 @@ class EGraph:
         """
         try:
             self.check(*facts)
-        # TODO: Make a separate exception class for this
-        except Exception as e:
-            if "Check failed" in str(e):
+        except bindings.EggSmolError as e:
+            error = e.__dict__.get("_egglog_proto_error")
+            if (
+                isinstance(error, pb.Error)
+                and error.code == pb.ErrorCode.CHECK_FAILED
+                and error.location is not None
+                and error.location.path == [0]
+                and not error.location.iterations
+            ):
                 return False
             raise
         return True
@@ -1261,15 +1267,21 @@ class EGraph:
 
     def check_fail(self, *facts: FactLike) -> None:
         """
-        Checks that one of the facts is not true
-        """
-        self._state.run_program(bindings.Fail(span(1), self._facts_to_check(facts)))
+        Expect the native check to fail, retaining completed effects.
 
-    def _facts_to_check(self, fact_likes: Iterable[FactLike]) -> bindings.Check:
-        facts = _fact_likes(fact_likes)
-        self._add_decls(*facts)
-        egg_facts = [self._state.fact_to_egg(f.fact) for f in _fact_likes(facts)]
-        return bindings.Check(span(2), egg_facts)
+        Invalid facts and prerequisite or trailing helper failures propagate.
+        """
+        builder = Builder()
+        indices = [builder.import_ref(fact.__egg_ref__) for fact in _fact_likes(facts)]
+        command = builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["fail"], pb.Command](
+                    "fail", pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=indices)))
+                )
+            ),
+        )
+        self._state.run_program([builder.publish().ref("commands", command)])
 
     @overload
     def extract(

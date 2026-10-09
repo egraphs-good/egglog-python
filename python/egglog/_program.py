@@ -84,7 +84,7 @@ _FIELDS = {
     "Rewrite": "lhs:nodes rhs:nodes conditions:nodes subsume",
     "BiRewrite": "lhs:nodes rhs:nodes conditions:nodes",
     "CombinedRuleset": "rulesets",
-    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze print_size print_function print_table_stats repeat saturate span",
+    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze print_size print_function print_table_stats repeat saturate fail span",
     "Check": "facts:nodes",
     "Prove": "facts:nodes",
     "ProveExists": "constructor@callable",
