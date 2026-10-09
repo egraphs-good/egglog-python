@@ -47,7 +47,7 @@ from mypy.test.testcheck import TypeCheckSuite
 __all__ = ["TypeCheckSuite"]
 
 
-@pytest.mark.parametrize("family", ["scalar", "pair", "vec", "map", "concrete_members", "rational"])
+@pytest.mark.parametrize("family", ["scalar", "pair", "vec", "map", "concrete_members", "rational", "set"])
 @pytest.mark.parametrize("kind", ["positive", "negative"])
 def test_generated_builtin_installed_types(family, kind, tmp_path):
     """Check actual installed public imports, independent of source MYPYPATH."""
@@ -114,7 +114,7 @@ def test_generated_builtin_installed_types(family, kind, tmp_path):
     assert not result.stderr, result.stderr
 
 
-@pytest.mark.parametrize("family", ["scalar", "pair", "vec", "map", "concrete_members", "rational"])
+@pytest.mark.parametrize("family", ["scalar", "pair", "vec", "map", "concrete_members", "rational", "set"])
 @pytest.mark.parametrize("kind", ["positive", "negative"])
 def test_generated_builtin_source_types(family, kind, tmp_path, request):
     """Actual catalog-derived source stub; shadowing cannot replace the installed gate."""

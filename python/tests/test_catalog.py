@@ -19,6 +19,72 @@ from egglog.runtime import RuntimeExpr, RuntimeFunction, _class_for_sort
 from egglog.type_constraint_solver import TypeConstraintError
 
 
+def test_set_generated_surface_from_actual_catalog(set_catalog_program):
+    render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
+        "render_stubs"
+    ]
+    stub = render(set_catalog_program)
+    body = stub.split("class Set(", 1)[1].split("\nclass ", 1)[0]
+    for signature in (
+        "def __init__(self, *args: _Set_T_0) -> None:",
+        "def empty(cls) -> Set[_Set_T_0]:",
+        "def value(self) -> set[_Set_T_0]:",
+        "def __iter__(self) -> Iterator[_Set_T_0]:",
+        "def __len__(self) -> int:",
+        "def __contains__(self, item: _Set_T_0) -> bool:",
+        "def contains(self, value: _Set_T_0) -> Unit:",
+        "def not_contains(self, value: _Set_T_0) -> Unit:",
+        "def insert(self, value: _Set_T_0) -> Set[_Set_T_0]:",
+        "def remove(self, value: _Set_T_0) -> Set[_Set_T_0]:",
+        "def length(self) -> i64:",
+        "def __or__(self, other: Set[_Set_T_0]) -> Set[_Set_T_0]:",
+        "def __sub__(self, other: Set[_Set_T_0]) -> Set[_Set_T_0]:",
+        "def __and__(self, other: Set[_Set_T_0]) -> Set[_Set_T_0]:",
+        "def eval(self) -> set[_Set_T_0]:",
+    ):
+        assert signature in body
+    assert "SetLike: TypeAlias = Set[_Set_T_0] | set[_Set_HostT]" in stub
+    assert "def get(" not in body
+    assert "def __ror__(" not in body
+    assert "def __getitem__(" not in body
+    declarations = {d.kind.value.name: d for d in set_catalog_program.declarations}
+    assert len([name for name in declarations if name.startswith("egglog.core.set.")]) == 11
+    declarations["egglog.core.set.insert"].bindings.python.views[0].params[0].name = "item"
+    declarations["Set"].kind.value.bindings.python.path[-1] = "FiniteSet"
+    stub = render(set_catalog_program)
+    assert "def insert(self, item: _FiniteSet_T_0) -> FiniteSet[_FiniteSet_T_0]:" in stub
+    assert "FiniteSetLike: TypeAlias = FiniteSet[_FiniteSet_T_0] | set[_FiniteSet_HostT]" in stub
+
+
+@pytest.mark.parametrize("name", ["set", "SetLike", "_Set_HostT"])
+def test_set_generated_protocol_name_collisions(set_catalog_program, name):
+    render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
+        "render_stubs"
+    ]
+    family = next(d.kind.value for d in set_catalog_program.declarations if d.kind.value.name == "Vec")
+    family.bindings.python.path[-1] = name
+    with pytest.raises(ValueError, match="collision"):
+        render(set_catalog_program)
+
+
+def test_set_stub_uses_relocated_actual_sort_records(set_catalog_program):
+    from egglog._program import pack  # noqa: PLC0415
+
+    render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
+        "render_stubs"
+    ]
+    owner = Builder.from_program(set_catalog_program).publish()
+    relocated = pack([
+        owner.ref("declarations", index) for index in reversed(range(len(set_catalog_program.declarations)))
+    ]).program
+    assert relocated.sorts != set_catalog_program.sorts
+    original = render(set_catalog_program)
+    reordered = render(relocated)
+    for line in original.splitlines():
+        if "_Set_" in line or "class Set(" in line:
+            assert line in reordered
+
+
 def test_exact_generated_surface_keeps_native_constructors(rational_catalog_program):
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
         "render_stubs"

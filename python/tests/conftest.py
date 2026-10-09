@@ -147,6 +147,35 @@ def rational_catalog_program():
 
 
 @pytest.fixture
+def set_catalog_program():
+    """Actual native export; no synthetic Set signatures or views."""
+    path = Path(os.environ.get("EGGLOG_TEST_BUILTIN_CATALOG", Path(__file__).parents[1] / "egglog/_builtin_catalog.pb"))
+    program = pb.Program.from_binary(path.read_bytes())
+    assert any(d.kind.value.name == "egglog.core.set.of" for d in program.declarations)
+    return program
+
+
+@pytest.fixture
+def set_runtime(set_catalog_program, monkeypatch):
+    """Exercise catalog-derived Set authoring while forbidding native execution."""
+    from egglog import _catalog, bindings, conversion, runtime  # noqa: PLC0415
+    from egglog._catalog import Catalog  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Set source authoring accessed a native engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
+    catalog = Catalog(set_catalog_program)
+    monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(runtime, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(runtime, "_BASE_CLASSES", {})
+    monkeypatch.setattr(runtime, "_CLASS_CACHE", runtime.WeakKeyDictionary())
+    monkeypatch.setattr(conversion, "CONVERSIONS", {})
+    return runpy.run_path(str(Path(__file__).parents[1] / "egglog/builtins.py"), run_name="egglog.builtins")
+
+
+@pytest.fixture
 def rational_runtime(rational_catalog_program, monkeypatch):
     """Use real catalog records without replacing package data or a native engine."""
     from egglog import _catalog, bindings, conversion, runtime  # noqa: PLC0415

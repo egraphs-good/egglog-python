@@ -51,6 +51,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         "object",
         "list",
         "dict",
+        "set",
         "classmethod",
         "str",
         "tuple",
@@ -303,13 +304,12 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 name: prefix
                 + f"    def {name}({bound_name}{', ' if rendered_parameters else ''}{', '.join(rendered_parameters)}) -> {result_type}: ..."
             }
-            if name in _REFLECTED:
+            if name in _REFLECTED and family_name in _SCALARS:
                 if (
                     (signature.varargs and not specialized)
                     or len(rendered_parameters) != 1
                     or output != owner
                     or any(sort_type(argument.sort) != owner for argument in effective_inputs)
-                    or family_name not in _SCALARS
                 ):
                     msg = "Reflected static generation requires homogeneous scalar input/output"
                     raise ValueError(msg)
@@ -335,6 +335,15 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         exported.add(alias)
         used_names.update((alias, host_variable))
     map_protocol = "Map" in families
+    set_protocol = "Set" in methods and "__init__" in methods["Set"]
+    if set_protocol:
+        set_alias = names["Set"] + "Like"
+        set_host = f"_{names['Set']}_HostT"
+        if set_alias in used_names or set_host in used_names:
+            msg = "Python static name collision with a set protocol"
+            raise ValueError(msg)
+        exported.add(set_alias)
+        used_names.update((set_alias, set_host))
     if map_protocol:
         if families["Map"].arity != 2:
             msg = "Map codec requires two family arguments"
@@ -350,7 +359,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         "# Generated from the native catalog and Python host protocol policy. Do not edit.",
         "# ruff: noqa: N801, N816, PYI042 -- Preserve canonical Python presentation names.",
         "",
-        *(["from collections.abc import Iterator"] if vec_protocol or map_protocol else []),
+        *(["from collections.abc import Iterator"] if vec_protocol or map_protocol or set_protocol else []),
         "from dataclasses import dataclass",
         *(["from fractions import Fraction"] if any(name in families for name in ("Rational", "BigRat")) else []),
         "from typing import Generic, Never, TypeAlias, TypeVar",
@@ -393,9 +402,9 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                     f"    def value(self) -> tuple[{', '.join(family_variables)}]: ...",
                 ])
                 reserved.update({"value", "__match_args__"})
-            elif family_name == "Vec" and vec_protocol:
+            elif (family_name == "Vec" and vec_protocol) or (family_name == "Set" and set_protocol):
                 (element,) = family_variables
-                value_type = f"tuple[{element}, ...]"
+                value_type = f"tuple[{element}, ...]" if family_name == "Vec" else f"set[{element}]"
                 lines.extend([
                     '    __match_args__ = ("value",)',
                     "    @property",
@@ -458,6 +467,12 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             lines.extend(f'{host} = TypeVar("{host}")' for host in map_hosts)
             lines.extend([
                 f"{map_alias}: TypeAlias = {name}[{', '.join(family_variables)}] | dict[{', '.join(map_hosts)}]",
+                "",
+            ])
+        if family_name == "Set" and set_protocol:
+            lines.extend([
+                f'{set_host} = TypeVar("{set_host}")',
+                f"{set_alias}: TypeAlias = {name}[{family_variables[0]}] | set[{set_host}]",
                 "",
             ])
         if protocol is not None and (protocol.literal_types or protocol.conversion_sort):

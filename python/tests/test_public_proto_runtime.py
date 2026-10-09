@@ -35,6 +35,48 @@ from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_
 from egglog.runtime import RuntimeExpr, RuntimeFunction
 
 
+def test_set_public_native_bytes() -> None:
+    # Requires the genuine Set wheel; source-only tests cannot accept this gate.
+    from egglog import Set, convert  # noqa: PLC0415
+
+    graph = EGraph()
+    one, two, three = i64(1), i64(2), i64(3)
+    original = Set(two, one, two)
+    for expression, expected in (
+        (Set[i64](), set()),
+        (Set[i64].empty(), set()),
+        (convert(set(), Set[i64]), set()),
+        (convert({1, 2}, Set[i64]), {one, two}),
+        (original, {one, two}),
+        (Set(one + 1, two), {two}),
+        (original.insert(three), {one, two, three}),
+        (original.remove(one), {two}),
+        (original | Set(three), {one, two, three}),
+        (original - Set(one), {two}),
+        (original & Set(one, three), {one}),
+        (Set(Pair(one, String("a"))), {Pair(one, String("a"))}),
+        (Set(Vec(one, two)), {Vec(one, two)}),
+        (Set(Set(one)), {Set(one)}),
+    ):
+        assert expression.__egg_ref__.read().kind.field == "call"
+        extracted = graph.extract(expression)
+        assert extracted.__egg_ref__.read().kind.value.value.field == "set"
+        if expression is original or isinstance(expression, Set[i64]):
+            assert extracted.value == expected
+        else:
+            # Nested children become formed values rather than constructor Calls.
+            assert len(extracted) == 1
+            assert next(iter(extracted)).value == graph.extract(next(iter(expression))).value
+        assert EGraph().extract(extracted).value == extracted.value
+        record = extracted.__egg_ref__.read()
+        refs = [extracted.__egg_ref__.owner.ref("nodes", item) for item in record.kind.value.value.value.items]
+        assert [item.__egg_ref__ for item in extracted] == list(dict.fromkeys(refs))
+    assert graph.extract(original.length()).value == 2
+    graph.check(original.contains(one), original.not_contains(three))
+    graph.check_fail(original.contains(three))
+    graph.check_fail(original.not_contains(one))
+
+
 def test_exact_wave_public_native_bytes() -> None:
     # Imported here so source-only scalar regressions remain collectable before
     # the actual rational catalog is packaged. This gate requires the new wheel.

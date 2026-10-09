@@ -229,12 +229,12 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                         ]
                         frames.extend(reversed(pieces))
                         continue
-                    elif primitive.field == "vec":
-                        from .builtins import _container_member, _vec_value  # noqa: PLC0415
+                    elif primitive.field in {"vec", "set"}:
+                        from .builtins import _container_items, _container_member  # noqa: PLC0415
                         from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
 
-                        children = _vec_value(RuntimeExpr(reference))
-                        if not children:
+                        children = _container_items(RuntimeExpr(reference))
+                        if not children and primitive.field == "vec":
                             frames.append(
                                 str(
                                     _container_member(

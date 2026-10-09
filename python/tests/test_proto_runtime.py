@@ -46,10 +46,219 @@ from egglog import (
     set_,
 )
 from egglog._program import Builder, Ref, StructuralView, pack
-from egglog.builtins import ExprValueError, _map_entries, _pair_value, _vec_value
+from egglog.builtins import ExprValueError, _container_items, _map_entries, _pair_value
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name
 from egglog.runtime import _CLASS_CACHE, RuntimeExpr, RuntimeFunction, _author_call, resolve_callable
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
+
+
+def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(set_runtime):
+    Set, integer = (set_runtime[name] for name in ("Set", "i64"))
+    first, second = integer(2), integer(1)
+    expression = Set(first, second, first)
+    assert isinstance(expression, Set[integer])
+    assert expression.value == {first, second}
+    assert list(expression) == [first, second]
+    assert len(expression) == 2
+    assert first in expression
+    assert integer(3) not in expression
+    assert [arg.__egg_ref__ for arg in get_callable_args(expression)] == [
+        first.__egg_ref__,
+        second.__egg_ref__,
+        first.__egg_ref__,
+    ]
+    assert len(Set(integer(1) + 1, integer(2))) == 2
+    assert Set[integer]().value == set()
+    with pytest.raises(set_runtime["ExprValueError"]):
+        _ = Set[integer].empty().value
+    with pytest.warns(DeprecationWarning, match="use .value"):
+        assert expression.eval() == expression.value
+    match expression:
+        case Set(children):
+            assert children == {first, second}
+        case _:
+            pytest.fail("Set value matching failed")
+    assert str(expression) == "Set[i64](2, 1, 2)"
+    assert str(expression | expression) == "Set[i64](2, 1, 2) | Set[i64](2, 1, 2)"
+    for operation, key in (
+        (expression.insert(first), "insert"),
+        (expression.remove(first), "remove"),
+        (expression | expression, "union"),
+        (expression - expression, "diff"),
+        (expression & expression, "intersect"),
+        (expression.contains(first), "contains"),
+        (expression.not_contains(first), "not_contains"),
+        (expression.length(), "length"),
+    ):
+        assert operation.__egg_ref__.read().kind.value.func == f"egglog.core.set.{key}"
+        with pytest.raises(AttributeError):
+            _ = operation.value
+    with pytest.raises(AttributeError):
+        _ = expression.get
+    with pytest.raises(TypeError):
+        Set[integer](args=(first,))
+    with pytest.raises(TypeConstraintError):
+        Set()
+
+
+def test_set_conversion_and_typed_alias(set_runtime):
+    Set, SetLike, integer = (set_runtime[name] for name in ("Set", "SetLike", "i64"))
+    converted = convert({1, 2}, Set[integer])
+    assert converted.value == {integer(1), integer(2)}
+    empty = convert(set(), Set[integer])
+    assert get_callable_fn(empty).__egg_ref__ == Set[integer].empty.__egg_ref__
+    assert isinstance(empty, Set[integer])
+    with pytest.raises(set_runtime["ExprValueError"]):
+        _ = empty.value
+    for source in ([1], frozenset({1}), {"wrong"}):
+        with pytest.raises(ConvertError):
+            convert(source, Set[integer])
+    assert get_type_args() == ()
+
+    @function
+    def size(value: SetLike[integer, int]) -> integer: ...
+
+    assert get_callable_args(size({1, 2}))[0].value == converted.value
+    assert get_callable_fn(get_callable_args(size(set()))[0]).__egg_ref__ == Set[integer].empty.__egg_ref__
+    pair, string = (set_runtime[name] for name in ("Pair", "String"))
+    nested = convert({(1, "a")}, Set[pair[integer, string]])
+    assert next(iter(nested)).value == (integer(1), string("a"))
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_set_formed_value_preserves_refs_and_pretty_roundtrip(set_runtime, empty, monkeypatch):
+    Set, integer = (set_runtime[name] for name in ("Set", "i64"))
+    builder = Builder()
+    first = builder.import_ref(integer(2).__egg_ref__)
+    second = builder.import_ref(integer(1).__egg_ref__)
+    root = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(Set[integer].__egg_sort__),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value",
+                pb.PrimitiveValue(
+                    value=Oneof[Literal["set"], pb.ValueList](
+                        "set", pb.ValueList(items=[] if empty else [first, second, first])
+                    )
+                ),
+            ),
+        ),
+    )
+    owner = builder.publish()
+    expression = RuntimeExpr(owner.ref("nodes", root))
+    before = expression.__egg_ref__.read().to_binary()
+    assert [item.__egg_ref__ for item in expression] == (
+        [] if empty else [owner.ref("nodes", first), owner.ref("nodes", second)]
+    )
+    assert expression.value == (set() if empty else {integer(2), integer(1)})
+    expected = "Set[i64]()" if empty else "Set[i64](i64(2), i64(1), i64(2))"
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Set inspection or pretty authored a Call")
+
+    with monkeypatch.context() as inspection:
+        inspection.setattr(runtime, "_author_call", forbidden)
+        assert expression.value == (set() if empty else {integer(2), integer(1)})
+        assert str(expression) == expected
+    # Trusted display of our constructed values, not evaluation by an engine.
+    authored = eval(expected, set_runtime)
+    assert authored.__egg_ref__.read().kind.field == "call"
+    assert list(authored) == list(expression)
+    assert get_callable_args(expression) is None
+    copied = copy(expression)
+    assert copied.__egg_ref__ == expression.__egg_ref__
+    packed = pack([expression.__egg_ref__])
+    binary = packed.program.to_binary()
+    assert pb.Program.from_binary(binary).to_binary() == binary
+    items = packed.program.nodes[packed.indices[0]].kind.value.value.value.items
+    assert len(items) == (0 if empty else 3)
+    if not empty:
+        assert items[0] == items[2] != items[1]
+        assert [packed.program.nodes[index].kind.value.value.value for index in items] == [2, 1, 2]
+    assert expression.__egg_ref__.read().to_binary() == before
+
+
+@pytest.mark.parametrize("same", [False, True])
+def test_set_local_children_preserve_union_identity(set_runtime, same):
+    Set, integer = (set_runtime[name] for name in ("Set", "i64"))
+    first = RuntimeExpr(eq(integer(1)).to(integer(2)).__egg_ref__)
+    second = first if same else RuntimeExpr(eq(integer(1)).to(integer(2)).__egg_ref__)
+    expression = Set(first, second)
+    assert len(expression) == (1 if same else 2)
+    assert [child.__egg_ref__ for child in expression] == (
+        [first.__egg_ref__] if same else [first.__egg_ref__, second.__egg_ref__]
+    )
+
+
+@pytest.mark.parametrize("malformed", ["wrong_sort", "invalid_ref", "cycle", "arity", "wrong_arm", "user_call"])
+def test_set_formed_value_rejects_malformed_children(set_runtime, malformed):
+    Set, integer, floating = (set_runtime[name] for name in ("Set", "i64", "f64"))
+    builder = Builder()
+    child = builder.import_ref((floating(1.0) if malformed == "wrong_sort" else integer(1)).__egg_ref__)
+    sort_ref = Set[integer].__egg_sort__
+    if malformed == "arity":
+        record = sort_ref.read()
+        record.kind.value.args.clear()
+        sort = builder.add("sorts", record)
+    else:
+        sort = builder.import_ref(sort_ref)
+    if malformed == "invalid_ref":
+        child = 999
+    elif malformed == "cycle":
+        child = 1
+    arm = "vec" if malformed == "wrong_arm" else "set"
+    kind = Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+        "primitive_value", pb.PrimitiveValue(value=Oneof(arm, pb.ValueList(items=[child])))
+    )
+    if malformed == "user_call":
+        builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof[Literal["function"], pb.Function](
+                    "function", pb.Function(name="egglog.core.set.of", output=sort)
+                )
+            ),
+        )
+        kind = Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.set.of", args=[child]))
+    root = builder.add("nodes", pb.Node(sort_id=sort, kind=kind))
+    expression = RuntimeExpr(builder.publish().ref("nodes", root))
+    with pytest.raises((ValueError, IndexError, AttributeError)):
+        _ = expression.value
+
+
+def test_set_empty_converter_and_formed_pretty_use_retained_presentation(set_catalog_program, request):
+    declarations = {d.kind.value.name: d for d in set_catalog_program.declarations}
+    declarations["Set"].kind.value.bindings.python.path[-1] = "FiniteSet"
+    declarations["egglog.core.set.empty"].bindings.python.views[0].path[-1] = "vacant"
+    generated = request.getfixturevalue("set_runtime")
+    Set, integer = generated["FiniteSet"], generated["i64"]
+    assert str(convert(set(), Set[integer])) == "FiniteSet[i64].vacant()"
+    builder = Builder()
+    root = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(Set[integer].__egg_sort__),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["set"], pb.ValueList]("set", pb.ValueList()))
+            ),
+        ),
+    )
+    assert str(RuntimeExpr(builder.publish().ref("nodes", root))) == "FiniteSet[i64]()"
+
+
+def test_map_from_pairs_rejects_set_even_with_forged_input_metadata(set_catalog_program, request):
+    declaration = next(d for d in set_catalog_program.declarations if d.kind.value.name == "egglog.core.map.of")
+    input_sort = set_catalog_program.sorts[declaration.kind.value.typing.value.inputs[0].sort]
+    assert input_sort.kind.field == "family"
+    assert input_sort.kind.value.name == "Vec"
+    input_sort.kind.value.name = "Set"
+    generated = request.getfixturevalue("set_runtime")
+    Map, Set, Pair, integer, string = (generated[name] for name in ("Map", "Set", "Pair", "i64", "String"))
+    expression = Map.from_pairs(Set(Pair(integer(1), string("a"))))
+    assert expression.__egg_ref__.read().kind.field == "call"
+    with pytest.raises(generated["ExprValueError"], match="Vec"):
+        _ = expression.value
 
 
 def test_exact_construction_and_conversions_stay_symbolic(rational_runtime):
@@ -1047,7 +1256,7 @@ def test_vec_value_rejects_invalid_payload_and_provenance(vec_runtime, malformed
             def __init__(self) -> None: ...
 
         with pytest.raises(AttributeError):
-            _vec_value(NominalVec())
+            _container_items(NominalVec())
         return
     builder = Builder()
     child = builder.import_ref((f64(1.0) if malformed == "wrong_sort" else i64(1)).__egg_ref__)

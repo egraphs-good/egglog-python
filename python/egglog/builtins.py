@@ -208,8 +208,8 @@ def _tuple_to_pair(value: tuple[object, ...]) -> RuntimeExpr:
     return result
 
 
-def _vec_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C901
-    """Inspect validated ordered children without evaluating a computed Vec."""
+def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C901
+    """Validate ordered Vec/Set children without evaluating or normalizing them."""
     from .runtime import _definition_at  # noqa: PLC0415
     from .type_constraint_solver import infer_sort  # noqa: PLC0415
 
@@ -217,33 +217,38 @@ def _vec_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C901
     node: pb.Node = reference.read()
     sort = reference.owner.ref("sorts", node.sort_id)
     record: pb.Sort = sort.read()
-    if record.kind is None or record.kind.field != "family" or record.kind.value.name != "Vec":
-        raise ExprValueError(expr, "Vec(*args) or Vec.empty()")
+    if record.kind is None or record.kind.field != "family" or record.kind.value.name not in {"Vec", "Set"}:
+        raise ExprValueError(expr, "a Vec or Set value")
+    family = record.kind.value.name
+    allowed = "Vec(*args) or Vec.empty()" if family == "Vec" else "Set(*args)"
     if len(record.kind.value.args) != 1:
-        msg = "Vec inspection requires one sort argument"
+        msg = f"{family} inspection requires one sort argument"
         raise ValueError(msg)
+    constructor = f"egglog.core.{family.lower()}.of"
     if (
         node.kind is not None
         and node.kind.field == "call"
-        and node.kind.value.func in {"egglog.core.vec.of", "egglog.core.vec.empty"}
+        and (
+            node.kind.value.func == constructor or (family == "Vec" and node.kind.value.func == "egglog.core.vec.empty")
+        )
     ):
         call = node.kind.value
         declaration = _definition_at(reference, "callable", call.func)
         callable_record: pb.Declaration = declaration.read()
         if callable_record.kind is None or callable_record.kind.field != "host_primitive":
-            raise ExprValueError(expr, "Vec(*args) or Vec.empty()")
+            raise ExprValueError(expr, allowed)
         primitive = callable_record.kind.value
         if primitive.typing is None or primitive.typing.field != "signature":
-            raise ExprValueError(expr, "Vec(*args) or Vec.empty()")
+            raise ExprValueError(expr, allowed)
         signature = primitive.typing.value
-        variadic = call.func == "egglog.core.vec.of"
+        variadic = call.func == constructor
         if (
             signature.inputs
             or len(signature.varargs) != int(variadic)
             or not signature.has_field("output")
             or (not variadic and call.args)
         ):
-            msg = "Invalid canonical Vec constructor signature or arguments"
+            msg = f"Invalid canonical {family} constructor signature or arguments"
             raise ValueError(msg)
         substitutions: dict[int, Ref] = {}
         infer_sort(declaration.owner.ref("sorts", signature.output), sort, len(signature.type_params), substitutions)
@@ -257,22 +262,23 @@ def _vec_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C901
                 substitutions,
             )
         if len(substitutions) != len(signature.type_params):
-            msg = "Vec inspection has unresolved signature parameters"
+            msg = f"{family} inspection has unresolved signature parameters"
             raise ValueError(msg)
     elif (
         node.kind is not None
         and node.kind.field == "primitive_value"
         and node.kind.value.value is not None
-        and node.kind.value.value.field == "vec"
+        and node.kind.value.value.field == family.lower()
+        and isinstance(node.kind.value.value.value, pb.ValueList)
     ):
         children = tuple(reference.owner.ref("nodes", index) for index in node.kind.value.value.value.items)
     else:
-        raise ExprValueError(expr, "Vec(*args) or Vec.empty()")
+        raise ExprValueError(expr, allowed)
     element = sort.owner.ref("sorts", record.kind.value.args[0])
     for child in children:
         payload = child.read()
         if StructuralView(child.owner.ref("sorts", payload.sort_id)) != StructuralView(element):
-            msg = "Vec child has the wrong canonical sort"
+            msg = f"{family} child has the wrong canonical sort"
             raise ValueError(msg)
     return tuple(RuntimeExpr(child) for child in children)
 
@@ -295,16 +301,16 @@ def _container_member(target: RuntimeClass | RuntimeExpr, name: str, kind: pb.Py
     return RuntimeFunction(reference, view, target)
 
 
-def _sequence_to_vec(value: list[object] | tuple[object, ...]) -> RuntimeExpr:
+def _collection_to_expr(value: list[object] | tuple[object, ...] | set[object], family: str) -> RuntimeExpr:
     from .runtime import _BASE_CLASSES  # noqa: PLC0415
 
     (element,) = get_type_args()
     assert element.__egg_sort__ is not None
-    target = _BASE_CLASSES["Vec"][element]
+    target = _BASE_CLASSES[family][element]
     result = (
         target(*(resolve_literal(element.__egg_sort__, item) for item in value))
         if value
-        else _container_member(target, "egglog.core.vec.empty", pb.PythonCallKind.CLASS_METHOD)()
+        else _container_member(target, f"egglog.core.{family.lower()}.empty", pb.PythonCallKind.CLASS_METHOD)()
     )
     assert isinstance(result, RuntimeExpr)
     return result
@@ -418,7 +424,14 @@ def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:  # noqa: C90
                 break
             if call.func == "egglog.core.map.of":
                 (vector,) = children
-                for pair in _vec_value(RuntimeExpr(vector)):
+                vector_sort: pb.Sort = vector.owner.ref("sorts", vector.read().sort_id).read()
+                if (
+                    vector_sort.kind is None
+                    or vector_sort.kind.field != "family"
+                    or vector_sort.kind.value.name != "Vec"
+                ):
+                    raise ExprValueError(expr, "Map.from_pairs(Vec(*pairs))")
+                for pair in _container_items(RuntimeExpr(vector)):
                     left, right = _pair_value(pair)
                     entries.append((left.__egg_ref__, right.__egg_ref__))
                 break
@@ -488,19 +501,33 @@ for _definition in _catalog.definitions.values():
         converter(tuple, _class, _tuple_to_pair)
     if _kind.value.name == "Vec" and isinstance(_kind.value, pb.HostSortFamily):
         _class.__egg_hooks__.update(
-            value=property(_vec_value),
+            value=property(_container_items),
             __iter__=lambda expr: iter(expr.value),
             __len__=lambda expr: len(expr.value),
             __contains__=lambda expr, item: item in expr.value,
             eval=_eval,
         )
-        converter(list, _class, _sequence_to_vec)
-        converter(tuple, _class, _sequence_to_vec)
+        converter(list, _class, lambda value: _collection_to_expr(value, "Vec"))
+        converter(tuple, _class, lambda value: _collection_to_expr(value, "Vec"))
         _host_element = TypeVar("_host_element")
         globals()[f"{_name}Like"] = (
             GenericAlias(_class, _class.__egg_arguments__)
             | GenericAlias(tuple, (_host_element, ...))
             | GenericAlias(list, _host_element)
+        )
+        __all__ += [f"{_name}Like"]  # noqa: PLE0604
+    if _kind.value.name == "Set" and isinstance(_kind.value, pb.HostSortFamily):
+        _class.__egg_hooks__.update(
+            value=property(lambda expr: set(_container_items(expr))),
+            __iter__=lambda expr: iter(dict.fromkeys(_container_items(expr))),
+            __len__=lambda expr: len(expr.value),
+            __contains__=lambda expr, item: item in expr.value,
+            eval=_eval,
+        )
+        converter(set, _class, lambda value: _collection_to_expr(value, "Set"))
+        _host_set_element = TypeVar("_host_set_element")
+        globals()[f"{_name}Like"] = GenericAlias(_class, _class.__egg_arguments__) | GenericAlias(
+            set, _host_set_element
         )
         __all__ += [f"{_name}Like"]  # noqa: PLE0604
     if _kind.value.name == "Map" and isinstance(_kind.value, pb.HostSortFamily):
