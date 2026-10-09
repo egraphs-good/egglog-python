@@ -34,6 +34,9 @@ from typing import (
 from uuid import uuid4
 from warnings import warn
 
+if sys.version_info >= (3, 14):
+    import annotationlib
+
 import graphviz
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from opentelemetry import trace
@@ -42,18 +45,18 @@ from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
 from ._catalog import Catalog
-from ._program import Builder, Ref, StructuralView
+from ._program import Builder, Ref, StructuralView, _definition_key, pack
 from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
 from .declarations import *
-from .declarations import _BUILTIN_EGG_FN_NAMES, is_callable_decl_constructor
+from .declarations import is_callable_decl_constructor
 from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_decl, pretty_ref
 from .run_report import RunReport
 from .runtime import *
-from .runtime import _ClassContext
+from .runtime import _ClassContext, _definition_at
 from .thunk import *
 
 if TYPE_CHECKING:
@@ -350,7 +353,9 @@ def function(*args, **kwargs) -> Any:
 
     # If we have any positional args, then we are calling it directly on a function
     if args:
-        assert len(args) == 1
+        if len(args) != 1 or kwargs:
+            msg = "function() accepts either a function or keyword options, not both"
+            raise TypeError(msg)
         return _FunctionConstructor(fn_locals)(args[0])
     # otherwise, we are passing some keyword args, so save those, and then return a partial
     return _FunctionConstructor(fn_locals, **kwargs)
@@ -400,7 +405,7 @@ class _ExprMetaclass(type):
                         name=egg_sort or ".".join(path), bindings=pb.SortBindings(python=pb.TypeBinding(path=path))
                     ),
                 ),
-                doc=namespace.get("__doc__") or "",
+                doc=namespace.get("__doc__"),
             ),
         )
         return RuntimeClass(builder.publish(keepalive=(context,)).ref("declarations", definition))
@@ -450,90 +455,117 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
     bases: tuple[type, ...],
     ruleset: Ruleset | None,
 ) -> Catalog:
-    """Compile one complete concrete constructor scope directly into protobuf."""
-    if bases != (Expr,) or ruleset is not None or namespace.get("__annotations__"):
-        msg = "Only direct nongeneric Expr classes without class variables or rulesets are migrated"
+    """Compile a complete concrete bodyless member scope directly into protobuf."""
+    if bases != (Expr,):
+        msg = "Only direct nongeneric Expr classes are migrated"
         raise NotImplementedError(msg)
-    initializer = None
-    egg_name = None
-    # Validate the complete source surface before publishing any member records.
+    if ruleset is not None:
+        msg = "Class ruleset binding is not migrated"
+        raise NotImplementedError(msg)
+    hint_locals = {**frame.f_locals, runtime_cls.__name__: runtime_cls}
+    annotations = namespace.get("__annotations__", {})
+    if (
+        sys.version_info >= (3, 14)
+        and (annotate := annotationlib.get_annotate_from_class_namespace(namespace)) is not None
+    ):
+        annotations = annotationlib.call_annotate_function(annotate, annotationlib.Format.FORWARDREF)
+    hints = get_type_hints(
+        type("_ClassAnnotations", (), {"__annotations__": annotations}),
+        globalns=frame.f_globals,
+        localns=hint_locals,
+    )
+    definitions = [runtime_cls.__egg_definition__]
+    assert runtime_cls.__egg_sort__ is not None
+    for name, annotation in hints.items():
+        if getattr(annotation, "__origin__", None) is not ClassVar:
+            raise NotImplementedError(f"On class {runtime_cls}, for attribute {name!r}, expected a ClassVar")
+        if name in namespace:
+            raise NotImplementedError(f"Class variable defaults are not migrated: {runtime_cls}.{name}")
+        sort = resolve_type_annotation(annotation.__args__[0])
+        if not isinstance(sort, Ref) or sort.role != "sorts":
+            raise NotImplementedError(f"Class variable {runtime_cls}.{name} requires a concrete sort")
+        builder = Builder()
+        output = builder.import_ref(sort)
+        sort_record: pb.Sort = sort.read()
+        qualified = f"{runtime_cls.__module__}.{runtime_cls.__name__}.{name}"
+        egg_name = re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", qualified)
+        kind = (
+            Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name=egg_name, output=output))
+            if sort_record.kind is not None and sort_record.kind.field == "eq"
+            else Oneof[Literal["function"], pb.Function]("function", pb.Function(name=egg_name, output=output))
+        )
+        index = builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=kind,
+                bindings=pb.CallableBindings(
+                    python=pb.PythonBindings(
+                        views=[
+                            pb.PythonCallable(
+                                kind=pb.PythonCallKind.CLASS_VARIABLE,
+                                path=[name],
+                                owner=pb.BindingOwner(
+                                    kind=Oneof[Literal["sort"], int](
+                                        "sort", builder.import_ref(runtime_cls.__egg_sort__)
+                                    )
+                                ),
+                            )
+                        ]
+                    )
+                ),
+            ),
+        )
+        definitions.append(builder.publish().ref("declarations", index))
+    # Validate the complete source surface before publishing the member catalog.
     for name, value in namespace.items():
+        if name in {"__annotate__", "__annotate_func__"} and not isinstance(value, _WrappedMethod):
+            continue
         if name in IGNORED_ATTRIBUTES and not isinstance(value, _WrappedMethod):
             continue
         if isinstance(value, _WrappedMethod):
             if (
-                value.cost is not None
-                or value.merge is not None
-                or value.mutates_self
-                or value.unextractable
-                or value.subsume
+                (
+                    (value.preserve or name == "__init__")
+                    and (
+                        value.cost is not None
+                        or value.merge is not None
+                        or value.mutates_self
+                        or value.unextractable
+                        or value.subsume
+                    )
+                )
                 or value.reverse_args
                 or (value.preserve and (value.egg_fn is not None or name == "__init__"))
             ):
                 raise NotImplementedError(f"Method options for {runtime_cls}.{name} are not migrated")
             fn = value.fn
             preserve = value.preserve
-            supplied_name = value.egg_fn
+            compiler = _FunctionConstructor(
+                hint_locals,
+                egg_fn=value.egg_fn,
+                cost=value.cost,
+                merge=value.merge,
+                mutates_first_arg=value.mutates_self,
+                unextractable=value.unextractable,
+                subsume=value.subsume,
+            )
         else:
-            fn, preserve, supplied_name = value, False, None
+            fn, preserve = value, False
+            compiler = _FunctionConstructor(hint_locals, mutates_first_arg=name in ALWAYS_MUTATES_SELF)
         if preserve or name in ALWAYS_PRESERVED:
             continue
-        if name != "__init__" or not isinstance(fn, FunctionType) or _function_has_body(fn):
-            raise NotImplementedError(
-                f"Only bodyless initializers and preserved methods are migrated: {runtime_cls}.{name}"
-            )
-        initializer, egg_name = fn, supplied_name
-    if initializer is None:
-        return Catalog.from_refs([runtime_cls.__egg_definition__])
-    parameters = list(signature(initializer).parameters.values())
-    if not parameters or any(parameter.kind != Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters):
-        msg = "Constructor parameters must be fixed positional-or-keyword parameters including self"
-        raise NotImplementedError(msg)
-    parameters = parameters[1:]
-    hints_namespace = {**initializer.__globals__, **frame.f_locals, runtime_cls.__name__: runtime_cls}
-    hints = get_type_hints(initializer, globalns=hints_namespace, localns=hints_namespace)
-    builder = Builder()
-    builder.import_ref(runtime_cls.__egg_definition__)
-    assert runtime_cls.__egg_sort__ is not None
-    output = builder.import_ref(runtime_cls.__egg_sort__)
-    inputs = []
-    surface = []
-    for index, parameter in enumerate(parameters):
-        sort = resolve_type_annotation(hints[parameter.name])
-        if not isinstance(sort, Ref) or sort.role != "sorts":
-            raise NotImplementedError(f"Constructor input {parameter.name!r} requires a concrete sort")
-        inputs.append(pb.Arg(sort=builder.import_ref(sort), name=parameter.name))
-        parameter_record = pb.PythonParameter(core_input=index, name=parameter.name)
-        if parameter.default is not Parameter.empty:
-            default = resolve_literal(sort, parameter.default)
-            parameter_record.default_expr = builder.import_ref(default.__egg_ref__)
-        surface.append(parameter_record)
-    qualified = f"{runtime_cls.__module__}.{runtime_cls.__name__}.__init__"
-    definition = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["constructor"], pb.Constructor](
-                "constructor",
-                pb.Constructor(
-                    name=egg_name or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", qualified), inputs=inputs, output=output
-                ),
-            ),
-            bindings=pb.CallableBindings(
-                python=pb.PythonBindings(
-                    views=[
-                        pb.PythonCallable(
-                            kind=pb.PythonCallKind.INITIALIZER,
-                            owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", output)),
-                            params=surface,
-                        )
-                    ]
-                )
-            ),
-            doc=initializer.__doc__ or "",
-        ),
-    )
-    owner = builder.publish()
-    return Catalog.from_refs([runtime_cls.__egg_definition__, owner.ref("declarations", definition)])
+        if name in IGNORED_ATTRIBUTES:
+            raise NotImplementedError(f"Symbolic reflected member {runtime_cls}.{name} is not migrated")
+        view_kind = pb.PythonCallKind.INITIALIZER if name == "__init__" else pb.PythonCallKind.METHOD
+        if isinstance(fn, classmethod):
+            fn, view_kind = fn.__func__, pb.PythonCallKind.CLASS_METHOD
+        elif isinstance(fn, property):
+            fn, view_kind = fn.fget, pb.PythonCallKind.PROPERTY
+        if isinstance(fn, _WrappedMethod):
+            msg = f"{runtime_cls}.{name} Add the @method(...) decorator above @classmethod or @property"
+            raise ValueError(msg)  # noqa: TRY004 -- preserve the public decorator-order error
+        definitions.append(compiler.prepare(fn, owner=runtime_cls, view_kind=view_kind, member_name=name))
+    return Catalog.from_refs(definitions)
 
 
 @dataclass
@@ -548,217 +580,187 @@ class _FunctionConstructor:
     ruleset: Ruleset | None = None
     subsume: bool = False
 
-    def __post_init__(self) -> None:
-        if self.builtin and self.egg_fn is not None:
-            _BUILTIN_EGG_FN_NAMES.add(self.egg_fn)
-
     def __call__(self, fn: Callable) -> RuntimeFunction:
-        return RuntimeFunction(*split_thunk(Thunk.fn(self.create_decls, fn)))
+        return RuntimeFunction(partial(self.prepare, fn), 0)
 
-    def create_decls(self, fn: Callable) -> tuple[Declarations, CallableRef]:
-        decls = Declarations()
-        add_rewrite = _fn_decl(
-            decls,
-            self.egg_fn,
-            ref := FunctionRef(Ident(fn.__name__, fn.__module__)),
-            fn,
-            self.hint_locals,
-            self.cost,
-            self.merge,
-            self.mutates_first_arg,
-            self.builtin,
-            ruleset=self.ruleset,
-            subsume=self.subsume,
-            unextractable=self.unextractable,
+    def prepare(  # noqa: C901, PLR0912
+        self,
+        fn: object,
+        *,
+        owner: RuntimeClass | None = None,
+        view_kind: pb.PythonCallKind = pb.PythonCallKind.FUNCTION,
+        member_name: str | None = None,
+    ) -> Ref:
+        """Compile raw Python source directly, never a legacy declaration projection."""
+        if isinstance(fn, RuntimeFunction):
+            msg = "Inside of classes, wrap methods with the `method` decorator, not `function`"
+            raise ValueError(msg)  # noqa: TRY004
+        if not isinstance(fn, FunctionType):
+            raise NotImplementedError(f"Can only generate function declarations for functions, not {type(fn)}")
+        module_globals = vars(sys.modules[fn.__module__]) if fn.__module__ in sys.modules else {}
+        hint_namespace = {**module_globals, **fn.__globals__, **self.hint_locals}
+        hints = get_type_hints(fn, globalns=hint_namespace, localns=hint_namespace)
+        parameters = list(signature(fn).parameters.values())
+        if owner is not None:
+            if not parameters or any(parameter.kind != Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters):
+                msg = "Member parameters must be fixed positional-or-keyword parameters including self or cls"
+                raise NotImplementedError(msg)
+            if view_kind in {pb.PythonCallKind.INITIALIZER, pb.PythonCallKind.CLASS_METHOD}:
+                parameters = parameters[1:]
+            elif view_kind == pb.PythonCallKind.PROPERTY and len(parameters) != 1:
+                msg = "A symbolic property must have only its receiver"
+                raise NotImplementedError(msg)
+        variable = _last_param_variable(parameters)
+        receiver = owner is not None and view_kind in {pb.PythonCallKind.METHOD, pb.PythonCallKind.PROPERTY}
+        input_sorts = [
+            owner.__egg_sort__
+            if owner is not None and index == 0 and receiver
+            else resolve_type_annotation(hints[parameter.name])
+            for index, parameter in enumerate(parameters)
+        ]
+        output = (
+            owner.__egg_sort__
+            if owner is not None and view_kind == pb.PythonCallKind.INITIALIZER
+            else input_sorts[0]
+            if self.mutates_first_arg and input_sorts
+            else resolve_type_annotation(hints["return"])
         )
-        add_rewrite()
-        return decls, ref
-
-
-def _fn_decl(  # noqa: C901, PLR0912
-    decls: Declarations,
-    egg_name: str | None,
-    ref: FunctionRef | MethodRef | PropertyRef | ClassMethodRef | InitRef,
-    fn: object,
-    # Pass in the locals, retrieved from the frame when wrapping,
-    # so that we support classes and function defined inside of other functions (which won't show up in the globals)
-    hint_locals: dict[str, Any],
-    cost: int | None,
-    merge: Callable[[object, object], object] | None,
-    mutates_first_arg: bool,
-    is_builtin: bool,
-    subsume: bool,
-    ruleset: Ruleset | None = None,
-    unextractable: bool = False,
-    reverse_args: bool = False,
-) -> Callable[[], None]:
-    """
-    Sets the function decl for the function object and returns the ref as well as a thunk that sets the default callable.
-    """
-    if isinstance(fn, RuntimeFunction):
-        msg = "Inside of classes, wrap methods with the `method` decorator, not `function`"
-        raise ValueError(msg)  # noqa: TRY004
-    if not isinstance(fn, FunctionType):
-        raise NotImplementedError(f"Can only generate function decls for functions not {fn}  {type(fn)}")
-
-    # Resolve annotations against the module, function globals, and captured definition locals. Passing the same merged
-    # namespace as globals and locals keeps forward references working across Python versions.
-    # We need this to be false so it returns "__forward_value__" https://github.com/python/cpython/blob/440ed18e08887b958ad50db1b823e692a747b671/Lib/typing.py#L919
-    # https://github.com/egraphs-good/egglog-python/issues/210
-    module_globals = vars(sys.modules[fn.__module__]) if fn.__module__ in sys.modules else {}
-    hint_namespace = {**module_globals, **fn.__globals__, **hint_locals}
-    hints = get_type_hints(fn, globalns=hint_namespace, localns=hint_namespace)
-
-    params = list(signature(fn).parameters.values())
-
-    # If this is an init function, or a classmethod, the first arg is not used
-    if isinstance(ref, ClassMethodRef | InitRef):
-        params = params[1:]
-
-    if _last_param_variable(params):
-        *params, var_arg_param = params
-        # For now, we don't use the variable arg name
-        var_arg_type = resolve_type_annotation_mutate(decls, hints[var_arg_param.name])
-    else:
-        var_arg_type = None
-    arg_types = tuple(
-        decls.get_parameterized_class(ref.ident)
-        if i == 0 and isinstance(ref, MethodRef | PropertyRef)
-        else resolve_type_annotation_mutate(decls, hints[t.name])
-        for i, t in enumerate(params)
-    )
-
-    # Resolve all default values as arg types
-    arg_defaults = [
-        resolve_literal(t, p.default, Thunk.value(decls)) if p.default is not Parameter.empty else None
-        for (t, p) in zip(arg_types, params, strict=True)
-    ]
-
-    decls.update(*arg_defaults)
-
-    return_type = (
-        decls.get_parameterized_class(ref.ident)
-        if isinstance(ref, InitRef)
-        else arg_types[0]
-        if mutates_first_arg
-        else resolve_type_annotation_mutate(decls, hints["return"])
-    )
-
-    arg_names = tuple(t.name for t in params)
-
-    # Keep these lazy so builtin declarations do not resolve them eagerly.
-    # Eager primitive bodies are bound in backend argument order. Rewrite-backed
-    # bodies keep Python-order variables because their call pattern is reversed
-    # separately during lowering.
-    reverse_body_args = reverse_args and ruleset is None
-    arg_count = len(arg_types)
-    args = (
-        TypedExprDecl(
-            tp.to_just(),
-            UnboundVarDecl(name, f"_{arg_count - i - 1 if reverse_body_args else i}"),
-        )
-        for i, (name, tp) in enumerate(zip(arg_names, arg_types, strict=True))
-    )
-
-    return_type_is_eqsort = isinstance(return_type, TypeRefWithVars) and not decls._classes[return_type.ident].builtin
-    has_merge = merge is not None
-    has_body = _function_has_body(fn)
-    signature_ = FunctionSignature(
-        return_type=None if mutates_first_arg else return_type,
-        var_arg_type=var_arg_type,
-        arg_types=arg_types,
-        arg_names=arg_names,
-        arg_defaults=tuple(a.__egg_typed_expr__.expr if a is not None else None for a in arg_defaults),
-        reverse_args=reverse_args,
-    )
-    doc = fn.__doc__
-    if is_builtin and has_merge:
-        msg = "Builtin callables cannot use merge"
-        raise ValueError(msg)
-    if subsume:
-        if not return_type_is_eqsort:
-            msg = "Primitive-returning callables cannot use subsume"
+        if not isinstance(output, Ref) or output.role != "sorts":
+            msg = "Free functions require a concrete output sort"
+            raise NotImplementedError(msg)
+        output_record: pb.Sort = output.read()
+        if output_record.kind is None or output_record.kind.field not in {"eq", "family"}:
+            msg = "Free functions require an equality or host-family output sort"
+            raise NotImplementedError(msg)
+        equality = output_record.kind.field == "eq"
+        has_body = _function_has_body(fn)
+        has_merge = self.merge is not None
+        if self.builtin and has_merge:
+            msg = "Builtin callables cannot use merge"
             raise ValueError(msg)
-        if ruleset is None:
-            msg = "subsume requires an explicit ruleset"
-            raise ValueError(msg)
-    if return_type_is_eqsort and is_builtin:
-        msg = "Eqsort-returning callables cannot be builtin"
-        raise ValueError(msg)
-    if not return_type_is_eqsort:
-        if cost is not None:
-            msg = "Primitive-returning callables cannot use cost"
-            raise ValueError(msg)
-        if unextractable:
-            msg = "Primitive-returning callables cannot be unextractable"
-            raise ValueError(msg)
-        if signature_.semantic_return_type == TypeRefWithVars(Ident.builtin("Unit")) and has_merge:
-            msg = "Functions that return Unit cannot use merge"
-            raise ValueError(msg)
-    elif has_merge:
-        # A merge makes this a function rather than a constructor, so constructor-only
-        # options must be rejected before evaluating a possibly effectful Python body.
-        if cost is not None:
-            msg = "Cost can only be set for constructors"
-            raise ValueError(msg)
-        if unextractable:
-            msg = "Unextractable can only be set for constructors"
-            raise ValueError(msg)
-    if is_builtin and ruleset is not None:
-        msg = "Builtin callables cannot use an explicit ruleset"
-        raise ValueError(msg)
-    if is_builtin and has_body:
-        msg = "Builtin callables cannot have a body"
-        raise ValueError(msg)
-    # Reject statically incompatible body options before evaluating either the
-    # body or merge callback. The checks in _add_default_rewrite_function stay
-    # as a defensive boundary for the value the body actually returns.
-    if has_body:
-        if return_type_is_eqsort:
-            if has_merge:
-                msg = "Eqsort-returning callables with bodies cannot use merge"
+        if self.subsume:
+            if not equality:
+                msg = "Primitive-returning callables cannot use subsume"
                 raise ValueError(msg)
-            if ruleset is None and cost is not None:
-                msg = "Eqsort-returning eager bodies cannot use cost"
+            if self.ruleset is None:
+                msg = "subsume requires an explicit ruleset"
                 raise ValueError(msg)
-            if ruleset is None and unextractable:
-                msg = "Eqsort-returning eager bodies cannot be unextractable"
+        if equality and self.builtin:
+            msg = "Eqsort-returning callables cannot be builtin"
+            raise ValueError(msg)
+        if not equality:
+            assert output_record.kind.field == "family"
+            if self.cost is not None:
+                msg = "Primitive-returning callables cannot use cost"
                 raise ValueError(msg)
+            if self.unextractable:
+                msg = "Primitive-returning callables cannot be unextractable"
+                raise ValueError(msg)
+            if output_record.kind.value.name == "Unit" and has_merge:
+                msg = "Functions that return Unit cannot use merge"
+                raise ValueError(msg)
+        elif has_merge:
+            if self.cost is not None:
+                msg = "Cost can only be set for constructors"
+                raise ValueError(msg)
+            if self.unextractable:
+                msg = "Unextractable can only be set for constructors"
+                raise ValueError(msg)
+        if self.builtin and self.ruleset is not None:
+            msg = "Builtin callables cannot use an explicit ruleset"
+            raise ValueError(msg)
+        if self.builtin and has_body:
+            msg = "Builtin callables cannot have a body"
+            raise ValueError(msg)
+        if has_body:
+            if equality:
+                if has_merge:
+                    msg = "Eqsort-returning callables with bodies cannot use merge"
+                    raise ValueError(msg)
+                if self.ruleset is None and self.cost is not None:
+                    msg = "Eqsort-returning eager bodies cannot use cost"
+                    raise ValueError(msg)
+                if self.ruleset is None and self.unextractable:
+                    msg = "Eqsort-returning eager bodies cannot be unextractable"
+                    raise ValueError(msg)
+            else:
+                if self.ruleset is not None:
+                    msg = "Primitive-returning callables with bodies cannot use an explicit ruleset"
+                    raise ValueError(msg)
+                if has_merge:
+                    msg = "Primitive-returning callables with bodies cannot use merge"
+                    raise ValueError(msg)
+            msg = "Free function bodies are not migrated"
+            raise NotImplementedError(msg)
+        if self.ruleset is not None:
+            msg = "Explicit rulesets require a body"
+            raise ValueError(msg)
+        if self.subsume:
+            msg = "subsume requires a body"
+            raise ValueError(msg)
+        if (
+            self.builtin
+            or has_merge
+            or self.mutates_first_arg
+            or self.cost is not None
+            or self.unextractable
+            or variable
+        ):
+            msg = "Builtin, merge, mutation, cost, unextractable and variadic free functions are not migrated"
+            raise NotImplementedError(msg)
+        if any(not isinstance(sort, Ref) or sort.role != "sorts" for sort in input_sorts):
+            msg = "Free functions require concrete input sorts"
+            raise NotImplementedError(msg)
+        builder = Builder()
+        inputs = []
+        surface = []
+        for index, (parameter, sort) in enumerate(zip(parameters, input_sorts, strict=True)):
+            assert isinstance(sort, Ref)
+            inputs.append(pb.Arg(sort=builder.import_ref(sort), name=parameter.name))
+            if receiver and index == 0:
+                continue
+            parameter_record = pb.PythonParameter(core_input=index, name=parameter.name)
+            if parameter.default is not Parameter.empty:
+                default = resolve_literal(sort, parameter.default)
+                parameter_record.default_expr = builder.import_ref(default.__egg_ref__)
+            surface.append(parameter_record)
+        output_index = builder.import_ref(output)
+        if owner is None:
+            path = [*fn.__module__.split("."), fn.__name__] if fn.__module__ else [fn.__name__]
         else:
-            if ruleset is not None:
-                msg = "Primitive-returning callables with bodies cannot use an explicit ruleset"
-                raise ValueError(msg)
-            if has_merge:
-                msg = "Primitive-returning callables with bodies cannot use merge"
-                raise ValueError(msg)
-    merge_expr = _resolve_merge(decls, return_type, merge)
-    decl: ConstructorDecl | FunctionDecl
-    if return_type_is_eqsort and merge_expr is None:
-        decl = ConstructorDecl(signature_, egg_name, cost, unextractable, doc)
-    else:
-        decl = FunctionDecl(
-            signature=signature_,
-            egg_name=egg_name,
-            merge=merge_expr,
-            builtin=is_builtin,
-            doc=doc,
+            assert member_name is not None
+            path = [*owner.__module__.split("."), owner.__name__, member_name]
+        name = self.egg_fn or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", ".".join(path))
+        view = pb.PythonCallable(kind=view_kind, path=path, params=surface)
+        if owner is not None:
+            assert member_name is not None
+            assert owner.__egg_sort__ is not None
+            view.owner = pb.BindingOwner(
+                kind=Oneof[Literal["sort"], int]("sort", builder.import_ref(owner.__egg_sort__))
+            )
+            view.path = [] if view_kind == pb.PythonCallKind.INITIALIZER else [member_name]
+            if receiver:
+                view.receiver = 0
+        kind = (
+            Oneof[Literal["constructor"], pb.Constructor](
+                "constructor", pb.Constructor(name=name, inputs=inputs, output=output_index)
+            )
+            if equality
+            else Oneof[Literal["function"], pb.Function](
+                "function", pb.Function(name=name, inputs=inputs, output=output_index)
+            )
         )
-    decls.set_function_decl(ref, decl)
-    if is_builtin:
-        return lambda: None
-    return Thunk.fn(
-        _add_default_rewrite_function,
-        decls,
-        ref,
-        fn,
-        args,
-        ruleset,
-        subsume,
-        return_type,
-        mutates_first_arg,
-        has_body,
-        context=f"creating {ref}",
-    )
+        index = builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=kind,
+                bindings=pb.CallableBindings(python=pb.PythonBindings(views=[view])),
+                doc=fn.__doc__,
+            ),
+        )
+        reference = builder.publish().ref("declarations", index)
+        Catalog.from_refs([reference])
+        return reference
 
 
 # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
@@ -876,26 +878,16 @@ def constant(
     A "constant" is implemented as the instantiation of a value that takes no args.
     This creates a function with `name` and return type `tp` and returns a value of it being called.
     """
-    return cast(
-        "BASE_EXPR",
-        RuntimeExpr(*split_thunk(Thunk.fn(_constant_thunk, name, tp, egg_name, default_replacement, ruleset, merge))),
-    )
-
-
-def _constant_thunk(
-    name: str,
-    tp: type,
-    egg_name: str | None,
-    default_replacement: object,
-    ruleset: Ruleset | None,
-    merge: Callable[[Any, Any], Any] | None = None,
-) -> tuple[Declarations, TypedExprDecl]:
-    decls = Declarations()
-    type_ref = resolve_type_annotation_mutate(decls, tp)
-    ident = Ident(name, _get_module())
-    callable_ref = ConstantRef(ident)
+    sort = resolve_type_annotation(tp)
+    if not isinstance(sort, Ref) or sort.role != "sorts":
+        msg = "Constants require a concrete sort"
+        raise NotImplementedError(msg)
+    record: pb.Sort = sort.read()
+    if record.kind is None or record.kind.field not in {"eq", "family"}:
+        msg = "Constants require an equality or host-family sort"
+        raise NotImplementedError(msg)
     has_default = default_replacement is not _MISSING
-    return_type_is_eqsort = isinstance(type_ref, TypeRefWithVars) and not decls._classes[type_ref.ident].builtin
+    return_type_is_eqsort = record.kind.field == "eq"
     if ruleset is not None and not has_default:
         msg = "Explicit rulesets require a default"
         raise ValueError(msg)
@@ -903,7 +895,7 @@ def _constant_thunk(
         msg = "Primitive-returning defaults cannot use an explicit ruleset"
         raise ValueError(msg)
     has_merge = merge is not None
-    if type_ref == TypeRefWithVars(Ident.builtin("Unit")) and has_merge:
+    if record.kind.field == "family" and record.kind.value.name == "Unit" and has_merge:
         msg = "Functions that return Unit cannot use merge"
         raise ValueError(msg)
     if has_default and has_merge:
@@ -913,21 +905,31 @@ def _constant_thunk(
             else "Primitive-returning callables with bodies cannot use merge"
         )
         raise ValueError(msg)
-    merge_expr = _resolve_merge(decls, type_ref, merge)
-    resolved_default = (
-        resolve_literal(type_ref, default_replacement, Thunk.value(decls)) if has_default and ruleset is None else None
+    if has_default or has_merge or ruleset is not None:
+        msg = "Constant defaults, merges and rulesets are not migrated"
+        raise NotImplementedError(msg)
+    module = _get_module()
+    path = [*module.split("."), name] if module else [name]
+    builder = Builder()
+    output = builder.import_ref(sort)
+    logical_name = egg_name or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", "%" + ".".join(path))
+    kind = (
+        Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name=logical_name, output=output))
+        if return_type_is_eqsort
+        else Oneof[Literal["function"], pb.Function]("function", pb.Function(name=logical_name, output=output))
     )
-    if resolved_default is not None:
-        decls |= resolved_default
-    decls._constants[ident] = ConstantDecl(
-        type_ref.to_just(),
-        egg_name,
-        resolved_default.__egg_typed_expr__ if resolved_default is not None else None,
-        merge_expr,
+    index = builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=kind,
+            bindings=pb.CallableBindings(
+                python=pb.PythonBindings(views=[pb.PythonCallable(kind=pb.PythonCallKind.CONSTANT, path=path)])
+            ),
+        ),
     )
-    if has_default and ruleset is not None:
-        _add_default_rewrite(decls, callable_ref, type_ref, default_replacement, ruleset, subsume=False)
-    return decls, TypedExprDecl(type_ref.to_just(), CallDecl(callable_ref))
+    reference = builder.publish().ref("declarations", index)
+    Catalog.from_refs([reference])  # Validate the persisted Python view before exposing the expression.
+    return cast("BASE_EXPR", RuntimeFunction(reference, 0)())
 
 
 def _add_default_rewrite_function(  # noqa: C901, PLR0912
@@ -1691,44 +1693,17 @@ class EGraph:
         Registers any number of rewrites or rules.
         """
         if isinstance(command_or_generator, FunctionType):
-            assert not command_likes
-            current_frame = inspect.currentframe()
-            assert current_frame
-            original_frame = current_frame.f_back
-            assert original_frame
-            command_likes = tuple(_rewrite_or_rule_generator(command_or_generator, original_frame))
-        else:
-            command_likes = (cast("CommandLike", command_or_generator), *command_likes)
+            msg = "Rule generators are not migrated to canonical registration"
+            raise NotImplementedError(msg)
+        command_likes = (cast("CommandLike", command_or_generator), *command_likes)
         commands = [_command_like(c) for c in command_likes]
         self._register_commands(commands)
 
     def _register_commands(self, cmds: list[Command]) -> None:
-        self._add_decls(*cmds)
-        previous_pending_let_names = self._state.pending_let_names
-        self._state.pending_let_names |= frozenset(
-            name if name.startswith("$") else f"${name}"
-            for cmd in cmds
-            if isinstance(cmd, Action) and isinstance(cmd.action, LetDecl)
-            for name in (cmd.action.name,)
-        )
-        try:
-            egg_cmds = [egg_cmd for cmd in cmds for egg_cmd in self._commands_to_egg(cmd)]
-        finally:
-            self._state.pending_let_names = previous_pending_let_names
-        self._state.run_program(*egg_cmds)
-
-    def _commands_to_egg(self, cmd: Command) -> list[bindings._Command]:
-        ruleset_ident = Ident("")
-        cmd_decl: CommandDecl
-        match cmd:
-            case RewriteOrRule(_, cmd_decl, ruleset):
-                if ruleset:
-                    ruleset_ident = ruleset.__egg_ident__
-            case Action(_, action):
-                cmd_decl = ActionCommandDecl(action)
-            case _:
-                assert_never(cmd)
-        return self._state.commands_to_egg(cmd_decl, ruleset_ident)
+        if any(not isinstance(command, Action) for command in cmds):
+            msg = "Only canonical actions are migrated to registration"
+            raise NotImplementedError(msg)
+        self._state.run_program([cast("Action", command).__egg_ref__ for command in cmds])
 
     def function_size(self, fn: ExprCallable) -> int:
         """
@@ -2327,17 +2302,42 @@ class Fact:
         raise ValueError(msg)
 
 
-@dataclass
 class Action:
     """
     A change to an EGraph, either unioning multiple expressions, setting the value of a function call, deleting an expression, or panicing.
     """
 
-    __egg_decls__: Declarations
-    action: ActionDecl
+    __slots__ = ("__egg_ref__",)
+    __hash__ = None  # type: ignore[assignment]
+
+    def __init__(self, reference: Ref) -> None:
+        if not isinstance(reference, Ref) or reference.role != "commands":
+            msg = "Actions require a canonical command reference"
+            raise TypeError(msg)
+        record: pb.Command = reference.read()
+        if record.kind is None or record.kind.field != "action":
+            msg = "Actions require a command containing an action"
+            raise TypeError(msg)
+        self.__egg_ref__ = reference.owner.ref(reference.role, reference.index)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Action):
+            return NotImplemented
+        if StructuralView(self.__egg_ref__) != StructuralView(other.__egg_ref__):
+            return False
+        # Reuse packing's named closure, but compare original refs so Union
+        # identity survives and unrelated declarations/local hooks stay out.
+        closures = [
+            {
+                _definition_key(declaration.read()): StructuralView(declaration)
+                for declaration in pack(commands=[reference]).definitions
+            }
+            for reference in (self.__egg_ref__, other.__egg_ref__)
+        ]
+        return closures[0] == closures[1]
 
     def __str__(self) -> str:
-        return pretty_decl(self.__egg_decls__, self.action)
+        return pretty_ref(self.__egg_ref__)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2369,55 +2369,47 @@ def ne(expr: BASE_EXPR) -> _NeBuilder[BASE_EXPR]:
 
 def panic(message: str) -> Action:
     """Raise an error with the given message."""
-    return Action(Declarations(), PanicDecl(message))
+    msg = "Panic action authoring is not migrated"
+    raise NotImplementedError(msg)
 
 
 def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
     """Set the cost of the given expression."""
-    from .builtins import i64  # noqa: PLC0415
-
-    expr_runtime = to_runtime_expr(expr)
-    cost_runtime = to_runtime_expr(convert(cost, i64))
-    typed_expr_decl = expr_runtime.__egg_typed_expr__
-    cost_decl = cost_runtime.__egg_typed_expr__.expr
-    expr_decl = typed_expr_decl.expr
-    assert isinstance(expr_decl, CallDecl), "Can only set cost of calls, not literals or vars"
-    if isinstance(cost_decl, LitDecl) and isinstance(cost_decl.value, int) and cost_decl.value < 0:
-        msg = "Dynamic extraction costs must be nonnegative"
-        raise ValueError(msg)
-    return Action(
-        Declarations.create(expr_runtime, cost_runtime),
-        SetCostDecl(typed_expr_decl.tp, expr_decl, cost_decl),
-    )
+    msg = "Dynamic cost action authoring is not migrated"
+    raise NotImplementedError(msg)
 
 
 def let(name: str, expr: BaseExpr) -> Action:
     """Create a let binding."""
-    runtime_expr = to_runtime_expr(expr)
-    return Action(runtime_expr.__egg_decls__, LetDecl(name, runtime_expr.__egg_typed_expr__))
+    msg = "Retained local-let actions are not migrated"
+    raise NotImplementedError(msg)
 
 
 def expr_action(expr: BaseExpr) -> Action:
     runtime_expr = to_runtime_expr(expr)
-    return Action(runtime_expr.__egg_decls__, ExprActionDecl(runtime_expr.__egg_typed_expr__))
+    builder = Builder()
+    node = builder.import_ref(runtime_expr.__egg_ref__)
+    index = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action", pb.Action(kind=Oneof[Literal["term"], int]("term", node))
+            )
+        ),
+    )
+    return Action(builder.publish().ref("commands", index))
 
 
 def delete(expr: BaseExpr) -> Action:
     """Create a delete expression."""
-    runtime_expr = to_runtime_expr(expr)
-    typed_expr = runtime_expr.__egg_typed_expr__
-    call_decl = typed_expr.expr
-    assert isinstance(call_decl, CallDecl), "Can only delete calls, not literals or vars"
-    return Action(runtime_expr.__egg_decls__, ChangeDecl(typed_expr.tp, call_decl, "delete"))
+    msg = "Delete action authoring is not migrated"
+    raise NotImplementedError(msg)
 
 
 def subsume(expr: Expr) -> Action:
     """Subsume an expression so it cannot be matched against or extracted"""
-    runtime_expr = to_runtime_expr(expr)
-    typed_expr = runtime_expr.__egg_typed_expr__
-    call_decl = typed_expr.expr
-    assert isinstance(call_decl, CallDecl), "Can only subsume calls, not literals or vars"
-    return Action(runtime_expr.__egg_decls__, ChangeDecl(typed_expr.tp, call_decl, "subsume"))
+    msg = "Subsume action authoring is not migrated"
+    raise NotImplementedError(msg)
 
 
 def expr_fact(expr: BaseExpr) -> Fact:
@@ -2589,20 +2581,44 @@ class _SetBuilder(Generic[BASE_EXPR]):
 
     def to(self, rhs: BASE_EXPR) -> Action:
         lhs = to_runtime_expr(self.lhs)
-        rhs = convert_to_same_type(rhs, lhs)
-        lhs_expr = lhs.__egg_typed_expr__.expr
-        assert isinstance(lhs_expr, CallDecl), "Can only set function calls"
-        return Action(
-            Declarations.create(lhs, rhs),
-            SetDecl(lhs.__egg_typed_expr__.tp, lhs_expr, rhs.__egg_typed_expr__.expr),
+        node: pb.Node = lhs.__egg_ref__.read()
+        if node.kind is None or node.kind.field != "call":
+            msg = "Can only set function calls"
+            raise TypeError(msg)
+        call = node.kind.value
+        declaration = _definition_at(lhs.__egg_ref__, "callable", call.func)
+        declared: pb.Declaration = declaration.read()
+        if declared.kind is None or declared.kind.field != "function":
+            msg = "Can only set table-backed Function calls"
+            raise TypeError(msg)
+        rhs_expr = resolve_literal(declaration.owner.ref("sorts", declared.kind.value.output), rhs)
+        builder = Builder()
+        builder.import_ref(declaration)
+        target = pb.Call(
+            func=call.func,
+            args=[builder.import_ref(lhs.__egg_ref__.owner.ref("nodes", index)) for index in call.args],
         )
+        index = builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action",
+                    pb.Action(
+                        kind=Oneof[Literal["set"], pb.Set](
+                            "set", pb.Set(target=target, value=builder.import_ref(rhs_expr.__egg_ref__))
+                        )
+                    ),
+                )
+            ),
+        )
+        return Action(builder.publish().ref("commands", index))
 
     def __repr__(self) -> str:
         return str(self)
 
     def __str__(self) -> str:
         lhs = to_runtime_expr(self.lhs)
-        return lhs.__egg_pretty__("set_")
+        return f"set_({pretty_ref(lhs.__egg_ref__)})"
 
 
 @dataclass
@@ -2610,12 +2626,8 @@ class _UnionBuilder(Generic[EXPR]):
     lhs: EXPR
 
     def with_(self, rhs: EXPR) -> Action:
-        lhs = to_runtime_expr(self.lhs)
-        rhs = convert_to_same_type(rhs, lhs)
-        return Action(
-            Declarations.create(lhs, rhs),
-            UnionDecl(lhs.__egg_typed_expr__.tp, lhs.__egg_typed_expr__.expr, rhs.__egg_typed_expr__.expr),
-        )
+        msg = "Union action authoring is not migrated"
+        raise NotImplementedError(msg)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2755,19 +2767,8 @@ def _action_like(action_like: ActionLike) -> Action:
     if isinstance(action_like, Action):
         return action_like
     if isinstance(action_like, Fact):
-        match action_like.fact:
-            case EqDecl(tp, left, right):
-                return Action(
-                    action_like.__egg_decls__,
-                    UnionDecl(tp, left, right),
-                )
-            case ExprFactDecl(expr):
-                return Action(
-                    action_like.__egg_decls__,
-                    ExprActionDecl(expr),
-                )
-            case _:
-                assert_never(action_like.fact)
+        msg = "Fact-to-action conversion is not migrated"
+        raise NotImplementedError(msg)
     return expr_action(action_like)
 
 
@@ -2776,7 +2777,8 @@ Command: TypeAlias = Action | RewriteOrRule
 
 def _command_like(command_like: CommandLike) -> Command:
     if isinstance(command_like, RewriteOrRule):
-        return command_like
+        msg = "Rule registration is not migrated"
+        raise NotImplementedError(msg)
     return _action_like(command_like)
 
 

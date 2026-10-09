@@ -1,12 +1,140 @@
 """Normal Python syntax over the generated-record runtime, without an engine."""
 
 from copy import copy
+from typing import ClassVar
 
 import pytest
 
-from egglog import EGraph, Expr, ExprValueError, Fact, _program, bindings, eq, expr_parts, f64, i64, method
-from egglog.deconstruct import get_callable_args, get_callable_fn, get_literal_value
-from egglog.runtime import RuntimeExpr
+from egglog import (
+    Bool,
+    BoolLike,
+    EGraph,
+    Expr,
+    ExprValueError,
+    Fact,
+    Map,
+    Pair,
+    String,
+    StringLike,
+    Unit,
+    Vec,
+    _program,
+    bindings,
+    constant,
+    eq,
+    expr_parts,
+    f64,
+    function,
+    i64,
+    join,
+    method,
+    set_,
+)
+from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
+from egglog.runtime import RuntimeExpr, RuntimeFunction
+
+
+def test_scalar_wave_public_native_bytes() -> None:
+    graph = EGraph()
+    sample = "a\0b\n☃"
+    for expression, expected in (
+        (String(sample), sample),
+        (join(), ""),
+        (join(sample), sample),
+        (join(sample, "!", "?"), sample + "!?"),
+        (String(sample) + "!", sample + "!"),
+        ("!" + String(sample), "!" + sample),
+        (String(sample).replace("b", "xy"), "a\0xy\n☃"),
+        (i64(-42).to_string(), "-42"),
+    ):
+        assert graph.extract(expression).value == expected
+    assert str(graph.extract(Unit())) == "Unit()"
+    assert get_literal_value(graph.extract(Unit())) is None
+    for left in (False, True):
+        assert graph.extract(~Bool(left)).value is (not left)
+        for right in (False, True):
+            for expression, expected in (
+                (Bool(left) & right, left and right),
+                (Bool(left) | right, left or right),
+                (Bool(left) ^ right, left != right),
+                (Bool(left).implies(right), not left or right),
+                (left & Bool(right), left and right),
+                (left | Bool(right), left or right),
+                (left ^ Bool(right), left != right),
+            ):
+                assert graph.extract(expression).value is expected
+    pair = graph.extract(Pair[String, Bool](String("a") + "b", ~Bool(True)))
+    assert tuple(part.value for part in pair.value) == ("ab", False)
+    mapping = graph.extract(Map[String, Bool].empty().insert("key", Bool(False) | True))
+    assert mapping.value[String("key")].value is True
+
+
+@pytest.mark.parametrize("values", [(), (False,), (True,), (False, False), (False, True, False, False, True)])
+def test_scalar_wave_variadic_bool_native_bytes(values) -> None:
+    # Canonical bytes deliberately support arities without a public Python view.
+    expression = RuntimeFunction(Bool.__or__.__egg_ref__, None)(*values)
+    assert EGraph().extract(expression).value is any(values)
+
+
+def test_scalar_wave_functions_and_concrete_defaults_native_bytes() -> None:
+    @function
+    def message(prefix: StringLike = String("a") + "b", enabled: BoolLike = False) -> String: ...
+
+    @function
+    def flag(value: BoolLike = Bool(False)) -> Bool: ...
+
+    @function
+    def done() -> Unit: ...
+
+    graph = EGraph()
+    graph.register(set_(message()).to("hello"), set_(flag()).to(True), set_(done()).to(Unit()))
+    assert graph.extract(message()).value == "hello"
+    assert graph.extract(flag()).value is True
+    assert str(graph.extract(done())) == "Unit()"
+
+
+def test_concrete_class_members_public_bytes() -> None:
+    class E(Expr):
+        X: ClassVar[i64]
+
+        def __init__(self) -> None: ...
+        def m(self) -> i64: ...
+
+        @property
+        def p(self) -> i64: ...
+
+        @classmethod
+        def cm(cls) -> i64: ...
+
+    graph = EGraph()
+    values = [E().m(), E.X, E().p, E.cm()]
+    graph.register(*(set_(value).to(i64(n)) for n, value in enumerate(values, 1)))
+    for n, value in enumerate(values, 1):
+        graph.check(eq(value).to(i64(n)))
+        assert graph.extract(value).value == n
+
+
+def test_concrete_eqsort_and_container_members_public_bytes() -> None:
+    class Token(Expr):
+        ROOT: ClassVar["Token"]
+
+        @classmethod
+        def make(cls, value: i64) -> "Token": ...
+
+        def next(self) -> "Token": ...
+        def values(self) -> Vec[Pair[i64, f64]]: ...
+
+    graph = EGraph()
+    root = Token.ROOT
+    assert str(graph.extract(root)) == "Token.ROOT"
+    assert str(graph.extract(root)) == "Token.ROOT"
+    expression = Token.make(i64(1)).next()
+    assert str(graph.extract(expression)) == "Token.make(1).next()"
+    pairs = Vec(Pair(i64(2), f64(3.0)))
+    graph.register(set_(expression.values()).to(pairs))
+    graph.check(eq(expression.values()).to(pairs))
+    value = graph.extract(expression.values()).value[0]
+    assert tuple(part.value for part in value.value) == (2, 3.0)
 
 
 def test_scalar_local_value_and_presentation() -> None:
@@ -61,6 +189,195 @@ def test_normal_scalar_bytes_boundary() -> None:
     assert graph.extract(expression).value == 3
     assert graph.extract(f64(1.0) + 2.0).value == 3.0
     graph.check(eq(expression).to(i64(3)))
+
+
+def test_vec_public_generic_and_computed_table_bytes() -> None:
+    @function
+    def vector() -> Vec[i64]: ...
+
+    @function
+    def pair() -> Pair[i64, f64]: ...
+
+    graph = EGraph()
+    expression = Vec[i64](i64(1) + 2, i64(4))
+    graph.register(set_(vector()).to(expression), set_(pair()).to(Pair(i64(5), f64(6.0))))
+    extracted = graph.extract(vector())
+    assert extracted.__egg_ref__.read().kind.value.value.field == "vec"
+    assert tuple(child.value for child in extracted.value) == (3, 4)
+    assert graph.extract(vector()[0]).value == 3
+    graph.check(eq(vector()[1]).to(i64(4)))
+    graph.check(eq(extracted).to(expression))
+    assert graph.extract(Vec[i64].empty()).value == ()
+    assert tuple(child.value for child in graph.extract(pair()).value) == (5, 6.0)
+    with pytest.raises(ExprValueError):
+        vector().value
+
+
+def test_map_public_computed_vec_table_and_reingested_value_bytes() -> None:
+    @function
+    def entries() -> Vec[Pair[i64, f64]]: ...
+
+    @function
+    def mapping() -> Map[i64, f64]: ...
+
+    graph = EGraph()
+    pairs = Vec(Pair(i64(1), f64(2.0)), Pair(i64(1), f64(3.0)), Pair(i64(2), f64(4.0)))
+    graph.register(set_(entries()).to(pairs))
+    expression = Map.from_pairs(entries())
+    assert len(get_callable_args(expression)) == 1
+    with pytest.raises(ExprValueError):
+        _ = expression.value
+    graph.register(set_(mapping()).to(expression))
+    result = graph.extract(mapping())
+    assert result.__egg_ref__.read().kind.value.value.field == "map"
+    assert {key.value: value.value for key, value in result.value.items()} == {1: 3.0, 2: 4.0}
+    graph.check(eq(result).to(expression))
+    assert graph.extract(mapping()[i64(1)]).value == 3.0
+    assert graph.extract(result.insert(i64(3), f64(5.0))[i64(3)]).value == 5.0
+    assert graph.extract(Map[i64, f64].empty()).value == {}
+    assert graph.extract(Map[i64, f64].from_pairs(Vec[Pair[i64, f64]].empty())).value == {}
+    with pytest.raises(ExprValueError):
+        _ = mapping().value
+
+
+def test_nominal_pair_coexists_with_ambient_family_through_bytes() -> None:
+    class NominalPair(Expr, egg_sort="Pair"):
+        @method(egg_fn="P")
+        def __init__(self) -> None: ...
+
+        @method(preserve=True)
+        def tag(self):
+            return "nominal Pair"
+
+    expression = NominalPair()
+    graph = EGraph()
+    assert ("host_sort_family", "Pair") in graph._state.definitions
+    graph.register(expression)
+    result = graph.extract(expression)
+    graph.check(eq(expression).to(result))
+    assert result.tag() == "nominal Pair"
+    assert result.__egg_ref__.read().kind.value.func == "P"
+    result_sort = result.__egg_ref__.owner.ref("sorts", result.__egg_ref__.read().sort_id).read()
+    assert result_sort.kind.field == "eq"
+    assert result_sort.kind.value == "Pair"
+    assert ("eq_sort", "Pair") in graph._state.definitions
+    assert ("host_sort_family", "Pair") in graph._state.definitions
+
+
+def test_bodyless_free_function_public_bytes() -> None:
+    @function(egg_fn="score with spaces")
+    def score(x: i64, offset: i64 = i64(2)) -> i64: ...
+
+    expression = score(1)
+    assert str(expression) == "score(1)"
+    assert str(set_(expression).to(7)) == "set_(score(1)).to(i64(7))"
+    graph = EGraph()
+    with pytest.raises(bindings.EggSmolError):
+        graph.extract(expression)
+    graph.register(set_(score(offset=2, x=1)).to(i64(3) + 4))
+    assert graph.extract(score(1)).value == 7
+    graph.check(eq(score(1, 2)).to(i64(7)))
+    with pytest.raises(ExprValueError):
+        _ = expression.value
+    with pytest.raises(bindings.EggSmolError, match="Illegal merge"):
+        graph.register(set_(score(1)).to(i64(8)))
+
+
+def test_nullary_and_f64_free_functions_public_bytes() -> None:
+    @function
+    def fixed() -> i64: ...
+
+    @function
+    def measure(x: f64) -> f64: ...
+
+    assert str(fixed) == "fixed"
+    assert str(fixed()) == "fixed()"
+    graph = EGraph()
+    graph.register(set_(fixed()).to(3), set_(measure(1.5)).to(f64(2.0) + 3.0))
+    assert graph.extract(fixed()).value == 3
+    assert graph.extract(measure(1.5)).value == 5.0
+    graph.check(eq(measure(1.5)).to(f64(5.0)))
+
+
+def test_free_constructor_function_recovers_local_output_hooks_through_bytes() -> None:
+    def factory():
+        class Num(Expr):
+            @method(preserve=True)
+            def tag(self):
+                return "local Num"
+
+        @function
+        def leaf(value: i64 = i64(1)) -> Num:
+            """A free constructor."""
+
+        return leaf
+
+    leaf = factory()
+    expression = leaf(i64(1) + 2)
+    graph = EGraph()
+    result = graph.extract(expression)
+    assert get_callable_fn(result) == leaf
+    assert get_callable_args(result, leaf)[0].value == 3
+    assert str(result) == "leaf(3)"
+    graph.check(eq(result).to(leaf(3)))
+    with pytest.raises(TypeError, match="table-backed"):
+        set_(expression).to(result)
+    del expression, leaf
+    graph._state.destroy()
+    assert result.tag() == "local Num"
+    assert get_callable_fn(result).__doc__ == "A free constructor."
+
+
+def test_constant_set_and_extract_public_bytes() -> None:
+    current = constant("current", i64, egg_name="table with spaces")
+    assert str(current) == "current"
+    with pytest.raises(ExprValueError):
+        _ = current.value
+    graph = EGraph()
+    with pytest.raises(bindings.EggSmolError):
+        graph.extract(current)
+    action = set_(current).to(i64(1) + 2)
+    assert str(action) == "set_(current).to(i64(1) + 2)"
+    graph.register(action)
+    assert graph.extract(current).value == 3
+    graph.check(eq(current).to(i64(3)))
+    graph.register(set_(current).to(i64(3)))
+    assert graph.extract(current).value == 3
+    with pytest.raises(ExprValueError):
+        _ = current.value
+    with pytest.raises(bindings.EggSmolError, match="Illegal merge"):
+        graph.register(set_(current).to(i64(4)))
+
+
+@pytest.mark.parametrize("name", ["two words", "class", ""])
+@pytest.mark.parametrize("egg_name", [None, "exact", ""])
+def test_constant_string_names_through_bytes(name, egg_name):
+    value = constant(name, i64, egg_name=egg_name)
+    assert str(value) == name
+    assert get_constant_name(value).name == name
+    graph = EGraph()
+    graph.register(set_(value).to(i64(1)))
+    assert graph.extract(value).value == 1
+
+
+def test_equality_constant_retains_name_and_local_hooks_through_bytes() -> None:
+    def make():
+        class Token(Expr):
+            @method(preserve=True)
+            def tag(self) -> str:
+                return "local token"
+
+        return constant("token", Token, egg_name="constant with spaces")
+
+    token = make()
+    graph = EGraph()
+    graph.register(token)
+    result = graph.extract(token)
+    graph.check(eq(result).to(token))
+    graph._state.destroy()
+    assert str(result) == "token"
+    assert get_constant_name(result).name == "token"
+    assert result.tag() == token.tag() == "local token"
 
 
 def test_user_constructor_public_bytes() -> None:
@@ -171,3 +488,23 @@ def test_ten_thousand_ordinary_calls_are_incremental(monkeypatch: pytest.MonkeyP
     assert visited < 20 * 10_000
     packed = _program.pack([expression.__egg_ref__])
     assert len(packed.program.nodes) == 20_001
+
+
+def test_pair_public_generic_bytes_roundtrip() -> None:
+    from egglog import Pair, convert, f64  # noqa: PLC0415
+
+    expression = Pair[i64, f64](left=i64(1) + 2, right=f64(4.5))
+    assert expression.value[0].__egg_ref__.read().kind.field == "call"
+    graph = EGraph(num_threads=1)
+    graph.register(expression)
+    extracted = graph.extract(expression)
+    assert extracted.__egg_ref__.read().kind.value.value.field == "pair"
+    assert [child.value for child in extracted.value] == [3, 4.5]
+    assert graph.extract(extracted.left).value == 3
+    assert graph.extract(extracted.right).value == 4.5
+    graph.register(extracted)
+    graph.check(eq(expression).to(extracted))
+    nested = convert(((5, 6.5), 7), Pair[Pair[i64, f64], i64])
+    result = graph.extract(nested)
+    assert result.value[0].value[1].value == 6.5
+    assert result.value[1].value == 7

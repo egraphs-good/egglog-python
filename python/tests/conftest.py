@@ -1,7 +1,12 @@
 import copy
+import runpy
 import sys
+from pathlib import Path
+from typing import Literal
 
 import pytest
+from egglog_proto.egglog.v1 import egglog_pb as pb
+from protobuf import Oneof
 from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
 
@@ -31,3 +36,100 @@ class PythonSnapshotExtension(SingleFileSnapshotExtension):
 @pytest.fixture
 def snapshot_py(snapshot):
     return snapshot.with_defaults(extension_class=PythonSnapshotExtension)
+
+
+@pytest.fixture
+def pair_catalog_program():
+    """Proposed presentation only; signatures stay in the real native snapshot."""
+    program = pb.Program.from_binary((Path(__file__).parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
+    declarations = {d.kind.value.name: d for d in program.declarations}
+    family = declarations["Pair"].kind.value
+    family.bindings = pb.SortBindings(
+        python=pb.TypeBinding(path=["egglog", "builtins", "Pair"], type_params=["L", "R"])
+    )
+    make = declarations["egglog.core.pair.make"]
+    owner = make.kind.value.typing.value.output
+    make.bindings.python = pb.PythonBindings(
+        views=[
+            pb.PythonCallable(
+                kind=pb.PythonCallKind.INITIALIZER,
+                owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", owner)),
+                params=[pb.PythonParameter(name="left", core_input=0), pb.PythonParameter(name="right", core_input=1)],
+            )
+        ]
+    )
+    for core, public in [("first", "left"), ("second", "right")]:
+        declarations[f"egglog.core.pair.{core}"].bindings.python = pb.PythonBindings(
+            views=[
+                pb.PythonCallable(
+                    kind=pb.PythonCallKind.PROPERTY,
+                    path=[public],
+                    owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", owner)),
+                    receiver=0,
+                )
+            ]
+        )
+    return program
+
+
+@pytest.fixture
+def pair_runtime(pair_catalog_program, monkeypatch, request):
+    """Run real wrapper generation over one coherent fixture-owned catalog."""
+    from egglog import _catalog, conversion, runtime  # noqa: PLC0415
+    from egglog._catalog import Catalog  # noqa: PLC0415
+
+    catalog = Catalog(pair_catalog_program)
+    monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(runtime, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
+    monkeypatch.setattr(conversion, "CONVERSIONS", {})
+    generated = runpy.run_path(str(Path(__file__).parents[1] / "egglog/builtins.py"), run_name="egglog.builtins")
+    for name in ("i64", "f64", "Pair", "Vec", "ExprValueError", "_pair_value"):
+        if hasattr(request.module, name):
+            monkeypatch.setattr(request.module, name, generated[name])
+    return generated["Pair"]
+
+
+@pytest.fixture
+def vec_catalog_program(pair_catalog_program):
+    """Proposed Vec views over copied actual signatures; never a package export."""
+    declarations = {d.kind.value.name: d for d in pair_catalog_program.declarations}
+    declarations["Vec"].kind.value.bindings.python = pb.TypeBinding(
+        path=["egglog", "builtins", "Vec"], type_params=["T"]
+    )
+    owner = declarations["egglog.core.vec.of"].kind.value.typing.value.output
+    for core, kind, path, receiver, params in [
+        ("of", pb.PythonCallKind.INITIALIZER, [], None, [pb.PythonParameter(core_input=0, name="args")]),
+        ("empty", pb.PythonCallKind.CLASS_METHOD, ["empty"], None, []),
+        ("get", pb.PythonCallKind.METHOD, ["__getitem__"], 0, [pb.PythonParameter(core_input=1, name="index")]),
+    ]:
+        declarations[f"egglog.core.vec.{core}"].bindings.python = pb.PythonBindings(
+            views=[
+                pb.PythonCallable(
+                    kind=kind,
+                    path=path,
+                    owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", owner)),
+                    receiver=receiver,
+                    params=params,
+                )
+            ]
+        )
+    return pair_catalog_program
+
+
+@pytest.fixture
+def vec_runtime(vec_catalog_program, monkeypatch, request):
+    """Run ordinary wrapper generation with the proposed fixture-only Vec views."""
+    from egglog import _catalog, conversion, runtime  # noqa: PLC0415
+    from egglog._catalog import Catalog  # noqa: PLC0415
+
+    catalog = Catalog(vec_catalog_program)
+    monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(runtime, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
+    monkeypatch.setattr(conversion, "CONVERSIONS", {})
+    generated = runpy.run_path(str(Path(__file__).parents[1] / "egglog/builtins.py"), run_name="egglog.builtins")
+    for name in ("i64", "f64", "Pair", "Vec", "VecLike", "ExprValueError"):
+        if hasattr(request.module, name):
+            monkeypatch.setattr(request.module, name, generated[name])
+    return generated["Vec"]

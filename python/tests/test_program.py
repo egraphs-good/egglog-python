@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import struct
 from typing import Literal
 from weakref import ref as weakref
 
@@ -10,8 +11,9 @@ import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import DescFieldValueList, Oneof
 
-from egglog import _program
+from egglog import Bool, String, Unit, _program, join
 from egglog._program import Builder, StructuralView, clone_nodes, pack
+from egglog.egraph import Action
 
 
 def literal(value: int):
@@ -28,7 +30,245 @@ def literal(value: int):
     return builder.publish().ref("nodes", index)
 
 
-AMBIENT = frozenset({("sort", "i64"), ("callable", "f"), ("callable", "g")})
+AMBIENT = frozenset({("host_sort_family", "i64"), ("callable", "f"), ("callable", "g")})
+
+
+@pytest.mark.parametrize(
+    ("left_bits", "right_bits", "equal"),
+    [
+        (0, 1 << 63, True),
+        (0x7FF8000000000001, 0x7FF8000000000001, True),
+        (0x7FF0000000000001, 0x7FF0000000000001, True),
+        (0x7FF8000000000001, 0x7FF8000000000002, False),
+        (0x7FF8000000000001, 0xFFF8000000000001, False),
+        (0x7FF8000000000001, 0x7FF0000000000001, False),
+        (0x7FF8000000000001, int.from_bytes(struct.pack("!d", float(0x7FF8000000000001))), False),
+    ],
+)
+def test_structural_float_equality_hashes_and_exact_bits(left_bits, right_bits, equal):
+    views = []
+    for bits in (left_bits, right_bits):
+        builder = Builder()
+        builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="f64"))))
+        index = builder.add(
+            "nodes",
+            pb.Node(
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["f64_bits"], int]("f64_bits", bits))
+                )
+            ),
+        )
+        reference = builder.publish().ref("nodes", index)
+        assert reference.read().kind.value.value.value == bits
+        views.append(StructuralView(reference))
+    assert (views[0] == views[1]) is equal
+    assert views[0] == views[0]
+    if equal:
+        assert hash(views[0]) == hash(views[1])
+
+
+@pytest.fixture
+def action_program():
+    """A Set whose declaration closure contains a recursive named dependency."""
+    return pb.Program(
+        ir_version=1,
+        sorts=[
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name=name)))
+            for name in ("i64", "f64")
+        ],
+        nodes=[
+            pb.Node(
+                sort_id=0,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", value))
+                ),
+            )
+            for value in (1, 2)
+        ]
+        + [pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func=name))) for name in ("g", "f")],
+        declarations=[
+            pb.Declaration(
+                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                    "host_sort_family", pb.HostSortFamily(name=name)
+                )
+            )
+            for name in ("i64", "f64")
+        ]
+        + [
+            pb.Declaration(
+                kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name=name, output=0, merge=merge))
+            )
+            for name, merge in (("f", 2), ("g", 3))
+        ],
+        commands=[
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action",
+                    pb.Action(kind=Oneof[Literal["set"], pb.Set]("set", pb.Set(target=pb.Call(func="f"), value=0))),
+                )
+            )
+        ],
+    )
+
+
+def test_action_equality_ignores_unrelated_records_and_arena_layout(action_program):
+    first = Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    action_program.declarations += [
+        pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="unused")))
+    ]
+    action_program.nodes.append(pb.Node(sort_id=1, kind=Oneof[Literal["var"], str]("var", "unused")))
+    assert first == Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    mappings = {
+        role: {
+            index: len(getattr(action_program, role)) - index - 1 for index in range(len(getattr(action_program, role)))
+        }
+        for role in ("nodes", "sorts", "declarations", "commands")
+    }
+    for role in mappings:
+        original = list(getattr(action_program, role))
+        relocated = [
+            _program._copy_record(record, relocate=lambda arena, index: mappings[arena][index])
+            for record in reversed(original)
+        ]
+        getattr(action_program, role)[:] = relocated
+    assert first == Action(Builder.from_program(action_program).publish().ref("commands", 0))
+
+
+@pytest.mark.parametrize("change", ["doc", "presentation", "merge", "sort", "rhs", "action"])
+def test_action_equality_observes_referenced_declaration_closure(action_program, change):
+    first = Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    assert first == Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    # g is reached only through f's merge; checking the action root or f alone
+    # would miss these changes to the recursive referenced declaration closure.
+    declaration = action_program.declarations[3]
+    if change == "doc":
+        declaration.doc = "different"
+    elif change == "presentation":
+        declaration.bindings = pb.CallableBindings(
+            python=pb.PythonBindings(views=[pb.PythonCallable(kind=pb.PythonCallKind.FUNCTION, path=["renamed"])])
+        )
+    elif change == "merge":
+        declaration.kind.value.merge = 1
+    elif change == "sort":
+        action_program.declarations[0].kind.value.bindings = pb.SortBindings(python=pb.TypeBinding(path=["renamed"]))
+    elif change == "rhs":
+        action_program.commands[0].kind.value.kind.value.value = 1
+    else:
+        action_program.commands[0].kind.value.kind = Oneof[Literal["term"], int]("term", 0)
+    assert first != Action(Builder.from_program(action_program).publish().ref("commands", 0))
+
+
+def test_action_equality_keeps_union_identity_in_declaration_closure(action_program):
+    action_program.nodes.append(
+        pb.Node(sort_id=0, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[0, 1])))
+    )
+    action_program.declarations[2].kind.value.merge = 4
+    owner = Builder.from_program(action_program).publish()
+    first = Action(owner.ref("commands", 0))
+    assert first == Action(owner.ref("commands", 0))
+    assert first != Action(Builder.from_program(action_program).publish().ref("commands", 0))
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_nominal_family_callable_names_keep_independent_closure(reverse):
+    declarations = [
+        pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair"))),
+        pb.Declaration(
+            kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                "host_sort_family", pb.HostSortFamily(name="Pair", arity=2)
+            )
+        ),
+        pb.Declaration(
+            kind=Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name="Pair", output=0))
+        ),
+    ]
+    owner = Builder.from_program(
+        pb.Program(
+            ir_version=1,
+            sorts=[
+                pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Pair")),
+                pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Pair", args=[0, 0]))),
+            ],
+            declarations=declarations[::-1] if reverse else declarations,
+            nodes=[
+                pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="Pair"))),
+                pb.Node(
+                    sort_id=1,
+                    kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                        "primitive_value",
+                        pb.PrimitiveValue(
+                            value=Oneof[Literal["pair"], pb.PairValue]("pair", pb.PairValue(first=0, second=0))
+                        ),
+                    ),
+                ),
+            ],
+        )
+    ).publish()
+    nominal, family = owner.ref("nodes", 0), owner.ref("nodes", 1)
+    for roots in ([nominal, family], [family, nominal], clone_nodes([family]), [nominal, *clone_nodes([family])]):
+        result = pack(roots)
+        assert {_program._definition_key(d) for d in result.program.declarations} == {
+            ("eq_sort", "Pair"),
+            ("host_sort_family", "Pair"),
+            ("callable", "Pair"),
+        }
+        payload = next(n.kind.value.value.value for n in result.program.nodes if n.kind.field == "primitive_value")
+        assert payload.first == payload.second
+    assert {_program._definition_key(d) for d in pack([nominal]).program.declarations} == {
+        ("eq_sort", "Pair"),
+        ("callable", "Pair"),
+    }
+
+
+@pytest.mark.parametrize("nominal", [False, True])
+@pytest.mark.parametrize("local", [False, True])
+def test_sort_dependency_never_falls_back_to_other_kind(nominal, local):
+    builder = Builder()
+    sort = builder.add(
+        "sorts",
+        pb.Sort(
+            kind=Oneof[Literal["eq"], str]("eq", "Pair")
+            if nominal
+            else Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Pair"))
+        ),
+    )
+    wrong_kind = "host_sort_family" if nominal else "eq_sort"
+    if local:
+        builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                    "host_sort_family", pb.HostSortFamily(name="Pair")
+                )
+                if nominal
+                else Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair"))
+            ),
+        )
+    reference = builder.publish().ref("sorts", sort)
+    with pytest.raises(ValueError, match="missing definitions"):
+        pack([reference], ambient=() if local else {(wrong_kind, "Pair")})
+    correct_kind = "eq_sort" if nominal else "host_sort_family"
+    assert not pack([reference], ambient={(correct_kind, "Pair")}).program.declarations
+
+
+@pytest.mark.parametrize("nominal", [False, True])
+def test_same_kind_sort_definition_conflicts_remain_errors(nominal):
+    builder = Builder()
+    for index in range(2):
+        builder.add(
+            "declarations",
+            pb.Declaration(
+                doc=str(index),
+                kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair"))
+                if nominal
+                else Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                    "host_sort_family", pb.HostSortFamily(name="Pair", arity=index)
+                ),
+            ),
+        )
+    owner = builder.publish()
+    with pytest.raises(ValueError, match="same-name"):
+        pack([owner.ref("declarations", 0), owner.ref("declarations", 1)])
 
 
 def test_template_expansion_freshens_nodes_not_definition_identity():
@@ -142,7 +382,7 @@ def test_diamonds_distinct_equal_unions_and_cycles():
         branches.append(branch.publish().ref("nodes", root))
     result = pack(
         [*branches, source.ref("nodes", fresh), source.ref("nodes", other)],
-        ambient={("sort", "E"), ("callable", "cycle")},
+        ambient={("eq_sort", "E"), ("callable", "cycle")},
     )
     assert result.indices[0] == result.indices[1]
     assert result.indices[2] != result.indices[3]
@@ -330,6 +570,63 @@ def test_inventory_covers_all_program_message_fields():
     _program._check_inventory()
 
 
+@pytest.mark.parametrize("message", ["PythonCallable", "RustCallable"])
+def test_tail_repetitions_must_be_classified_in_inventory(monkeypatch, message):
+    monkeypatch.delitem(_program._FIELD_ROLES[message], "tail_repetitions")
+    with pytest.raises(NotImplementedError, match="Unclassified protobuf fields"):
+        _program._check_inventory()
+
+
+@pytest.mark.parametrize("repetitions", [None, 0, 2])
+def test_scalar_view_presence_survives_owned_closure_and_relocation(repetitions):
+    packet = pack([join("a", "b").__egg_ref__])
+    program = packet.program
+    declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.string.concat")
+    python_view, rust_view = declaration.bindings.python.views[0], declaration.bindings.rust.views[0]
+    if repetitions is not None:
+        python_view.tail_repetitions = rust_view.tail_repetitions = repetitions
+        python_view.params = [pb.PythonParameter(core_input=i, name=f"part{i}") for i in range(repetitions)]
+        rust_view.params = [pb.RustParameter(core_input=i, name=f"part{i}") for i in range(repetitions)]
+    owner = Builder.from_program(program).publish()
+    reference = owner.ref("declarations", program.declarations.index(declaration))
+    detached = reference.read()
+    detached.bindings.python.views[0].tail_repetitions = 7
+    detached.bindings.rust.views[0].tail_repetitions = 7
+    builder = Builder()
+    for index in reversed(range(len(program.sorts))):
+        builder.import_ref(owner.ref("sorts", index))
+    for index in reversed(range(len(program.declarations))):
+        builder.import_ref(owner.ref("declarations", index))
+    cloned = clone_nodes([owner.ref("nodes", packet.indices[0])])[0]
+    index = builder.import_ref(cloned)
+    packed = pack([builder.publish().ref("nodes", index)]).program
+    reencoded = pb.Program.from_binary(packed.to_binary())
+    assert reencoded == packed
+    for records in (
+        reference.read(),
+        next(d for d in reencoded.declarations if d.kind.value.name == "egglog.core.string.concat"),
+    ):
+        for view in (records.bindings.python.views[0], records.bindings.rust.views[0]):
+            assert view.has_field("tail_repetitions") is (repetitions is not None)
+            if repetitions is not None:
+                assert view.tail_repetitions == repetitions
+        assert not records.kind.value.typing.value.inputs
+        assert len(records.kind.value.typing.value.varargs) == 1
+    call = next(n.kind.value for n in reencoded.nodes if n.kind.field == "call")
+    assert [reencoded.nodes[i].kind.value.value.value for i in call.args] == ["a", "b"]
+
+
+def test_scalar_literals_publish_and_pack_exact_payloads():
+    values = [String("a\0b\n☃"), Bool(False), Unit()]
+    result = pack([value.__egg_ref__ for value in values])
+    decoded = pb.Program.from_binary(result.program.to_binary())
+    payloads = [decoded.nodes[index].kind.value.value for index in result.indices]
+    assert [value.field for value in payloads] == ["string", "bool", "unit"]
+    assert payloads[0].value == "a\0b\n☃"
+    assert payloads[1].value is False
+    assert payloads[2].value == pb.Unit()
+
+
 def test_owner_keepalive_is_lifetime_only_not_semantic_storage():
     class LocalContext:
         pass
@@ -437,12 +734,12 @@ def test_detached_default_expansions_preserve_internal_identity():
     default.add("nodes", pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
     root = default.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f", args=[0, 0]))))
     owner = default.publish()
-    packet = pack([owner.ref("nodes", root)], ambient={*AMBIENT, ("sort", "E")})
+    packet = pack([owner.ref("nodes", root)], ambient={*AMBIENT, ("eq_sort", "E")})
     refs = []
     for _ in range(2):
         imported = Builder.from_program(packet.program).publish()
         refs.append(imported.ref("nodes", packet.indices[0]))
-    result = pack(refs, ambient={*AMBIENT, ("sort", "E")})
+    result = pack(refs, ambient={*AMBIENT, ("eq_sort", "E")})
     args = []
     for index in result.indices:
         node = result.program.nodes[index]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import itertools
 import struct
 from collections.abc import Callable
 from contextlib import suppress
@@ -14,6 +13,7 @@ from weakref import WeakKeyDictionary, WeakValueDictionary
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
+from ._builtin_protocols import NUMERIC_BINARY_METHODS, SCALAR_PROTOCOLS
 from ._catalog import Catalog, builtin_catalog
 from ._program import Builder, Owner, Ref, StructuralView, _definition_key, clone_nodes
 from .type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
@@ -32,28 +32,6 @@ __all__ = [
     "resolve_callable",
     "resolve_type_annotation",
 ]
-
-NUMERIC_BINARY_METHODS = {
-    "__add__",
-    "__sub__",
-    "__mul__",
-    "__matmul__",
-    "__truediv__",
-    "__floordiv__",
-    "__mod__",
-    "__divmod__",
-    "__pow__",
-    "__lshift__",
-    "__rshift__",
-    "__and__",
-    "__xor__",
-    "__or__",
-    "__lt__",
-    "__le__",
-    "__gt__",
-    "__ge__",
-}
-
 
 # special methods that return none and mutate self
 ALWAYS_MUTATES_SELF = {
@@ -141,7 +119,7 @@ def _author_call(  # noqa: C901, PLR0912
         raise ValueError(msg)
     kind = record.kind.value
     binder_size = 0
-    varargs = None
+    varargs: list[pb.Arg] = []
     match kind:
         case pb.HostPrimitive():
             if kind.typing is None or kind.typing.field != "signature":
@@ -167,13 +145,34 @@ def _author_call(  # noqa: C901, PLR0912
             path=[kind.name],
             params=[pb.PythonParameter(core_input=i, name=arg.name or f"arg{i}") for i, arg in enumerate(inputs)],
         )
-        if varargs is not None:
-            view.params.append(pb.PythonParameter(core_input=len(inputs), name=varargs.name or "args"))
+        if varargs:
+            view.params.append(pb.PythonParameter(core_input=len(inputs), name=varargs[0].name or "args"))
     else:
         if record.bindings is None or record.bindings.python is None:
             msg = "Requested Python view is absent"
             raise ValueError(msg)
         view = record.bindings.python.views[view_index]
+    specialized = view.has_field("tail_repetitions")
+    slot_count = len(inputs) + bool(varargs)
+    if specialized:
+        if view.kind not in {pb.PythonCallKind.FUNCTION, pb.PythonCallKind.METHOD}:
+            msg = "Tail specialization supports only function and method views"
+            raise ValueError(msg)
+        if not varargs:
+            msg = "Tail specialization requires a variadic host signature"
+            raise ValueError(msg)
+        if any(not parameter.has_field("core_input") for parameter in view.params):
+            msg = "Python view parameter is missing its core input"
+            raise ValueError(msg)
+        slot_count = len(inputs) + len(varargs) * view.tail_repetitions
+        if slot_count > 2**32 - 1 or slot_count != len(view.params) + view.has_field("receiver"):
+            msg = "Tail specialization must map every effective input exactly once"
+            raise ValueError(msg)
+        if any(p.core_input >= len(inputs) and p.has_field("default_expr") for p in view.params) or (
+            view.has_field("mutates") and view.mutates >= len(inputs)
+        ):
+            msg = "Specialized tail inputs cannot have defaults or mutation"
+            raise ValueError(msg)
     substitutions: dict[int, Ref] = {}
     if owner is not None and view.owner is not None and view.owner.kind is not None and view.owner.kind.field == "sort":
         infer_sort(declaration.owner.ref("sorts", view.owner.kind.value), owner, binder_size, substitutions)
@@ -193,7 +192,7 @@ def _author_call(  # noqa: C901, PLR0912
         Parameter(
             parameter.name,
             Parameter.VAR_POSITIONAL
-            if varargs is not None and parameter.core_input == len(inputs)
+            if varargs and not specialized and parameter.core_input == len(inputs)
             else Parameter.POSITIONAL_OR_KEYWORD,
             default=_OMITTED if parameter.has_field("default_expr") else Parameter.empty,
         )
@@ -209,17 +208,32 @@ def _author_call(  # noqa: C901, PLR0912
             raise ValueError(msg)
         value = bound.arguments[parameter.name]
         core_values[parameter.core_input] = next(defaults) if value is _OMITTED else value
-    expected_slots = set(range(len(inputs) + (varargs is not None)))
+    expected_slots = set(range(slot_count))
     if core_values.keys() != expected_slots:
         msg = "Python view does not map every core input exactly once"
         raise ValueError(msg)
-    ordered_values = [core_values[index] for index in range(len(inputs))]
+    ordered_values = [core_values[index] for index in range(slot_count if specialized else len(inputs))]
     patterns = [declaration.owner.ref("sorts", arg.sort) for arg in inputs]
-    if varargs is not None:
-        tail = core_values[len(inputs)]
+    if varargs:
+        tail = tuple(ordered_values[len(inputs) :]) if specialized else core_values[len(inputs)]
         assert isinstance(tail, tuple)
-        ordered_values.extend(tail)
-        patterns.extend([declaration.owner.ref("sorts", varargs.sort)] * len(tail))
+        if len(tail) % len(varargs):
+            raise TypeError(f"Variadic arguments must form complete groups of {len(varargs)}")
+        if not specialized:
+            ordered_values.extend(tail)
+        patterns.extend(
+            declaration.owner.ref("sorts", arg.sort) for _ in range(len(tail) // len(varargs)) for arg in varargs
+        )
+    if (
+        view.has_field("receiver")
+        and view.owner is not None
+        and view.owner.kind is not None
+        and view.owner.kind.field == "sort"
+        and StructuralView(patterns[view.receiver])
+        != StructuralView(declaration.owner.ref("sorts", view.owner.kind.value))
+    ):
+        msg = "Python receiver input must match its owner"
+        raise ValueError(msg)
     existing = [value if isinstance(value, Ref) else node_of(value) for value in ordered_values]
     for pattern, node in zip(patterns, existing, strict=True):
         if node is not None:
@@ -262,8 +276,7 @@ def _author_call(  # noqa: C901, PLR0912
 
 # These are Python codecs/protocol hooks, not callable signatures. Sort and
 # callable definitions still come from the native-generated catalog.
-_LITERAL_ARMS = {"i64": "i64", "f64": "f64_bits", "String": "string", "bool": "bool", "Unit": "unit"}
-LIT_IDENTS = frozenset(_LITERAL_ARMS)
+LIT_IDENTS = frozenset(SCALAR_PROTOCOLS)
 DUMMY_VALUE = object()
 _CLASS_CACHE: WeakKeyDictionary[Owner, WeakValueDictionary[int, RuntimeClass]] = WeakKeyDictionary()
 _BASE_CLASSES: dict[str, RuntimeClass] = {}
@@ -338,12 +351,14 @@ def _class_for_sort(sort: Ref) -> RuntimeClass:
     match record.kind.field:
         case "family":
             name = record.kind.value.name
+            namespace = "host_sort_family"
         case "eq":
             name = record.kind.value
+            namespace = "eq_sort"
         case _:
             msg = "Function/pattern runtime class projection is not migrated yet"
             raise NotImplementedError(msg)
-    definition = _definition_at(sort, "sort", name)
+    definition = _definition_at(sort, namespace, name)
     for context in definition.owner._keepalive:
         if isinstance(context, _ClassContext):
             return context.runtime_class
@@ -384,7 +399,7 @@ class RuntimeClass(type):
             raise ValueError(msg)
         namespace = {
             "__module__": ".".join(path[:-1]),
-            "__doc__": declaration.doc or None,
+            "__doc__": declaration.doc if declaration.has_field("doc") else None,
             **{name: RuntimeClassDescriptor(name) for name in CLASS_DESCRIPTOR_METHODS},
         }
         result = type.__new__(cls, path[-1], (), namespace)
@@ -447,18 +462,20 @@ class RuntimeClass(type):
         actual = _class_for_sort(instance.__egg_ref__.owner.ref("sorts", node.sort_id))
         return cls.__egg_definition__ == actual.__egg_definition__
 
-    def __call__(cls, *args: object, **kwargs: object) -> RuntimeExpr | None:
+    def __call__(cls, *args: object, **kwargs: object) -> RuntimeExpr | None:  # noqa: C901
         declaration: pb.Declaration = cls.__egg_definition__.read()
         assert declaration.kind is not None
         name = declaration.kind.value.name
-        if isinstance(declaration.kind.value, pb.HostSortFamily) and name in _LITERAL_ARMS:
+        if isinstance(declaration.kind.value, pb.HostSortFamily) and name in SCALAR_PROTOCOLS:
             if kwargs or len(args) != (0 if name == "Unit" else 1):
                 raise TypeError(f"{cls} expects {'zero' if name == 'Unit' else 'one'} positional literal argument")
+            if args and not isinstance(args[0], SCALAR_PROTOCOLS[name].literal_types):
+                raise TypeError(f"{cls} expects a {SCALAR_PROTOCOLS[name].value_type.__name__} literal")
             if cls.__egg_sort__ is None:
                 msg = "Literal constructor has an unresolved sort"
                 raise TypeError(msg)
             primitive = pb.PrimitiveValue()
-            match _LITERAL_ARMS[name]:
+            match SCALAR_PROTOCOLS[name].literal_arm:
                 case "i64":
                     primitive.value = Oneof[Literal["i64"], int]("i64", cast("int", args[0]))
                 case "f64_bits":
@@ -505,9 +522,19 @@ class RuntimeClass(type):
         )
         return _class_for_sort(builder.publish().ref("sorts", index))
 
-    def __getattr__(cls, name: str) -> object:
+    def __getattr__(cls, name: str) -> object:  # noqa: C901
         if name.startswith("__egg_"):
             raise AttributeError(name)
+        if name == "__args__":
+            if cls.__egg_sort__ is None:
+                return cls.__egg_arguments__
+            record: pb.Sort = cls.__egg_sort__.read()
+            assert record.kind is not None
+            return (
+                tuple(_class_for_sort(cls.__egg_sort__.owner.ref("sorts", index)) for index in record.kind.value.args)
+                if record.kind.field == "family"
+                else ()
+            )
         if name == "__origin__":
             if cls.__egg_arguments__:
                 declaration: pb.Declaration = cls.__egg_definition__.read()
@@ -524,12 +551,14 @@ class RuntimeClass(type):
             cls.__egg_pending__()
         declaration = cls.__egg_definition__.read()
         assert declaration.kind is not None
-        key = declaration.kind.value.name, name
+        definition_key = _definition_key(declaration)
+        assert definition_key is not None
+        key = definition_key, name
         catalog = builtin_catalog()
         if cls.__egg_context__ is not None:
             catalog = cls.__egg_context__.catalog
             assert catalog is not None
-        elif cls.__egg_definition__ != catalog.definitions.get(("sort", key[0])):
+        elif cls.__egg_definition__ != catalog.definitions.get(definition_key):
             raise AttributeError(f"{cls} has no canonical Python member {name!r}")
         try:
             reference, view = catalog.members[key]
@@ -583,15 +612,72 @@ class RuntimeClass(type):
         return ("value",) if "value" in cls.__egg_hooks__ else ()
 
 
-class RuntimeFunction:
+class RuntimeFunctionMeta(type):
+    def __getattribute__(cls, name: str) -> object:
+        # Instance module metadata comes from its record, not this Python type.
+        if name == "__module__":
+            return __name__
+        return super().__getattribute__(name)
+
+
+class RuntimeFunction(metaclass=RuntimeFunctionMeta):
     """A selected language view over one owned canonical callable declaration."""
 
     def __init__(
-        self, declaration: Ref, view_index: int | None = None, bound: RuntimeClass | RuntimeExpr | None = None
+        self,
+        declaration: Ref | Callable[[], Ref],
+        view_index: int | None = None,
+        bound: RuntimeClass | RuntimeExpr | None = None,
     ) -> None:
-        self.__egg_ref__ = declaration
+        self.__egg_declaration__ = declaration if isinstance(declaration, Ref) else None
+        self.__egg_prepare__ = declaration if callable(declaration) else None
+        self.__egg_error__: Exception | None = None
+        self.__egg_resolving__ = False
+        self.__egg_lock__ = RLock()
         self.__egg_view__ = view_index
         self.__egg_bound__ = bound
+
+    @property
+    def __egg_ref__(self) -> Ref:
+        """Materialize raw Python source once, publishing only a complete record."""
+        with self.__egg_lock__:
+            if self.__egg_declaration__ is not None:
+                return self.__egg_declaration__
+            if self.__egg_error__ is not None:
+                raise self.__egg_error__.with_traceback(None)
+            if self.__egg_resolving__:
+                msg = "Recursively resolving function declarations"
+                raise ValueError(msg)
+            assert self.__egg_prepare__ is not None
+            self.__egg_resolving__ = True
+            try:
+                reference = self.__egg_prepare__()
+                if not isinstance(reference, Ref) or reference.role != "declarations":
+                    msg = "Function source must publish a canonical declaration"
+                    raise TypeError(msg)  # noqa: TRY301 -- invalid preparation is a terminal cached error
+                self.__egg_declaration__ = reference.owner.ref(reference.role, reference.index)
+            except Exception as error:
+                self.__egg_error__ = error
+                raise
+            finally:
+                self.__egg_prepare__ = None
+                self.__egg_resolving__ = False
+            return self.__egg_declaration__
+
+    @property
+    def __module__(self) -> str | None:  # type: ignore[override]
+        record: pb.Declaration = self.__egg_ref__.read()
+        if self.__egg_view__ is None or record.bindings is None or record.bindings.python is None:
+            return None
+        view = record.bindings.python.views[self.__egg_view__]
+        if view.owner is not None and view.owner.kind is not None and view.owner.kind.field == "sort":
+            return _class_for_sort(self.__egg_ref__.owner.ref("sorts", view.owner.kind.value)).__module__
+        return ".".join(view.path[:-1]) or None
+
+    @property
+    def __doc__(self) -> str | None:  # type: ignore[override]
+        record: pb.Declaration = self.__egg_ref__.read()
+        return record.doc if record.has_field("doc") else None
 
     def __call__(self, *args: object, **kwargs: object) -> RuntimeExpr | None:
         from .conversion import resolve_literal  # noqa: PLC0415
@@ -624,24 +710,36 @@ class RuntimeFunction:
         assert record.bindings.python is not None
         view = record.bindings.python.views[self.__egg_view__]
         if view.kind == pb.PythonCallKind.FUNCTION:
-            return ".".join(view.path)
+            return view.path[-1]
         name = "__init__" if view.kind == pb.PythonCallKind.INITIALIZER else view.path[0]
         return f"{self.__egg_bound__}.{name}"
 
     def __repr__(self) -> str:
         return str(self)
 
+    def _identity(self) -> tuple[object, ...]:
+        """Compare callable records or named user functions, without binding."""
+        reference = self.__egg_ref__
+        record: pb.Declaration = reference.read()
+        if (
+            record.kind is not None
+            and record.kind.field in {"function", "constructor"}
+            and self.__egg_view__ is not None
+            and record.bindings is not None
+            and record.bindings.python is not None
+        ):
+            view = record.bindings.python.views[self.__egg_view__]
+            if view.kind == pb.PythonCallKind.FUNCTION:
+                return "function", tuple(view.path)
+        return reference, self.__egg_view__
+
     def __hash__(self) -> int:
-        return hash((self.__egg_ref__, self.__egg_view__, self.__egg_bound__))
+        return hash((*self._identity(), self.__egg_bound__))
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, RuntimeFunction):
             return NotImplemented
-        return (
-            self.__egg_ref__ == other.__egg_ref__
-            and self.__egg_view__ == other.__egg_view__
-            and bool(self.__egg_bound__ == other.__egg_bound__)
-        )
+        return self._identity() == other._identity() and bool(self.__egg_bound__ == other.__egg_bound__)
 
 
 class RuntimeExpr:
@@ -732,28 +830,26 @@ class RuntimeExpr:
         self.__egg_ref__ = other.__egg_ref__
 
 
-def define_expr_method(name: str) -> None:
+def define_expr_method(name: str, *, reverse: bool = False) -> None:
     """Install a Python special-method entrypoint using the generated member view."""
 
     def invoke(self: RuntimeExpr, *args: object, **kwargs: object) -> object:
         return cast("Callable", self.__getattr__(name))(*args, **kwargs)
 
-    setattr(RuntimeExpr, name, invoke)
+    def reflected(self: RuntimeExpr, other: object) -> object:
+        from .conversion import convert_to_same_type  # noqa: PLC0415
+
+        return cast("Callable", convert_to_same_type(other, self).__getattr__(name))(self)
+
+    setattr(RuntimeExpr, f"__r{name[2:]}" if reverse else name, reflected if reverse else invoke)
 
 
 for _name in TYPE_DEFINED_METHODS - {"__hash__"}:
     define_expr_method(_name)
 
-for _name, _reverse in itertools.product(NUMERIC_BINARY_METHODS, (False, True)):
-
-    def binary(self: RuntimeExpr, other: object, name: str = _name, reverse: bool = _reverse) -> object:
-        if reverse:
-            from .conversion import convert_to_same_type  # noqa: PLC0415
-
-            return cast("Callable", convert_to_same_type(other, self).__getattr__(name))(self)
-        return cast("Callable", self.__getattr__(name))(other)
-
-    setattr(RuntimeExpr, f"__r{_name[2:]}" if _reverse else _name, binary)
+for _name in NUMERIC_BINARY_METHODS:
+    define_expr_method(_name)
+    define_expr_method(_name, reverse=True)
 
 
 def resolve_type_annotation(tp: object) -> Ref | TypeVar | RuntimeClass:
@@ -762,6 +858,8 @@ def resolve_type_annotation(tp: object) -> Ref | TypeVar | RuntimeClass:
         return tp
     if get_origin(tp) is Union:
         return resolve_type_annotation(get_args(tp)[0])
+    if isinstance(origin := get_origin(tp), RuntimeClass):
+        return resolve_type_annotation(origin[get_args(tp)])
     if isinstance(tp, RuntimeClass):
         return tp.__egg_sort__ if tp.__egg_sort__ is not None else tp
     raise TypeError(f"Unexpected type annotation {tp!r}")

@@ -8,6 +8,7 @@ from typing import Any
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
+from .declarations import Ident
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, _class_for_sort, _definition_at
 
 __all__ = [
@@ -44,12 +45,23 @@ def get_literal_value(x: object) -> object:
             return None
 
 
-def get_constant_name(x: object) -> object:
-    """Inspect a retained constant name (constant presentation is not migrated)."""
+def get_constant_name(x: object) -> Ident | None:
+    """Return the supplied constant presentation name without evaluating it."""
     if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    msg = "Constant presentation is not migrated"
-    raise NotImplementedError(msg)
+    node: pb.Node = x.__egg_ref__.read()
+    if node.kind is None or node.kind.field != "call":
+        return None
+    declaration: pb.Declaration = _definition_at(x.__egg_ref__, "callable", node.kind.value.func).read()
+    if declaration.bindings is None or declaration.bindings.python is None:
+        return None
+    views = declaration.bindings.python.views
+    if views and views[0].kind == pb.PythonCallKind.CONSTANT:
+        if node.kind.value.args:
+            msg = "A constant call must be nullary"
+            raise ValueError(msg)
+        return Ident(views[0].path[-1], ".".join(views[0].path[:-1]) or None)
+    return None
 
 
 def get_let_name(x: object) -> str | None:
@@ -68,7 +80,7 @@ def get_var_name(x: object) -> str | None:
     return node.kind.value if node.kind is not None and node.kind.field == "var" else None
 
 
-def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, tuple[RuntimeExpr, ...]] | None:
+def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, tuple[RuntimeExpr, ...]] | None:  # noqa: C901
     """Select a declaration's Python view and restore its argument ordering."""
     node: pb.Node = x.__egg_ref__.read()
     if node.kind is None or node.kind.field != "call":
@@ -79,19 +91,47 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
     arguments = tuple(RuntimeExpr(x.__egg_ref__.owner.ref("nodes", index)) for index in call.args)
     if record.bindings is None or record.bindings.python is None or not record.bindings.python.views:
         return RuntimeFunction(declaration), arguments
-    view = record.bindings.python.views[0]
+    if any(
+        view.has_field("tail_repetitions") and view.kind not in {pb.PythonCallKind.FUNCTION, pb.PythonCallKind.METHOD}
+        for view in record.bindings.python.views
+    ):
+        msg = "Tail specialization supports only function and method views"
+        raise ValueError(msg)
+    kind = record.kind.value if record.kind is not None else None
+    signature = (
+        kind.typing.value
+        if isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "signature"
+        else None
+    )
+    fixed = len(signature.inputs) if signature is not None else len(arguments)
+    tail_width = len(signature.varargs) if signature is not None else 0
+    if (
+        len(arguments) < fixed
+        or (len(arguments) - fixed) % (tail_width or 1)
+        or (not tail_width and len(arguments) != fixed)
+    ):
+        msg = "Call has invalid canonical argument count"
+        raise ValueError(msg)
+    selected = next(
+        (
+            (index, view)
+            for index, view in enumerate(record.bindings.python.views)
+            if not view.has_field("tail_repetitions")
+            or (tail_width and len(arguments) == fixed + tail_width * view.tail_repetitions)
+        ),
+        None,
+    )
+    if selected is None:
+        return RuntimeFunction(declaration), arguments
+    view_index, view = selected
     ordered: list[RuntimeExpr] = []
     if view.has_field("receiver"):
         ordered.append(arguments[view.receiver])
-    kind = record.kind.value if record.kind is not None else None
-    fixed = (
-        len(kind.typing.value.inputs)
-        if isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "signature"
-        else len(arguments)
-    )
     for parameter in view.params:
         ordered.extend(
-            arguments[parameter.core_input :] if parameter.core_input == fixed else (arguments[parameter.core_input],)
+            arguments[parameter.core_input :]
+            if tail_width and not view.has_field("tail_repetitions") and parameter.core_input == fixed
+            else (arguments[parameter.core_input],)
         )
     if view.kind == pb.PythonCallKind.INITIALIZER:
         return _class_for_sort(x.__egg_ref__.owner.ref("sorts", node.sort_id)), tuple(ordered)
@@ -102,7 +142,7 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
             owner = _class_for_sort(receiver.owner.ref("sorts", receiver.read().sort_id))
         else:
             owner = _class_for_sort(declaration.owner.ref("sorts", view.owner.kind.value))
-    return RuntimeFunction(declaration, 0, owner), tuple(ordered)
+    return RuntimeFunction(declaration, view_index, owner), tuple(ordered)
 
 
 def get_callable_fn(x: object) -> Callable[..., Any] | None:
@@ -126,5 +166,5 @@ def get_callable_args(x: object, fn: object = None) -> tuple[RuntimeExpr, ...] |
     if isinstance(actual, RuntimeClass) and isinstance(fn, RuntimeClass):
         return arguments if actual.__egg_definition__ == fn.__egg_definition__ else None
     if isinstance(actual, RuntimeFunction) and isinstance(fn, RuntimeFunction):
-        return arguments if actual.__egg_ref__ == fn.__egg_ref__ else None
+        return arguments if actual.__egg_ref__ == fn.__egg_ref__ or actual._identity() == fn._identity() else None
     return None

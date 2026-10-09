@@ -7,9 +7,107 @@ import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
-from egglog import EGraph, bindings, i64
+from egglog import EGraph, Expr, bindings, constant, eq, i64, method, set_
 from egglog._catalog import builtin_catalog
 from egglog._program import pack
+
+
+def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
+    requests = []
+
+    class InertTransport:
+        def create(self, encoded):
+            pb.CreateEGraphRequest.from_binary(encoded)
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            requests.append(pb.RunProgramRequest.from_binary(encoded))
+            return pb.RunProgramResponse().to_binary()
+
+        def destroy(self, encoded):
+            assert pb.DestroyEGraphRequest.from_binary(encoded).egraph_id == 1
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport, raising=False)
+    current = constant("current", i64)
+    later = constant("later", i64)
+    graph = EGraph()
+    graph.register(set_(current).to(i64(1)), current, set_(later).to(current + 2), later)
+    assert len(requests) == 1
+    program = requests[0].program
+    assert [command.kind.value.kind.field for command in program.commands] == ["set", "term", "set", "term"]
+    first = program.commands[0].kind.value.kind.value
+    second = program.commands[2].kind.value.kind.value
+    assert program.nodes[program.commands[1].kind.value.kind.value].kind.value.func == first.target.func
+    assert program.nodes[program.commands[3].kind.value.kind.value].kind.value.func == second.target.func
+    definitions = {declaration.kind.value.name: declaration for declaration in program.declarations}
+    assert definitions[first.target.func].kind.field == "function"
+    assert definitions[second.target.func].bindings.python.views[0].kind == pb.PythonCallKind.CONSTANT
+    rhs = program.nodes[second.value].kind.value
+    assert rhs.func == "egglog.core.i64.add"
+    assert program.nodes[rhs.args[0]].kind.value.func == first.target.func
+    with pytest.raises(NotImplementedError, match="Fact-to-action"):
+        graph.register(set_(current).to(i64(1)), eq(i64(1)).to(i64(1)))
+    assert len(requests) == 1
+    graph._state.destroy()
+
+
+def test_response_owner_keeps_nominal_and_ambient_family_contexts(monkeypatch):
+    family = builtin_catalog().definitions["host_sort_family", "Pair"]
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            request = pb.RunProgramRequest.from_binary(encoded)
+            assert any(d.kind.field == "eq_sort" and d.kind.value.name == "Pair" for d in request.program.declarations)
+            return pb.RunProgramResponse(
+                sorts=[
+                    pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Pair")),
+                    pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+                ],
+                nodes=[
+                    pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="P"))),
+                    pb.Node(
+                        sort_id=1,
+                        kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                            "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
+                        ),
+                    ),
+                ],
+                outputs=[
+                    pb.CommandOutput(
+                        kind=Oneof[Literal["extraction"], pb.ExtractResult](
+                            "extraction",
+                            pb.ExtractResult(roots=[pb.ExtractedRoot(variants=[pb.ExtractedTerm(term=0, cost=1)])]),
+                        ),
+                        location=pb.CommandLocation(path=[0]),
+                    )
+                ],
+            ).to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport, raising=False)
+
+    class NominalPair(Expr, egg_sort="Pair"):
+        @method(egg_fn="P")
+        def __init__(self) -> None: ...
+
+        @method(preserve=True)
+        def tag(self):
+            return "nominal hook"
+
+    graph = EGraph()
+    result = graph.extract(NominalPair())
+    assert graph._state.definitions["host_sort_family", "Pair"] == family
+    assert graph._state.definitions["eq_sort", "Pair"] == NominalPair.__egg_definition__
+    assert result.tag() == "nominal hook"
+    assert str(result) == "NominalPair()"
+    graph._state.destroy()
+    assert result.tag() == "nominal hook"
 
 
 def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.MonkeyPatch) -> None:

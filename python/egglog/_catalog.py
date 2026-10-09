@@ -61,7 +61,8 @@ class Catalog:
         definitions: dict[tuple[str, str], Ref] = {}
         types: dict[tuple[str, ...], Ref] = {}
         functions: dict[tuple[str, ...], tuple[Ref, int]] = {}
-        members: dict[tuple[str | None, str], tuple[Ref, int]] = {}
+        constants: dict[tuple[str, ...], tuple[Ref, int]] = {}
+        members: dict[tuple[tuple[str, str] | None, str], tuple[Ref, int]] = {}
         for ref in self.roots:
             declaration: pb.Declaration = ref.read()
             key = _definition_key(declaration)
@@ -75,7 +76,7 @@ class Catalog:
                 binding = kind.bindings
                 if binding is not None and binding.python is not None:
                     path = _python_path(binding.python.path)
-                    if path in types or path in functions:
+                    if path in types or path in functions or path in constants:
                         raise ValueError(f"Python binding collision: {path}")
                     types[path] = ref
                 continue
@@ -88,14 +89,46 @@ class Catalog:
                     if view.owner is not None or view.has_field("receiver"):
                         msg = "A free Python function cannot have an owner or receiver"
                         raise ValueError(msg)
-                    if path in types or path in functions:
+                    if path in types or path in functions or path in constants:
                         raise ValueError(f"Python binding collision: {path}")
                     functions[path] = ref, view_index
+                    continue
+                if view.owner is None and view.kind == pb.PythonCallKind.CONSTANT:
+                    # constant() accepts display-name strings, not Python identifiers.
+                    path = tuple(view.path)
+                    if not path or any(not part for part in path[:-1]):
+                        raise ValueError(f"Invalid Python constant path: {path!r}")
+                    if view.has_field("receiver") or view.params or view.has_field("mutates"):
+                        msg = "A Python constant must be ownerless and nullary"
+                        raise ValueError(msg)
+                    if isinstance(kind, pb.HostPrimitive):
+                        if kind.typing is None or kind.typing.field != "signature":
+                            msg = "A Python constant requires a concrete signature"
+                            raise ValueError(msg)
+                        signature = kind.typing.value
+                        if signature.inputs or signature.type_params or signature.varargs:
+                            msg = "A Python constant requires a concrete nullary signature"
+                            raise ValueError(msg)
+                    elif not isinstance(kind, pb.Constructor | pb.Function | pb.Primitive | pb.Relation) or kind.inputs:
+                        msg = "A Python constant requires a nullary callable"
+                        raise ValueError(msg)
+                    if path in types or path in functions or path in constants:
+                        raise ValueError(f"Python binding collision: {path}")
+                    constants[path] = ref, view_index
                     continue
                 if view.owner is None or view.owner.kind is None:
                     msg = "Python member requires an owner"
                     raise ValueError(msg)
-                owner_name = None
+                if view.kind not in {
+                    pb.PythonCallKind.INITIALIZER,
+                    pb.PythonCallKind.METHOD,
+                    pb.PythonCallKind.CLASS_METHOD,
+                    pb.PythonCallKind.PROPERTY,
+                    pb.PythonCallKind.CLASS_VARIABLE,
+                }:
+                    msg = "Python member has an invalid presentation kind"
+                    raise ValueError(msg)
+                owner_key = None
                 if view.owner.kind.field == "sort":
                     owner_sort: pb.Sort = ref.owner.ref("sorts", view.owner.kind.value).read()
                     if owner_sort.kind is None:
@@ -103,9 +136,9 @@ class Catalog:
                         raise ValueError(msg)
                     match owner_sort.kind.field:
                         case "eq":
-                            owner_name = owner_sort.kind.value
+                            owner_key = "eq_sort", owner_sort.kind.value
                         case "family":
-                            owner_name = owner_sort.kind.value.name
+                            owner_key = "host_sort_family", owner_sort.kind.value.name
                         case _:
                             msg = "Python member requires an equality or host family owner"
                             raise ValueError(msg)
@@ -120,11 +153,12 @@ class Catalog:
                         msg = "Python member path must contain exactly one name"
                         raise ValueError(msg)
                     name = path[0]
-                member = owner_name, name
+                member = owner_key, name
                 if member in members:
                     raise ValueError(f"Python binding collision: {member}")
                 members[member] = ref, view_index
         self.definitions = definitions
         self.types = types
         self.functions = functions
+        self.constants = constants
         self.members = members

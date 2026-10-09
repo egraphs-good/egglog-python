@@ -72,19 +72,34 @@ def resolve_literal(sort: Ref, value: object) -> RuntimeExpr:
         if source_sort.kind.field == "family"
         else ()
     )
+    conversion = None
     for candidate in candidates:
         conversion = CONVERSIONS.get((candidate, target))
         if conversion is not None:
-            with with_type_args(arguments):
-                result = conversion[1](value)
-            if not isinstance(result, RuntimeExpr):
-                raise ConvertError(f"Converter to {target} returned {type(result).__name__}, not an expression")
-            payload: pb.Node = result.__egg_ref__.read()
-            actual = result.__egg_ref__.owner.ref("sorts", payload.sort_id)
-            if StructuralView(actual) != StructuralView(sort):
-                raise ConvertError(f"Converter to {target} returned the wrong canonical sort")
-            return result
-    raise ConvertError(f"Cannot convert {value} of type {source} to {target}")
+            break
+    if conversion is None and source_sort.kind.field == "family":
+        conversion = next(
+            (
+                registered
+                for candidate in candidates
+                for (registered_source, registered_target), registered in CONVERSIONS.items()
+                if registered_source == candidate
+                and registered_target.__egg_sort__ is None
+                and registered_target.__egg_definition__ == target.__egg_definition__
+            ),
+            None,
+        )
+    if conversion is None:
+        raise ConvertError(f"Cannot convert {value} of type {source} to {target}")
+    with with_type_args(arguments):
+        result = conversion[1](value)
+    if not isinstance(result, RuntimeExpr):
+        raise ConvertError(f"Converter to {target} returned {type(result).__name__}, not an expression")
+    payload: pb.Node = result.__egg_ref__.read()
+    actual = result.__egg_ref__.owner.ref("sorts", payload.sort_id)
+    if StructuralView(actual) != StructuralView(sort):
+        raise ConvertError(f"Converter to {target} returned the wrong canonical sort")
+    return result
 
 
 def convert(source: object, target: type[V]) -> V:

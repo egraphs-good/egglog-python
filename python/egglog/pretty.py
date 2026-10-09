@@ -114,7 +114,8 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
             if record.kind.field not in {"eq", "family"}:
                 raise NotImplementedError(f"Sort presentation is not migrated: {record.kind.field}")
             name = record.kind.value if record.kind.field == "eq" else record.kind.value.name
-            sort_declaration: pb.Declaration = _definition_at(reference, "sort", name).read()
+            namespace = "eq_sort" if record.kind.field == "eq" else "host_sort_family"
+            sort_declaration: pb.Declaration = _definition_at(reference, namespace, name).read()
             assert sort_declaration.kind is not None
             assert isinstance(sort_declaration.kind.value, pb.EqSort | pb.HostSortFamily)
             bindings = sort_declaration.kind.value.bindings
@@ -146,6 +147,69 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                         value = repr(primitive.value)
                     elif primitive.field == "unit":
                         value = ""
+                    elif primitive.field == "pair":
+                        from .builtins import _pair_value  # noqa: PLC0415
+                        from .runtime import RuntimeExpr  # noqa: PLC0415
+
+                        left, right = _pair_value(RuntimeExpr(reference))
+                        pieces = [
+                            (sort, False, False),
+                            "(",
+                            (left.__egg_ref__, False, False),
+                            ", ",
+                            (right.__egg_ref__, False, False),
+                            ")",
+                        ]
+                        frames.extend(reversed(pieces))
+                        continue
+                    elif primitive.field == "vec":
+                        from .builtins import _container_member, _vec_value  # noqa: PLC0415
+                        from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
+
+                        children = _vec_value(RuntimeExpr(reference))
+                        if not children:
+                            frames.append(
+                                str(
+                                    _container_member(
+                                        _class_for_sort(sort), "egglog.core.vec.empty", pb.PythonCallKind.CLASS_METHOD
+                                    )
+                                )
+                                + "()"
+                            )
+                            continue
+                        pieces = [(sort, False, False), "("]
+                        for index, child in enumerate(children):
+                            if index:
+                                pieces.append(", ")
+                            pieces.append((child.__egg_ref__, False, False))
+                        pieces.append(")")
+                        frames.extend(reversed(pieces))
+                        continue
+                    elif primitive.field == "map":
+                        from .builtins import _container_member, _map_entries  # noqa: PLC0415
+                        from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
+
+                        entries = _map_entries(RuntimeExpr(reference))
+                        target = _class_for_sort(sort)
+                        empty = _container_member(target, "egglog.core.map.empty", pb.PythonCallKind.CLASS_METHOD)
+                        pieces = [str(empty), "()"]
+                        if entries:
+                            insert = _container_member(target, "egglog.core.map.insert", pb.PythonCallKind.METHOD)
+                            metadata: pb.Declaration = insert.__egg_ref__.read()
+                            assert metadata.bindings is not None
+                            assert metadata.bindings.python is not None
+                            assert insert.__egg_view__ is not None
+                            insert_view = metadata.bindings.python.views[insert.__egg_view__]
+                            for key, value_ref in entries:
+                                arguments = {1: key, 2: value_ref}
+                                pieces.extend([".", insert_view.path[-1], "("])
+                                for index, parameter in enumerate(insert_view.params):
+                                    if index:
+                                        pieces.append(", ")
+                                    pieces.append((arguments[parameter.core_input], False, False))
+                                pieces.append(")")
+                        frames.extend(reversed(pieces))
+                        continue
                     else:
                         raise NotImplementedError(f"Value presentation is not migrated: {primitive.field}")
                     pieces = [value] if bare else [(sort, False, False), "(", value, ")"]
@@ -153,33 +217,60 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                     call = record.kind.value
                     declaration = _definition_at(reference, "callable", call.func)
                     declared: pb.Declaration = declaration.read()
-                    view = (
-                        declared.bindings.python.views[0]
+                    views = (
+                        declared.bindings.python.views
                         if declared.bindings is not None
                         and declared.bindings.python is not None
                         and declared.bindings.python.views
-                        else None
+                        else []
                     )
                     args = [owner.ref("nodes", index) for index in call.args]
+                    if any(
+                        candidate.has_field("tail_repetitions")
+                        and candidate.kind not in {pb.PythonCallKind.FUNCTION, pb.PythonCallKind.METHOD}
+                        for candidate in views
+                    ):
+                        msg = "Tail specialization supports only function and method views"
+                        raise ValueError(msg)
+                    assert declared.kind is not None
+                    kind = declared.kind.value
+                    signature = (
+                        kind.typing.value
+                        if isinstance(kind, pb.HostPrimitive)
+                        and kind.typing is not None
+                        and kind.typing.field == "signature"
+                        else None
+                    )
+                    fixed = len(signature.inputs) if signature is not None else len(args)
+                    tail_width = len(signature.varargs) if signature is not None else 0
+                    if (
+                        len(args) < fixed
+                        or (len(args) - fixed) % (tail_width or 1)
+                        or (not tail_width and len(args) != fixed)
+                    ):
+                        msg = "Call has invalid canonical argument count"
+                        raise ValueError(msg)
+                    view = next(
+                        (
+                            candidate
+                            for candidate in views
+                            if not candidate.has_field("tail_repetitions")
+                            or (tail_width and len(args) == fixed + tail_width * candidate.tail_repetitions)
+                        ),
+                        None,
+                    )
                     if view is None:
                         pieces = [call.func, "("]
                         selected = [(argument, False, False) for argument in args]
                     else:
-                        assert declared.kind is not None
-                        kind = declared.kind.value
-                        fixed = (
-                            len(kind.typing.value.inputs)
-                            if isinstance(kind, pb.HostPrimitive)
-                            and kind.typing is not None
-                            and kind.typing.field == "signature"
-                            else len(args)
-                        )
                         selected = []
                         defaults: list[Ref | None] = []
                         for parameter in view.params:
                             for argument in (
                                 args[parameter.core_input :]
-                                if parameter.core_input == fixed
+                                if tail_width
+                                and not view.has_field("tail_repetitions")
+                                and parameter.core_input == fixed
                                 else [args[parameter.core_input]]
                             ):
                                 selected.append((argument, True, False))
@@ -196,6 +287,12 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                             selected.pop()
                             defaults.pop()
                         name = view.path[-1] if view.path else "__init__"
+                        if view.kind == pb.PythonCallKind.METHOD and name in UNARY_METHODS and not selected:
+                            pieces = [UNARY_METHODS[name], (args[view.receiver], False, True)]
+                            if parentheses:
+                                pieces = ["(", *pieces, ")"]
+                            frames.extend(reversed(pieces))
+                            continue
                         if view.kind == pb.PythonCallKind.METHOD and name in BINARY_METHODS and len(selected) == 1:
                             pieces = [
                                 (args[view.receiver], False, True),
@@ -204,6 +301,10 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                             ]
                             if parentheses:
                                 pieces = ["(", *pieces, ")"]
+                            frames.extend(reversed(pieces))
+                            continue
+                        if view.kind == pb.PythonCallKind.METHOD and name == "__getitem__" and len(selected) == 1:
+                            pieces = [(args[view.receiver], False, True), "[", (selected[0][0], True, False), "]"]
                             frames.extend(reversed(pieces))
                             continue
                         if view.kind == pb.PythonCallKind.INITIALIZER:
@@ -220,13 +321,53 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                             if view.owner.kind.field != "sort":
                                 msg = "Function-type class member presentation is not migrated"
                                 raise NotImplementedError(msg)
-                            pieces = [(declaration.owner.ref("sorts", view.owner.kind.value), False, False), ".", name]
+                            owner_sort = declaration.owner.ref("sorts", view.owner.kind.value)
+                            if (
+                                isinstance(kind, pb.HostPrimitive)
+                                and kind.typing is not None
+                                and kind.typing.field == "signature"
+                            ):
+                                from .type_constraint_solver import infer_sort, substitute_sort  # noqa: PLC0415
+
+                                signature = kind.typing.value
+                                substitutions: dict[int, Ref] = {}
+                                infer_sort(
+                                    declaration.owner.ref("sorts", signature.output),
+                                    sort,
+                                    len(signature.type_params),
+                                    substitutions,
+                                )
+                                patterns = list(signature.inputs)
+                                if signature.varargs:
+                                    tail_count = len(args) - len(patterns)
+                                    if tail_count < 0 or tail_count % len(signature.varargs):
+                                        msg = "Class member has invalid variadic argument count"
+                                        raise ValueError(msg)
+                                    patterns.extend(signature.varargs * (tail_count // len(signature.varargs)))
+                                for parameter, argument in zip(patterns, args, strict=True):
+                                    payload: pb.Node = argument.read()
+                                    infer_sort(
+                                        declaration.owner.ref("sorts", parameter.sort),
+                                        argument.owner.ref("sorts", payload.sort_id),
+                                        len(signature.type_params),
+                                        substitutions,
+                                    )
+                                owner_sort = substitute_sort(owner_sort, substitutions)
+                            pieces = [(owner_sort, False, False), ".", name]
                             if view.kind == pb.PythonCallKind.CLASS_VARIABLE:
                                 frames.extend(reversed(pieces))
                                 continue
                             pieces.append("(")
-                        else:
+                        elif view.kind == pb.PythonCallKind.FUNCTION:
                             pieces = [name, "("]
+                        elif view.kind == pb.PythonCallKind.CONSTANT:
+                            if args or view.params or view.owner is not None or view.has_field("receiver"):
+                                msg = "A constant view must be ownerless and nullary"
+                                raise ValueError(msg)
+                            frames.append(name)
+                            continue
+                        else:
+                            raise NotImplementedError(f"Python view presentation is not migrated: {view.kind}")
                     for index, argument_frame in enumerate(selected):
                         if index:
                             pieces.append(", ")
@@ -241,6 +382,55 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                     pieces.append(")")
                 case _:
                     raise NotImplementedError(f"Node presentation is not migrated: {record.kind.field}")
+        elif isinstance(record, pb.Command) and record.kind is not None and record.kind.field == "action":
+            action = record.kind.value
+            if action.kind is None:
+                msg = "Cannot print an action without a kind"
+                raise ValueError(msg)
+            if action.kind.field == "term":
+                pieces = [(owner.ref("nodes", action.kind.value), False, False)]
+            elif action.kind.field == "set":
+                assignment = action.kind.value
+                if assignment.target is None or not assignment.has_field("value"):
+                    msg = "Cannot print a Set without target and value"
+                    raise ValueError(msg)
+                target = assignment.target
+                declaration = _definition_at(reference, "callable", target.func)
+                declared = declaration.read()
+                view = (
+                    declared.bindings.python.views[0]
+                    if declared.bindings is not None
+                    and declared.bindings.python is not None
+                    and declared.bindings.python.views
+                    else None
+                )
+                name = view.path[-1] if view is not None else target.func
+                pieces = ["set_(", name]
+                if view is None or view.kind == pb.PythonCallKind.FUNCTION:
+                    pieces.append("(")
+                    indices = target.args if view is None else [target.args[p.core_input] for p in view.params]
+                    if view is not None:
+                        while indices:
+                            parameter = view.params[len(indices) - 1]
+                            if not parameter.has_field("default_expr") or StructuralView(
+                                owner.ref("nodes", indices[-1])
+                            ) != StructuralView(declaration.owner.ref("nodes", parameter.default_expr)):
+                                break
+                            indices.pop()
+                    for index, argument in enumerate(indices):
+                        if index:
+                            pieces.append(", ")
+                        pieces.append((owner.ref("nodes", argument), view is not None, False))
+                    pieces.append(")")
+                elif view.kind != pb.PythonCallKind.CONSTANT:
+                    msg = "Set presentation for symbolic members is not migrated"
+                    raise NotImplementedError(msg)
+                elif target.args:
+                    msg = "A constant Set target must be nullary"
+                    raise ValueError(msg)
+                pieces.extend([").to(", (owner.ref("nodes", assignment.value), False, False), ")"])
+            else:
+                raise NotImplementedError(f"Action presentation is not migrated: {action.kind.field}")
         else:
             raise NotImplementedError(f"Record presentation is not migrated: {reference.role}")
         frames.extend(reversed(pieces))

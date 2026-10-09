@@ -27,8 +27,8 @@ from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Mes
 _FIELDS = {
     "Program": "ir_version nodes sorts declarations commands files rulesets rules",
     "Node": "sort_id:sorts var primitive_value call union get_cost span",
-    "Sort": "eq@sort family func var span",
-    "HostSort": "name@sort args:sorts",
+    "Sort": "eq@eq_sort family func var span",
+    "HostSort": "name@host_sort_family args:sorts",
     "FuncSort": "params:sorts result:sorts",
     "Span": "file:files start end",
     "SourceFile": "name contents",
@@ -66,10 +66,10 @@ _FIELDS = {
     "BindingOwner": "sort:sorts function",
     "FunctionTypeOwner": "",
     "PythonBindings": "views",
-    "PythonCallable": "kind path owner receiver params mutates",
+    "PythonCallable": "kind path owner receiver params mutates tail_repetitions",
     "PythonParameter": "core_input name default_expr:nodes",
     "RustBindings": "views",
-    "RustCallable": "path owner borrowed_self receiver params trait_impl",
+    "RustCallable": "path owner borrowed_self receiver params trait_impl tail_repetitions",
     "RustReceiver": "core_input borrowed",
     "RustParameter": "core_input name borrowed",
     "RustTrait": "path args output_associated_type",
@@ -242,7 +242,7 @@ _STRUCTURAL_HASHES: WeakKeyDictionary[Owner, dict[tuple[str, int], int]] = WeakK
 _STRUCTURAL_LOCK = RLock()
 
 
-def _structural_parts(reference: Ref) -> tuple[tuple[object, ...], list[Ref]]:  # noqa: C901
+def _structural_parts(reference: Ref) -> tuple[tuple[object, ...], list[Ref]]:
     """Read comparison data directly; only arena addresses become child refs."""
     ref = reference.owner.ref(reference.role, reference.index)
     record = cast("Message", ref.owner._slots[ref.role][ref.index])
@@ -275,10 +275,7 @@ def _structural_parts(reference: Ref) -> tuple[tuple[object, ...], list[Ref]]:  
                     inline.append((item, f"{path}/{field.name}/{index}"))
                 elif isinstance(message, pb.PrimitiveValue) and field.name == "f64_bits":
                     number = unpack("!d", item.to_bytes(8, "big"))[0]
-                    if isnan(number):
-                        msg = "NaN structural comparison requires the pending Python identity decision"
-                        raise NotImplementedError(msg)
-                    shape.append(number)
+                    shape.append(("nan", item) if isnan(number) else number)
                 else:
                     shape.append(item)
         pending.extend(reversed(inline))
@@ -505,7 +502,7 @@ def _definition_key(record: Message) -> tuple[str, str] | None:
         if record.kind is None:
             msg = "Declaration has no kind"
             raise ValueError(msg)
-        namespace = "sort" if record.kind.field in {"eq_sort", "host_sort_family"} else "callable"
+        namespace = record.kind.field if record.kind.field in {"eq_sort", "host_sort_family"} else "callable"
         return namespace, record.kind.value.name
     if isinstance(record, pb.Ruleset) and record.has_field("name"):
         return "ruleset", record.name

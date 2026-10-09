@@ -26,6 +26,25 @@ assert String("hello").value == "hello"
 assert PyObject([1,2,3]).value == [1,2,3]
 ```
 
+`join` concatenates any number of strings, including none. String addition,
+replacement, integer conversion, and Boolean operations build expressions;
+extract them to inspect the computed value:
+
+```{code-cell} python
+graph = EGraph()
+assert graph.extract(join()).value == ""
+assert graph.extract(join("hello", " ", String("world"))).value == "hello world"
+assert graph.extract((String("abc") + "!").replace("b", "x")).value == "axc!"
+assert graph.extract(i64(-42).to_string()).value == "-42"
+assert graph.extract(~Bool(False) & (Bool(False) | True)).value is True
+assert graph.extract(Bool(True).implies(False)).value is False
+```
+
+`bool(Bool(False))` is `False`. Inspecting the truth value of a computed Bool
+raises `ExprValueError` until it is extracted. `Unit()` has no `.value` or
+`.eval()`; its fact truth check raises `ValueError` because it is not a
+structural equality.
+
 To check if an expression is a let value and get its name, use `get_let_name(expr)`:
 
 ```{code-cell} python
