@@ -84,7 +84,7 @@ _FIELDS = {
     "Rewrite": "lhs:nodes rhs:nodes conditions:nodes subsume",
     "BiRewrite": "lhs:nodes rhs:nodes conditions:nodes",
     "CombinedRuleset": "rulesets",
-    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze print_size print_function print_table_stats repeat saturate fail span",
+    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze print_size print_function print_table_stats repeat saturate fail stats span",
     "Check": "facts:nodes",
     "Prove": "facts:nodes",
     "ProveExists": "constructor@callable",
@@ -333,62 +333,74 @@ class StructuralView:
         return True
 
 
-def rule_equal(left: Ref, right: Ref) -> bool:  # noqa: C901, PLR0912
+def _rule_key(root: Ref) -> tuple[object, ...]:  # noqa: C901
     """
-    Compare rule templates, preserving allocation topology within each use unit.
+    Derive comparison/hash tokens, preserving allocation topology per use unit.
 
     Rule addresses remain occurrence identities everywhere else. Query Union
     syntax is nonallocating; action/deferred-code Unions need a bijection, not
     absolute owner indices. Named closure is exactly packing's dependency closure.
     """
-    if left.role != "rules" or right.role != "rules":
+    if root.role != "rules":
         msg = "Rule comparison requires rule references"
         raise TypeError(msg)
-    closures = [{_definition_key(ref.read()): ref for ref in pack(roots=[root]).definitions} for root in (left, right)]
-    if closures[0].keys() != closures[1].keys():
-        return False
-    pending: list[tuple[Ref, Ref, object, bool]] = [(left, right, "rule", False)]
-    pending.extend((ref, closures[1][key], key, False) for key, ref in closures[0].items())
-    seen: set[tuple[Ref, Ref, object, bool]] = set()
-    unions: dict[tuple[object, Ref], Ref] = {}
-    reverse_unions: dict[tuple[object, Ref], Ref] = {}
+    closure = {_definition_key(ref.read()): ref for ref in pack(roots=[root]).definitions}
+    ordered = sorted(closure, key=repr)
+    roots: list[tuple[Ref, object, bool]] = [(closure[key], key, False) for key in ordered] + [(root, "rule", False)]
+    roots = [(ref.owner.ref(ref.role, ref.index), domain, query) for ref, domain, query in roots]
+    pending: list[tuple[Ref, object, bool, bool]] = [(*visit, False) for visit in reversed(roots)]
+    active: dict[tuple[Ref, object, bool], tuple[tuple[object, ...], list[tuple[Ref, object, bool]]]] = {}
+    completed: dict[tuple[Ref, object, bool], int] = {}
+    tokens: dict[tuple[object, ...], int] = {}
+    unions: dict[object, dict[Ref, int]] = {}
     while pending:
-        a, b, domain, query = pending.pop()
-        a = a.owner.ref(a.role, a.index)
-        b = b.owner.ref(b.role, b.index)
-        visit = (a, b, domain, query)
-        if visit in seen:
+        reference, domain, query, leaving = pending.pop()
+        reference = reference.owner.ref(reference.role, reference.index)
+        visit = reference, domain, query
+        if leaving:
+            shape, children_visits = active.pop(visit)
+            token = shape, tuple(completed[child] for child in children_visits)
+            completed[visit] = tokens.setdefault(token, len(tokens))
             continue
-        seen.add(visit)
-        record = a.read()
+        if visit in completed:
+            continue
+        if visit in active:
+            msg = "Cyclic rule template syntax"
+            raise ValueError(msg)
+        shape, children = _structural_parts(reference, identity=False)
+        record = reference.read()
         if isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "union" and not query:
-            if unions.get((domain, a), b) != b or reverse_unions.get((domain, b), a) != a:
-                return False
-            unions[domain, a] = b
-            reverse_unions[domain, b] = a
-        shape_a, children_a = _structural_parts(a, identity=False)
-        shape_b, children_b = _structural_parts(b, identity=False)
-        if shape_a != shape_b or len(children_a) != len(children_b):
-            return False
-        for (child_a, path_a), (child_b, path_b) in zip(children_a, children_b, strict=True):
-            if path_a != path_b:
-                return False
+            allocations = unions.setdefault(domain, {})
+            ordinal = allocations.setdefault(reference, len(allocations))
+            shape = ("allocation", ordinal, shape)
+        children_visits = []
+        active[visit] = shape, children_visits
+        pending.append((reference, domain, query, True))
+        for child, path in children:
             child_domain, child_query = domain, query
-            if a.role == "rules":
-                if path_a.startswith("/birewrite/"):
+            if reference.role == "rules":
+                if path.startswith("/birewrite/"):
                     msg = "Bidirectional rule template comparison is not migrated"
                     raise NotImplementedError(msg)
-                child_query = path_a.startswith(("/rule/0/query/", "/rewrite/0/lhs/", "/rewrite/0/conditions/"))
+                child_query = path.startswith(("/rule/0/query/", "/rewrite/0/lhs/", "/rewrite/0/conditions/"))
                 child_domain = "query" if child_query else "head"
-            elif a.role == "declarations":
+            elif reference.role == "declarations":
                 # All defaults of one presentation expand together. Other body
                 # roots (primitive, merge, cost) have independent binders/units.
-                child_domain = (a, b, path_a.partition("/params/")[0] if "/default_expr/" in path_a else path_a)
+                child_domain = (reference, path.partition("/params/")[0] if "/default_expr/" in path else path)
                 child_query = False
-            elif "/lambda/0/body/" in path_a:
-                child_domain, child_query = (a, b, path_a), False
-            pending.append((child_a, child_b, child_domain, child_query))
-    return True
+            elif "/lambda/0/body/" in path:
+                child_domain, child_query = object(), False
+            children_visits.append((child.owner.ref(child.role, child.index), child_domain, child_query))
+        pending.extend((*child, False) for child in reversed(children_visits))
+    # Interned child IDs erase pure DAG sharing without expanding its paths.
+    # Insertion order is canonical postorder, not any owner's arena numbering.
+    return tuple(ordered), tuple(completed[visit] for visit in roots), tuple(tokens)
+
+
+def rule_equal(left: Ref, right: Ref) -> bool:
+    """Compare templates; rule Ref identity remains occurrence identity elsewhere."""
+    return _rule_key(left) == _rule_key(right)
 
 
 class Owner:
@@ -500,6 +512,8 @@ class Packed:
     # Canonical source declarations let response owners retain the same
     # presentations without manufacturing another semantic declaration copy.
     definitions: tuple[Ref, ...]
+    # Exact source owners in request-index order for report attribution.
+    rulesets: tuple[Ref, ...]
 
 
 def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
@@ -664,7 +678,8 @@ def pack(  # noqa: C901, PLR0912
             if missing:
                 raise ValueError(f"missing definitions: {sorted(missing)}")
             break
-    return Packed(program, indices, tuple(emitted.values()))
+    rulesets = tuple(ref for ref in sorted(mapped, key=mapped.__getitem__) if ref.role == "rulesets")
+    return Packed(program, indices, tuple(emitted.values()), rulesets)
 
 
 _check_inventory()

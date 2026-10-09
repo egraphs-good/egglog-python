@@ -33,6 +33,36 @@ def literal(value: int):
 AMBIENT = frozenset({("host_sort_family", "i64"), ("callable", "f"), ("callable", "g")})
 
 
+def test_schedule_composition_relocates_owned_inline_spans_without_engine(monkeypatch):
+    from egglog import Schedule, seq  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Schedule relocation accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    builder = Builder()
+    builder.add("files", pb.SourceFile(name="unused"))
+    file = builder.add("files", pb.SourceFile(name="schedule.py", contents="run()"))
+    index = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["run"], pb.Run](
+                "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", "")))
+            ),
+            span=pb.Span(file=file, start=0, end=5),
+        ),
+    )
+    original = Schedule(builder.publish().ref("commands", index), {})
+    combined = seq(original, original.saturate() * 2)
+    program = pack(commands=[combined._resolve(None)], ambient={("ruleset", "")}).program
+    assert [file.name for file in program.files] == ["schedule.py"]
+    first, second = program.commands[0].kind.value.body
+    assert first.span == pb.Span(file=0, start=0, end=5)
+    assert second.kind.value.body[0].kind.value.body[0].span == first.span
+    assert pb.Program.from_binary(program.to_binary()) == program
+
+
 @pytest.mark.parametrize(
     ("mode", "expected"),
     [

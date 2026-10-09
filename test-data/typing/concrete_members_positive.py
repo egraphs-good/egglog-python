@@ -6,10 +6,13 @@ from collections.abc import Callable, Iterable
 from typing import ClassVar, assert_type
 
 from egglog import (
+    EGraph,
     Expr,
     Pair,
     RewriteOrRule,
     Ruleset,
+    RunReport,
+    Schedule,
     Vec,
     eq,
     f64,
@@ -19,9 +22,12 @@ from egglog import (
     rewrite,
     rule,
     ruleset,
+    run,
+    seq,
     var,
     vars_,
 )
+from egglog.run_report import RuleKey
 
 
 class Node(Expr):
@@ -96,3 +102,13 @@ assert_type(Defaults.earlier(defaults, 1), Node)
 assert_type(defaults.own, Defaults)
 assert_type(Defaults.named(), Defaults)
 assert_type(Defaults.choose(Node), Node)
+
+schedule = (destination + run()).saturate() * 3
+assert_type(schedule, Schedule)
+assert_type(seq(destination, run()), Schedule)
+graph = EGraph()
+report = graph.run(schedule)
+assert_type(report, RunReport)
+assert_type(graph.stats(), RunReport)
+assert_type(next(iter(report.num_matches_per_rule)), RuleKey)
+assert_type(next(iter(report.num_matches_per_rule.values())), int)

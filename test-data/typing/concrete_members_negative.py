@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import ClassVar
 
-from egglog import Expr, Pair, Vec, f64, i64, i64Like, rewrite, rule, ruleset, var, vars_
+from egglog import EGraph, Expr, Pair, Vec, f64, i64, i64Like, rewrite, rule, ruleset, run, seq, var, vars_
+from egglog.run_report import RuleKey
 
 
 class Node(Expr):
@@ -65,3 +66,10 @@ Defaults.earlier(node, 1)  # error: arg-type
 wrong_default: i64 = Defaults.FIRST  # error: assignment
 wrong_body_result: i64 = Defaults().earlier()  # error: assignment
 Defaults.choose(i64)  # error: arg-type
+
+run() * "three"  # error: operator
+seq(run(), i64(1))  # error: arg-type
+run(i64(1))  # error: arg-type
+bad_report: i64 = EGraph().run(run())  # error: assignment
+bad_key: str = next(iter(EGraph().stats().num_matches_per_rule))  # error: assignment
+RuleKey("not a canonical reference")  # error: arg-type

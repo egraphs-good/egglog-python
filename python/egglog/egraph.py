@@ -12,6 +12,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
+from operator import index as index_integer
 from types import FrameType, FunctionType
 from typing import (
     TYPE_CHECKING,
@@ -1161,7 +1162,22 @@ class EGraph:
         """
         Set the level of detail recorded in subsequent run reports.
         """
-        self._egraph.set_report_level(level)
+        levels = {
+            bindings.TimeOnly: pb.ReportLevel.TIME_ONLY,
+            bindings.WithPlan: pb.ReportLevel.WITH_PLAN,
+            bindings.StageInfo: pb.ReportLevel.STAGE_INFO,
+        }
+        if type(level) not in levels:
+            msg = "Expected a native report level"
+            raise TypeError(msg)
+        if self._state.handle is None:
+            msg = "EGraph handle has been destroyed"
+            raise RuntimeError(msg)
+        request = pb.ConfigureEGraphResourcesRequest(
+            egraph_id=self._state.handle,
+            operation=Oneof[Literal["report_level"], pb.ReportLevel]("report_level", levels[type(level)]),
+        )
+        pb.ConfigureEGraphResourcesResponse.from_binary(self._state.transport.configure_resources(request.to_binary()))
 
     def num_threads(self) -> int:
         """Return the number of worker threads configured for this e-graph."""
@@ -1277,19 +1293,48 @@ class EGraph:
         return self._run_schedule(limit_or_schedule)
 
     def _run_schedule(self, schedule: Schedule) -> RunReport:
-        self._add_decls(schedule)
-        cmd = self._state.run_schedule_to_egg(schedule.schedule)
-        (command_output,) = self._state.run_program(cmd)
-        assert isinstance(command_output, bindings.RunScheduleOutput)
-        return RunReport._from_bindings(command_output.report, self._state)
+        if isinstance(schedule, Ruleset | UnstableCombinedRuleset):
+            schedule = run(schedule)
+        command = schedule._resolve(self._state)
+        packed = pack(commands=[command], ambient=self._state.definitions)
+        response, _ = self._state.run_program(packed, include_run_reports=True)
+        if len(response.outputs) != 1 or response.outputs[0].run_report is None:
+            msg = "Run response omitted its complete native report"
+            raise ValueError(msg)
+        output = response.outputs[0]
+        report = output.run_report
+        assert report is not None
+        expected = "run" if command.read().kind.field == "run" else "loop"
+        if (
+            output.location != pb.CommandLocation(path=[0])
+            or output.kind is None
+            or output.kind.field not in ("run", "loop")
+            or output.kind.field != expected
+            or output.kind.value.updated != report.updated
+            or (output.kind.field == "run" and output.kind.value.can_stop != report.can_stop)
+        ):
+            msg = "Run report does not match its requested top-level control"
+            raise ValueError(msg)
+        return RunReport._from_proto(report, response, packed, self._state)
 
     def stats(self) -> RunReport:
         """
         Returns the overall run report for the egraph.
         """
-        (output,) = self._state.run_program(bindings.PrintOverallStatistics(span(1), None))
-        assert isinstance(output, bindings.OverallStatistics)
-        return RunReport._from_bindings(output.report, self._state)
+        builder = Builder()
+        command = builder.add("commands", pb.Command(kind=Oneof[Literal["stats"], pb.Unit]("stats", pb.Unit())))
+        packed = pack(commands=[builder.publish().ref("commands", command)])
+        response, _ = self._state.run_program(packed)
+        if (
+            len(response.outputs) != 1
+            or response.outputs[0].kind is None
+            or response.outputs[0].kind.field != "statistics"
+            or response.outputs[0].location != pb.CommandLocation(path=[0])
+            or response.outputs[0].run_report is not None
+        ):
+            msg = "Stats response omitted its native statistics"
+            raise ValueError(msg)
+        return RunReport._from_proto(response.outputs[0].kind.value, response, packed, self._state)
 
     def check_bool(self, *facts: FactLike) -> bool:
         """
@@ -1587,9 +1632,8 @@ class EGraph:
         if not self._state_stack:
             msg = "Cannot pop an EGraph without a pushed state"
             raise IndexError(msg)
-        temporary = self._state
+        self._state.return_to(self._state_stack[-1])
         self._state = self._state_stack.pop()
-        temporary.destroy()
 
     def __enter__(self) -> Self:
         """
@@ -2205,8 +2249,7 @@ def ruleset(
     return r
 
 
-@dataclass
-class Schedule(DelayedDeclarations):
+class Schedule:
     """
     A composable e-graph schedule.
 
@@ -2215,11 +2258,86 @@ class Schedule(DelayedDeclarations):
     repeat until the schedule stops changing the e-graph.
     """
 
-    # Defer declarations so that we can have rule generators that used not yet defined yet
-    schedule: ScheduleDecl
+    def __init__(self, reference: Ref, bindings: dict[str, Ruleset | UnstableCombinedRuleset]) -> None:
+        if reference.role != "commands":
+            msg = "Schedules require a canonical command reference"
+            raise TypeError(msg)
+        self._command = reference
+        # Resolution/lifetime ownership only; all control topology is in Command.
+        self._bindings = bindings.copy()
+
+    def _resolve(self, state: EGraphState | None) -> Ref:  # noqa: C901, PLR0912
+        """Materialize live sources, then relocate this one canonical command."""
+        builder = Builder()
+        command: pb.Command = _copy_record(
+            self._command.read(),
+            relocate=lambda role, index: builder.import_ref(self._command.owner.ref(role, index)),
+        )
+        pending = [command]
+        leaves: list[pb.Run] = []
+        while pending:
+            current = pending.pop()
+            if current.kind is None:
+                msg = "Schedule command has no kind"
+                raise ValueError(msg)
+            if current.kind.field == "run":
+                if current.kind.value.scheduler:
+                    msg = "Custom schedulers are not migrated"
+                    raise NotImplementedError(msg)
+                leaves.append(current.kind.value)
+            elif current.kind.field in {"repeat", "saturate"}:
+                control = current.kind.value
+                if control.until or (isinstance(control, pb.Repeat) and control.times not in (0, 1)):
+                    msg = "Only ordinary no-until schedules and exact Repeat0/1 are migrated"
+                    raise NotImplementedError(msg)
+                if state is not None:
+                    count = (
+                        control.times
+                        if isinstance(control, pb.Repeat)
+                        else (control.max_iterations if control.has_field("max_iterations") else None)
+                    )
+                    if count is not None and not 0 <= count < 2**64:
+                        msg = "can't convert schedule count to unsigned native size"
+                        raise OverflowError(msg)
+                pending.extend(reversed(control.body))
+            else:
+                msg = f"Schedule command is not migrated: {current.kind.field}"
+                raise NotImplementedError(msg)
+        identifiers: dict[Ref, Ident] = {}
+        snapshots: dict[str, Ref] = {}
+        # Source precedence is authored leaf order, not binding-map insertion
+        # order: seq(a, b, a) must select a last even when its token is reused.
+        for leaf in leaves:
+            if leaf.ruleset is None or leaf.ruleset.kind is None or leaf.ruleset.kind.field != "name":
+                msg = "Schedule template requires a live named target"
+                raise ValueError(msg)
+            name = leaf.ruleset.kind.value
+            if name:
+                snapshots[name] = self._bindings[name]._snapshot(identifiers)
+        for leaf in leaves:
+            if leaf.ruleset is None or leaf.ruleset.kind is None or leaf.ruleset.kind.field != "name":
+                msg = "Schedule template requires a live named target"
+                raise ValueError(msg)
+            name = leaf.ruleset.kind.value
+            if name:
+                reference = snapshots[name]
+                if state is not None:
+                    reference = state.publish_ruleset(reference, identifiers)
+            elif state is None:
+                continue
+            else:
+                default = Builder()
+                index = default.add(
+                    "rulesets", pb.Ruleset(kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList()))
+                )
+                reference = default.publish().ref("rulesets", index)
+                reference = state.publish_ruleset(reference, {reference: Ident("")})
+            leaf.ruleset = pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", builder.import_ref(reference)))
+        index = builder.add("commands", command)
+        return builder.publish().ref("commands", index)
 
     def __str__(self) -> str:
-        return pretty_decl(self.__egg_decls__, self.schedule)
+        return pretty_ref(self._resolve(None))
 
     def __repr__(self) -> str:
         return str(self)
@@ -2228,28 +2346,42 @@ class Schedule(DelayedDeclarations):
         """
         Repeat the schedule a number of times.
         """
-        if isinstance(self, Ruleset | UnstableCombinedRuleset):
-            msg = "Canonical repeated schedules are not migrated"
-            raise NotImplementedError(msg)
-        return Schedule(self.__egg_decls_thunk__, RepeatDecl(self.schedule, length))
+        source = run(self) if isinstance(self, Ruleset | UnstableCombinedRuleset) else self
+        length = index_integer(length)
+        builder = Builder()
+        command: pb.Command = _copy_record(
+            source._command.read(),
+            relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),
+        )
+        kind = (
+            Oneof[Literal["repeat"], pb.Repeat]("repeat", pb.Repeat(times=0, body=[command]))
+            if length == 0
+            else Oneof[Literal["saturate"], pb.Saturate]("saturate", pb.Saturate(max_iterations=length, body=[command]))
+        )
+        index = builder.add("commands", pb.Command(kind=kind))
+        return Schedule(builder.publish().ref("commands", index), source._bindings)
 
     def saturate(self) -> Schedule:
         """
         Run the schedule until the e-graph is saturated.
         """
-        if isinstance(self, Ruleset | UnstableCombinedRuleset):
-            msg = "Canonical saturated schedules are not migrated"
-            raise NotImplementedError(msg)
-        return Schedule(self.__egg_decls_thunk__, SaturateDecl(self.schedule))
+        source = run(self) if isinstance(self, Ruleset | UnstableCombinedRuleset) else self
+        builder = Builder()
+        command: pb.Command = _copy_record(
+            source._command.read(),
+            relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),
+        )
+        index = builder.add(
+            "commands",
+            pb.Command(kind=Oneof[Literal["saturate"], pb.Saturate]("saturate", pb.Saturate(body=[command]))),
+        )
+        return Schedule(builder.publish().ref("commands", index), source._bindings)
 
     def __add__(self, other: Schedule) -> Schedule:
         """
         Run two schedules in sequence.
         """
-        if isinstance(self, Ruleset | UnstableCombinedRuleset) or isinstance(other, Ruleset | UnstableCombinedRuleset):
-            msg = "Canonical sequential schedules are not migrated"
-            raise NotImplementedError(msg)
-        return Schedule(partial(Declarations.create, self, other), SequenceDecl((self.schedule, other.schedule)))
+        return seq(self, other)
 
 
 class Ruleset(Schedule):
@@ -2324,7 +2456,7 @@ class Ruleset(Schedule):
             self.deferred_rule_gens.append(Thunk.fn(_rewrite_or_rule_generator, rule_or_generator, original_frame))
 
     def __str__(self) -> str:
-        return pretty_ref(self.__egg_ref__)
+        return pretty_ref(self._snapshot({}))
 
     def __repr__(self) -> str:
         return str(self)
@@ -2915,15 +3047,23 @@ def run(
     ruleset once. Additional facts become ``:until`` stop conditions. A custom
     ``scheduler`` currently supports at most one non-equality stop fact.
     """
-    facts = _fact_likes(until)
-    return Schedule(
-        partial(Declarations.create, ruleset, *facts),
-        RunDecl(
-            ruleset.__egg_ident__ if ruleset else Ident(""),
-            tuple(f.fact for f in facts),
-            scheduler.scheduler if scheduler else None,
+    if until or scheduler is not None:
+        msg = "Until and custom schedulers require a separate shared execution migration"
+        raise NotImplementedError(msg)
+    if ruleset is not None and not isinstance(cast("object", ruleset), Ruleset | UnstableCombinedRuleset):
+        msg = "Run target must be a ruleset"
+        raise TypeError(msg)
+    name = uuid4().hex if ruleset is not None else ""
+    builder = Builder()
+    index = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["run"], pb.Run](
+                "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", name)))
+            )
         ),
     )
+    return Schedule(builder.publish().ref("commands", index), {} if ruleset is None else {name: ruleset})
 
 
 def back_off(match_limit: None | int = None, ban_length: None | int = None) -> BackOff:
@@ -2956,7 +3096,8 @@ class BackOff:
         Defines the scheduler to be created directly before the inner schedule, instead of the default which is at the
         most outer scope.
         """
-        return Schedule(schedule.__egg_decls_thunk__, LetSchedulerDecl(self.scheduler, schedule.schedule))
+        msg = "Custom scheduler scopes are not migrated"
+        raise NotImplementedError(msg)
 
     def __str__(self) -> str:
         return pretty_decl(Declarations(), self.scheduler)
@@ -2971,7 +3112,25 @@ def seq(*schedules: Schedule) -> Schedule:
 
     For two schedules, ``left + right`` is equivalent to ``seq(left, right)``.
     """
-    return Schedule(partial(Declarations.create, *schedules), SequenceDecl(tuple(s.schedule for s in schedules)))
+    sources = [
+        run(schedule) if isinstance(schedule, Ruleset | UnstableCombinedRuleset) else schedule for schedule in schedules
+    ]
+    builder = Builder()
+    body: list[pb.Command] = [
+        _copy_record(
+            source._command.read(),
+            relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),  # noqa: B023
+        )
+        for source in sources
+    ]
+    index = builder.add(
+        "commands",
+        pb.Command(kind=Oneof[Literal["repeat"], pb.Repeat]("repeat", pb.Repeat(times=1, body=body))),
+    )
+    return Schedule(
+        builder.publish().ref("commands", index),
+        {name: owner for source in sources for name, owner in source._bindings.items()},
+    )
 
 
 def _action_likes(action_likes: Iterable[ActionLike]) -> tuple[Action, ...]:

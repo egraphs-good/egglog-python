@@ -2,13 +2,93 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import TYPE_CHECKING
+
+from egglog_proto.egglog.v1 import egglog_pb as pb
 
 from . import bindings
-from .declarations import BiRewriteDecl, Declarations, RewriteDecl, RuleDecl
-from .egraph_state import EGraphState
-from .pretty import pretty_decl
+from ._program import Packed, Ref, _rule_key, rule_equal
+from .pretty import pretty_ref
 
-RewriteOrRuleDecl = RuleDecl | BiRewriteDecl | RewriteDecl
+if TYPE_CHECKING:
+    from .egraph_state import EGraphState
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class RuleKey:
+    """Immutable authored-rule inspection key, independent of installation identity."""
+
+    __egg_ref__: Ref
+
+    def __post_init__(self) -> None:
+        if self.__egg_ref__.role != "rules":
+            msg = "Report keys require a canonical rule reference"
+            raise TypeError(msg)
+        record: pb.RuleDecl = self.__egg_ref__.read()
+        if record.kind is None:
+            msg = "Report rule has no body"
+            raise ValueError(msg)
+
+    def __hash__(self) -> int:
+        return hash(_rule_key(self.__egg_ref__))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, RuleKey):
+            return NotImplemented
+        return rule_equal(self.__egg_ref__, other.__egg_ref__)
+
+    def __repr__(self) -> str:
+        return pretty_ref(self.__egg_ref__)
+
+
+def _duration(value: pb.ReportDuration | None) -> timedelta:
+    """Preserve native integer microsecond truncation and Python duration limits."""
+    if value is None or not 0 <= value.seconds < 2**64 or not 0 <= value.nanos < 10**9:
+        msg = "Missing or invalid native report duration"
+        raise ValueError(msg)
+    try:
+        return timedelta(seconds=value.seconds, microseconds=value.nanos // 1000)
+    except OverflowError:
+        msg = "Rust Duration is too large for datetime.timedelta"
+        raise OverflowError(msg) from None
+
+
+def _plan(value: pb.ReportPlan | None) -> bindings.Plan | None:
+    """Project inert native plan observations, validating their local topology."""
+    if value is None:
+        return None
+    stages: list[tuple[bindings._Stage, bindings.StageStats | None, list[int]]] = []
+    for stage in value.stages:
+        if stage.kind is None or any(not 0 <= successor < len(value.stages) for successor in stage.next):
+            msg = "Malformed native report plan"
+            raise ValueError(msg)
+        native: bindings._Stage
+        if stage.kind.field == "intersect":
+            scans = []
+            for scan in stage.kind.value.scans:
+                if len(scan.columns) != 1:
+                    msg = "A native single scan must have exactly one column"
+                    raise ValueError(msg)
+                column = scan.columns[0]
+                scans.append(bindings.SingleScan(scan.table, (column.variable, column.column)))
+            native = bindings.Intersect(scans)
+        else:
+            fused = stage.kind.value
+            if fused.cover is None:
+                msg = "A fused native plan requires a cover"
+                raise ValueError(msg)
+            native = bindings.FusedIntersect(
+                bindings.Scan(fused.cover.table, [(c.variable, c.column) for c in fused.cover.columns]),
+                [
+                    bindings.Scan(scan.table, [(c.variable, c.column) for c in scan.columns])
+                    for scan in fused.to_intersect
+                ],
+            )
+        stats = (
+            None if stage.stats is None else bindings.StageStats(stage.stats.num_candidates, stage.stats.num_succeeded)
+        )
+        stages.append((native, stats, list(stage.next)))
+    return bindings.Plan(stages)
 
 
 @dataclass
@@ -17,50 +97,20 @@ class RuleReport:
     search_and_apply_time: timedelta
     num_matches: int
 
-    @classmethod
-    def _from_bindings(cls, report: bindings.RuleReport) -> RuleReport:
-        return cls(
-            plan=report.plan,
-            search_and_apply_time=report.search_and_apply_time,
-            num_matches=report.num_matches,
-        )
-
 
 @dataclass
 class RuleSetReport:
-    _decls: Declarations = field(repr=False)
+    # Retained positional observation slot; no semantic declarations are stored.
+    _decls: object = field(repr=False)
     changed: bool = False
-    rule_reports: dict[RewriteOrRuleDecl, list[RuleReport]] = field(default_factory=dict)
+    rule_reports: dict[RuleKey, list[RuleReport]] = field(default_factory=dict)
     search_and_apply_time: timedelta = field(default_factory=timedelta)
     merge_time: timedelta = field(default_factory=timedelta)
 
-    @classmethod
-    def _from_bindings(
-        cls, report: bindings.RuleSetReport, rule_map: dict[str, RewriteOrRuleDecl], decls: Declarations
-    ) -> RuleSetReport:
-        rule_reports: dict[RewriteOrRuleDecl, list[RuleReport]] = {}
-        for k, v in report.rule_reports.items():
-            translated = rule_map[k]
-            reports = [RuleReport._from_bindings(rr) for rr in v]
-            if translated in rule_reports:
-                rule_reports[translated].extend(reports)
-            else:
-                rule_reports[translated] = reports
-        return cls(
-            _decls=decls,
-            changed=report.changed,
-            rule_reports=rule_reports,
-            search_and_apply_time=report.search_and_apply_time,
-            merge_time=report.merge_time,
-        )
-
     def __repr__(self) -> str:
-        rule_reports_str = {pretty_decl(self._decls, k): v for k, v in self.rule_reports.items()}
         return (
-            f"RuleSetReport(changed={self.changed}, "
-            f"rule_reports={rule_reports_str}, "
-            f"search_and_apply_time={self.search_and_apply_time}, "
-            f"merge_time={self.merge_time})"
+            f"RuleSetReport(changed={self.changed}, rule_reports={self.rule_reports}, "
+            f"search_and_apply_time={self.search_and_apply_time}, merge_time={self.merge_time})"
         )
 
 
@@ -69,73 +119,122 @@ class IterationReport:
     rule_set_report: RuleSetReport
     rebuild_time: timedelta
 
-    @classmethod
-    def _from_bindings(
-        cls, report: bindings.IterationReport, rule_map: dict[str, RewriteOrRuleDecl], decls: Declarations
-    ) -> IterationReport:
-        return cls(
-            rule_set_report=RuleSetReport._from_bindings(report.rule_set_report, rule_map, decls),
-            rebuild_time=report.rebuild_time,
-        )
-
 
 @dataclass
 class RunReport:
-    """Python-friendly wrapper around bindings.RunReport."""
+    """Actual native report data with meaningful canonical authored-rule keys."""
 
-    _decls: Declarations = field(repr=False)
+    _decls: object = field(repr=False)
     iterations: list[IterationReport] = field(default_factory=list)
     updated: bool = False
-    search_and_apply_time_per_rule: dict[RewriteOrRuleDecl, timedelta] = field(default_factory=dict)
-    num_matches_per_rule: dict[RewriteOrRuleDecl, int] = field(default_factory=dict)
+    search_and_apply_time_per_rule: dict[RuleKey, timedelta] = field(default_factory=dict)
+    num_matches_per_rule: dict[RuleKey, int] = field(default_factory=dict)
     search_and_apply_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
     merge_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
     rebuild_time_per_ruleset: dict[str, timedelta] = field(default_factory=dict)
     can_stop: bool = False
 
-    def __repr__(self) -> str:
-        time_per_rule = {pretty_decl(self._decls, k): v for k, v in self.search_and_apply_time_per_rule.items()}
-        matches_per_rule = {pretty_decl(self._decls, k): v for k, v in self.num_matches_per_rule.items()}
-        return (
-            f"RunReport(iterations={self.iterations}, "
-            f"updated={self.updated}, "
-            f"can_stop={self.can_stop}, "
-            f"search_and_apply_time_per_rule={time_per_rule}, "
-            f"num_matches_per_rule={matches_per_rule}, "
-            f"search_and_apply_time_per_ruleset={self.search_and_apply_time_per_ruleset}, "
-            f"merge_time_per_ruleset={self.merge_time_per_ruleset}, "
-            f"rebuild_time_per_ruleset={self.rebuild_time_per_ruleset})"
-        )
-
     @classmethod
-    def _from_bindings(cls, report: bindings.RunReport, state: EGraphState) -> RunReport:
-        rule_map = state.rule_name_to_command_decl
-        decls = state.__egg_decls__
+    def _from_proto(  # noqa: C901
+        cls, report: pb.NativeRunReport, response: pb.RunProgramResponse, request: Packed, state: EGraphState
+    ) -> RunReport:
+        def ruleset(reference: pb.RulesetRef | None) -> Ref:
+            if reference is None or reference.kind is None:
+                msg = "Report is missing canonical ruleset attribution"
+                raise ValueError(msg)
+            if reference.kind.field == "index":
+                index = reference.kind.value
+                if not 0 <= index < len(request.rulesets):
+                    msg = "Report ruleset index is outside its request"
+                    raise ValueError(msg)
+                return request.rulesets[index]
+            return state.definitions["ruleset", reference.kind.value]
 
-        search_and_apply_time_per_rule: dict[RewriteOrRuleDecl, timedelta] = {}
-        for k, v in report.search_and_apply_time_per_rule.items():
-            translated = rule_map[k]
-            if translated in search_and_apply_time_per_rule:
-                search_and_apply_time_per_rule[translated] += v
-            else:
-                search_and_apply_time_per_rule[translated] = v
+        def rule(row: pb.RuleDurationEntry | pb.RuleCountEntry | pb.NativeRuleReportsEntry) -> RuleKey:
+            if not row.has_field("rule"):
+                raise KeyError(row.native_name)
+            if not row.has_field("direction") or row.direction not in (
+                pb.NativeRuleDirection.SINGLE,
+                pb.NativeRuleDirection.FORWARD,
+                pb.NativeRuleDirection.REVERSE,
+            ):
+                msg = "Report rule is missing a valid native direction"
+                raise ValueError(msg)
+            if not 0 <= row.rule < len(response.rules):
+                msg = "Report rule index is outside its response"
+                raise ValueError(msg)
+            attribution = response.rules[row.rule]
+            reference = ruleset(attribution.root)
+            for ordinal in attribution.children:
+                record: pb.Ruleset = reference.read()
+                if (
+                    record.kind is None
+                    or record.kind.field != "combined"
+                    or not 0 <= ordinal < len(record.kind.value.rulesets)
+                ):
+                    msg = "Report rule route is not a valid combined-ruleset path"
+                    raise ValueError(msg)
+                child = record.kind.value.rulesets[ordinal]
+                if child.kind is not None and child.kind.field == "index":
+                    reference = reference.owner.ref("rulesets", child.kind.value)
+                else:
+                    reference = ruleset(child)
+            record = reference.read()
+            if (
+                record.kind is None
+                or record.kind.field != "rules"
+                or not 0 <= attribution.rule < len(record.kind.value.rules)
+            ):
+                msg = "Report rule route does not end at a rule membership"
+                raise ValueError(msg)
+            result = reference.owner.ref("rules", record.kind.value.rules[attribution.rule])
+            canonical: pb.RuleDecl = result.read()
+            if attribution.has_field("name") != canonical.has_field("name") or attribution.name != canonical.name:
+                msg = "Report rule label disagrees with its canonical occurrence"
+                raise ValueError(msg)
+            return RuleKey(result)
 
-        num_matches_per_rule: dict[RewriteOrRuleDecl, int] = {}
-        for k, v in report.num_matches_per_rule.items():
-            translated = rule_map[k]
-            if translated in num_matches_per_rule:
-                num_matches_per_rule[translated] += v
-            else:
-                num_matches_per_rule[translated] = v
-
-        return cls(
-            _decls=decls,
-            iterations=[IterationReport._from_bindings(it, rule_map, decls) for it in report.iterations],
-            updated=report.updated,
-            can_stop=report.can_stop,
-            search_and_apply_time_per_rule=search_and_apply_time_per_rule,
-            num_matches_per_rule=num_matches_per_rule,
-            search_and_apply_time_per_ruleset=report.search_and_apply_time_per_ruleset,
-            merge_time_per_ruleset=report.merge_time_per_ruleset,
-            rebuild_time_per_ruleset=report.rebuild_time_per_ruleset,
-        )
+        result = cls(None, updated=report.updated, can_stop=report.can_stop)
+        for row in report.search_and_apply_time_per_rule:
+            key = rule(row)
+            result.search_and_apply_time_per_rule[key] = result.search_and_apply_time_per_rule.get(
+                key, timedelta()
+            ) + _duration(row.value)
+        for count in report.num_matches_per_rule:
+            key = rule(count)
+            result.num_matches_per_rule[key] = result.num_matches_per_rule.get(key, 0) + count.value
+        for source, target in (
+            (report.search_and_apply_time_per_ruleset, result.search_and_apply_time_per_ruleset),
+            (report.merge_time_per_ruleset, result.merge_time_per_ruleset),
+            (report.rebuild_time_per_ruleset, result.rebuild_time_per_ruleset),
+        ):
+            exact: dict[str, int] = {}
+            for entry in source:
+                if entry.ruleset is None:
+                    raise KeyError(entry.native_name)
+                ident = state._ruleset_identifiers[ruleset(entry.ruleset)]
+                _duration(entry.value)  # Validate every captured duration before combining.
+                assert entry.value is not None
+                name = str(ident)
+                exact[name] = exact.get(name, 0) + entry.value.seconds * 10**9 + entry.value.nanos
+            for name, nanos in exact.items():
+                seconds, subsecond = divmod(nanos, 10**9)
+                target[name] = _duration(pb.ReportDuration(seconds=seconds, nanos=subsecond))
+        for iteration in report.iterations:
+            native = iteration.rule_set_report
+            if native is None:
+                msg = "Native iteration omitted its ruleset report"
+                raise ValueError(msg)
+            projected = RuleSetReport(
+                None,
+                changed=native.changed,
+                search_and_apply_time=_duration(native.search_and_apply_time),
+                merge_time=_duration(native.merge_time),
+            )
+            for group in native.rule_reports:
+                projected.rule_reports.setdefault(rule(group), []).extend(
+                    RuleReport(_plan(item.plan), _duration(item.search_and_apply_time), item.num_matches)
+                    for item in group.reports
+                )
+            result.iterations.append(IterationReport(projected, _duration(iteration.rebuild_time)))
+        return result

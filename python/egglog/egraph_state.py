@@ -19,7 +19,7 @@ from protobuf import Oneof
 
 from . import bindings
 from ._catalog import builtin_catalog
-from ._program import Builder, Owner, Ref, _copy_record, _definition_key, pack, rule_equal
+from ._program import Builder, Owner, Packed, Ref, _copy_record, _definition_key, pack, rule_equal
 from .declarations import Ident
 
 __all__ = ["EGraphState"]
@@ -83,14 +83,20 @@ class EGraphState:
         return response.threads
 
     def run_program(  # noqa: C901
-        self, commands: Iterable[Ref], *, roots: Iterable[Ref] = ()
+        self, commands: Iterable[Ref] | Packed, *, roots: Iterable[Ref] = (), include_run_reports: bool = False
     ) -> tuple[pb.RunProgramResponse, Owner]:
         """Pack canonical command closure once and adopt the returned records."""
         if self.handle is None:
             msg = "EGraph handle has been destroyed"
             raise RuntimeError(msg)
-        packed = pack(roots, commands=commands, ambient=self.definitions.keys())
-        request = pb.RunProgramRequest(egraph_id=self.handle, program=packed.program, profile=True)
+        packed = (
+            commands
+            if isinstance(commands, Packed)
+            else pack(roots, commands=commands, ambient=self.definitions.keys())
+        )
+        request = pb.RunProgramRequest(
+            egraph_id=self.handle, program=packed.program, profile=True, include_run_reports=include_run_reports
+        )
         response = pb.RunProgramResponse.from_binary(self.transport.run(request.to_binary()))
         submitted = {
             cast("pb.Ruleset", reference.read()).name: reference
@@ -194,11 +200,15 @@ class EGraphState:
         selected = {ident: reference for reference, ident in identifiers.items()}
         active: set[Ident] = set()
 
-        def confirm(reference: Ref) -> None:
+        def confirm(reference: Ref, ident: Ident) -> None:
             record: pb.Ruleset = reference.read()
             key = ("ruleset", record.name)
-            if self.definitions.get(key) != reference:
-                self.run_program([], roots=[reference])
+            try:
+                if self.definitions.get(key) != reference:
+                    self.run_program([], roots=[reference])
+            finally:
+                if self.definitions.get(key) == reference:
+                    self._ruleset_identifiers[reference] = ident
             if self.definitions.get(key) != reference:
                 msg = "Ruleset publication did not confirm the requested root"
                 raise ValueError(msg)
@@ -211,7 +221,7 @@ class EGraphState:
             try:
                 current = self.rulesets.get(ident)
                 if current is not None:
-                    confirm(current)
+                    confirm(current, ident)
                 if installed_only and ident not in self._combined_sources:
                     if current is None:
                         msg = "Combined ruleset child has no completed membership"
@@ -255,7 +265,7 @@ class EGraphState:
                         self._pending_roots[root_key] = builder.publish().ref("rulesets", index)
                     candidate = self._pending_roots[root_key]
                     try:
-                        confirm(candidate)
+                        confirm(candidate, ident)
                     finally:
                         if self.definitions.get(("ruleset", candidate.read().name)) == candidate:
                             self.rulesets[ident] = candidate
@@ -318,14 +328,14 @@ class EGraphState:
                         self._pending_rules[key] = leaf, candidate
                     leaf, candidate = self._pending_rules[key]
                     try:
-                        confirm(leaf)
+                        confirm(leaf, ident)
                     finally:
                         if self.definitions.get(("ruleset", leaf.read().name)) == leaf:
                             self.rulesets[ident] = current = candidate
                             if direct:
                                 self._direct_rules.update(self._ruleset_members(leaf))
                             self._pending_rules.pop(key)
-                    confirm(candidate)
+                    confirm(candidate, ident)
                 if current is None:
                     root_key = (ident, "rules", ())
                     if root_key not in self._pending_roots:
@@ -340,7 +350,7 @@ class EGraphState:
                         self._pending_roots[root_key] = builder.publish().ref("rulesets", index)
                     current = self._pending_roots[root_key]
                     try:
-                        confirm(current)
+                        confirm(current, ident)
                     finally:
                         if self.definitions.get(("ruleset", current.read().name)) == current:
                             self.rulesets[ident] = current
@@ -370,6 +380,23 @@ class EGraphState:
         result._pending_rules = self._pending_rules.copy()
         result._pending_roots = self._pending_roots.copy()
         return result
+
+    def return_to(self, saved: EGraphState) -> None:
+        """Restore a direct saved owner; successful Return consumes this handle."""
+        if self.handle is None or saved.handle is None:
+            msg = "Return requires two live EGraph handles"
+            raise RuntimeError(msg)
+        if self.transport is not saved.transport or self.handle == saved.handle:
+            msg = "Return requires distinct handles on the same transport"
+            raise ValueError(msg)
+        encoded = self.transport.return_to(
+            pb.ReturnToEGraphRequest(active_id=self.handle, saved_id=saved.handle).to_binary()
+        )
+        # Successful transport has consumed the active handle. Even a corrupt
+        # acknowledgement must not leave ownership that could Destroy it twice.
+        # Public pop selects the saved state only after decoding succeeds.
+        self.handle = None
+        pb.ReturnToEGraphResponse.from_binary(encoded)
 
     def destroy(self) -> None:
         """Release this handle once without affecting cloned graph handles."""

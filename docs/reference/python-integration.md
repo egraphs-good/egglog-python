@@ -721,6 +721,19 @@ report.num_matches_per_rule
 `report.can_stop` flag is true only when the run observed no changes and its
 scheduler has no deferred work that requires another iteration.
 
+The per-rule maps use immutable `RuleKey` inspection objects, backed by the
+canonical authored rule or rewrite. Their repr is readable Python rule syntax;
+structurally equal authored bodies group together even when installed as distinct
+memberships. These keys are not raw native names or mutable authoring wrappers.
+The report retains actual native histories and aggregate maps; totals are not
+reconstructed from the iteration list. `None` plans mean that no plan was recorded,
+which differs from a recorded empty plan.
+
+Ordinary schedules support sequencing, bounded repetition and saturation without
+custom schedulers or `until` conditions. Those other forms remain migration gaps.
+Constructing a schedule does not install rules; printing it can materialize deferred
+rule generators, and later appended rules remain visible when it is run.
+
 ### `stats`
 
 Use {meth}`egglog.egraph.EGraph.stats` when you want cumulative counters for the

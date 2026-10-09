@@ -88,7 +88,7 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
 
     # Frames stream output rather than recursively copying each child's string.
     # The Boolean asks scalar arguments to omit their inferred wrapper.
-    frames: list[str | Ref | tuple[Ref, bool, bool] | tuple[Ref, pb.Action]] = [(root, False, False)]
+    frames: list[str | Ref | tuple[Ref, bool, bool] | tuple[Ref, pb.Action | pb.Command]] = [(root, False, False)]
     output: list[str] = []
     active: set[Ref] = set()
     while frames:
@@ -115,8 +115,52 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
         owner = reference.owner
         if isinstance(record, pb.Command) and record.kind is not None and record.kind.field == "action":
             record = record.kind.value
-        pieces: list[str | tuple[Ref, bool, bool] | tuple[Ref, pb.Action]]
-        if isinstance(record, pb.Sort):
+        pieces: list[str | tuple[Ref, bool, bool] | tuple[Ref, pb.Action | pb.Command]]
+        if isinstance(record, pb.Command):
+            if record.kind is None:
+                msg_0 = "Cannot print a command without a kind"
+                raise ValueError(msg_0)
+            if record.kind.field == "run":
+                selected = record.kind.value.ruleset
+                if selected is None or selected.kind is None:
+                    msg_0 = "Cannot print a Run without a ruleset"
+                    raise ValueError(msg_0)
+                if selected.kind.field == "index":
+                    pieces = [(owner.ref("rulesets", selected.kind.value), False, False)]
+                else:
+                    pieces = [f"run({selected.kind.value})" if selected.kind.value else "run()"]
+            elif record.kind.field in {"repeat", "saturate"}:
+                control = record.kind.value
+                if isinstance(control, pb.Repeat) and control.times == 1:
+                    pieces = ["seq("]
+                    for index, child in enumerate(control.body):
+                        if index:
+                            pieces.append(", ")
+                        pieces.append((reference, child))
+                    pieces.append(")")
+                else:
+                    pieces = ["("]
+                    if len(control.body) == 1:
+                        pieces.append((reference, control.body[0]))
+                    else:
+                        pieces.append("seq(")
+                        for index, child in enumerate(control.body):
+                            if index:
+                                pieces.append(", ")
+                            pieces.append((reference, child))
+                        pieces.append(")")
+                    pieces.append(")")
+                    if isinstance(control, pb.Saturate) and not control.has_field("max_iterations"):
+                        pieces.append(".saturate()")
+                    else:
+                        count = control.times if isinstance(control, pb.Repeat) else control.max_iterations
+                        pieces.append(f" * {count}")
+            elif record.kind.field == "stats":
+                pieces = ["stats()"]
+            else:
+                msg_0 = f"Command presentation is not migrated: {record.kind.field}"
+                raise NotImplementedError(msg_0)
+        elif isinstance(record, pb.Sort):
             if record.kind is None:
                 msg = "Cannot print a sort without a kind"
                 raise ValueError(msg)

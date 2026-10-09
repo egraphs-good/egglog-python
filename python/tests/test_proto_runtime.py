@@ -61,6 +61,83 @@ from egglog.runtime import _CLASS_CACHE, RuntimeExpr, RuntimeFunction, _author_c
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
 
 
+def test_canonical_schedule_live_repr_and_generator_failure_without_engine(monkeypatch):
+    from egglog import run, seq  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Schedule authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    events = []
+    selected = ruleset(name="live")
+
+    def deferred():
+        events.append("first")
+        yield rule(name="first").then()
+
+    selected.register(deferred)
+    schedule = (selected + run()).saturate() * 3
+    assert events == []
+    assert "first" in str(schedule)
+    assert events == ["first"]
+    assert "first" in repr(schedule)
+    assert events == ["first"]
+    selected.append(rule(name="later").then())
+    assert "later" in str(schedule)
+    assert str(seq()) == "seq()"
+    assert "* 0" in str(run() * 0)
+    assert schedule._command.read().kind.field == "saturate"
+    assert schedule._command.read().kind.value.max_iterations == 3
+    assert ".saturate()" in str(schedule)
+
+    def failing():
+        events.append("failure")
+        yield rule(name="not-appended").then()
+        msg = "schedule generator"
+        raise ValueError(msg)
+
+    selected.register(failing)
+    with pytest.raises(ValueError, match="schedule generator"):
+        str(schedule)
+    assert "not-appended" not in str(schedule)
+    assert events == ["first", "failure"]
+
+
+def test_canonical_report_key_contextual_hash_without_engine(monkeypatch):
+    from egglog.run_report import RuleKey  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Report key accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    first = rule(name="same").then(set_(constant("report-target", i64)).to(1))
+    second = rule(name="same").then(set_(constant("report-target", i64)).to(1))
+    left, right = RuleKey(first.__egg_ref__), RuleKey(second.__egg_ref__)
+    assert left == right
+    assert hash(left) == hash(right)
+    assert len({left, right}) == 1
+    assert "report-target" in repr(left)
+    with pytest.raises(TypeError, match="rule"):
+        RuleKey(i64(1).__egg_ref__)
+    with pytest.raises(TypeError):
+        hash(first)
+    shared = i64(1) + i64(2)
+    shared_key = RuleKey(rule().then(shared, shared).__egg_ref__)
+    copied_key = RuleKey(rule().then(i64(1) + 2, i64(1) + 2).__egg_ref__)
+    assert shared_key == copied_key
+    assert hash(shared_key) == hash(copied_key)
+    nan = struct.unpack("!d", bytes.fromhex("7ff8000000000001"))[0]
+    other_nan = struct.unpack("!d", bytes.fromhex("7ff8000000000002"))[0]
+    first_nan = RuleKey(rule().then(f64(nan)).__egg_ref__)
+    equal_nan = RuleKey(rule().then(f64(nan)).__egg_ref__)
+    assert first_nan == equal_nan
+    assert hash(first_nan) == hash(equal_nan)
+    assert first_nan != RuleKey(rule().then(f64(other_nan)).__egg_ref__)
+    assert RuleKey(rule().then(f64(0.0)).__egg_ref__) == RuleKey(rule().then(f64(-0.0)).__egg_ref__)
+
+
 def test_rule_template_comparison_and_live_rulesets_without_engine(monkeypatch):
     from egglog import ruleset  # noqa: PLC0415
 
@@ -92,8 +169,120 @@ def test_rule_template_comparison_and_live_rulesets_without_engine(monkeypatch):
     assert "rule(" in str(selected)
 
 
+def test_report_key_default_and_lambda_use_domains_without_engine():
+    from egglog.run_report import RuleKey  # noqa: PLC0415
+
+    class Value(Expr):
+        def __init__(self) -> None: ...
+
+    builder = Builder()
+    sort = builder.import_ref(Value.__egg_sort__)
+    empty = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("union", pb.Union())))
+    default = RuntimeExpr(builder.publish().ref("nodes", empty))
+
+    @function
+    def choose(left: Value = default, right: Value = default) -> Value: ...
+
+    template = rule().then(choose(Value(), Value()))
+    packed = pack([template.__egg_ref__])
+    equal = RuleKey(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
+    key = RuleKey(template.__egg_ref__)
+    assert key == equal
+    assert hash(key) == hash(equal)
+    declaration = next(d for d in packed.program.declarations if d.bindings and d.bindings.python.views[0].params)
+    view = declaration.bindings.python.views[0]
+    original = view.params[0].default_expr
+    assert view.params[1].default_expr == original
+    view.params[1].default_expr = len(packed.program.nodes)
+    packed.program.nodes.append(packed.program.nodes[original])
+    independent = RuleKey(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
+    assert key != independent  # Defaults of one presentation are one allocation domain.
+    assert len({key, equal, independent}) == 2
+
+    def lambdas(*, shared_body, captures=False, same_node=False):
+        builder = Builder()
+        sort = builder.import_ref(Value.__egg_sort__)
+        func = builder.add("sorts", pb.Sort(kind=Oneof("func", pb.FuncSort(result=sort))))
+        bodies = [builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("union", pb.Union()))) for _ in range(2)]
+        functions = [
+            builder.add(
+                "nodes",
+                pb.Node(
+                    sort_id=func,
+                    kind=Oneof(
+                        "primitive_value",
+                        pb.PrimitiveValue(
+                            value=Oneof(
+                                "lambda",
+                                pb.Lambda(captures=[bodies[index]] if captures else [], body=bodies[index]),
+                            )
+                        ),
+                    ),
+                ),
+            )
+            for index in (0, 0 if shared_body else 1)
+        ]
+        if same_node:
+            functions[1] = functions[0]
+        root = builder.add(
+            "rules",
+            pb.RuleDecl(kind=Oneof("rule", pb.Rule(head=[pb.Action(kind=Oneof("term", node)) for node in functions]))),
+        )
+        return RuleKey(builder.publish().ref("rules", root))
+
+    separate = lambdas(shared_body=False)
+    shared = lambdas(shared_body=True)
+    aliased = lambdas(shared_body=True, same_node=True)
+    assert separate == shared == aliased  # Each deferred body has its own use domain.
+    assert hash(separate) == hash(shared) == hash(aliased)
+    assert lambdas(shared_body=True, captures=True) != lambdas(shared_body=False, captures=True)
+
+
+@pytest.mark.parametrize("allocating", [False, True])
+def test_report_key_shared_dag_work_is_bounded(monkeypatch, allocating):
+    from egglog import _program  # noqa: PLC0415
+    from egglog.run_report import RuleKey  # noqa: PLC0415
+
+    depth = 14
+    if allocating:
+
+        class Value(Expr):
+            def __init__(self, left: "Value", right: "Value") -> None: ...
+
+        builder = Builder()
+        sort = builder.import_ref(Value.__egg_sort__)
+        empty = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("union", pb.Union())))
+        left = RuntimeExpr(builder.publish().ref("nodes", empty))
+    else:
+        left = i64(1)
+    for _ in range(depth):
+        left = Value(left, left) if allocating else left + left
+    if allocating:
+        parent = Value(left, left)
+        shared = RuleKey(rule().then(parent, parent).__egg_ref__)
+        duplicated = RuleKey(rule().then(Value(left, left), Value(left, left)).__egg_ref__)
+        assert shared == duplicated
+        assert hash(shared) == hash(duplicated)
+    first = RuleKey(rule().then(left).__egg_ref__)
+    packed = pack([first.__egg_ref__])
+    second = RuleKey(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
+    original = _program._structural_parts
+    visits = 0
+
+    def counted(reference, *, identity=True):
+        nonlocal visits
+        visits += 1
+        assert visits <= 16 * (depth + 20), "Comparison/hash expanded the shared expression DAG"
+        return original(reference, identity=identity)
+
+    monkeypatch.setattr(_program, "_structural_parts", counted)
+    assert first == second
+    assert hash(first) == hash(second)
+
+
 def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
     from egglog import RewriteOrRule  # noqa: PLC0415
+    from egglog.run_report import RuleKey  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
         pytest.fail("Template comparison accessed an engine")
@@ -142,10 +331,20 @@ def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
     assert StructuralView(left.__egg_ref__) != StructuralView(right.__egg_ref__)
     assert authored(shared=True, empty=True) == authored(shared=True, empty=True)
     assert authored(shared=True, empty=True) != authored(shared=False, empty=True)
+    assert hash(RuleKey(left.__egg_ref__)) == hash(RuleKey(right.__egg_ref__))
+    assert len({RuleKey(left.__egg_ref__), RuleKey(right.__egg_ref__)}) == 1
+    assert (
+        len({
+            RuleKey(authored(shared=True, empty=True).__egg_ref__),
+            RuleKey(authored(shared=False, empty=True).__egg_ref__),
+        })
+        == 2
+    )
 
 
 def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch):
     from egglog import RewriteOrRule  # noqa: PLC0415
+    from egglog.run_report import RuleKey  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
         pytest.fail("Rule closure comparison accessed an engine")
@@ -155,6 +354,7 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
     first = rule().then(set_(constant("independent_target", i64)).to(1))
     second = rule().then(set_(constant("independent_target", i64)).to(1))
     assert first == second
+    assert hash(RuleKey(first.__egg_ref__)) == hash(RuleKey(second.__egg_ref__))
     packed = pack(roots=[second.__egg_ref__])
     program = packed.program
     target = next(
@@ -164,6 +364,7 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
     target.merge = value
     modified = RewriteOrRule(Builder.from_program(program).publish().ref("rules", packed.indices[0]))
     assert first != modified  # The command shape alone is identical.
+    assert len({RuleKey(first.__egg_ref__), RuleKey(modified.__egg_ref__)}) == 2
     builder = Builder()
     root = builder.import_ref(first.__egg_ref__)
     builder.import_ref(constant("unrelated", i64).__egg_ref__)

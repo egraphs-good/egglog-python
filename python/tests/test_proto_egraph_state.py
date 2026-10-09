@@ -13,6 +13,239 @@ from egglog._program import pack
 from egglog.runtime import resolve_callable
 
 
+def test_scope_return_consumption_and_rejection_without_engine():
+    from egglog.egraph_state import EGraphState  # noqa: PLC0415
+
+    calls = []
+
+    class InertTransport:
+        reject = True
+
+        def return_to(self, encoded):
+            request = pb.ReturnToEGraphRequest.from_binary(encoded)
+            calls.append((request.active_id, request.saved_id))
+            if self.reject:
+                msg = "Return rejection"
+                raise ValueError(msg)
+            return pb.ReturnToEGraphResponse().to_binary()
+
+    active, saved = object.__new__(EGraphState), object.__new__(EGraphState)
+    active.handle, saved.handle = 2, 1
+    active.transport = saved.transport = InertTransport()
+    with pytest.raises(ValueError, match="Return rejection"):
+        active.return_to(saved)
+    assert (active.handle, saved.handle) == (2, 1)
+    active.transport.reject = False
+    active.return_to(saved)
+    assert (active.handle, saved.handle) == (None, 1)
+    with pytest.raises(RuntimeError, match="live"):
+        active.return_to(saved)
+    assert calls == [(2, 1), (2, 1)]
+    active.handle = 2
+    original = active.transport
+    active.transport = InertTransport()
+    with pytest.raises(ValueError, match="same transport"):
+        active.return_to(saved)
+    active.transport = original
+    active.handle = 1
+    with pytest.raises(ValueError, match="distinct"):
+        active.return_to(saved)
+    active.handle = None
+    saved.handle = None
+
+
+def test_scope_return_corrupt_success_consumes_active_without_selecting_saved(monkeypatch):
+    destroyed = []
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def clone_graph(self, encoded):
+            return pb.CloneEGraphResponse(egraph_id=2).to_binary()
+
+        def return_to(self, encoded):
+            request = pb.ReturnToEGraphRequest.from_binary(encoded)
+            assert (request.active_id, request.saved_id) == (2, 1)
+            return b"\x80"  # Successful transport, then a truncated acknowledgement.
+
+        def destroy(self, encoded):
+            destroyed.append(pb.DestroyEGraphRequest.from_binary(encoded).egraph_id)
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    saved = graph._state
+    graph.push()
+    active = graph._state
+    with pytest.raises(ValueError, match="invalid varint"):
+        graph.pop()
+    assert graph._state is active
+    assert graph._state_stack == [saved]
+    assert active.handle is None
+    assert saved.handle == 1
+    active.destroy()
+    assert destroyed == []  # Never Destroy a handle already consumed by Return.
+
+
+def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypatch):
+    from egglog import rule, ruleset, run, seq  # noqa: PLC0415
+    from egglog.declarations import Ident  # noqa: PLC0415
+    from egglog.egraph import set_current_ruleset  # noqa: PLC0415
+
+    requests = []
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            request = pb.RunProgramRequest.from_binary(encoded)
+            requests.append(request)
+            program = request.program
+            assert program is not None
+            outputs = []
+            if program.commands:
+                assert len(program.commands) == 1
+                command = program.commands[0].kind
+                report = pb.NativeRunReport(can_stop=True)
+                if command.field == "stats":
+                    assert not request.include_run_reports
+                    outputs = [
+                        pb.CommandOutput(
+                            kind=Oneof[Literal["statistics"], pb.NativeRunReport]("statistics", report),
+                            location=pb.CommandLocation(path=[0]),
+                        )
+                    ]
+                else:
+                    assert request.include_run_reports
+                    outputs = [
+                        pb.CommandOutput(
+                            kind=Oneof("run", pb.RunOutcome(can_stop=True))
+                            if command.field == "run"
+                            else Oneof(
+                                "loop", pb.LoopOutcome(iterations=1, termination=pb.TerminationReason.COUNT_REACHED)
+                            ),
+                            run_report=report,
+                            location=pb.CommandLocation(path=[0]),
+                        )
+                    ]
+            return pb.RunProgramResponse(
+                ruleset_publication=pb.RulesetPublication(names=[r.name for r in program.rulesets]),
+                outputs=outputs,
+            ).to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+        def configure_resources(self, encoded):
+            request = pb.ConfigureEGraphResourcesRequest.from_binary(encoded)
+            requests.append(request)
+            return pb.ConfigureEGraphResourcesResponse().to_binary()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Schedule request assembly accessed a native engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    first = ruleset(rule(name="first").then(), name="same")
+    last = ruleset(rule(name="last").then(), name="same")
+    a, b = run(first), run(last)
+    schedule = seq(a, b, a)
+    assert "first" in str(schedule)
+    assert graph.run(schedule).can_stop
+    installed = graph._state.rulesets[first.__egg_ident__]
+    assert [ref.read().name for ref in graph._state._ruleset_members(installed)] == ["first"]
+    execution = requests[-1]
+    assert execution.program.commands[0].kind.field == "repeat"
+    assert len(execution.program.commands[0].kind.value.body) == 3
+    assert not any(request.program.commands for request in requests[:-1])
+    before = len(requests)
+    graph.run(schedule)
+    assert len(requests) == before + 1  # Same members/cursors, no fresh publication.
+    first.append(rule(name="append").then())
+    graph.run(schedule)
+    assert [ref.read().name for ref in graph._state._ruleset_members(graph._state.rulesets[first.__egg_ident__])] == [
+        "first",
+        "append",
+    ]
+    graph.run(seq(run()))
+    assert Ident("") in graph._state.rulesets
+    assert graph.stats().can_stop
+    assert requests[-1].program.commands[0].kind.field == "stats"
+    for length in (-1, 2**64):
+        before = len(requests)
+        with pytest.raises(OverflowError):
+            graph.run(run() * length)
+        assert len(requests) == before  # No publication precedes unsigned-count rejection.
+    other = ruleset(rule(name="other").then(), name="other")
+    combined = first | other
+    graph.run(combined)
+    first.append(rule(name="deferred-append").then())
+    graph.run(combined)
+    installed = graph._state.rulesets[combined.__egg_ident__]
+    assert [ref.read().name for ref in graph._state._ruleset_members(installed)] == ["first", "append", "other"]
+    graph.run(first)
+    graph.run(combined)
+    installed = graph._state.rulesets[combined.__egg_ident__]
+    assert [ref.read().name for ref in graph._state._ruleset_members(installed)] == [
+        "first",
+        "append",
+        "deferred-append",
+        "other",
+    ]
+    with set_current_ruleset(other):
+        graph.run(run())
+    selected = requests[-1].program.commands[0].kind.value.ruleset.kind.value
+    assert requests[-1].program.rulesets[selected].name == graph._state.rulesets[Ident("")].read().name
+    for level, expected in (
+        (bindings.TimeOnly(), pb.ReportLevel.TIME_ONLY),
+        (bindings.WithPlan(), pb.ReportLevel.WITH_PLAN),
+        (bindings.StageInfo(), pb.ReportLevel.STAGE_INFO),
+    ):
+        graph.set_report_level(level)
+        assert requests[-1].operation.value == expected
+
+
+@pytest.mark.parametrize("operation", ["run", "stats"])
+@pytest.mark.parametrize("malformed", ["location", "kind", "missing", "flags"])
+def test_public_reports_require_the_requested_top_level_output(monkeypatch, operation, malformed):
+    from egglog import seq  # noqa: PLC0415
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            report = pb.NativeRunReport(can_stop=True)
+            output = pb.CommandOutput(
+                location=pb.CommandLocation(path=[1] if malformed == "location" else [0]),
+                kind=Oneof("statistics", report)
+                if operation == "stats"
+                else Oneof("loop", pb.LoopOutcome(termination=pb.TerminationReason.COUNT_REACHED)),
+                run_report=report if operation == "run" else None,
+            )
+            if malformed == "kind":
+                output.kind = Oneof("run", pb.RunOutcome(can_stop=True))
+            elif malformed == "missing":
+                output.kind = None
+            elif malformed == "flags":
+                if operation == "run":
+                    output.kind.value.updated = True
+                else:
+                    output.run_report = report
+            return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication(), outputs=[output]).to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    with pytest.raises(ValueError, match=r"report|statistics"):
+        graph.run(seq()) if operation == "run" else graph.stats()
+
+
 def _run_ruleset_step(graph, selected=None):
     """Freeze a live target, execute canonical Run bytes, and read raw matches."""
     from egglog._program import Builder  # noqa: PLC0415
@@ -86,6 +319,9 @@ def test_publication_adopts_exact_receipt_before_install_error(monkeypatch, comp
     first_name = requests[0].program.rulesets[0].name
     assert (("ruleset", first_name) in graph._state.definitions) is completed
     assert (selected.__egg_ident__ in graph._state.rulesets) is completed
+    if completed:
+        confirmed = graph._state.rulesets[selected.__egg_ident__]
+        assert graph._state._ruleset_identifiers[confirmed] == selected.__egg_ident__
     fail = False
     version = graph._state.publish_ruleset(snapshot, identifiers)
     assert version.read().name == first_name
@@ -831,6 +1067,11 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
             assert pb.CloneEGraphRequest.from_binary(encoded).egraph_id == 1
             return pb.CloneEGraphResponse(egraph_id=2).to_binary()
 
+        def return_to(self, encoded: bytes) -> bytes:
+            request = pb.ReturnToEGraphRequest.from_binary(encoded)
+            assert (request.active_id, request.saved_id) == (2, 1)
+            return pb.ReturnToEGraphResponse().to_binary()
+
         def destroy(self, encoded: bytes) -> bytes:
             destroyed.append(pb.DestroyEGraphRequest.from_binary(encoded).egraph_id)
             return pb.DestroyEGraphResponse().to_binary()
@@ -863,16 +1104,16 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
     with graph:
         assert graph._state.handle == 2
     assert graph._state.handle == 1
-    assert destroyed == [2]
+    assert destroyed == []
     graph.close()
     assert graph._state.handle == 1
     graph._state.destroy()
     graph._state.destroy()
-    assert destroyed == [2, 1]
+    assert destroyed == [1]
 
 
 @pytest.mark.parametrize("body_raises", [False, True])
-def test_context_restores_saved_state_when_clone_disposal_fails(
+def test_context_keeps_active_and_saved_state_when_return_rejected(
     monkeypatch: pytest.MonkeyPatch, body_raises: bool
 ) -> None:
     class FaultTransport:
@@ -882,10 +1123,13 @@ def test_context_restores_saved_state_when_clone_disposal_fails(
         def clone_graph(self, encoded: bytes) -> bytes:
             return pb.CloneEGraphResponse(egraph_id=2).to_binary()
 
+        def return_to(self, encoded: bytes) -> bytes:
+            request = pb.ReturnToEGraphRequest.from_binary(encoded)
+            assert (request.active_id, request.saved_id) == (2, 1)
+            msg = "cleanup sentinel"
+            raise RuntimeError(msg)
+
         def destroy(self, encoded: bytes) -> bytes:
-            if pb.DestroyEGraphRequest.from_binary(encoded).egraph_id == 2:
-                msg = "cleanup sentinel"
-                raise RuntimeError(msg)
             return pb.DestroyEGraphResponse().to_binary()
 
     monkeypatch.setattr(bindings, "_ProtoEngine", FaultTransport, raising=False)
@@ -901,8 +1145,10 @@ def test_context_restores_saved_state_when_clone_disposal_fails(
         if body_raises:
             msg = "body sentinel"
             raise ValueError(msg)
-    assert graph._state is saved
-    assert not graph._state_stack
+    assert graph._state is not saved
+    assert graph._state.handle == 2
+    assert saved.handle == 1
+    assert graph._state_stack == [saved]
 
 
 class ResourceTransport:
@@ -944,6 +1190,12 @@ class ResourceTransport:
     def destroy(self, encoded: bytes) -> bytes:
         del self.threads[pb.DestroyEGraphRequest.from_binary(encoded).egraph_id]
         return pb.DestroyEGraphResponse().to_binary()
+
+    def return_to(self, encoded: bytes) -> bytes:
+        request = pb.ReturnToEGraphRequest.from_binary(encoded)
+        del self.threads[request.active_id]
+        assert request.saved_id in self.threads
+        return pb.ReturnToEGraphResponse().to_binary()
 
 
 @pytest.fixture
