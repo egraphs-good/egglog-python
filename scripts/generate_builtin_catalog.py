@@ -89,7 +89,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             if family.arity:
                 msg = "Scalar codec requires a nullary family"
                 raise ValueError(msg)
-            if protocol.literal_types:
+            if protocol.literal_types or protocol.conversion_sort:
                 if name + "Like" in exported:
                     raise ValueError(f"Python binding collision: {name}Like")
                 exported.add(name + "Like")
@@ -141,7 +141,11 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 + "]"
             )
         protocol = _SCALARS.get(family.name)
-        return name + "Like" if input_type and protocol is not None and protocol.literal_types else name
+        return (
+            name + "Like"
+            if input_type and protocol is not None and (protocol.literal_types or protocol.conversion_sort)
+            else name
+        )
 
     methods: dict[str, dict[str, str]] = {name: {} for name in families}
     functions: dict[str, str] = {}
@@ -348,6 +352,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         "",
         *(["from collections.abc import Iterator"] if vec_protocol or map_protocol else []),
         "from dataclasses import dataclass",
+        *(["from fractions import Fraction"] if any(name in families for name in ("Rational", "BigRat")) else []),
         "from typing import Generic, Never, TypeAlias, TypeVar",
         "",
         "from typing_extensions import deprecated",
@@ -418,16 +423,21 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 reserved.update({"value", "__match_args__", "__iter__", "__len__", "__contains__", "eval"})
         else:
             value_type = protocol.value_type.__name__
-            if protocol.literal_types:
+            if protocol.literal_types or not protocol.literal_constructor:
+                if protocol.literal_constructor:
+                    lines.append(f"    def __init__(self, value: {value_type}, /) -> None: ...")
+                    reserved.add("__init__")
+                elif "__init__" not in methods[family_name]:
+                    lines.append("    def __init__(self, _unavailable: Never, /) -> None: ...")
+                    reserved.add("__init__")
                 lines.extend([
-                    f"    def __init__(self, value: {value_type}, /) -> None: ...",
                     '    __match_args__ = ("value",)',
                     "    @property",
                     f"    def value(self) -> {value_type}: ...",
                     '    @deprecated("use .value")',
                     f"    def eval(self) -> {value_type}: ...",
                 ])
-                reserved.update({"__init__", "value", "eval", "__match_args__"})
+                reserved.update({"value", "eval", "__match_args__"})
             else:
                 lines.append("    def __init__(self) -> None: ...")
                 reserved.add("__init__")
@@ -450,9 +460,16 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 f"{map_alias}: TypeAlias = {name}[{', '.join(family_variables)}] | dict[{', '.join(map_hosts)}]",
                 "",
             ])
-        if protocol is not None and protocol.literal_types:
+        if protocol is not None and (protocol.literal_types or protocol.conversion_sort):
+            converted = []
+            if protocol.conversion_sort:
+                if protocol.conversion_sort not in names:
+                    msg = "Host conversion requires its catalog source family"
+                    raise ValueError(msg)
+                converted.append(names[protocol.conversion_sort] + "Like")
             lines.append(
-                f"{name}Like: TypeAlias = " + " | ".join([name, *(t.__name__ for t in protocol.literal_types)])
+                f"{name}Like: TypeAlias = "
+                + " | ".join([name, *(t.__name__ for t in protocol.literal_types), *converted])
             )
             lines.append("")
     lines.extend(functions.values())

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from decimal import Decimal
+from fractions import Fraction
 from types import GenericAlias
 from typing import Any, TypeVar, cast
 
@@ -38,6 +41,67 @@ def _scalar_value(expr: RuntimeExpr) -> object:
 
     cls = _class_for_sort(expr.__egg_ref__.owner.ref("sorts", node.sort_id))
     raise ExprValueError(expr, str(cls))
+
+
+def _exact_value(expr: RuntimeExpr) -> int | Fraction:  # noqa: C901
+    """Inspect inert exact values or the legacy constructor value forms locally."""
+    from .deconstruct import get_literal_value  # noqa: PLC0415
+    from .runtime import _definition_at  # noqa: PLC0415
+    from .type_constraint_solver import infer_sort  # noqa: PLC0415
+
+    value = get_literal_value(expr)
+    if value is not None:
+        return cast("int | Fraction", value)
+    reference = expr.__egg_ref__
+    node: pb.Node = reference.read()
+    sort = reference.owner.ref("sorts", node.sort_id)
+    family: pb.Sort = sort.read()
+    assert family.kind is not None
+    allowed = "a literal value or a locally inspectable exact constructor"
+    if node.kind is None or node.kind.field != "call" or family.kind.field != "family":
+        raise ExprValueError(expr, allowed)
+    call = node.kind.value
+    if (family.kind.value.name, call.func) not in {
+        ("Rational", "egglog.experimental.rational.make"),
+        ("BigInt", "egglog.core.bigint.from_string"),
+        ("BigRat", "egglog.core.bigrat.make"),
+    }:
+        raise ExprValueError(expr, allowed)
+    declaration = _definition_at(reference, "callable", call.func)
+    record: pb.Declaration = declaration.read()
+    if record.kind is None or record.kind.field != "host_primitive":
+        raise ExprValueError(expr, allowed)
+    primitive = record.kind.value
+    if primitive.typing is None or primitive.typing.field != "signature":
+        raise ExprValueError(expr, allowed)
+    signature = primitive.typing.value
+    if signature.type_params or signature.varargs or not signature.has_field("output"):
+        msg = "Exact constructor inspection requires a closed fixed signature"
+        raise ValueError(msg)
+    infer_sort(declaration.owner.ref("sorts", signature.output), sort, 0, {})
+    if len(call.args) != len(signature.inputs):
+        msg = "Exact constructor has invalid canonical argument count"
+        raise ValueError(msg)
+    children = [reference.owner.ref("nodes", index) for index in call.args]
+    for child, parameter in zip(children, signature.inputs, strict=True):
+        infer_sort(
+            declaration.owner.ref("sorts", parameter.sort), child.owner.ref("sorts", child.read().sort_id), 0, {}
+        )
+    if family.kind.value.name == "BigInt":
+        (text,) = children
+        text_value = RuntimeExpr(text).value
+        if not isinstance(text_value, str):
+            raise ExprValueError(expr, allowed)
+        # Inert BigInts print as these existing symbolic Calls. Inspect their
+        # canonical decimals exactly at arbitrary magnitude; keep int's legacy
+        # handling/errors for every other spelling (not Decimal's exponent or
+        # fractional syntax).
+        return int(Decimal(text_value)) if re.fullmatch(r"0|-?[1-9][0-9]*", text_value) else int(text_value)
+    numerator, denominator = children
+    numerator_value, denominator_value = RuntimeExpr(numerator).value, RuntimeExpr(denominator).value
+    if not isinstance(numerator_value, int) or not isinstance(denominator_value, int):
+        raise ExprValueError(expr, allowed)
+    return Fraction(numerator_value, denominator_value)
 
 
 @deprecated("use .value")
@@ -453,13 +517,19 @@ for _definition in _catalog.definitions.values():
             dict, (_host_key, _host_value)
         )
         __all__ += [f"{_name}Like"]  # noqa: PLE0604
-    if _protocol is not None and _protocol.literal_types:
-        _class.__egg_hooks__.update(value=property(_scalar_value), eval=_eval)
+    if _protocol is not None and (_protocol.literal_types or not _protocol.literal_constructor):
+        _class.__egg_hooks__.update(
+            value=property(_scalar_value if _protocol.literal_constructor else _exact_value), eval=_eval
+        )
         _literal_types = _protocol.literal_types
         _like: Any = _class
         for _literal_type in _literal_types:
             _like = _like | _literal_type
-            if _protocol.value_type is float:
+            if not _protocol.literal_constructor:
+                converter(
+                    _literal_type, _class, lambda value, target=_class: target(value.numerator, value.denominator)
+                )
+            elif _protocol.value_type is float:
                 converter(_literal_type, _class, lambda value, target=_class: target(float(value)))
             else:
                 converter(_literal_type, _class, _class)
@@ -471,6 +541,24 @@ for _definition in _catalog.definitions.values():
         from .egraph import expr_fact
 
         _class.__egg_hooks__["__bool__"] = lambda expr: bool(expr_fact(expr))
+
+# Expression conversion policy is separate from formed-value decoding. In
+# particular, Python ints/Fractions still pass through bounded i64 Calls.
+for _family, _protocol in SCALAR_PROTOCOLS.items():
+    if _protocol.conversion_sort is None or ("host_sort_family", _family) not in _catalog.definitions:
+        continue
+    from .runtime import _BASE_CLASSES
+
+    _class = _BASE_CLASSES[_family]
+    _source = _BASE_CLASSES[_protocol.conversion_sort]
+    if _protocol.value_type is int:
+        converter(_source, _class, _class)
+    else:
+        converter(_source, _class, lambda value, target=_class: target(value, 1))
+    _like = _class | _source
+    for _literal_type in (*_protocol.literal_types, *SCALAR_PROTOCOLS[_protocol.conversion_sort].literal_types):
+        _like = _like | _literal_type
+    globals()[f"{_class.__name__}Like"] = _like
 
 for _path, (_definition, _view) in _catalog.functions.items():
     if _path[:-1] == tuple(__name__.split(".")):

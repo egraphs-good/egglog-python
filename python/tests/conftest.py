@@ -1,4 +1,5 @@
 import copy
+import os
 import runpy
 import sys
 from pathlib import Path
@@ -133,3 +134,33 @@ def vec_runtime(vec_catalog_program, monkeypatch, request):
         if hasattr(request.module, name):
             monkeypatch.setattr(request.module, name, generated[name])
     return generated["Vec"]
+
+
+@pytest.fixture
+def rational_catalog_program():
+    """Actual native export, optionally supplied before package regeneration."""
+    path = Path(os.environ.get("EGGLOG_TEST_BUILTIN_CATALOG", Path(__file__).parents[1] / "egglog/_builtin_catalog.pb"))
+    program = pb.Program.from_binary(path.read_bytes())
+    if not any(d.kind.value.name == "egglog.experimental.rational.make" for d in program.declarations):
+        pytest.skip("Rational native export not packaged or supplied via EGGLOG_TEST_BUILTIN_CATALOG")
+    return program
+
+
+@pytest.fixture
+def rational_runtime(rational_catalog_program, monkeypatch):
+    """Use real catalog records without replacing package data or a native engine."""
+    from egglog import _catalog, bindings, conversion, runtime  # noqa: PLC0415
+    from egglog._catalog import Catalog  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Rational source authoring accessed a native engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
+    catalog = Catalog(rational_catalog_program)
+    monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(runtime, "builtin_catalog", lambda: catalog)
+    monkeypatch.setattr(runtime, "_BASE_CLASSES", {})
+    monkeypatch.setattr(runtime, "_CLASS_CACHE", runtime.WeakKeyDictionary())
+    monkeypatch.setattr(conversion, "CONVERSIONS", {})
+    return runpy.run_path(str(Path(__file__).parents[1] / "egglog/builtins.py"), run_name="egglog.builtins")

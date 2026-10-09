@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import re
 import struct
 from collections.abc import Callable
+from decimal import Decimal
+from fractions import Fraction
+from math import gcd
 from typing import Any
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
+from ._builtin_protocols import SCALAR_PROTOCOLS
 from .declarations import Ident
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, _class_for_sort, _definition_at
 
@@ -21,6 +26,47 @@ __all__ = [
 ]
 
 
+def _exact_literal_value(sort: pb.Sort, primitive: pb.PrimitiveValue) -> int | Fraction:
+    """Validate canonical exact payload/sort agreement before host decoding."""
+    value = primitive.value
+    if (
+        value is None
+        or sort.kind is None
+        or sort.kind.field != "family"
+        or sort.kind.value.args
+        or (protocol := SCALAR_PROTOCOLS.get(sort.kind.value.name)) is None
+        or protocol.literal_arm != value.field
+    ):
+        msg = "Exact value payload has the wrong canonical sort"
+        raise ValueError(msg)
+    if value.field == "big_int":
+        if not re.fullmatch(r"0|-?[1-9][0-9]*", value.value):
+            msg = "BigInt value is not canonical decimal"
+            raise ValueError(msg)
+        # Decimal's exact string construction/int conversion does not inherit
+        # int(str)'s process-wide decimal digit cap or apply context rounding.
+        return int(Decimal(value.value))
+    if value.field == "big_rat":
+        if not re.fullmatch(r"0|-?[1-9][0-9]*", value.value.numerator) or not re.fullmatch(
+            r"[1-9][0-9]*", value.value.denominator
+        ):
+            msg = "BigRat value is not canonical decimal"
+            raise ValueError(msg)
+        numerator, denominator = int(Decimal(value.value.numerator)), int(Decimal(value.value.denominator))
+    elif value.field == "rational":
+        numerator, denominator = value.value.numerator, value.value.denominator
+        if not (-(2**63) <= numerator < 2**63 and 0 < denominator < 2**63):
+            msg = "Rational value requires an i64 numerator and positive i64 denominator"
+            raise ValueError(msg)
+    else:
+        msg = "Exact value payload has the wrong canonical sort"
+        raise ValueError(msg)
+    if denominator <= 0 or gcd(numerator, denominator) != 1:
+        msg = "Rational value must be reduced with a positive denominator"
+        raise ValueError(msg)
+    return Fraction(numerator, denominator)
+
+
 def get_literal_value(x: object) -> object:
     """Return a local literal payload, or None for symbolic expressions."""
     if not isinstance(x, RuntimeExpr):
@@ -32,6 +78,14 @@ def get_literal_value(x: object) -> object:
     if value is None:
         msg = "Primitive value has no payload"
         raise ValueError(msg)
+    sort: pb.Sort = x.__egg_ref__.owner.ref("sorts", node.sort_id).read()
+    exact_sort = (
+        sort.kind is not None
+        and sort.kind.field == "family"
+        and sort.kind.value.name in {"BigInt", "BigRat", "Rational"}
+    )
+    if exact_sort or value.field in {"big_int", "big_rat", "rational"}:
+        return _exact_literal_value(sort, node.kind.value)
     match value.field:
         case "i64" | "string" | "bool":
             return value.value

@@ -2,9 +2,12 @@
 
 import gc
 import math
+import operator
 import struct
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
+from fractions import Fraction
 from time import sleep
 from typing import ClassVar, Literal, get_type_hints
 from weakref import ref as weakref
@@ -47,6 +50,259 @@ from egglog.builtins import ExprValueError, _map_entries, _pair_value, _vec_valu
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name
 from egglog.runtime import _CLASS_CACHE, RuntimeExpr, RuntimeFunction, _author_call, resolve_callable
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
+
+
+def test_exact_construction_and_conversions_stay_symbolic(rational_runtime):
+    r, z, q, integer = (rational_runtime[name] for name in ("Rational", "BigInt", "BigRat", "i64"))
+    symbolic = integer(1) + 2
+    for expression, key in (
+        (r(1, 2), "egglog.experimental.rational.make"),
+        (z(10), "egglog.core.bigint.from_i64"),
+        (z.from_string("123"), "egglog.core.bigint.from_string"),
+        (q(1, 2), "egglog.core.bigrat.make"),
+        (r(1, 2) + Fraction(1, 3), "egglog.experimental.rational.add"),
+        (Fraction(1, 3) + r(1, 2), "egglog.experimental.rational.add"),
+    ):
+        assert expression.__egg_ref__.read().kind.field == "call"
+        assert expression.__egg_ref__.read().kind.value.func == key
+        packed = pack([expression.__egg_ref__])
+        assert pb.Program.from_binary(packed.program.to_binary()).to_binary() == packed.program.to_binary()
+    assert get_callable_fn(r(1, 2)) == r
+    assert get_callable_fn(z.from_string("123")) == z.from_string
+    assert [part.value for part in get_callable_args(Fraction(1, 3) + r(1, 2))] == [Fraction(1, 3), Fraction(1, 2)]
+    for target in (r, z, q):
+        converted = convert(symbolic, target)
+        child = get_callable_args(converted)[0]
+        if target == q:
+            child = get_callable_args(child)[0]
+        assert child.__egg_ref__ == symbolic.__egg_ref__
+        with pytest.raises(rational_runtime["ExprValueError"]):
+            _ = converted.value
+    for target in (r, q):
+        converted = convert(Fraction(1, 2), target)
+        assert get_callable_fn(converted) == target
+        numerator = get_callable_args(converted)[0]
+        if target == q:
+            numerator = get_callable_args(numerator)[0]
+        assert numerator.__egg_ref__.read().kind.value.value.field == "i64"
+    for target in (r, z, q):
+        with pytest.raises(ConvertError):
+            convert(1.5, target)
+    assert str(r(symbolic, 2)) == "Rational(i64(1) + 2, 2)"
+
+
+def test_exact_legacy_local_inspection_and_protocols(rational_runtime):
+    r, z, q = (rational_runtime[name] for name in ("Rational", "BigInt", "BigRat"))
+    half = r(1, 2)
+    assert half.value == Fraction(1, 2)
+    assert float(half) == 0.5
+    assert int(half) == 0
+    assert r(1, -2).value == Fraction(-1, 2)
+    with pytest.raises(ZeroDivisionError):
+        _ = r(1, 0).value
+    huge = 10**100 + 1
+    formed_integer = z.from_string(str(huge))
+    assert formed_integer.value == huge
+    assert int(formed_integer) == operator.index(formed_integer) == huge
+    formed_ratio = q(formed_integer, z.from_string("2"))
+    assert formed_ratio.value == Fraction(huge, 2)
+    assert int(formed_ratio) == huge // 2
+    assert float(formed_ratio) == float(Fraction(huge, 2))
+    for value in (half, formed_integer, formed_ratio):
+        with pytest.warns(DeprecationWarning, match="use .value"):
+            assert value.eval() == value.value
+    match half:
+        case r(value):
+            assert value == Fraction(1, 2)
+        case _:
+            pytest.fail("Exact value match protocol missing")
+    # Keep the old local form limits: from_i64 is a native call, not a literal.
+    for symbolic in (z(10), q(1, 2), half + Fraction(1, 3)):
+        with pytest.raises(rational_runtime["ExprValueError"]):
+            _ = symbolic.value
+    with pytest.raises(ValueError, match="invalid literal"):
+        _ = z.from_string("invalid").value
+
+
+def test_exact_pretty_uses_retained_classmethod_presentation(rational_runtime, rational_catalog_program):
+    from egglog.pretty import pretty_ref  # noqa: PLC0415
+
+    declaration = next(
+        d for d in rational_catalog_program.declarations if d.kind.value.name == "egglog.core.bigint.from_string"
+    )
+    declaration.bindings.python.views[0].path[0] = "decimal"
+    family = next(d.kind.value for d in rational_catalog_program.declarations if d.kind.value.name == "BigInt")
+    family.bindings.python.path[-1] = "Integer"
+    for name in ("egglog.core.bigrat.make", "egglog.experimental.rational.make"):
+        declaration = next(d for d in rational_catalog_program.declarations if d.kind.value.name == name)
+        declaration.bindings.python.views[0].params.reverse()
+    builder = Builder.from_program(rational_catalog_program)
+    for name, arm, payload, expected in (
+        ("BigInt", "big_int", "123", "Integer.decimal('123')"),
+        (
+            "BigRat",
+            "big_rat",
+            pb.BigRat(numerator="1", denominator="2"),
+            "BigRat(Integer.decimal('2'), Integer.decimal('1'))",
+        ),
+        ("Rational", "rational", pb.Rational(numerator=1, denominator=2), "Rational(2, 1)"),
+    ):
+        sort = next(
+            i
+            for i, s in enumerate(rational_catalog_program.sorts)
+            if s.kind.field == "family" and s.kind.value.name == name
+        )
+        index = builder.add(
+            "nodes", pb.Node(sort_id=sort, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))))
+        )
+        # The ambient generated classes still have the original BigInt name and
+        # from_string method. Only this owned record contains the changed view.
+        assert pretty_ref(builder.publish().ref("nodes", index)) == expected
+        builder = Builder.from_program(rational_catalog_program)
+
+
+@pytest.mark.parametrize(
+    ("family", "arm", "payload", "expected"),
+    [
+        ("BigInt", "big_int", "-123456789012345678901234567890", -123456789012345678901234567890),
+        (
+            "BigRat",
+            "big_rat",
+            pb.BigRat(numerator="100000000000000000001", denominator="3"),
+            Fraction(100000000000000000001, 3),
+        ),
+        ("Rational", "rational", pb.Rational(numerator=-1, denominator=2), Fraction(-1, 2)),
+        ("Rational", "rational", pb.Rational(numerator=0, denominator=1), Fraction(0)),
+    ],
+)
+def test_exact_inert_values_are_owned_inspectable_and_printable(rational_runtime, family, arm, payload, expected):
+    from egglog.deconstruct import get_literal_value  # noqa: PLC0415
+
+    cls = rational_runtime[family]
+    builder = Builder()
+    primitive = pb.PrimitiveValue(value=Oneof(arm, payload))
+    index = builder.add(
+        "nodes", pb.Node(sort_id=builder.import_ref(cls.__egg_sort__), kind=Oneof("primitive_value", primitive))
+    )
+    expression = RuntimeExpr(builder.publish().ref("nodes", index))
+    if not isinstance(payload, str):
+        payload.denominator = "0" if arm == "big_rat" else 0
+    assert get_literal_value(expression) == expression.value == expected
+    assert get_callable_args(expression) is None
+    assert copy(expression).__egg_ref__ == expression.__egg_ref__
+    # Display uses actual constructor/classmethod presentations, never f64 or
+    # frontend evaluation. Reauthoring is symbolic, not an inert-record clone.
+    displayed = eval(str(expression), rational_runtime)
+    assert displayed.value == expected
+    assert displayed.__egg_ref__.read().kind.field == "call"
+    packed = pack([expression.__egg_ref__])
+    detached = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+    assert RuntimeExpr(detached.ref("nodes", packed.indices[0])).value == expected
+
+
+@pytest.mark.parametrize("access", ["literal", "value", "display", "binary", "display_value"])
+@pytest.mark.parametrize("form", ["integer", "numerator", "denominator", "both"])
+def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runtime, access, form):
+    from egglog.deconstruct import get_literal_value  # noqa: PLC0415
+
+    limit = sys.get_int_max_str_digits()
+    digits = max(5000, limit + 1)
+    text, huge = "9" * digits, 10**digits - 1
+    if form == "integer":
+        family, arm, payload, expected = "BigInt", "big_int", "-" + text, -huge
+        display = f"BigInt.from_string('-{text}')"
+    else:
+        numerator, denominator, expected = {
+            "numerator": ("-" + text, "2", Fraction(-huge, 2)),
+            "denominator": ("1", text, Fraction(1, huge)),
+            "both": (text, "1" + "0" * (digits - 1), Fraction(huge, 10 ** (digits - 1))),
+        }[form]
+        family, arm = "BigRat", "big_rat"
+        payload = pb.BigRat(numerator=numerator, denominator=denominator)
+        display = f"BigRat(BigInt.from_string({numerator!r}), BigInt.from_string({denominator!r}))"
+    builder = Builder()
+    index = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(rational_runtime[family].__egg_sort__),
+            kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))),
+        ),
+    )
+    expression = RuntimeExpr(builder.publish().ref("nodes", index))
+    try:
+        if access == "literal":
+            assert get_literal_value(expression) == expected
+        elif access == "value":
+            assert expression.value == expected
+        elif access == "display":
+            assert str(expression) == display
+        elif access == "binary":
+            packed = pack([expression.__egg_ref__])
+            encoded = packed.program.to_binary()
+            decoded = pb.Program.from_binary(encoded)
+            assert decoded.to_binary() == encoded
+            detached = Builder.from_program(decoded).publish()
+            assert RuntimeExpr(detached.ref("nodes", packed.indices[0])).value == expected
+        else:
+            # Independent of inert decoding: the existing display contract
+            # reauthors a symbolic from-string Call that remains inspectable.
+            reauthored = eval(display, rational_runtime)
+            assert reauthored.__egg_ref__.read().kind.field == "call"
+            assert reauthored.value == expected
+    finally:
+        assert sys.get_int_max_str_digits() == limit
+
+
+def test_exact_from_string_inspection_preserves_noncanonical_int_behavior(rational_runtime):
+    cls = rational_runtime["BigInt"]
+    for text, expected in (("  +001_234 ", 1234), ("-0", 0), ("+1", 1), ("01", 1)):
+        assert cls.from_string(text).value == expected
+    for text in ("1e3", "1.5", "NaN", "Infinity"):
+        with pytest.raises(ValueError, match="invalid literal"):
+            _ = cls.from_string(text).value
+
+
+@pytest.mark.parametrize(
+    ("family", "arm", "payload"),
+    [
+        ("BigInt", "big_int", "01"),
+        ("BigInt", "big_int", "-0"),
+        ("BigInt", "big_int", "+1"),
+        ("BigInt", "big_int", "1_0"),
+        ("BigInt", "big_int", " 1"),
+        ("BigInt", "big_int", "1e3"),
+        ("BigInt", "big_int", "1.5"),
+        ("BigInt", "big_int", "NaN"),
+        ("BigRat", "big_rat", pb.BigRat(numerator="1", denominator="2.0")),
+        ("BigInt", "rational", pb.Rational(numerator=1, denominator=2)),
+        ("Rational", "i64", 1),
+        ("BigRat", "big_rat", pb.BigRat(numerator="2", denominator="4")),
+        ("BigRat", "big_rat", pb.BigRat(numerator="0", denominator="2")),
+        ("BigRat", "big_rat", pb.BigRat(numerator="1", denominator="-2")),
+        ("BigRat", "big_rat", pb.BigRat(numerator="+1", denominator="2")),
+        ("Rational", "rational", pb.Rational(numerator=2, denominator=4)),
+        ("Rational", "rational", pb.Rational(numerator=1, denominator=0)),
+        ("Rational", "rational", pb.Rational(numerator=0, denominator=2)),
+        ("Rational", "rational", pb.Rational(numerator=2**63, denominator=1)),
+        ("Rational", "rational", pb.Rational(numerator=1, denominator=2**63)),
+    ],
+)
+def test_exact_inert_values_reject_malformed_data(rational_runtime, family, arm, payload):
+    from egglog.deconstruct import get_literal_value  # noqa: PLC0415
+
+    builder = Builder()
+    index = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(rational_runtime[family].__egg_sort__),
+            kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))),
+        ),
+    )
+    expression = RuntimeExpr(builder.publish().ref("nodes", index))
+    with pytest.raises(ValueError, match=r"canonical|requires|reduced"):
+        get_literal_value(expression)
+    with pytest.raises(ValueError, match=r"canonical|requires|reduced"):
+        _ = expression.value
 
 
 def test_scalar_wave_local_protocols_and_matching_never_evaluate(monkeypatch):

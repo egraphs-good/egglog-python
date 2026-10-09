@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import re
+import runpy
 import subprocess
 import sys
 
@@ -46,7 +47,7 @@ from mypy.test.testcheck import TypeCheckSuite
 __all__ = ["TypeCheckSuite"]
 
 
-@pytest.mark.parametrize("family", ["scalar", "pair", "vec", "map", "concrete_members"])
+@pytest.mark.parametrize("family", ["scalar", "pair", "vec", "map", "concrete_members", "rational"])
 @pytest.mark.parametrize("kind", ["positive", "negative"])
 def test_generated_builtin_installed_types(family, kind, tmp_path):
     """Check actual installed public imports, independent of source MYPYPATH."""
@@ -113,12 +114,17 @@ def test_generated_builtin_installed_types(family, kind, tmp_path):
     assert not result.stderr, result.stderr
 
 
-@pytest.mark.parametrize("family", ["scalar", "pair", "vec", "map", "concrete_members"])
+@pytest.mark.parametrize("family", ["scalar", "pair", "vec", "map", "concrete_members", "rational"])
 @pytest.mark.parametrize("kind", ["positive", "negative"])
-def test_generated_builtin_source_types(family, kind, tmp_path):
+def test_generated_builtin_source_types(family, kind, tmp_path, request):
     """Actual catalog-derived source stub; shadowing cannot replace the installed gate."""
     root = pathlib.Path(__file__).resolve().parents[2]
     stub = root / "python/egglog/builtins.pyi"
+    if family == "rational":
+        program = request.getfixturevalue("rational_catalog_program")
+        render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+        stub = tmp_path / "generated_builtins.pyi"
+        stub.write_text(render(program))
     environment = os.environ.copy()
     environment.pop("MYPYPATH", None)
     environment.pop("PYTHONPATH", None)

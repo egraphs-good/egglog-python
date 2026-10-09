@@ -3,13 +3,14 @@
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Generic, Never, TypeAlias, TypeVar
 
 from typing_extensions import deprecated
 
 from .egraph import BaseExpr, BuiltinExpr
 
-__all__ = ["Bool", "BoolLike", "ExprValueError", "Map", "MapLike", "Pair", "String", "StringLike", "Unit", "Vec", "VecLike", "f64", "f64Like", "i64", "i64Like", "join"]
+__all__ = ["BigInt", "BigIntLike", "BigRat", "BigRatLike", "Bool", "BoolLike", "ExprValueError", "Map", "MapLike", "Pair", "Rational", "RationalLike", "String", "StringLike", "Unit", "Vec", "VecLike", "f64", "f64Like", "i64", "i64Like", "join"]
 
 @dataclass
 class ExprValueError(AttributeError):
@@ -81,6 +82,32 @@ class f64(BuiltinExpr):
 
 f64Like: TypeAlias = f64 | float | int
 
+class BigInt(BuiltinExpr):
+    __match_args__ = ("value",)
+    @property
+    def value(self) -> int: ...
+    @deprecated("use .value")
+    def eval(self) -> int: ...
+    def __int__(self) -> int: ...
+    def __index__(self) -> int: ...
+    def __init__(self, value: i64Like) -> None: ...
+    @classmethod
+    def from_string(cls, s: StringLike) -> BigInt: ...
+
+BigIntLike: TypeAlias = BigInt | i64Like
+
+class BigRat(BuiltinExpr):
+    __match_args__ = ("value",)
+    @property
+    def value(self) -> Fraction: ...
+    @deprecated("use .value")
+    def eval(self) -> Fraction: ...
+    def __int__(self) -> int: ...
+    def __float__(self) -> float: ...
+    def __init__(self, num: BigIntLike, den: BigIntLike) -> None: ...
+
+BigRatLike: TypeAlias = BigRat | Fraction | i64Like
+
 _Vec_T_0 = TypeVar("_Vec_T_0", bound=BaseExpr)
 
 class Vec(BuiltinExpr, Generic[_Vec_T_0]):
@@ -137,5 +164,19 @@ class Map(BuiltinExpr, Generic[_Map_K_0, _Map_V_1]):
 _Map_HostK = TypeVar("_Map_HostK")
 _Map_HostV = TypeVar("_Map_HostV")
 MapLike: TypeAlias = Map[_Map_K_0, _Map_V_1] | dict[_Map_HostK, _Map_HostV]
+
+class Rational(BuiltinExpr):
+    __match_args__ = ("value",)
+    @property
+    def value(self) -> Fraction: ...
+    @deprecated("use .value")
+    def eval(self) -> Fraction: ...
+    def __int__(self) -> int: ...
+    def __float__(self) -> float: ...
+    def __add__(self, other: RationalLike) -> Rational: ...
+    def __radd__(self, other: RationalLike) -> Rational: ...
+    def __init__(self, num: i64Like, den: i64Like) -> None: ...
+
+RationalLike: TypeAlias = Rational | Fraction | i64Like
 
 def join(*strings: StringLike) -> String: ...

@@ -1,6 +1,7 @@
 """Normal Python syntax over the generated-record runtime, without an engine."""
 
 from copy import copy
+from fractions import Fraction
 from typing import ClassVar
 
 import pytest
@@ -32,6 +33,35 @@ from egglog import (
 )
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.runtime import RuntimeExpr, RuntimeFunction
+
+
+def test_exact_wave_public_native_bytes() -> None:
+    # Imported here so source-only scalar regressions remain collectable before
+    # the actual rational catalog is packaged. This gate requires the new wheel.
+    from egglog import BigInt, BigRat, Rational, convert  # noqa: PLC0415
+
+    graph = EGraph()
+    huge = 10**100 + 1
+    for expression, expected in (
+        (Rational(1, 2), Fraction(1, 2)),
+        (Rational(1, -2), Fraction(-1, 2)),
+        (Rational(i64(1) + 2, 2), Fraction(3, 2)),
+        (Rational(1, 2) + Fraction(1, 3), Fraction(5, 6)),
+        (Fraction(1, 3) + Rational(1, 2), Fraction(5, 6)),
+        (BigInt(10), 10),
+        (BigInt(i64(1) + 2), 3),
+        (BigInt.from_string(str(huge)), huge),
+        (BigRat(1, 2), Fraction(1, 2)),
+        (BigRat(BigInt.from_string(str(huge)), 2), Fraction(huge, 2)),
+        (convert(Fraction(1, 2), BigRat), Fraction(1, 2)),
+    ):
+        assert expression.__egg_ref__.read().kind.field == "call"
+        extracted = graph.extract(expression)
+        assert extracted.__egg_ref__.read().kind.field == "primitive_value"
+        assert extracted.value == expected
+        assert EGraph().extract(extracted).value == expected
+    assert int(graph.extract(BigInt(10))) == 10
+    assert float(graph.extract(BigRat(1, 2))) == 0.5
 
 
 def test_scalar_wave_public_native_bytes() -> None:

@@ -19,6 +19,41 @@ from egglog.runtime import RuntimeExpr, RuntimeFunction, _class_for_sort
 from egglog.type_constraint_solver import TypeConstraintError
 
 
+def test_exact_generated_surface_keeps_native_constructors(rational_catalog_program):
+    render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
+        "render_stubs"
+    ]
+    stub = render(rational_catalog_program)
+    for signature in (
+        "def __init__(self, num: i64Like, den: i64Like) -> None:",
+        "def __add__(self, other: RationalLike) -> Rational:",
+        "def __radd__(self, other: RationalLike) -> Rational:",
+        "def __init__(self, value: i64Like) -> None:",
+        "def from_string(cls, s: StringLike) -> BigInt:",
+        "def __init__(self, num: BigIntLike, den: BigIntLike) -> None:",
+        "RationalLike: TypeAlias = Rational | Fraction | i64Like",
+        "BigIntLike: TypeAlias = BigInt | i64Like",
+        "BigRatLike: TypeAlias = BigRat | Fraction | i64Like",
+    ):
+        assert signature in stub
+    for family, value, hook in (
+        ("Rational", "Fraction", "__float__"),
+        ("BigRat", "Fraction", "__float__"),
+        ("BigInt", "int", "__index__"),
+    ):
+        body = stub.split(f"class {family}(", 1)[1].split("\nclass ", 1)[0]
+        assert body.count("def __init__(") == 1
+        assert f"def value(self) -> {value}:" in body
+        assert f"def eval(self) -> {value}:" in body
+        assert f"def {hook}(self) ->" in body
+        assert "from_value" not in body
+    declaration = next(
+        d for d in rational_catalog_program.declarations if d.kind.value.name == "egglog.experimental.rational.make"
+    )
+    declaration.bindings.python.views[0].params[0].name = "numerator"
+    assert "def __init__(self, numerator: i64Like, den: i64Like)" in render(rational_catalog_program)
+
+
 def test_scalar_generated_surface_uses_actual_variadic_providers():
     root = Path(__file__).resolve().parents[2]
     program = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
@@ -415,7 +450,11 @@ def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message)
     if mutation == "receiver":
         view.receiver = 1
     elif mutation == "argument":
-        signature.inputs[1].sort = 0
+        f64_sort = next(
+            i for i, s in enumerate(program.sorts) if s.kind.field == "family" and s.kind.value.name == "f64"
+        )
+        assert f64_sort != signature.inputs[1].sort
+        signature.inputs[1].sort = f64_sort
     elif mutation == "tail":
         signature.varargs = [pb.Arg(sort=1), pb.Arg(sort=0)]
     elif mutation == "collision":
@@ -508,7 +547,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     old_binary, old_stub = binary.read_bytes(), stub.read_bytes()
     malformed = pb.Program.from_binary(old_binary)
     addition = next(d for d in malformed.declarations if d.kind.value.name == "egglog.core.i64.add")
-    addition.kind.value.typing.value.output = 0
+    f64_sort = next(i for i, s in enumerate(malformed.sorts) if s.kind.field == "family" and s.kind.value.name == "f64")
+    assert f64_sort != addition.kind.value.typing.value.output
+    addition.kind.value.typing.value.output = f64_sort
     invalid = tmp_path / "invalid.pb"
     invalid.write_bytes(malformed.to_binary())
     command[4] = str(invalid)

@@ -8,6 +8,7 @@ import ast
 import struct
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from fractions import Fraction
 from typing import TYPE_CHECKING, TypeAlias, assert_never
 
 import black
@@ -147,6 +148,72 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                         value = repr(primitive.value)
                     elif primitive.field == "unit":
                         value = ""
+                    elif primitive.field in {"big_int", "big_rat", "rational"}:
+                        from .deconstruct import get_literal_value  # noqa: PLC0415
+                        from .runtime import RuntimeExpr  # noqa: PLC0415
+
+                        exact = get_literal_value(RuntimeExpr(reference))
+                        if primitive.field == "rational":
+                            assert isinstance(exact, Fraction)
+                            arguments = [str(exact.numerator), str(exact.denominator)]
+                        else:
+                            string_constructor = _definition_at(reference, "callable", "egglog.core.bigint.from_string")
+                            integer_metadata: pb.Declaration = string_constructor.read()
+                            integer_views = (
+                                integer_metadata.bindings.python.views
+                                if integer_metadata.bindings and integer_metadata.bindings.python
+                                else []
+                            )
+                            class_view = next(
+                                (v for v in integer_views if v.kind == pb.PythonCallKind.CLASS_METHOD), None
+                            )
+                            if (
+                                class_view is None
+                                or class_view.owner is None
+                                or class_view.owner.kind is None
+                                or class_view.owner.kind.field != "sort"
+                            ):
+                                msg = "BigInt value presentation requires a supplied from-string classmethod"
+                                raise ValueError(msg)
+                            integer_sort = string_constructor.owner.ref("sorts", class_view.owner.kind.value)
+                            constructor = f"{pretty_ref(integer_sort)}.{class_view.path[-1]}"
+                            if primitive.field == "big_int":
+                                frames.append(f"{constructor}({primitive.value!r})")
+                                continue
+                            assert isinstance(exact, Fraction)
+                            # The validated wire already owns canonical decimal
+                            # strings; str(large_int) would impose a host limit.
+                            arguments = [
+                                f"{constructor}({part!r})"
+                                for part in (primitive.value.numerator, primitive.value.denominator)
+                            ]
+                        ratio_constructor = _definition_at(
+                            reference,
+                            "callable",
+                            "egglog.experimental.rational.make"
+                            if primitive.field == "rational"
+                            else "egglog.core.bigrat.make",
+                        )
+                        ratio_metadata: pb.Declaration = ratio_constructor.read()
+                        ratio_views = (
+                            ratio_metadata.bindings.python.views
+                            if ratio_metadata.bindings and ratio_metadata.bindings.python
+                            else []
+                        )
+                        init_view = next((v for v in ratio_views if v.kind == pb.PythonCallKind.INITIALIZER), None)
+                        if init_view is None or sorted(
+                            p.core_input for p in init_view.params if p.has_field("core_input")
+                        ) != [0, 1]:
+                            msg = "Ratio value presentation requires a supplied two-input initializer"
+                            raise ValueError(msg)
+                        pieces = [
+                            (sort, False, False),
+                            "(",
+                            ", ".join(arguments[p.core_input] for p in init_view.params),
+                            ")",
+                        ]
+                        frames.extend(reversed(pieces))
+                        continue
                     elif primitive.field == "pair":
                         from .builtins import _pair_value  # noqa: PLC0415
                         from .runtime import RuntimeExpr  # noqa: PLC0415

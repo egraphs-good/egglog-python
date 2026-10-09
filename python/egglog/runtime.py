@@ -276,7 +276,7 @@ def _author_call(  # noqa: C901, PLR0912
 
 # These are Python codecs/protocol hooks, not callable signatures. Sort and
 # callable definitions still come from the native-generated catalog.
-LIT_IDENTS = frozenset(SCALAR_PROTOCOLS)
+LIT_IDENTS = frozenset(name for name, protocol in SCALAR_PROTOCOLS.items() if protocol.literal_constructor)
 DUMMY_VALUE = object()
 _CLASS_CACHE: WeakKeyDictionary[Owner, WeakValueDictionary[int, RuntimeClass]] = WeakKeyDictionary()
 _BASE_CLASSES: dict[str, RuntimeClass] = {}
@@ -466,7 +466,7 @@ class RuntimeClass(type):
         declaration: pb.Declaration = cls.__egg_definition__.read()
         assert declaration.kind is not None
         name = declaration.kind.value.name
-        if isinstance(declaration.kind.value, pb.HostSortFamily) and name in SCALAR_PROTOCOLS:
+        if isinstance(declaration.kind.value, pb.HostSortFamily) and name in LIT_IDENTS:
             if kwargs or len(args) != (0 if name == "Unit" else 1):
                 raise TypeError(f"{cls} expects {'zero' if name == 'Unit' else 'one'} positional literal argument")
             if args and not isinstance(args[0], SCALAR_PROTOCOLS[name].literal_types):
