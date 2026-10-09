@@ -500,6 +500,33 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                 pieces.append(")")
             else:
                 raise NotImplementedError(f"Rule presentation is not migrated: {record.kind.field}")
+        elif isinstance(record, pb.Ruleset):
+            if record.kind is None:
+                msg = "Cannot print a ruleset without a kind"
+                raise ValueError(msg)
+            if record.kind.field == "rules":
+                pieces = ["ruleset("]
+                for index, rule_index in enumerate(record.kind.value.rules):
+                    if index:
+                        pieces.append(", ")
+                    pieces.append((owner.ref("rules", rule_index), False, False))
+            else:
+                pieces = ["unstable_combine_rulesets("]
+                for index, child in enumerate(record.kind.value.rulesets):
+                    if index:
+                        pieces.append(", ")
+                    if child.kind is None:
+                        msg = "Cannot print a ruleset reference without a kind"
+                        raise ValueError(msg)
+                    if child.kind.field == "index":
+                        pieces.append((owner.ref("rulesets", child.kind.value), False, False))
+                    else:
+                        pieces.append(child.kind.value)
+            if record.has_field("name"):
+                if len(pieces) > 1:
+                    pieces.append(", ")
+                pieces.append(f"name={record.name!r}")
+            pieces.append(")")
         elif isinstance(record, pb.Action):
             action = record
             if action.kind is None:

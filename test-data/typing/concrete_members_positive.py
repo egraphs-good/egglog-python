@@ -5,7 +5,23 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import ClassVar, assert_type
 
-from egglog import Expr, Pair, RewriteOrRule, Vec, eq, f64, i64, i64Like, method, rewrite, rule, var, vars_
+from egglog import (
+    Expr,
+    Pair,
+    RewriteOrRule,
+    Ruleset,
+    Vec,
+    eq,
+    f64,
+    i64,
+    i64Like,
+    method,
+    rewrite,
+    rule,
+    ruleset,
+    var,
+    vars_,
+)
 
 
 class Node(Expr):
@@ -43,3 +59,9 @@ assert_type(vars_("left right", Node), Iterable[Node])
 assert_type(var("number", i64), i64)
 assert_type(rewrite(variable).to(node), RewriteOrRule)
 assert_type(rule(eq(variable).to(node)).then(node), RewriteOrRule)
+destination = ruleset(name="typed_rules")
+assert_type(destination, Ruleset)
+assert_type(rewrite(variable, ruleset=destination).to(node), RewriteOrRule)
+assert_type(rule(variable, ruleset=destination).then(node), RewriteOrRule)
+destination.append(rewrite(variable).to(node))
+assert_type(rewrite(variable).to(node) == rewrite(variable).to(node), bool)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import ClassVar
 
-from egglog import Expr, Pair, Vec, f64, i64, i64Like, rewrite, rule, var, vars_
+from egglog import Expr, Pair, Vec, f64, i64, i64Like, rewrite, rule, ruleset, var, vars_
 
 
 class Node(Expr):
@@ -41,3 +41,6 @@ wrong_rule: i64 = rule().then()  # error: assignment
 rewrite(var("node", Node)).to(i64(1))  # error: arg-type
 rule("not a fact")  # error: arg-type
 rule().then("not an action")  # error: arg-type
+ruleset().append(node)  # error: arg-type
+rewrite(node, ruleset="not a ruleset")  # error: arg-type
+rule(node, ruleset=i64(1))  # error: arg-type

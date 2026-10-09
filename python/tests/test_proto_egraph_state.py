@@ -12,6 +12,476 @@ from egglog._catalog import builtin_catalog
 from egglog._program import pack
 
 
+def _run_ruleset_step(graph, selected=None):
+    """Freeze a live target, execute canonical Run bytes, and read raw matches."""
+    from egglog._program import Builder  # noqa: PLC0415
+    from egglog.declarations import Ident  # noqa: PLC0415
+
+    if selected is None:
+        published = graph._state.rulesets[Ident("")]
+    else:
+        identifiers = {}
+        snapshot = selected._snapshot(identifiers)
+        published = graph._state.publish_ruleset(snapshot, identifiers)
+    builder = Builder()
+    ruleset_index = builder.import_ref(published)
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["run"], pb.Run](
+                "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", ruleset_index)))
+            )
+        ),
+    )
+    response, _ = graph._state.run_program([builder.publish().ref("commands", command)])
+    assert response.error is None
+    assert response.profile is not None
+    assert len(response.profile.runs) == 1
+    labels = {index: attribution.name for index, attribution in enumerate(response.rules)}
+    matches = {}
+    for summary in response.profile.runs[0].rules:
+        assert summary.matches is not None
+        label = labels[summary.rule]
+        matches[label] = matches.get(label, 0) + summary.matches
+    return matches
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_publication_adopts_exact_receipt_before_install_error(monkeypatch, completed):
+    from egglog import rule, ruleset  # noqa: PLC0415
+
+    requests = []
+    fail = True
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            request = pb.RunProgramRequest.from_binary(encoded)
+            requests.append(request)
+            names = [record.name for record in request.program.rulesets if record.has_field("name")]
+            return pb.RunProgramResponse(
+                ruleset_publication=pb.RulesetPublication(names=names if completed or not fail else []),
+                error=pb.Error(code=pb.ErrorCode.EVALUATION_FAILED, message="injected install boundary")
+                if fail
+                else None,
+            ).to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Publication bookkeeping used the legacy engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    selected = ruleset(rule(name="first").then(), name="receipt")
+    identifiers = {}
+    snapshot = selected._snapshot(identifiers)
+    with pytest.raises(bindings.EggSmolError, match="injected install boundary"):
+        graph._state.publish_ruleset(snapshot, identifiers)
+    first_name = requests[0].program.rulesets[0].name
+    assert (("ruleset", first_name) in graph._state.definitions) is completed
+    assert (selected.__egg_ident__ in graph._state.rulesets) is completed
+    fail = False
+    version = graph._state.publish_ruleset(snapshot, identifiers)
+    assert version.read().name == first_name
+    if completed:
+        assert len(requests) == 1  # Retry must not reset the completed occurrence.
+    else:
+        assert len(requests) == 2
+        assert requests[1].program == requests[0].program
+    assert graph._state._ruleset_members(version)[0] != snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+
+
+@pytest.mark.parametrize("receipt", [None, ["foreign"], ["requested", "requested"], []])
+def test_invalid_publication_receipt_does_not_adopt_roots(monkeypatch, receipt):
+    from egglog._program import Builder  # noqa: PLC0415
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            return pb.RunProgramResponse(
+                ruleset_publication=None if receipt is None else pb.RulesetPublication(names=receipt)
+            ).to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    builder = Builder()
+    index = builder.add(
+        "rulesets", pb.Ruleset(name="requested", kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList()))
+    )
+    before = graph._state.definitions.copy()
+    with pytest.raises(ValueError, match=r"receipt|confirmation"):
+        graph._state.run_program([], roots=[builder.publish().ref("rulesets", index)])
+    assert graph._state.definitions == before
+
+
+@pytest.mark.parametrize("across_actions", [False, True])
+def test_mixed_registration_cut_distinguishes_query_from_action_identity(monkeypatch, across_actions):
+    from egglog import Action, Fact, expr_action, rule  # noqa: PLC0415
+    from egglog._program import Builder  # noqa: PLC0415
+
+    requests = []
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            request = pb.RunProgramRequest.from_binary(encoded)
+            requests.append(request)
+            return pb.RunProgramResponse(
+                ruleset_publication=pb.RulesetPublication(
+                    names=[root.name for root in request.program.rulesets if root.has_field("name")]
+                )
+            ).to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+
+    class Box(Expr):
+        def __init__(self) -> None: ...
+
+    builder = Builder()
+    union = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(Box.__egg_sort__),
+            kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[builder.import_ref(Box().__egg_ref__)])),
+        ),
+    )
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action", pb.Action(kind=Oneof[Literal["term"], int]("term", union))
+            )
+        ),
+    )
+    owner = builder.publish()
+    action = Action(owner.ref("commands", command))
+    query = Fact(owner.ref("nodes", union))
+    graph = EGraph()
+    if across_actions:
+        with pytest.raises(NotImplementedError, match="shared allocating Union"):
+            graph.register(action, rule(query).then(), action)
+        assert not requests
+        assert not graph._state.rulesets
+    else:
+        graph.register(action, rule(query).then(), expr_action(i64(1)))
+        assert [len(request.program.commands) for request in requests] == [1, 0, 1]
+        assert len(requests[1].program.rules) == 1
+
+
+def test_ruleset_append_preserves_native_cursor(tmp_path):
+    """Real encoded execution; raw summaries are not a public RunReport."""
+    from egglog import rule, ruleset, var  # noqa: PLC0415
+
+    class Input(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    class Old(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    class New(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    graph = EGraph()
+    transport = graph._state.transport
+    responses = []
+
+    class AuditedTransport:
+        def run(self, encoded):
+            index = len(responses)
+            (tmp_path / f"request-{index}.pb").write_bytes(encoded)
+            decoded = pb.RunProgramRequest.from_binary(encoded)
+            assert pb.RunProgramRequest.from_binary(decoded.to_binary()) == decoded
+            returned = transport.run(encoded)
+            (tmp_path / f"response-{index}.pb").write_bytes(returned)
+            response = pb.RunProgramResponse.from_binary(returned)
+            assert response.ruleset_publication is not None
+            responses.append(response)
+            return returned
+
+        def destroy(self, encoded):
+            return transport.destroy(encoded)
+
+    graph._state.transport = AuditedTransport()
+    graph.register(Input(1))
+    x = var("x", i64)
+    selected = ruleset(rule(Input(x), name="old").then(Old(x)), name="append_cursor")
+
+    assert _run_ruleset_step(graph, selected) == {"old": 1}
+    graph.check(Old(1))
+    selected.append(rule(Input(x), name="new").then(New(x)))
+    assert _run_ruleset_step(graph, selected) == {"new": 1}
+    graph.check(Old(1), New(1))
+    assert _run_ruleset_step(graph, selected) == {}
+    assert any(response.ruleset_publication.names for response in responses)
+
+
+@pytest.fixture
+def native_rule_program():
+    from egglog import rule, var  # noqa: PLC0415
+
+    class Seed(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    class First(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    class Second(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    x = var("x", i64)
+    first = rule(Seed(x), name="first").then(First(x))
+    second = rule(Seed(x), name="second").then(Second(x))
+    return Seed, First, Second, first, second
+
+
+def test_native_same_ident_retains_all_completed_memberships(native_rule_program):
+    from egglog import ruleset  # noqa: PLC0415
+
+    Seed, First, Second, first, second = native_rule_program
+    r1, r2 = ruleset(first, name="same"), ruleset(second, name="same")
+    graph = EGraph()
+    graph.register(Seed(1))
+    assert _run_ruleset_step(graph, r1) == {"first": 1}
+    assert _run_ruleset_step(graph, r2) == {"second": 1}
+    assert _run_ruleset_step(graph, r1) == {}
+    graph.register(Seed(2))
+    assert _run_ruleset_step(graph, r1) == {"first": 1, "second": 1}
+    graph.check(First(1), Second(1), First(2), Second(2))
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_native_combined_same_ident_selects_rightmost_before_install(native_rule_program, reverse):
+    from egglog import ruleset  # noqa: PLC0415
+
+    Seed, First, Second, first, second = native_rule_program
+    r1, r2 = ruleset(first, name="same"), ruleset(second, name="same")
+    graph = EGraph()
+    graph.register(Seed(1))
+    assert _run_ruleset_step(graph, r2 | r1 if reverse else r1 | r2) == {"first" if reverse else "second": 1}
+    assert graph.check_bool(First(1)) is reverse
+    assert graph.check_bool(Second(1)) is not reverse
+
+
+def test_native_combined_uses_only_completed_child_updates(native_rule_program):
+    from egglog import ruleset  # noqa: PLC0415
+
+    Seed, First, Second, first, second = native_rule_program
+    left = ruleset(first, name="left")
+    combined = left | ruleset(name="empty")
+    graph = EGraph()
+    graph.register(Seed(1))
+    assert _run_ruleset_step(graph, combined) == {"first": 1}
+    left.append(second)
+    assert _run_ruleset_step(graph, combined) == {}
+    graph.check_fail(Second(1))
+    assert _run_ruleset_step(graph, left) == {"second": 1}
+    graph.register(Seed(2))
+    assert _run_ruleset_step(graph, combined) == {"first": 1, "second": 1}
+    graph.check(First(2), Second(2))
+
+
+def test_native_distinct_ident_memberships_do_not_share_cursors(native_rule_program):
+    from egglog import ruleset  # noqa: PLC0415
+
+    Seed, _, _, first, _ = native_rule_program
+    graph = EGraph()
+    graph.register(Seed(1))
+    r1 = ruleset(first, first, name="independent_one")
+    r2 = ruleset(first, name="independent_two")
+    assert _run_ruleset_step(graph, r1) == {"first": 1}
+    assert _run_ruleset_step(graph, r2) == {"first": 1}
+    assert _run_ruleset_step(graph, r1) == {}
+    roots = [graph._state.rulesets[r.__egg_ident__] for r in (r1, r2)]
+    occurrences = [graph._state._ruleset_members(root) for root in roots]
+    assert len(occurrences[0]) == len(occurrences[1]) == 1
+    assert occurrences[0][0] != occurrences[1][0]
+
+
+@pytest.mark.parametrize("prefix_rule", [False, True])
+def test_native_mixed_registration_keeps_failure_prefix(native_rule_program, prefix_rule):
+    from egglog import rule, var  # noqa: PLC0415
+
+    Seed, First, Second, first, _ = native_rule_program
+    bad = rule(Seed(var("x", i64)), name="unbound-head").then(Second(var("unbound_y", i64)))
+    graph = EGraph()
+    if prefix_rule:
+        graph.register(Seed(1))
+    with pytest.raises(bindings.EggSmolError):
+        graph.register(first if prefix_rule else Seed(1), bad, Second(2))
+    graph.check(Seed(1))
+    graph.check_fail(First(1))
+    graph.check_fail(Second(2))
+    if prefix_rule:
+        assert _run_ruleset_step(graph) == {"first": 1}
+        graph.check(First(1))
+    graph.check_fail(Second(2))
+
+
+def test_native_valid_mixed_registration_and_scope_memberships(native_rule_program):
+    from egglog import ruleset  # noqa: PLC0415
+
+    Seed, First, Second, first, second = native_rule_program
+    graph = EGraph()
+    graph.register(Seed(1), first, Second(1))
+    assert _run_ruleset_step(graph) == {"first": 1}
+    graph.check(First(1), Second(1))
+    original_direct = graph._state._direct_rules
+    graph.push()
+    assert graph._state._direct_rules == original_direct
+    assert graph._state._direct_rules is not original_direct
+    graph.register(second)
+    assert len(graph._state._direct_rules) == 2
+    assert len(original_direct) == 1
+    assert _run_ruleset_step(graph) == {"second": 1}
+    graph.pop()
+    assert graph._state._direct_rules is original_direct
+    graph.register(Seed(2))
+    assert _run_ruleset_step(graph) == {"first": 1}
+    graph.check(First(2))
+    graph.check_fail(Second(2))
+    explicit = ruleset(second, name="explicit")
+    assert _run_ruleset_step(graph, explicit) == {"second": 2}
+
+
+def test_native_direct_unnamed_registration_creates_fresh_occurrences(native_rule_program):
+    from egglog import rule, var  # noqa: PLC0415
+    from egglog.declarations import Ident  # noqa: PLC0415
+
+    Seed, First, _, _, _ = native_rule_program
+    x = var("x", i64)
+    authored = rule(Seed(x)).then(First(x))
+    graph = EGraph()
+    graph.register(Seed(1))
+    graph.register(authored, authored)
+    assert _run_ruleset_step(graph) == {"": 2}
+    graph.register(authored)
+    assert _run_ruleset_step(graph) == {"": 1}
+    assert len(graph._state._ruleset_members(graph._state.rulesets[Ident("")])) == 3
+    graph.check(First(1))
+
+
+def test_native_direct_named_collision_keeps_prefix_and_error_shape(native_rule_program):
+    Seed, First, Second, first, _ = native_rule_program
+    graph = EGraph()
+    graph.register(Seed(1))
+    for prefix in [True, False]:
+        with pytest.raises(bindings.EggSmolError) as raised:
+            graph.register(first, first, Second(1)) if prefix else graph.register(first, Second(1))
+        message = "At 0:0 of \nRule already exists: first"
+        assert type(raised.value) is bindings.EggSmolError
+        assert str(raised.value) == message
+        assert raised.value.args == (message, False)
+        assert raised.value.replayable_by_fail is False
+        assert "_egglog_proto_error" not in raised.value.__dict__  # Frontend compatibility validation.
+        assert _run_ruleset_step(graph) == ({"first": 1} if prefix else {})
+        graph.check(First(1))
+        graph.check_fail(Second(1))
+
+
+@pytest.mark.parametrize("default", [False, True])
+@pytest.mark.parametrize("named", [False, True])
+@pytest.mark.parametrize("direct_first", [False, True])
+def test_native_direct_and_materialized_memberships(native_rule_program, default, named, direct_first):
+    from egglog import rule, ruleset, var  # noqa: PLC0415
+
+    Seed, First, _, _, _ = native_rule_program
+    selected = ruleset(name="" if default else "explicit")
+    graph = EGraph()
+    graph.register(Seed(1))
+    assert _run_ruleset_step(graph, selected) == {}
+    authored = rule(Seed(var("x", i64)), name="first" if named else None, ruleset=selected).then(First(var("x", i64)))
+    label = "first" if named else ""
+    if direct_first:
+        graph.register(authored)
+        if named and default:
+            with pytest.raises(bindings.EggSmolError, match="Rule already exists: first"):
+                _run_ruleset_step(graph, selected)
+            assert _run_ruleset_step(graph) == {label: 1}
+        else:
+            assert _run_ruleset_step(graph, selected) == {label: 2 if default else 1}
+    else:
+        assert _run_ruleset_step(graph, selected) == {label: 1}
+        if named and default:
+            with pytest.raises(bindings.EggSmolError, match="Rule already exists: first"):
+                graph.register(authored)
+        else:
+            graph.register(authored)
+            assert _run_ruleset_step(graph, selected) == ({label: 1} if default else {})
+    graph.check(First(1))
+
+
+def test_native_publication_clone_before_and_after_append(native_rule_program):
+    from egglog import ruleset  # noqa: PLC0415
+
+    Seed, First, Second, first, second = native_rule_program
+    selected = ruleset(first, name="cloned")
+    graph = EGraph()
+    graph.register(Seed(1))
+    assert _run_ruleset_step(graph, selected) == {"first": 1}
+    graph.push()
+    selected.append(second)
+    assert _run_ruleset_step(graph, selected) == {"second": 1}
+    graph.pop()
+    graph.check(First(1))
+    graph.check_fail(Second(1))
+    assert _run_ruleset_step(graph, selected) == {"second": 1}
+    graph.push()
+    assert _run_ruleset_step(graph, selected) == {}
+    graph.pop()
+    assert _run_ruleset_step(graph, selected) == {}
+
+
+def test_native_publication_keeps_independent_compatible_declaration_owners():
+    from egglog import rule, ruleset  # noqa: PLC0415
+
+    left = constant("publication_owned_target", i64)
+    right = constant("publication_owned_target", i64)
+    assert left.__egg_ref__.owner is not right.__egg_ref__.owner
+    selected = ruleset(rule(name="first").then(set_(left).to(1)), name="owners")
+    graph = EGraph()
+    assert _run_ruleset_step(graph, selected) == {"first": 1}
+    selected.append(rule(name="second").then(set_(right).to(1)))
+    assert _run_ruleset_step(graph, selected) == {"second": 1}
+    # Packing has an explicit, pre-existing same-Program reconciliation guard.
+    with pytest.raises(ValueError, match="Ambiguous same-name definitions"):
+        graph.check(eq(left).to(1), eq(right).to(1))
+    graph.check(eq(left).to(1))
+    graph.check(eq(right).to(1))
+
+
+def test_native_registration_materializes_generator_before_execution(native_rule_program):
+    from egglog import rule  # noqa: PLC0415
+
+    Seed, First, _, _, _ = native_rule_program
+    graph = EGraph()
+    graph.register(Seed(1))
+
+    def broken(x: i64):
+        yield rule(Seed(x)).then(First(x))
+        msg = "authoring failed"
+        raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError, match="authoring failed"):
+        graph.register(broken)
+    assert not graph._state.rulesets
+    graph.check_fail(First(1))
+
+
 def test_check_fail_authors_one_canonical_nested_command(monkeypatch):
     requests = []
 
@@ -170,7 +640,7 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
 
         def run(self, encoded):
             requests.append(pb.RunProgramRequest.from_binary(encoded))
-            return pb.RunProgramResponse().to_binary()
+            return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication()).to_binary()
 
         def destroy(self, encoded):
             assert pb.DestroyEGraphRequest.from_binary(encoded).egraph_id == 1
@@ -211,6 +681,7 @@ def test_response_owner_keeps_nominal_and_ambient_family_contexts(monkeypatch):
             request = pb.RunProgramRequest.from_binary(encoded)
             assert any(d.kind.field == "eq_sort" and d.kind.value.name == "Pair" for d in request.program.declarations)
             return pb.RunProgramResponse(
+                ruleset_publication=pb.RulesetPublication(),
                 sorts=[
                     pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Pair")),
                     pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
@@ -279,6 +750,7 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
             requests.append(request)
             # Fixed inert reply: no interpretation or computation of the request.
             return pb.RunProgramResponse(
+                ruleset_publication=pb.RulesetPublication(),
                 sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
                 nodes=[
                     pb.Node(

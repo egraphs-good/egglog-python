@@ -58,6 +58,157 @@ from egglog.runtime import _CLASS_CACHE, RuntimeExpr, RuntimeFunction, _author_c
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
 
 
+def test_rule_template_comparison_and_live_rulesets_without_engine(monkeypatch):
+    from egglog import ruleset  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Canonical rule authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    x = var("x", i64)
+    target = constant("comparison_target", i64)
+    fact = eq(x).to(i64(1))
+    one = rule(fact, fact, name="one").then(set_(target).to(x))
+    equivalent = rule(eq(x).to(i64(1)), eq(x).to(i64(1)), name="one").then(set_(target).to(x))
+    assert one == equivalent
+    assert one != rule(fact, name="one").then(set_(target).to(x))
+    assert one != rule(fact, fact, name="two").then(set_(target).to(x))
+    with pytest.raises(TypeError):
+        hash(one)
+    selected = ruleset(one, equivalent, name="selected")
+    identifiers = {}
+    before = selected._snapshot(identifiers)
+    assert len(before.read().kind.value.rules) == 2
+    selected.append(rule(fact, name="new").then(set_(target).to(2)))
+    after = selected._snapshot({})
+    assert len(after.read().kind.value.rules) == 3
+    assert len(before.read().kind.value.rules) == 2
+    combined = selected | ruleset(name="empty")
+    assert combined._snapshot({}).read().kind.field == "combined"
+    assert "rule(" in str(selected)
+
+
+def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
+    from egglog import RewriteOrRule  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Template comparison accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+
+    class Box(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    value = Box(0)
+
+    def authored(*, shared, swap=False, empty=False):
+        builder = Builder()
+        sort = builder.import_ref(Box.__egg_sort__)
+        member = builder.import_ref(value.__egg_ref__)
+        nodes = [
+            builder.add(
+                "nodes",
+                pb.Node(
+                    sort_id=sort,
+                    kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[] if empty else [member])),
+                ),
+            )
+            for _ in range(2)
+        ]
+        head = [nodes[int(swap)], nodes[int(swap)] if shared else nodes[not swap]]
+        index = builder.add(
+            "rules",
+            pb.RuleDecl(
+                kind=Oneof[Literal["rule"], pb.Rule](
+                    "rule",
+                    pb.Rule(
+                        query=[] if empty else nodes,
+                        head=[pb.Action(kind=Oneof[Literal["term"], int]("term", node)) for node in head],
+                    ),
+                ),
+                eval_mode=pb.RuleEvalMode.SEMINAIVE,
+            ),
+        )
+        return RewriteOrRule(builder.publish().ref("rules", index))
+
+    left, right = authored(shared=True), authored(shared=True, swap=True)
+    assert left == right  # Query visits must not seed the action allocation bijection.
+    assert left.__egg_ref__ != right.__egg_ref__
+    assert StructuralView(left.__egg_ref__) != StructuralView(right.__egg_ref__)
+    assert authored(shared=True, empty=True) == authored(shared=True, empty=True)
+    assert authored(shared=True, empty=True) != authored(shared=False, empty=True)
+
+
+def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch):
+    from egglog import RewriteOrRule  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Rule closure comparison accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    first = rule().then(set_(constant("independent_target", i64)).to(1))
+    second = rule().then(set_(constant("independent_target", i64)).to(1))
+    assert first == second
+    packed = pack(roots=[second.__egg_ref__])
+    program = packed.program
+    target = next(
+        declaration.kind.value for declaration in program.declarations if declaration.kind.field == "function"
+    )
+    value = next(index for index, node in enumerate(program.nodes) if node.kind.field == "primitive_value")
+    target.merge = value
+    modified = RewriteOrRule(Builder.from_program(program).publish().ref("rules", packed.indices[0]))
+    assert first != modified  # The command shape alone is identical.
+    builder = Builder()
+    root = builder.import_ref(first.__egg_ref__)
+    builder.import_ref(constant("unrelated", i64).__egg_ref__)
+    assert first == RewriteOrRule(builder.publish().ref("rules", root))
+
+
+def test_deferred_rulesets_keep_live_scope_order_and_failure_prefix(monkeypatch):
+    from egglog import ruleset  # noqa: PLC0415
+    from egglog.egraph import get_current_ruleset  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Deferred authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    selected = ruleset()
+    events = []
+
+    def older(value: "Late"):
+        events.append(("older", get_current_ruleset()))
+        return [rule(value, name="older").then()]
+
+    def failing():
+        events.append(("failing", get_current_ruleset()))
+        selected.append(rule(name="side-effect").then())
+        yield rule(name="not-appended").then()
+        msg = "generator marker"
+        raise ValueError(msg)
+
+    selected.register(older)
+    selected.register(failing)
+
+    class Late(Expr):
+        def __init__(self) -> None: ...
+
+    with pytest.raises(ValueError, match="generator marker"):
+        selected._snapshot({})
+    assert events == [("failing", selected)]
+    assert get_current_ruleset() is None
+    snapshot = selected._snapshot({})
+    assert events == [("failing", selected), ("older", selected)]
+    assert [snapshot.owner.ref("rules", i).read().name for i in snapshot.read().kind.value.rules] == [
+        "side-effect",
+        "older",
+    ]
+    assert not selected.deferred_rule_gens
+
+
 def test_direct_variables_are_canonical_without_an_engine(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Variable authoring accessed the engine")
@@ -125,7 +276,7 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch):
     assert str(authored) == repr(authored) == expected
     with pytest.raises(ConvertError):
         rewrite(lhs).to(i64(2))
-    with pytest.raises(NotImplementedError, match="Ruleset-bound"):
+    with pytest.raises(TypeError, match="destinations must be Rulesets"):
         rewrite(lhs, ruleset=object()).to(rhs)
     with pytest.raises(NotImplementedError, match="Birewrite"):
         birewrite(lhs).to(rhs)

@@ -69,20 +69,18 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
     assert str(rule(name="").then()) == "rule().then()"
     with pytest.raises(TypeError, match="strings"):
         rule(name=42).then()
-    with pytest.raises(NotImplementedError, match="Ruleset-bound"):
+    with pytest.raises(TypeError, match="destinations must be Rulesets"):
         rule(ruleset=object()).then()
-    assert authored == authored  # noqa: PLR0124 -- preserve reflexivity without inventing structural comparison
+    assert authored == authored  # noqa: PLR0124 -- reflexivity is part of the wrapper contract
     assert authored.__eq__(object()) is NotImplemented
     with pytest.raises(TypeError, match="unhashable"):
         hash(authored)
-    with pytest.raises(NotImplementedError, match="Structural rule comparison"):
-        assert authored == rule(eval_mode=mode).then()
+    assert authored == rule(eval_mode=mode).then()
     destination = ruleset()
-    initial = destination.__egg_decls__
-    with pytest.raises(NotImplementedError, match="Ruleset rule installation"):
-        destination.append(authored)
-    assert destination.__egg_decls__ is initial
-    assert destination.__egg_ruleset__.rules == []
+    initial = destination._snapshot({})
+    destination.append(authored)
+    assert initial.read().kind.value.rules == []
+    assert len(destination._snapshot({}).read().kind.value.rules) == 1
     calls = []
 
     def deferred():
@@ -91,10 +89,13 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
 
     destination.register(deferred)
     pending = tuple(destination.deferred_rule_gens)
-    with pytest.raises(NotImplementedError, match="Deferred ruleset materialization"):
+    with pytest.raises(NotImplementedError, match="legacy declaration projection"):
         _ = destination.__egg_decls__
     assert not calls
     assert tuple(destination.deferred_rule_gens) == pending
+    assert len(destination._snapshot({}).read().kind.value.rules) == 2
+    assert calls == ["called"]
+    assert not destination.deferred_rule_gens
 
 
 def test_nested_fail_pack_relocates_child_facts_and_all_spans():

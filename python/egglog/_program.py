@@ -242,12 +242,13 @@ _STRUCTURAL_HASHES: WeakKeyDictionary[Owner, dict[tuple[str, int], int]] = WeakK
 _STRUCTURAL_LOCK = RLock()
 
 
-def _structural_parts(reference: Ref) -> tuple[tuple[object, ...], list[Ref]]:
+def _structural_parts(reference: Ref, *, identity: bool = True) -> tuple[tuple[object, ...], list[tuple[Ref, str]]]:
     """Read comparison data directly; only arena addresses become child refs."""
     ref = reference.owner.ref(reference.role, reference.index)
     record = cast("Message", ref.owner._slots[ref.role][ref.index])
-    if ref.role in {"rules", "rulesets"} or (
-        isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "union"
+    if identity and (
+        ref.role in {"rules", "rulesets"}
+        or (isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "union")
     ):
         return (ref.role, ref), []
     shape: list[object] = [ref.role]
@@ -269,7 +270,7 @@ def _structural_parts(reference: Ref) -> tuple[tuple[object, ...], list[Ref]]:
             role = _FIELD_ROLES[message.desc().name][field.name]
             for index, item in enumerate(values):
                 if role and not role.startswith("@"):
-                    children.append(ref.owner.ref(role, item))
+                    children.append((ref.owner.ref(role, item), f"{path}/{field.name}/{index}"))
                     shape.append(("ref", role))
                 elif isinstance(item, Message):
                     inline.append((item, f"{path}/{field.name}/{index}"))
@@ -302,14 +303,14 @@ class StructuralView:
                 shape, children = _structural_parts(ref)
                 if leaving:
                     active.remove(ref)
-                    cache[key] = hash((shape, tuple(_STRUCTURAL_HASHES[c.owner][c.role, c.index] for c in children)))
+                    cache[key] = hash((shape, tuple(_STRUCTURAL_HASHES[c.owner][c.role, c.index] for c, _ in children)))
                     continue
                 if ref in active:
                     msg = "Cyclic protobuf structure without an identity-bearing node"
                     raise ValueError(msg)
                 active.add(ref)
                 pending.append((ref, True))
-                pending.extend((child, False) for child in reversed(children))
+                pending.extend((child, False) for child, _ in reversed(children))
             return _STRUCTURAL_HASHES[root.owner][root.role, root.index]
 
     def __eq__(self, other: object) -> bool:
@@ -328,8 +329,66 @@ class StructuralView:
             right_shape, right_children = _structural_parts(right)
             if left_shape != right_shape or len(left_children) != len(right_children):
                 return False
-            pending.extend(zip(left_children, right_children, strict=True))
+            pending.extend((left[0], right[0]) for left, right in zip(left_children, right_children, strict=True))
         return True
+
+
+def rule_equal(left: Ref, right: Ref) -> bool:  # noqa: C901, PLR0912
+    """
+    Compare rule templates, preserving allocation topology within each use unit.
+
+    Rule addresses remain occurrence identities everywhere else. Query Union
+    syntax is nonallocating; action/deferred-code Unions need a bijection, not
+    absolute owner indices. Named closure is exactly packing's dependency closure.
+    """
+    if left.role != "rules" or right.role != "rules":
+        msg = "Rule comparison requires rule references"
+        raise TypeError(msg)
+    closures = [{_definition_key(ref.read()): ref for ref in pack(roots=[root]).definitions} for root in (left, right)]
+    if closures[0].keys() != closures[1].keys():
+        return False
+    pending: list[tuple[Ref, Ref, object, bool]] = [(left, right, "rule", False)]
+    pending.extend((ref, closures[1][key], key, False) for key, ref in closures[0].items())
+    seen: set[tuple[Ref, Ref, object, bool]] = set()
+    unions: dict[tuple[object, Ref], Ref] = {}
+    reverse_unions: dict[tuple[object, Ref], Ref] = {}
+    while pending:
+        a, b, domain, query = pending.pop()
+        a = a.owner.ref(a.role, a.index)
+        b = b.owner.ref(b.role, b.index)
+        visit = (a, b, domain, query)
+        if visit in seen:
+            continue
+        seen.add(visit)
+        record = a.read()
+        if isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "union" and not query:
+            if unions.get((domain, a), b) != b or reverse_unions.get((domain, b), a) != a:
+                return False
+            unions[domain, a] = b
+            reverse_unions[domain, b] = a
+        shape_a, children_a = _structural_parts(a, identity=False)
+        shape_b, children_b = _structural_parts(b, identity=False)
+        if shape_a != shape_b or len(children_a) != len(children_b):
+            return False
+        for (child_a, path_a), (child_b, path_b) in zip(children_a, children_b, strict=True):
+            if path_a != path_b:
+                return False
+            child_domain, child_query = domain, query
+            if a.role == "rules":
+                if path_a.startswith("/birewrite/"):
+                    msg = "Bidirectional rule template comparison is not migrated"
+                    raise NotImplementedError(msg)
+                child_query = path_a.startswith(("/rule/0/query/", "/rewrite/0/lhs/", "/rewrite/0/conditions/"))
+                child_domain = "query" if child_query else "head"
+            elif a.role == "declarations":
+                # All defaults of one presentation expand together. Other body
+                # roots (primitive, merge, cost) have independent binders/units.
+                child_domain = (a, b, path_a.partition("/params/")[0] if "/default_expr/" in path_a else path_a)
+                child_query = False
+            elif "/lambda/0/body/" in path_a:
+                child_domain, child_query = (a, b, path_a), False
+            pending.append((child_a, child_b, child_domain, child_query))
+    return True
 
 
 class Owner:

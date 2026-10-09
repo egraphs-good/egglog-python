@@ -9,7 +9,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Generator, Iterable, Sequence
 from contextvars import ContextVar, Token
-from dataclasses import InitVar, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
 from types import FrameType, FunctionType
@@ -45,7 +45,7 @@ from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
 from ._catalog import Catalog
-from ._program import Builder, Ref, StructuralView, _copy_record, _definition_key, pack
+from ._program import Builder, Ref, StructuralView, _copy_record, _definition_key, _structural_parts, pack, rule_equal
 from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
@@ -1022,12 +1022,8 @@ def _add_default_rewrite(
     """
     Adds a default rewrite for the callable when an explicit ruleset is provided.
     """
-    resolved_value = resolve_literal(type_ref, default_rewrite, Thunk.value(decls))
-    rewrite_decl = DefaultRewriteDecl(ref, resolved_value.__egg_typed_expr__.expr, subsume)
-    ruleset_decls = ruleset._current_egg_decls
-    ruleset.__egg_ruleset__.rules.append(rewrite_decl)
-    ruleset_decls |= decls
-    ruleset_decls |= resolved_value
+    msg = "Canonical class/default rewrite authoring is not migrated"
+    raise NotImplementedError(msg)
 
 
 def _last_param_variable(params: list[Parameter]) -> bool:
@@ -1705,17 +1701,59 @@ class EGraph:
         Registers any number of rewrites or rules.
         """
         if isinstance(command_or_generator, FunctionType):
-            msg = "Rule generators are not migrated to canonical registration"
-            raise NotImplementedError(msg)
-        command_likes = (cast("CommandLike", command_or_generator), *command_likes)
+            assert not command_likes
+            frame = inspect.currentframe()
+            assert frame is not None
+            assert frame.f_back is not None
+            command_likes = tuple(_rewrite_or_rule_generator(command_or_generator, frame.f_back))
+        else:
+            command_likes = (cast("CommandLike", command_or_generator), *command_likes)
         commands = [_command_like(c) for c in command_likes]
         self._register_commands(commands)
 
     def _register_commands(self, cmds: list[Command]) -> None:
-        if any(not isinstance(command, Action) for command in cmds):
-            msg = "Only canonical actions are migrated to registration"
-            raise NotImplementedError(msg)
-        self._state.run_program([cast("Action", command).__egg_ref__ for command in cmds])
+        if all(isinstance(command, Action) for command in cmds):
+            self._state.run_program([cast("Action", command).__egg_ref__ for command in cmds])
+            return
+        # Mixed registration preserves each original command's failure prefix.
+        # Splitting is forbidden if direct Action uses bridge a Union identity
+        # across requests. Query facts and invoked code bodies have other units.
+        uses: dict[Ref, int] = {}
+        for position, command in enumerate(cmds):
+            if not isinstance(command, Action):
+                continue
+            pending = [command.__egg_ref__]
+            seen: set[Ref] = set()
+            while pending:
+                reference = pending.pop()
+                if reference in seen:
+                    continue
+                seen.add(reference)
+                record = reference.read()
+                if isinstance(record, pb.Node) and record.kind is not None and record.kind.field == "union":
+                    if reference in uses and uses[reference] != position:
+                        msg = "Mixed registration cannot split a shared allocating Union across Actions"
+                        raise NotImplementedError(msg)
+                    uses[reference] = position
+                _, children = _structural_parts(reference, identity=False)
+                pending.extend(
+                    child for child, path in children if child.role == "nodes" and "/lambda/0/body/" not in path
+                )
+        for command in cmds:
+            if isinstance(command, Action):
+                self._state.run_program([command.__egg_ref__])
+            else:
+                builder = Builder()
+                index = builder.add(
+                    "rulesets",
+                    pb.Ruleset(
+                        kind=Oneof[Literal["rules"], pb.RuleList](
+                            "rules", pb.RuleList(rules=[builder.import_ref(command.__egg_ref__)])
+                        )
+                    ),
+                )
+                root = builder.publish().ref("rulesets", index)
+                self._state.publish_ruleset(root, {root: Ident("")}, direct=True)
 
     def function_size(self, fn: ExprCallable) -> int:
         """
@@ -2129,58 +2167,75 @@ class Schedule(DelayedDeclarations):
         """
         Repeat the schedule a number of times.
         """
+        if isinstance(self, Ruleset | UnstableCombinedRuleset):
+            msg = "Canonical repeated schedules are not migrated"
+            raise NotImplementedError(msg)
         return Schedule(self.__egg_decls_thunk__, RepeatDecl(self.schedule, length))
 
     def saturate(self) -> Schedule:
         """
         Run the schedule until the e-graph is saturated.
         """
+        if isinstance(self, Ruleset | UnstableCombinedRuleset):
+            msg = "Canonical saturated schedules are not migrated"
+            raise NotImplementedError(msg)
         return Schedule(self.__egg_decls_thunk__, SaturateDecl(self.schedule))
 
     def __add__(self, other: Schedule) -> Schedule:
         """
         Run two schedules in sequence.
         """
+        if isinstance(self, Ruleset | UnstableCombinedRuleset) or isinstance(other, Ruleset | UnstableCombinedRuleset):
+            msg = "Canonical sequential schedules are not migrated"
+            raise NotImplementedError(msg)
         return Schedule(partial(Declarations.create, self, other), SequenceDecl((self.schedule, other.schedule)))
 
 
-@dataclass
 class Ruleset(Schedule):
     """
     A collection of rules, which can be run as a schedule.
     """
 
-    __egg_decls_thunk__: Callable[[], Declarations] = field(init=False)
-    schedule: RunDecl = field(init=False)
-    ident: Ident | None
+    def __init__(self, ident: Ident | None) -> None:
+        self.ident = ident
+        self.deferred_rule_gens: list[Callable[[], Iterable[RewriteOrRule]]] = []
+        builder = Builder()
+        index = builder.add("rulesets", pb.Ruleset(kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList())))
+        self.__egg_ref__ = builder.publish().ref("rulesets", index)
 
-    # Current declerations we have accumulated
-    _current_egg_decls: Declarations = field(default_factory=Declarations)
-    # Current rulesets we have accumulated
-    __egg_ruleset__: RulesetDecl = field(init=False)
-    # Rule generator functions that have been deferred, to allow for late type binding
-    deferred_rule_gens: list[Callable[[], Iterable[RewriteOrRule]]] = field(default_factory=list)
+    @property
+    def __egg_decls__(self) -> Declarations:
+        msg = "Canonical rulesets have no legacy declaration projection"
+        raise NotImplementedError(msg)
 
-    def __post_init__(self) -> None:
-        self.schedule = RunDecl(self.__egg_ident__, ())
-        self.__egg_ruleset__ = self._current_egg_decls._rulesets[self.__egg_ident__] = RulesetDecl([])
-        self.__egg_decls_thunk__ = self._update_egg_decls
-
-    def _update_egg_decls(self) -> Declarations:
-        """
-        To return the egg decls, we go through our deferred rules and add any we haven't yet
-        """
-        if self.deferred_rule_gens:
-            msg = "Deferred ruleset materialization is not migrated"
-            raise NotImplementedError(msg)
-        return self._current_egg_decls
+    def _snapshot(self, identifiers: dict[Ref, Ident]) -> Ref:
+        while self.deferred_rule_gens:
+            generator = self.deferred_rule_gens.pop()
+            with set_current_ruleset(self):
+                rules = list(generator())
+            for rule in rules:
+                self.append(rule)
+        identifiers.pop(self.__egg_ref__, None)
+        identifiers[self.__egg_ref__] = self.__egg_ident__
+        return self.__egg_ref__
 
     def append(self, rule: RewriteOrRule) -> None:
         """
         Register a rule with the ruleset.
         """
-        msg = "Ruleset rule installation is not migrated"
-        raise NotImplementedError(msg)
+        if not isinstance(cast("object", rule), RewriteOrRule):
+            msg = "Rulesets require canonical rules or rewrites"
+            raise TypeError(msg)
+        record: pb.Ruleset = self.__egg_ref__.read()
+        assert record.kind is not None
+        assert record.kind.field == "rules"
+        builder = Builder()
+        record.kind.value.rules = [
+            builder.import_ref(self.__egg_ref__.owner.ref("rules", index)) for index in record.kind.value.rules
+        ]
+        record.kind.value.rules.append(builder.import_ref(rule.__egg_ref__))
+        index = builder.add("rulesets", record)
+        self.__egg_ref__ = builder.publish().ref("rulesets", index)
 
     def register(
         self,
@@ -2208,7 +2263,7 @@ class Ruleset(Schedule):
             self.deferred_rule_gens.append(Thunk.fn(_rewrite_or_rule_generator, rule_or_generator, original_frame))
 
     def __str__(self) -> str:
-        return pretty_decl(self._current_egg_decls, self.__egg_ruleset__, ruleset_ident=self.ident)
+        return pretty_ref(self.__egg_ref__)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2222,24 +2277,22 @@ class Ruleset(Schedule):
         return self.ident or Ident(f"ruleset_{id(self)}")
 
 
-@dataclass
 class UnstableCombinedRuleset(Schedule):
     _next_generated_ident: ClassVar[int] = 0
 
-    __egg_decls_thunk__: Callable[[], Declarations] = field(init=False)
-    schedule: RunDecl = field(init=False)
-    ident: Ident | None
-    _generated_ident: Ident | None = field(default=None, init=False, repr=False)
-    rulesets: InitVar[list[Ruleset | UnstableCombinedRuleset]]
-
-    def __post_init__(self, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
+    def __init__(self, ident: Ident | None, rulesets: list[Ruleset | UnstableCombinedRuleset]) -> None:
+        self.ident = ident
+        self.rulesets = tuple(rulesets)
+        self.__egg_ref__: Ref | None = None
+        self._generated_ident: Ident | None = None
         if self.ident is None:
             self._generated_ident = Ident(f"_combined_ruleset_{UnstableCombinedRuleset._next_generated_ident}")
             UnstableCombinedRuleset._next_generated_ident += 1
-        self.schedule = RunDecl(self.__egg_ident__, ())
-        # Don't use thunk so that this is re-evaluated each time its requsted, so that additions inside will
-        # be added after its been evaluated once.
-        self.__egg_decls_thunk__ = partial(self._create_egg_decls, *rulesets)
+
+    @property
+    def __egg_decls__(self) -> Declarations:
+        msg = "Canonical rulesets have no legacy declaration projection"
+        raise NotImplementedError(msg)
 
     @property
     def __egg_ident__(self) -> Ident:
@@ -2248,10 +2301,45 @@ class UnstableCombinedRuleset(Schedule):
         assert self._generated_ident is not None
         return self._generated_ident
 
-    def _create_egg_decls(self, *rulesets: Ruleset | UnstableCombinedRuleset) -> Declarations:
-        decls = Declarations.create(*rulesets)
-        decls._rulesets[self.__egg_ident__] = CombinedRulesetDecl(tuple(r.__egg_ident__ for r in rulesets))
-        return decls
+    def _snapshot(self, identifiers: dict[Ref, Ident]) -> Ref:
+        children = tuple(child._snapshot(identifiers) for child in self.rulesets)
+        previous: tuple[Ref, ...] | None = None
+        if self.__egg_ref__ is not None:
+            record: pb.Ruleset = self.__egg_ref__.read()
+            assert record.kind is not None
+            assert record.kind.field == "combined"
+            previous = tuple(
+                self.__egg_ref__.owner.ref("rulesets", child.kind.value)
+                for child in record.kind.value.rulesets
+                if child.kind is not None and child.kind.field == "index"
+            )
+        if previous != children:
+            builder = Builder()
+            index = builder.add(
+                "rulesets",
+                pb.Ruleset(
+                    kind=Oneof[Literal["combined"], pb.CombinedRuleset](
+                        "combined",
+                        pb.CombinedRuleset(
+                            rulesets=[
+                                pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", builder.import_ref(child)))
+                                for child in children
+                            ]
+                        ),
+                    )
+                ),
+            )
+            self.__egg_ref__ = builder.publish().ref("rulesets", index)
+        assert self.__egg_ref__ is not None
+        identifiers.pop(self.__egg_ref__, None)
+        identifiers[self.__egg_ref__] = self.__egg_ident__
+        return self.__egg_ref__
+
+    def __str__(self) -> str:
+        return pretty_ref(self._snapshot({}))
+
+    def __repr__(self) -> str:
+        return str(self)
 
     def __or__(self, other: Ruleset | UnstableCombinedRuleset) -> UnstableCombinedRuleset:
         return unstable_combine_rulesets(self, other)
@@ -2281,8 +2369,7 @@ class RewriteOrRule:
             return NotImplemented
         if self is other:
             return True
-        msg = "Structural rule comparison is not migrated"
-        raise NotImplementedError(msg)
+        return rule_equal(self.__egg_ref__, other.__egg_ref__)
 
     def __str__(self) -> str:
         return pretty_ref(self.__egg_ref__)
@@ -2369,7 +2456,7 @@ class Action:
 # if the arguments are the same type of expression
 
 
-def rewrite(lhs: EXPR, ruleset: None = None, *, subsume: bool = False) -> _RewriteBuilder[EXPR]:
+def rewrite(lhs: EXPR, ruleset: Ruleset | None = None, *, subsume: bool = False) -> _RewriteBuilder[EXPR]:
     """Rewrite the given expression to a new expression."""
     return _RewriteBuilder(lhs, ruleset, subsume)
 
@@ -2451,7 +2538,7 @@ def set_(lhs: BASE_EXPR) -> _SetBuilder[BASE_EXPR]:
 
 def rule(
     *facts: FactLike,
-    ruleset: None = None,
+    ruleset: Ruleset | None = None,
     name: str | None = None,
     eval_mode: RuleEvalMode = "seminaive",
     no_decomp: bool = False,
@@ -2507,9 +2594,9 @@ class _RewriteBuilder(Generic[EXPR]):
     subsume: bool
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> RewriteOrRule:
-        if self.ruleset is not None:
-            msg = "Ruleset-bound rewrite authoring is not migrated"
-            raise NotImplementedError(msg)
+        if self.ruleset is not None and not isinstance(cast("object", self.ruleset), Ruleset):
+            msg = "Rewrite destinations must be Rulesets"
+            raise TypeError(msg)
         lhs = to_runtime_expr(self.lhs)
         facts = _fact_likes(conditions)
         rhs = convert_to_same_type(rhs, lhs)
@@ -2529,7 +2616,10 @@ class _RewriteBuilder(Generic[EXPR]):
                 eval_mode=pb.RuleEvalMode.SEMINAIVE,
             ),
         )
-        return RewriteOrRule(builder.publish().ref("rules", index))
+        result = RewriteOrRule(builder.publish().ref("rules", index))
+        if self.ruleset is not None:
+            self.ruleset.append(result)
+        return result
 
     def __str__(self) -> str:
         lhs = to_runtime_expr(self.lhs)
@@ -2676,9 +2766,9 @@ class _RuleBuilder:
     no_decomp: bool
 
     def then(self, *actions: ActionLike) -> RewriteOrRule:
-        if self.ruleset is not None:
-            msg = "Ruleset-bound rule authoring is not migrated"
-            raise NotImplementedError(msg)
+        if self.ruleset is not None and not isinstance(cast("object", self.ruleset), Ruleset):
+            msg = "Rule destinations must be Rulesets"
+            raise TypeError(msg)
         modes = {
             "seminaive": pb.RuleEvalMode.SEMINAIVE,
             "naive": pb.RuleEvalMode.NAIVE,
@@ -2720,7 +2810,10 @@ class _RuleBuilder:
         if self.name:
             record.name = self.name
         index = builder.add("rules", record)
-        return RewriteOrRule(builder.publish().ref("rules", index))
+        result = RewriteOrRule(builder.publish().ref("rules", index))
+        if self.ruleset is not None:
+            self.ruleset.append(result)
+        return result
 
     def __str__(self) -> str:
         # TODO: Figure out how to stringify rulebuilder that preserves statements
@@ -2838,8 +2931,7 @@ Command: TypeAlias = Action | RewriteOrRule
 
 def _command_like(command_like: CommandLike) -> Command:
     if isinstance(command_like, RewriteOrRule):
-        msg = "Rule registration is not migrated"
-        raise NotImplementedError(msg)
+        return command_like
     return _action_like(command_like)
 
 
