@@ -1898,7 +1898,7 @@ class EGraph:
             for ref in self._state.egg_fn_to_callable_refs.get(egg_fn, ())
         ]
 
-    def function_values(
+    def function_values(  # noqa: C901, PLR0912
         self, fn: Callable[..., BASE_EXPR] | BASE_EXPR, length: int | None = None
     ) -> dict[BASE_EXPR, BASE_EXPR]:
         """
@@ -1907,21 +1907,113 @@ class EGraph:
         Relations, constructors, and bodyless functions have tables. Eager and
         builtin primitives do not.
 
-        If length is specified, only the first `length` values will be returned.
+        If length is specified, only the first `length` rows will be returned;
+        zero returns no rows. The callable is registered before length validation.
+
+        Raises ValueError if any selected argument or output has no extractable
+        representative. The error identifies the table, zero-based row, and
+        argument index or output. No partial dictionary or placeholder is returned.
         """
-        ref, decls = resolve_callable(fn)
-        self._add_decls(decls)
-        self._require_table_backed(ref)
-        egg_name = self._state.callable_ref_to_egg(ref)[0]
-        cmd = bindings.PrintFunction(span(1), egg_name, length, None, bindings.DefaultPrintFunctionMode())
-        (output,) = self._state.run_program(cmd)
-        assert isinstance(output, bindings.PrintFunctionOutput)
-        signature = self.__egg_decls__.get_callable_decl(ref).signature
-        assert isinstance(signature, FunctionSignature)
-        tp = signature.semantic_return_type.to_just()
+        reference = resolve_callable(fn)
+        declaration: pb.Declaration = reference.read()
+        if declaration.kind is None or not isinstance(
+            declaration.kind.value, pb.Function | pb.Constructor | pb.Relation
+        ):
+            msg = (
+                "This operation requires a table-backed relation, constructor, or bodyless function; "
+                "eager and builtin primitives do not have tables"
+            )
+            raise ValueError(msg)
+        signature = declaration.kind.value
+        if length is not None:
+            self._state.run_program([], roots=[reference])
+            try:
+                length = index_integer(length)
+                if length < 0:
+                    msg = "can't convert negative int to unsigned"
+                    raise OverflowError(msg)  # noqa: TRY301
+                if length > 2**64 - 1:
+                    msg = "int too big to convert"
+                    raise OverflowError(msg)  # noqa: TRY301
+            except BaseException as error:
+                error.add_note("while processing 'length'")
+                raise
+        builder = Builder()
+        builder.import_ref(reference)
+        command = builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["print_function"], pb.PrintFunction](
+                    "print_function", pb.PrintFunction(table=signature.name, max_rows=length)
+                )
+            ),
+        )
+        response, owner = self._state.run_program([builder.publish().ref("commands", command)])
+        if (
+            len(response.outputs) != 1
+            or response.outputs[0].kind is None
+            or response.outputs[0].kind.field != "printed_function"
+            or response.outputs[0].location != pb.CommandLocation(path=[0])
+            or response.outputs[0].kind.value.table != signature.name
+            or response.outputs[0].run_report is not None
+        ):
+            raise ValueError(f"Shared adapter did not return the requested table {signature.name!r}")
+        builder = Builder()
+        builder.import_ref(reference)
+        rows: list[tuple[int, Ref]] = []
+        for row_index, row in enumerate(response.outputs[0].kind.value.rows):
+            if len(row.args) != len(signature.inputs) or row.output is None:
+                raise ValueError(f"Malformed table {signature.name!r} row {row_index}")
+            values = []
+            for position, cell in enumerate([*row.args, row.output]):
+                location = f"argument {position}" if position < len(row.args) else "output"
+                context = f"Table {signature.name!r} row {row_index} {location}"
+                if cell.kind is None:
+                    raise ValueError(f"{context} omitted its cell kind")
+                if cell.kind.field == "term":
+                    if cell.kind.value >= len(response.nodes):
+                        raise ValueError(f"{context} references an invalid term")
+                    value = owner.ref("nodes", cell.kind.value)
+                    node: pb.Node = value.read()
+                    if node.kind is None or node.sort_id >= len(response.sorts):
+                        raise ValueError(f"{context} references an invalid node")
+                    actual_sort = owner.ref("sorts", node.sort_id)
+                    values.append(value)
+                else:
+                    if cell.kind.value >= len(response.sorts):
+                        raise ValueError(f"{context} references an invalid unavailable sort")
+                    actual_sort = owner.ref("sorts", cell.kind.value)
+                expected = (
+                    signature.inputs[position].sort
+                    if position < len(row.args)
+                    else signature.output
+                    if not isinstance(signature, pb.Relation)
+                    else None
+                )
+                valid_sort = (
+                    actual_sort.read().kind == Oneof("family", pb.HostSort(name="Unit"))
+                    if expected is None
+                    else StructuralView(actual_sort) == StructuralView(reference.owner.ref("sorts", expected))
+                )
+                if not valid_sort:
+                    raise ValueError(f"{context} has the wrong sort")
+                if cell.kind.field == "unavailable_sort":
+                    raise ValueError(f"{context} has no extractable representative")
+            key = builder.add(
+                "nodes",
+                pb.Node(
+                    sort_id=builder.import_ref(actual_sort),
+                    kind=Oneof[Literal["call"], pb.Call](
+                        "call",
+                        pb.Call(func=signature.name, args=[builder.import_ref(value) for value in values[:-1]]),
+                    ),
+                ),
+            )
+            rows.append((key, values[-1]))
+        result_owner = builder.publish()
         return {
-            self._from_termdag(output.termdag, call, tp): self._from_termdag(output.termdag, res, tp)
-            for (call, res) in output.terms
+            cast("BASE_EXPR", RuntimeExpr(result_owner.ref("nodes", key))): cast("BASE_EXPR", RuntimeExpr(value))
+            for key, value in rows
         }
 
     def lookup_function_value(self, expr: BASE_EXPR) -> BASE_EXPR | None:

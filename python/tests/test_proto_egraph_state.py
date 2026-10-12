@@ -7,10 +7,332 @@ import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
-from egglog import EGraph, Expr, bindings, constant, eq, i64, method, set_
+from egglog import EGraph, Expr, bindings, constant, eq, function, i64, method, set_
 from egglog._catalog import builtin_catalog
-from egglog._program import pack
-from egglog.runtime import resolve_callable
+from egglog._program import Builder, pack
+from egglog.runtime import RuntimeFunction, resolve_callable
+
+
+@pytest.fixture
+def table_transport(monkeypatch, tmp_path):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Table inspection used the legacy engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    graph = EGraph()
+    transport = graph._state.transport
+    requests: list[pb.RunProgramRequest] = []
+    responses: list[pb.RunProgramResponse] = []
+
+    class AuditedTransport:
+        destroy = transport.destroy
+
+        def run(self, encoded):
+            assert isinstance(encoded, bytes)
+            position = len(requests)
+            (tmp_path / f"request-{position}.pb").write_bytes(encoded)
+            requests.append(pb.RunProgramRequest.from_binary(encoded))
+            returned = transport.run(encoded)
+            assert isinstance(returned, bytes)
+            (tmp_path / f"response-{position}.pb").write_bytes(returned)
+            responses.append(pb.RunProgramResponse.from_binary(returned))
+            return returned
+
+    monkeypatch.setattr(graph._state, "transport", AuditedTransport())
+    yield graph, requests, responses
+    graph._state.transport = transport
+    graph._state.destroy()
+
+
+def test_function_values_native_bytes_and_shared_terms(table_transport):
+    graph, requests, responses = table_transport
+
+    @function
+    def repeated(left: i64, right: i64) -> i64: ...  # type: ignore[empty-body]
+
+    graph.register(set_(repeated(i64(1), i64(1))).to(i64(1)), set_(repeated(i64(2), i64(3))).to(i64(7)))
+    rows = graph.function_values(repeated)
+    assert len(requests) == 2
+    command = requests[-1].program.commands[0].kind
+    assert command.field == "print_function"
+    assert command.value.table == resolve_callable(repeated).read().kind.value.name
+    assert not command.value.has_field("max_rows")
+    output = responses[-1].outputs[0]
+    assert output.location == pb.CommandLocation(path=[0])
+    assert output.kind.field == "printed_function"
+    row = output.kind.value.rows[0]
+    assert row.args[0] == row.args[1] == row.output == pb.TableCell(kind=Oneof[Literal["term"], int]("term", 0))
+    assert responses[-1].nodes[0].kind.value.value == Oneof("i64", 1)
+    key, result = next(iter(rows.items()))
+    args = key.__egg_ref__.read().kind.value.args
+    assert key.__egg_ref__.owner.ref("nodes", args[0]) == key.__egg_ref__.owner.ref("nodes", args[1])
+    assert graph.function_values(repeated, 0) == {}
+    assert requests[-2].program.commands == []
+    assert requests[-1].program.commands[0].kind.value.has_field("max_rows")
+    assert requests[-1].program.commands[0].kind.value.max_rows == 0
+    graph._state.destroy()
+    assert rows == {repeated(i64(1), i64(1)): i64(1), repeated(i64(2), i64(3)): i64(7)}
+    assert result.value == 1
+    assert str(key) == "repeated(1, 1)"
+    assert len(requests) == 4
+
+
+@pytest.mark.parametrize("value", [-1, 1])
+def test_function_values_installs_before_index_conversion_native_bytes(table_transport, value):
+    graph, requests, responses = table_transport
+
+    @function
+    def untouched(value: i64) -> i64: ...  # type: ignore[empty-body]
+
+    calls = []
+
+    class IndexedLength:
+        def __index__(self) -> int:
+            calls.append(len(requests))
+            assert len(requests) == 1
+            assert requests[0].program.commands == []
+            assert any(decl.kind.field == "function" for decl in requests[0].program.declarations)
+            assert responses[0].error is None
+            return value
+
+    if value < 0:
+        with pytest.raises(OverflowError, match="can't convert negative int to unsigned") as caught:
+            graph.function_values(untouched, IndexedLength())
+        assert caught.value.__notes__ == ["while processing 'length'"]
+        assert len(requests) == 1
+    else:
+        assert graph.function_values(untouched, IndexedLength()) == {}
+        assert len(requests) == 2
+    assert calls == [1]
+    assert graph.function_values(untouched) == {}
+
+
+@pytest.mark.parametrize(
+    ("length", "error", "message"),
+    [
+        (-1, OverflowError, "can't convert negative int to unsigned"),
+        (1.0, TypeError, "'float' object cannot be interpreted as an integer"),
+        (2**64, OverflowError, "int too big to convert"),
+    ],
+)
+def test_function_values_bad_length_keeps_installed_table_native_bytes(table_transport, length, error, message):
+    graph, requests, responses = table_transport
+
+    @function
+    def untouched(value: i64) -> i64: ...  # type: ignore[empty-body]
+
+    with pytest.raises(error, match=message) as caught:
+        graph.function_values(untouched, length)
+    assert caught.value.__notes__ == ["while processing 'length'"]
+    assert len(requests) == 1
+    assert requests[0].program.commands == []
+    assert responses[0].error is None
+    assert graph.function_values(untouched) == {}
+
+
+@pytest.mark.parametrize("unavailable", ["argument 1", "output"])
+def test_function_values_unavailable_cells_raise_from_native_bytes(table_transport, unavailable):
+    graph, requests, responses = table_transport
+    # Canonical backend fixture: public unextractable authoring stays guarded.
+    sorts = [
+        pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Hidden")),
+    ]
+    nodes = [
+        pb.Node(
+            sort_id=0,
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", n))
+            ),
+        )
+        for n in (1, 2)
+    ]
+    nodes.extend([
+        pb.Node(sort_id=1, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="Hidden", args=[0]))),
+        pb.Node(sort_id=1, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="Visible"))),
+    ])
+    inputs = [pb.Arg(sort=0), pb.Arg(sort=1)] if unavailable == "argument 1" else [pb.Arg(sort=0)]
+    program = pb.Program(
+        ir_version=1,
+        sorts=sorts,
+        nodes=nodes,
+        declarations=[
+            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Hidden"))),
+            pb.Declaration(
+                kind=Oneof[Literal["constructor"], pb.Constructor](
+                    "constructor", pb.Constructor(name="Hidden", inputs=[pb.Arg(sort=0)], output=1, unextractable=True)
+                )
+            ),
+            pb.Declaration(
+                kind=Oneof[Literal["constructor"], pb.Constructor](
+                    "constructor", pb.Constructor(name="Visible", output=1)
+                )
+            ),
+            pb.Declaration(
+                kind=Oneof[Literal["function"], pb.Function](
+                    "function",
+                    pb.Function(name="inspected", inputs=inputs, output=0 if unavailable == "argument 1" else 1),
+                )
+            ),
+        ],
+        commands=[
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action",
+                    pb.Action(
+                        kind=Oneof[Literal["set"], pb.Set](
+                            "set",
+                            pb.Set(
+                                target=pb.Call(
+                                    func="inspected", args=[number, value] if unavailable == "argument 1" else [number]
+                                ),
+                                value=number if unavailable == "argument 1" else value,
+                            ),
+                        )
+                    ),
+                )
+            )
+            for number, value in ((0, 3), (1, 2))
+        ],
+    )
+    owner = Builder.from_program(program).publish()
+    graph._state.run_program([owner.ref("commands", n) for n in range(2)])
+    target = RuntimeFunction(owner.ref("declarations", 3))
+    with pytest.raises(ValueError, match=f"Table 'inspected' row 1 {unavailable} has no extractable representative"):
+        graph.function_values(target)
+    table = responses[-1].outputs[0].kind.value
+    assert responses[-1].error is None
+    assert len(table.rows) == 2
+    cell = table.rows[1].args[1] if unavailable == "argument 1" else table.rows[1].output
+    assert cell.kind.field == "unavailable_sort"
+    assert responses[-1].sorts[cell.kind.value].kind == Oneof("eq", "Hidden")
+    assert requests[-1].program.commands[0].kind.field == "print_function"
+    assert graph.function_values(target, 0) == {}
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "outputs",
+        "kind",
+        "location",
+        "table",
+        "arity",
+        "output",
+        "cell",
+        "index",
+        "node",
+        "argument sort",
+        "output sort",
+    ],
+)
+def test_function_values_rejects_malformed_response_without_engine(monkeypatch, corruption):  # noqa: C901
+    @function(egg_fn="table")
+    def table(value: i64) -> i64: ...  # type: ignore[empty-body]
+
+    available = pb.TableCell(kind=Oneof[Literal["term"], int]("term", 0))
+    row = pb.FunctionRow(args=[available], output=available)
+    output = pb.CommandOutput(
+        kind=Oneof[Literal["printed_function"], pb.PrintedFunction](
+            "printed_function", pb.PrintedFunction(table="table", rows=[row])
+        ),
+        location=pb.CommandLocation(path=[0]),
+    )
+    response = pb.RunProgramResponse(
+        sorts=[
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name=name)))
+            for name in ("i64", "Bool")
+        ],
+        nodes=[
+            pb.Node(
+                sort_id=0,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
+                ),
+            ),
+            pb.Node(
+                sort_id=1,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["bool"], bool]("bool", True))
+                ),
+            ),
+        ],
+        outputs=[output],
+        ruleset_publication=pb.RulesetPublication(),
+    )
+    # Generated messages retain the assigned child messages in this inert fixture.
+    match corruption:
+        case "outputs":
+            response.outputs.clear()
+        case "kind":
+            output.kind = Oneof[Literal["extraction"], pb.ExtractResult]("extraction", pb.ExtractResult())
+        case "location":
+            output.location = pb.CommandLocation(path=[1])
+        case "table":
+            assert output.kind is not None
+            assert output.kind.field == "printed_function"
+            output.kind.value.table = "wrong"
+        case "arity":
+            row.args.clear()
+        case "output":
+            row.output = None
+        case "cell":
+            row.args[0] = pb.TableCell()
+        case "index":
+            row.args[0] = pb.TableCell(kind=Oneof[Literal["term"], int]("term", 99))
+        case "node":
+            response.nodes[0].kind = None
+        case "argument sort":
+            row.args[0] = pb.TableCell(kind=Oneof[Literal["term"], int]("term", 1))
+        case "output sort":
+            row.output = pb.TableCell(kind=Oneof[Literal["term"], int]("term", 1))
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            request = pb.RunProgramRequest.from_binary(encoded)
+            assert request.program is not None
+            assert request.program.commands[0].kind is not None
+            assert request.program.commands[0].kind.field == "print_function"
+            return response.to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    with pytest.raises(ValueError, match=r"table|Table"):
+        EGraph().function_values(table)
+
+
+def test_function_values_rejects_primitives_without_table_request(table_transport):
+    graph, requests, _ = table_transport
+    owner = Builder.from_program(
+        pb.Program(
+            ir_version=1,
+            sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
+            nodes=[
+                pb.Node(
+                    sort_id=0,
+                    kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                        "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
+                    ),
+                )
+            ],
+            declarations=[
+                pb.Declaration(
+                    kind=Oneof[Literal["primitive"], pb.Primitive](
+                        "primitive", pb.Primitive(name="eager", output=0, body=0)
+                    )
+                )
+            ],
+        )
+    ).publish()
+    for target in (i64.__add__, RuntimeFunction(owner.ref("declarations", 0))):
+        with pytest.raises(ValueError, match="table-backed"):
+            graph.function_values(target)
+    assert requests == []
 
 
 def test_scope_return_consumption_and_rejection_without_engine():

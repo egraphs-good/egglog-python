@@ -754,6 +754,11 @@ bodyless constants; eager and builtin primitives do not have tables to inspect:
 egraph.function_values(score)
 ```
 
+If any selected argument or output has no extractable representative,
+`function_values` raises `ValueError` identifying the table, zero-based row, and
+argument index or output. It does not return a partial dictionary or an
+`Unextractable` placeholder. `length=0` selects no rows and returns `{}`.
+
 ### `freeze`
 
 Use {meth}`egglog.egraph.EGraph.freeze` to snapshot the current state into a

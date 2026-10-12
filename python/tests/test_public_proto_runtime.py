@@ -1,8 +1,9 @@
 """Normal Python syntax over the generated-record runtime, without an engine."""
 
+import gc
 from copy import copy
 from fractions import Fraction
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
 
@@ -30,9 +31,74 @@ from egglog import (
     join,
     method,
     set_,
+    union,
 )
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.runtime import RuntimeExpr, RuntimeFunction
+
+
+def test_function_values_public_bytes() -> None:
+    @function(egg_fn="table with spaces")
+    def score(value: i64) -> i64: ...  # type: ignore[empty-body]
+
+    graph = EGraph()
+    assert graph.function_values(score, 0) == {}
+    assert graph.function_values(score) == {}
+    graph.register(set_(score(i64(1))).to(i64(2)), set_(score(i64(3))).to(i64(4)))
+    rows = graph.function_values(score)
+    assert rows == {score(i64(1)): i64(2), score(i64(3)): i64(4)}
+    for limit in (0, False, 1, True, 2, 2**64 - 1):
+        assert list(graph.function_values(score, limit).items()) == list(rows.items())[:limit]
+    with pytest.raises(ValueError, match="table-backed"):
+        graph.function_values(i64.__add__)
+
+
+def test_function_values_nullary_and_container_bytes() -> None:
+    current = constant("current", i64)
+
+    @function
+    def entry(values: Vec[i64]) -> Pair[i64, i64]: ...  # type: ignore[empty-body]
+
+    graph = EGraph(set_(current).to(i64(7)), set_(entry(Vec(i64(1), i64(2)))).to(Pair(i64(3), i64(3))))
+    assert graph.function_values(current) == {current: i64(7)}
+    ((key, result),) = graph.function_values(entry).items()
+    assert get_callable_fn(key) == entry
+    args = get_callable_args(key, entry)
+    assert args is not None
+    assert len(args) == 1
+    argument = cast("Vec[i64]", args[0])
+    assert tuple(child.value for child in argument.value) == (1, 2)
+    assert tuple(child.value for child in result.value) == (3, 3)
+    del graph
+    gc.collect()
+    assert tuple(child.value for child in argument.value) == (1, 2)
+    assert tuple(child.value for child in result.value) == (3, 3)
+    assert EGraph().extract(result).value == (i64(3), i64(3))
+
+
+def test_function_values_constructor_key_keeps_selected_table_bytes() -> None:
+    class Number(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+        @method(preserve=True)
+        def tag(self) -> str:
+            return "local Number"
+
+    @function
+    def wrap(value: Number) -> Number: ...  # type: ignore[empty-body]
+
+    value = Number(i64(1))
+    graph = EGraph(union(wrap(value)).with_(value))
+    ((key, result),) = graph.function_values(wrap).items()
+    assert get_callable_fn(key) == wrap
+    assert get_callable_args(key, wrap) == get_callable_args(wrap(value), wrap)
+    assert get_callable_fn(result) == Number
+    assert result == value
+    assert result.tag() == "local Number"
+    del graph
+    gc.collect()
+    assert str(key) == "wrap(Number(1))"
+    assert result.tag() == "local Number"
 
 
 def test_set_public_native_bytes() -> None:
