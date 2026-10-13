@@ -308,18 +308,21 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 if (
                     (signature.varargs and not specialized)
                     or len(rendered_parameters) != 1
-                    or output != owner
-                    or any(sort_type(argument.sort) != owner for argument in effective_inputs)
+                    or view.params[0].name != "other"
+                    or view.params[0].has_field("default_expr")
                 ):
-                    msg = "Reflected static generation requires homogeneous scalar input/output"
-                    raise ValueError(msg)
-                if view.params[0].name != "other" or view.params[0].has_field("default_expr"):
                     msg = "Numeric forwarding requires one required 'other' parameter"
                     raise ValueError(msg)
-                reverse = "__r" + name[2:]
-                # Both RuntimeExpr numeric forwarders own this required argument.
-                annotation = sort_type(effective_inputs[view.params[0].core_input].sort, input_type=True)
-                generated[reverse] = f"    def {reverse}(self, other: {annotation}) -> {output}: ..."
+                # Forward calls use the declared signature. Reflected calls
+                # first convert the left operand to self's sort before swapping.
+                if (
+                    name not in {"__lt__", "__le__", "__gt__", "__ge__"}
+                    and output == owner
+                    and all(sort_type(argument.sort) == owner for argument in effective_inputs)
+                ):
+                    reverse = "__r" + name[2:]
+                    annotation = sort_type(effective_inputs[view.params[0].core_input].sort, input_type=True)
+                    generated[reverse] = f"    def {reverse}(self, other: {annotation}) -> {output}: ..."
             for method_name, text in generated.items():
                 if method_name in methods[family_name]:
                     raise ValueError(f"Python member collision: {owner}.{method_name}")

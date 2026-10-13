@@ -23,3 +23,30 @@ r: RationalLike = 0.5  # error: assignment
 z: BigIntLike = Fraction(1, 2)  # error: assignment
 q: BigRatLike = BigInt(1)  # error: assignment
 Rational.from_value(Fraction(1, 2))  # error: attr-defined
+
+integer = BigInt(1)
+ratio = BigRat(1, 2)
+integer << BigInt(2)  # error: operator
+integer >> ratio  # error: operator
+integer << f64(2.0)  # error: operator
+integer + ratio  # error: operator
+_ = integer < ratio  # error: operator
+integer.min(ratio)  # error: arg-type
+integer.bool_eq(ratio)  # error: arg-type
+integer.bits(1)  # error: call-arg
+integer.to_string(1)  # error: call-arg
+ratio + integer  # error: operator
+_ = ratio < integer  # error: operator
+ratio.min(integer)  # error: arg-type
+ratio**integer  # error: operator
+ratio.numer()  # error: operator
+ratio.denom(1)  # error: operator
+ratio.to_i64(1)  # error: call-arg
+ratio.to_f64(1)  # error: call-arg
+ratio.sqrt(1)  # error: call-arg
+wrong_numerator: BigRat = ratio.numer  # error: assignment
+wrong_denominator: f64 = ratio.denom  # error: assignment
+wrong_predicate: bool = ratio < 2  # error: assignment
+wrong_bits: int = integer.bits()  # error: assignment
+integer.__rrshift__(1)  # error: attr-defined
+ratio.__rlt__(1)  # error: attr-defined

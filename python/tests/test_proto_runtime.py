@@ -839,6 +839,83 @@ def test_exact_construction_and_conversions_stay_symbolic(rational_runtime):
     assert str(r(symbolic, 2)) == "Rational(i64(1) + 2, 2)"
 
 
+def test_bignum_generated_family_authors_exact_calls_without_engine(rational_runtime):
+    z, q, integer = (rational_runtime[name] for name in ("BigInt", "BigRat", "i64"))
+    a, b = z.from_string("123456789012345678901"), z.from_string("-17")
+    x, y = q(a, z.from_string("2")), q(1, 3)
+    expressions = [
+        ("bigint.add", a + b, "BigInt"),
+        ("bigint.sub", a - b, "BigInt"),
+        ("bigint.mul", a * b, "BigInt"),
+        ("bigint.div", a / b, "BigInt"),
+        ("bigint.rem", a % b, "BigInt"),
+        ("bigint.bitand", a & b, "BigInt"),
+        ("bigint.bitor", a | b, "BigInt"),
+        ("bigint.bitxor", a ^ b, "BigInt"),
+        ("bigint.shl", a << integer(3), "BigInt"),
+        ("bigint.shr", a >> 3, "BigInt"),
+        ("bigint.not", ~a, "BigInt"),
+        ("bigint.bits", a.bits(), "BigInt"),
+        ("bigint.lt", a < b, "Unit"),
+        ("bigint.gt", a > b, "Unit"),
+        ("bigint.le", a <= b, "Unit"),
+        ("bigint.ge", a >= b, "Unit"),
+        ("bigint.bool_eq", a.bool_eq(b), "bool"),
+        ("bigint.bool_lt", a.bool_lt(b), "bool"),
+        ("bigint.bool_gt", a.bool_gt(b), "bool"),
+        ("bigint.bool_le", a.bool_le(b), "bool"),
+        ("bigint.bool_ge", a.bool_ge(b), "bool"),
+        ("bigint.min", a.min(b), "BigInt"),
+        ("bigint.max", a.max(b), "BigInt"),
+        ("bigint.to_string", a.to_string(), "String"),
+        ("bigrat.add", x + y, "BigRat"),
+        ("bigrat.sub", x - y, "BigRat"),
+        ("bigrat.mul", x * y, "BigRat"),
+        ("bigrat.div", x / y, "BigRat"),
+        ("bigrat.min", x.min(y), "BigRat"),
+        ("bigrat.max", x.max(y), "BigRat"),
+        ("bigrat.neg", -x, "BigRat"),
+        ("bigrat.abs", abs(x), "BigRat"),
+        ("bigrat.floor", x.floor(), "BigRat"),
+        ("bigrat.ceil", x.ceil(), "BigRat"),
+        ("bigrat.round", x.round(), "BigRat"),
+        ("bigrat.pow", x**y, "BigRat"),
+        ("bigrat.log", x.log(), "BigRat"),
+        ("bigrat.sqrt", x.sqrt(), "BigRat"),
+        ("bigrat.cbrt", x.cbrt(), "BigRat"),
+        ("bigrat.numer", x.numer, "BigInt"),
+        ("bigrat.denom", x.denom, "BigInt"),
+        ("bigrat.to_f64", x.to_f64(), "f64"),
+        ("bigrat.to_i64", x.to_i64(), "i64"),
+        ("bigrat.lt", x < y, "Unit"),
+        ("bigrat.gt", x > y, "Unit"),
+        ("bigrat.le", x <= y, "Unit"),
+        ("bigrat.ge", x >= y, "Unit"),
+    ]
+    assert len(expressions) == 47
+    for suffix, expression, family in expressions:
+        root = expression.__egg_ref__
+        node = root.read()
+        assert node.kind.field == "call"
+        assert node.kind.value.func == f"egglog.core.{suffix}"
+        assert root.owner.ref("sorts", node.sort_id).read().kind.value.name == family
+        packed = pack([root]).program
+        assert pb.Program.from_binary(packed.to_binary()).to_binary() == packed.to_binary()
+    amount = integer(3)
+    for expression, children in ((a << amount, (a, amount)), (x - y, (x, y)), (x.numer, (x,))):
+        arguments = get_callable_args(expression)
+        assert arguments is not None
+        assert [child.__egg_ref__ for child in arguments] == [child.__egg_ref__ for child in children]
+    assert x.value == Fraction(123456789012345678901, 2)
+    for expression in (x.numer, x.denom, a >> 3, x + y):
+        with pytest.raises(rational_runtime["ExprValueError"]):
+            _ = expression.value
+    assert str(x.numer).endswith(".numer")
+    assert StructuralView((5 + a).__egg_ref__) == StructuralView((z(5) + a).__egg_ref__)
+    with pytest.raises(ConvertError):
+        _ = a << b
+
+
 def test_exact_legacy_local_inspection_and_protocols(rational_runtime):
     r, z, q = (rational_runtime[name] for name in ("Rational", "BigInt", "BigRat"))
     half = r(1, 2)

@@ -497,7 +497,6 @@ def test_pair_stub_rejects_specialized_owner_as_universal_class_view(pair_catalo
     ("mutation", "message"),
     [
         ("receiver", "cover each input exactly once"),
-        ("argument", "homogeneous"),
         ("tail", "fixed concrete signature"),
         ("collision", "Python member collision"),
         ("missing_output", "fixed concrete signature"),
@@ -515,12 +514,6 @@ def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message)
     view = addition.bindings.python.views[0]
     if mutation == "receiver":
         view.receiver = 1
-    elif mutation == "argument":
-        f64_sort = next(
-            i for i, s in enumerate(program.sorts) if s.kind.field == "family" and s.kind.value.name == "f64"
-        )
-        assert f64_sort != signature.inputs[1].sort
-        signature.inputs[1].sort = f64_sort
     elif mutation == "tail":
         signature.varargs = [pb.Arg(sort=1), pb.Arg(sort=0)]
     elif mutation == "collision":
@@ -545,6 +538,72 @@ def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message)
         )
     with pytest.raises(ValueError, match=message):
         renderer(program)
+
+
+@pytest.mark.parametrize(
+    ("method", "argument", "output"),
+    [("__lshift__", "f64", "i64"), ("__lt__", "i64", "Unit"), ("__lt__", "i64", "i64")],
+)
+def test_numeric_forward_signature_does_not_imply_reflection(method, argument, output):
+    """Mutated descriptor shapes test emission policy, not native availability."""
+    root = Path(__file__).resolve().parents[2]
+    renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    program = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
+    addition = next(
+        d for d in program.declarations if d.kind is not None and d.kind.value.name == "egglog.core.i64.add"
+    )
+    assert addition.kind is not None
+    assert isinstance(addition.kind.value, pb.HostPrimitive)
+    typing = addition.kind.value.typing
+    assert typing is not None
+    assert isinstance(typing.value, pb.GenericSignature)
+    signature = typing.value
+    sorts = {
+        s.kind.value.name: i
+        for i, s in enumerate(program.sorts)
+        if s.kind is not None and isinstance(s.kind.value, pb.HostSort)
+    }
+    signature.inputs[1].sort = sorts[argument]
+    signature.output = sorts[output]
+    for declaration in program.declarations:
+        if declaration is not addition and declaration.bindings is not None and declaration.bindings.python is not None:
+            declaration.bindings.python.views[:] = [
+                view for view in declaration.bindings.python.views if view.path != [method]
+            ]
+    assert addition.bindings is not None
+    assert addition.bindings.python is not None
+    addition.bindings.python.views[0].path = [method]
+    stub = renderer(program)
+    body = stub.split("class i64(", 1)[1].split("\nclass ", 1)[0]
+    assert f"def {method}(self, other: {argument}Like) -> {output}:" in body
+    assert f"def __r{method[2:]}(" not in body
+
+
+def test_bignum_generated_surface_uses_actual_forward_signatures(rational_catalog_program):
+    renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
+        "render_stubs"
+    ]
+    declarations = {d.kind.value.name: d for d in rational_catalog_program.declarations}
+    assert len([name for name in declarations if name.startswith("egglog.core.bigrat.")]) == 24
+    assert len([name for name in declarations if name.startswith("egglog.core.bigint.")]) == 26
+    stub = renderer(rational_catalog_program)
+    integer = stub.split("class BigInt(", 1)[1].split("\nclass ", 1)[0]
+    ratio = stub.split("class BigRat(", 1)[1].split("\nclass ", 1)[0]
+    for member in ("numer", "denom"):
+        assert f"@property\n    def {member}(self) -> BigInt:" in ratio
+        view = declarations[f"egglog.core.bigrat.{member}"].bindings.python.views[0]
+        assert view.kind == pb.PythonCallKind.PROPERTY
+        assert view.receiver == 0
+    for member in ("__lshift__", "__rshift__"):
+        assert f"def {member}(self, other: i64Like) -> BigInt:" in integer
+        assert f"def __r{member[2:]}(" not in integer
+    for body, family in ((integer, "BigInt"), (ratio, "BigRat")):
+        for member in ("__lt__", "__gt__", "__le__", "__ge__"):
+            assert f"def {member}(self, other: {family}Like) -> Unit:" in body
+            assert f"def __r{member[2:]}(" not in body
+        for member in ("__add__", "__sub__", "__mul__", "__truediv__"):
+            assert f"def {member}(self, other: {family}Like) -> {family}:" in body
+            assert f"def __r{member[2:]}(self, other: {family}Like) -> {family}:" in body
 
 
 def test_stub_defaults_are_inert_and_presence_controls_arity():
@@ -613,15 +672,15 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     old_binary, old_stub = binary.read_bytes(), stub.read_bytes()
     malformed = pb.Program.from_binary(old_binary)
     addition = next(d for d in malformed.declarations if d.kind.value.name == "egglog.core.i64.add")
-    f64_sort = next(i for i, s in enumerate(malformed.sorts) if s.kind.field == "family" and s.kind.value.name == "f64")
-    assert f64_sort != addition.kind.value.typing.value.output
-    addition.kind.value.typing.value.output = f64_sort
+    assert addition.bindings is not None
+    assert addition.bindings.python is not None
+    addition.bindings.python.views[0].params[0].name = "invalid_operand"
     invalid = tmp_path / "invalid.pb"
     invalid.write_bytes(malformed.to_binary())
     command[4] = str(invalid)
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode != 0
-    assert "homogeneous" in result.stderr
+    assert "Numeric forwarding requires one required 'other' parameter" in result.stderr
     assert binary.read_bytes() == old_binary
     assert stub.read_bytes() == old_stub
 
