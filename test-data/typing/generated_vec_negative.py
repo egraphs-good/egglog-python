@@ -13,6 +13,10 @@ value["0"]  # error: index
 value[0, 1]  # error: index
 wrong_result: Vec[f64] = value  # error: assignment
 wrong_item: f64 = value[0]  # error: assignment
+wrong_range: Vec[f64] = i64(5).range()  # error: assignment
+i64(5).range(1)  # error: call-arg
+f64(5.0).range()  # error: attr-defined
+i64.range(f64(5.0))  # error: arg-type
 wrong_value: tuple[int, ...] = value.value  # error: assignment
 wrong_pair = Pair(f64(1.0), i64(2))
 Vec[Pair[i64, f64]](wrong_pair)  # error: arg-type

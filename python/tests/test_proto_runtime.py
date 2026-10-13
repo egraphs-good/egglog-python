@@ -1937,6 +1937,37 @@ def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypat
     with pytest.raises(TypeConstraintError):
         vector()
 
+    ranged = i64(5).range()
+    assert isinstance(ranged, vector[i64])
+    assert str(ranged) == "i64(5).range()"
+    with pytest.raises(ExprValueError):
+        ranged.value
+    selected = ranged[0]
+    assert isinstance(selected, i64)
+    assert str(selected) == "i64(5).range()[0]"
+    reference = to_runtime_expr(ranged).__egg_ref__
+    node = reference.read()
+    assert node.kind is not None
+    assert isinstance(node.kind.value, pb.Call)
+    assert node.kind.value.func == "egglog.core.vec.range"
+    assert len(node.kind.value.args) == 1
+    argument = reference.owner.ref("nodes", node.kind.value.args[0])
+    assert StructuralView(argument) == StructuralView(to_runtime_expr(i64(5)).__egg_ref__)
+    assert StructuralView(reference.owner.ref("sorts", node.sort_id)) == StructuralView(vector[i64].__egg_sort__)
+    packed = pack([reference])
+    assert (
+        sum(d.kind is not None and d.kind.value.name == "egglog.core.vec.range" for d in packed.program.declarations)
+        == 1
+    )
+    decoded = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+    assert StructuralView(decoded.ref("nodes", packed.indices[0])) == StructuralView(reference)
+    range_method = to_runtime_expr(i64(5)).range
+    assert isinstance(range_method, RuntimeFunction)
+    with pytest.raises(TypeError):
+        range_method(1)
+    with pytest.raises(AttributeError):
+        to_runtime_expr(f64(5.0)).range
+
 
 @pytest.mark.parametrize("source", [[1, 2], (1, 2), [], ()])
 def test_vec_contextual_sequence_conversion_and_matching(vec_runtime, source):

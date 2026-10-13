@@ -517,6 +517,17 @@ def test_vec_public_generic_and_computed_table_bytes() -> None:
     with pytest.raises(ExprValueError):
         vector().value
 
+    for end, expected in [(-(2**63), ()), (-1, ()), (0, ()), (1, (0,)), (5, (0, 1, 2, 3, 4))]:
+        ranged = i64(end).range()
+        with pytest.raises(ExprValueError):
+            ranged.value
+        value = graph.extract(ranged)
+        assert tuple(child.value for child in value.value) == expected
+        graph.check(eq(value).to(ranged))
+    assert graph.extract(i64(5).range()[4]).value == 4
+    with pytest.raises(bindings.EggSmolError):
+        graph.extract(i64(5).range()[5])
+
 
 def test_map_public_computed_vec_table_and_reingested_value_bytes() -> None:
     @function

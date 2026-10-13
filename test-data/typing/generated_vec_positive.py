@@ -18,6 +18,9 @@ assert_type(i64(1) in owned, bool)
 assert_type(convert([1, 2], Vec[i64]), Vec[i64])
 assert_type(convert((), Vec[f64]), Vec[f64])
 assert_type(Vec(Pair(i64(1), f64(2.0))), Vec[Pair[i64, f64]])
+assert_type(i64(5).range(), Vec[i64])
+assert_type(i64(5).range()[0], i64)
+assert_type(i64(5).range().value, tuple[i64, ...])
 
 match owned:
     case Vec(children):

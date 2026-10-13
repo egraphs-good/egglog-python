@@ -248,6 +248,7 @@ def test_vec_uniform_tail_and_classmethod_stub_from_native_signatures(vec_catalo
     assert "def __len__(self) -> int:" in stub
     assert "def __contains__(self, item: _Vec_T_0) -> bool:" in stub
     assert "def eval(self) -> tuple[_Vec_T_0, ...]:" in stub
+    assert "def range(self) -> Vec[i64]:" in stub
     assert "VecLike: TypeAlias = Vec[_Vec_T_0] | tuple[_Vec_HostT, ...] | list[_Vec_HostT]" in stub
     declarations = {d.kind.value.name: d for d in vec_catalog_program.declarations}
     declarations["Vec"].kind.value.bindings.python.type_params = ["Element"]
