@@ -901,11 +901,40 @@ def resolve_callable(value: object) -> Ref:
     raise TypeError(f"Cannot resolve a canonical callable for {value!r}")
 
 
-def create_callable(reference: Ref) -> RuntimeFunction:
+def create_callable(reference: Ref) -> RuntimeClass | RuntimeFunction | RuntimeExpr:
+    """Recover the first canonical Python callable view without evaluating it."""
     record: pb.Declaration = reference.read()
-    view = (
-        0
-        if record.bindings is not None and record.bindings.python is not None and record.bindings.python.views
-        else None
+    if record.bindings is None or record.bindings.python is None or not record.bindings.python.views:
+        return RuntimeFunction(reference)
+    view = record.bindings.python.views[0]
+    owner = None
+    if view.owner is not None:
+        if view.owner.kind is None or view.owner.kind.field != "sort":
+            msg = "A table callable's Python owner must be a concrete sort"
+            raise ValueError(msg)
+        owner = _class_for_sort(reference.owner.ref("sorts", view.owner.kind.value))
+    if view.kind == pb.PythonCallKind.INITIALIZER:
+        if owner is None:
+            msg = "An initializer view requires a Python owner"
+            raise ValueError(msg)
+        return owner
+    if view.kind not in {pb.PythonCallKind.CONSTANT, pb.PythonCallKind.CLASS_VARIABLE}:
+        return RuntimeFunction(reference, 0, owner)
+    if (
+        record.kind is None
+        or not isinstance(record.kind.value, pb.Function | pb.Constructor | pb.Primitive)
+        or record.kind.value.inputs
+    ):
+        msg = "A constant view requires a nullary concrete value callable"
+        raise ValueError(msg)
+    signature = record.kind.value
+    builder = Builder()
+    builder.import_ref(reference)
+    node = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(reference.owner.ref("sorts", signature.output)),
+            kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func=signature.name)),
+        ),
     )
-    return RuntimeFunction(reference, view)
+    return RuntimeExpr(builder.publish().ref("nodes", node))

@@ -759,6 +759,12 @@ If any selected argument or output has no extractable representative,
 argument index or output. It does not return a partial dictionary or an
 `Unextractable` placeholder. `length=0` selects no rows and returns `{}`.
 
+For row counts without extracting values, use
+{meth}`egglog.egraph.EGraph.function_size` or
+{meth}`egglog.egraph.EGraph.all_function_sizes`. Counts include subsumed rows and
+rows without extractable representatives. `function_size` registers an untouched
+table and returns zero; `all_function_sizes` only observes registered tables.
+
 ### `freeze`
 
 Use {meth}`egglog.egraph.EGraph.freeze` to snapshot the current state into a

@@ -10,7 +10,7 @@ from protobuf import Oneof
 from egglog import EGraph, Expr, bindings, constant, eq, function, i64, method, set_
 from egglog._catalog import builtin_catalog
 from egglog._program import Builder, pack
-from egglog.runtime import RuntimeFunction, resolve_callable
+from egglog.runtime import RuntimeFunction, create_callable, resolve_callable
 
 
 @pytest.fixture
@@ -42,6 +42,188 @@ def table_transport(monkeypatch, tmp_path):
     yield graph, requests, responses
     graph._state.transport = transport
     graph._state.destroy()
+
+
+def test_function_sizes_native_bytes_register_and_filter_unmapped(table_transport):
+    graph, requests, responses = table_transport
+
+    @function(egg_fn="z-known")
+    def known(value: i64) -> i64: ...  # type: ignore[empty-body]
+
+    @function(egg_fn="a-unmapped")
+    def unmapped(value: i64) -> i64: ...  # type: ignore[empty-body]
+
+    assert graph.function_size(known) == 0
+    assert len(requests) == 1
+    assert any(decl.kind.value.name == "z-known" for decl in requests[0].program.declarations)
+    assert requests[0].program.commands[0].kind == Oneof("print_size", pb.PrintSize(tables=["z-known"]))
+    assert responses[0].outputs[0].location == pb.CommandLocation(path=[0])
+    assert responses[0].outputs[0].kind == Oneof("sizes", pb.TableSizes(sizes=[pb.TableSize(table="z-known", rows=0)]))
+    graph.register(set_(known(i64(1))).to(i64(2)), set_(unmapped(i64(1))).to(i64(3)))
+    # The legacy public API filtered native tables lacking a Python mapping.
+    # Keep the native row, but remove only its canonical language lookup entry.
+    del graph._state.definitions["callable", "a-unmapped"]
+    assert graph.all_function_sizes() == [(known, 1)]
+    assert requests[-1].program.declarations == []
+    assert requests[-1].program.commands[0].kind == Oneof("print_size", pb.PrintSize())
+    assert [entry.table for entry in responses[-1].outputs[0].kind.value.sizes] == ["a-unmapped", "z-known"]
+
+
+def test_function_sizes_include_unavailable_and_subsumed_native_bytes(table_transport):
+    graph, _, _ = table_transport
+    program = pb.Program(
+        ir_version=1,
+        sorts=[
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+            pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "CountedHidden")),
+        ],
+        declarations=[
+            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="CountedHidden"))),
+            pb.Declaration(
+                kind=Oneof[Literal["constructor"], pb.Constructor](
+                    "constructor",
+                    pb.Constructor(name="hidden-count", inputs=[pb.Arg(sort=0)], output=1, unextractable=True),
+                )
+            ),
+        ],
+        nodes=[
+            pb.Node(
+                sort_id=0,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", n))
+                ),
+            )
+            for n in (1, 2)
+        ]
+        + [
+            pb.Node(sort_id=1, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="hidden-count", args=[n])))
+            for n in (0, 1)
+        ],
+        commands=[
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action", pb.Action(kind=Oneof[Literal["term"], int]("term", n))
+                )
+            )
+            for n in (2, 3)
+        ]
+        + [
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action",
+                    pb.Action(
+                        kind=Oneof[Literal["subsume"], pb.Call]("subsume", pb.Call(func="hidden-count", args=[0]))
+                    ),
+                )
+            )
+        ],
+    )
+    owner = Builder.from_program(program).publish()
+    graph._state.run_program([owner.ref("commands", n) for n in range(3)])
+    target = RuntimeFunction(owner.ref("declarations", 1))
+    assert graph.function_size(target) == 2
+    assert graph.all_function_sizes() == [(target, 2)]
+    with pytest.raises(ValueError, match="has no extractable representative"):
+        graph.function_values(target)
+
+
+def test_table_callable_projection_keeps_first_view_without_invocation(monkeypatch):
+    owner = Builder.from_program(
+        pb.Program(
+            ir_version=1,
+            sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
+            declarations=[
+                pb.Declaration(
+                    kind=Oneof[Literal["function"], pb.Function](
+                        "function", pb.Function(name="two-views", inputs=[pb.Arg(sort=0)], output=0)
+                    ),
+                    bindings=pb.CallableBindings(
+                        python=pb.PythonBindings(
+                            views=[
+                                pb.PythonCallable(
+                                    kind=pb.PythonCallKind.FUNCTION,
+                                    path=[name],
+                                    params=[pb.PythonParameter(name="value", core_input=0)],
+                                )
+                                for name in ("first", "second")
+                            ]
+                        )
+                    ),
+                )
+            ],
+        )
+    ).publish()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Callable projection invoked a Python callable")
+
+    monkeypatch.setattr(RuntimeFunction, "__call__", forbidden)
+    reference = owner.ref("declarations", 0)
+    projected = create_callable(reference)
+    assert projected == RuntimeFunction(reference, 0)
+    assert hash(projected) == hash(RuntimeFunction(reference, 0))
+    assert projected != RuntimeFunction(reference, 1)
+
+
+def test_table_constant_projection_does_not_invoke_callable(monkeypatch):
+    current = constant("projected-current", i64)
+    reference = resolve_callable(current)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Constant projection invoked a Python callable")
+
+    monkeypatch.setattr(RuntimeFunction, "__call__", forbidden)
+    projected = create_callable(reference)
+    assert projected == current
+    assert hash(projected) == hash(current)
+
+
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("corruption", ["outputs", "kind", "location", "run report", "table", "duplicate"])
+def test_function_sizes_reject_malformed_response_without_engine(monkeypatch, selected, corruption):  # noqa: C901
+    @function(egg_fn="size-table")
+    def table(value: i64) -> i64: ...  # type: ignore[empty-body]
+
+    sizes = pb.TableSizes(sizes=[pb.TableSize(table="size-table", rows=1)])
+    output = pb.CommandOutput(
+        kind=Oneof[Literal["sizes"], pb.TableSizes]("sizes", sizes),
+        location=pb.CommandLocation(path=[0]),
+    )
+    response = pb.RunProgramResponse(outputs=[output], ruleset_publication=pb.RulesetPublication())
+    match corruption:
+        case "outputs":
+            response.outputs.clear()
+        case "kind":
+            output.kind = Oneof[Literal["printed_function"], pb.PrintedFunction](
+                "printed_function", pb.PrintedFunction()
+            )
+        case "location":
+            output.location = pb.CommandLocation(path=[1])
+        case "run report":
+            output.run_report = pb.NativeRunReport()
+        case "table":
+            sizes.sizes[0].table = ""
+        case "duplicate":
+            sizes.sizes.append(pb.TableSize(table="size-table", rows=2))
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            request = pb.RunProgramRequest.from_binary(encoded)
+            assert request.program is not None
+            assert request.program.commands[0].kind is not None
+            assert request.program.commands[0].kind.field == "print_size"
+            return response.to_binary()
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    with pytest.raises(ValueError, match="table size"):
+        graph.function_size(table) if selected else graph.all_function_sizes()
 
 
 def test_function_values_native_bytes_and_shared_terms(table_transport):
@@ -332,6 +514,8 @@ def test_function_values_rejects_primitives_without_table_request(table_transpor
     for target in (i64.__add__, RuntimeFunction(owner.ref("declarations", 0))):
         with pytest.raises(ValueError, match="table-backed"):
             graph.function_values(target)
+        with pytest.raises(ValueError, match="table-backed"):
+            graph.function_size(target)
     assert requests == []
 
 

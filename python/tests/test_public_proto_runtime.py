@@ -12,6 +12,7 @@ from egglog import (
     BoolLike,
     EGraph,
     Expr,
+    ExprCallable,
     ExprValueError,
     Fact,
     Map,
@@ -35,6 +36,74 @@ from egglog import (
 )
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.runtime import RuntimeExpr, RuntimeFunction
+
+
+def test_function_sizes_public_forms_bytes() -> None:
+    @function
+    def f() -> i64: ...  # type: ignore[empty-body]
+
+    class Counted(Expr):
+        X: ClassVar[i64]
+
+        def __init__(self) -> None: ...
+        def m(self) -> i64: ...  # type: ignore[empty-body]
+
+        @property
+        def p(self) -> i64: ...  # type: ignore[empty-body]
+
+        @classmethod
+        def cm(cls) -> i64: ...  # type: ignore[empty-body]
+
+        @method(preserve=True)
+        def tag(self) -> str:
+            return "retained Counted hook"
+
+    current = constant("counted-current", i64)
+    graph = EGraph(
+        set_(f()).to(i64(0)),
+        set_(Counted().m()).to(i64(0)),
+        set_(Counted.X).to(i64(0)),
+        set_(Counted().p).to(i64(0)),
+        set_(current).to(i64(0)),
+        set_(Counted.cm()).to(i64(0)),
+    )
+    targets: tuple[ExprCallable, ...] = (
+        Counted,
+        f,
+        Counted.m,
+        Counted.X,
+        cast("ExprCallable", Counted.p),
+        current,
+        Counted.cm,
+    )
+    for target in targets:
+        assert graph.function_size(target) == 1
+    rows = graph.all_function_sizes()
+    assert set(rows) == {(target, 1) for target in targets}
+    del graph
+    gc.collect()
+    assert set(rows) == {(target, 1) for target in targets}
+    restored = next(target for target, _ in rows if target == Counted)
+    assert hash(restored) == hash(Counted)
+    assert cast("type[Counted]", restored)().tag() == "retained Counted hook"
+
+
+def test_function_sizes_empty_order_and_primitive_rejection_bytes() -> None:
+    @function(egg_fn='z-count "last"')
+    def last(value: i64) -> i64: ...  # type: ignore[empty-body]
+
+    @function(egg_fn="a-count first")
+    def first(value: i64) -> i64: ...  # type: ignore[empty-body]
+
+    graph = EGraph()
+    assert graph.all_function_sizes() == []
+    assert graph.function_size(last) == 0
+    assert graph.all_function_sizes() == [(last, 0)]
+    graph.register(set_(first(i64(1))).to(i64(7)), set_(last(i64(1))).to(i64(8)))
+    assert graph.all_function_sizes() == [(first, 1), (last, 1)]
+    with pytest.raises(ValueError, match="table-backed"):
+        graph.function_size(i64.__add__)
+    assert graph.all_function_sizes() == [(first, 1), (last, 1)]
 
 
 def test_function_values_public_bytes() -> None:

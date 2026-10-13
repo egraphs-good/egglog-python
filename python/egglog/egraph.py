@@ -1876,27 +1876,64 @@ class EGraph:
         Relations, constructors, and bodyless functions have tables. Eager and
         builtin primitives do not.
         """
-        ref, decls = resolve_callable(fn)
-        self._add_decls(decls)
-        self._require_table_backed(ref)
-        egg_name = self._state.callable_ref_to_egg(ref)[0]
-        (output,) = self._state.run_program(bindings.PrintSize(span(1), egg_name))
-        assert isinstance(output, bindings.PrintFunctionSize)
-        return output.size
+        reference = resolve_callable(fn)
+        declaration: pb.Declaration = reference.read()
+        if declaration.kind is None or not isinstance(
+            declaration.kind.value, pb.Function | pb.Constructor | pb.Relation
+        ):
+            msg = (
+                "This operation requires a table-backed relation, constructor, or bodyless function; "
+                "eager and builtin primitives do not have tables"
+            )
+            raise ValueError(msg)
+        table = declaration.kind.value.name
+        builder = Builder()
+        builder.import_ref(reference)
+        command = builder.add(
+            "commands",
+            pb.Command(kind=Oneof[Literal["print_size"], pb.PrintSize]("print_size", pb.PrintSize(tables=[table]))),
+        )
+        response, _ = self._state.run_program([builder.publish().ref("commands", command)])
+        if (
+            len(response.outputs) != 1
+            or response.outputs[0].kind is None
+            or response.outputs[0].kind.field != "sizes"
+            or response.outputs[0].location != pb.CommandLocation(path=[0])
+            or response.outputs[0].run_report is not None
+            or len(response.outputs[0].kind.value.sizes) != 1
+            or response.outputs[0].kind.value.sizes[0].table != table
+        ):
+            raise ValueError(f"Shared adapter did not return the requested table size for {table!r}")
+        return response.outputs[0].kind.value.sizes[0].rows
 
     def all_function_sizes(self) -> list[tuple[ExprCallable, int]]:
         """
         Return the sizes of all registered function tables.
         """
-        (output,) = self._state.run_program(bindings.PrintSize(span(1), None))
-        assert isinstance(output, bindings.PrintAllFunctionsSize)
-        return [(callables[0], size) for (name, size) in output.sizes if (callables := self._egg_fn_to_callables(name))]
-
-    def _egg_fn_to_callables(self, egg_fn: str) -> list[ExprCallable]:
-        return [
-            cast("ExprCallable", create_callable(self._state.__egg_decls__, ref))
-            for ref in self._state.egg_fn_to_callable_refs.get(egg_fn, ())
-        ]
+        builder = Builder()
+        command = builder.add(
+            "commands", pb.Command(kind=Oneof[Literal["print_size"], pb.PrintSize]("print_size", pb.PrintSize()))
+        )
+        response, _ = self._state.run_program([builder.publish().ref("commands", command)])
+        if (
+            len(response.outputs) != 1
+            or response.outputs[0].kind is None
+            or response.outputs[0].kind.field != "sizes"
+            or response.outputs[0].location != pb.CommandLocation(path=[0])
+            or response.outputs[0].run_report is not None
+        ):
+            msg = "Shared adapter did not return all table sizes"
+            raise ValueError(msg)
+        names: set[str] = set()
+        result: list[tuple[ExprCallable, int]] = []
+        for entry in response.outputs[0].kind.value.sizes:
+            if not entry.table or entry.table in names:
+                msg = "Shared adapter returned invalid or duplicate table sizes"
+                raise ValueError(msg)
+            names.add(entry.table)
+            if (reference := self._state.definitions.get(("callable", entry.table))) is not None:
+                result.append((cast("ExprCallable", create_callable(reference)), entry.rows))
+        return result
 
     def function_values(  # noqa: C901, PLR0912
         self, fn: Callable[..., BASE_EXPR] | BASE_EXPR, length: int | None = None
