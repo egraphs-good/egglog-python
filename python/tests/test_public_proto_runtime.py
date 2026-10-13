@@ -278,6 +278,38 @@ def test_scalar_wave_public_native_bytes() -> None:
     assert mapping.value[String("key")].value is True
 
 
+def test_closed_scalar_bool_comparisons_and_conversion_native_bytes() -> None:
+    from egglog import count_matches  # noqa: PLC0415
+
+    graph = EGraph()
+    retained: list[tuple[Bool, bool]] = []
+    for left, right in ((0, 1), (1, 1), (2, 1), (-(2**63), 2**63 - 1)):
+        for expression, expected in (
+            (i64(left).bool_lt(right), left < right),
+            (i64(left).bool_gt(right), left > right),
+            (i64(left).bool_le(right), left <= right),
+            (i64(left).bool_ge(right), left >= right),
+        ):
+            with pytest.raises(ExprValueError):
+                _ = expression.value
+            with pytest.raises(ExprValueError):
+                bool(expression)
+            result = graph.extract(expression)
+            assert isinstance(result, Bool)
+            assert result.value is expected
+            retained.append((result, expected))
+    graph.check(i64(2) > 1, i64(1) <= 1)
+    graph.check_fail(i64(1) > 1)
+    graph.check_fail(i64(2) <= 1)
+    assert graph.extract(f64.from_i64(i=-3)).value == -3.0
+    assert graph.extract(count_matches(s="a\0a☃a", pattern="a")).value == 3
+    del graph
+    gc.collect()
+    for result, expected in retained:
+        assert bool(result) is expected
+        assert EGraph().extract(result).value is expected
+
+
 @pytest.mark.parametrize("values", [(), (False,), (True,), (False, False), (False, True, False, False, True)])
 def test_scalar_wave_variadic_bool_native_bytes(values) -> None:
     # Canonical bytes deliberately support arities without a public Python view.

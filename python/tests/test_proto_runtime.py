@@ -966,6 +966,128 @@ def test_bignum_generated_family_authors_exact_calls_without_engine(rational_run
         _ = a << b
 
 
+def test_closed_scalar_family_authors_exact_calls_without_engine(rational_runtime):
+    integer, floating, ratio = (rational_runtime[name] for name in ("i64", "f64", "Rational"))
+    count_matches = rational_runtime["count_matches"]
+    a, b = integer(13), integer(2)
+    x, y = floating(4.0), floating(2.0)
+    r, s = ratio(3, 2), ratio(1, 2)
+    expressions = [
+        ("egglog.core.i64.bitor", a | b, "i64"),
+        ("egglog.core.i64.bitxor", a ^ b, "i64"),
+        ("egglog.core.i64.shl", a << b, "i64"),
+        ("egglog.core.i64.shr", a >> b, "i64"),
+        ("egglog.core.i64.not", ~a, "i64"),
+        ("egglog.core.i64.log2", a.log2(), "i64"),
+        ("egglog.core.i64.abs", abs(a), "i64"),
+        ("egglog.core.i64.gt", a > b, "Unit"),
+        ("egglog.core.i64.le", a <= b, "Unit"),
+        ("egglog.core.i64.bool_lt", a.bool_lt(b), "bool"),
+        ("egglog.core.i64.bool_gt", a.bool_gt(b), "bool"),
+        ("egglog.core.i64.bool_le", a.bool_le(b), "bool"),
+        ("egglog.core.i64.bool_ge", a.bool_ge(b), "bool"),
+        ("egglog.core.f64.sub", x - y, "f64"),
+        ("egglog.core.f64.mul", x * y, "f64"),
+        ("egglog.core.f64.div", x / y, "f64"),
+        ("egglog.core.f64.rem", x % y, "f64"),
+        ("egglog.core.f64.pow", x**y, "f64"),
+        ("egglog.core.f64.neg", -x, "f64"),
+        ("egglog.core.f64.abs", abs(x), "f64"),
+        ("egglog.core.f64.exp", x.exp(), "f64"),
+        ("egglog.core.f64.log", x.log(), "f64"),
+        ("egglog.core.f64.sqrt", x.sqrt(), "f64"),
+        ("egglog.core.f64.lt", x < y, "Unit"),
+        ("egglog.core.f64.gt", x > y, "Unit"),
+        ("egglog.core.f64.le", x <= y, "Unit"),
+        ("egglog.core.f64.ge", x >= y, "Unit"),
+        ("egglog.core.f64.min", x.min(y), "f64"),
+        ("egglog.core.f64.max", x.max(y), "f64"),
+        ("egglog.core.f64.to_i64", x.to_i64(), "i64"),
+        ("egglog.core.f64.from_i64", floating.from_i64(i=a), "f64"),
+        ("egglog.core.f64.to_string", x.to_string(), "String"),
+        ("egglog.experimental.f64.is_finite", x.is_finite(), "Unit"),
+        ("egglog.experimental.rational.sub", r - s, "Rational"),
+        ("egglog.experimental.rational.mul", r * s, "Rational"),
+        ("egglog.experimental.rational.div", r / s, "Rational"),
+        ("egglog.experimental.rational.min", r.min(s), "Rational"),
+        ("egglog.experimental.rational.max", r.max(s), "Rational"),
+        ("egglog.experimental.rational.neg", -r, "Rational"),
+        ("egglog.experimental.rational.abs", abs(r), "Rational"),
+        ("egglog.experimental.rational.floor", r.floor(), "Rational"),
+        ("egglog.experimental.rational.ceil", r.ceil(), "Rational"),
+        ("egglog.experimental.rational.round", r.round(), "Rational"),
+        ("egglog.experimental.rational.numer", r.numer, "i64"),
+        ("egglog.experimental.rational.denom", r.denom, "i64"),
+        ("egglog.experimental.rational.to_f64", r.to_f64(), "f64"),
+        ("egglog.experimental.rational.pow", r**s, "Rational"),
+        ("egglog.experimental.rational.log", r.log(), "Rational"),
+        ("egglog.experimental.rational.sqrt", r.sqrt(), "Rational"),
+        ("egglog.experimental.rational.cbrt", r.cbrt(), "Rational"),
+        ("egglog.experimental.rational.lt", r < s, "Unit"),
+        ("egglog.experimental.rational.gt", r > s, "Unit"),
+        ("egglog.experimental.rational.le", r <= s, "Unit"),
+        ("egglog.experimental.rational.ge", r >= s, "Unit"),
+        ("egglog.core.string.count_matches", count_matches(s="a\0a", pattern="a"), "i64"),
+    ]
+    assert len(expressions) == 55
+    assert len({identity for identity, _, _ in expressions}) == 55
+    for identity, expression, family in expressions:
+        root = expression.__egg_ref__
+        node = root.read()
+        assert node.kind.field == "call"
+        assert node.kind.value.func == identity
+        assert root.owner.ref("sorts", node.sort_id).read().kind.value.name == family
+        packed = pack([root])
+        decoded = pb.Program.from_binary(packed.program.to_binary())
+        restored = Builder.from_program(decoded).publish().ref("nodes", packed.indices[0])
+        assert StructuralView(restored) == StructuralView(root)
+        assert str(RuntimeExpr(restored)) == str(expression)
+        if family != "Unit":
+            with pytest.raises(rational_runtime["ExprValueError"]):
+                _ = expression.value
+    for expression, children in (
+        (a << b, (a, b)),
+        (x - y, (x, y)),
+        (r - s, (r, s)),
+        (r.numer, (r,)),
+        (floating.from_i64(i=a), (a,)),
+    ):
+        actual_children = get_callable_args(expression)
+        assert actual_children is not None
+        assert [child.__egg_ref__ for child in actual_children] == [child.__egg_ref__ for child in children]
+    for reflected, explicit in (
+        (2 | a, integer(2) | a),
+        (2 ^ a, integer(2) ^ a),
+        (2 << a, integer(2) << a),
+        (2 >> a, integer(2) >> a),
+        (2 - x, floating(2.0) - x),
+        (2 / x, floating(2.0) / x),
+        (2**x, floating(2.0) ** x),
+        (2 - r, ratio(2, 1) - r),
+        (2 / r, ratio(2, 1) / r),
+        (2**r, ratio(2, 1) ** r),
+        (floating.from_i64(1), floating.from_i64(integer(1))),
+    ):
+        assert StructuralView(reflected.__egg_ref__) == StructuralView(explicit.__egg_ref__)
+    assert str(r.numer) == "Rational(3, 2).numer"
+    assert str(floating.from_i64(1)) == "f64.from_i64(1)"
+    assert str(count_matches(s="aba", pattern="a")) == "count_matches('aba', 'a')"
+    for operation, argument in (
+        (a.bool_lt, x),
+        (a.bool_gt, "2"),
+        (a.bool_le, r),
+        (a.bool_ge, x),
+        (floating.from_i64, x),
+        (r.min, x),
+    ):
+        with pytest.raises(ConvertError):
+            operation(argument)
+    with pytest.raises(TypeError):
+        floating.from_i64()
+    with pytest.raises(TypeError):
+        floating.from_i64(1, 2)
+
+
 def test_exact_legacy_local_inspection_and_protocols(rational_runtime):
     r, z, q = (rational_runtime[name] for name in ("Rational", "BigInt", "BigRat"))
     half = r(1, 2)

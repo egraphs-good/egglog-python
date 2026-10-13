@@ -1,6 +1,21 @@
 """Each marked public misuse must independently produce its diagnostic code."""
 
-from egglog import Bool, BoolLike, String, StringLike, Unit, Vec, f64, function, i64, i64Like, join, ne, ruleset
+from egglog import (
+    Bool,
+    BoolLike,
+    String,
+    StringLike,
+    Unit,
+    Vec,
+    count_matches,
+    f64,
+    function,
+    i64,
+    i64Like,
+    join,
+    ne,
+    ruleset,
+)
 
 String(1)  # error: arg-type
 String()  # error: call-arg
@@ -50,6 +65,38 @@ f64(1.0) + i64(2)  # error: operator
 i64(1).__add__()  # error: call-arg
 i64(1).__add__(2, 3)  # error: call-arg
 wrong_value: str = i64(1).value  # error: assignment
+i64(1) | f64(2.0)  # error: operator
+i64(1) ^ String("2")  # error: operator
+i64(1) << f64(2.0)  # error: operator
+i64(1) >> String("2")  # error: operator
+i64(1).bool_lt(f64(2.0))  # error: arg-type
+i64(1).bool_gt(String("2"))  # error: arg-type
+i64(1).bool_le(2.0)  # error: arg-type
+i64(1).bool_ge("2")  # error: arg-type
+i64(1).bool_lt()  # error: call-arg
+i64(1).bool_ge(2, 3)  # error: call-arg
+i64(1).log2(2)  # error: call-arg
+f64(4.0) - i64(2)  # error: operator
+f64(4.0) * String("2")  # error: operator
+f64(4.0) / i64(2)  # error: operator
+f64(4.0) % String("2")  # error: operator
+f64(4.0) ** i64(2)  # error: operator
+f64(4.0).sqrt(2)  # error: call-arg
+f64(4.0).is_finite(2)  # error: call-arg
+f64(4.0).min(i64(2))  # error: arg-type
+f64.from_i64(1.0)  # error: arg-type
+f64.from_i64(String("1"))  # error: arg-type
+f64.from_i64()  # error: call-arg
+f64.from_i64(1, 2)  # error: call-arg
+count_matches("a")  # error: call-arg
+count_matches("a", "a", "a")  # error: call-arg
+count_matches(i64(1), "a")  # error: arg-type
+wrong_bool_comparison: Unit = i64(1).bool_lt(2)  # error: assignment
+wrong_unit_comparison: Bool = f64(1.0) < 2  # error: assignment
+i64(1).__rgt__(2)  # error: attr-defined
+f64(1.0).__rle__(2)  # error: attr-defined
+i64(1).bool_eq(2)  # error: attr-defined
+Bool(True).guard()  # error: attr-defined
 
 
 @function
