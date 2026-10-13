@@ -21,6 +21,7 @@ from egglog import (
     i64,
     i64Like,
     join,
+    ne,
 )
 
 assert_type(String("x"), String)
@@ -44,6 +45,10 @@ assert_type(String("x").value, str)
 assert_type(Bool(False).value, bool)
 assert_type(bool(Bool(False)), bool)
 assert_type(bool(Unit()), bool)
+assert_type(ne(Bool(True)).to(Bool(False)), Unit)
+assert_type(ne(i64(1)).to(i64(2)), Unit)
+assert_type(ne(Vec[i64](i64(1))).to(Vec[i64](i64(2))), Unit)
+assert_type(bool(ne(i64(1)).to(i64(2))), bool)
 assert_type(convert("x", String), String)
 assert_type(convert(False, Bool), Bool)
 assert_type(Pair(String("key"), Bool(False)), Pair[String, Bool])

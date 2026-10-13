@@ -1,6 +1,6 @@
 """Each marked public misuse must independently produce its diagnostic code."""
 
-from egglog import Bool, BoolLike, String, StringLike, Unit, Vec, f64, function, i64, i64Like, join, ruleset
+from egglog import Bool, BoolLike, String, StringLike, Unit, Vec, f64, function, i64, i64Like, join, ne, ruleset
 
 String(1)  # error: arg-type
 String()  # error: call-arg
@@ -21,6 +21,11 @@ Bool(True).__or__()  # error: call-arg
 Bool(True).__or__(False, True)  # error: call-arg
 Bool(True).__invert__(False)  # error: call-arg
 Bool(True).implies(String("x"))  # error: arg-type
+ne(i64(1)).to(String("1"))  # error: arg-type
+ne(Vec[i64](i64(1))).to(Vec[String](String("1")))  # error: arg-type
+ne(i64(1)).to()  # error: call-arg
+ne(i64(1)).to(i64(2), i64(3))  # error: call-arg
+wrong_ne: Bool = ne(i64(1)).to(i64(2))  # error: assignment
 
 
 @function

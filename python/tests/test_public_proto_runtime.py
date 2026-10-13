@@ -10,6 +10,7 @@ import pytest
 from egglog import (
     Bool,
     BoolLike,
+    ConvertError,
     EGraph,
     Expr,
     ExprCallable,
@@ -31,6 +32,7 @@ from egglog import (
     i64,
     join,
     method,
+    ne,
     set_,
     union,
 )
@@ -388,6 +390,70 @@ def test_structural_inspection_and_equality_fact() -> None:
     assert not bool(eq(i64(1)).to(i64(2)))
     assert str(eq(i64(1)).to(i64(2))) == "eq(i64(1)).to(i64(2))"
     assert expr_parts(f64(0.0)) == expr_parts(f64(-0.0))
+
+
+def test_ne_authoring_pretty_and_structural_truth_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("Inequality authoring or truth accessed the native engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+
+    class Compared(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    pairs = [
+        (Bool(True), Bool(False)),
+        (i64(1), i64(2)),
+        (Compared(i64(1)), Compared(i64(2))),
+        (Vec[i64](i64(1)), Vec[i64](i64(2))),
+        (Vec[Compared](Compared(i64(1))), Vec[Compared](Compared(i64(2)))),
+        (Pair(i64(1), String("a")), Pair(i64(1), String("b"))),
+    ]
+    for left, right in pairs:
+        different = ne(left).to(right)
+        assert isinstance(different, Unit)
+        assert bool(different)
+        assert bool(left != right)
+        assert not bool(ne(left).to(copy(left)))
+        assert not bool(left != copy(left))
+        assert bool(copy(different))
+        assert str(ne(left)) == repr(ne(left)) == f"ne({left})"
+        assert str(different) == repr(different) == f"ne({left}).to({right})"
+    assert str(ne(i64(1)).to(cast("i64", 2))) == "ne(i64(1)).to(i64(2))"
+    assert bool(ne(i64(1) + 1).to(i64(2)))  # Structural, not arithmetic evaluation.
+    assert not bool(ne(f64(0.0)).to(f64(-0.0)))
+    with pytest.raises(ValueError, match="Can only check equality for == or !="):
+        bool(Unit())
+    with pytest.raises(ValueError, match="Can only check equality for == or !="):
+        bool(i64(1) < 2)
+
+
+def test_ne_rejects_wrong_sort() -> None:
+    with pytest.raises(ConvertError):
+        ne(i64(1)).to(cast("i64", String("1")))
+    with pytest.raises(ConvertError):
+        ne(Vec[i64](i64(1))).to(cast("Vec[i64]", Vec[String](String("1"))))
+
+
+def test_ne_byte_execution_and_structural_truth_after_union() -> None:
+    class Compared(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    left, right = Compared(i64(1)), Compared(i64(2))
+    different = ne(left).to(right)
+    graph = EGraph(left, right)
+    graph.check(ne(Bool(True)).to(Bool(False)), ne(i64(1)).to(i64(2)), different)
+    graph.check_fail(ne(i64(1) + 1).to(i64(2)))
+    assert bool(ne(i64(1) + 1).to(i64(2)))
+    graph.check(ne(Vec[Compared](left)).to(Vec[Compared](right)))
+    graph.register(union(left).with_(right))
+    graph.check_fail(different)
+    graph.check_fail(ne(Vec[Compared](left)).to(Vec[Compared](right)))
+    assert bool(different)  # Python truth does not query the mutated e-graph.
+    extracted = graph.extract(Vec[Compared](left))
+    assert not bool(ne(extracted).to(copy(extracted)))
+    graph.check_fail(ne(extracted).to(Vec[Compared](right)))
 
 
 def test_normal_scalar_bytes_boundary() -> None:

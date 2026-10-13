@@ -369,6 +369,10 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                     ):
                         msg = "Call has invalid canonical argument count"
                         raise ValueError(msg)
+                    if call.func == "egglog.core.ne" and len(args) == 2:
+                        pieces = ["ne(", (args[0], False, False), ").to(", (args[1], False, False), ")"]
+                        frames.extend(reversed(pieces))
+                        continue
                     view = next(
                         (
                             candidate

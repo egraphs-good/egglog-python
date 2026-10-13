@@ -45,7 +45,7 @@ from protobuf import Oneof
 from typing_extensions import ParamSpec, TypeForm
 
 from . import bindings
-from ._catalog import Catalog
+from ._catalog import Catalog, builtin_catalog
 from ._program import (
     Builder,
     Ref,
@@ -2730,12 +2730,22 @@ class Fact:
 
     def __bool__(self) -> bool:
         """
-        Returns True if the two sides of an equality are structurally equal.
+        Compare equality or inequality structurally, without querying an EGraph.
         """
         node: pb.Node = self.__egg_ref__.read()
         if node.kind is not None and node.kind.field == "union" and len(node.kind.value.members) == 2:
             left, right = node.kind.value.members
             return StructuralView(self.__egg_ref__.owner.ref("nodes", left)) == StructuralView(
+                self.__egg_ref__.owner.ref("nodes", right)
+            )
+        if (
+            node.kind is not None
+            and node.kind.field == "call"
+            and node.kind.value.func == "egglog.core.ne"
+            and len(node.kind.value.args) == 2
+        ):
+            left, right = node.kind.value.args
+            return StructuralView(self.__egg_ref__.owner.ref("nodes", left)) != StructuralView(
                 self.__egg_ref__.owner.ref("nodes", right)
             )
         msg = f"Can only check equality for == or != not {self}"
@@ -2994,25 +3004,16 @@ class _NeBuilder(Generic[BASE_EXPR]):
     lhs: BASE_EXPR
 
     def to(self, rhs: BASE_EXPR) -> Unit:
-        from .builtins import Unit  # noqa: PLC0415
-
         lhs = to_runtime_expr(self.lhs)
         rhs = convert_to_same_type(rhs, lhs)
-        res = RuntimeExpr.__from_values__(
-            Declarations.create(cast("RuntimeClass", Unit), lhs, rhs),
-            TypedExprDecl(
-                JustTypeRef(Ident.builtin("Unit")),
-                CallDecl(FunctionRef(Ident.builtin("!=")), (lhs.__egg_typed_expr__, rhs.__egg_typed_expr__)),
-            ),
-        )
-        return cast("Unit", res)
+        return cast("Unit", RuntimeFunction(builtin_catalog().definitions["callable", "egglog.core.ne"])(lhs, rhs))
 
     def __repr__(self) -> str:
         return str(self)
 
     def __str__(self) -> str:
         expr = to_runtime_expr(self.lhs)
-        return expr.__egg_pretty__("ne")
+        return f"ne({expr})"
 
 
 @dataclass

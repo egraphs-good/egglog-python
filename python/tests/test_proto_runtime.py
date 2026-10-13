@@ -47,6 +47,7 @@ from egglog import (
     i64,
     join,
     method,
+    ne,
     rewrite,
     rule,
     ruleset,
@@ -56,11 +57,60 @@ from egglog import (
     var,
     vars_,
 )
+from egglog._catalog import builtin_catalog
 from egglog._program import Builder, Ref, StructuralView, pack
 from egglog.builtins import ExprValueError, _container_items, _map_entries, _pair_value
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name
+from egglog.egraph import to_runtime_expr
 from egglog.runtime import _CLASS_CACHE, RuntimeExpr, RuntimeFunction, _author_call, resolve_callable
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
+
+
+def test_ne_uses_actual_generic_catalog_and_ordered_canonical_calls(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Generic inequality authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    declaration = builtin_catalog().definitions["callable", "egglog.core.ne"]
+    record = declaration.read()
+    assert record.kind is not None
+    assert isinstance(record.kind.value, pb.HostPrimitive)
+    typing = record.kind.value.typing
+    assert typing is not None
+    assert isinstance(typing.value, pb.GenericSignature)
+    signature = typing.value
+    assert len(signature.type_params) == 1
+    assert len(signature.inputs) == 2
+    assert signature.inputs[0].sort == signature.inputs[1].sort
+    assert declaration.owner.ref("sorts", signature.inputs[0].sort).read().kind == Oneof("var", 0)
+    assert declaration.owner.ref("sorts", signature.output).read().kind == Oneof("family", pb.HostSort(name="Unit"))
+    function = RuntimeFunction(declaration)
+    first, second = i64(1), i64(2)
+    expression = ne(first).to(second)
+    authored = to_runtime_expr(expression)
+    direct = function(first, second)
+    assert direct is not None
+    assert StructuralView(authored.__egg_ref__) == StructuralView(direct.__egg_ref__)
+    node = authored.__egg_ref__.read()
+    assert node.kind is not None
+    assert isinstance(node.kind.value, pb.Call)
+    assert node.kind.value.func == "egglog.core.ne"
+    assert [StructuralView(authored.__egg_ref__.owner.ref("nodes", index)) for index in node.kind.value.args] == [
+        StructuralView(to_runtime_expr(first).__egg_ref__),
+        StructuralView(to_runtime_expr(second).__egg_ref__),
+    ]
+    packed = pack([authored.__egg_ref__])
+    decoded = pb.Program.from_binary(packed.program.to_binary())
+    copied = Builder.from_program(decoded).publish().ref("nodes", packed.indices[0])
+    assert StructuralView(copied) == StructuralView(authored.__egg_ref__)
+    assert str(RuntimeExpr(copied)) == "ne(i64(1)).to(i64(2))"
+    with pytest.raises(TypeError):
+        function(first)
+    with pytest.raises(TypeError):
+        function(first, second, first)
+    with pytest.raises(ConvertError):
+        function(first, String("2"))
 
 
 def test_canonical_schedule_live_repr_and_generator_failure_without_engine(monkeypatch):
