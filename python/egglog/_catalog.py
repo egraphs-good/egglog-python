@@ -84,6 +84,14 @@ class Catalog:
             if binding is None or binding.python is None:
                 continue
             for view_index, view in enumerate(binding.python.views):
+                if (
+                    isinstance(kind, pb.HostPrimitive)
+                    and kind.typing is not None
+                    and kind.typing.field == "application"
+                    and (view.owner is None or view.owner.kind is None or view.owner.kind.field != "function")
+                ):
+                    msg = "Python member has an invalid structural function application owner"
+                    raise ValueError(msg)
                 if view.kind == pb.PythonCallKind.FUNCTION:
                     path = _python_path(view.path)
                     if view.owner is not None or view.has_field("receiver"):
@@ -129,7 +137,27 @@ class Catalog:
                     msg = "Python member has an invalid presentation kind"
                     raise ValueError(msg)
                 owner_key = None
-                if view.owner.kind.field == "sort":
+                if view.owner.kind.field == "function":
+                    if (
+                        not isinstance(kind, pb.HostPrimitive)
+                        or kind.typing is None
+                        or kind.typing.field != "application"
+                        or view.kind != pb.PythonCallKind.METHOD
+                        or list(view.path) != ["__call__"]
+                        or not view.has_field("receiver")
+                        or view.receiver != 0
+                        or view.has_field("mutates")
+                        or view.has_field("tail_repetitions")
+                        or len(view.params) != 1
+                        or not view.params[0].has_field("core_input")
+                        or view.params[0].core_input != 1
+                        or view.params[0].name != "args"
+                        or view.params[0].has_field("default_expr")
+                    ):
+                        msg = "Invalid Python structural function application view"
+                        raise ValueError(msg)
+                    owner_key = "function", ""
+                elif view.owner.kind.field == "sort":
                     owner_sort: pb.Sort = ref.owner.ref("sorts", view.owner.kind.value).read()
                     if owner_sort.kind is None:
                         msg = "Python member owner has no sort kind"

@@ -7,6 +7,7 @@ import struct
 from collections.abc import Callable
 from decimal import Decimal
 from fractions import Fraction
+from functools import partial
 from math import gcd
 from typing import Any
 
@@ -91,8 +92,29 @@ def get_literal_value(x: object) -> object:
             return value.value
         case "f64_bits":
             return struct.unpack("!d", struct.pack("!Q", value.value))[0]
-        case "unit":
-            return None
+        case "partial_call":
+            from .runtime import _partial_function, create_callable  # noqa: PLC0415
+
+            reference = x.__egg_ref__
+            declaration = _definition_at(reference, "callable", value.value.func)
+            record: pb.Declaration = declaration.read()
+            view_index = (
+                0
+                if record.bindings is not None and record.bindings.python is not None and record.bindings.python.views
+                else None
+            )
+            captures = tuple(RuntimeExpr(reference.owner.ref("nodes", index)) for index in value.value.args)
+            _, children, owner_sort = _partial_function(
+                RuntimeFunction(declaration, view_index),
+                captures,
+                reference.owner.ref("sorts", node.sort_id),
+                convert_captures=False,
+            )
+            function = create_callable(declaration, owner_sort=owner_sort)
+            if not isinstance(function, RuntimeFunction | RuntimeClass):
+                msg = "Function value has no callable Python presentation"
+                raise TypeError(msg)
+            return partial(function, *children) if children else function
         case _:
             # Containers have their own .value protocols, retaining symbolic
             # children. They are not scalar literals.
@@ -134,7 +156,7 @@ def get_var_name(x: object) -> str | None:
     return node.kind.value if node.kind is not None and node.kind.field == "var" else None
 
 
-def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, tuple[RuntimeExpr, ...]] | None:  # noqa: C901
+def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, tuple[RuntimeExpr, ...]] | None:  # noqa: C901, PLR0912
     """Select a declaration's Python view and restore its argument ordering."""
     node: pb.Node = x.__egg_ref__.read()
     if node.kind is None or node.kind.field != "call":
@@ -159,6 +181,35 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
     )
     fixed = len(signature.inputs) if signature is not None else len(arguments)
     tail_width = len(signature.varargs) if signature is not None else 0
+    application = isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "application"
+    if application:
+        from .type_constraint_solver import infer_sort  # noqa: PLC0415
+
+        if not arguments:
+            msg = "Function application has no function input"
+            raise ValueError(msg)
+        function = arguments[0].__egg_ref__
+        function_sort = function.owner.ref("sorts", function.read().sort_id)
+        function_type: pb.Sort = function_sort.read()
+        if (
+            function_type.kind is None
+            or function_type.kind.field != "func"
+            or len(arguments) != len(function_type.kind.value.params) + 1
+        ):
+            msg = "Function application has invalid argument sorts or arity"
+            raise ValueError(msg)
+        infer_sort(
+            function_sort.owner.ref("sorts", function_type.kind.value.result),
+            x.__egg_ref__.owner.ref("sorts", node.sort_id),
+            0,
+            {},
+        )
+        for argument, expected in zip(arguments[1:], function_type.kind.value.params, strict=True):
+            child = argument.__egg_ref__
+            infer_sort(
+                function_sort.owner.ref("sorts", expected), child.owner.ref("sorts", child.read().sort_id), 0, {}
+            )
+        fixed, tail_width = 1, 1
     if (
         len(arguments) < fixed
         or (len(arguments) - fixed) % (tail_width or 1)
@@ -190,11 +241,11 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
     if view.kind == pb.PythonCallKind.INITIALIZER:
         return _class_for_sort(x.__egg_ref__.owner.ref("sorts", node.sort_id)), tuple(ordered)
     owner = None
-    if view.owner is not None and view.owner.kind is not None and view.owner.kind.field == "sort":
+    if view.owner is not None and view.owner.kind is not None:
         if view.has_field("receiver"):
             receiver = arguments[view.receiver].__egg_ref__
             owner = _class_for_sort(receiver.owner.ref("sorts", receiver.read().sort_id))
-        else:
+        elif view.owner.kind.field == "sort":
             owner = _class_for_sort(declaration.owner.ref("sorts", view.owner.kind.value))
     return RuntimeFunction(declaration, view_index, owner), tuple(ordered)
 

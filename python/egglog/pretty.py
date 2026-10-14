@@ -164,6 +164,15 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
             if record.kind is None:
                 msg = "Cannot print a sort without a kind"
                 raise ValueError(msg)
+            if record.kind.field == "func":
+                pieces = ["UnstableFn["]
+                for index, argument in enumerate([record.kind.value.result, *record.kind.value.params]):
+                    if index:
+                        pieces.append(", ")
+                    pieces.append((owner.ref("sorts", argument), False, False))
+                pieces.append("]")
+                frames.extend(reversed(pieces))
+                continue
             if record.kind.field not in {"eq", "family"}:
                 raise NotImplementedError(f"Sort presentation is not migrated: {record.kind.field}")
             name = record.kind.value if record.kind.field == "eq" else record.kind.value.name
@@ -281,6 +290,23 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                         ]
                         frames.extend(reversed(pieces))
                         continue
+                    elif primitive.field == "partial_call":
+                        from functools import partial  # noqa: PLC0415
+
+                        from .deconstruct import get_literal_value  # noqa: PLC0415
+                        from .runtime import RuntimeExpr  # noqa: PLC0415
+
+                        value = get_literal_value(RuntimeExpr(reference))
+                        if isinstance(value, partial):
+                            pieces = ["partial(", str(value.func)]
+                            for child in value.args:
+                                assert isinstance(child, RuntimeExpr)
+                                pieces.extend([", ", (child.__egg_ref__, False, False)])
+                            pieces.append(")")
+                        else:
+                            pieces = [str(value)]
+                        frames.extend(reversed(pieces))
+                        continue
                     elif primitive.field in {"vec", "set"}:
                         from .builtins import _container_items, _container_member  # noqa: PLC0415
                         from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
@@ -353,6 +379,42 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                         raise ValueError(msg)
                     assert declared.kind is not None
                     kind = declared.kind.value
+                    if (
+                        isinstance(kind, pb.HostPrimitive)
+                        and kind.typing is not None
+                        and kind.typing.field == "application"
+                    ):
+                        from .type_constraint_solver import infer_sort  # noqa: PLC0415
+
+                        if not args:
+                            msg = "Function application has no function input"
+                            raise ValueError(msg)
+                        function_sort = owner.ref("sorts", args[0].read().sort_id)
+                        function_type: pb.Sort = function_sort.read()
+                        if (
+                            function_type.kind is None
+                            or function_type.kind.field != "func"
+                            or len(args) != len(function_type.kind.value.params) + 1
+                        ):
+                            msg = "Function application has invalid argument sorts or arity"
+                            raise ValueError(msg)
+                        infer_sort(function_sort.owner.ref("sorts", function_type.kind.value.result), sort, 0, {})
+                        pieces = [(args[0], False, False), "("]
+                        for index, (argument, expected) in enumerate(
+                            zip(args[1:], function_type.kind.value.params, strict=True)
+                        ):
+                            infer_sort(
+                                function_sort.owner.ref("sorts", expected),
+                                owner.ref("sorts", argument.read().sort_id),
+                                0,
+                                {},
+                            )
+                            if index:
+                                pieces.append(", ")
+                            pieces.append((argument, True, False))
+                        pieces.append(")")
+                        frames.extend(reversed(pieces))
+                        continue
                     signature = (
                         kind.typing.value
                         if isinstance(kind, pb.HostPrimitive)

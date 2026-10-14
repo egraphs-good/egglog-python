@@ -388,6 +388,167 @@ def test_generated_stub_matches_catalog_without_frontend_imports(monkeypatch):
     assert program.to_binary() == encoded
 
 
+def test_function_generated_surface_uses_actual_application_metadata():
+    root = Path(__file__).resolve().parents[2]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    program = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
+    application = next(
+        d for d in program.declarations if d.kind is not None and d.kind.value.name == "egglog.core.fn.apply"
+    )
+    assert application.kind is not None
+    assert application.kind.field == "host_primitive"
+    assert application.kind.value.typing is not None
+    assert application.kind.value.typing.field == "application"
+    assert application.bindings is not None
+    assert application.bindings.python is not None
+    (view,) = application.bindings.python.views
+    assert view.owner is not None
+    assert view.owner.kind is not None
+    assert view.owner.kind.field == "function"
+    stub = render(program)
+    for signature in (
+        "class UnstableFn(BuiltinExpr, Generic[_UnstableFn_T, *_UnstableFn_TS]):",
+        '    __match_args__ = ("value",)',
+        "def __init__(self, f: Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]) -> None:",
+        "def __init__(self, f: Callable[[_UnstableFn_T1, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, /) -> None:",
+        "def __init__(self, f: Callable[[_UnstableFn_T1, _UnstableFn_T2, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, _b: _UnstableFn_T2, /) -> None:",
+        "def __call__(self, *args: *_UnstableFn_TS) -> _UnstableFn_T:",
+        "def value(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]:",
+        '    @deprecated("use .value")',
+        "def eval(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]:",
+    ):
+        assert signature in stub
+    assert stub.count("    @overload\n") == 3
+    assert "Any" not in stub
+    application.bindings.python = None
+    assert "UnstableFn" not in render(program)
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "value"),
+    [
+        ("view", "kind", pb.PythonCallKind.PROPERTY),
+        ("view", "path", ["apply"]),
+        ("view", "owner", None),
+        ("view", "owner", pb.BindingOwner()),
+        ("view", "owner", pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", 0))),
+        ("view", "receiver", 1),
+        ("view", "receiver", None),
+        ("parameter", "core_input", 0),
+        ("parameter", "core_input", None),
+        ("view", "params", []),
+        (
+            "view",
+            "params",
+            [pb.PythonParameter(core_input=1, name="args"), pb.PythonParameter(core_input=2, name="extra")],
+        ),
+        ("parameter", "name", "values"),
+        ("parameter", "default_expr", 0),
+        ("view", "mutates", 0),
+        ("view", "tail_repetitions", 0),
+        ("conflict", "", None),
+        ("collision", "", None),
+        ("signature", "", None),
+    ],
+)
+def test_function_generated_views_reject_invalid_metadata(target, field, value):
+    root = Path(__file__).resolve().parents[2]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    program = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
+    application = next(
+        d for d in program.declarations if d.kind is not None and d.kind.value.name == "egglog.core.fn.apply"
+    )
+    assert application.kind is not None
+    assert application.kind.field == "host_primitive"
+    assert application.bindings is not None
+    assert application.bindings.python is not None
+    (view,) = application.bindings.python.views
+    if target == "view":
+        setattr(view, field, value)
+    elif target == "parameter":
+        setattr(view.params[0], field, value)
+    elif target == "conflict":
+        other = pb.Declaration.from_binary(application.to_binary())
+        assert other.kind is not None
+        other.kind.value.name = "test.other_application"
+        program.declarations.append(other)
+    elif target == "collision":
+        family = next(d.kind.value for d in program.declarations if d.kind is not None and d.kind.value.name == "Vec")
+        assert isinstance(family, pb.HostSortFamily)
+        assert family.bindings is not None
+        assert family.bindings.python is not None
+        family.bindings.python.path[-1] = "UnstableFn"
+    else:
+        application.kind.value.typing = Oneof[Literal["signature"], pb.GenericSignature](
+            "signature", pb.GenericSignature(output=0)
+        )
+    with pytest.raises(ValueError, match=r"function|Function|collision|static view"):
+        render(program)
+    if target != "collision":
+        with pytest.raises(ValueError, match=r"function|collision"):
+            Catalog(program)
+
+
+def test_function_sort_annotations_recurse_through_canonical_records():
+    root = Path(__file__).resolve().parents[2]
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    program = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
+    declarations = {d.kind.value.name: d for d in program.declarations if d.kind is not None}
+    signatures = {
+        d.kind.value.name: d.kind.value.typing.value
+        for d in program.declarations
+        if d.kind is not None
+        and d.kind.field == "host_primitive"
+        and d.kind.value.typing is not None
+        and d.kind.value.typing.field == "signature"
+    }
+    signature = signatures["egglog.core.pair.first"]
+    left, right = (arg.sort for arg in signatures["egglog.core.pair.make"].inputs)
+    index = len(program.sorts)
+    program.sorts.extend([
+        pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=[left], result=right))),
+        pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=[index], result=index))),
+        pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[index + 1]))),
+    ])
+    signature.output = index + 2
+    assert (
+        "def left(self) -> Vec[UnstableFn[UnstableFn[_Pair_R_1, _Pair_L_0], UnstableFn[_Pair_R_1, _Pair_L_0]]]:"
+        in render(program)
+    )
+    i64_sort = signatures["egglog.core.i64.add"].output
+    kind = program.sorts[index].kind
+    assert kind is not None
+    assert kind.field == "func"
+    kind.value.params = [i64_sort]
+    kind.value.result = i64_sort
+    join = declarations["egglog.core.string.concat"]
+    assert join.bindings is not None
+    assert join.bindings.python is not None
+    join.bindings.python.views = [join.bindings.python.views[0]]
+    signatures["egglog.core.string.concat"].varargs[0].sort = index
+    assert "def join(*strings: Callable[[i64], i64]) -> String:" in render(program)
+    kind.value.params.clear()
+    assert "def join(*strings: Callable[[], i64]) -> String:" in render(program)
+    kind.value.result = 0
+    zero_sort = program.sorts[0].kind
+    assert zero_sort is not None
+    assert zero_sort.field == "family"
+    zero_declaration = declarations[zero_sort.value.name].kind
+    assert zero_declaration is not None
+    assert zero_declaration.field == "host_sort_family"
+    zero_family = zero_declaration.value
+    assert zero_family.bindings is not None
+    assert zero_family.bindings.python is not None
+    zero_name = zero_family.bindings.python.path[-1]
+    assert f"def join(*strings: Callable[[], {zero_name}]) -> String:" in render(program)
+    kind.value.result = index
+    with pytest.raises(ValueError, match="cyclic signature sort"):
+        render(program)
+    kind.value.result = len(program.sorts)
+    with pytest.raises(ValueError, match="Invalid or cyclic signature sort"):
+        render(program)
+
+
 def test_stub_generation_uses_canonical_ordinary_method_view():
     root = Path(__file__).resolve().parents[2]
     renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
@@ -501,7 +662,7 @@ def test_pair_stub_rejects_specialized_owner_as_universal_class_view(pair_catalo
         ("tail", "fixed concrete signature"),
         ("collision", "Python member collision"),
         ("missing_output", "fixed concrete signature"),
-        ("application", "Function application static generation"),
+        ("application", "Unsupported structural function Python static view"),
         ("numeric_keyword", "Numeric forwarding requires one required 'other' parameter"),
         ("numeric_default", "Numeric forwarding requires one required 'other' parameter"),
     ],

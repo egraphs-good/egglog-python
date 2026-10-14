@@ -70,6 +70,11 @@ def resolve_literal(sort: Ref, value: object) -> RuntimeExpr:
     arguments = (
         tuple(_class_for_sort(sort.owner.ref("sorts", index)) for index in source_sort.kind.value.args)
         if source_sort.kind.field == "family"
+        else tuple(
+            _class_for_sort(sort.owner.ref("sorts", index))
+            for index in [source_sort.kind.value.result, *source_sort.kind.value.params]
+        )
+        if source_sort.kind.field == "func"
         else ()
     )
     conversion = None
@@ -77,7 +82,7 @@ def resolve_literal(sort: Ref, value: object) -> RuntimeExpr:
         conversion = CONVERSIONS.get((candidate, target))
         if conversion is not None:
             break
-    if conversion is None and source_sort.kind.field == "family":
+    if conversion is None and source_sort.kind.field in {"family", "func"}:
         conversion = next(
             (
                 registered

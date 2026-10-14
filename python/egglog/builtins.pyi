@@ -1,21 +1,40 @@
 # Generated from the native catalog and Python host protocol policy. Do not edit.
 # ruff: noqa: N801, N816, PYI042 -- Preserve canonical Python presentation names.
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Generic, Never, TypeAlias, TypeVar
+from typing import Generic, Never, TypeAlias, TypeVar, TypeVarTuple, Unpack, overload
 
 from typing_extensions import deprecated
 
 from .egraph import BaseExpr, BuiltinExpr
 
-__all__ = ["BigInt", "BigIntLike", "BigRat", "BigRatLike", "Bool", "BoolLike", "ExprValueError", "Map", "MapLike", "Pair", "Rational", "RationalLike", "Set", "SetLike", "String", "StringLike", "Unit", "Vec", "VecLike", "count_matches", "f64", "f64Like", "i64", "i64Like", "join"]
+__all__ = ["BigInt", "BigIntLike", "BigRat", "BigRatLike", "Bool", "BoolLike", "ExprValueError", "Map", "MapLike", "Pair", "Rational", "RationalLike", "Set", "SetLike", "String", "StringLike", "Unit", "UnstableFn", "Vec", "VecLike", "count_matches", "f64", "f64Like", "i64", "i64Like", "join"]
 
 @dataclass
 class ExprValueError(AttributeError):
     expr: object
     allowed: str
+
+_UnstableFn_T = TypeVar("_UnstableFn_T", bound=BaseExpr)
+_UnstableFn_TS = TypeVarTuple("_UnstableFn_TS")
+_UnstableFn_T1 = TypeVar("_UnstableFn_T1")
+_UnstableFn_T2 = TypeVar("_UnstableFn_T2")
+
+class UnstableFn(BuiltinExpr, Generic[_UnstableFn_T, *_UnstableFn_TS]):
+    __match_args__ = ("value",)
+    @overload
+    def __init__(self, f: Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]) -> None: ...
+    @overload
+    def __init__(self, f: Callable[[_UnstableFn_T1, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, /) -> None: ...
+    @overload
+    def __init__(self, f: Callable[[_UnstableFn_T1, _UnstableFn_T2, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, _b: _UnstableFn_T2, /) -> None: ...
+    def __call__(self, *args: *_UnstableFn_TS) -> _UnstableFn_T: ...
+    @property
+    def value(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]: ...
+    @deprecated("use .value")
+    def eval(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]: ...
 
 class Unit(BuiltinExpr):
     def __init__(self) -> None: ...

@@ -574,6 +574,13 @@ Note that this is all built on the [unstable function support added as a sort to
 While this sort is exposed directly at the high level with the `UnstableFn` class, we don't reccomend depending on it directly, and instead
 using the builtin Python type annotations. This will allow us to change the implementation in the future without breaking user code.
 
+`UnstableFn[Result, *Arguments]` uses the result type first. For a named function
+value, `.value` inspects it without running egglog: it returns the callable, or
+a `functools.partial` containing its captured prefix. Captured expressions stay
+symbolic until the function value is constructed in the engine; reading `.value`
+does not evaluate them. A nonliteral function expression must be extracted before
+its `.value` is available. Mutating callables cannot be partially applied.
+
 ### Unwrapped functions
 
 We also support using normal python functions, either named or anonymous, as values. These will automatically be wrapped as egglog functions when passed to a function which expects an egglog function.

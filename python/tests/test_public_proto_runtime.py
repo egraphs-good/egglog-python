@@ -1,8 +1,10 @@
 """Normal Python syntax over the generated-record runtime, without an engine."""
 
 import gc
+from collections.abc import Callable
 from copy import copy
 from fractions import Fraction
+from functools import partial
 from typing import ClassVar, cast
 
 import pytest
@@ -35,9 +37,90 @@ from egglog import (
     ne,
     set_,
     union,
+    var,
 )
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.runtime import RuntimeExpr, RuntimeFunction
+
+
+def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args, **kwargs):
+        pytest.fail("Named function authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    from egglog import UnstableFn  # noqa: PLC0415 -- exercise the public import under the no-engine guard
+
+    @function
+    def combine(left: i64, right: i64) -> i64: ...  # type: ignore[empty-body]
+
+    whole = UnstableFn(combine)
+    assert whole.value == combine
+    assert str(whole) == "combine"
+    prefix = UnstableFn(combine, i64(10))
+    assert isinstance(prefix.value, partial)
+    assert prefix.value.func == combine
+    assert prefix.value.args == (i64(10),)
+    assert expr_parts(prefix.value(i64(2))) == expr_parts(combine(i64(10), i64(2)))
+    assert expr_parts(copy(prefix)) == expr_parts(prefix)
+    assert str(prefix) == "partial(combine, i64(10))"
+    assert isinstance(prefix(i64(2)), i64)
+    assert isinstance(UnstableFn(combine, i64(10), i64(2))(), i64)
+    assert expr_parts(UnstableFn[i64, i64](combine, i64(10))) == expr_parts(prefix)
+    assert hash(copy(prefix)) == hash(prefix)
+    arguments = get_callable_args(whole(i64(10), i64(2)))
+    assert arguments is not None
+    assert arguments == tuple(cast("RuntimeExpr", value) for value in (whole, i64(10), i64(2)))
+    nullary = UnstableFn(combine, i64(10), i64(2))
+    assert isinstance(nullary.value, partial)
+    assert nullary.value.func == combine
+    assert nullary.value.args == (i64(10), i64(2))
+    arguments = get_callable_args(nullary())
+    assert arguments is not None
+    assert arguments == (cast("RuntimeExpr", nullary),)
+
+    class Accumulator(Expr):
+        def __init__(self) -> None: ...
+        def add(self, value: i64) -> i64: ...  # type: ignore[empty-body]
+
+        @classmethod
+        def make(cls, value: i64) -> "Accumulator": ...  # type: ignore[empty-body]
+
+    receiver = Accumulator()
+    assert expr_parts(UnstableFn(receiver.add)) == expr_parts(UnstableFn(Accumulator.add, receiver))
+    assert expr_parts(UnstableFn(receiver.add, i64(2))) == expr_parts(UnstableFn(Accumulator.add, receiver, i64(2)))
+    method_value = UnstableFn(receiver.add).value
+    assert isinstance(method_value, partial)
+    assert method_value.func == Accumulator.add
+    assert method_value.args == (receiver,)
+    class_value = UnstableFn(Accumulator.make, i64(2)).value
+    assert isinstance(class_value, partial)
+    assert class_value.func == Accumulator.make
+    assert class_value.args == (i64(2),)
+    assert expr_parts(UnstableFn(i64(10).__add__)) == expr_parts(UnstableFn(i64.__add__, i64(10)))
+
+    @function
+    def consume(callback: Callable[[i64], i64]) -> i64: ...  # type: ignore[empty-body]
+
+    assert expr_parts(consume(partial(combine, i64(10)))) == expr_parts(consume(prefix))
+    assert expr_parts(consume(UnstableFn(i64.__invert__))) == expr_parts(consume(i64.__invert__))
+    nested = UnstableFn(UnstableFn[i64, i64].__call__, prefix)
+    assert isinstance(nested(i64(2)), i64)
+    assert isinstance(nested.value, partial)
+    assert nested.value.args == (prefix,)
+
+    symbolic = var("callback", UnstableFn[i64, i64])
+    assert get_literal_value(symbolic) is None
+    with pytest.raises(ExprValueError, match=r"UnstableFn\(f, \*args\)"):
+        _ = symbolic.value
+    apply = cast("RuntimeExpr", prefix).__getattr__("__call__")
+    assert isinstance(apply, RuntimeFunction)
+    with pytest.raises(TypeError, match="expects 1 arguments"):
+        apply()
+    with pytest.raises(TypeError, match="expects 1 arguments"):
+        apply(i64(1), i64(2))
+    with pytest.raises(ConvertError):
+        apply(String("wrong sort"))
 
 
 def test_function_sizes_public_forms_bytes() -> None:

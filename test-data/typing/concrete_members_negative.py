@@ -3,7 +3,25 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import ClassVar
 
-from egglog import EGraph, Expr, Pair, Vec, f64, i64, i64Like, rewrite, rule, ruleset, run, seq, union, var, vars_
+from egglog import (
+    EGraph,
+    Expr,
+    Pair,
+    UnstableFn,
+    Vec,
+    f64,
+    function,
+    i64,
+    i64Like,
+    rewrite,
+    rule,
+    ruleset,
+    run,
+    seq,
+    union,
+    var,
+    vars_,
+)
 from egglog.run_report import RuleKey
 
 
@@ -20,6 +38,8 @@ class Node(Expr):
     def make(cls, value: i64Like = 1) -> Node: ...
 
     def pairs(self, values: Vec[Pair[i64, f64]]) -> Vec[Pair[i64, f64]]: ...
+
+    def strict(self, value: i64) -> i64: ...
 
 
 node = Node()
@@ -48,6 +68,23 @@ rule(node, ruleset=i64(1))  # error: arg-type
 union(node).with_(i64(1))  # error: arg-type
 union(i64(1))  # error: type-var
 wrong_union: i64 = union(node).with_(node)  # error: assignment
+
+
+@function
+def exact(value: i64) -> i64: ...
+
+
+named = UnstableFn(exact)
+named(f64(1))  # error: arg-type
+named(1)  # error: arg-type
+named()  # error: call-arg
+named(i64(1), i64(2))  # error: call-arg
+UnstableFn[i64, i64](Node.strict, i64(1))  # error: arg-type
+UnstableFn[f64, i64](exact)  # error: arg-type
+UnstableFn[i64, i64](i64(1))  # error: call-overload
+wrong_callback: Callable[[i64], f64] = named.value  # error: assignment
+wrong_wrapper: UnstableFn[f64, i64] = named  # error: assignment
+UnstableFn(exact, i64(1))(i64(2))  # error: call-arg
 
 
 class Defaults(Expr, ruleset=ruleset()):

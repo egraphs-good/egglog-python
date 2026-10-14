@@ -699,8 +699,8 @@ class _FunctionConstructor:
             msg = "Free functions require a concrete output sort"
             raise NotImplementedError(msg)
         output_record: pb.Sort = output.read()
-        if output_record.kind is None or output_record.kind.field not in {"eq", "family"}:
-            msg = "Free functions require an equality or host-family output sort"
+        if output_record.kind is None or output_record.kind.field not in {"eq", "family", "func"}:
+            msg = "Free functions require an equality, host-family or function output sort"
             raise NotImplementedError(msg)
         equality = output_record.kind.field == "eq"
         has_body = _function_has_body(fn)
@@ -719,14 +719,13 @@ class _FunctionConstructor:
             msg = "Eqsort-returning callables cannot be builtin"
             raise ValueError(msg)
         if not equality:
-            assert output_record.kind.field == "family"
             if self.cost is not None:
                 msg = "Primitive-returning callables cannot use cost"
                 raise ValueError(msg)
             if self.unextractable:
                 msg = "Primitive-returning callables cannot be unextractable"
                 raise ValueError(msg)
-            if output_record.kind.value.name == "Unit" and has_merge:
+            if output_record.kind.field == "family" and output_record.kind.value.name == "Unit" and has_merge:
                 msg = "Functions that return Unit cannot use merge"
                 raise ValueError(msg)
         elif has_merge:

@@ -6,7 +6,8 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
-from types import GenericAlias
+from functools import partial
+from types import GenericAlias, MethodType
 from typing import Any, TypeVar, cast
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
@@ -474,8 +475,24 @@ def _dict_to_map(value: dict[object, object]) -> RuntimeExpr:
     return result
 
 
+def _function_value(expr: RuntimeExpr) -> object:
+    from .deconstruct import get_literal_value  # noqa: PLC0415
+
+    value = get_literal_value(expr)
+    if value is None:
+        raise ExprValueError(expr, "UnstableFn(f, *args)")
+    return value
+
+
 __all__ = ["ExprValueError"]
 _catalog = builtin_catalog()
+if (_function_binding := _catalog.members.get((("function", ""), "__call__"))) is not None:
+    UnstableFn = RuntimeClass(_function_binding[0])
+    UnstableFn.__egg_hooks__.update(value=property(_function_value), eval=_eval)
+    __all__ += ["UnstableFn"]
+    converter(RuntimeFunction, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
+    converter(MethodType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
+    converter(partial, UnstableFn, lambda value: UnstableFn[get_type_args()](value.func, *value.args))
 for _definition in _catalog.definitions.values():
     _declaration: pb.Declaration = _definition.read()
     _kind = _declaration.kind

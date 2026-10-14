@@ -9,9 +9,10 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from fractions import Fraction
+from functools import partial
 from threading import Event
 from time import sleep
-from typing import ClassVar, Literal, TypeVar, get_type_hints
+from typing import ClassVar, Literal, TypeVar, cast, get_type_hints
 from weakref import ref as weakref
 
 import pytest
@@ -31,6 +32,7 @@ from egglog import (
     String,
     StringLike,
     Unit,
+    UnstableFn,
     Vec,
     VecLike,
     bindings,
@@ -60,7 +62,7 @@ from egglog import (
 from egglog._catalog import builtin_catalog
 from egglog._program import Builder, Ref, StructuralView, pack
 from egglog.builtins import ExprValueError, _container_items, _map_entries, _pair_value
-from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name
+from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.egraph import to_runtime_expr
 from egglog.runtime import _CLASS_CACHE, RuntimeExpr, RuntimeFunction, _author_call, resolve_callable
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
@@ -4019,6 +4021,341 @@ def test_call_authoring_binds_keywords_defaults_and_core_input_order():
             node_of=lambda _: None,
             convert=convert,
         )
+
+
+@pytest.mark.parametrize(("order", "captures"), [((1, 0), ()), ((0, 2, 1), (i64(10),))])
+@pytest.mark.parametrize("decoded", [False, True])
+def test_function_value_rejects_reordered_remaining_arguments(order, captures, decoded, class_authoring_without_engine):
+    builder = Builder()
+    integer = runtime.resolve_type_annotation(i64)
+    assert isinstance(integer, Ref)
+    sort = builder.import_ref(integer)
+    declaration = builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["function"], pb.Function](
+                "function",
+                pb.Function(name="sample.subtract_reversed", inputs=[pb.Arg(sort=sort) for _ in order], output=sort),
+            ),
+            bindings=pb.CallableBindings(
+                python=pb.PythonBindings(
+                    views=[
+                        pb.PythonCallable(
+                            kind=pb.PythonCallKind.FUNCTION,
+                            path=["sample", "subtract_reversed"],
+                            params=[
+                                pb.PythonParameter(core_input=core, name=f"arg{position}")
+                                for position, core in enumerate(order)
+                            ],
+                        )
+                    ]
+                )
+            ),
+        ),
+    )
+    if decoded:
+        function_sort = builder.add(
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["func"], pb.FuncSort](
+                    "func", pb.FuncSort(params=[sort] * (len(order) - len(captures)), result=sort)
+                )
+            ),
+        )
+        node = builder.add(
+            "nodes",
+            pb.Node(
+                sort_id=function_sort,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value",
+                    pb.PrimitiveValue(
+                        value=Oneof[Literal["partial_call"], pb.Call](
+                            "partial_call",
+                            pb.Call(
+                                func="sample.subtract_reversed",
+                                args=[builder.import_ref(to_runtime_expr(capture).__egg_ref__) for capture in captures],
+                            ),
+                        )
+                    ),
+                ),
+            ),
+        )
+        expression = RuntimeExpr(builder.publish().ref("nodes", node))
+        with pytest.raises(NotImplementedError, match="Reordered Python function-value presentations"):
+            get_literal_value(expression)
+    else:
+        function = RuntimeFunction(builder.publish().ref("declarations", declaration), 0)
+        with pytest.raises(NotImplementedError, match="Reordered Python function-value presentations"):
+            runtime._partial_function(function, captures, None)
+
+
+def test_function_value_rejects_mutation_before_replacing_receiver(class_authoring_without_engine):
+    original = to_runtime_expr(i64(10))
+    reference = original.__egg_ref__
+    builder = Builder()
+    sort = builder.import_ref(reference.owner.ref("sorts", reference.read().sort_id))
+    declaration = builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["function"], pb.Function](
+                "function", pb.Function(name="sample.mutable", inputs=[pb.Arg(sort=sort)], output=sort)
+            ),
+            bindings=pb.CallableBindings(
+                python=pb.PythonBindings(
+                    views=[
+                        pb.PythonCallable(
+                            kind=pb.PythonCallKind.METHOD,
+                            path=["mutable"],
+                            owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", sort)),
+                            receiver=0,
+                            mutates=0,
+                        )
+                    ]
+                )
+            ),
+        ),
+    )
+    function = RuntimeFunction(builder.publish().ref("declarations", declaration), 0, original)
+    with pytest.raises(AssertionError, match="Mutable partial functions not supported"):
+        runtime._partial_function(function, (), None)
+    assert original.__egg_ref__ is reference
+    assert original.value == 10
+
+
+@pytest.mark.parametrize(
+    ("target", "captures", "wrapper"),
+    [
+        (i64.__add__, (i64(10),), UnstableFn[i64, i64]),
+        (Vec[i64].empty, (), UnstableFn[Vec[i64]]),
+        (Vec(i64(1)).__getitem__, (), UnstableFn[i64, i64]),
+        (join, (), UnstableFn[String, String, String]),
+        (Bool.__and__, (Bool(True),), UnstableFn[Bool, Bool]),
+    ],
+)
+def test_named_function_values_roundtrip_actual_canonical_records(
+    target, captures, wrapper, class_authoring_without_engine
+):
+    authored = to_runtime_expr(wrapper(target, *captures))
+    packed = pack([authored.__egg_ref__])
+    decoded = pb.Program.from_binary(packed.program.to_binary())
+    restored = RuntimeExpr(Builder.from_program(decoded).publish().ref("nodes", packed.indices[0]))
+    assert StructuralView(restored.__egg_ref__) == StructuralView(authored.__egg_ref__)
+    assert str(restored) == str(authored)
+    assert get_literal_value(restored) is not None
+    assert str(restored.value) == str(authored.value)
+    kind = restored.__egg_ref__.read().kind
+    assert kind is not None
+    assert kind.field == "primitive_value"
+    assert kind.value.value is not None
+    assert kind.value.value.field == "partial_call"
+    sort = restored.__egg_ref__.owner.ref("sorts", restored.__egg_ref__.read().sort_id).read()
+    assert sort.kind is not None
+    assert sort.kind.field == "func"
+
+
+@pytest.mark.parametrize("corruption", [None, "capture-sort", "arity", "result-sort", "sort-kind", "callee"])
+def test_function_value_zero_indices_and_malformed_records(corruption, class_authoring_without_engine):
+    builder = Builder()
+    literal = to_runtime_expr(i64(10)).__egg_ref__
+    captured = builder.import_ref(literal)
+    assert captured == 0
+    integer = builder.import_ref(literal.owner.ref("sorts", literal.read().sort_id))
+    assert integer == 0
+    builder.import_ref(resolve_callable(i64.__add__))
+    string = runtime.resolve_type_annotation(String)
+    assert isinstance(string, Ref)
+    output = builder.import_ref(string) if corruption == "result-sort" else integer
+    remaining = [integer, integer] if corruption == "arity" else [integer]
+    function_sort = builder.add(
+        "sorts", pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=remaining, result=output)))
+    )
+    if corruption == "capture-sort":
+        captured = builder.import_ref(to_runtime_expr(String("wrong")).__egg_ref__)
+    node = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=integer if corruption == "sort-kind" else function_sort,
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value",
+                pb.PrimitiveValue(
+                    value=Oneof[Literal["partial_call"], pb.Call](
+                        "partial_call",
+                        pb.Call(func="unknown" if corruption == "callee" else "egglog.core.i64.add", args=[captured]),
+                    )
+                ),
+            ),
+        ),
+    )
+    expression = RuntimeExpr(builder.publish().ref("nodes", node))
+    if corruption is not None:
+        with pytest.raises((ConvertError, TypeConstraintError, TypeError, LookupError)):
+            get_literal_value(expression)
+    else:
+        packed = pack([expression.__egg_ref__])
+        restored = RuntimeExpr(
+            Builder
+            .from_program(pb.Program.from_binary(packed.program.to_binary()))
+            .publish()
+            .ref("nodes", packed.indices[0])
+        )
+        value = restored.value
+        assert isinstance(value, partial)
+        assert StructuralView(resolve_callable(value.func)) == StructuralView(resolve_callable(i64.__add__))
+        assert value.func == i64.__add__
+        assert hash(value.func) == hash(i64.__add__)
+        assert value.args == (i64(10),)
+        assert callable(restored)
+        assert isinstance(restored(i64(2)), RuntimeExpr)
+
+
+def test_decoded_builtin_callable_identity_uses_definition_and_selected_view():
+    original = i64.__add__
+    packed = pack([resolve_callable(original)])
+    encoded = packed.program.to_binary()
+    left_owner = Builder.from_program(pb.Program.from_binary(encoded)).publish()
+    right_owner = Builder.from_program(pb.Program.from_binary(encoded)).publish()
+    left_ref = left_owner.ref("declarations", packed.indices[0])
+    right_ref = right_owner.ref("declarations", packed.indices[0])
+    assert left_ref != right_ref
+    left = RuntimeFunction(left_ref, 0, cast("runtime.RuntimeClass", i64))
+    right = RuntimeFunction(right_ref, 0, cast("runtime.RuntimeClass", i64))
+    assert StructuralView(left_ref) == StructuralView(right_ref)
+    assert left == right == original
+    assert hash(left) == hash(right) == hash(original)
+    assert {left: "same callable"}[right] == "same callable"
+
+    for change in ("name", "signature", "view"):
+        program = pb.Program.from_binary(encoded)
+        record = program.declarations[packed.indices[0]]
+        assert record.kind is not None
+        assert record.kind.field == "host_primitive"
+        assert record.bindings is not None
+        assert record.bindings.python is not None
+        if change == "name":
+            record.kind.value.name = "test.distinct.provider.add"
+        elif change == "signature":
+            assert record.kind.value.typing is not None
+            assert record.kind.value.typing.field == "signature"
+            record.kind.value.typing.value.inputs.append(pb.Arg(sort=record.kind.value.typing.value.output))
+            record.bindings.python.views[0].params.append(pb.PythonParameter(core_input=2, name="extra"))
+        else:
+            view = pb.PythonCallable.from_binary(record.bindings.python.views[0].to_binary())
+            view.path = ["other_add"]
+            record.bindings.python.views.append(view)
+        ref = Builder.from_program(program).publish().ref("declarations", packed.indices[0])
+        candidate = RuntimeFunction(ref, 0, cast("runtime.RuntimeClass", i64))
+        assert candidate != original
+        if change == "view":
+            assert candidate != RuntimeFunction(ref, 1, cast("runtime.RuntimeClass", i64))
+
+
+def test_function_value_decoding_never_converts_canonical_captures(monkeypatch, class_authoring_without_engine):
+    from egglog import conversion  # noqa: PLC0415
+
+    monkeypatch.setattr(conversion, "CONVERSIONS", conversion.CONVERSIONS.copy())
+    calls = []
+
+    def convert_string(value):
+        calls.append(value)
+        return i64(10)
+
+    converter(String, i64, convert_string, cost=0)
+    authored = runtime._partial_function(cast("RuntimeFunction", i64.__add__), (String("authoring conversion"),), None)
+    assert authored[1] == (to_runtime_expr(i64(10)),)
+    assert len(calls) == 1
+    calls.clear()
+
+    builder = Builder()
+    captured = builder.import_ref(to_runtime_expr(String("malformed decoded capture")).__egg_ref__)
+    builder.import_ref(resolve_callable(i64.__add__))
+    index = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(authored[0]),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value",
+                pb.PrimitiveValue(
+                    value=Oneof[Literal["partial_call"], pb.Call](
+                        "partial_call", pb.Call(func="egglog.core.i64.add", args=[captured])
+                    )
+                ),
+            ),
+        ),
+    )
+    malformed = RuntimeExpr(builder.publish().ref("nodes", index))
+    with pytest.raises(TypeConstraintError, match="Expected i64, got String"):
+        get_literal_value(malformed)
+    with pytest.raises(TypeConstraintError, match="Expected i64, got String"):
+        _ = malformed.value
+    with pytest.raises(TypeConstraintError, match="Expected i64, got String"):
+        str(malformed)
+    assert calls == []
+
+
+def test_named_function_expected_sorts_specialize_generic_builtins(class_authoring_without_engine):
+    getter = UnstableFn[i64, Vec[i64], i64](Vec.__getitem__)
+    assert getter.value == Vec[i64].__getitem__
+    assert isinstance(getter(Vec(i64(1)), i64(0)), i64)
+    constructor = UnstableFn[Vec[i64], i64, i64](Vec[i64])
+    assert constructor.value == Vec[i64]
+    assert isinstance(constructor(i64(1), i64(2)), Vec)
+    empty = UnstableFn[Vec[i64]](Vec.empty)
+    assert empty.value == Vec[i64].empty
+    with pytest.raises(TypeConstraintError, match="Unresolved"):
+        UnstableFn(Vec.empty)
+    wrong_result = runtime.resolve_type_annotation(UnstableFn[String, i64])
+    assert isinstance(wrong_result, Ref)
+    with pytest.raises(TypeConstraintError):
+        runtime._partial_function(cast("RuntimeFunction", i64.__invert__), (), wrong_result)
+
+    def stored(): ...
+
+    stored.__annotations__["return"] = UnstableFn[i64, i64]
+    output = to_runtime_expr(function(stored)())
+    expected = runtime.resolve_type_annotation(UnstableFn[i64, i64])
+    assert isinstance(expected, Ref)
+    assert StructuralView(output.__egg_ref__.owner.ref("sorts", output.__egg_ref__.read().sort_id)) == StructuralView(
+        expected
+    )
+    assert get_literal_value(output) is None
+
+
+def test_named_function_capture_keeps_local_context_without_engine(class_authoring_without_engine):
+    def make():
+        class Local(Expr):
+            def __init__(self) -> None: ...
+
+            def keep(self): ...
+
+            keep.__annotations__["return"] = "Local"
+
+            @method(preserve=True)
+            def tag(self):
+                return "retained capture"
+
+        expression = UnstableFn(Local.keep, Local())
+        runtime_class = cast("runtime.RuntimeClass", Local)
+        return (
+            expression,
+            weakref(Local),
+            weakref(runtime_class.__egg_context__),
+            weakref(runtime_class.__egg_definition__.owner),
+        )
+
+    expression, cls, context, owner = make()
+    value = expression.value
+    assert isinstance(value, partial)
+    del expression
+    _CLASS_CACHE.clear()
+    gc.collect()
+    assert cls() is not None
+    assert context() is not None
+    assert owner() is not None
+    assert value.args[0].tag() == "retained capture"
+    assert value().tag() == "retained capture"
+    del value
+    gc.collect()
+    assert cls() is context() is owner() is None
 
 
 def test_generic_empty_call_requires_result_owner_and_keeps_signature_unchanged():

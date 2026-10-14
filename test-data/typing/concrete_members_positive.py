@@ -14,9 +14,11 @@ from egglog import (
     Ruleset,
     RunReport,
     Schedule,
+    UnstableFn,
     Vec,
     eq,
     f64,
+    function,
     i64,
     i64Like,
     method,
@@ -49,6 +51,10 @@ class Node(Expr):
 
     def pairs(self, values: Vec[Pair[i64, f64]]) -> Vec[Pair[i64, f64]]: ...
 
+    def strict(self, value: i64) -> i64: ...
+
+    def combine(self, left: i64, right: f64) -> i64: ...
+
 
 node = Node()
 assert_type(Node.ROOT, Node)
@@ -60,6 +66,27 @@ assert_type(node.weight, f64)
 assert_type(Node.make(), Node)
 assert_type(Node.make(value=3), Node)
 assert_type(node.pairs(Vec(Pair(i64(1), f64(2)))), Vec[Pair[i64, f64]])
+
+
+@function
+def exact(value: i64) -> i64: ...
+
+
+named = UnstableFn(exact)
+assert_type(named, UnstableFn[i64, i64])
+assert_type(UnstableFn[i64, i64](exact), UnstableFn[i64, i64])
+assert_type(named(i64(1)), i64)
+assert_type(named.value, Callable[[i64], i64])
+assert_type(named.eval(), Callable[[i64], i64])
+assert_type(UnstableFn(node.strict), UnstableFn[i64, i64])
+assert_type(UnstableFn(Node.strict, node), UnstableFn[i64, i64])
+assert_type(UnstableFn(Node.combine, node, i64(1)), UnstableFn[i64, f64])
+nullary = UnstableFn(exact, i64(1))
+assert_type(nullary, UnstableFn[i64])
+assert_type(nullary(), i64)
+assert_type(nullary.value, Callable[[], i64])
+callback: Callable[[i64], i64] = named
+assert_type(callback(i64(1)), i64)
 
 variable = var("node", Node)
 assert_type(variable, Node)

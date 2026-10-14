@@ -60,6 +60,55 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         reserved_names.update(t.__name__ for t in (protocol.value_type, *protocol.literal_types))
         reserved_names.update(result.__name__ for _, result in protocol.hooks)
 
+    function_protocol = False
+    for declaration in program.declarations:
+        kind = declaration.kind
+        if (
+            kind is None
+            or kind.field != "host_primitive"
+            or kind.value.typing is None
+            or kind.value.typing.field != "application"
+            or declaration.bindings is None
+            or declaration.bindings.python is None
+        ):
+            continue
+        for view in declaration.bindings.python.views:
+            if (
+                view.kind != pb.PythonCallKind.METHOD
+                or view.path != ["__call__"]
+                or view.owner is None
+                or view.owner.kind is None
+                or view.owner.kind.field != "function"
+                or not view.has_field("receiver")
+                or view.receiver != 0
+                or len(view.params) != 1
+                or not view.params[0].has_field("core_input")
+                or view.params[0].core_input != 1
+                or view.params[0].name != "args"
+                or view.params[0].has_field("default_expr")
+                or view.has_field("mutates")
+                or view.has_field("tail_repetitions")
+            ):
+                msg = "Unsupported structural function Python static view"
+                raise ValueError(msg)
+            if function_protocol:
+                msg = "Python structural function member collision"
+                raise ValueError(msg)
+            function_protocol = True
+    if function_protocol:
+        # Python presentation policy for the structural owner, not a host family.
+        exported.add("UnstableFn")
+        reserved_names.update({
+            "Callable",
+            "TypeVarTuple",
+            "Unpack",
+            "overload",
+            "_UnstableFn_T",
+            "_UnstableFn_TS",
+            "_UnstableFn_T1",
+            "_UnstableFn_T2",
+        })
+
     def identifier(name: str) -> str:
         if not name.isidentifier() or keyword.iskeyword(name):
             raise ValueError(f"Invalid Python identifier: {name!r}")
@@ -126,8 +175,18 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 msg = "Unbound static signature parameter"
                 raise ValueError(msg)
             return parameters[kind.value]
+        if kind is not None and kind.field == "func":
+            function = kind.value
+            if not function_protocol:
+                msg = "Function sort requires an admitted structural function view"
+                raise ValueError(msg)
+            result = sort_type(function.result, parameters=parameters, active=active | {index})
+            args = [sort_type(i, parameters=parameters, active=active | {index}) for i in function.params]
+            if input_type:
+                return f"Callable[[{', '.join(args)}], {result}]"
+            return f"UnstableFn[{', '.join([result, *args])}]"
         if kind is None or kind.field != "family" or kind.value.name not in families:
-            msg = "Static callable generation requires closed catalog family sorts"
+            msg = "Static callable generation requires catalog family or function sorts"
             raise ValueError(msg)
         family = kind.value
         if len(family.args) != families[family.name].arity:
@@ -159,6 +218,10 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             msg = "Unsupported builtin static declaration"
             raise ValueError(msg)
         primitive = declaration.kind.value
+        if primitive.typing is not None and primitive.typing.field == "application":
+            # Its exact heterogeneous signature comes from the receiver's FuncSort.
+            # The structural-owner view was validated before rendering any sorts.
+            continue
         if primitive.typing is None or primitive.typing.field != "signature":
             msg = "Function application static generation is not supported"
             raise ValueError(msg)
@@ -358,14 +421,18 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             raise ValueError(msg)
         exported.add(map_alias)
         used_names.update((map_alias, *map_hosts))
+    collections_imports = (["Callable"] if function_protocol else []) + (
+        ["Iterator"] if vec_protocol or map_protocol or set_protocol else []
+    )
     lines = [
         "# Generated from the native catalog and Python host protocol policy. Do not edit.",
         "# ruff: noqa: N801, N816, PYI042 -- Preserve canonical Python presentation names.",
         "",
-        *(["from collections.abc import Iterator"] if vec_protocol or map_protocol or set_protocol else []),
+        *(["from collections.abc import " + ", ".join(collections_imports)] if collections_imports else []),
         "from dataclasses import dataclass",
         *(["from fractions import Fraction"] if any(name in families for name in ("Rational", "BigRat")) else []),
-        "from typing import Generic, Never, TypeAlias, TypeVar",
+        "from typing import Generic, Never, TypeAlias, TypeVar"
+        + (", TypeVarTuple, Unpack, overload" if function_protocol else ""),
         "",
         "from typing_extensions import deprecated",
         "",
@@ -379,6 +446,28 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         "    allowed: str",
         "",
     ]
+    if function_protocol:
+        lines.extend([
+            '_UnstableFn_T = TypeVar("_UnstableFn_T", bound=BaseExpr)',
+            '_UnstableFn_TS = TypeVarTuple("_UnstableFn_TS")',
+            '_UnstableFn_T1 = TypeVar("_UnstableFn_T1")',
+            '_UnstableFn_T2 = TypeVar("_UnstableFn_T2")',
+            "",
+            "class UnstableFn(BuiltinExpr, Generic[_UnstableFn_T, *_UnstableFn_TS]):",
+            '    __match_args__ = ("value",)',
+            "    @overload",
+            "    def __init__(self, f: Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]) -> None: ...",
+            "    @overload",
+            "    def __init__(self, f: Callable[[_UnstableFn_T1, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, /) -> None: ...",
+            "    @overload",
+            "    def __init__(self, f: Callable[[_UnstableFn_T1, _UnstableFn_T2, Unpack[_UnstableFn_TS]], _UnstableFn_T], _a: _UnstableFn_T1, _b: _UnstableFn_T2, /) -> None: ...",
+            "    def __call__(self, *args: *_UnstableFn_TS) -> _UnstableFn_T: ...",
+            "    @property",
+            "    def value(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]: ...",
+            '    @deprecated("use .value")',
+            "    def eval(self) -> Callable[[Unpack[_UnstableFn_TS]], _UnstableFn_T]: ...",
+            "",
+        ])
     for family_name in families:
         name = names[family_name]
         family_variables = variables[family_name]
