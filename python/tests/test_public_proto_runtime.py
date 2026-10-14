@@ -123,6 +123,60 @@ def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyP
         apply(String("wrong sort"))
 
 
+def test_named_eager_function_values_author_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    from egglog import UnstableFn  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Named eager authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+
+    def make_combine():
+        @function
+        def combine(left: i64, right: i64 = i64(2)) -> i64:
+            """Named eager addition."""
+            return left + right
+
+        return combine
+
+    combine = make_combine()
+    whole = UnstableFn(combine)
+    prefix = UnstableFn(combine, i64(10))
+    nullary = UnstableFn(combine, i64(10), i64(2))
+    assert whole.value == combine == make_combine()
+    assert hash(whole.value) == hash(combine) == hash(make_combine())
+    assert str(whole) == "combine"
+    assert str(prefix) == "partial(combine, i64(10))"
+    assert str(nullary) == "partial(combine, i64(10), i64(2))"
+    assert isinstance(prefix.value, partial)
+    assert prefix.value.func == combine
+    assert prefix.value.args == (i64(10),)
+    assert expr_parts(prefix.value(i64(2))) == expr_parts(combine(i64(10)))
+    assert isinstance(whole(i64(10), i64(2)), i64)
+    assert isinstance(prefix(i64(2)), i64)
+    assert isinstance(nullary(), i64)
+    assert get_callable_fn(combine(i64(10))) == combine
+    assert combine.__doc__ == "Named eager addition."
+
+    @function
+    def different(left: i64, right: i64) -> i64:
+        return left + right
+
+    assert whole.value != different
+
+    class Box(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    @function
+    def boxed(value: i64) -> Box:
+        return Box(value + 1)
+
+    assert isinstance(boxed(i64(3)), Box)
+    assert isinstance(UnstableFn(boxed, i64(3))(), Box)
+    assert UnstableFn(boxed).value == boxed
+
+
 def test_function_sizes_public_forms_bytes() -> None:
     @function
     def f() -> i64: ...  # type: ignore[empty-body]

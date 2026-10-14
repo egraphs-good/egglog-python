@@ -759,8 +759,11 @@ class _FunctionConstructor:
                 if has_merge:
                     msg = "Primitive-returning callables with bodies cannot use merge"
                     raise ValueError(msg)
-            if owner is None or self.ruleset is None or view_kind == pb.PythonCallKind.INITIALIZER:
-                msg = "Free function and initializer bodies are not migrated"
+            if owner is None and self.ruleset is not None:
+                msg = "Explicit-ruleset free function bodies are not migrated"
+                raise NotImplementedError(msg)
+            if owner is not None and (self.ruleset is None or view_kind == pb.PythonCallKind.INITIALIZER):
+                msg = "Eager member and initializer bodies are not migrated"
                 raise NotImplementedError(msg)
         if self.ruleset is not None and owner is None:
             msg = "Explicit rulesets require a body"
@@ -811,8 +814,36 @@ class _FunctionConstructor:
             view.path = [] if view_kind == pb.PythonCallKind.INITIALIZER else [member_name]
             if receiver:
                 view.receiver = 0
+        body = None
+        if has_body and owner is None:
+            formals = Builder()
+            formal_indices = []
+            for parameter, sort in zip(parameters, input_sorts, strict=True):
+                assert isinstance(sort, Ref)
+                formal_indices.append(
+                    formals.add(
+                        "nodes",
+                        pb.Node(
+                            sort_id=formals.import_ref(sort),
+                            kind=Oneof[Literal["var"], str]("var", parameter.name),
+                        ),
+                    )
+                )
+            formal_owner = formals.publish()
+            formal_refs = [formal_owner.ref("nodes", index) for index in formal_indices]
+            with set_current_ruleset(None):
+                result = fn(*(RuntimeExpr(reference) for reference in formal_refs))
+                if result is None:
+                    msg = "Callable bodies must return a value"
+                    raise ValueError(msg)
+                resolved = resolve_literal(output, result)
+            body = _lower_primitive_body(builder, resolved.__egg_ref__, formal_refs)
         kind = (
-            Oneof[Literal["constructor"], pb.Constructor](
+            Oneof[Literal["primitive"], pb.Primitive](
+                "primitive", pb.Primitive(name=name, inputs=inputs, output=output_index, body=body)
+            )
+            if body is not None
+            else Oneof[Literal["constructor"], pb.Constructor](
                 "constructor", pb.Constructor(name=name, inputs=inputs, output=output_index)
             )
             if equality
@@ -831,6 +862,48 @@ class _FunctionConstructor:
         reference = builder.publish().ref("declarations", index)
         Catalog.from_refs([reference])
         return reference
+
+
+def _lower_primitive_body(builder: Builder, body: Ref, formals: list[Ref]) -> int:  # noqa: C901
+    """Bind only this body's formal identities, importing callee closures intact."""
+    parameters = {reference: f"_{index}" for index, reference in enumerate(formals)}
+    indices: dict[Ref, int] = {body: builder.reserve("nodes")}
+    pending = [body]
+    while pending:
+        source = pending.pop()
+        node: pb.Node = source.read()
+        if node.kind is None:
+            msg = "Named eager body node has no kind"
+            raise ValueError(msg)
+        if node.kind.field == "var":
+            if source not in parameters:
+                raise ValueError(f"Free variable {node.kind.value!r} in named eager body")
+            node.kind = Oneof[Literal["var"], str]("var", parameters[source])
+        elif node.kind.field == "union":
+            msg = "Union in named eager bodies is not supported"
+            raise NotImplementedError(msg)
+        elif (
+            node.kind.field == "primitive_value"
+            and node.kind.value.value is not None
+            and node.kind.value.value.field == "lambda"
+        ):
+            msg = "Lambda in named eager bodies is not supported"
+            raise NotImplementedError(msg)
+
+        def relocate(role: str, index: int, origin: Ref = source) -> int:
+            reference = origin.owner.ref(role, index)
+            if role != "nodes":
+                return builder.import_ref(reference)
+            if reference not in indices:
+                indices[reference] = builder.reserve("nodes")
+                pending.append(reference)
+            return indices[reference]
+
+        def dependency(namespace: str, name: str, origin: Ref = source) -> None:
+            builder.import_ref(_definition_at(origin, namespace, name))
+
+        builder.fill("nodes", indices[source], _copy_record(node, relocate=relocate, dependency=dependency))
+    return indices[body]
 
 
 # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value

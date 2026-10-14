@@ -873,7 +873,7 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         record: pb.Declaration = reference.read()
         if (
             record.kind is not None
-            and record.kind.field in {"function", "constructor"}
+            and record.kind.field in {"function", "constructor", "primitive"}
             and self.__egg_view__ is not None
             and record.bindings is not None
             and record.bindings.python is not None

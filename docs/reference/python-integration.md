@@ -581,6 +581,16 @@ symbolic until the function value is constructed in the engine; reading `.value`
 does not evaluate them. A nonliteral function expression must be extracted before
 its `.value` is available. Mutating callables cannot be partially applied.
 
+A free `@function` with concrete argument and result sorts, fixed
+positional-or-keyword parameters, a body, and no explicit `ruleset` defines eager
+computation, including when its result is an equality sort. Its
+Python body runs once with symbolic arguments when the declaration is first
+needed. The resulting calls and table reads execute when egglog applies the
+function; authoring or inspecting a function value does not execute them. A
+bodyless declaration still defines a table or constructor. Named eager bodies
+can call other named eager functions and capture positional prefixes with
+`UnstableFn`; free query variables and recursive bodies are not supported.
+
 ### Unwrapped functions
 
 We also support using normal python functions, either named or anonymous, as values. These will automatically be wrapped as egglog functions when passed to a function which expects an egglog function.

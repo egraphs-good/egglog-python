@@ -63,7 +63,7 @@ from egglog._catalog import builtin_catalog
 from egglog._program import Builder, Ref, StructuralView, pack
 from egglog.builtins import ExprValueError, _container_items, _map_entries, _pair_value
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
-from egglog.egraph import to_runtime_expr
+from egglog.egraph import get_current_ruleset, set_current_ruleset, to_runtime_expr
 from egglog.runtime import _CLASS_CACHE, RuntimeExpr, RuntimeFunction, _author_call, resolve_callable
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
 
@@ -2573,7 +2573,7 @@ def test_bodyless_none_and_docstring_do_not_execute_python():
     assert documented.__doc__ == "Only documentation."
 
 
-def test_function_source_validation_is_lazy_and_never_executes_bodies():
+def test_named_eager_body_is_authored_once_without_engine():
     calls = 0
 
     @function
@@ -2582,19 +2582,220 @@ def test_function_source_validation_is_lazy_and_never_executes_bodies():
         calls += 1
         return i64(1)
 
-    for _ in range(2):
-        with pytest.raises(NotImplementedError, match="bodies"):
-            body()
     assert calls == 0
+    for _ in range(2):
+        assert str(body()) == "body()"
+    assert calls == 1
     assert body.__egg_prepare__ is None
-    with pytest.raises(NotImplementedError, match="bodies"):
-        resolve_callable(body)
+    declaration = resolve_callable(body)
+    assert declaration.read().kind.field == "primitive"
+    assert declaration.owner.ref("nodes", declaration.read().kind.value.body).read().kind.value.value.value == 1
 
     @function(cost=1)
     def invalid() -> i64: ...
 
     with pytest.raises(ValueError, match="Primitive-returning callables cannot use cost"):
         invalid()
+
+
+def test_named_eager_binders_keep_slots_and_callee_closure():
+    @function
+    def seed(value: i64) -> i64:
+        return value
+
+    @function
+    def inner(second: i64, first: i64 = seed(i64(7))) -> i64:
+        return second + first
+
+    @function
+    def outer(unused: i64, second: i64, first: i64) -> i64:
+        return inner(first, second) + inner(second)
+
+    reference = resolve_callable(outer)
+    primitive = reference.read().kind.value
+    assert isinstance(primitive, pb.Primitive)
+    assert [argument.name for argument in primitive.inputs] == ["unused", "second", "first"]
+    body = RuntimeExpr(reference.owner.ref("nodes", primitive.body))
+    assert str(body) == "inner(_2, _1) + inner(_1)"
+    inner_reference = resolve_callable(inner)
+    before = pack([inner_reference]).program.to_binary()
+    program = pack([reference]).program
+    inner_copy = next(
+        declaration
+        for declaration in program.declarations
+        if declaration.kind is not None and declaration.kind.value.name == inner_reference.read().kind.value.name
+    )
+    assert inner_copy.kind is not None
+    assert isinstance(inner_copy.kind.value, pb.Primitive)
+    assert pack([inner_reference]).program.to_binary() == before
+    inner_body = RuntimeExpr(inner_reference.owner.ref("nodes", inner_reference.read().kind.value.body))
+    assert str(inner_body) == "_0 + _1"
+    assert inner_copy.bindings is not None
+    assert inner_copy.bindings.python is not None
+    default = inner_copy.bindings.python.views[0].params[1]
+    assert default.has_field("default_expr")
+    default_kind = program.nodes[default.default_expr].kind
+    assert default_kind is not None
+    assert isinstance(default_kind.value, pb.Call)
+    assert default_kind.value.func == resolve_callable(seed).read().kind.value.name
+    assert inner_reference in {
+        reference.owner.ref("declarations", index) for index in range(len(reference.owner._slots["declarations"]))
+    }
+
+
+@pytest.mark.parametrize("spelling", ["_0", "value", "external"])
+def test_named_eager_body_rejects_free_variable_by_identity(spelling):
+    external = var(spelling, i64)
+
+    @function
+    def body(value: i64) -> i64:
+        return value + external
+
+    with pytest.raises(ValueError, match=r"Free variable.*named eager body"):
+        resolve_callable(body)
+    assert cast("RuntimeFunction", body).__egg_declaration__ is None
+
+
+def test_named_eager_partial_call_captures_bind_formals_only():
+    @function
+    def add(left: i64, right: i64) -> i64:
+        return left + right
+
+    @function
+    def capture(unused: i64, value: i64) -> UnstableFn[i64, i64]:
+        return UnstableFn(add, value)
+
+    reference = resolve_callable(capture)
+    body = reference.owner.ref("nodes", reference.read().kind.value.body)
+    value = RuntimeExpr(body)
+    assert str(value) == "partial(add, _1)"
+    assert body.read().kind.value.value.field == "partial_call"
+    partial_value = get_literal_value(value)
+    assert isinstance(partial_value, partial)
+    assert partial_value.func == add
+    assert pack([reference]).program.to_binary()
+
+
+@pytest.mark.parametrize("outcome", ["none", "wrong", "raise", "recursive"])
+def test_named_eager_body_failure_publishes_no_declaration(outcome):
+    calls = []
+
+    def body(value: i64) -> object:
+        calls.append(value)
+        if outcome == "none":
+            return None
+        if outcome == "wrong":
+            return String("wrong")
+        if outcome == "recursive":
+            return wrapped(value)
+        msg = "body marker"
+        raise RuntimeError(msg)
+
+    body.__annotations__["return"] = i64
+    wrapped = cast("RuntimeFunction", function(body))
+    error, message = {
+        "none": (ValueError, "Callable bodies must return a value"),
+        "wrong": (ConvertError, "Cannot convert"),
+        "raise": (RuntimeError, "body marker"),
+        "recursive": (ValueError, "Recursively resolving"),
+    }[outcome]
+    for _ in range(2):
+        with pytest.raises(error, match=message):
+            resolve_callable(wrapped)
+    assert len(calls) == 1
+    assert wrapped.__egg_declaration__ is None
+    assert wrapped.__egg_prepare__ is None
+
+
+def test_named_eager_eqsort_result_and_ambient_ruleset_isolation():
+    class Box(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    calls = []
+    ambient = ruleset()
+
+    @function
+    def body(value: i64) -> Box:
+        calls.append(get_current_ruleset())
+        rewrite(Box(value)).to(Box(value + 1))
+        return Box(value)
+
+    with set_current_ruleset(ambient):
+        result = body(i64(2))
+        assert get_current_ruleset() is ambient
+    assert calls == [None]
+    assert isinstance(result, Box)
+    assert resolve_callable(body).read().kind.field == "primitive"
+    assert not ambient._snapshot({}).read().kind.value.rules
+
+    def empty(value: i64): ...
+
+    empty.__annotations__["return"] = Box
+    assert resolve_callable(function(empty)).read().kind.field == "constructor"
+
+
+def test_named_eager_result_conversion_has_no_ambient_ruleset():
+    class Box(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    class Source:
+        pass
+
+    calls = []
+
+    def convert_source(value):
+        calls.append(get_current_ruleset())
+        rewrite(Box(i64(1))).to(Box(i64(2)))
+        return Box(i64(3))
+
+    converter(Source, Box, convert_source)
+
+    def body() -> object:
+        calls.append(get_current_ruleset())
+        return Source()
+
+    body.__annotations__["return"] = Box
+    wrapped = function(body)
+    ambient = ruleset()
+    with set_current_ruleset(ambient):
+        resolve_callable(wrapped)
+        assert get_current_ruleset() is ambient
+    assert calls == [None, None]
+    assert not ambient._snapshot({}).read().kind.value.rules
+
+
+@pytest.mark.parametrize(
+    ("equality", "options", "error", "message"),
+    [
+        (
+            False,
+            {"ruleset": object()},
+            ValueError,
+            "Primitive-returning callables with bodies cannot use an explicit ruleset",
+        ),
+        (
+            False,
+            {"merge": lambda old, new: old},
+            ValueError,
+            "Primitive-returning callables with bodies cannot use merge",
+        ),
+        (False, {"cost": 1}, ValueError, "Primitive-returning callables cannot use cost"),
+        (True, {"ruleset": object()}, NotImplementedError, "Explicit-ruleset free function bodies are not migrated"),
+        (True, {"cost": 1}, ValueError, "Eqsort-returning eager bodies cannot use cost"),
+        (True, {"unextractable": True}, ValueError, "Eqsort-returning eager bodies cannot be unextractable"),
+    ],
+)
+def test_named_eager_static_options_precede_callback(equality, options, error, message):
+    class Box(Expr): ...
+
+    def body(value: i64):
+        pytest.fail("Invalid or deferred body was executed")
+
+    body.__annotations__["return"] = Box if equality else i64
+    wrapped = function(**options)(body)
+    with pytest.raises(error, match=message):
+        resolve_callable(wrapped)
+    assert wrapped.__egg_declaration__ is None
 
 
 @pytest.mark.parametrize(
