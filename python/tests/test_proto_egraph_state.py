@@ -1076,6 +1076,51 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
     assert resolve_callable(Result).read().kind.value.name in declared
 
 
+@pytest.mark.parametrize(("seeded", "subsume_body"), [(False, False), (True, False), (True, True)])
+def test_native_free_ruleset_body_is_deferred_with_complete_closure(table_transport, seeded, subsume_body):
+    from egglog import expr_parts, ruleset  # noqa: PLC0415
+
+    class FreeDefaultBox(Expr, egg_sort=f"FreeDefaultBox_{seeded}_{subsume_body}"):
+        def __init__(self, value: i64) -> None: ...
+
+    destination = ruleset()
+    callbacks = []
+
+    @function(ruleset=destination, subsume=subsume_body)
+    def delayed(value: i64) -> FreeDefaultBox:
+        callbacks.append(1)
+        return FreeDefaultBox(value)
+
+    expression = delayed(i64(4))
+    graph, requests, responses = table_transport
+    if seeded:
+        graph.register(expression)
+        graph.check_fail(eq(expression).to(FreeDefaultBox(i64(4))))
+        assert not graph.run(ruleset()).updated
+        graph.check_fail(eq(expression).to(FreeDefaultBox(i64(4))))
+    assert graph.run(destination).updated is seeded
+    if seeded:
+        graph.check(eq(expression).to(FreeDefaultBox(i64(4))))
+        if subsume_body:
+            assert expr_parts(graph.extract(expression)) == expr_parts(FreeDefaultBox(i64(4)))
+    else:
+        assert not graph.run(destination).updated
+    assert len(graph.function_values(delayed)) == int(seeded)
+    output = responses[-1].outputs[0]
+    assert output.kind.field == "printed_function"
+    assert [row.subsumed for row in output.kind.value.rows] == ([subsume_body] if seeded else [])
+    declarations = {
+        declaration.kind.value.name: declaration for request in requests for declaration in request.program.declarations
+    }
+    name = resolve_callable(delayed).read().kind.value.name
+    assert declarations[name].kind.field == "constructor"
+    assert resolve_callable(FreeDefaultBox).read().kind.value.name in declarations
+    authored = [rule for request in requests for rule in request.program.rules]
+    assert authored
+    assert all(rule.kind.field == "rewrite" and rule.kind.value.subsume is subsume_body for rule in authored)
+    assert callbacks == [1]
+
+
 @pytest.fixture
 def native_rule_program():
     from egglog import rule, var  # noqa: PLC0415

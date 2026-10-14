@@ -29,6 +29,7 @@ from egglog import (
     Map,
     MapLike,
     Pair,
+    Ruleset,
     String,
     StringLike,
     Unit,
@@ -2764,6 +2765,216 @@ def test_named_eager_result_conversion_has_no_ambient_ruleset():
     assert not ambient._snapshot({}).read().kind.value.rules
 
 
+@pytest.mark.parametrize("subsume_body", [False, True])
+def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
+    class FreeRewriteBox(Expr, egg_sort=f"FreeRewriteBox_{subsume_body}"):
+        def __init__(self, value: i64) -> None: ...
+
+    destination, ambient = ruleset(), ruleset()
+    calls = []
+
+    @function(ruleset=destination, subsume=subsume_body)
+    def body(unused: i64, value: i64 = i64(4)) -> FreeRewriteBox:
+        calls.append((get_current_ruleset(), str(unused), str(value)))
+        return FreeRewriteBox(value)
+
+    assert not destination._snapshot({}).read().kind.value.rules
+    with set_current_ruleset(ambient):
+        expression = body(i64(9))
+        assert get_current_ruleset() is ambient
+    assert calls == [(destination, "unused", "value")]
+    assert resolve_callable(body).read().kind.field == "constructor"
+    arguments = get_callable_args(expression)
+    assert arguments is not None
+    assert [argument.value for argument in arguments] == [9, 4]
+    body(i64(8), i64(5))
+    assert len(calls) == 1
+    snapshot = destination._snapshot({})
+    assert len(snapshot.read().kind.value.rules) == 1
+    assert not ambient._snapshot({}).read().kind.value.rules
+    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    record = reference.read().kind.value
+    assert record.subsume is subsume_body
+    lhs = reference.owner.ref("nodes", record.lhs)
+    assert [lhs.owner.ref("nodes", argument).read().kind.value for argument in lhs.read().kind.value.args] == [
+        "_0",
+        "_1",
+    ]
+    rhs = RuntimeExpr(reference.owner.ref("nodes", record.rhs))
+    rhs_arguments = get_callable_args(rhs, FreeRewriteBox)
+    assert rhs_arguments is not None
+    assert rhs_arguments[0].__egg_ref__.read().kind.value == "_1"
+    encoded = pack(roots=[snapshot]).program.to_binary()
+    program = pb.Program.from_binary(encoded)
+    assert program.to_binary() == encoded
+    assert {
+        declaration.kind.value.name
+        for declaration in program.declarations
+        if declaration.kind is not None and declaration.kind.field == "constructor"
+    } == {resolve_callable(body).read().kind.value.name, resolve_callable(FreeRewriteBox).read().kind.value.name}
+
+
+@pytest.mark.parametrize(("name", "expected"), [("value", "_value"), ("0", "_0"), ("_0", "__0")])
+def test_free_ruleset_body_preserves_original_positional_variable_relation(name, expected):
+    class ExternalRewriteBox(Expr, egg_sort=f"ExternalRewriteBox_{name}"):
+        def __init__(self, value: i64) -> None: ...
+
+    @function
+    def inner(value: i64) -> i64:
+        return value + 1
+
+    external = var(name, i64)
+    destination = ruleset()
+
+    @function(ruleset=destination)
+    def body(value: i64) -> ExternalRewriteBox:
+        return ExternalRewriteBox(inner(value) + external)
+
+    body(i64(2))
+    snapshot = destination._snapshot({})
+    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    record = reference.read().kind.value
+    rhs = RuntimeExpr(reference.owner.ref("nodes", record.rhs))
+    rhs_arguments = get_callable_args(rhs, ExternalRewriteBox)
+    assert rhs_arguments is not None
+    sum_arguments = get_callable_args(rhs_arguments[0])
+    assert sum_arguments is not None
+    call, free = sum_arguments
+    call_arguments = get_callable_args(call, inner)
+    assert call_arguments is not None
+    assert call_arguments[0].__egg_ref__.read().kind.value == "_0"
+    assert free.__egg_ref__.read().kind.value == expected
+    program = pack(roots=[snapshot]).program
+    declaration = next(
+        item.kind.value
+        for item in program.declarations
+        if item.kind is not None and isinstance(item.kind.value, pb.Primitive)
+    )
+    inner_body = program.nodes[declaration.body]
+    assert inner_body.kind is not None
+    assert isinstance(inner_body.kind.value, pb.Call)
+    assert program.nodes[inner_body.kind.value.args[0]].kind == Oneof("var", "_0")
+    assert to_runtime_expr(external).__egg_ref__.read().kind.value == name
+
+
+def test_free_ruleset_body_lhs_keeps_original_wrapper_binders():
+    class ReplacedRewriteBox(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    destination = ruleset()
+
+    @function(ruleset=destination)
+    def body(value: i64) -> ReplacedRewriteBox:
+        value.__replace_expr__(i64(7))
+        return ReplacedRewriteBox(value)
+
+    body(i64(2))
+    snapshot = destination._snapshot({})
+    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    record = reference.read().kind.value
+    lhs = RuntimeExpr(reference.owner.ref("nodes", record.lhs))
+    lhs_arguments = get_callable_args(lhs, body)
+    assert lhs_arguments is not None
+    assert lhs_arguments[0].__egg_ref__.read().kind.value == "_0"
+    rhs = RuntimeExpr(reference.owner.ref("nodes", record.rhs))
+    rhs_arguments = get_callable_args(rhs, ReplacedRewriteBox)
+    assert rhs_arguments is not None
+    assert rhs_arguments[0].value == 7
+
+
+def test_free_ruleset_body_result_conversion_restores_outer_context():
+    class ConvertedRewriteBox(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    class Source:
+        pass
+
+    destination, ambient = ruleset(), ruleset()
+    calls = []
+
+    def convert_source(value):
+        calls.append(get_current_ruleset())
+        return ConvertedRewriteBox(i64(3))
+
+    converter(Source, ConvertedRewriteBox, convert_source)
+
+    def body() -> object:
+        calls.append(get_current_ruleset())
+        return Source()
+
+    body.__annotations__["return"] = ConvertedRewriteBox
+    wrapped = function(ruleset=destination)(cast("Callable[[], ConvertedRewriteBox]", body))
+    with set_current_ruleset(ambient):
+        resolve_callable(wrapped)
+        assert get_current_ruleset() is ambient
+    assert calls == [destination, ambient]
+    assert len(destination._snapshot({}).read().kind.value.rules) == 1
+    assert not ambient._snapshot({}).read().kind.value.rules
+
+
+@pytest.mark.parametrize("outcome", ["none", "wrong", "raise", "recursive"])
+def test_free_ruleset_body_failure_is_cached_without_default_publication(outcome):
+    class FailedRewriteBox(Expr, egg_sort=f"FailedRewriteBox_{outcome}"):
+        def __init__(self, value: i64) -> None: ...
+
+    destination, ambient = ruleset(), ruleset()
+    calls = []
+
+    def body(value: i64) -> object:
+        calls.append(get_current_ruleset())
+        rewrite(FailedRewriteBox(i64(1)), ruleset=destination).to(FailedRewriteBox(i64(2)))
+        if outcome == "none":
+            return None
+        if outcome == "wrong":
+            return String("wrong")
+        if outcome == "recursive":
+            return wrapped(value)
+        msg = "rewrite body marker"
+        raise RuntimeError(msg)
+
+    body.__annotations__["return"] = FailedRewriteBox
+    wrapped = cast("RuntimeFunction", function(ruleset=destination)(cast("Callable[[i64], FailedRewriteBox]", body)))
+    error, message = {
+        "none": (ValueError, "Callable bodies must return a value"),
+        "wrong": (ConvertError, "Cannot convert"),
+        "raise": (RuntimeError, "rewrite body marker"),
+        "recursive": (ValueError, "Recursively resolving"),
+    }[outcome]
+    with set_current_ruleset(ambient):
+        for _ in range(2):
+            with pytest.raises(error, match=message):
+                resolve_callable(wrapped)
+            assert get_current_ruleset() is ambient
+    assert calls == [destination]
+    assert wrapped.__egg_declaration__ is None
+    assert wrapped.__egg_prepare__ is None
+    assert len(destination._snapshot({}).read().kind.value.rules) == 1
+    assert not ambient._snapshot({}).read().kind.value.rules
+
+
+def test_free_ruleset_body_invalid_destination_precedes_callback():
+    class InvalidRulesetBox(Expr): ...
+
+    @function(ruleset=cast("Ruleset", object()))
+    def body() -> InvalidRulesetBox:
+        pytest.fail("Invalid destination executed the body")
+
+    with pytest.raises(TypeError, match="Rewrite destinations must be Rulesets"):
+        resolve_callable(body)
+
+
+@pytest.mark.parametrize("options", [{"cost": 1}, {"unextractable": True}])
+def test_free_ruleset_body_constructor_options_remain_unmigrated(options):
+    class DeferredRulesetBox(Expr): ...
+
+    @function(ruleset=ruleset(), **options)
+    def body() -> DeferredRulesetBox:
+        pytest.fail("Unmigrated constructor option executed the body")
+
+    with pytest.raises(NotImplementedError, match="cost, unextractable and variadic free functions are not migrated"):
+        resolve_callable(body)
+
+
 @pytest.mark.parametrize(
     ("equality", "options", "error", "message"),
     [
@@ -2780,7 +2991,7 @@ def test_named_eager_result_conversion_has_no_ambient_ruleset():
             "Primitive-returning callables with bodies cannot use merge",
         ),
         (False, {"cost": 1}, ValueError, "Primitive-returning callables cannot use cost"),
-        (True, {"ruleset": object()}, NotImplementedError, "Explicit-ruleset free function bodies are not migrated"),
+        (True, {"ruleset": object()}, TypeError, "Rewrite destinations must be Rulesets"),
         (True, {"cost": 1}, ValueError, "Eqsort-returning eager bodies cannot use cost"),
         (True, {"unextractable": True}, ValueError, "Eqsort-returning eager bodies cannot be unextractable"),
     ],

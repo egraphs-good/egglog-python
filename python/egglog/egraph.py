@@ -759,15 +759,16 @@ class _FunctionConstructor:
                 if has_merge:
                     msg = "Primitive-returning callables with bodies cannot use merge"
                     raise ValueError(msg)
-            if owner is None and self.ruleset is not None:
-                msg = "Explicit-ruleset free function bodies are not migrated"
-                raise NotImplementedError(msg)
             if owner is not None and (self.ruleset is None or view_kind == pb.PythonCallKind.INITIALIZER):
                 msg = "Eager member and initializer bodies are not migrated"
                 raise NotImplementedError(msg)
         if self.ruleset is not None and owner is None:
-            msg = "Explicit rulesets require a body"
-            raise ValueError(msg)
+            if not has_body:
+                msg = "Explicit rulesets require a body"
+                raise ValueError(msg)
+            if not isinstance(cast("object", self.ruleset), Ruleset):
+                msg = "Rewrite destinations must be Rulesets"
+                raise TypeError(msg)
         if self.subsume and not has_body:
             msg = "subsume requires a body"
             raise ValueError(msg)
@@ -831,18 +832,23 @@ class _FunctionConstructor:
                 )
             formal_owner = formals.publish()
             formal_refs = [formal_owner.ref("nodes", index) for index in formal_indices]
-            with set_current_ruleset(None):
+            with set_current_ruleset(self.ruleset):
                 result = fn(*(RuntimeExpr(reference) for reference in formal_refs))
                 if result is None:
                     msg = "Callable bodies must return a value"
                     raise ValueError(msg)
+                if self.ruleset is None:
+                    resolved = resolve_literal(output, result)
+            if self.ruleset is not None:
                 resolved = resolve_literal(output, result)
-            body = _lower_primitive_body(builder, resolved.__egg_ref__, formal_refs)
+            body = _lower_function_body(
+                builder, resolved.__egg_ref__, formal_refs, rewrite_body=self.ruleset is not None
+            )
         kind = (
             Oneof[Literal["primitive"], pb.Primitive](
                 "primitive", pb.Primitive(name=name, inputs=inputs, output=output_index, body=body)
             )
-            if body is not None
+            if body is not None and self.ruleset is None
             else Oneof[Literal["constructor"], pb.Constructor](
                 "constructor", pb.Constructor(name=name, inputs=inputs, output=output_index)
             )
@@ -861,11 +867,23 @@ class _FunctionConstructor:
         )
         reference = builder.publish().ref("declarations", index)
         Catalog.from_refs([reference])
+        if body is not None and self.ruleset is not None:
+            lhs = RuntimeFunction(reference, 0)(*(RuntimeExpr(formal) for formal in formal_refs))
+            assert isinstance(lhs, RuntimeExpr)
+            lhs_builder = Builder()
+            lhs_index = _lower_function_body(lhs_builder, lhs.__egg_ref__, formal_refs, rewrite_body=True)
+            rewrite(
+                cast("Expr", RuntimeExpr(lhs_builder.publish().ref("nodes", lhs_index))),
+                ruleset=self.ruleset,
+                subsume=self.subsume,
+            ).to(cast("Expr", RuntimeExpr(reference.owner.ref("nodes", body))))
         return reference
 
 
-def _lower_primitive_body(builder: Builder, body: Ref, formals: list[Ref]) -> int:  # noqa: C901
-    """Bind only this body's formal identities, importing callee closures intact."""
+def _lower_function_body(  # noqa: C901
+    builder: Builder, body: Ref, formals: list[Ref], *, rewrite_body: bool = False
+) -> int:
+    """Lower this body's variables to backend names, importing callee closures intact."""
     parameters = {reference: f"_{index}" for index, reference in enumerate(formals)}
     indices: dict[Ref, int] = {body: builder.reserve("nodes")}
     pending = [body]
@@ -876,10 +894,14 @@ def _lower_primitive_body(builder: Builder, body: Ref, formals: list[Ref]) -> in
             msg = "Named eager body node has no kind"
             raise ValueError(msg)
         if node.kind.field == "var":
-            if source not in parameters:
+            if source in parameters:
+                name = parameters[source]
+            elif rewrite_body:
+                name = f"_{node.kind.value}"
+            else:
                 raise ValueError(f"Free variable {node.kind.value!r} in named eager body")
-            node.kind = Oneof[Literal["var"], str]("var", parameters[source])
-        elif node.kind.field == "union":
+            node.kind = Oneof[Literal["var"], str]("var", name)
+        elif node.kind.field == "union" and not rewrite_body:
             msg = "Union in named eager bodies is not supported"
             raise NotImplementedError(msg)
         elif (
@@ -887,7 +909,11 @@ def _lower_primitive_body(builder: Builder, body: Ref, formals: list[Ref]) -> in
             and node.kind.value.value is not None
             and node.kind.value.value.field == "lambda"
         ):
-            msg = "Lambda in named eager bodies is not supported"
+            msg = (
+                "Lambda in named rewrite bodies is not migrated"
+                if rewrite_body
+                else "Lambda in named eager bodies is not supported"
+            )
             raise NotImplementedError(msg)
 
         def relocate(role: str, index: int, origin: Ref = source) -> int:
