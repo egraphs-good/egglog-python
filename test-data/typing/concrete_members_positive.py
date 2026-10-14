@@ -16,6 +16,7 @@ from egglog import (
     Schedule,
     UnstableFn,
     Vec,
+    birewrite,
     eq,
     f64,
     function,
@@ -99,6 +100,9 @@ assert_type(rule(variable).then(union(variable).with_(node)), RewriteOrRule)
 destination = ruleset(name="typed_rules")
 assert_type(destination, Ruleset)
 assert_type(rewrite(variable, ruleset=destination).to(node), RewriteOrRule)
+assert_type(birewrite(variable, ruleset=destination).to(node), RewriteOrRule)
+assert_type(birewrite(variable, ruleset=None).to(node), RewriteOrRule)
+assert_type(birewrite(variable).to(node), RewriteOrRule)
 assert_type(rule(variable, ruleset=destination).then(node), RewriteOrRule)
 destination.append(rewrite(variable).to(node))
 assert_type(rewrite(variable).to(node) == rewrite(variable).to(node), bool)

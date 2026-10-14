@@ -574,13 +574,14 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
             if record.include_subsumed:
                 msg = "include_subsumed rule presentation is not migrated"
                 raise NotImplementedError(msg)
-            if record.kind.field == "rewrite":
+            if record.kind.field in {"rewrite", "birewrite"}:
                 if record.has_field("name") or record.no_decomp or record.eval_mode != pb.RuleEvalMode.SEMINAIVE:
                     msg = "Rewrite option presentation is not migrated"
                     raise NotImplementedError(msg)
                 rewrite = record.kind.value
-                pieces = ["rewrite(", (owner.ref("nodes", rewrite.lhs), False, False)]
-                if rewrite.subsume:
+                assert isinstance(rewrite, pb.Rewrite | pb.BiRewrite)
+                pieces = [f"{record.kind.field}(", (owner.ref("nodes", rewrite.lhs), False, False)]
+                if isinstance(rewrite, pb.Rewrite) and rewrite.subsume:
                     pieces.append(", subsume=True")
                 pieces.extend([").to(", (owner.ref("nodes", rewrite.rhs), False, False)])
                 for condition in rewrite.conditions:

@@ -65,7 +65,14 @@ from egglog._program import Builder, Ref, StructuralView, pack
 from egglog.builtins import ExprValueError, _container_items, _map_entries, _pair_value
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.egraph import get_current_ruleset, set_current_ruleset, to_runtime_expr
-from egglog.runtime import _CLASS_CACHE, RuntimeExpr, RuntimeFunction, _author_call, resolve_callable
+from egglog.runtime import (
+    _CLASS_CACHE,
+    RuntimeExpr,
+    RuntimeFunction,
+    _author_call,
+    resolve_callable,
+    resolve_type_annotation,
+)
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
 
 
@@ -294,7 +301,8 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
 
 
 @pytest.mark.parametrize("allocating", [False, True])
-def test_report_key_shared_dag_work_is_bounded(monkeypatch, allocating):
+@pytest.mark.parametrize("bidirectional", [False, True])
+def test_report_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirectional):
     from egglog import _program  # noqa: PLC0415
     from egglog.run_report import RuleKey  # noqa: PLC0415
 
@@ -319,6 +327,9 @@ def test_report_key_shared_dag_work_is_bounded(monkeypatch, allocating):
         assert shared == duplicated
         assert hash(shared) == hash(duplicated)
     first = RuleKey(rule().then(left).__egg_ref__)
+    if bidirectional:
+        expression = cast("Expr", left)
+        first = RuleKey(birewrite(expression).to(expression).__egg_ref__)
     packed = pack([first.__egg_ref__])
     second = RuleKey(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
     original = _program._structural_parts
@@ -508,7 +519,10 @@ def test_direct_variables_are_canonical_without_an_engine(monkeypatch):
         var("", i64)
 
 
-def test_direct_rewrite_owns_records_without_an_engine(monkeypatch):
+@pytest.mark.parametrize("bidirectional", [False, True])
+def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectional):
+    from egglog import RewriteOrRule  # noqa: PLC0415
+
     def forbidden(*args, **kwargs):
         pytest.fail("Rewrite authoring accessed the engine")
 
@@ -520,25 +534,29 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch):
 
     lhs, rhs = RewriteBox(1), RewriteBox(2)
     condition = eq(i64(3)).to(i64(3))
-    authored = rewrite(lhs, subsume=True).to(rhs, condition)
+    builder = birewrite(lhs) if bidirectional else rewrite(lhs, subsume=True)
+    kind = "birewrite" if bidirectional else "rewrite"
+    assert str(builder) == f"{kind}(RewriteBox(1))"
+    authored = builder.to(rhs, condition, i64(4), condition)
     assert authored.__egg_ref__.role == "rules"
     record = authored.__egg_ref__.read()
     assert record.eval_mode == pb.RuleEvalMode.SEMINAIVE
     assert not record.has_field("name")
-    assert record.kind.field == "rewrite"
+    assert record.kind.field == kind
     body = record.kind.value
-    assert body.subsume
+    if not bidirectional:
+        assert body.subsume
     assert authored.__egg_ref__.owner.ref("nodes", body.lhs) == lhs.__egg_ref__
     assert authored.__egg_ref__.owner.ref("nodes", body.rhs) == rhs.__egg_ref__
-    assert [authored.__egg_ref__.owner.ref("nodes", index) for index in body.conditions] == [condition.__egg_ref__]
-    expected = "rewrite(RewriteBox(1), subsume=True).to(RewriteBox(2), eq(i64(3)).to(i64(3)))"
+    assert authored.__egg_ref__.owner.ref("nodes", body.conditions[0]) == condition.__egg_ref__
+    assert body.conditions[0] == body.conditions[2]
+    options = "" if bidirectional else ", subsume=True"
+    expected = f"{kind}(RewriteBox(1){options}).to(RewriteBox(2), eq(i64(3)).to(i64(3)), i64(4), eq(i64(3)).to(i64(3)))"
     assert str(authored) == repr(authored) == expected
     with pytest.raises(ConvertError):
         rewrite(lhs).to(i64(2))
     with pytest.raises(TypeError, match="destinations must be Rulesets"):
         rewrite(lhs, ruleset=object()).to(rhs)
-    with pytest.raises(NotImplementedError, match="Birewrite"):
-        birewrite(lhs).to(rhs)
     with pytest.raises(NotImplementedError, match="Fact-to-action"):
         rule().then(condition)
     lhs.__egg_ref__ = RewriteBox(9).__egg_ref__
@@ -546,10 +564,135 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch):
     body.conditions.clear()
     assert str(authored) == expected
     packed = pack([authored.__egg_ref__])
+    assert len(packed.program.rules) == 1
     assert not packed.program.commands
     decoded = pb.Program.from_binary(packed.program.to_binary())
     owner = Builder.from_program(decoded).publish()
-    assert pack([owner.ref("rules", packed.indices[0])]).program.to_binary() == decoded.to_binary()
+    restored = RewriteOrRule(owner.ref("rules", packed.indices[0]))
+    assert str(restored) == expected
+    assert restored == authored
+    assert pack([restored.__egg_ref__]).program.to_binary() == decoded.to_binary()
+
+
+def test_direct_birewrite_preserves_conversion_order_and_destination_on_failure():
+    class Box(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    class Source:
+        def __init__(self, fail: bool = False) -> None:
+            self.fail = fail
+
+    events: list[Ruleset | None] = []
+
+    def convert_source(value: Source) -> Box:
+        events.append(get_current_ruleset())
+        if value.fail:
+            msg = "birewrite conversion marker"
+            raise ValueError(msg)
+        return Box(i64(2))
+
+    converter(Source, Box, convert_source)
+    destination, ambient = ruleset(), ruleset()
+    original_destination = destination.__egg_ref__
+    original_ambient = ambient.__egg_ref__
+    lhs, rhs = Box(i64(1)), cast("Box", Source())
+    with set_current_ruleset(ambient):
+        with pytest.raises(TypeError, match="Expected a RuntimeExpr"):
+            birewrite(cast("Box", object()), destination).to(rhs)
+        with pytest.raises(TypeError, match="Expected a RuntimeExpr"):
+            birewrite(lhs, destination).to(rhs, cast("Expr", object()))
+        assert not events
+        with pytest.raises(ValueError, match="birewrite conversion marker"):
+            birewrite(lhs, destination).to(cast("Box", Source(fail=True)))
+        assert destination.__egg_ref__ == original_destination
+        with pytest.raises(ConvertError):
+            birewrite(lhs, destination).to(cast("Box", i64(2)))
+        assert destination.__egg_ref__ == original_destination
+        unattached = birewrite(lhs).to(rhs)
+        authored = birewrite(lhs, destination).to(rhs)
+    assert events == [ambient, ambient, ambient]
+    assert ambient.__egg_ref__ == original_ambient
+    assert get_current_ruleset() is None
+    record = destination.__egg_ref__.read()
+    assert isinstance(record, pb.Ruleset)
+    assert record.kind is not None
+    assert isinstance(record.kind.value, pb.RuleList)
+    assert [destination.__egg_ref__.owner.ref("rules", index) for index in record.kind.value.rules] == [
+        authored.__egg_ref__
+    ]
+    assert unattached == authored
+    with pytest.raises(TypeError, match="destinations must be Rulesets"):
+        birewrite(lhs, cast("Ruleset", object())).to(rhs)
+    assert events == [ambient, ambient, ambient, None]
+
+
+def test_direct_birewrite_keeps_occurrences_but_compares_structural_keys():
+    from egglog.run_report import RuleKey  # noqa: PLC0415
+
+    class Box(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    lhs, rhs = Box(i64(1)), Box(i64(2))
+    first, second = birewrite(lhs).to(rhs), birewrite(lhs).to(rhs)
+    assert first.__egg_ref__ != second.__egg_ref__
+    assert first == second
+    assert first != rewrite(lhs).to(rhs)
+    assert first != birewrite(rhs).to(lhs)
+    assert first != birewrite(lhs).to(rhs, eq(i64(1)).to(i64(1)))
+    assert RuleKey(first.__egg_ref__) == RuleKey(second.__egg_ref__)
+    assert len({RuleKey(first.__egg_ref__), RuleKey(second.__egg_ref__)}) == 1
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(first)
+    selected = ruleset(first, first, second)
+    packed = pack([selected.__egg_ref__])
+    record = packed.program.rulesets[packed.indices[0]]
+    assert record.kind is not None
+    assert isinstance(record.kind.value, pb.RuleList)
+    occurrences = record.kind.value.rules
+    assert len(occurrences) == 3
+    assert occurrences[0] == occurrences[1] != occurrences[2]
+    assert len(packed.program.rules) == 2
+
+
+def test_birewrite_comparison_isolates_directional_union_allocations():
+    from egglog.run_report import RuleKey  # noqa: PLC0415
+
+    class Box(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    def authored(*, shared_left=True, shared_right=True, shared_across=False, condition_alias=False):
+        builder = Builder()
+        sort_ref = resolve_type_annotation(Box)
+        assert isinstance(sort_ref, Ref)
+        sort = builder.import_ref(sort_ref)
+        member = builder.import_ref(to_runtime_expr(Box(i64(0))).__egg_ref__)
+        nodes = [
+            builder.add(
+                "nodes",
+                pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[member]))),
+            )
+            for _ in range(5)
+        ]
+        left, right = nodes[0], nodes[0 if shared_across else 1]
+        sides = [
+            builder.add(
+                "nodes",
+                pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=members))),
+            )
+            for members in ([left, left if shared_left else nodes[2]], [right, right if shared_right else nodes[3]])
+        ]
+        owner = builder.publish()
+        lhs, rhs, condition = [
+            cast("Box", RuntimeExpr(owner.ref("nodes", index)))
+            for index in [*sides, nodes[0 if condition_alias else 4]]
+        ]
+        return birewrite(lhs).to(rhs, condition)
+
+    separate, shared = authored(), authored(shared_across=True, condition_alias=True)
+    assert separate == shared  # Sharing across directions/queries is not action allocation identity.
+    assert hash(RuleKey(separate.__egg_ref__)) == hash(RuleKey(shared.__egg_ref__))
+    assert separate != authored(shared_left=False)
+    assert separate != authored(shared_right=False)
 
 
 def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):

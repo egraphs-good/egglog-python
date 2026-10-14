@@ -2889,7 +2889,7 @@ def rewrite(lhs: EXPR, ruleset: Ruleset | None = None, *, subsume: bool = False)
     return _RewriteBuilder(lhs, ruleset, subsume)
 
 
-def birewrite(lhs: EXPR, ruleset: None = None) -> _BirewriteBuilder[EXPR]:
+def birewrite(lhs: EXPR, ruleset: Ruleset | None = None) -> _BirewriteBuilder[EXPR]:
     """Rewrite the given expression to a new expression and vice versa."""
     return _BirewriteBuilder(lhs, ruleset)
 
@@ -3060,8 +3060,31 @@ class _BirewriteBuilder(Generic[EXPR]):
     ruleset: Ruleset | None
 
     def to(self, rhs: EXPR, *conditions: FactLike) -> RewriteOrRule:
-        msg = "Birewrite authoring is not migrated"
-        raise NotImplementedError(msg)
+        lhs = to_runtime_expr(self.lhs)
+        facts = _fact_likes(conditions)
+        rhs = convert_to_same_type(rhs, lhs)
+        if self.ruleset is not None and not isinstance(cast("object", self.ruleset), Ruleset):
+            msg = "Birewrite destinations must be Rulesets"
+            raise TypeError(msg)
+        builder = Builder()
+        index = builder.add(
+            "rules",
+            pb.RuleDecl(
+                kind=Oneof[Literal["birewrite"], pb.BiRewrite](
+                    "birewrite",
+                    pb.BiRewrite(
+                        lhs=builder.import_ref(lhs.__egg_ref__),
+                        rhs=builder.import_ref(rhs.__egg_ref__),
+                        conditions=[builder.import_ref(fact.__egg_ref__) for fact in facts],
+                    ),
+                ),
+                eval_mode=pb.RuleEvalMode.SEMINAIVE,
+            ),
+        )
+        result = RewriteOrRule(builder.publish().ref("rules", index))
+        if self.ruleset is not None:
+            self.ruleset.append(result)
+        return result
 
     def __str__(self) -> str:
         lhs = to_runtime_expr(self.lhs)

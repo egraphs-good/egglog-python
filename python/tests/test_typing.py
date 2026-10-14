@@ -155,6 +155,15 @@ def test_generated_builtin_source_types(family, kind, tmp_path, request):
             "--shadow-file",
             installed,
             str(stub),
+            *(
+                [
+                    "--shadow-file",
+                    str(pathlib.Path(installed).with_name("egraph.py")),
+                    str(root / "python/egglog/egraph.py"),
+                ]
+                if family == "concrete_members"
+                else []
+            ),
             str(fixture),
         ],
         cwd=tmp_path,

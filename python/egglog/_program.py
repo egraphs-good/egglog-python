@@ -438,8 +438,16 @@ def _rule_key(root: Ref) -> tuple[object, ...]:  # noqa: C901
             child_domain, child_query = domain, query
             if reference.role == "rules":
                 if path.startswith("/birewrite/"):
-                    msg = "Bidirectional rule template comparison is not migrated"
-                    raise NotImplementedError(msg)
+                    # Each direction has its own action allocation domain;
+                    # neither its query nor the other direction seeds it.
+                    for direction, lhs in (("forward", "lhs"), ("reverse", "rhs")):
+                        child_query = path.startswith((f"/birewrite/0/{lhs}/", "/birewrite/0/conditions/"))
+                        children_visits.append((
+                            child.owner.ref(child.role, child.index),
+                            (direction, "query" if child_query else "head"),
+                            child_query,
+                        ))
+                    continue
                 child_query = path.startswith(("/rule/0/query/", "/rewrite/0/lhs/", "/rewrite/0/conditions/"))
                 child_domain = "query" if child_query else "head"
             elif reference.role == "declarations":

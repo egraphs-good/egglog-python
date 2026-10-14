@@ -9,6 +9,7 @@ from egglog import (
     Pair,
     UnstableFn,
     Vec,
+    birewrite,
     f64,
     function,
     i64,
@@ -60,10 +61,12 @@ wrong_variable: i64 = var("node", Node)  # error: assignment
 wrong_variables: Iterable[i64] = vars_("left right", Node)  # error: arg-type
 wrong_rule: i64 = rule().then()  # error: assignment
 rewrite(var("node", Node)).to(i64(1))  # error: arg-type
+birewrite(var("node", Node)).to(i64(1))  # error: arg-type
 rule("not a fact")  # error: arg-type
 rule().then("not an action")  # error: arg-type
 ruleset().append(node)  # error: arg-type
 rewrite(node, ruleset="not a ruleset")  # error: arg-type
+birewrite(node, ruleset="not a ruleset")  # error: arg-type
 rule(node, ruleset=i64(1))  # error: arg-type
 union(node).with_(i64(1))  # error: arg-type
 union(i64(1))  # error: type-var

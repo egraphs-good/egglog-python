@@ -1121,6 +1121,45 @@ def test_native_free_ruleset_body_is_deferred_with_complete_closure(table_transp
     assert callbacks == [1]
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_native_birewrite_runs_each_guarded_direction(table_transport, reverse, enabled):
+    from egglog import birewrite, ruleset  # noqa: PLC0415
+    from egglog.run_report import RuleKey  # noqa: PLC0415
+
+    class Box(Expr):
+        pass
+
+    selected = ruleset()
+    left, right = constant("left", Box), constant("right", Box)
+    guard = constant("guard", i64)
+    authored = birewrite(left, selected).to(right, eq(guard).to(i64(5)))
+    seed, target = (right, left) if reverse else (left, right)
+    graph, requests, responses = table_transport
+    graph.register(seed, set_(guard).to(i64(5 if enabled else 6)))
+    assert graph.function_size(seed) == 1
+    assert graph.function_size(target) == 0
+    graph.check_fail(eq(seed).to(target))
+    report = graph.run(selected)
+    native_report = responses[-1].outputs[0].run_report
+    assert native_report is not None
+    assert report.updated is enabled
+    assert graph.function_size(target) == int(enabled)
+    if enabled:
+        graph.check(eq(seed).to(target))
+        assert list(report.search_and_apply_time_per_rule) == [RuleKey(authored.__egg_ref__)]
+        assert "birewrite(" in str(report)
+    else:
+        graph.check_fail(eq(seed).to(target))
+        assert not report.search_and_apply_time_per_rule
+        assert not native_report.search_and_apply_time_per_rule
+        assert not native_report.num_matches_per_rule
+    encoded_rules = [rule for request in requests for rule in request.program.rules]
+    assert encoded_rules
+    assert all(rule.kind.field == "birewrite" for rule in encoded_rules)
+    assert all(len(request.program.rules) <= 1 for request in requests)
+
+
 @pytest.fixture
 def native_rule_program():
     from egglog import rule, var  # noqa: PLC0415
