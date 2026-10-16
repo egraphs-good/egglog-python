@@ -958,16 +958,9 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
             return transport.destroy(encoded)
 
     graph._state.transport = AuditedTransport()
-    if reuse == "separate":
-        graph.register(first, second)
-        assert responses[0].error is None
-        graph.check(eq(lhs).to(rhs))
-    else:
-        with pytest.raises(bindings.EggSmolError, match="repeated action Union occurrence"):
-            graph.register(first, second)
-        assert responses[0].error.code == pb.ErrorCode.INVALID_PROGRAM
-        assert responses[0].error.location is None
-        graph.check_fail(eq(lhs).to(rhs))
+    graph.register(first, second)
+    assert responses[0].error is None
+    graph.check(eq(lhs).to(rhs))
     assert len(requests[0].program.commands) == 2
     roots = [command.kind.value.kind.value for command in requests[0].program.commands]
     assert (roots[0] == roots[1]) is (reuse != "separate")
