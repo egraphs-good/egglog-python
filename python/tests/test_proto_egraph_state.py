@@ -1,7 +1,7 @@
 """Record/bytes plumbing tests; the inert responder is not engine conformance."""
 
 from operator import index
-from typing import Literal
+from typing import Literal, Never
 
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
@@ -11,6 +11,512 @@ from egglog import EGraph, Expr, bindings, constant, eq, function, i64, method, 
 from egglog._catalog import builtin_catalog
 from egglog._program import Builder, pack
 from egglog.runtime import RuntimeFunction, create_callable, resolve_callable
+
+# Test-only observation of the exception actually raised inside Python. Functions
+# pickle by module reference; this is not an engine error slot or value registry.
+_callback_observations = {}
+
+
+def _observed_pyerr_callback(tag):
+    observation = _callback_observations[tag]
+    observation["calls"] += 1
+    if "started" in observation:
+        observation["started"].set()
+        assert observation["release"].wait(10), "callback release timed out"
+    if "barrier" in observation:
+        observation["barrier"].wait(timeout=10)
+    error = observation["error"]
+    if error is not None:
+        observation["caught"] = error
+        raise error
+    return 8
+
+
+@pytest.fixture
+def callback_observations(monkeypatch):
+    import sys  # noqa: PLC0415
+
+    observations = {}
+    monkeypatch.setattr(sys.modules[__name__], "_callback_observations", observations)
+    return observations
+
+
+def _callback_program(tag):
+    """Author a closed call using the actual configured registrar, not fake signatures."""
+    import cloudpickle  # noqa: PLC0415
+
+    # The generation-only exporter is intentionally absent from the public stub.
+    program = pb.Program.from_binary(getattr(bindings, "_export_pyobject_catalog")())  # noqa: B009
+    sort = next(
+        index
+        for index, record in enumerate(program.sorts)
+        if record.kind.field == "family" and record.kind.value == pb.HostSort(name="PyObject")
+    )
+    first = len(program.nodes)
+    for value in (_observed_pyerr_callback, tag):
+        program.nodes.append(
+            pb.Node(
+                sort_id=sort,
+                kind=Oneof(
+                    "primitive_value",
+                    pb.PrimitiveValue(value=Oneof("custom", pb.CustomValue(payload=cloudpickle.dumps(value)))),
+                ),
+            )
+        )
+    program.nodes.append(
+        pb.Node(
+            sort_id=sort,
+            kind=Oneof("call", pb.Call(func="egglog.python.pyobject.call", args=[first, first + 1])),
+        )
+    )
+    program.commands.append(
+        pb.Command(kind=Oneof("extract", pb.Extract(roots=[first + 2], variants=1, extractor=pb.Extractor.TREE)))
+    )
+    return program, first
+
+
+def _callback_exchange(state, program, path):
+    """Keep the real encoded request/response before interpreting the atomic error pair."""
+    encoded = pb.RunProgramRequest(egraph_id=state.handle, program=program, profile=True).to_binary()
+    assert pb.RunProgramRequest.from_binary(encoded).to_binary() == encoded
+    path.with_suffix(".request.pb").write_bytes(encoded)
+    response, error = state.transport.run(encoded)
+    assert isinstance(response, bytes)
+    path.with_suffix(".response.pb").write_bytes(response)
+    decoded = pb.RunProgramResponse.from_binary(response)
+    assert pb.RunProgramResponse.from_binary(decoded.to_binary()) == decoded
+    assert decoded.ruleset_publication is not None
+    return decoded, error
+
+
+@pytest.mark.parametrize("kind", ["value", "chain", "unpickleable", "expression", "hostile_notes", "malformed_notes"])
+def test_callback_error_original_identity_and_adoption(table_transport, callback_observations, monkeypatch, kind):
+    class CustomError(ValueError):
+        pass
+
+    class HostileNotesError(CustomError):
+        def add_note(self, note):
+            msg = "annotation must not replace the original error"
+            raise RuntimeError(msg)
+
+    class Unpickleable:
+        def __reduce_ex__(self, protocol) -> Never:
+            pytest.fail("The original callback error argument was serialized")
+
+    argument = Unpickleable() if kind == "unpickleable" else i64(7) if kind == "expression" else "actual error"
+    error = (
+        ValueError(argument)
+        if kind == "value"
+        else HostileNotesError(argument)
+        if kind == "hostile_notes"
+        else CustomError(argument)
+    )
+    error.detail = {"owned": [1, 2]}
+    BaseException.add_note(error, "original note")
+    if kind == "malformed_notes":
+        malformed_notes = {"preserve": "original note state"}
+        error.__notes__ = malformed_notes
+    if kind == "chain":
+        cause, context = KeyError("cause"), LookupError("context")
+        error.__cause__, error.__context__, error.__suppress_context__ = cause, context, True
+        cause.__context__, context.__cause__ = context, error
+    chain = error.__cause__, error.__context__, error.__suppress_context__
+    callback_observations[kind] = {"error": error, "calls": 0}
+    graph, requests, responses = table_transport
+    program, first = _callback_program(kind)
+    # A completed ordinary Custom output must survive the later callback error.
+    program.commands.insert(
+        0, pb.Command(kind=Oneof("extract", pb.Extract(roots=[first + 1], variants=1, extractor=pb.Extractor.TREE)))
+    )
+    program.rulesets.append(pb.Ruleset(name="host_error_published", kind=Oneof("rules", pb.RuleList())))
+    source = Builder.from_program(program).publish()
+    published = source.ref("rulesets", len(program.rulesets) - 1)
+    packed = pack(commands=[source.ref("commands", index) for index in range(2)], roots=[published])
+    original_adopt = Builder.from_program.__func__
+    adopted = []
+
+    def adopt(cls, returned):
+        assert graph._state.definitions["ruleset", "host_error_published"] == published
+        adopted.append(returned)
+        return original_adopt(cls, returned)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Builder, "from_program", classmethod(adopt))
+        with pytest.raises(type(error)) as caught:
+            graph._state.run_program(packed)
+    assert caught.value is error is callback_observations[kind]["caught"]
+    assert error.args == (argument,)
+    assert error.args[0] is argument
+    assert error.detail == {"owned": [1, 2]}
+    assert (error.__cause__, error.__context__, error.__suppress_context__) == chain
+    if kind == "chain":
+        assert error.__cause__.__context__ is error.__context__
+        assert error.__context__.__cause__ is error
+    if kind == "hostile_notes":
+        assert error.__notes__ == ["original note"]
+    elif kind == "malformed_notes":
+        assert error.__notes__ is malformed_notes
+    else:
+        assert error.__notes__[0] == "original note"
+        assert error.__notes__[1].startswith("Calling function ")
+        assert error.__notes__[2:] == ["While calling primitive 'py-call'"]
+    traceback = error.__traceback__
+    frames = []
+    while traceback is not None:
+        frames.append(traceback.tb_frame.f_code)
+        traceback = traceback.tb_next
+    assert _observed_pyerr_callback.__code__ in frames
+    assert len(requests) == len(responses) == len(adopted) == 1
+    response = responses[0]
+    assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
+    assert response.error.location.path == [1]
+    assert len(response.outputs) == 1
+    assert response.outputs[0].location.path == [0]
+    assert adopted[0].nodes == response.nodes
+    assert adopted[0].sorts == response.sorts
+    term = response.outputs[0].kind.value.roots[0].variants[0].term
+    custom = response.nodes[term].kind.value.value
+    assert custom.field == "custom"
+    assert custom.value.payload == program.nodes[first + 1].kind.value.value.value.payload
+    assert custom.value.args == []
+
+
+@pytest.mark.parametrize("failure", ["binary", "receipt", "arena"])
+def test_callback_error_protocol_failure_keeps_original_chain(monkeypatch, failure):
+    error = ValueError("original host error")
+    cause, context = KeyError("cause"), LookupError("context")
+    error.__cause__, error.__context__, error.__suppress_context__ = cause, context, True
+    cause.__context__, context.__cause__ = context, error
+    response = pb.RunProgramResponse(
+        ruleset_publication=None if failure == "receipt" else pb.RulesetPublication()
+    ).to_binary()
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            pb.RunProgramRequest.from_binary(encoded)
+            return (b"\xff" if failure == "binary" else response), error
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    packed = pack([])
+    if failure == "arena":
+
+        def reject(cls, program):
+            msg = "response arena rejected"
+            raise ValueError(msg)
+
+        monkeypatch.setattr(Builder, "from_program", classmethod(reject))
+    # Decode/adoption failures differ in type; this control asserts original-cause identity.
+    with pytest.raises(Exception) as caught:  # noqa: PT011
+        graph._state.run_program(packed)
+    assert caught.value is not error
+    assert caught.value.__cause__ is error
+    assert (error.__cause__, error.__context__, error.__suppress_context__) == (cause, context, True)
+    assert cause.__context__ is context
+    assert context.__cause__ is error
+
+
+def test_callback_error_prior_native_record_is_not_current_check_failure(monkeypatch):
+    """An original host exception may itself retain an earlier native receipt."""
+    original = bindings.EggSmolError("earlier native check")
+    prior = pb.Error(
+        code=pb.ErrorCode.CHECK_FAILED, message="earlier native check", location=pb.CommandLocation(path=[0])
+    )
+    original.__dict__["_egglog_proto_error"] = prior
+
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            request = pb.RunProgramRequest.from_binary(encoded)
+            assert request.program.commands[0].kind.field == "check"
+            return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication()).to_binary(), original
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    with pytest.raises(bindings.EggSmolError) as caught:
+        graph.check_bool(eq(i64(1)).to(i64(1)))
+    assert caught.value is original
+    assert original.__dict__["_egglog_proto_error"] is prior
+
+
+@pytest.mark.parametrize("domain", ["same", "clone", "independent"])
+def test_callback_error_atomic_pairs_outlive_handles(callback_observations, tmp_path, domain):
+    from egglog.egraph_state import EGraphState  # noqa: PLC0415
+
+    first = EGraphState()
+    second = first if domain == "same" else first.copy() if domain == "clone" else EGraphState()
+    errors = [ValueError("request A"), LookupError("request B")]
+    pairs = []
+    try:
+        for index, state in enumerate((first, second)):
+            tag = str(index)
+            callback_observations[tag] = {"error": errors[index], "calls": 0}
+            program, _ = _callback_program(tag)
+            pairs.append(_callback_exchange(state, program, tmp_path / f"request-{index}"))
+        # The first returned object no longer occupies any mutable native slot.
+        callback_observations["recovery"] = {"error": None, "calls": 0}
+        program, _ = _callback_program("recovery")
+        recovered, no_error = _callback_exchange(first, program, tmp_path / "recovery")
+        assert recovered.error is None
+        assert no_error is None
+    finally:
+        if second is not first:
+            second.destroy()
+        first.destroy()
+    for index in (1, 0):
+        response, error = pairs[index]
+        assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
+        assert error is errors[index] is callback_observations[str(index)]["caught"]
+        with pytest.raises(type(error)) as caught:
+            raise error
+        assert caught.value is errors[index]
+
+
+def test_callback_error_independent_engines_do_not_swap_concurrent_errors(callback_observations, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+    from threading import Barrier  # noqa: PLC0415
+
+    from egglog.egraph_state import EGraphState  # noqa: PLC0415
+
+    barrier = Barrier(2)
+    states = [EGraphState(), EGraphState()]
+    programs = []
+    errors = [ValueError("parallel A"), KeyError("parallel B")]
+    for ordinal in range(2):
+        callback_observations[str(ordinal)] = {"error": errors[ordinal], "calls": 0, "barrier": barrier}
+        programs.append(_callback_program(str(ordinal))[0])
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            pending = [
+                executor.submit(_callback_exchange, states[ordinal], programs[ordinal], tmp_path / str(ordinal))
+                for ordinal in range(2)
+            ]
+            for ordinal, future in enumerate(pending):
+                response, error = future.result(timeout=20)
+                assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
+                assert error is errors[ordinal] is callback_observations[str(ordinal)]["caught"]
+    finally:
+        for state in states:
+            state.destroy()
+
+
+def test_callback_error_shared_transport_rejects_overlapping_borrow(callback_observations, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+    from threading import Event  # noqa: PLC0415
+
+    from egglog.egraph_state import EGraphState  # noqa: PLC0415
+
+    state = EGraphState()
+    clone = state.copy()
+    started, release = Event(), Event()
+    original = ValueError("blocked callback")
+    callback_observations["first"] = {"error": original, "calls": 0, "started": started, "release": release}
+    callback_observations["second"] = {"error": LookupError("must not run"), "calls": 0}
+    first, _ = _callback_program("first")
+    second, _ = _callback_program("second")
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(_callback_exchange, state, first, tmp_path / "first")
+            try:
+                assert started.wait(10)
+                with pytest.raises(RuntimeError):
+                    _callback_exchange(clone, second, tmp_path / "second")
+                assert callback_observations["second"]["calls"] == 0
+            finally:
+                release.set()
+            response, error = pending.result(timeout=20)
+            assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
+            assert error is original
+    finally:
+        clone.destroy()
+        state.destroy()
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+@pytest.mark.parametrize("case", ["query_failure", "query_success", "extract_failure", "later_native_error"])
+def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901
+    callback_observations, tmp_path, threads, case
+):
+    # Shared setup preserves the same request-prefix, suppression and recovery boundary.
+    import cloudpickle  # noqa: PLC0415
+
+    from egglog.egraph_state import EGraphState  # noqa: PLC0415
+
+    original = None if case == "query_success" else ValueError("prefix error")
+    callback_observations["first"] = {"error": original, "calls": 0}
+    callback_observations["later"] = {"error": None, "calls": 0}
+    program, first = _callback_program("first")
+    pyobject = program.nodes[first].sort_id
+    integer, unit = (
+        next(index for index, sort in enumerate(program.sorts) if sort.kind == Oneof("family", pb.HostSort(name=name)))
+        for name in ("i64", "Unit")
+    )
+    marks = []
+    for key, value in ((10, 1010), (20, 2020), (30, 3030)):
+        marks.append((len(program.nodes), len(program.nodes) + 1))
+        for number in (key, value):
+            program.nodes.append(
+                pb.Node(sort_id=integer, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", number))))
+            )
+    unit_value = len(program.nodes)
+    program.nodes.append(
+        pb.Node(sort_id=unit, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("unit", pb.Unit()))))
+    )
+    x, y = len(program.nodes), len(program.nodes) + 1
+    program.nodes.extend([pb.Node(sort_id=pyobject, kind=Oneof("var", name)) for name in ("x", "y")])
+    seed = len(program.nodes)
+    program.nodes.append(pb.Node(sort_id=unit, kind=Oneof("call", pb.Call(func="handoff_seed", args=[x]))))
+    query_call = len(program.nodes)
+    program.nodes.append(
+        pb.Node(sort_id=pyobject, kind=Oneof("call", pb.Call(func="egglog.python.pyobject.call", args=[first, x])))
+    )
+    later_argument = len(program.nodes)
+    program.nodes.append(
+        pb.Node(
+            sort_id=pyobject,
+            kind=Oneof(
+                "primitive_value",
+                pb.PrimitiveValue(value=Oneof("custom", pb.CustomValue(payload=cloudpickle.dumps("later")))),
+            ),
+        )
+    )
+    later_call = len(program.nodes)
+    program.nodes.append(
+        pb.Node(
+            sort_id=pyobject,
+            kind=Oneof("call", pb.Call(func="egglog.python.pyobject.call", args=[first, later_argument])),
+        )
+    )
+    program.declarations.extend([
+        pb.Declaration(
+            kind=Oneof("function", pb.Function(name="handoff_mark", inputs=[pb.Arg(sort=integer)], output=integer))
+        ),
+        pb.Declaration(
+            kind=Oneof("function", pb.Function(name="handoff_seed", inputs=[pb.Arg(sort=pyobject)], output=unit))
+        ),
+    ])
+    for name, call in (("handoff_first", query_call), ("handoff_later", later_call)):
+        query = len(program.nodes)
+        program.nodes.append(pb.Node(sort_id=pyobject, kind=Oneof("union", pb.Union(members=[y, call]))))
+        rule = len(program.rules)
+        program.rules.append(
+            pb.RuleDecl(
+                name=name,
+                eval_mode=pb.RuleEvalMode.SEMINAIVE,
+                kind=Oneof(
+                    "rule",
+                    pb.Rule(
+                        query=[seed, query],
+                        head=[
+                            pb.Action(
+                                kind=Oneof(
+                                    "set",
+                                    pb.Set(target=pb.Call(func="handoff_mark", args=[marks[2][0]]), value=marks[2][1]),
+                                )
+                            )
+                        ],
+                    ),
+                ),
+            )
+        )
+        program.rulesets.append(pb.Ruleset(name=name, kind=Oneof("rules", pb.RuleList(rules=[rule]))))
+    program.commands = [
+        pb.Command(
+            kind=Oneof(
+                "action",
+                pb.Action(
+                    kind=Oneof("set", pb.Set(target=pb.Call(func="handoff_seed", args=[first + 1]), value=unit_value))
+                ),
+            )
+        )
+    ]
+    state = EGraphState(num_threads=threads)
+    try:
+        setup, error = _callback_exchange(state, program, tmp_path / "setup")
+        assert setup.error is None
+        assert error is None
+        assert callback_observations["first"]["calls"] == callback_observations["later"]["calls"] == 0
+        program.commands = [
+            pb.Command(
+                kind=Oneof(
+                    "action",
+                    pb.Action(kind=Oneof("set", pb.Set(target=pb.Call(func="handoff_mark", args=[key]), value=value))),
+                )
+            )
+            for key, value in marks[:2]
+        ]
+        program.commands.insert(
+            1,
+            pb.Command(
+                kind=(
+                    Oneof("extract", pb.Extract(roots=[first + 2], variants=1, extractor=pb.Extractor.TREE))
+                    if case == "extract_failure"
+                    else Oneof("run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof("name", "handoff_first"))))
+                )
+            ),
+        )
+        program.commands.append(
+            pb.Command(
+                kind=(
+                    Oneof("action", pb.Action(kind=Oneof("panic", "native after callback")))
+                    if case == "later_native_error"
+                    else Oneof("run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof("name", "handoff_later"))))
+                )
+            )
+        )
+        response, captured = _callback_exchange(state, program, tmp_path / "execution")
+        assert captured is original
+        assert (response.error is not None) == (case in {"extract_failure", "later_native_error"})
+        if original is not None:
+            assert captured is callback_observations["first"]["caught"]
+            assert callback_observations["later"]["calls"] == 0
+        if case == "later_native_error":
+            assert response.error.location.path == [3]
+            assert "native after callback" in response.error.message
+        elif case == "extract_failure":
+            assert response.error.location.path == [1]
+        program.commands = [pb.Command(kind=Oneof("print_function", pb.PrintFunction(table="handoff_mark")))]
+        observed, error = _callback_exchange(state, program, tmp_path / "markers")
+        assert observed.error is None
+        assert error is None
+        rows = {}
+        for row in observed.outputs[0].kind.value.rows:
+            values = []
+            for cell in (*row.args, row.output):
+                assert cell.kind.field == "term"
+                node = observed.nodes[cell.kind.value]
+                assert node.kind.value.value.field == "i64"
+                values.append(node.kind.value.value.value)
+            assert len(values) == 2
+            rows[values[0]] = values[1]
+        expected = {10: 1010}
+        if case != "extract_failure":
+            expected[20] = 2020
+        if case == "query_success":
+            expected[30] = 3030
+        assert rows == expected
+        callback_observations["recovery"] = {"error": None, "calls": 0}
+        recovered, error = _callback_exchange(state, _callback_program("recovery")[0], tmp_path / "recovery")
+        assert recovered.error is None
+        assert error is None
+        term = recovered.outputs[0].kind.value.roots[0].variants[0].term
+        payload = recovered.nodes[term].kind.value.value
+        assert payload.field == "custom"
+        assert payload.value.args == []
+        assert cloudpickle.loads(payload.value.payload) == 8
+    finally:
+        state.destroy()
 
 
 @pytest.fixture
@@ -32,11 +538,11 @@ def table_transport(monkeypatch, tmp_path):
             position = len(requests)
             (tmp_path / f"request-{position}.pb").write_bytes(encoded)
             requests.append(pb.RunProgramRequest.from_binary(encoded))
-            returned = transport.run(encoded)
+            returned, host_error = transport.run(encoded)
             assert isinstance(returned, bytes)
             (tmp_path / f"response-{position}.pb").write_bytes(returned)
             responses.append(pb.RunProgramResponse.from_binary(returned))
-            return returned
+            return returned, host_error
 
     monkeypatch.setattr(graph._state, "transport", AuditedTransport())
     yield graph, requests, responses
@@ -215,7 +721,7 @@ def test_function_sizes_reject_malformed_response_without_engine(monkeypatch, se
             assert request.program is not None
             assert request.program.commands[0].kind is not None
             assert request.program.commands[0].kind.field == "print_size"
-            return response.to_binary()
+            return response.to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -478,7 +984,7 @@ def test_function_values_rejects_malformed_response_without_engine(monkeypatch, 
             assert request.program is not None
             assert request.program.commands[0].kind is not None
             assert request.program.commands[0].kind.field == "print_function"
-            return response.to_binary()
+            return response.to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -639,7 +1145,7 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
             return pb.RunProgramResponse(
                 ruleset_publication=pb.RulesetPublication(names=[r.name for r in program.rulesets]),
                 outputs=outputs,
-            ).to_binary()
+            ).to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -741,7 +1247,9 @@ def test_public_reports_require_the_requested_top_level_output(monkeypatch, oper
                     output.kind.value.updated = True
                 else:
                     output.run_report = report
-            return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication(), outputs=[output]).to_binary()
+            return pb.RunProgramResponse(
+                ruleset_publication=pb.RulesetPublication(), outputs=[output]
+            ).to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -806,7 +1314,7 @@ def test_publication_adopts_exact_receipt_before_install_error(monkeypatch, comp
                 error=pb.Error(code=pb.ErrorCode.EVALUATION_FAILED, message="injected install boundary")
                 if fail
                 else None,
-            ).to_binary()
+            ).to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -850,7 +1358,7 @@ def test_invalid_publication_receipt_does_not_adopt_roots(monkeypatch, receipt):
         def run(self, encoded):
             return pb.RunProgramResponse(
                 ruleset_publication=None if receipt is None else pb.RulesetPublication(names=receipt)
-            ).to_binary()
+            ).to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -885,7 +1393,7 @@ def test_mixed_registration_cut_distinguishes_query_from_action_identity(monkeyp
                 ruleset_publication=pb.RulesetPublication(
                     names=[root.name for root in request.program.rulesets if root.has_field("name")]
                 )
-            ).to_binary()
+            ).to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -949,10 +1457,10 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
             index = len(requests)
             (tmp_path / f"request-{index}.pb").write_bytes(encoded)
             requests.append(pb.RunProgramRequest.from_binary(encoded))
-            returned = transport.run(encoded)
+            returned, host_error = transport.run(encoded)
             (tmp_path / f"response-{index}.pb").write_bytes(returned)
             responses.append(pb.RunProgramResponse.from_binary(returned))
-            return returned
+            return returned, host_error
 
         def destroy(self, encoded):
             return transport.destroy(encoded)
@@ -990,12 +1498,12 @@ def test_ruleset_append_preserves_native_cursor(tmp_path):
             (tmp_path / f"request-{index}.pb").write_bytes(encoded)
             decoded = pb.RunProgramRequest.from_binary(encoded)
             assert pb.RunProgramRequest.from_binary(decoded.to_binary()) == decoded
-            returned = transport.run(encoded)
+            returned, host_error = transport.run(encoded)
             (tmp_path / f"response-{index}.pb").write_bytes(returned)
             response = pb.RunProgramResponse.from_binary(returned)
             assert response.ruleset_publication is not None
             responses.append(response)
-            return returned
+            return returned, host_error
 
         def destroy(self, encoded):
             return transport.destroy(encoded)
@@ -1046,12 +1554,12 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
         assert request.to_binary() == encoded
         requests.append(request)
         (tmp_path / f"request-{index}.pb").write_bytes(encoded)
-        returned = transport.run(encoded)
+        returned, host_error = transport.run(encoded)
         (tmp_path / f"response-{index}.pb").write_bytes(returned)
         response = pb.RunProgramResponse.from_binary(returned)
         assert response.ruleset_publication is not None
         responses.append(response)
-        return returned
+        return returned, host_error
 
     graph._state.transport = SimpleNamespace(run=audited_run, destroy=transport.destroy)
     if seeded:
@@ -1414,7 +1922,7 @@ def test_check_fail_authors_one_canonical_nested_command(monkeypatch):
 
         def run(self, encoded):
             requests.append(pb.RunProgramRequest.from_binary(encoded))
-            return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication()).to_binary()
+            return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication()).to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -1435,6 +1943,32 @@ def test_check_fail_authors_one_canonical_nested_command(monkeypatch):
     assert requests[1].program.commands[0].kind.value.kind.value.facts == []
 
 
+@pytest.mark.parametrize("shape", ["empty", "other", "multiple"])
+def test_failed_check_policy_requires_one_top_level_check(monkeypatch, shape):
+    class InertTransport:
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1).to_binary()
+
+        def run(self, encoded):
+            pytest.fail("Invalid failed-check policy must not execute a request")
+
+        def destroy(self, encoded):
+            return pb.DestroyEGraphResponse().to_binary()
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
+    graph = EGraph()
+    commands = []
+    if shape == "other":
+        commands.append(pb.Command(kind=Oneof("stats", pb.Unit())))
+    elif shape == "multiple":
+        commands.extend(pb.Command(kind=Oneof("check", pb.Check())) for _ in range(2))
+    owner = Builder.from_program(pb.Program(ir_version=1, commands=commands)).publish()
+    with pytest.raises(ValueError, match="exactly one top-level Check"):
+        graph._state.run_program(
+            [owner.ref("commands", index) for index in range(len(commands))], allow_failed_check=True
+        )
+
+
 @pytest.mark.parametrize("operation", ["check", "check_bool", "check_fail"])
 @pytest.mark.parametrize(
     ("code", "location"),
@@ -1442,6 +1976,7 @@ def test_check_fail_authors_one_canonical_nested_command(monkeypatch):
         (pb.ErrorCode.CHECK_FAILED, pb.CommandLocation(path=[0])),
         (pb.ErrorCode.CHECK_FAILED, None),
         (pb.ErrorCode.CHECK_FAILED, pb.CommandLocation(path=[1])),
+        (pb.ErrorCode.CHECK_FAILED, pb.CommandLocation(path=[0], iterations=[0])),
         (pb.ErrorCode.EVALUATION_FAILED, pb.CommandLocation(path=[0])),
         (pb.ErrorCode.PROOF_FAILED, pb.CommandLocation(path=[0])),
         (pb.ErrorCode.INVALID_PROGRAM, None),
@@ -1457,7 +1992,7 @@ def test_check_errors_use_codes_and_locations_not_messages(monkeypatch, operatio
             return pb.CreateEGraphResponse(egraph_id=1).to_binary()
 
         def run(self, encoded):
-            return pb.RunProgramResponse(error=record, ruleset_publication=pb.RulesetPublication()).to_binary()
+            return pb.RunProgramResponse(error=record, ruleset_publication=pb.RulesetPublication()).to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -1470,6 +2005,7 @@ def test_check_errors_use_codes_and_locations_not_messages(monkeypatch, operatio
         and code == pb.ErrorCode.CHECK_FAILED
         and location is not None
         and location.path == [0]
+        and not location.iterations
     ):
         assert method(eq(i64(1)).to(i64(1))) is False
     else:
@@ -1503,7 +2039,7 @@ def test_execution_error_retains_only_confirmed_declaration_refs(monkeypatch, lo
                     location=pb.CommandLocation(path=[0]) if located else None,
                 ),
                 ruleset_publication=pb.RulesetPublication(),
-            ).to_binary()
+            ).to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -1563,7 +2099,7 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
 
         def run(self, encoded):
             requests.append(pb.RunProgramRequest.from_binary(encoded))
-            return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication()).to_binary()
+            return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication()).to_binary(), None
 
         def destroy(self, encoded):
             assert pb.DestroyEGraphRequest.from_binary(encoded).egraph_id == 1
@@ -1627,7 +2163,7 @@ def test_response_owner_keeps_nominal_and_ambient_family_contexts(monkeypatch):
                         location=pb.CommandLocation(path=[0]),
                     )
                 ],
-            ).to_binary()
+            ).to_binary(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -1667,7 +2203,7 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
             assert request.sorts[request.options.cost_sort].kind.value.name == "i64"
             return pb.CreateEGraphResponse(egraph_id=1).to_binary()
 
-        def run(self, encoded: bytes) -> bytes:
+        def run(self, encoded: bytes) -> tuple[bytes, BaseException | None]:
             assert isinstance(encoded, bytes)
             request = pb.RunProgramRequest.from_binary(encoded)
             requests.append(request)
@@ -1692,7 +2228,7 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
                         location=pb.CommandLocation(path=[0]),
                     )
                 ],
-            ).to_binary()
+            ).to_binary(), None
 
         def clone_graph(self, encoded: bytes) -> bytes:
             assert pb.CloneEGraphRequest.from_binary(encoded).egraph_id == 1

@@ -1,11 +1,15 @@
-//! Private bytes-only access to the shared adapter. No Python syntax is lowered here.
+//! Encoded adapter access, with request-owned original Python callback errors.
+//! No Python syntax is lowered here; ordinary results and errors remain bytes.
 
+use crate::py_object_sort::{PyObjectErrorState, PyObjectExtension};
 use egglog_experimental::protobuf::NativeExtension;
 use egglog_experimental::protobuf::{Engine, TransportError};
 use prost::Message;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyBaseException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::Arc;
 
 /// Generation-time export from the actual registrar, not a parallel catalog.
 #[pyfunction]
@@ -29,9 +33,21 @@ pub(crate) fn _export_pyobject_catalog(py: Python<'_>) -> PyResult<Bound<'_, PyB
 }
 
 #[pyclass(name = "_ProtoEngine")]
-#[derive(Default)]
 pub struct ProtoEngine {
     engine: Engine,
+    py_error: PyObjectErrorState,
+}
+
+impl Default for ProtoEngine {
+    fn default() -> Self {
+        let py_error = PyObjectErrorState::default();
+        Self {
+            engine: Engine::with_extension(Arc::new(PyObjectExtension {
+                py_error: py_error.clone(),
+            })),
+            py_error,
+        }
+    }
 }
 
 impl ProtoEngine {
@@ -49,6 +65,38 @@ impl ProtoEngine {
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         Ok(PyBytes::new(py, &response))
     }
+
+    // Drain while this request still exclusively owns the engine. The returned
+    // exception belongs to its response, not to a later mutable take_error slot.
+    fn run_request<'py>(
+        &mut self,
+        py: Python<'py>,
+        request: &Bound<'py, PyBytes>,
+        operation: impl FnOnce(&mut Engine, &[u8]) -> Result<Vec<u8>, TransportError> + Send,
+    ) -> PyResult<(Bound<'py, PyBytes>, Option<Py<PyBaseException>>)> {
+        let bytes = request.as_bytes().to_vec();
+        self.py_error.lock().unwrap().take();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            py.detach(|| operation(&mut self.engine, &bytes))
+        }));
+        let captured = self.py_error.lock().unwrap().take();
+        let response = match result {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                return Err(captured.unwrap_or_else(|| PyValueError::new_err(error.to_string())));
+            }
+            Err(error) => {
+                if let Some(captured) = captured {
+                    return Err(captured);
+                }
+                resume_unwind(error);
+            }
+        };
+        Ok((
+            PyBytes::new(py, &response),
+            captured.map(|error| error.into_value(py)),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -60,6 +108,153 @@ mod tests {
     use prost::Message;
     use pyo3::types::PyDict;
     use std::sync::Arc;
+
+    #[test]
+    fn callback_error_handoff_preserves_response_and_identity() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::from_code(
+                py,
+                c"caught = None\ndef callback():\n    global caught\n    caught = ValueError('original callback error')\n    raise caught\n",
+                c"pyerr_handoff.py",
+                c"_egglog_pyerr_handoff",
+            )
+            .unwrap();
+            PyModule::import(py, "sys")
+                .unwrap()
+                .getattr("modules")
+                .unwrap()
+                .set_item("_egglog_pyerr_handoff", &module)
+                .unwrap();
+            let callback = dump(module.getattr("callback").unwrap()).unwrap().0;
+            let mut instance = ProtoEngine::default();
+            let id = create(&mut instance.engine);
+            let mut program = custom_program(callback);
+            program.nodes.push(pb::Node {
+                sort_id: 0,
+                kind: Some(pb::node::Kind::Call(pb::Call {
+                    func: "egglog.python.pyobject.call".into(),
+                    args: vec![0],
+                })),
+                ..Default::default()
+            });
+            let Some(pb::command::Kind::Extract(extract)) = &mut program.commands[0].kind else {
+                unreachable!()
+            };
+            extract.roots = vec![1];
+            let request = pb::RunProgramRequest {
+                egraph_id: id,
+                program: Some(program),
+                profile: true,
+                ..Default::default()
+            }
+            .encode_to_vec();
+            let instance = Py::new(py, instance).unwrap();
+            // Dynamic invocation keeps the pre-fix witness compilable. Accept
+            // its old bytes shape only to expose the lost actual callback error.
+            let returned = instance
+                .bind(py)
+                .call_method1("run", (PyBytes::new(py, &request),))
+                .unwrap();
+            let (bytes, captured) = returned
+                .extract::<(Vec<u8>, Option<Py<pyo3::exceptions::PyBaseException>>)>()
+                .unwrap_or_else(|_| (returned.extract::<Vec<u8>>().unwrap(), None));
+            let response = pb::RunProgramResponse::decode(bytes.as_slice()).unwrap();
+            assert_eq!(response.encode_to_vec(), bytes);
+            assert!(response.ruleset_publication.is_some());
+            assert_eq!(
+                response.error.unwrap().code,
+                pb::ErrorCode::EvaluationFailed as i32
+            );
+            let original = module.getattr("caught").unwrap();
+            assert!(original.is_instance_of::<PyValueError>());
+            assert_eq!(
+                original
+                    .getattr("args")
+                    .unwrap()
+                    .extract::<(String,)>()
+                    .unwrap()
+                    .0,
+                "original callback error"
+            );
+            let captured = captured.expect("actual callback error was lost after native execution");
+            assert!(captured.bind(py).is(&original));
+            let notes: Vec<String> = original.getattr("__notes__").unwrap().extract().unwrap();
+            assert_eq!(notes.len(), 2);
+            assert!(notes[0].starts_with("Calling function "));
+            assert_eq!(notes[1], "While calling primitive 'py-call'");
+            assert!(!original.getattr("__traceback__").unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn callback_error_request_drain_covers_worker_transport_and_unwind() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mut instance = ProtoEngine::default();
+            let independent = ProtoEngine::default();
+            assert!(!Arc::ptr_eq(&instance.py_error, &independent.py_error));
+            for boundary in ["response", "transport", "unwind"] {
+                *instance.py_error.lock().unwrap() = Some(PyValueError::new_err("stale"));
+                let original = PyValueError::new_err(boundary);
+                let value = original.value(py).clone().unbind();
+                let errors = instance.py_error.clone();
+                let result =
+                    instance.run_request(py, &PyBytes::new(py, b"request"), move |engine, _| {
+                        assert!(errors.lock().unwrap().is_none());
+                        std::thread::spawn(move || {
+                            *errors.lock().unwrap() = Some(original);
+                        })
+                        .join()
+                        .unwrap();
+                        match boundary {
+                            "response" => Ok(pb::RunProgramResponse {
+                                ruleset_publication: Some(pb::RulesetPublication::default()),
+                                ..Default::default()
+                            }
+                            .encode_to_vec()),
+                            "transport" => engine.run(&[0xff]),
+                            _ => panic!("secondary native unwind"),
+                        }
+                    });
+                if boundary == "response" {
+                    let (bytes, captured) = result.unwrap();
+                    assert!(
+                        pb::RunProgramResponse::decode(bytes.as_bytes())
+                            .unwrap()
+                            .ruleset_publication
+                            .is_some()
+                    );
+                    assert!(captured.unwrap().bind(py).is(value.bind(py)));
+                } else {
+                    assert!(result.unwrap_err().value(py).is(value.bind(py)));
+                }
+                assert!(instance.py_error.lock().unwrap().is_none());
+                assert!(independent.py_error.lock().unwrap().is_none());
+                let (bytes, captured) = instance
+                    .run_request(
+                        py,
+                        &PyBytes::new(py, b"next"),
+                        |_, bytes| Ok(bytes.to_vec()),
+                    )
+                    .unwrap();
+                assert_eq!(bytes.as_bytes(), b"next");
+                assert!(captured.is_none());
+            }
+            let failure = instance
+                .run_request(py, &PyBytes::new(py, &[0xff]), Engine::run)
+                .unwrap_err();
+            assert!(failure.is_instance_of::<PyValueError>(py));
+            assert!(instance.py_error.lock().unwrap().is_none());
+            let unwind = catch_unwind(AssertUnwindSafe(|| {
+                let _ = instance.run_request(py, &PyBytes::new(py, b"panic"), |_, _| {
+                    panic!("uncaptured native unwind")
+                });
+            }));
+            assert!(unwind.is_err());
+            assert!(instance.py_error.lock().unwrap().is_none());
+        });
+    }
 
     #[test]
     fn provider_catalog_and_inert_string_bytes() {
@@ -735,6 +930,7 @@ mod tests {
             egraph_id: id,
             program: Some(program),
             profile: true,
+            ..Default::default()
         };
         pb::RunProgramResponse::decode(engine.run(&request.encode_to_vec()).unwrap().as_slice())
             .unwrap()
@@ -793,8 +989,8 @@ impl ProtoEngine {
         &mut self,
         py: Python<'py>,
         request: &Bound<'py, PyBytes>,
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        self.request(py, request, Engine::run)
+    ) -> PyResult<(Bound<'py, PyBytes>, Option<Py<PyBaseException>>)> {
+        self.run_request(py, request, Engine::run)
     }
 
     fn clone_graph<'py>(

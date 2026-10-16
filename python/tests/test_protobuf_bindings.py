@@ -111,9 +111,11 @@ def test_binary_engine_lifecycle_and_scalar_extract():
             )
         ],
     )
-    response = pb.RunProgramResponse.from_binary(
-        engine.run(pb.RunProgramRequest(egraph_id=created.egraph_id, program=program, profile=True).to_binary()),
+    encoded, host_error = engine.run(
+        pb.RunProgramRequest(egraph_id=created.egraph_id, program=program, profile=True).to_binary()
     )
+    assert host_error is None
+    response = pb.RunProgramResponse.from_binary(encoded)
     assert response.error is None
     output = response.outputs[0].kind
     assert output is not None
@@ -285,7 +287,10 @@ def proof_engine(request):
 
 def test_binary_proof_modes_requested_outputs_and_maintenance(proof_engine):
     engine, handles, mode = proof_engine
-    encoded = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=_proof_program(), profile=True).to_binary())
+    encoded, host_error = engine.run(
+        pb.RunProgramRequest(egraph_id=handles[0], program=_proof_program(), profile=True).to_binary()
+    )
+    assert host_error is None
     response = pb.RunProgramResponse.from_binary(encoded)
     assert pb.RunProgramResponse.from_binary(response.to_binary()) == response
     profile = response.profile
@@ -347,9 +352,11 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     engine, handles, mode = proof_engine
     setup = _proof_program()
     del setup.commands[3:]
-    response = pb.RunProgramResponse.from_binary(
-        engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=setup, profile=True).to_binary())
+    setup_bytes, host_error = engine.run(
+        pb.RunProgramRequest(egraph_id=handles[0], program=setup, profile=True).to_binary()
     )
+    assert host_error is None
+    response = pb.RunProgramResponse.from_binary(setup_bytes)
     assert response.error is None
     cloned = pb.CloneEGraphResponse.from_binary(
         engine.clone_graph(pb.CloneEGraphRequest(egraph_id=handles[0]).to_binary())
@@ -376,7 +383,10 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     ]
     if not proofs_enabled:
         del program.commands[0]
-    encoded = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary())
+    encoded, host_error = engine.run(
+        pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary()
+    )
+    assert host_error is None
     response = pb.RunProgramResponse.from_binary(encoded)
     assert response.error is not None
     assert response.error.code == pb.ErrorCode.PROOF_FAILED
@@ -392,18 +402,22 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     assert not response.profile.complete
     for handle, node, succeeds in [(handles[0], 7, True), (handles[0], 9, False), (handles[1], 7, False)]:
         program.commands = [pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[node])))]
-        checked = pb.RunProgramResponse.from_binary(
-            engine.run(pb.RunProgramRequest(egraph_id=handle, program=program, profile=True).to_binary())
+        checked_bytes, host_error = engine.run(
+            pb.RunProgramRequest(egraph_id=handle, program=program, profile=True).to_binary()
         )
+        assert host_error is None
+        checked = pb.RunProgramResponse.from_binary(checked_bytes)
         assert (checked.error is None) == succeeds
     program.commands = [
         pb.Command(
             kind=Oneof[Literal["prove_exists"], pb.ProveExists]("prove_exists", pb.ProveExists(constructor="Goal"))
         )
     ]
-    copied = pb.RunProgramResponse.from_binary(
-        engine.run(pb.RunProgramRequest(egraph_id=handles[1], program=program, profile=True).to_binary())
+    copied_bytes, host_error = engine.run(
+        pb.RunProgramRequest(egraph_id=handles[1], program=program, profile=True).to_binary()
     )
+    assert host_error is None
+    copied = pb.RunProgramResponse.from_binary(copied_bytes)
     assert (copied.error is None) == proofs_enabled
     if not proofs_enabled:
         assert copied.error is not None
@@ -453,9 +467,11 @@ def test_binary_encoded_observations_stay_explicitly_unsupported(proof_engine, o
             )
         ),
     ]
-    failed = pb.RunProgramResponse.from_binary(
-        engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary())
+    encoded, host_error = engine.run(
+        pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary()
     )
+    assert host_error is None
+    failed = pb.RunProgramResponse.from_binary(encoded)
     assert failed.error is not None
     assert failed.error.code == pb.ErrorCode.INVALID_PROGRAM
     assert not failed.outputs
@@ -464,9 +480,11 @@ def test_binary_encoded_observations_stay_explicitly_unsupported(proof_engine, o
     assert not failed.profile.runs
     assert not failed.profile.maintenance
     program.commands = [pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[2])))]
-    retry = pb.RunProgramResponse.from_binary(
-        engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary())
+    encoded, host_error = engine.run(
+        pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary()
     )
+    assert host_error is None
+    retry = pb.RunProgramResponse.from_binary(encoded)
     assert retry.error is not None
     assert retry.error.location is not None
 
@@ -484,13 +502,13 @@ def test_binary_unknown_mode_and_profile_off_stay_explicit():
     request.options.execution_mode = pb.ExecutionMode.NORMAL
     created = pb.CreateEGraphResponse.from_binary(engine.create(request.to_binary()))
     try:
-        response = pb.RunProgramResponse.from_binary(
-            engine.run(
-                pb.RunProgramRequest(
-                    egraph_id=created.egraph_id, program=pb.Program(ir_version=1), profile=False
-                ).to_binary()
-            )
+        encoded, host_error = engine.run(
+            pb.RunProgramRequest(
+                egraph_id=created.egraph_id, program=pb.Program(ir_version=1), profile=False
+            ).to_binary()
         )
+        assert host_error is None
+        response = pb.RunProgramResponse.from_binary(encoded)
         assert response.error is not None
         assert response.error.code == pb.ErrorCode.INVALID_PROGRAM
         assert "profile=false" in response.error.message

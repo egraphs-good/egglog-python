@@ -131,10 +131,10 @@ impl BaseSort for PyObjectSort {
         // Keep these native signatures without inventing a Python method view.
         add_primitive!(eg, "py-call" [id = "egglog.python.pyobject.call"] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
             attach(&self.ctx, "py-call", |py| {
-                let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>().map_err(|e| {e.add_note(py, "Loading arguments").unwrap(); e})?;
+                let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>().map_err(|e| {let _ = e.add_note(py, "Loading arguments"); e})?;
                 let fn_obj = &xs[0];
-                let args = PyTuple::new(py, xs[1..].to_vec()).map_err(|e| {e.add_note(py, "Creating tuple").unwrap(); e})?;
-                dump(fn_obj.call1(args).map_err(|e| {e.add_note(py, format!("Calling function {}", fn_obj)).unwrap(); e})?)
+                let args = PyTuple::new(py, xs[1..].to_vec()).map_err(|e| {let _ = e.add_note(py, "Creating tuple"); e})?;
+                dump(fn_obj.call1(args).map_err(|e| {let _ = e.add_note(py, format!("Calling function {}", fn_obj)); e})?)
             })
         });
 
@@ -269,11 +269,11 @@ fn py_object_bindings(
     }
 }
 
-/// Explicit value-only capability. The public Python byte engine does not
-/// install this while callback exception/prefix semantics remain unresolved.
+/// Explicit native Python capability. Each owning byte engine supplies its own
+/// first-error latch; native handles and clones in that engine share it.
 #[derive(Default)]
 pub(crate) struct PyObjectExtension {
-    py_error: PyObjectErrorState,
+    pub(crate) py_error: PyObjectErrorState,
 }
 
 impl egglog_experimental::protobuf::NativeExtension for PyObjectExtension {
@@ -377,8 +377,8 @@ where
         match f(py) {
             Ok(val) => Some(val),
             Err(err) => {
-                err.add_note(py, format!("While calling primitive '{}'", name))
-                    .unwrap();
+                // User exception methods/state must not replace the first error.
+                let _ = err.add_note(py, format!("While calling primitive '{}'", name));
                 let mut first_error = py_error.lock().unwrap();
                 if first_error.is_none() {
                     *first_error = Some(err);

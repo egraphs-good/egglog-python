@@ -531,11 +531,11 @@ def test_symbolic_getattr_public_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path
             index = len(requests)
             (tmp_path / f"request-{index}.pb").write_bytes(encoded)
             requests.append(pb.RunProgramRequest.from_binary(encoded))
-            returned = transport.run(encoded)
+            returned, host_error = transport.run(encoded)
             assert isinstance(returned, bytes)
             (tmp_path / f"response-{index}.pb").write_bytes(returned)
             responses.append(pb.RunProgramResponse.from_binary(returned))
-            return returned
+            return returned, host_error
 
     monkeypatch.setattr(graph._state, "transport", AuditedTransport())
     receiver = A(i64(7))
@@ -609,10 +609,10 @@ def test_symbolic_getattr_corrupt_bytes_reject_before_execution(monkeypatch: pyt
             corrupted = request.to_binary()
             assert corrupted != encoded
             (tmp_path / "request-corrupted.pb").write_bytes(corrupted)
-            returned = transport.run(corrupted)
+            returned, host_error = transport.run(corrupted)
             (tmp_path / "response.pb").write_bytes(returned)
             rejected.append(pb.RunProgramResponse.from_binary(returned))
-            return returned
+            return returned, host_error
 
     with monkeypatch.context() as patch:
         patch.setattr(graph._state, "transport", CorruptTransport())

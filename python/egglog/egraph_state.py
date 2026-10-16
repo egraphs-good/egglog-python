@@ -1,9 +1,10 @@
 """
-Bytes-only EGraph transport and response ownership.
+Encoded EGraph transport and response ownership.
 
 No expression, declaration, or command is reconstructed from Python semantic
 dataclasses here. Language lookup indexes retain canonical declaration Refs;
 installation compatibility and idempotence belong to the shared adapter.
+Only original Python callback exceptions use a request-owned non-wire channel.
 """
 
 from __future__ import annotations
@@ -82,8 +83,14 @@ class EGraphState:
             raise ValueError(msg)
         return response.threads
 
-    def run_program(  # noqa: C901
-        self, commands: Iterable[Ref] | Packed, *, roots: Iterable[Ref] = (), include_run_reports: bool = False
+    # Receipt/arena adoption and host-error precedence share one error boundary.
+    def run_program(  # noqa: C901, PLR0912
+        self,
+        commands: Iterable[Ref] | Packed,
+        *,
+        roots: Iterable[Ref] = (),
+        include_run_reports: bool = False,
+        allow_failed_check: bool = False,
     ) -> tuple[pb.RunProgramResponse, Owner]:
         """Pack canonical command closure once and adopt the returned records."""
         if self.handle is None:
@@ -94,42 +101,80 @@ class EGraphState:
             if isinstance(commands, Packed)
             else pack(roots, commands=commands, ambient=self.definitions.keys())
         )
+        if allow_failed_check and (
+            len(packed.program.commands) != 1
+            or packed.program.commands[0].kind is None
+            or packed.program.commands[0].kind.field != "check"
+        ):
+            msg = "Failed-check policy requires exactly one top-level Check"
+            raise ValueError(msg)
         request = pb.RunProgramRequest(
             egraph_id=self.handle, program=packed.program, profile=True, include_run_reports=include_run_reports
         )
-        response = pb.RunProgramResponse.from_binary(self.transport.run(request.to_binary()))
-        submitted = {
-            cast("pb.Ruleset", reference.read()).name: reference
-            for reference in packed.definitions
-            if reference.role == "rulesets"
-        }
-        receipt = response.ruleset_publication
-        if receipt is None:
-            msg = "Response omitted the required ruleset publication receipt"
-            raise ValueError(msg)
-        names = set(receipt.names)
-        if len(names) != len(receipt.names) or not names <= submitted.keys():
-            msg = "Ruleset publication receipt contains duplicate or unsubmitted names"
-            raise ValueError(msg)
-        if (response.error is None or response.error.location is not None) and names != submitted.keys():
-            msg = "Completed installation omitted submitted ruleset confirmations"
-            raise ValueError(msg)
-        for name in receipt.names:
-            reference = submitted[name]
-            self.definitions["ruleset", name] = reference
-            # A completed root confirms its declaration dependencies even when
-            # a later installation failed before authored commands began.
-            for dependency in pack(roots=[reference], ambient=self.definitions.keys()).definitions:
-                key = _definition_key(dependency.read())
-                if key is not None and dependency.role == "declarations":
-                    self.definitions[key] = dependency
-        # A command location confirms that declaration installation finished,
-        # even when execution failed. An absent location proves no such thing.
-        if response.error is None or response.error.location is not None:
-            for reference in packed.definitions:
-                key = _definition_key(reference.read())
-                if key is not None and reference.role == "declarations":
-                    self.definitions[key] = reference
+        encoded, host_error = self.transport.run(request.to_binary())
+        # Keep receipt validation inside this boundary to preserve the host cause.
+        try:
+            response = pb.RunProgramResponse.from_binary(encoded)
+            submitted = {
+                cast("pb.Ruleset", reference.read()).name: reference
+                for reference in packed.definitions
+                if reference.role == "rulesets"
+            }
+            receipt = response.ruleset_publication
+            if receipt is None:
+                msg = "Response omitted the required ruleset publication receipt"
+                raise ValueError(msg)  # noqa: TRY301
+            names = set(receipt.names)
+            if len(names) != len(receipt.names) or not names <= submitted.keys():
+                msg = "Ruleset publication receipt contains duplicate or unsubmitted names"
+                raise ValueError(msg)  # noqa: TRY301
+            if (response.error is None or response.error.location is not None) and names != submitted.keys():
+                msg = "Completed installation omitted submitted ruleset confirmations"
+                raise ValueError(msg)  # noqa: TRY301
+            for name in receipt.names:
+                reference = submitted[name]
+                self.definitions["ruleset", name] = reference
+                # A completed root confirms its declaration dependencies even when
+                # a later installation failed before authored commands began.
+                for dependency in pack(roots=[reference], ambient=self.definitions.keys()).definitions:
+                    key = _definition_key(dependency.read())
+                    if key is not None and dependency.role == "declarations":
+                        self.definitions[key] = dependency
+            # A command location confirms that declaration installation finished,
+            # even when execution failed. An absent location proves no such thing.
+            if response.error is None or response.error.location is not None:
+                for reference in packed.definitions:
+                    key = _definition_key(reference.read())
+                    if key is not None and reference.role == "declarations":
+                        self.definitions[key] = reference
+            builder = Builder.from_program(
+                pb.Program(
+                    ir_version=1,
+                    nodes=response.nodes,
+                    sorts=response.sorts,
+                    files=response.files,
+                )
+            )
+            for reference in self.definitions.values():
+                builder.import_ref(reference)
+            owner = builder.publish()
+        except BaseException as error:
+            if host_error is not None and error is not host_error:
+                raise error from host_error
+            raise
+        # The actual response/arena and publication have been consumed. Preserve
+        # first-host precedence without rewriting its chain or the native Error.
+        if host_error is not None:
+            raise host_error
+        if (
+            allow_failed_check
+            and response.error is not None
+            and response.error.code == pb.ErrorCode.CHECK_FAILED
+            and response.error.location is not None
+            and response.error.location.path == [0]
+            and not response.error.location.iterations
+        ):
+            return response, owner
         if response.error is not None:
             error = bindings.EggSmolError(response.error.message)
             # The binding exception is not subclassable. Its inherited dict
@@ -137,17 +182,7 @@ class EGraphState:
             # message or args, or using a parallel error registry.
             error.__dict__["_egglog_proto_error"] = response.error
             raise error
-        builder = Builder.from_program(
-            pb.Program(
-                ir_version=1,
-                nodes=response.nodes,
-                sorts=response.sorts,
-                files=response.files,
-            )
-        )
-        for reference in self.definitions.values():
-            builder.import_ref(reference)
-        return response, builder.publish()
+        return response, owner
 
     def _ruleset_members(self, root: Ref) -> list[Ref]:
         """Flatten ordered canonical selections, deduplicating occurrences only."""

@@ -1449,32 +1449,26 @@ class EGraph:
         """
         Returns true if the facts are true in the egraph.
         """
-        try:
-            self.check(*facts)
-        except bindings.EggSmolError as e:
-            error = e.__dict__.get("_egglog_proto_error")
-            if (
-                isinstance(error, pb.Error)
-                and error.code == pb.ErrorCode.CHECK_FAILED
-                and error.location is not None
-                and error.location.path == [0]
-                and not error.location.iterations
-            ):
-                return False
-            raise
-        return True
+        return self._check(facts, allow_failed_check=True)
 
-    @_TRACER.start_as_current_span("check")
     def check(self, *facts: FactLike) -> None:
         """
         Check if a fact is true in the egraph.
         """
+        self._check(facts)
+
+    @_TRACER.start_as_current_span("check")
+    def _check(self, facts: Iterable[FactLike], *, allow_failed_check: bool = False) -> bool:
+        """Build one canonical query and interpret only this response's check result."""
         builder = Builder()
         indices = [builder.import_ref(fact.__egg_ref__) for fact in _fact_likes(facts)]
         command = builder.add(
             "commands", pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=indices)))
         )
-        self._state.run_program([builder.publish().ref("commands", command)])
+        response, _ = self._state.run_program(
+            [builder.publish().ref("commands", command)], allow_failed_check=allow_failed_check
+        )
+        return response.error is None
 
     def check_fail(self, *facts: FactLike) -> None:
         """
