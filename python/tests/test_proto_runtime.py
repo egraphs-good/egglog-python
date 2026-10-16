@@ -4012,6 +4012,188 @@ def class_authoring_without_engine(monkeypatch):
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
 
 
+def test_bodyless_mutating_members_use_canonical_calls(class_authoring_without_engine):
+    class A(Expr):
+        def __init__(self) -> None: ...
+        def __delitem__(self, key: "A") -> None: ...
+        def __setitem__(self, key: "A", value: "A") -> None: ...
+
+    receiver, key, value = A(), A(), A()
+    alias, snapshot = receiver, copy(receiver)
+    original = to_runtime_expr(receiver).__egg_ref__
+    key_root, value_root = to_runtime_expr(key).__egg_ref__, to_runtime_expr(value).__egg_ref__
+    for name, parameters in [("__delitem__", ["key"]), ("__setitem__", ["key", "value"])]:
+        declaration = resolve_callable(getattr(A, name))
+        record = declaration.read()
+        assert record.kind.field == "constructor"
+        signature = record.kind.value
+        view = record.bindings.python.views[0]
+        assert signature.output == signature.inputs[0].sort
+        assert [argument.name for argument in signature.inputs] == ["self", *parameters]
+        assert view.kind == pb.PythonCallKind.METHOD
+        assert view.receiver == view.mutates == 0
+        assert view.has_field("receiver")
+        assert view.has_field("mutates")
+        assert [(parameter.name, parameter.core_input) for parameter in view.params] == [
+            (name, index) for index, name in enumerate(parameters, start=1)
+        ]
+    assert receiver.__delitem__(key) is None
+    assert alias is receiver
+    assert to_runtime_expr(receiver).__egg_ref__ is not original
+    assert to_runtime_expr(snapshot).__egg_ref__ == original
+    assert to_runtime_expr(key).__egg_ref__ is key_root
+    assert to_runtime_expr(value).__egg_ref__ is value_root
+    assert [expr_parts(argument) for argument in get_callable_args(receiver, A.__delitem__)] == [
+        expr_parts(snapshot),
+        expr_parts(key),
+    ]
+    deleted = copy(receiver)
+    assert A.__setitem__(receiver, key, value) is None
+    assert [expr_parts(argument) for argument in get_callable_args(receiver, A.__setitem__)] == [
+        expr_parts(deleted),
+        expr_parts(key),
+        expr_parts(value),
+    ]
+    assert to_runtime_expr(snapshot).__egg_ref__ == original
+    assert expr_parts(alias) == expr_parts(receiver)
+
+
+def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_engine):
+    default = i64(4)
+    destination = ruleset()
+
+    class Accumulator(Expr, ruleset=destination):
+        def __init__(self) -> None: ...
+
+        @method(mutates_self=True, egg_fn="exact mutable member")
+        def update(self, left: i64 = default, right: i64 = i64(5)) -> None:
+            """A bodyless mutating declaration."""
+
+        @method(mutates_self=True)
+        def reset(self) -> None:
+            return None
+
+    receiver = Accumulator()
+    declaration = resolve_callable(Accumulator.update)
+    assert declaration.read().kind.value.name == "exact mutable member"
+    assert Accumulator.update.__doc__ == "A bodyless mutating declaration."
+    assert destination._snapshot({}).read().kind.value.rules == []
+    default.__replace_expr__(i64(9))
+    original = copy(receiver)
+    assert receiver.update() is None
+    arguments = get_callable_args(receiver, Accumulator.update)
+    assert expr_parts(arguments[0]) == expr_parts(original)
+    assert [argument.value for argument in arguments[1:]] == [4, 5]
+    prior = copy(receiver)
+    assert Accumulator.update(receiver, right=7, left=6) is None
+    arguments = get_callable_args(receiver, Accumulator.update)
+    assert expr_parts(arguments[0]) == expr_parts(prior)
+    assert [argument.value for argument in arguments[1:]] == [6, 7]
+    Accumulator.__egg_attr_cache__.clear()
+    Accumulator.__egg_context__.catalog.members.clear()
+    Accumulator.__egg_context__.catalog.reindex()
+    assert resolve_callable(Accumulator.update) == declaration
+    root = to_runtime_expr(receiver).__egg_ref__
+    for args, kwargs, error in [
+        ((1, 2, 3), {}, TypeError),
+        ((1,), {"left": 2}, TypeError),
+        ((), {"unknown": 1}, TypeError),
+        ((String("wrong"),), {}, ConvertError),
+    ]:
+        with pytest.raises(error):
+            receiver.update(*args, **kwargs)
+        assert to_runtime_expr(receiver).__egg_ref__ is root
+
+    class BadInput:
+        pass
+
+    def fail_conversion(value):
+        msg = "mutating input conversion failed"
+        raise ValueError(msg)
+
+    converter(BadInput, i64, fail_conversion)
+    with pytest.raises(ValueError, match="mutating input conversion failed"):
+        receiver.update(BadInput())
+    assert to_runtime_expr(receiver).__egg_ref__ is root
+    wrong_receiver = i64(1)
+    wrong_root = to_runtime_expr(wrong_receiver).__egg_ref__
+    with pytest.raises(ConvertError):
+        Accumulator.update(wrong_receiver)
+    assert to_runtime_expr(wrong_receiver).__egg_ref__ is wrong_root
+    assert receiver.reset() is None
+    assert get_callable_args(receiver, Accumulator.reset)[0].__egg_ref__ == root
+    assert destination._snapshot({}).read().kind.value.rules == []
+
+
+@pytest.mark.parametrize("name", ["__delitem__", "__setitem__", "update"])
+def test_bodyless_mutation_reconstructs_without_result_normalization(class_authoring_without_engine, monkeypatch, name):
+    class Mutable(Expr):
+        def __init__(self) -> None: ...
+        def __delitem__(self, key: "Mutable") -> None: ...
+        def __setitem__(self, key: "Mutable", value: "Mutable") -> None: ...
+
+        @method(mutates_self=True)
+        def update(self, key: "Mutable") -> None: ...
+
+    receiver = Mutable()
+    arguments = [Mutable(), Mutable()] if name == "__setitem__" else [Mutable()]
+    assert getattr(receiver, name)(*arguments) is None
+    packed = pack([to_runtime_expr(receiver).__egg_ref__])
+    encoded = packed.program.to_binary()
+    decoded = pb.Program.from_binary(encoded)
+    root = Builder.from_program(decoded).publish().ref("nodes", packed.indices[0])
+    rebuilt = RuntimeExpr(root)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Canonical mutation reconstruction converted an existing expression")
+
+    monkeypatch.setattr("egglog.conversion.resolve_literal", forbidden)
+    function = get_callable_fn(rebuilt)
+    arguments = get_callable_args(rebuilt, function)
+    assert StructuralView(resolve_callable(function)) == StructuralView(resolve_callable(getattr(Mutable, name)))
+    assert len(arguments) == (3 if name == "__setitem__" else 2)
+    old_receiver = arguments[0].__egg_ref__
+    others = tuple(argument.__egg_ref__ for argument in arguments[1:])
+    assert function(*arguments) is None
+    assert arguments[0].__egg_ref__ is not old_receiver
+    assert expr_parts(arguments[0]) == expr_parts(rebuilt)
+    assert tuple(argument.__egg_ref__ for argument in arguments[1:]) == others
+    assert rebuilt.__egg_ref__ == root
+    assert decoded.to_binary() == encoded
+
+
+@pytest.mark.parametrize("descriptor", [classmethod, property])
+def test_mutation_noninstance_views_remain_rejected(class_authoring_without_engine, descriptor):
+    class Invalid(Expr):
+        def __init__(self) -> None: ...
+
+        @method(mutates_self=True)
+        @descriptor
+        def mutate(self) -> "Invalid": ...
+
+    with pytest.raises(NotImplementedError, match="not migrated"):
+        Invalid()
+    assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
+
+
+@pytest.mark.parametrize("explicit_ruleset", [False, True])
+def test_mutating_member_bodies_remain_rejected_before_callback(class_authoring_without_engine, explicit_ruleset):
+    destination = ruleset() if explicit_ruleset else None
+
+    class Invalid(Expr, ruleset=destination):
+        def __init__(self) -> None: ...
+
+        @method(mutates_self=True)
+        def mutate(self) -> None:
+            pytest.fail("Unsupported mutating member body was executed")
+
+    with pytest.raises(NotImplementedError, match="not migrated"):
+        Invalid()
+    assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
+    if destination is not None:
+        assert destination._snapshot({}).read().kind.value.rules == []
+
+
 def test_class_ruleset_bodyless_callable_headers(class_authoring_without_engine):
     destination = ruleset()
 

@@ -515,6 +515,55 @@ def test_concrete_eqsort_and_container_members_public_bytes() -> None:
     assert tuple(part.value for part in value.value) == (2, 3.0)
 
 
+def test_bodyless_mutating_members_public_bytes() -> None:
+    class Mutable(Expr):
+        def __init__(self, tag: i64) -> None: ...
+        def __delitem__(self, key: "Mutable") -> None: ...
+        def __setitem__(self, key: "Mutable", value: "Mutable") -> None: ...
+
+        @method(mutates_self=True, egg_fn="mutable update")
+        def update(self, value: i64 = i64(4)) -> None: ...
+
+    graph = EGraph()
+    receiver, key, value = Mutable(i64(1)), Mutable(i64(2)), Mutable(i64(3))
+    original = copy(receiver)
+    del receiver[key]
+    graph.register(receiver)
+    deleted = graph.extract(receiver)
+    assert get_callable_fn(deleted) == Mutable.__delitem__
+    arguments = get_callable_args(deleted, Mutable.__delitem__)
+    assert arguments is not None
+    assert [expr_parts(argument) for argument in arguments] == [
+        expr_parts(original),
+        expr_parts(key),
+    ]
+    receiver[key] = value
+    graph.register(receiver)
+    assigned = graph.extract(receiver)
+    assert get_callable_fn(assigned) == Mutable.__setitem__
+    arguments = get_callable_args(assigned, Mutable.__setitem__)
+    assert arguments is not None
+    assert [expr_parts(argument) for argument in arguments] == [
+        expr_parts(deleted),
+        expr_parts(key),
+        expr_parts(value),
+    ]
+    assert receiver.update() is None
+    for _ in range(2):
+        graph.register(receiver)
+        result = graph.extract(receiver)
+        graph.check(eq(result).to(receiver))
+        assert get_callable_fn(result) == Mutable.update
+        arguments = get_callable_args(result, Mutable.update)
+        assert arguments is not None
+        assert expr_parts(arguments[0]) == expr_parts(assigned)
+        assert arguments[1].value == 4
+    assert get_callable_fn(graph.extract(original)) == Mutable
+    assert get_callable_args(graph.extract(original))[0].value == 1
+    assert get_callable_args(graph.extract(key))[0].value == 2
+    assert get_callable_args(graph.extract(value))[0].value == 3
+
+
 def test_scalar_local_value_and_presentation() -> None:
     assert i64(3).value == 3
     assert f64(1.25).value == 1.25

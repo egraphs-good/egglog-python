@@ -775,7 +775,7 @@ class _FunctionConstructor:
         if (
             self.builtin
             or has_merge
-            or self.mutates_first_arg
+            or (self.mutates_first_arg and (owner is None or view_kind != pb.PythonCallKind.METHOD or has_body))
             or self.cost is not None
             or self.unextractable
             or variable
@@ -806,6 +806,8 @@ class _FunctionConstructor:
             path = [*owner.__module__.split("."), owner.__name__, member_name]
         name = self.egg_fn or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", ".".join(path))
         view = pb.PythonCallable(kind=view_kind, path=path, params=surface)
+        if self.mutates_first_arg:
+            view.mutates = 0
         if owner is not None:
             assert member_name is not None
             assert owner.__egg_sort__ is not None
