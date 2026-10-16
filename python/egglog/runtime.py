@@ -7,7 +7,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from inspect import Parameter, Signature
 from threading import RLock
-from types import MethodType
+from types import FunctionType, MethodType
 from typing import Any, Literal, TypeVar, Union, cast, get_args, get_origin
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
@@ -573,7 +573,7 @@ class RuntimeClass(type):
             if isinstance(function, MethodType) and isinstance(function.__self__, RuntimeExpr):
                 for member_name, member in RuntimeExpr.__dict__.items():
                     if member is function.__func__:
-                        function = function.__self__.__getattr__(member_name)
+                        function = _get_expr_member(function.__self__, member_name)
                         break
             if isinstance(function, RuntimeClass):
                 function = RuntimeClass.__getattr__(function, "__init__")
@@ -671,7 +671,9 @@ class RuntimeClass(type):
         )
         return _class_for_sort(builder.publish().ref("sorts", index))
 
-    def __getattr__(cls, name: str) -> object:  # noqa: C901, PLR0911
+    def __getattr__(  # noqa: C901, PLR0911, PLR0912
+        cls, name: str, *, _missing_ok: bool = False, _method_only: bool = False
+    ) -> object:
         if name.startswith("__egg_"):
             raise AttributeError(name)
         if name == "__args__":
@@ -707,7 +709,9 @@ class RuntimeClass(type):
         # attempt. Same-thread reentry uses the already-published declarations.
         if cls.__egg_pending__ is not None:
             cls.__egg_pending__()
-        if name in cls.__egg_attr_cache__:
+        # A cached class variable is already evaluated; fallback eligibility
+        # must instead be decided from its declaration without invoking it.
+        if not _method_only and name in cls.__egg_attr_cache__:
             return cls.__egg_attr_cache__[name]
         declaration = cls.__egg_definition__.read()
         assert declaration.kind is not None
@@ -723,11 +727,15 @@ class RuntimeClass(type):
         try:
             reference, view = catalog.members[key]
         except KeyError as exc:
+            if _missing_ok:
+                return _OMITTED
             raise AttributeError(f"{cls} has no generated Python member {name!r}") from exc
         function = RuntimeFunction(reference, view, cls)
         payload: pb.Declaration = reference.read()
         assert payload.bindings is not None
         assert payload.bindings.python is not None
+        if _method_only and payload.bindings.python.views[view].kind != pb.PythonCallKind.METHOD:
+            raise AttributeError(f"{cls} member {name!r} is not an instance method")
         result = (
             function() if payload.bindings.python.views[view].kind == pb.PythonCallKind.CLASS_VARIABLE else function
         )
@@ -1134,24 +1142,17 @@ class RuntimeExpr:
             raise TypeError(msg)
         self.__egg_ref__ = reference.owner.ref("nodes", reference.index)
 
-    def __getattr__(self, name: str) -> object:
-        if name.startswith("__egg_"):
+    def __getattr__(self, name: str | RuntimeExpr) -> object:
+        if isinstance(name, str):
+            if name.startswith("__egg_"):
+                raise AttributeError(name)
+            result = _get_expr_member(self, name, missing_ok=True)
+            if result is not _OMITTED:
+                return result
+        fallback = _get_expr_member(self, "__getattr__", missing_ok=True, method_only=True)
+        if fallback is _OMITTED:
             raise AttributeError(name)
-        node: pb.Node = self.__egg_ref__.read()
-        cls = _class_for_sort(self.__egg_ref__.owner.ref("sorts", node.sort_id))
-        if name in cls.__egg_hooks__:
-            return cls.__egg_hooks__[name].__get__(self, cls)
-        function = RuntimeClass.__getattr__(cls, name)
-        if not isinstance(function, RuntimeFunction):
-            return function
-        result = RuntimeFunction(function.__egg_ref__, function.__egg_view__, self)
-        declaration: pb.Declaration = function.__egg_ref__.read()
-        if function.__egg_view__ is not None:
-            assert declaration.bindings is not None
-            assert declaration.bindings.python is not None
-            if declaration.bindings.python.views[function.__egg_view__].kind == pb.PythonCallKind.PROPERTY:
-                return result()
-        return result
+        return cast("Callable", fallback)(name)
 
     def __str__(self) -> str:
         node: pb.Node = self.__egg_ref__.read()
@@ -1211,16 +1212,40 @@ class RuntimeExpr:
         self.__egg_ref__ = other.__egg_ref__
 
 
+def _get_expr_member(
+    expression: RuntimeExpr, name: str, *, missing_ok: bool = False, method_only: bool = False
+) -> object:
+    """Resolve a genuine member without dynamic fallback or swallowed user errors."""
+    node: pb.Node = expression.__egg_ref__.read()
+    cls = _class_for_sort(expression.__egg_ref__.owner.ref("sorts", node.sort_id))
+    if name in cls.__egg_hooks__:
+        hook = cls.__egg_hooks__[name]
+        if method_only and not isinstance(hook, FunctionType):
+            raise AttributeError(f"{cls} member {name!r} is not an instance method")
+        return None if hook is None else hook.__get__(expression, cls)
+    function = RuntimeClass.__getattr__(cls, name, _missing_ok=missing_ok, _method_only=method_only)
+    if not isinstance(function, RuntimeFunction):
+        return function
+    result = RuntimeFunction(function.__egg_ref__, function.__egg_view__, expression)
+    declaration: pb.Declaration = function.__egg_ref__.read()
+    if function.__egg_view__ is not None:
+        assert declaration.bindings is not None
+        assert declaration.bindings.python is not None
+        if declaration.bindings.python.views[function.__egg_view__].kind == pb.PythonCallKind.PROPERTY:
+            return result()
+    return result
+
+
 def define_expr_method(name: str, *, reverse: bool = False) -> None:
     """Install a Python special-method entrypoint using the generated member view."""
 
     def invoke(self: RuntimeExpr, *args: object, **kwargs: object) -> object:
-        return cast("Callable", self.__getattr__(name))(*args, **kwargs)
+        return cast("Callable", _get_expr_member(self, name))(*args, **kwargs)
 
     def reflected(self: RuntimeExpr, other: object) -> object:
         from .conversion import convert_to_same_type  # noqa: PLC0415
 
-        return cast("Callable", convert_to_same_type(other, self).__getattr__(name))(self)
+        return cast("Callable", _get_expr_member(convert_to_same_type(other, self), name))(self)
 
     setattr(RuntimeExpr, f"__r{name[2:]}" if reverse else name, reflected if reverse else invoke)
 

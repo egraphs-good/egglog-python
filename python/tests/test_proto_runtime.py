@@ -4012,6 +4012,298 @@ def class_authoring_without_engine(monkeypatch):
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
 
 
+@pytest.mark.parametrize("style", ["unbound", "attribute", "symbolic"])
+def test_symbolic_getattr_uses_existing_header(class_authoring_without_engine, style):
+    class A(Expr):
+        def __init__(self) -> None: ...
+        def __getattr__(self, name: StringLike) -> "A": ...
+
+    receiver = A()
+    original = receiver.__egg_ref__
+    name = String("a") + "b" if style == "symbolic" else String("foo")
+    result = (
+        A.__getattr__(receiver, name)
+        if style == "unbound"
+        else receiver.foo
+        if style == "attribute"
+        else receiver.__getattr__(name)
+    )
+    declaration = resolve_callable(A.__getattr__)
+    record = declaration.read()
+    view = record.bindings.python.views[0]
+    assert record.kind.field == "constructor"
+    assert record.kind.value.output == record.kind.value.inputs[0].sort
+    assert [argument.name for argument in record.kind.value.inputs] == ["self", "name"]
+    assert view.kind == pb.PythonCallKind.METHOD
+    assert view.receiver == 0
+    assert [(parameter.name, parameter.core_input) for parameter in view.params] == [("name", 1)]
+    assert not view.has_field("mutates")
+    assert get_callable_fn(result) == A.__getattr__
+    arguments = get_callable_args(result, A.__getattr__)
+    assert arguments is not None
+    assert expr_parts(arguments[0]) == expr_parts(receiver)
+    assert expr_parts(arguments[1]) == expr_parts(name)
+    if style == "symbolic":
+        assert arguments[1].__egg_ref__ == name.__egg_ref__
+    assert receiver.__egg_ref__ is original
+    assert {member for _, member in A.__egg_context__.catalog.members} == {"__init__", "__getattr__"}
+
+
+def test_getattr_preserves_real_members_and_none(class_authoring_without_engine):
+    calls = []
+
+    class A(Expr):
+        def __init__(self) -> None: ...
+        def real(self) -> "A": ...
+
+        @property
+        def symbolic_property(self) -> "A": ...
+
+        @method(preserve=True)
+        def host(self):
+            return "host method"
+
+        @method(preserve=True)
+        @property
+        def empty(self):
+            return None
+
+        __hash__ = None
+
+        @method(preserve=True)
+        def __getattr__(self, name) -> object:
+            calls.append(name)
+            return None if name == "nothing" else ("fallback", name)
+
+    receiver = A()
+    assert get_callable_fn(receiver.real()) == A.real
+    assert get_callable_fn(receiver.symbolic_property) == A.symbolic_property
+    assert receiver.host() == "host method"
+    assert receiver.empty is None
+    assert receiver.__getattr__("__hash__") is None
+    assert calls == []
+    assert receiver.foo == ("fallback", "foo")
+    assert receiver.nothing is None
+    assert calls == ["foo", "nothing"]
+    assert {member for _, member in A.__egg_context__.catalog.members} == {
+        "__init__",
+        "real",
+        "symbolic_property",
+    }
+    with pytest.raises(AttributeError):
+        _ = A.foo
+    with pytest.raises(AttributeError):
+        _ = receiver.__egg_missing__
+    assert calls == ["foo", "nothing"]
+
+
+@pytest.mark.parametrize("descriptor", [property, classmethod])
+def test_getattr_ineligible_preserved_descriptors_are_inert(class_authoring_without_engine, descriptor):
+    class Invalid(Expr):
+        def __init__(self) -> None: ...
+
+        @method(preserve=True)
+        @descriptor
+        def __getattr__(self, *args) -> object:
+            pytest.fail("Ineligible fallback descriptor was evaluated")
+
+    receiver = Invalid()
+    with pytest.raises(AttributeError, match="not an instance method"):
+        _ = receiver.foo
+    with pytest.raises(AttributeError, match="not an instance method"):
+        receiver.__getattr__(String("foo"))
+
+
+@pytest.mark.parametrize("kind", ["property", "classmethod", "class_variable"])
+def test_getattr_ineligible_symbolic_views_are_inert(class_authoring_without_engine, monkeypatch, kind):
+    class Invalid(Expr):
+        def __init__(self) -> None: ...
+
+        if kind == "property":
+
+            @property
+            def __getattr__(self) -> "Invalid": ...  # noqa: PLE0302 -- deliberately ineligible descriptor
+
+        elif kind == "classmethod":
+
+            @classmethod
+            def __getattr__(cls, name: StringLike) -> "Invalid": ...
+
+        else:
+            __getattr__: ClassVar["Invalid"]
+
+    receiver = Invalid()
+    if kind == "class_variable":
+        cached = Invalid.__getattr__
+        assert isinstance(cached, RuntimeExpr)
+        assert Invalid.__egg_attr_cache__["__getattr__"] is cached
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Ineligible fallback view was invoked")
+
+    monkeypatch.setattr(RuntimeFunction, "__call__", forbidden)
+    with pytest.raises(AttributeError, match="not an instance method"):
+        _ = receiver.foo
+    with pytest.raises(AttributeError, match="not an instance method"):
+        receiver.__getattr__(String("foo"))
+
+
+@pytest.mark.parametrize("source", ["property", "fallback", "prepare", "conversion"])
+def test_getattr_propagates_original_errors(class_authoring_without_engine, source):
+    marker = AttributeError(f"original {source} error")
+    calls = []
+
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+        @method(preserve=True)
+        @property
+        def broken(self):
+            raise marker
+
+        @method(preserve=True)
+        def __getattr__(self, name) -> object:
+            calls.append(name)
+            raise marker
+
+    if source == "prepare":
+
+        def failed_prepare(cls):
+            raise marker
+
+        A.__egg_context__.prepare = failed_prepare
+        receiver = var("unprepared", A)
+        operation = partial(getattr, receiver, "foo")
+    elif source == "conversion":
+
+        class Symbolic(Expr):
+            def __init__(self) -> None: ...
+            def __getattr__(self, name: StringLike) -> "Symbolic": ...
+
+        class BadName:
+            pass
+
+        def failed_conversion(value):
+            raise marker
+
+        converter(BadName, String, failed_conversion)
+        receiver = Symbolic()
+        operation = partial(receiver.__getattr__, BadName())
+    else:
+        receiver = A()
+        operation = partial(getattr, receiver, "broken" if source == "property" else "foo")
+    with pytest.raises(AttributeError) as error:
+        operation()
+    assert error.value is marker
+    assert calls == (["foo"] if source == "fallback" else [])
+
+
+def test_getattr_does_not_synthesize_protocols_or_captures(class_authoring_without_engine):
+    class A(Expr):
+        def __init__(self) -> None: ...
+        def __getattr__(self, name: StringLike) -> "A": ...
+
+    receiver = A()
+
+    class Preserved(Expr):
+        def __init__(self) -> None: ...
+
+        @method(preserve=True)
+        def __getattr__(self, name) -> object:
+            pytest.fail("Missing protocol or capture invoked dynamic fallback")
+
+    for value in (receiver, Preserved()):
+        for operation in (
+            lambda value=value: -value,
+            lambda value=value: value(),
+            lambda value=value: value.__radd__(value),
+            lambda value=value: UnstableFn(value.__neg__),
+        ):
+            with pytest.raises(AttributeError):
+                operation()
+    assert expr_parts(UnstableFn(receiver.__getattr__)) == expr_parts(UnstableFn(A.__getattr__, receiver))
+    original = receiver.__egg_ref__
+    with pytest.raises(TypeError):
+        A.__getattr__(receiver)
+    with pytest.raises(TypeError):
+        A.__getattr__(receiver, "foo", "bar")
+    with pytest.raises(ConvertError):
+        receiver.__getattr__(i64(1))
+    assert receiver.__egg_ref__ is original
+    with pytest.raises(AttributeError):
+        _ = i64(1).absent
+
+
+def test_getattr_does_not_swallow_metadata_errors(class_authoring_without_engine):
+    calls = []
+
+    class A(Expr):
+        def __init__(self) -> None: ...
+        def real(self) -> "A": ...
+
+        @method(preserve=True)
+        def __getattr__(self, name) -> object:
+            calls.append(name)
+            return name
+
+    receiver = A()
+    catalog = A.__egg_context__.catalog
+    key = next(key for key in catalog.members if key[1] == "real")
+    reference, _ = catalog.members[key]
+    catalog.members[key] = reference, 999
+    with pytest.raises(IndexError):
+        _ = receiver.real
+    assert calls == []
+
+
+@pytest.mark.parametrize("strip_metadata", [False, True])
+def test_getattr_does_not_attach_preserved_hooks_to_detached_records(class_authoring_without_engine, strip_metadata):
+    class A(Expr):
+        def __init__(self) -> None: ...
+
+        @method(preserve=True)
+        def __getattr__(self, name) -> object:
+            pytest.fail("Detached records recovered a Python-only fallback hook")
+
+    receiver = A()
+    assert "__getattr__" in A.__egg_hooks__
+    assert {member for _, member in A.__egg_context__.catalog.members} == {"__init__"}
+    packed = pack([receiver.__egg_ref__])
+    program = pb.Program.from_binary(packed.program.to_binary())
+    if strip_metadata:
+        for declaration in program.declarations:
+            declaration.bindings = None
+            if declaration.kind.field == "eq_sort":
+                declaration.kind.value.bindings = None
+    detached = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
+    with pytest.raises(AttributeError):
+        _ = detached.foo
+    with pytest.raises(AttributeError):
+        detached.__getattr__(String("foo"))
+
+
+def test_getattr_inspection_keeps_symbolic_name_inert(class_authoring_without_engine, monkeypatch):
+    class A(Expr):
+        def __init__(self) -> None: ...
+        def __getattr__(self, name: StringLike) -> "A": ...
+
+    receiver = A()
+    name = String("a") + "b"
+    expression = receiver.__getattr__(name)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Inspection evaluated or converted a symbolic attribute name")
+
+    monkeypatch.setattr("egglog.conversion.resolve_literal", forbidden)
+    assert get_callable_fn(expression) == A.__getattr__
+    arguments = get_callable_args(expression, A.__getattr__)
+    assert arguments is not None
+    assert arguments[0].__egg_ref__ == receiver.__egg_ref__
+    assert arguments[1].__egg_ref__ == name.__egg_ref__
+    assert get_callable_fn(arguments[1]) == join
+    assert [part.value for part in get_callable_args(arguments[1], join)] == ["a", "b"]
+
+
 def test_bodyless_mutating_members_use_canonical_calls(class_authoring_without_engine):
     class A(Expr):
         def __init__(self) -> None: ...

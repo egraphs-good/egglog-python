@@ -8,6 +8,7 @@ from functools import partial
 from typing import ClassVar, cast
 
 import pytest
+from egglog_proto.egglog.v1 import egglog_pb as pb
 
 from egglog import (
     Bool,
@@ -513,6 +514,116 @@ def test_concrete_eqsort_and_container_members_public_bytes() -> None:
     graph.check(eq(expression.values()).to(pairs))
     value = graph.extract(expression.values()).value[0]
     assert tuple(part.value for part in value.value) == (2, 3.0)
+
+
+def test_symbolic_getattr_public_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    class A(Expr):
+        def __init__(self, tag: i64) -> None: ...
+        def __getattr__(self, name: StringLike) -> "A": ...
+
+    graph = EGraph()
+    transport = graph._state.transport
+    requests, responses = [], []
+
+    class AuditedTransport:
+        def run(self, encoded):
+            assert isinstance(encoded, bytes)
+            index = len(requests)
+            (tmp_path / f"request-{index}.pb").write_bytes(encoded)
+            requests.append(pb.RunProgramRequest.from_binary(encoded))
+            returned = transport.run(encoded)
+            assert isinstance(returned, bytes)
+            (tmp_path / f"response-{index}.pb").write_bytes(returned)
+            responses.append(pb.RunProgramResponse.from_binary(returned))
+            return returned
+
+    monkeypatch.setattr(graph._state, "transport", AuditedTransport())
+    receiver = A(i64(7))
+    name = String("a") + "b"
+    computed = receiver.__getattr__(name)
+    assert get_callable_args(computed, A.__getattr__)[1].__egg_ref__ == name.__egg_ref__
+    for expression, expected in ((receiver.foo, "foo"), (computed, "ab")):
+        graph.register(expression)
+        result = graph.extract(expression)
+        graph.check(eq(result).to(expression))
+        assert get_callable_fn(result) == A.__getattr__
+        arguments = get_callable_args(result, A.__getattr__)
+        assert arguments is not None
+        assert expr_parts(arguments[0]) == expr_parts(receiver)
+        assert get_callable_args(arguments[0], A)[0].value == 7
+        assert arguments[1].value == expected
+    assert requests
+    assert len(requests) == len(responses)
+    assert all(response.error is None for response in responses)
+    assert any(
+        node.kind.field == "call" and node.kind.value.func == "egglog.core.string.concat"
+        for request in requests
+        for node in request.program.nodes
+    )
+
+
+def test_preserved_getattr_survives_public_result_adoption() -> None:
+    class Local(Expr):
+        def __init__(self, tag: i64) -> None: ...
+
+        @method(preserve=True)
+        def __getattr__(self, name) -> object:
+            return None if name == "nothing" else ("local", name)
+
+    receiver = Local(i64(9))
+    graph = EGraph()
+    graph.register(receiver)
+    result = graph.extract(receiver)
+    assert get_callable_fn(result) == Local
+    assert get_callable_args(result, Local)[0].value == 9
+    assert result.foo == ("local", "foo")
+    assert result.nothing is None
+
+
+def test_symbolic_getattr_corrupt_bytes_reject_before_execution(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    class A(Expr):
+        def __init__(self) -> None: ...
+        def __getattr__(self, name: StringLike) -> "A": ...
+
+    graph = EGraph()
+    expression = A().foo
+    graph.register(A())
+    # Install the callable without inserting any of its rows.
+    assert graph.function_size(A.__getattr__) == 0
+    callee = A.__getattr__.__egg_ref__.read().kind.value.name
+    transport = graph._state.transport
+    rejected = []
+
+    class CorruptTransport:
+        def run(self, encoded):
+            (tmp_path / "request-original.pb").write_bytes(encoded)
+            request = pb.RunProgramRequest.from_binary(encoded)
+            calls = [
+                node.kind.value
+                for node in request.program.nodes
+                if node.kind.field == "call" and node.kind.value.func == callee
+            ]
+            assert len(calls) == 1
+            assert len(calls[0].args) == 2
+            calls[0].args.pop()
+            corrupted = request.to_binary()
+            assert corrupted != encoded
+            (tmp_path / "request-corrupted.pb").write_bytes(corrupted)
+            returned = transport.run(corrupted)
+            (tmp_path / "response.pb").write_bytes(returned)
+            rejected.append(pb.RunProgramResponse.from_binary(returned))
+            return returned
+
+    with monkeypatch.context() as patch:
+        patch.setattr(graph._state, "transport", CorruptTransport())
+        with pytest.raises(bindings.EggSmolError):
+            graph.register(expression)
+    assert len(rejected) == 1
+    assert rejected[0].error is not None
+    assert rejected[0].error.location is None
+    assert graph.function_size(A.__getattr__) == 0
+    graph.register(expression)
+    assert graph.function_size(A.__getattr__) == 1
 
 
 def test_bodyless_mutating_members_public_bytes() -> None:
