@@ -206,6 +206,18 @@ kwargs = PyObject({"factor": 3})
 assert EGraph().extract(scale.call_extended(args, kwargs)).value == 30
 ```
 
+### Expected Primitive Failure
+
+A Python callback can raise `PrimitiveFailure` (imported from `egglog`) when an
+input has no result. Subclasses have the same meaning. In a rule query this is
+an ordinary non-match; direct evaluation fails with the native evaluation error.
+It does not roll back earlier effects or retain a Python callback error, and
+later callbacks can still run when native execution continues.
+
+Returning Python `None` is different: it is a successful `PyObject(None)` value.
+Other callback exceptions propagate as their original Python exception objects,
+not as expected primitive failures.
+
 Conversion to/from a string:
 
 ```{code-cell} python

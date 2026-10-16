@@ -56,6 +56,7 @@ __all__ = [
     "PanicSpan",
     "Plan",
     "Pop",
+    "PrimitiveFailure",
     "PrintAllFunctionsSize",
     "PrintFunction",
     "PrintFunctionOutput",
@@ -219,6 +220,9 @@ class EggSmolError(Exception):
     replayable_by_fail: bool
     def __new__(cls, context: str, replayable_by_fail: bool = ...) -> EggSmolError: ...
     def __init__(self, /, *args: Any, **kwargs: Any) -> None: ...
+
+# Expected no-result signal, not an unexpected callback error.
+class PrimitiveFailure(Exception): ...  # noqa: N818
 
 ##
 # Spans

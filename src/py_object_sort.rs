@@ -18,6 +18,8 @@ use std::{
 };
 use uuid::Uuid;
 
+use crate::error::PrimitiveFailure;
+
 use pyo3::{
     PyAny, PyErr, PyResult, PyTypeCheck, Python,
     prelude::*,
@@ -131,10 +133,10 @@ impl BaseSort for PyObjectSort {
         // Keep these native signatures without inventing a Python method view.
         add_primitive!(eg, "py-call" [id = "egglog.python.pyobject.call"] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
             attach(&self.ctx, "py-call", |py| {
-                let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>().map_err(|e| {let _ = e.add_note(py, "Loading arguments"); e})?;
+                let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>().map_err(|e| {if !e.is_instance_of::<PrimitiveFailure>(py) {let _ = e.add_note(py, "Loading arguments");} e})?;
                 let fn_obj = &xs[0];
-                let args = PyTuple::new(py, xs[1..].to_vec()).map_err(|e| {let _ = e.add_note(py, "Creating tuple"); e})?;
-                dump(fn_obj.call1(args).map_err(|e| {let _ = e.add_note(py, format!("Calling function {}", fn_obj)); e})?)
+                let args = PyTuple::new(py, xs[1..].to_vec()).map_err(|e| {if !e.is_instance_of::<PrimitiveFailure>(py) {let _ = e.add_note(py, "Creating tuple");} e})?;
+                dump(fn_obj.call1(args).map_err(|e| {if !e.is_instance_of::<PrimitiveFailure>(py) {let _ = e.add_note(py, format!("Calling function {}", fn_obj));} e})?)
             })
         });
 
@@ -365,7 +367,7 @@ impl egglog_experimental::protobuf::NativeExtension for PyObjectExtension {
 
 /// Attaches to the Python interpreter and runs the given closure.
 ///
-/// Also handles errors, by saving the first one for the binding thread and returning None.
+/// Expected failures return None; other errors save the first one for the binding thread.
 fn attach<F, R>(py_error: &PyObjectErrorState, name: &str, f: F) -> Option<R>
 where
     F: for<'py> FnOnce(Python<'py>) -> PyResult<R>,
@@ -376,6 +378,7 @@ where
         };
         match f(py) {
             Ok(val) => Some(val),
+            Err(err) if err.is_instance_of::<PrimitiveFailure>(py) => None,
             Err(err) => {
                 // User exception methods/state must not replace the first error.
                 let _ = err.add_note(py, format!("While calling primitive '{}'", name));
@@ -407,8 +410,35 @@ fn run_path<'py>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::PrimitiveFailure;
     use pyo3::exceptions::PyValueError;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn expected_failure_does_not_latch_or_suppress_later_callbacks() {
+        Python::initialize();
+        let state = PyObjectErrorState::default();
+        let result: Option<()> = attach(&state, "py-call", |_py| {
+            Err(PrimitiveFailure::new_err("expected miss"))
+        });
+        assert!(result.is_none());
+        assert!(
+            state.lock().unwrap().is_none(),
+            "expected failure was latched"
+        );
+        assert_eq!(attach(&state, "py-call", |_py| Ok(7)), Some(7));
+
+        let unexpected = PyValueError::new_err("unexpected error after expected miss");
+        let original = Python::attach(|py| unexpected.value(py).clone().unbind());
+        let result: Option<()> = attach(&state, "py-call", |_py| Err(unexpected));
+        assert!(result.is_none());
+        let result: Option<()> = attach(&state, "py-call", |_py| {
+            panic!("an expected failure must not run after a latched unexpected error")
+        });
+        assert!(result.is_none());
+        let captured = state.lock().unwrap().take().unwrap();
+        Python::attach(|py| assert!(captured.value(py).is(original.bind(py))));
+    }
 
     #[test]
     fn custom_codec_requires_actual_type_and_exact_reconstruction() {

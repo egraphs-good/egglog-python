@@ -1,5 +1,11 @@
 use pyo3::prelude::*;
 
+pyo3::create_exception!(
+    egglog.bindings,
+    PrimitiveFailure,
+    pyo3::exceptions::PyException
+);
+
 // Create exceptions with class instead of create_exception! macro
 // https://github.com/PyO3/pyo3/issues/295#issuecomment-852358088
 #[pyclass(extends=pyo3::exceptions::PyException)]

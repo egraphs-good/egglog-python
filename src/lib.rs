@@ -40,6 +40,10 @@ fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::protobuf::ProtoEngine>()?;
     m.add_class::<crate::egraph::Value>()?;
     m.add_class::<crate::error::EggSmolError>()?;
+    m.add(
+        "PrimitiveFailure",
+        m.py().get_type::<crate::error::PrimitiveFailure>(),
+    )?;
     m.add_class::<crate::termdag::TermDag>()?;
     m.add_class::<crate::conversions::UserDefinedCommandOutput>()?;
     m.add_class::<crate::conversions::MultiExtractOutput>()?;

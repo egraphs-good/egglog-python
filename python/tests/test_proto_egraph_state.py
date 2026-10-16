@@ -1,13 +1,13 @@
 """Record/bytes plumbing tests; the inert responder is not engine conformance."""
 
 from operator import index
-from typing import Literal, Never
+from typing import Literal, Never, Self
 
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
-from egglog import EGraph, Expr, bindings, constant, eq, function, i64, method, set_
+from egglog import EGraph, Expr, PrimitiveFailure, bindings, constant, eq, function, i64, method, set_
 from egglog._catalog import builtin_catalog
 from egglog._program import Builder, pack
 from egglog.runtime import RuntimeFunction, create_callable, resolve_callable
@@ -29,7 +29,15 @@ def _observed_pyerr_callback(tag):
     if error is not None:
         observation["caught"] = error
         raise error
-    return 8
+    return observation.get("result", 8)
+
+
+class _UnprintableCallback:
+    __call__ = staticmethod(_observed_pyerr_callback)
+
+    def __str__(self) -> str:
+        _callback_observations["formatted"] = True
+        return "expected failures must not format the callable"
 
 
 @pytest.fixture
@@ -41,7 +49,7 @@ def callback_observations(monkeypatch):
     return observations
 
 
-def _callback_program(tag):
+def _callback_program(tag, callback=_observed_pyerr_callback):
     """Author a closed call using the actual configured registrar, not fake signatures."""
     import cloudpickle  # noqa: PLC0415
 
@@ -53,7 +61,7 @@ def _callback_program(tag):
         if record.kind.field == "family" and record.kind.value == pb.HostSort(name="PyObject")
     )
     first = len(program.nodes)
-    for value in (_observed_pyerr_callback, tag):
+    for value in (callback, tag):
         program.nodes.append(
             pb.Node(
                 sort_id=sort,
@@ -89,7 +97,56 @@ def _callback_exchange(state, program, path):
     return decoded, error
 
 
-@pytest.mark.parametrize("kind", ["value", "chain", "unpickleable", "expression", "hostile_notes", "malformed_notes"])
+def test_primitive_failure_public_exception_constructor():
+    assert PrimitiveFailure is bindings.PrimitiveFailure
+    assert PrimitiveFailure.__name__ == "PrimitiveFailure"
+    assert PrimitiveFailure.__module__ == "egglog.bindings"
+    assert PrimitiveFailure.__bases__ == (Exception,)
+
+    class NoInit(PrimitiveFailure):
+        def __init__(self, *args) -> None:
+            pass
+
+    class SuperNew(PrimitiveFailure):
+        def __new__(cls, *args) -> Self:
+            return super().__new__(cls, *args)
+
+    marker = object()
+    for constructor in (PrimitiveFailure, NoInit, SuperNew):
+        for args in ((), (marker,), (marker, "message", 17)):
+            error = constructor(*args)
+            assert type(error) is constructor
+            assert error.args == args
+            if args:
+                assert error.args[0] is marker
+        with pytest.raises(TypeError):
+            constructor(message="not a positional argument")
+
+
+def test_callback_python_none_is_a_value(callback_observations, tmp_path):
+    import cloudpickle  # noqa: PLC0415
+
+    from egglog.egraph_state import EGraphState  # noqa: PLC0415
+
+    callback_observations["none"] = {"error": None, "result": None, "calls": 0}
+    state = EGraphState()
+    try:
+        response, error = _callback_exchange(state, _callback_program("none")[0], tmp_path / "none")
+        assert error is None
+        assert response.error is None
+        assert callback_observations["none"]["calls"] > 0
+        term = response.outputs[0].kind.value.roots[0].variants[0].term
+        value = response.nodes[term].kind.value.value
+        assert value.field == "custom"
+        assert value.value.args == []
+        assert cloudpickle.loads(value.value.payload) is None
+    finally:
+        state.destroy()
+
+
+@pytest.mark.parametrize(
+    "kind", ["value", "chain", "unpickleable", "expression", "hostile_notes", "malformed_notes", "same_name"]
+)
 def test_callback_error_original_identity_and_adoption(table_transport, callback_observations, monkeypatch, kind):
     class CustomError(ValueError):
         pass
@@ -107,6 +164,8 @@ def test_callback_error_original_identity_and_adoption(table_transport, callback
     error = (
         ValueError(argument)
         if kind == "value"
+        else type("PrimitiveFailure", (ValueError,), {})(argument)
+        if kind == "same_name"
         else HostileNotesError(argument)
         if kind == "hostile_notes"
         else CustomError(argument)
@@ -344,8 +403,20 @@ def test_callback_error_shared_transport_rejects_overlapping_borrow(callback_obs
 
 
 @pytest.mark.parametrize("threads", [1, 2])
-@pytest.mark.parametrize("case", ["query_failure", "query_success", "extract_failure", "later_native_error"])
-def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901
+@pytest.mark.parametrize(
+    "case",
+    [
+        "query_failure",
+        "query_success",
+        "extract_failure",
+        "later_native_error",
+        "query_expected",
+        "query_expected_subclass",
+        "extract_expected",
+        "extract_expected_subclass",
+    ],
+)
+def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, PLR0912
     callback_observations, tmp_path, threads, case
 ):
     # Shared setup preserves the same request-prefix, suppression and recovery boundary.
@@ -353,10 +424,29 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901
 
     from egglog.egraph_state import EGraphState  # noqa: PLC0415
 
-    original = None if case == "query_success" else ValueError("prefix error")
+    class ExpectedSubclass(PrimitiveFailure):
+        def add_note(self, note) -> None:
+            self.annotation_calls += 1
+            pytest.fail("Expected primitive failures must not be annotated")
+
+    expected_failure = "expected" in case
+    extracting = case.startswith("extract")
+    original = (
+        None
+        if case == "query_success"
+        else ExpectedSubclass("expected miss")
+        if case.endswith("subclass")
+        else PrimitiveFailure("expected miss")
+        if expected_failure
+        else ValueError("prefix error")
+    )
+    if expected_failure:
+        original.annotation_calls = 0
     callback_observations["first"] = {"error": original, "calls": 0}
     callback_observations["later"] = {"error": None, "calls": 0}
-    program, first = _callback_program("first")
+    program, first = _callback_program(
+        "first", _UnprintableCallback() if case.endswith("subclass") else _observed_pyerr_callback
+    )
     pyobject = program.nodes[first].sort_id
     integer, unit = (
         next(index for index, sort in enumerate(program.sorts) if sort.kind == Oneof("family", pb.HostSort(name=name)))
@@ -461,7 +551,7 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901
             pb.Command(
                 kind=(
                     Oneof("extract", pb.Extract(roots=[first + 2], variants=1, extractor=pb.Extractor.TREE))
-                    if case == "extract_failure"
+                    if extracting
                     else Oneof("run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof("name", "handoff_first"))))
                 )
             ),
@@ -475,16 +565,32 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901
                 )
             )
         )
+        if expected_failure and not extracting:
+            # Observe the first rule's no-match before the later successful callback writes its head.
+            program.commands.insert(3, pb.Command(kind=Oneof("print_function", pb.PrintFunction(table="handoff_mark"))))
         response, captured = _callback_exchange(state, program, tmp_path / "execution")
-        assert captured is original
-        assert (response.error is not None) == (case in {"extract_failure", "later_native_error"})
-        if original is not None:
+        assert captured is (None if expected_failure else original)
+        assert (response.error is not None) == (extracting or case == "later_native_error")
+        if expected_failure:
+            assert callback_observations["first"]["caught"] is original
+            assert original.annotation_calls == 0
+            assert not hasattr(original, "__notes__")
+            assert not callback_observations.get("formatted", False)
+            if extracting:
+                assert callback_observations["later"]["calls"] == 0
+            else:
+                assert callback_observations["later"]["calls"] > 0
+                (printed,) = [output for output in response.outputs if output.kind.field == "printed_function"]
+                assert printed.location.path == [3]
+                assert len(printed.kind.value.rows) == 2
+        elif original is not None:
             assert captured is callback_observations["first"]["caught"]
             assert callback_observations["later"]["calls"] == 0
         if case == "later_native_error":
             assert response.error.location.path == [3]
             assert "native after callback" in response.error.message
-        elif case == "extract_failure":
+        elif extracting:
+            assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
             assert response.error.location.path == [1]
         program.commands = [pb.Command(kind=Oneof("print_function", pb.PrintFunction(table="handoff_mark")))]
         observed, error = _callback_exchange(state, program, tmp_path / "markers")
@@ -501,9 +607,9 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901
             assert len(values) == 2
             rows[values[0]] = values[1]
         expected = {10: 1010}
-        if case != "extract_failure":
+        if not extracting:
             expected[20] = 2020
-        if case == "query_success":
+        if case == "query_success" or (expected_failure and not extracting):
             expected[30] = 3030
         assert rows == expected
         callback_observations["recovery"] = {"error": None, "calls": 0}
