@@ -17,7 +17,7 @@ from protobuf import Oneof
 from ._builtin_protocols import NUMERIC_BINARY_METHODS, SCALAR_PROTOCOLS
 from ._catalog import Catalog, builtin_catalog
 from ._program import Builder, Owner, Ref, StructuralView, _definition_key, clone_nodes
-from .type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
+from .type_constraint_solver import TypeConstraintError, check_type_restrictions, infer_sort, substitute_sort
 
 __all__ = [
     "ALWAYS_MUTATES_SELF",
@@ -102,6 +102,7 @@ def _author_call(  # noqa: C901, PLR0912
     convert: Callable[[Ref, object], Ref],
     receiver: object = _OMITTED,
     owner: Ref | None = None,
+    type_bindings: tuple[tuple[int, Ref], ...] = (),
 ) -> tuple[Ref, object | None]:
     """
     Bind a Python call directly to its canonical declaration and node records.
@@ -214,7 +215,12 @@ def _author_call(  # noqa: C901, PLR0912
             raise ValueError(msg)
         view = record.bindings.python.views[view_index]
     specialized = view.has_field("tail_repetitions")
-    slot_count = len(inputs) + bool(varargs)
+    consumes_tail = not specialized and view.has_field("receiver") and view.receiver == len(inputs)
+    if consumes_tail and (len(varargs) != 1 or view.kind != pb.PythonCallKind.METHOD):
+        msg = "Tail receiver requires a homogeneous variadic method"
+        raise ValueError(msg)
+    tail_slot = len(inputs) + consumes_tail
+    slot_count = tail_slot + bool(varargs)
     if specialized:
         if view.kind not in {pb.PythonCallKind.FUNCTION, pb.PythonCallKind.METHOD}:
             msg = "Tail specialization supports only function and method views"
@@ -234,7 +240,7 @@ def _author_call(  # noqa: C901, PLR0912
         ):
             msg = "Specialized tail inputs cannot have defaults or mutation"
             raise ValueError(msg)
-    substitutions: dict[int, Ref] = {}
+    substitutions: dict[int, Ref] = dict(type_bindings)
     if owner is not None and view.owner is not None and view.owner.kind is not None and view.owner.kind.field == "sort":
         infer_sort(declaration.owner.ref("sorts", view.owner.kind.value), owner, binder_size, substitutions)
     core_values: dict[int, object] = {}
@@ -253,7 +259,7 @@ def _author_call(  # noqa: C901, PLR0912
         Parameter(
             parameter.name,
             Parameter.VAR_POSITIONAL
-            if varargs and not specialized and parameter.core_input == len(inputs)
+            if varargs and not specialized and parameter.core_input == tail_slot
             else Parameter.POSITIONAL_OR_KEYWORD,
             default=_OMITTED if parameter.has_field("default_expr") else Parameter.empty,
         )
@@ -273,17 +279,19 @@ def _author_call(  # noqa: C901, PLR0912
     if core_values.keys() != expected_slots:
         msg = "Python view does not map every core input exactly once"
         raise ValueError(msg)
-    ordered_values = [core_values[index] for index in range(slot_count if specialized else len(inputs))]
+    ordered_values = [core_values[index] for index in range(slot_count if specialized else tail_slot)]
     patterns = [declaration.owner.ref("sorts", arg.sort) for arg in inputs]
     if varargs:
-        tail = tuple(ordered_values[len(inputs) :]) if specialized else core_values[len(inputs)]
+        tail = tuple(ordered_values[len(inputs) :]) if specialized else core_values[tail_slot]
         assert isinstance(tail, tuple)
         if len(tail) % len(varargs):
             raise TypeError(f"Variadic arguments must form complete groups of {len(varargs)}")
         if not specialized:
             ordered_values.extend(tail)
         patterns.extend(
-            declaration.owner.ref("sorts", arg.sort) for _ in range(len(tail) // len(varargs)) for arg in varargs
+            declaration.owner.ref("sorts", arg.sort)
+            for _ in range(len(tail) // len(varargs) + consumes_tail)
+            for arg in varargs
         )
     if (
         view.has_field("receiver")
@@ -321,6 +329,8 @@ def _author_call(  # noqa: C901, PLR0912
     if len(substitutions) != binder_size:
         msg = "Not every generic parameter was determined by the call"
         raise TypeConstraintError(msg)
+    if isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "signature":
+        check_type_restrictions(kind.typing.value, substitutions)
     builder = Builder()
     builder.import_ref(declaration)
     node_index = builder.add(
@@ -778,6 +788,8 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         declaration: Ref | Callable[[], Ref],
         view_index: int | None = None,
         bound: RuntimeClass | RuntimeExpr | None = None,
+        *,
+        type_bindings: tuple[tuple[int, Ref], ...] = (),
     ) -> None:
         self.__egg_declaration__ = declaration if isinstance(declaration, Ref) else None
         self.__egg_prepare__ = declaration if callable(declaration) else None
@@ -786,6 +798,26 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         self.__egg_lock__ = RLock()
         self.__egg_view__ = view_index
         self.__egg_bound__ = bound
+        if type_bindings:
+            record: pb.Declaration = self.__egg_ref__.read()
+            kind = record.kind.value if record.kind is not None else None
+            if not isinstance(kind, pb.HostPrimitive) or kind.typing is None or kind.typing.field != "signature":
+                msg = "Type bindings require a generic callable signature"
+                raise TypeConstraintError(msg)
+            signature = kind.typing.value
+            indices = [index for index, _ in type_bindings]
+            if indices != sorted(set(indices)) or any(
+                index < 0 or index >= len(signature.type_params) for index in indices
+            ):
+                msg = "Invalid callable type binding indices"
+                raise TypeConstraintError(msg)
+            for index, sort in type_bindings:
+                infer_sort(sort, sort, 0, {})
+                if index in signature.equality_type_params and sort.read().kind.field != "eq":
+                    raise TypeConstraintError(f"Type parameter {index} requires an equality sort")
+        self.__egg_type_bindings__ = tuple(
+            (index, sort.owner.ref("sorts", sort.index)) for index, sort in type_bindings
+        )
 
     @property
     def __egg_ref__(self) -> Ref:
@@ -844,6 +876,7 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
             convert=lambda sort, value: resolve_literal(sort, value).__egg_ref__,
             receiver=receiver,
             owner=owner,
+            type_bindings=self.__egg_type_bindings__,
         )
         if mutated is not None:
             if isinstance(mutated, RuntimeExpr):
@@ -886,12 +919,20 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         return reference, self.__egg_view__
 
     def __hash__(self) -> int:
-        return hash((*self._identity(), self.__egg_bound__))
+        identity = (*self._identity(), self.__egg_bound__)
+        if self.__egg_type_bindings__:
+            identity += (tuple((index, StructuralView(sort)) for index, sort in self.__egg_type_bindings__),)
+        return hash(identity)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, RuntimeFunction):
             return NotImplemented
-        return self._identity() == other._identity() and bool(self.__egg_bound__ == other.__egg_bound__)
+        return (
+            self._identity() == other._identity()
+            and tuple((index, StructuralView(sort)) for index, sort in self.__egg_type_bindings__)
+            == tuple((index, StructuralView(sort)) for index, sort in other.__egg_type_bindings__)
+            and bool(self.__egg_bound__ == other.__egg_bound__)
+        )
 
 
 def _partial_function(  # noqa: C901, PLR0912
@@ -935,7 +976,7 @@ def _partial_function(  # noqa: C901, PLR0912
         infer_sort(expected, expected, 0, {})
         expected_params = [expected.owner.ref("sorts", index) for index in expected_type.kind.value.params]
         expected_result = expected.owner.ref("sorts", expected_type.kind.value.result)
-    substitutions: dict[int, Ref] = {}
+    substitutions: dict[int, Ref] = dict(function.__egg_type_bindings__)
     binder_size = 0
     tail: list[Ref] = []
     application = False
@@ -978,6 +1019,10 @@ def _partial_function(  # noqa: C901, PLR0912
         raise TypeError(msg)
     fixed = len(patterns)
     specialized = view is not None and view.has_field("tail_repetitions")
+    consumes_tail = view is not None and not specialized and view.has_field("receiver") and view.receiver == fixed
+    if consumes_tail and (len(tail) != 1 or view.kind != pb.PythonCallKind.METHOD):
+        msg = "Tail receiver requires a homogeneous variadic method"
+        raise ValueError(msg)
     if application:
         patterns.extend(tail)
     elif tail:
@@ -998,11 +1043,14 @@ def _partial_function(  # noqa: C901, PLR0912
         msg = "Function prefix and remaining parameters have the wrong arity"
         raise TypeError(msg)
     if view is not None:
+        if consumes_tail and len(patterns) <= fixed:
+            msg = "Consuming receiver view requires a tail operand"
+            raise TypeError(msg)
         order = [view.receiver] if view.has_field("receiver") else []
         for parameter in view.params:
             order.extend(
-                range(fixed, len(patterns))
-                if (tail or application) and not specialized and parameter.core_input == fixed
+                range(fixed + consumes_tail, len(patterns))
+                if (tail or application) and not specialized and parameter.core_input == fixed + consumes_tail
                 else (parameter.core_input,)
             )
         if order != list(range(len(patterns))):
@@ -1048,6 +1096,8 @@ def _partial_function(  # noqa: C901, PLR0912
     if len(substitutions) != binder_size:
         msg = "Not every generic parameter was determined by the function value"
         raise TypeConstraintError(msg)
+    if isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "signature":
+        check_type_restrictions(kind.typing.value, substitutions)
     owner = None
     if view is not None and view.owner is not None and view.owner.kind is not None:
         owner = (
@@ -1228,12 +1278,23 @@ def resolve_callable(value: object) -> Ref:
     raise TypeError(f"Cannot resolve a canonical callable for {value!r}")
 
 
-def create_callable(reference: Ref, *, owner_sort: Ref | None = None) -> RuntimeClass | RuntimeFunction | RuntimeExpr:
+def create_callable(
+    reference: Ref,
+    *,
+    owner_sort: Ref | None = None,
+    view_index: int | None = 0,
+    type_bindings: tuple[tuple[int, Ref], ...] = (),
+) -> RuntimeClass | RuntimeFunction | RuntimeExpr:
     """Recover the first canonical Python callable view without evaluating it."""
     record: pb.Declaration = reference.read()
-    if record.bindings is None or record.bindings.python is None or not record.bindings.python.views:
-        return RuntimeFunction(reference)
-    view = record.bindings.python.views[0]
+    if (
+        view_index is None
+        or record.bindings is None
+        or record.bindings.python is None
+        or not record.bindings.python.views
+    ):
+        return RuntimeFunction(reference, type_bindings=type_bindings)
+    view = record.bindings.python.views[view_index]
     owner = None
     if view.owner is not None:
         if owner_sort is not None:
@@ -1249,7 +1310,7 @@ def create_callable(reference: Ref, *, owner_sort: Ref | None = None) -> Runtime
             raise ValueError(msg)
         return owner
     if view.kind not in {pb.PythonCallKind.CONSTANT, pb.PythonCallKind.CLASS_VARIABLE}:
-        return RuntimeFunction(reference, 0, owner)
+        return RuntimeFunction(reference, view_index, owner, type_bindings=type_bindings)
     if (
         record.kind is None
         or not isinstance(record.kind.value, pb.Function | pb.Constructor | pb.Primitive)

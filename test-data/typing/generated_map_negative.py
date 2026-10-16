@@ -22,7 +22,11 @@ wrong_result: Map[f64, i64] = value  # error: assignment
 wrong_item: i64 = value[i64(1)]  # error: assignment
 wrong_value: dict[int, float] = value.value  # error: assignment
 Map.of(i64(1), f64(2.0))  # error: attr-defined
-value.remove(i64(1))  # error: attr-defined
+value.remove(f64(1.0))  # error: arg-type
+value.remove()  # error: call-arg
+value.contains(f64(1.0))  # error: arg-type
+value.not_contains(f64(1.0))  # error: arg-type
+value.length(i64(1))  # error: call-arg
 
 
 @function

@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from typing import assert_type
 
-from egglog import Map, MapLike, Pair, Vec, convert, f64, function, i64
+from egglog import Map, MapLike, Pair, Unit, Vec, convert, f64, function, i64
 
 empty = Map[i64, f64].empty()
 owned = empty.insert(i64(1), f64(2.0))
@@ -12,6 +12,10 @@ assert_type(Map.from_pairs(entries), Map[i64, f64])
 assert_type(Map[i64, f64].from_pairs(entries), Map[i64, f64])
 assert_type(Map[i64, f64].from_pairs(Vec[Pair[i64, f64]].empty()), Map[i64, f64])
 assert_type(owned[i64(1)], f64)
+assert_type(owned.remove(i64(1)), Map[i64, f64])
+assert_type(owned.length(), i64)
+assert_type(owned.contains(i64(1)), Unit)
+assert_type(owned.not_contains(i64(1)), Unit)
 assert_type(owned.value, dict[i64, f64])
 assert_type(iter(owned), Iterator[i64])
 assert_type(len(owned), int)

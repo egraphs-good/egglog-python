@@ -439,8 +439,15 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                         (
                             candidate
                             for candidate in views
-                            if not candidate.has_field("tail_repetitions")
-                            or (tail_width and len(args) == fixed + tail_width * candidate.tail_repetitions)
+                            if (
+                                not candidate.has_field("tail_repetitions")
+                                and (not candidate.has_field("receiver") or candidate.receiver < len(args))
+                            )
+                            or (
+                                candidate.has_field("tail_repetitions")
+                                and tail_width
+                                and len(args) == fixed + tail_width * candidate.tail_repetitions
+                            )
                         ),
                         None,
                     )
@@ -449,13 +456,14 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                         selected = [(argument, False, False) for argument in args]
                     else:
                         selected = []
+                        tail_slot = fixed + (view.has_field("receiver") and view.receiver == fixed)
                         defaults: list[Ref | None] = []
                         for parameter in view.params:
                             for argument in (
                                 args[parameter.core_input :]
                                 if tail_width
                                 and not view.has_field("tail_repetitions")
-                                and parameter.core_input == fixed
+                                and parameter.core_input == tail_slot
                                 else [args[parameter.core_input]]
                             ):
                                 selected.append((argument, True, False))

@@ -57,7 +57,7 @@ _FIELDS = {
     "Primitive": "name inputs output:sorts body:nodes",
     "HostSortFamily": "name arity bindings",
     "HostPrimitive": "name signature application",
-    "GenericSignature": "type_params inputs output:sorts varargs",
+    "GenericSignature": "type_params inputs output:sorts varargs equality_type_params",
     "FunctionApplication": "",
     "SortBindings": "python rust egglog",
     "TypeBinding": "path type_params",

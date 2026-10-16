@@ -14,8 +14,10 @@ from typing import Any
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
 from ._builtin_protocols import SCALAR_PROTOCOLS
+from ._program import Ref
 from .declarations import Ident
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, _class_for_sort, _definition_at
+from .type_constraint_solver import infer_call_bindings, infer_sort
 
 __all__ = [
     "get_callable_args",
@@ -68,7 +70,7 @@ def _exact_literal_value(sort: pb.Sort, primitive: pb.PrimitiveValue) -> int | F
     return Fraction(numerator, denominator)
 
 
-def get_literal_value(x: object) -> object:
+def get_literal_value(x: object) -> object:  # noqa: C901, PLR0912
     """Return a local literal payload, or None for symbolic expressions."""
     if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
@@ -96,21 +98,81 @@ def get_literal_value(x: object) -> object:
             from .runtime import _partial_function, create_callable  # noqa: PLC0415
 
             reference = x.__egg_ref__
+            function_sort = reference.owner.ref("sorts", node.sort_id)
             declaration = _definition_at(reference, "callable", value.value.func)
             record: pb.Declaration = declaration.read()
-            view_index = (
-                0
-                if record.bindings is not None and record.bindings.python is not None and record.bindings.python.views
+            captures = tuple(RuntimeExpr(reference.owner.ref("nodes", index)) for index in value.value.args)
+            if sort.kind is None or sort.kind.field != "func":
+                msg = "Named function value requires a Func sort"
+                raise TypeError(msg)
+            kind = record.kind.value if record.kind is not None else None
+            signature = (
+                kind.typing.value
+                if isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "signature"
                 else None
             )
-            captures = tuple(RuntimeExpr(reference.owner.ref("nodes", index)) for index in value.value.args)
+            fixed = (
+                len(signature.inputs)
+                if signature is not None
+                else len(kind.inputs)
+                if isinstance(kind, pb.Function | pb.Constructor | pb.Primitive)
+                else 1
+            )
+            tail_width = len(signature.varargs) if signature is not None else int(isinstance(kind, pb.HostPrimitive))
+            total = len(captures) + len(sort.kind.value.params)
+            views = (
+                record.bindings.python.views
+                if record.bindings is not None and record.bindings.python is not None
+                else []
+            )
+            view_index = next(
+                (
+                    index
+                    for index, candidate in enumerate(views)
+                    if (
+                        not candidate.has_field("tail_repetitions")
+                        and (not candidate.has_field("receiver") or candidate.receiver < total)
+                    )
+                    or (
+                        candidate.has_field("tail_repetitions")
+                        and tail_width
+                        and total == fixed + tail_width * candidate.tail_repetitions
+                    )
+                ),
+                None,
+            )
             _, children, owner_sort = _partial_function(
                 RuntimeFunction(declaration, view_index),
                 captures,
-                reference.owner.ref("sorts", node.sort_id),
+                function_sort,
                 convert_captures=False,
             )
-            function = create_callable(declaration, owner_sort=owner_sort)
+            type_bindings = ()
+            if signature is not None:
+                _, type_bindings = infer_call_bindings(
+                    declaration,
+                    [
+                        *(child.__egg_ref__.owner.ref("sorts", child.__egg_ref__.read().sort_id) for child in children),
+                        *(function_sort.owner.ref("sorts", index) for index in sort.kind.value.params),
+                    ],
+                    function_sort.owner.ref("sorts", sort.kind.value.result),
+                )
+                # An existing concrete owner already carries these bindings.
+                # Retain the rest of the concrete Func constraints explicitly.
+                owner_bindings: dict[int, Ref] = {}
+                if view_index is not None and owner_sort is not None:
+                    view = views[view_index]
+                    if view.owner is not None and view.owner.kind is not None and view.owner.kind.field == "sort":
+                        infer_sort(
+                            declaration.owner.ref("sorts", view.owner.kind.value),
+                            owner_sort,
+                            len(signature.type_params),
+                            owner_bindings,
+                        )
+                type_bindings = tuple((index, bound) for index, bound in type_bindings if index not in owner_bindings)
+            function = create_callable(
+                declaration, owner_sort=owner_sort, view_index=view_index, type_bindings=type_bindings
+            )
             if not isinstance(function, RuntimeFunction | RuntimeClass):
                 msg = "Function value has no callable Python presentation"
                 raise TypeError(msg)
@@ -165,26 +227,32 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
     declaration = _definition_at(x.__egg_ref__, "callable", call.func)
     record: pb.Declaration = declaration.read()
     arguments = tuple(RuntimeExpr(x.__egg_ref__.owner.ref("nodes", index)) for index in call.args)
-    if record.bindings is None or record.bindings.python is None or not record.bindings.python.views:
-        return RuntimeFunction(declaration), arguments
-    if any(
-        view.has_field("tail_repetitions") and view.kind not in {pb.PythonCallKind.FUNCTION, pb.PythonCallKind.METHOD}
-        for view in record.bindings.python.views
-    ):
-        msg = "Tail specialization supports only function and method views"
-        raise ValueError(msg)
     kind = record.kind.value if record.kind is not None else None
     signature = (
         kind.typing.value
         if isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "signature"
         else None
     )
+    type_bindings = ()
+    if signature is not None or isinstance(kind, pb.Function | pb.Constructor | pb.Primitive):
+        determined, bindings = infer_call_bindings(
+            declaration,
+            [arg.__egg_ref__.owner.ref("sorts", arg.__egg_ref__.read().sort_id) for arg in arguments],
+            x.__egg_ref__.owner.ref("sorts", node.sort_id),
+        )
+        type_bindings = tuple((index, sort) for index, sort in bindings if index not in determined)
+    if record.bindings is None or record.bindings.python is None or not record.bindings.python.views:
+        return RuntimeFunction(declaration, type_bindings=type_bindings), arguments
+    if any(
+        view.has_field("tail_repetitions") and view.kind not in {pb.PythonCallKind.FUNCTION, pb.PythonCallKind.METHOD}
+        for view in record.bindings.python.views
+    ):
+        msg = "Tail specialization supports only function and method views"
+        raise ValueError(msg)
     fixed = len(signature.inputs) if signature is not None else len(arguments)
     tail_width = len(signature.varargs) if signature is not None else 0
     application = isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "application"
     if application:
-        from .type_constraint_solver import infer_sort  # noqa: PLC0415
-
         if not arguments:
             msg = "Function application has no function input"
             raise ValueError(msg)
@@ -221,21 +289,29 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
         (
             (index, view)
             for index, view in enumerate(record.bindings.python.views)
-            if not view.has_field("tail_repetitions")
-            or (tail_width and len(arguments) == fixed + tail_width * view.tail_repetitions)
+            if (
+                not view.has_field("tail_repetitions")
+                and (not view.has_field("receiver") or view.receiver < len(arguments))
+            )
+            or (
+                view.has_field("tail_repetitions")
+                and tail_width
+                and len(arguments) == fixed + tail_width * view.tail_repetitions
+            )
         ),
         None,
     )
     if selected is None:
-        return RuntimeFunction(declaration), arguments
+        return RuntimeFunction(declaration, type_bindings=type_bindings), arguments
     view_index, view = selected
+    tail_slot = fixed + (view.has_field("receiver") and view.receiver == fixed)
     ordered: list[RuntimeExpr] = []
     if view.has_field("receiver"):
         ordered.append(arguments[view.receiver])
     for parameter in view.params:
         ordered.extend(
             arguments[parameter.core_input :]
-            if tail_width and not view.has_field("tail_repetitions") and parameter.core_input == fixed
+            if tail_width and not view.has_field("tail_repetitions") and parameter.core_input == tail_slot
             else (arguments[parameter.core_input],)
         )
     if view.kind == pb.PythonCallKind.INITIALIZER:

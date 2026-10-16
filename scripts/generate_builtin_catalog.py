@@ -226,6 +226,12 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             msg = "Function application static generation is not supported"
             raise ValueError(msg)
         signature = primitive.typing.value
+        restrictions = signature.equality_type_params
+        if list(restrictions) != sorted(set(restrictions)) or any(
+            i >= len(signature.type_params) for i in restrictions
+        ):
+            msg = "Invalid equality type parameter indices"
+            raise ValueError(msg)
         if len(signature.varargs) > 1 or not signature.has_field("output"):
             msg = "Static callable generation requires a fixed concrete signature"
             raise ValueError(msg)
@@ -290,7 +296,12 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             receiver_slots = [view.receiver] if view.has_field("receiver") else []
             slots = [*receiver_slots, *(p.core_input for p in view.params if p.has_field("core_input"))]
             specialized = view.has_field("tail_repetitions")
-            slot_count = len(signature.inputs) + bool(signature.varargs)
+            consumes_tail = not specialized and view.has_field("receiver") and view.receiver == len(signature.inputs)
+            if consumes_tail and (len(signature.varargs) != 1 or view.kind != pb.PythonCallKind.METHOD):
+                msg = "Tail receiver requires a homogeneous variadic method"
+                raise ValueError(msg)
+            tail_slot = len(signature.inputs) + consumes_tail
+            slot_count = tail_slot + bool(signature.varargs)
             if specialized:
                 if view.kind not in {pb.PythonCallKind.FUNCTION, pb.PythonCallKind.METHOD}:
                     msg = "Tail specialization supports only function and method views"
@@ -310,6 +321,8 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             effective_inputs = list(signature.inputs)
             if specialized:
                 effective_inputs.extend(signature.varargs * view.tail_repetitions)
+            elif consumes_tail:
+                effective_inputs.extend(signature.varargs)
             if view.has_field("receiver") and (
                 view.receiver >= len(effective_inputs)
                 or sort_type(effective_inputs[view.receiver].sort, parameters=parameters) != owner
@@ -330,12 +343,23 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                     msg = "Duplicate Python parameter name"
                     raise ValueError(msg)
                 parameter_names.add(parameter_name)
-                tail = bool(signature.varargs) and not specialized and parameter.core_input == len(signature.inputs)
+                tail = bool(signature.varargs) and not specialized and parameter.core_input == tail_slot
                 if tail and (parameter is not view.params[-1] or parameter.has_field("default_expr")):
                     msg = "A uniform tail must be the final parameter without a default"
                     raise ValueError(msg)
                 expected_sort = signature.varargs[0].sort if tail else effective_inputs[parameter.core_input].sort
                 annotation = sort_type(expected_sort, input_type=True, parameters=parameters)
+                # Uniform Vec tails accept the existing element-wise list/tuple
+                # codec while retaining the same symbolic element type.
+                expected_kind = program.sorts[expected_sort].kind
+                if (
+                    tail
+                    and expected_kind is not None
+                    and expected_kind.field == "family"
+                    and expected_kind.value.name == "Vec"
+                ):
+                    element = sort_type(expected_kind.value.args[0], parameters=parameters)
+                    annotation = f"{names['Vec']}Like[{element}, {element}]"
                 default = ""
                 if parameter.has_field("default_expr"):
                     if (

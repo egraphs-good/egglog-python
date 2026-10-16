@@ -8,6 +8,17 @@ Vec[int](1)  # error: type-var
 Vec[i64, f64](i64(1))  # error: misc
 Vec[i64].empty(i64(1))  # error: call-arg
 value = Vec[i64](i64(1))
+value.append(Vec[f64](f64(1.0)))  # error: arg-type
+value.append([f64(1.0)])  # error: list-item
+value.push(f64(1.0))  # error: arg-type
+value.pop(i64(1))  # error: call-arg
+value.length(i64(1))  # error: call-arg
+value.set(f64(0.0), i64(1))  # error: arg-type
+value.set(0, f64(1.0))  # error: arg-type
+value.remove(f64(0.0))  # error: arg-type
+value.contains(f64(1.0))  # error: arg-type
+value.not_contains(f64(1.0))  # error: arg-type
+value | Vec[f64](f64(1.0))  # error: operator
 value[f64(0.0)]  # error: index
 value["0"]  # error: index
 value[0, 1]  # error: index
