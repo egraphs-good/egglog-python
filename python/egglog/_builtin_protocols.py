@@ -24,6 +24,7 @@ SCALAR_PROTOCOLS = {
     "String": ScalarProtocol("string", str, (str,)),
     "bool": ScalarProtocol("bool", bool, (bool,), (("__bool__", bool),)),
     "Unit": ScalarProtocol("unit", type(None), (), (("__bool__", bool),)),
+    "PyObject": ScalarProtocol("custom", object, (object,)),
     "Rational": ScalarProtocol(
         "rational", Fraction, (Fraction,), (("__int__", int), ("__float__", float)), False, "i64"
     ),

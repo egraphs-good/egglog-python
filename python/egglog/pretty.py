@@ -19,7 +19,7 @@ from ._program import Ref, StructuralView
 from .declarations import *
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
 
 __all__ = [
@@ -82,8 +82,27 @@ NAMED_UNARY_METHODS = {
 }
 
 
-def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
-    """Print the canonical records directly, using supplied Python bindings."""
+def _format_pyobject(reference: Ref, bare: bool) -> str:
+    """Trusted public-Python display, distinct from opaque record inspection."""
+    from .deconstruct import _pyobject_value  # noqa: PLC0415
+    from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
+
+    value = repr(_pyobject_value(RuntimeExpr(reference)))
+    if not is_valid_python_expr(value):
+        value = f"eval({value!r})"
+    if not bare:
+        node: pb.Node = reference.read()
+        value = f"{_class_for_sort(reference.owner.ref('sorts', node.sort_id))}({value})"
+    # Preserve the public host-literal printer's quote/invalid-repr policy.
+    value = ast.unparse(ast.parse(value))
+    try:
+        return black.format_str(value, mode=BLACK_MODE).strip()
+    except black.parsing.InvalidInput:
+        return value
+
+
+def pretty_ref(root: Ref, *, custom_literal: Callable[[Ref, bool], str] | None = None) -> str:  # noqa: C901, PLR0912
+    """Print records inertly unless the caller supplies a trusted Custom formatter."""
     from .runtime import _definition_at  # noqa: PLC0415
 
     # Frames stream output rather than recursively copying each child's string.
@@ -209,6 +228,9 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                         value = repr(primitive.value)
                     elif primitive.field == "unit":
                         value = ""
+                    elif primitive.field == "custom" and custom_literal is not None:
+                        frames.append(custom_literal(reference, bare))
+                        continue
                     elif primitive.field in {"big_int", "big_rat", "rational"}:
                         from .deconstruct import get_literal_value  # noqa: PLC0415
                         from .runtime import RuntimeExpr  # noqa: PLC0415

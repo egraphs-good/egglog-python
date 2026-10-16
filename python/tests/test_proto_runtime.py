@@ -76,6 +76,151 @@ from egglog.runtime import (
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
 
 
+def test_pyobject_local_values_and_trusted_display(class_authoring_without_engine, monkeypatch):
+    import cloudpickle  # noqa: PLC0415
+
+    from egglog import PyObject, py_eval  # noqa: PLC0415
+    from egglog.pretty import pretty_ref  # noqa: PLC0415
+    from egglog.run_report import RuleKey  # noqa: PLC0415
+
+    original = {"x": [1]}
+    value = PyObject(original)
+    original["x"].append(2)
+    assert value.value == {"x": [1]}
+    restored = value.value
+    restored["x"].append(3)
+    assert value.value == {"x": [1]}
+    assert PyObject(None).value is None
+    match PyObject(None):
+        case PyObject(None):
+            pass
+        case _:
+            pytest.fail("PyObject(None) did not match its actual None value")
+    assert get_literal_value(PyObject("test")) == "test"
+    assert get_literal_value(PyObject.dict()) is None
+    with pytest.raises(ExprValueError, match="PyObject literal"):
+        _ = PyObject.dict().value
+
+    class BadRepr:
+        def __repr__(self) -> str:
+            return "&&&"
+
+    assert str(PyObject("hi")) == 'PyObject("hi")'
+    assert repr(PyObject(BadRepr())) == 'PyObject(eval("&&&"))'
+    expression = py_eval("x", {}, {"x": 1})
+    assert '{"x": 1}' in str(expression)
+    action = expr_action(value)
+    assert str(action) == str(value)
+    rewrite_value = rewrite(value).to(PyObject({"x": [2]}))
+    assert str(value) in str(rewrite_value)
+    assert str(value) in repr(RuleKey(rewrite_value.__egg_ref__))
+
+    packed = pack([value.__egg_ref__])
+
+    def forbidden(_payload):
+        pytest.fail("Opaque record inspection materialized a PyObject")
+
+    monkeypatch.setattr(cloudpickle, "loads", forbidden)
+    decoded = pb.Program.from_binary(packed.program.to_binary())
+    detached = RuntimeExpr(Builder.from_program(decoded).publish().ref("nodes", packed.indices[0]))
+    assert StructuralView(detached.__egg_ref__) == StructuralView(value.__egg_ref__)
+    assert hash(detached) == hash(value)
+    assert pack([detached.__egg_ref__]).program.to_binary() == packed.program.to_binary()
+    with pytest.raises(NotImplementedError, match="custom"):
+        pretty_ref(detached.__egg_ref__)
+
+
+@pytest.mark.parametrize("corruption", ["family", "arity", "declaration", "arm", "children"])
+def test_pyobject_materialization_rejects_malformed_shape(corruption, class_authoring_without_engine, monkeypatch):
+    import cloudpickle  # noqa: PLC0415
+
+    from egglog import PyObject  # noqa: PLC0415
+
+    packed = pack([PyObject(None).__egg_ref__])
+    program = pb.Program.from_binary(packed.program.to_binary())
+    node = program.nodes[packed.indices[0]]
+    sort = program.sorts[node.sort_id]
+    if corruption == "family":
+        sort.kind.value.name = "String"
+    elif corruption == "arity":
+        sort.kind.value.args.append(node.sort_id)
+    elif corruption == "declaration":
+        next(d.kind.value for d in program.declarations if d.kind.field == "host_sort_family").arity = 1
+    elif corruption == "arm":
+        node.kind.value.value = Oneof("string", "not a pickle")
+    else:
+        node.kind.value.value.value.args.append(packed.indices[0])
+
+    def forbidden(_payload):
+        pytest.fail("Malformed Custom value reached pickle decoding")
+
+    monkeypatch.setattr(cloudpickle, "loads", forbidden)
+    expression = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
+    with pytest.raises(ValueError, match="PyObject value"):
+        get_literal_value(expression)
+
+
+@pytest.mark.parametrize("diagnostic", ["normal", "type-repr", "add-note"])
+def test_pyobject_serialization_preserves_original_error(diagnostic, class_authoring_without_engine, monkeypatch):
+    import cloudpickle  # noqa: PLC0415
+
+    from egglog import PyObject  # noqa: PLC0415
+
+    class HostileMeta(type):
+        def __repr__(cls) -> str:
+            if diagnostic == "type-repr":
+                msg = "annotation formatting failed"
+                raise RuntimeError(msg)
+            return "Unpickleable"
+
+    class Unpickleable(metaclass=HostileMeta):
+        pass
+
+    class OriginalError(ValueError):
+        def add_note(self, note):
+            if diagnostic == "add-note":
+                msg = "annotation failed"
+                raise RuntimeError(msg)
+            super().add_note(note)
+
+    error = OriginalError("serialization failed")
+
+    def fail(_value):
+        raise error
+
+    monkeypatch.setattr(cloudpickle, "dumps", fail)
+    with pytest.raises(OriginalError) as caught:
+        PyObject(Unpickleable())
+    assert caught.value is error
+    assert getattr(error, "__notes__", []) == (
+        ["Failed to pickle object of type Unpickleable"] if diagnostic == "normal" else []
+    )
+
+
+def test_pyobject_compatibility_adapter_and_consuming_calls(class_authoring_without_engine):
+    import egglog  # noqa: PLC0415
+    from egglog import PyObject, py_eval_fn  # noqa: PLC0415
+    from egglog import builtins as egg_builtins  # noqa: PLC0415
+
+    assert hasattr(egg_builtins, "PyObjectFunction")
+    assert "PyObjectFunction" not in egg_builtins.__all__
+    assert not hasattr(egglog, "PyObjectFunction")
+    with pytest.warns(DeprecationWarning, match=r"use PyObject\(fn\) directly"):
+        fn = py_eval_fn(int)
+    assert get_literal_value(fn) is int
+    for expression, target in (
+        (fn(), PyObject.__call__),
+        (fn(1, 2), PyObject.__call__),
+        (PyObject({}).dict_update(), PyObject.dict_update),
+    ):
+        arguments = get_callable_args(expression, target)
+        assert arguments is not None
+        assert get_callable_fn(expression) == target
+        assert StructuralView(target(*arguments).__egg_ref__) == StructuralView(expression.__egg_ref__)
+    with pytest.raises(TypeError):
+        fn(value=1)
+
+
 def test_ne_uses_actual_generic_catalog_and_ordered_canonical_calls(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Generic inequality authoring accessed an engine")

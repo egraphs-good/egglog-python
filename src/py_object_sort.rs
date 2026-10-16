@@ -90,8 +90,19 @@ impl BaseSort for PyObjectSort {
                 PyPickledValue(STANDARD.decode(ident.as_bytes()).unwrap())
             }
         );
+        // Register the real default-expression helper before its consumers.
+        // (py-dict [<key-object> <value-object>]*)
+        add_primitive!(eg, "py-dict" [id = "egglog.python.pyobject.dict", bindings = |s| py_object_bindings(s, "dict", &["keys_and_values"], false)] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
+            attach(&self.ctx, "py-dict", |py| {
+                let dict = PyDict::new(py);
+                for i in xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>()?.chunks_exact(2) {
+                    dict.set_item(i[0].clone(), i[1].clone())?;
+                }
+                dump(dict.into())
+            })
+        });
         // Supports calling (py-eval <str-obj> <globals-obj> <locals-obj>)
-        add_primitive!(eg, "py-eval" [id = "egglog.python.pyobject.eval"] = {self.py_error.clone(): PyObjectErrorState} |code: S, globals: PyPickledValue, locals: PyPickledValue| -?> PyPickledValue {
+        add_primitive!(eg, "py-eval" [id = "egglog.python.pyobject.eval", context = py_code_context] = {self.py_error.clone(): PyObjectErrorState} |code: S, globals: PyPickledValue, locals: PyPickledValue| -?> PyPickledValue {
             attach(&self.ctx, "py-eval", |py| {
                 dump(py.eval(
                     CString::new(code.to_string()).unwrap().as_c_str(),
@@ -104,7 +115,7 @@ impl BaseSort for PyObjectSort {
         // (py-exec <str-obj> <globals-obj> <locals-obj>)
         add_primitive!(
             eg,
-            "py-exec" [id = "egglog.python.pyobject.exec"] =
+            "py-exec" [id = "egglog.python.pyobject.exec", context = py_code_context] =
                 {self.py_error.clone(): PyObjectErrorState}
                 |code: S, globals: PyPickledValue, locals: PyPickledValue| -?> PyPickledValue {
                     attach(&self.ctx, "py-exec", |py| {
@@ -129,9 +140,7 @@ impl BaseSort for PyObjectSort {
                 }
         );
         // (py-call <fn-obj> [<arg-object>]*)
-        // N=0 homogeneous tails cannot describe an unbounded METHOD receiver.
-        // Keep these native signatures without inventing a Python method view.
-        add_primitive!(eg, "py-call" [id = "egglog.python.pyobject.call"] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
+        add_primitive!(eg, "py-call" [id = "egglog.python.pyobject.call", bindings = |s| py_object_bindings(s, "__call__", &["args"], true)] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
             attach(&self.ctx, "py-call", |py| {
                 let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>().map_err(|e| {if !e.is_instance_of::<PrimitiveFailure>(py) {let _ = e.add_note(py, "Loading arguments");} e})?;
                 let fn_obj = &xs[0];
@@ -150,18 +159,8 @@ impl BaseSort for PyObjectSort {
             })
         });
 
-        // (py-dict [<key-object> <value-object>]*)
-        add_primitive!(eg, "py-dict" [id = "egglog.python.pyobject.dict", bindings = |s| py_object_bindings(s, "dict", &["keys_and_values"], false)] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
-            attach(&self.ctx, "py-dict", |py| {
-                let dict = PyDict::new(py);
-                for i in xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>()?.chunks_exact(2) {
-                    dict.set_item(i[0].clone(), i[1].clone())?;
-                }
-                dump(dict.into())
-            })
-        });
         // Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
-        add_primitive!(eg, "py-dict-update" [id = "egglog.python.pyobject.dict_update"] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {{
+        add_primitive!(eg, "py-dict-update" [id = "egglog.python.pyobject.dict_update", bindings = |s| py_object_bindings(s, "dict_update", &["keys_and_values"], true)] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {{
             attach(&self.ctx, "py-dict-update", |py| {
                 let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>()?;
                 // Copy the dict so we can mutate it and return it
@@ -224,8 +223,8 @@ impl BaseSort for PyObjectSort {
     }
 }
 
-// These fixed methods/class methods have a representable native input view.
-// The unspecialized homogeneous dict tail is one whole-tail parameter.
+// A homogeneous method consumes its receiver from the tail; dict's classmethod
+// instead exposes the entire tail in its original logical slot.
 fn py_object_bindings(
     signature: &pb::GenericSignature,
     name: &str,
@@ -233,8 +232,10 @@ fn py_object_bindings(
     method: bool,
 ) -> pb::CallableBindings {
     let receiver_count = usize::from(method);
+    let consumes_tail = method && signature.inputs.is_empty();
+    assert!(!consumes_tail || signature.varargs.len() == 1);
     assert_eq!(
-        signature.inputs.len() + signature.varargs.len(),
+        signature.inputs.len() + signature.varargs.len() + usize::from(consumes_tail),
         params.len() + receiver_count
     );
     pb::CallableBindings {
@@ -249,7 +250,12 @@ fn py_object_bindings(
                 path: vec![name.into()],
                 owner: Some(pb::BindingOwner {
                     kind: Some(pb::binding_owner::Kind::Sort(if method {
-                        signature.inputs[0].sort
+                        signature
+                            .inputs
+                            .first()
+                            .or_else(|| signature.varargs.first())
+                            .unwrap()
+                            .sort
                     } else {
                         signature.output.unwrap()
                     })),
@@ -269,6 +275,68 @@ fn py_object_bindings(
         }),
         ..Default::default()
     }
+}
+
+// Defaults belong to the registrar's rooted declaration closure, not an
+// exporter-only overlay or a Python reconstruction of the native signature.
+fn py_code_context(
+    types: &egglog::TypeInfo,
+    key: &str,
+    draft: &mut pb::Program,
+) -> Result<(), String> {
+    let name = match key {
+        "egglog.python.pyobject.eval" => "py_eval",
+        "egglog.python.pyobject.exec" => "py_exec",
+        _ => return Err("unexpected Python code primitive".into()),
+    };
+    let mut consumer = draft.clone();
+    let root = consumer.declarations.iter().position(|declaration| {
+        matches!(&declaration.kind, Some(pb::declaration::Kind::HostPrimitive(primitive)) if primitive.name == key)
+    }).ok_or("missing generated Python code primitive")?;
+    let Some(pb::declaration::Kind::HostPrimitive(primitive)) = &consumer.declarations[root].kind
+    else {
+        unreachable!()
+    };
+    let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+        return Err("Python code primitive requires a generated signature".into());
+    };
+    let default = u32::try_from(consumer.nodes.len()).map_err(|_| "too many default nodes")?;
+    consumer.nodes.push(pb::Node {
+        sort_id: signature.output.ok_or("missing Python code result sort")?,
+        kind: Some(pb::node::Kind::Call(pb::Call {
+            func: "egglog.python.pyobject.dict".into(),
+            args: vec![],
+        })),
+        ..Default::default()
+    });
+    consumer.declarations[root]
+        .bindings
+        .as_mut()
+        .ok_or("missing native alias")?
+        .python = Some(pb::PythonBindings {
+        views: vec![pb::PythonCallable {
+            kind: pb::PythonCallKind::Function.into(),
+            path: vec!["egglog".into(), "builtins".into(), name.into()],
+            params: ["code", "globals_", "locals_"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| pb::PythonParameter {
+                    core_input: Some(index as u32),
+                    name: name.into(),
+                    default_expr: (index != 0).then_some(default),
+                })
+                .collect(),
+            ..Default::default()
+        }],
+    });
+    let mut complete = pb::Program {
+        ir_version: 1,
+        ..Default::default()
+    };
+    types.export_builtin_definition("egglog.python.pyobject.dict", &mut complete)?;
+    egglog::builtin::definitions::reconcile_declarations(&consumer, &mut complete)?;
+    *draft = complete;
+    Ok(())
 }
 
 /// Explicit native Python capability. Each owning byte engine supplies its own

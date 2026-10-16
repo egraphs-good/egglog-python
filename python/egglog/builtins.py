@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
 from functools import partial
 from types import GenericAlias, MethodType
-from typing import Any, TypeVar, cast
+from typing import Any, Protocol, TypeVar, cast
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from typing_extensions import deprecated
@@ -658,9 +659,12 @@ for _definition in _catalog.definitions.values():
         )
         __all__ += [f"{_name}Like"]  # noqa: PLE0604
     if _protocol is not None and (_protocol.literal_types or not _protocol.literal_constructor):
-        _class.__egg_hooks__.update(
-            value=property(_scalar_value if _protocol.literal_constructor else _exact_value), eval=_eval
-        )
+        _value_protocol = _scalar_value if _protocol.literal_constructor else _exact_value
+        if _protocol.literal_arm == "custom":
+            from .deconstruct import _pyobject_value
+
+            _value_protocol = _pyobject_value
+        _class.__egg_hooks__.update(value=property(_value_protocol), eval=_eval)
         _literal_types = _protocol.literal_types
         _like: Any = _class
         for _literal_type in _literal_types:
@@ -706,3 +710,16 @@ for _path, (_definition, _view) in _catalog.functions.items():
             raise ValueError(f"Python builtin binding collision: {_path!r}")
         globals()[_path[-1]] = RuntimeFunction(_definition, _view)
         __all__ += [_path[-1]]  # noqa: PLE0604
+
+
+if ("host_sort_family", "PyObject") in _catalog.definitions:
+
+    class PyObjectFunction(Protocol):
+        def __call__(self, *__args: PyObject) -> PyObject: ...  # noqa: F821 -- native-catalog class
+
+    @deprecated("use PyObject(fn) directly")
+    def py_eval_fn(fn: Callable) -> PyObjectFunction:
+        """Compatibility adapter for stored Python callables; prefer PyObject(fn)."""
+        return globals()["PyObject"](fn)
+
+    __all__ += ["py_eval_fn"]  # The Protocol remains module-only, as in the original API.

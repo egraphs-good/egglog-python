@@ -63,7 +63,7 @@ from .declarations import *
 from .declarations import is_callable_decl_constructor
 from .egraph_state import *
 from .ipython_magic import IN_IPYTHON
-from .pretty import pretty_decl, pretty_ref
+from .pretty import _format_pyobject, pretty_decl, pretty_ref
 from .run_report import RunReport
 from .runtime import *
 from .runtime import _ClassContext, _definition_at
@@ -2569,7 +2569,7 @@ class Schedule:
         return builder.publish().ref("commands", index)
 
     def __str__(self) -> str:
-        return pretty_ref(self._resolve(None))
+        return pretty_ref(self._resolve(None), custom_literal=_format_pyobject)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2688,7 +2688,7 @@ class Ruleset(Schedule):
             self.deferred_rule_gens.append(Thunk.fn(_rewrite_or_rule_generator, rule_or_generator, original_frame))
 
     def __str__(self) -> str:
-        return pretty_ref(self._snapshot({}))
+        return pretty_ref(self._snapshot({}), custom_literal=_format_pyobject)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2761,7 +2761,7 @@ class UnstableCombinedRuleset(Schedule):
         return self.__egg_ref__
 
     def __str__(self) -> str:
-        return pretty_ref(self._snapshot({}))
+        return pretty_ref(self._snapshot({}), custom_literal=_format_pyobject)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2797,7 +2797,7 @@ class RewriteOrRule:
         return rule_equal(self.__egg_ref__, other.__egg_ref__)
 
     def __str__(self) -> str:
-        return pretty_ref(self.__egg_ref__)
+        return pretty_ref(self.__egg_ref__, custom_literal=_format_pyobject)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2817,7 +2817,7 @@ class Fact:
         self.__egg_ref__ = reference
 
     def __str__(self) -> str:
-        return pretty_ref(self.__egg_ref__)
+        return pretty_ref(self.__egg_ref__, custom_literal=_format_pyobject)
 
     def __repr__(self) -> str:
         return str(self)
@@ -2870,7 +2870,7 @@ class Action:
         return action_equal(self.__egg_ref__, other.__egg_ref__)
 
     def __str__(self) -> str:
-        return pretty_ref(self.__egg_ref__)
+        return pretty_ref(self.__egg_ref__, custom_literal=_format_pyobject)
 
     def __repr__(self) -> str:
         return str(self)
@@ -3176,7 +3176,7 @@ class _SetBuilder(Generic[BASE_EXPR]):
 
     def __str__(self) -> str:
         lhs = to_runtime_expr(self.lhs)
-        return f"set_({pretty_ref(lhs.__egg_ref__)})"
+        return f"set_({pretty_ref(lhs.__egg_ref__, custom_literal=_format_pyobject)})"
 
 
 @dataclass
@@ -3213,7 +3213,7 @@ class _UnionBuilder(Generic[EXPR]):
 
     def __str__(self) -> str:
         lhs = to_runtime_expr(self.lhs)
-        return f"union({pretty_ref(lhs.__egg_ref__)})"
+        return f"union({pretty_ref(lhs.__egg_ref__, custom_literal=_format_pyobject)})"
 
 
 @dataclass

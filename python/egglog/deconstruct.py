@@ -14,7 +14,7 @@ from typing import Any
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
 from ._builtin_protocols import SCALAR_PROTOCOLS
-from ._program import Ref
+from ._program import Ref, StructuralView
 from .declarations import Ident
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, _class_for_sort, _definition_at
 from .type_constraint_solver import infer_call_bindings, infer_sort, substitute_sort
@@ -27,6 +27,35 @@ __all__ = [
     "get_literal_value",
     "get_var_name",
 ]
+
+
+def _pyobject_value(expr: RuntimeExpr) -> object:
+    """Materialize a trusted PyObject literal after validating its owned shape."""
+    import cloudpickle  # noqa: PLC0415 -- explicit host materialization only
+
+    from ._catalog import builtin_catalog  # noqa: PLC0415
+    from .builtins import ExprValueError  # noqa: PLC0415
+
+    reference = expr.__egg_ref__
+    node: pb.Node = reference.read()
+    if node.kind is None or node.kind.field != "primitive_value":
+        raise ExprValueError(expr, "a PyObject literal")
+    value = node.kind.value.value
+    sort: pb.Sort = reference.owner.ref("sorts", node.sort_id).read()
+    if (
+        sort.kind is None
+        or sort.kind.field != "family"
+        or sort.kind.value.name != "PyObject"
+        or sort.kind.value.args
+        or value is None
+        or value.field != "custom"
+        or value.value.args
+        or StructuralView(_definition_at(reference, "host_sort_family", "PyObject"))
+        != StructuralView(builtin_catalog().definitions["host_sort_family", "PyObject"])
+    ):
+        msg = "PyObject value requires its canonical nullary family and childless Custom payload"
+        raise ValueError(msg)
+    return cloudpickle.loads(value.value.payload)
 
 
 def _exact_literal_value(sort: pb.Sort, primitive: pb.PrimitiveValue) -> int | Fraction:
@@ -70,7 +99,7 @@ def _exact_literal_value(sort: pb.Sort, primitive: pb.PrimitiveValue) -> int | F
     return Fraction(numerator, denominator)
 
 
-def get_literal_value(x: object) -> object:  # noqa: C901, PLR0912
+def get_literal_value(x: object) -> object:  # noqa: C901, PLR0911, PLR0912 -- each payload dispatches to its own codec
     """Return a local literal payload, or None for symbolic expressions."""
     if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
@@ -82,6 +111,10 @@ def get_literal_value(x: object) -> object:  # noqa: C901, PLR0912
         msg = "Primitive value has no payload"
         raise ValueError(msg)
     sort: pb.Sort = x.__egg_ref__.owner.ref("sorts", node.sort_id).read()
+    if value.field == "custom" or (
+        sort.kind is not None and sort.kind.field == "family" and sort.kind.value.name == "PyObject"
+    ):
+        return _pyobject_value(x)
     exact_sort = (
         sort.kind is not None
         and sort.kind.field == "family"

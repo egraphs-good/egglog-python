@@ -424,8 +424,60 @@ mod tests {
             assert_eq!(sort_name(signature.output.unwrap()), output);
             let bindings = declaration.bindings.as_ref().unwrap();
             assert_eq!(bindings.egglog.as_ref().unwrap().views[0].symbol, alias);
-            if matches!(alias, "py-object" | "py-call" | "py-dict-update") {
+            if alias == "py-object" {
                 assert!(bindings.python.is_none());
+            } else {
+                let views = &bindings
+                    .python
+                    .as_ref()
+                    .expect("missing public PyObject view")
+                    .views;
+                assert_eq!(views.len(), 1);
+                let view = &views[0];
+                if matches!(alias, "py-eval" | "py-exec") {
+                    assert_eq!(view.kind, pb::PythonCallKind::Function as i32);
+                    assert_eq!(view.path, ["egglog", "builtins", &alias.replace('-', "_")]);
+                    assert!(view.owner.is_none());
+                    assert_eq!(view.receiver, None);
+                    assert_eq!(view.params.len(), 3);
+                    for (index, name) in ["code", "globals_", "locals_"].iter().enumerate() {
+                        let parameter = &view.params[index];
+                        assert_eq!(parameter.name, *name);
+                        assert_eq!(parameter.core_input, Some(index as u32));
+                        if index == 0 {
+                            assert_eq!(parameter.default_expr, None);
+                            continue;
+                        }
+                        let default = &catalog.definitions.nodes
+                            [parameter.default_expr.expect("missing real dict default") as usize];
+                        assert_eq!(sort_name(default.sort_id), "PyObject");
+                        assert_eq!(
+                            default.kind,
+                            Some(pb::node::Kind::Call(pb::Call {
+                                func: "egglog.python.pyobject.dict".into(),
+                                args: vec![],
+                            }))
+                        );
+                    }
+                } else if matches!(alias, "py-call" | "py-dict-update") {
+                    assert_eq!(view.kind, pb::PythonCallKind::Method as i32);
+                    assert_eq!(view.receiver, Some(0));
+                    assert_eq!(
+                        view.owner.as_ref().unwrap().kind,
+                        Some(pb::binding_owner::Kind::Sort(signature.varargs[0].sort))
+                    );
+                    assert_eq!(view.params.len(), 1);
+                    assert_eq!(view.params[0].core_input, Some(1));
+                    assert_eq!(view.params[0].default_expr, None);
+                    assert_eq!(
+                        view.path,
+                        [if alias == "py-call" {
+                            "__call__"
+                        } else {
+                            "dict_update"
+                        }]
+                    );
+                }
             }
             // The alias and key refer to the same actual registration in every
             // native context. This resolves signatures; no callback is executed.
@@ -513,6 +565,231 @@ mod tests {
                 "hello"
             )
         });
+    }
+
+    #[test]
+    fn pyobject_default_context_validation_and_installed_authority() {
+        Python::initialize();
+        let extension = Arc::new(PyObjectExtension::default());
+        let mut graph = egglog_experimental::new_experimental_egraph();
+        extension.initialize(&mut graph).unwrap();
+        let catalog = graph.type_info().builtin_catalog().unwrap().definitions;
+        let mut engine = Engine::with_extension(extension);
+        for operation in ["eval", "exec"] {
+            let key = format!("egglog.python.pyobject.{operation}");
+            let helper = "egglog.python.pyobject.dict";
+            // Export the actual callback-built context, not a second signature.
+            let mut context = pb::Program::default();
+            graph
+                .type_info()
+                .export_builtin_definition(&key, &mut context)
+                .unwrap();
+            let root = context
+                .declarations
+                .iter()
+                .position(|d| {
+                    matches!(&d.kind,
+                Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == key)
+                })
+                .unwrap();
+            let default = context.declarations[root]
+                .bindings
+                .as_ref()
+                .unwrap()
+                .python
+                .as_ref()
+                .unwrap()
+                .views[0]
+                .params[1]
+                .default_expr
+                .unwrap() as usize;
+            let Some(pb::declaration::Kind::HostPrimitive(primitive)) =
+                &context.declarations[root].kind
+            else {
+                unreachable!()
+            };
+            let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+                unreachable!()
+            };
+            let string_sort = signature.inputs[0].sort;
+            let mut imported = pb::Program::default();
+            egglog::builtin::import_rooted_definition(&key, &context, &mut imported).unwrap();
+            let before = imported.clone();
+            egglog::builtin::import_rooted_definition(&key, &context, &mut imported).unwrap();
+            assert_eq!(imported, before);
+
+            // Standalone closure needs its helper; an installed P session
+            // already owns that genuine declaration, so omission is allowed.
+            let mut missing = context.clone();
+            missing.declarations.retain(|d| {
+                !matches!(&d.kind,
+                Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == helper)
+            });
+            let mut destination = pb::Program::default();
+            assert_eq!(
+                egglog::builtin::import_rooted_definition(&key, &missing, &mut destination)
+                    .unwrap_err(),
+                "unknown default callee"
+            );
+            assert_eq!(destination, pb::Program::default());
+            let id = create(&mut engine);
+            assert_eq!(run(&mut engine, id, missing).error, None);
+            assert_eq!(run(&mut engine, id, context.clone()).error, None);
+
+            for (case, standalone_error) in [
+                ("forged_helper", None),
+                ("forged_family", None),
+                ("unknown_callee", Some("unknown default callee")),
+                ("fixed_helper_arity", Some("default call arity mismatch")),
+                ("default_sort", Some("default sort differs from parameter")),
+                ("family_arity", Some("presentation family arity mismatch")),
+            ] {
+                let mut invalid = context.clone();
+                match case {
+                    "forged_helper" => {
+                        let declaration = invalid
+                            .declarations
+                            .iter_mut()
+                            .find(|d| {
+                                matches!(&d.kind,
+                            Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == helper)
+                            })
+                            .unwrap();
+                        declaration
+                            .bindings
+                            .as_mut()
+                            .unwrap()
+                            .python
+                            .as_mut()
+                            .unwrap()
+                            .views[0]
+                            .path = vec!["forged_dict".into()];
+                    }
+                    "forged_family" | "family_arity" => {
+                        let family = invalid
+                            .declarations
+                            .iter_mut()
+                            .find_map(|d| match &mut d.kind {
+                                Some(pb::declaration::Kind::HostSortFamily(f))
+                                    if f.name == "PyObject" =>
+                                {
+                                    Some(f)
+                                }
+                                _ => None,
+                            })
+                            .unwrap();
+                        if case == "family_arity" {
+                            family.arity = 1;
+                        } else {
+                            family
+                                .bindings
+                                .as_mut()
+                                .unwrap()
+                                .python
+                                .as_mut()
+                                .unwrap()
+                                .path = vec!["forged".into(), "PyObject".into()];
+                        }
+                    }
+                    "default_sort" => invalid.nodes[default].sort_id = string_sort,
+                    _ => {
+                        let callee = if case == "fixed_helper_arity" {
+                            let callee = "egglog.python.pyobject.from_string";
+                            graph
+                                .type_info()
+                                .export_builtin_definition(callee, &mut invalid)
+                                .unwrap();
+                            invalid.declarations.retain(|d| {
+                                !matches!(&d.kind,
+                                Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == helper)
+                            });
+                            callee
+                        } else {
+                            "egglog.python.pyobject.missing_helper"
+                        };
+                        let Some(pb::node::Kind::Call(call)) = &mut invalid.nodes[default].kind
+                        else {
+                            unreachable!()
+                        };
+                        call.func = callee.into();
+                    }
+                }
+                let mut destination = pb::Program::default();
+                let result =
+                    egglog::builtin::import_rooted_definition(&key, &invalid, &mut destination);
+                if let Some(expected) = standalone_error {
+                    assert_eq!(result.unwrap_err(), expected, "{operation}/{case}");
+                    assert_eq!(destination, pb::Program::default());
+                } else {
+                    // Rooted import assumes registered evidence; it does not
+                    // confer native authority on self-consistent forged views.
+                    result.unwrap();
+                }
+                let id = create(&mut engine);
+                let response = run(&mut engine, id, invalid);
+                assert_eq!(
+                    response.error.unwrap().code,
+                    pb::ErrorCode::InvalidProgram as i32,
+                    "{operation}/{case}"
+                );
+                assert!(response.outputs.is_empty());
+                assert!(response.ruleset_publication.unwrap().names.is_empty());
+                assert_eq!(
+                    run(&mut engine, id, context.clone()).error,
+                    None,
+                    "failed admission must not poison the genuine context: {operation}/{case}"
+                );
+            }
+
+            // Dict has a homogeneous tail, not pair-width arity. A single
+            // well-sorted argument is valid and the unchanged body ignores it.
+            let mut odd = context.clone();
+            let argument = odd.nodes.len() as u32;
+            odd.nodes.push(odd.nodes[default].clone());
+            let Some(pb::node::Kind::Call(call)) = &mut odd.nodes[default].kind else {
+                unreachable!()
+            };
+            call.args.push(argument);
+            egglog::builtin::import_rooted_definition(&key, &odd, &mut pb::Program::default())
+                .unwrap();
+            // Execute only the call, not a conflicting resupply of changed
+            // eval/exec defaults. The installed catalog supplies its callee.
+            odd.declarations.clear();
+            odd.commands.push(pb::Command {
+                kind: Some(pb::command::Kind::Extract(pb::Extract {
+                    roots: vec![default as u32],
+                    variants: 1,
+                    extractor: pb::Extractor::Tree.into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            });
+            let response = run(&mut engine, id, odd);
+            assert_eq!(response.error, None);
+            let Some(pb::command_output::Kind::Extraction(extraction)) = &response.outputs[0].kind
+            else {
+                unreachable!()
+            };
+            let Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                value: Some(pb::primitive_value::Value::Custom(value)),
+            })) = &response.nodes[extraction.roots[0].variants[0].term as usize].kind
+            else {
+                panic!("expected an owned PyObject dict")
+            };
+            Python::attach(|py| {
+                assert!(
+                    load(py, &PyPickledValue(value.payload.clone()))
+                        .unwrap()
+                        .cast::<PyDict>()
+                        .unwrap()
+                        .is_empty()
+                );
+            });
+        }
+        assert_eq!(
+            graph.type_info().builtin_catalog().unwrap().definitions,
+            catalog
+        );
     }
 
     #[test]

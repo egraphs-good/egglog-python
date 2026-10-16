@@ -687,6 +687,82 @@ def test_scalar_local_value_and_presentation() -> None:
         get_literal_value(1)
 
 
+def test_public_pyobject_defaults_and_results_cross_bytes(monkeypatch, tmp_path) -> None:
+    from egglog import PyObject, py_eval, py_exec  # noqa: PLC0415
+
+    graph = EGraph()
+    transport = graph._state.transport
+    requests, responses = [], []
+
+    class AuditedTransport:
+        def run(self, encoded):
+            index = len(requests)
+            assert isinstance(encoded, bytes)
+            (tmp_path / f"request-{index}.pb").write_bytes(encoded)
+            requests.append(pb.RunProgramRequest.from_binary(encoded))
+            returned, host_error = transport.run(encoded)
+            assert isinstance(returned, bytes)
+            (tmp_path / f"response-{index}.pb").write_bytes(returned)
+            responses.append(pb.RunProgramResponse.from_binary(returned))
+            return returned, host_error
+
+    monkeypatch.setattr(graph._state, "transport", AuditedTransport())
+    original = {"x": 7}
+    for expression, expected in (
+        (py_exec("x = 10"), {"x": 10}),
+        (py_eval("1 + 2"), 3),
+        (py_eval("x", {"x": 1}, {"x": 2}), 2),
+        (py_exec("x = y + 1", {"y": 10}), {"x": 11}),
+        (PyObject(original).dict_update("x", 8), {"x": 8}),
+        (PyObject.from_string("hello"), "hello"),
+        (PyObject.from_int(42), 42),
+        (PyObject(None), None),
+        (PyObject(int)(PyObject.from_int(10)), 10),
+        (PyObject(lambda x, *, factor=1: x * factor).call_extended((10,), {"factor": 3}), 30),
+    ):
+        result = graph.extract(expression)
+        assert result.value == expected
+        assert result.__egg_ref__.read().kind.value.value.field == "custom"
+    assert original == {"x": 7}
+    graph.check(PyObject("hello").to_string() == String("hello"))
+    assert graph.extract(PyObject(True).to_bool()).value is True
+    assert requests
+    assert len(requests) == len(responses)
+    assert all(response.error is None for response in responses)
+    assert any(
+        node.kind.field == "call" and node.kind.value.func == "egglog.python.pyobject.dict"
+        for request in requests
+        for node in request.program.nodes
+    )
+    monkeypatch.setattr(graph._state, "transport", transport)
+    graph._state.destroy()
+    assert result.value == 30
+
+
+def test_public_pyobject_callback_errors_none_and_recovery() -> None:
+    from egglog import PrimitiveFailure, PyObject, py_eval_fn  # noqa: PLC0415
+
+    def callback(value):
+        if value == "expected":
+            msg = "no match"
+            raise PrimitiveFailure(msg)
+        if value == "unexpected":
+            msg = "original callback failure"
+            raise ValueError(msg)
+
+    graph = EGraph()
+    fn = PyObject(callback)
+    with pytest.raises(ValueError, match="original callback failure") as caught:
+        graph.extract(fn("unexpected"))
+    assert caught.value.args == ("original callback failure",)
+    with pytest.raises(bindings.EggSmolError):
+        graph.extract(fn("expected"))
+    assert graph.extract(fn("success")).value is None
+    with pytest.warns(DeprecationWarning, match=r"use PyObject\(fn\) directly"):
+        wrapped = py_eval_fn(int)
+    assert graph.extract(wrapped(PyObject("12"))).value == 12
+
+
 def test_scalar_call_children_are_retained_records() -> None:
     leaf = i64(1)
     expression = leaf + 2

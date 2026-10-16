@@ -101,7 +101,7 @@ def test_complete_catalog_preserves_the_166_definition_baseline():
     baseline = Catalog(pb.Program.from_binary(Path(path).read_bytes()))
     current = builtin_catalog()
     assert len(baseline.roots) == 166
-    assert len(current.roots) == 184
+    assert len(current.roots) == 196
     for key, definition in baseline.definitions.items():
         assert StructuralView(definition) == StructuralView(current.definitions[key]), key
     assert current.definitions.keys() - baseline.definitions.keys() == {
@@ -114,6 +114,24 @@ def test_complete_catalog_preserves_the_166_definition_baseline():
     } | {
         ("host_sort_family", "Maybe"),
         *(("callable", f"egglog.experimental.maybe.{name}") for name in ("none", "some", "unwrap", "unwrap_or")),
+    } | {
+        ("host_sort_family", "PyObject"),
+        *(
+            ("callable", f"egglog.python.pyobject.{name}")
+            for name in (
+                "from_pickle",
+                "eval",
+                "exec",
+                "call",
+                "call_extended",
+                "dict",
+                "dict_update",
+                "to_string",
+                "to_bool",
+                "from_string",
+                "from_int",
+            )
+        ),
     }
 
 

@@ -134,8 +134,7 @@ We define a custom "primitive sort" (i.e. a builtin type) for `PyObject`s. This 
 ### Saving Python Objects
 
 To create an expression of type `PyObject`, call the constructor with any Python object. The value is immediately
-serialized with `cloudpickle.dumps`, and the serialized bytes (base64 encoded when printed) are what get stored
-inside the e-graph. This means the e-graph keeps a snapshot of the object rather than a live reference.
+serialized with `cloudpickle.dumps`. The e-graph stores that snapshot rather than a live reference.
 
 ```{code-cell} python
 from dataclasses import dataclass
@@ -158,6 +157,13 @@ merge them by value.
 as open file handles, generators, or extension types that `cloudpickle` cannot handle will raise an error when you
 try to construct a `PyObject`.
 ```
+
+Only load trusted Python objects. Accessing `.value` or `get_literal_value`,
+displaying a `PyObject` in a public Python expression, and executing its native
+operations may deserialize its pickle and run Python code. Generic protobuf
+record inspection, copying, and structural comparison keep Custom payloads opaque.
+Public display preserves the Python representation of the object; it does not
+evaluate a symbolic Egglog expression to obtain that representation.
 
 ### Retrieving Python Objects
 
@@ -185,7 +191,7 @@ deserializes its inputs, performs the operation in Python, and then serializes t
 
 ### Calling Stored Python Functions
 
-Any `PyObject` whose value is callable can now be invoked directly. Each positional or keyword argument is first
+Any `PyObject` whose value is callable can now be invoked directly. Each positional argument is first
 converted into a `PyObject`, the call executes inside Python, and the result is serialized back into a new
 `PyObject` expression.
 
@@ -197,7 +203,7 @@ assert EGraph().extract(result).value == 21
 ```
 
 When you already have the arguments packaged up, use `call_extended` to forward explicit `*args`/`**kwargs`
-collections. This is needed when you want to call any keyword arguments as well which are not supported y the simple form:
+collections. Use this form for keyword arguments, which the simple call does not support:
 
 ```{code-cell} python
 args = PyObject((10,))
@@ -240,7 +246,9 @@ We also support evaluating arbitrary Python code, given some locals and globals.
 EGraph().extract(py_eval("1 + 2"))
 ```
 
-Executing Python code is also supported. In this case, the return value will be the updated globals dict, which will be copied first before using.
+Executing Python code is also supported. The return value is the updated copy of
+the locals dictionary. Omitted globals and locals use symbolic `PyObject.dict()`
+defaults; neither operation mutates a dictionary supplied by the caller.
 
 ```{code-cell} python
 EGraph().extract(py_exec("x = 1 + 2"))

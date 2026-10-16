@@ -1,10 +1,11 @@
 """
 Package an actual native catalog export without importing the Python frontend.
 
-First run egglog-experimental's export_builtin_catalog example from the pinned
-native checkout. This command consumes that binary snapshot; it never discovers
-signatures through an EGraph during import or authoring. --check is a byte-for-
-byte reproducibility gate, so changed native records cannot be silently hidden.
+Export the actual configured native catalog first: Python's generation-time
+_export_pyobject_catalog includes its real host provider. This command consumes
+that binary snapshot; it never discovers signatures through an EGraph during
+import or authoring. --check is a byte-for-byte reproducibility gate, so changed
+native records cannot be silently hidden.
 """
 
 from __future__ import annotations
@@ -59,6 +60,16 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
     for protocol in _SCALARS.values():
         reserved_names.update(t.__name__ for t in (protocol.value_type, *protocol.literal_types))
         reserved_names.update(result.__name__ for _, result in protocol.hooks)
+
+    pyobject_protocol = any(
+        declaration.kind is not None
+        and declaration.kind.field == "host_sort_family"
+        and declaration.kind.value.name == "PyObject"
+        for declaration in program.declarations
+    )
+    if pyobject_protocol:
+        reserved_names.update({"Callable", "Protocol", "PyObjectFunction", "py_eval_fn"})
+        exported.add("py_eval_fn")
 
     function_protocol = False
     for declaration in program.declarations:
@@ -445,7 +456,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             raise ValueError(msg)
         exported.add(map_alias)
         used_names.update((map_alias, *map_hosts))
-    collections_imports = (["Callable"] if function_protocol else []) + (
+    collections_imports = (["Callable"] if function_protocol or pyobject_protocol else []) + (
         ["Iterator"] if vec_protocol or map_protocol or set_protocol else []
     )
     lines = [
@@ -455,7 +466,9 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         *(["from collections.abc import " + ", ".join(collections_imports)] if collections_imports else []),
         "from dataclasses import dataclass",
         *(["from fractions import Fraction"] if any(name in families for name in ("Rational", "BigRat")) else []),
-        "from typing import Generic, Never, TypeAlias, TypeVar"
+        "from typing import Generic, Never"
+        + (", Protocol" if pyobject_protocol else "")
+        + ", TypeAlias, TypeVar"
         + (", TypeVarTuple, Unpack, overload" if function_protocol else ""),
         "",
         "from typing_extensions import deprecated",
@@ -614,6 +627,16 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             )
             lines.append("")
     lines.extend(functions.values())
+    if pyobject_protocol:
+        name = names["PyObject"]
+        lines.extend([
+            "",
+            "class PyObjectFunction(Protocol):",
+            f"    def __call__(self, *__args: {name}) -> {name}: ...",
+            "",
+            '@deprecated("use PyObject(fn) directly")',
+            "def py_eval_fn(fn: Callable) -> PyObjectFunction: ...",
+        ])
     result = "\n".join(lines)
     ast.parse(result, filename="builtins.pyi")
     return result

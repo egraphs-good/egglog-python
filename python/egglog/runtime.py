@@ -11,6 +11,7 @@ from types import FunctionType, MethodType
 from typing import Any, Literal, TypeVar, Union, cast, get_args, get_origin
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
+import cloudpickle
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
@@ -625,6 +626,18 @@ class RuntimeClass(type):
                     primitive.value = Oneof[Literal["bool"], bool]("bool", cast("bool", args[0]))
                 case "unit":
                     primitive.value = Oneof[Literal["unit"], pb.Unit]("unit", pb.Unit())
+                case "custom":
+                    try:
+                        payload = cloudpickle.dumps(args[0])
+                    except Exception as error:
+                        # Both formatting the diagnostic and add_note may run
+                        # user code; neither may replace the serialization error.
+                        with suppress(BaseException):
+                            error.add_note(f"Failed to pickle object of type {type(args[0])}")
+                        raise
+                    primitive.value = Oneof[Literal["custom"], pb.CustomValue](
+                        "custom", pb.CustomValue(payload=payload)
+                    )
             builder = Builder()
             builder.import_ref(cls.__egg_definition__)
             index = builder.add(
@@ -1159,9 +1172,9 @@ class RuntimeExpr:
         cls = _class_for_sort(self.__egg_ref__.owner.ref("sorts", node.sort_id))
         if "__str__" in cls.__egg_hooks__:
             return cls.__egg_hooks__["__str__"].__get__(self, cls)()
-        from .pretty import pretty_ref  # noqa: PLC0415
+        from .pretty import _format_pyobject, pretty_ref  # noqa: PLC0415
 
-        return pretty_ref(self.__egg_ref__)
+        return pretty_ref(self.__egg_ref__, custom_literal=_format_pyobject)
 
     def __repr__(self) -> str:
         node: pb.Node = self.__egg_ref__.read()

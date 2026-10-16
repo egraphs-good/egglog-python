@@ -19,6 +19,67 @@ from egglog.runtime import RuntimeExpr, RuntimeFunction, _class_for_sort
 from egglog.type_constraint_solver import TypeConstraintError
 
 
+def test_pyobject_generated_surface_uses_real_defaults_and_host_policy():
+    from egglog._catalog import builtin_catalog  # noqa: PLC0415
+    from egglog._program import pack  # noqa: PLC0415
+
+    program = pack(builtin_catalog().roots).program
+    renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
+        "render_stubs"
+    ]
+    stub = renderer(program)
+    for signature in (
+        "def __init__(self, value: object, /) -> None:",
+        "def value(self) -> object:",
+        "def __call__(self, *args: PyObjectLike) -> PyObject:",
+        "def dict(cls, *keys_and_values: PyObjectLike) -> PyObject:",
+        "def dict_update(self, *keys_and_values: PyObjectLike) -> PyObject:",
+        "def py_eval(code: StringLike, globals_: PyObjectLike = ..., locals_: PyObjectLike = ...) -> PyObject:",
+        "def py_exec(code: StringLike, globals_: PyObjectLike = ..., locals_: PyObjectLike = ...) -> PyObject:",
+        "class PyObjectFunction(Protocol):",
+        "def py_eval_fn(fn: Callable) -> PyObjectFunction:",
+    ):
+        assert signature in stub
+    assert '"py_eval_fn"' in stub.split("__all__ = ", 1)[1].splitlines()[0]
+    assert '"PyObjectFunction"' not in stub.split("__all__ = ", 1)[1].splitlines()[0]
+    for name in ("eval", "exec"):
+        declaration = builtin_catalog().definitions["callable", f"egglog.python.pyobject.{name}"]
+        view = declaration.read().bindings.python.views[0]
+        assert view.path == ["egglog", "builtins", f"py_{name}"]
+        assert view.params[0].name == "code"
+        assert not view.params[0].has_field("default_expr")
+        for parameter, expected in zip(view.params[1:], ("globals_", "locals_"), strict=True):
+            assert parameter.name == expected
+            default = declaration.owner.ref("nodes", parameter.default_expr).read()
+            assert default.kind.field == "call"
+            assert default.kind.value.func == "egglog.python.pyobject.dict"
+            assert not default.kind.value.args
+    # The same real export must remain usable after all arena IDs relocate.
+    relocated = pack(reversed(builtin_catalog().roots)).program
+    assert sorted(renderer(relocated).splitlines()) == sorted(stub.splitlines())
+
+
+@pytest.mark.parametrize("corruption", ["index", "sort"])
+def test_pyobject_generator_rejects_invalid_default(corruption):
+    from egglog._catalog import builtin_catalog  # noqa: PLC0415
+    from egglog._program import pack  # noqa: PLC0415
+
+    program = pack(builtin_catalog().roots).program
+    declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.python.pyobject.eval")
+    parameter = declaration.bindings.python.views[0].params[1]
+    if corruption == "index":
+        parameter.default_expr = len(program.nodes)
+    else:
+        program.nodes[parameter.default_expr].sort_id = next(
+            i for i, sort in enumerate(program.sorts) if sort.kind.field == "family" and sort.kind.value.name == "i64"
+        )
+    renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
+        "render_stubs"
+    ]
+    with pytest.raises(ValueError, match="Default"):
+        renderer(program)
+
+
 def test_set_generated_surface_from_actual_catalog(set_catalog_program):
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
         "render_stubs"

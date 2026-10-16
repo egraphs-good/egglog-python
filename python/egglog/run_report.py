@@ -8,7 +8,7 @@ from egglog_proto.egglog.v1 import egglog_pb as pb
 
 from . import bindings
 from ._program import Packed, Ref, _rule_key, rule_equal
-from .pretty import pretty_ref
+from .pretty import _format_pyobject, pretty_ref
 
 if TYPE_CHECKING:
     from .egraph_state import EGraphState
@@ -38,7 +38,7 @@ class RuleKey:
         return rule_equal(self.__egg_ref__, other.__egg_ref__)
 
     def __repr__(self) -> str:
-        return pretty_ref(self.__egg_ref__)
+        return pretty_ref(self.__egg_ref__, custom_literal=_format_pyobject)
 
 
 def _duration(value: pb.ReportDuration | None) -> timedelta:
