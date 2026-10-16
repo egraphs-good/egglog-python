@@ -34,6 +34,32 @@ def literal(value: int):
 AMBIENT = frozenset({("host_sort_family", "i64"), ("callable", "f"), ("callable", "g")})
 
 
+def test_sort_text_alias_metadata_survives_copy_and_pack_without_affecting_identity():
+    sorts = []
+    for symbols in ([], ["A"], ["Z"], ["A", "Z"]):
+        builder = Builder()
+        scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
+        index = builder.add(
+            "sorts",
+            pb.Sort(
+                kind=Oneof("family", pb.HostSort(name="Vec", args=[scalar])),
+                egglog_aliases=[pb.EgglogTypeBinding(symbol=s) for s in symbols],
+            ),
+        )
+        sort = builder.publish().ref("sorts", index)
+        sorts.append(StructuralView(sort))
+        imported = Builder()
+        imported.add("sorts", pb.Sort(kind=Oneof("eq", "unused")))
+        copied = imported.import_ref(sort)
+        copied = imported.publish().ref("sorts", copied)
+        assert [a.symbol for a in copied.read().egglog_aliases] == symbols
+        packed = pack([copied], ambient={("host_sort_family", "i64"), ("host_sort_family", "Vec")}).program
+        decoded = pb.Program.from_binary(packed.to_binary())
+        assert [a.symbol for a in decoded.sorts[0].egglog_aliases] == symbols
+        assert StructuralView(copied) == StructuralView(sort)
+    assert len(set(sorts)) == 1
+
+
 def test_print_function_limit_presence_survives_copy_and_pack_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     def forbidden(*args: object, **kwargs: object) -> None:
         pytest.fail("Table command authoring accessed an engine")

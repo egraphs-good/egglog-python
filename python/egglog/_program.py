@@ -27,7 +27,7 @@ from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Mes
 _FIELDS = {
     "Program": "ir_version nodes sorts declarations commands files rulesets rules",
     "Node": "sort_id:sorts var primitive_value call union get_cost span",
-    "Sort": "eq@eq_sort family func var span",
+    "Sort": "eq@eq_sort family func var span egglog_aliases",
     "HostSort": "name@host_sort_family args:sorts",
     "FuncSort": "params:sorts result:sorts",
     "Span": "file:files start end",
@@ -259,7 +259,11 @@ def _structural_parts(reference: Ref, *, identity: bool = True) -> tuple[tuple[o
         shape.extend((path, message.desc().type_name))
         inline = []
         for field in message.desc().fields:
-            if field.name == "span" or (field.presence.name != "IMPLICIT" and field not in message):
+            if (
+                field.name == "span"
+                or (isinstance(message, pb.Sort) and field.name == "egglog_aliases")
+                or (field.presence.name != "IMPLICIT" and field not in message)
+            ):
                 continue
             value = message[field]
             if value is None:
