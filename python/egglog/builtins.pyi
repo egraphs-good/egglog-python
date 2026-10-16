@@ -10,7 +10,7 @@ from typing_extensions import deprecated
 
 from .egraph import BaseExpr, BuiltinExpr
 
-__all__ = ["BigInt", "BigIntLike", "BigRat", "BigRatLike", "Bool", "BoolLike", "ExprValueError", "Map", "MapLike", "Pair", "Rational", "RationalLike", "Set", "SetLike", "String", "StringLike", "Unit", "UnstableFn", "Vec", "VecLike", "count_matches", "f64", "f64Like", "i64", "i64Like", "join"]
+__all__ = ["BigInt", "BigIntLike", "BigRat", "BigRatLike", "Bool", "BoolLike", "ExprValueError", "Map", "MapLike", "Maybe", "Pair", "Rational", "RationalLike", "Set", "SetLike", "String", "StringLike", "Unit", "UnstableFn", "Vec", "VecLike", "count_matches", "f64", "f64Like", "i64", "i64Like", "join"]
 
 @dataclass
 class ExprValueError(AttributeError):
@@ -383,6 +383,21 @@ class Rational(BuiltinExpr):
     def to_f64(self) -> f64: ...
 
 RationalLike: TypeAlias = Rational | Fraction | i64Like
+
+_Maybe_T_0 = TypeVar("_Maybe_T_0", bound=BaseExpr)
+
+class Maybe(BuiltinExpr, Generic[_Maybe_T_0]):
+    # No Python initializer is supplied; this remains a usable type token.
+    def __init__(self, _unavailable: Never, /) -> None: ...
+    __match_args__ = ("value",)
+    @property
+    def value(self) -> _Maybe_T_0 | None: ...
+    @classmethod
+    def none(cls) -> Maybe[_Maybe_T_0]: ...
+    @classmethod
+    def some(cls, value: _Maybe_T_0) -> Maybe[_Maybe_T_0]: ...
+    def unwrap(self) -> _Maybe_T_0: ...
+    def unwrap_or(self, default: _Maybe_T_0) -> _Maybe_T_0: ...
 
 def join(*strings: StringLike) -> String: ...
 

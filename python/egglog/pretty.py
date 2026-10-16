@@ -275,6 +275,22 @@ def pretty_ref(root: Ref) -> str:  # noqa: C901, PLR0912
                         ]
                         frames.extend(reversed(pieces))
                         continue
+                    elif primitive.field == "maybe":
+                        from .builtins import _container_member, _maybe_value  # noqa: PLC0415
+                        from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
+
+                        child = _maybe_value(RuntimeExpr(reference))
+                        constructor = _container_member(
+                            _class_for_sort(sort),
+                            "egglog.experimental.maybe.none" if child is None else "egglog.experimental.maybe.some",
+                            pb.PythonCallKind.CLASS_METHOD,
+                        )
+                        pieces = [str(constructor), "("]
+                        if child is not None:
+                            pieces.append((child.__egg_ref__, False, False))
+                        pieces.append(")")
+                        frames.extend(reversed(pieces))
+                        continue
                     elif primitive.field == "pair":
                         from .builtins import _pair_value  # noqa: PLC0415
                         from .runtime import RuntimeExpr  # noqa: PLC0415

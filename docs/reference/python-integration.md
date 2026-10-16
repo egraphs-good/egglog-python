@@ -45,6 +45,23 @@ raises `ExprValueError` until it is extracted. `Unit()` has no `.value` or
 `.eval()`; its fact truth check raises `ValueError` because it is not a
 structural equality.
 
+`Maybe[T].value` is `None` or a symbolic child of type `T`. It inspects direct
+`none`/`some` construction and extracted values without evaluating the child;
+`Some(None)` therefore remains distinct from an outer `None`:
+
+```{code-cell} python
+none = Maybe[i64].none()
+some = Maybe[i64].some(i64(7))
+assert none.value is None
+assert some.value.value == 7
+assert Maybe[Maybe[i64]].some(none).value.value is None
+assert EGraph().extract(some.unwrap_or(i64(2))).value == 7
+```
+
+`unwrap()` is undefined for `None`. `unwrap_or(default)` evaluates its default
+even when the value is present. Python `None` converts to `Maybe[T].none()` when
+the expected type supplies `T`.
+
 To check if an expression is a let value and get its name, use `get_let_name(expr)`:
 
 ```{code-cell} python

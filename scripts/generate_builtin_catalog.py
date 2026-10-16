@@ -518,6 +518,16 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                     f"    def value(self) -> tuple[{', '.join(family_variables)}]: ...",
                 ])
                 reserved.update({"value", "__match_args__"})
+            elif family_name == "Maybe":
+                if len(family_variables) != 1:
+                    msg = "Maybe codec requires one family argument"
+                    raise ValueError(msg)
+                lines.extend([
+                    '    __match_args__ = ("value",)',
+                    "    @property",
+                    f"    def value(self) -> {family_variables[0]} | None: ...",
+                ])
+                reserved.update({"value", "__match_args__"})
             elif (family_name == "Vec" and vec_protocol) or (family_name == "Set" and set_protocol):
                 (element,) = family_variables
                 value_type = f"tuple[{element}, ...]" if family_name == "Vec" else f"set[{element}]"

@@ -17,7 +17,7 @@ from ._builtin_protocols import SCALAR_PROTOCOLS
 from ._program import Ref
 from .declarations import Ident
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, _class_for_sort, _definition_at
-from .type_constraint_solver import infer_call_bindings, infer_sort
+from .type_constraint_solver import infer_call_bindings, infer_sort, substitute_sort
 
 __all__ = [
     "get_callable_args",
@@ -233,6 +233,7 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
         if isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "signature"
         else None
     )
+    bindings: tuple[tuple[int, Ref], ...] = ()
     type_bindings = ()
     if signature is not None or isinstance(kind, pb.Function | pb.Constructor | pb.Primitive):
         determined, bindings = infer_call_bindings(
@@ -318,12 +319,24 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
         return _class_for_sort(x.__egg_ref__.owner.ref("sorts", node.sort_id)), tuple(ordered)
     owner = None
     if view.owner is not None and view.owner.kind is not None:
+        owner_sort = None
         if view.has_field("receiver"):
             receiver = arguments[view.receiver].__egg_ref__
-            owner = _class_for_sort(receiver.owner.ref("sorts", receiver.read().sort_id))
+            owner_sort = receiver.owner.ref("sorts", receiver.read().sort_id)
         elif view.owner.kind.field == "sort":
-            owner = _class_for_sort(declaration.owner.ref("sorts", view.owner.kind.value))
-    return RuntimeFunction(declaration, view_index, owner), tuple(ordered)
+            owner_sort = substitute_sort(declaration.owner.ref("sorts", view.owner.kind.value), dict(bindings))
+        if owner_sort is not None:
+            if view.owner.kind.field == "sort":
+                pattern = declaration.owner.ref("sorts", view.owner.kind.value)
+                size = len(signature.type_params) if signature is not None else 0
+                infer_sort(pattern, owner_sort, size, dict(bindings))
+                # A concrete owner already carries its own specialization.
+                # Keep only result bindings absent from that owner.
+                owner_bindings: dict[int, Ref] = {}
+                infer_sort(pattern, owner_sort, size, owner_bindings)
+                type_bindings = tuple((index, sort) for index, sort in type_bindings if index not in owner_bindings)
+            owner = _class_for_sort(owner_sort)
+    return RuntimeFunction(declaration, view_index, owner, type_bindings=type_bindings), tuple(ordered)
 
 
 def get_callable_fn(x: object) -> Callable[..., Any] | None:

@@ -101,7 +101,7 @@ def test_complete_catalog_preserves_the_166_definition_baseline():
     baseline = Catalog(pb.Program.from_binary(Path(path).read_bytes()))
     current = builtin_catalog()
     assert len(baseline.roots) == 166
-    assert len(current.roots) == 179
+    assert len(current.roots) == 184
     for key, definition in baseline.definitions.items():
         assert StructuralView(definition) == StructuralView(current.definitions[key]), key
     assert current.definitions.keys() - baseline.definitions.keys() == {
@@ -111,6 +111,9 @@ def test_complete_catalog_preserves_the_166_definition_baseline():
             ("map", ("remove", "length", "contains", "not_contains")),
         ]
         for key in keys
+    } | {
+        ("host_sort_family", "Maybe"),
+        *(("callable", f"egglog.experimental.maybe.{name}") for name in ("none", "some", "unwrap", "unwrap_or")),
     }
 
 
@@ -255,13 +258,23 @@ def test_zero_append_conflicts_and_named_partial_roundtrip():
         RuntimeFunction(declaration)()
 
 
-def test_minimal_result_binding_preserves_input_polymorphism():
+@pytest.mark.parametrize("selected_view", [False, True])
+def test_minimal_result_binding_preserves_input_polymorphism(selected_view):
     # Inference-only fixture: no provider/body/engine is installed or invoked.
     program = pb.Program.from_binary(pack(builtin_catalog().roots).program.to_binary())
     declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.pair.make")
     declaration.kind.value.name = "test.result_pair"
     declaration.kind.value.typing.value.inputs.pop()
-    declaration.bindings = None
+    if selected_view:
+        declaration.bindings.python.views = [
+            pb.PythonCallable(
+                kind=pb.PythonCallKind.FUNCTION,
+                path=["result_pair"],
+                params=[pb.PythonParameter(core_input=0, name="value")],
+            )
+        ]
+    else:
+        declaration.bindings = None
     owner = Builder.from_program(program).publish()
     reference = owner.ref("declarations", program.declarations.index(declaration))
     first = get_callable_fn(_stored_call(reference, [i64(1)], Pair[i64, String]))
@@ -281,6 +294,65 @@ def test_minimal_result_binding_preserves_input_polymorphism():
     assert isinstance(decoded(i64(3)), Pair[i64, String])
     with pytest.raises((TypeConstraintError, TypeError, ConvertError)):
         decoded(f64(3.0))
+
+
+def test_method_result_binding_preserves_independent_input_polymorphism(monkeypatch):
+    # Inference-only Vec<T> receiver, V input, Pair<V,U> result. No provider.
+    program = pb.Program.from_binary(pack(builtin_catalog().roots).program.to_binary())
+    declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.pair.make")
+    declaration.kind.value.name = "test.method_result_pair"
+    signature = declaration.kind.value.typing.value
+    first_var, second_var = [arg.sort for arg in signature.inputs]
+    third_var = len(program.sorts)
+    program.sorts.append(pb.Sort(kind=Oneof("var", 2)))
+    receiver_sort = len(program.sorts)
+    program.sorts.append(pb.Sort(kind=Oneof("family", pb.HostSort(name="Vec", args=[first_var]))))
+    signature.type_params.append("V")
+    signature.inputs = [pb.Arg(sort=receiver_sort), pb.Arg(sort=third_var)]
+    signature.output = len(program.sorts)
+    program.sorts.append(pb.Sort(kind=Oneof("family", pb.HostSort(name="Pair", args=[third_var, second_var]))))
+    view = pb.PythonCallable(
+        kind=pb.PythonCallKind.METHOD,
+        path=["result_pair"],
+        owner=pb.BindingOwner(kind=Oneof("sort", receiver_sort)),
+        receiver=0,
+        params=[pb.PythonParameter(core_input=1, name="value")],
+    )
+    declaration.bindings.python.views = [view]
+    reference = Builder.from_program(program).publish().ref("declarations", program.declarations.index(declaration))
+    receiver = Vec[i64](i64(0))
+    original = _stored_call(reference, [receiver, i64(1)], Pair[i64, String])
+    first = get_callable_fn(original)
+    second = get_callable_fn(_stored_call(reference, [receiver, f64(1.0)], Pair[f64, String]))
+    assert [index for index, _ in first.__egg_type_bindings__] == [1]
+    assert first == second
+    assert hash(first) == hash(second)
+    assert StructuralView(first(*get_callable_args(original)).__egg_ref__) == StructuralView(original.__egg_ref__)
+    assert isinstance(first(receiver, f64(2.0)), Pair[f64, String])
+    assert get_callable_fn(_stored_call(reference, [receiver, i64(1)], Pair[i64, i64])) != first
+    with pytest.raises((TypeConstraintError, TypeError, ConvertError)):
+        first(Vec[f64](f64(0.0)), i64(1))
+    malformed = [
+        _stored_call(reference, [receiver, i64(1)], Pair[f64, String]),
+        _stored_call(reference, [receiver], Pair[i64, String]),
+    ]
+    # The owner must not reinterpret U as the receiver's already-inferred T.
+    bad_owner = len(program.sorts)
+    program.sorts.append(pb.Sort(kind=Oneof("family", pb.HostSort(name="Vec", args=[second_var]))))
+    view.owner.kind = Oneof("sort", bad_owner)
+    bad_reference = Builder.from_program(program).publish().ref("declarations", program.declarations.index(declaration))
+    malformed.append(_stored_call(bad_reference, [receiver, i64(1)], Pair[i64, String]))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Local reconstruction evaluated, converted, or manufactured a call")
+
+    monkeypatch.setattr(conversion, "resolve_literal", forbidden)
+    monkeypatch.setattr(RuntimeFunction, "__call__", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    assert get_callable_fn(original) == first
+    for call in malformed:
+        with pytest.raises(TypeConstraintError):
+            get_callable_fn(call)
 
 
 def test_malformed_stored_calls_and_type_bindings_fail_without_conversion(monkeypatch):

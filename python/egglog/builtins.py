@@ -194,6 +194,93 @@ def _pair_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, RuntimeExpr]:
     return RuntimeExpr(children[0]), RuntimeExpr(children[1])
 
 
+def _maybe_value(expr: RuntimeExpr) -> RuntimeExpr | None:
+    """Inspect exact optional presence while leaving a present child symbolic."""
+    from .runtime import _definition_at  # noqa: PLC0415
+    from .type_constraint_solver import infer_call_bindings  # noqa: PLC0415
+
+    reference = expr.__egg_ref__
+    node: pb.Node = reference.read()
+    sort = reference.owner.ref("sorts", node.sort_id)
+    record: pb.Sort = sort.read()
+    if (
+        record.kind is None
+        or record.kind.field != "family"
+        or record.kind.value.name != "Maybe"
+        or len(record.kind.value.args) != 1
+    ):
+        raise ExprValueError(expr, "Maybe.none() or Maybe.some(value)")
+    family: pb.Declaration = _definition_at(reference, "host_sort_family", "Maybe").read()
+    if family.kind is None or family.kind.field != "host_sort_family" or family.kind.value.arity != 1:
+        msg = "Maybe inspection requires the canonical family"
+        raise ValueError(msg)
+    child: Ref | None
+    if (
+        node.kind is not None
+        and node.kind.field == "primitive_value"
+        and node.kind.value.value is not None
+        and node.kind.value.value.field == "maybe"
+    ):
+        payload = node.kind.value.value.value
+        child = reference.owner.ref("nodes", payload.value) if payload.has_field("value") else None
+    elif (
+        node.kind is not None
+        and node.kind.field == "call"
+        and node.kind.value.func in {"egglog.experimental.maybe.none", "egglog.experimental.maybe.some"}
+    ):
+        call = node.kind.value
+        declaration = _definition_at(reference, "callable", call.func)
+        declared: pb.Declaration = declaration.read()
+        if (
+            declared.kind is None
+            or declared.kind.field != "host_primitive"
+            or declared.kind.value.typing is None
+            or declared.kind.value.typing.field != "signature"
+        ):
+            msg = "Maybe inspection requires native callable provenance"
+            raise ValueError(msg)
+        signature = declared.kind.value.typing.value
+        expected_ref = builtin_catalog().definitions["callable", call.func]
+        expected = expected_ref.read().kind.value.typing.value
+        if (
+            len(signature.type_params) != len(expected.type_params)
+            or signature.equality_type_params != expected.equality_type_params
+            or len(signature.inputs) != len(expected.inputs)
+            or signature.varargs
+            or not signature.has_field("output")
+            or len(call.args) != len(signature.inputs)
+            or any(
+                StructuralView(declaration.owner.ref("sorts", actual))
+                != StructuralView(expected_ref.owner.ref("sorts", canonical))
+                for actual, canonical in zip(
+                    [*(arg.sort for arg in signature.inputs), signature.output],
+                    [*(arg.sort for arg in expected.inputs), expected.output],
+                    strict=True,
+                )
+            )
+        ):
+            msg = "Maybe constructor differs from the canonical optional-child signature"
+            raise ValueError(msg)
+        children = [reference.owner.ref("nodes", index) for index in call.args]
+        infer_call_bindings(
+            declaration,
+            [child.owner.ref("sorts", child.read().sort_id) for child in children],
+            sort,
+        )
+        child = children[0] if children else None
+    else:
+        raise ExprValueError(expr, "Maybe.none() or Maybe.some(value)")
+    if child is None:
+        return None
+    child_node: pb.Node = child.read()
+    if StructuralView(child.owner.ref("sorts", child_node.sort_id)) != StructuralView(
+        sort.owner.ref("sorts", record.kind.value.args[0])
+    ):
+        msg = "Maybe child has the wrong canonical sort"
+        raise ValueError(msg)
+    return RuntimeExpr(child)
+
+
 def _tuple_to_pair(value: tuple[object, ...]) -> RuntimeExpr:
     from .runtime import _BASE_CLASSES  # noqa: PLC0415
 
@@ -516,6 +603,15 @@ for _definition in _catalog.definitions.values():
     if _kind.value.name == "Pair" and isinstance(_kind.value, pb.HostSortFamily):
         _class.__egg_hooks__["value"] = property(_pair_value)
         converter(tuple, _class, _tuple_to_pair)
+    if _kind.value.name == "Maybe" and isinstance(_kind.value, pb.HostSortFamily):
+        _class.__egg_hooks__["value"] = property(_maybe_value)
+        converter(
+            type(None),
+            _class,
+            lambda _value, cls=_class: _container_member(
+                cls[get_type_args()[0]], "egglog.experimental.maybe.none", pb.PythonCallKind.CLASS_METHOD
+            )(),
+        )
     if _kind.value.name == "Vec" and isinstance(_kind.value, pb.HostSortFamily):
         _class.__egg_hooks__.update(
             value=property(_container_items),
