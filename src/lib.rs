@@ -1,72 +1,23 @@
-mod conversions;
-mod egraph;
 mod error;
-mod extract;
-mod freeze;
 mod protobuf;
 mod py_object_sort;
-mod serialize;
-mod termdag;
-mod tracing_otel;
-mod utils;
 
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
-#[pyfunction]
-#[pyo3(signature = (*, exporter, endpoint=None))]
-fn setup_tracing(py: Python<'_>, exporter: &str, endpoint: Option<&str>) -> PyResult<()> {
-    let exporter = exporter.to_string();
-    let endpoint = endpoint.map(str::to_string);
-    py.detach(move || crate::tracing_otel::setup_tracing(&exporter, endpoint.as_deref()))
-        .map_err(pyo3::exceptions::PyRuntimeError::new_err)
-}
-
-#[pyfunction]
-fn shutdown_tracing(py: Python<'_>) -> PyResult<()> {
-    py.detach(crate::tracing_otel::shutdown_tracing)
-        .map_err(pyo3::exceptions::PyRuntimeError::new_err)
-}
-
-/// Bindings for egglog rust library
-// Callers serialize access to shared mutable instances; PyO3 rejects overlapping
-// borrows involving mutation rather than waiting for them.
+/// Encoded protocol transport with the native Python-object provider installed.
+// PyO3 rejects overlapping mutable borrows of an engine instance.
 #[pymodule(gil_used = false)]
 fn bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
-
-    m.add_class::<crate::serialize::SerializedEGraph>()?;
-    m.add_class::<crate::egraph::EGraph>()?;
     m.add_class::<crate::protobuf::ProtoEngine>()?;
-    m.add_class::<crate::egraph::Value>()?;
-    m.add_class::<crate::error::EggSmolError>()?;
     m.add(
         "PrimitiveFailure",
         m.py().get_type::<crate::error::PrimitiveFailure>(),
     )?;
-    m.add_class::<crate::termdag::TermDag>()?;
-    m.add_class::<crate::conversions::UserDefinedCommandOutput>()?;
-    m.add_class::<crate::conversions::MultiExtractOutput>()?;
-    m.add_class::<crate::conversions::Function>()?;
-    m.add_class::<crate::extract::Extractor>()?;
-    m.add_class::<crate::extract::CostModel>()?;
-    m.add_class::<crate::extract::DagCostModel>()?;
-    m.add_class::<crate::freeze::FrozenRow>()?;
-    m.add_class::<crate::freeze::FrozenFunction>()?;
-    m.add_class::<crate::freeze::FrozenEGraph>()?;
-    m.add_class::<crate::conversions::SrcFile>()?;
-    m.add_function(wrap_pyfunction!(setup_tracing, m)?)?;
-    m.add_function(wrap_pyfunction!(shutdown_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(
         crate::protobuf::_export_pyobject_catalog,
         m
     )?)?;
-    m.add_function(wrap_pyfunction!(
-        crate::extract::extract_best_with_dag_cost_model,
-        m
-    )?)?;
-    crate::conversions::add_structs_to_module(m)?;
-    crate::conversions::add_enums_to_module(m)?;
-
     Ok(())
 }

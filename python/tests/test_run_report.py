@@ -23,7 +23,6 @@ def test_proto_report_projection_preserves_grouping_rounding_and_ownership(monke
     def forbidden(*args, **kwargs):
         pytest.fail("Report projection accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     roots = [ruleset(rule(name="same").then())._snapshot({}) for _ in range(2)]
     request = pack(roots)
@@ -150,14 +149,16 @@ def test_proto_report_duration_and_plan_controls_without_engine():
         ]
     )
     plan = _plan(native)
-    assert isinstance(plan.stages[0][0], bindings.Intersect)
-    assert plan.stages[0][0].scans[0].column == ("x", 2)
-    assert plan.stages[0][1].num_candidates == 3
-    assert plan.stages[0][1].num_succeeded == 0
-    assert plan.stages[0][2] == [1]
-    assert isinstance(plan.stages[1][0], bindings.FusedIntersect)
-    assert plan.stages[1][1] is None
+    assert plan is not None
+    assert plan.stages[0].kind.field == "intersect"
+    assert plan.stages[0].kind.value.scans[0].columns[0] == pb.ReportColumn(variable="x", column=2)
+    assert plan.stages[0].stats.num_candidates == 3
+    assert plan.stages[0].stats.num_succeeded == 0
+    assert plan.stages[0].next == [1]
+    assert plan.stages[1].kind.field == "fused_intersect"
+    assert plan.stages[1].stats is None
     native.stages[0].next = [2]
+    assert plan.stages[0].next == [1]
     with pytest.raises(ValueError, match="Malformed"):
         _plan(native)
 

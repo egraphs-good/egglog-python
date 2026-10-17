@@ -4,6 +4,12 @@ _This project uses semantic versioning_
 
 ## UNRELEASED
 
+- Use the shared protobuf byte engine throughout the Python frontend. Remove the
+  native EGraph, AST, raw-value, extractor and report-wrapper binding APIs;
+  `freeze()` now returns an `EGraphSnapshot`, and report detail uses the generated
+  `ReportLevel` enum. Host Python-object providers and original callback exceptions
+  remain native. Custom cost callbacks, notebook text, CSV input, snapshot
+  visualization and replayable source recording remain unfinished.
 - Publish releases with `uv`, then tag and fast-forward `main` directly without a release PR or redundant CI.
 - Fix missing macOS wheels for standard CPython 3.14 when building alongside free-threaded Python.
 

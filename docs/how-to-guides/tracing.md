@@ -1,22 +1,18 @@
 # Tracing
 
-`egglog` can emit OpenTelemetry spans from both the high-level Python wrapper and the Rust bindings.
+`egglog` emits OpenTelemetry spans from the high-level Python wrapper.
 The Python package stays library-style: it only depends on `opentelemetry-api`, and it starts emitting Python spans
 once your application configures an OpenTelemetry tracer provider.
 
-The Rust side uses the current Python trace context when one exists, so Rust spans can appear under the same parent
-trace. To export Rust spans, call `egglog.bindings.setup_tracing(...)` before the traced Rust calls:
-
-- `exporter="console"` writes Rust spans to stdout.
-- `exporter="http"` sends Rust spans to an OTLP/HTTP endpoint.
+Rust trace configuration and context propagation are not currently exposed by
+the shared byte transport.
 
 For the contributor-oriented pytest workflow, see {doc}`../reference/contributing`.
 
 ## Trace A Host Application
 
 This example configures Python tracing in an application that happens to call into `egglog`.
-The Python spans come from the configured tracer provider, and the Rust spans join the same trace because the
-bindings propagate the current `traceparent` and `tracestate` into the Rust tracing layer.
+The Python spans come from the configured tracer provider.
 
 ```python
 from opentelemetry import trace
@@ -24,30 +20,24 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
 
-from egglog import EGraph, bindings, i64
+from egglog import EGraph, i64
 
 provider = TracerProvider(resource=Resource.create({"service.name": "demo-app"}))
 provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
 trace.set_tracer_provider(provider)
-bindings.setup_tracing(exporter="console")
 
 tracer = trace.get_tracer(__name__)
 
 with tracer.start_as_current_span("optimize"):
     EGraph().extract(i64(0))
 
-bindings.shutdown_tracing()
 provider.shutdown()
 ```
 
 In that setup:
 
 - Python spans use the module tracer names such as `egglog.egraph` and `egglog.egraph_state`.
-- Python span names are the public method names such as `create`, `push`, `pop`, `register`, `run`, and `extract`, plus `run_schedule_to_egg` while schedules are lowered.
-- Rust spans use names such as `bindings.run_program`, `bindings.serialize`, and `bindings.extractor.extract_best`.
-
-If you call the low-level bindings directly, pass `traceparent=` and `tracestate=` yourself on the traced methods.
-The high-level Python API does that automatically.
+- Python span names include public method names such as `create`, `push`, `pop`, `register`, `run`, and `extract`.
 
 ## Send Traces To Jaeger
 
@@ -64,7 +54,7 @@ docker run --rm \
   cr.jaegertracing.io/jaegertracing/jaeger:2.16.0
 ```
 
-Point both Python and Rust tracing at Jaeger over OTLP/HTTP:
+Point Python tracing at Jaeger over OTLP/HTTP:
 
 ```python
 from opentelemetry import trace
@@ -73,12 +63,9 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from egglog import bindings
-
 provider = TracerProvider(resource=Resource.create({"service.name": "demo-app"}))
 provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint="http://127.0.0.1:4318/v1/traces")))
 trace.set_tracer_provider(provider)
-bindings.setup_tracing(exporter="http", endpoint="http://127.0.0.1:4318/v1/traces")
 ```
 
 After that, open [http://localhost:16686](http://localhost:16686) and search for traces from `demo-app` and `egglog`.

@@ -29,6 +29,7 @@ from egglog import (
 from egglog._catalog import Catalog, builtin_catalog
 from egglog._program import Builder, StructuralView, pack
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_literal_value
+from egglog.egraph_state import EggSmolError
 from egglog.runtime import RuntimeExpr, RuntimeFunction, resolve_type_annotation
 from egglog.type_constraint_solver import TypeConstraintError
 
@@ -196,7 +197,7 @@ def test_ordinary_vec_map_methods_execute_and_reconstruct():
     assert not graph.check_bool(xs.not_contains(i64(11)))
     for index in [-1, 3]:
         for call in [xs.set(index, i64(9)), xs.remove(index)]:
-            with pytest.raises(bindings.EggSmolError, match=r"evaluation|Evaluation|failed"):
+            with pytest.raises(EggSmolError, match=r"evaluation|Evaluation|failed"):
                 graph.extract(call)
     declaration = builtin_catalog().definitions["callable", "egglog.core.vec.append"]
     zero = _stored_call(declaration, [], Vec[i64])
@@ -227,10 +228,10 @@ def test_vec_union_merges_elements_and_keeps_failure_atomic():
     graph.register(left | right)
     graph.check(eq(a).to(b))
     graph.check(eq(graph.extract(left | right)).to(left))
-    with pytest.raises(bindings.EggSmolError, match=r"evaluation|Evaluation|failed"):
+    with pytest.raises(EggSmolError, match=r"evaluation|Evaluation|failed"):
         graph.register(left | Vec[Atom](c, c))
     assert not graph.check_bool(eq(a).to(c))
-    with pytest.raises(bindings.EggSmolError):
+    with pytest.raises(EggSmolError):
         graph.check(eq(left | right).to(left))
 
 
@@ -258,7 +259,6 @@ def test_zero_append_specialization_is_stable_and_structural(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Local reconstruction accessed an evaluator or converter")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     monkeypatch.setattr(conversion, "resolve_literal", forbidden)
     declaration = builtin_catalog().definitions["callable", "egglog.core.vec.append"]

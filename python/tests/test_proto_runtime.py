@@ -225,7 +225,6 @@ def test_ne_uses_actual_generic_catalog_and_ordered_canonical_calls(monkeypatch)
     def forbidden(*args, **kwargs):
         pytest.fail("Generic inequality authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     declaration = builtin_catalog().definitions["callable", "egglog.core.ne"]
     record = declaration.read()
@@ -274,7 +273,6 @@ def test_canonical_schedule_live_repr_and_generator_failure_without_engine(monke
     def forbidden(*args, **kwargs):
         pytest.fail("Schedule authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     events = []
     selected = ruleset(name="live")
@@ -317,7 +315,6 @@ def test_canonical_report_key_contextual_hash_without_engine(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Report key accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     first = rule(name="same").then(set_(constant("report-target", i64)).to(1))
     second = rule(name="same").then(set_(constant("report-target", i64)).to(1))
@@ -351,7 +348,6 @@ def test_rule_template_comparison_and_live_rulesets_without_engine(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Canonical rule authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     x = var("x", i64)
     target = constant("comparison_target", i64)
@@ -498,7 +494,6 @@ def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Template comparison accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
 
     class Box(Expr):
@@ -560,7 +555,6 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
     def forbidden(*args, **kwargs):
         pytest.fail("Rule closure comparison accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     first = rule().then(set_(constant("independent_target", i64)).to(1))
     second = rule().then(set_(constant("independent_target", i64)).to(1))
@@ -589,7 +583,6 @@ def test_deferred_rulesets_keep_live_scope_order_and_failure_prefix(monkeypatch)
     def forbidden(*args, **kwargs):
         pytest.fail("Deferred authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     selected = ruleset()
     events = []
@@ -628,7 +621,6 @@ def test_direct_variables_are_canonical_without_an_engine(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Variable authoring accessed the engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
 
     class VariableBox(Expr):
@@ -671,7 +663,6 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectiona
     def forbidden(*args, **kwargs):
         pytest.fail("Rewrite authoring accessed the engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
 
     class RewriteBox(Expr):
@@ -844,7 +835,6 @@ def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Rule variable authoring accessed the engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
 
     @function
@@ -871,7 +861,6 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Rule authoring accessed the engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
 
     class RuleBox(Expr):
@@ -1597,7 +1586,6 @@ def test_scalar_wave_local_protocols_and_matching_never_evaluate(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Scalar authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     text, false, unit = String("a\0b\n☃"), Bool(False), Unit()
     assert text.value == "a\0b\n☃"
@@ -1793,7 +1781,6 @@ def test_map_authoring_symbolic_children_and_local_protocols(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Map authoring/inspection accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     key, first, newest = i64(1) + 2, f64(3.0), f64(4.0)
     empty = Map[i64, f64].empty()
@@ -2199,7 +2186,6 @@ def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypat
     def forbidden(*args, **kwargs):
         pytest.fail("Vec authoring/inspection accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     vector = vec_runtime
     symbolic, literal = i64(1) + 2, i64(3)
@@ -2454,7 +2440,6 @@ def test_pair_proposed_authoring_and_symbolic_inspection(pair_runtime, monkeypat
     def forbidden(*args, **kwargs):
         pytest.fail("Pair authoring accessed the engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     pair = pair_runtime
     left, right = i64(1) + 2, f64(3.0)
@@ -2693,7 +2678,6 @@ def test_function_source_records_defaults_and_metadata(doc, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Function authoring accessed the engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     default = i64(1)
 
@@ -3479,7 +3463,6 @@ def test_set_and_term_authoring_own_commands_without_evaluating(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Action authoring cannot create an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     builder = Builder()
     output = builder.import_ref(i64.__egg_sort__)
@@ -3515,7 +3498,6 @@ def test_action_equality_uses_commands_and_independent_declarations(monkeypatch)
     def forbidden(*args, **kwargs):
         pytest.fail("Action comparison accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     left = constant("score", i64, egg_name="score")
     right = constant("score", i64, egg_name="score")
@@ -3628,7 +3610,6 @@ def test_constants_own_distinct_canonical_presentation_and_declaration_kinds(mon
     def forbidden(*args, **kwargs):
         pytest.fail("Constant authoring cannot create an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
 
     class Token(Expr):
@@ -3687,7 +3668,6 @@ def test_user_constructor_defaults_keywords_and_names_are_records(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Class authoring cannot create an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     default = i64(5)
 
@@ -3908,7 +3888,6 @@ def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Class authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     default = i64(4)
 
@@ -4153,7 +4132,6 @@ def class_authoring_without_engine(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Class authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
 
 
@@ -5656,7 +5634,6 @@ def test_multiset_local_protocols_preserve_symbolic_occurrences_without_engine(m
     def forbidden(*args, **kwargs):
         pytest.fail("MultiSet authoring or inspection accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     query = var("element", i64)
     expression = MultiSet(query, i64(1), query)
@@ -5723,7 +5700,6 @@ def test_multiset_formed_values_keep_refs_and_inert_pretty(empty, monkeypatch):
         pytest.fail("MultiSet formed-value inspection authored or executed a Call")
 
     monkeypatch.setattr(runtime, "_author_call", forbidden)
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     del builder, owner
     gc.collect()
@@ -5820,7 +5796,6 @@ def test_multiset_formed_symbolic_children_outlive_parent_without_authoring(monk
         pytest.fail("Retained MultiSet child inspection authored or executed a Call")
 
     monkeypatch.setattr(runtime, "_author_call", forbidden)
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     retained = expression.value
     del expression, builder, owner, symbolic, query

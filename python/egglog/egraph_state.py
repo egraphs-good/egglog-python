@@ -23,9 +23,13 @@ from ._catalog import builtin_catalog
 from ._program import Builder, Owner, Packed, Ref, _copy_record, _definition_key, pack, rule_equal
 from .declarations import Ident
 
-__all__ = ["EGraphState"]
+__all__ = ["EGraphState", "EggSmolError"]
 
 _QUERY_RESOURCES = object()
+
+
+class EggSmolError(Exception):
+    """An engine error returned by the encoded protocol."""
 
 
 def _thread_count(value: object) -> int:
@@ -176,10 +180,8 @@ class EGraphState:
         ):
             return response, owner
         if response.error is not None:
-            error = bindings.EggSmolError(response.error.message)
-            # The binding exception is not subclassable. Its inherited dict
-            # keeps the actual generated record without changing public type,
-            # message or args, or using a parallel error registry.
+            error = EggSmolError(response.error.message)
+            # Keep the actual generated record with this Python exception.
             error.__dict__["_egglog_proto_error"] = response.error
             raise error
         return response, owner
@@ -319,7 +321,7 @@ class EGraphState:
                         # Python's public names were unique within the logical
                         # ruleset. Shared IR labels are deliberately not identity:
                         # this is frontend compatibility validation, not a wire error.
-                        raise bindings.EggSmolError(f"At 0:0 of \nRule already exists: {label}", False)
+                        raise EggSmolError(f"At 0:0 of \nRule already exists: {label}")
                     key = (ident, rule, current)
                     if key not in self._pending_rules:
                         builder = Builder()

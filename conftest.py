@@ -67,18 +67,12 @@ def configure_pytest_otel(config: Any):
     ConsoleSpanExporter = trace_export.ConsoleSpanExporter
     SimpleSpanProcessor = trace_export.SimpleSpanProcessor
 
-    bindings = import_module("egglog.bindings")
-
     provider = TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}))
     if otel_config.traces == "console":
         provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
     else:
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=otel_config.endpoint)))
     trace.set_tracer_provider(provider)
-    if otel_config.traces == "console":
-        bindings.setup_tracing(exporter="console")
-    else:
-        bindings.setup_tracing(exporter="http", endpoint=otel_config.endpoint)
     return provider
 
 
@@ -95,5 +89,4 @@ def pytest_configure(config):
 def pytest_unconfigure(config):
     provider = getattr(config, "_egglog_otel_provider", None)
     if provider is not None:
-        import_module("egglog.bindings").shutdown_tracing()
         provider.shutdown()

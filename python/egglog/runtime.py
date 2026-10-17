@@ -123,6 +123,7 @@ def _author_call(  # noqa: C901, PLR0912
     kind = record.kind.value
     binder_size = 0
     varargs: list[pb.Arg] = []
+    output: int | None
     match kind:
         case pb.HostPrimitive():
             if kind.typing is not None and kind.typing.field == "application":
@@ -197,6 +198,8 @@ def _author_call(  # noqa: C901, PLR0912
             varargs = signature.varargs
         case pb.Constructor() | pb.Function() | pb.Primitive():
             inputs, output = kind.inputs, kind.output
+        case pb.Relation():
+            inputs, output = kind.inputs, None
         case _:
             msg = f"Call authoring for {record.kind.field} is not migrated yet"
             raise NotImplementedError(msg)
@@ -355,7 +358,11 @@ def _author_call(  # noqa: C901, PLR0912
             payload = node.read()
             infer_sort(expected, node.owner.ref("sorts", payload.sort_id), 0, {})
         converted.append(node)
-    result_sort = substitute_sort(declaration.owner.ref("sorts", output), substitutions)
+    if output is None:
+        result_sort = _BASE_CLASSES["Unit"].__egg_sort__
+        assert result_sort is not None
+    else:
+        result_sort = substitute_sort(declaration.owner.ref("sorts", output), substitutions)
     if len(substitutions) != binder_size:
         msg = "Not every generic parameter was determined by the call"
         raise TypeConstraintError(msg)

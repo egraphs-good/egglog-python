@@ -5,7 +5,7 @@ from typing import TypeVar, cast
 import numpy as np
 from opentelemetry import trace
 
-from egglog import EGraph, bindings
+from egglog import EggSmolError, EGraph
 from egglog.exp.array_api import NDArray, set_array_api_egraph
 from egglog.exp.array_api_numba import array_api_numba_schedule
 from egglog.exp.array_api_program_gen import EvalProgram, array_api_program_gen_schedule, ndarray_function_two_program
@@ -39,10 +39,10 @@ def jit(
 
     try:
         return cast("X", egraph.extract(fn_program.as_py_object).value)
-    except bindings.EggSmolError as e:
+    except EggSmolError as e:
         try:
             debug_program = egraph.extract(fn_program)
-        except bindings.EggSmolError:
+        except EggSmolError:
             debug_program = fn_program
         e.add_note(f"Failed to get py object from {debug_program}")
         raise

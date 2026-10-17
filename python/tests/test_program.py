@@ -64,7 +64,6 @@ def test_print_function_limit_presence_survives_copy_and_pack_without_engine(mon
     def forbidden(*args: object, **kwargs: object) -> None:
         pytest.fail("Table command authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     views = []
     encodings = []
@@ -105,7 +104,6 @@ def test_schedule_composition_relocates_owned_inline_spans_without_engine(monkey
     def forbidden(*args, **kwargs):
         pytest.fail("Schedule relocation accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     builder = Builder()
     builder.add("files", pb.SourceFile(name="unused"))
@@ -141,7 +139,6 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
     def forbidden(*args, **kwargs):
         pytest.fail("Rule storage accessed the engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     authored = rule(eval_mode=mode).then()
     record = authored.__egg_ref__.read()
@@ -643,7 +640,7 @@ def no_live_engine(monkeypatch):
         msg = "Protobuf ownership must not instantiate an engine"
         raise AssertionError(msg)
 
-    monkeypatch.setattr("egglog.bindings.EGraph", forbidden)
+    monkeypatch.setattr("egglog.bindings._ProtoEngine", forbidden)
 
 
 def test_slot_permutation_and_protobuf_fields_are_authoritative():

@@ -822,22 +822,21 @@ table and returns zero; `all_function_sizes` only observes registered tables.
 ### `freeze`
 
 Use {meth}`egglog.egraph.EGraph.freeze` to snapshot the current state into a
-replayable high-level program:
+generated protobuf `EGraphSnapshot`. The snapshot owns its reconstruction
+`Program` and logical options, independently of the live handle:
 
 ```{code-cell} python
 frozen = egraph.freeze()
-str(frozen)
+frozen.program.ir_version
 ```
+
+`frozen.to_binary()` serializes the snapshot without materializing host values.
+It records logical state rather than request history or scheduler progress.
 
 ### `display`
 
-In Jupyter, the default rich display for an e-graph is the interactive
-[egraph visualizer](https://github.com/egraphs-good/egraph-visualizer). You can
-also call {meth}`egglog.egraph.EGraph.display` directly:
-
-```{code-cell} python
-egraph.display()
-```
+Visualization from exported protobuf snapshots remains unfinished.
+{meth}`egglog.egraph.EGraph.display` currently raises `NotImplementedError`.
 
 ### `saturate`
 

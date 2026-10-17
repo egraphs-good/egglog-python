@@ -803,7 +803,6 @@ AllDecls: TypeAlias = (
     | ExprDecl
     | ScheduleDecl
     | BackOffDecl
-    | EGraphDecl
     | TypedExprDecl
 )
 
@@ -963,16 +962,13 @@ class TraverseContext:
             case SetCostDecl(_, e, c):
                 self(e)
                 self(c)
-            case BackOffDecl() | ValueDecl():
+            case BackOffDecl():
                 pass
             case LetSchedulerDecl(scheduler, schedule):
                 self(scheduler)
                 self(schedule)
             case DummyDecl():
                 pass
-            case EGraphDecl() as eg:
-                for a in eg.to_actions:
-                    self(a)
             case TypedExprDecl():
                 self(decl.expr)
             case _:
@@ -1135,14 +1131,10 @@ class PrettyContext:
                 if persistent:
                     rendered += ".persistent()"
                 return rendered, "scheduler"
-            case ValueDecl(value):
-                return str(value), "value"
             case DummyDecl():
                 return "__InternalDummyValueShouldNotBeSeenOpenAnIssue()", "dummy"
             case GetCostDecl(ref, args):
                 return f"get_cost({self(CallDecl(ref, args))})", "get_cost"
-            case EGraphDecl() as eg:
-                return f"EGraph({', '.join(map(self, eg.to_actions))}).freeze()", "egraph"
             case TypedExprDecl(tp, expr):
                 return (
                     self(expr, unwrap_lit=unwrap_lit, ruleset_ident=ruleset_ident, parens=parens),

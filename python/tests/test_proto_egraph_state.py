@@ -10,11 +10,79 @@ from protobuf import Oneof
 from egglog import EGraph, Expr, PrimitiveFailure, bindings, constant, eq, function, i64, method, set_
 from egglog._catalog import builtin_catalog
 from egglog._program import Builder, pack
+from egglog.egraph_state import EggSmolError
 from egglog.runtime import RuntimeFunction, create_callable, resolve_callable
 
 # Test-only observation of the exception actually raised inside Python. Functions
 # pickle by module reference; this is not an engine error slot or value registry.
 _callback_observations = {}
+
+
+@pytest.mark.parametrize(
+    "state",
+    ["term", "constant", "set", "constant-set", "union", "relation", "subsumed", "cost", "let-vec", "nested-vec"],
+)
+def test_shared_snapshot_restores_logical_state_over_bytes(state):
+    from collections import Counter  # noqa: PLC0415
+
+    from egglog import Vec, expr_parts, let, relation, set_cost, subsume, union  # noqa: PLC0415
+
+    class Atom(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    class Wrapper(Expr):
+        def __init__(self, values: Vec[Atom]) -> None: ...
+
+    @function
+    def cell() -> i64: ...
+
+    a, b = Atom(i64(1)), Atom(i64(2))
+    marker = constant("snapshot-marker", Atom)
+    scalar = constant("snapshot-scalar", i64)
+    member = relation("snapshot_member", Atom)
+    cases = {
+        "term": lambda: ((a,), a),
+        "constant": lambda: ((marker,), marker),
+        "set": lambda: ((set_(cell()).to(i64(7)),), cell()),
+        "constant-set": lambda: ((set_(scalar).to(i64(7)),), scalar),
+        "union": lambda: ((union(a).with_(b),), a),
+        "relation": lambda: ((member(a),), a),
+        "subsumed": lambda: ((a, subsume(a)), None),
+        "cost": lambda: ((a, set_cost(a, 10)), a),
+        "let-vec": lambda: ((let("vector", Vec(a)),), Vec(a)),
+        "nested-vec": lambda: ((Wrapper(Vec(a)),), Wrapper(Vec(a))),
+    }
+    actions, probe = cases[state]()
+    graph = EGraph(*actions)
+    expected = graph.extract(probe, include_cost=True) if probe is not None else None
+    snapshot = graph.freeze()
+    assert isinstance(snapshot, pb.EGraphSnapshot)
+    assert snapshot.options is not None
+    assert snapshot.program is not None
+    encoded = snapshot.to_binary()
+    graph._state.destroy()
+    snapshot = pb.EGraphSnapshot.from_binary(encoded)
+    owner = Builder.from_program(snapshot.program).publish()
+    restored = EGraph()
+    restored._state.run_program(
+        pack(
+            roots=[owner.ref("declarations", index) for index in range(len(snapshot.program.declarations))],
+            commands=[owner.ref("commands", index) for index in range(len(snapshot.program.commands))],
+        )
+    )
+    if probe is not None:
+        result, cost = restored.extract(probe, include_cost=True)
+        assert expr_parts(result) == expr_parts(expected[0])
+        assert cost == expected[1]
+    if state == "union":
+        restored.check(eq(a).to(b))
+    elif state == "relation":
+        restored.check(member(a))
+    roundtrip = restored.freeze()
+    assert roundtrip.options == snapshot.options
+    assert Counter(command.kind.value.kind.field for command in roundtrip.program.commands) == Counter(
+        command.kind.value.kind.field for command in snapshot.program.commands
+    )
 
 
 def _observed_pyerr_callback(tag):
@@ -283,7 +351,7 @@ def test_callback_error_protocol_failure_keeps_original_chain(monkeypatch, failu
 
 def test_callback_error_prior_native_record_is_not_current_check_failure(monkeypatch):
     """An original host exception may itself retain an earlier native receipt."""
-    original = bindings.EggSmolError("earlier native check")
+    original = EggSmolError("earlier native check")
     prior = pb.Error(
         code=pb.ErrorCode.CHECK_FAILED, message="earlier native check", location=pb.CommandLocation(path=[0])
     )
@@ -303,7 +371,7 @@ def test_callback_error_prior_native_record_is_not_current_check_failure(monkeyp
 
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
     graph = EGraph()
-    with pytest.raises(bindings.EggSmolError) as caught:
+    with pytest.raises(EggSmolError) as caught:
         graph.check_bool(eq(i64(1)).to(i64(1)))
     assert caught.value is original
     assert original.__dict__["_egglog_proto_error"] is prior
@@ -630,7 +698,6 @@ def table_transport(monkeypatch, tmp_path):
     def forbidden(*args, **kwargs):
         pytest.fail("Table inspection used the legacy engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     graph = EGraph()
     transport = graph._state.transport
     requests: list[pb.RunProgramRequest] = []
@@ -1264,7 +1331,6 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     def forbidden(*args, **kwargs):
         pytest.fail("Schedule request assembly accessed a native engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
     graph = EGraph()
     first = ruleset(rule(name="first").then(), name="same")
@@ -1317,13 +1383,9 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
         graph.run(run())
     selected = requests[-1].program.commands[0].kind.value.ruleset.kind.value
     assert requests[-1].program.rulesets[selected].name == graph._state.rulesets[Ident("")].read().name
-    for level, expected in (
-        (bindings.TimeOnly(), pb.ReportLevel.TIME_ONLY),
-        (bindings.WithPlan(), pb.ReportLevel.WITH_PLAN),
-        (bindings.StageInfo(), pb.ReportLevel.STAGE_INFO),
-    ):
+    for level in (pb.ReportLevel.TIME_ONLY, pb.ReportLevel.WITH_PLAN, pb.ReportLevel.STAGE_INFO):
         graph.set_report_level(level)
-        assert requests[-1].operation.value == expected
+        assert requests[-1].operation.value == level
 
 
 @pytest.mark.parametrize("operation", ["run", "stats"])
@@ -1428,13 +1490,12 @@ def test_publication_adopts_exact_receipt_before_install_error(monkeypatch, comp
     def forbidden(*args, **kwargs):
         pytest.fail("Publication bookkeeping used the legacy engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
     graph = EGraph()
     selected = ruleset(rule(name="first").then(), name="receipt")
     identifiers = {}
     snapshot = selected._snapshot(identifiers)
-    with pytest.raises(bindings.EggSmolError, match="injected install boundary"):
+    with pytest.raises(EggSmolError, match="injected install boundary"):
         graph._state.publish_ruleset(snapshot, identifiers)
     first_name = requests[0].program.rulesets[0].name
     assert (("ruleset", first_name) in graph._state.definitions) is completed
@@ -1858,7 +1919,7 @@ def test_native_mixed_registration_keeps_failure_prefix(native_rule_program, pre
     graph = EGraph()
     if prefix_rule:
         graph.register(Seed(1))
-    with pytest.raises(bindings.EggSmolError):
+    with pytest.raises(EggSmolError):
         graph.register(first if prefix_rule else Seed(1), bad, Second(2))
     graph.check(Seed(1))
     graph.check_fail(First(1))
@@ -1917,13 +1978,12 @@ def test_native_direct_named_collision_keeps_prefix_and_error_shape(native_rule_
     graph = EGraph()
     graph.register(Seed(1))
     for prefix in [True, False]:
-        with pytest.raises(bindings.EggSmolError) as raised:
+        with pytest.raises(EggSmolError) as raised:
             graph.register(first, first, Second(1)) if prefix else graph.register(first, Second(1))
         message = "At 0:0 of \nRule already exists: first"
-        assert type(raised.value) is bindings.EggSmolError
+        assert type(raised.value) is EggSmolError
         assert str(raised.value) == message
-        assert raised.value.args == (message, False)
-        assert raised.value.replayable_by_fail is False
+        assert raised.value.args == (message,)
         assert "_egglog_proto_error" not in raised.value.__dict__  # Frontend compatibility validation.
         assert _run_ruleset_step(graph) == ({"first": 1} if prefix else {})
         graph.check(First(1))
@@ -1946,7 +2006,7 @@ def test_native_direct_and_materialized_memberships(native_rule_program, default
     if direct_first:
         graph.register(authored)
         if named and default:
-            with pytest.raises(bindings.EggSmolError, match="Rule already exists: first"):
+            with pytest.raises(EggSmolError, match="Rule already exists: first"):
                 _run_ruleset_step(graph, selected)
             assert _run_ruleset_step(graph) == {label: 1}
         else:
@@ -1954,7 +2014,7 @@ def test_native_direct_and_materialized_memberships(native_rule_program, default
     else:
         assert _run_ruleset_step(graph, selected) == {label: 1}
         if named and default:
-            with pytest.raises(bindings.EggSmolError, match="Rule already exists: first"):
+            with pytest.raises(EggSmolError, match="Rule already exists: first"):
                 graph.register(authored)
         else:
             graph.register(authored)
@@ -2115,9 +2175,9 @@ def test_check_errors_use_codes_and_locations_not_messages(monkeypatch, operatio
     ):
         assert method(eq(i64(1)).to(i64(1))) is False
     else:
-        with pytest.raises(bindings.EggSmolError) as caught:
+        with pytest.raises(EggSmolError) as caught:
             method(eq(i64(1)).to(i64(1)))
-        assert type(caught.value) is bindings.EggSmolError
+        assert type(caught.value) is EggSmolError
         assert caught.value.__dict__["_egglog_proto_error"] == record
         assert str(caught.value) == record.message
         assert caught.value.args == (record.message,)
@@ -2162,12 +2222,12 @@ def test_execution_error_retains_only_confirmed_declaration_refs(monkeypatch, lo
         if reference.role == "declarations"
     }
     before = graph._state.definitions.copy()
-    with pytest.raises(bindings.EggSmolError):
+    with pytest.raises(EggSmolError):
         graph.register(action)
     assert graph._state.definitions == (before | expected if located else before)
 
 
-@pytest.mark.parametrize("error_type", [ValueError, bindings.EggSmolError])
+@pytest.mark.parametrize("error_type", [ValueError, EggSmolError])
 @pytest.mark.parametrize("misleading_record", [False, True])
 def test_check_bool_preserves_transport_exception_and_traceback(monkeypatch, error_type, misleading_record):
     sentinel = error_type("Check failed is only text")

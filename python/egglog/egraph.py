@@ -3,10 +3,8 @@ from __future__ import annotations
 import contextlib
 import dis
 import inspect
-import pathlib
 import re
 import sys
-import tempfile
 from collections.abc import Callable, Generator, Iterable, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
@@ -27,24 +25,20 @@ from typing import (
     TypedDict,
     TypeVar,
     Unpack,
-    assert_never,
     cast,
     get_type_hints,
     overload,
 )
 from uuid import uuid4
-from warnings import warn
 
 if sys.version_info >= (3, 14):
     import annotationlib
 
-import graphviz
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from opentelemetry import trace
 from protobuf import Oneof
 from typing_extensions import ParamSpec, TypeForm
 
-from . import bindings
 from ._catalog import Catalog, builtin_catalog
 from ._program import (
     Builder,
@@ -56,13 +50,10 @@ from ._program import (
     pack,
     rule_equal,
 )
-from ._tracing import call_with_current_trace
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
 from .declarations import *
-from .declarations import is_callable_decl_constructor
 from .egraph_state import *
-from .ipython_magic import IN_IPYTHON
 from .pretty import _format_pyobject, pretty_decl, pretty_ref
 from .run_report import RunReport
 from .runtime import *
@@ -188,7 +179,7 @@ def check_eq(x: BASE_EXPR, y: BASE_EXPR, schedule: Schedule | None = None, *, ad
     fact = eq(x_var).to(y_var)
     try:
         egraph.check(fact)
-    except bindings.EggSmolError as err:
+    except EggSmolError as err:
         if display:
             egraph.display()
         err.add_note(f"Failed:\n{eq(x).to(y)}\n\nExtracted:\n {eq(egraph.extract(x)).to(egraph.extract(y))})")
@@ -786,11 +777,9 @@ class _FunctionConstructor:
         if (
             self.builtin
             or (self.mutates_first_arg and (owner is None or view_kind != pb.PythonCallKind.METHOD or has_body))
-            or self.cost is not None
-            or self.unextractable
             or variable
         ):
-            msg = "Builtin, mutation, cost, unextractable and variadic free functions are not migrated"
+            msg = "Builtin, mutation and variadic free functions are not migrated"
             raise NotImplementedError(msg)
         if any(not isinstance(sort, Ref) or sort.role != "sorts" for sort in input_sorts):
             msg = "Free functions require concrete input sorts"
@@ -857,13 +846,23 @@ class _FunctionConstructor:
                 builder, resolved.__egg_ref__, formal_refs, rewrite_body=self.ruleset is not None
             )
         merge = _resolve_merge(output, self.merge)
+        cost = None
+        if self.cost is not None:
+            from .builtins import i64  # noqa: PLC0415
+
+            cost_sort = resolve_type_annotation(i64)
+            assert isinstance(cost_sort, Ref)
+            cost = builder.import_ref(resolve_literal(cost_sort, self.cost).__egg_ref__)
         kind = (
             Oneof[Literal["primitive"], pb.Primitive](
                 "primitive", pb.Primitive(name=name, inputs=inputs, output=output_index, body=body)
             )
             if body is not None and self.ruleset is None
             else Oneof[Literal["constructor"], pb.Constructor](
-                "constructor", pb.Constructor(name=name, inputs=inputs, output=output_index)
+                "constructor",
+                pb.Constructor(
+                    name=name, inputs=inputs, output=output_index, cost=cost, unextractable=self.unextractable
+                ),
             )
             if equality and not has_merge
             else Oneof[Literal["function"], pb.Function](
@@ -1070,10 +1069,34 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
     """
     Creates a function whose return type is `Unit` and has a default value.
     """
-    ident = Ident(name, _get_module())
-
-    decls_thunk = Thunk.fn(_relation_decls, ident, tps, egg_fn)
-    return cast("Callable[..., Unit]", RuntimeFunction(decls_thunk, Thunk.value(FunctionRef(ident))))
+    module = _get_module()
+    path = [*module.split("."), name] if module else [name]
+    builder = Builder()
+    inputs = []
+    params = []
+    for index, tp in enumerate(tps):
+        sort = resolve_type_annotation(tp)
+        if not isinstance(sort, Ref) or sort.role != "sorts":
+            msg = "Relations require concrete input sorts"
+            raise TypeError(msg)
+        label = f"arg{index}"
+        inputs.append(pb.Arg(sort=builder.import_ref(sort), name=label))
+        params.append(pb.PythonParameter(core_input=index, name=label))
+    logical_name = egg_fn or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", ".".join(path))
+    declaration = builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=logical_name, inputs=inputs)),
+            bindings=pb.CallableBindings(
+                python=pb.PythonBindings(
+                    views=[pb.PythonCallable(kind=pb.PythonCallKind.FUNCTION, path=path, params=params)]
+                )
+            ),
+        ),
+    )
+    reference = builder.publish().ref("declarations", declaration)
+    Catalog.from_refs([reference])
+    return cast("Callable[..., Unit]", RuntimeFunction(reference, 0))
 
 
 def _get_module(frame: FrameType | None = None) -> str | None:
@@ -1087,16 +1110,6 @@ def _get_module(frame: FrameType | None = None) -> str | None:
 
     module = getmodule(frame)
     return module.__name__ if module is not None else None
-
-
-def _relation_decls(ident: Ident, tps: tuple[type, ...], egg_fn: str | None) -> Declarations:
-    from .builtins import Unit  # noqa: PLC0415
-
-    decls = Declarations()
-    decls |= cast("RuntimeClass", Unit)
-    arg_types = tuple(resolve_type_annotation_mutate(decls, tp).to_just() for tp in tps)
-    decls._functions[ident] = RelationDecl(arg_types, tuple(None for _ in tps), egg_fn)
-    return decls
 
 
 @overload
@@ -1212,100 +1225,6 @@ def constant(
     return cast("BASE_EXPR", RuntimeFunction(reference, 0)())
 
 
-def _add_default_rewrite_function(  # noqa: C901, PLR0912
-    decls: Declarations,
-    ref: FunctionRef | MethodRef | PropertyRef | ClassMethodRef | InitRef,
-    fn: Callable,
-    args: Iterable[TypedExprDecl],
-    ruleset: Ruleset | None,
-    subsume: bool,
-    res_type: TypeOrVarRef,
-    mutates_first_arg: bool,
-    has_body: bool,
-) -> None:
-    args = list(args)
-    arg_exprs: list[RuntimeExpr | RuntimeClass] = [RuntimeExpr.__from_values__(decls, a) for a in args]
-    # If this is a classmethod, add the class as the first arg
-    if isinstance(ref, ClassMethodRef):
-        tp = decls.get_parameterized_class(ref.ident)
-        arg_exprs.insert(0, RuntimeClass(Thunk.value(decls), tp))
-    elif isinstance(ref, InitRef):
-        tp = decls.get_parameterized_class(ref.ident)
-        arg_exprs.insert(
-            0,
-            RuntimeExpr.__from_values__(decls, TypedExprDecl(tp.to_just(), CallDecl(ref, tuple(args)))),
-        )
-    with set_current_ruleset(ruleset):
-        res = fn(*arg_exprs)
-    # If this function mutates its first argument and that argument changed, use it as the result.
-    if mutates_first_arg and arg_exprs[0].__egg_typed_expr__ != args[0]:
-        res = arg_exprs[0]
-    decl = decls.get_callable_decl(ref)
-    assert isinstance(decl, ConstructorDecl | FunctionDecl)
-    if res is None:
-        if has_body:
-            msg = "Callable bodies must return a value"
-            raise ValueError(msg)
-        if ruleset is not None and isinstance(ref, FunctionRef):
-            msg = "Explicit rulesets require a body"
-            raise ValueError(msg)
-        if subsume:
-            msg = "subsume requires a body"
-            raise ValueError(msg)
-        return
-    return_type_is_eqsort = isinstance(res_type, TypeRefWithVars) and not decls._classes[res_type.ident].builtin
-    if return_type_is_eqsort and isinstance(decl, FunctionDecl) and decl.merge is not None:
-        msg = "Eqsort-returning callables with bodies cannot use merge"
-        raise ValueError(msg)
-    if return_type_is_eqsort and ruleset is not None:
-        _add_default_rewrite(decls, ref, res_type, res, ruleset, subsume)
-        return
-
-    if isinstance(decl, ConstructorDecl):
-        if decl.cost is not None:
-            msg = "Eqsort-returning eager bodies cannot use cost"
-            raise ValueError(msg)
-        if decl.unextractable:
-            msg = "Eqsort-returning eager bodies cannot be unextractable"
-            raise ValueError(msg)
-    else:
-        if ruleset is not None:
-            msg = "Primitive-returning callables with bodies cannot use an explicit ruleset"
-            raise ValueError(msg)
-        if decl.builtin:
-            msg = "Builtin callables cannot have a body"
-            raise ValueError(msg)
-        if decl.merge is not None:
-            msg = "Primitive-returning callables with bodies cannot use merge"
-            raise ValueError(msg)
-
-    resolved_value = resolve_literal(res_type, res, Thunk.value(decls))
-    decls |= resolved_value
-    match decl:
-        case ConstructorDecl(signature, egg_name, _, _, doc):
-            decls.set_function_decl(
-                ref,
-                FunctionDecl(signature=signature, egg_name=egg_name, body=resolved_value.__egg_typed_expr__, doc=doc),
-            )
-        case FunctionDecl():
-            decls.set_function_decl(ref, replace(decl, body=resolved_value.__egg_typed_expr__))
-
-
-def _add_default_rewrite(
-    decls: Declarations,
-    ref: FunctionRef | ConstantRef | MethodRef | ClassMethodRef | InitRef | ClassVariableRef | PropertyRef,
-    type_ref: TypeOrVarRef,
-    default_rewrite: object,
-    ruleset: Ruleset,
-    subsume: bool,
-) -> None:
-    """
-    Adds a default rewrite for the callable when an explicit ruleset is provided.
-    """
-    msg = "Canonical class/default rewrite authoring is not migrated"
-    raise NotImplementedError(msg)
-
-
 def _last_param_variable(params: list[Parameter]) -> bool:
     """
     Checks if the last paramater is a variable arg.
@@ -1347,10 +1266,6 @@ class EGraph:
     _state_stack: list[EGraphState] = field(default_factory=list, repr=False)
     # For storing the global "current" egraph
     _token_stack: list[EGraph] = field(default_factory=list, repr=False)
-    # Raw values supplied while extraction holds this e-graph read-only.
-    _cost_callback_values: dict[TypedExprDecl, bindings.Value] | None = field(
-        default=None, init=False, repr=False, compare=False
-    )
 
     def __init__(
         self,
@@ -1368,32 +1283,20 @@ class EGraph:
                 self._state = EGraphState(num_threads=num_threads)
             self._state_stack = []
             self._token_stack = []
-            self._cost_callback_values = None
             if actions:
                 self.register(*actions)
 
-    def _add_decls(self, *decls: DeclarationsLike) -> None:
-        msg = "Legacy declaration submission is removed; this operation is not migrated"
-        raise NotImplementedError(msg)
-
-    def set_report_level(self, level: bindings._ReportLevel) -> None:
-        """
-        Set the level of detail recorded in subsequent run reports.
-        """
-        levels = {
-            bindings.TimeOnly: pb.ReportLevel.TIME_ONLY,
-            bindings.WithPlan: pb.ReportLevel.WITH_PLAN,
-            bindings.StageInfo: pb.ReportLevel.STAGE_INFO,
-        }
-        if type(level) not in levels:
-            msg = "Expected a native report level"
+    def set_report_level(self, level: pb.ReportLevel) -> None:
+        """Set native report detail using the generated protocol enum."""
+        if type(level) is not pb.ReportLevel or level == pb.ReportLevel.UNSPECIFIED:
+            msg = "Expected a defined protobuf report level"
             raise TypeError(msg)
         if self._state.handle is None:
             msg = "EGraph handle has been destroyed"
             raise RuntimeError(msg)
         request = pb.ConfigureEGraphResourcesRequest(
             egraph_id=self._state.handle,
-            operation=Oneof[Literal["report_level"], pb.ReportLevel]("report_level", levels[type(level)]),
+            operation=Oneof[Literal["report_level"], pb.ReportLevel]("report_level", level),
         )
         pb.ConfigureEGraphResourcesResponse.from_binary(self._state.transport.configure_resources(request.to_binary()))
 
@@ -1415,8 +1318,10 @@ class EGraph:
         return False
 
     def set_no_decomp(self, no_decomp: bool) -> None:
-        """Set whether subsequently registered rules skip decomposition."""
-        self._egraph.set_no_decomp(no_decomp)
+        """Configure rule decomposition when the shared adapter supports it."""
+        if no_decomp:
+            msg = "Handle-wide decomposition settings are not represented by the shared protocol"
+            raise NotImplementedError(msg)
 
     @property
     def as_egglog_string(self) -> str:
@@ -1427,7 +1332,8 @@ class EGraph:
         represented by a replayable command, the transcript is invalidated and
         this property raises ``RuntimeError``.
         """
-        return self._state.egglog_string()
+        msg = "Replayable source recording requires the shared producer and failure-history support"
+        raise NotImplementedError(msg)
 
     def close(self) -> None:
         """
@@ -1444,21 +1350,9 @@ class EGraph:
         self.display()
 
     def input(self, fn: Callable[..., String], path: str) -> None:
-        """
-        Load a CSV file into a table-backed callable.
-
-        Eager and builtin primitives do not have tables and cannot be input
-        targets.
-        """
-        ref, decls = resolve_callable(fn)
-        self._add_decls(decls)
-        self._require_table_backed(ref)
-        self._state.run_program(bindings.Input(span(1), self._state.callable_ref_to_egg(ref)[0], path))
-
-    def _callable_to_egg(self, fn: ExprCallable) -> tuple[CallableRef, str]:
-        ref, decls = resolve_callable(fn)
-        self._add_decls(decls)
-        return ref, self._state.callable_ref_to_egg(ref)[0]
+        """Load CSV data when a shared input producer is available."""
+        msg = "CSV input requires a shared authoring producer; direct native input is removed"
+        raise NotImplementedError(msg)
 
     def let(self, name: str, expr: BASE_EXPR) -> BASE_EXPR:
         """
@@ -1472,6 +1366,7 @@ class EGraph:
         assert command.kind.value.kind is not None
         assert command.kind.value.kind.field == "set"
         target = command.kind.value.kind.value.target
+        assert target is not None
         declaration = _definition_at(action.__egg_ref__, "callable", target.func)
         return cast("BASE_EXPR", RuntimeFunction(declaration, 0)())
 
@@ -1653,9 +1548,10 @@ class EGraph:
         """
         Extract the lowest cost expression from the egraph.
         """
-        _extractor_options(extractor)
-        if cost_model is not None or extractor != "tree":
-            msg = "Custom Python cost models and non-tree extraction are not migrated"
+        if extractor not in {"tree", "greedy-dag"}:
+            raise ValueError(f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'")
+        if cost_model is not None:
+            msg = "Custom Python cost models require shared host-model registration"
             raise NotImplementedError(msg)
         runtime_expr = to_runtime_expr(expr)
         builder = Builder()
@@ -1665,7 +1561,11 @@ class EGraph:
             pb.Command(
                 kind=Oneof[Literal["extract"], pb.Extract](
                     "extract",
-                    pb.Extract(roots=[root], variants=1, extractor=pb.Extractor.TREE),
+                    pb.Extract(
+                        roots=[root],
+                        variants=1,
+                        extractor=pb.Extractor.TREE if extractor == "tree" else pb.Extractor.GREEDY_DAG,
+                    ),
                 )
             ),
         )
@@ -1696,10 +1596,6 @@ class EGraph:
             raise TypeError(msg)
         return result, cost
 
-    def _from_termdag(self, termdag: bindings.TermDag, term: int, tp: JustTypeRef) -> Any:
-        (new_typed_expr,) = self._state.exprs_from_egg(termdag, [term], tp)
-        return RuntimeExpr.__from_values__(self.__egg_decls__, new_typed_expr)
-
     @overload
     def extract_multiple(self, expr: BASE_EXPR, n: int, *, extractor: ExtractionMode = "tree") -> list[BASE_EXPR]: ...
 
@@ -1715,62 +1611,54 @@ class EGraph:
         *,
         extractor: ExtractionMode = "tree",
     ) -> list[BASE_EXPR] | list[list[BASE_EXPR]]:
-        """
-        Extract up to ``n`` variants of one expression or each expression in a sequence.
-
-        Sequence results preserve the roots' order and may contain an empty
-        list when a root has no extractable representation.
-        """
+        """Extract ordered variants for one root or a sequence of roots over bytes."""
+        n = index_integer(n)
         if n <= 0:
             msg = "The number of variants must be positive"
             raise ValueError(msg)
-        extractor_options = _extractor_options(extractor)
+        if n > 2**32 - 1:
+            msg = "The number of variants exceeds the protocol's uint32 range"
+            raise OverflowError(msg)
+        if extractor not in {"tree", "greedy-dag"}:
+            raise ValueError(f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'")
         if isinstance(expr, Sequence):
-            if not expr:
-                msg = "extract_multiple requires at least one expression"
-                raise ValueError(msg)
-            runtime_exprs = [to_runtime_expr(item) for item in expr]
-            self._add_decls(*runtime_exprs)
-            egg_exprs = [self._state.typed_expr_to_egg(item.__egg_typed_expr__) for item in runtime_exprs]
-            cmd = bindings.UserDefined(
-                span(2),
-                "multi-extract",
-                [bindings.Lit(span(2), bindings.Int(n)), *egg_exprs, *extractor_options],
-            )
-            try:
-                outputs = self._state.run_program(cmd)
-            except BaseException as e:
-                e.add_note("while extracting: " + ", ".join(map(str, runtime_exprs)))
-                raise
-            if len(outputs) != 1 or not isinstance(outputs[0], bindings.UserDefinedOutput):
-                msg = "multi-extract returned unexpected command outputs"
-                raise RuntimeError(msg)
-            output = outputs[0].output.as_multi_extract()
-            if output is None:
-                msg = "multi-extract returned an unexpected user-defined output"
-                raise RuntimeError(msg)
-            termdag = output.termdag
-            terms_by_root = output.terms
-            if len(terms_by_root) != len(runtime_exprs):
-                msg = "multi-extract returned an unexpected user-defined output"
-                raise RuntimeError(msg)
-            results: list[list[BASE_EXPR]] = []
-            for runtime_expr, terms in zip(runtime_exprs, terms_by_root, strict=True):
-                typed_exprs = self._state.exprs_from_egg(termdag, terms, runtime_expr.__egg_typed_expr__.tp)
-                results.append([
-                    cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, typed_expr))
-                    for typed_expr in typed_exprs
-                ])
-            return results
-
-        runtime_expr = to_runtime_expr(expr)
-        self._add_decls(runtime_expr)
-        extract_report = self._run_extract(runtime_expr, n, extractor)
-        assert isinstance(extract_report, bindings.ExtractVariants)
-        new_exprs = self._state.exprs_from_egg(
-            extract_report.termdag, extract_report.terms, runtime_expr.__egg_typed_expr__.tp
+            batched = True
+            expressions = list(expr)
+        else:
+            batched = False
+            expressions = [expr]
+        if not expressions:
+            msg = "extract_multiple requires at least one expression"
+            raise ValueError(msg)
+        builder = Builder()
+        roots = [builder.import_ref(to_runtime_expr(item).__egg_ref__) for item in expressions]
+        command = builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["extract"], pb.Extract](
+                    "extract",
+                    pb.Extract(
+                        roots=roots,
+                        variants=n,
+                        extractor=pb.Extractor.TREE if extractor == "tree" else pb.Extractor.GREEDY_DAG,
+                    ),
+                )
+            ),
         )
-        return [cast("BASE_EXPR", RuntimeExpr.__from_values__(self.__egg_decls__, expr)) for expr in new_exprs]
+        response, owner = self._state.run_program([builder.publish().ref("commands", command)])
+        if (
+            len(response.outputs) != 1
+            or response.outputs[0].kind is None
+            or response.outputs[0].kind.field != "extraction"
+            or len(response.outputs[0].kind.value.roots) != len(expressions)
+        ):
+            msg = "Shared adapter did not return the requested root extractions"
+            raise ValueError(msg)
+        results = [
+            [cast("BASE_EXPR", RuntimeExpr(owner.ref("nodes", variant.term))) for variant in root.variants]
+            for root in response.outputs[0].kind.value.roots
+        ]
+        return results if batched else results[0]
 
     def keep_best(
         self,
@@ -1779,52 +1667,34 @@ class EGraph:
         *fns: ExprCallable,
         extractor: ExtractionMode = "tree",
     ) -> None:
-        """
-        Keep the best rows of selected callables and discard unreferenced rows.
-
-        This destructively clears all old rows, then rebuilds the selected rows
-        and the constructor rows needed by their extracted representations.
-        Declarations and dynamic-cost table identities remain available for
-        subsequent iteration.
-        """
-        extractor_options = _extractor_options(extractor)
-        resolved = [resolve_callable(callable_) for callable_ in (fn, *fns)]
-        self._add_decls(*(decls for _, decls in resolved))
-        for ref, _ in resolved:
-            self._require_table_backed(ref)
-        table_names = [self._state.callable_ref_to_egg(ref)[0] for ref, _ in resolved]
-        args: list[bindings._Expr] = [bindings.Lit(span(2), bindings.String(table_name)) for table_name in table_names]
-        self._state.run_program(bindings.UserDefined(span(2), "keep-best", [*args, *extractor_options]))
-
-        # Compaction rebuilds the tables with fresh raw value IDs. Reject every
-        # opaque value captured before it, including values inherited from a
-        # parent push scope; popping restores that parent's owner generation.
-        self._state.value_owner = object()
-        self._state.valid_value_owners = frozenset((self._state.value_owner,))
-
-        # keep-best clears every table, including synthetic and user let rows.
-        # Do not let later lowering reuse references to those now-empty tables.
-        self._state.expr_to_letref_cache.clear()
-        self._state.expr_to_egg_cache = {
-            expr: egg_expr
-            for expr, egg_expr in self._state.expr_to_egg_cache.items()
-            if not isinstance(expr, LetRefDecl)
-        }
-
-    def _run_extract(self, expr: RuntimeExpr, n: int, extractor: ExtractionMode = "tree") -> bindings._CommandOutput:
-        egg_expr = self._state.typed_expr_to_egg(expr.__egg_typed_expr__)
-        # If we have defined any cost tables use the custom extraction
-        args: tuple[bindings._Expr, ...] = (egg_expr, bindings.Lit(span(2), bindings.Int(n)))
-        args += _extractor_options(extractor)
-        if self._state.cost_table_names or extractor == "greedy-dag":
-            cmd: bindings._Command = bindings.UserDefined(span(2), "extract", list(args))
-        else:
-            cmd = bindings.Extract(span(2), *args)
-        try:
-            return self._state.run_program(cmd)[0]
-        except BaseException as e:
-            e.add_note("while extracting: " + str(expr))
-            raise
+        """Compact selected tables through the shared KeepBest command."""
+        if extractor not in {"tree", "greedy-dag"}:
+            raise ValueError(f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'")
+        references = [resolve_callable(callable_) for callable_ in (fn, *fns)]
+        builder = Builder()
+        tables = []
+        for reference in references:
+            declaration: pb.Declaration = reference.read()
+            if declaration.kind is None or not isinstance(
+                declaration.kind.value, pb.Function | pb.Constructor | pb.Relation
+            ):
+                msg = "This operation requires a table-backed relation, constructor, or bodyless function"
+                raise ValueError(msg)
+            builder.import_ref(reference)
+            tables.append(declaration.kind.value.name)
+        command = builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["keep_best"], pb.KeepBest](
+                    "keep_best",
+                    pb.KeepBest(
+                        tables=tables,
+                        extractor=pb.Extractor.TREE if extractor == "tree" else pb.Extractor.GREEDY_DAG,
+                    ),
+                )
+            ),
+        )
+        self._state.run_program([builder.publish().ref("commands", command)])
 
     @_TRACER.start_as_current_span("push")
     def push(self) -> None:
@@ -1862,92 +1732,12 @@ class EGraph:
             if exc_type is None:
                 raise
 
-    def _serialize(
-        self,
-        **kwargs: Unpack[GraphvizKwargs],
-    ) -> bindings.SerializedEGraph:
-        max_functions = kwargs.pop("max_functions", None)
-        max_calls_per_function = kwargs.pop("max_calls_per_function", None)
-        split_primitive_outputs = kwargs.pop("split_primitive_outputs", True)
-        split_functions = kwargs.pop("split_functions", [])
-        include_temporary_functions = kwargs.pop("include_temporary_functions", False)
-        n_inline_leaves = kwargs.pop("n_inline_leaves", 0)
-        serialized = call_with_current_trace(
-            self._egraph.serialize,
-            [],
-            max_functions=max_functions,
-            max_calls_per_function=max_calls_per_function,
-            include_temporary_functions=include_temporary_functions,
-        )
-        if serialized.discarded_functions:
-            msg = ", ".join(set(self._state.possible_egglog_functions(serialized.discarded_functions)))
-            warn(f"Omitted: {msg}", stacklevel=3)
-        if serialized.truncated_functions:
-            msg = ", ".join(set(self._state.possible_egglog_functions(serialized.truncated_functions)))
-            warn(f"Truncated: {msg}", stacklevel=3)
-        if split_primitive_outputs or split_functions:
-            additional_ops = {self._callable_to_egg(f)[1] for f in split_functions}
-            serialized.split_classes(self._egraph, additional_ops)
-        serialized.map_ops(self._state.op_mapping())
-
-        for _ in range(n_inline_leaves):
-            serialized.inline_leaves()
-
-        return serialized
-
-    def _graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Source:
-        serialized = self._serialize(**kwargs)
-
-        original = serialized.to_dot()
-        # Add link to stylesheet to the graph, so that edges light up on hover
-        # https://gist.github.com/sverweij/93e324f67310f66a8f5da5c2abe94682
-        styles = """/* the lines within the edges */
-      .edge:active path,
-      .edge:hover path {
-        stroke: fuchsia;
-        stroke-width: 3;
-        stroke-opacity: 1;
-      }
-      /* arrows are typically drawn with a polygon */
-      .edge:active polygon,
-      .edge:hover polygon {
-        stroke: fuchsia;
-        stroke-width: 3;
-        fill: fuchsia;
-        stroke-opacity: 1;
-        fill-opacity: 1;
-      }
-      /* If you happen to have text and want to color that as well... */
-      .edge:active text,
-      .edge:hover text {
-        fill: fuchsia;
-      }"""
-        p = pathlib.Path(tempfile.gettempdir()) / "graphviz-styles.css"
-        p.write_text(styles)
-        with_stylesheet = original.replace("{", f'{{stylesheet="{p!s}"', 1)
-        return graphviz.Source(with_stylesheet)
-
     def display(self, graphviz: bool = False, **kwargs: Unpack[GraphvizKwargs]) -> None:
-        """
-        Displays the e-graph.
+        """Display exported logical state when the protobuf visualizer is available."""
+        msg = "Visualization must derive from the shared snapshot; native serialization is removed"
+        raise NotImplementedError(msg)
 
-        If in IPython it will display it inline, otherwise it will write it to a file and open it.
-        """
-        from IPython.display import SVG, display  # noqa: PLC0415
-
-        from .visualizer_widget import VisualizerWidget  # noqa: PLC0415
-
-        if graphviz:
-            if IN_IPYTHON:
-                svg = self._graphviz(**kwargs).pipe(format="svg", quiet=True, encoding="utf-8")
-                display(SVG(svg))
-            else:
-                self._graphviz(**kwargs).render(view=True, format="svg", quiet=True)
-        else:
-            serialized = self._serialize(**kwargs)
-            VisualizerWidget(egraphs=[serialized.to_json()]).display_or_open()
-
-    def saturate(  # noqa: C901
+    def saturate(
         self,
         schedule: Schedule | None = None,
         *,
@@ -1957,54 +1747,19 @@ class EGraph:
         print_frozen: bool = False,
         **kwargs: Unpack[GraphvizKwargs],
     ) -> None:
-        """
-        Saturate the egraph, running the given schedule until the egraph is saturated.
-        It serializes the egraph at each step and returns a widget to visualize the egraph.
-
-        If an `expr` is passed, it's also extracted after each run and printed
-        """
-        from .visualizer_widget import VisualizerWidget  # noqa: PLC0415
-
-        def to_json() -> str:
+        """Run repeated byte schedules until the adapter reports saturation."""
+        if visualize:
+            msg = "Visualization must derive from the shared snapshot; native serialization is removed"
+            raise NotImplementedError(msg)
+        for iteration in range(max):
+            report = self.run(schedule or 1)
             if expr is not None:
                 print(self.extract(expr), "\n")
-            return self._serialize(**kwargs).to_json()
-
-        if visualize:
-            egraphs = [to_json()]
-        i = 0
-        # Always visualize, even if we encounter an error
-        try:
-            while i < max:
-                report = self.run(schedule or 1)
-                if report.can_stop:
-                    break
-                i += 1
-                if visualize:
-                    egraphs.append(to_json())
-                if print_frozen:
-                    print(f"After iteration {i}:")
-                    print(self.freeze())
-                    print("\n")
-        except:
-            if visualize:
-                egraphs.append(to_json())
             if print_frozen:
-                print(self.freeze())
-            raise
-        finally:
-            if visualize:
-                VisualizerWidget(egraphs=egraphs).display_or_open()
-
-    @property
-    def _egraph(self) -> bindings.EGraph:
-        msg = "Direct native-AST access is removed; this operation is not migrated"
-        raise NotImplementedError(msg)
-
-    @property
-    def __egg_decls__(self) -> Declarations:
-        msg = "Legacy declaration projections are removed"
-        raise NotImplementedError(msg)
+                print(f"After iteration {iteration + 1}:")
+                print(self.freeze(), "\n")
+            if report.can_stop:
+                break
 
     @_TRACER.start_as_current_span("register")
     def register(
@@ -2256,290 +2011,43 @@ class EGraph:
         }
 
     def lookup_function_value(self, expr: BASE_EXPR) -> BASE_EXPR | None:
-        """
-        Look up the current value of a table-backed call, if that row exists.
-
-        Cost lookups use their associated cost table. Eager and builtin
-        primitive calls cannot be inspected with this method.
-
-        During a custom cost-model callback, same-e-graph lookups may use
-        values supplied to that callback but cannot evaluate newly derived
-        arguments while extraction holds the e-graph read-only.
-
-        Opaque values returned for user-defined sorts belong to this EGraph
-        and cannot be used to query another EGraph.
-        """
-        runtime_expr = to_runtime_expr(expr)
-        typed_expr = runtime_expr.__egg_typed_expr__
-        assert isinstance(typed_expr.expr, CallDecl | GetCostDecl)
-        callback_values = self._cost_callback_values
-        in_cost_model_callback = callback_values is not None
-        if in_cost_model_callback:
-            ref = typed_expr.expr.callable
-            table_is_registered = (
-                ref in self._state.callable_ref_to_egg_fn
-                if isinstance(typed_expr.expr, CallDecl)
-                else ref in self._state.cost_table_names
-            )
-            if not table_is_registered:
-                msg = "Tables queried by cost-model callbacks must be registered before extraction starts"
-                raise ValueError(msg)
-        else:
-            self._add_decls(runtime_expr)
-        if isinstance(typed_expr.expr, CallDecl):
-            self._require_table_backed(typed_expr.expr.callable)
-        egg_fn, typed_args = self._state.translate_call(typed_expr.expr)
-        values_args = self._lookup_argument_values(typed_args, callback_values)
-        possible_value = self._egraph.lookup_function(egg_fn, values_args)
-        if possible_value is None:
-            return None
-        return cast(
-            "BASE_EXPR",
-            RuntimeExpr.__from_values__(
-                self.__egg_decls__,
-                TypedExprDecl(typed_expr.tp, self._state.value_to_expr(typed_expr.tp, possible_value)),
-            ),
-        )
-
-    def _lookup_argument_values(
-        self,
-        typed_args: list[TypedExprDecl],
-        callback_values: dict[TypedExprDecl, bindings.Value] | None,
-    ) -> list[bindings.Value]:
-        """Resolve lookup keys without mutating an e-graph borrowed by extraction."""
-        if callback_values is None:
-            args_to_materialize = list(typed_args)
-            while args_to_materialize:
-                arg = args_to_materialize.pop()
-                match arg.expr:
-                    case CallDecl():
-                        self.register(cast("BaseExpr", RuntimeExpr.__from_values__(self.__egg_decls__, arg)))
-                    case PartialCallDecl(CallDecl(args=nested_args)):
-                        # The unstable-fn value itself has no table row. Only
-                        # evaluating its captured calls can mutate the e-graph.
-                        args_to_materialize.extend(nested_args)
-            return [self._state.typed_expr_to_value(arg) for arg in typed_args]
-
-        values = []
-        for arg in typed_args:
-            if arg in callback_values:
-                values.append(callback_values[arg])
-                continue
-            if isinstance(arg.expr, ValueDecl) and arg.expr.owner in self._state.valid_value_owners:
-                values.append(arg.expr.value)
-                continue
-            msg = (
-                "Cost-model callbacks can only look up tables using values supplied to the callback; "
-                "evaluating new expressions would require mutating the borrowed e-graph"
-            )
-            raise ValueError(msg)
-        return values
-
-    def _require_table_backed(self, ref: CallableRef) -> None:
-        """Reject callable shapes that Egglog lowers without a queryable table."""
-        if self._state._callable_is_table_backed(ref):
-            return
-        msg = (
-            "This operation requires a table-backed relation, constructor, or bodyless function; "
-            "eager and builtin primitives do not have tables"
-        )
-        raise ValueError(msg)
+        """Look up a table key when shared readonly lookup is available."""
+        msg = "Raw native lookup is removed; use function_values for portable table inspection"
+        raise NotImplementedError(msg)
 
     def has_custom_cost(self, fn: ExprCallable) -> bool:
-        """
-        Checks if the any custom costs have been set for this expression callable.
-        """
-        resolved, _ = resolve_callable(fn)
-        return resolved in self._state.cost_table_names
-
-    def freeze(self) -> FrozenEGraph:  # noqa: C901,PLR0912
-        """
-        Freeze the current e-graph state for debugging.
-
-        The returned :class:`FrozenEGraph` contains a snapshot of the current
-        declarations and can be pretty-printed back into replayable high-level
-        actions with ``str(...)``.
-
-        This is useful when debugging unexpected unions, sets, subsumptions, or
-        costs after a run:
-
-        >>> from egglog import *
-        >>> class Math(Expr):
-        ...     def __init__(self, value: i64Like) -> None: ...
-        ...
-        >>> egraph = EGraph(Math(1))
-        >>> str(egraph.freeze())
-        'EGraph(Math(1)).freeze()'
-        """
-        frozen = self._egraph.freeze()
-        let_bindings: dict[str, TypedExprDecl] = {}
-        e_classes: dict[bindings.Value, tuple[JustTypeRef, list[CallDecl]]] = {}
-        sets: dict[CallDecl, TypedExprDecl] = {}
-        costs: dict[CallDecl, tuple[JustTypeRef, int]] = {}
-        expr_actions: list[TypedExprDecl] = []
-        subsumed: list[tuple[JustTypeRef, CallDecl]] = []
-
-        def append_e_class_row(output: bindings.Value, tp: JustTypeRef, call: CallDecl, is_subsumed: bool) -> None:
-            if output not in e_classes:
-                e_classes[output] = (tp, [])
-            e_class_tp, exprs = e_classes[output]
-            assert e_class_tp == tp
-            exprs.append(call)
-            if is_subsumed:
-                subsumed.append((tp, call))
-
-        synthetic_let_names = {var.name for var in self._state.expr_to_letref_cache.values()}
-        cost_target_inputs: dict[CallableRef, set[tuple[bindings.Value, ...]] | None] = {}
-        for cost_callable_ref in self._state.cost_table_names:
-            target_name = self._state.callable_ref_to_egg_fn[cost_callable_ref][0]
-            target_fn = frozen.functions.get(target_name)
-            # Table-backed targets need a live row before replay can set its
-            # cost. Eager and builtin targets have no frozen table and can be
-            # reconstructed directly from the cost-table arguments.
-            cost_target_inputs[cost_callable_ref] = (
-                None if target_fn is None else {tuple(target_row.inputs) for target_row in target_fn.rows}
-            )
-        for name, fn in frozen.functions.items():
-            if fn.is_let_binding:
-                if name in synthetic_let_names:
-                    continue
-                for row in fn.rows:
-                    output_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
-                    let_bindings[name] = TypedExprDecl(output_tp, self._state.value_to_expr(output_tp, row.output))
-                continue
-            is_cost = name in self._state.cost_table_names.values()
-            cost_callable_refs = tuple(
-                ref for ref, cost_name in self._state.cost_table_names.items() if name == cost_name
-            )
-            raw_callable_refs = self._state.egg_fn_to_callable_refs.get(name, set())
-            if is_cost and not raw_callable_refs:
-                callable_ref = cost_callable_refs[0]
-            else:
-                (callable_ref,) = raw_callable_refs
-            callable_decl = self.__egg_decls__.get_callable_decl(callable_ref)
-            signature = callable_decl.signature
-            assert isinstance(signature, FunctionSignature), (
-                f"Cannot freeze special callable {callable_ref} with signature {signature}"
-            )
-            assert signature.var_arg_type is None, f"Frozen calls do not support var args: {callable_ref}"
-
-            for row in fn.rows:
-                python_inputs = row.inputs[::-1] if signature.reverse_args else row.inputs
-                arg_exprs = tuple(
-                    TypedExprDecl(tp, self._state.value_to_expr(tp, value))
-                    for arg_type, value in zip(signature.arg_types, python_inputs, strict=True)
-                    for tp in (arg_type.to_just(),)
-                )
-                if is_cost:
-                    cost_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
-                    cost_expr = TypedExprDecl(cost_tp, self._state.value_to_expr(cost_tp, row.output))
-                    for cost_callable_ref in cost_callable_refs:
-                        target_inputs = cost_target_inputs[cost_callable_ref]
-                        if target_inputs is not None and tuple(row.inputs) not in target_inputs:
-                            continue
-                        cost_signature = self.__egg_decls__.get_callable_decl(cost_callable_ref).signature
-                        assert isinstance(cost_signature, FunctionSignature)
-                        cost_inputs = row.inputs[::-1] if cost_signature.reverse_args else row.inputs
-                        cost_arg_exprs = tuple(
-                            TypedExprDecl(tp, self._state.value_to_expr(tp, value))
-                            for arg_type, value in zip(cost_signature.arg_types, cost_inputs, strict=True)
-                            for tp in (arg_type.to_just(),)
-                        )
-                        cost_call = CallDecl(cost_callable_ref, cost_arg_exprs)
-                        match cost_expr.expr:
-                            case LitDecl(int(value)):
-                                costs[cost_call] = (cost_signature.semantic_return_type.to_just(), value)
-                            case _:
-                                raise TypeError(f"Expected integer cost for {cost_callable_ref}, got {cost_expr.expr}")
-                    # A user-declared bodyless function may intentionally own the
-                    # canonical table that also serves as the dynamic-cost table.
-                    # Preserve its public rows as ordinary sets as well as costs.
-                    if not raw_callable_refs:
-                        continue
-
-                call = CallDecl(callable_ref, arg_exprs)
-                output_tp = signature.semantic_return_type.to_just()
-                match callable_decl:
-                    case ConstructorDecl():
-                        append_e_class_row(row.output, output_tp, call, row.subsumed)
-                    case FunctionDecl():
-                        set_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
-                        sets[call] = TypedExprDecl(set_tp, self._state.value_to_expr(set_tp, row.output))
-                    case ConstantDecl():
-                        if is_callable_decl_constructor(self.__egg_decls__, callable_decl):
-                            append_e_class_row(row.output, output_tp, call, row.subsumed)
-                        else:
-                            set_tp = self._state.egg_sort_to_type_ref[fn.output_sort]
-                            sets[call] = TypedExprDecl(set_tp, self._state.value_to_expr(set_tp, row.output))
-                    case RelationDecl():
-                        if row.subsumed:
-                            raise TypeError(f"Cannot freeze subsumed relation row for {callable_ref}")
-                        expr_actions.append(TypedExprDecl(output_tp, call))
-                    case _:
-                        assert_never(callable_decl)
-
-        return FrozenEGraph(
-            self.__egg_decls__.copy(),
-            EGraphDecl(
-                let_bindings=let_bindings,
-                e_classes={value: (tp, tuple(exprs)) for value, (tp, exprs) in e_classes.items()},
-                sets=sets,
-                expr_actions=tuple(expr_actions),
-                costs=costs,
-                subsumed=tuple(subsumed),
-            ),
+        """Inspect assigned row costs from a complete shared snapshot."""
+        reference = resolve_callable(fn)
+        declaration: pb.Declaration = reference.read()
+        assert declaration.kind is not None
+        name = declaration.kind.value.name
+        snapshot = self.freeze()
+        assert snapshot.program is not None
+        return any(
+            command.kind is not None
+            and command.kind.field == "action"
+            and command.kind.value.kind is not None
+            and command.kind.value.kind.field == "set_cost"
+            and command.kind.value.kind.value.target is not None
+            and command.kind.value.kind.value.target.func == name
+            for command in snapshot.program.commands
         )
 
-    def _values_to_expr_and_callback_values(
-        self, args: list[bindings.Value], name: str
-    ) -> tuple[RuntimeExpr, dict[TypedExprDecl, bindings.Value]] | None:
-        """Reconstruct a callback call and map its Python-order arguments to raw backend values."""
-        if name not in self._state.egg_fn_to_callable_refs:
-            return None
-        (callable_ref,) = self._state.egg_fn_to_callable_refs[name]
-        signature = self.__egg_decls__.get_callable_decl(callable_ref).signature
-        assert isinstance(signature, FunctionSignature)
-        python_args = args[::-1] if signature.reverse_args else args
-        arg_exprs = tuple(
-            TypedExprDecl(tp, self._state.value_to_expr(tp, arg))
-            for arg_type, arg in zip(signature.arg_types, python_args, strict=True)
-            for tp in (arg_type.to_just(),)
-        )
-        # Interned calls retain structurally equal argument declarations from
-        # earlier uses, so callback values cannot be keyed by Python identity.
-        callback_values = dict(zip(arg_exprs, python_args, strict=True))
-        stack = list(arg_exprs)
-        while stack:
-            arg = stack.pop()
-            match arg.expr:
-                case ValueDecl(value, owner):
-                    # Reconstructed nested e-class values also belong to this
-                    # callback borrow, but structurally equal values from
-                    # another e-graph must not be accepted.
-                    if owner in self._state.valid_value_owners:
-                        callback_values[arg] = value
-                case CallDecl(args=nested_args) | PartialCallDecl(CallDecl(args=nested_args)):
-                    stack.extend(nested_args)
-        res_type = signature.semantic_return_type.to_just()
-        return (
-            RuntimeExpr.__from_values__(
-                self.__egg_decls__,
-                TypedExprDecl(res_type, CallDecl(callable_ref, arg_exprs)),
-            ),
-            callback_values,
-        )
-
-
-@dataclass(frozen=True)
-class FrozenEGraph:
-    __egg_decls__: Declarations
-    decl: EGraphDecl
-
-    def __str__(self) -> str:
-        return pretty_decl(self.__egg_decls__, self.decl)
-
-    def __repr__(self) -> str:
-        return str(self)
+    def freeze(self) -> pb.EGraphSnapshot:
+        """Export the complete logical state as an owned protobuf snapshot."""
+        builder = Builder()
+        command = builder.add("commands", pb.Command(kind=Oneof[Literal["freeze"], pb.Freeze]("freeze", pb.Freeze())))
+        response, _ = self._state.run_program([builder.publish().ref("commands", command)])
+        if (
+            len(response.outputs) != 1
+            or response.outputs[0].kind is None
+            or response.outputs[0].kind.field != "snapshot"
+            or response.outputs[0].kind.value.options is None
+            or response.outputs[0].kind.value.program is None
+        ):
+            msg = "Shared adapter did not return the requested logical snapshot"
+            raise ValueError(msg)
+        return pb.EGraphSnapshot.from_binary(response.outputs[0].kind.value.to_binary())
 
 
 # Either a constant or a function.
@@ -3010,14 +2518,48 @@ def ne(expr: BASE_EXPR) -> _NeBuilder[BASE_EXPR]:
 
 def panic(message: str) -> Action:
     """Raise an error with the given message."""
-    msg = "Panic action authoring is not migrated"
-    raise NotImplementedError(msg)
+    builder = Builder()
+    index = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action", pb.Action(kind=Oneof[Literal["panic"], str]("panic", message))
+            )
+        ),
+    )
+    return Action(builder.publish().ref("commands", index))
 
 
 def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
     """Set the cost of the given expression."""
-    msg = "Dynamic cost action authoring is not migrated"
-    raise NotImplementedError(msg)
+    runtime_expr = to_runtime_expr(expr)
+    reference = runtime_expr.__egg_ref__
+    node: pb.Node = reference.read()
+    if node.kind is None or node.kind.field != "call":
+        msg = "Can only set cost of function calls"
+        raise TypeError(msg)
+    builder = Builder()
+    builder.import_ref(_definition_at(reference, "callable", node.kind.value.func))
+    target = _copy_record(
+        node.kind.value, relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index))
+    )
+    cost_sort = Builder()
+    sort = cost_sort.add(
+        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+    )
+    value = builder.import_ref(resolve_literal(cost_sort.publish().ref("sorts", sort), cost).__egg_ref__)
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action",
+                pb.Action(
+                    kind=Oneof[Literal["set_cost"], pb.SetCost]("set_cost", pb.SetCost(target=target, cost=value))
+                ),
+            )
+        ),
+    )
+    return Action(builder.publish().ref("commands", command))
 
 
 def let(name: str, expr: BaseExpr) -> Action:
@@ -3082,14 +2624,48 @@ def expr_action(expr: BaseExpr) -> Action:
 
 def delete(expr: BaseExpr) -> Action:
     """Create a delete expression."""
-    msg = "Delete action authoring is not migrated"
-    raise NotImplementedError(msg)
+    reference = to_runtime_expr(expr).__egg_ref__
+    node: pb.Node = reference.read()
+    if node.kind is None or node.kind.field != "call":
+        msg = "Delete requires a table call"
+        raise TypeError(msg)
+    builder = Builder()
+    builder.import_ref(_definition_at(reference, "callable", node.kind.value.func))
+    target = _copy_record(
+        node.kind.value, relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index))
+    )
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action", pb.Action(kind=Oneof[Literal["delete"], pb.Call]("delete", target))
+            )
+        ),
+    )
+    return Action(builder.publish().ref("commands", command))
 
 
 def subsume(expr: Expr) -> Action:
     """Subsume an expression so it cannot be matched against or extracted"""
-    msg = "Subsume action authoring is not migrated"
-    raise NotImplementedError(msg)
+    reference = to_runtime_expr(expr).__egg_ref__
+    node: pb.Node = reference.read()
+    if node.kind is None or node.kind.field != "call":
+        msg = "Subsume requires a constructor call"
+        raise TypeError(msg)
+    builder = Builder()
+    builder.import_ref(_definition_at(reference, "callable", node.kind.value.func))
+    target = _copy_record(
+        node.kind.value, relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index))
+    )
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action", pb.Action(kind=Oneof[Literal["subsume"], pb.Call]("subsume", target))
+            )
+        ),
+    )
+    return Action(builder.publish().ref("commands", command))
 
 
 def expr_fact(expr: BaseExpr) -> Fact:
@@ -3618,38 +3194,24 @@ def set_current_ruleset(r: Ruleset | None) -> Generator[None, None, None]:
         _CURRENT_RULESET.reset(token)
 
 
-@contextlib.contextmanager
-def _cost_model_callback_values(
-    egraph: EGraph,
-    values: dict[TypedExprDecl, bindings.Value],
-) -> Generator[None, None, None]:
-    """Make raw callback values available to read-only table lookups without evaluating expressions."""
-    # Values belong to the physical e-graph borrow, not Python's ambient context.
-    # Restore any outer callback scope if callback setup is nested.
-    previous = egraph._cost_callback_values
-    egraph._cost_callback_values = values
-    try:
-        yield
-    finally:
-        egraph._cost_callback_values = previous
-
-
 def get_cost(expr: BaseExpr) -> i64:
     """
     Return a lookup of the cost of an expression. If not set, won't match.
     """
     runtime_expr = to_runtime_expr(expr)
-    expr_decl = runtime_expr.__egg_typed_expr__.expr
-    if not isinstance(expr_decl, CallDecl):
+    builder = Builder()
+    reference = runtime_expr.__egg_ref__
+    node: pb.Node = reference.read()
+    if node.kind is None or node.kind.field != "call":
         msg = "Can only get cost of function calls, not literals or variables"
         raise TypeError(msg)
-    return cast(
-        "i64",
-        RuntimeExpr.__from_values__(
-            runtime_expr.__egg_decls__,
-            TypedExprDecl(JustTypeRef(Ident.builtin("i64")), GetCostDecl(expr_decl.callable, expr_decl.args)),
-        ),
+    builder.import_ref(_definition_at(reference, "callable", node.kind.value.func))
+    target = _copy_record(
+        node.kind.value, relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index))
     )
+    sort = builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+    index = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["get_cost"], pb.Call]("get_cost", target)))
+    return cast("i64", RuntimeExpr(builder.publish().ref("nodes", index)))
 
 
 class Comparable(Protocol):
@@ -3661,18 +3223,6 @@ class Comparable(Protocol):
 
 COST = TypeVar("COST", bound=Comparable)
 ExtractionMode: TypeAlias = Literal["tree", "greedy-dag"]
-
-
-def _extractor_options(extractor: str) -> tuple[bindings._Expr, ...]:
-    """Validate an extraction mode and lower its optional command selector."""
-    match extractor:
-        case "tree":
-            return ()
-        case "greedy-dag":
-            return (bindings.Var(span(2), ":extractor"), bindings.Var(span(2), "greedy-dag"))
-        case _:
-            msg = f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'"
-            raise ValueError(msg)
 
 
 class TreeCostModel(Protocol, Generic[COST]):
@@ -3725,155 +3275,25 @@ class DagCostModel(Generic[DAG_COST]):
 
 
 def default_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
-    """
-    A default cost model for an e-graph, which looks up costs set on function calls, or uses 1 as the default cost.
-    """
-    from .builtins import Container  # noqa: PLC0415
-    from .deconstruct import get_callable_fn  # noqa: PLC0415
-
-    # 1. First prefer if the expr has a custom cost set on it
-    if (
-        (callable_fn := get_callable_fn(expr)) is not None
-        and egraph.has_custom_cost(callable_fn)
-        and (i := egraph.lookup_function_value(get_cost(expr))) is not None
-    ):
-        self_cost = int(i)
-    # 2. Else, check if this is a callable and it has a cost set on its declaration
-    elif callable_fn is not None and (callable_cost := get_callable_cost(callable_fn)) is not None:
-        self_cost = callable_cost
-    # 3. Else, if this is a container, it has no cost, otherwise it has a cost of 1
-    else:
-        # By default, all nodes have a cost of 1 except for containers which have a cost of 0
-        self_cost = 0 if isinstance(expr, Container) else 1
-    # Sum up the costs of the children and our own cost
-    return sum(children_costs, start=self_cost)
+    """Use the shared host default once Python cost-model registration is available."""
+    msg = "Python cost callbacks require shared host-model registration"
+    raise NotImplementedError(msg)
 
 
 def get_callable_cost(fn: ExprCallable) -> int | None:
     """
     Returns the cost of a callable, if it has one set. Otherwise returns None.
     """
-    callable_ref, decls = resolve_callable(fn)
-    callable_decl = decls.get_callable_decl(callable_ref)
-    return callable_decl.cost if isinstance(callable_decl, ConstructorDecl) else 1
+    reference = resolve_callable(fn)
+    declaration: pb.Declaration = reference.read()
+    if declaration.kind is None or declaration.kind.field != "constructor":
+        return 1
+    if not declaration.kind.value.has_field("cost"):
+        return None
+    from .deconstruct import get_literal_value  # noqa: PLC0415
 
-
-@dataclass
-class _CostModel(Generic[COST]):
-    """
-    Implements the methods compatible with the bindings for the cost model.
-    """
-
-    model: CostModel[COST]
-    egraph: EGraph
-    enode_cost_results: dict[tuple[str, tuple[bindings.Value, ...]], int] = field(default_factory=dict)
-    enode_cost_expressions: list[RuntimeExpr] = field(default_factory=list)
-    enode_cost_argument_values: list[dict[TypedExprDecl, bindings.Value]] = field(default_factory=list)
-    base_value_cost_results: dict[tuple[str, bindings.Value], COST] = field(default_factory=dict)
-
-    def call_model(self, expr: RuntimeExpr, children_costs: list[COST]) -> COST:
-        return self.model(self.egraph, cast("BaseExpr", expr), children_costs)
-        # if __debug__:
-        #     for c in children_costs:
-        #         if res <= c:
-        #             msg = f"Cost model {self.model} produced a cost {res} less than or equal to a child cost {c} for {expr}"
-        #             raise ValueError(msg)
-
-    def fold(self, _fn: str, index: int, children_costs: list[COST]) -> COST:
-        expr = self.enode_cost_expressions[index]
-        with _cost_model_callback_values(self.egraph, self.enode_cost_argument_values[index]):
-            return self.call_model(expr, children_costs)
-
-    # enode cost is only ever called right before fold, for the head_cost
-    def enode_cost(self, name: str, args: list[bindings.Value]) -> int:
-        try:
-            return self.enode_cost_results[(name, tuple(args))]
-        except KeyError:
-            pass
-        callback = self.egraph._values_to_expr_and_callback_values(args, name)
-        if callback is None:
-            msg = f"Cannot compute custom cost for unknown egg function {name!r}"
-            raise ValueError(msg)
-        res, argument_values = callback
-        index = len(self.enode_cost_expressions)
-        self.enode_cost_expressions.append(res)
-        self.enode_cost_argument_values.append(argument_values)
-        self.enode_cost_results[(name, tuple(args))] = index
-        return index
-
-    def base_value_cost(self, tp: str, value: bindings.Value) -> COST:
-        try:
-            return self.base_value_cost_results[(tp, value)]
-        except KeyError:
-            pass
-        type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
-        expr = RuntimeExpr.__from_values__(
-            self.egraph.__egg_decls__,
-            TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
-        )
-        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
-            res = self.call_model(expr, [])
-        self.base_value_cost_results[(tp, value)] = res
-        return res
-
-    def container_cost(self, tp: str, value: bindings.Value, element_costs: list[COST]) -> COST:
-        type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
-        expr = RuntimeExpr.__from_values__(
-            self.egraph.__egg_decls__,
-            TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
-        )
-        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
-            return self.call_model(expr, element_costs)
-
-    def to_bindings_cost_model(self) -> bindings.CostModel[COST, int]:
-        return bindings.CostModel(self.fold, self.enode_cost, self.container_cost, self.base_value_cost)
-
-
-@dataclass
-class _DagCostModel(Generic[DAG_COST]):
-    """Adapts a high-level marginal model to the raw binding callbacks."""
-
-    model: DagCostModel[DAG_COST]
-    egraph: EGraph
-    enode_cost_results: dict[tuple[str, tuple[bindings.Value, ...]], DAG_COST] = field(default_factory=dict)
-    value_cost_results: dict[tuple[str, bindings.Value], DAG_COST] = field(default_factory=dict)
-
-    def enode_cost(self, name: str, args: list[bindings.Value]) -> DAG_COST:
-        key = (name, tuple(args))
-        try:
-            return self.enode_cost_results[key]
-        except KeyError:
-            pass
-        callback = self.egraph._values_to_expr_and_callback_values(args, name)
-        if callback is None:
-            msg = f"Cannot compute custom cost for unknown egg function {name!r}"
-            raise ValueError(msg)
-        expr, argument_values = callback
-        with _cost_model_callback_values(self.egraph, argument_values):
-            result = self.model.marginal_cost(self.egraph, cast("BaseExpr", expr))
-        self.enode_cost_results[key] = result
-        return result
-
-    def value_cost(self, tp: str, value: bindings.Value) -> DAG_COST:
-        key = (tp, value)
-        try:
-            return self.value_cost_results[key]
-        except KeyError:
-            pass
-        type_ref = self.egraph._state.egg_sort_to_type_ref[tp]
-        expr = RuntimeExpr.__from_values__(
-            self.egraph.__egg_decls__,
-            TypedExprDecl(type_ref, self.egraph._state.value_to_expr(type_ref, value)),
-        )
-        with _cost_model_callback_values(self.egraph, {expr.__egg_typed_expr__: value}):
-            result = self.model.marginal_cost(self.egraph, cast("BaseExpr", expr))
-        self.value_cost_results[key] = result
-        return result
-
-    def to_bindings_cost_model(self) -> bindings.DagCostModel[DAG_COST]:
-        return bindings.DagCostModel(
-            self.model.identity,
-            self.enode_cost,
-            self.value_cost,
-            self.value_cost,
-        )
+    cost = get_literal_value(RuntimeExpr(reference.owner.ref("nodes", declaration.kind.value.cost)))
+    if not isinstance(cost, int):
+        msg = "The constructor's Python cost must be an i64 literal"
+        raise TypeError(msg)
+    return cost

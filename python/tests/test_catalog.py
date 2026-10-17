@@ -482,7 +482,8 @@ def test_function_generated_surface_uses_actual_application_metadata():
     assert stub.count("    @overload\n") == 3
     assert "Any" not in stub
     application.bindings.python = None
-    assert "UnstableFn" not in render(program)
+    with pytest.raises(ValueError, match="Function sort requires an admitted structural function view"):
+        render(program)
 
 
 @pytest.mark.parametrize(
@@ -755,7 +756,7 @@ def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message)
                 ),
             )
         )
-        view.params[0].default_expr = 0
+        view.params[0].default_expr = len(program.nodes) - 1
     else:
         addition.kind.value.typing = Oneof[Literal["application"], pb.FunctionApplication](
             "application", pb.FunctionApplication()
@@ -838,6 +839,7 @@ def test_stub_defaults_are_inert_and_presence_controls_arity():
     addition.bindings.python.views[0].path = ["plus"]
     parameter = addition.bindings.python.views[0].params[0]
     scalar_sort = addition.kind.value.typing.value.inputs[parameter.core_input].sort
+    literal = len(program.nodes)
     program.nodes.extend([
         pb.Node(
             sort_id=scalar_sort,
@@ -847,10 +849,10 @@ def test_stub_defaults_are_inert_and_presence_controls_arity():
         ),
         pb.Node(
             sort_id=scalar_sort,
-            kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.i64.add", args=[0, 0])),
+            kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.i64.add", args=[literal, literal])),
         ),
     ])
-    parameter.default_expr = 1
+    parameter.default_expr = literal + 1
     assert "def plus(self, other: i64Like = ...) -> i64:" in renderer(program)
     owner = Builder.from_program(program).publish()
     method = RuntimeFunction(owner.ref("declarations", program.declarations.index(addition)), 0, i64(1))
@@ -859,7 +861,7 @@ def test_stub_defaults_are_inert_and_presence_controls_arity():
     assert result.__egg_ref__.owner.ref("nodes", argument).read().kind.value.func == "egglog.core.i64.add"
     parameter.clear_field("default_expr")
     assert "other: i64Like = ..." not in renderer(program)
-    parameter.default_expr = 2
+    parameter.default_expr = len(program.nodes)
     with pytest.raises(ValueError, match="Default root"):
         renderer(program)
 
@@ -954,7 +956,7 @@ def test_catalog_indexes_records_without_evaluating_or_retyping(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Catalog loading cannot create an engine")
 
-    monkeypatch.setattr("egglog.bindings.EGraph", forbidden)
+    monkeypatch.setattr("egglog.bindings._ProtoEngine", forbidden)
     source = catalog_fixture()
     catalog = Catalog(source)
     family = catalog.types["example", "Number"]
@@ -1270,9 +1272,9 @@ def test_multiset_generated_surface_from_actual_catalog():
         assert f"def {name}(x: {first}, xs: MultiSet[{parameter}]) -> {output}:" in stub
         assert f'"{name}"' in stub.split("__all__ = ", 1)[1].splitlines()[0]
     declarations = {d.kind.value.name: d for d in program.declarations}
-    assert len([name for name in declarations if name.startswith("egglog.core.multiset.")]) == 20
+    assert len([name for name in declarations if name.startswith("egglog.core.multiset.")]) == 27
     assert "def empty(" not in body
-    assert "def map(" not in body
+    assert "def map(self, f: Callable[[_MultiSet_T_0], _MultiSet_map_T1]) -> MultiSet[_MultiSet_map_T1]:" in body
     declarations["MultiSet"].kind.value.bindings.python.path[-1] = "Bag"
     view = declarations["egglog.core.multiset.remove_swapped"].bindings.python.views[0]
     view.path[-1] = "take_one"
@@ -1327,7 +1329,6 @@ def test_multiset_free_signature_labels_are_diagnostic_only(label, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Signature label rendering authored or executed a Call")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     monkeypatch.setattr("egglog.runtime._author_call", forbidden)
     program = pack(builtin_catalog().roots).program

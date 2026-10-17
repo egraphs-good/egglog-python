@@ -29,6 +29,7 @@ from egglog import (
 from egglog._catalog import Catalog, builtin_catalog
 from egglog._program import Builder, StructuralView, _copy_record, pack
 from egglog.deconstruct import get_callable_args, get_callable_fn
+from egglog.egraph_state import EggSmolError
 from egglog.runtime import RuntimeExpr, RuntimeFunction
 from egglog.type_constraint_solver import TypeConstraintError
 
@@ -69,9 +70,9 @@ def test_maybe_ordinary_surface_executes_as_bytes():
     assert graph.extract(Maybe[f64].some(1.0).unwrap()).value == 1.0  # type: ignore[arg-type]
     assert graph.extract(Maybe[f64].none().unwrap_or(2.5)).value == 2.5  # type: ignore[arg-type]
     assert graph.extract(Maybe[i64].some(i64(7)).unwrap_or(i64(2))).value == 7
-    with pytest.raises(bindings.EggSmolError, match=r"evaluation|Evaluation|failed"):
+    with pytest.raises(EggSmolError, match=r"evaluation|Evaluation|failed"):
         graph.extract(Maybe[i64].none().unwrap())
-    with pytest.raises(bindings.EggSmolError, match=r"evaluation|Evaluation|failed"):
+    with pytest.raises(EggSmolError, match=r"evaluation|Evaluation|failed"):
         graph.extract(Maybe[i64].some(i64(7)).unwrap_or(i64(1) / i64(0)))
     assert str(some) == "Maybe[f64].some(f64(1.0))"
     assert EGraph().extract(some).value.value == 1.0

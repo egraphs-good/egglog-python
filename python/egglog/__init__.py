@@ -2,13 +2,16 @@
 Package for creating e-graphs in Python.
 """
 
+from egglog_proto.egglog.v1.egglog_pb import ReportLevel as ReportLevel
+
 from . import config, ipython_magic  # noqa: F401
-from .bindings import EggSmolError, PrimitiveFailure, StageInfo, TimeOnly, WithPlan  # noqa: F401
+from .bindings import PrimitiveFailure as PrimitiveFailure
 from .builtins import *
 from .conversion import *
 from .deconstruct import *
 from .egraph import *
 from .egraph import ActionLike as ActionLike
+from .egraph_state import EggSmolError as EggSmolError
 from .runtime import define_expr_method as define_expr_method
 
 del ipython_magic

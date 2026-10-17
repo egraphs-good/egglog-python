@@ -90,9 +90,9 @@ uv run py-spy record  --format speedscope  --  python -O tmp.py
 
 `pytest` can also configure OpenTelemetry tracing for local debugging. For the full host-application setup and the
 Jaeger startup command, see {doc}`../how-to-guides/tracing`. The pytest plugin configures both the Python tracer
-provider and `egglog.bindings.setup_tracing(...)` for you.
+provider for you. Rust trace configuration is not exposed through the byte transport.
 
-To print both Python and Rust spans to the console during a test run:
+To print Python spans to the console during a test run:
 
 ```bash
 uv run pytest python/tests/test_tracing.py --benchmark-disable -q -s --otel-traces=console

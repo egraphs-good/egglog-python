@@ -9,11 +9,16 @@ from protobuf import Oneof
 from egglog import bindings
 
 
+def test_native_surface_contains_only_encoded_transport_and_host_provider():
+    assert {name for name in vars(bindings) if not name.startswith("_")} == {"PrimitiveFailure"}
+    assert callable(bindings._export_pyobject_catalog)
+    assert callable(bindings._ProtoEngine)
+
+
 def test_table_cell_reader_preserves_availability_and_ownership_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     def forbidden(*args: object, **kwargs: object) -> None:
         pytest.fail("Table response inspection accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     available = pb.TableCell(kind=Oneof[Literal["term"], int]("term", 0))
     unavailable = pb.TableCell(kind=Oneof[Literal["unavailable_sort"], int]("unavailable_sort", 1))

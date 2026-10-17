@@ -1,8 +1,3 @@
-from ._tracing import call_with_current_trace
-from .bindings import EGraph
-
-EGRAPH_VAR = "_MAGIC_EGRAPH"
-
 try:
     get_ipython()  # type: ignore[name-defined]
     IN_IPYTHON = True
@@ -10,7 +5,6 @@ except NameError:
     IN_IPYTHON = False
 
 if IN_IPYTHON:
-    import graphviz
     from IPython.core.magic import needs_local_scope, register_cell_magic
 
     @needs_local_scope
@@ -28,15 +22,5 @@ if IN_IPYTHON:
         If `continue` is specified, the program will be run in the same EGraph as the previous cell.
         If `graph` is specified, the EGraph will be displayed as a graph.
         """
-        if EGRAPH_VAR in local_ns and "continue" in line:
-            e = local_ns[EGRAPH_VAR]
-        else:
-            e = EGraph()
-            local_ns[EGRAPH_VAR] = e
-        cmds = e.parse_program(cell)
-        res = call_with_current_trace(e.run_program, *cmds)
-        if "output" in line:
-            print("\n".join(res))
-        if "graph" in line:
-            return graphviz.Source(e.serialize([]).to_dot())
-        return None
+        msg = "Notebook Egglog text requires the shared source-to-protobuf producer, which is not exposed to Python"
+        raise NotImplementedError(msg)

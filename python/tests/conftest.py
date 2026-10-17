@@ -164,7 +164,6 @@ def set_runtime(set_catalog_program, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Set source authoring accessed a native engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     catalog = Catalog(set_catalog_program)
     monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
@@ -184,7 +183,6 @@ def rational_runtime(rational_catalog_program, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Rational source authoring accessed a native engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     catalog = Catalog(rational_catalog_program)
     monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)

@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
-from . import bindings
 from ._program import Packed, Ref, _rule_key, rule_equal
 from .pretty import _format_pyobject, pretty_ref
 
@@ -53,47 +52,30 @@ def _duration(value: pb.ReportDuration | None) -> timedelta:
         raise OverflowError(msg) from None
 
 
-def _plan(value: pb.ReportPlan | None) -> bindings.Plan | None:
+def _plan(value: pb.ReportPlan | None) -> pb.ReportPlan | None:
     """Project inert native plan observations, validating their local topology."""
     if value is None:
         return None
-    stages: list[tuple[bindings._Stage, bindings.StageStats | None, list[int]]] = []
     for stage in value.stages:
         if stage.kind is None or any(not 0 <= successor < len(value.stages) for successor in stage.next):
             msg = "Malformed native report plan"
             raise ValueError(msg)
-        native: bindings._Stage
         if stage.kind.field == "intersect":
-            scans = []
             for scan in stage.kind.value.scans:
                 if len(scan.columns) != 1:
                     msg = "A native single scan must have exactly one column"
                     raise ValueError(msg)
-                column = scan.columns[0]
-                scans.append(bindings.SingleScan(scan.table, (column.variable, column.column)))
-            native = bindings.Intersect(scans)
         else:
             fused = stage.kind.value
             if fused.cover is None:
                 msg = "A fused native plan requires a cover"
                 raise ValueError(msg)
-            native = bindings.FusedIntersect(
-                bindings.Scan(fused.cover.table, [(c.variable, c.column) for c in fused.cover.columns]),
-                [
-                    bindings.Scan(scan.table, [(c.variable, c.column) for c in scan.columns])
-                    for scan in fused.to_intersect
-                ],
-            )
-        stats = (
-            None if stage.stats is None else bindings.StageStats(stage.stats.num_candidates, stage.stats.num_succeeded)
-        )
-        stages.append((native, stats, list(stage.next)))
-    return bindings.Plan(stages)
+    return pb.ReportPlan.from_binary(value.to_binary())
 
 
 @dataclass
 class RuleReport:
-    plan: bindings.Plan | None
+    plan: pb.ReportPlan | None
     search_and_apply_time: timedelta
     num_matches: int
 

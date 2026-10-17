@@ -1,76 +1,37 @@
----
-file_format: mystnb
----
+# Encoded transport: `egglog.bindings`
 
-# Low Level: `egglog.bindings`
+The public Python frontend authors generated protobuf records and sends encoded
+requests to the shared Experimental adapter. Use {doc}`python-integration` for
+the normal Python API. The generated protocol types live in
+`egglog_proto.egglog.v1.egglog_pb`.
 
-This modules contains bindings for the rust `egglog` library which are meant to be as close to the source as possible. This might result in not the most ergonomic API, if so, we can build higher level abstractions on top of it.
+`egglog.bindings` is the private native transport. Its `_ProtoEngine` accepts
+bytes for creation, execution, cloning, destruction, resource configuration and
+scope return. Results are bytes, except that execution also returns an original
+Python callback exception when one occurred. `PrimitiveFailure`, re-exported
+from `egglog`, marks an expected host primitive non-match.
 
-Example:
+The native Python-object provider installs its real custom sort and primitives
+inside each transport. `_export_pyobject_catalog()` exports their configured
+declarations for generation; builtin signatures come from their native owners.
 
-```{code-cell} python
-from egglog.bindings import *
-
-eqsat_basic = """(datatype Math
-  (Num i64)
-  (Var String)
-  (Add Math Math)
-  (Mul Math Math))
-
-;; expr1 = 2 * (x + 3)
-(let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))
-;; expr2 = 6 + 2 * x
-(let expr2 (Add (Num 6) (Mul (Num 2) (Var "x"))))
-
-
-(rewrite (Add a b)
-         (Add b a))
-(rewrite (Mul a (Add b c))
-         (Add (Mul a b) (Mul a c)))
-(rewrite (Add (Num a) (Num b))
-         (Num (+ a b)))
-(rewrite (Mul (Num a) (Num b))
-         (Num (* a b)))
-
-(run 10)
-(check (= expr1 expr2))"""
-
-egraph = EGraph()
-commands = egraph.parse_program(eqsat_basic)
-egraph.run_program(*commands)
-```
-
-`EggSmolError.replayable_by_fail` conservatively reports whether the failing
-command can be reproduced by wrapping it in Egglog's `(fail ...)` command.
-
-Experimental commands may return typed data through
-`UserDefinedCommandOutput`. Command execution first returns a
-`UserDefinedOutput` wrapper; call `output.output.as_multi_extract()` on its
-payload. This returns a `MultiExtractOutput` for `multi-extract` results and
-`None` for other custom outputs. Its `termdag` is shared by all results, while
-`terms` contains one ordered list of variant term IDs per input root.
-
-The commands are a representation which is close the AST of the egglog text language. We
-can see this by printing the commands:
-
-```{code-cell} python
-for command in commands:
-    print(command)
-```
+The extension has no public native EGraph, AST/command classes, raw values,
+extractor, snapshot, plan wrappers or tracing configuration functions. Extraction,
+compaction, snapshots and reports use the generated protocol records. Report
+detail is selected with the generated `egglog.ReportLevel` enum, and
+`EGraph.freeze()` returns an owned `EGraphSnapshot`.
 
 ## Thread safety
 
-Independent `EGraph` and `Extractor` instances can run concurrently. Serialize
-access to shared mutable objects, including `EGraph` and `TermDag`; overlapping
-accesses involving mutation raise an error instead of waiting. Python callbacks
-must synchronize shared mutable state. The
+Independent byte engines may run concurrently. Serialize access to a shared
+mutable engine; overlapping mutation raises an error instead of waiting.
+Python callbacks must synchronize shared mutable state. The
 [high-level API](python-integration.md#thread-safety) also requires initialization
 before concurrent use.
 
-## API
+## Current migration limits
 
-```{eval-rst}
-.. automodule:: egglog.bindings
-   :members:
-   :undoc-members:
-```
+Notebook text needs the shared source-to-protobuf producer exposed to Python.
+CSV input, replayable source recording and visualization from exported snapshots
+remain unfinished. Python custom extraction callbacks need shared host-model
+registration; they do not use a second native engine or extractor API.

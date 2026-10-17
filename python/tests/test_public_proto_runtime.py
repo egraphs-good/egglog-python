@@ -42,6 +42,7 @@ from egglog import (
     var,
 )
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
+from egglog.egraph_state import EggSmolError
 from egglog.runtime import RuntimeExpr, RuntimeFunction
 
 
@@ -49,7 +50,6 @@ def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyP
     def forbidden(*args, **kwargs):
         pytest.fail("Named function authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     from egglog import UnstableFn  # noqa: PLC0415 -- exercise the public import under the no-engine guard
 
@@ -131,7 +131,6 @@ def test_named_eager_function_values_author_without_engine(monkeypatch: pytest.M
     def forbidden(*args, **kwargs):
         pytest.fail("Named eager authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
 
     def make_combine():
@@ -617,7 +616,7 @@ def test_symbolic_getattr_corrupt_bytes_reject_before_execution(monkeypatch: pyt
 
     with monkeypatch.context() as patch:
         patch.setattr(graph._state, "transport", CorruptTransport())
-        with pytest.raises(bindings.EggSmolError):
+        with pytest.raises(EggSmolError):
             graph.register(expression)
     assert len(rejected) == 1
     assert rejected[0].error is not None
@@ -756,7 +755,7 @@ def test_public_pyobject_callback_errors_none_and_recovery() -> None:
     with pytest.raises(ValueError, match="original callback failure") as caught:
         graph.extract(fn("unexpected"))
     assert caught.value.args == ("original callback failure",)
-    with pytest.raises(bindings.EggSmolError):
+    with pytest.raises(EggSmolError):
         graph.extract(fn("expected"))
     assert graph.extract(fn("success")).value is None
     with pytest.warns(DeprecationWarning, match=r"use PyObject\(fn\) directly"):
@@ -784,7 +783,6 @@ def test_authoring_never_creates_native_engine(monkeypatch: pytest.MonkeyPatch) 
     def forbidden(*args: object, **kwargs: object) -> None:
         pytest.fail("Authoring accessed the native engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     assert (i64(2) + 3).__egg_ref__.read().kind.value.func == "egglog.core.i64.add"
 
@@ -802,7 +800,6 @@ def test_ne_authoring_pretty_and_structural_truth_without_engine(monkeypatch: py
     def forbidden(*args: object, **kwargs: object) -> None:
         pytest.fail("Inequality authoring or truth accessed the native engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
 
     class Compared(Expr):
@@ -899,7 +896,7 @@ def test_vec_public_generic_and_computed_table_bytes() -> None:
         assert tuple(child.value for child in value.value) == expected
         graph.check(eq(value).to(ranged))
     assert graph.extract(i64(5).range()[4]).value == 4
-    with pytest.raises(bindings.EggSmolError):
+    with pytest.raises(EggSmolError):
         graph.extract(i64(5).range()[5])
 
 
@@ -962,14 +959,14 @@ def test_bodyless_free_function_public_bytes() -> None:
     assert str(expression) == "score(1)"
     assert str(set_(expression).to(7)) == "set_(score(1)).to(i64(7))"
     graph = EGraph()
-    with pytest.raises(bindings.EggSmolError):
+    with pytest.raises(EggSmolError):
         graph.extract(expression)
     graph.register(set_(score(offset=2, x=1)).to(i64(3) + 4))
     assert graph.extract(score(1)).value == 7
     graph.check(eq(score(1, 2)).to(i64(7)))
     with pytest.raises(ExprValueError):
         _ = expression.value
-    with pytest.raises(bindings.EggSmolError, match="Illegal merge"):
+    with pytest.raises(EggSmolError, match="Illegal merge"):
         graph.register(set_(score(1)).to(i64(8)))
 
 
@@ -1024,7 +1021,7 @@ def test_constant_set_and_extract_public_bytes() -> None:
     with pytest.raises(ExprValueError):
         _ = current.value
     graph = EGraph()
-    with pytest.raises(bindings.EggSmolError):
+    with pytest.raises(EggSmolError):
         graph.extract(current)
     action = set_(current).to(i64(1) + 2)
     assert str(action) == "set_(current).to(i64(1) + 2)"
@@ -1035,7 +1032,7 @@ def test_constant_set_and_extract_public_bytes() -> None:
     assert graph.extract(current).value == 3
     with pytest.raises(ExprValueError):
         _ = current.value
-    with pytest.raises(bindings.EggSmolError, match="Illegal merge"):
+    with pytest.raises(EggSmolError, match="Illegal merge"):
         graph.register(set_(current).to(i64(4)))
 
 
@@ -1211,9 +1208,26 @@ def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: p
     assert {name for kind, name in definitions if kind == "callable" and name.startswith("egglog.core.multiset.")} == {
         f"egglog.core.multiset.{suffix}"
         for suffix in (
-            "of", "single", "pick", "insert", "remove", "remove_swapped", "subtract", "subtract_swapped",
-            "length", "contains", "not_contains", "contains_swapped", "not_contains_swapped", "intersection",
-            "sum", "reset_counts", "pick_max", "count", "sum_multisets", "union_values",
+            "of",
+            "single",
+            "pick",
+            "insert",
+            "remove",
+            "remove_swapped",
+            "subtract",
+            "subtract_swapped",
+            "length",
+            "contains",
+            "not_contains",
+            "contains_swapped",
+            "not_contains_swapped",
+            "intersection",
+            "sum",
+            "reset_counts",
+            "pick_max",
+            "count",
+            "sum_multisets",
+            "union_values",
         )
     }
     from egglog import MultiSet, convert  # noqa: PLC0415 -- only after the actual packaged-family discriminator
@@ -1289,9 +1303,12 @@ def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: p
         result.__egg_ref__.owner.ref("nodes", index) for index in value.value.items
     ]
     assert any(
-        node.kind.field == "call" and node.kind.value.func == "egglog.core.multiset.of"
-        and len(node.kind.value.args) == 3 and node.kind.value.args[0] == node.kind.value.args[2]
-        for request in requests for node in request.program.nodes
+        node.kind.field == "call"
+        and node.kind.value.func == "egglog.core.multiset.of"
+        and len(node.kind.value.args) == 3
+        and node.kind.value.args[0] == node.kind.value.args[2]
+        for request in requests
+        for node in request.program.nodes
     )
     original_handle = graph._state.handle
     graph._state.destroy()
@@ -1380,7 +1397,7 @@ def test_multiset_all_ordinary_views_and_partial_failures_public_bytes() -> None
         empty.pick(),
         empty.pick_max(),
     ):
-        with pytest.raises(bindings.EggSmolError):
+        with pytest.raises(EggSmolError):
             graph.extract(expression)
         assert graph.extract(xs.count(two)).value == 2
 
@@ -1420,7 +1437,6 @@ def test_python_callbacks_capture_symbolic_values_without_engine(monkeypatch: py
     def forbidden(*args, **kwargs):
         pytest.fail("Python callback authoring accessed an engine")
 
-    monkeypatch.setattr(bindings, "EGraph", forbidden)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     captured = i64(4) + i64(5)
     callback = UnstableFn[i64, i64](lambda value: value + captured)
@@ -1484,6 +1500,76 @@ def test_let_existing_check_eq_and_cloned_state() -> None:
     assert graph.extract(retained).value == 3
 
 
+def test_public_tree_variants_preserve_batch_order_and_empty_roots_over_bytes() -> None:
+    class MultiRoot(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+        @method(unextractable=True)
+        def opaque(self) -> "MultiRoot": ...
+
+    first, second = MultiRoot(i64(1)), MultiRoot(i64(2))
+    graph = EGraph(union(first).with_(second))
+    opaque = graph.let("opaque_multi_root", MultiRoot(i64(3)).opaque())
+    batches = graph.extract_multiple([String("first"), opaque, first], 2)
+    assert batches[0] == [String("first")]
+    assert batches[1] == []
+    assert {expr_parts(expr) for expr in batches[2]} == {expr_parts(first), expr_parts(second)}
+    assert graph.extract_multiple(i64(4), 1) == [i64(4)]
+
+
+def test_callable_cost_preserves_unset_constructor_metadata_without_engine(monkeypatch) -> None:
+    from egglog.egraph import get_callable_cost  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Callable metadata cannot create an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+
+    class Costed(Expr):
+        def __init__(self) -> None: ...
+
+        @method(cost=7)
+        @classmethod
+        def expensive(cls) -> "Costed": ...
+
+    assert get_callable_cost(Costed) is None
+    assert get_callable_cost(Costed.expensive) == 7
+
+
+@pytest.mark.parametrize("extractor", ["tree", "greedy-dag"])
+@pytest.mark.parametrize("assigned_costs", [False, True], ids=["default-costs", "assigned-costs"])
+def test_public_keep_best_compacts_costed_tables_over_bytes(extractor, assigned_costs) -> None:
+    from egglog import set_cost  # noqa: PLC0415
+
+    class Compact(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+        def __add__(self, other: "Compact") -> "Compact": ...
+
+    @function(merge=lambda old, new: new)
+    def target(key: i64) -> Compact: ...
+
+    @function(merge=lambda old, new: new)
+    def discarded(key: i64) -> Compact: ...
+
+    direct, shared = Compact(i64(2)), Compact(i64(1))
+    repeated = shared + shared
+    graph = EGraph(
+        union(direct).with_(repeated),
+        set_(target(i64(0))).to(direct),
+        set_(discarded(i64(0))).to(Compact(i64(9))),
+    )
+    if assigned_costs:
+        graph.register(set_cost(direct, 100), set_cost(shared, 4))
+    graph.keep_best(target, extractor=extractor)
+    assert graph.function_size(target) == 1
+    assert graph.function_size(discarded) == 0
+    assert graph.has_custom_cost(Compact) == assigned_costs
+    assert expr_parts(graph.extract(target(i64(0)))) == expr_parts(repeated if assigned_costs else direct)
+    graph.register(repeated, set_(target(i64(1))).to(repeated))
+    assert graph.function_size(target) == 2
+
+
 def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
@@ -1500,7 +1586,7 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
             invalid.union_values()
     graph = EGraph(xs)
     graph.check_fail(eq(a).to(b))
-    with pytest.raises(bindings.EggSmolError):
+    with pytest.raises(EggSmolError):
         graph.check(eq(xs.union_values()).to(a))
     graph.check_fail(eq(a).to(b))  # Rejected queries must not perform the write.
     graph.register(xs.union_values())
@@ -1508,7 +1594,7 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
     assert graph.extract(xs.count(a)).value == 3
     assert graph.extract(xs.length()).value == 3
     assert len(graph.extract(xs).value) == 3
-    with pytest.raises(bindings.EggSmolError):
+    with pytest.raises(EggSmolError):
         graph.register(MultiSet[Atom]().union_values())
     assert graph.extract(xs.length()).value == 3
 
@@ -1561,7 +1647,7 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
         command = builder.publish().ref("commands", check)
         with monkeypatch.context() as patch:
             patch.setattr(fresh._state, "transport", AuditedTransport(fresh._state.transport, label))
-            with pytest.raises(bindings.EggSmolError):
+            with pytest.raises(EggSmolError):
                 fresh._state.run_program([before.__egg_ref__, command, after.__egg_ref__])
         assert [item.kind.field for item in requests[label].program.commands] == ["action", "check", "action"]
         if label == "body-query":
@@ -1587,7 +1673,7 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
 
     with monkeypatch.context() as patch:
         patch.setattr(fresh._state, "transport", AuditedTransport(fresh._state.transport, "empty-prefix"))
-        with pytest.raises(bindings.EggSmolError):
+        with pytest.raises(EggSmolError):
             fresh.register(before, MultiSet[Atom]().union_values(), after)
     assert [item.kind.field for item in requests["empty-prefix"].program.commands] == ["action"] * 3
     error = responses["empty-prefix"].error
