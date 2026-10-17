@@ -27,6 +27,7 @@ from egglog import (
     Vec,
     _program,
     bindings,
+    check_eq,
     constant,
     eq,
     expr_parts,
@@ -1382,6 +1383,105 @@ def test_multiset_all_ordinary_views_and_partial_failures_public_bytes() -> None
         with pytest.raises(bindings.EggSmolError):
             graph.extract(expression)
         assert graph.extract(xs.count(two)).value == 2
+
+
+def test_multiset_higher_order_views_public_bytes() -> None:
+    from egglog import MultiSet, UnstableFn, multiset_flat_map, multiset_fold  # noqa: PLC0415
+
+    @function
+    def stringify(value: i64) -> String:
+        return value.to_string()
+
+    @function
+    def below_two(value: i64) -> Unit:
+        return value < i64(2)
+
+    @function
+    def copies(value: i64) -> MultiSet[i64]:
+        return MultiSet(value, value)
+
+    xs = MultiSet(i64(2), i64(1), i64(2))
+    mapped = xs.map(stringify)
+    explicit = xs.map(UnstableFn(stringify))
+    graph = EGraph()
+    assert sorted(child.value for child in graph.extract(mapped).value) == ["1", "2", "2"]
+    graph.check(eq(mapped).to(explicit))
+    assert sorted(child.value for child in graph.extract(xs.map(i64.to_string)).value) == ["1", "2", "2"]
+    assert [child.value for child in graph.extract(xs.filter(below_two)).value] == [1]
+    assert [child.value for child in graph.extract(xs.filter_not(below_two)).value] == [2, 2]
+    assert sorted(child.value for child in graph.extract(multiset_flat_map(copies, xs)).value) == [1, 1, 2, 2, 2, 2]
+    assert graph.extract(multiset_fold(i64.__add__, i64(0), xs)).value == 5
+    assert graph.extract(multiset_fold(i64.__add__, i64(10), MultiSet[i64]())).value == 10
+
+
+def test_python_callbacks_capture_symbolic_values_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    from egglog import UnstableFn  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Python callback authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    captured = i64(4) + i64(5)
+    callback = UnstableFn[i64, i64](lambda value: value + captured)
+    restored = callback.value
+    assert isinstance(restored, partial)
+    assert len(restored.args) == 1
+    assert expr_parts(restored.args[0]) == expr_parts(captured)
+    primitive = cast("RuntimeFunction", restored.func).__egg_ref__.read()
+    assert primitive.kind.field == "primitive"
+    assert len(primitive.kind.value.inputs) == 2
+    assert callback.__egg_ref__.read().kind.value.value.field == "partial_call"
+    assert str(callback) == "lambda value: value + (i64(4) + 5)"
+    with pytest.raises(ConvertError):
+        UnstableFn[i64, i64](lambda value: String("wrong result"))
+
+
+def test_python_callbacks_execute_captures_and_infer_multiset_output() -> None:
+    from egglog import MultiSet  # noqa: PLC0415
+
+    captured = i64(10)
+    xs = MultiSet(i64(2), i64(1), i64(2))
+    mapped = xs.map(lambda value: (value + captured).to_string())
+    graph = EGraph()
+    assert sorted(child.value for child in graph.extract(mapped).value) == ["11", "12", "12"]
+
+
+def test_let_captures_primitive_and_eq_values_before_later_writes() -> None:
+    class Atom(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    @function(merge=lambda old, new: new)
+    def scalar_cell() -> i64: ...
+
+    @function(merge=lambda old, new: new)
+    def atom_cell() -> Atom: ...
+
+    first, second = Atom(i64(1)), Atom(i64(2))
+    graph = EGraph(set_(scalar_cell()).to(i64(10)), set_(atom_cell()).to(first))
+    scalar = graph.let("scalar capture", scalar_cell())
+    atom = graph.let("atom capture", atom_cell())
+    graph.register(set_(scalar_cell()).to(i64(20)), set_(atom_cell()).to(second))
+    graph.check(eq(scalar).to(i64(10)), eq(scalar_cell()).to(i64(20)))
+    graph.check(eq(atom).to(first), eq(atom_cell()).to(second))
+    graph.check_fail(eq(atom).to(second))
+    assert str(scalar) == "scalar capture"
+    assert str(atom) == "atom capture"
+    assert graph.extract(scalar).value == 10
+    assert expr_parts(graph.extract(atom)) == expr_parts(first)
+
+
+def test_let_existing_check_eq_and_cloned_state() -> None:
+    assert check_eq(i64(1) + i64(2), i64(3))
+    assert check_eq(i64(1) + i64(2), i64(3), add_second=False)
+    graph = EGraph()
+    retained = graph.let("value", i64(3))
+    graph.push()
+    nested = graph.let("nested", retained + i64(2))
+    graph.check(eq(retained).to(i64(3)), eq(nested).to(i64(5)))
+    graph.pop()
+    graph.check(eq(retained).to(i64(3)))
+    assert graph.extract(retained).value == 3
 
 
 def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(

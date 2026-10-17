@@ -10,7 +10,6 @@ from functools import partial
 from typing import ClassVar, TypeAlias
 
 from egglog import *
-from egglog.runtime import RuntimeFunction
 
 
 class Math(Expr):
@@ -203,19 +202,17 @@ class C(Expr):
 
 
 def test_callable_accepted_as_type():
+    callback = var("f", UnstableFn[C, A, B])
+
     @function
     def func(f: UnstableFn[C, A, B]) -> C: ...
 
-    original_func: object = func
-    assert isinstance(original_func, RuntimeFunction)
-    original = original_func.__egg_decls__, original_func.__egg_ref__
+    original = expr_parts(func(callback))
 
     @function  # type: ignore[no-redef]
     def func(f: Callable[[A, B], C]) -> C: ...
 
-    converted_func: object = func
-    assert isinstance(converted_func, RuntimeFunction)
-    converted = converted_func.__egg_decls__, converted_func.__egg_ref__
+    converted = expr_parts(func(callback))
 
     assert converted == original
 

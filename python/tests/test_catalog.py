@@ -641,7 +641,7 @@ def test_stub_generation_rejects_host_and_internal_name_collisions(name):
     assert "class Integer(BuiltinExpr):" in renderer(program)
 
 
-@pytest.mark.parametrize("mutation", ["output", "receiver", "params", "owner_order", "unknown_binder", "default"])
+@pytest.mark.parametrize("mutation", ["output", "receiver", "params", "owner_duplicate", "unknown_binder", "default"])
 def test_pair_stub_rejects_invalid_or_unadmitted_generic_views(pair_catalog_program, mutation):
     renderer = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
         "render_stubs"
@@ -656,8 +656,9 @@ def test_pair_stub_rejects_invalid_or_unadmitted_generic_views(pair_catalog_prog
         first.bindings.python.views[0].clear_field("receiver")
     elif mutation == "params":
         first.bindings.python.views[0].params = [pb.PythonParameter(name="extra", core_input=0)]
-    elif mutation == "owner_order":
-        pair_catalog_program.sorts[signature.output].kind.value.args.reverse()
+    elif mutation == "owner_duplicate":
+        owner_args = pair_catalog_program.sorts[signature.output].kind.value.args
+        owner_args[1] = owner_args[0]
     elif mutation == "unknown_binder":
         signature.type_params.append("Unused")
     else:
@@ -712,7 +713,7 @@ def test_pair_stub_rejects_specialized_owner_as_universal_class_view(pair_catalo
     signature.inputs[0].sort = i64_sort
     signature.inputs[1].sort = i64_sort
     pair_catalog_program.sorts[signature.output].kind.value.args = [i64_sort, i64_sort]
-    with pytest.raises(ValueError, match="ordered supported family parameters"):
+    with pytest.raises(ValueError, match="distinct in-range family parameters"):
         renderer(pair_catalog_program)
 
 
@@ -1353,3 +1354,106 @@ def test_multiset_free_signature_labels_are_diagnostic_only(label, monkeypatch):
     for signature in signatures:
         signature.type_params = [label] * len(signature.type_params)
     assert render(program) == before
+
+
+def test_multiset_method_local_binders_from_actual_catalog():
+    from os import environ  # noqa: PLC0415
+
+    root = Path(__file__).resolve().parents[2]
+    source = Path(environ.get("EGGLOG_TEST_HIGHER_ORDER_CATALOG", root / "python/egglog/_builtin_catalog.pb"))
+    program = pb.Program.from_binary(source.read_bytes())
+    declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.multiset.map")
+    signature = declaration.kind.value.typing.value
+    view = declaration.bindings.python.views[0]
+    assert len(signature.type_params) == 2
+    owner = program.sorts[view.owner.kind.value].kind.value
+    assert owner.name == "MultiSet"
+    assert [program.sorts[index].kind.value for index in owner.args] == [0]
+    callback = program.sorts[signature.inputs[view.params[0].core_input].sort]
+    assert callback.kind.field == "func"
+    assert [program.sorts[index].kind.value for index in callback.kind.value.params] == [0]
+    assert program.sorts[callback.kind.value.result].kind.value == 1
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    stub = render(program)
+    local = "_MultiSet_map_T1"
+    assert f'{local} = TypeVar("{local}", bound=BaseExpr)' in stub
+    assert f"def map(self, f: Callable[[_MultiSet_T_0], {local}]) -> MultiSet[{local}]:" in stub
+    assert "class MultiSet(BuiltinExpr, Generic[_MultiSet_T_0]):" in stub
+    assert "Any" not in stub
+    assert "Callable[...," not in stub
+    for labels in (["", ""], ["class", "Element type"], ["duplicate", "duplicate"]):
+        signature.type_params = labels
+        assert render(program) == stub
+
+    def relocated(order):
+        # Alpha-permute only this real signature's owned sort closure. Other
+        # declarations and every operation's authoritative signature stay intact.
+        result = pb.Program.from_binary(program.to_binary())
+        selected = next(d for d in result.declarations if d.kind.value.name == "egglog.core.multiset.map")
+        indices = {}
+
+        def sort(index):
+            if index in indices:
+                return indices[index]
+            record = pb.Sort.from_binary(program.sorts[index].to_binary())
+            kind = record.kind
+            if kind.field == "var":
+                record.kind = Oneof[Literal["var"], int]("var", order[kind.value])
+            elif kind.field == "family":
+                kind.value.args = [sort(child) for child in kind.value.args]
+            elif kind.field == "func":
+                kind.value.params = [sort(child) for child in kind.value.params]
+                kind.value.result = sort(kind.value.result)
+            else:
+                pytest.fail("The actual map signature has an unexpected sort form")
+            indices[index] = len(result.sorts)
+            result.sorts.append(record)
+            return indices[index]
+
+        bound = selected.kind.value.typing.value
+        for argument in bound.inputs:
+            argument.sort = sort(argument.sort)
+        bound.output = sort(bound.output)
+        selected.bindings.python.views[0].owner.kind = Oneof[Literal["sort"], int]("sort", sort(view.owner.kind.value))
+        return result
+
+    reordered = relocated((1, 0))
+    reordered_stub = render(reordered)
+    assert "class MultiSet(BuiltinExpr, Generic[_MultiSet_T_0]):" in reordered_stub
+    assert (
+        "def map(self, f: Callable[[_MultiSet_T_0], _MultiSet_map_T0]) -> MultiSet[_MultiSet_map_T0]:" in reordered_stub
+    )
+    nested = relocated((0, 1))
+    selected = next(d for d in nested.declarations if d.kind.value.name == "egglog.core.multiset.map")
+    bound = selected.kind.value.typing.value
+    function = nested.sorts[bound.inputs[0].sort].kind.value
+    nested.sorts.append(pb.Sort.from_binary(nested.sorts[bound.inputs[0].sort].to_binary()))
+    nested_function = len(nested.sorts) - 1
+    function.result = nested_function
+    nested.sorts[bound.output].kind.value.args = [nested_function]
+    assert (
+        "def map(self, f: Callable[[_MultiSet_T_0], UnstableFn[_MultiSet_map_T1, _MultiSet_T_0]])"
+        " -> MultiSet[UnstableFn[_MultiSet_map_T1, _MultiSet_T_0]]:" in render(nested)
+    )
+    malformed = relocated((0, 1))
+    selected = next(d for d in malformed.declarations if d.kind.value.name == "egglog.core.multiset.map")
+    selected.kind.value.typing.value.type_params.append("Unused")
+    with pytest.raises(ValueError, match="Unused static signature parameter"):
+        render(malformed)
+    selected.kind.value.typing.value.type_params.pop()
+    selected.bindings.python.views[0].params[0].default_expr = len(malformed.nodes)
+    with pytest.raises(ValueError, match="Default root"):
+        render(malformed)
+    collision = relocated((0, 1))
+    scalar = next(d for d in collision.declarations if d.kind.value.name == "String")
+    scalar.kind.value.bindings.python.path[-1] = local
+    with pytest.raises(ValueError, match="collision"):
+        render(collision)
+    for direction in (1, -1):
+        collision = relocated((0, 1))
+        collision.declarations = collision.declarations[::direction]
+        assert f"def map(self, f: Callable[[_MultiSet_T_0], {local}]) -> MultiSet[{local}]:" in render(collision)
+        member = next(d for d in collision.declarations if d.kind.value.name == "egglog.core.multiset.clear_index")
+        member.bindings.python.views[0].path = [local]
+        with pytest.raises(ValueError, match="collision"):
+            render(collision)

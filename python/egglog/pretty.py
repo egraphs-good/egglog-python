@@ -101,7 +101,12 @@ def _format_pyobject(reference: Ref, bare: bool) -> str:
         return value
 
 
-def pretty_ref(root: Ref, *, custom_literal: Callable[[Ref, bool], str] | None = None) -> str:  # noqa: C901, PLR0912
+def pretty_ref(  # noqa: C901, PLR0912
+    root: Ref,
+    *,
+    custom_literal: Callable[[Ref, bool], str] | None = None,
+    variables: Mapping[str, str] | None = None,
+) -> str:
     """Print records inertly unless the caller supplies a trusted Custom formatter."""
     from .runtime import _definition_at  # noqa: PLC0415
 
@@ -216,7 +221,8 @@ def pretty_ref(root: Ref, *, custom_literal: Callable[[Ref, bool], str] | None =
             sort = owner.ref("sorts", record.sort_id)
             match record.kind.field:
                 case "var":
-                    pieces = [record.kind.value]
+                    name = record.kind.value
+                    pieces = [variables.get(name, name) if variables is not None else name]
                 case "primitive_value":
                     primitive = record.kind.value.value
                     if primitive is None:
@@ -332,9 +338,43 @@ def pretty_ref(root: Ref, *, custom_literal: Callable[[Ref, bool], str] | None =
                         from functools import partial  # noqa: PLC0415
 
                         from .deconstruct import get_literal_value  # noqa: PLC0415
-                        from .runtime import RuntimeExpr  # noqa: PLC0415
+                        from .runtime import RuntimeExpr, RuntimeFunction  # noqa: PLC0415
 
                         value = get_literal_value(RuntimeExpr(reference))
+                        function = value.func if isinstance(value, partial) else value
+                        if isinstance(function, RuntimeFunction):
+                            declaration = function.__egg_ref__
+                            declared: pb.Declaration = declaration.read()
+                            computed = declared.kind.value if declared.kind is not None else None
+                            if (
+                                isinstance(computed, pb.Primitive)
+                                and computed.name.startswith("__egglog_python_lambda_")
+                                and declared.bindings is not None
+                                and declared.bindings.python is not None
+                                and len(declared.bindings.python.views) == 1
+                            ):
+                                view = declared.bindings.python.views[0]
+                                names = [parameter.name for parameter in view.params]
+                                captures = value.args if isinstance(value, partial) else ()
+                                bindings = {
+                                    f"_{index}": "("
+                                    + pretty_ref(child.__egg_ref__, custom_literal=custom_literal, variables=variables)
+                                    + ")"
+                                    for index, child in enumerate(captures)
+                                }
+                                bindings.update({
+                                    f"_{index}": name for index, name in enumerate(names) if index >= len(captures)
+                                })
+                                body = pretty_ref(
+                                    declaration.owner.ref("nodes", computed.body),
+                                    custom_literal=custom_literal,
+                                    variables=bindings,
+                                )
+                                parameters = ", ".join(names[len(captures) :])
+                                text = f"lambda {parameters}: {body}" if parameters else f"lambda: {body}"
+                                pieces = [f"({text})" if parentheses else text]
+                                frames.extend(reversed(pieces))
+                                continue
                         if isinstance(value, partial):
                             pieces = ["partial(", str(value.func)]
                             for child in value.args:

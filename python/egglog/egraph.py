@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
 from operator import index as index_integer
-from types import FrameType, FunctionType
+from types import CellType, FrameType, FunctionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -213,17 +213,28 @@ def check(x: FactLike, schedule: Schedule | None = None, *given: ActionLike) -> 
 
 
 def _resolve_merge(
-    decls: Declarations,
-    return_type: TypeOrVarRef,
+    return_type: Ref,
     merge: Callable[[object, object], object] | None,
-) -> ExprDecl | None:
+) -> Ref | None:
     if merge is None:
         return None
-    old = RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), UnboundVarDecl("old", "old")))
-    new = RuntimeExpr.__from_values__(decls, TypedExprDecl(return_type.to_just(), UnboundVarDecl("new", "new")))
-    resolved_merge = resolve_literal(return_type, merge(old, new), lambda: decls)
-    decls |= resolved_merge
-    return resolved_merge.__egg_typed_expr__.expr
+    builder = Builder()
+    parameters = [
+        builder.add(
+            "nodes",
+            pb.Node(
+                sort_id=builder.import_ref(return_type),
+                kind=Oneof[Literal["var"], str]("var", name),
+            ),
+        )
+        for name in ("old", "new")
+    ]
+    owner = builder.publish()
+    with set_current_ruleset(None):
+        resolved = resolve_literal(
+            return_type, merge(*(RuntimeExpr(owner.ref("nodes", index)) for index in parameters))
+        )
+    return resolved.__egg_ref__
 
 
 def _function_has_body(fn: FunctionType) -> bool:
@@ -774,13 +785,12 @@ class _FunctionConstructor:
             raise ValueError(msg)
         if (
             self.builtin
-            or has_merge
             or (self.mutates_first_arg and (owner is None or view_kind != pb.PythonCallKind.METHOD or has_body))
             or self.cost is not None
             or self.unextractable
             or variable
         ):
-            msg = "Builtin, merge, mutation, cost, unextractable and variadic free functions are not migrated"
+            msg = "Builtin, mutation, cost, unextractable and variadic free functions are not migrated"
             raise NotImplementedError(msg)
         if any(not isinstance(sort, Ref) or sort.role != "sorts" for sort in input_sorts):
             msg = "Free functions require concrete input sorts"
@@ -846,6 +856,7 @@ class _FunctionConstructor:
             body = _lower_function_body(
                 builder, resolved.__egg_ref__, formal_refs, rewrite_body=self.ruleset is not None
             )
+        merge = _resolve_merge(output, self.merge)
         kind = (
             Oneof[Literal["primitive"], pb.Primitive](
                 "primitive", pb.Primitive(name=name, inputs=inputs, output=output_index, body=body)
@@ -854,9 +865,15 @@ class _FunctionConstructor:
             else Oneof[Literal["constructor"], pb.Constructor](
                 "constructor", pb.Constructor(name=name, inputs=inputs, output=output_index)
             )
-            if equality
+            if equality and not has_merge
             else Oneof[Literal["function"], pb.Function](
-                "function", pb.Function(name=name, inputs=inputs, output=output_index)
+                "function",
+                pb.Function(
+                    name=name,
+                    inputs=inputs,
+                    output=output_index,
+                    merge=builder.import_ref(merge) if merge is not None else None,
+                ),
             )
         )
         index = builder.add(
@@ -932,6 +949,98 @@ def _lower_function_body(  # noqa: C901
 
         builder.fill("nodes", indices[source], _copy_record(node, relocate=relocate, dependency=dependency))
     return indices[body]
+
+
+def _compile_python_function(
+    function: FunctionType, parameters: list[Ref], output: Ref | None
+) -> tuple[RuntimeFunction, tuple[RuntimeExpr, ...]]:
+    """Lift lexical symbolic values into a named primitive's positional prefix."""
+    closure_values = [cell.cell_contents for cell in function.__closure__ or ()]
+    global_values = {
+        name: value
+        for name in function.__code__.co_names
+        if isinstance(value := function.__globals__.get(name), RuntimeExpr)
+    }
+    captured = {
+        value.__egg_ref__: value
+        for value in [*closure_values, *global_values.values()]
+        if isinstance(value, RuntimeExpr)
+    }
+    captures = tuple(captured.values())
+    capture_sorts = [value.__egg_ref__.owner.ref("sorts", value.__egg_ref__.read().sort_id) for value in captures]
+    sorts = [*capture_sorts, *parameters]
+    formals = Builder()
+    indices = [
+        formals.add(
+            "nodes",
+            pb.Node(
+                sort_id=formals.import_ref(sort),
+                kind=Oneof[Literal["var"], str]("var", f"_{index}"),
+            ),
+        )
+        for index, sort in enumerate(sorts)
+    ]
+    owner = formals.publish()
+    references = [owner.ref("nodes", index) for index in indices]
+    replacements = {
+        reference: RuntimeExpr(formal) for reference, formal in zip(captured, references[: len(captures)], strict=True)
+    }
+    symbolic_globals = {
+        **function.__globals__,
+        **{name: replacements[value.__egg_ref__] for name, value in global_values.items()},
+    }
+    symbolic_closure = tuple(
+        CellType(replacements[value.__egg_ref__] if isinstance(value, RuntimeExpr) else value)
+        for value in closure_values
+    )
+    symbolic = FunctionType(
+        function.__code__, symbolic_globals, function.__name__, function.__defaults__, symbolic_closure or None
+    )
+    symbolic.__kwdefaults__ = function.__kwdefaults__
+    with set_current_ruleset(None):
+        result = symbolic(*(RuntimeExpr(reference) for reference in references[len(captures) :]))
+        body = resolve_literal(output, result) if output is not None else to_runtime_expr(result)
+    body_node: pb.Node = body.__egg_ref__.read()
+    builder = Builder()
+    body_index = _lower_function_body(builder, body.__egg_ref__, references)
+    name = f"__egglog_python_lambda_{uuid4().hex}"
+    argument_names = list(signature(function).parameters)
+    if len(argument_names) != len(parameters):
+        argument_names = [f"arg{index}" for index in range(len(parameters))]
+    parameter_names = [*(f"_capture{index}" for index in range(len(captures))), *argument_names]
+    if len(set(parameter_names)) != len(parameter_names):
+        parameter_names = [f"arg{index}" for index in range(len(sorts))]
+    declaration = builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["primitive"], pb.Primitive](
+                "primitive",
+                pb.Primitive(
+                    name=name,
+                    inputs=[
+                        pb.Arg(sort=builder.import_ref(sort), name=f"_{index}") for index, sort in enumerate(sorts)
+                    ],
+                    output=builder.import_ref(body.__egg_ref__.owner.ref("sorts", body_node.sort_id)),
+                    body=body_index,
+                ),
+            ),
+            bindings=pb.CallableBindings(
+                python=pb.PythonBindings(
+                    views=[
+                        pb.PythonCallable(
+                            kind=pb.PythonCallKind.FUNCTION,
+                            path=["egglog", "egraph", name],
+                            params=[
+                                pb.PythonParameter(name=parameter, core_input=index)
+                                for index, parameter in enumerate(parameter_names)
+                            ],
+                        )
+                    ]
+                )
+            ),
+        ),
+    )
+    return RuntimeFunction(builder.publish().ref("declarations", declaration), 0), captures
 
 
 # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
@@ -1351,21 +1460,20 @@ class EGraph:
         self._add_decls(decls)
         return ref, self._state.callable_ref_to_egg(ref)[0]
 
-    # TODO: Change let to be action...
     def let(self, name: str, expr: BASE_EXPR) -> BASE_EXPR:
         """
         Define a new expression in the egraph and return a reference to it.
         """
         action = let(name, expr)
         self.register(action)
-        runtime_expr = to_runtime_expr(expr)
-        self._add_decls(runtime_expr)
-        return cast(
-            "BASE_EXPR",
-            RuntimeExpr.__from_values__(
-                self.__egg_decls__, TypedExprDecl(runtime_expr.__egg_typed_expr__.tp, LetRefDecl(name))
-            ),
-        )
+        command: pb.Command = action.__egg_ref__.read()
+        assert command.kind is not None
+        assert command.kind.field == "action"
+        assert command.kind.value.kind is not None
+        assert command.kind.value.kind.field == "set"
+        target = command.kind.value.kind.value.target
+        declaration = _definition_at(action.__egg_ref__, "callable", target.func)
+        return cast("BASE_EXPR", RuntimeFunction(declaration, 0)())
 
     def include(self, path: str) -> None:
         """
@@ -2914,8 +3022,47 @@ def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
 
 def let(name: str, expr: BaseExpr) -> Action:
     """Create a let binding."""
-    msg = "Retained local-let actions are not migrated"
-    raise NotImplementedError(msg)
+    runtime_expr = to_runtime_expr(expr)
+    node: pb.Node = runtime_expr.__egg_ref__.read()
+    builder = Builder()
+    logical_name = f"__egglog_python_let_{uuid4().hex}"
+    builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["function"], pb.Function](
+                "function",
+                pb.Function(
+                    name=logical_name,
+                    output=builder.import_ref(runtime_expr.__egg_ref__.owner.ref("sorts", node.sort_id)),
+                ),
+            ),
+            bindings=pb.CallableBindings(
+                python=pb.PythonBindings(
+                    views=[
+                        pb.PythonCallable(
+                            kind=pb.PythonCallKind.CONSTANT,
+                            path=["egglog", "egraph", logical_name, name],
+                        )
+                    ]
+                )
+            ),
+        ),
+    )
+    index = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action",
+                pb.Action(
+                    kind=Oneof[Literal["set"], pb.Set](
+                        "set",
+                        pb.Set(target=pb.Call(func=logical_name), value=builder.import_ref(runtime_expr.__egg_ref__)),
+                    )
+                ),
+            )
+        ),
+    )
+    return Action(builder.publish().ref("commands", index))
 
 
 def expr_action(expr: BaseExpr) -> Action:

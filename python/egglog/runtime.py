@@ -304,13 +304,42 @@ def _author_call(  # noqa: C901, PLR0912
     ):
         msg = "Python receiver input must match its owner"
         raise ValueError(msg)
-    existing = [value if isinstance(value, Ref) else node_of(value) for value in ordered_values]
+    existing = []
+    for pattern, value in zip(patterns, ordered_values, strict=True):
+        node = value if isinstance(value, Ref) else node_of(value)
+        # A closed named callback can determine a method-local result binder.
+        # Generic callbacks still use their concrete expected conversion below.
+        if node is None and pattern.read().kind.field == "func" and isinstance(value, RuntimeFunction):
+            with suppress(TypeConstraintError):
+                expression = _BASE_CLASSES["UnstableFn"](value)
+                assert isinstance(expression, RuntimeExpr)
+                node = expression.__egg_ref__
+        existing.append(node)
     for pattern, node in zip(patterns, existing, strict=True):
         if node is not None:
             payload: pb.Node = node.read()
             # A registered Python conversion may still satisfy this input.
             with suppress(TypeConstraintError):
                 infer_sort(pattern, node.owner.ref("sorts", payload.sort_id), binder_size, substitutions)
+    for position, (pattern, value, node) in enumerate(zip(patterns, ordered_values, existing, strict=True)):
+        sort_kind = pattern.read().kind
+        if node is None and sort_kind is not None and sort_kind.field == "func" and isinstance(value, FunctionType):
+            from .egraph import _compile_python_function  # noqa: PLC0415
+
+            parameters = [
+                substitute_sort(pattern.owner.ref("sorts", index), substitutions) for index in sort_kind.value.params
+            ]
+            result = None
+            with suppress(TypeConstraintError):
+                result = substitute_sort(pattern.owner.ref("sorts", sort_kind.value.result), substitutions)
+            function, captures = _compile_python_function(value, parameters, result)
+            expression = _BASE_CLASSES["UnstableFn"](function, *captures)
+            assert isinstance(expression, RuntimeExpr)
+            callback_node = expression.__egg_ref__
+            infer_sort(
+                pattern, callback_node.owner.ref("sorts", callback_node.read().sort_id), binder_size, substitutions
+            )
+            existing[position] = callback_node
     converted = []
     for pattern, value, original_node in zip(patterns, ordered_values, existing, strict=True):
         node = original_node
@@ -578,6 +607,21 @@ class RuntimeClass(type):
                         break
             if isinstance(function, RuntimeClass):
                 function = RuntimeClass.__getattr__(function, "__init__")
+            if isinstance(function, FunctionType):
+                from .egraph import _compile_python_function  # noqa: PLC0415
+
+                if captures or cls.__egg_sort__ is None:
+                    msg = "Python callbacks require a concrete expected function type and no explicit prefix"
+                    raise TypeError(msg)
+                expected: pb.Sort = cls.__egg_sort__.read()
+                assert expected.kind is not None
+                assert expected.kind.field == "func"
+                function, closed = _compile_python_function(
+                    function,
+                    [cls.__egg_sort__.owner.ref("sorts", index) for index in expected.kind.value.params],
+                    cls.__egg_sort__.owner.ref("sorts", expected.kind.value.result),
+                )
+                captures = list(closed)
             if not isinstance(function, RuntimeFunction):
                 msg = "UnstableFn requires a named RuntimeFunction"
                 raise TypeError(msg)

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
 from functools import partial
-from types import GenericAlias, MethodType
+from types import FunctionType, GenericAlias, MethodType
 from typing import Any, Protocol, TypeVar, cast
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
@@ -579,6 +579,7 @@ if (_function_binding := _catalog.members.get((("function", ""), "__call__"))) i
     UnstableFn.__egg_hooks__.update(value=property(_function_value), eval=_eval)
     __all__ += ["UnstableFn"]
     converter(RuntimeFunction, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
+    converter(FunctionType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
     converter(MethodType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
     converter(partial, UnstableFn, lambda value: UnstableFn[get_type_args()](value.func, *value.args))
 for _definition in _catalog.definitions.values():

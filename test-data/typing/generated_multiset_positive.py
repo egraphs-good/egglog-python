@@ -5,11 +5,15 @@ from egglog import (
     Expr,
     MultiSet,
     MultiSetLike,
+    String,
     Unit,
+    UnstableFn,
     convert,
     function,
     i64,
     multiset_contains_swapped,
+    multiset_flat_map,
+    multiset_fold,
     multiset_not_contains_swapped,
     multiset_remove_swapped,
     multiset_subtract_swapped,
@@ -64,3 +68,38 @@ def size(value: MultiSetLike[i64, int]) -> i64: ...
 assert_type(size(owned), i64)
 assert_type(size((1, 2, 1)), i64)
 assert_type(size(()), i64)
+
+
+@function
+def stringify(value: i64) -> String: ...
+
+
+@function
+def predicate(value: i64) -> Unit: ...
+
+
+@function
+def copies(value: i64) -> MultiSet[i64]: ...
+
+
+@function
+def index(values: MultiSet[i64], value: i64) -> i64: ...
+
+
+assert_type(owned.map(stringify), MultiSet[String])
+assert_type(owned.map(i64.to_string), MultiSet[String])
+assert_type(owned.map(UnstableFn(stringify)), MultiSet[String])
+assert_type(owned.filter(predicate), MultiSet[i64])
+assert_type(owned.filter_not(predicate), MultiSet[i64])
+assert_type(multiset_flat_map(copies, owned), MultiSet[i64])
+assert_type(multiset_fold(i64.__add__, i64(0), owned), i64)
+assert_type(owned.fill_index(index), Unit)
+assert_type(owned.clear_index(index), Unit)
+
+
+def direct_stringify(value: i64) -> String:
+    return value.to_string()
+
+
+assert_type(owned.map(direct_stringify), MultiSet[String])
+assert_type(owned.map(lambda value: value.to_string()), MultiSet[String])

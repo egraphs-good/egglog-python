@@ -6,6 +6,8 @@ from egglog import (
     function,
     i64,
     multiset_contains_swapped,
+    multiset_flat_map,
+    multiset_fold,
     multiset_remove_swapped,
     multiset_subtract_swapped,
 )
@@ -48,3 +50,26 @@ size(("bad",))  # error: arg-type
 size(other)  # error: arg-type
 size([1])  # error: arg-type
 size({1})  # error: arg-type
+
+
+@function
+def stringify(value: i64) -> String: ...
+
+
+@function
+def wrong_input(value: f64) -> i64: ...
+
+
+@function
+def wrong_index(values: MultiSet[i64], value: i64) -> String: ...
+
+
+owned.map(wrong_input)  # error: arg-type
+mapped = owned.map(stringify)
+wrong_mapped: MultiSet[i64] = mapped  # error: assignment
+owned.filter(stringify)  # error: arg-type
+owned.filter_not(stringify)  # error: arg-type
+multiset_flat_map(stringify, owned)  # error: arg-type
+multiset_fold(i64.__add__, f64(0.0), owned)  # error: misc
+owned.fill_index(wrong_index)  # error: arg-type
+owned.clear_index(wrong_index)  # error: arg-type

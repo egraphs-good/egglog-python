@@ -230,6 +230,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         )
 
     methods: dict[str, dict[str, str]] = {name: {} for name in families}
+    method_variables: dict[str, list[str]] = {name: [] for name in families}
     functions: dict[str, str] = {}
     for declaration in program.declarations:
         if declaration.bindings is None or declaration.bindings.python is None:
@@ -280,6 +281,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             used_parameters: set[int] = set()
             family_name = ""
             owner = ""
+            name = "__init__" if view.kind == pb.PythonCallKind.INITIALIZER else identifier(view.path[-1])
             if free:
                 if view.owner is not None or tuple(view.path[:-1]) != module:
                     msg = "Static free functions require an ownerless builtin view"
@@ -305,25 +307,34 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                     msg = "Static owner must be a catalog family"
                     raise ValueError(msg)
                 family_name = owner_kind.value.name
-                if signature.type_params:
-                    if (
-                        len(signature.type_params) != families[family_name].arity
-                        or len(owner_kind.value.args) != len(signature.type_params)
-                        or any(
-                            index >= len(program.sorts)
-                            or (argument := program.sorts[index].kind) is None
-                            or argument.field != "var"
-                            or argument.value != position
-                            for position, index in enumerate(owner_kind.value.args)
-                        )
-                    ):
-                        msg = "Generic static owner requires ordered supported family parameters"
-                        raise ValueError(msg)
-                    parameters = tuple(variables[family_name])
-                elif owner_kind.value.args:
-                    msg = "Generic static owner requires ordered supported family parameters"
+                owner_parameters: dict[int, str] = {}
+                if len(owner_kind.value.args) != families[family_name].arity:
+                    msg = "Generic static owner requires distinct in-range family parameters"
                     raise ValueError(msg)
-                owner = sort_type(view.owner.kind.value, parameters=parameters)
+                for position, index in enumerate(owner_kind.value.args):
+                    if (
+                        index < 0
+                        or index >= len(program.sorts)
+                        or (argument := program.sorts[index].kind) is None
+                        or argument.field != "var"
+                        or argument.value < 0
+                        or argument.value >= len(signature.type_params)
+                        or argument.value in owner_parameters
+                    ):
+                        msg = "Generic static owner requires distinct in-range family parameters"
+                        raise ValueError(msg)
+                    owner_parameters[argument.value] = variables[family_name][position]
+                parameters = tuple(
+                    owner_parameters.get(index, f"_{names[family_name]}_{name}_T{index}")
+                    for index in range(len(signature.type_params))
+                )
+                for index, variable in enumerate(parameters):
+                    if index not in owner_parameters:
+                        if variable in used_names:
+                            raise ValueError(f"Python static name collision with a generated TypeVar: {variable}")
+                        used_names.add(variable)
+                        method_variables[family_name].append(variable)
+                owner = sort_type(view.owner.kind.value, parameters=parameters, used_parameters=used_parameters)
             output = sort_type(signature.output, parameters=parameters, used_parameters=used_parameters)
             receiver_slots = [view.receiver] if view.has_field("receiver") else []
             slots = [*receiver_slots, *(p.core_input for p in view.params if p.has_field("core_input"))]
@@ -364,7 +375,6 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             if view.kind == pb.PythonCallKind.INITIALIZER and output != owner:
                 msg = "Python initializer output differs from owner"
                 raise ValueError(msg)
-            name = "__init__" if view.kind == pb.PythonCallKind.INITIALIZER else identifier(view.path[-1])
             rendered_parameters = []
             bound_name = "" if free else "cls" if view.kind == pb.PythonCallKind.CLASS_METHOD else "self"
             parameter_names = {bound_name} if bound_name else set()
@@ -414,10 +424,10 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             if view.kind == pb.PythonCallKind.CLASS_METHOD:
                 prefix = "    @classmethod\n"
             result_type = "None" if view.kind == pb.PythonCallKind.INITIALIZER else output
+            if used_parameters != set(range(len(parameters))):
+                msg = "Unused static signature parameter" + (" in static owner view" if not free else "")
+                raise ValueError(msg)
             if free:
-                if used_parameters != set(range(len(parameters))):
-                    msg = "Unused static signature parameter"
-                    raise ValueError(msg)
                 if name in used_names:
                     raise ValueError(f"Python static name collision: {name}")
                 exported.add(name)
@@ -455,6 +465,11 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 if method_name in methods[family_name]:
                     raise ValueError(f"Python member collision: {owner}.{method_name}")
                 methods[family_name][method_name] = text
+
+    for family_name, family_method_variables in method_variables.items():
+        for variable in family_method_variables:
+            if variable in methods[family_name]:
+                raise ValueError(f"Python member collision with a generated TypeVar: {names[family_name]}.{variable}")
 
     vec_protocol = "Vec" in methods and "__init__" in methods["Vec"]
     if vec_protocol:
@@ -547,8 +562,11 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
     for family_name in families:
         name = names[family_name]
         family_variables = variables[family_name]
-        lines.extend(f'{variable} = TypeVar("{variable}", bound=BaseExpr)' for variable in family_variables)
-        if family_variables:
+        lines.extend(
+            f'{variable} = TypeVar("{variable}", bound=BaseExpr)'
+            for variable in [*family_variables, *method_variables[family_name]]
+        )
+        if family_variables or method_variables[family_name]:
             lines.append("")
         generic = f", Generic[{', '.join(family_variables)}]" if family_variables else ""
         lines.append(f"class {name}(BuiltinExpr{generic}):")
