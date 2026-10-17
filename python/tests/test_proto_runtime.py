@@ -5648,3 +5648,189 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
     )
     with pytest.raises(TypeConstraintError, match="Not every generic parameter"):
         _author_call(incomplete, None, arguments, {}, node_of=lambda x: x.__egg_ref__, convert=forbidden)
+
+
+def test_multiset_local_protocols_preserve_symbolic_occurrences_without_engine(monkeypatch):
+    from egglog import MultiSet, MultiSetLike  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("MultiSet authoring or inspection accessed an engine")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    query = var("element", i64)
+    expression = MultiSet(query, i64(1), query)
+    assert expression.value == list(expression) == [query, i64(1), query]
+    assert len(expression) == 3
+    assert query in expression
+    assert expression.value[0].__egg_ref__ == expression.value[2].__egg_ref__
+    assert expression.value[0].__egg_ref__.read().kind.field == "var"
+    assert get_literal_value(expression) is None
+    with pytest.warns(DeprecationWarning, match="use .value"):
+        assert expression.eval() == expression.value
+    match expression:
+        case MultiSet(children):
+            assert children == expression.value
+        case _:
+            pytest.fail("MultiSet value matching failed")
+    packed = pack([expression.__egg_ref__])
+    args = packed.program.nodes[packed.indices[0]].kind.value.args
+    assert args[0] == args[2] != args[1]
+    assert packed.program.nodes[args[0]].kind.field == "var"
+    assert convert((), MultiSet[i64]).__egg_ref__.read().kind.value.func == "egglog.core.multiset.of"
+
+    @function
+    def size(value: MultiSetLike[i64, int]) -> i64: ...
+
+    assert get_callable_args(size((1, 2, 1)))[0].value == [i64(1), i64(2), i64(1)]
+    assert get_callable_args(size(()))[0].value == []
+    for source in ([1], {1}, ("wrong",)):
+        with pytest.raises(ConvertError):
+            convert(source, MultiSet[i64])
+    with pytest.raises(ExprValueError):
+        _ = expression.insert(i64(3)).value
+    with pytest.raises(TypeConstraintError):
+        MultiSet()
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_multiset_formed_values_keep_refs_and_inert_pretty(empty, monkeypatch):
+    from egglog import MultiSet  # noqa: PLC0415
+
+    builder = Builder()
+    first = builder.import_ref(i64(2).__egg_ref__)
+    second = builder.import_ref(i64(1).__egg_ref__)
+    root = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(MultiSet[i64].__egg_sort__),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value",
+                pb.PrimitiveValue(
+                    value=Oneof[Literal["multiset"], pb.ValueList](
+                        "multiset", pb.ValueList(items=[] if empty else [first, second, first])
+                    )
+                ),
+            ),
+        ),
+    )
+    owner = builder.publish()
+    expression = RuntimeExpr(owner.ref("nodes", root))
+    children = [] if empty else [owner.ref("nodes", index) for index in (first, second, first)]
+    before = expression.__egg_ref__.read().to_binary()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("MultiSet formed-value inspection authored or executed a Call")
+
+    monkeypatch.setattr(runtime, "_author_call", forbidden)
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    del builder, owner
+    gc.collect()
+    assert [child.__egg_ref__ for child in expression.value] == children
+    assert list(expression) == expression.value
+    assert str(expression) == ("MultiSet[i64]()" if empty else "MultiSet[i64](i64(2), i64(1), i64(2))")
+    assert get_callable_args(expression) is None
+    assert get_literal_value(expression) is None
+    assert hash(copy(expression)) == hash(expression)
+    packed = pack([expression.__egg_ref__])
+    adopted = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+    relocated = RuntimeExpr(adopted.ref("nodes", packed.indices[0]))
+    assert relocated.value == expression.value
+    assert str(relocated) == str(expression)
+    assert expression.__egg_ref__.read().to_binary() == before
+
+
+@pytest.mark.parametrize("same", [False, True])
+def test_multiset_occurrences_preserve_union_identity(same):
+    from egglog import MultiSet  # noqa: PLC0415
+
+    first = RuntimeExpr(eq(i64(1)).to(i64(2)).__egg_ref__)
+    second = first if same else RuntimeExpr(eq(i64(1)).to(i64(2)).__egg_ref__)
+    expression = MultiSet(first, second)
+    assert len(expression) == 2
+    assert [child.__egg_ref__ for child in expression.value] == [first.__egg_ref__, second.__egg_ref__]
+    packed = pack([expression.__egg_ref__])
+    args = packed.program.nodes[packed.indices[0]].kind.value.args
+    assert (args[0] == args[1]) == same
+
+
+@pytest.mark.parametrize("malformed", ["wrong_sort", "invalid_ref", "cycle", "arity", "wrong_arm", "user_call"])
+def test_multiset_formed_values_reject_malformed_children(malformed):
+    from egglog import MultiSet  # noqa: PLC0415
+
+    builder = Builder()
+    child = builder.import_ref((f64(1.0) if malformed == "wrong_sort" else i64(1)).__egg_ref__)
+    sort_ref = MultiSet[i64].__egg_sort__
+    if malformed == "arity":
+        record = sort_ref.read()
+        record.kind.value.args.clear()
+        sort = builder.add("sorts", record)
+    else:
+        sort = builder.import_ref(sort_ref)
+    if malformed == "invalid_ref":
+        child = 999
+    elif malformed == "cycle":
+        child = 1
+    arm = "vec" if malformed == "wrong_arm" else "multiset"
+    kind = Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+        "primitive_value", pb.PrimitiveValue(value=Oneof(arm, pb.ValueList(items=[child])))
+    )
+    if malformed == "user_call":
+        builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof[Literal["function"], pb.Function](
+                    "function", pb.Function(name="egglog.core.multiset.of", output=sort)
+                )
+            ),
+        )
+        kind = Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.multiset.of", args=[child]))
+    root = builder.add("nodes", pb.Node(sort_id=sort, kind=kind))
+    with pytest.raises((ValueError, IndexError, AttributeError)):
+        _ = RuntimeExpr(builder.publish().ref("nodes", root)).value
+
+
+def test_multiset_formed_symbolic_children_outlive_parent_without_authoring(monkeypatch):
+    from egglog import MultiSet  # noqa: PLC0415
+
+    query = var("retained_multiset_element", i64)
+    symbolic = query + i64(1)
+    before = symbolic.__egg_ref__.read().to_binary()
+    expected_text, expected_hash = str(symbolic), hash(symbolic)
+    builder = Builder()
+    child = builder.import_ref(symbolic.__egg_ref__)
+    root = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(MultiSet[i64].__egg_sort__),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value",
+                pb.PrimitiveValue(
+                    value=Oneof[Literal["multiset"], pb.ValueList]("multiset", pb.ValueList(items=[child, child]))
+                ),
+            ),
+        ),
+    )
+    owner = builder.publish()
+    expression = RuntimeExpr(owner.ref("nodes", root))
+    parent_owner, child_owner = weakref(owner), weakref(symbolic.__egg_ref__.owner)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Retained MultiSet child inspection authored or executed a Call")
+
+    monkeypatch.setattr(runtime, "_author_call", forbidden)
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    retained = expression.value
+    del expression, builder, owner, symbolic, query
+    gc.collect()
+    assert parent_owner() is None
+    assert child_owner() is not None
+    assert len(retained) == 2
+    assert retained[0].__egg_ref__ == retained[1].__egg_ref__
+    assert retained[0].__egg_ref__.read().kind.field == "call"
+    assert retained[0].__egg_ref__.read().to_binary() == before
+    assert str(retained[0]) == str(retained[1]) == expected_text
+    assert hash(retained[0]) == hash(retained[1]) == expected_hash
+    assert get_callable_args(retained[0])[0].__egg_ref__.read().kind.field == "var"

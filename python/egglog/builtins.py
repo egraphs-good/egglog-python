@@ -298,7 +298,7 @@ def _tuple_to_pair(value: tuple[object, ...]) -> RuntimeExpr:
 
 
 def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C901
-    """Validate ordered Vec/Set children without evaluating or normalizing them."""
+    """Validate ordered collection children without evaluating or normalizing them."""
     from .runtime import _definition_at  # noqa: PLC0415
     from .type_constraint_solver import infer_sort  # noqa: PLC0415
 
@@ -306,10 +306,10 @@ def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C90
     node: pb.Node = reference.read()
     sort = reference.owner.ref("sorts", node.sort_id)
     record: pb.Sort = sort.read()
-    if record.kind is None or record.kind.field != "family" or record.kind.value.name not in {"Vec", "Set"}:
-        raise ExprValueError(expr, "a Vec or Set value")
+    if record.kind is None or record.kind.field != "family" or record.kind.value.name not in {"Vec", "Set", "MultiSet"}:
+        raise ExprValueError(expr, "a Vec, Set or MultiSet value")
     family = record.kind.value.name
-    allowed = "Vec(*args) or Vec.empty()" if family == "Vec" else "Set(*args)"
+    allowed = "Vec(*args) or Vec.empty()" if family == "Vec" else f"{family}(*args)"
     if len(record.kind.value.args) != 1:
         msg = f"{family} inspection requires one sort argument"
         raise ValueError(msg)
@@ -398,7 +398,7 @@ def _collection_to_expr(value: list[object] | tuple[object, ...] | set[object], 
     target = _BASE_CLASSES[family][element]
     result = (
         target(*(resolve_literal(element.__egg_sort__, item) for item in value))
-        if value
+        if value or family == "MultiSet"
         else _container_member(target, f"egglog.core.{family.lower()}.empty", pb.PythonCallKind.CLASS_METHOD)()
     )
     assert isinstance(result, RuntimeExpr)
@@ -642,6 +642,20 @@ for _definition in _catalog.definitions.values():
         _host_set_element = TypeVar("_host_set_element")
         globals()[f"{_name}Like"] = GenericAlias(_class, _class.__egg_arguments__) | GenericAlias(
             set, _host_set_element
+        )
+        __all__ += [f"{_name}Like"]  # noqa: PLE0604
+    if _kind.value.name == "MultiSet" and isinstance(_kind.value, pb.HostSortFamily):
+        _class.__egg_hooks__.update(
+            value=property(lambda expr: list(_container_items(expr))),
+            __iter__=lambda expr: iter(expr.value),
+            __len__=lambda expr: len(expr.value),
+            __contains__=lambda expr, item: item in expr.value,
+            eval=_eval,
+        )
+        converter(tuple, _class, lambda value: _collection_to_expr(value, "MultiSet"))
+        _host_multiset_element = TypeVar("_host_multiset_element")
+        globals()[f"{_name}Like"] = GenericAlias(_class, _class.__egg_arguments__) | GenericAlias(
+            tuple, (_host_multiset_element, ...)
         )
         __all__ += [f"{_name}Like"]  # noqa: PLE0604
     if _kind.value.name == "Map" and isinstance(_kind.value, pb.HostSortFamily):

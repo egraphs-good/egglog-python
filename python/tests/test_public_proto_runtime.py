@@ -1197,3 +1197,305 @@ def test_pair_public_generic_bytes_roundtrip() -> None:
     result = graph.extract(nested)
     assert result.value[0].value[1].value == 6.5
     assert result.value[1].value == 7
+
+
+def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from egglog._catalog import builtin_catalog  # noqa: PLC0415
+
+    definitions = builtin_catalog().definitions
+    assert ("host_sort_family", "MultiSet") in definitions, (
+        f"Packaged catalog is missing the MultiSet family ({len(definitions)} definitions); "
+        "this is not a public-import or native-build failure"
+    )
+    assert {name for kind, name in definitions if kind == "callable" and name.startswith("egglog.core.multiset.")} == {
+        f"egglog.core.multiset.{suffix}"
+        for suffix in (
+            "of", "single", "pick", "insert", "remove", "remove_swapped", "subtract", "subtract_swapped",
+            "length", "contains", "not_contains", "contains_swapped", "not_contains_swapped", "intersection",
+            "sum", "reset_counts", "pick_max", "count", "sum_multisets", "union_values",
+        )
+    }
+    from egglog import MultiSet, convert  # noqa: PLC0415 -- only after the actual packaged-family discriminator
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("MultiSet authoring or retained-value inspection accessed an engine")
+
+    with monkeypatch.context() as inert:
+        inert.setattr(bindings, "EGraph", forbidden)
+        inert.setattr(bindings, "_ProtoEngine", forbidden)
+        one = i64(1)
+        symbolic = one + one
+        inferred = MultiSet(symbolic, one, symbolic)
+        explicit = MultiSet[i64](symbolic, one, symbolic)
+        empty = MultiSet[i64]()
+        assert expr_parts(inferred) == expr_parts(explicit)
+        assert isinstance(explicit.value, list)
+        assert explicit.value == list(explicit) == [symbolic, one, symbolic]
+        assert len(explicit) == 3
+        assert symbolic in explicit
+        assert explicit.value[0].__egg_ref__ == explicit.value[2].__egg_ref__
+        assert explicit.value[0].__egg_ref__.read().kind.field == "call"
+        inspected = explicit.value
+        inspected.clear()
+        assert len(explicit.value) == 3
+        assert empty.value == list(empty) == []
+        assert convert((), MultiSet[i64]).value == []
+        assert convert((1, 2, 1), MultiSet[i64]).value == [one, i64(2), one]
+        assert str(inferred) == str(explicit)
+        assert str(empty) == "MultiSet[i64]()"
+        nested = MultiSet[MultiSet[i64]](explicit, explicit, empty)
+        assert nested.value == [explicit, explicit, empty]
+
+    requests: list[pb.RunProgramRequest] = []
+    responses: list[pb.RunProgramResponse] = []
+    destroyed: list[pb.DestroyEGraphRequest] = []
+
+    class AuditedTransport:
+        def __init__(self, transport: bindings._ProtoEngine) -> None:
+            self.transport = transport
+
+        def run(self, encoded: bytes) -> tuple[bytes, BaseException | None]:
+            assert isinstance(encoded, bytes)
+            index = len(requests)
+            (tmp_path / f"request-{index}.pb").write_bytes(encoded)
+            requests.append(pb.RunProgramRequest.from_binary(encoded))
+            returned, host_error = self.transport.run(encoded)
+            assert isinstance(returned, bytes)
+            (tmp_path / f"response-{index}.pb").write_bytes(returned)
+            responses.append(pb.RunProgramResponse.from_binary(returned))
+            assert host_error is None
+            return returned, host_error
+
+        def destroy(self, encoded: bytes) -> bytes:
+            index = len(destroyed)
+            (tmp_path / f"destroy-request-{index}.pb").write_bytes(encoded)
+            destroyed.append(pb.DestroyEGraphRequest.from_binary(encoded))
+            returned = self.transport.destroy(encoded)
+            pb.DestroyEGraphResponse.from_binary(returned)
+            (tmp_path / f"destroy-response-{index}.pb").write_bytes(returned)
+            return returned
+
+    graph = EGraph()
+    monkeypatch.setattr(graph._state, "transport", AuditedTransport(graph._state.transport))
+    result = graph.extract(explicit)
+    retained_nested = graph.extract(nested)
+    assert result.__egg_ref__.read().kind.field == "primitive_value"
+    value = result.__egg_ref__.read().kind.value.value
+    assert value.field == "multiset"
+    assert len(value.value.items) == 3
+    assert len(set(value.value.items)) == 2
+    assert [item.__egg_ref__ for item in result.value] == [
+        result.__egg_ref__.owner.ref("nodes", index) for index in value.value.items
+    ]
+    assert any(
+        node.kind.field == "call" and node.kind.value.func == "egglog.core.multiset.of"
+        and len(node.kind.value.args) == 3 and node.kind.value.args[0] == node.kind.value.args[2]
+        for request in requests for node in request.program.nodes
+    )
+    original_handle = graph._state.handle
+    graph._state.destroy()
+    assert graph._state.handle is None
+    assert [request.egraph_id for request in destroyed] == [original_handle]
+    del graph
+    gc.collect()
+    run_count = len(requests)
+    with monkeypatch.context() as inert:
+        inert.setattr(bindings, "EGraph", forbidden)
+        inert.setattr(bindings, "_ProtoEngine", forbidden)
+        assert isinstance(result.value, list)
+        assert sorted(child.value for child in result.value) == [1, 2, 2]
+        assert list(result) == result.value
+        assert sorted(len(child.value) for child in retained_nested.value) == [0, 3, 3]
+        assert "MultiSet" in str(result)
+        assert "MultiSet" in str(retained_nested)
+        assert len(requests) == run_count
+        assert len(destroyed) == 1
+
+    fresh = EGraph()
+    monkeypatch.setattr(fresh._state, "transport", AuditedTransport(fresh._state.transport))
+    replayed = fresh.extract(result)
+    fresh.check(eq(replayed).to(explicit))
+    assert fresh.extract(replayed.count(i64(2))).value == 2
+    assert fresh.extract(replayed.length()).value == 3
+    assert fresh.extract(empty).value == []
+    assert sorted(len(child.value) for child in fresh.extract(retained_nested).value) == [0, 3, 3]
+    fresh_handle = fresh._state.handle
+    fresh._state.destroy()
+    assert fresh._state.handle is None
+    assert len(destroyed) == 2
+    assert destroyed[-1].egraph_id == fresh_handle
+    assert len(requests) > run_count
+    assert len(requests) == len(responses)
+    assert all(response.error is None for response in responses)
+
+
+def test_multiset_all_ordinary_views_and_partial_failures_public_bytes() -> None:
+    from egglog import (  # noqa: PLC0415
+        MultiSet,
+        multiset_contains_swapped,
+        multiset_not_contains_swapped,
+        multiset_remove_swapped,
+        multiset_subtract_swapped,
+    )
+
+    one, two, three = i64(1), i64(2), i64(3)
+    xs = MultiSet(two, one, two)
+    empty = MultiSet[i64]()
+    graph = EGraph()
+    for expression, expected in (
+        (xs, [1, 2, 2]),
+        (MultiSet[i64].single(two, 2), [2, 2]),
+        (MultiSet[i64].single(two, 0), []),
+        (xs.insert(three), [1, 2, 2, 3]),
+        (xs.remove(one), [2, 2]),
+        (multiset_remove_swapped(two, xs), [1, 2]),
+        (xs - MultiSet(one), [2, 2]),
+        (multiset_subtract_swapped(MultiSet(one), xs), [2, 2]),
+        (xs & MultiSet(two, three), [2]),
+        (xs + MultiSet(three), [1, 2, 2, 3]),
+        (xs.reset_counts(), [1, 2]),
+        (MultiSet.sum_multisets(MultiSet(xs, xs, empty)), [1, 1, 2, 2, 2, 2]),
+    ):
+        result = graph.extract(expression)
+        assert result.__egg_ref__.read().kind.value.value.field == "multiset"
+        assert sorted(child.value for child in result.value) == expected
+    assert graph.extract(xs.pick()).value in (1, 2)
+    assert graph.extract(xs.pick_max()).value == 2
+    assert graph.extract(xs.length()).value == 3
+    assert graph.extract(xs.count(two)).value == 2
+    assert graph.extract(xs.count(three)).value == 0
+    graph.check(xs.contains(one), xs.not_contains(three))
+    graph.check(multiset_contains_swapped(one, xs), multiset_not_contains_swapped(three, xs))
+    graph.check_fail(xs.contains(three))
+    graph.check_fail(xs.not_contains(one))
+    graph.check_fail(multiset_contains_swapped(three, xs))
+    graph.check_fail(multiset_not_contains_swapped(one, xs))
+    for expression in (
+        MultiSet[i64].single(one, -1),
+        xs.remove(three),
+        multiset_remove_swapped(three, xs),
+        xs - MultiSet(two, two, two),
+        multiset_subtract_swapped(MultiSet(two, two, two), xs),
+        empty.pick(),
+        empty.pick_max(),
+    ):
+        with pytest.raises(bindings.EggSmolError):
+            graph.extract(expression)
+        assert graph.extract(xs.count(two)).value == 2
+
+
+def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from egglog import MultiSet  # noqa: PLC0415
+    from egglog.type_constraint_solver import TypeConstraintError  # noqa: PLC0415
+
+    class Atom(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    a, b = Atom(i64(1)), Atom(i64(2))
+    xs = MultiSet(a, b, a)
+    for invalid in (MultiSet(i64(1)), MultiSet(Vec(a)), MultiSet(MultiSet(a))):
+        with pytest.raises(TypeConstraintError, match="requires an equality sort"):
+            invalid.union_values()
+    graph = EGraph(xs)
+    graph.check_fail(eq(a).to(b))
+    with pytest.raises(bindings.EggSmolError):
+        graph.check(eq(xs.union_values()).to(a))
+    graph.check_fail(eq(a).to(b))  # Rejected queries must not perform the write.
+    graph.register(xs.union_values())
+    graph.check(eq(a).to(b))
+    assert graph.extract(xs.count(a)).value == 3
+    assert graph.extract(xs.length()).value == 3
+    assert len(graph.extract(xs).value) == 3
+    with pytest.raises(bindings.EggSmolError):
+        graph.register(MultiSet[Atom]().union_values())
+    assert graph.extract(xs.length()).value == 3
+
+    from protobuf import Oneof  # noqa: PLC0415
+
+    @function
+    def via_union(values: MultiSet[Atom]) -> Atom:
+        return values.union_values()
+
+    declaration = cast("RuntimeFunction", via_union).__egg_ref__
+    primitive = declaration.read().kind
+    assert primitive is not None
+    assert primitive.field == "primitive"
+    body = declaration.owner.ref("nodes", primitive.value.body).read()
+    assert body.kind is not None
+    assert body.kind.field == "call"
+    assert body.kind.value.func == "egglog.core.multiset.union_values"
+
+    @function
+    def marker(key: i64) -> i64: ...
+
+    c, d = Atom(i64(3)), Atom(i64(4))
+    repeated = MultiSet(c, d, c)
+    fresh = EGraph(repeated)
+    assert fresh.function_values(marker) == {}
+    before = set_(marker(i64(10))).to(i64(1))
+    after = set_(marker(i64(20))).to(i64(2))
+    requests: dict[str, pb.RunProgramRequest] = {}
+    responses: dict[str, pb.RunProgramResponse] = {}
+
+    class AuditedTransport:
+        def __init__(self, transport: bindings._ProtoEngine, label: str) -> None:
+            self.transport = transport
+            self.label = label
+
+        def run(self, encoded: bytes) -> tuple[bytes, BaseException | None]:
+            assert self.label not in requests
+            (tmp_path / f"{self.label}-request.pb").write_bytes(encoded)
+            requests[self.label] = pb.RunProgramRequest.from_binary(encoded)
+            returned, host_error = self.transport.run(encoded)
+            assert host_error is None
+            (tmp_path / f"{self.label}-response.pb").write_bytes(returned)
+            responses[self.label] = pb.RunProgramResponse.from_binary(returned)
+            return returned, host_error
+
+    for label, expression in (("direct-query", repeated.union_values()), ("body-query", via_union(repeated))):
+        builder = _program.Builder()
+        fact = builder.import_ref(eq(expression).to(c).__egg_ref__)
+        check = builder.add("commands", pb.Command(kind=Oneof("check", pb.Check(facts=[fact]))))
+        command = builder.publish().ref("commands", check)
+        with monkeypatch.context() as patch:
+            patch.setattr(fresh._state, "transport", AuditedTransport(fresh._state.transport, label))
+            with pytest.raises(bindings.EggSmolError):
+                fresh._state.run_program([before.__egg_ref__, command, after.__egg_ref__])
+        assert [item.kind.field for item in requests[label].program.commands] == ["action", "check", "action"]
+        if label == "body-query":
+            assert any(
+                item.kind.field == "primitive" and item.kind.value.name == primitive.value.name
+                for item in requests[label].program.declarations
+            )
+        error = responses[label].error
+        assert error is not None
+        assert error.code == pb.ErrorCode.INVALID_PROGRAM
+        assert error.location is None
+        assert fresh.function_values(marker) == {}
+        fresh.check_fail(eq(c).to(d))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fresh._state, "transport", AuditedTransport(fresh._state.transport, "body-action"))
+        fresh.register(via_union(repeated))
+    assert responses["body-action"].error is None
+    fresh.check(eq(c).to(d))
+    assert fresh.extract(repeated.count(c)).value == 3
+    assert fresh.extract(repeated.length()).value == 3
+    assert len(fresh.extract(repeated).value) == 3
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fresh._state, "transport", AuditedTransport(fresh._state.transport, "empty-prefix"))
+        with pytest.raises(bindings.EggSmolError):
+            fresh.register(before, MultiSet[Atom]().union_values(), after)
+    assert [item.kind.field for item in requests["empty-prefix"].program.commands] == ["action"] * 3
+    error = responses["empty-prefix"].error
+    assert error is not None
+    assert error.code == pb.ErrorCode.EVALUATION_FAILED
+    assert error.location is not None
+    assert error.location.path == [1]
+    assert fresh.function_values(marker) == {marker(i64(10)): i64(1)}
+    assert fresh.extract(repeated.count(c)).value == 3
+    assert fresh.extract(repeated.length()).value == 3
+    assert set(requests) == set(responses) == {"direct-query", "body-query", "body-action", "empty-prefix"}

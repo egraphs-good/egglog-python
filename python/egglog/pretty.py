@@ -345,7 +345,7 @@ def pretty_ref(root: Ref, *, custom_literal: Callable[[Ref, bool], str] | None =
                             pieces = [str(value)]
                         frames.extend(reversed(pieces))
                         continue
-                    elif primitive.field in {"vec", "set"}:
+                    elif primitive.field in {"vec", "set", "multiset"}:
                         from .builtins import _container_items, _container_member  # noqa: PLC0415
                         from .runtime import RuntimeExpr, _class_for_sort  # noqa: PLC0415
 

@@ -175,24 +175,32 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         *,
         input_type: bool = False,
         parameters: tuple[str, ...] = (),
+        used_parameters: set[int] | None = None,
         active: frozenset[int] = frozenset(),
     ) -> str:
+        used_parameters = set() if used_parameters is None else used_parameters
         if index < 0 or index >= len(program.sorts) or index in active:
             msg = "Invalid or cyclic signature sort"
             raise ValueError(msg)
         kind = program.sorts[index].kind
         if kind is not None and kind.field == "var":
-            if kind.value >= len(parameters):
+            if kind.value < 0 or kind.value >= len(parameters):
                 msg = "Unbound static signature parameter"
                 raise ValueError(msg)
+            used_parameters.add(kind.value)
             return parameters[kind.value]
         if kind is not None and kind.field == "func":
             function = kind.value
             if not function_protocol:
                 msg = "Function sort requires an admitted structural function view"
                 raise ValueError(msg)
-            result = sort_type(function.result, parameters=parameters, active=active | {index})
-            args = [sort_type(i, parameters=parameters, active=active | {index}) for i in function.params]
+            result = sort_type(
+                function.result, parameters=parameters, used_parameters=used_parameters, active=active | {index}
+            )
+            args = [
+                sort_type(i, parameters=parameters, used_parameters=used_parameters, active=active | {index})
+                for i in function.params
+            ]
             if input_type:
                 return f"Callable[[{', '.join(args)}], {result}]"
             return f"UnstableFn[{', '.join([result, *args])}]"
@@ -208,7 +216,10 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             return (
                 name
                 + "["
-                + ", ".join(sort_type(i, parameters=parameters, active=active | {index}) for i in family.args)
+                + ", ".join(
+                    sort_type(i, parameters=parameters, used_parameters=used_parameters, active=active | {index})
+                    for i in family.args
+                )
                 + "]"
             )
         protocol = _SCALARS.get(family.name)
@@ -266,12 +277,22 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 msg = "Unsupported builtin Python static view"
                 raise ValueError(msg)
             parameters: tuple[str, ...] = ()
+            used_parameters: set[int] = set()
             family_name = ""
             owner = ""
             if free:
-                if view.owner is not None or tuple(view.path[:-1]) != module or signature.type_params:
-                    msg = "Static free functions require an ownerless closed builtin view"
+                if view.owner is not None or tuple(view.path[:-1]) != module:
+                    msg = "Static free functions require an ownerless builtin view"
                     raise ValueError(msg)
+                if signature.type_params and (signature.varargs or view.has_field("tail_repetitions")):
+                    msg = "Generic static free functions require fixed signatures"
+                    raise ValueError(msg)
+                function_name = identifier(view.path[-1])
+                parameters = tuple(f"_{function_name}_T{index}" for index in range(len(signature.type_params)))
+                for variable in parameters:
+                    if variable in used_names:
+                        raise ValueError(f"Python static name collision with a generated TypeVar: {variable}")
+                    used_names.add(variable)
             else:
                 if view.owner is None or view.owner.kind is None or view.owner.kind.field != "sort":
                     msg = "Unsupported builtin Python static view"
@@ -303,7 +324,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                     msg = "Generic static owner requires ordered supported family parameters"
                     raise ValueError(msg)
                 owner = sort_type(view.owner.kind.value, parameters=parameters)
-            output = sort_type(signature.output, parameters=parameters)
+            output = sort_type(signature.output, parameters=parameters, used_parameters=used_parameters)
             receiver_slots = [view.receiver] if view.has_field("receiver") else []
             slots = [*receiver_slots, *(p.core_input for p in view.params if p.has_field("core_input"))]
             specialized = view.has_field("tail_repetitions")
@@ -359,7 +380,9 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                     msg = "A uniform tail must be the final parameter without a default"
                     raise ValueError(msg)
                 expected_sort = signature.varargs[0].sort if tail else effective_inputs[parameter.core_input].sort
-                annotation = sort_type(expected_sort, input_type=True, parameters=parameters)
+                annotation = sort_type(
+                    expected_sort, input_type=True, parameters=parameters, used_parameters=used_parameters
+                )
                 # Uniform Vec tails accept the existing element-wise list/tuple
                 # codec while retaining the same symbolic element type.
                 expected_kind = program.sorts[expected_sort].kind
@@ -392,11 +415,18 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 prefix = "    @classmethod\n"
             result_type = "None" if view.kind == pb.PythonCallKind.INITIALIZER else output
             if free:
+                if used_parameters != set(range(len(parameters))):
+                    msg = "Unused static signature parameter"
+                    raise ValueError(msg)
                 if name in used_names:
                     raise ValueError(f"Python static name collision: {name}")
                 exported.add(name)
                 used_names.add(name)
-                functions[name] = f"def {name}({', '.join(rendered_parameters)}) -> {result_type}: ...\n"
+                functions[name] = (
+                    "".join(f'{variable} = TypeVar("{variable}", bound=BaseExpr)\n' for variable in parameters)
+                    + ("\n" if parameters else "")
+                    + f"def {name}({', '.join(rendered_parameters)}) -> {result_type}: ...\n"
+                )
                 continue
             generated = {
                 name: prefix
@@ -445,6 +475,15 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             raise ValueError(msg)
         exported.add(set_alias)
         used_names.update((set_alias, set_host))
+    multiset_protocol = "MultiSet" in methods and "__init__" in methods["MultiSet"]
+    if multiset_protocol:
+        multiset_alias = names["MultiSet"] + "Like"
+        multiset_host = f"_{names['MultiSet']}_HostT"
+        if multiset_alias in used_names or multiset_host in used_names:
+            msg = "Python static name collision with a multiset protocol"
+            raise ValueError(msg)
+        exported.add(multiset_alias)
+        used_names.update((multiset_alias, multiset_host))
     if map_protocol:
         if families["Map"].arity != 2:
             msg = "Map codec requires two family arguments"
@@ -457,7 +496,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         exported.add(map_alias)
         used_names.update((map_alias, *map_hosts))
     collections_imports = (["Callable"] if function_protocol or pyobject_protocol else []) + (
-        ["Iterator"] if vec_protocol or map_protocol or set_protocol else []
+        ["Iterator"] if vec_protocol or map_protocol or set_protocol or multiset_protocol else []
     )
     lines = [
         "# Generated from the native catalog and Python host protocol policy. Do not edit.",
@@ -541,9 +580,17 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                     f"    def value(self) -> {family_variables[0]} | None: ...",
                 ])
                 reserved.update({"value", "__match_args__"})
-            elif (family_name == "Vec" and vec_protocol) or (family_name == "Set" and set_protocol):
+            elif (
+                (family_name == "Vec" and vec_protocol)
+                or (family_name == "Set" and set_protocol)
+                or (family_name == "MultiSet" and multiset_protocol)
+            ):
                 (element,) = family_variables
-                value_type = f"tuple[{element}, ...]" if family_name == "Vec" else f"set[{element}]"
+                value_type = (
+                    f"tuple[{element}, ...]"
+                    if family_name == "Vec"
+                    else f"{'set' if family_name == 'Set' else 'list'}[{element}]"
+                )
                 lines.extend([
                     '    __match_args__ = ("value",)',
                     "    @property",
@@ -612,6 +659,12 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             lines.extend([
                 f'{set_host} = TypeVar("{set_host}")',
                 f"{set_alias}: TypeAlias = {name}[{family_variables[0]}] | set[{set_host}]",
+                "",
+            ])
+        if family_name == "MultiSet" and multiset_protocol:
+            lines.extend([
+                f'{multiset_host} = TypeVar("{multiset_host}")',
+                f"{multiset_alias}: TypeAlias = {name}[{family_variables[0]}] | tuple[{multiset_host}, ...]",
                 "",
             ])
         if protocol is not None and (protocol.literal_types or protocol.conversion_sort):

@@ -101,10 +101,38 @@ def test_complete_catalog_preserves_the_166_definition_baseline():
     baseline = Catalog(pb.Program.from_binary(Path(path).read_bytes()))
     current = builtin_catalog()
     assert len(baseline.roots) == 166
-    assert len(current.roots) == 196
+    assert len(current.roots) == 217
+    multiset_keys = {
+        ("host_sort_family", "MultiSet"),
+        *(
+            ("callable", f"egglog.core.multiset.{name}")
+            for name in (
+                "of",
+                "single",
+                "pick",
+                "insert",
+                "remove",
+                "remove_swapped",
+                "subtract",
+                "subtract_swapped",
+                "length",
+                "contains",
+                "not_contains",
+                "contains_swapped",
+                "not_contains_swapped",
+                "intersection",
+                "sum",
+                "reset_counts",
+                "pick_max",
+                "count",
+                "sum_multisets",
+                "union_values",
+            )
+        ),
+    }
     for key, definition in baseline.definitions.items():
         assert StructuralView(definition) == StructuralView(current.definitions[key]), key
-    assert current.definitions.keys() - baseline.definitions.keys() == {
+    assert current.definitions.keys() - baseline.definitions.keys() - multiset_keys == {
         ("callable", f"egglog.core.{family}.{key}")
         for family, keys in [
             ("vec", ("append", "push", "pop", "length", "contains", "not_contains", "set", "remove", "union")),
@@ -133,6 +161,14 @@ def test_complete_catalog_preserves_the_166_definition_baseline():
             )
         ),
     }
+    prior_path = os.environ.get("EGGLOG_PRE_MULTISET_BUILTIN_CATALOG")
+    assert prior_path is not None, "The artifact gate must also supply the immutable complete196 catalog"
+    prior = Catalog(pb.Program.from_binary(Path(prior_path).read_bytes()))
+    assert len(prior.roots) == 196
+    assert prior.definitions.keys() <= current.definitions.keys()
+    for key, definition in prior.definitions.items():
+        assert StructuralView(definition) == StructuralView(current.definitions[key]), key
+    assert current.definitions.keys() - prior.definitions.keys() == multiset_keys
 
 
 def test_ordinary_vec_map_methods_execute_and_reconstruct():

@@ -1223,3 +1223,133 @@ def test_constant_path_allows_only_an_empty_final_name(path, valid):
     else:
         with pytest.raises(ValueError, match="Invalid Python constant path"):
             Catalog(source)
+
+
+def test_multiset_generated_surface_from_actual_catalog():
+    from egglog._catalog import builtin_catalog  # noqa: PLC0415
+    from egglog._program import pack  # noqa: PLC0415
+
+    program = pack(builtin_catalog().roots).program
+    render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
+        "render_stubs"
+    ]
+    stub = render(program)
+    body = stub.split("class MultiSet(", 1)[1].split("\nclass ", 1)[0]
+    for signature in (
+        "def __init__(self, *args: _MultiSet_T_0) -> None:",
+        "def single(cls, x: _MultiSet_T_0, i: i64Like) -> MultiSet[_MultiSet_T_0]:",
+        "def pick(self) -> _MultiSet_T_0:",
+        "def insert(self, value: _MultiSet_T_0) -> MultiSet[_MultiSet_T_0]:",
+        "def remove(self, value: _MultiSet_T_0) -> MultiSet[_MultiSet_T_0]:",
+        "def __sub__(self, other: MultiSet[_MultiSet_T_0]) -> MultiSet[_MultiSet_T_0]:",
+        "def length(self) -> i64:",
+        "def contains(self, value: _MultiSet_T_0) -> Unit:",
+        "def not_contains(self, value: _MultiSet_T_0) -> Unit:",
+        "def __and__(self, other: MultiSet[_MultiSet_T_0]) -> MultiSet[_MultiSet_T_0]:",
+        "def __add__(self, other: MultiSet[_MultiSet_T_0]) -> MultiSet[_MultiSet_T_0]:",
+        "def reset_counts(self) -> MultiSet[_MultiSet_T_0]:",
+        "def pick_max(self) -> _MultiSet_T_0:",
+        "def count(self, value: _MultiSet_T_0) -> i64:",
+        "def sum_multisets(cls, xs: MultiSet[MultiSet[_MultiSet_T_0]]) -> MultiSet[_MultiSet_T_0]:",
+        "def union_values(self) -> _MultiSet_T_0:",
+        "def value(self) -> list[_MultiSet_T_0]:",
+        "def __iter__(self) -> Iterator[_MultiSet_T_0]:",
+        "def __len__(self) -> int:",
+        "def __contains__(self, item: _MultiSet_T_0) -> bool:",
+        "def eval(self) -> list[_MultiSet_T_0]:",
+    ):
+        assert signature in body
+    assert "MultiSetLike: TypeAlias = MultiSet[_MultiSet_T_0] | tuple[_MultiSet_HostT, ...]" in stub
+    for suffix in ("remove_swapped", "subtract_swapped", "contains_swapped", "not_contains_swapped"):
+        name = f"multiset_{suffix}"
+        parameter = f"_{name}_T0"
+        first = f"MultiSet[{parameter}]" if suffix == "subtract_swapped" else parameter
+        output = f"MultiSet[{parameter}]" if suffix in {"remove_swapped", "subtract_swapped"} else "Unit"
+        assert f'{parameter} = TypeVar("{parameter}", bound=BaseExpr)' in stub
+        assert f"def {name}(x: {first}, xs: MultiSet[{parameter}]) -> {output}:" in stub
+        assert f'"{name}"' in stub.split("__all__ = ", 1)[1].splitlines()[0]
+    declarations = {d.kind.value.name: d for d in program.declarations}
+    assert len([name for name in declarations if name.startswith("egglog.core.multiset.")]) == 20
+    assert "def empty(" not in body
+    assert "def map(" not in body
+    declarations["MultiSet"].kind.value.bindings.python.path[-1] = "Bag"
+    view = declarations["egglog.core.multiset.remove_swapped"].bindings.python.views[0]
+    view.path[-1] = "take_one"
+    view.params[0].name, view.params[1].name = "item", "values"
+    renamed = render(program)
+    assert "BagLike: TypeAlias = Bag[_Bag_T_0] | tuple[_Bag_HostT, ...]" in renamed
+    assert "def take_one(item: _take_one_T0, values: Bag[_take_one_T0]) -> Bag[_take_one_T0]:" in renamed
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        ("unused", "Unused static signature parameter"),
+        ("unbound", "Unbound static signature parameter"),
+        ("default", "Default root"),
+        ("tail", "Generic static free functions require fixed signatures"),
+        ("collision", "collision"),
+    ],
+)
+def test_multiset_generic_free_static_guards(corruption, message):
+    from egglog._catalog import builtin_catalog  # noqa: PLC0415
+    from egglog._program import pack  # noqa: PLC0415
+
+    program = pack(builtin_catalog().roots).program
+    declarations = {d.kind.value.name: d for d in program.declarations}
+    declaration = declarations["egglog.core.multiset.remove_swapped"]
+    signature = declaration.kind.value.typing.value
+    if corruption == "unused":
+        signature.type_params.append("Unused")
+    elif corruption == "unbound":
+        signature.inputs[0].sort = len(program.sorts)
+        program.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 1)))
+    elif corruption == "default":
+        declaration.bindings.python.views[0].params[0].default_expr = len(program.nodes)
+    elif corruption == "tail":
+        signature.varargs.append(signature.inputs[0])
+    else:
+        declarations["MultiSet"].kind.value.bindings.python.path[-1] = "_multiset_remove_swapped_T0"
+    render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
+        "render_stubs"
+    ]
+    with pytest.raises(ValueError, match=message):
+        render(program)
+
+
+@pytest.mark.parametrize("label", ["", "Element type", "class", "duplicate"])
+def test_multiset_free_signature_labels_are_diagnostic_only(label, monkeypatch):
+    from egglog import bindings  # noqa: PLC0415
+    from egglog._catalog import builtin_catalog  # noqa: PLC0415
+    from egglog._program import pack  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Signature label rendering authored or executed a Call")
+
+    monkeypatch.setattr(bindings, "EGraph", forbidden)
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    monkeypatch.setattr("egglog.runtime._author_call", forbidden)
+    program = pack(builtin_catalog().roots).program
+    signatures = [
+        declaration.kind.value.typing.value
+        for declaration in program.declarations
+        if declaration.kind.value.name
+        in {
+            f"egglog.core.multiset.{suffix}"
+            for suffix in ("remove_swapped", "subtract_swapped", "contains_swapped", "not_contains_swapped")
+        }
+    ]
+    assert len(signatures) == 4
+    if label == "duplicate":
+        # Use a second positional binder in a real fixed free signature so the
+        # duplicate-label control is within one signature, not across functions.
+        signatures[0].type_params.append("Other")
+        signatures[0].inputs[0].sort = len(program.sorts)
+        program.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 1)))
+    render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
+        "render_stubs"
+    ]
+    before = render(program)
+    for signature in signatures:
+        signature.type_params = [label] * len(signature.type_params)
+    assert render(program) == before
