@@ -1,6 +1,6 @@
 from typing import assert_type
 
-from egglog import Expr, Maybe, convert, f64, function, i64
+from egglog import Expr, Maybe, String, catch, convert, f64, function, i64
 
 
 class Atom(Expr):
@@ -30,3 +30,14 @@ def identity(value: Maybe[i64]) -> Maybe[i64]: ...
 
 
 assert_type(identity(some), Maybe[i64])
+assert_type(catch(lambda: i64(7)), Maybe[i64])
+assert_type(catch(lambda: f64(1.0)), Maybe[f64])
+assert_type(some.match(f=lambda value: value.to_string(), n=String("none")), String)
+assert_type(Maybe[Atom].none().match(lambda _atom: f64(1.0), f64(0.0)), f64)
+
+
+@function
+def thunk() -> i64: ...
+
+
+assert_type(catch(f=thunk), Maybe[i64])

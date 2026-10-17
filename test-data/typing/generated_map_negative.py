@@ -1,4 +1,4 @@
-from egglog import Map, MapLike, Pair, Vec, f64, function, i64
+from egglog import Map, MapLike, Pair, Vec, f64, function, i64, map_fold_kv
 
 Map[i64, f64]()  # error: call-arg
 Map[i64, f64](i64(1))  # error: arg-type
@@ -35,3 +35,13 @@ def size(value: MapLike[i64, f64, int, float]) -> i64: ...
 
 size({"wrong": 2.0})  # error: dict-item
 size({1: "wrong"})  # error: dict-item
+
+
+@function
+def wrong_fold(total: i64, key: f64, item: i64) -> i64: ...
+
+
+map_fold_kv(wrong_fold, i64(0), value)  # error: arg-type
+map_fold_kv(lambda total, _key, _item: total, i64(0))  # error: call-arg
+folded = map_fold_kv(lambda total, _key, item: total + item, f64(0.0), value)
+wrong_folded: i64 = folded  # error: assignment

@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from typing import assert_type
 
-from egglog import Map, MapLike, Pair, Unit, Vec, convert, f64, function, i64
+from egglog import Map, MapLike, Pair, Unit, Vec, convert, f64, function, i64, map_fold_kv
 
 empty = Map[i64, f64].empty()
 owned = empty.insert(i64(1), f64(2.0))
@@ -45,3 +45,11 @@ assert_type(Map.from_pairs(vector()), Map[i64, f64])
 assert_type(mapping(), Map[i64, f64])
 assert_type(size({1: 2.0}), i64)
 assert_type(size(owned), i64)
+
+
+@function
+def summarize(total: Pair[i64, f64], key: i64, item: f64) -> Pair[i64, f64]: ...
+
+
+assert_type(map_fold_kv(f=summarize, initial=Pair(i64(0), f64(0.0)), xs=owned), Pair[i64, f64])
+assert_type(map_fold_kv(lambda total, _key, item: total + item, f64(0.0), owned), f64)

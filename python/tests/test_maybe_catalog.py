@@ -78,6 +78,46 @@ def test_maybe_ordinary_surface_executes_as_bytes():
     assert EGraph().extract(some).value.value == 1.0
 
 
+def test_higher_order_map_fold_and_maybe_callbacks_execute_as_bytes(monkeypatch):
+    from egglog import Pair, catch, map_fold_kv  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Higher-order authoring accessed an engine")
+
+    mapping = Map[i64, f64].empty().insert(i64(1), f64(2.5)).insert(i64(3), f64(4.5))
+    offset = i64(10)
+    initial = Pair(i64(0), f64(0.0))
+    with monkeypatch.context() as guard:
+        guard.setattr(bindings, "_ProtoEngine", forbidden)
+        expression = map_fold_kv(
+            lambda total, key, item: Pair(
+                total.left + key + offset,
+                total.right + catch(lambda: mapping[key]).match(lambda found: found + item, f64(0.0)),
+            ),
+            initial,
+            mapping,
+        )
+        assert get_callable_fn(expression) == map_fold_kv
+        args = get_callable_args(expression)
+        assert args is not None
+        assert args[1:] == (initial, mapping)
+        packed = pack([expression.__egg_ref__])
+        detached = RuntimeExpr(
+            Builder
+            .from_program(pb.Program.from_binary(packed.program.to_binary()))
+            .publish()
+            .ref("nodes", packed.indices[0])
+        )
+        assert StructuralView(detached.__egg_ref__) == StructuralView(expression.__egg_ref__)
+
+    graph = EGraph()
+    assert graph.extract(expression).value == (i64(24), f64(14.0))
+    assert graph.extract(catch(lambda: mapping[i64(99)])).value is None
+    assert graph.extract(catch(lambda: mapping[i64(1)]).match(lambda item: item + 1.0, f64(7.0))).value == 3.5
+    assert graph.extract(Maybe[i64].none().match(lambda item: item / i64(0), i64(7))).value == 7
+    assert graph.extract(Maybe[i64].some(i64(3)).match(lambda item: item.to_string(), String("none"))).value == "3"
+
+
 def test_maybe_none_conversion_and_constructor_deconstruction():
     @function
     def identity(value: Maybe[i64]) -> Maybe[i64]: ...

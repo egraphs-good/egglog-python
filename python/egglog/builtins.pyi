@@ -10,7 +10,7 @@ from typing_extensions import deprecated
 
 from .egraph import BaseExpr, BuiltinExpr
 
-__all__ = ["BigInt", "BigIntLike", "BigRat", "BigRatLike", "Bool", "BoolLike", "ExprValueError", "Map", "MapLike", "Maybe", "MultiSet", "MultiSetLike", "Pair", "PyObject", "PyObjectLike", "Rational", "RationalLike", "Set", "SetLike", "String", "StringLike", "Unit", "UnstableFn", "Vec", "VecLike", "count_matches", "f64", "f64Like", "i64", "i64Like", "join", "multiset_contains_swapped", "multiset_flat_map", "multiset_fold", "multiset_not_contains_swapped", "multiset_remove_swapped", "multiset_subtract_swapped", "py_eval", "py_eval_fn", "py_exec"]
+__all__ = ["BigInt", "BigIntLike", "BigRat", "BigRatLike", "Bool", "BoolLike", "ExprValueError", "Map", "MapLike", "Maybe", "MultiSet", "MultiSetLike", "Pair", "PyObject", "PyObjectLike", "Rational", "RationalLike", "Set", "SetLike", "String", "StringLike", "Unit", "UnstableFn", "Vec", "VecLike", "catch", "count_matches", "f64", "f64Like", "i64", "i64Like", "join", "map_fold_kv", "multiset_contains_swapped", "multiset_flat_map", "multiset_fold", "multiset_not_contains_swapped", "multiset_remove_swapped", "multiset_subtract_swapped", "py_eval", "py_eval_fn", "py_exec"]
 
 @dataclass
 class ExprValueError(AttributeError):
@@ -383,6 +383,7 @@ _Set_HostT = TypeVar("_Set_HostT")
 SetLike: TypeAlias = Set[_Set_T_0] | set[_Set_HostT]
 
 _Maybe_T_0 = TypeVar("_Maybe_T_0", bound=BaseExpr)
+_Maybe_match_T1 = TypeVar("_Maybe_match_T1", bound=BaseExpr)
 
 class Maybe(BuiltinExpr, Generic[_Maybe_T_0]):
     # No Python initializer is supplied; this remains a usable type token.
@@ -390,6 +391,7 @@ class Maybe(BuiltinExpr, Generic[_Maybe_T_0]):
     __match_args__ = ("value",)
     @property
     def value(self) -> _Maybe_T_0 | None: ...
+    def match(self, f: Callable[[_Maybe_T_0], _Maybe_match_T1], n: _Maybe_match_T1) -> _Maybe_match_T1: ...
     @classmethod
     def none(cls) -> Maybe[_Maybe_T_0]: ...
     @classmethod
@@ -486,6 +488,16 @@ def multiset_subtract_swapped(x: MultiSet[_multiset_subtract_swapped_T0], xs: Mu
 def join(*strings: StringLike) -> String: ...
 
 def count_matches(s: StringLike, pattern: StringLike) -> i64: ...
+
+_map_fold_kv_T0 = TypeVar("_map_fold_kv_T0", bound=BaseExpr)
+_map_fold_kv_T1 = TypeVar("_map_fold_kv_T1", bound=BaseExpr)
+_map_fold_kv_T2 = TypeVar("_map_fold_kv_T2", bound=BaseExpr)
+
+def map_fold_kv(f: Callable[[_map_fold_kv_T2, _map_fold_kv_T0, _map_fold_kv_T1], _map_fold_kv_T2], initial: _map_fold_kv_T2, xs: Map[_map_fold_kv_T0, _map_fold_kv_T1]) -> _map_fold_kv_T2: ...
+
+_catch_T0 = TypeVar("_catch_T0", bound=BaseExpr)
+
+def catch(f: Callable[[], _catch_T0]) -> Maybe[_catch_T0]: ...
 
 def py_eval(code: StringLike, globals_: PyObjectLike = ..., locals_: PyObjectLike = ...) -> PyObject: ...
 
