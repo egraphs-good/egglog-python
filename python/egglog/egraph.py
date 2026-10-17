@@ -55,6 +55,7 @@ from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
 from .declarations import *
 from .egraph_state import *
+from .egraph_state import _CostModelObservation
 from .pretty import _format_pyobject, pretty_decl, pretty_ref
 from .run_report import RunReport
 from .runtime import *
@@ -552,19 +553,15 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             continue
         if isinstance(value, _WrappedMethod):
             if (
-                (
-                    (value.preserve or name == "__init__")
-                    and (
-                        value.cost is not None
-                        or value.merge is not None
-                        or value.mutates_self
-                        or value.unextractable
-                        or value.subsume
-                    )
+                (value.preserve or name == "__init__")
+                and (
+                    value.cost is not None
+                    or value.merge is not None
+                    or value.mutates_self
+                    or value.unextractable
+                    or value.subsume
                 )
-                or value.reverse_args
-                or (value.preserve and (value.egg_fn is not None or name == "__init__"))
-            ):
+            ) or (value.preserve and (value.egg_fn is not None or name == "__init__")):
                 raise NotImplementedError(f"Method options for {runtime_cls}.{name} are not migrated")
             fn = value.fn
             preserve = value.preserve
@@ -593,7 +590,15 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         if isinstance(fn, _WrappedMethod):
             msg = f"{runtime_cls}.{name} Add the @method(...) decorator above @classmethod or @property"
             raise ValueError(msg)  # noqa: TRY004 -- preserve the public decorator-order error
-        definitions.append(compiler.prepare(fn, owner=runtime_cls, view_kind=view_kind, member_name=name))
+        definitions.append(
+            compiler.prepare(
+                fn,
+                owner=runtime_cls,
+                view_kind=view_kind,
+                member_name=name,
+                reverse_args=value.reverse_args if isinstance(value, _WrappedMethod) else False,
+            )
+        )
         context.catalog = Catalog.from_refs(definitions)
         assert isinstance(fn, FunctionType)
         if _function_has_body(fn):
@@ -666,6 +671,7 @@ class _FunctionConstructor:
         owner: RuntimeClass | None = None,
         view_kind: pb.PythonCallKind = pb.PythonCallKind.FUNCTION,
         member_name: str | None = None,
+        reverse_args: bool = False,
     ) -> Ref:
         """Compile raw Python source directly, never a legacy declaration projection."""
         if isinstance(fn, RuntimeFunction):
@@ -796,11 +802,15 @@ class _FunctionConstructor:
             inputs.append(pb.Arg(sort=builder.import_ref(sort), name=parameter.name))
             if receiver and index == 0:
                 continue
-            parameter_record = pb.PythonParameter(core_input=index, name=parameter.name)
+            parameter_record = pb.PythonParameter(
+                core_input=len(parameters) - index - 1 if reverse_args else index, name=parameter.name
+            )
             if parameter.default is not Parameter.empty:
                 default = resolve_literal(sort, parameter.default)
                 parameter_record.default_expr = builder.import_ref(default.__egg_ref__)
             surface.append(parameter_record)
+        if reverse_args:
+            inputs.reverse()
         output_index = builder.import_ref(output)
         if owner is None:
             path = [*fn.__module__.split("."), fn.__name__] if fn.__module__ else [fn.__name__]
@@ -809,8 +819,9 @@ class _FunctionConstructor:
             path = [*owner.__module__.split("."), owner.__name__, member_name]
         name = self.egg_fn or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", ".".join(path))
         view = pb.PythonCallable(kind=view_kind, path=path, params=surface)
+        python_first_input = len(parameters) - 1 if reverse_args else 0
         if self.mutates_first_arg:
-            view.mutates = 0
+            view.mutates = python_first_input
         if owner is not None:
             assert member_name is not None
             assert owner.__egg_sort__ is not None
@@ -819,7 +830,7 @@ class _FunctionConstructor:
             )
             view.path = [] if view_kind == pb.PythonCallKind.INITIALIZER else [member_name]
             if receiver:
-                view.receiver = 0
+                view.receiver = python_first_input
         body = None
         if has_body and owner is None:
             formals = Builder()
@@ -1202,18 +1213,37 @@ def constant(
             else "Primitive-returning callables with bodies cannot use merge"
         )
         raise ValueError(msg)
-    if has_default or has_merge or ruleset is not None:
-        msg = "Constant defaults, merges and rulesets are not migrated"
-        raise NotImplementedError(msg)
+    if ruleset is not None and not isinstance(cast("object", ruleset), Ruleset):
+        msg = "Rewrite destinations must be Rulesets"
+        raise TypeError(msg)
     module = _get_module()
     path = [*module.split("."), name] if module else [name]
     builder = Builder()
     output = builder.import_ref(sort)
+    body = None
+    if has_default:
+        with set_current_ruleset(None):
+            default = resolve_literal(sort, default_replacement)
+        body = _lower_function_body(builder, default.__egg_ref__, [])
+    merge_expression = _resolve_merge(sort, cast("Callable[[object, object], object] | None", merge))
     logical_name = egg_name or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", "%" + ".".join(path))
     kind = (
-        Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name=logical_name, output=output))
-        if return_type_is_eqsort
-        else Oneof[Literal["function"], pb.Function]("function", pb.Function(name=logical_name, output=output))
+        Oneof[Literal["primitive"], pb.Primitive](
+            "primitive", pb.Primitive(name=logical_name, output=output, body=body)
+        )
+        if body is not None and ruleset is None
+        else Oneof[Literal["constructor"], pb.Constructor](
+            "constructor", pb.Constructor(name=logical_name, output=output)
+        )
+        if return_type_is_eqsort and not has_merge
+        else Oneof[Literal["function"], pb.Function](
+            "function",
+            pb.Function(
+                name=logical_name,
+                output=output,
+                merge=builder.import_ref(merge_expression) if merge_expression is not None else None,
+            ),
+        )
     )
     index = builder.add(
         "declarations",
@@ -1226,7 +1256,10 @@ def constant(
     )
     reference = builder.publish().ref("declarations", index)
     Catalog.from_refs([reference])  # Validate the persisted Python view before exposing the expression.
-    return cast("BASE_EXPR", RuntimeFunction(reference, 0)())
+    value = RuntimeFunction(reference, 0)()
+    if body is not None and ruleset is not None:
+        rewrite(cast("Expr", value), ruleset=ruleset).to(cast("Expr", RuntimeExpr(reference.owner.ref("nodes", body))))
+    return cast("BASE_EXPR", value)
 
 
 def _last_param_variable(params: list[Parameter]) -> bool:
@@ -1270,6 +1303,7 @@ class EGraph:
     _state_stack: list[EGraphState] = field(default_factory=list, repr=False)
     # For storing the global "current" egraph
     _token_stack: list[EGraph] = field(default_factory=list, repr=False)
+    _cost_model_frames: list[tuple[_CostModelObservation, frozenset[Ref]]] = field(default_factory=list, repr=False)
 
     def __init__(
         self,
@@ -1287,11 +1321,15 @@ class EGraph:
                 self._state = EGraphState(num_threads=num_threads)
             self._state_stack = []
             self._token_stack = []
+            self._cost_model_frames = []
             if actions:
                 self.register(*actions)
 
     def set_report_level(self, level: pb.ReportLevel) -> None:
         """Set native report detail using the generated protocol enum."""
+        if self._cost_model_frames or self._state._native_running:
+            msg = "Cannot execute engine operations during a cost-model callback"
+            raise RuntimeError(msg)
         if type(level) is not pb.ReportLevel or level == pb.ReportLevel.UNSPECIFIED:
             msg = "Expected a defined protobuf report level"
             raise TypeError(msg)
@@ -1554,26 +1592,36 @@ class EGraph:
         """
         if extractor not in {"tree", "greedy-dag"}:
             raise ValueError(f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'")
-        if cost_model is not None:
-            msg = "Custom Python cost models require shared host-model registration"
-            raise NotImplementedError(msg)
-        runtime_expr = to_runtime_expr(expr)
-        builder = Builder()
-        root = builder.import_ref(runtime_expr.__egg_ref__)
-        index = builder.add(
-            "commands",
-            pb.Command(
-                kind=Oneof[Literal["extract"], pb.Extract](
-                    "extract",
-                    pb.Extract(
-                        roots=[root],
-                        variants=1,
-                        extractor=pb.Extractor.TREE if extractor == "tree" else pb.Extractor.GREEDY_DAG,
-                    ),
-                )
-            ),
+        if cost_model is not None and extractor == "greedy-dag" and not isinstance(cost_model, DagCostModel):
+            msg = "greedy-dag extraction requires a DagCostModel"
+            raise TypeError(msg)
+        registration = (
+            self._state.cost_model(
+                _HostModelFactory(self, cast("TreeCostModel[Comparable] | DagCostModel[ComparableAdd]", cost_model)),
+                additive=isinstance(cost_model, DagCostModel),
+            )
+            if cost_model is not None
+            else contextlib.nullcontext("")
         )
-        response, owner = self._state.run_program([builder.publish().ref("commands", index)])
+        with registration as model_name:
+            runtime_expr = to_runtime_expr(expr)
+            builder = Builder()
+            root = builder.import_ref(runtime_expr.__egg_ref__)
+            index = builder.add(
+                "commands",
+                pb.Command(
+                    kind=Oneof[Literal["extract"], pb.Extract](
+                        "extract",
+                        pb.Extract(
+                            roots=[root],
+                            variants=1,
+                            cost_model=model_name,
+                            extractor=pb.Extractor.TREE if extractor == "tree" else pb.Extractor.GREEDY_DAG,
+                        ),
+                    )
+                ),
+            )
+            response, owner = self._state.run_program([builder.publish().ref("commands", index)])
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
@@ -1595,7 +1643,7 @@ class EGraph:
         from .deconstruct import get_literal_value  # noqa: PLC0415
 
         cost = get_literal_value(RuntimeExpr(owner.ref("nodes", variant.cost)))
-        if not isinstance(cost, int):
+        if cost_model is None and not isinstance(cost, int):
             msg = "Expected an i64 extraction cost"
             raise TypeError(msg)
         return result, cost
@@ -1670,10 +1718,14 @@ class EGraph:
         /,
         *fns: ExprCallable,
         extractor: ExtractionMode = "tree",
+        cost_model: TreeCostModel[COST] | DagCostModel[DAG_COST] | None = None,
     ) -> None:
         """Compact selected tables through the shared KeepBest command."""
         if extractor not in {"tree", "greedy-dag"}:
             raise ValueError(f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'")
+        if cost_model is not None and extractor == "greedy-dag" and not isinstance(cost_model, DagCostModel):
+            msg = "greedy-dag extraction requires a DagCostModel"
+            raise TypeError(msg)
         references = [resolve_callable(callable_) for callable_ in (fn, *fns)]
         builder = Builder()
         tables = []
@@ -1686,25 +1738,38 @@ class EGraph:
                 raise ValueError(msg)
             builder.import_ref(reference)
             tables.append(declaration.kind.value.name)
-        command = builder.add(
-            "commands",
-            pb.Command(
-                kind=Oneof[Literal["keep_best"], pb.KeepBest](
-                    "keep_best",
-                    pb.KeepBest(
-                        tables=tables,
-                        extractor=pb.Extractor.TREE if extractor == "tree" else pb.Extractor.GREEDY_DAG,
-                    ),
-                )
-            ),
+        registration = (
+            self._state.cost_model(
+                _HostModelFactory(self, cast("TreeCostModel[Comparable] | DagCostModel[ComparableAdd]", cost_model)),
+                additive=isinstance(cost_model, DagCostModel),
+            )
+            if cost_model is not None
+            else contextlib.nullcontext("")
         )
-        self._state.run_program([builder.publish().ref("commands", command)])
+        with registration as model_name:
+            command = builder.add(
+                "commands",
+                pb.Command(
+                    kind=Oneof[Literal["keep_best"], pb.KeepBest](
+                        "keep_best",
+                        pb.KeepBest(
+                            tables=tables,
+                            cost_model=model_name,
+                            extractor=pb.Extractor.TREE if extractor == "tree" else pb.Extractor.GREEDY_DAG,
+                        ),
+                    )
+                ),
+            )
+            self._state.run_program([builder.publish().ref("commands", command)])
 
     @_TRACER.start_as_current_span("push")
     def push(self) -> None:
         """
         Push the current state of the egraph, so that it can be popped later and reverted back.
         """
+        if self._cost_model_frames or self._state._native_running:
+            msg = "Cannot push during a cost-model callback"
+            raise RuntimeError(msg)
         copied = self._state.copy()
         self._state_stack.append(self._state)
         self._state = copied
@@ -1714,6 +1779,9 @@ class EGraph:
         """
         Pop the current state of the egraph, reverting back to the previous state.
         """
+        if self._cost_model_frames or self._state._native_running:
+            msg = "Cannot pop during a cost-model callback"
+            raise RuntimeError(msg)
         if not self._state_stack:
             msg = "Cannot pop an EGraph without a pushed state"
             raise IndexError(msg)
@@ -2084,9 +2152,15 @@ class EGraph:
         }
 
     def lookup_function_value(self, expr: BASE_EXPR) -> BASE_EXPR | None:
-        """Look up a table key when shared readonly lookup is available."""
-        msg = "Raw native lookup is removed; use function_values for portable table inspection"
-        raise NotImplementedError(msg)
+        """Read an existing logical row without evaluating its arguments."""
+        if self._cost_model_frames:
+            observation, supplied = self._cost_model_frames[-1]
+        else:
+            snapshot = self.freeze()
+            assert snapshot.program is not None
+            observation, supplied = _CostModelObservation(self._state, snapshot.program), None
+        value = observation.lookup(to_runtime_expr(expr).__egg_ref__, supplied=supplied)
+        return None if value is None else cast("BASE_EXPR", RuntimeExpr(value))
 
     def has_custom_cost(self, fn: ExprCallable) -> bool:
         """Inspect assigned row costs from a complete shared snapshot."""
@@ -2094,6 +2168,8 @@ class EGraph:
         declaration: pb.Declaration = reference.read()
         assert declaration.kind is not None
         name = declaration.kind.value.name
+        if self._cost_model_frames:
+            return any(table == name for table, _ in self._cost_model_frames[-1][0].assigned)
         snapshot = self.freeze()
         assert snapshot.program is not None
         return any(
@@ -3348,9 +3424,62 @@ class DagCostModel(Generic[DAG_COST]):
 
 
 def default_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
-    """Use the shared host default once Python cost-model registration is available."""
-    msg = "Python cost callbacks require shared host-model registration"
-    raise NotImplementedError(msg)
+    """Apply assigned C, declared C, then the ordinary node/container cost."""
+    from .deconstruct import get_callable_fn  # noqa: PLC0415
+
+    callable_fn = get_callable_fn(expr)
+    if callable_fn is not None and (assigned := egraph.lookup_function_value(get_cost(expr))) is not None:
+        self_cost = int(assigned)
+    elif callable_fn is not None and (declared := get_callable_cost(callable_fn)) is not None:
+        self_cost = declared
+    else:
+        node: pb.Node = to_runtime_expr(expr).__egg_ref__.read()
+        primitive = node.kind.value.value if node.kind is not None and node.kind.field == "primitive_value" else None
+        self_cost = (
+            0
+            if primitive is not None
+            and primitive.field in {"vec", "set", "multiset", "map", "pair", "maybe", "partial_call", "lambda"}
+            else 1
+        )
+    return sum(children_costs, start=self_cost)
+
+
+@dataclass(frozen=True)
+class _HostModelFactory:
+    egraph: EGraph
+    model: TreeCostModel[Comparable] | DagCostModel[ComparableAdd]
+
+    def __call__(self, encoded: bytes) -> _HostModelRuntime:
+        observation = _CostModelObservation(self.egraph._state, pb.Program.from_binary(encoded))
+        return _HostModelRuntime(self.egraph, self.model, observation)
+
+
+@dataclass(frozen=True)
+class _HostModelRuntime:
+    egraph: EGraph
+    model: TreeCostModel[Comparable] | DagCostModel[ComparableAdd]
+    observation: _CostModelObservation
+
+    @property
+    def identity(self) -> object:
+        if not isinstance(self.model, DagCostModel):
+            msg = "Tree folds do not provide an additive identity"
+            raise TypeError(msg)
+        return self.model.identity
+
+    def cost(self, node: int, children: list[object]) -> object:
+        frame = self.observation, self.observation.supplied_values(node)
+        state = self.egraph._state
+        self.egraph._cost_model_frames.append(frame)
+        state._cost_model_active += 1
+        try:
+            expr = cast("BaseExpr", RuntimeExpr(self.observation.owner.ref("nodes", node)))
+            if isinstance(self.model, DagCostModel):
+                return self.model.marginal_cost(self.egraph, expr)
+            return self.model(self.egraph, expr, cast("list[Comparable]", children))
+        finally:
+            state._cost_model_active -= 1
+            assert self.egraph._cost_model_frames.pop() is frame
 
 
 def get_callable_cost(fn: ExprCallable) -> int | None:

@@ -18,6 +18,60 @@ from egglog.runtime import RuntimeFunction, create_callable, resolve_callable
 _callback_observations = {}
 
 
+@pytest.mark.parametrize("case", ["unknown", "annotation", "algorithm"])
+def test_host_model_contract_rejects_before_callbacks(case):
+    from egglog.egraph_state import EGraphState  # noqa: PLC0415
+
+    state = EGraphState()
+    sorts = pb.Program(
+        ir_version=1,
+        sorts=[
+            pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))),
+            pb.Sort(kind=Oneof("family", pb.HostSort(name="PyObject"))),
+            pb.Sort(kind=Oneof("family", pb.HostSort(name="bool"))),
+        ],
+    )
+
+    def unused(_observation: bytes) -> object:
+        pytest.fail("Rejected model contract must not invoke callbacks")
+
+    name = state.transport.register_cost_model(
+        state.handle, sorts.to_binary(), 2 if case == "annotation" else 0, 1, False, unused
+    )
+    try:
+        builder = Builder()
+        sort = builder.add("sorts", sorts.sorts[0])
+        root = builder.add(
+            "nodes", pb.Node(sort_id=sort, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 1))))
+        )
+        command = builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof(
+                    "extract",
+                    pb.Extract(
+                        roots=[root],
+                        variants=1,
+                        extractor=pb.Extractor.GREEDY_DAG if case == "algorithm" else pb.Extractor.TREE,
+                        cost_model="missing-model" if case == "unknown" else name,
+                    ),
+                )
+            ),
+        )
+        message = {
+            "unknown": "unknown cost model",
+            "annotation": "stored annotation sort",
+            "algorithm": "additive marginal",
+        }[case]
+        with pytest.raises(EggSmolError, match=message) as caught:
+            state.run_program([builder.publish().ref("commands", command)])
+        error = caught.value.__dict__["_egglog_proto_error"]
+        assert error.code == (pb.ErrorCode.UNKNOWN_NAME if case == "unknown" else pb.ErrorCode.INVALID_PROGRAM)
+    finally:
+        state.transport.release_cost_model(state.handle, name)
+        state.destroy()
+
+
 @pytest.mark.parametrize(
     "state",
     ["term", "constant", "set", "constant-set", "union", "relation", "subsumed", "cost", "let-vec", "nested-vec"],

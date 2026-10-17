@@ -1249,6 +1249,8 @@ def test_reverse_args_rewrite_method_preserves_python_argument_order() -> None:
 
 
 def test_reverse_args_bodyless_method_uses_backend_argument_order() -> None:
+    from egglog_proto.egglog.v1 import egglog_pb as pb  # noqa: PLC0415
+
     class ReverseLookup(Expr):
         def __init__(self, value: i64Like) -> None: ...
 
@@ -1258,10 +1260,23 @@ def test_reverse_args_bodyless_method_uses_backend_argument_order() -> None:
 
     value = ReverseLookup(1).lookup(i64(2))
     egraph = EGraph()
-    egraph.register(set_(value).to(String("found")), set_cost(value, 7))
+    egraph.register(set_(value).to(String("found")))
 
-    egraph.check(eq(value).to(String("found")), eq(get_cost(value)).to(i64(7)))
+    egraph.check(eq(value).to(String("found")))
     assert egraph.function_values(ReverseLookup.lookup) == {value: String("found")}
+    before = egraph.freeze().to_binary()
+    with pytest.raises(EggSmolError, match="invalid action target subtype") as caught:
+        egraph.register(set_cost(value, 7))
+    error = caught.value.__dict__["_egglog_proto_error"]
+    assert error.code == pb.ErrorCode.INVALID_PROGRAM
+    assert error.location is None
+    assert egraph.freeze().to_binary() == before
+    with pytest.raises(EggSmolError, match="GetCost requires a constructor target") as caught:
+        egraph.check(eq(get_cost(value)).to(i64(7)))
+    error = caught.value.__dict__["_egglog_proto_error"]
+    assert error.code == pb.ErrorCode.INVALID_PROGRAM
+    assert error.location is None
+    assert egraph.freeze().to_binary() == before
 
 
 def test_reverse_args_bodyless_constructor_round_trips_backend_argument_order() -> None:
@@ -1275,7 +1290,9 @@ def test_reverse_args_bodyless_constructor_round_trips_backend_argument_order() 
 
     expr = ReverseSource(1).make(i64(2))
 
-    assert expr_parts(EGraph(expr).extract(expr)) == expr_parts(expr)
+    egraph = EGraph(expr, set_cost(expr, 7))
+    assert expr_parts(egraph.extract(expr)) == expr_parts(expr)
+    egraph.check(eq(get_cost(expr)).to(i64(7)))
 
 
 def test_named_builtin_return_function_with_eqsort_input_is_eager() -> None:
@@ -2062,6 +2079,8 @@ class TestDefaultReplacements:
         check_eq(cast("Maybe[i64]", Defaults.missing), Maybe[i64].none())
 
     def test_eqsort_constant_with_merge(self):
+        from egglog._program import Builder, pack  # noqa: PLC0415
+
         merged = constant("merged", A, merge=lambda old, _new: old)
 
         egraph = EGraph()
@@ -2069,7 +2088,17 @@ class TestDefaultReplacements:
 
         egraph.check(eq(merged).to(A()))
         assert egraph.function_values(merged) == {merged: A()}
-        assert "set_(merged).to(A())" in str(egraph.freeze())
+        snapshot = egraph.freeze()
+        assert snapshot.program is not None
+        owner = Builder.from_program(snapshot.program).publish()
+        restored = EGraph()
+        restored._state.run_program(
+            pack(
+                roots=[owner.ref("declarations", index) for index in range(len(snapshot.program.declarations))],
+                commands=[owner.ref("commands", index) for index in range(len(snapshot.program.commands))],
+            )
+        )
+        restored.check(eq(merged).to(A()))
 
     def test_function(self):
         @function
@@ -3637,6 +3666,117 @@ def test_keep_best_invalidates_opaque_values_until_a_parent_scope_is_restored() 
 
 
 class TestCustomExtract:
+    def test_callback_keeps_builtin_and_user_class_member_identity(self) -> None:
+        class Key(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+            def size(self) -> i64: ...
+
+        class Root(Expr):
+            def __init__(self, key: Key) -> None: ...
+
+        graph = EGraph(set_(Key(3).size()).to(i64(17)))
+
+        def model(callback_graph: EGraph, expr: BaseExpr, children: list[int]) -> int:
+            if isinstance(expr, i64):
+                return 1
+            if isinstance(expr, Key):
+                return sum(children)
+            assert isinstance(expr, Root)
+            args = get_callable_args(expr)
+            assert args is not None
+            key = args[0]
+            assert isinstance(key, Key)
+            value = callback_graph.lookup_function_value(cast("Key", key).size())
+            assert isinstance(value, i64)
+            return int(value) + sum(children)
+
+        assert graph.extract(Root(Key(3)), include_cost=True, cost_model=model) == (Root(Key(3)), 18)
+
+    def test_param_cost_callback_recognizes_original_classes(self) -> None:
+        from egglog.exp.param_eq import Num, ParamCost, param_cost_model  # noqa: PLC0415
+
+        def model(callback_graph: EGraph, expr: BaseExpr, children: list[ParamCost]) -> ParamCost:
+            assert isinstance(expr, (f64, Num))
+            return param_cost_model(callback_graph, expr, children)
+
+        expr = Num(2.5)
+        assert EGraph().extract(expr, include_cost=True, cost_model=model) == (expr, ParamCost(floats=1))
+
+    def test_callback_freeze_rejects_reentry_and_other_graph_remains_independent(self) -> None:
+        graph, other = EGraph(), EGraph()
+
+        def model(callback_graph: EGraph, _expr: BaseExpr, _children: list[int]) -> int:
+            snapshot = other.freeze()
+            assert snapshot.options is not None
+            assert snapshot.options.has_field("cost_sort")
+            callback_graph.freeze()
+            return 1
+
+        with pytest.raises(RuntimeError, match="Cannot execute engine operations during a cost-model callback"):
+            graph.extract(i64(1), cost_model=model)
+        assert graph.freeze().options is not None
+
+    def test_model_objectives_leave_i64_annotations_independent(self) -> None:
+        class Item(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        graph = EGraph(Item(1), set_cost(Item(1), 7))
+
+        def boolean_objective(_graph: EGraph, expr: BaseExpr, children: list[bool]) -> bool:
+            return isinstance(expr, Item) or any(children)
+
+        assert graph.extract(Item(1), include_cost=True) == (Item(1), 8)
+        assert graph.extract(Item(1), include_cost=True, cost_model=boolean_objective) == (Item(1), True)
+        assert graph.extract(get_cost(Item(1))) == i64(7)
+        graph.push()
+        try:
+            graph.register(set_cost(Item(1), 9))
+            assert graph.extract(Item(1), include_cost=True, cost_model=default_cost_model) == (Item(1), 10)
+            assert graph.extract(Item(1), include_cost=True, cost_model=boolean_objective) == (Item(1), True)
+        finally:
+            graph.pop()
+        assert graph.extract(Item(1), include_cost=True, cost_model=default_cost_model) == (Item(1), 8)
+
+    def test_tree_keep_best_ranks_in_d_and_preserves_c(self) -> None:
+        class Key(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        @function(merge=lambda old, new: new)
+        def selected() -> Key: ...
+
+        graph = EGraph(
+            set_(selected()).to(Key(1)),
+            union(Key(1)).with_(Key(2)),
+            set_cost(Key(1), 99),
+            set_cost(Key(2), 7),
+        )
+
+        def prefer_two(_graph: EGraph, expr: BaseExpr, children: list[bool]) -> bool:
+            args = get_callable_args(expr)
+            return bool(isinstance(expr, Key) and args is not None and cast("i64", args[0]).value == 1) or any(children)
+
+        graph.keep_best(selected, cost_model=prefer_two)
+        assert graph.extract(selected()) == Key(2)
+        assert graph.extract(get_cost(Key(2))) == i64(7)
+
+    def test_callback_exception_retains_identity_and_next_request_works(self) -> None:
+        class Item(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        graph = EGraph()
+        root = Item(1)
+        original = LookupError("original custom model failure")
+
+        def fail(_graph: EGraph, _expr: BaseExpr, _children: list[int]) -> int:
+            raise original
+
+        with pytest.raises(LookupError) as caught:
+            graph.extract(root, cost_model=fail)
+        assert caught.value is original
+        name = cast("RuntimeExpr", root).__egg_ref__.read().kind.value.func
+        assert ("callable", name) in graph._state.definitions
+        assert graph.extract(i64(2)) == i64(2)
+
     def test_literal_root(self) -> None:
         def is_even_cost_model(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
             del egraph, children_costs
@@ -3715,22 +3855,16 @@ class TestCustomExtract:
             pytest.param(UnstableFn[E, i64](ff, i64(1)), id="fn partial"),
         ],
     )
-    def test_to_from_value(self, expr):
+    def test_host_model_preserves_portable_value_roots(self, expr):
         egraph = EGraph()
-        expr = egraph.extract(expr)
-        assert expr == self._to_from_value(egraph, expr)
-
-    def _to_from_value(self, egraph: EGraph, expr: RuntimeExpr):
-        typed_expr = expr.__egg_typed_expr__
-        value = egraph._state.typed_expr_to_value(typed_expr)
-        res_val = egraph._state.value_to_expr(typed_expr.tp, value)
-        return expr.__with_expr__(TypedExprDecl(typed_expr.tp, res_val))
+        expected = egraph.extract(expr)
+        assert egraph.extract(expr, cost_model=default_cost_model) == expected
 
     def test_compare_values(self):
         egraph = EGraph()
         egraph.register(E(), gg())
-        e_value = self._to_from_value(egraph, cast("RuntimeExpr", E()))
-        gg_value = self._to_from_value(egraph, cast("RuntimeExpr", gg()))
+        e_value = egraph.extract(E())
+        gg_value = egraph.extract(gg())
         assert e_value != gg_value
         assert hash(e_value) != hash(gg_value)
         assert str(e_value) != str(gg_value)
@@ -3748,7 +3882,7 @@ class TestCustomExtract:
         # cost = 2
         x = i64(10)
         # cost = 3 + 2 = 5
-        xs = Vec(x)
+        xs = EGraph().extract(Vec(x))
         # cost = 100
         res = E()
         # cost = 1 + 5  = 6
@@ -4123,7 +4257,7 @@ class TestCustomExtract:
             assert value is not None
             return int(value) + sum(children_costs)
 
-        expr = Root(Map[Key, i64].empty().insert(Key(3), i64(0)))
+        expr = Root(EGraph().extract(Map[Key, i64].empty().insert(Key(3), i64(0))))
         assert egraph.extract(expr, include_cost=True, cost_model=cast("TreeCostModel[int]", lookup_cost)) == (
             expr,
             17,

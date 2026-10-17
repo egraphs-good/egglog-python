@@ -435,6 +435,27 @@ impl egglog_experimental::protobuf::NativeExtension for PyObjectExtension {
             args: vec![],
         }))
     }
+
+    fn encode_observed_custom_value(
+        &self,
+        graph: &EGraph,
+        sort: &ArcSort,
+        value: Value,
+    ) -> Result<Option<pb::CustomValue>, String> {
+        if sort.value_type() != Some(TypeId::of::<PyPickledValue>()) {
+            return Ok(None);
+        }
+        if !graph
+            .get_sort_by_name("PyObject")
+            .is_some_and(|actual| Arc::ptr_eq(actual, sort))
+        {
+            return Err("PyObject native sort provenance mismatch".into());
+        }
+        Ok(Some(pb::CustomValue {
+            payload: graph.value_to_base::<PyPickledValue>(value).0.clone(),
+            args: vec![],
+        }))
+    }
 }
 
 /// Attaches to the Python interpreter and runs the given closure.

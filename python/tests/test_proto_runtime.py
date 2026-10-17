@@ -3589,14 +3589,116 @@ def test_invalid_constant_options_reject_before_authored_records(default, option
         constant("bad", i64, *args, **options)
 
 
-def test_valid_but_unmigrated_constant_forms_fail_without_callbacks():
-    def forbidden(old, new):
-        pytest.fail("Unmigrated merge callback executed")
+def test_constant_eager_defaults_are_closed_nullary_primitives(monkeypatch):
+    from egglog import Maybe  # noqa: PLC0415
 
-    with pytest.raises(NotImplementedError, match="defaults, merges and rulesets"):
-        constant("default", i64, i64(3))
-    with pytest.raises(NotImplementedError, match="defaults, merges and rulesets"):
-        constant("merge", i64, merge=forbidden)
+    def forbidden(*args, **kwargs):
+        pytest.fail("Constant authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+
+    class ConstantBox(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    @function
+    def seed(value: i64) -> i64:
+        return value + 1
+
+    scalar, box = seed(i64(3)), ConstantBox(i64(4))
+    before = pack([scalar.__egg_ref__, box.__egg_ref__]).program.to_binary()
+    for value, expected in [
+        (constant("scalar", i64, scalar), scalar),
+        (constant("box", ConstantBox, box), box),
+        (constant("missing", Maybe[i64], None), Maybe[i64].none()),
+    ]:
+        declaration = resolve_callable(value)
+        primitive = declaration.read().kind.value
+        assert isinstance(primitive, pb.Primitive)
+        assert not primitive.inputs
+        assert expr_parts(RuntimeExpr(declaration.owner.ref("nodes", primitive.body))) == expr_parts(expected)
+        with pytest.raises(TypeError, match="table-backed Function"):
+            set_(value).to(expected)
+        encoded = pack([value.__egg_ref__]).program.to_binary()
+        assert pb.Program.from_binary(encoded).to_binary() == encoded
+    assert pack([scalar.__egg_ref__, box.__egg_ref__]).program.to_binary() == before
+
+
+def test_constant_merges_are_nullary_functions_without_engine(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Constant authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    calls = []
+
+    def maximum(old, new):
+        calls.append(get_current_ruleset())
+        return old.max(new)
+
+    class MergedToken(Expr):
+        def __init__(self) -> None: ...
+
+    ambient = ruleset()
+    with set_current_ruleset(ambient):
+        maximum_value = constant("maximum", i64, merge=maximum)
+        token = constant("token", MergedToken, merge=lambda old, _new: old)
+        assert get_current_ruleset() is ambient
+    assert calls == [None]
+    for value, expected in [(maximum_value, "old.max(new)"), (token, "old")]:
+        declaration = resolve_callable(value)
+        merged = declaration.read().kind.value
+        assert isinstance(merged, pb.Function)
+        assert not merged.inputs
+        assert str(RuntimeExpr(declaration.owner.ref("nodes", merged.merge))) == expected
+    assert set_(maximum_value).to(i64(2)).__egg_ref__.read().kind.value.kind.field == "set"
+    assert set_(token).to(MergedToken()).__egg_ref__.read().kind.value.kind.field == "set"
+    assert not ambient._snapshot({}).read().kind.value.rules
+
+
+def test_constant_ruleset_default_is_a_destination_constructor_rewrite(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Constant authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+
+    class DefaultToken(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    destination, ambient = ruleset(), ruleset()
+    previous = destination._snapshot({})
+    default = DefaultToken(i64(3))
+    with set_current_ruleset(ambient):
+        value = constant("token", DefaultToken, default, ruleset=destination)
+        assert get_current_ruleset() is ambient
+    assert resolve_callable(value).read().kind.field == "constructor"
+    assert not previous.read().kind.value.rules
+    assert not ambient._snapshot({}).read().kind.value.rules
+    snapshot = destination._snapshot({})
+    assert len(snapshot.read().kind.value.rules) == 1
+    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    record = reference.read().kind.value
+    assert isinstance(record, pb.Rewrite)
+    assert not record.conditions
+    assert not record.subsume
+    assert expr_parts(RuntimeExpr(reference.owner.ref("nodes", record.lhs))) == expr_parts(value)
+    assert expr_parts(RuntimeExpr(reference.owner.ref("nodes", record.rhs))) == expr_parts(default)
+    encoded = pack([snapshot]).program.to_binary()
+    assert pb.Program.from_binary(encoded).to_binary() == encoded
+    with pytest.raises(TypeError, match="Rewrite destinations must be Rulesets"):
+        constant("invalid", DefaultToken, default, ruleset=object())
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("spelling", ["external", "_0"])
+def test_constant_defaults_reject_unbound_query_variables(explicit, spelling):
+    class QueryDefaultToken(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    destination = ruleset() if explicit else None
+    default = QueryDefaultToken(var(spelling, i64))
+    with pytest.raises(ValueError, match=r"Free variable.*named eager body"):
+        constant("invalid", QueryDefaultToken, default, ruleset=destination)
+    if destination is not None:
+        assert not destination._snapshot({}).read().kind.value.rules
 
 
 @pytest.mark.parametrize("egg_name", [None, ""])
@@ -3821,7 +3923,6 @@ def test_constructor_scope_publishes_once_across_authoring_threads():
         {"mutates_self": True},
         {"unextractable": True},
         {"subsume": True},
-        {"reverse_args": True},
         {"preserve": True},
     ],
 )
@@ -3834,6 +3935,107 @@ def test_unmigrated_constructor_options_never_publish_members(options):
         Invalid()
     assert not Invalid.__egg_context__.catalog.members
     assert not Invalid.__egg_attr_cache__
+
+
+def test_reverse_args_members_map_heterogeneous_inputs_and_mutation(class_authoring_without_engine):
+    class ReversedResult(Expr): ...
+
+    class ReversedSource(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+        @method(reverse_args=True)
+        def make(self, label: StringLike, count: i64 = i64(4)) -> ReversedResult: ...
+
+        @method(reverse_args=True)
+        @classmethod
+        def create(cls, label: StringLike, count: i64) -> "ReversedSource": ...
+
+        @method(reverse_args=True, mutates_self=True)
+        def replace(self, label: StringLike) -> None: ...
+
+    source = ReversedSource(i64(3))
+    expression = source.make("tag")
+    declaration = resolve_callable(ReversedSource.make)
+    record = declaration.read()
+    assert [argument.name for argument in record.kind.value.inputs] == ["count", "label", "self"]
+    view = record.bindings.python.views[0]
+    assert view.receiver == 2
+    assert [(parameter.name, parameter.core_input) for parameter in view.params] == [("label", 1), ("count", 0)]
+    assert view.params[1].has_field("default_expr")
+    call = expression.__egg_ref__.read().kind.value
+    arguments = [expression.__egg_ref__.owner.ref("nodes", index) for index in call.args]
+    assert [RuntimeExpr(argument) for argument in arguments] == [i64(4), String("tag"), source]
+    assert get_callable_fn(expression) == ReversedSource.make
+    assert get_callable_args(expression) == (source, String("tag"), i64(4))
+    assert expr_parts(ReversedSource.make(source, count=i64(4), label="tag")) == expr_parts(expression)
+    with pytest.raises(ConvertError, match="Cannot convert"):
+        source.make(i64(9))
+    with pytest.raises(ConvertError, match="Cannot convert"):
+        source.make("tag", String("wrong"))
+    with pytest.raises(TypeError, match="too many positional"):
+        source.make("tag", i64(4), i64(5))
+    packed = pack([expression.__egg_ref__])
+    program = pb.Program.from_binary(packed.program.to_binary())
+    detached = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
+    assert expr_parts(detached) == expr_parts(expression)
+    assert str(detached) == str(expression)
+    assert get_callable_args(detached) == get_callable_args(expression)
+
+    created = ReversedSource.create("tag", i64(4))
+    create = resolve_callable(ReversedSource.create).read()
+    assert [argument.name for argument in create.kind.value.inputs] == ["count", "label"]
+    assert not create.bindings.python.views[0].has_field("receiver")
+    assert get_callable_args(created) == (String("tag"), i64(4))
+
+    snapshot = copy(source)
+    assert source.replace("next") is None
+    replace = resolve_callable(ReversedSource.replace).read()
+    assert replace.bindings.python.views[0].receiver == replace.bindings.python.views[0].mutates == 1
+    assert get_callable_args(source, ReversedSource.replace) == (snapshot, String("next"))
+
+
+def test_reverse_args_initializer_retains_python_parameter_order(class_authoring_without_engine):
+    class ReversedInitializer(Expr):
+        @method(reverse_args=True)
+        def __init__(self, label: StringLike, count: i64) -> None: ...
+
+    expression = ReversedInitializer("tag", i64(4))
+    declaration = resolve_callable(ReversedInitializer).read()
+    assert [argument.name for argument in declaration.kind.value.inputs] == ["count", "label"]
+    view = declaration.bindings.python.views[0]
+    assert not view.has_field("receiver")
+    assert [(parameter.name, parameter.core_input) for parameter in view.params] == [("label", 1), ("count", 0)]
+    assert get_callable_fn(expression) == ReversedInitializer
+    assert get_callable_args(expression) == (String("tag"), i64(4))
+    assert expr_parts(ReversedInitializer(count=i64(4), label="tag")) == expr_parts(expression)
+
+
+def test_reverse_args_rewrite_body_receives_python_order(class_authoring_without_engine):
+    destination = ruleset()
+    calls = []
+
+    class ReversedRewrite(Expr, ruleset=destination):
+        def __init__(self, value: i64) -> None: ...
+
+        @method(reverse_args=True)
+        def select(self, label: StringLike, count: i64) -> "ReversedRewrite":
+            calls.append((str(self), str(label), str(count)))
+            return self
+
+    ReversedRewrite(i64(1)).select("tag", i64(2))
+    assert calls == [("self", "label", "count")]
+    snapshot = destination._snapshot({})
+    assert len(snapshot.read().kind.value.rules) == 1
+    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    rewrite = reference.read().kind.value
+    lhs = reference.owner.ref("nodes", rewrite.lhs)
+    assert [lhs.owner.ref("nodes", index).read().kind.value for index in lhs.read().kind.value.args] == [
+        "count",
+        "label",
+        "self",
+    ]
+    assert reference.owner.ref("nodes", rewrite.rhs) == lhs.owner.ref("nodes", lhs.read().kind.value.args[-1])
+    assert [str(argument) for argument in get_callable_args(RuntimeExpr(lhs))] == ["self", "label", "count"]
 
 
 @pytest.mark.parametrize("options", [{"cost": 1}, {}])

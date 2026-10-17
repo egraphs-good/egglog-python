@@ -9,8 +9,8 @@ Only original Python callback exceptions use a request-owned non-wire channel.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from contextlib import suppress
+from collections.abc import Callable, Generator, Iterable, Mapping
+from contextlib import contextmanager, suppress
 from operator import index
 from typing import Literal, SupportsIndex, cast
 from uuid import uuid4
@@ -20,7 +20,7 @@ from protobuf import Oneof
 
 from . import bindings
 from ._catalog import builtin_catalog
-from ._program import Builder, Owner, Packed, Ref, _copy_record, _definition_key, pack, rule_equal
+from ._program import Builder, Owner, Packed, Ref, StructuralView, _copy_record, _definition_key, pack, rule_equal
 from .declarations import Ident
 
 __all__ = ["EGraphState", "EggSmolError"]
@@ -67,9 +67,34 @@ class EGraphState:
         self._direct_rules: set[Ref] = set()
         self._pending_rules: dict[tuple[Ident, Ref, Ref | None], tuple[Ref, Ref]] = {}
         self._pending_roots: dict[tuple[Ident, str, tuple[Ref, ...]], Ref] = {}
+        self._cost_model_active = 0
+        self._native_running = False
+        self._active_definitions: tuple[Ref, ...] = ()
+
+    @contextmanager
+    def cost_model(self, factory: Callable[[bytes], object], *, additive: bool) -> Generator[str, None, None]:
+        """Retain an explicit C/D/codec registration for exactly one operation."""
+        if self.handle is None or self._cost_model_active or self._native_running:
+            msg = "Cannot register a model on a destroyed or actively extracting EGraph"
+            raise RuntimeError(msg)
+        sorts = pb.Program(
+            ir_version=1,
+            sorts=[
+                pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+                pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="PyObject"))),
+            ],
+        )
+        name = self.transport.register_cost_model(self.handle, sorts.to_binary(), 0, 1, additive, factory)
+        try:
+            yield name
+        finally:
+            self.transport.release_cost_model(self.handle, name)
 
     def configure_resources(self, num_threads: object = _QUERY_RESOURCES) -> int:
         """Query/update this handle over bytes and return the receiver's actual count."""
+        if self._cost_model_active or self._native_running:
+            msg = "Cannot execute engine operations during a cost-model callback"
+            raise RuntimeError(msg)
         if self.handle is None:
             msg = "EGraph handle has been destroyed"
             raise RuntimeError(msg)
@@ -97,6 +122,9 @@ class EGraphState:
         allow_failed_check: bool = False,
     ) -> tuple[pb.RunProgramResponse, Owner]:
         """Pack canonical command closure once and adopt the returned records."""
+        if self._cost_model_active or self._native_running:
+            msg = "Cannot execute engine operations during a cost-model callback"
+            raise RuntimeError(msg)
         if self.handle is None:
             msg = "EGraph handle has been destroyed"
             raise RuntimeError(msg)
@@ -115,7 +143,13 @@ class EGraphState:
         request = pb.RunProgramRequest(
             egraph_id=self.handle, program=packed.program, profile=True, include_run_reports=include_run_reports
         )
-        encoded, host_error = self.transport.run(request.to_binary())
+        self._native_running = True
+        self._active_definitions = packed.definitions
+        try:
+            encoded, host_error = self.transport.run(request.to_binary())
+        finally:
+            self._active_definitions = ()
+            self._native_running = False
         # Keep receipt validation inside this boundary to preserve the host cause.
         try:
             response = pb.RunProgramResponse.from_binary(encoded)
@@ -151,7 +185,7 @@ class EGraphState:
                     key = _definition_key(reference.read())
                     if key is not None and reference.role == "declarations":
                         self.definitions[key] = reference
-            builder = Builder.from_program(
+            owner = self._adopt_value_records(
                 pb.Program(
                     ir_version=1,
                     nodes=response.nodes,
@@ -159,9 +193,6 @@ class EGraphState:
                     files=response.files,
                 )
             )
-            for reference in self.definitions.values():
-                builder.import_ref(reference)
-            owner = builder.publish()
         except BaseException as error:
             if host_error is not None and error is not host_error:
                 raise error from host_error
@@ -185,6 +216,37 @@ class EGraphState:
             error.__dict__["_egglog_proto_error"] = response.error
             raise error
         return response, owner
+
+    def _adopt_value_records(self, program: pb.Program, *, pending: Iterable[Ref] = ()) -> Owner:
+        """Own value arenas while retaining canonical declaration/class identity."""
+        if program._unknown_fields:
+            msg = "Cannot adopt unknown Program fields"
+            raise NotImplementedError(msg)
+        definitions = self.definitions.copy()
+        observed = {_definition_key(declaration) for declaration in program.declarations}
+        # Native observation starts after installation but before its response
+        # receipt reaches Python. Retain first-use source contexts only for
+        # definitions actually present in the owned native observation.
+        for reference in pending:
+            if reference.role == "declarations" and (key := _definition_key(reference.read())) in observed:
+                assert key is not None
+                definitions[key] = reference
+        builder = Builder.from_program(
+            pb.Program(
+                ir_version=program.ir_version,
+                nodes=program.nodes,
+                sorts=program.sorts,
+                files=program.files,
+            )
+        )
+        for declaration in program.declarations:
+            if _definition_key(declaration) not in definitions:
+                # Native-only records have no original Python class context;
+                # their arena references already address the owned values.
+                builder.add("declarations", declaration)
+        for reference in definitions.values():
+            builder.import_ref(reference)
+        return builder.publish()
 
     def _ruleset_members(self, root: Ref) -> list[Ref]:
         """Flatten ordered canonical selections, deduplicating occurrences only."""
@@ -416,6 +478,9 @@ class EGraphState:
         result._direct_rules = self._direct_rules.copy()
         result._pending_rules = self._pending_rules.copy()
         result._pending_roots = self._pending_roots.copy()
+        result._cost_model_active = 0
+        result._native_running = False
+        result._active_definitions = ()
         return result
 
     def return_to(self, saved: EGraphState) -> None:
@@ -449,3 +514,128 @@ class EGraphState:
         if getattr(self, "handle", None) is not None:
             with suppress(Exception):
                 self.destroy()
+
+
+class _CostModelObservation:
+    """Lookup-only indexes over one owned normative observation Program."""
+
+    def __init__(self, state: EGraphState, program: pb.Program) -> None:
+        self.program = program
+        self.owner = state._adopt_value_records(program, pending=state._active_definitions)
+        self.registered = frozenset(
+            key for declaration in program.declarations if (key := _definition_key(declaration)) is not None
+        )
+        self.rows: dict[tuple[str, tuple[int, ...]], int] = {}
+        self.assigned: dict[tuple[str, tuple[int, ...]], int] = {}
+        for node_index, node in enumerate(program.nodes):
+            if node.kind is not None and node.kind.field == "union":
+                for member in node.kind.value.members:
+                    alternative = program.nodes[member]
+                    if alternative.kind is not None and alternative.kind.field == "call":
+                        call = alternative.kind.value
+                        self.rows[call.func, tuple(call.args)] = node_index
+        for command in program.commands:
+            if command.kind is None or command.kind.field != "action" or command.kind.value.kind is None:
+                continue
+            action = command.kind.value.kind
+            if action.field in {"set", "set_cost"} and action.value.target is not None:
+                target = action.value.target
+                destination = self.rows if action.field == "set" else self.assigned
+                destination[target.func, tuple(target.args)] = (
+                    action.value.value if action.field == "set" else action.value.cost
+                )
+
+    def supplied_values(self, node: int) -> frozenset[Ref]:
+        """Follow semantic callback arguments, stopping at opaque class identity."""
+        record = self.program.nodes[node]
+        pending = list(record.kind.value.args) if record.kind is not None and record.kind.field == "call" else [node]
+        result: set[Ref] = set()
+        while pending:
+            index = pending.pop()
+            reference = self.owner.ref("nodes", index)
+            if reference in result:
+                continue
+            result.add(reference)
+            record = reference.read()
+            if record.kind is not None and record.kind.field == "union":
+                continue
+
+            def visit(role: str, child: int) -> int:
+                if role == "nodes":
+                    pending.append(child)
+                return child
+
+            _copy_record(record, relocate=visit)
+        return frozenset(result)
+
+    def lookup(self, reference: Ref, *, supplied: frozenset[Ref] | None) -> Ref | None:
+        """Resolve existing rows without evaluating arguments or publishing declarations."""
+        node: pb.Node = reference.read()
+        if node.kind is None or node.kind.field not in {"call", "get_cost"}:
+            msg = "Can only look up a table call or assigned cost"
+            raise TypeError(msg)
+        call = node.kind.value
+        if ("callable", call.func) not in self.registered:
+            msg = "Lookup tables must be registered before extraction starts"
+            raise ValueError(msg)
+        allowed = (
+            supplied
+            if supplied is not None
+            else frozenset(self.owner.ref("nodes", i) for i in range(len(self.program.nodes)))
+        )
+
+        key = (
+            call.func,
+            tuple(
+                self._resolve(reference.owner.ref("nodes", arg), allowed, callback=supplied is not None)
+                for arg in call.args
+            ),
+        )
+        result = (self.assigned if node.kind.field == "get_cost" else self.rows).get(key)
+        return None if result is None else self.owner.ref("nodes", result)
+
+    def _resolve(self, value: Ref, allowed: frozenset[Ref], *, callback: bool) -> int:
+        value = value.owner.ref(value.role, value.index)
+        if value in allowed and value.owner is self.owner:
+            return value.index
+        record: pb.Node = value.read()
+        if (structural := self._portable_shape(value)) is not None:
+            for candidate in allowed:
+                if StructuralView(candidate) == structural:
+                    return candidate.index
+        if not callback and record.kind is not None and record.kind.field == "call":
+            target = record.kind.value
+            key = (
+                target.func,
+                tuple(self._resolve(value.owner.ref("nodes", arg), allowed, callback=False) for arg in target.args),
+            )
+            if key in self.rows:
+                return self.rows[key]
+        msg = (
+            "Cost models can only look up tables using values supplied to the callback"
+            if callback
+            else "Lookup value belongs to a different EGraph or observation scope"
+        )
+        raise ValueError(msg)
+
+    @staticmethod
+    def _portable_shape(reference: Ref) -> StructuralView | None:
+        """Reject opaque classes and unevaluated calls before structural matching."""
+        pending = [reference]
+        seen: set[Ref] = set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            record: pb.Node = current.read()
+            if record.kind is None or record.kind.field != "primitive_value":
+                return None
+
+            def visit(role: str, child: int, owner: Owner = current.owner) -> int:
+                if role == "nodes":
+                    pending.append(owner.ref("nodes", child))
+                return child
+
+            _copy_record(record, relocate=visit)
+        return StructuralView(reference)

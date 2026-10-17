@@ -3,12 +3,17 @@
 
 use crate::py_object_sort::{PyObjectErrorState, PyObjectExtension};
 use egglog_experimental::builtin::PortableTypeInfo;
+use egglog_experimental::proto as pb;
 use egglog_experimental::protobuf::NativeExtension;
+use egglog_experimental::protobuf::cost_model::{
+    CostModelContract, CostModelRuntime, ModelSort, NativeCostModel, Objective,
+};
 use egglog_experimental::protobuf::{Engine, TransportError};
 use prost::Message;
 use pyo3::exceptions::{PyBaseException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use std::cmp::Ordering;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 
@@ -87,7 +92,9 @@ impl ProtoEngine {
                 return Err(captured.unwrap_or_else(|| PyValueError::new_err(error.to_string())));
             }
             Err(error) => {
-                if let Some(captured) = captured {
+                if error.is::<PythonCostError>()
+                    && let Some(captured) = captured
+                {
                     return Err(captured);
                 }
                 resume_unwind(error);
@@ -100,6 +107,161 @@ impl ProtoEngine {
     }
 }
 
+// Only this private payload is translated at the mutable request boundary.
+// Native panics must never be disguised by an earlier Python error latch.
+struct PythonCostError;
+
+fn remember_cost_error(errors: &PyObjectErrorState, error: PyErr) -> egglog::Error {
+    let mut first = errors.lock().unwrap();
+    if first.is_none() {
+        *first = Some(error);
+    }
+    egglog::Error::ExtractError("Python cost model failed".into())
+}
+
+fn host_cost_result<T>(errors: &PyObjectErrorState, result: PyResult<T>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = remember_cost_error(errors, error);
+            resume_unwind(Box::new(PythonCostError))
+        }
+    }
+}
+
+struct PythonModelRegistration {
+    sorts: Vec<pb::Sort>,
+    annotation: u32,
+    objective: u32,
+    additive: bool,
+    factory: Py<PyAny>,
+    errors: PyObjectErrorState,
+}
+
+impl NativeCostModel for PythonModelRegistration {
+    fn contract(&self) -> CostModelContract {
+        CostModelContract {
+            annotation: ModelSort {
+                sorts: self.sorts.clone(),
+                root: self.annotation,
+            },
+            objective: ModelSort {
+                sorts: self.sorts.clone(),
+                root: self.objective,
+            },
+            additive: self.additive,
+        }
+    }
+
+    fn start(&self, observation: &pb::Program) -> Result<Arc<dyn CostModelRuntime>, egglog::Error> {
+        let object = Python::attach(|py| {
+            self.factory
+                .call1(py, (PyBytes::new(py, &observation.encode_to_vec()),))
+        })
+        .map_err(|error| remember_cost_error(&self.errors, error))?;
+        Ok(Arc::new(PythonModelRuntime {
+            object,
+            errors: self.errors.clone(),
+        }))
+    }
+}
+
+struct PythonModelRuntime {
+    object: Py<PyAny>,
+    errors: PyObjectErrorState,
+}
+
+impl CostModelRuntime for PythonModelRuntime {
+    fn run(
+        &self,
+        operation: Box<dyn FnOnce() -> Result<(), egglog::Error> + '_>,
+    ) -> Result<(), egglog::Error> {
+        match catch_unwind(AssertUnwindSafe(operation)) {
+            Ok(result) => result,
+            Err(payload) if payload.is::<PythonCostError>() => Err(egglog::Error::ExtractError(
+                "Python cost model failed".into(),
+            )),
+            Err(payload) => resume_unwind(payload),
+        }
+    }
+    fn cost(&self, node: u32, children: &[Objective]) -> Objective {
+        Python::attach(|py| {
+            let children = children
+                .iter()
+                .map(|value| {
+                    value
+                        .downcast_ref::<Py<PyAny>>()
+                        .expect("provider objective type")
+                        .clone_ref(py)
+                })
+                .collect::<Vec<_>>();
+            Arc::new(host_cost_result(
+                &self.errors,
+                self.object.call_method1(py, "cost", (node, children)),
+            )) as Objective
+        })
+    }
+    fn compare(&self, left: &Objective, right: &Objective) -> Ordering {
+        Python::attach(|py| {
+            host_cost_result(
+                &self.errors,
+                left.downcast_ref::<Py<PyAny>>()
+                    .expect("provider objective type")
+                    .bind(py)
+                    .compare(
+                        right
+                            .downcast_ref::<Py<PyAny>>()
+                            .expect("provider objective type")
+                            .bind(py),
+                    ),
+            )
+        })
+    }
+    fn combine(&self, left: &Objective, right: &Objective) -> Objective {
+        Python::attach(|py| {
+            let result = left
+                .downcast_ref::<Py<PyAny>>()
+                .expect("provider objective type")
+                .bind(py)
+                .add(
+                    right
+                        .downcast_ref::<Py<PyAny>>()
+                        .expect("provider objective type")
+                        .bind(py),
+                );
+            Arc::new(host_cost_result(&self.errors, result).unbind()) as Objective
+        })
+    }
+    fn identity(&self) -> Objective {
+        Python::attach(|py| {
+            Arc::new(host_cost_result(
+                &self.errors,
+                self.object.getattr(py, "identity"),
+            )) as Objective
+        })
+    }
+    fn encode(&self, value: &Objective) -> Result<Option<pb::PrimitiveValue>, egglog::Error> {
+        let payload = Python::attach(|py| {
+            host_cost_result(
+                &self.errors,
+                crate::py_object_sort::dump(
+                    value
+                        .downcast_ref::<Py<PyAny>>()
+                        .expect("provider objective type")
+                        .bind(py)
+                        .clone(),
+                ),
+            )
+        });
+        Ok(Some(pb::PrimitiveValue {
+            value: Some(pb::primitive_value::Value::Custom(pb::CustomValue {
+                payload: payload.0,
+                args: vec![],
+            })),
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,6 +271,28 @@ mod tests {
     use prost::Message;
     use pyo3::types::PyDict;
     use std::sync::Arc;
+
+    #[test]
+    fn host_cost_boundary_preserves_unrelated_native_panics() {
+        struct NativePanic;
+
+        Python::initialize();
+        let runtime = PythonModelRuntime {
+            object: Python::attach(|py| py.None()),
+            errors: PyObjectErrorState::default(),
+        };
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            runtime.run(Box::new(|| {
+                let _ = remember_cost_error(
+                    &runtime.errors,
+                    PyValueError::new_err("earlier host error"),
+                );
+                resume_unwind(Box::new(NativePanic))
+            }))
+        }));
+        assert!(result.unwrap_err().is::<NativePanic>());
+        assert!(runtime.errors.lock().unwrap().is_some());
+    }
 
     #[test]
     fn callback_error_handoff_preserves_response_and_identity() {
@@ -215,7 +399,7 @@ mod tests {
                             }
                             .encode_to_vec()),
                             "transport" => engine.run(&[0xff]),
-                            _ => panic!("secondary native unwind"),
+                            _ => resume_unwind(Box::new(PythonCostError)),
                         }
                     });
                 if boundary == "response" {
@@ -247,13 +431,21 @@ mod tests {
                 .unwrap_err();
             assert!(failure.is_instance_of::<PyValueError>(py));
             assert!(instance.py_error.lock().unwrap().is_none());
-            let unwind = catch_unwind(AssertUnwindSafe(|| {
-                let _ = instance.run_request(py, &PyBytes::new(py, b"panic"), |_, _| {
-                    panic!("uncaptured native unwind")
-                });
-            }));
-            assert!(unwind.is_err());
-            assert!(instance.py_error.lock().unwrap().is_none());
+            struct NativePanic;
+            for latched in [false, true] {
+                let errors = instance.py_error.clone();
+                let unwind = catch_unwind(AssertUnwindSafe(|| {
+                    let _ = instance.run_request(py, &PyBytes::new(py, b"panic"), |_, _| {
+                        if latched {
+                            *errors.lock().unwrap() =
+                                Some(PyValueError::new_err("prior host error"));
+                        }
+                        resume_unwind(Box::new(NativePanic))
+                    });
+                }));
+                assert!(unwind.unwrap_err().is::<NativePanic>());
+                assert!(instance.py_error.lock().unwrap().is_none());
+            }
         });
     }
 
@@ -1262,6 +1454,72 @@ impl ProtoEngine {
     #[new]
     fn new() -> Self {
         Self::default()
+    }
+
+    /// Private native-provider registration; execution still submits Extract
+    /// with the returned name through run(bytes). The explicit codec is the
+    /// existing childless PyObject codec; C remains independently declared.
+    fn register_cost_model(
+        &mut self,
+        handle: u64,
+        sorts: &Bound<'_, PyBytes>,
+        annotation: u32,
+        objective: u32,
+        additive: bool,
+        factory: Py<PyAny>,
+    ) -> PyResult<String> {
+        let program = pb::Program::decode(sorts.as_bytes())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        if program.ir_version != 1
+            || !program.nodes.is_empty()
+            || !program.declarations.is_empty()
+            || !program.rulesets.is_empty()
+            || !program.rules.is_empty()
+            || !program.commands.is_empty()
+            || !program.files.is_empty()
+        {
+            return Err(PyValueError::new_err(
+                "model registration requires a sort-only Program",
+            ));
+        }
+        let mut canonical = Vec::new();
+        egglog_experimental::builtin::import_sort(&program.sorts, annotation, &mut canonical)
+            .map_err(PyValueError::new_err)?;
+        let result =
+            egglog_experimental::builtin::import_sort(&program.sorts, objective, &mut canonical)
+                .map_err(PyValueError::new_err)?;
+        if !matches!(&canonical[result as usize].kind,
+            Some(pb::sort::Kind::Family(family)) if family.name == "PyObject" && family.args.is_empty())
+        {
+            return Err(PyValueError::new_err(
+                "Python model objective requires the explicit PyObject leaf codec",
+            ));
+        }
+        if canonical
+            .iter()
+            .any(|sort| matches!(sort.kind, Some(pb::sort::Kind::Var(_))))
+        {
+            return Err(PyValueError::new_err("cost model sorts must be closed"));
+        }
+        self.engine
+            .register_cost_model(
+                handle,
+                Arc::new(PythonModelRegistration {
+                    sorts: program.sorts,
+                    annotation,
+                    objective,
+                    additive,
+                    factory,
+                    errors: self.py_error.clone(),
+                }),
+            )
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    fn release_cost_model(&mut self, handle: u64, name: &str) -> PyResult<()> {
+        self.engine
+            .release_cost_model(handle, name)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
     fn create<'py>(
