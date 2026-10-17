@@ -8,8 +8,10 @@ _This project uses semantic versioning_
   native EGraph, AST, raw-value, extractor and report-wrapper binding APIs;
   `freeze()` now returns an `EGraphSnapshot`, and report detail uses the generated
   `ReportLevel` enum. Host Python-object providers and original callback exceptions
-  remain native. Custom cost callbacks, notebook text, CSV input, snapshot
-  visualization and replayable source recording remain unfinished.
+  remain native. Display and saturation history project snapshots into the
+  existing widget/Graphviz format without materializing opaque host values;
+  display filtering never changes the snapshot. Custom cost callbacks, notebook
+  text, CSV input and replayable source recording remain unfinished.
 - Publish releases with `uv`, then tag and fast-forward `main` directly without a release PR or redundant CI.
 - Fix missing macOS wheels for standard CPython 3.14 when building alongside free-threaded Python.
 

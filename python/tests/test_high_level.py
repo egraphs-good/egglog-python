@@ -2780,17 +2780,21 @@ def test_override_hash():
     assert hash(A()) == 42
 
 
-def test_serialize_warning_max_functions():
+def test_serialize_warning_max_functions(monkeypatch):
+    monkeypatch.setattr("egglog.visualizer_widget.VisualizerWidget.display_or_open", lambda self: None)
+
     class A(Expr):
         def __init__(self) -> None: ...
 
     egraph = EGraph()
     egraph.register(A())
     with pytest.warns(UserWarning, match="A"):
-        egraph._serialize(max_functions=0)
+        egraph.display(max_functions=0)
 
 
-def test_serialize_warning_max_calls():
+def test_serialize_warning_max_calls(monkeypatch):
+    monkeypatch.setattr("egglog.visualizer_widget.VisualizerWidget.display_or_open", lambda self: None)
+
     class A(Expr): ...
 
     @function
@@ -2799,7 +2803,102 @@ def test_serialize_warning_max_calls():
     egraph = EGraph()
     egraph.register(f("a"), f("b"))
     with pytest.warns(UserWarning, match="f"):
-        egraph._serialize(max_calls_per_function=1)
+        egraph.display(max_calls_per_function=1)
+
+
+def test_display_reads_snapshot_rows_and_cycles_without_mutation(monkeypatch):
+    import json  # noqa: PLC0415
+
+    graphs = []
+    monkeypatch.setattr(
+        "egglog.visualizer_widget.VisualizerWidget.display_or_open", lambda self: graphs.extend(self.egraphs)
+    )
+
+    class Displayed(Expr):
+        def __init__(self, value: i64) -> None: ...
+        def wrap(self) -> Displayed: ...
+
+    @function
+    def cell() -> String: ...
+
+    member = relation("display_member", Displayed)
+    value = Displayed(i64(1))
+    graph = EGraph(union(value).with_(value.wrap()), set_(cell()).to(String('quote"\n</script>')), member(value))
+    before = graph.freeze().to_binary()
+    graph.display(split_primitive_outputs=False)
+    data = json.loads(graphs[0])
+    by_op = {node["op"]: node for node in data["nodes"].values()}
+    wrapped = by_op["Displayed.wrap"]
+    assert wrapped["eclass"] == by_op["Displayed"]["eclass"]
+    assert data["nodes"][wrapped["children"][0]]["eclass"] == wrapped["eclass"]
+    assert by_op["cell"]["eclass"] == by_op[repr('quote"\n</script>')]["eclass"]
+    assert "display_member" in by_op
+    assert graph.freeze().to_binary() == before
+    dot = graph._graphviz().source
+    assert "Displayed.wrap" in dot
+    assert "cluster_" in dot
+    assert "</script>" in dot
+    assert "<svg" in graph._graphviz().pipe(format="svg", quiet=True, encoding="utf-8")
+
+
+def test_saturate_visualizes_snapshot_history_and_failure_prefix(monkeypatch):
+    import json  # noqa: PLC0415
+
+    graphs = []
+    monkeypatch.setattr(
+        "egglog.visualizer_widget.VisualizerWidget.display_or_open", lambda self: graphs.append(self.egraphs)
+    )
+
+    @function(merge=lambda old, new: new)
+    def cell() -> i64: ...
+
+    graph = EGraph(set_(cell()).to(i64(1)))
+    graph.saturate(max=1)
+    assert len(graphs[0]) == 2
+    assert all(any(node["op"] == "1" for node in json.loads(data)["nodes"].values()) for data in graphs[0])
+
+    def failing_run(*args, **kwargs):
+        graph.register(set_(cell()).to(i64(2)))
+        msg = "after the prefix"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(graph, "run", failing_run)
+    with pytest.raises(RuntimeError, match="after the prefix"):
+        graph.saturate(max=1)
+    assert len(graphs[1]) == 2
+    assert any(node["op"] == "2" for node in json.loads(graphs[1][-1])["nodes"].values())
+
+
+def test_saturate_observation_failures_do_not_replace_the_original_error(monkeypatch):
+    graph = EGraph()
+    original = RuntimeError("original step failure")
+    reads = 0
+
+    def observe(**kwargs):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            return {"nodes": {}, "class_data": {}, "root_eclasses": []}
+        msg = "snapshot unavailable"
+        raise ValueError(msg)
+
+    def failing_run(*args, **kwargs):
+        raise original
+
+    def failing_display(self):
+        msg = "display unavailable"
+        raise OSError(msg)
+
+    monkeypatch.setattr(graph, "_serialize", observe)
+    monkeypatch.setattr(graph, "run", failing_run)
+    monkeypatch.setattr("egglog.visualizer_widget.VisualizerWidget.display_or_open", failing_display)
+    with pytest.raises(RuntimeError) as raised:
+        graph.saturate(max=1)
+    assert raised.value is original
+    assert raised.value.__notes__ == [
+        "Could not visualize the failure prefix (ValueError)",
+        "Could not display snapshot history (OSError)",
+    ]
 
 
 EXAMPLE_FILES = list((pathlib.Path(__file__).parent / "../egglog/examples").glob("*.py"))

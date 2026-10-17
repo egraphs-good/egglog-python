@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import dis
 import inspect
+import json
 import re
 import sys
 from collections.abc import Callable, Generator, Iterable, Sequence
@@ -61,7 +62,10 @@ from .runtime import _ClassContext, _definition_at
 from .thunk import *
 
 if TYPE_CHECKING:
+    import graphviz
+
     from .builtins import String, Unit, i64, i64Like
+    from .visualizer_widget import _Graph
 
 
 _TRACER = trace.get_tracer(__name__)
@@ -1732,12 +1736,61 @@ class EGraph:
             if exc_type is None:
                 raise
 
-    def display(self, graphviz: bool = False, **kwargs: Unpack[GraphvizKwargs]) -> None:
-        """Display exported logical state when the protobuf visualizer is available."""
-        msg = "Visualization must derive from the shared snapshot; native serialization is removed"
-        raise NotImplementedError(msg)
+    def _serialize(self, **kwargs: Unpack[GraphvizKwargs]) -> _Graph:
+        """Read logical state over bytes and project a separate, filtered display."""
+        from .visualizer_widget import _snapshot_to_data  # noqa: PLC0415
 
-    def saturate(
+        split = {resolve_callable(fn).read().kind.value.name for fn in kwargs.get("split_functions", [])}
+        # Backend temporaries are not part of the logical snapshot inventory.
+        return _snapshot_to_data(
+            self.freeze(),
+            split_functions=split,
+            max_functions=kwargs.get("max_functions"),
+            max_calls_per_function=kwargs.get("max_calls_per_function"),
+            n_inline_leaves=kwargs.get("n_inline_leaves", 0),
+            split_primitive_outputs=kwargs.get("split_primitive_outputs", True),
+        )
+
+    def _graphviz(self, **kwargs: Unpack[GraphvizKwargs]) -> graphviz.Digraph:
+        import graphviz  # noqa: PLC0415
+
+        data = self._serialize(**kwargs)
+        dot = graphviz.Digraph(graph_attr={"compound": "true"})
+        groups: dict[str, list[str]] = {}
+        for nid, node in data["nodes"].items():
+            groups.setdefault(node["eclass"], []).append(nid)
+        for cid, members in groups.items():
+            with dot.subgraph(name=f"cluster_{cid}") as cluster:
+                cluster.attr(label=data["class_data"].get(cid, {}).get("type", ""), style="rounded,dashed")
+                for nid in members:
+                    node = data["nodes"][nid]
+                    cluster.node(
+                        nid,
+                        node["op"],
+                        style="dashed" if node["subsumed"] else "solid",
+                        tooltip=f"cost: {node['cost']}" if "cost" in node else "",
+                    )
+        for nid, node in data["nodes"].items():
+            for position, child in enumerate(node["children"]):
+                dot.edge(nid, child, label=str(position), lhead=f"cluster_{data['nodes'][child]['eclass']}")
+        return dot
+
+    def display(self, graphviz: bool = False, **kwargs: Unpack[GraphvizKwargs]) -> None:
+        """Display the protobuf snapshot with the interactive widget or Graphviz."""
+        from IPython.display import SVG, display  # noqa: PLC0415
+
+        from .visualizer_widget import IN_IPYTHON, VisualizerWidget  # noqa: PLC0415
+
+        if graphviz:
+            dot = self._graphviz(**kwargs)
+            if IN_IPYTHON:
+                display(SVG(dot.pipe(format="svg", quiet=True, encoding="utf-8")))
+            else:
+                dot.render(view=True, format="svg", quiet=True)
+        else:
+            VisualizerWidget(egraphs=[json.dumps(self._serialize(**kwargs))]).display_or_open()
+
+    def saturate(  # noqa: C901
         self,
         schedule: Schedule | None = None,
         *,
@@ -1748,18 +1801,38 @@ class EGraph:
         **kwargs: Unpack[GraphvizKwargs],
     ) -> None:
         """Run repeated byte schedules until the adapter reports saturation."""
-        if visualize:
-            msg = "Visualization must derive from the shared snapshot; native serialization is removed"
-            raise NotImplementedError(msg)
-        for iteration in range(max):
-            report = self.run(schedule or 1)
-            if expr is not None:
-                print(self.extract(expr), "\n")
-            if print_frozen:
-                print(f"After iteration {iteration + 1}:")
-                print(self.freeze(), "\n")
-            if report.can_stop:
-                break
+        from .visualizer_widget import VisualizerWidget  # noqa: PLC0415
+
+        history = [json.dumps(self._serialize(**kwargs))] if visualize else []
+        failure: BaseException | None = None
+        try:
+            for iteration in range(max):
+                report = self.run(schedule or 1)
+                if expr is not None:
+                    print(self.extract(expr), "\n")
+                if visualize:
+                    history.append(json.dumps(self._serialize(**kwargs)))
+                if print_frozen:
+                    print(f"After iteration {iteration + 1}:")
+                    print(self.freeze(), "\n")
+                if report.can_stop:
+                    break
+        except BaseException as error:
+            failure = error
+            if visualize:
+                try:
+                    history.append(json.dumps(self._serialize(**kwargs)))
+                except Exception as observation_error:
+                    error.add_note(f"Could not visualize the failure prefix ({type(observation_error).__name__})")
+            raise
+        finally:
+            if visualize:
+                try:
+                    VisualizerWidget(egraphs=history).display_or_open()
+                except Exception as display_error:
+                    if failure is None:
+                        raise
+                    failure.add_note(f"Could not display snapshot history ({type(display_error).__name__})")
 
     @_TRACER.start_as_current_span("register")
     def register(

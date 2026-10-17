@@ -1,0 +1,201 @@
+"""Inert display projection, not native engine conformance."""
+
+import json
+
+import pytest
+from egglog_proto.egglog.v1 import egglog_pb as pb
+from protobuf import Oneof
+
+from egglog.visualizer_widget import _snapshot_to_data
+
+
+@pytest.fixture
+def snapshot():
+    program = pb.Program(
+        ir_version=1,
+        sorts=[
+            pb.Sort(kind=Oneof("eq", "A")),
+            pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))),
+            pb.Sort(kind=Oneof("family", pb.HostSort(name="String"))),
+            pb.Sort(kind=Oneof("family", pb.HostSort(name="Vec", args=[0]))),
+            pb.Sort(kind=Oneof("family", pb.HostSort(name="Unit"))),
+        ],
+        declarations=[
+            pb.Declaration(kind=Oneof("eq_sort", pb.EqSort(name="A"))),
+            *[
+                pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name=name, arity=arity)))
+                for name, arity in [("i64", 0), ("String", 0), ("Vec", 1), ("Unit", 0)]
+            ],
+            pb.Declaration(kind=Oneof("constructor", pb.Constructor(name="C", inputs=[pb.Arg(sort=1)], output=0))),
+            pb.Declaration(kind=Oneof("constructor", pb.Constructor(name="Wrap", inputs=[pb.Arg(sort=0)], output=0))),
+            pb.Declaration(kind=Oneof("function", pb.Function(name="cell", inputs=[pb.Arg(sort=0)], output=3))),
+            pb.Declaration(kind=Oneof("function", pb.Function(name="scalar", output=2))),
+            pb.Declaration(kind=Oneof("function", pb.Function(name="unit", output=4))),
+            pb.Declaration(kind=Oneof("relation", pb.Relation(name="member", inputs=[pb.Arg(sort=0)]))),
+        ],
+        nodes=[
+            pb.Node(sort_id=0, kind=Oneof("union", pb.Union(members=[2, 3]))),
+            pb.Node(sort_id=1, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 1)))),
+            pb.Node(sort_id=0, kind=Oneof("call", pb.Call(func="C", args=[1]))),
+            pb.Node(sort_id=0, kind=Oneof("call", pb.Call(func="Wrap", args=[0]))),
+            pb.Node(sort_id=0, kind=Oneof("union", pb.Union())),
+            pb.Node(sort_id=0, kind=Oneof("union", pb.Union())),
+            pb.Node(
+                sort_id=3,
+                kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("vec", pb.ValueList(items=[0, 0, 4, 5])))),
+            ),
+            pb.Node(
+                sort_id=2, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("string", 'quote"\n</script>')))
+            ),
+            pb.Node(sort_id=4, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("unit", pb.Unit())))),
+            pb.Node(sort_id=4, kind=Oneof("call", pb.Call(func="member", args=[0]))),
+        ],
+        commands=[
+            *[pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", index)))) for index in (0, 4, 5, 9)],
+            *[
+                pb.Command(
+                    kind=Oneof(
+                        "action",
+                        pb.Action(kind=Oneof("set", pb.Set(target=pb.Call(func=name, args=args), value=value))),
+                    )
+                )
+                for name, args, value in [("cell", [0], 6), ("scalar", [], 7), ("unit", [], 8)]
+            ],
+            pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("subsume", pb.Call(func="C", args=[1]))))),
+            pb.Command(
+                kind=Oneof(
+                    "action", pb.Action(kind=Oneof("set_cost", pb.SetCost(target=pb.Call(func="C", args=[1]), cost=1)))
+                )
+            ),
+        ],
+    )
+    return pb.EGraphSnapshot(program=program, options=pb.EGraphOptions(cost_sort=1))
+
+
+def test_snapshot_projection_preserves_classes_rows_cycles_and_subsumption(snapshot):
+    before = snapshot.to_binary()
+    data = _snapshot_to_data(snapshot, split_primitive_outputs=False)
+    nodes = data["nodes"]
+    by_op = {node["op"]: node for node in nodes.values()}
+    constructor = by_op["C"]
+    assert constructor["subsumed"]
+    assert constructor["cost"] == "1"
+    wrapper = by_op["Wrap"]
+    assert wrapper["eclass"] == constructor["eclass"]
+    assert nodes[wrapper["children"][0]]["eclass"] == constructor["eclass"]
+    empty = [node["eclass"] for node in nodes.values() if node["op"] == "∅"]
+    assert len(set(empty)) == 2
+    vector = by_op["Vec[A]"]
+    classes = [nodes[child]["eclass"] for child in vector["children"]]
+    assert classes[:2] == [constructor["eclass"]] * 2
+    assert set(classes[2:]) == set(empty)
+    assert by_op["cell"]["eclass"] == vector["eclass"]
+    assert by_op["scalar"]["eclass"] == by_op[repr('quote"\n</script>')]["eclass"]
+    assert by_op["unit"]["eclass"] == by_op["Unit"]["eclass"]
+    assert by_op["member"]["eclass"] != by_op["Unit"]["eclass"]
+    assert json.loads(json.dumps(data)) == data
+    assert snapshot.to_binary() == before
+
+
+@pytest.mark.parametrize("assigned", [False, True])
+def test_snapshot_costs_preserve_declared_value_and_assigned_override(snapshot, assigned):
+    program = snapshot.program
+    constructor = next(d.kind.value for d in program.declarations if d.kind.value.name == "C")
+    constructor.cost = len(program.nodes)
+    program.nodes.append(pb.Node(sort_id=1, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 7)))))
+    if not assigned:
+        program.commands = [command for command in program.commands if command.kind.value.kind.field != "set_cost"]
+    data = _snapshot_to_data(snapshot)
+    assert next(node["cost"] for node in data["nodes"].values() if node["op"] == "C") == ("1" if assigned else "7")
+
+
+@pytest.mark.parametrize("assigned", [False, True])
+def test_snapshot_custom_costs_never_invoke_codec_or_debug(snapshot, monkeypatch, assigned):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Custom cost inspection must not materialize host values")
+
+    monkeypatch.setattr("cloudpickle.loads", forbidden)
+    program = snapshot.program
+    cost_sort = len(program.sorts)
+    program.sorts.append(pb.Sort(kind=Oneof("family", pb.HostSort(name="Opaque"))))
+    program.declarations.append(pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="Opaque"))))
+    first = len(program.nodes)
+    for payload in (b"declared", b"assigned!"):
+        program.nodes.append(
+            pb.Node(
+                sort_id=cost_sort,
+                kind=Oneof(
+                    "primitive_value",
+                    pb.PrimitiveValue(value=Oneof("custom", pb.CustomValue(payload=payload, args=[4]))),
+                ),
+            )
+        )
+    constructor = next(d.kind.value for d in program.declarations if d.kind.value.name == "C")
+    constructor.cost = first
+    snapshot.options.cost_sort = cost_sort
+    if assigned:
+        next(
+            command.kind.value.kind.value for command in program.commands if command.kind.value.kind.field == "set_cost"
+        ).cost = first + 1
+    else:
+        program.commands = [command for command in program.commands if command.kind.value.kind.field != "set_cost"]
+    before = snapshot.to_binary()
+    data = _snapshot_to_data(snapshot)
+    cost = next(node["cost"] for node in data["nodes"].values() if node["op"] == "C")
+    assert cost == f"Opaque(<{9 if assigned else 8} opaque bytes>)(@class-4)"
+    assert "declared" not in json.dumps(data)
+    assert "assigned!" not in json.dumps(data)
+    assert snapshot.to_binary() == before
+
+
+@pytest.mark.parametrize("kind", ["set", "multiset", "pair", "map", "maybe", "none", "custom"])
+def test_snapshot_container_edges_are_inert_and_ordered(snapshot, monkeypatch, kind):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Visualization must not materialize custom values")
+
+    monkeypatch.setattr("cloudpickle.loads", forbidden)
+    program = snapshot.program
+    variants = {
+        "set": ("Set", [0], pb.ValueList(items=[0, 4, 5])),
+        "multiset": ("MultiSet", [0], pb.ValueList(items=[0, 0, 4, 5])),
+        "pair": ("Pair", [0, 0], pb.PairValue(first=4, second=5)),
+        "map": ("Map", [0, 0], pb.MapValue(entries=[pb.MapEntry(key=0, value=4), pb.MapEntry(key=0, value=5)])),
+        "maybe": ("Maybe", [0], pb.MaybeValue(value=0)),
+        "none": ("Maybe", [0], pb.MaybeValue()),
+        "custom": ("Opaque", [], pb.CustomValue(payload=b"not a pickle", args=[0, 4, 5])),
+    }
+    name, args, value = variants[kind]
+    program.sorts[3].kind.value.name, program.sorts[3].kind.value.args = name, args
+    family = next(d.kind.value for d in program.declarations if d.kind.value.name == "Vec")
+    family.name, family.arity = name, len(args)
+    program.nodes[6].kind.value.value = Oneof("maybe" if kind == "none" else kind, value)
+    before = snapshot.to_binary()
+    data = _snapshot_to_data(snapshot, split_primitive_outputs=False)
+    container = data["nodes"]["node-6"]
+    expected = {
+        "set": [0, 4, 5],
+        "multiset": [0, 0, 4, 5],
+        "pair": [4, 5],
+        "map": [0, 4, 0, 5],
+        "maybe": [0],
+        "none": [],
+        "custom": [0, 4, 5],
+    }[kind]
+    assert [data["nodes"][child]["eclass"] for child in container["children"]] == [f"class-{i}" for i in expected]
+    assert "not a pickle" not in json.dumps(data)
+    assert snapshot.to_binary() == before
+
+
+@pytest.mark.parametrize(
+    "options", [{"max_functions": 0}, {"max_calls_per_function": 0}, {"n_inline_leaves": 2}, {"split_functions": {"C"}}]
+)
+def test_snapshot_display_filters_keep_edges_valid_and_snapshot_exact(snapshot, options):
+    before = snapshot.to_binary()
+    if "max_functions" in options or "max_calls_per_function" in options:
+        with pytest.warns(UserWarning, match="Omitted|Truncated"):
+            data = _snapshot_to_data(snapshot, **options)
+    else:
+        data = _snapshot_to_data(snapshot, **options)
+    assert sum(node["op"] == "∅" for node in data["nodes"].values()) == 2
+    assert all(child in data["nodes"] for node in data["nodes"].values() for child in node["children"])
+    assert snapshot.to_binary() == before

@@ -835,14 +835,26 @@ It records logical state rather than request history or scheduler progress.
 
 ### `display`
 
-Visualization from exported protobuf snapshots remains unfinished.
-{meth}`egglog.egraph.EGraph.display` currently raises `NotImplementedError`.
+{meth}`egglog.egraph.EGraph.display` projects the current protobuf snapshot into
+the interactive widget, or Graphviz when called with `graphviz=True`. Equality
+alternatives, function/relation rows, shared containers and cycles come directly
+from its reconstruction records. An empty stored class is displayed as `∅`;
+this is a display placeholder, not a constructor inserted into the graph.
+
+`max_functions`, `max_calls_per_function`, `split_primitive_outputs`,
+`split_functions` and `n_inline_leaves` affect only the visualization. Omitted or
+truncated tables emit warnings; filtering cannot truncate or mutate the snapshot.
+Backend temporary functions are already absent from the logical export, so
+`include_temporary_functions` does not change it. Opaque host values and costs
+remain opaque; visualization does not unpickle or evaluate them.
 
 ### `saturate`
 
 Use {meth}`egglog.egraph.EGraph.saturate` to keep running until the schedule
 reports no graph changes or deferred scheduler work, while printing the
-extracted form after each step:
+extracted form after each step. By default the widget also shows snapshot
+history, including the final observed failure prefix if a step raises. Use
+`visualize=False` to disable the widget:
 
 ```{code-cell} python
 egraph = EGraph()

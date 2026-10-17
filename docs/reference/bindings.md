@@ -32,6 +32,7 @@ before concurrent use.
 ## Current migration limits
 
 Notebook text needs the shared source-to-protobuf producer exposed to Python.
-CSV input, replayable source recording and visualization from exported snapshots
-remain unfinished. Python custom extraction callbacks need shared host-model
-registration; they do not use a second native engine or extractor API.
+CSV input and replayable source recording remain unfinished. Visualization reads
+the exported snapshot without a native serializer. Python custom extraction
+callbacks need shared host-model registration; they do not use a second native
+engine or extractor API.
