@@ -487,12 +487,16 @@ def test_lookup_function_value_constructor_row() -> None:
     egraph = EGraph(A(1))
     egraph.register(set_(A(1).score()).to(i64(7)))
 
-    value = egraph.lookup_function_value(A(1))
-    assert value is not None
+    observed = egraph.lookup_function_value(A(1))
+    assert observed is not None
+    value = egraph.let("lookup-value", A(1))
     score = egraph.lookup_function_value(value.score())
     assert score is not None
     assert int(score) == 7
     assert egraph.lookup_function_value(A(2)) is None
+    assert egraph.function_size(A) == 1
+    with pytest.raises(ValueError, match="observation scope"):
+        egraph.lookup_function_value(observed.score())
 
 
 def test_let_auto_prefixes_global_names(capfd: pytest.CaptureFixture[str]):
@@ -3015,7 +3019,7 @@ def test_function_values():
     assert values == {f(i64(1)): i64(2)}
 
 
-def test_lookup_function_value_records_materialized_constructor_arguments() -> None:
+def test_lookup_function_value_does_not_materialize_constructor_arguments() -> None:
     class LookupReplayValue(Expr, egg_sort="LookupReplayValueSort"):
         @method(egg_fn="LookupReplayValue")
         def __init__(self, value: i64Like) -> None: ...
@@ -3023,17 +3027,24 @@ def test_lookup_function_value_records_materialized_constructor_arguments() -> N
     @function(egg_fn="lookup-replay-result")
     def result(value: LookupReplayValue) -> i64: ...
 
-    egraph = EGraph(save_egglog_string=True)
+    egraph = EGraph()
     egraph.register(set_(result(LookupReplayValue(1))).to(i64(10)))
 
     assert egraph.lookup_function_value(result(LookupReplayValue(2))) is None
-    assert egraph.function_size(LookupReplayValue) == 2
+    assert egraph.function_size(LookupReplayValue) == 1
+    assert egraph.function_size(result) == 1
 
-    replayed = egg_bindings.EGraph()
-    outputs = replayed.parse_and_run_program(egraph.as_egglog_string + "\n(print-size)")
-    sizes = outputs[-1]
-    assert isinstance(sizes, egg_bindings.PrintAllFunctionsSize)
-    assert dict(sizes.sizes)["LookupReplayValue"] == 2
+    egraph.register(LookupReplayValue(2))
+    assert egraph.function_size(LookupReplayValue) == 2
+    assert egraph.lookup_function_value(result(LookupReplayValue(2))) is None
+
+    egraph.register(set_(result(LookupReplayValue(2))).to(i64(20)))
+    assert egraph.lookup_function_value(result(LookupReplayValue(2))) == i64(20)
+    assert egraph.extract(LookupReplayValue(2)) == LookupReplayValue(2)
+    with pytest.raises(ValueError, match="cannot evaluate primitive keys"):
+        egraph.lookup_function_value(result(LookupReplayValue(i64(1) + i64(1))))
+    assert egraph.function_size(LookupReplayValue) == 2
+    assert egraph.function_size(result) == 2
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
@@ -3635,7 +3646,7 @@ def test_keep_best_rejects_non_table_callable_before_compaction() -> None:
         EGraph().keep_best(eager)
 
 
-def test_keep_best_invalidates_opaque_values_until_a_parent_scope_is_restored() -> None:
+def test_keep_best_discards_unselected_bindings_until_a_parent_scope_is_restored() -> None:
     class CompactKey(Expr):
         def __init__(self, value: i64Like) -> None: ...
 
@@ -3643,25 +3654,25 @@ def test_keep_best_invalidates_opaque_values_until_a_parent_scope_is_restored() 
     def score(key: CompactKey) -> i64: ...
 
     egraph = EGraph(CompactKey(1), set_(score(CompactKey(1))).to(i64(11)))
-    parent_key = egraph.lookup_function_value(CompactKey(1))
-    assert parent_key is not None
+    parent_key = egraph.let("parent-key", CompactKey(1))
+    observed = egraph.lookup_function_value(CompactKey(1))
+    assert observed is not None
 
     egraph.push()
     egraph.keep_best(score)
-    fresh_key = egraph.lookup_function_value(CompactKey(1))
-    assert fresh_key is not None
+    fresh_key = egraph.let("fresh-key", CompactKey(1))
     assert egraph.lookup_function_value(score(fresh_key)) == i64(11)
-    with pytest.raises(ValueError, match="inactive push scope"):
-        egraph.lookup_function_value(score(parent_key))
+    assert egraph.lookup_function_value(score(parent_key)) is None
+    with pytest.raises(ValueError, match="observation scope"):
+        egraph.lookup_function_value(score(observed))
 
     egraph.pop()
     assert egraph.lookup_function_value(score(parent_key)) == i64(11)
+    assert egraph.lookup_function_value(score(fresh_key)) is None
 
     egraph.keep_best(score)
-    with pytest.raises(ValueError, match="inactive push scope"):
-        egraph.lookup_function_value(score(parent_key))
-    root_fresh_key = egraph.lookup_function_value(CompactKey(1))
-    assert root_fresh_key is not None
+    assert egraph.lookup_function_value(score(parent_key)) is None
+    root_fresh_key = egraph.let("root-fresh-key", CompactKey(1))
     assert egraph.lookup_function_value(score(root_fresh_key)) == i64(11)
 
 
@@ -3785,14 +3796,17 @@ class TestCustomExtract:
         assert EGraph().extract(i64(10), include_cost=True, cost_model=is_even_cost_model) == (i64(10), 1)
         assert EGraph().extract(i64(5), include_cost=True, cost_model=is_even_cost_model) == (i64(5), 0)
 
-    def test_lookup_value_root(self) -> None:
+    def test_lookup_value_root_uses_explicit_binding(self) -> None:
         class LookupExpr(Expr):
             def __init__(self, value: i64Like) -> None: ...
 
         egraph = EGraph(LookupExpr(1))
-        value = egraph.lookup_function_value(LookupExpr(1))
+        observed = egraph.lookup_function_value(LookupExpr(1))
 
-        assert value is not None
+        assert observed is not None
+        assert egraph.lookup_function_value(LookupExpr(2)) is None
+        assert egraph.function_size(LookupExpr) == 1
+        value = egraph.let("lookup-root", LookupExpr(1))
         assert egraph.extract(value, include_cost=True, cost_model=default_cost_model) == (LookupExpr(1), 2)
 
     @staticmethod
@@ -4211,7 +4225,44 @@ class TestCustomExtract:
         with pytest.raises(ValueError, match="belongs to a different EGraph"):
             egraph.lookup_function_value(score(foreign_key))
 
-    def test_lookup_values_follow_push_scope_lifetimes(self) -> None:
+    @pytest.mark.parametrize("nested", [False, True], ids=["direct", "nested"])
+    @pytest.mark.parametrize("missing_first", [False, True], ids=["opaque-first", "missing-first"])
+    @pytest.mark.parametrize("foreign", [False, True], ids=["stale", "foreign"])
+    def test_lookup_validates_all_keys_before_returning_missing_row(
+        self, *, nested: bool, missing_first: bool, foreign: bool
+    ) -> None:
+        class Key(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        class PairKey(Expr):
+            def __init__(self, left: Key, right: Key) -> None: ...
+
+        @function
+        def score(left: Key, right: Key) -> i64: ...
+
+        @function
+        def nested_score(value: PairKey) -> i64: ...
+
+        egraph = EGraph(
+            set_(score(Key(1), Key(1))).to(i64(7)),
+            set_(nested_score(PairKey(Key(1), Key(1)))).to(i64(8)),
+        )
+        observed_graph = EGraph(Key(1)) if foreign else egraph
+        observed = observed_graph.lookup_function_value(Key(1))
+        assert observed is not None
+        arguments = (Key(99), observed) if missing_first else (observed, Key(99))
+        query = nested_score(PairKey(*arguments)) if nested else score(*arguments)
+        with pytest.raises(ValueError, match="observation scope"):
+            egraph.lookup_function_value(query)
+
+        assert egraph.lookup_function_value(score(Key(99), Key(1))) is None
+        assert egraph.lookup_function_value(nested_score(PairKey(Key(99), Key(1)))) is None
+        assert egraph.function_size(Key) == 1
+        assert egraph.function_size(PairKey) == 1
+        assert egraph.function_size(score) == 1
+        assert egraph.function_size(nested_score) == 1
+
+    def test_lookup_captured_reads_follow_push_scope_lifetimes(self) -> None:
         class Key(Expr):
             def __init__(self, value: i64Like) -> None: ...
 
@@ -4219,20 +4270,57 @@ class TestCustomExtract:
         def score(value: Key) -> i64: ...
 
         egraph = EGraph(Key(1), set_(score(Key(1))).to(i64(11)))
-        parent_key = egraph.lookup_function_value(Key(1))
-        assert parent_key is not None
+        parent_key = egraph.let("parent-key", Key(1))
+        observed = egraph.lookup_function_value(Key(1))
+        assert observed is not None
 
+        # Push clones the graph, including the parent's ordinary binding row.
         egraph.push()
         assert egraph.lookup_function_value(score(parent_key)) == i64(11)
+        with pytest.raises(ValueError, match="observation scope"):
+            egraph.lookup_function_value(score(observed))
         egraph.register(Key(2), set_(score(Key(2))).to(i64(22)))
-        child_key = egraph.lookup_function_value(Key(2))
-        assert child_key is not None
+        child_key = egraph.let("child-key", Key(2))
+        assert egraph.lookup_function_value(score(child_key)) == i64(22)
         egraph.pop()
 
         assert egraph.lookup_function_value(score(parent_key)) == i64(11)
         egraph.register(Key(3), set_(score(Key(3))).to(i64(33)))
-        with pytest.raises(ValueError, match="inactive push scope"):
-            egraph.lookup_function_value(score(child_key))
+        assert egraph.lookup_function_value(score(child_key)) is None
+        assert egraph.function_size(Key) == 2
+        independent = EGraph(set_(score(Key(1))).to(i64(111)))
+        assert independent.lookup_function_value(score(parent_key)) is None
+
+    def test_captured_lookup_read_survives_source_writes_and_delete_without_replay(self) -> None:
+        class Key(Expr):
+            def __init__(self, value: i64Like) -> None: ...
+
+        @function(merge=lambda old, new: new)
+        def source(index: i64Like) -> Key: ...
+
+        @function
+        def score(value: Key) -> i64: ...
+
+        egraph = EGraph(
+            set_(source(0)).to(Key(1)),
+            set_(score(Key(1))).to(i64(11)),
+            set_(score(Key(2))).to(i64(22)),
+        )
+        saved = egraph.let("saved-source", source(0))
+        egraph.register(set_(source(0)).to(Key(2)))
+        assert egraph.lookup_function_value(score(saved)) == i64(11)
+        assert egraph.lookup_function_value(score(source(0))) == i64(22)
+
+        egraph.register(delete(source(0)), delete(Key(1)), delete(Key(2)))
+        assert egraph.lookup_function_value(source(0)) is None
+        assert egraph.lookup_function_value(score(source(0))) is None
+        assert egraph.lookup_function_value(score(saved)) == i64(11)
+        assert egraph.function_size(source) == 0
+        assert egraph.function_size(Key) == 0
+        with pytest.raises(ValueError, match="Unextractable root"):
+            egraph.extract(saved)
+        assert egraph.function_size(source) == 0
+        assert egraph.function_size(Key) == 0
 
     def test_cost_model_callback_can_lookup_nested_value_from_container_argument(self) -> None:
         class Key(Expr):

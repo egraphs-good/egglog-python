@@ -2152,14 +2152,39 @@ class EGraph:
         }
 
     def lookup_function_value(self, expr: BASE_EXPR) -> BASE_EXPR | None:
-        """Read an existing logical row without evaluating its arguments."""
+        """
+        Read an existing table row without evaluating or materializing keys.
+
+        The table must already be registered. Standalone calls resolve portable
+        values and existing table-call keys in a fresh snapshot; a missing key
+        or row returns None. Opaque class values belong to that observation, not
+        to a later lookup or live root.
+        Use ``self.let(name, original_call)`` to retain a live value instead.
+        Portable primitive results remain usable across observations.
+
+        During extraction, lookup uses the active callback observation and only
+        its supplied values. It never executes a command or initializes a binding.
+        This deliberately replaces the prototype's key materialization and
+        transparent raw-value retention; register or bind expressions explicitly.
+        """
+        runtime_expr = to_runtime_expr(expr)
+        node: pb.Node = runtime_expr.__egg_ref__.read()
+        if node.kind is not None and node.kind.field == "call":
+            declaration: pb.Declaration = _definition_at(
+                runtime_expr.__egg_ref__, "callable", node.kind.value.func
+            ).read()
+            if declaration.kind is None or not isinstance(
+                declaration.kind.value, pb.Function | pb.Constructor | pb.Relation
+            ):
+                msg = "Lookup requires a table-backed callable; eager and builtin primitives do not have tables"
+                raise ValueError(msg)
         if self._cost_model_frames:
             observation, supplied = self._cost_model_frames[-1]
         else:
             snapshot = self.freeze()
             assert snapshot.program is not None
             observation, supplied = _CostModelObservation(self._state, snapshot.program), None
-        value = observation.lookup(to_runtime_expr(expr).__egg_ref__, supplied=supplied)
+        value = observation.lookup(runtime_expr.__egg_ref__, supplied=supplied)
         return None if value is None else cast("BASE_EXPR", RuntimeExpr(value))
 
     def has_custom_cost(self, fn: ExprCallable) -> bool:

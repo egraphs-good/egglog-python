@@ -925,8 +925,16 @@ Use {meth}`egglog.egraph.EGraph.lookup_function_value` when a model needs to
 inspect a table registered before extraction using those callback arguments
 directly. A same-e-graph lookup cannot evaluate a newly derived key while
 extraction is holding the graph read-only; such a lookup raises `ValueError`.
-Opaque user-sort values returned by a lookup belong to that e-graph and are
-rejected if passed to a different one.
+Opaque class values belong to the current observation; they cannot identify
+live classes in another lookup, extraction request, or e-graph. Portable
+primitive results can be reused. Outside callbacks, lookup reads a fresh snapshot
+without evaluating keys or inserting rows; the table must already be registered,
+and missing keys or rows return `None`.
+Use `egraph.register(expr)` for materialization, or
+`saved = egraph.let("saved", original_call)` to capture a live read for later
+lookup or extraction. A binding reads its stored value, not its initializer, so
+source-row updates or deletion do not retarget it. This deliberately replaces
+the earlier prototype's implicit key materialization and raw-value retention.
 
 For example, this model uses a boolean cost for whether an `i64` is even:
 
@@ -993,10 +1001,11 @@ This operation is destructive. It clears all old rows, then rebuilds the
 extracted rows of the requested callables and any constructor rows needed to
 represent their values. Unreferenced rows remain absent. Declarations and
 cost-table identities remain available, although their rows are cleared.
-Existing handles returned by {meth}`egglog.egraph.EGraph.let` become invalid
-because their rows have been cleared. Opaque values previously returned by
-{meth}`egglog.egraph.EGraph.lookup_function_value` are also invalid because
-compaction assigns fresh backend value identities. The same `EGraph` can
+Bindings returned by {meth}`egglog.egraph.EGraph.let` are ordinary function rows
+and disappear if not retained by compaction. A missing binding is not
+reinitialized when reused; popping a saved scope restores its saved rows.
+Snapshot-owned lookup class values remain observation-local, independently of
+compaction. The same `EGraph` can
 continue registering new actions and running rules afterward. Call this method
 only when dropping all unselected table state is intended.
 

@@ -525,6 +525,11 @@ class _CostModelObservation:
         self.registered = frozenset(
             key for declaration in program.declarations if (key := _definition_key(declaration)) is not None
         )
+        self.table_backed = frozenset(
+            declaration.kind.value.name
+            for declaration in program.declarations
+            if declaration.kind is not None and declaration.kind.field in {"constructor", "function", "relation"}
+        )
         self.rows: dict[tuple[str, tuple[int, ...]], int] = {}
         self.assigned: dict[tuple[str, tuple[int, ...]], int] = {}
         for node_index, node in enumerate(program.nodes):
@@ -584,17 +589,21 @@ class _CostModelObservation:
             else frozenset(self.owner.ref("nodes", i) for i in range(len(self.program.nodes)))
         )
 
-        key = (
-            call.func,
-            tuple(
-                self._resolve(reference.owner.ref("nodes", arg), allowed, callback=supplied is not None)
-                for arg in call.args
-            ),
-        )
+        # A missing row must not hide a later invalid observation.
+        resolved_args = [
+            self._resolve(reference.owner.ref("nodes", arg), allowed, callback=supplied is not None)
+            for arg in call.args
+        ]
+        arguments = []
+        for value in resolved_args:
+            if value is None:
+                return None
+            arguments.append(value)
+        key = call.func, tuple(arguments)
         result = (self.assigned if node.kind.field == "get_cost" else self.rows).get(key)
         return None if result is None else self.owner.ref("nodes", result)
 
-    def _resolve(self, value: Ref, allowed: frozenset[Ref], *, callback: bool) -> int:
+    def _resolve(self, value: Ref, allowed: frozenset[Ref], *, callback: bool) -> int | None:
         value = value.owner.ref(value.role, value.index)
         if value in allowed and value.owner is self.owner:
             return value.index
@@ -603,18 +612,29 @@ class _CostModelObservation:
             for candidate in allowed:
                 if StructuralView(candidate) == structural:
                     return candidate.index
+            if not callback:
+                return None
         if not callback and record.kind is not None and record.kind.field == "call":
             target = record.kind.value
-            key = (
-                target.func,
-                tuple(self._resolve(value.owner.ref("nodes", arg), allowed, callback=False) for arg in target.args),
-            )
-            if key in self.rows:
-                return self.rows[key]
+            if ("callable", target.func) in self.registered and target.func not in self.table_backed:
+                msg = "Lookup cannot evaluate primitive keys; register or bind the expression explicitly"
+                raise ValueError(msg)
+            resolved_args = [
+                self._resolve(value.owner.ref("nodes", arg), allowed, callback=False) for arg in target.args
+            ]
+            arguments = []
+            for resolved in resolved_args:
+                if resolved is None:
+                    return None
+                arguments.append(resolved)
+            return self.rows.get((target.func, tuple(arguments)))
         msg = (
             "Cost models can only look up tables using values supplied to the callback"
             if callback
-            else "Lookup value belongs to a different EGraph or observation scope"
+            else (
+                "Lookup value belongs to a different EGraph or observation scope; "
+                "use EGraph.let(name, original_call) to retain a live value"
+            )
         )
         raise ValueError(msg)
 
