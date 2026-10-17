@@ -2,6 +2,7 @@
 //! No Python syntax is lowered here; ordinary results and errors remain bytes.
 
 use crate::py_object_sort::{PyObjectErrorState, PyObjectExtension};
+use egglog_experimental::builtin::PortableTypeInfo;
 use egglog_experimental::protobuf::NativeExtension;
 use egglog_experimental::protobuf::{Engine, TransportError};
 use prost::Message;
@@ -20,7 +21,7 @@ pub(crate) fn _export_pyobject_catalog(py: Python<'_>) -> PyResult<Bound<'_, PyB
         .map_err(PyValueError::new_err)?;
     let catalog = graph
         .type_info()
-        .builtin_catalog()
+        .portable_builtin_catalog()
         .map_err(PyValueError::new_err)?;
     eprintln!(
         "undescribed primitives: {:?}; families: {:?}; family primitives: {:?}; sorts: {:?}",
@@ -103,8 +104,8 @@ impl ProtoEngine {
 mod tests {
     use super::*;
     use crate::py_object_sort::{PyObjectExtension, PyPickledValue, dump, load};
-    use egglog_experimental::proto as pb;
     use egglog_experimental::protobuf::NativeExtension;
+    use egglog_experimental::{builtin::import_rooted_definition, proto as pb};
     use prost::Message;
     use pyo3::types::PyDict;
     use std::sync::Arc;
@@ -262,7 +263,7 @@ mod tests {
         let extension = Arc::new(PyObjectExtension::default());
         let mut graph = egglog_experimental::new_experimental_egraph();
         extension.initialize(&mut graph).unwrap();
-        let catalog = graph.type_info().builtin_catalog().unwrap();
+        let catalog = graph.type_info().portable_builtin_catalog().unwrap();
         assert!(
             !catalog
                 .undescribed_sorts
@@ -524,7 +525,11 @@ mod tests {
             exported
         );
         assert_eq!(
-            graph.type_info().builtin_catalog().unwrap().definitions,
+            graph
+                .type_info()
+                .portable_builtin_catalog()
+                .unwrap()
+                .definitions,
             catalog.definitions
         );
         let payload = Python::attach(|py| dump("hello".into_pyobject(py).unwrap()).unwrap().0);
@@ -573,7 +578,11 @@ mod tests {
         let extension = Arc::new(PyObjectExtension::default());
         let mut graph = egglog_experimental::new_experimental_egraph();
         extension.initialize(&mut graph).unwrap();
-        let catalog = graph.type_info().builtin_catalog().unwrap().definitions;
+        let catalog = graph
+            .type_info()
+            .portable_builtin_catalog()
+            .unwrap()
+            .definitions;
         let mut engine = Engine::with_extension(extension);
         for operation in ["eval", "exec"] {
             let key = format!("egglog.python.pyobject.{operation}");
@@ -613,9 +622,9 @@ mod tests {
             };
             let string_sort = signature.inputs[0].sort;
             let mut imported = pb::Program::default();
-            egglog::builtin::import_rooted_definition(&key, &context, &mut imported).unwrap();
+            import_rooted_definition(&key, &context, &mut imported).unwrap();
             let before = imported.clone();
-            egglog::builtin::import_rooted_definition(&key, &context, &mut imported).unwrap();
+            import_rooted_definition(&key, &context, &mut imported).unwrap();
             assert_eq!(imported, before);
 
             // Standalone closure needs its helper; an installed P session
@@ -627,8 +636,7 @@ mod tests {
             });
             let mut destination = pb::Program::default();
             assert_eq!(
-                egglog::builtin::import_rooted_definition(&key, &missing, &mut destination)
-                    .unwrap_err(),
+                import_rooted_definition(&key, &missing, &mut destination).unwrap_err(),
                 "unknown default callee"
             );
             assert_eq!(destination, pb::Program::default());
@@ -715,8 +723,7 @@ mod tests {
                     }
                 }
                 let mut destination = pb::Program::default();
-                let result =
-                    egglog::builtin::import_rooted_definition(&key, &invalid, &mut destination);
+                let result = import_rooted_definition(&key, &invalid, &mut destination);
                 if let Some(expected) = standalone_error {
                     assert_eq!(result.unwrap_err(), expected, "{operation}/{case}");
                     assert_eq!(destination, pb::Program::default());
@@ -750,8 +757,7 @@ mod tests {
                 unreachable!()
             };
             call.args.push(argument);
-            egglog::builtin::import_rooted_definition(&key, &odd, &mut pb::Program::default())
-                .unwrap();
+            import_rooted_definition(&key, &odd, &mut pb::Program::default()).unwrap();
             // Execute only the call, not a conflicting resupply of changed
             // eval/exec defaults. The installed catalog supplies its callee.
             odd.declarations.clear();
@@ -787,7 +793,11 @@ mod tests {
             });
         }
         assert_eq!(
-            graph.type_info().builtin_catalog().unwrap().definitions,
+            graph
+                .type_info()
+                .portable_builtin_catalog()
+                .unwrap()
+                .definitions,
             catalog
         );
     }

@@ -4,8 +4,12 @@ use egglog::{
     ArcSort, BaseValue, Term, TermDag, TermId, Value, add_primitive,
     ast::Literal,
     prelude::{BaseSort, EGraph},
-    proto as pb,
     sort::{BaseValues, S},
+};
+use egglog_experimental::{
+    add_primitive as add_portable_primitive,
+    builtin::{PortableEGraph, PortableRegistration, PortableTypeInfo},
+    proto as pb,
 };
 use std::{
     any::TypeId,
@@ -71,7 +75,7 @@ impl BaseSort for PyObjectSort {
 
     fn register_primitives(&self, eg: &mut EGraph) {
         eg.type_info()
-            .register_builtin_family(pb::HostSortFamily {
+            .register_portable_family(pb::HostSortFamily {
                 name: "PyObject".into(),
                 arity: 0,
                 bindings: Some(pb::SortBindings {
@@ -92,7 +96,7 @@ impl BaseSort for PyObjectSort {
         );
         // Register the real default-expression helper before its consumers.
         // (py-dict [<key-object> <value-object>]*)
-        add_primitive!(eg, "py-dict" [id = "egglog.python.pyobject.dict", bindings = |s| py_object_bindings(s, "dict", &["keys_and_values"], false)] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
+        add_portable_primitive!(eg, "py-dict" [id = "egglog.python.pyobject.dict", bindings = |s| py_object_bindings(s, "dict", &["keys_and_values"], false)] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
             attach(&self.ctx, "py-dict", |py| {
                 let dict = PyDict::new(py);
                 for i in xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>()?.chunks_exact(2) {
@@ -102,7 +106,7 @@ impl BaseSort for PyObjectSort {
             })
         });
         // Supports calling (py-eval <str-obj> <globals-obj> <locals-obj>)
-        add_primitive!(eg, "py-eval" [id = "egglog.python.pyobject.eval", context = py_code_context] = {self.py_error.clone(): PyObjectErrorState} |code: S, globals: PyPickledValue, locals: PyPickledValue| -?> PyPickledValue {
+        add_portable_primitive!(eg, "py-eval" [id = "egglog.python.pyobject.eval", context = py_code_context] = {self.py_error.clone(): PyObjectErrorState} |code: S, globals: PyPickledValue, locals: PyPickledValue| -?> PyPickledValue {
             attach(&self.ctx, "py-eval", |py| {
                 dump(py.eval(
                     CString::new(code.to_string()).unwrap().as_c_str(),
@@ -113,7 +117,7 @@ impl BaseSort for PyObjectSort {
         });
         // Copies the locals, execs the Python string, then returns the copied version of the locals with any updates
         // (py-exec <str-obj> <globals-obj> <locals-obj>)
-        add_primitive!(
+        add_portable_primitive!(
             eg,
             "py-exec" [id = "egglog.python.pyobject.exec", context = py_code_context] =
                 {self.py_error.clone(): PyObjectErrorState}
@@ -140,7 +144,7 @@ impl BaseSort for PyObjectSort {
                 }
         );
         // (py-call <fn-obj> [<arg-object>]*)
-        add_primitive!(eg, "py-call" [id = "egglog.python.pyobject.call", bindings = |s| py_object_bindings(s, "__call__", &["args"], true)] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
+        add_portable_primitive!(eg, "py-call" [id = "egglog.python.pyobject.call", bindings = |s| py_object_bindings(s, "__call__", &["args"], true)] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {
             attach(&self.ctx, "py-call", |py| {
                 let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>().map_err(|e| {if !e.is_instance_of::<PrimitiveFailure>(py) {let _ = e.add_note(py, "Loading arguments");} e})?;
                 let fn_obj = &xs[0];
@@ -150,7 +154,7 @@ impl BaseSort for PyObjectSort {
         });
 
         // (py-call-extended <fn-obj> <args-obj> <kwargs-obj>)
-        add_primitive!(eg, "py-call-extended" [id = "egglog.python.pyobject.call_extended", bindings = |s| py_object_bindings(s, "call_extended", &["args", "kwargs"], true)] = {self.py_error.clone(): PyObjectErrorState} |fn_: PyPickledValue, args: PyPickledValue, kwargs: PyPickledValue| -?> PyPickledValue {
+        add_portable_primitive!(eg, "py-call-extended" [id = "egglog.python.pyobject.call_extended", bindings = |s| py_object_bindings(s, "call_extended", &["args", "kwargs"], true)] = {self.py_error.clone(): PyObjectErrorState} |fn_: PyPickledValue, args: PyPickledValue, kwargs: PyPickledValue| -?> PyPickledValue {
             attach(&self.ctx, "py-call-extended", |py| {
                 let fn_ = load(py, &fn_)?;
                 let args = load(py, &args)?;
@@ -160,7 +164,7 @@ impl BaseSort for PyObjectSort {
         });
 
         // Supports calling (py-dict-update <dict-obj> [<key-object> <value-obj>]*)
-        add_primitive!(eg, "py-dict-update" [id = "egglog.python.pyobject.dict_update", bindings = |s| py_object_bindings(s, "dict_update", &["keys_and_values"], true)] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {{
+        add_portable_primitive!(eg, "py-dict-update" [id = "egglog.python.pyobject.dict_update", bindings = |s| py_object_bindings(s, "dict_update", &["keys_and_values"], true)] = {self.py_error.clone(): PyObjectErrorState} [xs: PyPickledValue] -?> PyPickledValue {{
             attach(&self.ctx, "py-dict-update", |py| {
                 let xs = xs.map(|x| load(py, &x)).collect::<PyResult<Vec<_>>>()?;
                 // Copy the dict so we can mutate it and return it
@@ -173,7 +177,7 @@ impl BaseSort for PyObjectSort {
             })
         }});
         // (py-to-string <obj>)
-        add_primitive!(
+        add_portable_primitive!(
             eg,
             "py-to-string" [id = "egglog.python.pyobject.to_string", bindings = |s| py_object_bindings(s, "to_string", &[], true)] = {self.py_error.clone(): PyObjectErrorState} |x: PyPickledValue| -?> S {
                 {
@@ -183,7 +187,7 @@ impl BaseSort for PyObjectSort {
             }
         );
         // (py-to-bool <obj>)
-        add_primitive!(
+        add_portable_primitive!(
             eg,
             "py-to-bool" [id = "egglog.python.pyobject.to_bool", bindings = |s| py_object_bindings(s, "to_bool", &[], true)] = {self.py_error.clone(): PyObjectErrorState} |x: PyPickledValue| -?> bool {
                 {
@@ -192,7 +196,7 @@ impl BaseSort for PyObjectSort {
             }
         );
         // (py-from-string <str>)
-        add_primitive!(
+        add_portable_primitive!(
             eg,
             "py-from-string" [id = "egglog.python.pyobject.from_string", bindings = |s| py_object_bindings(s, "from_string", &["s"], false)] = {self.py_error.clone(): PyObjectErrorState} |x: S| -?> PyPickledValue {
                 attach(&self.ctx, "py-from-string", |py| {
@@ -201,7 +205,7 @@ impl BaseSort for PyObjectSort {
             }
         );
         // (py-from-int <int>)
-        add_primitive!(
+        add_portable_primitive!(
             eg,
             "py-from-int" [id = "egglog.python.pyobject.from_int", bindings = |s| py_object_bindings(s, "from_int", &["i"], false)] = {self.py_error.clone(): PyObjectErrorState} |x: i64| -?> PyPickledValue {
                 attach(&self.ctx, "py-from-int", |py| {
@@ -334,7 +338,7 @@ fn py_code_context(
         ..Default::default()
     };
     types.export_builtin_definition("egglog.python.pyobject.dict", &mut complete)?;
-    egglog::builtin::definitions::reconcile_declarations(&consumer, &mut complete)?;
+    egglog_experimental::builtin::definitions::reconcile_declarations(&consumer, &mut complete)?;
     *draft = complete;
     Ok(())
 }
