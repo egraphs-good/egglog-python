@@ -259,6 +259,151 @@ def test_numeric_winner_error_is_not_retried_and_restores_context():
     assert get_type_args() == ()
 
 
+@pytest.mark.parametrize("raises", [False, True])
+def test_numeric_positive_original_winner_preserves_ties_and_context(monkeypatch, raises):
+    monkeypatch.setattr(conversion, "CONVERSIONS", {})
+
+    class Source:
+        pass
+
+    class Operand(Expr):
+        def __init__(self) -> None: ...
+
+    class Left(Expr):
+        def __init__(self) -> None: ...
+        def __sub__(self, other: Operand) -> "Left": ...
+
+    prepared = []
+
+    class Alternative(Expr):
+        def __sub__(self, other: "Alternative") -> "Alternative":
+            prepared.append("alternative")
+            pytest.fail("Losing member was prepared")
+
+    marker = ValueError("original winning converter failed")
+    calls = []
+
+    def from_source(_):
+        calls.append(get_type_args())
+        if raises:
+            raise marker
+        return Operand()
+
+    converter(Source, Operand, from_source)
+    converter(Left, Alternative, lambda _: pytest.fail("Losing receiver converter ran"), cost=0)
+    converter(Source, Alternative, lambda _: pytest.fail("Losing RHS converter ran"))
+    left = Left()
+    with with_type_args((String,)):
+        if raises:
+            with pytest.raises(ValueError, match="original winning converter failed") as caught:
+                left - Source()
+            assert caught.value is marker
+        else:
+            expression = left - Source()
+            assert expr_parts(expression) == expr_parts(Left.__sub__(left, Operand()))
+        assert get_type_args() == (String,)
+    assert calls == [()]
+    assert get_type_args() == ()
+    assert prepared == []
+    assert Alternative.__egg_pending__ is not None
+
+
+@pytest.mark.parametrize("reentrant", [False, True])
+def test_numeric_cutoff_preserves_negative_left_costs(monkeypatch, reentrant):
+    monkeypatch.setattr(conversion, "CONVERSIONS", {})
+
+    class Source:
+        pass
+
+    class Operand(Expr):
+        def __init__(self) -> None: ...
+
+    class Left(Expr):
+        def __init__(self) -> None: ...
+        def __sub__(self, other: Operand) -> "Left": ...
+
+    class Alternative(Expr):
+        def __init__(self) -> None: ...
+        def __sub__(self, other: "Alternative") -> "Alternative": ...
+
+    calls = []
+
+    def from_left(_):
+        calls.append("left")
+        return Alternative()
+
+    def from_right(_):
+        calls.append("right")
+        return Alternative()
+
+    converter(Left, Alternative, from_left, cost=0 if reentrant else -5)
+    converter(Source, Operand, lambda _: pytest.fail("Losing original converter ran"))
+    converter(Source, Alternative, from_right, cost=2)
+    updates = []
+    armed = False
+
+    class MutatingMeta(type):
+        __hash__ = type.__hash__
+
+        def __eq__(cls, other) -> bool:
+            nonlocal armed
+            if armed and other is Source:
+                armed = False
+                converter(Left, Alternative, from_left, cost=-5)
+                updates.append("lowered")
+            return type.__eq__(cls, other)
+
+    class Trigger(metaclass=MutatingMeta):
+        pass
+
+    converter(Trigger, Operand, lambda _: pytest.fail("Unrelated converter ran"))
+    armed = reentrant
+    expression = Left() - Source()
+    assert expr_parts(expression) == expr_parts(Alternative.__sub__(Alternative(), Alternative()))
+    assert calls == ["left", "right"]
+    assert updates == (["lowered"] if reentrant else [])
+
+
+@pytest.mark.parametrize("custom_rhs", [False, True])
+def test_numeric_cutoff_opts_out_of_custom_integer_costs(monkeypatch, custom_rhs):
+    monkeypatch.setattr(conversion, "CONVERSIONS", {})
+
+    class Source:
+        pass
+
+    class Unrelated:
+        pass
+
+    class Operand(Expr):
+        def __init__(self) -> None: ...
+
+    class Left(Expr):
+        def __init__(self) -> None: ...
+        def __sub__(self, other: Operand) -> "Left": ...
+
+    class Alternative(Expr):
+        def __sub__(self, other: "Alternative") -> "Alternative": ...
+
+    class Cost(int):
+        def __ge__(self, other) -> bool:
+            pytest.fail("Custom conversion cost was compared")
+
+    calls = []
+
+    def from_source(_):
+        calls.append("original")
+        return Operand()
+
+    converter(Source, Operand, from_source, cost=Cost(1) if custom_rhs else 1)
+    converter(
+        Unrelated, Alternative, lambda _: pytest.fail("Unrelated converter ran"), cost=1 if custom_rhs else Cost(1)
+    )
+    left = Left()
+    expression = left - Source()
+    assert expr_parts(expression) == expr_parts(Left.__sub__(left, Operand()))
+    assert calls == ["original"]
+
+
 def test_numeric_generic_owner_preserves_element_context():
     class Element(Expr):
         def __init__(self, value: i64) -> None: ...

@@ -159,7 +159,9 @@ def _conversion_cost(sort: Ref, value: object) -> int | None:
     return conversion[0] if conversion is not None else None
 
 
-def _binary_conversion_candidates(left: object, right: object) -> Generator[tuple[RuntimeClass, int, int], None, None]:
+def _binary_conversion_candidates(
+    left: object, right: object
+) -> Generator[tuple[RuntimeClass, int, int], int | None, None]:
     """Try the original receiver first; lazily price alternatives and RHS lower bounds."""
     original = left if isinstance(left, RuntimeExpr) else right
     assert isinstance(original, RuntimeExpr)
@@ -168,11 +170,11 @@ def _binary_conversion_candidates(left: object, right: object) -> Generator[tupl
     original_sort = reference.owner.ref("sorts", payload.sort_id)
     original_class = _class_for_sort(original_sort)
     cost = _conversion_cost(original_sort, left)
+    cutoff = None
     if cost is not None:
-        yield original_class, cost, 0
+        cutoff = yield original_class, cost, 0
     # Exact signatures can finish before scanning the conversion graph or
     # preparing an unrelated target's member. Bounds also exclude losing ties.
-    classes = dict.fromkeys(target for _, target in CONVERSIONS if target.__egg_sort__ is not None)
     other_source: type | RuntimeClass = type(right)
     minimum_other = None
     if isinstance(right, RuntimeExpr):
@@ -188,6 +190,13 @@ def _binary_conversion_candidates(left: object, right: object) -> Generator[tupl
     for (source, _), (cost, _) in CONVERSIONS.items():
         if source in sources and (minimum_other is None or cost < minimum_other):
             minimum_other = cost
+    if (
+        cutoff is not None
+        and all(type(cost) is int and cost >= 0 for cost, _ in CONVERSIONS.values())
+        and (minimum_other if minimum_other is not None else 0) >= cutoff
+    ):
+        return
+    classes = dict.fromkeys(target for _, target in CONVERSIONS if target.__egg_sort__ is not None)
     for cls in classes:
         if cls == original_class:
             continue

@@ -1543,7 +1543,7 @@ def _numeric_method_cost(function: RuntimeFunction, owner: Ref, left: object, ri
     return None if not plan or None in costs else sum(cost for cost in costs if cost is not None)
 
 
-def _numeric_binary_call(name: str, left: object, right: object) -> object:
+def _numeric_binary_call(name: str, left: object, right: object) -> object:  # noqa: C901
     """Choose the cheapest applicable exact signature, then run only its conversions."""
     from .conversion import _binary_conversion_candidates, convert_to_same_type, resolve_literal  # noqa: PLC0415
 
@@ -1560,7 +1560,12 @@ def _numeric_binary_call(name: str, left: object, right: object) -> object:
             return cast("Callable", member)(right)
         return cast("Callable", _get_expr_member(convert_to_same_type(left, original), name))(right)
     best: tuple[int, RuntimeClass, RuntimeFunction] | None = None
-    for cls, left_cost, minimum_other in _binary_conversion_candidates(left, right):
+    candidates = _binary_conversion_candidates(left, right)
+    while True:
+        try:
+            cls, left_cost, minimum_other = candidates.send(best[0] if best is not None else None)
+        except StopIteration:
+            break
         sort = cls.__egg_sort__
         assert sort is not None
         if best is not None and left_cost + minimum_other >= best[0]:
