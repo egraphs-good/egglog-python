@@ -855,7 +855,7 @@ class _FunctionConstructor:
         if self.subsume and not has_body:
             msg = "subsume requires a body"
             raise ValueError(msg)
-        if self.builtin or variable:
+        if variable or (self.builtin and (owner is not None or self.mutates_first_arg or self.egg_fn is not None)):
             msg = "Builtin, mutation and variadic free functions are not migrated"
             raise NotImplementedError(msg)
         if any(not isinstance(sort, Ref) or sort.role != "sorts" for sort in input_sorts):
@@ -904,7 +904,17 @@ class _FunctionConstructor:
             if receiver:
                 view.receiver = python_first_input
         kind = (
-            Oneof[Literal["primitive"], pb.Primitive](
+            Oneof[Literal["host_primitive"], pb.HostPrimitive](
+                "host_primitive",
+                pb.HostPrimitive(
+                    name=name,
+                    typing=Oneof[Literal["signature"], pb.GenericSignature](
+                        "signature", pb.GenericSignature(inputs=inputs, output=output_index)
+                    ),
+                ),
+            )
+            if self.builtin
+            else Oneof[Literal["primitive"], pb.Primitive](
                 "primitive", pb.Primitive(name=name, inputs=inputs, output=output_index)
             )
             if has_body and self.ruleset is None

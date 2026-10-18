@@ -2862,11 +2862,63 @@ class A(Expr):
 
 
 class TestDefaultReplacements:
-    def test_builtin_function_without_body(self):
+    def test_builtin_function_without_body(self, monkeypatch):
+        engine = MagicMock(side_effect=AssertionError("Bodyless builtin authoring must not create an engine"))
+        monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
+        from egglog._program import Builder, pack  # noqa: PLC0415
+
         @function(builtin=True)
         def f(x: i64Like) -> i64: ...
 
         assert expr_parts(f(1)) == expr_parts(f(i64(1)))
+        reference = cast("RuntimeFunction", f).__egg_ref__
+        record: pb.Declaration = reference.read()
+        assert record.kind is not None
+        assert isinstance(record.kind.value, pb.HostPrimitive)
+        primitive = record.kind.value
+        assert primitive.typing is not None
+        assert primitive.typing.field == "signature"
+        signature = primitive.typing.value
+        assert signature.type_params == []
+        assert signature.varargs == []
+        assert signature.equality_type_params == []
+        assert signature.has_field("output")
+        assert len(signature.inputs) == 1
+        assert signature.inputs[0].name == "x"
+        assert signature.inputs[0].sort == signature.output
+        sort: pb.Sort = reference.owner.ref("sorts", signature.output).read()
+        assert sort.kind is not None
+        assert sort.kind.field == "family"
+        assert sort.kind.value.name == "i64"
+        assert sort.kind.value.args == []
+        assert record.bindings is not None
+        assert record.bindings.python is not None
+        assert record.bindings.rust is None
+        assert record.bindings.egglog is None
+        assert len(record.bindings.python.views) == 1
+        view = record.bindings.python.views[0]
+        assert view.kind == pb.PythonCallKind.FUNCTION
+        assert view.path == [*__name__.split("."), "f"]
+        assert view.owner is None
+        assert not view.has_field("receiver")
+        assert not view.has_field("mutates")
+        assert len(view.params) == 1
+        assert view.params[0].name == "x"
+        assert view.params[0].has_field("core_input")
+        assert view.params[0].core_input == 0
+        assert not view.params[0].has_field("default_expr")
+
+        before = record.to_binary()
+        value = cast("RuntimeExpr", f(1))
+        assert value.__egg_ref__.read().kind.value.func == primitive.name
+        assert get_literal_value(f(1)) is None
+        packed = pack([value.__egg_ref__])
+        decoded = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+        restored = RuntimeExpr(decoded.ref("nodes", packed.indices[0]))
+        assert expr_parts(cast("BaseExpr", restored)) == expr_parts(f(1))
+        assert cast("RuntimeFunction", f).__egg_ref__ is reference
+        assert reference.read().to_binary() == before
+        engine.assert_not_called()
 
     def test_eqsort_merge_function_without_body(self):
         @function(merge=lambda old, new: old)
@@ -4264,6 +4316,51 @@ def test_builtin_free_callable_alias_authoring_remains_explicitly_unsupported() 
 
     with pytest.raises(NotImplementedError, match="Builtin, mutation and variadic free functions are not migrated"):
         plus_alias(1, 2)
+
+
+@pytest.mark.parametrize("frontier", ["mutation", "variadic", "generic", "explicit-empty"])
+def test_bodyless_builtin_rejects_unmigrated_frontiers_before_conversion(monkeypatch, frontier: str) -> None:
+    engine = MagicMock(side_effect=AssertionError("Invalid builtin headers must not create an engine"))
+    monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
+
+    class Host:
+        pass
+
+    calls = []
+
+    def convert_host(value: Host) -> i64:
+        calls.append(value)
+        return i64(3)
+
+    converter(Host, i64, convert_host)
+    if frontier == "mutation":
+
+        @function(builtin=True, mutates_first_arg=True)
+        def mutation(value: i64Like) -> None: ...
+
+        candidate = cast("Callable[[object], object]", mutation)
+    elif frontier == "variadic":
+
+        @function(builtin=True)
+        def variadic(*values: i64Like) -> i64: ...
+
+        candidate = cast("Callable[[object], object]", variadic)
+    elif frontier == "generic":
+
+        @function(builtin=True)
+        def generic(value: Vec[_BuiltinExprT]) -> i64: ...
+
+        candidate = cast("Callable[[object], object]", generic)
+    else:
+
+        @function(builtin=True, egg_fn="")
+        def explicit(value: i64Like) -> i64: ...
+
+        candidate = cast("Callable[[object], object]", explicit)
+    with pytest.raises(NotImplementedError):
+        candidate(Host())
+    assert calls == []
+    engine.assert_not_called()
 
 
 def test_freeze_preserves_reverse_function_rows_and_constructor_costs() -> None:
