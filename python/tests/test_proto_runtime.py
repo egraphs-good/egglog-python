@@ -3887,7 +3887,6 @@ def test_named_eager_static_options_precede_callback(equality, options, error, m
         ({"subsume": True}, ValueError, "Primitive-returning callables cannot use subsume"),
         ({"builtin": True, "merge": lambda old, new: old}, ValueError, "Builtin callables cannot use merge"),
         ({"builtin": True, "ruleset": object()}, ValueError, "Builtin callables cannot use an explicit ruleset"),
-        ({"builtin": True}, NotImplementedError, "not migrated"),
         ({"mutates_first_arg": True}, ValueError, "must be annotated to return None"),
     ],
 )

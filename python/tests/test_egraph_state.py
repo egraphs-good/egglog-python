@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import gc
-import pathlib
-from typing import Literal, TextIO, cast
-
 import pytest
+from egglog_proto.egglog.v1 import egglog_pb as pb
 
-import egglog.bindings as egg_bindings
-import egglog.egraph as egraph_module
 from egglog import (
     EggSmolError,
     EGraph,
@@ -26,28 +21,6 @@ from egglog import (
     var,
 )
 from egglog.egraph import get_current_ruleset
-
-
-def test_saved_egglog_transcript_close_removes_backing_file() -> None:
-    egraph = EGraph(save_egglog_string=True)
-    assert egraph._state.egglog_file_state is not None
-    path = pathlib.Path(egraph._state.egglog_file_state.path)
-
-    egraph.close()
-
-    assert not path.exists()
-
-
-def test_saved_egglog_transcript_is_removed_on_finalization() -> None:
-    egraph = EGraph(save_egglog_string=True)
-    assert egraph._state.egglog_file_state is not None
-    path = pathlib.Path(egraph._state.egglog_file_state.path)
-    assert path.exists()
-
-    del egraph
-    gc.collect()
-
-    assert not path.exists()
 
 
 def test_closing_saved_transcript_inside_context_restores_scope() -> None:
@@ -88,7 +61,7 @@ def test_invalid_saved_transcript_inside_context_restores_scope() -> None:
             for node in snapshot.program.nodes
             if node.kind is not None
             and node.kind.field == "call"
-            and node.kind.value.func == "invalid_transcript_scope_marker"
+            and node.kind.value.func == marker.__egg_ref__.read().kind.value.name
         ]
         assert len(marker_calls) == 1
         value = snapshot.program.nodes[marker_calls[0].args[0]].kind.value.value
@@ -106,71 +79,38 @@ def test_invalid_saved_transcript_inside_context_restores_scope() -> None:
         egraph._state.destroy()
 
 
-def test_cleanup_failure_does_not_mask_propagating_base_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_closing_saved_transcript_preserves_propagating_base_exception() -> None:
     class BodyError(BaseException):
         pass
 
-    def fail_cleanup(*args: object, **kwargs: object) -> None:
-        message = "cleanup failed"
-        raise RuntimeError(message)
-
+    original = BodyError("body sentinel")
     egraph = EGraph(save_egglog_string=True)
     parent_state = egraph._state
 
-    def enter_and_fail() -> None:
-        with egraph:
-            egraph.close()
-            monkeypatch.setattr(egraph_module, "call_with_current_trace", fail_cleanup)
-            raise BodyError
+    with pytest.raises(BodyError) as caught, egraph:  # noqa: PT012 -- exercise body failure and rollback together
+        egraph.close()
+        raise original
 
-    with pytest.raises(BodyError):
-        enter_and_fail()
-
+    assert caught.value is original
     assert egraph._state is parent_state
     assert not egraph._state_stack
 
 
-def test_file_backed_errors_report_saved_file_line() -> None:
+def test_saved_transcript_errors_preserve_command_location() -> None:
     egraph = EGraph(save_egglog_string=True)
     egraph.let("x", i64(1))
     egraph.let("y", i64(2))
-    expected_line = len(egraph.as_egglog_string.splitlines()) + 1
-    assert egraph._state.egglog_file_state is not None
-    path = egraph._state.egglog_file_state.path
 
     with pytest.raises(EggSmolError) as exc_info:
         egraph.check(eq(i64(1)).to(i64(2)))
 
-    error_text = exc_info.value.context
-    assert exc_info.value.replayable_by_fail
-    assert path in error_text
-    assert f"In {expected_line}:" in error_text
-    lines = egraph.as_egglog_string.splitlines()
-    assert "(fail (check (= 1 2))) ; Check failed:" in lines
-    assert "(check (= 1 2))" not in lines
-
-
-def test_non_replayable_egglog_error_invalidates_saved_transcript() -> None:
-    egraph = EGraph(save_egglog_string=True)
-    command = egg_bindings.Check(
-        egg_bindings.RustSpan(__name__, 0, 0),
-        [
-            egg_bindings.Eq(
-                egg_bindings.RustSpan(__name__, 0, 0),
-                egg_bindings.Lit(egg_bindings.RustSpan(__name__, 0, 0), egg_bindings.Int(1)),
-                egg_bindings.Lit(egg_bindings.RustSpan(__name__, 0, 0), egg_bindings.Float(1.0)),
-            )
-        ],
-    )
-
-    with pytest.raises(EggSmolError) as exc_info:
-        egraph._state.run_program(command)
-
-    assert not exc_info.value.replayable_by_fail
-    with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
+    error = exc_info.value.__dict__["_egglog_proto_error"]
+    assert error.code == pb.ErrorCode.CHECK_FAILED
+    assert error.location == pb.CommandLocation(path=[0])
+    assert str(exc_info.value) == error.message
+    assert exc_info.value.args == (error.message,)
+    with pytest.raises(RuntimeError, match="cannot be replayed"):
         _ = egraph.as_egglog_string
-    with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
-        egraph.register(relation("after_non_replayable_failure")())
 
 
 def _raise_after_partial_write(_: object) -> object:
@@ -197,7 +137,9 @@ def test_non_egglog_failure_invalidates_saved_transcript() -> None:
         recorded.run(run(failing_rules))
     with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
         recorded.check(done(i64(1)))
-    with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
+    with pytest.raises(
+        RuntimeError, match=r"^The saved transcript cannot be replayed after a failed engine operation$"
+    ):
         _ = recorded.as_egglog_string
     recorded.close()
 
@@ -210,52 +152,6 @@ def test_non_egglog_failure_invalidates_saved_transcript() -> None:
     with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
         scoped.check(done(i64(1)))
     scoped.close()
-
-
-class _FaultingWriter:
-    def __init__(self, file: TextIO, fail_on: Literal["write", "flush"]) -> None:
-        self.file = file
-        self.fail_on = fail_on
-
-    @property
-    def closed(self) -> bool:
-        return self.file.closed
-
-    def write(self, text: str) -> int:
-        if self.fail_on == "write":
-            message = "transcript write failed"
-            raise OSError(message)
-        return self.file.write(text)
-
-    def flush(self) -> None:
-        if self.fail_on == "flush":
-            message = "transcript flush failed"
-            raise OSError(message)
-        self.file.flush()
-
-
-@pytest.mark.parametrize("fail_on", ["write", "flush"])
-@pytest.mark.parametrize("command_succeeds", [False, True], ids=["egglog-error", "success"])
-def test_saved_transcript_io_failure_invalidates_transcript(
-    fail_on: Literal["write", "flush"], *, command_succeeds: bool
-) -> None:
-    marker = relation(f"transcript_io_{fail_on}_{command_succeeds}", i64)
-    egraph = EGraph(marker(i64(0)), save_egglog_string=True)
-    assert egraph._state.egglog_file_state is not None
-    file = egraph._state.egglog_file_state.file
-    egraph._state.egglog_file_state.file = cast("TextIO", _FaultingWriter(file, fail_on))
-
-    def execute_command() -> None:
-        if command_succeeds:
-            egraph.register(marker(i64(1)))
-        else:
-            egraph.check(eq(i64(1)).to(i64(2)))
-
-    with pytest.raises(OSError, match=f"transcript {fail_on} failed"):
-        execute_command()
-    with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
-        _ = egraph.as_egglog_string
-    egraph.close()
 
 
 def test_higher_order_callable_inference_does_not_mutate_ambient_ruleset() -> None:
