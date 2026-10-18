@@ -1230,6 +1230,13 @@ def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: p
             "count",
             "sum_multisets",
             "union_values",
+            "map",
+            "reduce",
+            "filter",
+            "filter_not",
+            "flat_map",
+            "fill_index",
+            "clear_index",
         )
     }
     from egglog import MultiSet, convert  # noqa: PLC0415 -- only after the actual packaged-family discriminator
