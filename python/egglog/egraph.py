@@ -1540,7 +1540,10 @@ class EGraph:
 
     def let(self, name: str, expr: BASE_EXPR) -> BASE_EXPR:
         """
-        Define a new expression in the egraph and return a reference to it.
+        Set an exact-name binding and return its ordinary nullary call.
+
+        The returned expression resolves that name in whichever graph uses it.
+        See :func:`let` for repeated-write and name policies.
         """
         action = let(name, expr)
         self.register(action)
@@ -2903,11 +2906,17 @@ def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
 
 
 def let(name: str, expr: BaseExpr) -> Action:
-    """Create a let binding."""
+    """
+    Bind an expression once using the exact name; ``x`` and ``$x`` are distinct.
+
+    Equal repeated writes are idempotent; unequal writes use ordinary no-merge
+    errors, including their completed operand effects. Names are graph-local,
+    not fresh identities tied to a call or scope.
+    """
     runtime_expr = to_runtime_expr(expr)
     node: pb.Node = runtime_expr.__egg_ref__.read()
     builder = Builder()
-    logical_name = f"__egglog_python_let_{uuid4().hex}"
+    logical_name = f"__egglog_python_let_{name.encode('utf-8').hex()}"
     builder.add(
         "declarations",
         pb.Declaration(

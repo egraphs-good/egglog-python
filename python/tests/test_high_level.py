@@ -760,6 +760,107 @@ def test_let_auto_prefixes_global_names(capfd: pytest.CaptureFixture[str]):
     _replay_recorded_source(egraph.as_egglog_string)
 
 
+def test_named_let_actions_reconcile_across_independent_owners() -> None:
+    from egglog._program import pack  # noqa: PLC0415
+
+    first = let("shared", i64(1))
+    second = let("shared", i64(1))
+    packed = pack(commands=[first.__egg_ref__, second.__egg_ref__])
+    declarations = [
+        declaration.kind.value
+        for declaration in packed.program.declarations
+        if declaration.kind is not None and declaration.kind.field == "function"
+    ]
+    assert len(declarations) == 1
+    declaration = declarations[0]
+    assert declaration.name == "__egglog_python_let_736861726564"
+    assert declaration.inputs == []
+    assert not declaration.has_field("merge")
+    for command in packed.program.commands:
+        assert command.kind is not None
+        assert command.kind.field == "action"
+        assert command.kind.value.kind is not None
+        assert command.kind.value.kind.field == "set"
+        assert command.kind.value.kind.value.target is not None
+        assert command.kind.value.kind.value.target.func == declaration.name
+
+    graph = EGraph(save_egglog_string=True)
+    graph.register(first, second)
+    saved = graph.let("shared", i64(1))
+    graph.check(eq(saved).to(i64(1)))
+    _replay_recorded_source(graph.as_egglog_string)
+
+
+def test_named_lets_preserve_exact_names_without_sanitization_collisions() -> None:
+    names = ["", "x", "$x", "has space", "has_space", "caf\u00e9", "cafe\u0301", "x;y", "x_y"]
+    graph = EGraph(save_egglog_string=True)
+    for index, name in enumerate(names):
+        saved = graph.let(name, i64(index))
+        node = expr_parts(saved).ref.read()
+        assert node.kind is not None
+        assert node.kind.field == "call"
+        assert node.kind.value.func == f"__egglog_python_let_{name.encode('utf-8').hex()}"
+        graph.check(eq(saved).to(i64(index)))
+    snapshot = pb.EGraphSnapshot.from_binary(graph.freeze().to_binary())
+    assert snapshot.program is not None
+    bindings = {
+        view.path[-1]: declaration.kind.value.name
+        for declaration in snapshot.program.declarations
+        if declaration.kind is not None and declaration.bindings is not None and declaration.bindings.python is not None
+        for view in declaration.bindings.python.views
+        if view.kind == pb.PythonCallKind.CONSTANT and view.path[-1] in names
+    }
+    assert bindings.keys() == set(names)
+    assert len(set(bindings.values())) == len(names)
+    _replay_recorded_source(graph.as_egglog_string)
+
+
+def test_named_let_unequal_initializers_use_native_no_merge() -> None:
+    graph = EGraph()
+    saved = graph.let("same", i64(1))
+
+    with pytest.raises(EggSmolError) as exc_info:
+        graph.let("same", i64(2))
+
+    error = exc_info.value.__dict__["_egglog_proto_error"]
+    assert error.code == pb.ErrorCode.EVALUATION_FAILED
+    assert error.location is not None
+    assert error.location.path == [0]
+    graph.check(eq(saved).to(i64(1)))
+
+
+def test_named_let_incompatible_output_sort_rejects_before_effects() -> None:
+    graph = EGraph(save_egglog_string=True)
+    saved = graph.let("same", i64(1))
+    before, history = graph.freeze(), graph.as_egglog_string
+
+    with pytest.raises(ValueError, match=r"^conflicting declaration __egglog_python_let_73616d65$"):
+        graph.let("same", String("different sort"))
+
+    assert graph.freeze() == before
+    assert graph.as_egglog_string == history
+    graph.check(eq(saved).to(i64(1)))
+    _replay_recorded_source(graph.as_egglog_string)
+
+
+def test_named_let_resolves_recreated_names_after_pop_and_in_other_graphs() -> None:
+    graph = EGraph()
+    parent = graph.let("parent", i64(1))
+    graph.push()
+    graph.check(eq(parent).to(i64(1)))
+    child = graph.let("child", i64(2))
+    graph.pop()
+    graph.check_fail(eq(child).to(i64(2)))
+    graph.check(eq(parent).to(i64(1)))
+
+    recreated = graph.let("child", i64(3))
+    graph.check(eq(child).to(recreated), eq(child).to(i64(3)))
+    independent = EGraph()
+    independent.check_fail(eq(parent).to(i64(1)))
+    independent.let("child", i64(7))
+    independent.check(eq(child).to(i64(7)))
+
+
 def test_failed_check_does_not_materialize_shared_constructor_expressions() -> None:
     class CheckEdge(Expr):
         @classmethod
