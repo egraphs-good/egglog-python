@@ -4330,12 +4330,13 @@ def test_unsupported_class_members_and_parameter_kinds_are_not_ignored():
     class KeywordOnly(Expr):
         def __init__(self, *, value: i64) -> None: ...
 
-    for cls in (HasBody, KeywordOnly):
-        with pytest.raises(NotImplementedError):
-            cls()
-        expected = {"__init__"} if cls is HasBody else set()
-        assert {name for _, name in cls.__egg_context__.catalog.members} == expected
-        assert not cls.__egg_attr_cache__
+    # Eager method bodies are supported; fixed member parameter kinds still apply.
+    assert isinstance(HasBody().other(), i64)
+    assert resolve_callable(HasBody.other).read().kind.field == "primitive"
+    with pytest.raises(NotImplementedError, match="positional-or-keyword"):
+        KeywordOnly()
+    assert not KeywordOnly.__egg_context__.catalog.members
+    assert not KeywordOnly.__egg_attr_cache__
 
 
 def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
@@ -4473,7 +4474,12 @@ def test_member_scope_failure_keeps_prefix_without_executing_body():
             calls.append(1)
             return i64(2)
 
-    with pytest.raises(NotImplementedError, match="bodies"):
+        @method(cost=1)
+        def invalid(self) -> i64: ...
+
+    # The supported eager header is private until complete. A genuinely invalid
+    # later header must still fail before callbacks or publication of that body.
+    with pytest.raises(ValueError, match="cannot use cost"):
         Invalid.valid
     assert calls == []
     assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"VALUE", "__init__", "valid"}
@@ -4483,6 +4489,639 @@ def test_member_scope_failure_keeps_prefix_without_executing_body():
     with pytest.raises(AttributeError):
         _ = Invalid.body
     assert calls == []
+
+
+def test_eager_member_forward_completion_owns_only_final_definitions(class_authoring_without_engine):
+    calls = []
+    captured = []
+
+    class Eager(Expr):
+        def __init__(self) -> None: ...
+
+        def first(self, value: i64 = i64(3)) -> i64:
+            calls.append("first")
+            captured.append(Eager.later)
+            return self.later(value) + 1
+
+        def later(self, value: i64) -> i64:
+            calls.append("later")
+            return value + 2
+
+        @property
+        def number(self) -> i64:
+            calls.append("number")
+            return i64(4)
+
+        @classmethod
+        def make(cls) -> "Eager":
+            calls.append("make")
+            return cls()
+
+    expression = Eager()
+    first, later = resolve_callable(Eager.first), resolve_callable(Eager.later)
+    assert captured == [Eager.later]
+    assert resolve_callable(captured[0]) is later
+    assert calls == ["first", "later", "number", "make"]
+    assert first.read().kind.field == later.read().kind.field == "primitive"
+    body = RuntimeExpr(first.owner.ref("nodes", first.read().kind.value.body))
+    assert str(body) == "_0.later(_1) + 1"
+    assert isinstance(expression.first(), i64)
+    assert isinstance(expression.number, i64)
+    assert isinstance(Eager.make(), Eager)
+    packed = pack([to_runtime_expr(expression.first()).__egg_ref__, first, later, resolve_callable(captured[0])])
+    names = [record.kind.value.name for record in packed.program.declarations]
+    assert names.count(first.read().kind.value.name) == names.count(later.read().kind.value.name) == 1
+    assert pb.Program.from_binary(packed.program.to_binary()) == packed.program
+    assert calls == ["first", "later", "number", "make"]
+
+
+def test_eager_member_reverse_args_keep_callback_and_core_order(class_authoring_without_engine):
+    class Reverse(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+        @method(reverse_args=True)
+        def ordered(self, other: i64) -> "Pair[Reverse, i64]":
+            return Pair(self, other)
+
+    reference = resolve_callable(Reverse.ordered)
+    primitive = reference.read().kind.value
+    view = reference.read().bindings.python.views[0]
+    assert isinstance(primitive, pb.Primitive)
+    assert [argument.name for argument in primitive.inputs] == ["other", "self"]
+    assert view.receiver == 1
+    assert [parameter.core_input for parameter in view.params] == [0]
+    assert str(RuntimeExpr(reference.owner.ref("nodes", primitive.body))) == "Pair[Reverse, i64](_1, _0)"
+    assert str(Reverse(1).ordered(2)) == "Reverse(1).ordered(2)"
+    pack([to_runtime_expr(Reverse(1).ordered(2)).__egg_ref__])
+
+
+def test_eager_member_eqsort_views_and_later_bodyless_member(class_authoring_without_engine):
+    class Result(Expr):
+        def __init__(self) -> None: ...
+
+    class Views(Expr):
+        def __init__(self) -> None: ...
+
+        def value(self) -> Result:
+            return Result()
+
+        @property
+        def own(self) -> Result:
+            return Result()
+
+        @classmethod
+        def make(cls) -> Result:
+            return Result()
+
+        def early(self) -> Result:
+            return self.later()
+
+        def later(self) -> Result: ...
+
+    value = Views()
+    for member, expression in (
+        (Views.value, value.value()),
+        (Views.own, value.own),
+        (Views.make, Views.make()),
+        (Views.early, value.early()),
+    ):
+        reference = resolve_callable(member)
+        assert isinstance(reference.read().kind.value, pb.Primitive)
+        assert isinstance(expression, Result)
+        pack([to_runtime_expr(expression).__egg_ref__])
+    assert resolve_callable(Views.later).read().kind.field == "constructor"
+
+
+def test_eager_initializer_gets_symbolic_self_and_rejects_retained_recursion(class_authoring_without_engine):
+    seen = []
+
+    class Initialized(Expr):
+        def __init__(self, value: i64) -> None:
+            node = self.__egg_ref__.read()
+            seen.append((node.kind.value.func, str(value), self.__egg_ref__.owner.ref("sorts", node.sort_id)))
+            return Initialized.wrap(value)  # noqa: PLE0101 -- symbolic initializer returns its replacement
+
+        @classmethod
+        def wrap(cls, value: i64) -> "Initialized": ...
+
+    value = Initialized(2)
+    reference = resolve_callable(Initialized)
+    primitive = reference.read().kind.value
+    assert isinstance(primitive, pb.Primitive)
+    assert seen == [(primitive.name, "value", Initialized.__egg_sort__)]
+    assert str(RuntimeExpr(reference.owner.ref("nodes", primitive.body))) == "Initialized.wrap(_0)"
+    pack([to_runtime_expr(value).__egg_ref__])
+
+    class Recursive(Expr):
+        def __init__(self) -> None:
+            return self  # noqa: PLE0101 -- witness a recursive symbolic initializer result
+
+    with pytest.raises(ValueError, match="Recursively resolving function declarations"):
+        Recursive()
+    assert not Recursive.__egg_context__.catalog.members
+    assert not Recursive.__egg_attr_cache__
+
+    class Replaced(Expr):
+        def __init__(self, value: i64) -> None:
+            self.__replace_expr__(Replaced.wrap(value))
+            return self  # noqa: PLE0101 -- symbolic initializer returns its replacement
+
+        @classmethod
+        def wrap(cls, value: i64) -> "Replaced": ...
+
+    pack([to_runtime_expr(Replaced(3)).__egg_ref__])
+    replacement = resolve_callable(Replaced)
+    assert str(RuntimeExpr(replacement.owner.ref("nodes", replacement.read().kind.value.body))) == "Replaced.wrap(_0)"
+
+
+@pytest.mark.parametrize("mutual", [False, True])
+def test_eager_member_cycles_fail_without_publishing_pending_headers(class_authoring_without_engine, mutual):
+    calls = []
+
+    class Cyclic(Expr):
+        def __init__(self) -> None: ...
+
+        def first(self) -> i64:
+            calls.append("first")
+            return self.later() if mutual else self.first()
+
+        def later(self) -> i64:
+            calls.append("later")
+            return self.first()
+
+    with pytest.raises(ValueError, match="Recursively resolving function declarations"):
+        Cyclic.first
+    assert calls == (["first", "later"] if mutual else ["first"])
+    assert {name for _, name in Cyclic.__egg_context__.catalog.members} == {"__init__"}
+    assert not Cyclic.__egg_attr_cache__
+    with pytest.raises(AttributeError):
+        Cyclic.first
+
+
+def test_eager_member_failure_keeps_completed_dependency_prefix(class_authoring_without_engine):
+    calls = []
+
+    class Partial(Expr):
+        def __init__(self) -> None: ...
+
+        def first(self) -> i64:
+            calls.append("first")
+            self.later()
+            msg = "body sentinel"
+            raise ValueError(msg)
+
+        def later(self) -> i64:
+            calls.append("later")
+            return i64(2)
+
+    with pytest.raises(ValueError, match="body sentinel"):
+        Partial.first
+    assert calls == ["first", "later"]
+    assert {name for _, name in Partial.__egg_context__.catalog.members} == {"__init__", "later"}
+    assert set(Partial.__egg_attr_cache__) == {"later"}
+    assert isinstance(Partial().later(), i64)
+    with pytest.raises(AttributeError):
+        Partial.first
+    assert calls == ["first", "later"]
+
+
+@pytest.mark.parametrize("eager_second", [False, True])
+def test_eager_member_duplicate_headers_precede_callbacks(class_authoring_without_engine, eager_second):
+    calls = []
+
+    class Duplicate(Expr):
+        def __init__(self) -> None: ...
+
+        @method(egg_fn="same exact member")
+        def first(self) -> i64:
+            calls.append("first")
+            return i64(1)
+
+        if eager_second:
+
+            @method(egg_fn="same exact member")
+            def second(self) -> i64:
+                calls.append("second")
+                return i64(2)
+
+        else:
+
+            @method(egg_fn="same exact member")
+            def second(self) -> i64: ...
+
+    with pytest.raises(ValueError, match="Duplicate catalog definition"):
+        Duplicate.first
+    assert not calls
+    assert {name for _, name in Duplicate.__egg_context__.catalog.members} == {"__init__"}
+    assert not Duplicate.__egg_attr_cache__
+
+
+def test_eager_member_pending_view_eligibility_precedes_completion(class_authoring_without_engine):
+    calls = []
+
+    class Eligible(Expr):
+        def __init__(self) -> None: ...
+
+        def first(self) -> i64:
+            calls.append("first")
+            with pytest.raises(AttributeError, match="not an instance method"):
+                runtime.RuntimeClass.__getattr__(Eligible, "number", False, True)
+            assert calls == ["first"]
+            return i64(1)
+
+        @property
+        def number(self) -> i64:
+            calls.append("number")
+            return i64(2)
+
+    assert isinstance(Eligible().first(), i64)
+    assert calls == ["first", "number"]
+
+
+def test_eager_member_conversion_is_once_without_ambient_ruleset(class_authoring_without_engine):
+    class Source:
+        pass
+
+    calls = []
+
+    def convert_source(value):
+        calls.append(("conversion", get_current_ruleset()))
+        return i64(2)
+
+    converter(Source, i64, convert_source)
+
+    class Converted(Expr):
+        def __init__(self) -> None: ...
+
+        def value(self) -> i64:
+            calls.append(("body", get_current_ruleset()))
+            return Source()
+
+    ambient = ruleset()
+    with set_current_ruleset(ambient):
+        assert isinstance(Converted().value(), i64)
+        assert isinstance(Converted().value(), i64)
+        assert get_current_ruleset() is ambient
+    assert calls == [("body", None), ("conversion", None)]
+    assert not ambient._snapshot({}).read().kind.value.rules
+
+
+@pytest.mark.parametrize("late_bad", [False, True])
+def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_authoring_without_engine, late_bad):
+    class Source:
+        pass
+
+    calls = []
+    captured = []
+
+    def convert_source(value):
+        calls.append("conversion")
+        captured.append(Defaults.first)
+        return Defaults().first()
+
+    converter(Source, i64, convert_source)
+
+    class Defaults(Expr):
+        def __init__(self) -> None: ...
+
+        def first(self) -> i64:
+            calls.append("body")
+            return i64(2)
+
+        def with_default(self, value: i64 = Source()) -> i64: ...
+
+        if late_bad:
+
+            @method(cost=1)
+            def invalid(self) -> i64: ...
+
+    if late_bad:
+        with pytest.raises(ValueError, match="cannot use cost"):
+            Defaults()
+        # Static validation precedes every pending conversion/body. The v2
+        # converter-before-error expectation was newly authored, not legacy.
+        assert calls == []
+        assert captured == []
+        assert {name for _, name in Defaults.__egg_context__.catalog.members} == {"__init__"}
+        assert not Defaults.__egg_attr_cache__
+        for name in ("first", "with_default", "invalid"):
+            with pytest.raises(AttributeError):
+                getattr(Defaults, name)
+        return
+    assert isinstance(Defaults(), Defaults)
+    assert calls == ["body", "conversion"]
+    first = resolve_callable(Defaults.first)
+    assert first is resolve_callable(captured[0])
+    assert isinstance(first.read().kind.value, pb.Primitive)
+    catalog_ref = Defaults.__egg_context__.catalog.definitions["callable", first.read().kind.value.name]
+    # Owner.ref reconstructs Ref wrappers; canonical identity is owner/role/index,
+    # not Python allocation identity and not a structural-equality substitute.
+    assert catalog_ref == first
+    assert catalog_ref.owner is first.owner
+    assert {name for _, name in Defaults.__egg_context__.catalog.members} == {"__init__", "first", "with_default"}
+    assert captured[0].__egg_prepare__ is None
+    assert captured[0].__egg_pending_declaration__ is None
+    expression = Defaults().with_default()
+    assert isinstance(expression, i64)
+    packet = pack([to_runtime_expr(expression).__egg_ref__, first])
+    assert sum(record.kind.value.name == first.read().kind.value.name for record in packet.program.declarations) == 1
+    default = resolve_callable(Defaults.with_default)
+    view = default.read().bindings.python.views[0]
+    assert (
+        default.owner.ref("nodes", view.params[0].default_expr).read().kind.value.func == first.read().kind.value.name
+    )
+    assert calls == ["body", "conversion"]
+
+
+@pytest.mark.parametrize("free_query", [False, True])
+def test_eager_member_invalid_result_is_terminal_before_publication(class_authoring_without_engine, free_query):
+    calls = []
+    query = var("external", i64)
+
+    class InvalidResult(Expr):
+        def __init__(self) -> None: ...
+
+        def value(self) -> i64:
+            calls.append("body")
+            return query if free_query else None
+
+    with pytest.raises(ValueError, match="Free variable" if free_query else "must return a value"):
+        InvalidResult.value
+    assert calls == ["body"]
+    assert {name for _, name in InvalidResult.__egg_context__.catalog.members} == {"__init__"}
+    assert not InvalidResult.__egg_attr_cache__
+    with pytest.raises(AttributeError):
+        InvalidResult.value
+    assert calls == ["body"]
+
+
+def test_member_default_transitive_forward_headers_and_snapshot(class_authoring_without_engine):
+    class Source:
+        pass
+
+    calls = []
+    captured = []
+    supplied = i64(3)
+    supplied_ref = supplied.__egg_ref__
+
+    def convert_source(value):
+        calls.append("conversion")
+        captured.append(Forward.first)
+        return Forward().first()
+
+    converter(Source, i64, convert_source)
+
+    class Forward(Expr):
+        def __init__(self) -> None: ...
+
+        def first(self) -> i64:
+            calls.append("first")
+            supplied.__replace_expr__(i64(9))
+            return self.later()
+
+        def with_default(self, value: i64 = Source()) -> i64: ...
+        def snapshot(self, value: i64 = supplied) -> i64: ...
+
+        def later(self) -> i64:
+            calls.append("later")
+            return i64(2)
+
+    expression = Forward().with_default()
+    # Root completion is source ordered after the static barrier; dependencies
+    # complete immediately. Converter-first ordering was never a public contract.
+    assert calls == ["first", "later", "conversion"]
+    first = resolve_callable(Forward.first)
+    assert first is resolve_callable(captured[0])
+    snapshot = resolve_callable(Forward.snapshot)
+    default_index = snapshot.read().bindings.python.views[0].params[0].default_expr
+    assert snapshot.owner.ref("nodes", default_index) == supplied_ref
+    assert get_callable_args(Forward().snapshot())[1].value == 3
+    packet = pack([to_runtime_expr(expression).__egg_ref__, first])
+    assert sum(record.kind.value.name == first.read().kind.value.name for record in packet.program.declarations) == 1
+    assert pb.Program.from_binary(packet.program.to_binary()) == packet.program
+    assert calls == ["first", "later", "conversion"]
+
+
+def test_member_default_failure_keeps_only_completed_prefix(class_authoring_without_engine):
+    class Source:
+        pass
+
+    calls = []
+
+    def convert_source(value):
+        calls.append("conversion")
+        _ = Partial.first
+        msg = "parameter conversion marker"
+        raise ValueError(msg)
+
+    converter(Source, i64, convert_source)
+
+    class Partial(Expr):
+        def __init__(self) -> None: ...
+
+        def first(self) -> i64:
+            calls.append("first")
+            return i64(1)
+
+        def bad(self, value: i64 = Source()) -> i64: ...
+        def unvisited(self) -> i64: ...
+
+    with pytest.raises(ValueError, match="parameter conversion marker"):
+        Partial()
+    assert calls == ["first", "conversion"]
+    assert {name for _, name in Partial.__egg_context__.catalog.members} == {"__init__", "first"}
+    assert isinstance(Partial().first(), i64)
+    for name in ("bad", "unvisited"):
+        with pytest.raises(AttributeError):
+            getattr(Partial, name)
+    assert calls == ["first", "conversion"]
+
+
+def test_member_default_cycle_is_bounded_and_terminal(class_authoring_without_engine):
+    class Source:
+        pass
+
+    calls = []
+
+    def convert_source(value):
+        calls.append("conversion")
+        return Cyclic().value(i64(1))
+
+    converter(Source, i64, convert_source)
+
+    class Cyclic(Expr):
+        def __init__(self) -> None: ...
+        def value(self, argument: i64 = Source()) -> i64: ...
+
+    with pytest.raises(ValueError, match="Recursively resolving function declarations"):
+        Cyclic()
+    assert calls == ["conversion"]
+    assert {name for _, name in Cyclic.__egg_context__.catalog.members} == {"__init__"}
+    # The converter actually used this completed prefix; only its cyclic member
+    # must disappear, not the valid cached initializer.
+    assert set(Cyclic.__egg_attr_cache__) == {"__init__"}
+    assert Cyclic.__egg_attr_cache__["__init__"].__egg_pending_declaration__ is None
+    with pytest.raises(AttributeError):
+        Cyclic.value
+    assert calls == ["conversion"]
+
+
+def test_member_default_pending_eligibility_does_not_convert(class_authoring_without_engine):
+    class Source:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    calls = []
+
+    def convert_source(value):
+        calls.append(value.name)
+        if value.name == "first":
+            with pytest.raises(AttributeError, match="not an instance method"):
+                runtime.RuntimeClass.__getattr__(Eligible, "named", False, True)
+            assert calls == ["first"]
+        return i64(1)
+
+    converter(Source, i64, convert_source)
+
+    class Eligible(Expr):
+        def __init__(self) -> None: ...
+        def first(self, value: i64 = Source("first")) -> i64: ...
+
+        @classmethod
+        def named(cls, value: i64 = Source("named")) -> "Eligible": ...
+
+    assert isinstance(Eligible().first(), i64)
+    assert calls == ["first", "named"]
+
+
+def test_initializer_default_completes_forward_classmethods(class_authoring_without_engine):
+    class Source:
+        pass
+
+    calls = []
+
+    def convert_source(value):
+        calls.append("conversion")
+        return Initialized.first()
+
+    converter(Source, i64, convert_source)
+
+    class Initialized(Expr):
+        def __init__(self, value: i64 = Source()) -> None: ...
+
+        @classmethod
+        def first(cls) -> i64:
+            calls.append("first")
+            return cls.later()
+
+        @classmethod
+        def later(cls) -> i64:
+            calls.append("later")
+            return i64(2)
+
+    expression = Initialized()
+    assert calls == ["conversion", "first", "later"]
+    assert str(get_callable_args(expression)[0]) == "Initialized.first()"
+    pack([to_runtime_expr(expression).__egg_ref__])
+    assert calls == ["conversion", "first", "later"]
+
+
+@pytest.mark.parametrize("kind", ["merge", "cost"])
+@pytest.mark.parametrize("late_bad", [False, True])
+def test_member_header_value_callbacks_wait_for_static_barrier(  # noqa: C901
+    class_authoring_without_engine, monkeypatch, kind, late_bad
+):
+    from egglog.egraph import resolve_literal  # noqa: PLC0415
+
+    calls = []
+    marker = 123456789
+
+    def literal(sort, value):
+        if value is marker:
+            calls.append("cost")
+            Barrier().first()
+        return resolve_literal(sort, value)
+
+    monkeypatch.setattr("egglog.egraph.resolve_literal", literal)
+
+    def merge(old, new):
+        calls.append("merge")
+        return Barrier().first() + old + new
+
+    class Barrier(Expr):
+        def __init__(self) -> None: ...
+
+        def first(self) -> i64:
+            calls.append("first")
+            return self.later()
+
+        if kind == "merge":
+
+            @method(merge=merge)
+            def configured(self) -> i64: ...
+
+        else:
+
+            @method(cost=marker)
+            def configured(self) -> "Barrier": ...
+
+        def later(self) -> i64:
+            calls.append("later")
+            return i64(2)
+
+        if late_bad:
+
+            @method(cost=1)
+            def invalid(self) -> i64: ...
+
+    if late_bad:
+        with pytest.raises(ValueError, match="cannot use cost"):
+            Barrier()
+        assert calls == []
+        assert {name for _, name in Barrier.__egg_context__.catalog.members} == {"__init__"}
+        assert not Barrier.__egg_attr_cache__
+    else:
+        reference = resolve_callable(Barrier.configured)
+        assert reference.read().kind.field == ("function" if kind == "merge" else "constructor")
+        assert calls == ["first", "later", kind]
+        pack([reference])
+        assert calls == ["first", "later", kind]
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_member_default_barrier_preserves_explicit_rulesets(class_authoring_without_engine, explicit):
+    class Result(Expr):
+        def __init__(self) -> None: ...
+
+    class Source:
+        pass
+
+    calls = []
+    destination = ruleset()
+
+    def convert_source(value):
+        calls.append("conversion")
+        return Defaults().first()
+
+    converter(Source, Result, convert_source)
+
+    class Defaults(Expr, ruleset=destination if explicit else None):
+        def __init__(self) -> None: ...
+
+        def first(self) -> Result:
+            calls.append("first")
+            return self.later()
+
+        def defaulted(self, value: Result = Source()) -> Result: ...
+
+        def later(self) -> Result:
+            calls.append("later")
+            return Result()
+
+    assert isinstance(Defaults().defaulted(), Result)
+    assert calls == (["conversion", "first", "later"] if explicit else ["first", "later", "conversion"])
+    assert len(destination._snapshot({}).read().kind.value.rules) == (2 if explicit else 0)
+    pack([to_runtime_expr(Defaults().defaulted()).__egg_ref__])
 
 
 @pytest.mark.parametrize(
@@ -5570,12 +6209,13 @@ def test_class_default_bodies_see_all_headers_and_keep_failure_prefix(class_auth
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_class_cached_member_lookup_waits_for_authoring_attempt(class_authoring_without_engine, fail):
+@pytest.mark.parametrize("eager", [False, True])
+def test_class_cached_member_lookup_waits_for_authoring_attempt(class_authoring_without_engine, fail, eager):
     entered, release, requested, returned = Event(), Event(), Event(), Event()
     destination = ruleset()
     cached = []
 
-    class Partial(Expr, ruleset=destination):
+    class Partial(Expr, ruleset=None if eager else destination):
         def __init__(self) -> None: ...
 
         def earlier(self) -> "Partial": ...

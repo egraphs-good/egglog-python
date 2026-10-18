@@ -458,6 +458,11 @@ class _ClassContext:
             else:
                 self.catalog = catalog
             finally:
+                # Private eager headers never survive an incomplete class
+                # attempt; completed dependencies remain in the catalog/cache.
+                for name, value in tuple(self.runtime_class.__egg_attr_cache__.items()):
+                    if isinstance(value, RuntimeFunction) and value.__egg_pending_declaration__ is not None:
+                        del self.runtime_class.__egg_attr_cache__[name]
                 self.prepare = None
                 self.resolving = False
 
@@ -804,6 +809,15 @@ class RuntimeClass(type):
         # attempt. Same-thread reentry uses the already-published declarations.
         if cls.__egg_pending__ is not None:
             cls.__egg_pending__()
+        cached = cls.__egg_attr_cache__.get(name)
+        if isinstance(cached, RuntimeFunction) and cached.__egg_pending_declaration__ is not None:
+            header = cached.__egg_pending_declaration__
+            assert header.bindings is not None
+            assert header.bindings.python is not None
+            if _method_only and header.bindings.python.views[0].kind != pb.PythonCallKind.METHOD:
+                raise AttributeError(f"{cls} member {name!r} is not an instance method")
+            # A callable can escape only after its exact final definition exists.
+            _ = cached.__egg_ref__
         # A cached class variable is already evaluated; fallback eligibility
         # must instead be decided from its declaration without invoking it.
         if not _method_only and name in cls.__egg_attr_cache__:
@@ -893,9 +907,14 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         bound: RuntimeClass | RuntimeExpr | None = None,
         *,
         type_bindings: tuple[tuple[int, Ref], ...] = (),
+        pending_declaration: pb.Declaration | None = None,
+        pending_values: bool = False,
     ) -> None:
         self.__egg_declaration__ = declaration if isinstance(declaration, Ref) else None
         self.__egg_prepare__ = declaration if callable(declaration) else None
+        self.__egg_pending_declaration__ = pending_declaration
+        # Class staging readiness only; semantics remain in the private record.
+        self.__egg_pending_values__ = pending_values
         self.__egg_error__: Exception | None = None
         self.__egg_resolving__ = False
         self.__egg_lock__ = RLock()
@@ -940,7 +959,16 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
                 if not isinstance(reference, Ref) or reference.role != "declarations":
                     msg = "Function source must publish a canonical declaration"
                     raise TypeError(msg)  # noqa: TRY301 -- invalid preparation is a terminal cached error
-                self.__egg_declaration__ = reference.owner.ref(reference.role, reference.index)
+                reference = reference.owner.ref(reference.role, reference.index)
+                if self.__egg_pending_declaration__ is not None:
+                    assert isinstance(self.__egg_bound__, RuntimeClass)
+                    context = self.__egg_bound__.__egg_context__
+                    assert context is not None
+                    assert context.catalog is not None
+                    context.catalog = Catalog.from_refs([*context.catalog.roots, reference])
+                    self.__egg_pending_declaration__ = None
+                    self.__egg_pending_values__ = False
+                self.__egg_declaration__ = reference
             except Exception as error:
                 self.__egg_error__ = error
                 raise

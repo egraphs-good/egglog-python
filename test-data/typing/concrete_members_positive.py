@@ -18,6 +18,7 @@ from egglog import (
     UnstableFn,
     Vec,
     birewrite,
+    convert,
     eq,
     f64,
     function,
@@ -79,6 +80,37 @@ class EagerDefaults(Expr):
 assert_type(EagerDefaults.ROOT, Node)
 assert_type(EagerDefaults.COUNT, i64)
 assert_type(EagerDefaults.MISSING, Maybe[i64])
+
+
+class EagerMembers(Expr):
+    def __init__(self) -> None: ...
+
+    def first(self, value: i64Like = 1) -> i64:
+        return self.later(value)
+
+    def later(self, value: i64Like) -> i64:
+        return convert(value, i64) + 2
+
+    @method(reverse_args=True)
+    def ordered(self, value: i64Like) -> Pair[EagerMembers, i64]:
+        return Pair(self, convert(value, i64))
+
+    @property
+    def own(self) -> EagerMembers:
+        return self
+
+    @classmethod
+    def make(cls) -> EagerMembers:
+        return cls()
+
+
+eager = EagerMembers()
+assert_type(eager.first(), i64)
+assert_type(EagerMembers.first(eager, 2), i64)
+assert_type(eager.later(i64(3)), i64)
+assert_type(eager.ordered(4), Pair[EagerMembers, i64])
+assert_type(eager.own, EagerMembers)
+assert_type(EagerMembers.make(), EagerMembers)
 
 
 @function

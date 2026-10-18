@@ -472,7 +472,7 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
     bases: tuple[type, ...],
     ruleset: Ruleset | None,
 ) -> Catalog:
-    """Publish canonical headers in order, then author explicit rewrite defaults."""
+    """Stage member headers before source-ordered value/body completion."""
     if bases != (Expr,):
         msg = "Only direct nongeneric Expr classes are migrated"
         raise NotImplementedError(msg)
@@ -551,7 +551,9 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             default = resolve_literal(sort, namespace[name])
             lhs = RuntimeFunction(definitions[-1], 0)()
             rewrite(cast("Expr", lhs), ruleset=ruleset).to(cast("Expr", default))
-    bodies: list[tuple[FunctionType, Ref, bool]] = []
+    bodies: list[tuple[FunctionType, RuntimeFunction, bool]] = []
+    pending: list[RuntimeFunction] = []
+    values_pending = False
     for name, value in namespace.items():
         if name in hints:
             continue
@@ -598,21 +600,40 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         if isinstance(fn, _WrappedMethod):
             msg = f"{runtime_cls}.{name} Add the @method(...) decorator above @classmethod or @property"
             raise ValueError(msg)  # noqa: TRY004 -- preserve the public decorator-order error
-        definitions.append(
-            compiler.prepare(
-                fn,
-                owner=runtime_cls,
-                view_kind=view_kind,
-                member_name=name,
-                reverse_args=value.reverse_args if isinstance(value, _WrappedMethod) else False,
-            )
+        function = compiler.prepare(
+            fn,
+            owner=runtime_cls,
+            view_kind=view_kind,
+            member_name=name,
+            reverse_args=value.reverse_args if isinstance(value, _WrappedMethod) else False,
         )
-        context.catalog = Catalog.from_refs(definitions)
+        header = function.__egg_pending_declaration__
+        assert header is not None
+        assert header.kind is not None
+        key = ("callable", header.kind.value.name)
+        duplicate = key in context.catalog.definitions
+        for previous in pending:
+            previous_header = previous.__egg_pending_declaration__ or previous.__egg_ref__.read()
+            assert previous_header.kind is not None
+            duplicate |= previous_header.kind.value.name == key[1]
+        if duplicate:
+            raise ValueError(f"Duplicate catalog definition: {key}")
         assert isinstance(fn, FunctionType)
-        if _function_has_body(fn):
-            bodies.append((fn, definitions[-1], compiler.subsume))
-    for fn, reference, subsume_body in bodies:
+        if _function_has_body(fn) and ruleset is not None:
+            bodies.append((fn, function, compiler.subsume))
+        # Keep the source prefix of complete headers, but never materialize a
+        # later header across a pending conversion before the static barrier.
+        values_pending |= function.__egg_pending_values__
+        if values_pending or header.kind.field == "primitive":
+            runtime_cls.__egg_attr_cache__[name] = function
+            pending.append(function)
+        else:
+            _ = function.__egg_ref__
+    for function in pending:
+        _ = function.__egg_ref__
+    for fn, function, subsume_body in bodies:
         assert ruleset is not None
+        reference = function.__egg_ref__
         declaration: pb.Declaration = reference.read()
         assert declaration.kind is not None
         assert isinstance(declaration.kind.value, pb.Constructor)
@@ -679,6 +700,28 @@ class _FunctionConstructor:
     def __call__(self, fn: Callable) -> RuntimeFunction:
         return RuntimeFunction(partial(self.prepare, fn), 0)
 
+    @overload
+    def prepare(
+        self,
+        fn: object,
+        *,
+        owner: None = None,
+        view_kind: pb.PythonCallKind = pb.PythonCallKind.FUNCTION,
+        member_name: str | None = None,
+        reverse_args: bool = False,
+    ) -> Ref: ...
+
+    @overload
+    def prepare(
+        self,
+        fn: object,
+        *,
+        owner: RuntimeClass,
+        view_kind: pb.PythonCallKind = pb.PythonCallKind.FUNCTION,
+        member_name: str | None = None,
+        reverse_args: bool = False,
+    ) -> RuntimeFunction: ...
+
     def prepare(  # noqa: C901, PLR0912
         self,
         fn: object,
@@ -687,7 +730,7 @@ class _FunctionConstructor:
         view_kind: pb.PythonCallKind = pb.PythonCallKind.FUNCTION,
         member_name: str | None = None,
         reverse_args: bool = False,
-    ) -> Ref:
+    ) -> Ref | RuntimeFunction:
         """Compile raw Python source directly, never a legacy declaration projection."""
         if isinstance(fn, RuntimeFunction):
             msg = "Inside of classes, wrap methods with the `method` decorator, not `function`"
@@ -796,7 +839,10 @@ class _FunctionConstructor:
                 if has_merge:
                     msg = "Primitive-returning callables with bodies cannot use merge"
                     raise ValueError(msg)
-            if owner is not None and (self.ruleset is None or view_kind == pb.PythonCallKind.INITIALIZER):
+            if owner is not None and (
+                (self.ruleset is None and self.mutates_first_arg)
+                or (self.ruleset is not None and view_kind == pb.PythonCallKind.INITIALIZER)
+            ):
                 msg = "Eager member and initializer bodies are not migrated"
                 raise NotImplementedError(msg)
         if self.ruleset is not None and owner is None:
@@ -818,6 +864,7 @@ class _FunctionConstructor:
         builder = Builder()
         inputs = []
         surface = []
+        pending_values = self.merge is not None or self.cost is not None
         for index, (parameter, sort) in enumerate(zip(parameters, input_sorts, strict=True)):
             assert isinstance(sort, Ref)
             inputs.append(pb.Arg(sort=builder.import_ref(sort), name=parameter.name))
@@ -827,11 +874,15 @@ class _FunctionConstructor:
                 core_input=len(parameters) - index - 1 if reverse_args else index, name=parameter.name
             )
             if parameter.default is not Parameter.empty:
-                default = resolve_literal(sort, parameter.default)
-                parameter_record.default_expr = builder.import_ref(default.__egg_ref__)
+                pending_values = True
+                if owner is not None and isinstance(parameter.default, RuntimeExpr):
+                    # Defaults are captured before any dependency body can
+                    # replace a supplied expression's Python wrapper.
+                    parameters[index] = parameter.replace(default=RuntimeExpr(parameter.default.__egg_ref__))
             surface.append(parameter_record)
         if reverse_args:
             inputs.reverse()
+            input_sorts.reverse()
         output_index = builder.import_ref(output)
         if owner is None:
             path = [*fn.__module__.split("."), fn.__name__] if fn.__module__ else [fn.__name__]
@@ -852,59 +903,14 @@ class _FunctionConstructor:
             view.path = [] if view_kind == pb.PythonCallKind.INITIALIZER else [member_name]
             if receiver:
                 view.receiver = python_first_input
-        body = None
-        if has_body and owner is None:
-            formals = Builder()
-            formal_indices = []
-            for parameter, sort in zip(parameters, input_sorts, strict=True):
-                assert isinstance(sort, Ref)
-                formal_indices.append(
-                    formals.add(
-                        "nodes",
-                        pb.Node(
-                            sort_id=formals.import_ref(sort),
-                            kind=Oneof[Literal["var"], str]("var", parameter.name),
-                        ),
-                    )
-                )
-            formal_owner = formals.publish()
-            formal_refs = [formal_owner.ref("nodes", index) for index in formal_indices]
-            values = [RuntimeExpr(reference) for reference in formal_refs]
-            with set_current_ruleset(self.ruleset):
-                result = fn(*values)
-                if self.mutates_first_arg:
-                    if result is not None:
-                        msg = "Mutating callable bodies must return None"
-                        raise ValueError(msg)
-                    result = values[0]
-                if result is None:
-                    msg = "Callable bodies must return a value"
-                    raise ValueError(msg)
-                if self.ruleset is None:
-                    resolved = resolve_literal(output, result)
-            if self.ruleset is not None:
-                resolved = resolve_literal(output, result)
-            body = _lower_function_body(
-                builder, resolved.__egg_ref__, formal_refs, rewrite_body=self.ruleset is not None
-            )
-        merge = _resolve_merge(output, self.merge)
-        cost = None
-        if self.cost is not None:
-            from .builtins import i64  # noqa: PLC0415
-
-            cost_sort = resolve_type_annotation(i64)
-            assert isinstance(cost_sort, Ref)
-            cost = builder.import_ref(resolve_literal(cost_sort, self.cost).__egg_ref__)
         kind = (
             Oneof[Literal["primitive"], pb.Primitive](
-                "primitive", pb.Primitive(name=name, inputs=inputs, output=output_index, body=body)
+                "primitive", pb.Primitive(name=name, inputs=inputs, output=output_index)
             )
-            if body is not None and self.ruleset is None
+            if has_body and self.ruleset is None
             else Oneof[Literal["constructor"], pb.Constructor](
                 "constructor",
-                pb.Constructor(
-                    name=name, inputs=inputs, output=output_index, cost=cost, unextractable=self.unextractable
-                ),
+                pb.Constructor(name=name, inputs=inputs, output=output_index, unextractable=self.unextractable),
             )
             if equality and not has_merge
             else Oneof[Literal["function"], pb.Function](
@@ -913,38 +919,122 @@ class _FunctionConstructor:
                     name=name,
                     inputs=inputs,
                     output=output_index,
-                    merge=builder.import_ref(merge) if merge is not None else None,
                 ),
             )
         )
-        index = builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=kind,
-                bindings=pb.CallableBindings(python=pb.PythonBindings(views=[view])),
-                doc=fn.__doc__,
-            ),
+        declaration = pb.Declaration(
+            kind=kind,
+            bindings=pb.CallableBindings(python=pb.PythonBindings(views=[view])),
+            doc=fn.__doc__,
         )
-        reference = builder.publish().ref("declarations", index)
-        Catalog.from_refs([reference])
-        if body is not None and self.ruleset is not None:
-            values = [RuntimeExpr(formal) for formal in formal_refs]
-            lhs = RuntimeFunction(reference, 0)(*values)
-            if self.mutates_first_arg:
-                lhs = values[0]
-            assert isinstance(lhs, RuntimeExpr)
-            lhs_builder = Builder()
-            lhs_index = _lower_function_body(lhs_builder, lhs.__egg_ref__, formal_refs, rewrite_body=True)
-            rewrite(
-                cast("Expr", RuntimeExpr(lhs_builder.publish().ref("nodes", lhs_index))),
-                ruleset=self.ruleset,
-                subsume=self.subsume,
-            ).to(cast("Expr", RuntimeExpr(reference.owner.ref("nodes", body))))
-        return reference
+
+        def finish() -> Ref:  # noqa: C901, PLR0912
+            for parameter, parameter_record in zip(
+                parameters[1:] if receiver else parameters, view.params, strict=True
+            ):
+                if parameter.default is not Parameter.empty:
+                    sort = input_sorts[parameter_record.core_input]
+                    assert isinstance(sort, Ref)
+                    default = resolve_literal(sort, parameter.default)
+                    parameter_record.default_expr = builder.import_ref(default.__egg_ref__)
+            merge = _resolve_merge(output, self.merge)
+            if merge is not None:
+                assert isinstance(kind.value, pb.Function)
+                kind.value.merge = builder.import_ref(merge)
+            if self.cost is not None:
+                from .builtins import i64  # noqa: PLC0415
+
+                cost_sort = resolve_type_annotation(i64)
+                assert isinstance(cost_sort, Ref)
+                assert isinstance(kind.value, pb.Constructor)
+                kind.value.cost = builder.import_ref(resolve_literal(cost_sort, self.cost).__egg_ref__)
+            body = None
+            if has_body and (owner is None or self.ruleset is None):
+                formals = Builder()
+                formal_indices = []
+                for argument, sort in zip(inputs, input_sorts, strict=True):
+                    assert isinstance(sort, Ref)
+                    formal_indices.append(
+                        formals.add(
+                            "nodes",
+                            pb.Node(
+                                sort_id=formals.import_ref(sort),
+                                kind=Oneof[Literal["var"], str]("var", argument.name),
+                            ),
+                        )
+                    )
+                formal_owner = formals.publish()
+                formal_refs = [formal_owner.ref("nodes", index) for index in formal_indices]
+                values = [RuntimeExpr(reference) for reference in formal_refs]
+                callback_args: list[RuntimeExpr | RuntimeClass] = [
+                    values[parameter.core_input] for parameter in view.params
+                ]
+                if view.has_field("receiver"):
+                    callback_args.insert(0, values[view.receiver])
+                elif owner is not None and view.kind == pb.PythonCallKind.CLASS_METHOD:
+                    callback_args.insert(0, owner)
+                elif owner is not None and view.kind == pb.PythonCallKind.INITIALIZER:
+                    # A source-only self template, never a placeholder declaration.
+                    # Retaining this call in the final result is eager recursion.
+                    initial = Builder()
+                    initial_index = initial.add(
+                        "nodes",
+                        pb.Node(
+                            sort_id=initial.import_ref(output),
+                            kind=Oneof[Literal["call"], pb.Call](
+                                "call", pb.Call(func=name, args=[initial.import_ref(formal) for formal in formal_refs])
+                            ),
+                        ),
+                    )
+                    callback_args.insert(0, RuntimeExpr(initial.publish().ref("nodes", initial_index)))
+                with set_current_ruleset(self.ruleset):
+                    result = fn(*callback_args)
+                    if self.mutates_first_arg:
+                        if result is not None:
+                            msg = "Mutating callable bodies must return None"
+                            raise ValueError(msg)
+                        result = values[view.mutates]
+                    if result is None:
+                        msg = "Callable bodies must return a value"
+                        raise ValueError(msg)
+                    if self.ruleset is None:
+                        resolved = resolve_literal(output, result)
+                if self.ruleset is not None:
+                    resolved = resolve_literal(output, result)
+                body = _lower_function_body(
+                    builder,
+                    resolved.__egg_ref__,
+                    formal_refs,
+                    rewrite_body=self.ruleset is not None,
+                    recursive_name=name if owner is not None and view.kind == pb.PythonCallKind.INITIALIZER else None,
+                )
+                if isinstance(kind.value, pb.Primitive):
+                    kind.value.body = body
+            index = builder.add("declarations", declaration)
+            reference = builder.publish().ref("declarations", index)
+            Catalog.from_refs([reference])
+            if body is not None and self.ruleset is not None:
+                values = [RuntimeExpr(formal) for formal in formal_refs]
+                lhs = RuntimeFunction(reference, 0)(*values)
+                if self.mutates_first_arg:
+                    lhs = values[0]
+                assert isinstance(lhs, RuntimeExpr)
+                lhs_builder = Builder()
+                lhs_index = _lower_function_body(lhs_builder, lhs.__egg_ref__, formal_refs, rewrite_body=True)
+                rewrite(
+                    cast("Expr", RuntimeExpr(lhs_builder.publish().ref("nodes", lhs_index))),
+                    ruleset=self.ruleset,
+                    subsume=self.subsume,
+                ).to(cast("Expr", RuntimeExpr(reference.owner.ref("nodes", body))))
+            return reference
+
+        if owner is None:
+            return finish()
+        return RuntimeFunction(finish, 0, owner, pending_declaration=declaration, pending_values=pending_values)
 
 
 def _lower_function_body(  # noqa: C901
-    builder: Builder, body: Ref, formals: list[Ref], *, rewrite_body: bool = False
+    builder: Builder, body: Ref, formals: list[Ref], *, rewrite_body: bool = False, recursive_name: str | None = None
 ) -> int:
     """Lower this body's variables to backend names, importing callee closures intact."""
     parameters = {reference: f"_{index}" for index, reference in enumerate(formals)}
@@ -989,6 +1079,9 @@ def _lower_function_body(  # noqa: C901
             return indices[reference]
 
         def dependency(namespace: str, name: str, origin: Ref = source) -> None:
+            if namespace == "callable" and name == recursive_name:
+                msg = "Recursively resolving function declarations"
+                raise ValueError(msg)
             builder.import_ref(_definition_at(origin, namespace, name))
 
         builder.fill("nodes", indices[source], _copy_record(node, relocate=relocate, dependency=dependency))

@@ -11,6 +11,7 @@ from egglog import (
     UnstableFn,
     Vec,
     birewrite,
+    convert,
     f64,
     function,
     i64,
@@ -68,6 +69,31 @@ wrong_eager_root: i64 = EagerDefaults.ROOT  # error: assignment
 wrong_eager_count: f64 = EagerDefaults.COUNT  # error: assignment
 wrong_eager_missing: i64 = EagerDefaults.MISSING  # error: assignment
 EagerDefaults.COUNT()  # error: operator
+
+
+class EagerMembers(Expr):
+    def __init__(self) -> None: ...
+
+    def first(self, value: i64Like = 1) -> i64:
+        return convert(value, i64) + 2
+
+    @property
+    def own(self) -> EagerMembers:
+        return self
+
+    @classmethod
+    def make(cls) -> EagerMembers:
+        return cls()
+
+
+eager = EagerMembers()
+eager.first(f64(1))  # error: arg-type
+eager.first(unknown=1)  # error: call-arg
+EagerMembers.first(node, 1)  # error: arg-type
+eager.own()  # error: operator
+EagerMembers.make(1)  # error: call-arg
+wrong_eager_member: f64 = eager.first()  # error: assignment
+wrong_eager_owner: Node = eager.own  # error: assignment
 
 swapped = Vec(Pair(f64(1), i64(2)))
 node.pairs(swapped)  # error: arg-type
