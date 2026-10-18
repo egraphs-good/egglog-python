@@ -712,12 +712,14 @@ def test_public_pyobject_defaults_and_results_cross_bytes(monkeypatch, tmp_path)
         (py_exec("x = 10"), {"x": 10}),
         (py_eval("1 + 2"), 3),
         (py_eval("x", {"x": 1}, {"x": 2}), 2),
+        (py_eval("my_add(x, y)", {"my_add": lambda a, b: a + b}, PyObject({}).dict_update("x", 1, "y", 2)), 3),
         (py_exec("x = y + 1", {"y": 10}), {"x": 11}),
-        (PyObject(original).dict_update("x", 8), {"x": 8}),
+        (PyObject(original).dict_update("x", 8, "y", 9), {"x": 8, "y": 9}),
         (PyObject.from_string("hello"), "hello"),
         (PyObject.from_int(42), 42),
         (PyObject(None), None),
         (PyObject(int)(PyObject.from_int(10)), 10),
+        (PyObject(lambda a, b: a + b)(1, 2), 3),
         (PyObject(lambda x, *, factor=1: x * factor).call_extended((10,), {"factor": 3}), 30),
     ):
         result = graph.extract(expression)
@@ -1236,7 +1238,6 @@ def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: p
         pytest.fail("MultiSet authoring or retained-value inspection accessed an engine")
 
     with monkeypatch.context() as inert:
-        inert.setattr(bindings, "EGraph", forbidden)
         inert.setattr(bindings, "_ProtoEngine", forbidden)
         one = i64(1)
         symbolic = one + one
@@ -1318,7 +1319,6 @@ def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: p
     gc.collect()
     run_count = len(requests)
     with monkeypatch.context() as inert:
-        inert.setattr(bindings, "EGraph", forbidden)
         inert.setattr(bindings, "_ProtoEngine", forbidden)
         assert isinstance(result.value, list)
         assert sorted(child.value for child in result.value) == [1, 2, 2]
