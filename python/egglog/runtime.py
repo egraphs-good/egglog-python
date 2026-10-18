@@ -767,7 +767,7 @@ class RuntimeClass(type):
         return _class_for_sort(builder.publish().ref("sorts", index))
 
     def __getattr__(  # noqa: C901, PLR0911, PLR0912
-        cls, name: str, *, _missing_ok: bool = False, _method_only: bool = False
+        cls, name: str, _missing_ok: bool = False, _method_only: bool = False
     ) -> object:
         if name.startswith("__egg_"):
             raise AttributeError(name)
@@ -1123,7 +1123,7 @@ def _partial_function(  # noqa: C901, PLR0912
     fixed = len(patterns)
     specialized = view is not None and view.has_field("tail_repetitions")
     consumes_tail = view is not None and not specialized and view.has_field("receiver") and view.receiver == fixed
-    if consumes_tail and (len(tail) != 1 or view.kind != pb.PythonCallKind.METHOD):
+    if view is not None and consumes_tail and (len(tail) != 1 or view.kind != pb.PythonCallKind.METHOD):
         msg = "Tail receiver requires a homogeneous variadic method"
         raise ValueError(msg)
     if application:
@@ -1318,7 +1318,7 @@ def _get_expr_member(
         if method_only and not isinstance(hook, FunctionType):
             raise AttributeError(f"{cls} member {name!r} is not an instance method")
         return None if hook is None else hook.__get__(expression, cls)
-    function = RuntimeClass.__getattr__(cls, name, _missing_ok=missing_ok, _method_only=method_only)
+    function = RuntimeClass.__getattr__(cls, name, missing_ok, method_only)
     if not isinstance(function, RuntimeFunction):
         return function
     result = RuntimeFunction(function.__egg_ref__, function.__egg_view__, expression)
