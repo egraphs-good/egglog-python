@@ -565,7 +565,7 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             if (
                 (value.preserve or name == "__init__")
                 and (
-                    value.cost is not None
+                    (value.cost is not None and name != "__init__")
                     or value.merge is not None
                     or value.mutates_self
                     or value.unextractable

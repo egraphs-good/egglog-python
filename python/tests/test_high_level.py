@@ -3568,6 +3568,31 @@ def test_dynamic_cost_materializes_constructor_before_storing_cost(*, save_egglo
         _replay_recorded_source(egraph.as_egglog_string)
 
 
+@pytest.mark.parametrize("explicit_ruleset", [False, True])
+def test_initializer_cost_controls_extraction_and_source_replay(explicit_ruleset):
+    destination = ruleset()
+
+    class Costed(Expr, ruleset=destination if explicit_ruleset else None):
+        @method(cost=3)
+        def __init__(self, value: i64Like) -> None: ...
+
+        @method(cost=1)
+        @classmethod
+        def cheap(cls, value: i64Like) -> Costed: ...
+
+    expression = Costed(7)
+    egraph = EGraph(expression, save_egglog_string=True)
+    extracted, cost = egraph.extract(expression, include_cost=True)
+    assert expr_parts(extracted) == expr_parts(expression)
+    assert cost == 4
+    cheaper = Costed.cheap(7)
+    egraph.register(union(expression).with_(cheaper))
+    extracted, cost = egraph.extract(expression, include_cost=True)
+    assert expr_parts(extracted) == expr_parts(cheaper)
+    assert cost == 2
+    _replay_recorded_source(egraph.as_egglog_string)
+
+
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
 def test_dynamic_cost_rule_materializes_constructor_without_shadowing(*, save_egglog_string: bool) -> None:
     class RuleMaterializedCost(Expr):

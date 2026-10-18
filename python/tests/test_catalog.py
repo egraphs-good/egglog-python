@@ -1106,7 +1106,44 @@ def test_catalog_rejects_ambiguous_presentation_and_invalid_paths():
     assert kind.field == "host_sort_family"
     assert kind.value.bindings is not None
     assert kind.value.bindings.python is not None
-    kind.value.bindings.python.path = ["bad-name"]
+    kind.value.bindings.python.path = ["bad-name", "Number"]
+    with pytest.raises(ValueError, match="Python path"):
+        Catalog(source)
+
+
+@pytest.mark.parametrize("name", ["1.0", "not-a-python-identifier", "class"])
+def test_runtime_type_names_do_not_weaken_static_generator_identifiers(name):
+    root = Path(__file__).resolve().parents[2]
+    source = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
+    declaration = next(d for d in source.declarations if d.kind.value.name == "i64")
+    declaration.kind.value.bindings.python.path[-1] = name
+    path = tuple(declaration.kind.value.bindings.python.path)
+    catalog = Catalog(source)
+    reference = catalog.types[path]
+    assert reference.read().kind.value.bindings.python.path[-1] == name
+    restored = Catalog(pb.Program.from_binary(pack(catalog.roots).program.to_binary()))
+    assert restored.types[path].read().kind.value.bindings.python.path[-1] == name
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    with pytest.raises(ValueError, match="Invalid Python identifier"):
+        render(source)
+    source.declarations.append(
+        pb.Declaration(
+            kind=Oneof[Literal["eq_sort"], pb.EqSort](
+                "eq_sort",
+                pb.EqSort(name="different.core", bindings=pb.SortBindings(python=pb.TypeBinding(path=list(path)))),
+            )
+        )
+    )
+    with pytest.raises(ValueError, match="Python binding collision"):
+        Catalog(source)
+
+
+@pytest.mark.parametrize(
+    "path", [[], [""], ["example", ""], ["", "Number"], ["class", "Number"], ["bad-name", "Number"]]
+)
+def test_type_paths_keep_nonempty_terminal_and_identifier_qualifiers(path):
+    source = catalog_fixture()
+    source.declarations[0].kind.value.bindings.python.path = path
     with pytest.raises(ValueError, match="Python path"):
         Catalog(source)
 

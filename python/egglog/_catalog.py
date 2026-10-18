@@ -75,7 +75,14 @@ class Catalog:
             if isinstance(kind, pb.HostSortFamily | pb.EqSort):
                 binding = kind.bindings
                 if binding is not None and binding.python is not None:
-                    path = _python_path(binding.python.path)
+                    # type() can return names that static Python class syntax
+                    # cannot spell. Keep qualifiers strict and terminals exact;
+                    # static generators validate the identifiers they emit.
+                    path = tuple(binding.python.path)
+                    if not path or not path[-1]:
+                        raise ValueError(f"Invalid Python path: {path!r}")
+                    if len(path) > 1:
+                        _python_path(path[:-1])
                     if path in types or path in functions or path in constants:
                         raise ValueError(f"Python binding collision: {path}")
                     types[path] = ref

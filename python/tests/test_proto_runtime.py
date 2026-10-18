@@ -4238,6 +4238,38 @@ def test_recursive_class_sorts_resolve_without_recursive_member_compilation():
     )
 
 
+def test_type_factory_retains_canonical_sort_and_formals(class_authoring_without_engine):
+    def init(self, value: i64) -> None: ...
+
+    def choose(self, value: i64) -> i64:
+        return value
+
+    namespace = {"__module__": __name__, "__init__": init, "choose": choose}
+    dynamic = type("Factory", (Expr,), namespace)
+    expression = dynamic(3)
+    assert isinstance(dynamic, runtime.RuntimeClass)
+    assert isinstance(expression, dynamic)
+    assert runtime._class_for_sort(dynamic.__egg_sort__) is dynamic
+    assert namespace == {"__module__": __name__, "__init__": init, "choose": choose}
+    reference = resolve_callable(dynamic.choose)
+    declaration = reference.read()
+    assert declaration.kind.field == "primitive"
+    assert [argument.name for argument in declaration.kind.value.inputs] == ["self", "value"]
+    body = reference.owner.ref("nodes", declaration.kind.value.body)
+    assert body.read().kind == Oneof[Literal["var"], str]("var", "_1")
+    assert StructuralView(reference.owner.ref("sorts", declaration.kind.value.inputs[0].sort)) == StructuralView(
+        dynamic.__egg_sort__
+    )
+    with pytest.raises(TypeError):
+        runtime.RuntimeClass("Spoof", (Expr,), {})
+    with pytest.raises(TypeError):
+        runtime.RuntimeClass(dynamic.__egg_definition__, object())
+    with pytest.raises(TypeError):
+        runtime.RuntimeClass(dynamic.__egg_definition__, unsupported=True)
+    with pytest.raises(TypeError, match="requires a canonical sort declaration"):
+        runtime.RuntimeClass(resolve_callable(dynamic))
+
+
 def test_constructor_scope_publishes_once_across_authoring_threads():
     class Num(Expr):
         def __init__(self, value: i64) -> None: ...
@@ -4273,6 +4305,18 @@ def test_unmigrated_constructor_options_never_publish_members(options):
         @method(**options)
         def __init__(self) -> None: ...
 
+    if "cost" in options:
+        expression = Invalid()
+        reference = resolve_callable(Invalid)
+        record = reference.read()
+        assert record.kind.field == "constructor"
+        assert record.bindings.python.views[0].kind == pb.PythonCallKind.INITIALIZER
+        cost = reference.owner.ref("nodes", record.kind.value.cost).read()
+        assert cost.kind.value.value == Oneof[Literal["i64"], int]("i64", 1)
+        assert get_callable_fn(expression) == Invalid
+        assert resolve_callable(Invalid) is reference
+        assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
+        return
     with pytest.raises(NotImplementedError, match="options"):
         Invalid()
     assert not Invalid.__egg_context__.catalog.members
@@ -5176,6 +5220,56 @@ def test_member_header_value_callbacks_wait_for_static_barrier(  # noqa: C901
         assert calls == ["first", "later", kind]
         pack([reference])
         assert calls == ["first", "later", kind]
+
+
+@pytest.mark.parametrize("option", ["merge", "mutates_self", "unextractable", "subsume", "preserve"])
+def test_initializer_cost_does_not_enable_other_rejected_options(class_authoring_without_engine, option):
+    calls = []
+
+    def merge(old, new):
+        calls.append("merge")
+        return old
+
+    options = {option: merge if option == "merge" else True}
+
+    class Invalid(Expr):
+        @method(cost=3, **options)
+        def __init__(self, value: i64) -> None:
+            calls.append("body")
+
+    with pytest.raises(NotImplementedError, match="Method options"):
+        Invalid(1)
+    assert calls == []
+    assert not Invalid.__egg_context__.catalog.members
+
+
+@pytest.mark.parametrize("explicit_ruleset", [False, True])
+def test_initializer_cost_waits_for_all_static_headers(class_authoring_without_engine, monkeypatch, explicit_ruleset):
+    from egglog.egraph import resolve_literal  # noqa: PLC0415
+
+    calls = []
+    destination = ruleset()
+    marker = 123456789
+
+    def literal(sort, value):
+        if value is marker:
+            calls.append("cost")
+        return resolve_literal(sort, value)
+
+    monkeypatch.setattr("egglog.egraph.resolve_literal", literal)
+
+    class Invalid(Expr, ruleset=destination if explicit_ruleset else None):
+        @method(cost=marker)
+        def __init__(self, value: i64) -> None: ...
+
+        @method(cost=1)
+        def invalid(self) -> i64: ...
+
+    with pytest.raises(ValueError, match="Primitive-returning callables cannot use cost"):
+        Invalid(1)
+    assert calls == []
+    assert not Invalid.__egg_context__.catalog.members
+    assert not destination._snapshot({}).read().kind.value.rules
 
 
 @pytest.mark.parametrize("explicit", [False, True])

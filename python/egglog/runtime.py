@@ -8,7 +8,7 @@ from contextlib import suppress
 from inspect import Parameter, Signature
 from threading import RLock
 from types import FunctionType, MethodType
-from typing import Any, Literal, TypeVar, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, Union, cast, get_args, get_origin
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
 import cloudpickle
@@ -615,9 +615,16 @@ class RuntimeClass(type):
             _CLASS_CACHE.setdefault(actual.owner, WeakValueDictionary())[actual.index] = result
         return result
 
-    def __init__(cls, definition: Ref, *, sort: Ref | None = None, arguments: tuple[object, ...] = ()) -> None:
-        # type.__init__ expects (name, bases, namespace), not semantic records.
-        pass
+    if TYPE_CHECKING:
+
+        def __init__(cls, definition: Ref, *, sort: Ref | None = None, arguments: tuple[object, ...] = ()) -> None: ...
+
+    else:
+
+        def __init__(cls, *args: object, **kwargs: object) -> None:
+            # __new__ fully initializes canonical records; type() can replay
+            # its original (name, bases, namespace) arguments here instead.
+            pass
 
     __egg_definition__: Ref
     __egg_sort__: Ref | None
