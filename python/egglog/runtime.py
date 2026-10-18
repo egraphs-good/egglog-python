@@ -218,6 +218,19 @@ def _author_call(  # noqa: C901, PLR0912
             msg = "Requested Python view is absent"
             raise ValueError(msg)
         view = record.bindings.python.views[view_index]
+    if view.has_field("mutates") and (
+        view.kind == pb.PythonCallKind.INITIALIZER
+        or view.mutates >= len(inputs)
+        or output is None
+        or StructuralView(declaration.owner.ref("sorts", inputs[view.mutates].sort))
+        != StructuralView(declaration.owner.ref("sorts", output))
+        or not (
+            (view.has_field("receiver") and view.mutates == view.receiver)
+            or any(parameter.core_input == view.mutates for parameter in view.params)
+        )
+    ):
+        msg = "Invalid mutated input"
+        raise ValueError(msg)
     specialized = view.has_field("tail_repetitions")
     consumes_tail = not specialized and view.has_field("receiver") and view.receiver == len(inputs)
     if consumes_tail and (len(varargs) != 1 or view.kind != pb.PythonCallKind.METHOD):
@@ -283,6 +296,24 @@ def _author_call(  # noqa: C901, PLR0912
     if core_values.keys() != expected_slots:
         msg = "Python view does not map every core input exactly once"
         raise ValueError(msg)
+    if view.has_field("mutates"):
+        target = node_of(core_values[view.mutates])
+        if target is None:
+            msg = "Mutating arguments require a supplied expression wrapper"
+            raise TypeError(msg)
+        target_node: pb.Node = target.read()
+        try:
+            infer_sort(
+                declaration.owner.ref("sorts", inputs[view.mutates].sort),
+                target.owner.ref("sorts", target_node.sort_id),
+                binder_size,
+                substitutions,
+            )
+        except TypeConstraintError as error:
+            from .conversion import ConvertError  # noqa: PLC0415
+
+            msg = "Cannot convert a mutated argument: its wrapper must already have the input sort"
+            raise ConvertError(msg) from error
     ordered_values = [core_values[index] for index in range(slot_count if specialized else tail_slot)]
     patterns = [declaration.owner.ref("sorts", arg.sort) for arg in inputs]
     if varargs:

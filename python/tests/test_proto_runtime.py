@@ -3515,7 +3515,7 @@ def test_named_eager_static_options_precede_callback(equality, options, error, m
         ({"builtin": True, "ruleset": object()}, ValueError, "Builtin callables cannot use an explicit ruleset"),
         ({"builtin": True}, NotImplementedError, "not migrated"),
         ({"merge": lambda old, new: pytest.fail("merge called")}, NotImplementedError, "not migrated"),
-        ({"mutates_first_arg": True}, NotImplementedError, "not migrated"),
+        ({"mutates_first_arg": True}, ValueError, "must be annotated to return None"),
     ],
 )
 def test_free_function_options_do_not_silently_drop_behavior(options, error, message):
@@ -4927,6 +4927,211 @@ def test_bodyless_mutating_members_use_canonical_calls(class_authoring_without_e
     assert expr_parts(alias) == expr_parts(receiver)
 
 
+def test_bodyless_free_mutation_owns_calls_and_aliases(class_authoring_without_engine):
+    class Mutable(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    @function(mutates_first_arg=True)
+    def update(value: Mutable, amount: i64 = 4) -> None: ...
+
+    reference = resolve_callable(update)
+    declaration = reference.read()
+    assert declaration.kind.field == "constructor"
+    signature = declaration.kind.value
+    view = declaration.bindings.python.views[0]
+    assert signature.output == signature.inputs[0].sort
+    assert view.kind == pb.PythonCallKind.FUNCTION
+    assert view.has_field("mutates")
+    assert view.mutates == 0
+    assert not view.has_field("receiver")
+    value = Mutable(1)
+    alias, original = value, copy(value)
+    assert update(value) is None
+    assert alias is value
+    assert get_callable_fn(value) == update
+    assert [expr_parts(argument) for argument in get_callable_args(value)] == [expr_parts(original), expr_parts(i64(4))]
+    assert expr_parts(original) == expr_parts(Mutable(1))
+    encoded = pack([to_runtime_expr(value).__egg_ref__]).program.to_binary()
+    assert pb.Program.from_binary(encoded).to_binary() == encoded
+    root = to_runtime_expr(value).__egg_ref__
+    for args, kwargs, error in [
+        ((), {}, TypeError),
+        ((value, 2), {"amount": 3}, TypeError),
+        ((value, String("wrong")), {}, ConvertError),
+        ((i64(1),), {}, ConvertError),
+    ]:
+        with pytest.raises(error):
+            update(*args, **kwargs)
+        assert to_runtime_expr(value).__egg_ref__ is root
+
+
+def test_canonical_mutation_display_keeps_sharing_and_reverse_slots(class_authoring_without_engine):
+    class Mutable(Expr):
+        def __init__(self, value: i64) -> None: ...
+        def __add__(self, other: "Mutable") -> "Mutable": ...
+        def __setitem__(self, key: i64, value: i64) -> None: ...
+        def __delitem__(self, key: i64) -> None: ...
+
+        @method(mutates_self=True, reverse_args=True)
+        def update(self, label: String, amount: i64) -> None: ...
+
+    value = Mutable(1)
+    value.update(String("tag"), i64(2))
+    expected = "_Mutable_1 = Mutable(1)\n_Mutable_1.update('tag', 2)\n_Mutable_1"
+    assert str(value) == expected
+    assert str(value + value) == expected + " + _Mutable_1"
+    saved = copy(value)
+    value[3] = 4
+    assert str(saved + value) == (
+        "_Mutable_1 = Mutable(1)\n_Mutable_1.update('tag', 2)\n"
+        "_Mutable_2 = copy(_Mutable_1)\n_Mutable_2[3] = 4\n_Mutable_1 + _Mutable_2"
+    )
+    del value[3]
+    assert (
+        str(value)
+        == "_Mutable_1 = Mutable(1)\n_Mutable_1.update('tag', 2)\n_Mutable_1[3] = 4\ndel _Mutable_1[3]\n_Mutable_1"
+    )
+    packed = pack([to_runtime_expr(value).__egg_ref__])
+    owner = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+    assert str(RuntimeExpr(owner.ref("nodes", packed.indices[0]))) == str(value)
+
+
+def test_eager_free_mutation_uses_original_formals_once(class_authoring_without_engine):
+    class Mutable(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    calls = []
+
+    @function(mutates_first_arg=True)
+    def replace(value: Mutable, other: Mutable) -> None:
+        calls.append(get_current_ruleset())
+        value.__replace_expr__(other)
+        other.__replace_expr__(Mutable(9))
+
+    reference = resolve_callable(replace)
+    primitive = reference.read().kind.value
+    assert isinstance(primitive, pb.Primitive)
+    body = reference.owner.ref("nodes", primitive.body)
+    assert body.read().kind.field == "var"
+    assert body.read().kind.value == "_1"
+    value, other = Mutable(1), Mutable(2)
+    original, other_root = copy(value), to_runtime_expr(other).__egg_ref__
+    assert replace(value, other) is None
+    assert replace(value, other) is None
+    assert calls == [None]
+    assert expr_parts(original) == expr_parts(Mutable(1))
+    assert to_runtime_expr(other).__egg_ref__ is other_root
+    assert reference.read().bindings.python.views[0].has_field("mutates")
+    encoded = pack([to_runtime_expr(value).__egg_ref__]).program.to_binary()
+    assert pb.Program.from_binary(encoded).to_binary() == encoded
+
+
+@pytest.mark.parametrize("outcome", ["value", "wrong-sort", "raise"])
+def test_eager_free_mutation_failure_is_terminal_before_rebinding(class_authoring_without_engine, outcome):
+    class Mutable(Expr):
+        def __init__(self) -> None: ...
+
+    marker = RuntimeError("mutation body marker")
+    calls = []
+
+    @function(mutates_first_arg=True)
+    def invalid(value: Mutable) -> None:
+        calls.append(1)
+        if outcome == "value":
+            return value
+        if outcome == "wrong-sort":
+            value.__replace_expr__(i64(1))
+        else:
+            raise marker
+        return None
+
+    value = Mutable()
+    root = to_runtime_expr(value).__egg_ref__
+    error = {"value": ValueError, "wrong-sort": ConvertError, "raise": RuntimeError}[outcome]
+    for _ in range(2):
+        with pytest.raises(error) as caught:
+            invalid(value)
+        if outcome == "raise":
+            assert caught.value is marker
+        assert to_runtime_expr(value).__egg_ref__ is root
+    assert calls == [1]
+    assert invalid.__egg_declaration__ is None
+
+
+@pytest.mark.parametrize("invalid", ["return", "missing-input"])
+def test_free_mutation_signature_rejects_before_body(class_authoring_without_engine, invalid):
+    if invalid == "return":
+
+        def body(value: i64) -> i64:
+            pytest.fail("Invalid mutation return annotation executed its body")
+
+    else:
+
+        def body() -> None:
+            pytest.fail("Mutation without an input executed its body")
+
+    wrapped = function(mutates_first_arg=True)(body)
+    with pytest.raises(ValueError, match="Mutating callables"):
+        resolve_callable(wrapped)
+    assert wrapped.__egg_declaration__ is None
+
+
+@pytest.mark.parametrize("corruption", ["index", "output", "initializer", "unmapped"])
+def test_mutation_metadata_rejects_before_argument_callbacks(class_authoring_without_engine, corruption):
+    @function(mutates_first_arg=True)
+    def update(value: i64) -> None: ...
+
+    packed = pack([resolve_callable(update)])
+    program = packed.program
+    declaration = program.declarations[packed.indices[0]]
+    view = declaration.bindings.python.views[0]
+    if corruption == "index":
+        view.mutates = 1
+    elif corruption == "output":
+        declaration.kind.value.output = len(program.sorts)
+        program.sorts.append(pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "wrong-output")))
+    elif corruption == "initializer":
+        view.kind = pb.PythonCallKind.INITIALIZER
+    else:
+        view.params.clear()
+    owner = Builder.from_program(program).publish()
+
+    def forbidden(*args):
+        pytest.fail("Malformed mutation metadata reached an argument callback")
+
+    with pytest.raises(ValueError, match="Invalid mutated input"):
+        _author_call(
+            owner.ref("declarations", packed.indices[0]), 0, (object(),), {}, node_of=forbidden, convert=forbidden
+        )
+
+
+@pytest.mark.parametrize("target", [None, 1, i64(1)])
+def test_mutation_target_validation_precedes_conversions(class_authoring_without_engine, target):
+    calls = []
+
+    class Input:
+        pass
+
+    def convert_input(value):
+        calls.append(value)
+        return i64(2)
+
+    converter(Input, i64, convert_input)
+
+    class Mutable(Expr):
+        def __init__(self) -> None: ...
+
+        @method(mutates_self=True, reverse_args=True)
+        def update(self, amount: i64) -> None: ...
+
+    wrong = to_runtime_expr(target).__egg_ref__ if isinstance(target, RuntimeExpr) else None
+    with pytest.raises(ConvertError if wrong is not None else TypeError):
+        Mutable.update(target, Input())
+    assert calls == []
+    if wrong is not None:
+        assert to_runtime_expr(target).__egg_ref__ is wrong
+
+
 def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_engine):
     default = i64(4)
     destination = ruleset()
@@ -5045,11 +5250,8 @@ def test_mutation_noninstance_views_remain_rejected(class_authoring_without_engi
     assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
 
 
-@pytest.mark.parametrize("explicit_ruleset", [False, True])
-def test_mutating_member_bodies_remain_rejected_before_callback(class_authoring_without_engine, explicit_ruleset):
-    destination = ruleset() if explicit_ruleset else None
-
-    class Invalid(Expr, ruleset=destination):
+def test_eager_mutating_member_bodies_remain_rejected_before_callback(class_authoring_without_engine):
+    class Invalid(Expr):
         def __init__(self) -> None: ...
 
         @method(mutates_self=True)
@@ -5059,8 +5261,46 @@ def test_mutating_member_bodies_remain_rejected_before_callback(class_authoring_
     with pytest.raises(NotImplementedError, match="not migrated"):
         Invalid()
     assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
-    if destination is not None:
-        assert destination._snapshot({}).read().kind.value.rules == []
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_mutating_member_rewrite_keeps_original_binders(class_authoring_without_engine, reverse):
+    destination = ruleset()
+    calls = []
+
+    class Mutable(Expr, ruleset=destination):
+        def __init__(self, value: i64) -> None: ...
+
+        @method(mutates_self=True, reverse_args=reverse)
+        def replace(self, other: "Mutable") -> None:
+            calls.append(get_current_ruleset())
+            self.__replace_expr__(other)
+            other.__replace_expr__(Mutable(9))
+
+    value, other = Mutable(1), Mutable(2)
+    original = copy(value)
+    other_root = to_runtime_expr(other).__egg_ref__
+    assert value.replace(other) is None
+    assert calls == [destination]
+    assert to_runtime_expr(other).__egg_ref__ is other_root
+    assert expr_parts(original) == expr_parts(Mutable(1))
+    declaration = resolve_callable(Mutable.replace).read()
+    view = declaration.bindings.python.views[0]
+    assert view.receiver == view.mutates == int(reverse)
+    snapshot = destination._snapshot({})
+    assert len(snapshot.read().kind.value.rules) == 1
+    record = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    rewrite_record = record.read().kind.value
+    assert isinstance(rewrite_record, pb.Rewrite)
+    lhs = record.owner.ref("nodes", rewrite_record.lhs)
+    assert [lhs.owner.ref("nodes", index).read().kind.value for index in lhs.read().kind.value.args] == (
+        ["other", "self"] if reverse else ["self", "other"]
+    )
+    rhs = record.owner.ref("nodes", rewrite_record.rhs)
+    assert rhs.read().kind.field == "var"
+    assert rhs.read().kind.value == "other"
+    encoded = pack([snapshot, to_runtime_expr(value).__egg_ref__]).program.to_binary()
+    assert pb.Program.from_binary(encoded).to_binary() == encoded
 
 
 def test_class_ruleset_bodyless_callable_headers(class_authoring_without_engine):

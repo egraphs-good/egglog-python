@@ -15,7 +15,7 @@ import black
 import cloudpickle
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
-from ._program import Ref, StructuralView
+from ._program import Ref, StructuralView, _structural_parts
 from .declarations import *
 
 if TYPE_CHECKING:
@@ -82,6 +82,32 @@ NAMED_UNARY_METHODS = {
 }
 
 
+def _name_expr(tp_name: str, expr: str, *, copy_identifier: bool, statements: list[str], counts: dict[str, int]) -> str:
+    """Name a computed expression, copying an identifier only when it is shared."""
+    if expr.isidentifier() and not copy_identifier:
+        return expr
+    counts[tp_name] = counts.get(tp_name, 0) + 1
+    name = f"_{tp_name}_{counts[tp_name]}"
+    statements.append(f"{name} = copy({expr})" if expr.isidentifier() else f"{name} = {expr}")
+    return name
+
+
+_RefFrame: TypeAlias = str | Ref | tuple[Ref, bool, bool] | tuple[Ref, pb.Action | pb.Command]
+
+
+@dataclass
+class _MutationFrame:
+    """Resume a call after naming its input, then capture its statement output."""
+
+    reference: Ref
+    target: Ref
+    target_piece: tuple[Ref, bool, bool]
+    pieces: list[_RefFrame]
+    type_name: str
+    output_start: int
+    name: str | None = None
+
+
 def _format_pyobject(reference: Ref, bare: bool) -> str:
     """Trusted public-Python display, distinct from opaque record inspection."""
     from .deconstruct import _pyobject_value  # noqa: PLC0415
@@ -112,11 +138,46 @@ def pretty_ref(  # noqa: C901, PLR0912
 
     # Frames stream output rather than recursively copying each child's string.
     # The Boolean asks scalar arguments to omit their inferred wrapper.
-    frames: list[str | Ref | tuple[Ref, bool, bool] | tuple[Ref, pb.Action | pb.Command]] = [(root, False, False)]
+    frames: list[_RefFrame | _MutationFrame] = [(root, False, False)]
     output: list[str] = []
+    statements: list[str] = []
+    mutation_names: dict[Ref, str] = {}
+    counts: dict[str, int] = {}
+    parents: Counter[Ref] = Counter()
+    pending, seen = [root], set()
+    while pending:
+        reference = pending.pop()
+        if reference in seen:
+            continue
+        seen.add(reference)
+        for child, _ in _structural_parts(reference, identity=False)[1]:
+            if child.role not in {"sorts", "declarations", "files"}:
+                parents[child] += 1
+                pending.append(child)
     active: set[Ref] = set()
     while frames:
         frame = frames.pop()
+        if isinstance(frame, _MutationFrame):
+            rendered = "".join(output[frame.output_start :])
+            del output[frame.output_start :]
+            if frame.name is None:
+                frame.name = _name_expr(
+                    frame.type_name,
+                    rendered,
+                    copy_identifier=parents[frame.target] > 1,
+                    statements=statements,
+                    counts=counts,
+                )
+                mutation_names[frame.reference] = frame.name
+                frame.output_start = len(output)
+                frames.append(frame)
+                frames.extend(
+                    reversed([frame.name if piece is frame.target_piece else piece for piece in frame.pieces])
+                )
+            else:
+                statements.append(rendered)
+                output.append(frame.name)
+            continue
         if isinstance(frame, str):
             output.append(frame)
             continue
@@ -130,6 +191,9 @@ def pretty_ref(  # noqa: C901, PLR0912
             bare = parentheses = False
         else:
             reference, bare, parentheses = frame
+            if reference in mutation_names:
+                output.append(mutation_names[reference])
+                continue
             if reference in active:
                 msg = "Cyclic expression presentation is not migrated"
                 raise ValueError(msg)
@@ -139,7 +203,7 @@ def pretty_ref(  # noqa: C901, PLR0912
         owner = reference.owner
         if isinstance(record, pb.Command) and record.kind is not None and record.kind.field == "action":
             record = record.kind.value
-        pieces: list[str | tuple[Ref, bool, bool] | tuple[Ref, pb.Action | pb.Command]]
+        pieces: list[_RefFrame]
         if isinstance(record, pb.Command):
             if record.kind is None:
                 msg_0 = "Cannot print a command without a kind"
@@ -594,18 +658,32 @@ def pretty_ref(  # noqa: C901, PLR0912
                         while (
                             selected
                             and defaults[-1] is not None
+                            and not (
+                                view.has_field("mutates") and view.params[len(selected) - 1].core_input == view.mutates
+                            )
                             and StructuralView(selected[-1][0]) == StructuralView(defaults[-1])
                         ):
                             selected.pop()
                             defaults.pop()
                         name = view.path[-1] if view.path else "__init__"
-                        if view.kind == pb.PythonCallKind.METHOD and name in UNARY_METHODS and not selected:
+                        receiver_piece = (args[view.receiver], False, True) if view.has_field("receiver") else None
+                        if (
+                            view.kind == pb.PythonCallKind.METHOD
+                            and name in UNARY_METHODS
+                            and not selected
+                            and not view.has_field("mutates")
+                        ):
                             pieces = [UNARY_METHODS[name], (args[view.receiver], False, True)]
                             if parentheses:
                                 pieces = ["(", *pieces, ")"]
                             frames.extend(reversed(pieces))
                             continue
-                        if view.kind == pb.PythonCallKind.METHOD and name in BINARY_METHODS and len(selected) == 1:
+                        if (
+                            view.kind == pb.PythonCallKind.METHOD
+                            and name in BINARY_METHODS
+                            and len(selected) == 1
+                            and not view.has_field("mutates")
+                        ):
                             pieces = [
                                 (args[view.receiver], False, True),
                                 f" {BINARY_METHODS[name]} ",
@@ -615,14 +693,35 @@ def pretty_ref(  # noqa: C901, PLR0912
                                 pieces = ["(", *pieces, ")"]
                             frames.extend(reversed(pieces))
                             continue
-                        if view.kind == pb.PythonCallKind.METHOD and name == "__getitem__" and len(selected) == 1:
+                        if (
+                            view.kind == pb.PythonCallKind.METHOD
+                            and name == "__getitem__"
+                            and len(selected) == 1
+                            and not view.has_field("mutates")
+                        ):
                             pieces = [(args[view.receiver], False, True), "[", (selected[0][0], True, False), "]"]
                             frames.extend(reversed(pieces))
                             continue
-                        if view.kind == pb.PythonCallKind.INITIALIZER:
+                        close_call = True
+                        if (
+                            view.kind == pb.PythonCallKind.METHOD
+                            and name in {"__setitem__", "__delitem__"}
+                            and view.has_field("mutates")
+                            and view.mutates == view.receiver
+                        ):
+                            assert receiver_piece is not None
+                            pieces = [receiver_piece, "[", selected[0], "]"]
+                            if name == "__delitem__":
+                                pieces.insert(0, "del ")
+                            if name == "__setitem__":
+                                pieces.extend([" = ", selected[1]])
+                            selected = []
+                            close_call = False
+                        elif view.kind == pb.PythonCallKind.INITIALIZER:
                             pieces = [(sort, False, False), "("]
                         elif view.kind in {pb.PythonCallKind.METHOD, pb.PythonCallKind.PROPERTY}:
-                            pieces = [(args[view.receiver], False, True), ".", name]
+                            assert receiver_piece is not None
+                            pieces = [receiver_piece, ".", name]
                             if view.kind == pb.PythonCallKind.PROPERTY:
                                 frames.extend(reversed(pieces))
                                 continue
@@ -684,7 +783,26 @@ def pretty_ref(  # noqa: C901, PLR0912
                         if index:
                             pieces.append(", ")
                         pieces.append(argument_frame)
-                    pieces.append(")")
+                    if view is None or close_call:
+                        pieces.append(")")
+                    if view is not None and view.has_field("mutates"):
+                        if view.has_field("receiver") and view.mutates == view.receiver:
+                            assert receiver_piece is not None
+                            target_piece = receiver_piece
+                        else:
+                            target_piece = selected[
+                                next(
+                                    i for i, parameter in enumerate(view.params) if parameter.core_input == view.mutates
+                                )
+                            ]
+                        target = args[view.mutates]
+                        frames.extend([
+                            _MutationFrame(
+                                reference, target, target_piece, pieces, pretty_ref(sort).partition("[")[0], len(output)
+                            ),
+                            (target, False, False),
+                        ])
+                        continue
                 case "union":
                     pieces = ["eq("]
                     for index, argument in enumerate(record.kind.value.members):
@@ -832,7 +950,7 @@ def pretty_ref(  # noqa: C901, PLR0912
         else:
             raise NotImplementedError(f"Record presentation is not migrated: {reference.role}")
         frames.extend(reversed(pieces))
-    return "".join(output)
+    return "\n".join([*statements, "".join(output)])
 
 
 AllDecls: TypeAlias = (
@@ -1054,7 +1172,9 @@ class PrettyContext:
             # Schedulers with multiple parents need to be the same object, b/c are created with hidden UUIDs
             or tp_name == "scheduler"
         ):
-            self.names[decl] = expr_name = self._name_expr(tp_name, expr, copy_identifier=False)
+            self.names[decl] = expr_name = _name_expr(
+                tp_name, expr, copy_identifier=False, statements=self.statements, counts=self._gen_name_types
+            )
             return expr_name
         return expr
 
@@ -1225,7 +1345,13 @@ class PrettyContext:
             expr_str = self(first_arg)
             # copy an identifier expression iff it has multiple parents (b/c then we can't mutate it directly)
             has_multiple_parents = self.parents[first_arg] > 1
-            self.names[decl] = expr_name = self._name_expr(tp_name, expr_str, copy_identifier=has_multiple_parents)
+            self.names[decl] = expr_name = _name_expr(
+                tp_name,
+                expr_str,
+                copy_identifier=has_multiple_parents,
+                statements=self.statements,
+                counts=self._gen_name_types,
+            )
             # Set the first arg to be the name of the mutated arg and return the name
             args[0] = TypedExprDecl(args[0].tp, LetRefDecl(expr_name))
         else:
@@ -1304,24 +1430,6 @@ class PrettyContext:
                 expr = self._pretty_function_body(ref, [])
                 return f"({expr})", args, True
         assert_never(ref)
-
-    def _generate_name(self, typ: str) -> str:
-        self._gen_name_types[typ] += 1
-        return f"_{typ}_{self._gen_name_types[typ]}"
-
-    def _name_expr(self, tp_name: str, expr_str: str, copy_identifier: bool) -> str:
-        # tp_name =
-        # If the thing we are naming is already a variable, we don't need to name it
-        if expr_str.isidentifier():
-            if copy_identifier:
-                name = self._generate_name(tp_name)
-                self.statements.append(f"{name} = copy({expr_str})")
-            else:
-                name = expr_str
-        else:
-            name = self._generate_name(tp_name)
-            self.statements.append(f"{name} = {expr_str}")
-        return name
 
     def _pretty_partial(self, ref: CallableRef, args: list[TypedExprDecl], parens: bool) -> str:
         """

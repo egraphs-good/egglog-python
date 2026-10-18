@@ -632,6 +632,11 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             callback_args.insert(0, runtime_cls)
         with set_current_ruleset(ruleset):
             result = fn(*callback_args)
+        if view.has_field("mutates"):
+            if result is not None:
+                msg = "Mutating callable bodies must return None"
+                raise ValueError(msg)
+            result = values[view.mutates]
         if result is None:
             msg = "Callable bodies must return a value"
             raise ValueError(msg)
@@ -645,6 +650,8 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             *([values[view.receiver]] if view.has_field("receiver") else []),
             *(values[parameter.core_input] for parameter in view.params),
         )
+        if view.has_field("mutates"):
+            lhs = values[view.mutates]
         rewrite(cast("Expr", lhs), ruleset=ruleset, subsume=subsume_body).to(cast("Expr", rhs))
     return context.catalog
 
@@ -693,6 +700,16 @@ class _FunctionConstructor:
                 msg = "A symbolic property must have only its receiver"
                 raise NotImplementedError(msg)
         variable = _last_param_variable(parameters)
+        if self.mutates_first_arg:
+            if owner is not None and view_kind != pb.PythonCallKind.METHOD:
+                msg = "Mutating non-instance views are not migrated"
+                raise NotImplementedError(msg)
+            if not parameters:
+                msg = "Mutating callables require a first argument"
+                raise ValueError(msg)
+            if hints.get("return") is not type(None):
+                msg = "Mutating callables must be annotated to return None"
+                raise ValueError(msg)
         receiver = owner is not None and view_kind in {pb.PythonCallKind.METHOD, pb.PythonCallKind.PROPERTY}
         input_sorts = [
             owner.__egg_sort__
@@ -784,11 +801,7 @@ class _FunctionConstructor:
         if self.subsume and not has_body:
             msg = "subsume requires a body"
             raise ValueError(msg)
-        if (
-            self.builtin
-            or (self.mutates_first_arg and (owner is None or view_kind != pb.PythonCallKind.METHOD or has_body))
-            or variable
-        ):
+        if self.builtin or variable:
             msg = "Builtin, mutation and variadic free functions are not migrated"
             raise NotImplementedError(msg)
         if any(not isinstance(sort, Ref) or sort.role != "sorts" for sort in input_sorts):
@@ -848,8 +861,14 @@ class _FunctionConstructor:
                 )
             formal_owner = formals.publish()
             formal_refs = [formal_owner.ref("nodes", index) for index in formal_indices]
+            values = [RuntimeExpr(reference) for reference in formal_refs]
             with set_current_ruleset(self.ruleset):
-                result = fn(*(RuntimeExpr(reference) for reference in formal_refs))
+                result = fn(*values)
+                if self.mutates_first_arg:
+                    if result is not None:
+                        msg = "Mutating callable bodies must return None"
+                        raise ValueError(msg)
+                    result = values[0]
                 if result is None:
                     msg = "Callable bodies must return a value"
                     raise ValueError(msg)
@@ -901,7 +920,10 @@ class _FunctionConstructor:
         reference = builder.publish().ref("declarations", index)
         Catalog.from_refs([reference])
         if body is not None and self.ruleset is not None:
-            lhs = RuntimeFunction(reference, 0)(*(RuntimeExpr(formal) for formal in formal_refs))
+            values = [RuntimeExpr(formal) for formal in formal_refs]
+            lhs = RuntimeFunction(reference, 0)(*values)
+            if self.mutates_first_arg:
+                lhs = values[0]
             assert isinstance(lhs, RuntimeExpr)
             lhs_builder = Builder()
             lhs_index = _lower_function_body(lhs_builder, lhs.__egg_ref__, formal_refs, rewrite_body=True)

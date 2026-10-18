@@ -24,7 +24,6 @@ import egglog.egraph_state as egraph_state_module
 from egglog import *
 from egglog.declarations import (
     CallDecl,
-    FunctionRef,
     Ident,
     JustTypeRef,
     MethodRef,
@@ -1852,10 +1851,8 @@ class TestMutate:
         x_copied = copy(x)
         incr(x)
         assert expr_parts(x_copied) == expr_parts(Math(i64(10)))
-        assert expr_parts(x) == TypedExprDecl(
-            JustTypeRef(Ident("Math", __name__)),
-            CallDecl(FunctionRef(Ident("incr", __name__)), (expr_parts(x_copied),)),
-        )
+        assert get_callable_fn(x) == incr
+        assert [expr_parts(argument) for argument in get_callable_args(x)] == [expr_parts(x_copied)]
         assert str(x) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1"
         assert str(x + Math(10)) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1 + Math(10)"
 
