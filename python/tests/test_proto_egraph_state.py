@@ -2834,10 +2834,18 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
     assert destroyed == [1]
 
 
-@pytest.mark.parametrize("body_raises", [False, True])
+@pytest.mark.parametrize(
+    "body_error_type", [None, ValueError, BaseException], ids=["no-body-error", "exception", "base-exception"]
+)
 def test_context_keeps_active_and_saved_state_when_return_rejected(
-    monkeypatch: pytest.MonkeyPatch, body_raises: bool
+    monkeypatch: pytest.MonkeyPatch, body_error_type: type[BaseException] | None
 ) -> None:
+    class BodyError(BaseException):
+        pass
+
+    if body_error_type is BaseException:
+        body_error_type = BodyError
+
     class FaultTransport:
         def create(self, encoded: bytes) -> bytes:
             return pb.CreateEGraphResponse(egraph_id=1).to_binary()
@@ -2857,16 +2865,19 @@ def test_context_keeps_active_and_saved_state_when_return_rejected(
     monkeypatch.setattr(bindings, "_ProtoEngine", FaultTransport, raising=False)
     graph = EGraph()
     saved = graph._state
+    body_error = None if body_error_type is None else body_error_type("body sentinel")
     with (  # noqa: PT012 -- exercise body and disposal together
         pytest.raises(
-            ValueError if body_raises else RuntimeError, match="body sentinel" if body_raises else "cleanup sentinel"
-        ),
+            RuntimeError if body_error_type is None else body_error_type,
+            match="cleanup sentinel" if body_error is None else "body sentinel",
+        ) as caught,
         graph,
     ):
         assert graph._state is not saved
-        if body_raises:
-            msg = "body sentinel"
-            raise ValueError(msg)
+        if body_error is not None:
+            raise body_error
+    if body_error is not None:
+        assert caught.value is body_error
     assert graph._state is not saved
     assert graph._state.handle == 2
     assert saved.handle == 1

@@ -396,10 +396,30 @@ mod tests {
         assert!(matches!(&engine.recording, Some(Recording::Invalid)));
         engine.finish_recording(true);
         assert!(engine.recorded_source().is_err());
+        engine.prepare_recording_scope(false).unwrap();
+        engine.finish_recording(true);
+        assert!(matches!(&engine.recording, Some(Recording::Invalid)));
+        engine.finish_recording(false);
+        assert!(matches!(&engine.recording, Some(Recording::Invalid)));
         assert!(engine.prepare_recording_scope(true).is_err());
+        assert!(
+            engine
+                .stage_submission(Submission::Program(pb::Program::default()))
+                .is_err()
+        );
         engine.close_recording();
         engine.close_recording();
         assert!(matches!(&engine.recording, Some(Recording::Closed)));
+        engine.prepare_recording_scope(false).unwrap();
+        engine.finish_recording(true);
+        engine.finish_recording(false);
+        assert!(matches!(&engine.recording, Some(Recording::Closed)));
+        assert!(engine.prepare_recording_scope(true).is_err());
+        assert!(
+            engine
+                .stage_submission(Submission::Program(pb::Program::default()))
+                .is_err()
+        );
     }
 
     #[test]
@@ -1720,6 +1740,16 @@ impl ProtoEngine {
     }
 
     fn prepare_recording_scope(&mut self, push: bool) -> PyResult<()> {
+        // A disabled optional transcript must not block returning from a scope
+        // that was pushed while recording was active.
+        if !push
+            && matches!(
+                &self.recording,
+                Some(Recording::Invalid | Recording::Closed)
+            )
+        {
+            return Ok(());
+        }
         self.stage_submission(if push {
             Submission::Push(1)
         } else {

@@ -61,6 +61,51 @@ def test_closing_saved_transcript_inside_context_restores_scope() -> None:
     assert not egraph._state_stack
 
 
+def test_invalid_saved_transcript_inside_context_restores_scope() -> None:
+    marker = relation("invalid_transcript_scope_marker", i64)
+    egraph = EGraph(marker(i64(1)), save_egglog_string=True)
+    parent_state = egraph._state
+    original_error = None
+
+    try:
+        with pytest.raises(EggSmolError) as exc_info, egraph:  # noqa: PT012 -- exercise failure and rollback together
+            active_state = egraph._state
+            egraph.register(marker(i64(2)))
+            try:
+                egraph.check(eq(i64(1)).to(i64(2)))
+            except EggSmolError as error:
+                original_error = error
+                raise
+
+        assert exc_info.value is original_error
+        assert egraph._state is parent_state
+        assert not egraph._state_stack
+        assert active_state.handle is None
+        snapshot = egraph.freeze()
+        assert snapshot.program is not None
+        marker_calls = [
+            node.kind.value
+            for node in snapshot.program.nodes
+            if node.kind is not None
+            and node.kind.field == "call"
+            and node.kind.value.func == "invalid_transcript_scope_marker"
+        ]
+        assert len(marker_calls) == 1
+        value = snapshot.program.nodes[marker_calls[0].args[0]].kind.value.value
+        assert value.field == "i64"
+        assert value.value == 1
+        with pytest.raises(RuntimeError, match="cannot be replayed"):
+            _ = egraph.as_egglog_string
+        with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
+            egraph.register(marker(i64(3)))
+        with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
+            egraph.push()
+        assert egraph._state is parent_state
+        assert not egraph._state_stack
+    finally:
+        egraph._state.destroy()
+
+
 def test_cleanup_failure_does_not_mask_propagating_base_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     class BodyError(BaseException):
         pass
