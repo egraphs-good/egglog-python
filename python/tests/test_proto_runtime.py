@@ -627,6 +627,47 @@ def test_rule_template_comparison_and_live_rulesets_without_engine(monkeypatch):
     assert "rule(" in str(selected)
 
 
+def test_rule_comparison_memo_retains_only_successful_canonical_keys(monkeypatch):
+    from collections import Counter  # noqa: PLC0415
+
+    from egglog import _program as program  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Rule comparison accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    first = rule().then(set_(constant("memo_target", i64)).to(1)).__egg_ref__
+    equal = rule().then(set_(constant("memo_target", i64)).to(1)).__egg_ref__
+    different = rule().then(set_(constant("memo_target", i64)).to(2)).__egg_ref__
+    builder = Builder()
+    alias = builder.import_ref(first)
+    imported = builder.publish().ref("rules", alias)
+    original = program._rule_key
+    calls = Counter()
+    failure = ValueError("key did not complete")
+    fail = True
+
+    def counted(reference):
+        calls[reference] += 1
+        if reference == equal and fail:
+            raise failure
+        return original(reference)
+
+    monkeypatch.setattr(program, "_rule_key", counted)
+    keys = {}
+    with pytest.raises(ValueError, match="key did not complete") as caught:
+        program.rule_equal(first, equal, keys=keys)
+    assert caught.value is failure
+    assert set(keys) == {first}
+    fail = False
+    assert program.rule_equal(first, equal, keys=keys)
+    assert program.rule_equal(imported, equal, keys=keys)
+    assert not program.rule_equal(first, different, keys=keys)
+    assert calls == {first: 1, equal: 2, different: 1}
+    assert set(keys) == {first, equal, different}
+    assert first != equal  # Reusing comparison data does not merge occurrences.
+
+
 def test_report_key_default_and_lambda_use_domains_without_engine():
     from egglog.run_report import RuleKey  # noqa: PLC0415
 
@@ -743,7 +784,7 @@ def test_report_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirect
 
 
 def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
-    from egglog import RewriteOrRule  # noqa: PLC0415
+    from egglog import RewriteOrRule, _program  # noqa: PLC0415
     from egglog.run_report import RuleKey  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
@@ -791,7 +832,9 @@ def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
     assert left.__egg_ref__ != right.__egg_ref__
     assert StructuralView(left.__egg_ref__) != StructuralView(right.__egg_ref__)
     assert authored(shared=True, empty=True) == authored(shared=True, empty=True)
-    assert authored(shared=True, empty=True) != authored(shared=False, empty=True)
+    shared, independent = authored(shared=True, empty=True), authored(shared=False, empty=True)
+    assert shared != independent
+    assert not _program.rule_equal(shared.__egg_ref__, independent.__egg_ref__, keys={})
     assert hash(RuleKey(left.__egg_ref__)) == hash(RuleKey(right.__egg_ref__))
     assert len({RuleKey(left.__egg_ref__), RuleKey(right.__egg_ref__)}) == 1
     assert (
@@ -804,7 +847,7 @@ def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
 
 
 def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch):
-    from egglog import RewriteOrRule  # noqa: PLC0415
+    from egglog import RewriteOrRule, _program  # noqa: PLC0415
     from egglog.run_report import RuleKey  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
@@ -824,6 +867,7 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
     target.merge = value
     modified = RewriteOrRule(Builder.from_program(program).publish().ref("rules", packed.indices[0]))
     assert first != modified  # The command shape alone is identical.
+    assert not _program.rule_equal(first.__egg_ref__, modified.__egg_ref__, keys={})
     assert len({RuleKey(first.__egg_ref__), RuleKey(modified.__egg_ref__)}) == 2
     builder = Builder()
     root = builder.import_ref(first.__egg_ref__)

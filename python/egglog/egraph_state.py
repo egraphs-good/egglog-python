@@ -399,6 +399,7 @@ class EGraphState:
         """
         selected = {ident: reference for reference, ident in identifiers.items()}
         active: set[Ident] = set()
+        rule_keys: dict[Ref, tuple[object, ...]] = {}
 
         def confirm(reference: Ref, ident: Ident) -> None:
             record: pb.Ruleset = reference.read()
@@ -477,7 +478,9 @@ class EGraphState:
                 for index in record.kind.value.rules:
                     rule = source.owner.ref("rules", index)
                     members = [] if current is None else self._ruleset_members(current)
-                    if not direct and any(old not in self._direct_rules and rule_equal(rule, old) for old in members):
+                    if not direct and any(
+                        old not in self._direct_rules and rule_equal(rule, old, keys=rule_keys) for old in members
+                    ):
                         continue
                     label = rule.read().name
                     if label and any(old.read().name == label for old in members):

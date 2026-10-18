@@ -1782,6 +1782,36 @@ def test_public_reports_require_the_requested_top_level_output(monkeypatch, oper
         graph.run(seq()) if operation == "run" else graph.stats()
 
 
+def test_publication_derives_each_rule_key_once_per_call(monkeypatch):
+    from collections import Counter  # noqa: PLC0415
+
+    from egglog import _program as program  # noqa: PLC0415
+    from egglog import rule, ruleset, var  # noqa: PLC0415
+
+    x = var("x", i64)
+    selected = ruleset(*(rule(eq(x).to(i64(i)), name=f"memo_{i}").then() for i in range(4)), name="memo")
+    graph = EGraph()
+    original = program._rule_key
+    calls = Counter()
+
+    def counted(reference):
+        calls[reference] += 1
+        return original(reference)
+
+    monkeypatch.setattr(program, "_rule_key", counted)
+    versions = []
+    for _ in range(2):
+        calls.clear()
+        identifiers = {}
+        snapshot = selected._snapshot(identifiers)
+        versions.append(graph._state.publish_ruleset(snapshot, identifiers))
+        assert calls
+        assert max(calls.values()) == 1
+        assert len(graph._state._ruleset_members(versions[-1])) == 4
+    assert versions[0] == versions[1]
+    assert len([key for key in graph._state.definitions if key[0] == "ruleset"]) == 7
+
+
 def _run_ruleset_step(graph, selected=None):
     """Freeze a live target, execute canonical Run bytes, and read raw matches."""
     from egglog._program import Builder  # noqa: PLC0415

@@ -483,9 +483,16 @@ def _rule_key(root: Ref) -> tuple[object, ...]:  # noqa: C901
     return tuple(ordered), tuple(completed[visit] for visit in roots), tuple(tokens)
 
 
-def rule_equal(left: Ref, right: Ref) -> bool:
-    """Compare templates; rule Ref identity remains occurrence identity elsewhere."""
-    return _rule_key(left) == _rule_key(right)
+def rule_equal(left: Ref, right: Ref, *, keys: dict[Ref, tuple[object, ...]] | None = None) -> bool:
+    """Compare templates, optionally retaining completed keys in a caller-owned memo."""
+    if keys is None:
+        return _rule_key(left) == _rule_key(right)
+    left = left.owner.ref(left.role, left.index)
+    right = right.owner.ref(right.role, right.index)
+    for reference in (left, right):
+        if reference not in keys:
+            keys[reference] = _rule_key(reference)
+    return keys[left] == keys[right]
 
 
 class Owner:
