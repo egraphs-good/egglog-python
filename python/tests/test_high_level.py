@@ -2083,6 +2083,39 @@ def test_custom_equality():
     egraph.check(eq(should_be_false).to(Boolean(True)))
 
 
+@pytest.mark.parametrize("values", [(1, 2), [1, 2]])
+def test_generic_family_intermediate_executes_and_replays(values) -> None:
+    class Box(Expr):
+        def __init__(self, values: Vec[i64]) -> None: ...
+
+    converter(Vec[i64], Box, Box)
+    value = convert(values, Box)
+    expected = Box(convert(values, Vec[i64]))
+    graph = EGraph(value, save_egglog_string=True)
+    graph.check(eq(value).to(expected))
+    assert graph.function_size(Box) == 1
+    _replay_recorded_source(graph.as_egglog_string)
+
+
+def test_heterogeneous_non_boolean_equality_executes_and_replays() -> None:
+    class Symbolic(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+        def __eq__(self, other: String) -> i64:
+            return i64(7)
+
+        def __ne__(self, other: String) -> String:
+            return String("different")
+
+    value, other = Symbolic(i64(1)), String("other")
+    equal, unequal = value == other, value != other
+    assert expr_parts(equal) == expr_parts(Symbolic.__eq__(value, other))
+    assert expr_parts(unequal) == expr_parts(Symbolic.__ne__(value, other))
+    graph = EGraph(value, save_egglog_string=True)
+    graph.check(eq(equal).to(i64(7)), eq(unequal).to(String("different")))
+    _replay_recorded_source(graph.as_egglog_string)
+
+
 class TestMutate:
     def test_setitem_defaults(self):
         EGraph()

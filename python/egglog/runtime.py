@@ -832,6 +832,8 @@ class RuntimeClass(type):
             catalog = cls.__egg_context__.catalog
             assert catalog is not None
         elif cls.__egg_definition__ != catalog.definitions.get(definition_key):
+            if _missing_ok:
+                return _OMITTED
             raise AttributeError(f"{cls} has no canonical Python member {name!r}")
         try:
             reference, view = catalog.members[key]
@@ -1303,10 +1305,9 @@ class RuntimeExpr:
         return hash(StructuralView(self.__egg_ref__))
 
     def __eq__(self, other: object) -> Any:
-        node: pb.Node = self.__egg_ref__.read()
-        cls = _class_for_sort(self.__egg_ref__.owner.ref("sorts", node.sort_id))
-        if "__eq__" in cls.__egg_hooks__:
-            return cls.__egg_hooks__["__eq__"].__get__(self, cls)(other)
+        member = _get_expr_member(self, "__eq__", missing_ok=True, method_only=True)
+        if member is not _OMITTED:
+            return cast("Callable", member)(other)
         if not isinstance(other, RuntimeExpr):
             return NotImplemented
         left: pb.Node = self.__egg_ref__.read()
@@ -1320,10 +1321,9 @@ class RuntimeExpr:
         return eq(cast("Any", self)).to(other)
 
     def __ne__(self, other: object) -> Any:
-        node: pb.Node = self.__egg_ref__.read()
-        cls = _class_for_sort(self.__egg_ref__.owner.ref("sorts", node.sort_id))
-        if "__ne__" in cls.__egg_hooks__:
-            return cls.__egg_hooks__["__ne__"].__get__(self, cls)(other)
+        member = _get_expr_member(self, "__ne__", missing_ok=True, method_only=True)
+        if member is not _OMITTED:
+            return cast("Callable", member)(other)
         from .egraph import ne  # noqa: PLC0415
 
         return ne(cast("Any", self)).to(other)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
@@ -23,6 +24,35 @@ class ConvertError(Exception):
     pass
 
 
+def _sort_type_args(sort: Ref) -> tuple[RuntimeClass, ...]:
+    record: pb.Sort = sort.read()
+    assert record.kind is not None
+    indices = (
+        record.kind.value.args
+        if record.kind.field == "family"
+        else [record.kind.value.result, *record.kind.value.params]
+        if record.kind.field == "func"
+        else ()
+    )
+    return tuple(_class_for_sort(sort.owner.ref("sorts", index)) for index in indices)
+
+
+@dataclass
+class _ComposedConverter:
+    first: Callable[[Any], RuntimeExpr]
+    second: Callable[[Any], RuntimeExpr]
+    intermediate: RuntimeClass
+
+    def __call__(self, value: Any) -> RuntimeExpr:
+        sort = self.intermediate.__egg_sort__
+        if sort is None:
+            converted = self.first(value)
+        else:
+            with with_type_args(_sort_type_args(sort)):
+                converted = self.first(value)
+        return self.second(converted)
+
+
 def converter(from_type: type | RuntimeClass, to_type: type | RuntimeClass, fn: Callable, cost: int = 1) -> None:
     """Register a Python converter; target semantics remain owned sort records."""
     if not isinstance(to_type, RuntimeClass):
@@ -36,18 +66,54 @@ def converter(from_type: type | RuntimeClass, to_type: type | RuntimeClass, fn: 
     # Preserve the existing transitive conversion policy without storing type
     # trees or synthesizing a callable signature.
     for (source, target), (other_cost, other_fn) in tuple(CONVERSIONS.items()):
-        if target == from_type:
+        if isinstance(from_type, RuntimeClass) and (
+            target == from_type
+            or (
+                target.__egg_sort__ is None
+                and from_type.__egg_sort__ is not None
+                and target.__egg_definition__ == from_type.__egg_definition__
+            )
+        ):
+            converter(source, to_type, _ComposedConverter(other_fn, fn, from_type), cost + other_cost)
+        if isinstance(source, RuntimeClass) and (
+            to_type == source
+            or (
+                to_type.__egg_sort__ is None
+                and source.__egg_sort__ is not None
+                and to_type.__egg_definition__ == source.__egg_definition__
+            )
+        ):
+            converter(from_type, target, _ComposedConverter(fn, other_fn, source), cost + other_cost)
 
-            def composed(value: Any, first=other_fn, second=fn) -> RuntimeExpr:
-                return second(first(value))
 
-            converter(source, to_type, composed, cost + other_cost)
-        if to_type == source:
-
-            def composed(value: Any, first=fn, second=other_fn) -> RuntimeExpr:
-                return second(first(value))
-
-            converter(from_type, target, composed, cost + other_cost)
+def _lookup_conversion(
+    source: type | RuntimeClass, target: RuntimeClass
+) -> tuple[int, Callable[[Any], RuntimeExpr]] | None:
+    """Compare exact/family costs, preserving source MRO within each and exact ties."""
+    candidates = source.__mro__ if isinstance(source, type) and not isinstance(source, RuntimeClass) else (source,)
+    assert target.__egg_sort__ is not None
+    target_sort: pb.Sort = target.__egg_sort__.read()
+    assert target_sort.kind is not None
+    conversion = None
+    for candidate in candidates:
+        conversion = CONVERSIONS.get((candidate, target))
+        if conversion is not None:
+            break
+    if target_sort.kind.field in {"family", "func"}:
+        generic = next(
+            (
+                registered
+                for candidate in candidates
+                for (registered_source, registered_target), registered in CONVERSIONS.items()
+                if registered_source == candidate
+                and registered_target.__egg_sort__ is None
+                and registered_target.__egg_definition__ == target.__egg_definition__
+            ),
+            None,
+        )
+        if generic is not None and (conversion is None or generic[0] < conversion[0]):
+            return generic
+    return conversion
 
 
 def resolve_literal(sort: Ref, value: object) -> RuntimeExpr:
@@ -64,39 +130,10 @@ def resolve_literal(sort: Ref, value: object) -> RuntimeExpr:
     else:
         source = type(value)
     target = _class_for_sort(sort)
-    candidates = source.__mro__ if isinstance(source, type) and not isinstance(source, RuntimeClass) else (source,)
-    source_sort: pb.Sort = sort.read()
-    assert source_sort.kind is not None
-    arguments = (
-        tuple(_class_for_sort(sort.owner.ref("sorts", index)) for index in source_sort.kind.value.args)
-        if source_sort.kind.field == "family"
-        else tuple(
-            _class_for_sort(sort.owner.ref("sorts", index))
-            for index in [source_sort.kind.value.result, *source_sort.kind.value.params]
-        )
-        if source_sort.kind.field == "func"
-        else ()
-    )
-    conversion = None
-    for candidate in candidates:
-        conversion = CONVERSIONS.get((candidate, target))
-        if conversion is not None:
-            break
-    if conversion is None and source_sort.kind.field in {"family", "func"}:
-        conversion = next(
-            (
-                registered
-                for candidate in candidates
-                for (registered_source, registered_target), registered in CONVERSIONS.items()
-                if registered_source == candidate
-                and registered_target.__egg_sort__ is None
-                and registered_target.__egg_definition__ == target.__egg_definition__
-            ),
-            None,
-        )
+    conversion = _lookup_conversion(source, target)
     if conversion is None:
         raise ConvertError(f"Cannot convert {value} of type {source} to {target}")
-    with with_type_args(arguments):
+    with with_type_args(_sort_type_args(sort)):
         result = conversion[1](value)
     if not isinstance(result, RuntimeExpr):
         raise ConvertError(f"Converter to {target} returned {type(result).__name__}, not an expression")

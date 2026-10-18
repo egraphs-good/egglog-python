@@ -846,6 +846,57 @@ def test_direct_variables_are_canonical_without_an_engine(monkeypatch, name, egg
         var("x", TypeVar("T"))
 
 
+@pytest.mark.parametrize("operation", [operator.eq, operator.ne])
+def test_equality_dispatch_propagates_real_member_preparation_errors(operation):
+    marker = AttributeError("real equality preparation failure")
+    calls = []
+
+    class Broken(Expr):
+        def __eq__(self, other: "Broken") -> i64:
+            calls.append("body")
+            raise marker
+
+    value = var("value", Broken)
+    with pytest.raises(AttributeError, match="real equality preparation failure") as caught:
+        operation(value, value)
+    assert caught.value is marker
+    assert calls == ["body"]
+
+
+@pytest.mark.parametrize("strip_metadata", [False, True])
+def test_detached_equality_uses_predicates_without_borrowing_members(class_authoring_without_engine, strip_metadata):
+    class Shadow(Expr, egg_sort="i64"):
+        def __init__(self, value: i64) -> None: ...
+
+        @method(preserve=True)
+        def __eq__(self, other) -> object:
+            pytest.fail("Detached equality recovered a Python-only hook")
+
+        @method(preserve=True)
+        def __ne__(self, other) -> object:
+            pytest.fail("Detached inequality recovered a Python-only hook")
+
+    packed = pack([Shadow(3).__egg_ref__])
+    program = pb.Program.from_binary(packed.program.to_binary())
+    if strip_metadata:
+        for declaration in program.declarations:
+            declaration.bindings = None
+            if declaration.kind.field == "eq_sort":
+                declaration.kind.value.bindings = None
+    detached = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
+    other = RuntimeExpr(detached.__egg_ref__)
+    equality, inequality = detached == other, detached != other
+    assert isinstance(equality, Fact)
+    assert isinstance(inequality, Unit)
+    assert equality
+    assert expr_parts(inequality) == expr_parts(ne(detached).to(other))
+    assert equality.__egg_ref__.read().kind.field == "union"
+    assert inequality.__egg_ref__.read().kind.value.func == "egglog.core.ne"
+    for name in ("__eq__", "__ne__", "__add__"):
+        with pytest.raises(AttributeError, match="canonical Python member"):
+            runtime._get_expr_member(detached, name, method_only=True)
+
+
 @pytest.mark.parametrize("invalid", [None, False, 0, [], b"", object()])
 def test_variable_names_and_aliases_validate_before_fallback(invalid):
     with pytest.raises(TypeError, match="Variable names must be strings"):
