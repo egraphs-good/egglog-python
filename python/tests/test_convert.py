@@ -1,8 +1,7 @@
-from typing import Generic, TypeVar
-
 import pytest
 
 from egglog import *
+from egglog import conversion
 from egglog.conversion import with_type_args
 from egglog.type_constraint_solver import TypeConstraintError
 
@@ -306,61 +305,57 @@ def test_numeric_conversion_can_select_a_third_closed_receiver():
     assert calls == ["left", "right"]
 
 
-T = TypeVar("T", bound=BaseExpr)
+def test_convert_to_generic(monkeypatch):
+    """A concrete family target uses constructor inference and rejects incompatible types."""
+    monkeypatch.setattr(conversion, "CONVERSIONS", conversion.CONVERSIONS.copy())
 
-
-def test_convert_to_generic():
-    """
-    Tests that if you have a conversion from a python type to a generic type, it will work for a
-    particular instance of that generic even if the general instance is registered
-    """
-
-    class G(BuiltinExpr, Generic[T]):
-        def __init__(self, x: T) -> None: ...
-
-    converter(i64, G[i64], lambda x: G(x))
-    assert expr_parts(convert(10, G[i64])) == expr_parts(G(i64(10)))
+    converter(i64, Vec[i64], lambda value: Vec(value))
+    assert expr_parts(convert(10, Vec[i64])) == expr_parts(Vec(i64(10)))
 
     with pytest.raises(ConvertError):
-        convert(10, G[String])
+        convert(10, Vec[String])
 
     with pytest.raises(ConvertError):
-        convert("hi", G[i64])
+        convert("hi", Vec[i64])
 
 
-def test_convert_to_unbound_generic():
-    """
-    Tests that if you have a conversion from a python type to a generic type, it will work for a
-    particular instance of that generic even if the general instance is registered
-    """
+def test_convert_to_unbound_generic(monkeypatch):
+    """An unbound family converter receives target arguments not inferable from its input."""
+    monkeypatch.setattr(conversion, "CONVERSIONS", conversion.CONVERSIONS.copy())
+    contexts: list[tuple[object, ...]] = []
 
-    class G(BuiltinExpr, Generic[T]):
-        def __init__(self, x: i64) -> None: ...
+    def to_pair(value):
+        contexts.append(get_type_args())
+        empty_vector, scalar = get_type_args()
+        return Pair[empty_vector, scalar](empty_vector.empty(), value)  # type: ignore[valid-type, operator]
 
-    converter(i64, G, lambda x: G[get_type_args()[0]](x))  # type: ignore[misc, operator]
-    assert expr_parts(convert(10, G[String])) == expr_parts(G[String](i64(10)))
+    converter(i64, Pair, to_pair)
+    assert expr_parts(convert(10, Pair[Vec[String], i64])) == expr_parts(Pair(Vec[String].empty(), i64(10)))
+    assert contexts == [(Vec[String], i64)]
+    assert get_type_args() == ()
 
 
-def test_convert_generic_transitive():
-    """
-    If we have A -> B and B[C] -> D then we should
-    have A -> D conversion
-    """
+def test_convert_generic_transitive(monkeypatch):
+    """A -> Vec and Vec[C] -> D compose while supplying the intermediate argument C."""
+    monkeypatch.setattr(conversion, "CONVERSIONS", conversion.CONVERSIONS.copy())
 
     class A(Expr):
         def __init__(self) -> None: ...
-
-    class B(BuiltinExpr, Generic[T]):
-        def __init__(
-            self,
-        ) -> None: ...
 
     class C(Expr): ...
 
     class D(Expr):
         def __init__(self) -> None: ...
 
-    converter(A, B, lambda _: B[get_type_args()[0]]())  # type: ignore[misc, operator]
-    converter(B[C], D, lambda _: D())
+    contexts: list[tuple[object, ...]] = []
+
+    def to_vector(_):
+        contexts.append(get_type_args())
+        return Vec[get_type_args()[0]].empty()  # type: ignore[misc]
+
+    converter(A, Vec, to_vector)
+    converter(Vec[C], D, lambda _: D())
 
     assert expr_parts(convert(A(), D)) == expr_parts(D())
+    assert contexts == [(C,)]
+    assert get_type_args() == ()
