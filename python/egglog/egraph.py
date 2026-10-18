@@ -1805,20 +1805,102 @@ class EGraph:
         return result, cost
 
     @overload
-    def extract_multiple(self, expr: BASE_EXPR, n: int, *, extractor: ExtractionMode = "tree") -> list[BASE_EXPR]: ...
+    def extract_multiple(
+        self,
+        expr: BASE_EXPR,
+        n: int,
+        *,
+        include_cost: Literal[False] = False,
+        cost_model: TreeCostModel | DagCostModel | None = None,
+        extractor: ExtractionMode = "tree",
+    ) -> list[BASE_EXPR]: ...
 
     @overload
     def extract_multiple(
-        self, expr: Sequence[BASE_EXPR], n: int, *, extractor: ExtractionMode = "tree"
+        self,
+        expr: Sequence[BASE_EXPR],
+        n: int,
+        *,
+        include_cost: Literal[False] = False,
+        cost_model: TreeCostModel | DagCostModel | None = None,
+        extractor: ExtractionMode = "tree",
     ) -> list[list[BASE_EXPR]]: ...
 
+    @overload
     def extract_multiple(
+        self,
+        expr: BASE_EXPR,
+        n: int,
+        *,
+        include_cost: Literal[True],
+        cost_model: None = None,
+        extractor: ExtractionMode = "tree",
+    ) -> list[tuple[BASE_EXPR, int]]: ...
+
+    @overload
+    def extract_multiple(
+        self,
+        expr: Sequence[BASE_EXPR],
+        n: int,
+        *,
+        include_cost: Literal[True],
+        cost_model: None = None,
+        extractor: ExtractionMode = "tree",
+    ) -> list[list[tuple[BASE_EXPR, int]]]: ...
+
+    @overload
+    def extract_multiple(
+        self,
+        expr: BASE_EXPR,
+        n: int,
+        *,
+        include_cost: Literal[True],
+        cost_model: TreeCostModel[COST],
+        extractor: ExtractionMode = "tree",
+    ) -> list[tuple[BASE_EXPR, COST]]: ...
+
+    @overload
+    def extract_multiple(
+        self,
+        expr: Sequence[BASE_EXPR],
+        n: int,
+        *,
+        include_cost: Literal[True],
+        cost_model: TreeCostModel[COST],
+        extractor: ExtractionMode = "tree",
+    ) -> list[list[tuple[BASE_EXPR, COST]]]: ...
+
+    @overload
+    def extract_multiple(
+        self,
+        expr: BASE_EXPR,
+        n: int,
+        *,
+        include_cost: Literal[True],
+        cost_model: DagCostModel[DAG_COST],
+        extractor: ExtractionMode = "tree",
+    ) -> list[tuple[BASE_EXPR, DAG_COST]]: ...
+
+    @overload
+    def extract_multiple(
+        self,
+        expr: Sequence[BASE_EXPR],
+        n: int,
+        *,
+        include_cost: Literal[True],
+        cost_model: DagCostModel[DAG_COST],
+        extractor: ExtractionMode = "tree",
+    ) -> list[list[tuple[BASE_EXPR, DAG_COST]]]: ...
+
+    def extract_multiple(  # noqa: C901, PLR0912
         self,
         expr: BASE_EXPR | Sequence[BASE_EXPR],
         n: int,
         *,
+        include_cost: bool = False,
+        cost_model: TreeCostModel[Any] | DagCostModel[Any] | None = None,
         extractor: ExtractionMode = "tree",
-    ) -> list[BASE_EXPR] | list[list[BASE_EXPR]]:
+    ) -> list[BASE_EXPR] | list[list[BASE_EXPR]] | list[tuple[BASE_EXPR, Any]] | list[list[tuple[BASE_EXPR, Any]]]:
         """Extract ordered variants for one root or a sequence of roots over bytes."""
         n = index_integer(n)
         if n <= 0:
@@ -1829,6 +1911,9 @@ class EGraph:
             raise OverflowError(msg)
         if extractor not in {"tree", "greedy-dag"}:
             raise ValueError(f"Unknown extractor {extractor!r}; expected 'tree' or 'greedy-dag'")
+        if cost_model is not None and extractor == "greedy-dag" and not isinstance(cost_model, DagCostModel):
+            msg = "greedy-dag extraction requires a DagCostModel"
+            raise TypeError(msg)
         if isinstance(expr, Sequence):
             batched = True
             expressions = list(expr)
@@ -1838,22 +1923,32 @@ class EGraph:
         if not expressions:
             msg = "extract_multiple requires at least one expression"
             raise ValueError(msg)
-        builder = Builder()
-        roots = [builder.import_ref(to_runtime_expr(item).__egg_ref__) for item in expressions]
-        command = builder.add(
-            "commands",
-            pb.Command(
-                kind=Oneof[Literal["extract"], pb.Extract](
-                    "extract",
-                    pb.Extract(
-                        roots=roots,
-                        variants=n,
-                        extractor=pb.Extractor.TREE if extractor == "tree" else pb.Extractor.GREEDY_DAG,
-                    ),
-                )
-            ),
+        registration = (
+            self._state.cost_model(
+                _HostModelFactory(self, cast("TreeCostModel[Comparable] | DagCostModel[ComparableAdd]", cost_model)),
+                additive=isinstance(cost_model, DagCostModel),
+            )
+            if cost_model is not None
+            else contextlib.nullcontext("")
         )
-        response, owner = self._state.run_program([builder.publish().ref("commands", command)])
+        with registration as model_name:
+            builder = Builder()
+            roots = [builder.import_ref(to_runtime_expr(item).__egg_ref__) for item in expressions]
+            command = builder.add(
+                "commands",
+                pb.Command(
+                    kind=Oneof[Literal["extract"], pb.Extract](
+                        "extract",
+                        pb.Extract(
+                            roots=roots,
+                            variants=n,
+                            cost_model=model_name,
+                            extractor=pb.Extractor.TREE if extractor == "tree" else pb.Extractor.GREEDY_DAG,
+                        ),
+                    )
+                ),
+            )
+            response, owner = self._state.run_program([builder.publish().ref("commands", command)])
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
@@ -1862,11 +1957,28 @@ class EGraph:
         ):
             msg = "Shared adapter did not return the requested root extractions"
             raise ValueError(msg)
-        results = [
-            [cast("BASE_EXPR", RuntimeExpr(owner.ref("nodes", variant.term))) for variant in root.variants]
-            for root in response.outputs[0].kind.value.roots
-        ]
-        return results if batched else results[0]
+        if not include_cost:
+            results = [
+                [cast("BASE_EXPR", RuntimeExpr(owner.ref("nodes", variant.term))) for variant in root.variants]
+                for root in response.outputs[0].kind.value.roots
+            ]
+            return results if batched else results[0]
+        from .deconstruct import get_literal_value  # noqa: PLC0415
+
+        cost_results: list[list[tuple[BASE_EXPR, Any]]] = []
+        for root in response.outputs[0].kind.value.roots:
+            root_results: list[tuple[BASE_EXPR, Any]] = []
+            for variant in root.variants:
+                if not variant.has_field("cost"):
+                    msg = "The extraction cost has no portable value"
+                    raise ValueError(msg)
+                cost = get_literal_value(RuntimeExpr(owner.ref("nodes", variant.cost)))
+                if cost_model is None and not isinstance(cost, int):
+                    msg = "Expected an i64 extraction cost"
+                    raise TypeError(msg)
+                root_results.append((cast("BASE_EXPR", RuntimeExpr(owner.ref("nodes", variant.term))), cost))
+            cost_results.append(root_results)
+        return cost_results if batched else cost_results[0]
 
     def keep_best(
         self,

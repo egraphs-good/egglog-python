@@ -952,15 +952,20 @@ roots and returns one variant list per root in the same order:
 ```{code-block} python
 variants = egraph.extract_multiple(expr, 3, extractor="tree")
 variants_by_root = egraph.extract_multiple([expr1, expr2], 3, extractor="greedy-dag")
+variants_with_costs = egraph.extract_multiple(expr, 3, include_cost=True, cost_model=model)
 ```
 
 An inner list may be empty when its root has no extractable variant. The
 variant count must be positive, and the sequence form rejects an empty input.
 The roots share extraction preparation, but every root and variant is costed
 independently; sharing between separate roots does not reduce either cost. The
-sequence form uses dynamic costs; the single-expression form follows the
-ordinary `extract` selection described above. Custom Python cost models are
-supported only by single-root `extract`.
+sequence form uses dynamic costs when no explicit model is supplied; the
+single-expression form follows the ordinary `extract` selection described
+above. Both forms accept a custom `cost_model`; greedy-DAG extraction requires
+a `DagCostModel`. With `include_cost=True`, each variant is an
+`(expression, cost)` pair. Default-model costs are integers, and custom-model
+costs retain the model's result type. An unencodable requested cost raises an
+error, just as it does for `extract`.
 
 ### Custom Tree Cost Models
 

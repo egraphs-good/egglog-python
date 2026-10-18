@@ -7,7 +7,7 @@ import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
-from egglog import EGraph, Expr, PrimitiveFailure, bindings, constant, eq, function, i64, method, set_
+from egglog import BaseExpr, EGraph, Expr, PrimitiveFailure, bindings, constant, eq, function, i64, method, set_
 from egglog._catalog import builtin_catalog
 from egglog._program import Builder, pack
 from egglog.egraph_state import EggSmolError
@@ -1059,6 +1059,8 @@ def table_transport(monkeypatch, tmp_path):
 
     class AuditedTransport:
         destroy = transport.destroy
+        register_cost_model = transport.register_cost_model
+        release_cost_model = transport.release_cost_model
 
         def run(self, encoded):
             assert isinstance(encoded, bytes)
@@ -1075,6 +1077,24 @@ def table_transport(monkeypatch, tmp_path):
     yield graph, requests, responses
     graph._state.transport = transport
     graph._state.destroy()
+
+
+def test_tree_cost_callback_failure_does_not_publish_term_records(table_transport):
+    graph, requests, responses = table_transport
+    original = LookupError("base cost failed")
+
+    def fail(egraph: EGraph, expr: BaseExpr, children_costs: list[int]) -> int:
+        assert isinstance(expr, i64)
+        raise original
+
+    with pytest.raises(LookupError) as caught:
+        graph.extract(i64(1), cost_model=fail)
+    assert caught.value is original
+    assert len(requests) == len(responses) == 1
+    assert responses[0].outputs == []
+    assert responses[0].nodes == []
+    assert responses[0].error is not None
+    assert graph.extract(i64(2)) == i64(2)
 
 
 def test_function_sizes_native_bytes_register_and_filter_unmapped(table_transport):
