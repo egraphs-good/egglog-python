@@ -16,6 +16,7 @@ from typing import ClassVar, TypeAlias, TypeVar, cast
 from unittest.mock import MagicMock
 
 import pytest
+from egglog_proto.egglog.v1 import egglog_pb as pb
 
 import egglog.bindings as egg_bindings
 import egglog.builtins as egg_builtins
@@ -34,6 +35,46 @@ from egglog.declarations import (
 from egglog.runtime import RuntimeExpr, RuntimeFunction
 
 _BuiltinExprT = TypeVar("_BuiltinExprT", bound=BaseExpr)
+
+
+def _replay_recorded_source(text: str) -> list[pb.RunProgramResponse]:
+    """Replay sequential Source phases exclusively through encoded engine operations."""
+    source = egg_bindings._ProtoEngine.source(text)
+    graph = EGraph()
+    responses = []
+    try:
+        while (submission := source.next_submission()) is not None:
+            kind, program, count = submission
+            if kind == "program":
+                assert type(program) is bytes
+                encoded, host_error = graph._state.transport.run(
+                    pb.RunProgramRequest(
+                        egraph_id=graph._state.handle, program=pb.Program.from_binary(program), profile=True
+                    ).to_binary()
+                )
+                response = pb.RunProgramResponse.from_binary(encoded)
+                assert response.ruleset_publication is not None
+                if host_error is not None:
+                    raise host_error
+                if response.error is not None:
+                    error = EggSmolError(response.error.message)
+                    error.__dict__["_egglog_proto_error"] = response.error
+                    raise error
+                responses.append(response)
+            elif kind == "push":
+                assert program is None
+                for _ in range(count):
+                    graph.push()
+            elif kind == "pop":
+                assert program is None
+                for _ in range(count):
+                    graph.pop()
+            else:
+                raise AssertionError(f"Unknown Source submission: {kind}")
+    finally:
+        for state in [graph._state, *graph._state_stack]:
+            state.destroy()
+    return responses
 
 
 class TestExprStr:
@@ -207,7 +248,7 @@ def test_global_rule_options_reach_saved_rewrites(*, bidirectional: bool) -> Non
     assert all(isinstance(decl, expected_decl_type) for decl in report.num_matches_per_rule)
     assert transcript.count(":naive") == expected_rule_count
     assert transcript.count(":no-decomp") == expected_rule_count
-    egg_bindings.EGraph().parse_and_run_program(transcript)
+    _replay_recorded_source(transcript)
 
 
 @pytest.mark.parametrize("egg_name", ["check", "true", "_", "@internal"])
@@ -231,7 +272,7 @@ def test_empty_explicit_backend_names_are_treated_as_unspecified(*, save_egglog_
 
     egraph.check(marker(EmptyNamed()))
     if save_egglog_string:
-        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+        _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize(
@@ -244,13 +285,17 @@ def test_empty_explicit_backend_names_are_treated_as_unspecified(*, save_egglog_
 def test_saved_transcript_preserves_string_newlines(value: str, normalized: str) -> None:
     marker = relation(f"transcript_newline_{value.count(chr(13))}_{len(value)}", String)
     egraph = EGraph(marker(String(value)), save_egglog_string=True)
+    assert egraph.extract(String(value)).value == value
+    responses = _replay_recorded_source(egraph.as_egglog_string)
+    replayed = responses[-1]
+    term = replayed.outputs[0].kind.value.roots[0].variants[0].term
+    assert replayed.nodes[term].kind.value.value.value == value
 
     with pytest.raises(EggSmolError):
         egraph.check(marker(String(normalized)))
 
-    transcript = egraph.as_egglog_string
-    assert value in transcript
-    egg_bindings.EGraph().parse_and_run_program(transcript)
+    with pytest.raises(RuntimeError, match="cannot be replayed"):
+        _ = egraph.as_egglog_string
 
 
 @pytest.mark.parametrize("message", ['bad "quote"', "bad \\ slash"])
@@ -258,12 +303,15 @@ def test_saved_transcript_escapes_panic_message(message: str) -> None:
     trigger = relation("escaped_panic_message_trigger")
     panic_rules = ruleset(rule(trigger()).then(panic(message)), name="escaped-panic-message")
     egraph = EGraph(trigger(), save_egglog_string=True)
+    before_failure = egraph.as_egglog_string
 
     with pytest.raises(EggSmolError) as exc_info:
         egraph.run(panic_rules)
 
     assert message in str(exc_info.value)
-    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+    with pytest.raises(RuntimeError, match="cannot be replayed"):
+        _ = egraph.as_egglog_string
+    _replay_recorded_source(before_failure)
 
 
 def test_saved_transcript_allows_reserved_callable_name_in_nested_expression() -> None:
@@ -274,7 +322,8 @@ def test_saved_transcript_allows_reserved_callable_name_in_nested_expression() -
     egraph.register(set_(nested_check(1)).to(i64(7)))
 
     assert egraph.lookup_function_value(nested_check(1)) == i64(7)
-    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string + "\n(check (= (check 1) 7))")
+    egraph.check(eq(nested_check(1)).to(i64(7)))
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_saved_transcript_allows_command_head_name_in_rule_action() -> None:
@@ -286,7 +335,7 @@ def test_saved_transcript_allows_command_head_name_in_rule_action() -> None:
     egraph.run(action_rules)
 
     egraph.check(target())
-    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_saved_transcript_rejects_equality_head_name_in_rule_fact() -> None:
@@ -312,7 +361,7 @@ def test_saved_transcript_allows_equality_head_name_as_standalone_action() -> No
     egraph.register(claimed(i64(1), i64(2)))
 
     assert egraph.function_size(claimed) == 1
-    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_saved_transcript_rejects_literal_explicit_sort_name() -> None:
@@ -572,7 +621,7 @@ def test_synthetic_let_names_reserve_explicit_lets_in_a_batch(
     assert egraph.function_size(BatchedLetConflict.leaf) == 2
     assert egraph.function_size(BatchedLetConflict.pair) == 1
     if save_egglog_string:
-        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+        _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_synthetic_let_names_do_not_shadow_default_rewrite_variables() -> None:
@@ -728,7 +777,7 @@ def test_synthetic_let_names_reserve_explicit_backend_names(*, save_egglog_strin
     egraph.check(explicit())
     assert egraph.function_size(SyntheticLetNode.pair) == 1
     if save_egglog_string:
-        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+        _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
@@ -744,13 +793,18 @@ def test_synthetic_lets_do_not_capture_unbound_variables(*, save_egglog_string: 
     shared = SyntheticLetVariable.leaf(x)
     egraph = EGraph(save_egglog_string=save_egglog_string)
 
-    with pytest.raises(EggSmolError, match="Unbound symbol"):
-        egraph.register(SyntheticLetVariable.pair(shared, shared))
-
     if save_egglog_string:
-        with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
-            egraph.register(SyntheticLetVariable.leaf(1))
+        before = egraph.freeze()
+        with pytest.raises(ValueError, match=r"[Uu]nbound"):
+            egraph.register(SyntheticLetVariable.pair(shared, shared))
+        assert egraph.freeze() == before
+        assert not egraph.as_egglog_string
+        egraph.register(SyntheticLetVariable.leaf(1))
+        egraph.check(SyntheticLetVariable.leaf(1))
+        _replay_recorded_source(egraph.as_egglog_string)
     else:
+        with pytest.raises(EggSmolError, match="Unbound symbol"):
+            egraph.register(SyntheticLetVariable.pair(shared, shared))
         egraph.register(SyntheticLetVariable.leaf(1))
 
 
@@ -789,7 +843,7 @@ def test_duplicate_explicit_backend_name_does_not_publish_a_failed_alias(*, save
     assert "first" in str(egraph.freeze())
     if transcript is not None:
         assert egraph.as_egglog_string == transcript
-        egg_bindings.EGraph().parse_and_run_program(transcript)
+        _replay_recorded_source(transcript)
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
@@ -853,7 +907,7 @@ def test_generated_sort_names_are_safe_in_saved_source(name: str) -> None:
     egraph = EGraph(expr, save_egglog_string=True)
 
     egraph.check(expr)
-    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_saved_egglog_transcript_close_is_idempotent() -> None:
@@ -874,12 +928,15 @@ def test_saved_egglog_transcript_close_rejects_commands_before_mutation() -> Non
 
     egraph = EGraph(ClosedExpr(1), save_egglog_string=True)
     before = egraph.freeze()
+    transcript = egraph.as_egglog_string
+    assert transcript
     egraph.close()
 
     with pytest.raises(ValueError, match="transcript has been closed"):
         egraph.register(ClosedExpr(2))
 
     assert egraph.freeze() == before
+    _replay_recorded_source(transcript)
 
 
 def test_close_without_a_saved_transcript_is_a_noop() -> None:
@@ -893,14 +950,51 @@ def test_close_without_a_saved_transcript_is_a_noop() -> None:
 
 def test_saved_egglog_transcript_is_shared_across_push_and_pop() -> None:
     egraph = EGraph(save_egglog_string=True)
-    egraph.let("outer", i64(1))
+    outer = egraph.let("outer", i64(1))
     outer_transcript = egraph.as_egglog_string
 
     egraph.push()
     egraph.let("inner", i64(2))
+    inner_transcript = egraph.as_egglog_string
+    assert inner_transcript.startswith(outer_transcript)
+    assert len(inner_transcript) > len(outer_transcript)
     egraph.pop()
-    assert egraph.as_egglog_string.startswith(outer_transcript)
-    assert "(let $inner 2)" in egraph.as_egglog_string
+    assert egraph.as_egglog_string.startswith(inner_transcript)
+    egraph.check(eq(outer).to(i64(1)))
+    _replay_recorded_source(egraph.as_egglog_string)
+
+
+def test_saved_source_preflight_rejects_unrenderable_mutation_without_effects() -> None:
+    class RecordedCost(Expr):
+        def __init__(self) -> None: ...
+
+    graph = EGraph(RecordedCost(), save_egglog_string=True)
+    before = graph.freeze()
+    history = graph.as_egglog_string
+    with pytest.raises(ValueError, match="assigned-cost source rendering"):
+        graph.register(set_cost(RecordedCost(), 7))
+    assert graph.freeze() == before
+    assert graph.as_egglog_string == history
+    graph.check(RecordedCost())
+    _replay_recorded_source(graph.as_egglog_string)
+
+
+def test_saved_source_engine_failure_preserves_error_and_invalidates_history() -> None:
+    graph = EGraph(save_egglog_string=True)
+    graph.let("before_failure", i64(1))
+    with pytest.raises(EggSmolError, match="recorded failure") as caught:
+        graph.register(panic("recorded failure"))
+    assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.PANIC
+    with pytest.raises(RuntimeError, match="cannot be replayed"):
+        _ = graph.as_egglog_string
+    before = graph.freeze()
+    with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
+        graph.let("after_failure", i64(2))
+    assert graph.freeze() == before
+    graph.close()
+    graph.close()
+    with pytest.raises(ValueError, match="has been closed"):
+        _ = graph.as_egglog_string
 
 
 def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() -> None:
@@ -3099,7 +3193,7 @@ def test_saved_transcript_preserves_input_path(tmp_path: pathlib.Path, filename:
 
     recorded.input(loaded, str(path))
     recorded.check(eq(loaded()).to(String("value")))
-    egg_bindings.EGraph().parse_and_run_program(recorded.as_egglog_string)
+    _replay_recorded_source(recorded.as_egglog_string)
 
 
 def test_dynamic_cost():
@@ -3146,7 +3240,7 @@ def test_dynamic_cost_materializes_constructor_before_storing_cost(*, save_egglo
     assert egraph.function_size(MaterializedCost) == 1
     assert egraph.lookup_function_value(get_cost(expression)) == i64(9)
     if save_egglog_string:
-        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+        _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
@@ -3170,7 +3264,7 @@ def test_dynamic_cost_rule_materializes_constructor_without_shadowing(*, save_eg
     assert egraph.function_size(RuleMaterializedCost) == 1
     assert egraph.lookup_function_value(get_cost(expression)) == i64(11)
     if save_egglog_string:
-        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+        _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
@@ -3187,7 +3281,7 @@ def test_dynamic_cost_does_not_create_a_missing_function_row(*, save_egglog_stri
     assert egraph.function_size(missing_target) == 0
     assert egraph.lookup_function_value(get_cost(expression)) is None
     if save_egglog_string:
-        egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+        _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_dynamic_cost_evaluates_each_argument_once(tmp_path: pathlib.Path) -> None:
@@ -3204,7 +3298,7 @@ def test_dynamic_cost_evaluates_each_argument_once(tmp_path: pathlib.Path) -> No
     egraph.register(set_cost(SingleEvaluationCost(PyObject(record_call)(PyObject(7))), 9))
 
     assert marker.read_text() == "x"
-    egg_bindings.EGraph().parse_and_run_program(egraph.as_egglog_string)
+    _replay_recorded_source(egraph.as_egglog_string)
     assert marker.read_text() == "xx"
 
 
@@ -3527,27 +3621,38 @@ class TestScheduler:
         assert f"(run-with _scheduler_0 {ruleset_name})" in run_schedule
         assert f"(run-with _scheduler_1 {ruleset_name})" in run_schedule
 
-    def test_custom_scheduler_invalid_until(self):
-        """
-        Custom schedulers do not support equality facts in :until,
-        and only allow a single non-equality fact.
-        """
-        egraph = EGraph()
-
-        rel = relation("rel", i64)
+    def test_persistent_scheduler_child_binding_is_redeployed_after_pop(self):
+        source = relation("child_scheduler_source", i64)
+        copied = relation("child_scheduler_copied", i64)
         x = var("x", i64)
-        r = ruleset(name="r")
+        copy = ruleset(rule(source(x)).then(copied(x)), name="child-scheduler-copy")
+        scheduler = back_off(match_limit=2, ban_length=2).persistent()
+        egraph = EGraph(source(1))
+        with egraph:
+            egraph.run(run(copy, scheduler=scheduler))
+            egraph.check(copied(1))
+        egraph.check_fail(copied(1))
+        egraph.run(run(copy, scheduler=scheduler))
+        egraph.check(copied(1))
+
+    def test_custom_scheduler_until_accepts_equality_and_conjunctions(self):
+        """Canonical loop queries have no legacy single/non-equality limit."""
+        source = relation("scheduler_until_source", i64)
+        copied = relation("scheduler_until_copied", i64)
+        x = var("x", i64)
+        r = ruleset(rule(source(x)).then(copied(x)), name="scheduler-until-copy")
         bo = back_off(match_limit=1)
-
-        # Equality in until should error via high-level run
-        with pytest.raises(ValueError, match="Cannot use equality fact with custom scheduler"):
-            egraph.run(run(r, eq(x).to(i64(1)), scheduler=bo))
-
-        # Multiple until facts should error via high-level run
-        with pytest.raises(ValueError, match="Can only have one until fact with custom scheduler"):
-            egraph.run(run(r, rel(i64(0)), rel(i64(1)), scheduler=bo))
-
-        egraph.run(run(r, rel(i64(0)), scheduler=bo))
+        egraph = EGraph(source(1))
+        egraph.run(run(r, eq(i64(1)).to(i64(1)), scheduler=bo))
+        egraph.check_fail(copied(1))
+        # A conjunction with only one present fact does not stop the body.
+        egraph.run(run(r, source(1), source(2), scheduler=bo))
+        egraph.check(copied(1))
+        # When every conjunct holds, including equality, no body executes.
+        egraph = EGraph(source(1), source(2))
+        egraph.run(run(r, source(1), source(2), eq(i64(1)).to(i64(1)), scheduler=bo))
+        egraph.check_fail(copied(1))
+        egraph.check_fail(copied(2))
 
 
 @function

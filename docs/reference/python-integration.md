@@ -792,6 +792,29 @@ scheduler-free execution is unchanged.
 Constructing a schedule does not install rules; printing it can materialize deferred
 rule generators, and later appended rules remain visible when it is run.
 
+### Recording replayable source
+
+`EGraph(save_egglog_string=True).as_egglog_string` records the renderable,
+default-option subset using the shared Rust Source renderer. The actual packed
+Program is rendered before execution; its text and renderer state are committed
+only after the engine response and publication acknowledgement are accepted.
+Unsupported source forms are rejected before live effects, not approximated by
+Python's display printer. Custom objectives, assigned costs and some composite
+controls remain outside that source subset.
+
+Push/pop share one chronological transcript and restore the renderer's type
+scope after acknowledged Clone/Return operations. `close()` is idempotent and
+rejects later mutations before execution. A definition-free, arena-free single
+Freeze snapshot is unrecorded read-only introspection, including after close;
+this does not exempt any declaration installation or authored evaluation.
+When an execution/transport failure makes the completed prefix uncertain,
+recording is invalidated and the property raises `RuntimeError`; the original
+error, publication receipts and live partial effects are preserved. Invalidated
+recording rejects later potential mutations/evaluations; the same pure snapshot
+introspection remains available. Closing a graph whose recording was disabled
+remains a no-op. Nondefault global execution
+flags are still unsupported.
+
 ### `stats`
 
 Use {meth}`egglog.egraph.EGraph.stats` when you want cumulative counters for the

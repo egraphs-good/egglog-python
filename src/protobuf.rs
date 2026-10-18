@@ -8,9 +8,10 @@ use egglog_experimental::protobuf::NativeExtension;
 use egglog_experimental::protobuf::cost_model::{
     CostModelContract, CostModelRuntime, ModelSort, NativeCostModel, Objective,
 };
+use egglog_experimental::protobuf::source::{Renderer, Source, Submission};
 use egglog_experimental::protobuf::{Engine, TransportError};
 use prost::Message;
-use pyo3::exceptions::{PyBaseException, PyValueError};
+use pyo3::exceptions::{PyBaseException, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::cmp::Ordering;
@@ -42,6 +43,51 @@ pub(crate) fn _export_pyobject_catalog(py: Python<'_>) -> PyResult<Bound<'_, PyB
 pub struct ProtoEngine {
     engine: Engine,
     py_error: PyObjectErrorState,
+    recording: Option<Recording>,
+}
+
+enum Recording {
+    Active {
+        renderer: Box<Renderer>,
+        staged: Option<(Box<Renderer>, String)>,
+        source: String,
+    },
+    Invalid,
+    Closed,
+}
+
+/// Own the actual sequential producer; only encoded Programs and scope counts escape.
+#[pyclass(name = "_ProtoSource")]
+struct ProtoSource {
+    source: Source,
+}
+
+type EncodedSourceSubmission<'py> = (String, Option<Bound<'py, PyBytes>>, usize);
+
+#[pymethods]
+impl ProtoSource {
+    /// Stop consuming on any production or execution failure, retaining its prefix.
+    fn next_submission<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<Option<EncodedSourceSubmission<'py>>> {
+        self.source
+            .next_submission()
+            .map(|submission| {
+                let submission =
+                    submission.map_err(|error| PyValueError::new_err(error.to_string()))?;
+                Ok(match submission {
+                    Submission::Program(program) => (
+                        "program".into(),
+                        Some(PyBytes::new(py, &program.encode_to_vec())),
+                        0,
+                    ),
+                    Submission::Push(count) => ("push".into(), None, count),
+                    Submission::Pop { count, .. } => ("pop".into(), None, count),
+                })
+            })
+            .transpose()
+    }
 }
 
 impl Default for ProtoEngine {
@@ -52,11 +98,39 @@ impl Default for ProtoEngine {
                 py_error: py_error.clone(),
             })),
             py_error,
+            recording: None,
         }
     }
 }
 
 impl ProtoEngine {
+    fn stage_submission(&mut self, submission: Submission) -> PyResult<()> {
+        match &mut self.recording {
+            None => Ok(()),
+            Some(Recording::Invalid) => Err(PyRuntimeError::new_err(
+                "Recorded commands are disabled because partial effects cannot be replayed",
+            )),
+            Some(Recording::Closed) => Err(PyValueError::new_err(
+                "The saved transcript has been closed",
+            )),
+            Some(Recording::Active {
+                renderer, staged, ..
+            }) => {
+                if staged.is_some() {
+                    return Err(PyRuntimeError::new_err(
+                        "A source submission is already staged",
+                    ));
+                }
+                let mut candidate = renderer.clone();
+                let source = candidate
+                    .render_submission(&submission)
+                    .map_err(|error| PyValueError::new_err(error.to_string()))?;
+                *staged = Some((candidate, source));
+                Ok(())
+            }
+        }
+    }
+
     fn request<'py>(
         &mut self,
         py: Python<'py>,
@@ -271,6 +345,97 @@ mod tests {
     use prost::Message;
     use pyo3::types::PyDict;
     use std::sync::Arc;
+
+    #[test]
+    fn recording_stages_commits_scopes_and_invalidates() {
+        let mut engine = ProtoEngine::default();
+        engine.enable_recording().unwrap();
+        let program = Source::new(None, "(function recorded () i64 :merge new)")
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        engine
+            .stage_submission(Submission::Program(program))
+            .unwrap();
+        assert_eq!(engine.recorded_source().unwrap(), "");
+        engine.finish_recording(true);
+        let declared = engine.recorded_source().unwrap();
+        assert!(declared.contains("function"));
+        engine.prepare_recording_scope(true).unwrap();
+        assert_eq!(engine.recorded_source().unwrap(), declared);
+        engine.finish_recording(true);
+        engine.prepare_recording_scope(false).unwrap();
+        engine.finish_recording(true);
+        assert!(engine.recorded_source().unwrap().starts_with(&declared));
+        assert!(
+            engine
+                .recorded_source()
+                .unwrap()
+                .contains("(push 1)\n(pop 1)")
+        );
+        let history = engine.recorded_source().unwrap();
+        let unsupported = pb::Program {
+            ir_version: 1,
+            commands: vec![pb::Command {
+                kind: Some(pb::command::Kind::Freeze(pb::Freeze::default())),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            engine
+                .stage_submission(Submission::Program(unsupported))
+                .is_err()
+        );
+        assert_eq!(engine.recorded_source().unwrap(), history);
+        engine.finish_recording(false);
+        assert!(matches!(&engine.recording, Some(Recording::Invalid)));
+        engine.finish_recording(true);
+        assert!(engine.recorded_source().is_err());
+        assert!(engine.prepare_recording_scope(true).is_err());
+        engine.close_recording();
+        engine.close_recording();
+        assert!(matches!(&engine.recording, Some(Recording::Closed)));
+    }
+
+    #[test]
+    fn staged_panic_source_preserves_escaped_messages_without_execution() {
+        for message in ["bad \"quote\"", "bad \\ slash"] {
+            let mut engine = ProtoEngine::default();
+            engine.enable_recording().unwrap();
+            engine
+                .stage_submission(Submission::Program(pb::Program {
+                    ir_version: 1,
+                    commands: vec![pb::Command {
+                        kind: Some(pb::command::Kind::Action(pb::Action {
+                            kind: Some(pb::action::Kind::Panic(message.into())),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }))
+                .unwrap();
+            let Some(Recording::Active {
+                staged: Some((_, text)),
+                ..
+            }) = &engine.recording
+            else {
+                panic!("source was not staged");
+            };
+            let parsed = Source::new(None, text).unwrap().next().unwrap().unwrap();
+            let Some(pb::command::Kind::Action(pb::Action {
+                kind: Some(pb::action::Kind::Panic(actual)),
+                ..
+            })) = &parsed.commands[0].kind
+            else {
+                panic!("source did not preserve the Panic action");
+            };
+            assert_eq!(actual, message);
+            assert_eq!(engine.recorded_source().unwrap(), "");
+        }
+    }
 
     #[test]
     fn host_cost_boundary_preserves_unrelated_native_panics() {
@@ -1454,6 +1619,86 @@ impl ProtoEngine {
     #[new]
     fn new() -> Self {
         Self::default()
+    }
+
+    /// Typechecking-only source production, never native AST or graph exposure.
+    #[staticmethod]
+    fn source(py: Python<'_>, text: &str) -> PyResult<Py<ProtoSource>> {
+        let source =
+            Source::new(None, text).map_err(|error| PyValueError::new_err(error.to_string()))?;
+        Py::new(py, ProtoSource { source })
+    }
+
+    fn enable_recording(&mut self) -> PyResult<()> {
+        if self.recording.is_some() {
+            return Err(PyValueError::new_err(
+                "Source recording is already configured",
+            ));
+        }
+        self.recording = Some(Recording::Active {
+            renderer: Box::default(),
+            staged: None,
+            source: String::new(),
+        });
+        Ok(())
+    }
+
+    /// Prepare the actual submitted Program without executing any user command.
+    fn prepare_recording(&mut self, program: &Bound<'_, PyBytes>) -> PyResult<()> {
+        let program = pb::Program::decode(program.as_bytes())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        self.stage_submission(Submission::Program(program))
+    }
+
+    fn prepare_recording_scope(&mut self, push: bool) -> PyResult<()> {
+        self.stage_submission(if push {
+            Submission::Push(1)
+        } else {
+            Submission::Pop {
+                count: 1,
+                span: egglog::ast::Span::Panic,
+            }
+        })
+    }
+
+    /// Commit only after Python has validated the actual transport acknowledgement.
+    fn finish_recording(&mut self, success: bool) {
+        if let Some(Recording::Active {
+            renderer,
+            staged,
+            source,
+        }) = &mut self.recording
+        {
+            if success {
+                if let Some((candidate, text)) = staged.take() {
+                    *renderer = candidate;
+                    source.push_str(&text);
+                }
+            } else {
+                self.recording = Some(Recording::Invalid);
+            }
+        }
+    }
+
+    fn recorded_source(&self) -> PyResult<String> {
+        match &self.recording {
+            None => Err(PyValueError::new_err(
+                "Create the EGraph with save_egglog_string=True",
+            )),
+            Some(Recording::Closed) => Err(PyValueError::new_err(
+                "The saved transcript has been closed",
+            )),
+            Some(Recording::Invalid) => Err(PyRuntimeError::new_err(
+                "The saved transcript cannot be replayed after a failed engine operation",
+            )),
+            Some(Recording::Active { source, .. }) => Ok(source.clone()),
+        }
+    }
+
+    fn close_recording(&mut self) {
+        if self.recording.is_some() {
+            self.recording = Some(Recording::Closed);
+        }
     }
 
     /// Private native-provider registration; execution still submits Extract

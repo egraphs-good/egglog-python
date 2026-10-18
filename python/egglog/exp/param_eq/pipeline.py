@@ -542,9 +542,6 @@ def _run_pipeline(
     analysis_schedule: Schedule,
 ) -> PaperPipelineReport:
     current, before_cost = EGraph(save_egglog_string=False).extract(initial, include_cost=True, cost_model=cost_model)
-    # get schedule decls so that it's pre-cached
-    schedule.__egg_decls__
-    analysis_schedule.__egg_decls__
     start = time.perf_counter()
     # Add constants to the egraph so that they can be used in rules without needing to be registered each pass
     egraph = EGraph(Num(0.0), save_egglog_string=False)

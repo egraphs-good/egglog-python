@@ -1313,12 +1313,12 @@ class EGraph:
         num_threads: int = 1,
         no_decomp: bool = False,
     ) -> None:
-        if not seminaive or no_decomp or save_egglog_string:
-            msg = "Nondefault native execution flags and source transcripts are not migrated to the shared adapter"
+        if not seminaive or no_decomp:
+            msg = "Nondefault native execution flags are not migrated to the shared adapter"
             raise NotImplementedError(msg)
         with _TRACER.start_as_current_span("create"):
             with _TRACER.start_as_current_span("create_bindings"):
-                self._state = EGraphState(num_threads=num_threads)
+                self._state = EGraphState(num_threads=num_threads, save_egglog_string=save_egglog_string)
             self._state_stack = []
             self._token_stack = []
             self._cost_model_frames = []
@@ -1374,8 +1374,7 @@ class EGraph:
         represented by a replayable command, the transcript is invalidated and
         this property raises ``RuntimeError``.
         """
-        msg = "Replayable source recording requires the shared producer and failure-history support"
-        raise NotImplementedError(msg)
+        return self._state.transport.recorded_source()
 
     def close(self) -> None:
         """
@@ -1387,6 +1386,12 @@ class EGraph:
         """
         # With transcripts disabled, close historically leaves the graph usable.
         # Native handles are released when their owning state is disposed.
+        if not self._state._recording:
+            return
+        if self._cost_model_frames or self._state._native_running:
+            msg = "Cannot close a transcript during engine execution"
+            raise RuntimeError(msg)
+        self._state.transport.close_recording()
 
     def _ipython_display_(self) -> None:
         self.display()
@@ -2304,6 +2309,7 @@ class Schedule:
         pending = [command]
         leaves: list[pb.Run] = []
         local_schedulers: dict[str, BackOff] = {}
+        persistent_schedulers: dict[str, BackOff] = {}
         while pending:
             current = pending.pop()
             if current.kind is None:
@@ -2311,8 +2317,9 @@ class Schedule:
                 raise ValueError(msg)
             if current.kind.field == "run":
                 scheduler = self._schedulers.get(current.kind.value.scheduler)
-                if scheduler is not None and not scheduler._persistent:
-                    local_schedulers.setdefault(current.kind.value.scheduler, scheduler)
+                if scheduler is not None:
+                    selected = persistent_schedulers if scheduler._persistent else local_schedulers
+                    selected.setdefault(current.kind.value.scheduler, scheduler)
                 leaves.append(current.kind.value)
             elif current.kind.field in {"repeat", "saturate"}:
                 control = current.kind.value
@@ -2361,6 +2368,9 @@ class Schedule:
                 reference = default.publish().ref("rulesets", index)
                 reference = state.publish_ruleset(reference, {reference: Ident("")})
             leaf.ruleset = pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", builder.import_ref(reference)))
+        if state is not None:
+            for scheduler in persistent_schedulers.values():
+                state.bind_scheduler(scheduler.__egg_ref__)
         if local_schedulers:
             command = pb.Command(
                 kind=Oneof[Literal["repeat"], pb.Repeat](
@@ -3327,7 +3337,10 @@ class BackOff:
 
     def persistent(self) -> BackOff:
         """
-        Author a distinct persistent identity; deployment is not implemented yet.
+        Author a distinct identity, bound once on first use in each e-graph scope.
+
+        Acknowledged bindings and scheduler progress follow push/pop. A failed
+        deployment is not retried after transport without restoring a saved graph.
         """
         command = self.__egg_ref__.read()
         command.kind.value.name = f"__egglog_python_scheduler_{uuid4().hex}"

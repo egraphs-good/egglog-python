@@ -47,7 +47,9 @@ def _thread_count(value: object) -> int:
 class EGraphState:
     """Own one native handle and the declaration refs needed to read responses."""
 
-    def __init__(self, *, num_threads: int = 1) -> None:
+    _recording = False
+
+    def __init__(self, *, num_threads: int = 1, save_egglog_string: bool = False) -> None:
         num_threads = _thread_count(num_threads)
         self.transport = bindings._ProtoEngine()
         # The public default cost sort is an ambient engine builtin. Creation
@@ -59,6 +61,9 @@ class EGraphState:
         )
         response = pb.CreateEGraphResponse.from_binary(self.transport.create(request.to_binary()))
         self.handle: int | None = response.egraph_id
+        self._recording = save_egglog_string
+        if save_egglog_string:
+            self.transport.enable_recording()
         self.definitions = dict(builtin_catalog().definitions)
         # Language bindings index canonical records, never copies of rule bodies.
         self.rulesets: dict[Ident, Ref] = {}
@@ -67,6 +72,9 @@ class EGraphState:
         self._direct_rules: set[Ref] = set()
         self._pending_rules: dict[tuple[Ident, Ref, Ref | None], tuple[Ref, Ref]] = {}
         self._pending_roots: dict[tuple[Ident, str, tuple[Ref, ...]], Ref] = {}
+        # Exact acknowledged configs, or None after an unacknowledged attempt.
+        # Scope ownership follows this handle, never the shared transport.
+        self._scheduler_bindings: dict[str, pb.BindScheduler | None] = {}
         self._cost_model_active = 0
         self._native_running = False
         self._active_definitions: tuple[Ref, ...] = ()
@@ -143,10 +151,46 @@ class EGraphState:
         request = pb.RunProgramRequest(
             egraph_id=self.handle, program=packed.program, profile=True, include_run_reports=include_run_reports
         )
+        encoded_request = request.to_binary()
+        scheduler_bindings = [
+            _copy_record(command.kind.value)
+            for command in packed.program.commands
+            if command.kind is not None and command.kind.field == "bind_scheduler"
+        ]
+        if self._recording:
+            program = packed.program
+            # Snapshot introspection has no source command and cannot install
+            # definitions or evaluate authored roots. It remains usable after close.
+            snapshot_only = (
+                len(program.commands) == 1
+                and not program._unknown_fields
+                and not program.commands[0]._unknown_fields
+                and program.commands[0].kind is not None
+                and program.commands[0].kind.field == "freeze"
+                and not program.commands[0].kind.value._unknown_fields
+                and not any((
+                    program.nodes,
+                    program.sorts,
+                    program.declarations,
+                    program.rules,
+                    program.rulesets,
+                    program.files,
+                ))
+            )
+            if not snapshot_only:
+                self.transport.prepare_recording(program.to_binary())
+        # Rendering/packing failures above provably did not submit a binding.
+        # After transport starts, never retry an unacknowledged deployment.
+        for binding in scheduler_bindings:
+            self._scheduler_bindings.setdefault(binding.name, None)
         self._native_running = True
         self._active_definitions = packed.definitions
         try:
-            encoded, host_error = self.transport.run(request.to_binary())
+            encoded, host_error = self.transport.run(encoded_request)
+        except BaseException:
+            if self._recording:
+                self.transport.finish_recording(False)
+            raise
         finally:
             self._active_definitions = ()
             self._native_running = False
@@ -194,11 +238,18 @@ class EGraphState:
                 )
             )
         except BaseException as error:
+            if self._recording:
+                self.transport.finish_recording(False)
             if host_error is not None and error is not host_error:
                 raise error from host_error
             raise
         # The actual response/arena and publication have been consumed. Preserve
         # first-host precedence without rewriting its chain or the native Error.
+        if self._recording:
+            self.transport.finish_recording(host_error is None and response.error is None)
+        if host_error is None and response.error is None:
+            for binding in scheduler_bindings:
+                self._scheduler_bindings[binding.name] = binding
         if host_error is not None:
             raise host_error
         if (
@@ -216,6 +267,27 @@ class EGraphState:
             error.__dict__["_egglog_proto_error"] = response.error
             raise error
         return response, owner
+
+    def bind_scheduler(self, reference: Ref) -> None:
+        """Deploy once per acknowledged config; preserve uncertain live state."""
+        if self.handle is None or self._cost_model_active or self._native_running:
+            msg = "Cannot deploy a scheduler on a destroyed or actively executing EGraph"
+            raise RuntimeError(msg)
+        command = reference.read()
+        if reference.role != "commands" or command.kind is None or command.kind.field != "bind_scheduler":
+            msg = "Scheduler deployment requires a canonical BindScheduler command"
+            raise TypeError(msg)
+        binding = command.kind.value
+        if binding.name in self._scheduler_bindings:
+            installed = self._scheduler_bindings[binding.name]
+            if installed is None:
+                msg = f"Scheduler {binding.name} has an unacknowledged deployment; restore a saved graph before reuse"
+                raise RuntimeError(msg)
+            if installed != binding:
+                msg = f"Scheduler {binding.name} already has a different configuration"
+                raise ValueError(msg)
+            return
+        self.run_program([reference])
 
     def _adopt_value_records(self, program: pb.Program, *, pending: Iterable[Ref] = ()) -> Owner:
         """Own value arenas while retaining canonical declaration/class identity."""
@@ -465,12 +537,22 @@ class EGraphState:
         if self.handle is None:
             msg = "EGraph handle has been destroyed"
             raise RuntimeError(msg)
-        response = pb.CloneEGraphResponse.from_binary(
-            self.transport.clone_graph(pb.CloneEGraphRequest(egraph_id=self.handle).to_binary())
-        )
+        if self._recording:
+            self.transport.prepare_recording_scope(True)
+        try:
+            response = pb.CloneEGraphResponse.from_binary(
+                self.transport.clone_graph(pb.CloneEGraphRequest(egraph_id=self.handle).to_binary())
+            )
+        except BaseException:
+            if self._recording:
+                self.transport.finish_recording(False)
+            raise
+        if self._recording:
+            self.transport.finish_recording(True)
         result = object.__new__(EGraphState)
         result.transport = self.transport
         result.handle = response.egraph_id
+        result._recording = self._recording
         result.definitions = self.definitions.copy()
         result.rulesets = self.rulesets.copy()
         result._combined_sources = self._combined_sources.copy()
@@ -478,6 +560,7 @@ class EGraphState:
         result._direct_rules = self._direct_rules.copy()
         result._pending_rules = self._pending_rules.copy()
         result._pending_roots = self._pending_roots.copy()
+        result._scheduler_bindings = self._scheduler_bindings.copy()
         result._cost_model_active = 0
         result._native_running = False
         result._active_definitions = ()
@@ -491,14 +574,22 @@ class EGraphState:
         if self.transport is not saved.transport or self.handle == saved.handle:
             msg = "Return requires distinct handles on the same transport"
             raise ValueError(msg)
-        encoded = self.transport.return_to(
-            pb.ReturnToEGraphRequest(active_id=self.handle, saved_id=saved.handle).to_binary()
-        )
-        # Successful transport has consumed the active handle. Even a corrupt
-        # acknowledgement must not leave ownership that could Destroy it twice.
-        # Public pop selects the saved state only after decoding succeeds.
-        self.handle = None
-        pb.ReturnToEGraphResponse.from_binary(encoded)
+        if self._recording:
+            self.transport.prepare_recording_scope(False)
+        try:
+            encoded = self.transport.return_to(
+                pb.ReturnToEGraphRequest(active_id=self.handle, saved_id=saved.handle).to_binary()
+            )
+            # Successful transport consumes the active handle, even if decoding
+            # fails. Public pop selects the saved state only after acknowledgement.
+            self.handle = None
+            pb.ReturnToEGraphResponse.from_binary(encoded)
+        except BaseException:
+            if self._recording:
+                self.transport.finish_recording(False)
+            raise
+        if self._recording:
+            self.transport.finish_recording(True)
 
     def destroy(self) -> None:
         """Release this handle once without affecting cloned graph handles."""
