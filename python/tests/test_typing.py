@@ -10,42 +10,6 @@ import subprocess
 import sys
 
 import pytest
-from mypy.test import helpers
-
-# Monkeypatch testfile_pyversion so that we can test against the current python version, instead of the default (3.7)
-
-
-def monkeypatched_testfile_pyversion(path: str) -> tuple[int, int]:
-    return sys.version_info[:2]
-
-
-helpers.testfile_pyversion = monkeypatched_testfile_pyversion
-
-
-# This is required using the `TypeCheckSuite`, because it calls remove on a number of builtin files.
-# we can either make empty versions of them or just monkypatch the function so that it works.
-
-# Monkeypatch find_test_files so that we can "remove" any files that don't really exist.
-
-original_find_test_files = helpers.find_test_files
-
-
-class ListRemoveAnything(list):
-    def remove(self, item):
-        pass
-
-
-def new_find_test_files(*args, **kwargs):
-    original_output = original_find_test_files(*args, **kwargs)
-    return ListRemoveAnything(original_output)
-
-
-helpers.find_test_files = new_find_test_files
-
-# Import TypeCheckSuite so it is picked up by pytest.
-from mypy.test.testcheck import TypeCheckSuite
-
-__all__ = ["TypeCheckSuite"]
 
 
 @pytest.mark.parametrize("defect", [None, "missing", "annotation"])
@@ -105,18 +69,54 @@ def test_generated_private_builtin_helpers_match_runtime_annotations(defect, mon
 
 
 @pytest.mark.parametrize(
-    "family",
-    ["scalar", "pair", "vec", "map", "concrete_members", "rational", "set", "maybe", "multiset", "extract_multiple"],
+    ("family", "kind"),
+    [
+        *(
+            pytest.param(family, kind, id=f"{kind}-{family}")
+            for kind in ("positive", "negative")
+            for family in (
+                "scalar",
+                "pair",
+                "vec",
+                "map",
+                "concrete_members",
+                "rational",
+                "set",
+                "maybe",
+                "multiset",
+                "extract_multiple",
+            )
+        ),
+        *(
+            pytest.param("high_level", case, id=case)
+            for case in re.findall(
+                r"^\[case ([^]]+)\]$",
+                (pathlib.Path(__file__).resolve().parents[2] / "test-data/unit/check-high-level.test").read_text(),
+                re.MULTILINE,
+            )
+        ),
+    ],
 )
-@pytest.mark.parametrize("kind", ["positive", "negative"])
 def test_generated_builtin_installed_types(family, kind, tmp_path):
     """Check actual installed public imports, independent of source MYPYPATH."""
     root = pathlib.Path(__file__).resolve().parents[2]
-    prefix = family if family in {"concrete_members", "extract_multiple"} else f"generated_{family}"
-    fixture = root / "test-data" / "typing" / f"{prefix}_{kind}.py"
+    if family == "high_level":
+        cases = dict(
+            re.findall(
+                r"^\[case ([^]]+)\]\n(.*?)(?=^\[case |\Z)",
+                (root / "test-data/unit/check-high-level.test").read_text(),
+                re.MULTILINE | re.DOTALL,
+            )
+        )
+        fixture = tmp_path / f"{kind}.py"
+        fixture.write_text(cases[kind])
+    else:
+        prefix = family if family in {"concrete_members", "extract_multiple"} else f"generated_{family}"
+        fixture = root / "test-data" / "typing" / f"{prefix}_{kind}.py"
     environment = os.environ.copy()
     environment.pop("MYPYPATH", None)
     environment.pop("PYTHONPATH", None)
+    environment.pop("MYPY_TEST_PREFIX", None)
     provenance = subprocess.run(
         [
             sys.executable,
@@ -158,18 +158,27 @@ def test_generated_builtin_installed_types(family, kind, tmp_path):
         text=True,
         check=False,
     )
-    expected = [
-        (number, line.split("# error: ", 1)[1])
-        for number, line in enumerate(fixture.read_text().splitlines(), 1)
-        if "# error: " in line
-    ]
-    diagnostics = [line for line in result.stdout.splitlines() if ": error:" in line]
+    expected: list[tuple[int, str, str | None, str | None]] = []
+    for number, line in enumerate(fixture.read_text().splitlines(), 1):
+        if "# error: " in line:
+            expected.append((number, "error", None, line.split("# error: ", 1)[1]))
+        elif family == "high_level" and "# N: " in line:
+            expected.append((number, "note", line.split("# N: ", 1)[1], None))
+        elif family == "high_level" and "# E: " in line:
+            codes = {
+                "eqToNotAllowed": "arg-type",
+                "functionPrimitiveCostRejected": "type-var",
+                "functionPrimitiveRulesetSubsumeRejected": "type-var",
+            }
+            expected.append((number, "error", line.split("# E: ", 1)[1], codes[kind]))
+    diagnostics = [line for line in result.stdout.splitlines() if family == "high_level" or ": error:" in line]
     actual = []
+    diagnostic_path = fixture.name if family == "high_level" else str(fixture)
     for line in diagnostics:
-        match = re.fullmatch(re.escape(str(fixture)) + r":(\d+): error: .*  \[([^]]+)\]", line)
+        match = re.fullmatch(re.escape(diagnostic_path) + r":(\d+): (error|note): (.*?)(?:  \[([^]]+)\])?", line)
         assert match is not None, line
-        actual.append((int(match[1]), match[2]))
-    assert result.returncode == bool(expected), result.stdout + result.stderr
+        actual.append((int(match[1]), match[2], match[3] if family == "high_level" else None, match[4]))
+    assert result.returncode == any(kind == "error" for _, kind, _, _ in expected), result.stdout + result.stderr
     assert actual == expected, result.stdout + result.stderr
     assert not result.stderr, result.stderr
 

@@ -6030,6 +6030,8 @@ def test_getattr_does_not_swallow_metadata_errors(class_authoring_without_engine
     key = next(key for key in catalog.members if key[1] == "real")
     reference, _ = catalog.members[key]
     catalog.members[key] = reference, 999
+    # Exercise uncached resolution rather than a previously prepared callable.
+    A.__egg_attr_cache__.pop("real", None)
     with pytest.raises(IndexError):
         _ = receiver.real
     assert calls == []

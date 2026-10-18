@@ -60,8 +60,26 @@ def test_get_literal_value(expr, value):
 
 
 def test_get_let_name():
+    from egglog._program import Builder, pack  # noqa: PLC0415
+    from egglog.runtime import RuntimeExpr  # noqa: PLC0415
+
     assert get_let_name(l) == "l"
     assert get_let_name(X()) is None
+    assert get_let_name(c) is None
+    assert get_let_name(v) is None
+    for name in ("", "x", "$x", "a-b", "a_b", "é"):
+        assert get_let_name(EGraph().let(name, X())) == name
+    with pytest.raises(TypeError, match="Expected Expression"):
+        get_let_name(object())
+
+    packed = pack([expr_parts(l).ref])
+    node = packed.program.nodes[packed.indices[0]]
+    assert node.kind is not None
+    assert node.kind.field == "call"
+    node.kind.value.args.append(packed.indices[0])
+    owner = Builder.from_program(packed.program).publish()
+    with pytest.raises(ValueError, match="constant call must be nullary"):
+        get_let_name(RuntimeExpr(owner.ref("nodes", packed.indices[0])))
 
 
 def test_get_var_name():
@@ -77,7 +95,7 @@ def test_get_var_name():
         pytest.param(X.c(), X.c, (), id="classmethod"),
         pytest.param(X(), X, (), id="init"),
         pytest.param(X().m(X()), X.m, (X(), X()), id="method call"),
-        pytest.param(Vec(i64(1)), Vec, (i64(1),), id="generic class"),
+        pytest.param(Vec(i64(1)), Vec[i64], (i64(1),), id="generic class"),
         pytest.param(Vec[i64](), Vec[i64], (), id="generic parameter init"),
         pytest.param(Vec[i64].empty(), Vec[i64].empty, (), id="generic parameter classmethod"),
     ],

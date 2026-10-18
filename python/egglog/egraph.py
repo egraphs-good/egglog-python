@@ -2710,7 +2710,13 @@ class Ruleset(Schedule):
         self.ident = ident
         self.deferred_rule_gens: list[Callable[[], Iterable[RewriteOrRule]]] = []
         builder = Builder()
-        index = builder.add("rulesets", pb.Ruleset(kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList())))
+        index = builder.add(
+            "rulesets",
+            pb.Ruleset(
+                name=ident.name if ident is not None else None,
+                kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList()),
+            ),
+        )
         self.__egg_ref__ = builder.publish().ref("rulesets", index)
 
     @property
@@ -2828,6 +2834,7 @@ class UnstableCombinedRuleset(Schedule):
             index = builder.add(
                 "rulesets",
                 pb.Ruleset(
+                    name=self.ident.name if self.ident is not None and self.ident.name else None,
                     kind=Oneof[Literal["combined"], pb.CombinedRuleset](
                         "combined",
                         pb.CombinedRuleset(
@@ -2836,7 +2843,7 @@ class UnstableCombinedRuleset(Schedule):
                                 for child in children
                             ]
                         ),
-                    )
+                    ),
                 ),
             )
             self.__egg_ref__ = builder.publish().ref("rulesets", index)

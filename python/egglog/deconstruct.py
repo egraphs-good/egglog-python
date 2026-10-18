@@ -236,11 +236,24 @@ def get_constant_name(x: object) -> Ident | None:
 
 
 def get_let_name(x: object) -> str | None:
-    """Inspect a retained local name (the local-let policy is not migrated)."""
+    """Return the exact retained local-let name, or None for other expressions."""
     if not isinstance(x, RuntimeExpr):
         raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    msg = "Retained local-let presentation is not migrated"
-    raise NotImplementedError(msg)
+    node: pb.Node = x.__egg_ref__.read()
+    if node.kind is None or node.kind.field != "call":
+        return None
+    declaration: pb.Declaration = _definition_at(x.__egg_ref__, "callable", node.kind.value.func).read()
+    if declaration.bindings is None or declaration.bindings.python is None:
+        return None
+    views = declaration.bindings.python.views
+    if views and views[0].kind == pb.PythonCallKind.CONSTANT:
+        if node.kind.value.args:
+            msg = "A constant call must be nullary"
+            raise ValueError(msg)
+        path = views[0].path
+        if len(path) == 4 and path[:2] == ["egglog", "egraph"] and path[2].startswith("__egglog_python_let_"):
+            return path[3]
+    return None
 
 
 def get_var_name(x: object) -> str | None:

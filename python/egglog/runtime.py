@@ -501,6 +501,7 @@ class _ClassContext:
                 raise
             else:
                 self.catalog = catalog
+                self._publish_callables(catalog)
             finally:
                 # Private eager headers never survive an incomplete class
                 # attempt; completed dependencies remain in the catalog/cache.
@@ -509,6 +510,37 @@ class _ClassContext:
                         del self.runtime_class.__egg_attr_cache__[name]
                 self.prepare = None
                 self.resolving = False
+
+    def _publish_callables(self, catalog: Catalog) -> None:
+        """Stage canonical callables, preserving Python attributes and class variables."""
+        definition = _definition_key(self.runtime_class.__egg_definition__.read())
+        # Bypass the public __dict__ trigger while staging publication.
+        namespaces = [
+            type.__getattribute__(base, "__dict__")
+            for base in (
+                *type.__getattribute__(self.runtime_class, "__mro__"),
+                *type.__getattribute__(type(self.runtime_class), "__mro__"),
+            )
+        ]
+        members: dict[str, RuntimeFunction] = {}
+        for (owner, name), (reference, view_index) in catalog.members.items():
+            if owner != definition or name.startswith("__egg_"):
+                continue
+            current = next((namespace[name] for namespace in namespaces if name in namespace), _OMITTED)
+            if current is not _OMITTED and not isinstance(current, RuntimeClassDescriptor):
+                continue
+            record: pb.Declaration = reference.read()
+            assert record.bindings is not None
+            assert record.bindings.python is not None
+            if record.bindings.python.views[view_index].kind == pb.PythonCallKind.CLASS_VARIABLE:
+                continue
+            member = RuntimeClass.__getattr__(self.runtime_class, name)
+            assert isinstance(member, RuntimeFunction)
+            members[name] = member
+        # Publish only complete selected callables, never invoking a
+        # class variable or maintaining a second semantic catalog.
+        for name, member in members.items():
+            type.__setattr__(self.runtime_class, name, member)
 
 
 def _definition_at(origin: Ref, namespace: str, name: str) -> Ref:
@@ -687,6 +719,15 @@ class RuntimeClass(type):
     __egg_hooks__: dict[str, Any]
     __egg_pending__: Callable[[], None] | None
     __egg_context__: _ClassContext | None
+
+    def __getattribute__(cls, name: str) -> object:
+        if name == "__dict__":
+            # Raw access avoids recursively entering the publication trigger
+            # during preparation, including its permitted same-thread reentry.
+            pending: Callable[[], None] | None = type.__getattribute__(cls, "__dict__").get("__egg_pending__")
+            if pending is not None:
+                pending()
+        return type.__getattribute__(cls, name)
 
     def __instancecheck__(cls, instance: object) -> bool:
         if not isinstance(instance, RuntimeExpr):
@@ -982,6 +1023,14 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         self.__egg_type_bindings__ = tuple(
             (index, sort.owner.ref("sorts", sort.index)) for index, sort in type_bindings
         )
+
+    def __get__(self, _instance: object, _owner: type | None = None) -> RuntimeFunction:
+        # Selection/binding already happened in RuntimeClass/_get_expr_member.
+        # Direct namespace lookup must still respect the authoring barrier.
+        bound = self.__egg_bound__
+        if isinstance(bound, RuntimeClass) and (pending := bound.__egg_pending__) is not None:
+            pending()
+        return self
 
     @property
     def __egg_ref__(self) -> Ref:

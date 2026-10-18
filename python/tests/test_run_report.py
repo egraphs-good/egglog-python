@@ -371,6 +371,136 @@ def test_named_rule():
     assert "comm" in output, f"Expected rule name 'comm' in:\n{output}"
 
 
+def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # noqa: C901, PLR0912
+    """Replay real Source phases, checking state, loop identity, and report attribution."""
+    from egglog_proto.egglog.v1 import egglog_pb as pb  # noqa: PLC0415
+    from protobuf import Oneof  # noqa: PLC0415
+
+    (key,) = report.num_matches_per_rule
+    authored = key.__egg_ref__.read()
+    source = bindings._ProtoEngine.source(egraph.as_egglog_string)
+    engine = bindings._ProtoEngine()
+    created = pb.CreateEGraphResponse.from_binary(
+        engine.create(
+            pb.CreateEGraphRequest(
+                sorts=[pb.Sort(kind=Oneof("family", pb.HostSort(name="i64")))],
+                options=pb.EGraphOptions(cost_sort=0, seminaive=True),
+                threads=1,
+            ).to_binary()
+        )
+    )
+    rulesets = {}
+    loops = checks = 0
+    try:
+        while (submission := source.next_submission()) is not None:
+            kind, encoded_program, count = submission
+            assert kind == "program"
+            assert type(encoded_program) is bytes
+            assert count == 0
+            program = pb.Program.from_binary(encoded_program)
+            encoded_response, host_error = engine.run(
+                pb.RunProgramRequest(
+                    egraph_id=created.egraph_id, program=program, profile=True, include_run_reports=True
+                ).to_binary()
+            )
+            assert host_error is None
+            response = pb.RunProgramResponse.from_binary(encoded_response)
+            assert response.error is None
+            assert response.ruleset_publication is not None
+            assert response.profile is not None
+            assert response.profile.complete
+            for ruleset in program.rulesets:
+                if ruleset.has_field("name"):
+                    rulesets[ruleset.name] = program, ruleset
+            for command in program.commands:
+                if command.kind.field == "check":
+                    checks += 1  # The same final-state assertion succeeded in the fresh engine.
+            for output in response.outputs:
+                assert output.location is not None
+                (index,) = output.location.path
+                assert not output.location.iterations
+                command = program.commands[index].kind
+                assert command.field == "saturate"
+                assert command.value.has_field("max_iterations")
+                assert command.value.max_iterations == 1
+                assert not command.value.until
+                (body,) = command.value.body
+                assert body.kind.field == "run"
+                assert output.kind.field == "loop"
+                assert output.kind.value.iterations == 1
+                assert output.kind.value.updated is report.updated
+                assert output.kind.value.termination == (
+                    pb.TerminationReason.SATURATED
+                    if not report.updated and report.can_stop
+                    else pb.TerminationReason.ITERATION_LIMIT
+                )
+                native = output.run_report
+                assert native is not None
+                assert native.updated is report.updated
+                assert native.can_stop is report.can_stop
+                assert len(native.iterations) == len(report.iterations)
+                assert sum(row.value for row in native.num_matches_per_rule) == sum(
+                    report.num_matches_per_rule.values()
+                )
+                (summary,) = response.profile.runs
+                assert summary.command_path == [index, 0]
+                assert summary.invocations == 1
+                for field in ("search_and_apply_nanos", "merge_nanos", "rebuild_nanos"):
+                    assert summary.has_field(field)
+                (attribution,) = response.rules
+                owner = program
+                target = attribution.root
+                for child in [*attribution.children, None]:
+                    assert target is not None
+                    assert target.kind is not None
+                    if target.kind.field == "index":
+                        ruleset = owner.rulesets[target.kind.value]
+                    else:
+                        owner, ruleset = rulesets[target.kind.value]
+                    if child is not None:
+                        assert ruleset.kind.field == "combined"
+                        target = ruleset.kind.value.rulesets[child]
+                assert ruleset.kind.field == "rules"
+                replayed = owner.rules[ruleset.kind.value.rules[attribution.rule]]
+                assert replayed.kind.field == authored.kind.field
+                assert replayed.has_field("name") == attribution.has_field("name")
+                assert replayed.name == attribution.name
+                if authored.has_field("name"):
+                    assert replayed.has_field("name")
+                    assert replayed.name == authored.name
+                if authored.kind.field in {"rewrite", "birewrite"}:
+                    for operand in ("lhs", "rhs"):
+                        original_ref = key.__egg_ref__.owner.ref("nodes", getattr(authored.kind.value, operand))
+                        original = original_ref.read()
+                        replay = owner.nodes[getattr(replayed.kind.value, operand)]
+                        assert original.kind.field == replay.kind.field == "call"
+                        assert replay.kind.value.func == original.kind.value.func
+                        (original_arg,) = original.kind.value.args
+                        (replay_arg,) = replay.kind.value.args
+                        original_value = original_ref.owner.ref("nodes", original_arg).read()
+                        replay_value = owner.nodes[replay_arg]
+                        assert original_value.kind.field == replay_value.kind.field == "primitive_value"
+                        assert replay_value.kind.value == original_value.kind.value
+                rows = [*native.search_and_apply_time_per_rule, *native.num_matches_per_rule]
+                for iteration in native.iterations:
+                    assert iteration.rule_set_report is not None
+                    rows.extend(iteration.rule_set_report.rule_reports)
+                assert rows
+                for row in rows:
+                    assert row.has_field("rule")
+                    assert row.rule == 0
+                    assert row.has_field("direction")
+                    assert row.direction in (
+                        {pb.NativeRuleDirection.FORWARD, pb.NativeRuleDirection.REVERSE}
+                        if authored.kind.field == "birewrite"
+                        else {pb.NativeRuleDirection.SINGLE}
+                    )
+                loops += 1
+        assert loops == checks == 1
+    finally:
+        engine.destroy(pb.DestroyEGraphRequest(egraph_id=created.egraph_id).to_binary())
+
+
 @pytest.mark.parametrize("name", ['a"b', r"a\b", 'a"b\\c'])
 def test_saved_named_rule_round_trips_escaped_name(name: str) -> None:
     egraph = EGraph(save_egglog_string=True)
@@ -385,6 +515,8 @@ def test_saved_named_rule_round_trips_escaped_name(name: str) -> None:
         and decl.__egg_ref__.read().name == name
         for decl in report.num_matches_per_rule
     )
+    egraph.check(seen(i64(1)))
+    _assert_saved_report_replay(egraph, report)
 
 
 def test_unnamed_rule_decl():
@@ -448,6 +580,8 @@ def test_saved_transcript_report_translates_rewrite_with_string_literal() -> Non
         isinstance(key, RuleKey) and key.__egg_ref__.read().kind.field == "rewrite"
         for key in report.search_and_apply_time_per_rule
     )
+    egraph.check(eq(Word.named("input")).to(Word.named("fixed")))
+    _assert_saved_report_replay(egraph, report)
 
 
 def test_saved_transcript_report_translates_birewrite_directions() -> None:
@@ -466,3 +600,5 @@ def test_saved_transcript_report_translates_birewrite_directions() -> None:
         isinstance(key, RuleKey) and key.__egg_ref__.read().kind.field == "birewrite"
         for key in report.search_and_apply_time_per_rule
     )
+    egraph.check(eq(Word.named("input")).to(Word.named("fixed")))
+    _assert_saved_report_replay(egraph, report)

@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import final
 
-__all__ = ["PrimitiveFailure"]
+__all__ = ["PrimitiveFailure", "_ProtoEngine", "_export_pyobject_catalog"]
 
 class PrimitiveFailure(Exception): ...  # noqa: N818
 

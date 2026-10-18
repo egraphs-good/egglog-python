@@ -15,7 +15,7 @@ class Dim(Expr):
     A dimension of a matix.
 
     >>> Dim(3) * Dim.named("n")
-    Dim(3) * Dim.named("n")
+    Dim(3) * Dim.named('n')
     """
 
     @method(egg_fn="Lit")

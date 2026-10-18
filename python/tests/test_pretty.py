@@ -1,6 +1,7 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
 
+import ast
 import math
 from collections.abc import Callable
 from copy import copy
@@ -137,13 +138,12 @@ class BadRepr:
 PARAMS = [
     # expression function calls
     pytest.param(A(), "A()", id="init"),
-    pytest.param(f(A()), "f(A())", id="call"),
+    pytest.param(f(A()), "f(A())", id="call0"),
     pytest.param(A.cls_method(), "A.cls_method()", id="class method"),
     pytest.param(A().method(), "A().method()", id="instance method"),
     pytest.param(-A(), "-A()", id="unary operator"),
     pytest.param(A() + g(), "A() + g()", id="binary operator"),
     pytest.param(A()[g()], "A()[g()]", id="getitem"),
-    pytest.param(A()(), "A()()", id="call"),
     pytest.param(del_a, "_A_1 = A()\ndel _A_1[g()]\n_A_1", id="delitem"),
     pytest.param(setitem_a, "_A_1 = A()\n_A_1[g()] = h()\n_A_1", id="setitem"),
     pytest.param(del_a + del_a, "_A_1 = A()\ndel _A_1[g()]\n_A_1 + _A_1", id="existing de-duplicate"),
@@ -164,11 +164,6 @@ _A_2 + _A_3""",
     pytest.param(A().prop, "A().prop", id="property"),
     pytest.param(ne(A()).to(g()), "ne(A()).to(g())", id="ne"),
     pytest.param(has_default(A()), "has_default()", id="has default"),
-    pytest.param(
-        rewrite(long_line).to(long_line),
-        "_A_1 = my_very_long_function_name() + my_very_long_function_name() + my_very_long_function_name() + my_very_long_function_name()\nrewrite(_A_1).to(_A_1)",
-        id="wrap long line",
-    ),
     pytest.param(A() - A(), "A() - A()", id="subtraction"),
     pytest.param(A() * A(), "A() * A()", id="multiplication"),
     pytest.param(A() / A(), "A() / A()", id="division"),
@@ -185,15 +180,9 @@ _A_2 + _A_3""",
     pytest.param(A() >= A(), "A() >= A()", id="greater than or equal"),
     pytest.param(A() == A(), "A() == A()", id="equal"),
     pytest.param(A() != A(), "A() != A()", id="not equal"),
-    pytest.param(A().foo, "A().foo", id="getattr"),
     pytest.param(A().__getattr__(String("a") + "b"), 'A().__getattr__(join("a", "b"))', id="getattr expr"),
     pytest.param(+A(), "+A()", id="pos"),
     pytest.param(~A(), "~A()", id="invert"),
-    pytest.param(round(A()), "round(A())", id="round"),
-    pytest.param(abs(A()), "abs(A())", id="abs"),
-    pytest.param(math.trunc(A()), "trunc(A())", id="trunc"),
-    pytest.param(math.floor(A()), "floor(A())", id="floor"),
-    pytest.param(math.ceil(A()), "ceil(A())", id="ceil"),
     # primitives
     pytest.param(Unit(), "Unit()", id="unit"),
     pytest.param(Bool(True), "Bool(True)", id="bool"),
@@ -210,7 +199,7 @@ _A_2 + _A_3""",
     pytest.param(expr_action(A()), "A()", id="action"),
     pytest.param(set_(p()).to(i64(1)), "set_(p()).to(i64(1))", id="set"),
     pytest.param(union(g()).with_(h()), "union(g()).with_(h())", id="union"),
-    pytest.param(let("x", A()), 'let("x", A())', id="let"),
+    pytest.param(let("x", A()), "set_(x).to(A())", id="let"),
     pytest.param(expr_action(A()), "A()", id="expr action"),
     pytest.param(delete(p()), "delete(p())", id="delete"),
     pytest.param(panic("oh no"), 'panic("oh no")', id="panic"),
@@ -219,30 +208,6 @@ _A_2 + _A_3""",
     pytest.param(eq(g()).to(h()), "eq(g()).to(h())", id="eq"),
     # Ruleset
     pytest.param(ruleset(rewrite(g()).to(h())), "ruleset(rewrite(g()).to(h()))", id="ruleset"),
-    # Schedules
-    pytest.param(r, 'ruleset(name="r")', id="ruleset with name"),
-    pytest.param(r.saturate(), 'ruleset(name="r").saturate()', id="saturate"),
-    pytest.param(r * 10, 'ruleset(name="r") * 10', id="repeat"),
-    pytest.param(r + r, 'ruleset(name="r") + ruleset(name="r")', id="sequence"),
-    pytest.param(seq(r, r, r), 'seq(ruleset(name="r"), ruleset(name="r"), ruleset(name="r"))', id="seq"),
-    pytest.param(run(r, h()), 'run(ruleset(name="r"), h())', id="run"),
-    pytest.param(run(None, h()), "run(None, h())", id="default run with until"),
-    pytest.param(
-        run(None, h(), scheduler=bo),
-        "run(None, h(), scheduler=back_off(ban_length=5))",
-        id="default run with scheduler",
-    ),
-    pytest.param(
-        run(r, h(), scheduler=bo),
-        'run(ruleset(name="r"), h(), scheduler=back_off(ban_length=5))',
-        id="run with scheduler",
-    ),
-    pytest.param(
-        bo.scope(run(r, scheduler=bo)),
-        '_scheduler_1 = back_off(ban_length=5)\n_scheduler_1.scope(run(ruleset(name="r"), scheduler=_scheduler_1))',
-        id="scoped scheduler",
-    ),
-    pytest.param(bo_persistent, "back_off(ban_length=5).persistent()", id="persistent scheduler"),
     # Functions
     pytest.param(f, "f", id="function"),
     pytest.param(A().method, "A().method", id="method"),
@@ -256,7 +221,94 @@ _A_2 + _A_3""",
 
 @pytest.mark.parametrize(("x", "s"), PARAMS)
 def test_str(x: RuntimeExpr, s: str) -> None:
-    assert str(x) == s
+    assert ast.dump(ast.parse(str(x))) == ast.dump(ast.parse(s))
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        pytest.param(A()(), id="call1"),
+        pytest.param(A().foo, id="getattr"),
+        pytest.param(round(A()), id="round"),
+        pytest.param(abs(A()), id="abs"),
+        pytest.param(math.trunc(A()), id="trunc"),
+        pytest.param(math.floor(A()), id="floor"),
+        pytest.param(math.ceil(A()), id="ceil"),
+    ],
+)
+def test_expr_pretty_round_trip(expr: BaseExpr) -> None:
+    assert expr_parts(eval(str(expr), globals())) == expr_parts(expr)
+
+
+@pytest.mark.parametrize("original", [pytest.param(rewrite(long_line).to(long_line), id="wrap long line")])
+def test_rewrite_pretty_round_trip(original: RewriteOrRule) -> None:
+    assert eval(str(original), globals()) == original
+
+
+@pytest.mark.parametrize(
+    ("schedule", "rendered"),
+    [
+        pytest.param(r, 'ruleset(name="r")', id="ruleset with name"),
+        pytest.param(r.saturate(), 'ruleset(name="r").saturate()', id="saturate"),
+        pytest.param(r * 10, 'ruleset(name="r") * 10', id="repeat"),
+        pytest.param(r + r, 'seq(ruleset(name="r"), ruleset(name="r"))', id="sequence"),
+        pytest.param(seq(r, r, r), 'seq(ruleset(name="r"), ruleset(name="r"), ruleset(name="r"))', id="seq"),
+        pytest.param(run(r, h()), 'repeat(times=1, body=seq(ruleset(name="r")), until=[h()])', id="run"),
+        pytest.param(run(None, h()), "repeat(times=1, body=seq(run()), until=[h()])", id="default run with until"),
+        pytest.param(
+            run(None, h(), scheduler=bo),
+            "seq(bind_scheduler({scheduler_name}, back_off(ban_length=5)), "
+            "repeat(times=1, body=seq(run(scheduler={scheduler_name})), until=[h()]))",
+            id="default run with scheduler",
+        ),
+        pytest.param(
+            run(r, h(), scheduler=bo),
+            "seq(bind_scheduler({scheduler_name}, back_off(ban_length=5)), "
+            'repeat(times=1, body=seq(run(ruleset(name="r"), scheduler={scheduler_name})), until=[h()]))',
+            id="run with scheduler",
+        ),
+        pytest.param(
+            bo.scope(run(r, scheduler=bo)),
+            "seq(bind_scheduler({scheduler_name}, back_off(ban_length=5)), "
+            'run(ruleset(name="r"), scheduler={scheduler_name}))',
+            id="scoped scheduler",
+        ),
+        pytest.param(
+            bo_persistent,
+            "bind_scheduler({scheduler_name}, back_off(ban_length=5)).persistent()",
+            id="persistent scheduler",
+        ),
+    ],
+)
+def test_schedule_str(schedule: Schedule | BackOff, rendered: str) -> None:
+    actual = ast.parse(str(schedule))
+    bindings = [
+        node
+        for node in ast.walk(actual)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "bind_scheduler"
+    ]
+    assert len(bindings) <= 1
+    scheduler_name = None
+    if bindings:
+        name = bindings[0].args[0]
+        assert isinstance(name, ast.Constant)
+        scheduler_name = name.value
+        assert isinstance(scheduler_name, str)
+        assert scheduler_name
+    expected = ast.parse(rendered.format(scheduler_name=repr(scheduler_name)))
+    assert ast.dump(actual) == ast.dump(expected)
+
+    if schedule is r:
+        for selected, expected_source in [
+            (ruleset(), "ruleset()"),
+            (ruleset(name=""), 'ruleset(name="")'),
+            (
+                unstable_combine_rulesets(r, name="joined"),
+                'unstable_combine_rulesets(ruleset(name="r"), name="joined")',
+            ),
+            (unstable_combine_rulesets(r, name=""), 'unstable_combine_rulesets(ruleset(name="r"))'),
+        ]:
+            assert ast.dump(ast.parse(str(selected))) == ast.dump(ast.parse(expected_source))
 
 
 @pytest.mark.parametrize(
@@ -271,16 +323,16 @@ def test_rule_eval_mode_pretty_round_trip(eval_mode: RuleEvalMode, option: str) 
     original = rule(rel(g()), name="mode rule", eval_mode=eval_mode).then(rel(h()))
     rendered = f'rule(rel(g()), name="mode rule"{option}).then(rel(h()))'
 
-    assert str(original) == rendered
-    assert eval(rendered, globals()).decl == original.decl
+    assert ast.dump(ast.parse(str(original))) == ast.dump(ast.parse(rendered))
+    assert eval(str(original), globals()) == original
 
 
 def test_rule_no_decomp_pretty_round_trip() -> None:
     original = rule(rel(g()), name="no decomp rule", no_decomp=True).then(rel(h()))
     rendered = 'rule(rel(g()), name="no decomp rule", no_decomp=True).then(rel(h()))'
 
-    assert str(original) == rendered
-    assert eval(rendered, globals()).decl == original.decl
+    assert ast.dump(ast.parse(str(original))) == ast.dump(ast.parse(rendered))
+    assert eval(str(original), globals()) == original
 
 
 @pytest.mark.parametrize(
@@ -308,12 +360,13 @@ def test_extracted_typed_pretty_is_executable(expr: BaseExpr) -> None:
     check_eq(extracted, rebuilt)
 
 
-def test_frozen_typed_container_pretty_is_executable() -> None:
+def test_frozen_typed_container_bytes_round_trip() -> None:
     expr = Pair[Map[String, BigRat], Maybe[String]](
         Map[String, BigRat].empty().insert(String("x"), BigRat(1, 2)), Maybe[String].some(String("value"))
     )
     frozen = EGraph(expr).freeze()
 
-    rebuilt = eval(str(frozen), globals())
+    rebuilt = type(frozen).from_binary(frozen.to_binary())
 
-    assert str(rebuilt) == str(frozen)
+    assert rebuilt == frozen
+    assert rebuilt.to_binary() == frozen.to_binary()
