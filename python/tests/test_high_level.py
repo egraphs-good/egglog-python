@@ -4082,7 +4082,7 @@ def test_table_inspection_rejects_eager_primitives() -> None:
     ['input\r"\\.csv', "input\u0300.csv"],
     ids=["control-and-escapes", "combining-unicode"],
 )
-def test_saved_transcript_preserves_input_path(tmp_path: pathlib.Path, filename: str) -> None:
+def test_saved_transcript_replays_input_rows_after_file_removal(tmp_path: pathlib.Path, filename: str) -> None:
     @function
     def loaded() -> String: ...
 
@@ -4092,7 +4092,70 @@ def test_saved_transcript_preserves_input_path(tmp_path: pathlib.Path, filename:
 
     recorded.input(loaded, str(path))
     recorded.check(eq(loaded()).to(String("value")))
+    path.unlink()
     _replay_recorded_source(recorded.as_egglog_string)
+
+
+def test_input_parses_all_rows_before_mutating(tmp_path: pathlib.Path) -> None:
+    @function(merge=lambda old, new: new)
+    def loaded(key: i64Like) -> i64: ...
+
+    path = tmp_path / "rows.tsv"
+    path.write_text("0\t2\ninvalid\t3\n")
+    graph = EGraph(set_(loaded(9)).to(i64(99)), save_egglog_string=True)
+    with pytest.raises(ValueError, match="format"):
+        graph.input(loaded, str(path))
+    assert graph.function_values(loaded) == {loaded(9): i64(99)}
+    _replay_recorded_source(graph.as_egglog_string)
+
+
+def test_input_preserves_order_and_relation_constructor_keys(tmp_path: pathlib.Path) -> None:
+    def ordered_merge(old: i64, new: i64) -> i64:
+        return old * 10 + new
+
+    @function(merge=ordered_merge)
+    def loaded(key: i64Like) -> i64: ...
+
+    class Imported(Expr):
+        def __init__(self, key: i64Like, name: StringLike) -> None: ...
+
+    selected = relation("csv_selected", i64)
+    path = tmp_path / "rows.tsv"
+    graph = EGraph(set_(loaded(0)).to(i64(100)), save_egglog_string=True)
+    path.write_text("0\t2\n0\t3\n")
+    graph.input(loaded, str(path))
+    assert graph.lookup_function_value(loaded(0)) == i64(10023)
+    path.write_text("1\n1\n2\n")
+    graph.input(selected, str(path))
+    assert graph.function_size(selected) == 2
+    path.write_text("1\tA\n1\tA\n2\tB\n")
+    graph.input(Imported, str(path))
+    assert graph.function_size(Imported) == 2
+    path.unlink()
+    _replay_recorded_source(graph.as_egglog_string)
+
+
+def test_input_row_error_preserves_prefix_and_recovery(tmp_path: pathlib.Path) -> None:
+    @function
+    def loaded(key: i64Like) -> i64: ...
+
+    path = tmp_path / "conflict.tsv"
+    path.write_text("0\t1\n0\t2\n1\t3\n")
+    graph = EGraph(set_(loaded(9)).to(i64(99)))
+    with pytest.raises(EggSmolError, match="Illegal merge"):
+        graph.input(loaded, str(path))
+    assert graph.lookup_function_value(loaded(0)) == i64(1)
+    assert graph.lookup_function_value(loaded(1)) is None
+    graph.register(set_(loaded(8)).to(i64(88)))
+    graph.check(eq(loaded(9)).to(i64(99)), eq(loaded(8)).to(i64(88)))
+
+
+def test_input_rejects_unsupported_columns_before_opening_file(tmp_path: pathlib.Path) -> None:
+    @function
+    def loaded(key: Bool) -> i64: ...
+
+    with pytest.raises(ValueError, match=r"[Uu]nsupported.*bool"):
+        EGraph().input(loaded, str(tmp_path / "missing.tsv"))
 
 
 def test_dynamic_cost():

@@ -43,6 +43,7 @@ from typing_extensions import ParamSpec, TypeForm
 from ._catalog import Catalog, builtin_catalog
 from ._program import (
     Builder,
+    Packed,
     Ref,
     StructuralView,
     _copy_record,
@@ -65,7 +66,7 @@ from .thunk import *
 if TYPE_CHECKING:
     import graphviz
 
-    from .builtins import String, Unit, i64, i64Like
+    from .builtins import Unit, i64, i64Like
     from .visualizer_widget import _Graph
 
 
@@ -1533,10 +1534,20 @@ class EGraph:
     def _ipython_display_(self) -> None:
         self.display()
 
-    def input(self, fn: Callable[..., String], path: str) -> None:
-        """Load CSV data when a shared input producer is available."""
-        msg = "CSV input requires a shared authoring producer; direct native input is removed"
-        raise NotImplementedError(msg)
+    def input(self, fn: Callable[..., BASE_EXPR], path: str) -> None:
+        """Load tab-separated data; saved transcripts replay without the input file."""
+        reference = resolve_callable(fn)
+        declaration: pb.Declaration = reference.read()
+        if declaration.kind is None or not isinstance(
+            declaration.kind.value, pb.Function | pb.Constructor | pb.Relation
+        ):
+            msg = "CSV input requires a table-backed relation, constructor, or bodyless function"
+            raise ValueError(msg)
+        descriptor = pack(roots=[reference])
+        self._state.run_program(descriptor)
+        encoded = self._state.transport.produce_input(descriptor.program.to_binary(), declaration.kind.value.name, path)
+        rows = pb.Program.from_binary(encoded)
+        self._state.run_program(Packed(rows, (), descriptor.definitions, descriptor.rulesets))
 
     def let(self, name: str, expr: BASE_EXPR) -> BASE_EXPR:
         """

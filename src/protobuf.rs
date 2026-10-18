@@ -1716,6 +1716,27 @@ impl ProtoEngine {
         Py::new(py, ProtoSource { source })
     }
 
+    /// Produce ordinary row actions from a descriptor without using the live engine.
+    fn produce_input<'py>(
+        &self,
+        py: Python<'py>,
+        descriptor: &Bound<'py, PyBytes>,
+        table: &str,
+        path: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let descriptor = pb::Program::decode(descriptor.as_bytes())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let program = egglog_experimental::protobuf::source::produce_input(
+            &descriptor,
+            table,
+            path,
+            None,
+            Some(self.extension.clone()),
+        )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        Ok(PyBytes::new(py, &program.encode_to_vec()))
+    }
+
     fn enable_recording(&mut self) -> PyResult<()> {
         if self.recording.is_some() {
             return Err(PyValueError::new_err(
