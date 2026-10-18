@@ -320,6 +320,31 @@ def test_vec_uniform_tail_and_classmethod_stub_from_native_signatures(vec_catalo
     assert "def vacant(cls) -> Vec[_Vec_Element_0]:" in renamed
 
 
+def test_vec_map_view_and_static_signature_come_from_actual_catalog():
+    root = Path(__file__).resolve().parents[2]
+    program = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
+    declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.vec.map")
+    signature = declaration.kind.value.typing.value
+    rust = declaration.bindings.rust.views[0]
+    view = declaration.bindings.python.views[0]
+    assert view.kind == pb.PythonCallKind.METHOD
+    assert view.path == ["map"]
+    assert view.owner == rust.owner
+    assert view.receiver == rust.receiver.core_input == 1
+    assert [(p.core_input, p.name) for p in view.params] == [(0, signature.inputs[0].name)]
+    assert not view.has_field("mutates")
+    assert not view.params[0].has_field("default_expr")
+    assert program.sorts[signature.inputs[0].sort].kind.field == "func"
+    assert signature.inputs[1].sort == view.owner.kind.value
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    stub = render(program)
+    assert "def map(self, f: Callable[[_Vec_T_0], _Vec_map_T1]) -> Vec[_Vec_map_T1]:" in stub
+    assert '_Vec_map_T1 = TypeVar("_Vec_map_T1", bound=BaseExpr)' in stub
+    owner = Builder.from_program(program).publish()
+    relocated = pack(owner.ref("declarations", i) for i in reversed(range(len(program.declarations)))).program
+    assert sorted(render(relocated).splitlines()) == sorted(stub.splitlines())
+
+
 @pytest.mark.parametrize(
     "mutation", ["grouped", "default", "missing", "duplicate", "nonfinal", "receiver", "tail_receiver"]
 )

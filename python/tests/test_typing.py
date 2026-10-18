@@ -202,6 +202,32 @@ def test_generated_builtin_source_types(family, kind, tmp_path, request):
     assert "site-packages" in pathlib.Path(installed).parts
     prefix = family if family == "concrete_members" else f"generated_{family}"
     fixture = root / "test-data/typing" / f"{prefix}_{kind}.py"
+    if family == "vec":
+        extended = tmp_path / fixture.name
+        extra = (
+            """
+from egglog import String
+
+def stringify(value: i64) -> String: ...
+def atomize(value: i64) -> Atom: ...
+assert_type(owned.map(stringify), Vec[String])
+assert_type(owned.map(atomize), Vec[Atom])
+assert_type(owned.map(lambda value: value + 1), Vec[i64])
+"""
+            if kind == "positive"
+            else """
+def wrong_input(value: f64) -> i64: ...
+def wrong_output(value: i64) -> int: ...
+value.map(wrong_input)  # error: arg-type
+value.map(wrong_output)  # error: type-var
+value.map()  # error: call-arg
+value.map(lambda item: item, i64(1))  # error: call-arg
+mapped = value.map(lambda item: item)
+wrong_mapped: Vec[f64] = mapped  # error: assignment
+"""
+        )
+        extended.write_text(fixture.read_text() + extra)
+        fixture = extended
     result = subprocess.run(
         [
             sys.executable,
@@ -213,6 +239,7 @@ def test_generated_builtin_source_types(family, kind, tmp_path, request):
             "--show-error-codes",
             "--no-error-summary",
             "--no-pretty",
+            "--show-absolute-path",
             "--shadow-file",
             installed,
             str(stub),

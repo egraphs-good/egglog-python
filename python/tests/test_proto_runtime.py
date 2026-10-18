@@ -24,6 +24,7 @@ from egglog import (
     Bool,
     BoolLike,
     ConvertError,
+    EGraph,
     Expr,
     Fact,
     Map,
@@ -2546,6 +2547,86 @@ def test_map_converter_and_value_pretty_follow_renamed_views(vec_catalog_program
         ),
     )
     assert str(RuntimeExpr(builder.publish().ref("nodes", root))) == "Mapping[i64, f64].vacant().put(i64(1), f64(2.0))"
+
+
+@pytest.mark.parametrize("equality_output", [False, True])
+def test_vec_map_callback_capture_core_order_and_binary_roundtrip(equality_output, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Vec.map authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+
+    class Item(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    captured = i64(10)
+    calls = []
+
+    def callback(value):
+        calls.append(1)
+        result = value + captured
+        return Item(result) if equality_output else result
+
+    source = i64(3).range()
+    result = source.map(callback)
+    assert isinstance(result, Vec[Item] if equality_output else Vec[i64])
+    reference = result.__egg_ref__
+    call = reference.read().kind.value
+    assert call.func == "egglog.core.vec.map"
+    assert len(call.args) == 2
+    function = reference.owner.ref("nodes", call.args[0])
+    assert function.owner.ref("sorts", function.read().sort_id).read().kind.field == "func"
+    assert StructuralView(reference.owner.ref("nodes", call.args[1])) == StructuralView(source.__egg_ref__)
+    assert calls == [1]
+    encoded = pack([reference])
+    decoded = Builder.from_program(pb.Program.from_binary(encoded.program.to_binary())).publish()
+    restored = RuntimeExpr(decoded.ref("nodes", encoded.indices[0]))
+    assert StructuralView(restored.__egg_ref__) == StructuralView(reference)
+    assert str(restored) == str(result)
+    assert calls == [1]
+
+
+@pytest.mark.parametrize("equality_output", [False, True])
+def test_vec_map_executes_captured_callback_and_replays_source(equality_output):
+    class Item(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    captured = i64(10)
+    calls = []
+
+    def callback(value):
+        calls.append(1)
+        result = value + captured
+        return Item(result) if equality_output else result
+
+    expression = i64(3).range().map(callback)
+    expected = Vec(*(Item(i64(i)) if equality_output else i64(i) for i in (10, 11, 12)))
+    graph = EGraph(save_egglog_string=True)
+    replay = EGraph()
+    try:
+        # Eq-producing callbacks can mint constructors only in Full context.
+        actual = graph.let("mapped", expression)
+        graph.check(eq(actual).to(expected))
+        if not equality_output:
+            graph.check(eq(expression).to(expected))
+        source = bindings._ProtoEngine.source(graph.as_egglog_string)
+        submissions = 0
+        while (submission := source.next_submission()) is not None:
+            kind, encoded, _count = submission
+            assert kind == "program"
+            response, error = replay._state.transport.run(
+                pb.RunProgramRequest(
+                    egraph_id=replay._state.handle, program=pb.Program.from_binary(encoded), profile=True
+                ).to_binary()
+            )
+            assert error is None
+            assert pb.RunProgramResponse.from_binary(response).error is None
+            submissions += 1
+        assert submissions > 0
+        assert calls == [1]
+    finally:
+        graph._state.destroy()
+        replay._state.destroy()
 
 
 def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypatch):
