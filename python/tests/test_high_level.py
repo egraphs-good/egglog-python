@@ -992,15 +992,18 @@ def test_saved_egglog_transcript_is_shared_across_push_and_pop() -> None:
     _replay_recorded_source(egraph.as_egglog_string)
 
 
-def test_saved_source_preflight_rejects_unrenderable_mutation_without_effects() -> None:
+def test_saved_source_preflight_rejects_unextractable_cost_without_effects() -> None:
     class RecordedCost(Expr):
         def __init__(self) -> None: ...
+
+        @method(unextractable=True)
+        def opaque(self) -> RecordedCost: ...
 
     graph = EGraph(RecordedCost(), save_egglog_string=True)
     before = graph.freeze()
     history = graph.as_egglog_string
-    with pytest.raises(ValueError, match="assigned-cost source rendering"):
-        graph.register(set_cost(RecordedCost(), 7))
+    with pytest.raises(ValueError, match="source dynamic-cost helpers do not exist for unextractable constructors"):
+        graph.register(set_cost(RecordedCost().opaque(), 7))
     assert graph.freeze() == before
     assert graph.as_egglog_string == history
     graph.check(RecordedCost())
@@ -3277,7 +3280,7 @@ def test_dynamic_cost_rule_materializes_constructor_without_shadowing(*, save_eg
     source = relation("dynamic_cost_materialize_source", i64)
     # Exercise a name used by compiler-generated rule lets: lowering must
     # allocate a distinct binding instead of shadowing this variable.
-    value = var("value", i64, egg_name="__expr_0")
+    value = var("__expr_0", i64)
     materialize = ruleset(
         rule(source(value)).then(set_cost(RuleMaterializedCost(value), 11)),
         name="dynamic-cost-materialize",
