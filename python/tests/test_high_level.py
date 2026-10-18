@@ -2240,6 +2240,60 @@ def test_upcast_self_lower_cost():
     assert expr_parts(r) == expr_parts(NDArray.from_int(Int("x")) + NDArray("y"))
 
 
+@pytest.mark.parametrize("reverse_args", [False, True])
+def test_numeric_cost_preserves_operand_order_and_only_runs_winner(reverse_args):
+    class Small(Expr):
+        def __init__(self, label: StringLike) -> None: ...
+        def __sub__(self, other: Small) -> Small: ...
+
+    class Large(Expr):
+        def __init__(self, label: StringLike) -> None: ...
+
+        @method(reverse_args=reverse_args)
+        def __sub__(self, other: Large) -> Large: ...
+
+        @classmethod
+        def from_small(cls, value: Small) -> Large: ...
+
+    calls = []
+
+    def promote(value):
+        calls.append("promote")
+        return Large.from_small(value)
+
+    converter(Small, Large, promote, cost=1)
+    converter(Large, Small, lambda _: pytest.fail("Losing converter ran"), cost=100)
+    left, right = Small("left"), Large("right")
+    expression = left - right
+    expected = Large.__sub__(Large.from_small(left), right)
+    assert expr_parts(expression) == expr_parts(expected)
+    assert calls == ["promote"]
+    egraph = EGraph(expression, save_egglog_string=True)
+    egraph.check(eq(expression).to(expected))
+    egraph.check(eq(i64(10) - 3).to(i64(7)), eq(10 - i64(3)).to(i64(7)))
+    assert egraph.function_size(Large.__sub__) == 1
+    _replay_recorded_source(egraph.as_egglog_string)
+    assert calls == ["promote"]
+
+
+@pytest.mark.parametrize("reverse_args", [False, True])
+def test_numeric_exact_heterogeneous_signature_keeps_primitive_result(reverse_args):
+    class Offset(Expr):
+        def __init__(self) -> None: ...
+
+        @method(reverse_args=reverse_args)
+        def __sub__(self, other: i64) -> i64:
+            return other - 2
+
+    converter(i64, Offset, lambda _: pytest.fail("Exact heterogeneous input was converted"), cost=0)
+    receiver = Offset()
+    expression = receiver - i64(5)
+    assert expr_parts(expression) == expr_parts(Offset.__sub__(receiver, i64(5)))
+    egraph = EGraph(receiver, save_egglog_string=True)
+    egraph.check(eq(expression).to(i64(3)))
+    _replay_recorded_source(egraph.as_egglog_string)
+
+
 class TestEval:
     def test_string(self):
         assert String("hi").value == "hi"

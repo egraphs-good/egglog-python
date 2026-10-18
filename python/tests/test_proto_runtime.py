@@ -863,6 +863,59 @@ def test_equality_dispatch_propagates_real_member_preparation_errors(operation):
     assert calls == ["body"]
 
 
+def test_numeric_planning_propagates_real_member_preparation_errors(class_authoring_without_engine):
+    marker = AttributeError("real numeric preparation failure")
+    calls = []
+
+    class Broken(Expr):
+        def __sub__(self, other: "Broken") -> i64:
+            calls.append("body")
+            raise marker
+
+    value = var("value", Broken)
+    with pytest.raises(AttributeError, match="real numeric preparation failure") as caught:
+        value - value
+    assert caught.value is marker
+    assert calls == ["body"]
+
+
+def test_numeric_exact_signature_does_not_prepare_an_unrelated_target(class_authoring_without_engine):
+    calls = []
+
+    class Unrelated(Expr):
+        def __sub__(self, other: "Unrelated") -> i64:
+            calls.append("body")
+            msg = "Unrelated operator body was prepared"
+            raise AssertionError(msg)
+
+    converter(i64, Unrelated, lambda _: pytest.fail("Unselected converter ran"), cost=0)
+    assert expr_parts(i64(5) - i64(2)) == expr_parts(i64.__sub__(i64(5), i64(2)))
+    assert calls == []
+    assert Unrelated.__egg_pending__ is not None
+
+
+def test_numeric_mutating_member_keeps_its_receiver_and_aliases(class_authoring_without_engine):
+    class Mutable(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+        @method(mutates_self=True)
+        def __add__(self, other: "Mutable") -> None: ...
+
+    class Alternative(Expr):
+        def __init__(self) -> None: ...
+        def __add__(self, other: "Alternative") -> "Alternative": ...
+
+    converter(Mutable, Alternative, lambda _: pytest.fail("Mutating receiver was converted"), cost=0)
+    left, right = Mutable(1), Mutable(2)
+    alias, before = left, copy(left)
+    right_ref = right.__egg_ref__
+    assert left + right is None
+    assert alias is left
+    assert left.__egg_ref__ != before.__egg_ref__
+    assert right.__egg_ref__ is right_ref
+    assert get_callable_args(left, Mutable.__add__) == (before, right)
+
+
 @pytest.mark.parametrize("strip_metadata", [False, True])
 def test_detached_equality_uses_predicates_without_borrowing_members(class_authoring_without_engine, strip_metadata):
     class Shadow(Expr, egg_sort="i64"):

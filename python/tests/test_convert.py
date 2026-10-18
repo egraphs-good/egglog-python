@@ -4,6 +4,7 @@ import pytest
 
 from egglog import *
 from egglog.conversion import with_type_args
+from egglog.type_constraint_solver import TypeConstraintError
 
 # TODO: Revert global conversion state after each test w/ fixture
 
@@ -229,6 +230,80 @@ def test_generic_family_lookup_keeps_source_mro_preference():
     converter(Source, Vec, lambda _: pytest.fail("Less-specific family converter ran"), cost=0)
     converter(Derived, Vec, lambda _: Vec[get_type_args()[0]](1), cost=2)
     assert expr_parts(convert(Derived(), Vec[i64])) == expr_parts(Vec[i64](1))
+
+
+def test_numeric_winner_error_is_not_retried_and_restores_context():
+    class Left(Expr):
+        def __init__(self) -> None: ...
+        def __sub__(self, other: "Left") -> "Left": ...
+
+    class Right(Expr):
+        def __init__(self) -> None: ...
+        def __sub__(self, other: "Right") -> "Right": ...
+
+    marker = ValueError("winning converter failed")
+    calls = []
+
+    def fail(_):
+        calls.append(get_type_args())
+        raise marker
+
+    converter(Left, Right, fail, cost=1)
+    converter(Right, Left, lambda _: pytest.fail("Fallback converter ran"), cost=100)
+    left, right = Left(), Right()
+    with with_type_args((String,)):
+        with pytest.raises(ValueError, match="winning converter failed") as caught:
+            left - right
+        assert caught.value is marker
+        assert get_type_args() == (String,)
+    assert calls == [()]
+    assert get_type_args() == ()
+
+
+def test_numeric_generic_owner_preserves_element_context():
+    class Element(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    left = Vec[Element](Element(1))
+    with with_type_args((String,)):
+        expression = left | [Element(2)]
+        expected = Vec[Element].__or__(left, Vec[Element](Element(2)))
+        assert expr_parts(expression) == expr_parts(expected)
+        assert get_type_args() == (String,)
+    with pytest.raises(TypeConstraintError, match="requires an equality sort"):
+        Vec[i64](1) | Vec[i64](2)
+
+
+def test_numeric_conversion_can_select_a_third_closed_receiver():
+    class Left(Expr):
+        def __init__(self) -> None: ...
+        def __sub__(self, other: "Left") -> "Left": ...
+
+    class Right(Expr):
+        def __init__(self) -> None: ...
+        def __sub__(self, other: "Right") -> "Right": ...
+
+    class Common(Expr):
+        def __init__(self, label: StringLike) -> None: ...
+        def __sub__(self, other: "Common") -> "Common": ...
+
+    calls = []
+
+    def from_left(_):
+        calls.append("left")
+        return Common("left")
+
+    def from_right(_):
+        calls.append("right")
+        return Common("right")
+
+    converter(Left, Right, lambda _: pytest.fail("Expensive left conversion ran"), cost=10)
+    converter(Right, Left, lambda _: pytest.fail("Expensive right conversion ran"), cost=100)
+    converter(Left, Common, from_left)
+    converter(Right, Common, from_right)
+    expression = Left() - Right()
+    assert expr_parts(expression) == expr_parts(Common.__sub__(Common("left"), Common("right")))
+    assert calls == ["left", "right"]
 
 
 T = TypeVar("T", bound=BaseExpr)

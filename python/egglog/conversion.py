@@ -144,6 +144,60 @@ def resolve_literal(sort: Ref, value: object) -> RuntimeExpr:
     return result
 
 
+def _conversion_cost(sort: Ref, value: object) -> int | None:
+    """Price a canonical input without invoking a converter or changing context."""
+    node = value.__egg_ref__ if isinstance(value, RuntimeExpr) else value if isinstance(value, Ref) else None
+    if node is not None:
+        payload: pb.Node = node.read()
+        actual = node.owner.ref("sorts", payload.sort_id)
+        if StructuralView(actual) == StructuralView(sort):
+            return 0
+        source: type | RuntimeClass = _class_for_sort(actual)
+    else:
+        source = type(value)
+    conversion = _lookup_conversion(source, _class_for_sort(sort))
+    return conversion[0] if conversion is not None else None
+
+
+def _binary_conversion_candidates(left: object, right: object) -> Generator[tuple[RuntimeClass, int, int], None, None]:
+    """Try the original receiver first; lazily price alternatives and RHS lower bounds."""
+    original = left if isinstance(left, RuntimeExpr) else right
+    assert isinstance(original, RuntimeExpr)
+    reference = original.__egg_ref__
+    payload: pb.Node = reference.read()
+    original_sort = reference.owner.ref("sorts", payload.sort_id)
+    original_class = _class_for_sort(original_sort)
+    cost = _conversion_cost(original_sort, left)
+    if cost is not None:
+        yield original_class, cost, 0
+    # Exact signatures can finish before scanning the conversion graph or
+    # preparing an unrelated target's member. Bounds also exclude losing ties.
+    classes = dict.fromkeys(target for _, target in CONVERSIONS if target.__egg_sort__ is not None)
+    other_source: type | RuntimeClass = type(right)
+    minimum_other = None
+    if isinstance(right, RuntimeExpr):
+        reference = right.__egg_ref__
+        payload = reference.read()
+        other_source = _class_for_sort(reference.owner.ref("sorts", payload.sort_id))
+        minimum_other = 0
+    sources = (
+        other_source.__mro__
+        if isinstance(other_source, type) and not isinstance(other_source, RuntimeClass)
+        else (other_source,)
+    )
+    for (source, _), (cost, _) in CONVERSIONS.items():
+        if source in sources and (minimum_other is None or cost < minimum_other):
+            minimum_other = cost
+    for cls in classes:
+        if cls == original_class:
+            continue
+        sort = cls.__egg_sort__
+        assert sort is not None
+        cost = _conversion_cost(sort, left)
+        if cost is not None:
+            yield cls, cost, minimum_other if minimum_other is not None else 0
+
+
 def convert(source: object, target: type[V]) -> V:
     runtime_target = cast("object", target)
     if not isinstance(runtime_target, RuntimeClass) or runtime_target.__egg_sort__ is None:

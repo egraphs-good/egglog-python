@@ -104,7 +104,8 @@ def _author_call(  # noqa: C901, PLR0912
     receiver: object = _OMITTED,
     owner: Ref | None = None,
     type_bindings: tuple[tuple[int, Ref], ...] = (),
-) -> tuple[Ref, object | None]:
+    plan_only: bool = False,
+) -> tuple[Ref, object | None] | list[tuple[Ref, object]]:
     """
     Bind a Python call directly to its canonical declaration and node records.
 
@@ -112,6 +113,8 @@ def _author_call(  # noqa: C901, PLR0912
     parameter ordering, defaults, generic patterns and mutation selection come
     from the supplied immutable records. The return's second item identifies
     the supplied wrapper to replace for a mutating presentation.
+    Planning returns only expected input sorts and supplied values, before
+    callbacks/converters; an empty plan cannot infer all signature binders.
     """
     if declaration.role != "declarations":
         msg = "Call authoring requires a declaration reference"
@@ -127,6 +130,9 @@ def _author_call(  # noqa: C901, PLR0912
     match kind:
         case pb.HostPrimitive():
             if kind.typing is not None and kind.typing.field == "application":
+                if plan_only:
+                    msg = "Call planning requires a concrete signature"
+                    raise ValueError(msg)
                 if view_index is None or record.bindings is None or record.bindings.python is None:
                     msg = "Function application requires its canonical Python view"
                     raise ValueError(msg)
@@ -343,7 +349,12 @@ def _author_call(  # noqa: C901, PLR0912
         node = value if isinstance(value, Ref) else node_of(value)
         # A closed named callback can determine a method-local result binder.
         # Generic callbacks still use their concrete expected conversion below.
-        if node is None and pattern.read().kind.field == "func" and isinstance(value, RuntimeFunction):
+        if (
+            not plan_only
+            and node is None
+            and pattern.read().kind.field == "func"
+            and isinstance(value, RuntimeFunction)
+        ):
             with suppress(TypeConstraintError):
                 expression = _BASE_CLASSES["UnstableFn"](value)
                 assert isinstance(expression, RuntimeExpr)
@@ -355,6 +366,17 @@ def _author_call(  # noqa: C901, PLR0912
             # A registered Python conversion may still satisfy this input.
             with suppress(TypeConstraintError):
                 infer_sort(pattern, node.owner.ref("sorts", payload.sort_id), binder_size, substitutions)
+    if plan_only:
+        if len(substitutions) != binder_size:
+            return []
+        if output is not None:
+            substitute_sort(declaration.owner.ref("sorts", output), substitutions)
+        if isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "signature":
+            check_type_restrictions(kind.typing.value, substitutions)
+        return [
+            (substitute_sort(pattern, substitutions), value)
+            for pattern, value in zip(patterns, ordered_values, strict=True)
+        ]
     for position, (pattern, value, node) in enumerate(zip(patterns, ordered_values, existing, strict=True)):
         sort_kind = pattern.read().kind
         if node is None and sort_kind is not None and sort_kind.field == "func" and isinstance(value, FunctionType):
@@ -1007,7 +1029,7 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         bound = self.__egg_bound__
         owner = bound.__egg_sort__ if isinstance(bound, RuntimeClass) else None
         receiver = bound if isinstance(bound, RuntimeExpr) else _OMITTED
-        root, mutated = _author_call(
+        result = _author_call(
             self.__egg_ref__,
             self.__egg_view__,
             args,
@@ -1018,6 +1040,8 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
             owner=owner,
             type_bindings=self.__egg_type_bindings__,
         )
+        assert isinstance(result, tuple)
+        root, mutated = result
         if mutated is not None:
             if isinstance(mutated, RuntimeExpr):
                 mutated.__egg_ref__ = root
@@ -1366,16 +1390,92 @@ def _get_expr_member(
     return result
 
 
+def _numeric_method_cost(function: RuntimeFunction, owner: Ref, left: object, right: object) -> int | None:
+    """Price the actual mapped signature without materializing converted operands."""
+    from .conversion import _conversion_cost, resolve_literal  # noqa: PLC0415
+
+    record: pb.Declaration = function.__egg_ref__.read()
+    assert record.kind is not None
+    if function.__egg_view__ is None or (
+        isinstance(record.kind.value, pb.HostPrimitive)
+        and record.kind.value.typing is not None
+        and record.kind.value.typing.field == "application"
+    ):
+        return None
+    assert record.bindings is not None
+    assert record.bindings.python is not None
+    if record.bindings.python.views[function.__egg_view__].has_field("mutates"):
+        return None
+    plan = _author_call(
+        function.__egg_ref__,
+        function.__egg_view__,
+        (right,),
+        {},
+        node_of=lambda value: value.__egg_ref__ if isinstance(value, RuntimeExpr) else None,
+        convert=lambda sort, value: resolve_literal(sort, value).__egg_ref__,
+        receiver=left,
+        owner=owner,
+        type_bindings=function.__egg_type_bindings__,
+        plan_only=True,
+    )
+    assert isinstance(plan, list)
+    costs = [_conversion_cost(sort, value) for sort, value in plan]
+    return None if not plan or None in costs else sum(cost for cost in costs if cost is not None)
+
+
+def _numeric_binary_call(name: str, left: object, right: object) -> object:
+    """Choose the cheapest applicable exact signature, then run only its conversions."""
+    from .conversion import _binary_conversion_candidates, convert_to_same_type, resolve_literal  # noqa: PLC0415
+
+    original = left if isinstance(left, RuntimeExpr) else right
+    assert isinstance(original, RuntimeExpr)
+    member = _get_expr_member(original, name, missing_ok=True, method_only=True)
+    mutating = (
+        isinstance(member, RuntimeFunction)
+        and member.__egg_view__ is not None
+        and member.__egg_ref__.read().bindings.python.views[member.__egg_view__].has_field("mutates")
+    )
+    if member is not _OMITTED and (not isinstance(member, RuntimeFunction) or mutating):
+        if isinstance(left, RuntimeExpr):
+            return cast("Callable", member)(right)
+        return cast("Callable", _get_expr_member(convert_to_same_type(left, original), name))(right)
+    best: tuple[int, RuntimeClass, RuntimeFunction] | None = None
+    for cls, left_cost, minimum_other in _binary_conversion_candidates(left, right):
+        sort = cls.__egg_sort__
+        assert sort is not None
+        if best is not None and left_cost + minimum_other >= best[0]:
+            continue
+        function = RuntimeClass.__getattr__(cls, name, True, True)
+        if not isinstance(function, RuntimeFunction):
+            continue
+        cost = _numeric_method_cost(function, sort, left, right)
+        if cost is not None and (best is None or cost < best[0]):
+            best = cost, cls, function
+            if cost == 0:
+                break
+    if best is not None:
+        _, cls, function = best
+        assert cls.__egg_sort__ is not None
+        receiver = resolve_literal(cls.__egg_sort__, left)
+        return RuntimeFunction(
+            function.__egg_ref__, function.__egg_view__, receiver, type_bindings=function.__egg_type_bindings__
+        )(right)
+    if not isinstance(left, RuntimeExpr):
+        left = convert_to_same_type(left, original)
+    assert isinstance(left, RuntimeExpr)
+    return cast("Callable", _get_expr_member(left, name))(right)
+
+
 def define_expr_method(name: str, *, reverse: bool = False) -> None:
     """Install a Python special-method entrypoint using the generated member view."""
 
     def invoke(self: RuntimeExpr, *args: object, **kwargs: object) -> object:
+        if name in NUMERIC_BINARY_METHODS and len(args) == 1 and not kwargs:
+            return _numeric_binary_call(name, self, args[0])
         return cast("Callable", _get_expr_member(self, name))(*args, **kwargs)
 
     def reflected(self: RuntimeExpr, other: object) -> object:
-        from .conversion import convert_to_same_type  # noqa: PLC0415
-
-        return cast("Callable", _get_expr_member(convert_to_same_type(other, self), name))(self)
+        return _numeric_binary_call(name, other, self)
 
     setattr(RuntimeExpr, f"__r{name[2:]}" if reverse else name, reflected if reverse else invoke)
 
