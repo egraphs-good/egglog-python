@@ -6,7 +6,6 @@ from datetime import timedelta
 import pytest
 
 from egglog import *
-from egglog.declarations import Declarations
 from egglog.run_report import RuleKey
 
 
@@ -275,7 +274,7 @@ def test_can_stop_field():
 
 
 def test_can_stop_preserves_positional_constructor():
-    report = RunReport(Declarations(), [], False, {}, {}, {}, {}, {})
+    report = RunReport(None, [], False, {}, {}, {}, {}, {})
 
     assert report.can_stop is False
 

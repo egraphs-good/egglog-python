@@ -53,7 +53,7 @@ from ._program import (
 )
 from .conversion import *
 from .conversion import convert_to_same_type, resolve_literal
-from .declarations import *
+from .declarations import Ident, RuleEvalMode
 from .egraph_state import *
 from .egraph_state import _CostModelObservation
 from .pretty import _format_pyobject, pretty_ref
@@ -2575,7 +2575,7 @@ class Ruleset(Schedule):
         self.__egg_ref__ = builder.publish().ref("rulesets", index)
 
     @property
-    def __egg_decls__(self) -> Declarations:
+    def __egg_decls__(self) -> Never:
         msg = "Canonical rulesets have no legacy declaration projection"
         raise NotImplementedError(msg)
 
@@ -2661,7 +2661,7 @@ class UnstableCombinedRuleset(Schedule):
             UnstableCombinedRuleset._next_generated_ident += 1
 
     @property
-    def __egg_decls__(self) -> Declarations:
+    def __egg_decls__(self) -> Never:
         msg = "Canonical rulesets have no legacy declaration projection"
         raise NotImplementedError(msg)
 
