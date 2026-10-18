@@ -1,1 +1,1 @@
-tuple_value_program(TupleValue(Vec(Value.from_int(Int(1)), Value.from_int(Int(2)))))
+tuple_value_program(TupleValue(Vec[Value](Value.from_int(Int(1)), Value.from_int(Int(2)))))

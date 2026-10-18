@@ -33,6 +33,34 @@ def test_upcast_order():
     assert Int(2) > round(0.5 * Int(2))  # type: ignore[operator]
 
 
+def test_int_hash_without_current_egraph_is_structural(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected_egraph_work(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Hashing without a current e-graph must not perform engine work")
+
+    for method_name in ("__init__", "register", "run", "extract"):
+        monkeypatch.setattr(EGraph, method_name, unexpected_egraph_work)
+
+    shared = Int.var("hash_input")
+    expression = shared + shared
+    equivalent = Int.var("hash_input") + Int.var("hash_input")
+    assert expr_parts(expression) == expr_parts(equivalent)
+    assert hash(expression) == hash(equivalent) == hash(expr_parts(expression))
+
+
+def test_int_hash_uses_current_egraph_normal_form() -> None:
+    expression = Int(1) + Int(2)
+    equivalent = Int(1) + Int(2)
+    normal = Int(3)
+    expected = hash(expr_parts(normal))
+    egraph = EGraph()
+    with set_array_api_egraph(egraph):
+        assert hash(expression) == expected
+        egraph.check(eq(expression).to(normal))
+        assert hash(equivalent) == expected
+        assert hash(normal) == expected
+    assert hash(expression) == hash(expr_parts(expression))
+
+
 def test_cross_eval_numpy_uses_fresh_egraph():
     x = NDArray([1, 2, 3])
     y = NDArray([4, 5, 6])

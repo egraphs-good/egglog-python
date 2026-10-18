@@ -6,11 +6,15 @@ import math
 from collections.abc import Callable
 from copy import copy
 from functools import partial
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 import pytest
+from egglog_proto.egglog.v1 import egglog_pb as pb
+from protobuf import Oneof
 
 from egglog import *
+from egglog._program import Builder, StructuralView, pack
+from egglog.pretty import pretty_ref
 
 if TYPE_CHECKING:
     from egglog.runtime import RuntimeExpr
@@ -370,3 +374,117 @@ def test_frozen_typed_container_bytes_round_trip() -> None:
 
     assert rebuilt == frozen
     assert rebuilt.to_binary() == frozen.to_binary()
+
+
+@pytest.fixture
+def pretty_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("Pretty inspection accessed an engine")
+
+    monkeypatch.setattr("egglog.bindings._ProtoEngine", forbidden)
+
+
+@pytest.mark.parametrize("shared", [True, False], ids=["same-ref", "equal-distinct-refs"])
+def test_shared_call_names_use_ref_identity(pretty_without_engine, shared: bool) -> None:
+    left, right = A(), A()
+    for _ in range(40):
+        left, right = f(left), f(right)
+    if shared:
+        right = left
+    expression = binary(left, right)
+    root = expression.__egg_ref__
+    arguments = [root.owner.ref("nodes", index) for index in root.read().kind.value.args]
+    assert (arguments[0] == arguments[1]) is shared
+    assert StructuralView(arguments[0]) == StructuralView(arguments[1])
+
+    source = str(expression)
+    assert source.count("f(") == (40 if shared else 80)
+    body = ast.parse(source).body
+    final = body[-1]
+    assert isinstance(final, ast.Expr)
+    call = final.value
+    assert isinstance(call, ast.Call)
+    assert isinstance(call.func, ast.Name)
+    assert call.func.id == "binary"
+    if shared:
+        assert len(body) == 2
+        assignment = body[0]
+        assert isinstance(assignment, ast.Assign)
+        target = assignment.targets[0]
+        assert isinstance(target, ast.Name)
+        first, second = call.args
+        assert isinstance(first, ast.Name)
+        assert isinstance(second, ast.Name)
+        assert first.id == second.id == target.id
+
+
+def test_shared_call_without_class_presentation(pretty_without_engine) -> None:
+    builder = Builder()
+    sort = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Opaque")))
+    value = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["var"], str]("var", "x" * 80)))
+    for name, arity in [("plain", 1), ("pair", 2)]:
+        builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof[Literal["function"], pb.Function](
+                    "function", pb.Function(name=name, inputs=[pb.Arg(sort=sort) for _ in range(arity)], output=sort)
+                )
+            ),
+        )
+    shared = builder.add(
+        "nodes",
+        pb.Node(sort_id=sort, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="plain", args=[value]))),
+    )
+    root = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=sort, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="pair", args=[shared, shared]))
+        ),
+    )
+    source = pretty_ref(builder.publish().ref("nodes", root))
+    assert source.count("plain(") == 1
+    body = ast.parse(source).body
+    assert len(body) == 2
+    assignment = body[0]
+    assert isinstance(assignment, ast.Assign)
+    target = assignment.targets[0]
+    assert isinstance(target, ast.Name)
+    final = body[-1]
+    assert isinstance(final, ast.Expr)
+    call = final.value
+    assert isinstance(call, ast.Call)
+    assert isinstance(call.func, ast.Name)
+    assert call.func.id == "pair"
+    first, second = call.args
+    assert isinstance(first, ast.Name)
+    assert isinstance(second, ast.Name)
+    assert first.id == second.id == target.id
+
+
+def test_lambda_captures_keep_shared_calls_inside_expression(pretty_without_engine) -> None:
+    shared = A()
+    for _ in range(40):
+        shared = f(shared)
+    captured = binary(shared, shared)
+    expression = higher_order(lambda value: binary(captured, value))
+    assert ast.parse(str(expression), mode="eval")
+
+
+def test_deep_pretty_stays_iterative_without_formatter(pretty_without_engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    template = f(A()).__egg_ref__
+    packed = pack([template])
+    builder = Builder.from_program(packed.program)
+    index = packed.indices[0]
+    record = packed.program.nodes[index]
+    assert record.kind is not None
+    assert record.kind.field == "call"
+    depth = 10_000
+    for _ in range(depth):
+        record.kind.value.args = [index]
+        index = builder.add("nodes", record)
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("Deep record printing invoked the Python formatter")
+
+    monkeypatch.setattr("egglog.pretty.black.format_str", forbidden)
+    assert pretty_ref(builder.publish().ref("nodes", index)) == "f(" * (depth + 1) + "A()" + ")" * (depth + 1)

@@ -1,1 +1,1 @@
-NDArray.var("x") + NDArray.var("y")
+NDArray.var('x') + NDArray.var('y')

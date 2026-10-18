@@ -23,6 +23,7 @@ import numpy as np
 from opentelemetry import trace
 
 from egglog import *
+from egglog._program import StructuralView
 from egglog.runtime import RuntimeExpr
 
 from .program_gen import *
@@ -159,11 +160,11 @@ class Int(Expr, ruleset=array_api_ruleset):
         # Only hash if we have a current e-graph saved, like in the middle of tracing
         egraph = _CURRENT_EGRAPH
         if egraph is None:
-            return hash(self.__egg_typed_expr__)  # type: ignore[attr-defined]
+            return hash(StructuralView(cast("RuntimeExpr", self).__egg_ref__))
         egraph.register(self)
         egraph.run(array_api_schedule)
         simplified = egraph.extract(self)
-        return hash(cast("RuntimeExpr", simplified).__egg_typed_expr__)
+        return hash(StructuralView(cast("RuntimeExpr", simplified).__egg_ref__))
 
     def __round__(self, ndigits: OptionalIntLike = None) -> Int: ...
 

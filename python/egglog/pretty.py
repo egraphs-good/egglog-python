@@ -26,6 +26,7 @@ __all__ = [
     "pretty_ref",
 ]
 BLACK_MODE = black.Mode(line_length=180)
+_REF_BLACK_MODE = black.Mode(line_length=BLACK_MODE.line_length, string_normalization=False)
 
 # Special methods which we might want to use as functions
 # Mapping to the operator they represent for pretty printing them
@@ -78,6 +79,14 @@ _RefFrame: TypeAlias = str | Ref | tuple[Ref, bool, bool] | tuple[Ref, pb.Action
 
 
 @dataclass
+class _SharedFrame:
+    """Name a repeated call only after its children have been rendered."""
+
+    reference: Ref
+    output_start: int
+
+
+@dataclass
 class _MutationFrame:
     """Resume a call after naming its input, then capture its statement output."""
 
@@ -120,10 +129,10 @@ def pretty_ref(  # noqa: C901, PLR0912
 
     # Frames stream output rather than recursively copying each child's string.
     # The Boolean asks scalar arguments to omit their inferred wrapper.
-    frames: list[_RefFrame | _MutationFrame] = [(root, False, False)]
+    frames: list[_RefFrame | _MutationFrame | _SharedFrame] = [(root, False, False)]
     output: list[str] = []
     statements: list[str] = []
-    mutation_names: dict[Ref, str] = {}
+    expression_names: dict[Ref, str] = {}
     counts: dict[str, int] = {}
     parents: Counter[Ref] = Counter()
     pending, seen = [root], set()
@@ -137,8 +146,33 @@ def pretty_ref(  # noqa: C901, PLR0912
                 parents[child] += 1
                 pending.append(child)
     active: set[Ref] = set()
+    # Lambda bodies and captures are embedded expressions, not statement suites.
+    format_output = variables is None
     while frames:
         frame = frames.pop()
+        if isinstance(frame, _SharedFrame):
+            if frame.reference not in expression_names:
+                rendered = "".join(output[frame.output_start :])
+                if parents[frame.reference] * (len(rendered) - 10) > 110:
+                    shared_node: pb.Node = frame.reference.read()
+                    sort_record: pb.Sort = frame.reference.owner.ref("sorts", shared_node.sort_id).read()
+                    type_name = "expr"
+                    if sort_record.kind is not None:
+                        if sort_record.kind.field == "eq":
+                            type_name = sort_record.kind.value.rsplit(".", 1)[-1]
+                        elif sort_record.kind.field == "family":
+                            type_name = sort_record.kind.value.name
+                    name = _name_expr(
+                        type_name if type_name.isidentifier() else "expr",
+                        rendered,
+                        copy_identifier=False,
+                        statements=statements,
+                        counts=counts,
+                    )
+                    expression_names[frame.reference] = name
+                    del output[frame.output_start :]
+                    output.append(name)
+            continue
         if isinstance(frame, _MutationFrame):
             rendered = "".join(output[frame.output_start :])
             del output[frame.output_start :]
@@ -150,7 +184,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                     statements=statements,
                     counts=counts,
                 )
-                mutation_names[frame.reference] = frame.name
+                expression_names[frame.reference] = frame.name
                 frame.output_start = len(output)
                 frames.append(frame)
                 frames.extend(
@@ -173,15 +207,26 @@ def pretty_ref(  # noqa: C901, PLR0912
             bare = parentheses = False
         else:
             reference, bare, parentheses = frame
-            if reference in mutation_names:
-                output.append(mutation_names[reference])
+            if reference in expression_names:
+                output.append(expression_names[reference])
                 continue
             if reference in active:
                 msg = "Cyclic expression presentation is not migrated"
                 raise ValueError(msg)
             active.add(reference)
+            if len(active) > 100:
+                format_output = False
             frames.append(reference)
             record = reference.read()
+            if (
+                isinstance(record, pb.Node)
+                and record.kind is not None
+                and record.kind.field == "call"
+                and parents[reference] > 1
+                and variables is None
+                and root.role == "nodes"
+            ):
+                frames.append(_SharedFrame(reference, len(output)))
         owner = reference.owner
         if isinstance(record, pb.Command) and record.kind is not None and record.kind.field == "action":
             record = record.kind.value
@@ -445,7 +490,11 @@ def pretty_ref(  # noqa: C901, PLR0912
                                 captures = value.args if isinstance(value, partial) else ()
                                 bindings = {
                                     f"_{index}": "("
-                                    + pretty_ref(child.__egg_ref__, custom_literal=custom_literal, variables=variables)
+                                    + pretty_ref(
+                                        child.__egg_ref__,
+                                        custom_literal=custom_literal,
+                                        variables=variables if variables is not None else {},
+                                    )
                                     + ")"
                                     for index, child in enumerate(captures)
                                 }
@@ -971,7 +1020,14 @@ def pretty_ref(  # noqa: C901, PLR0912
         else:
             raise NotImplementedError(f"Record presentation is not migrated: {reference.role}")
         frames.extend(reversed(pieces))
-    return "\n".join([*statements, "".join(output)])
+    program = "\n".join([*statements, "".join(output)])
+    # Formatting is recursive; deep records retain the iterative raw display.
+    if format_output and len(program) > BLACK_MODE.line_length:
+        try:
+            return black.format_str(program, mode=_REF_BLACK_MODE).strip()
+        except (black.parsing.InvalidInput, RecursionError):
+            pass
+    return program
 
 
 def is_valid_python_expr(s: str) -> bool:
