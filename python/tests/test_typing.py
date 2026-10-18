@@ -105,13 +105,14 @@ def test_generated_private_builtin_helpers_match_runtime_annotations(defect, mon
 
 
 @pytest.mark.parametrize(
-    "family", ["scalar", "pair", "vec", "map", "concrete_members", "rational", "set", "maybe", "multiset"]
+    "family",
+    ["scalar", "pair", "vec", "map", "concrete_members", "rational", "set", "maybe", "multiset", "extract_multiple"],
 )
 @pytest.mark.parametrize("kind", ["positive", "negative"])
 def test_generated_builtin_installed_types(family, kind, tmp_path):
     """Check actual installed public imports, independent of source MYPYPATH."""
     root = pathlib.Path(__file__).resolve().parents[2]
-    prefix = family if family == "concrete_members" else f"generated_{family}"
+    prefix = family if family in {"concrete_members", "extract_multiple"} else f"generated_{family}"
     fixture = root / "test-data" / "typing" / f"{prefix}_{kind}.py"
     environment = os.environ.copy()
     environment.pop("MYPYPATH", None)
