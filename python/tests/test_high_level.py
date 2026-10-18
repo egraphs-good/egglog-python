@@ -74,6 +74,23 @@ def _replay_recorded_source(text: str) -> list[pb.RunProgramResponse]:
     return responses
 
 
+def _restore_snapshot(snapshot: pb.EGraphSnapshot) -> EGraph:
+    """Restore the actual serialized logical program through the encoded adapter."""
+    from egglog._program import Builder, pack  # noqa: PLC0415
+
+    snapshot = pb.EGraphSnapshot.from_binary(snapshot.to_binary())
+    assert snapshot.program is not None
+    owner = Builder.from_program(snapshot.program).publish()
+    restored = EGraph()
+    restored._state.run_program(
+        pack(
+            roots=[owner.ref("declarations", index) for index in range(len(snapshot.program.declarations))],
+            commands=[owner.ref("commands", index) for index in range(len(snapshot.program.commands))],
+        )
+    )
+    return restored
+
+
 class TestExprStr:
     def test_unwrap_lit(self):
         assert str(i64(1) + 1) == "i64(1) + 1"
@@ -1319,12 +1336,7 @@ def test_shared_subexpression_scan_runs_once_per_let(monkeypatch: pytest.MonkeyP
     assert scans_to_let(100) == scans_to_let(5)
 
 
-def test_shared_subexpression_inside_cost_lookup_is_hoisted() -> None:
-    """
-    The scan for shared subexpressions also looks inside a cost lookup's arguments, since they are
-    converted without scanning again (see `test_shared_subexpression_scan_runs_once_per_let`).
-    """
-
+def test_shared_subexpression_inside_cost_lookup_replays_its_value() -> None:
     class CostLeaf(Expr):
         def __init__(self, name: StringLike) -> None: ...
 
@@ -1341,13 +1353,13 @@ def test_shared_subexpression_inside_cost_lookup_is_hoisted() -> None:
     root = CostRoot(CostPair(shared, shared))
     egraph = EGraph(save_egglog_string=True)
     egraph.register(set_cost(root, i64(3)))
-    start = len(egraph.as_egglog_string)
     egraph.register(CostBox(get_cost(root)))
-    commands = egraph.as_egglog_string[start:]
-    # The shared leaf is hoisted into one synthetic let, which the pair refers to twice.
-    assert commands.count("(let $__expr_") == 1
-    let_name = commands.split("(let ", 1)[1].split(" ", 1)[0]
-    assert commands.count(let_name) == 3
+    egraph.check(eq(get_cost(root)).to(i64(3)), eq(CostBox(get_cost(root))).to(CostBox(3)))
+    assert egraph.function_size(CostLeaf) == 1
+    assert egraph.function_size(CostPair) == 1
+    assert egraph.function_size(CostRoot) == 1
+    assert egraph.function_size(CostBox) == 1
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_freeze_omits_synthetic_let_bindings() -> None:
@@ -3464,63 +3476,98 @@ def test_dynamic_cost_evaluates_each_argument_once(tmp_path: pathlib.Path) -> No
 
 
 @pytest.mark.parametrize("cost_first", [False, True], ids=["raw-table-first", "cost-first"])
-def test_dynamic_cost_reuses_a_compatible_canonical_table(cost_first: bool) -> None:
-    @function(egg_fn="canonical_cost_target")
-    def target(x: i64Like) -> i64: ...
+def test_dynamic_cost_is_independent_of_a_cost_named_user_table(cost_first: bool) -> None:
+    class Costed(Expr): ...
+
+    @function(egg_fn="canonical_cost_target", cost=41)
+    def target(x: i64Like) -> Costed: ...
 
     @function(egg_fn="cost_table_canonical_cost_target")
     def raw_cost(x: i64Like) -> i64: ...
 
-    egraph = EGraph()
+    egraph = EGraph(save_egglog_string=True)
     cost_action = set_cost(target(1), 7)
     raw_table_action = set_(raw_cost(2)).to(i64(5))
     cost_actions = (cost_action, raw_table_action) if cost_first else (raw_table_action, cost_action)
     egraph.register(
-        set_(target(1)).to(i64(2)),
+        target(2),
         *cost_actions,
     )
 
-    assert egraph.lookup_function_value(raw_cost(1)) == i64(7)
+    assert egraph.lookup_function_value(raw_cost(1)) is None
     assert egraph.lookup_function_value(raw_cost(2)) == i64(5)
+    assert egraph.lookup_function_value(get_cost(target(1))) == i64(7)
+    assert egraph.extract(target(2), include_cost=True) == (target(2), 42)
+    assert egraph.lookup_function_value(get_cost(target(2))) is None  # No declared-cost fallback.
+    egraph.register(set_cost(target(1), 0), set_(raw_cost(1)).to(i64(29)))
+    assert egraph.lookup_function_value(get_cost(target(1))) == i64(0)
+    assert egraph.lookup_function_value(raw_cost(1)) == i64(29)
     assert egraph.has_custom_cost(target)
+    egraph.register(delete(target(1)))
+    assert egraph.lookup_function_value(get_cost(target(1))) is None
+    assert not egraph.has_custom_cost(target)
+    assert egraph.lookup_function_value(raw_cost(1)) == i64(29)
+    assert egraph.lookup_function_value(raw_cost(2)) == i64(5)
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("cost_first", [False, True], ids=["raw-table-first", "cost-first"])
-def test_dynamic_cost_rejects_a_merged_canonical_table(cost_first: bool) -> None:
-    @function(egg_fn="merged_cost_target")
-    def target(x: i64Like) -> i64: ...
+def test_dynamic_cost_uses_incoming_value_independently_of_user_merge(cost_first: bool) -> None:
+    class Costed(Expr):
+        @method(egg_fn="merged_cost_target")
+        def __init__(self, x: i64Like) -> None: ...
 
     @function(egg_fn="cost_table_merged_cost_target", merge=lambda old, _new: old)
     def raw_cost(x: i64Like) -> i64: ...
 
-    cost_action = set_cost(target(1), 7)
+    cost_action = set_cost(Costed(1), 7)
     raw_table_action = set_(raw_cost(2)).to(i64(5))
     actions = (cost_action, raw_table_action) if cost_first else (raw_table_action, cost_action)
 
-    with pytest.raises(ValueError, match="already used by an incompatible callable"):
-        EGraph().register(*actions)
+    egraph = EGraph(*actions, save_egglog_string=True)
+    egraph.register(
+        set_(raw_cost(2)).to(i64(9)),
+        set_cost(Costed(1), 0),
+        set_cost(Costed(1), get_cost(Costed(1)) + raw_cost(2) + 4),
+    )
+    assert egraph.lookup_function_value(raw_cost(2)) == i64(5)
+    assert egraph.lookup_function_value(raw_cost(1)) is None
+    assert egraph.lookup_function_value(get_cost(Costed(1))) == i64(9)
+    egraph.check(eq(get_cost(Costed(1))).to(i64(9)), eq(raw_cost(2)).to(i64(5)))
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
-def test_dynamic_cost_rejects_multiple_raw_canonical_table_aliases() -> None:
-    @function(egg_fn="aliased_cost_target")
-    def target(x: i64Like) -> i64: ...
+def test_cost_named_incompatible_declarations_are_rejected_without_effects() -> None:
+    class Costed(Expr):
+        def __init__(self, x: i64Like) -> None: ...
 
     @function(egg_fn="cost_table_aliased_cost_target")
     def first_raw_cost(x: i64Like) -> i64: ...
 
-    @function(egg_fn="cost_table_aliased_cost_target")
+    @function(egg_fn="cost_table_aliased_cost_target", merge=lambda old, _new: old)
     def second_raw_cost(x: i64Like) -> i64: ...
 
-    with pytest.raises(ValueError, match="already has a raw callable alias"):
-        EGraph().register(
-            set_cost(target(1), 7),
+    egraph = EGraph(Costed(1), save_egglog_string=True)
+    before, history = egraph.freeze(), egraph.as_egglog_string
+    with pytest.raises(
+        ValueError, match=r"^Ambiguous same-name definitions require reconciliation:.*cost_table_aliased"
+    ):
+        egraph.register(
+            set_cost(Costed(1), 7),
             set_(first_raw_cost(2)).to(i64(5)),
             set_(second_raw_cost(3)).to(i64(6)),
         )
+    assert egraph.freeze() == before
+    assert egraph.as_egglog_string == history
+    assert egraph.lookup_function_value(get_cost(Costed(1))) is None
+    assert egraph.function_size(first_raw_cost) == 0
+    egraph.register(set_(first_raw_cost(2)).to(i64(5)), set_cost(Costed(1), 9))
+    egraph.check(eq(first_raw_cost(2)).to(i64(5)), eq(get_cost(Costed(1))).to(i64(9)))
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("cost_first", [False, True], ids=["raw-table-first", "cost-first"])
-def test_dynamic_cost_rejects_a_raw_table_alias_for_a_primitive(cost_first: bool) -> None:
+def test_dynamic_cost_rejects_primitive_targets_without_effects(cost_first: bool) -> None:
     @function(egg_fn="cost_table_/")
     def raw_cost(left: i64Like, right: i64Like) -> i64: ...
 
@@ -3528,89 +3575,139 @@ def test_dynamic_cost_rejects_a_raw_table_alias_for_a_primitive(cost_first: bool
     raw_table_action = set_(raw_cost(1, 0)).to(i64(5))
     actions = (cost_action, raw_table_action) if cost_first else (raw_table_action, cost_action)
 
-    with pytest.raises(ValueError, match="eager or builtin primitive"):
-        EGraph(*actions)
+    for saved in [False, True]:
+        egraph = EGraph(save_egglog_string=saved)
+        assert egraph.function_size(raw_cost) == 0
+        before = egraph.freeze()
+        history = egraph.as_egglog_string if saved else None
+        expected_error = ValueError if saved else EggSmolError
+        with pytest.raises(expected_error, match=r"^unknown action target egglog.core.i64.div$") as caught:
+            egraph.register(*actions)
+        assert type(caught.value) is expected_error
+        if not saved:
+            error = caught.value.__dict__["_egglog_proto_error"]
+            assert error.code == pb.ErrorCode.UNKNOWN_NAME
+            assert error.location is None
+        assert egraph.freeze() == before
+        if saved:
+            assert egraph.as_egglog_string == history
+        assert egraph.function_size(raw_cost) == 0
+        egraph.register(raw_table_action)
+        egraph.check(eq(raw_cost(1, 0)).to(i64(5)))
+        if saved:
+            _replay_recorded_source(egraph.as_egglog_string)
 
 
-def test_freeze_preserves_a_reused_canonical_cost_table_as_raw_rows_and_costs() -> None:
-    @function(egg_fn="freeze_cost_target")
-    def target(x: i64Like) -> i64: ...
+def test_freeze_preserves_assigned_costs_and_independent_user_rows() -> None:
+    class Costed(Expr):
+        @method(egg_fn="freeze_cost_target")
+        def __init__(self, x: i64Like) -> None: ...
 
     @function(egg_fn="cost_table_freeze_cost_target")
     def raw_cost(x: i64Like) -> i64: ...
 
     egraph = EGraph(
         set_(raw_cost(2)).to(i64(5)),
-        set_(target(1)).to(i64(2)),
-        set_cost(target(1), 7),
+        Costed(2),
+        set_cost(Costed(1), 7),
     )
 
-    rendered = str(egraph.freeze())
-    assert "set_(raw_cost(2)).to(i64(5))" in rendered
-    assert "set_(raw_cost(1)).to(i64(7))" in rendered
-    assert "set_cost(target(2), 5)" not in rendered
-    assert "set_cost(target(1), 7)" in rendered
-
-    replayed = eval(rendered.removesuffix(".freeze()"), globals(), locals())
-    assert isinstance(replayed, EGraph)
-    assert replayed.lookup_function_value(raw_cost(1)) == i64(7)
+    replayed = _restore_snapshot(egraph.freeze())
+    assert replayed.lookup_function_value(raw_cost(1)) is None
     assert replayed.lookup_function_value(raw_cost(2)) == i64(5)
-    assert replayed.lookup_function_value(target(1)) == i64(2)
-    assert replayed.has_custom_cost(target)
+    assert replayed.lookup_function_value(get_cost(Costed(1))) == i64(7)
+    assert replayed.lookup_function_value(get_cost(Costed(2))) is None
+    assert replayed.has_custom_cost(Costed)
+    assert replayed.function_values(Costed) == egraph.function_values(Costed)
 
 
-def test_freeze_preserves_every_callable_alias_for_a_shared_cost_table() -> None:
+def test_freeze_preserves_costs_through_ordinary_constructor_aliases() -> None:
+    class Costed(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    alias = Costed
+    egraph = EGraph(set_cost(Costed(1), 5), set_cost(alias(2), 6))
+    replayed = _restore_snapshot(egraph.freeze())
+    assert replayed.has_custom_cost(Costed)
+    assert replayed.has_custom_cost(alias)
+    assert replayed.lookup_function_value(get_cost(alias(1))) == i64(5)
+    assert replayed.lookup_function_value(get_cost(Costed(2))) == i64(6)
+
+
+def test_builtin_free_callable_alias_authoring_remains_explicitly_unsupported() -> None:
+    # This separate authoring frontier is not made valid by constructor-cost support.
     @function(egg_fn="+", builtin=True)
     def plus_alias(left: i64Like, right: i64Like) -> i64: ...
 
-    egraph = EGraph(
-        set_cost(i64(1) + i64(2), 5),
-        set_cost(plus_alias(3, 4), 6),
-    )
-
-    rendered = str(egraph.freeze())
-    replayed = eval(rendered.removesuffix(".freeze()"), globals(), locals())
-    assert isinstance(replayed, EGraph)
-    assert replayed.has_custom_cost(i64.__add__)
-    assert replayed.has_custom_cost(plus_alias)
-    assert replayed.lookup_function_value(get_cost(i64(1) + i64(2))) == i64(5)
-    assert replayed.lookup_function_value(get_cost(plus_alias(3, 4))) == i64(6)
+    with pytest.raises(NotImplementedError, match="Builtin, mutation and variadic free functions are not migrated"):
+        plus_alias(1, 2)
 
 
-def test_freeze_preserves_reverse_argument_order_for_rows_and_costs() -> None:
+def test_freeze_preserves_reverse_function_rows_and_constructor_costs() -> None:
     class ReverseFreeze(Expr):
         def __init__(self, value: i64Like) -> None: ...
 
         @method(reverse_args=True)
         def label(self, value: StringLike) -> i64: ...
 
+        @method(reverse_args=True)
+        def make(self, key: StringLike) -> ReverseFreeze: ...
+
     expression = ReverseFreeze(1).label("key")
-    egraph = EGraph(set_(expression).to(i64(3)), set_cost(expression, 7))
-
-    replayed = eval(str(egraph.freeze()).removesuffix(".freeze()"), globals(), locals())
-
-    assert isinstance(replayed, EGraph)
+    constructor = ReverseFreeze(1).make("other")
+    egraph = EGraph(set_(expression).to(i64(3)), set_cost(constructor, 7))
+    replayed = _restore_snapshot(egraph.freeze())
     assert replayed.lookup_function_value(expression) == i64(3)
-    assert replayed.lookup_function_value(get_cost(expression)) == i64(7)
+    assert replayed.function_values(ReverseFreeze.label) == {expression: i64(3)}
+    assert expr_parts(replayed.extract(constructor)) == expr_parts(constructor)
+    assert replayed.lookup_function_value(get_cost(constructor)) == i64(7)
 
 
-def test_dynamic_cost_rejects_an_incompatible_overload_without_recording_it() -> None:
-    egraph = EGraph()
-    egraph.register(set_cost(i64(1) + i64(2), 5))
+def test_dynamic_cost_rejects_exact_primitive_targets_without_recording_them() -> None:
+    from egglog._program import pack  # noqa: PLC0415
 
-    with pytest.raises(ValueError, match="already serves a callable with an incompatible schema"):
-        egraph.register(set_cost(Rational(1, 2) + Rational(1, 3), 6))
-
-    assert egraph.has_custom_cost(i64.__add__)
+    expressions = [i64(1) + i64(2), Rational(1, 2) + Rational(1, 3)]
+    targets = []
+    for expression in expressions:
+        packed = pack([expr_parts(expression).ref])
+        node = packed.program.nodes[packed.indices[0]]
+        assert node.kind is not None
+        assert node.kind.field == "call"
+        targets.append(node.kind.value.func)
+    assert targets == ["egglog.core.i64.add", "egglog.experimental.rational.add"]
+    egraph = EGraph(save_egglog_string=True)
+    before, history = egraph.freeze(), egraph.as_egglog_string
+    for expression, target in zip(expressions, targets, strict=True):
+        with pytest.raises(ValueError, match=r"^unknown action target ") as caught:
+            egraph.register(set_cost(expression, 5))
+        assert str(caught.value) == f"unknown action target {target}"
+        assert egraph.freeze() == before
+        assert egraph.as_egglog_string == history
+    assert not egraph.has_custom_cost(i64.__add__)
     assert not egraph.has_custom_cost(Rational.__add__)
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
-def test_dynamic_cost_rejects_a_negative_literal() -> None:
+def test_signed_assigned_costs_fail_only_in_the_affected_default_extraction_domain() -> None:
     class Costed(Expr):
         def __init__(self, value: i64Like) -> None: ...
 
-    with pytest.raises(ValueError, match="must be nonnegative"):
-        set_cost(Costed(1), -1)
+    class Unrelated(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+
+    extractors: list[ExtractionMode] = ["tree", "greedy-dag"]
+    for extractor in extractors:
+        egraph = EGraph(set_cost(Costed(1), -1), Unrelated(1))
+        assert egraph.lookup_function_value(get_cost(Costed(1))) == i64(-1)
+        assert egraph.extract(Unrelated(1), extractor=extractor) == Unrelated(1)
+        before = egraph.freeze()
+        with pytest.raises(EggSmolError, match="negative assigned costs") as caught:
+            egraph.extract(Costed(1), extractor=extractor)
+        error = caught.value.__dict__["_egglog_proto_error"]
+        assert error.code == pb.ErrorCode.EXTRACTION_FAILED
+        assert error.location == pb.CommandLocation(path=[0])
+        assert egraph.freeze() == before
+        assert egraph.lookup_function_value(get_cost(Costed(1))) == i64(-1)
 
 
 class TestScheduler:
