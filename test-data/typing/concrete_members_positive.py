@@ -9,6 +9,7 @@ from egglog import (
     Action,
     EGraph,
     Expr,
+    Maybe,
     Pair,
     RewriteOrRule,
     Ruleset,
@@ -67,6 +68,17 @@ assert_type(node.weight, f64)
 assert_type(Node.make(), Node)
 assert_type(Node.make(value=3), Node)
 assert_type(node.pairs(Vec(Pair(i64(1), f64(2)))), Vec[Pair[i64, f64]])
+
+
+class EagerDefaults(Expr):
+    ROOT: ClassVar[Node] = Node()
+    COUNT: ClassVar[i64] = i64(1)
+    MISSING: ClassVar[Maybe[i64]] = Maybe[i64].none()
+
+
+assert_type(EagerDefaults.ROOT, Node)
+assert_type(EagerDefaults.COUNT, i64)
+assert_type(EagerDefaults.MISSING, Maybe[i64])
 
 
 @function

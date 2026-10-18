@@ -4485,16 +4485,113 @@ def test_member_scope_failure_keeps_prefix_without_executing_body():
     assert calls == []
 
 
-@pytest.mark.parametrize("annotation", ["i64", "ClassVar[i64] = None", "ClassVar[i64] = i64(1)"])
-def test_invalid_or_unmigrated_class_annotations_are_explicit(annotation):
+@pytest.mark.parametrize(
+    ("annotation", "error", "message"),
+    [("i64", NotImplementedError, "expected a ClassVar"), ("ClassVar[i64] = None", ConvertError, "Cannot convert")],
+)
+def test_invalid_class_annotations_are_explicit(class_authoring_without_engine, annotation, error, message):
     namespace = {"Expr": Expr, "ClassVar": ClassVar, "i64": i64, "__name__": __name__}
     exec(f"class Invalid(Expr):\n    VALUE: {annotation}\n", namespace)
     cls = namespace["Invalid"]
-    with pytest.raises(NotImplementedError, match=r"expected a ClassVar|defaults"):
+    with pytest.raises(error, match=message):
         cls.VALUE
     assert not cls.__egg_context__.catalog.members
     with pytest.raises(AttributeError):
         _ = cls.VALUE
+
+
+def test_classvar_eager_defaults_are_closed_nullary_primitives(class_authoring_without_engine):
+    from egglog import Maybe  # noqa: PLC0415
+
+    class DefaultBox(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    scalar, box = i64(1), DefaultBox(2)
+    before = pack([scalar.__egg_ref__, to_runtime_expr(box).__egg_ref__]).program.to_binary()
+
+    class Defaults(Expr):
+        COUNT: ClassVar[i64] = scalar
+        BOX: ClassVar[DefaultBox] = box
+        MISSING: ClassVar[Maybe[i64] | None] = None
+
+    ambient = ruleset()
+    with set_current_ruleset(ambient):
+        values = [(Defaults.COUNT, scalar), (Defaults.BOX, box), (Defaults.MISSING, Maybe[i64].none())]
+        assert get_current_ruleset() is ambient
+    assert not ambient._snapshot({}).read().kind.value.rules
+    for value, expected in values:
+        declaration = resolve_callable(value)
+        record = declaration.read()
+        primitive = record.kind.value
+        assert isinstance(primitive, pb.Primitive)
+        assert not primitive.inputs
+        assert expr_parts(RuntimeExpr(declaration.owner.ref("nodes", primitive.body))) == expr_parts(expected)
+        view = record.bindings.python.views[0]
+        assert view.kind == pb.PythonCallKind.CLASS_VARIABLE
+        assert not view.params
+        assert StructuralView(declaration.owner.ref("sorts", view.owner.kind.value)) == StructuralView(
+            Defaults.__egg_sort__
+        )
+        assert str(value) == f"Defaults.{view.path[0]}"
+        with pytest.raises(TypeError, match="table-backed Function"):
+            set_(value).to(expected)
+        packed = pack([to_runtime_expr(value).__egg_ref__])
+        encoded = packed.program.to_binary()
+        decoded = pb.Program.from_binary(encoded)
+        restored = RuntimeExpr(Builder.from_program(decoded).publish().ref("nodes", packed.indices[0]))
+        assert expr_parts(restored) == expr_parts(value)
+        assert str(restored) == str(value)
+        assert decoded.to_binary() == encoded
+    assert pack([scalar.__egg_ref__, to_runtime_expr(box).__egg_ref__]).program.to_binary() == before
+
+
+def test_classvar_eager_default_conversion_keeps_completed_prefix(class_authoring_without_engine):
+    class Source:
+        def __init__(self, valid: bool) -> None:
+            self.valid = valid
+
+    events = []
+
+    def convert_source(value):
+        events.append(get_current_ruleset())
+        if value.valid:
+            return i64(1)
+        assert str(Partial.FIRST) == "Partial.FIRST"
+        msg = "class default conversion marker"
+        raise ValueError(msg)
+
+    converter(Source, i64, convert_source)
+
+    class Partial(Expr):
+        FIRST: ClassVar[i64] = Source(True)
+        BAD: ClassVar[i64] = Source(False)
+        LATER: ClassVar[i64] = i64(3)
+
+    ambient = ruleset()
+    with set_current_ruleset(ambient):
+        with pytest.raises(ValueError, match="class default conversion marker"):
+            _ = Partial.FIRST
+        assert get_current_ruleset() is ambient
+    assert events == [None, None]
+    assert isinstance(Partial.FIRST, i64)
+    assert Partial.FIRST is Partial.FIRST
+    for name in ("BAD", "LATER"):
+        with pytest.raises(AttributeError):
+            getattr(Partial, name)
+    assert events == [None, None]
+    assert not ambient._snapshot({}).read().kind.value.rules
+
+
+@pytest.mark.parametrize("spelling", ["external", "_0"])
+def test_classvar_eager_defaults_reject_unbound_query_variables(class_authoring_without_engine, spelling):
+    class Invalid(Expr):
+        VALUE: ClassVar[i64] = var(spelling, i64)
+
+    with pytest.raises(ValueError, match=r"Free variable.*named eager body"):
+        _ = Invalid.VALUE
+    assert not Invalid.__egg_context__.catalog.members
+    with pytest.raises(AttributeError):
+        _ = Invalid.VALUE
 
 
 def test_retained_member_context_lifetime_and_local_hooks():

@@ -6,6 +6,7 @@ from typing import ClassVar
 from egglog import (
     EGraph,
     Expr,
+    Maybe,
     Pair,
     UnstableFn,
     Vec,
@@ -55,6 +56,19 @@ node.weight()  # error: operator
 wrong_count: f64 = Node.COUNT  # error: assignment
 wrong_weight: i64 = node.weight  # error: assignment
 wrong_result: i64 = Node.make()  # error: assignment
+
+
+class EagerDefaults(Expr):
+    ROOT: ClassVar[Node] = Node()
+    COUNT: ClassVar[i64] = i64(1)
+    MISSING: ClassVar[Maybe[i64]] = Maybe[i64].none()
+
+
+wrong_eager_root: i64 = EagerDefaults.ROOT  # error: assignment
+wrong_eager_count: f64 = EagerDefaults.COUNT  # error: assignment
+wrong_eager_missing: i64 = EagerDefaults.MISSING  # error: assignment
+EagerDefaults.COUNT()  # error: operator
+
 swapped = Vec(Pair(f64(1), i64(2)))
 node.pairs(swapped)  # error: arg-type
 wrong_variable: i64 = var("node", Node)  # error: assignment

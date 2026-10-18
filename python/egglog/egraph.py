@@ -503,16 +503,24 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         builder = Builder()
         output = builder.import_ref(sort)
         sort_record: pb.Sort = sort.read()
-        if name in namespace:
-            if ruleset is None:
-                raise NotImplementedError(f"Class variable defaults are not migrated: {runtime_cls}.{name}")
-            if sort_record.kind is None or sort_record.kind.field != "eq":
-                msg = "Primitive-returning defaults cannot use an explicit ruleset"
-                raise ValueError(msg)
+        if name in namespace and ruleset is not None and (sort_record.kind is None or sort_record.kind.field != "eq"):
+            msg = "Primitive-returning defaults cannot use an explicit ruleset"
+            raise ValueError(msg)
         qualified = f"{runtime_cls.__module__}.{runtime_cls.__name__}.{name}"
         egg_name = re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", qualified)
+        body = None
+        if name in namespace and ruleset is None:
+            with set_current_ruleset(None):
+                default = resolve_literal(sort, namespace[name])
+            body = _lower_function_body(builder, default.__egg_ref__, [])
         kind = (
-            Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name=egg_name, output=output))
+            Oneof[Literal["primitive"], pb.Primitive](
+                "primitive", pb.Primitive(name=egg_name, output=output, body=body)
+            )
+            if body is not None
+            else Oneof[Literal["constructor"], pb.Constructor](
+                "constructor", pb.Constructor(name=egg_name, output=output)
+            )
             if sort_record.kind is not None and sort_record.kind.field == "eq"
             else Oneof[Literal["function"], pb.Function]("function", pb.Function(name=egg_name, output=output))
         )
@@ -539,7 +547,7 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         )
         definitions.append(builder.publish().ref("declarations", index))
         context.catalog = Catalog.from_refs(definitions)
-        if name in namespace:
+        if name in namespace and ruleset is not None:
             default = resolve_literal(sort, namespace[name])
             lhs = RuntimeFunction(definitions[-1], 0)()
             rewrite(cast("Expr", lhs), ruleset=ruleset).to(cast("Expr", default))
