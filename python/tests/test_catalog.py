@@ -1149,20 +1149,9 @@ def test_runtime_free_function_names_preserve_exact_callee_and_core_order(monkey
             ),
         )
     )
-    arguments = [len(source.nodes), len(source.nodes) + 1]
-    source.nodes.extend(
-        pb.Node(
-            sort_id=integer,
-            kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", value))),
-        )
-        for value in (9, 4)
-    )
     catalog = Catalog(source)
     reference, view = catalog.functions["example", name]
-    result = RuntimeFunction(reference, view)(
-        RuntimeExpr(reference.owner.ref("nodes", arguments[0])),
-        left=RuntimeExpr(reference.owner.ref("nodes", arguments[1])),
-    )
+    result = RuntimeFunction(reference, view)(i64(9), left=i64(4))
     assert isinstance(result, RuntimeExpr)
     call = result.__egg_ref__.read().kind.value
     assert call.func == "exact.declared.table"

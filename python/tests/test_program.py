@@ -606,6 +606,221 @@ def test_same_kind_sort_definition_conflicts_remain_errors(nominal):
         pack([owner.ref("declarations", 0), owner.ref("declarations", 1)])
 
 
+@pytest.mark.parametrize("root_kind", ["calls", "definitions", "late_owner"])
+def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_kind):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Definition composition cannot construct an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    producers = []
+    for offset in range(2):
+        builder = Builder()
+        if offset:
+            builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="f64"))))
+        scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
+        builder.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="i64"))))
+        definition = builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof("function", pb.Function(name="composed", inputs=[pb.Arg(sort=scalar)], output=scalar))
+            ),
+        )
+        value = builder.add(
+            "nodes",
+            pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 4 + offset)))),
+        )
+        call = builder.add("nodes", pb.Node(sort_id=scalar, kind=Oneof("call", pb.Call(func="composed", args=[value]))))
+        owner = builder.publish()
+        producers.append((owner.ref("sorts", scalar), owner.ref("declarations", definition), owner.ref("nodes", call)))
+    left, right = producers
+    assert left[1] != right[1]
+    assert left[1].read().to_binary() != right[1].read().to_binary()  # Arena IDs differ.
+    assert StructuralView(left[1]) == StructuralView(right[1])
+    before = [reference.read().to_binary() for _, reference, _ in producers]
+    if root_kind == "calls":
+        roots = [left[2], right[2]]
+    elif root_kind == "definitions":
+        roots = [left[1], right[1]]
+    else:
+        builder = Builder()
+        wrapper = builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof(
+                    "primitive",
+                    pb.Primitive(
+                        name="wrapper",
+                        output=builder.import_ref(left[0]),
+                        body=builder.import_ref(right[2]),
+                    ),
+                )
+            ),
+        )
+        roots = [builder.publish().ref("declarations", wrapper), left[1]]
+    packed = pack(roots)
+    assert sum(declaration.kind.value.name == "composed" for declaration in packed.program.declarations) == 1
+    assert sum(declaration.kind.field == "host_sort_family" for declaration in packed.program.declarations) == 1
+    assert [reference.read().to_binary() for _, reference, _ in producers] == before
+    if root_kind == "definitions":
+        assert packed.indices[0] == packed.indices[1]
+    elif root_kind == "calls":
+        assert packed.indices[0] != packed.indices[1]
+        assert len(packed.program.nodes) == 4
+    restored = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+    role = "nodes" if root_kind == "calls" else "declarations"
+    assert (
+        pack([restored.ref(role, index) for index in packed.indices]).program.to_binary() == packed.program.to_binary()
+    )
+
+
+@pytest.mark.parametrize("foreign_body_owner", [False, True])
+def test_compatible_definition_does_not_hide_conflicting_named_dependency(foreign_body_owner):
+    roots = []
+    for value in (4, 9):
+        builder = Builder()
+        scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
+        builder.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="i64"))))
+        literal = builder.add(
+            "nodes",
+            pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", value)))),
+        )
+        builder.add(
+            "declarations",
+            pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="dependency", output=scalar, body=literal))),
+        )
+        call = builder.add("nodes", pb.Node(sort_id=scalar, kind=Oneof("call", pb.Call(func="dependency"))))
+        if foreign_body_owner:
+            foreign = builder.publish()
+            builder = Builder()
+            scalar = builder.import_ref(foreign.ref("sorts", scalar))
+            call = builder.import_ref(foreign.ref("nodes", call))
+        wrapper = builder.add(
+            "declarations",
+            pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="wrapper", output=scalar, body=call))),
+        )
+        roots.append(builder.publish().ref("declarations", wrapper))
+    assert StructuralView(roots[0]) == StructuralView(roots[1])
+    for ordered in (roots, list(reversed(roots))):
+        with pytest.raises(ValueError, match=r"same-name.*dependency"):
+            pack(ordered)
+
+
+@pytest.mark.parametrize("body_kind", ["signed_zero", "union"])
+def test_definition_reconciliation_preserves_literal_bits_and_union_identity(body_kind):
+    roots = []
+    for index in range(2):
+        builder = Builder()
+        if body_kind == "signed_zero":
+            scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="f64"))))
+            builder.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="f64"))))
+            kind = Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("f64_bits", index << 63)))
+        else:
+            scalar = builder.add("sorts", pb.Sort(kind=Oneof("eq", "E")))
+            builder.add("declarations", pb.Declaration(kind=Oneof("eq_sort", pb.EqSort(name="E"))))
+            kind = Oneof("union", pb.Union())
+        body = builder.add("nodes", pb.Node(sort_id=scalar, kind=kind))
+        definition = builder.add(
+            "declarations",
+            pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="body", output=scalar, body=body))),
+        )
+        roots.append(builder.publish().ref("declarations", definition))
+    if body_kind == "signed_zero":
+        assert StructuralView(roots[0]) == StructuralView(roots[1])
+    else:
+        assert StructuralView(roots[0]) != StructuralView(roots[1])
+    with pytest.raises(ValueError, match="same-name"):
+        pack(roots)
+
+
+def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
+    roots = []
+    for value in (4, 9):
+        foreign = Builder()
+        scalar = foreign.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
+        body = foreign.add(
+            "nodes",
+            pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", value)))),
+        )
+        foreign.add(
+            "declarations",
+            pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="dependency", output=scalar, body=body))),
+        )
+        call = foreign.add("nodes", pb.Node(sort_id=scalar, kind=Oneof("call", pb.Call(func="dependency"))))
+        foreign_owner = foreign.publish()
+        builder = Builder()
+        scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
+        builder.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="i64"))))
+        builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof(
+                    "primitive",
+                    pb.Primitive(
+                        name="unused",
+                        output=scalar,
+                        body=builder.import_ref(foreign_owner.ref("nodes", call)),
+                    ),
+                )
+            ),
+        )
+        literal = builder.add(
+            "nodes",
+            pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", value)))),
+        )
+        roots.append(builder.publish().ref("nodes", literal))
+    packed = pack(roots)
+    assert [declaration.kind.value.name for declaration in packed.program.declarations] == ["i64"]
+    assert len(packed.program.nodes) == 2
+
+
+@pytest.mark.parametrize("mapped_first", [False, True])
+def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypatch, mapped_first):
+    foreign = Builder()
+    scalar = foreign.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
+    foreign.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="i64"))))
+    nine = foreign.add(
+        "nodes", pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 9))))
+    )
+    foreign.add(
+        "declarations", pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="f", output=scalar, body=nine)))
+    )
+    call = foreign.add("nodes", pb.Node(sort_id=scalar, kind=Oneof("call", pb.Call(func="f"))))
+    foreign_owner = foreign.publish()
+    builder = Builder()
+    scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
+    builder.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="i64"))))
+    four = builder.add(
+        "nodes", pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 4))))
+    )
+    first = builder.add(
+        "declarations", pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="f", output=scalar, body=four)))
+    )
+    wrapper = builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof(
+                "primitive",
+                pb.Primitive(
+                    name="wrapper",
+                    output=scalar,
+                    body=builder.import_ref(foreign_owner.ref("nodes", call)),
+                ),
+            )
+        ),
+    )
+    owner = builder.publish()
+    emitted = owner.ref("declarations", first)
+
+    def candidate_order(values):
+        # Both legal set iteration orders must reject, including the mapped
+        # representative fast path that used to skip a dirty-key comparison.
+        return iter(sorted(values, key=lambda reference: (reference == emitted) != mapped_first))
+
+    monkeypatch.setattr(_program, "iter", candidate_order, raising=False)
+    with pytest.raises(ValueError, match=r"same-name.*'f'"):
+        pack([owner.ref("declarations", wrapper), emitted])
+
+
 def test_template_expansion_freshens_nodes_not_definition_identity():
     builder = Builder()
     builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Box")))

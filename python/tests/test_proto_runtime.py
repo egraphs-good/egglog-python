@@ -868,8 +868,11 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectiona
         rewrite(lhs).to(i64(2))
     with pytest.raises(TypeError, match="destinations must be Rulesets"):
         rewrite(lhs, ruleset=object()).to(rhs)
-    with pytest.raises(NotImplementedError, match="Fact-to-action"):
-        rule().then(condition)
+    condition_action = rule().then(condition)
+    head = condition_action.__egg_ref__.read().kind.value.head
+    assert len(head) == 1
+    assert head[0].kind.field == "term"
+    assert condition_action.__egg_ref__.owner.ref("nodes", head[0].kind.value) == condition.__egg_ref__
     lhs.__egg_ref__ = RewriteBox(9).__egg_ref__
     rhs.__egg_ref__ = RewriteBox(10).__egg_ref__
     body.conditions.clear()
@@ -3678,6 +3681,34 @@ def test_public_union_contextual_rule_and_fact_presentation(class_authoring_with
     canonical = packed.rules[0].kind.value
     assert canonical.query == [canonical.head[0].kind.value]
     assert pb.Program.from_binary(packed.to_binary()) == packed
+
+
+def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_without_engine):
+    class UnionNode(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    lhs, rhs = UnionNode(1), UnionNode(2)
+    fact = eq(lhs).to(rhs)
+    separate = eq(lhs).to(rhs)
+    original = fact.__egg_ref__.read().to_binary()
+    authored = rule(fact).then(fact, fact, separate)
+    actions = [expr_action(item) for item in (fact, fact, separate)]
+    packet = pack(
+        [fact.__egg_ref__, separate.__egg_ref__, authored.__egg_ref__],
+        commands=[action.__egg_ref__ for action in actions],
+    )
+    program = pb.Program.from_binary(packet.program.to_binary())
+    first, second, rule_index = packet.indices
+    assert first != second
+    assert program.nodes[first].kind.field == program.nodes[second].kind.field == "union"
+    assert sum(node.kind.field == "union" for node in program.nodes) == 2
+    assert [command.kind.value.kind.field for command in program.commands] == ["term"] * 3
+    assert [command.kind.value.kind.value for command in program.commands] == [first, first, second]
+    canonical = program.rules[rule_index].kind.value
+    assert canonical.query == [first]
+    assert [action.kind.field for action in canonical.head] == ["term"] * 3
+    assert [action.kind.value for action in canonical.head] == [first, first, second]
+    assert fact.__egg_ref__.read().to_binary() == original
 
 
 def test_set_and_term_authoring_own_commands_without_evaluating(monkeypatch):

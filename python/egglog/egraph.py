@@ -2814,10 +2814,10 @@ def let(name: str, expr: BaseExpr) -> Action:
     return Action(builder.publish().ref("commands", index))
 
 
-def expr_action(expr: BaseExpr) -> Action:
-    runtime_expr = to_runtime_expr(expr)
+def expr_action(expr: BaseExpr | Fact) -> Action:
+    reference = expr.__egg_ref__ if isinstance(expr, Fact) else to_runtime_expr(expr).__egg_ref__
     builder = Builder()
-    node = builder.import_ref(runtime_expr.__egg_ref__)
+    node = builder.import_ref(reference)
     index = builder.add(
         "commands",
         pb.Command(
@@ -3426,9 +3426,6 @@ def _action_likes(action_likes: Iterable[ActionLike]) -> tuple[Action, ...]:
 def _action_like(action_like: ActionLike) -> Action:
     if isinstance(action_like, Action):
         return action_like
-    if isinstance(action_like, Fact):
-        msg = "Fact-to-action conversion is not migrated"
-        raise NotImplementedError(msg)
     return expr_action(action_like)
 
 

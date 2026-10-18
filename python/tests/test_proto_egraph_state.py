@@ -2408,9 +2408,7 @@ def test_native_publication_keeps_independent_compatible_declaration_owners():
     assert _run_ruleset_step(graph, selected) == {"first": 1}
     selected.append(rule(name="second").then(set_(right).to(1)))
     assert _run_ruleset_step(graph, selected) == {"second": 1}
-    # Packing has an explicit, pre-existing same-Program reconciliation guard.
-    with pytest.raises(ValueError, match="Ambiguous same-name definitions"):
-        graph.check(eq(left).to(1), eq(right).to(1))
+    graph.check(eq(left).to(1), eq(right).to(1))
     graph.check(eq(left).to(1))
     graph.check(eq(right).to(1))
 
@@ -2643,9 +2641,16 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
     rhs = program.nodes[second.value].kind.value
     assert rhs.func == "egglog.core.i64.add"
     assert program.nodes[rhs.args[0]].kind.value.func == first.target.func
-    with pytest.raises(NotImplementedError, match="Fact-to-action"):
-        graph.register(set_(current).to(i64(1)), eq(i64(1)).to(i64(1)))
-    assert len(requests) == 1
+    condition = eq(i64(1)).to(i64(1))
+    original = condition.__egg_ref__.read().to_binary()
+    graph.register(set_(current).to(i64(1)), condition)
+    assert len(requests) == 2
+    program = requests[1].program
+    assert [command.kind.value.kind.field for command in program.commands] == ["set", "term"]
+    union = program.nodes[program.commands[1].kind.value.kind.value]
+    assert union.kind.field == "union"
+    assert [program.nodes[index].kind.value.value.value for index in union.kind.value.members] == [1, 1]
+    assert condition.__egg_ref__.read().to_binary() == original
     graph._state.destroy()
 
 

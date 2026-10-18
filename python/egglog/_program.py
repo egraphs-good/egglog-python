@@ -242,7 +242,9 @@ _STRUCTURAL_HASHES: WeakKeyDictionary[Owner, dict[tuple[str, int], int]] = WeakK
 _STRUCTURAL_LOCK = RLock()
 
 
-def _structural_parts(reference: Ref, *, identity: bool = True) -> tuple[tuple[object, ...], list[tuple[Ref, str]]]:
+def _structural_parts(
+    reference: Ref, *, identity: bool = True, exact_literals: bool = False
+) -> tuple[tuple[object, ...], list[tuple[Ref, str]]]:
     """Read comparison data directly; only arena addresses become child refs."""
     ref = reference.owner.ref(reference.role, reference.index)
     record = cast("Message", ref.owner._slots[ref.role][ref.index])
@@ -278,13 +280,40 @@ def _structural_parts(reference: Ref, *, identity: bool = True) -> tuple[tuple[o
                     shape.append(("ref", role))
                 elif isinstance(item, Message):
                     inline.append((item, f"{path}/{field.name}/{index}"))
-                elif isinstance(message, pb.PrimitiveValue) and field.name == "f64_bits":
+                elif isinstance(message, pb.PrimitiveValue) and field.name == "f64_bits" and not exact_literals:
                     number = unpack("!d", item.to_bytes(8, "big"))[0]
                     shape.append(("nan", item) if isnan(number) else number)
                 else:
                     shape.append(item)
         pending.extend(reversed(inline))
     return tuple(shape), children
+
+
+def _structural_equal(
+    left: Ref, right: Ref, *, exact_literals: bool = False, owners: list[Owner] | None = None
+) -> bool:
+    """Compare relocated structure without conflating identity-bearing nodes."""
+    pending = [(left, right)]
+    seen = set()
+    while pending:
+        left, right = pending.pop()
+        left = left.owner.ref(left.role, left.index)
+        right = right.owner.ref(right.role, right.index)
+        if owners is not None:
+            owners.extend((left.owner, right.owner))
+        if left == right or (left, right) in seen:
+            continue
+        seen.add((left, right))
+        if exact_literals:
+            left_shape, left_children = _structural_parts(left, exact_literals=True)
+            right_shape, right_children = _structural_parts(right, exact_literals=True)
+        else:
+            left_shape, left_children = _structural_parts(left)
+            right_shape, right_children = _structural_parts(right)
+        if left_shape != right_shape or len(left_children) != len(right_children):
+            return False
+        pending.extend((left[0], right[0]) for left, right in zip(left_children, right_children, strict=True))
+    return True
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -320,21 +349,7 @@ class StructuralView:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, StructuralView):
             return NotImplemented
-        pending = [(self.ref, other.ref)]
-        seen = set()
-        while pending:
-            left, right = pending.pop()
-            left = left.owner.ref(left.role, left.index)
-            right = right.owner.ref(right.role, right.index)
-            if left == right or (left, right) in seen:
-                continue
-            seen.add((left, right))
-            left_shape, left_children = _structural_parts(left)
-            right_shape, right_children = _structural_parts(right)
-            if left_shape != right_shape or len(left_children) != len(right_children):
-                return False
-            pending.extend((left[0], right[0]) for left, right in zip(left_children, right_children, strict=True))
-        return True
+        return _structural_equal(self.ref, other.ref)
 
 
 def action_equal(left: Ref, right: Ref) -> bool:  # noqa: C901
@@ -652,7 +667,7 @@ def _definition_key(record: Message) -> tuple[str, str] | None:
     return None
 
 
-def pack(  # noqa: C901, PLR0912
+def pack(  # noqa: C901
     roots: Iterable[Ref] = (),
     *,
     commands: Iterable[Ref] = (),
@@ -664,8 +679,9 @@ def pack(  # noqa: C901, PLR0912
 
     Definitions supplied here are available by name, not automatic emission
     roots. Missing names require an explicit ambient declaration/provider set.
-    Distinct same-name definitions are rejected rather than guessed compatible;
-    semantic definition reconciliation belongs to a later adapter-aware layer.
+    Exact relocated definitions share one emission; differing code or metadata
+    still requires adapter-aware reconciliation. Literal bits and identity-bearing
+    Union/rule/ruleset references are never guessed equivalent.
     """
     program = pb.Program(ir_version=1)
     mapped: dict[Ref, int] = {}
@@ -686,9 +702,27 @@ def pack(  # noqa: C901, PLR0912
                 key = _definition_key(record)
                 if key is None:
                     continue
-                candidates.setdefault(key, set()).add(ref)
-                if key in emitted and len(candidates[key]) > 1:
+                matches = candidates.setdefault(key, set())
+                if ref not in matches:
+                    matches.add(ref)
+                    if key in emitted:
+                        demands.add(key)
+
+    def reconcile(key: tuple[str, str], preferred: Ref) -> Ref:
+        # Keep original candidates until their reachable owner closures have
+        # been inspected; a discarded body can import conflicting definitions.
+        matches = candidates[key]
+        reference = emitted.get(key) or next((old for old in matches if old in mapped), preferred)
+        while True:
+            count = len(matches)
+            owners: list[Owner] = []
+            for old in tuple(matches):
+                if not _structural_equal(reference, old, exact_literals=True, owners=owners):
                     raise ValueError(f"Ambiguous same-name definitions require reconciliation: {key}")
+            for owner in owners:
+                index_owner(owner)
+            if len(matches) == count:
+                return reference
 
     def allocate(reference: Ref) -> int:
         ref = reference.owner.ref(reference.role, reference.index)
@@ -697,6 +731,12 @@ def pack(  # noqa: C901, PLR0912
             raise ValueError(msg)
         if ref not in mapped:
             index_owner(ref.owner)
+            if ref.role in {"declarations", "rulesets"}:
+                key = _definition_key(ref.read())
+                if key is not None:
+                    ref = reconcile(key, ref)
+                    if ref in mapped:
+                        return mapped[ref]
             records = getattr(program, ref.role)
             mapped[ref] = len(records)
             records.append(_ROLES[ref.role]())
@@ -733,17 +773,16 @@ def pack(  # noqa: C901, PLR0912
             getattr(program, ref.role)[mapped[ref]] = rewritten
             key = _definition_key(rewritten)
             if key is not None:
-                if len(candidates.get(key, ())) > 1 or (key in emitted and emitted[key] != ref):
-                    raise ValueError(f"Distinct same-name definitions require reconciliation: {key}")
+                reconcile(key, ref)
                 emitted[key] = ref
         for key in sorted(demands):
             matches = candidates.get(key, set())
-            if len(matches) > 1:
-                raise ValueError(f"Ambiguous same-name definitions require reconciliation: {key}")
             if matches:
-                allocate(next(iter(matches)))
+                allocate(reconcile(key, next(iter(matches))))
                 demands.remove(key)
         if not pending:
+            if any(candidates.get(key) for key in demands):
+                continue
             missing = demands - set(ambient)
             if missing:
                 raise ValueError(f"missing definitions: {sorted(missing)}")
