@@ -1,4 +1,4 @@
-# Generated from the native catalog and Python host protocol policy. Do not edit.
+# Generated from the native catalog, Python host protocols and helper annotations. Do not edit.
 # ruff: noqa: N801, N816, PYI042 -- Preserve canonical Python presentation names.
 
 from collections.abc import Callable, Iterator
@@ -6,9 +6,12 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Generic, Never, Protocol, TypeAlias, TypeVar, TypeVarTuple, Unpack, overload
 
+from egglog_proto.egglog.v1 import egglog_pb as pb
 from typing_extensions import deprecated
 
+from ._program import Ref
 from .egraph import BaseExpr, BuiltinExpr
+from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
 
 __all__ = ["BigInt", "BigIntLike", "BigRat", "BigRatLike", "Bool", "BoolLike", "ExprValueError", "Map", "MapLike", "Maybe", "MultiSet", "MultiSetLike", "Pair", "PyObject", "PyObjectLike", "Rational", "RationalLike", "Set", "SetLike", "String", "StringLike", "Unit", "UnstableFn", "Vec", "VecLike", "catch", "count_matches", "f64", "f64Like", "i64", "i64Like", "join", "map_fold_kv", "multiset_contains_swapped", "multiset_flat_map", "multiset_fold", "multiset_not_contains_swapped", "multiset_remove_swapped", "multiset_subtract_swapped", "py_eval", "py_eval_fn", "py_exec"]
 
@@ -509,3 +512,14 @@ class PyObjectFunction(Protocol):
 
 @deprecated("use PyObject(fn) directly")
 def py_eval_fn(fn: Callable) -> PyObjectFunction: ...
+
+def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:
+    ...
+def _container_member(target: RuntimeClass | RuntimeExpr, name: str, kind: pb.PythonCallKind) -> RuntimeFunction:
+    ...
+def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:
+    ...
+def _maybe_value(expr: RuntimeExpr) -> RuntimeExpr | None:
+    ...
+def _pair_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, RuntimeExpr]:
+    ...

@@ -544,7 +544,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                 case "call":
                     call = record.kind.value
                     declaration = _definition_at(reference, "callable", call.func)
-                    declared: pb.Declaration = declaration.read()
+                    declared = declaration.read()
                     views = (
                         declared.bindings.python.views
                         if declared.bindings is not None

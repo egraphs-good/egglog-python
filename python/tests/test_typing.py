@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import pathlib
@@ -45,6 +46,62 @@ helpers.find_test_files = new_find_test_files
 from mypy.test.testcheck import TypeCheckSuite
 
 __all__ = ["TypeCheckSuite"]
+
+
+@pytest.mark.parametrize("defect", [None, "missing", "annotation"])
+def test_generated_private_builtin_helpers_match_runtime_annotations(defect, monkeypatch, tmp_path):
+    from egglog_proto.egglog.v1 import egglog_pb as pb  # noqa: PLC0415
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    package = root / "python/egglog"
+    implementation = ast.parse((package / "builtins.py").read_text())
+    pretty = ast.parse((package / "pretty.py").read_text())
+    names = {
+        alias.name
+        for node in ast.walk(pretty)
+        if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module == "builtins"
+        for alias in node.names
+        if alias.name.startswith("_")
+    }
+    helpers = {
+        node.name: node for node in implementation.body if isinstance(node, ast.FunctionDef) and node.name in names
+    }
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    program = pb.Program.from_binary((package / "_builtin_catalog.pb").read_bytes())
+    if defect is not None:
+        helper = helpers[min(names)]
+        if defect == "missing":
+            implementation.body.remove(helper)
+        else:
+            helper.args.args[0].annotation = None
+        (tmp_path / "builtins.py").write_text(ast.unparse(implementation))
+        monkeypatch.setitem(render.__globals__, "_PACKAGE", tmp_path)
+        with pytest.raises(ValueError, match="definitions are missing" if defect == "missing" else "fully annotated"):
+            render(program)
+        return
+    rendered = render(program)
+    assert rendered == (package / "builtins.pyi").read_text()
+    stub = ast.parse(rendered)
+    signatures = {
+        node.name: node for node in stub.body if isinstance(node, ast.FunctionDef) and node.name.startswith("_")
+    }
+    assert signatures.keys() == names
+    for name, source in helpers.items():
+        signature = signatures[name]
+        assert ast.dump(signature.args) == ast.dump(source.args)
+        assert signature.returns is not None
+        assert source.returns is not None
+        assert ast.dump(signature.returns) == ast.dump(source.returns)
+        body = signature.body[0]
+        assert isinstance(body, ast.Expr)
+        assert ast.literal_eval(body.value) is Ellipsis
+    exports = next(
+        ast.literal_eval(node.value)
+        for node in stub.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets)
+    )
+    assert names.isdisjoint(exports)
 
 
 @pytest.mark.parametrize(

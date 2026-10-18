@@ -32,7 +32,27 @@ _REFLECTED = cast("set[str]", _POLICY["NUMERIC_BINARY_METHODS"])
 
 
 def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
-    """Derive the admitted public surface; never execute package/native code."""
+    """Derive catalog views and private helper types without executing frontend code."""
+    private_names = {"_container_member", "_maybe_value", "_pair_value", "_container_items", "_map_entries"}
+    private_helpers = {
+        node.name: node
+        for node in ast.parse((_PACKAGE / "builtins.py").read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name in private_names
+    }
+    if private_helpers.keys() != private_names:
+        msg = "Private builtin helper definitions are missing"
+        raise ValueError(msg)
+    for node in private_helpers.values():
+        arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+        if (
+            node.decorator_list
+            or node.args.vararg is not None
+            or node.args.kwarg is not None
+            or node.returns is None
+            or any(argument.annotation is None for argument in arguments)
+        ):
+            raise ValueError(f"Private builtin helper {node.name} requires a fully annotated fixed signature")
+        node.body = [ast.Expr(value=ast.Constant(value=Ellipsis))]
     module = ("egglog", "builtins")
     families: dict[str, pb.HostSortFamily] = {}
     names: dict[str, str] = {}
@@ -50,12 +70,18 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         "deprecated",
         "__all__",
         "object",
+        "pb",
+        "Ref",
+        "RuntimeClass",
+        "RuntimeExpr",
+        "RuntimeFunction",
         "list",
         "dict",
         "set",
         "classmethod",
         "str",
         "tuple",
+        *private_names,
     }
     for protocol in _SCALARS.values():
         reserved_names.update(t.__name__ for t in (protocol.value_type, *protocol.literal_types))
@@ -514,7 +540,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         ["Iterator"] if vec_protocol or map_protocol or set_protocol or multiset_protocol else []
     )
     lines = [
-        "# Generated from the native catalog and Python host protocol policy. Do not edit.",
+        "# Generated from the native catalog, Python host protocols and helper annotations. Do not edit.",
         "# ruff: noqa: N801, N816, PYI042 -- Preserve canonical Python presentation names.",
         "",
         *(["from collections.abc import " + ", ".join(collections_imports)] if collections_imports else []),
@@ -525,9 +551,12 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         + ", TypeAlias, TypeVar"
         + (", TypeVarTuple, Unpack, overload" if function_protocol else ""),
         "",
+        "from egglog_proto.egglog.v1 import egglog_pb as pb",
         "from typing_extensions import deprecated",
         "",
+        "from ._program import Ref",
         "from .egraph import BaseExpr, BuiltinExpr",
+        "from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction",
         "",
         "__all__ = " + json.dumps(sorted(exported)),
         "",
@@ -708,7 +737,8 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             '@deprecated("use PyObject(fn) directly")',
             "def py_eval_fn(fn: Callable) -> PyObjectFunction: ...",
         ])
-    result = "\n".join(lines)
+    lines.extend(["", *(ast.unparse(private_helpers[name]) for name in sorted(private_names))])
+    result = "\n".join(lines) + "\n"
     ast.parse(result, filename="builtins.pyi")
     return result
 
