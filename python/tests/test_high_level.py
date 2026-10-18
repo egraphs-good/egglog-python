@@ -3602,11 +3602,27 @@ class TestScheduler:
         egraph.run(run(copy, scheduler=scheduler))
         egraph.run(run(copy, scheduler=scheduler))
 
-        scheduler_lines = [line for line in egraph.as_egglog_string.splitlines() if line.startswith("(let-scheduler ")]
-        run_with_lines = [line for line in egraph.as_egglog_string.splitlines() if "(run-with " in line]
-
-        assert len(scheduler_lines) == 1
-        assert len(run_with_lines) == 2
+        transcript = egraph.as_egglog_string
+        source = egg_bindings._ProtoEngine.source(transcript)
+        bindings, runs, actions = [], [], []
+        while (submission := source.next_submission()) is not None:
+            kind, encoded, count = submission
+            assert kind == "program"
+            assert count == 0
+            for command in pb.Program.from_binary(encoded).commands:
+                if command.kind.field == "bind_scheduler":
+                    bindings.append(command.kind.value)
+                elif command.kind.field == "action":
+                    actions.append(command.kind.value)
+                else:
+                    assert command.kind.field == "run"
+                    runs.append(command.kind.value)
+        assert len(bindings) == 1
+        assert len(runs) == 2
+        assert len(actions) == 2
+        assert all(action.kind.field == "term" for action in actions)
+        assert {item.scheduler for item in runs} == {bindings[0].name}
+        _replay_recorded_source(transcript)
 
     def test_scheduler_scope_does_not_leak_to_sequence_sibling(self):
         r = ruleset(name="scheduler-lexical-scope")
@@ -3615,11 +3631,40 @@ class TestScheduler:
 
         egraph.run(seq(scheduler.scope(run(r, scheduler=scheduler)), run(r, scheduler=scheduler)))
 
-        run_schedule = next(line for line in egraph.as_egglog_string.splitlines() if line.startswith("(run-schedule "))
-        assert run_schedule.count("(let-scheduler ") == 2
-        ruleset_name = f"{__name__}.scheduler-lexical-scope"
-        assert f"(run-with _scheduler_0 {ruleset_name})" in run_schedule
-        assert f"(run-with _scheduler_1 {ruleset_name})" in run_schedule
+        transcript = egraph.as_egglog_string
+        source = egg_bindings._ProtoEngine.source(transcript)
+        commands = []
+        while (submission := source.next_submission()) is not None:
+            kind, encoded, count = submission
+            assert kind == "program"
+            assert count == 0
+            commands.extend(pb.Program.from_binary(encoded).commands)
+        pending = [(command, 0) for command in reversed(commands)]
+        bindings, runs = [], []
+        while pending:
+            command, depth = pending.pop()
+            kind = command.kind
+            if kind.field == "bind_scheduler":
+                bindings.append((kind.value, depth))
+            elif kind.field == "run":
+                runs.append((kind.value, depth))
+            else:
+                assert kind.field in {"repeat", "saturate"}
+                pending.extend((child, depth + 1) for child in reversed(kind.value.body))
+        assert len(bindings) == len(runs) == 2
+        (outer, outer_depth), (inner, inner_depth) = bindings
+        assert outer.name != inner.name
+        assert outer_depth < inner_depth
+        for binding in (outer, inner):
+            assert binding.scheduler.kind.field == "back_off"
+            assert binding.scheduler.kind.value.match_limit == 2
+            assert binding.scheduler.kind.value.ban_length == 2
+        assert runs[0][0].scheduler == inner.name
+        assert runs[0][1] >= inner_depth
+        assert runs[1][0].scheduler == outer.name
+        assert runs[1][1] < inner_depth
+        assert runs[0][0].ruleset == runs[1][0].ruleset
+        _replay_recorded_source(transcript)
 
     def test_persistent_scheduler_child_binding_is_redeployed_after_pop(self):
         source = relation("child_scheduler_source", i64)
