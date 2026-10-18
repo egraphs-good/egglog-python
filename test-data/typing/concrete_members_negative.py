@@ -156,3 +156,13 @@ run(i64(1))  # error: arg-type
 bad_report: i64 = EGraph().run(run())  # error: assignment
 bad_key: str = next(iter(EGraph().stats().num_matches_per_rule))  # error: assignment
 RuleKey("not a canonical reference")  # error: arg-type
+
+
+class ObjectHolder(Expr):
+    def __init__(self, value: object = None) -> None: ...
+
+    def opaque(self, value: object) -> object: ...
+
+
+ObjectHolder(None, None)  # error: call-arg
+wrong_object_result: i64 = ObjectHolder().opaque(None)  # error: assignment

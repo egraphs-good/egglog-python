@@ -191,3 +191,14 @@ assert_type(report, RunReport)
 assert_type(graph.stats(), RunReport)
 assert_type(next(iter(report.num_matches_per_rule)), RuleKey)
 assert_type(next(iter(report.num_matches_per_rule.values())), int)
+
+
+class ObjectHolder(Expr):
+    def __init__(self, value: object = None) -> None: ...
+
+    def opaque(self, value: object) -> object: ...
+
+
+assert_type(ObjectHolder(), ObjectHolder)
+assert_type(ObjectHolder({"value": [1]}), ObjectHolder)
+assert_type(ObjectHolder().opaque(None), object)

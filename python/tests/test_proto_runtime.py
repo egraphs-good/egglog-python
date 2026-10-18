@@ -132,6 +132,84 @@ def test_pyobject_local_values_and_trusted_display(class_authoring_without_engin
         pretty_ref(detached.__egg_ref__)
 
 
+@pytest.mark.parametrize("annotation", [object, "PyObject", "PyObjectLike"])
+def test_object_annotations_share_canonical_pyobject_and_box_once(annotation, class_authoring_without_engine):
+    from egglog import PyObject, PyObjectLike  # noqa: PLC0415
+
+    annotation = {"PyObject": PyObject, "PyObjectLike": PyObjectLike}.get(annotation, annotation)
+    expected = resolve_type_annotation(PyObject)
+    assert StructuralView(resolve_type_annotation(annotation)) == StructuralView(expected)
+
+    class Holder(Expr):
+        def __init__(self, value: annotation = None) -> None: ...
+
+        def echo(self, value: annotation) -> annotation: ...
+
+    missing = Holder()
+    assert get_callable_args(missing, Holder)[0].value is None
+    calls = []
+
+    class Payload:
+        def __reduce__(self) -> tuple[type[dict[str, int]], tuple[list[tuple[str, int]]]]:
+            calls.append("serialize")
+            return dict, ([("value", 7)],)
+
+    held = Holder(Payload())
+    argument = get_callable_args(held, Holder)[0]
+    assert isinstance(argument, PyObject)
+    assert argument.value == {"value": 7}
+    assert calls == ["serialize"]
+    supplied = Holder(argument)
+    assert get_callable_args(supplied, Holder)[0].__egg_ref__ == argument.__egg_ref__
+    echoed = supplied.echo(argument)
+    assert isinstance(echoed, PyObject)
+    assert get_callable_args(echoed)[1].__egg_ref__ == argument.__egg_ref__
+    assert calls == ["serialize"]
+    encoded = pack([held.__egg_ref__, echoed.__egg_ref__])
+    decoded = Builder.from_program(pb.Program.from_binary(encoded.program.to_binary())).publish()
+    assert StructuralView(decoded.ref("nodes", encoded.indices[0])) == StructuralView(held.__egg_ref__)
+    assert StructuralView(decoded.ref("nodes", encoded.indices[1])) == StructuralView(echoed.__egg_ref__)
+    with pytest.raises(ConvertError):
+        Holder(i64(1))
+
+
+def test_object_callable_annotations_keep_concrete_sorts(class_authoring_without_engine):
+    from egglog import PyObject  # noqa: PLC0415
+
+    function_sort = resolve_type_annotation(Callable[[object], object])
+    signature = function_sort.read().kind.value
+    assert StructuralView(function_sort.owner.ref("sorts", signature.params[0])) == StructuralView(
+        resolve_type_annotation(PyObject)
+    )
+    assert StructuralView(function_sort.owner.ref("sorts", signature.result)) == StructuralView(
+        resolve_type_annotation(PyObject)
+    )
+    for unsupported in (int, str, type(None)):
+        with pytest.raises(TypeError, match="Unexpected type annotation"):
+            resolve_type_annotation(unsupported)
+
+
+def test_object_annotated_constructor_roundtrips_native_payload():
+    from egglog import PyObject  # noqa: PLC0415
+
+    class Holder(Expr):
+        def __init__(self, value: object = None) -> None: ...
+
+    payload = {"values": [1]}
+    expression = Holder(payload)
+    payload["values"].append(2)
+    graph = EGraph(expression, Holder())
+    try:
+        restored = graph.extract(expression)
+        value = get_callable_args(restored, Holder)[0]
+        assert isinstance(value, PyObject)
+        assert value.value == {"values": [1]}
+        graph.check(eq(expression).to(Holder(PyObject({"values": [1]}))))
+        graph.check(eq(Holder()).to(Holder(PyObject(None))))
+    finally:
+        graph._state.destroy()
+
+
 @pytest.mark.parametrize("corruption", ["family", "arity", "declaration", "arm", "children"])
 def test_pyobject_materialization_rejects_malformed_shape(corruption, class_authoring_without_engine, monkeypatch):
     import cloudpickle  # noqa: PLC0415
@@ -1987,13 +2065,20 @@ def test_scalar_wave_canonical_bool_pretty_preserves_every_argument(count):
     assert str(expression) == expected
 
 
-@pytest.mark.parametrize("target", [String("a").__add__, Bool(False).__or__])
-def test_scalar_wave_binary_view_rejects_wrong_arity_and_sort(target):
+@pytest.mark.parametrize(
+    ("target", "member"),
+    [
+        pytest.param(String("a").__add__, String.__add__, id="invoke0"),
+        pytest.param(Bool(False).__or__, Bool.__or__, id="invoke1"),
+    ],
+)
+def test_scalar_wave_binary_view_rejects_wrong_arity_and_sort(target, member):
     for args in ((), ("a", "b")):
         with pytest.raises(TypeError):
             target(*args)
+    # Operator dispatch may promote both operands; validate this exact member's sort.
     with pytest.raises(ConvertError):
-        target(i64(1))
+        member(target.__self__, i64(1))
     with pytest.raises(TypeError, match="unexpected keyword"):
         target(other=True, name="implies")
 

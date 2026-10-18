@@ -1490,6 +1490,8 @@ for _name in NUMERIC_BINARY_METHODS:
 
 def resolve_type_annotation(tp: object) -> Ref | TypeVar | RuntimeClass:
     """Keep unresolved Python generics as language state; concrete types are refs."""
+    if tp is object:
+        tp = _BASE_CLASSES["PyObject"]
     if isinstance(tp, TypeVar):
         return tp
     if get_origin(tp) is Union:
