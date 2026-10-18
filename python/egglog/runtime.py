@@ -5,6 +5,7 @@ from __future__ import annotations
 import struct
 from collections.abc import Callable
 from contextlib import suppress
+from functools import partial
 from inspect import Parameter, Signature
 from threading import RLock
 from types import FunctionType, GenericAlias, MethodType
@@ -347,16 +348,21 @@ def _author_call(  # noqa: C901, PLR0912
     existing = []
     for pattern, value in zip(patterns, ordered_values, strict=True):
         node = value if isinstance(value, Ref) else node_of(value)
-        # A closed named callback can determine a method-local result binder.
+        callback = value
+        prefix: tuple[object, ...] = ()
+        if isinstance(callback, partial) and not callback.keywords:
+            prefix = callback.args
+            callback = callback.func
+        # A closed named callback/prefix can determine a method-local result binder.
         # Generic callbacks still use their concrete expected conversion below.
         if (
             not plan_only
             and node is None
             and pattern.read().kind.field == "func"
-            and isinstance(value, RuntimeFunction)
+            and isinstance(callback, RuntimeFunction)
         ):
             with suppress(TypeConstraintError):
-                expression = _BASE_CLASSES["UnstableFn"](value)
+                expression = _BASE_CLASSES["UnstableFn"](callback, *prefix)
                 assert isinstance(expression, RuntimeExpr)
                 node = expression.__egg_ref__
         existing.append(node)
@@ -1246,8 +1252,18 @@ def _partial_function(  # noqa: C901, PLR0912
                 declaration.owner.ref("sorts", view.owner.kind.value), bound.__egg_sort__, binder_size, substitutions
             )
     for pattern, value in zip(patterns, captures, strict=False):
-        if isinstance(value, RuntimeExpr):
-            node = value.__egg_ref__
+        inferred_value = value
+        pattern_kind = pattern.read().kind
+        if (
+            convert_captures
+            and pattern_kind is not None
+            and pattern_kind.field == "func"
+            and isinstance(value, RuntimeFunction)
+        ):
+            with suppress(TypeConstraintError):
+                inferred_value = _BASE_CLASSES["UnstableFn"](value)
+        if isinstance(inferred_value, RuntimeExpr):
+            node = inferred_value.__egg_ref__
             try:
                 infer_sort(pattern, node.owner.ref("sorts", node.read().sort_id), binder_size, substitutions)
             except TypeConstraintError:

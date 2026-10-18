@@ -21,6 +21,7 @@ from egglog_proto.egglog.v1 import egglog_pb as pb
 import egglog.bindings as egg_bindings
 import egglog.builtins as egg_builtins
 from egglog import *
+from egglog.conversion import ConvertError
 from egglog.runtime import RuntimeExpr, RuntimeFunction
 
 _BuiltinExprT = TypeVar("_BuiltinExprT", bound=BaseExpr)
@@ -1706,6 +1707,32 @@ def test_map_fold_generic_negation_callback_is_concretized() -> None:
     expected = Map[i64, f64].empty().insert(i64(1), f64(-2.5)).insert(i64(2), f64(4.0))
 
     check_eq(map_fold_kv(lambda result, key, value: result.insert(key, -value), initial, input_map), expected)
+
+
+@pytest.mark.parametrize("callback_kind", ["plain", "partial", "result-context"])
+def test_multiset_map_infers_partial_result_from_closed_callback(monkeypatch, callback_kind: str) -> None:
+    engine = MagicMock(side_effect=AssertionError("Callback authoring must not create an engine"))
+    monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
+    from egglog.exp.array_api import Value, get_monomial  # noqa: PLC0415
+
+    mss = var("mss", MultiSet[MultiSet[Value]])
+    expected = mss.map(UnstableFn[MultiSet[Value], MultiSet[Value]](multiset_flat_map, get_monomial))
+    if callback_kind == "plain":
+        result = mss.map(lambda xs: multiset_flat_map(get_monomial, xs))
+    elif callback_kind == "partial":
+        result = mss.map(partial(multiset_flat_map, get_monomial))
+        assert expr_parts(result) == expr_parts(expected)
+    else:
+        result = expected
+    assert convert(result, MultiSet[MultiSet[Value]]) is result
+
+    wrong = var("wrong", MultiSet[MultiSet[i64]])
+    with pytest.raises(ConvertError) as expected_error:
+        wrong.map(UnstableFn[MultiSet[Value], MultiSet[Value]](multiset_flat_map, get_monomial))  # type: ignore[arg-type]
+    with pytest.raises(ConvertError) as actual_error:
+        wrong.map(partial(multiset_flat_map, get_monomial))
+    assert str(actual_error.value) == str(expected_error.value)
+    engine.assert_not_called()
 
 
 def test_map_and_set_length_primitives() -> None:
