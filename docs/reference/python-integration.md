@@ -77,6 +77,32 @@ v = var("x", i64)
 assert get_var_name(v) == "x"
 ```
 
+Variables have one canonical name, selected by `egg_name or name or "_"`.
+Both `str()` and `get_var_name()` expose this name; `egg_name` does not retain
+a separate Python display identity. Empty names and aliases fall back as shown:
+
+```{code-cell} python
+assert get_var_name(var("shown", i64, egg_name="wire")) == "wire"
+assert str(var("", i64)) == "_"
+assert get_var_name(var("x", i64, egg_name="")) == "x"
+```
+
+Within a query, independently created variables with the same canonical name
+join, and their sorts must agree. The typed name `"_"` is also a named variable,
+not a fresh wildcard. Some canonical names (including `"_"`, `"0"` and `"@x"`)
+work in direct protobuf queries but cannot be recorded with
+`save_egglog_string=True`; recording rejects them before effects.
+
+This differs from the legacy backend's implicit underscore prefix:
+
+| Variable pair | Legacy join | Canonical-name join |
+| --- | --- | --- |
+| `var("x", i64)` and `var("shown", i64, egg_name="_x")` | Same | Different |
+| `var("x", i64)` and `var("shown", i64, egg_name="x")` | Different | Same |
+
+Aliases are exact canonical names now; use `egg_name="x"` to join `var("x", i64)`.
+Separate queries and function bodies retain their own binders.
+
 For a callable (method, function, classmethod, or constructor), use `get_callable_fn(expr)` to get the underlying Python function:
 
 ```{code-cell} python

@@ -3031,21 +3031,18 @@ def rule(
 
 
 def var(name: str, bound: TypeForm[T], egg_name: str | None = None) -> T:
-    """Create a new variable with the given name and type."""
+    """Create a typed query variable named ``egg_name or name or '_'``."""
     return cast("T", _var(name, bound, egg_name=egg_name))
 
 
-def _var(name: str, bound: object, egg_name: str | None) -> RuntimeExpr:
+def _var(name: object, bound: object, egg_name: object) -> RuntimeExpr:
     """Create a new variable with the given name and type."""
-    if egg_name is not None:
-        msg = "Variable backend aliases are not migrated"
-        raise NotImplementedError(msg)
-    if not isinstance(cast("object", name), str):
+    if not isinstance(name, str):
         msg = "Variable names must be strings"
         raise TypeError(msg)
-    if not name:
-        msg = "Empty variable names are not migrated"
-        raise NotImplementedError(msg)
+    if egg_name is not None and not isinstance(egg_name, str):
+        msg = "Variable aliases must be strings"
+        raise TypeError(msg)
     sort = resolve_type_annotation(bound)
     if not isinstance(sort, Ref) or sort.role != "sorts":
         msg = "Variables require a concrete sort"
@@ -3053,7 +3050,7 @@ def _var(name: str, bound: object, egg_name: str | None) -> RuntimeExpr:
     builder = Builder()
     index = builder.add(
         "nodes",
-        pb.Node(sort_id=builder.import_ref(sort), kind=Oneof[Literal["var"], str]("var", name)),
+        pb.Node(sort_id=builder.import_ref(sort), kind=Oneof[Literal["var"], str]("var", egg_name or name or "_")),
     )
     return RuntimeExpr(builder.publish().ref("nodes", index))
 

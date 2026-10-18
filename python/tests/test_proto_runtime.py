@@ -47,6 +47,7 @@ from egglog import (
     f64,
     function,
     get_type_args,
+    get_var_name,
     i64,
     join,
     method,
@@ -792,7 +793,22 @@ def test_deferred_rulesets_keep_live_scope_order_and_failure_prefix(monkeypatch)
     assert not selected.deferred_rule_gens
 
 
-def test_direct_variables_are_canonical_without_an_engine(monkeypatch):
+@pytest.mark.parametrize(
+    ("name", "egg_name", "expected"),
+    [
+        ("x", None, "x"),
+        ("shown", "backend", "backend"),
+        ("shown", "x", "x"),
+        ("shown", "_x", "_x"),
+        ("shown", "0", "0"),
+        ("shown", "@x", "@x"),
+        ("shown", "_", "_"),
+        ("x", "", "x"),
+        ("", None, "_"),
+        ("", "", "_"),
+    ],
+)
+def test_direct_variables_are_canonical_without_an_engine(monkeypatch, name, egg_name, expected):
     def forbidden(*args, **kwargs):
         pytest.fail("Variable authoring accessed the engine")
 
@@ -802,12 +818,13 @@ def test_direct_variables_are_canonical_without_an_engine(monkeypatch):
         def __init__(self, value: i64) -> None: ...
 
     for sort in (i64, VariableBox, Vec[i64]):
-        first, second = var("x", sort), var("x", sort)
+        first, second = var(name, sort, egg_name=egg_name), var(name, sort, egg_name=egg_name)
         assert first.__egg_ref__ != second.__egg_ref__
-        assert str(first) == "x"
+        assert str(first) == expected
+        assert get_var_name(first) == expected
         for expression in (first, second):
             record = expression.__egg_ref__.read()
-            assert record.kind == Oneof[Literal["var"], str]("var", "x")
+            assert record.kind == Oneof[Literal["var"], str]("var", expected)
             assert StructuralView(expression.__egg_ref__.owner.ref("sorts", record.sort_id)) == StructuralView(
                 sort.__egg_sort__
             )
@@ -815,20 +832,41 @@ def test_direct_variables_are_canonical_without_an_engine(monkeypatch):
         decoded = pb.Program.from_binary(packed.program.to_binary())
         owner = Builder.from_program(decoded).publish()
         assert pack([owner.ref("nodes", index) for index in packed.indices]).program.to_binary() == decoded.to_binary()
+        for index in packed.indices:
+            restored = RuntimeExpr(owner.ref("nodes", index))
+            assert str(restored) == expected
+            assert get_var_name(restored) == expected
         detached = first.__egg_ref__.read()
         detached.kind = Oneof[Literal["var"], str]("var", "changed")
-        assert str(first) == "x"
+        assert str(first) == expected
     assert [str(value) for value in vars_("x y", i64)] == ["x", "y"]
-    with pytest.raises(NotImplementedError, match="aliases"):
-        var("x", i64, egg_name="backend")
-    with pytest.raises(NotImplementedError, match="aliases"):
-        var("x", i64, egg_name="x")
     with pytest.raises(TypeError, match="concrete"):
         var("x", Vec)
     with pytest.raises(TypeError, match="concrete"):
         var("x", TypeVar("T"))
-    with pytest.raises(NotImplementedError, match="Empty variable"):
-        var("", i64)
+
+
+@pytest.mark.parametrize("invalid", [None, False, 0, [], b"", object()])
+def test_variable_names_and_aliases_validate_before_fallback(invalid):
+    with pytest.raises(TypeError, match="Variable names must be strings"):
+        var(invalid, i64, egg_name="valid")
+    if invalid is not None:
+        with pytest.raises(TypeError, match="Variable aliases must be strings"):
+            var("valid", i64, egg_name=invalid)
+
+
+def test_canonical_variable_authoring_is_thread_local(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Variable authoring accessed the engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        values = list(pool.map(lambda _: var("shown", i64, egg_name="shared"), range(16)))
+    assert len({value.__egg_ref__ for value in values}) == 16
+    assert all(StructuralView(value.__egg_ref__) == StructuralView(values[0].__egg_ref__) for value in values)
+    detached = values[0].__egg_ref__.read()
+    detached.kind = Oneof[Literal["var"], str]("var", "changed")
+    assert [get_var_name(value) for value in values] == ["shared"] * 16
 
 
 @pytest.mark.parametrize("bidirectional", [False, True])
@@ -3141,8 +3179,9 @@ def test_named_eager_binders_keep_slots_and_callee_closure():
 
 
 @pytest.mark.parametrize("spelling", ["_0", "value", "external"])
-def test_named_eager_body_rejects_free_variable_by_identity(spelling):
-    external = var(spelling, i64)
+@pytest.mark.parametrize("aliased", [False, True])
+def test_named_eager_body_rejects_free_variable_by_identity(spelling, aliased):
+    external = var("shown" if aliased else spelling, i64, egg_name=spelling if aliased else None)
 
     @function
     def body(value: i64) -> i64:

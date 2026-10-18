@@ -567,8 +567,11 @@ def test_saved_transcript_rejects_literal_explicit_variable_name() -> None:
     direct.check(destination(i64(7)))
 
     recorded = EGraph(source(i64(7)), save_egglog_string=True)
-    with pytest.raises(ValueError, match="Egglog variable name"):
+    before, history = recorded.freeze(), recorded.as_egglog_string
+    with pytest.raises(ValueError, match=r'^identifier "0" cannot be rendered as one native source atom$'):
         recorded.register(rule(source(x)).then(destination(x)))
+    assert recorded.freeze() == before
+    assert recorded.as_egglog_string == history
 
 
 @pytest.mark.parametrize(
@@ -591,31 +594,89 @@ def test_saved_transcript_rejects_non_source_variable_name(python_name: str, egg
 
     recorded = EGraph(source(i64(7)), save_egglog_string=True)
     before, history = recorded.freeze(), recorded.as_egglog_string
-    message = (
-        r'^identifier "has space" cannot be rendered as one native source atom$'
-        if python_name == "has space" and egg_name is None
-        else "Egglog variable name"
-    )
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match="cannot be rendered as one native source atom") as caught:
         recorded.register(rule(source(x)).then(destination(x)))
+    assert str(caught.value) == f'identifier "{get_var_name(x)}" cannot be rendered as one native source atom'
     assert recorded.freeze() == before
     assert recorded.as_egglog_string == history
 
 
-def test_saved_transcript_rejects_variable_wildcard_semantic_drift() -> None:
+@pytest.mark.parametrize("shared", [False, True])
+def test_saved_transcript_rejects_variable_wildcard_semantic_drift(*, shared: bool) -> None:
     source = relation("wildcard_variable_source", i64, i64)
     destination = relation("wildcard_variable_destination")
     x = var("x", i64, egg_name="_")
-    repeated_variable_rule = rule(source(x, x)).then(destination())
+    other = x if shared else var("other", i64, egg_name="_")
+    repeated_variable_rule = rule(source(x, other)).then(destination())
 
     direct = EGraph(source(i64(1), i64(2)))
     direct.register(repeated_variable_rule)
     direct.run(1)
     assert not direct.check_bool(destination())
+    direct.register(source(i64(2), i64(2)))
+    direct.run(1)
+    direct.check(destination())
 
     recorded = EGraph(source(i64(1), i64(2)), save_egglog_string=True)
-    with pytest.raises(ValueError, match="Egglog variable name"):
+    before, history = recorded.freeze(), recorded.as_egglog_string
+    with pytest.raises(ValueError, match=r'^identifier "_" cannot be rendered as one native source atom$'):
         recorded.register(repeated_variable_rule)
+    assert recorded.freeze() == before
+    assert recorded.as_egglog_string == history
+
+
+@pytest.mark.parametrize(("alias", "joined"), [("x", True), ("_x", False)])
+def test_variable_aliases_select_canonical_query_identity(alias: str, *, joined: bool) -> None:
+    source = relation("canonical_variable_pair", i64, i64)
+    destination = relation("canonical_variable_match", i64, i64)
+    left, right = var("x", i64), var("shown", i64, egg_name=alias)
+    assert left.__egg_ref__ != right.__egg_ref__
+    selected = ruleset(rule(source(left, right)).then(destination(left, right)))
+    graph = EGraph(source(i64(1), i64(2)), save_egglog_string=True)
+    graph.run(selected)
+    # Unlike the historical implicit '_x' backend prefix, aliases now select
+    # the exact canonical name: alias 'x' joins, alias '_x' stays distinct.
+    assert graph.function_size(destination) == (0 if joined else 1)
+    graph.register(source(i64(3), i64(3)))
+    graph.run(selected)
+    graph.check(destination(i64(3), i64(3)))
+    assert graph.function_size(destination) == (1 if joined else 2)
+    _replay_recorded_source(graph.as_egglog_string)
+
+
+def test_variable_aliases_avoid_capture_and_keep_query_binders_independent() -> None:
+    class AliasLeaf(Expr):
+        def __init__(self, value: i64) -> None: ...
+
+    class AliasPair(Expr):
+        def __init__(self, left: AliasLeaf, right: AliasLeaf) -> None: ...
+
+    source = relation("alias_capture_source", i64)
+    other_source = relation("alias_other_source", i64)
+    other_destination = relation("alias_other_destination", i64)
+    value = var("shown", i64, egg_name="__expr_0")
+    independent = var("__expr_0", i64)
+    shared = AliasLeaf(value)
+    selected = ruleset(
+        rule(source(value)).then(AliasPair(shared, shared)),
+        rule(other_source(independent)).then(other_destination(independent)),
+    )
+    graph = EGraph(source(i64(7)), other_source(i64(9)), save_egglog_string=True)
+    graph.run(selected)
+    graph.check(AliasPair(AliasLeaf(i64(7)), AliasLeaf(i64(7))), other_destination(i64(9)))
+    assert graph.function_size(AliasLeaf) == 1
+    assert graph.function_size(AliasPair) == 1
+    _replay_recorded_source(graph.as_egglog_string)
+
+
+@pytest.mark.parametrize("saved", [False, True])
+def test_canonical_variable_name_rejects_conflicting_query_sorts(*, saved: bool) -> None:
+    number, text = relation("alias_number", i64), relation("alias_text", String)
+    left, right = var("x", i64), var("shown", String, egg_name="x")
+    graph = EGraph(number(i64(1)), text(String("one")), save_egglog_string=saved)
+    error = ValueError if saved else EggSmolError
+    with pytest.raises(error, match="unbound or inconsistently typed variable x"):
+        graph.register(rule(number(left), text(right)).then())
 
 
 def test_eqsat_basic():
