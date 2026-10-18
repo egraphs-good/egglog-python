@@ -380,7 +380,7 @@ def test_saved_transcript_allows_command_head_name_in_rule_action() -> None:
     _replay_recorded_source(egraph.as_egglog_string)
 
 
-def test_saved_transcript_rejects_equality_head_name_in_rule_fact() -> None:
+def test_saved_transcript_preserves_equality_head_name_in_rule_fact() -> None:
     source = relation("equality_head_source", i64, i64)
     claimed = relation("equality_head_claimed", i64, i64, egg_fn="=")  # type: ignore[call-overload]
     target = relation("equality_head_target")
@@ -392,8 +392,23 @@ def test_saved_transcript_rejects_equality_head_name_in_rule_fact() -> None:
     assert not direct.check_bool(target())
 
     recorded = EGraph(source(i64(1), i64(2)), save_egglog_string=True)
-    with pytest.raises(ValueError, match="cannot be used as a fact"):
-        recorded.run(equality_head_rules)
+    recorded.run(equality_head_rules)
+    assert recorded.function_size(target) == 0
+    recorded.register(claimed(i64(1), i64(2)))
+    recorded.run(equality_head_rules)
+    recorded.check(target())
+    assert recorded.function_size(claimed) == 1
+    snapshot = pb.EGraphSnapshot.from_binary(recorded.freeze().to_binary())
+    assert snapshot.program is not None
+    declaration = next(
+        declaration
+        for declaration in snapshot.program.declarations
+        if declaration.kind is not None and declaration.kind.field == "relation" and declaration.kind.value.name == "="
+    )
+    assert declaration.bindings is not None
+    assert declaration.bindings.python is not None
+    assert declaration.bindings.python.views[0].path == [*__name__.split("."), "equality_head_claimed"]
+    _replay_recorded_source(recorded.as_egglog_string)
 
 
 def test_saved_transcript_allows_equality_head_name_as_standalone_action() -> None:
@@ -406,41 +421,74 @@ def test_saved_transcript_allows_equality_head_name_as_standalone_action() -> No
     _replay_recorded_source(egraph.as_egglog_string)
 
 
-def test_saved_transcript_rejects_literal_explicit_sort_name() -> None:
+def test_saved_transcript_preserves_literal_explicit_sort_name() -> None:
     class LiteralNamed(Expr, egg_sort="true"):
         def __init__(self) -> None: ...
 
-    egraph = EGraph(save_egglog_string=True)
+    value = LiteralNamed()
+    mapping = Map[LiteralNamed, i64].empty().insert(value, i64(7))
+    egraph = EGraph(value, save_egglog_string=True)
+    egraph.check(eq(mapping[value]).to(i64(7)), eq(mapping.length()).to(i64(1)))
+    snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
+    assert snapshot.program is not None
+    sort = next(
+        declaration.kind.value
+        for declaration in snapshot.program.declarations
+        if declaration.kind is not None
+        and declaration.kind.field == "eq_sort"
+        and declaration.kind.value.name == "true"
+    )
+    assert sort.bindings is not None
+    assert sort.bindings.python is not None
+    assert sort.bindings.python.path == [*__name__.split("."), "LiteralNamed"]
+    _replay_recorded_source(egraph.as_egglog_string)
 
-    with pytest.raises(ValueError, match="Explicit Egglog sort name"):
-        egraph.register(LiteralNamed())
 
-    assert not egraph.as_egglog_string
-
-
-def test_saved_transcript_rejects_unparseable_explicit_sort_name() -> None:
+def test_saved_transcript_preserves_unparseable_explicit_sort_name() -> None:
     class UnparseableNamed(Expr, egg_sort="has space"):
         def __init__(self) -> None: ...
 
-    egraph = EGraph(save_egglog_string=True)
-
-    with pytest.raises(ValueError, match="Explicit Egglog sort name"):
-        egraph.register(UnparseableNamed())
-
-    assert not egraph.as_egglog_string
+    value = UnparseableNamed()
+    mapping = Map[UnparseableNamed, i64].empty().insert(value, i64(7))
+    egraph = EGraph(value, save_egglog_string=True)
+    egraph.check(eq(mapping[value]).to(i64(7)), eq(mapping.length()).to(i64(1)))
+    snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
+    assert snapshot.program is not None
+    sort = next(
+        declaration.kind.value
+        for declaration in snapshot.program.declarations
+        if declaration.kind is not None
+        and declaration.kind.field == "eq_sort"
+        and declaration.kind.value.name == "has space"
+    )
+    assert sort.bindings is not None
+    assert sort.bindings.python is not None
+    assert sort.bindings.python.path == [*__name__.split("."), "UnparseableNamed"]
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("egg_name", ["_", "@internal"])
-def test_saved_transcript_rejects_context_sensitive_explicit_sort_name(egg_name: str) -> None:
+def test_saved_transcript_preserves_context_sensitive_explicit_sort_name(egg_name: str) -> None:
     class ContextSensitiveNamed(Expr, egg_sort=egg_name):
         def __init__(self) -> None: ...
 
-    egraph = EGraph(save_egglog_string=True)
-
-    with pytest.raises(ValueError, match="Explicit Egglog sort name"):
-        egraph.register(Map[ContextSensitiveNamed, i64].empty())
-
-    assert not egraph.as_egglog_string
+    value = ContextSensitiveNamed()
+    mapping = Map[ContextSensitiveNamed, i64].empty().insert(value, i64(7))
+    egraph = EGraph(value, save_egglog_string=True)
+    egraph.check(eq(mapping[value]).to(i64(7)), eq(mapping.length()).to(i64(1)))
+    snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
+    assert snapshot.program is not None
+    sort = next(
+        declaration.kind.value
+        for declaration in snapshot.program.declarations
+        if declaration.kind is not None
+        and declaration.kind.field == "eq_sort"
+        and declaration.kind.value.name == egg_name
+    )
+    assert sort.bindings is not None
+    assert sort.bindings.python is not None
+    assert sort.bindings.python.path == [*__name__.split("."), "ContextSensitiveNamed"]
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize(
@@ -452,13 +500,24 @@ def test_saved_transcript_rejects_context_sensitive_explicit_sort_name(egg_name:
         pytest.param("x\ny", id="newline"),
     ],
 )
-def test_saved_transcript_rejects_unparseable_let_name(name: str) -> None:
+def test_saved_transcript_preserves_unparseable_let_name(name: str) -> None:
     egraph = EGraph(save_egglog_string=True)
-
-    with pytest.raises(ValueError, match="does not serialize as one Egglog symbol"):
-        egraph.let(name, i64(1))
-
-    assert not egraph.as_egglog_string
+    safe_name = "".join(character if character.isalnum() else "_" for character in name)
+    first = egraph.let(name, i64(1))
+    second = egraph.let(safe_name, i64(2))
+    egraph.check(eq(first).to(i64(1)), eq(second).to(i64(2)))
+    snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
+    assert snapshot.program is not None
+    bindings = {
+        view.path[-1]: declaration.kind.value.name
+        for declaration in snapshot.program.declarations
+        if declaration.kind is not None and declaration.bindings is not None and declaration.bindings.python is not None
+        for view in declaration.bindings.python.views
+        if view.kind == pb.PythonCallKind.CONSTANT and view.path[-1] in (name, safe_name)
+    }
+    assert bindings.keys() == {name, safe_name}
+    assert bindings[name] != bindings[safe_name]
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_direct_egraph_still_accepts_non_source_let_name() -> None:
@@ -470,15 +529,31 @@ def test_direct_egraph_still_accepts_non_source_let_name() -> None:
 
 
 @pytest.mark.parametrize("name", ["has space", "x;y", "x\ny"])
-def test_saved_transcript_rejects_unparseable_ruleset_name(name: str) -> None:
-    named_ruleset = ruleset(name=name)
+def test_saved_transcript_preserves_unparseable_ruleset_name(name: str) -> None:
+    source = relation("named_ruleset_source", i64)
+    destination = relation("named_ruleset_destination", i64)
+    x = var("x", i64)
+    safe_name = "".join(character if character.isalnum() else "_" for character in name)
+    named_ruleset = ruleset(rule(source(x)).then(destination(x)), name=name)
+    other_ruleset = ruleset(rule(source(x)).then(destination(x + 1)), name=safe_name)
 
-    EGraph().run(named_ruleset)
+    direct = EGraph(source(i64(7)))
+    direct.run(named_ruleset)
+    direct.check(destination(i64(7)))
 
-    recorded = EGraph(save_egglog_string=True)
-    with pytest.raises(ValueError, match="Ruleset name"):
-        recorded.run(named_ruleset)
-    assert not recorded.as_egglog_string
+    recorded = EGraph(source(i64(7)), save_egglog_string=True)
+    recorded.run(named_ruleset)
+    recorded.check(destination(i64(7)))
+    assert recorded.function_size(destination) == 1
+    recorded.run(other_ruleset)
+    recorded.check(destination(i64(7)), destination(i64(8)))
+    assert recorded.function_size(destination) == 2
+    snapshot = pb.EGraphSnapshot.from_binary(recorded.freeze().to_binary())
+    assert snapshot.program is not None
+    names = [ruleset.name for ruleset in snapshot.program.rulesets]
+    assert len(names) >= 2
+    assert len(set(names)) == len(names)
+    _replay_recorded_source(recorded.as_egglog_string)
 
 
 def test_saved_transcript_rejects_literal_explicit_variable_name() -> None:
@@ -515,8 +590,16 @@ def test_saved_transcript_rejects_non_source_variable_name(python_name: str, egg
     direct.check(destination(i64(7)))
 
     recorded = EGraph(source(i64(7)), save_egglog_string=True)
-    with pytest.raises(ValueError, match="Egglog variable name"):
+    before, history = recorded.freeze(), recorded.as_egglog_string
+    message = (
+        r'^identifier "has space" cannot be rendered as one native source atom$'
+        if python_name == "has space" and egg_name is None
+        else "Egglog variable name"
+    )
+    with pytest.raises(ValueError, match=message):
         recorded.register(rule(source(x)).then(destination(x)))
+    assert recorded.freeze() == before
+    assert recorded.as_egglog_string == history
 
 
 def test_saved_transcript_rejects_variable_wildcard_semantic_drift() -> None:
