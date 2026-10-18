@@ -8,15 +8,21 @@ The high level bindings available at the top module (`egglog`) expose most of th
 
 Any EGraph can also be converted to egglog with the `egraph.as_egglog_string` property, as long as it was created with `EGraph(save_egglog_string=True)`.
 Call `egraph.close()` to remove that saved transcript when it is no longer
-needed. A recorded e-graph does not accept further commands after it is closed.
+needed. A recorded e-graph does not accept further logical commands after it is closed.
 If a failure cannot be represented by Egglog's `(fail ...)` command—for
 example, a Python exception or a parse, expansion, or typechecking error—the
 transcript can no longer be guaranteed to replay the live state. Later
 commands and transcript reads then raise `RuntimeError`.
 Because the transcript is Egglog source, explicit callable, sort, variable,
 ruleset, and `let` names must also be unambiguous Egglog symbols. Names that are
-valid only through the direct AST API are rejected before executing the saved
+valid only through the encoded protocol are rejected before executing the saved
 command; direct e-graphs continue to accept them.
+Recorded graphs currently require `seminaive=True`: Source has no initial
+configuration context for `seminaive=False`, so that combination is rejected
+before graph creation. Runtime resource policies (threads, report detail and
+`no_decomp`) are not logical transcript commands and can still be queried or
+updated after closing a transcript. Logical replay need not retain their
+optimizer plans, match ordering or profile measurements.
 
 ## Builtin Types
 
@@ -175,6 +181,12 @@ def my_foo() -> i64:
 ```
 
 The static types on the decorator preserve the type of the underlying function, so that they can all be checked statically.
+
+Runtime free-callable presentation names may be arbitrary strings, including an
+empty name, when used through the returned callable object. Namespace, type and
+member names retain their spelling checks, as do identifiers emitted in static
+Python stubs. Presentation metadata is separate from the canonical callable
+target retained by each encoded call.
 
 ### Functions vs Constructors
 
@@ -428,13 +440,17 @@ must read tables populated during the same run can opt into naive evaluation
 with `rule(..., eval_mode="naive")`. The third mode,
 `eval_mode="unsafe-seminaive"`, skips semi-naive validation and should only be
 used when the rule is known to be valid under that evaluation strategy.
+`EGraph(seminaive=False)` changes the native global default at creation,
+including compilation of internally generated rules; this is not a rewrite of
+the authored rules' local `eval_mode` metadata.
 
 Egglog normally decomposes rules before execution. `EGraph` defaults to
 `no_decomp=False`; pass `no_decomp=True` to disable decomposition for
-subsequently registered rules, and use `no_decomp()` or
+subsequently compiled rules, and use `no_decomp()` or
 `set_no_decomp(...)` to inspect or change that setting. For a single rule,
 pass `no_decomp=True` to `rule(...)` instead. This is an advanced execution
-control.
+control. Updates affect future compilation, not already installed rule plans.
+The getter queries the actual native handle; clone/pop restores its real policy.
 
 ### Variables
 

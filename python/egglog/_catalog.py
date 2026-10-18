@@ -93,7 +93,14 @@ class Catalog:
                     msg = "Python member has an invalid structural function application owner"
                     raise ValueError(msg)
                 if view.kind == pb.PythonCallKind.FUNCTION:
-                    path = _python_path(view.path)
+                    # Returned callables may have dynamic names that cannot be
+                    # spelled as Python identifiers. Qualifiers remain strict;
+                    # the static generator validates its own emitted final name.
+                    path = tuple(view.path)
+                    if not path:
+                        raise ValueError(f"Invalid Python path: {path!r}")
+                    if len(path) > 1:
+                        _python_path(path[:-1])
                     if view.owner is not None or view.has_field("receiver"):
                         msg = "A free Python function cannot have an owner or receiver"
                         raise ValueError(msg)

@@ -49,15 +49,29 @@ class EGraphState:
 
     _recording = False
 
-    def __init__(self, *, num_threads: int = 1, save_egglog_string: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        num_threads: int = 1,
+        save_egglog_string: bool = False,
+        seminaive: object = True,
+        no_decomp: object = False,
+    ) -> None:
         num_threads = _thread_count(num_threads)
+        if not isinstance(seminaive, bool) or not isinstance(no_decomp, bool):
+            msg = "Compilation flags must be booleans"
+            raise TypeError(msg)
+        if save_egglog_string and not seminaive:
+            msg = "Recording cannot replay initial seminaive=False without a Source creation context"
+            raise NotImplementedError(msg)
         self.transport = bindings._ProtoEngine()
         # The public default cost sort is an ambient engine builtin. Creation
         # references it directly; authored Programs still send full declarations.
         request = pb.CreateEGraphRequest(
             sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
-            options=pb.EGraphOptions(cost_sort=0),
+            options=pb.EGraphOptions(cost_sort=0, seminaive=seminaive),
             threads=num_threads,
+            no_decomp=no_decomp,
         )
         response = pb.CreateEGraphResponse.from_binary(self.transport.create(request.to_binary()))
         self.handle: int | None = response.egraph_id
@@ -98,19 +112,31 @@ class EGraphState:
         finally:
             self.transport.release_cost_model(self.handle, name)
 
-    def configure_resources(self, num_threads: object = _QUERY_RESOURCES) -> int:
-        """Query/update this handle over bytes and return the receiver's actual count."""
+    def configure_resources(
+        self, num_threads: object = _QUERY_RESOURCES, *, no_decomp: object = _QUERY_RESOURCES
+    ) -> pb.ConfigureEGraphResourcesResponse:
+        """Query/update this handle over bytes and return its actual native resources."""
         if self._cost_model_active or self._native_running:
             msg = "Cannot execute engine operations during a cost-model callback"
             raise RuntimeError(msg)
         if self.handle is None:
             msg = "EGraph handle has been destroyed"
             raise RuntimeError(msg)
-        operation = (
-            Oneof[Literal["query"], pb.Unit]("query", pb.Unit())
-            if num_threads is _QUERY_RESOURCES
-            else Oneof[Literal["threads"], int]("threads", _thread_count(num_threads))
-        )
+        operation: Oneof[Literal["query"], pb.Unit] | Oneof[Literal["threads"], int] | Oneof[Literal["no_decomp"], bool]
+        if no_decomp is not _QUERY_RESOURCES:
+            if num_threads is not _QUERY_RESOURCES:
+                msg = "Resource updates require exactly one operation"
+                raise ValueError(msg)
+            if not isinstance(no_decomp, bool):
+                msg = "Decomposition setting must be a boolean"
+                raise TypeError(msg)
+            operation = Oneof[Literal["no_decomp"], bool]("no_decomp", no_decomp)
+        else:
+            operation = (
+                Oneof[Literal["query"], pb.Unit]("query", pb.Unit())
+                if num_threads is _QUERY_RESOURCES
+                else Oneof[Literal["threads"], int]("threads", _thread_count(num_threads))
+            )
         request = pb.ConfigureEGraphResourcesRequest(egraph_id=self.handle, operation=operation)
         response = pb.ConfigureEGraphResourcesResponse.from_binary(
             self.transport.configure_resources(request.to_binary())
@@ -118,7 +144,10 @@ class EGraphState:
         if response.threads < 1:
             msg = "Resource response must contain a positive actual thread count"
             raise ValueError(msg)
-        return response.threads
+        if no_decomp is not _QUERY_RESOURCES and response.no_decomp is not no_decomp:
+            msg = "Resource response did not acknowledge the requested decomposition setting"
+            raise ValueError(msg)
+        return response
 
     # Receipt/arena adoption and host-error precedence share one error boundary.
     def run_program(  # noqa: C901, PLR0912

@@ -2845,13 +2845,16 @@ class ResourceTransport:
         self.creations: list[pb.CreateEGraphRequest] = []
         self.requests: list[pb.ConfigureEGraphResourcesRequest] = []
         self.threads: dict[int, int] = {}
+        self.no_decomp: dict[int, bool] = {}
         self.error: ValueError | None = None
+        self.acknowledgement: bytes | ValueError | None = None
 
     def create(self, encoded: bytes) -> bytes:
         request = pb.CreateEGraphRequest.from_binary(encoded)
         self.creations.append(request)
         handle = len(self.creations)
         self.threads[handle] = request.threads or 7
+        self.no_decomp[handle] = request.no_decomp
         return pb.CreateEGraphResponse(egraph_id=handle).to_binary()
 
     def configure_resources(self, encoded: bytes) -> bytes:
@@ -2863,24 +2866,36 @@ class ResourceTransport:
         assert request.operation is not None
         if request.operation.field == "threads":
             self.threads[request.egraph_id] = request.operation.value or 7
+        elif request.operation.field == "no_decomp":
+            self.no_decomp[request.egraph_id] = request.operation.value
         else:
             assert request.operation.field == "query"
             assert isinstance(request.operation.value, pb.Unit)
-        return pb.ConfigureEGraphResourcesResponse(threads=self.threads[request.egraph_id]).to_binary()
+        if isinstance(self.acknowledgement, ValueError):
+            raise self.acknowledgement
+        if self.acknowledgement is not None:
+            return self.acknowledgement
+        return pb.ConfigureEGraphResourcesResponse(
+            threads=self.threads[request.egraph_id], no_decomp=self.no_decomp[request.egraph_id]
+        ).to_binary()
 
     def clone_graph(self, encoded: bytes) -> bytes:
         request = pb.CloneEGraphRequest.from_binary(encoded)
         handle = max(self.threads) + 1
         self.threads[handle] = self.threads[request.egraph_id]
+        self.no_decomp[handle] = self.no_decomp[request.egraph_id]
         return pb.CloneEGraphResponse(egraph_id=handle).to_binary()
 
     def destroy(self, encoded: bytes) -> bytes:
-        del self.threads[pb.DestroyEGraphRequest.from_binary(encoded).egraph_id]
+        handle = pb.DestroyEGraphRequest.from_binary(encoded).egraph_id
+        del self.threads[handle]
+        del self.no_decomp[handle]
         return pb.DestroyEGraphResponse().to_binary()
 
     def return_to(self, encoded: bytes) -> bytes:
         request = pb.ReturnToEGraphRequest.from_binary(encoded)
         del self.threads[request.active_id]
+        del self.no_decomp[request.active_id]
         assert request.saved_id in self.threads
         return pb.ReturnToEGraphResponse().to_binary()
 
@@ -2890,6 +2905,96 @@ def resource_transport(monkeypatch: pytest.MonkeyPatch) -> ResourceTransport:
     transport = ResourceTransport()
     monkeypatch.setattr(bindings, "_ProtoEngine", lambda: transport, raising=False)
     return transport
+
+
+@pytest.mark.parametrize("seminaive", [False, True])
+@pytest.mark.parametrize("no_decomp", [False, True])
+def test_compilation_flags_use_canonical_creation_bytes(resource_transport, seminaive, no_decomp):
+    graph = EGraph(seminaive=seminaive, no_decomp=no_decomp)
+    request = resource_transport.creations[0]
+    assert request.options.has_field("seminaive")
+    assert request.options.seminaive is seminaive
+    assert request.no_decomp is no_decomp
+    assert graph.no_decomp() is no_decomp
+    assert resource_transport.requests[-1].operation == Oneof("query", pb.Unit())
+
+
+@pytest.mark.parametrize("direct_state", [False, True])
+def test_naive_recording_rejects_before_create(resource_transport, direct_state):
+    from egglog.egraph_state import EGraphState  # noqa: PLC0415
+
+    create = EGraphState if direct_state else EGraph
+    with pytest.raises(NotImplementedError, match="initial seminaive=False"):
+        create(seminaive=False, no_decomp=True, save_egglog_string=True)
+    assert not resource_transport.creations
+    assert not resource_transport.requests
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "true"])
+def test_invalid_compilation_flags_have_no_transport_effect(resource_transport, value):
+    for keyword in ("seminaive", "no_decomp"):
+        with pytest.raises(TypeError, match="booleans"):
+            EGraph(**{keyword: value})
+    assert not resource_transport.creations
+    graph = EGraph()
+    with pytest.raises(TypeError, match="boolean"):
+        graph.set_no_decomp(value)
+    assert not resource_transport.requests
+
+
+def test_no_decomp_queries_are_uncached_and_updates_are_handle_local(resource_transport):
+    graph = EGraph(no_decomp=True)
+    assert graph.no_decomp()
+    with graph:
+        assert graph.no_decomp()
+        assert graph.set_no_decomp(False) is None
+        disabled = resource_transport.requests[-1]
+        assert disabled.egraph_id == 2
+        assert disabled.operation == Oneof("no_decomp", False)
+        assert not graph.no_decomp()
+        graph.set_no_decomp(True)
+        assert resource_transport.requests[-1].to_binary() != disabled.to_binary()
+    assert graph.no_decomp()
+    assert resource_transport.requests[-1].egraph_id == 1
+    resource_transport.no_decomp[1] = False
+    assert not graph.no_decomp()
+    graph._state.destroy()
+    calls = len(resource_transport.requests)
+    with pytest.raises(RuntimeError, match="destroyed"):
+        graph.no_decomp()
+    with pytest.raises(RuntimeError, match="destroyed"):
+        graph.set_no_decomp(False)
+    assert len(resource_transport.requests) == calls
+
+
+@pytest.mark.parametrize("failure", ["transport", "decode", "value"])
+def test_no_decomp_failed_acknowledgement_does_not_retry_or_cache(resource_transport, failure):
+    graph = EGraph()
+    original = ValueError("lost resource acknowledgement")
+    resource_transport.acknowledgement = {
+        "transport": original,
+        "decode": b"\x80",
+        "value": pb.ConfigureEGraphResourcesResponse(threads=1, no_decomp=False).to_binary(),
+    }[failure]
+    with pytest.raises(ValueError) as caught:  # noqa: PT011 -- decoder wording is provider-owned; identity/effects below.
+        graph.set_no_decomp(True)
+    if failure == "transport":
+        assert caught.value is original
+    assert len(resource_transport.requests) == 1
+    resource_transport.acknowledgement = None
+    assert graph.no_decomp()
+    assert len(resource_transport.requests) == 2
+
+
+@pytest.mark.parametrize("active", ["_cost_model_active", "_native_running"])
+def test_no_decomp_resource_calls_reject_active_callbacks_before_transport(resource_transport, active):
+    graph = EGraph()
+    setattr(graph._state, active, True)
+    with pytest.raises(RuntimeError, match="cost-model callback"):
+        graph.no_decomp()
+    with pytest.raises(RuntimeError, match="cost-model callback"):
+        graph.set_no_decomp(True)
+    assert not resource_transport.requests
 
 
 @pytest.mark.parametrize("use_setter", [False, True], ids=["constructor", "setter"])

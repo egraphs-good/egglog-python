@@ -1313,12 +1313,14 @@ class EGraph:
         num_threads: int = 1,
         no_decomp: bool = False,
     ) -> None:
-        if not seminaive or no_decomp:
-            msg = "Nondefault native execution flags are not migrated to the shared adapter"
-            raise NotImplementedError(msg)
         with _TRACER.start_as_current_span("create"):
             with _TRACER.start_as_current_span("create_bindings"):
-                self._state = EGraphState(num_threads=num_threads, save_egglog_string=save_egglog_string)
+                self._state = EGraphState(
+                    num_threads=num_threads,
+                    save_egglog_string=save_egglog_string,
+                    seminaive=seminaive,
+                    no_decomp=no_decomp,
+                )
             self._state_stack = []
             self._token_stack = []
             self._cost_model_frames = []
@@ -1344,7 +1346,7 @@ class EGraph:
 
     def num_threads(self) -> int:
         """Return the number of worker threads configured for this e-graph."""
-        return self._state.configure_resources()
+        return self._state.configure_resources().threads
 
     def set_num_threads(self, num_threads: int) -> None:
         """
@@ -1356,14 +1358,16 @@ class EGraph:
         self._state.configure_resources(num_threads)
 
     def no_decomp(self) -> bool:
-        """Return whether rule decomposition is disabled for this e-graph."""
-        return False
+        """Query whether decomposition is disabled for future rule compilation."""
+        return self._state.configure_resources().no_decomp
 
     def set_no_decomp(self, no_decomp: bool) -> None:
-        """Configure rule decomposition when the shared adapter supports it."""
-        if no_decomp:
-            msg = "Handle-wide decomposition settings are not represented by the shared protocol"
-            raise NotImplementedError(msg)
+        """
+        Configure decomposition for subsequently compiled rules, not installed plans.
+
+        This runtime policy is excluded from logical Egglog transcripts.
+        """
+        self._state.configure_resources(no_decomp=no_decomp)
 
     @property
     def as_egglog_string(self) -> str:

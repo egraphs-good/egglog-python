@@ -23,13 +23,11 @@ import egglog.builtins as egg_builtins
 import egglog.egraph_state as egraph_state_module
 from egglog import *
 from egglog.declarations import (
-    BiRewriteDecl,
     CallDecl,
     FunctionRef,
     Ident,
     JustTypeRef,
     MethodRef,
-    RewriteDecl,
     TypedExprDecl,
 )
 from egglog.runtime import RuntimeExpr, RuntimeFunction
@@ -121,6 +119,32 @@ def test_per_egraph_configuration() -> None:
     assert not egraph.no_decomp()
 
 
+def test_no_decomp_uses_native_clone_return_state() -> None:
+    egraph = EGraph(no_decomp=True)
+    egraph.push()
+    assert egraph.no_decomp()
+    egraph.set_no_decomp(False)
+    assert not egraph.no_decomp()
+    egraph.pop()
+    assert egraph.no_decomp()
+
+
+def test_no_decomp_saved_noop_update_invalidates_return_pairing() -> None:
+    egraph = EGraph()
+    saved = egraph._state
+    egraph.push()
+    active = egraph._state
+    assert not saved.configure_resources().no_decomp  # A query preserves pairing.
+    saved.configure_resources(no_decomp=False)  # Even a no-op is an acknowledged update.
+    with pytest.raises(ValueError, match="stale scope return"):
+        egraph.pop()
+    assert egraph._state is active
+    assert saved.handle is not None
+    assert active.handle is not None
+    active.destroy()
+    saved.destroy()
+
+
 def test_independent_egraphs_run_concurrently_after_setup() -> None:
     # A fresh process verifies that the public setup below resolves lazy declarations.
     subprocess.run(
@@ -190,30 +214,35 @@ def test_zero_threads_uses_available_parallelism(*, use_setter: bool) -> None:
 
 
 @pytest.mark.parametrize("use_setter", [False, True], ids=["constructor", "setter"])
-def test_egraph_no_decomp_reaches_saved_rules(*, use_setter: bool) -> None:
+def test_egraph_no_decomp_is_runtime_policy_not_saved_rule_metadata(*, use_setter: bool) -> None:
     rel = relation(f"no_decomp_rel_{use_setter}", i64)
     x = var("x", i64)
     egraph = EGraph(save_egglog_string=True, no_decomp=not use_setter)
     if use_setter:
         egraph.set_no_decomp(True)
 
-    egraph.register(rule(rel(x)).then(rel(x + 1)))
+    assert egraph.no_decomp()
+    egraph.register(rel(i64(0)), rule(rel(x)).then(rel(x + 1)))
+    egraph.run(run())
+    egraph.check(rel(i64(1)))
 
-    assert ":no-decomp" in egraph.as_egglog_string
+    transcript = egraph.as_egglog_string
+    assert ":no-decomp" not in transcript
+    egraph.set_no_decomp(False)
+    assert not egraph.no_decomp()
+    assert egraph.as_egglog_string == transcript
+    _replay_recorded_source(transcript)
 
 
-def test_global_naive_mode_reaches_saved_rules() -> None:
-    rel = relation("global_naive_saved_rule", i64)
-    x = var("x", i64)
-    egraph = EGraph(save_egglog_string=True, seminaive=False)
-
-    egraph.register(rule(rel(x)).then(rel(x + 1)))
-
-    assert ":naive" in egraph.as_egglog_string
+def test_global_naive_recording_rejects_missing_source_creation_context() -> None:
+    with pytest.raises(NotImplementedError, match="initial seminaive=False"):
+        EGraph(save_egglog_string=True, seminaive=False)
 
 
 @pytest.mark.parametrize("bidirectional", [False, True], ids=["rewrite", "birewrite"])
-def test_global_rule_options_reach_saved_rewrites(*, bidirectional: bool) -> None:
+def test_global_rule_options_execute_without_fake_saved_rewrite_options(*, bidirectional: bool) -> None:
+    from egglog.run_report import RuleKey  # noqa: PLC0415
+
     class RewriteConfigExpr(Expr):
         def __init__(self, value: i64Like) -> None: ...
 
@@ -225,14 +254,13 @@ def test_global_rule_options_reach_saved_rewrites(*, bidirectional: bool) -> Non
         return rewrite_config_lookup(value)
 
     grounded = relation("rewrite_config_grounded", i64)
-    x = var("x", i64, egg_name="__expr_0")
+    x = var("__expr_0", i64)
     rewrite_builder = birewrite if bidirectional else rewrite
     registered = rewrite_builder(RewriteConfigExpr(x)).to(RewriteConfigExpr(rewrite_config_read(x)), grounded(x))
     egraph = EGraph(
         set_(rewrite_config_lookup(i64(1))).to(i64(2)),
         grounded(i64(1)),
         RewriteConfigExpr(i64(1)),
-        save_egglog_string=True,
         seminaive=False,
         no_decomp=True,
     )
@@ -241,25 +269,23 @@ def test_global_rule_options_reach_saved_rewrites(*, bidirectional: bool) -> Non
     report = egraph.run(1)
     egraph.check(eq(RewriteConfigExpr(i64(1))).to(RewriteConfigExpr(i64(2))))
 
-    transcript = egraph.as_egglog_string
-    expected_rule_count = 2 if bidirectional else 1
-    expected_decl_type = BiRewriteDecl if bidirectional else RewriteDecl
+    assert egraph.no_decomp()
     assert report.num_matches_per_rule
-    assert all(isinstance(decl, expected_decl_type) for decl in report.num_matches_per_rule)
-    assert transcript.count(":naive") == expected_rule_count
-    assert transcript.count(":no-decomp") == expected_rule_count
-    _replay_recorded_source(transcript)
+    assert set(report.num_matches_per_rule) == {RuleKey(registered.__egg_ref__)}
+    with pytest.raises(NotImplementedError, match="initial seminaive=False"):
+        EGraph(save_egglog_string=True, seminaive=False, no_decomp=True)
 
 
 @pytest.mark.parametrize("egg_name", ["check", "true", "_", "@internal"])
-def test_saved_transcript_rejects_parser_sensitive_explicit_callable_name(egg_name: str) -> None:
+def test_saved_transcript_preserves_parser_sensitive_explicit_callable_name(egg_name: str) -> None:
     rel = relation(f"python_name_{egg_name}", egg_fn=egg_name)
+    authored = rel()
+    assert authored.__egg_ref__.read().kind.value.func == egg_name
     egraph = EGraph(save_egglog_string=True)
 
-    with pytest.raises(ValueError, match="Explicit Egglog callable name"):
-        egraph.register(rel())
-
-    assert not egraph.as_egglog_string
+    egraph.register(authored)
+    egraph.check(authored)
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
@@ -926,11 +952,14 @@ def test_saved_egglog_transcript_close_rejects_commands_before_mutation() -> Non
     class ClosedExpr(Expr):
         def __init__(self, value: i64Like) -> None: ...
 
-    egraph = EGraph(ClosedExpr(1), save_egglog_string=True)
+    egraph = EGraph(ClosedExpr(1), save_egglog_string=True, no_decomp=True)
     before = egraph.freeze()
     transcript = egraph.as_egglog_string
     assert transcript
     egraph.close()
+    assert egraph.no_decomp()
+    egraph.set_no_decomp(False)
+    assert not egraph.no_decomp()
 
     with pytest.raises(ValueError, match="transcript has been closed"):
         egraph.register(ClosedExpr(2))

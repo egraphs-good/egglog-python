@@ -13,7 +13,7 @@ from protobuf import Oneof
 
 from egglog import f64, i64
 from egglog._catalog import Catalog
-from egglog._program import Builder
+from egglog._program import Builder, StructuralView, pack
 from egglog.pretty import pretty_ref
 from egglog.runtime import RuntimeExpr, RuntimeFunction, _class_for_sort
 from egglog.type_constraint_solver import TypeConstraintError
@@ -1109,6 +1109,97 @@ def test_catalog_rejects_ambiguous_presentation_and_invalid_paths():
     kind.value.bindings.python.path = ["bad-name"]
     with pytest.raises(ValueError, match="Python path"):
         Catalog(source)
+
+
+@pytest.mark.parametrize("name", ["", "123", "eval_mode_unsafe-seminaive", "class", "@internal"])
+def test_runtime_free_function_names_preserve_exact_callee_and_core_order(monkeypatch, name):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Catalog names and calls cannot create an engine")
+
+    monkeypatch.setattr("egglog.bindings._ProtoEngine", forbidden)
+    source = pb.Program.from_binary((Path(__file__).parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
+    integer = next(
+        index
+        for index, sort in enumerate(source.sorts)
+        if sort.kind.field == "family" and sort.kind.value.name == "i64" and not sort.kind.value.args
+    )
+    source.declarations.append(
+        pb.Declaration(
+            kind=Oneof(
+                "function",
+                pb.Function(
+                    name="exact.declared.table",
+                    inputs=[pb.Arg(sort=integer), pb.Arg(sort=integer)],
+                    output=integer,
+                ),
+            ),
+            bindings=pb.CallableBindings(
+                python=pb.PythonBindings(
+                    views=[
+                        pb.PythonCallable(
+                            kind=pb.PythonCallKind.FUNCTION,
+                            path=["example", name],
+                            params=[
+                                pb.PythonParameter(core_input=1, name="right"),
+                                pb.PythonParameter(core_input=0, name="left"),
+                            ],
+                        )
+                    ]
+                )
+            ),
+        )
+    )
+    arguments = [len(source.nodes), len(source.nodes) + 1]
+    source.nodes.extend(
+        pb.Node(
+            sort_id=integer,
+            kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", value))),
+        )
+        for value in (9, 4)
+    )
+    catalog = Catalog(source)
+    reference, view = catalog.functions["example", name]
+    result = RuntimeFunction(reference, view)(
+        RuntimeExpr(reference.owner.ref("nodes", arguments[0])),
+        left=RuntimeExpr(reference.owner.ref("nodes", arguments[1])),
+    )
+    assert isinstance(result, RuntimeExpr)
+    call = result.__egg_ref__.read().kind.value
+    assert call.func == "exact.declared.table"
+    assert [result.__egg_ref__.owner.ref("nodes", index).read().kind.value.value.value for index in call.args] == [4, 9]
+    restored = Catalog(pb.Program.from_binary(pack([result.__egg_ref__]).program.to_binary()))
+    restored_reference, restored_view = restored.functions["example", name]
+    assert restored_view == view
+    assert StructuralView(restored_reference) == StructuralView(reference)
+    restored.functions.clear()
+    restored.reindex()
+    assert restored.functions["example", name] == (restored_reference, restored_view)
+    duplicate = pb.Declaration.from_binary(source.declarations[-1].to_binary())
+    duplicate.kind.value.name = "different.declared.table"
+    source.declarations.append(duplicate)
+    with pytest.raises(ValueError, match="binding collision"):
+        Catalog(source)
+
+
+@pytest.mark.parametrize("path", [[], ["", "f"], ["class", "f"], ["bad-name", "f"]])
+def test_free_function_paths_keep_nonempty_identifier_qualifiers(path):
+    source = catalog_fixture()
+    source.declarations[1].bindings.python.views = [pb.PythonCallable(kind=pb.PythonCallKind.FUNCTION, path=path)]
+    with pytest.raises(ValueError, match="Python path"):
+        Catalog(source)
+
+
+@pytest.mark.parametrize("name", ["", "not-a-python-identifier", "class"])
+def test_runtime_free_names_do_not_weaken_static_generator_identifiers(name):
+    root = Path(__file__).resolve().parents[2]
+    source = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
+    declaration = next(d for d in source.declarations if d.kind.value.name == "egglog.core.string.concat")
+    view = declaration.bindings.python.views[0]
+    view.path[-1] = name
+    assert tuple(view.path) in Catalog(source).functions
+    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
+    with pytest.raises(ValueError, match="Invalid Python identifier"):
+        render(source)
 
 
 @pytest.mark.parametrize("kind", ["constructor", "function", "primitive", "relation", "host_primitive"])
