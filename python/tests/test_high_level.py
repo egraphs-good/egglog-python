@@ -734,7 +734,28 @@ def test_let_auto_prefixes_global_names(capfd: pytest.CaptureFixture[str]):
 
     captured = capfd.readouterr()
     assert "should start with `$`" not in captured.err
-    assert "(let $x " in egraph.as_egglog_string
+    snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
+    assert snapshot.program is not None
+    declaration = next(
+        declaration
+        for declaration in snapshot.program.declarations
+        if declaration.bindings is not None
+        and declaration.bindings.python is not None
+        and any(
+            view.kind == pb.PythonCallKind.CONSTANT and view.path[-1] == "x"
+            for view in declaration.bindings.python.views
+        )
+    )
+    assert declaration.kind is not None
+    assert declaration.kind.field == "function"
+    assert declaration.kind.value.inputs == []
+    assert not declaration.kind.value.has_field("merge")
+    node = cast("RuntimeExpr", x).__egg_ref__.read()
+    assert node.kind is not None
+    assert node.kind.field == "call"
+    assert node.kind.value.func == declaration.kind.value.name
+    assert node.kind.value.args == []
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_failed_check_does_not_materialize_shared_constructor_expressions() -> None:
@@ -925,13 +946,34 @@ def test_generated_relation_names_reserve_explicit_backend_names(generated_first
     generated_action = generated(i64(1))
     explicit_action = explicit(i64(2))
     actions = (generated_action, explicit_action) if generated_first else (explicit_action, generated_action)
-    egraph = EGraph(save_egglog_string=True)
+    marker = relation("batch_collision_marker", i64)
+    egraph = EGraph(marker(i64(0)), save_egglog_string=True)
+    before, history = egraph.freeze(), egraph.as_egglog_string
 
-    egraph.register(*actions)
+    with pytest.raises(ValueError, match=r"^Ambiguous same-name definitions require reconciliation:"):
+        egraph.register(marker(i64(9)), *actions)
 
-    egraph.check(generated(i64(1)), explicit(i64(2)))
+    assert egraph.freeze() == before
+    assert egraph.as_egglog_string == history
+    egraph.check_fail(marker(i64(9)))
+
+    distinct = relation("distinct_explicit_relation", i64, egg_fn=f"{generated_candidate}_distinct")
+    distinct_actions = (generated_action, distinct(i64(2)))
+    egraph.register(*(distinct_actions if generated_first else distinct_actions[::-1]))
+    egraph.check(generated(i64(1)), distinct(i64(2)))
     egraph.check_fail(generated(i64(2)))
-    egraph.check_fail(explicit(i64(1)))
+    egraph.check_fail(distinct(i64(1)))
+    joined = relation("distinct_backend_join", i64)
+    value = var("distinct_backend_join_value", i64)
+    join_rules = ruleset(rule(generated(value), distinct(value)).then(joined(value)))
+    egraph.run(join_rules)
+    assert egraph.function_size(joined) == 0
+    egraph.register(distinct(i64(1)))
+    egraph.run(join_rules)
+    egraph.check(joined(i64(1)))
+    egraph.check_fail(joined(i64(2)))
+    assert egraph.function_size(joined) == 1
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
@@ -989,18 +1031,38 @@ def test_synthetic_lets_do_not_capture_unbound_variables(*, save_egglog_string: 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
 def test_late_explicit_backend_name_cannot_replace_registered_generated_relation(*, save_egglog_string: bool) -> None:
     generated = relation("late_explicit_backend_name", i64)
-    egraph = EGraph(save_egglog_string=save_egglog_string)
-    egraph.register(generated(i64(1)))
+    marker = relation("late_relation_collision_marker", i64)
+    egraph = EGraph(generated(i64(1)), marker(i64(0)), save_egglog_string=save_egglog_string)
+    before = egraph.freeze()
     transcript = egraph.as_egglog_string if save_egglog_string else None
 
     generated_name = f"{__name__.replace('.', '_')}_late_explicit_backend_name"
     explicit = relation("late_explicit_relation", i64, egg_fn=generated_name)
-    with pytest.raises(ValueError, match="already registered"):
-        egraph.register(explicit(i64(2)))
+    expected_error = ValueError if save_egglog_string else EggSmolError
+    with pytest.raises(expected_error, match=r"^conflicting Python binding$") as caught:
+        egraph.register(marker(i64(9)), explicit(i64(2)))
 
-    egraph.check(generated(i64(1)))
+    assert type(caught.value) is expected_error
+    if not save_egglog_string:
+        error = caught.value.__dict__["_egglog_proto_error"]
+        assert error.code == pb.ErrorCode.INVALID_PROGRAM
+        assert error.location is None
+    assert egraph.freeze() == before
     if transcript is not None:
-        assert egraph.as_egglog_string.startswith(transcript)
+        assert egraph.as_egglog_string == transcript
+    egraph.check(generated(i64(1)))
+    egraph.check_fail(generated(i64(2)))
+    egraph.check_fail(marker(i64(9)))
+    assert egraph.function_size(generated) == 1
+    assert before.program is not None
+    assert not any(
+        view.path and view.path[-1] == "late_explicit_relation"
+        for declaration in before.program.declarations
+        if declaration.bindings is not None and declaration.bindings.python is not None
+        for view in declaration.bindings.python.views
+    )
+    if transcript is not None:
+        _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
@@ -1011,17 +1073,39 @@ def test_duplicate_explicit_backend_name_does_not_publish_a_failed_alias(*, save
     @function(egg_fn="duplicate_explicit_backend")
     def second(value: i64Like) -> i64: ...
 
-    egraph = EGraph(set_(first(1)).to(i64(10)), save_egglog_string=save_egglog_string)
+    marker = relation("late_function_collision_marker", i64)
+    egraph = EGraph(set_(first(1)).to(i64(10)), marker(i64(0)), save_egglog_string=save_egglog_string)
+    before = egraph.freeze()
     transcript = egraph.as_egglog_string if save_egglog_string else None
 
-    with pytest.raises(ValueError, match="already registered"):
-        egraph.register(set_(second(2)).to(i64(20)))
+    expected_error = ValueError if save_egglog_string else EggSmolError
+    with pytest.raises(expected_error, match=r"^conflicting Python binding$") as caught:
+        egraph.register(marker(i64(9)), set_(second(2)).to(i64(20)))
 
-    assert egraph.lookup_function_value(first(1)) == i64(10)
-    assert "first" in str(egraph.freeze())
+    assert type(caught.value) is expected_error
+    if not save_egglog_string:
+        error = caught.value.__dict__["_egglog_proto_error"]
+        assert error.code == pb.ErrorCode.INVALID_PROGRAM
+        assert error.location is None
+    assert egraph.freeze() == before
     if transcript is not None:
         assert egraph.as_egglog_string == transcript
-        _replay_recorded_source(transcript)
+    assert egraph.lookup_function_value(first(1)) == i64(10)
+    assert egraph.lookup_function_value(first(2)) is None
+    egraph.check_fail(marker(i64(9)))
+    assert egraph.function_size(first) == 1
+    assert before.program is not None
+    paths = [
+        view.path[-1]
+        for declaration in before.program.declarations
+        if declaration.bindings is not None and declaration.bindings.python is not None
+        for view in declaration.bindings.python.views
+        if view.path
+    ]
+    assert "first" in paths
+    assert "second" not in paths
+    if transcript is not None:
+        _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
@@ -1029,19 +1113,42 @@ def test_late_explicit_backend_name_cannot_replace_registered_generated_sort(*, 
     class GeneratedLateSort(Expr):
         def __init__(self) -> None: ...
 
-    egraph = EGraph(save_egglog_string=save_egglog_string)
-    egraph.register(GeneratedLateSort())
+    marker = relation("late_sort_collision_marker", i64)
+    egraph = EGraph(GeneratedLateSort(), marker(i64(0)), save_egglog_string=save_egglog_string)
+    before = egraph.freeze()
     transcript = egraph.as_egglog_string if save_egglog_string else None
 
     class ExplicitLateSort(Expr, egg_sort=f"{__name__}.GeneratedLateSort"):
         def __init__(self) -> None: ...
 
-    with pytest.raises(ValueError, match="already registered"):
-        egraph.register(ExplicitLateSort())
+    expected_error = ValueError if save_egglog_string else EggSmolError
+    with pytest.raises(expected_error, match=r"^conflicting language binding$") as caught:
+        egraph.register(marker(i64(9)), ExplicitLateSort())
 
-    egraph.check(GeneratedLateSort())
+    assert type(caught.value) is expected_error
+    if not save_egglog_string:
+        error = caught.value.__dict__["_egglog_proto_error"]
+        assert error.code == pb.ErrorCode.INVALID_PROGRAM
+        assert error.location is None
+    assert egraph.freeze() == before
     if transcript is not None:
-        assert egraph.as_egglog_string.startswith(transcript)
+        assert egraph.as_egglog_string == transcript
+    egraph.check(GeneratedLateSort())
+    egraph.check_fail(marker(i64(9)))
+    assert egraph.function_size(GeneratedLateSort) == 1
+    assert before.program is not None
+    sort_paths = [
+        declaration.kind.value.bindings.python.path[-1]
+        for declaration in before.program.declarations
+        if declaration.kind is not None
+        and declaration.kind.field == "eq_sort"
+        and declaration.kind.value.bindings is not None
+        and declaration.kind.value.bindings.python is not None
+    ]
+    assert "GeneratedLateSort" in sort_paths
+    assert "ExplicitLateSort" not in sort_paths
+    if transcript is not None:
+        _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_generated_relation_names_avoid_command_macro_heads() -> None:
@@ -1294,13 +1401,45 @@ def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() 
         def var(cls, v: StringLike) -> Num: ...
 
     egraph = EGraph(save_egglog_string=True)
-    egraph.register(Num.var("x"))
-    egglog_string = egraph.as_egglog_string
-
-    qualified_sort = f"{__name__}.Num"
-    qualified_var = f"{__name__.replace('.', '_')}_Num_var"
-    assert f"(sort {qualified_sort})" in egglog_string
-    assert f"(constructor {qualified_var} (String) {qualified_sort})" in egglog_string
+    value = Num.var("x")
+    egraph.register(value)
+    snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
+    assert snapshot.program is not None
+    sort = next(
+        declaration.kind.value
+        for declaration in snapshot.program.declarations
+        if declaration.kind is not None and declaration.kind.field == "eq_sort"
+    )
+    assert sort.bindings is not None
+    assert sort.bindings.python is not None
+    assert sort.bindings.python.path == [*__name__.split("."), "Num"]
+    declaration = next(
+        declaration
+        for declaration in snapshot.program.declarations
+        if declaration.kind is not None and declaration.kind.field == "constructor"
+    )
+    assert declaration.bindings is not None
+    assert declaration.bindings.python is not None
+    view = declaration.bindings.python.views[0]
+    assert view.kind == pb.PythonCallKind.CLASS_METHOD
+    assert view.path == ["var"]
+    constructor = declaration.kind.value
+    assert view.owner is not None
+    assert view.owner.kind is not None
+    assert view.owner.kind.field == "sort"
+    assert view.owner.kind.value == constructor.output
+    output = snapshot.program.sorts[constructor.output]
+    assert output.kind is not None
+    assert output.kind.field == "eq"
+    assert output.kind.value == sort.name
+    argument = snapshot.program.sorts[constructor.inputs[0].sort]
+    assert argument.kind is not None
+    assert argument.kind.field == "family"
+    assert argument.kind.value.name == "String"
+    assert cast("RuntimeExpr", value).__egg_ref__.read().kind.value.func == constructor.name
+    assert egraph.function_size(Num.var) == 1
+    egraph.check(value)
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_generated_names_do_not_collide_with_lazy_builtin_declarations() -> None:
@@ -1318,26 +1457,56 @@ def test_generated_names_do_not_collide_with_lazy_builtin_declarations() -> None
 
 
 def test_parameterized_sort_names_use_allocated_argument_names() -> None:
+    from egglog._program import pack  # noqa: PLC0415
+
     egraph = EGraph(save_egglog_string=True)
+    value = Map[i64, BigRat].empty()
+    packed = pack([expr_parts(value).ref])
+    root = packed.program.nodes[packed.indices[0]]
+    sort = packed.program.sorts[root.sort_id]
+    assert sort.kind is not None
+    assert sort.kind.field == "family"
+    assert sort.kind.value.name == "Map"
+    arguments = [packed.program.sorts[index] for index in sort.kind.value.args]
+    assert [argument.kind.value.name for argument in arguments] == ["i64", "BigRat"]
 
-    egraph.register(Map[i64, BigRat].empty())
-
-    assert "(sort Map[i64,BigRat] (Map i64 BigRat))" in egraph.as_egglog_string
+    egraph.register(value)
+    egraph.check(eq(value.length()).to(i64(0)))
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_registering_bare_variable_expression_raises() -> None:
-    egraph = EGraph()
+    marker = relation("bare_variable_marker", i64)
+    egraph = EGraph(marker(i64(0)))
+    before = egraph.freeze()
 
-    with pytest.raises(ValueError, match="must be calls"):
-        egraph.register(var("x", i64))
+    with pytest.raises(EggSmolError, match="Unbound symbol x") as caught:
+        egraph.register(marker(i64(9)), var("x", i64))
+
+    error = caught.value.__dict__["_egglog_proto_error"]
+    assert error.code == pb.ErrorCode.INVALID_PROGRAM
+    assert error.location is None
+    assert egraph.freeze() == before
+    egraph.check(marker(i64(0)))
+    egraph.check_fail(marker(i64(9)))
+    assert egraph.function_size(marker) == 1
 
 
-def test_registering_let_reference_expression_raises() -> None:
-    egraph = EGraph()
+def test_registering_let_reference_preserves_bound_value() -> None:
+    egraph = EGraph(save_egglog_string=True)
     x = egraph.let("x", i64(1))
+    before = egraph.freeze()
 
-    with pytest.raises(ValueError, match="must be calls"):
-        egraph.register(x)
+    egraph.register(x)
+
+    assert egraph.freeze() == before
+    assert egraph.lookup_function_value(x) == i64(1)
+    node = cast("RuntimeExpr", x).__egg_ref__.read()
+    assert node.kind is not None
+    assert node.kind.field == "call"
+    assert node.kind.value.args == []
+    egraph.check(eq(x).to(i64(1)))
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_nested_rule_lowering_does_not_reuse_top_level_synthetic_lets() -> None:
@@ -1362,6 +1531,8 @@ def test_nested_rule_lowering_does_not_reuse_top_level_synthetic_lets() -> None:
 
 
 def test_top_level_action_factors_duplicate_sibling_edges() -> None:
+    from egglog._program import pack  # noqa: PLC0415
+
     class DuplicateEdge(Expr):
         @classmethod
         def leaf(cls, value: StringLike) -> DuplicateEdge: ...
@@ -1372,20 +1543,30 @@ def test_top_level_action_factors_duplicate_sibling_edges() -> None:
     leaf = DuplicateEdge.leaf("shared")
     first_pair = DuplicateEdge.pair(leaf, leaf)
     second_pair = DuplicateEdge.pair(first_pair, first_pair)
+    root = DuplicateEdge.pair(second_pair, second_pair)
     egraph = EGraph(save_egglog_string=True)
+    packed = pack([expr_parts(root).ref])
+    pair_name = cast("RuntimeExpr", root).__egg_ref__.read().kind.value.func
+    leaf_name = cast("RuntimeExpr", leaf).__egg_ref__.read().kind.value.func
+    index = packed.indices[0]
+    for _ in range(3):
+        node = packed.program.nodes[index]
+        assert node.kind is not None
+        assert node.kind.field == "call"
+        assert node.kind.value.func == pair_name
+        left, right = node.kind.value.args
+        assert left == right
+        index = left
+    assert packed.program.nodes[index].kind.value.func == leaf_name
+    calls = [node.kind.value for node in packed.program.nodes if node.kind is not None and node.kind.field == "call"]
+    assert sum(call.func == leaf_name for call in calls) == 1
+    assert sum(call.func == pair_name for call in calls) == 3
 
-    egraph.register(DuplicateEdge.pair(second_pair, second_pair))
-
-    lines = egraph.as_egglog_string.splitlines()
-    let_lines = [line for line in lines if line.startswith("(let $__expr_")]
-    assert len(let_lines) == 3
-    assert let_lines[0].startswith("(let $__expr_0 (")
-    assert let_lines[0].endswith(' "shared"))')
-    assert let_lines[1].startswith("(let $__expr_1 (")
-    assert let_lines[1].endswith(" $__expr_0 $__expr_0))")
-    assert let_lines[2].startswith("(let $__expr_2 (")
-    assert let_lines[2].endswith(" $__expr_1 $__expr_1))")
-    assert sum(line.endswith(" $__expr_2 $__expr_2)") for line in lines) == 1
+    egraph.register(root)
+    assert egraph.function_size(DuplicateEdge.leaf) == 1
+    assert egraph.function_size(DuplicateEdge.pair) == 3
+    egraph.check(root)
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 _DETERMINISTIC_HOISTING_SCRIPT = """
@@ -1464,13 +1645,29 @@ def test_freeze_omits_synthetic_let_bindings() -> None:
         def pair(cls, left: FreezeLetNum, right: FreezeLetNum) -> FreezeLetNum: ...
 
     shared = FreezeLetNum.var("shared")
+    root = FreezeLetNum.pair(shared, shared)
     egraph = EGraph(save_egglog_string=True)
-    egraph.register(FreezeLetNum.pair(shared, shared))
+    egraph.register(root)
 
-    assert "$__expr_" in egraph.as_egglog_string
-    frozen = str(egraph.freeze())
-    assert "FreezeLetNum.pair" in frozen
-    assert "$__expr_" not in frozen
+    snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
+    assert snapshot.program is not None
+    assert not any(
+        declaration.kind is not None and declaration.kind.field == "function"
+        for declaration in snapshot.program.declarations
+    )
+    pair_name = cast("RuntimeExpr", root).__egg_ref__.read().kind.value.func
+    pairs = [
+        node.kind.value
+        for node in snapshot.program.nodes
+        if node.kind is not None and node.kind.field == "call" and node.kind.value.func == pair_name
+    ]
+    assert len(pairs) == 1
+    assert pairs[0].args[0] == pairs[0].args[1]
+    restored = _restore_snapshot(snapshot)
+    assert restored.function_size(FreezeLetNum.var) == 1
+    assert restored.function_size(FreezeLetNum.pair) == 1
+    restored.check(root)
+    _replay_recorded_source(egraph.as_egglog_string)
 
 
 def test_integer_run_accepts_a_combined_ruleset() -> None:
