@@ -9,7 +9,7 @@ import struct
 from collections import Counter
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 import black
 from egglog_proto.egglog.v1 import egglog_pb as pb
@@ -554,7 +554,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                         if not args:
                             msg = "Function application has no function input"
                             raise ValueError(msg)
-                        function_sort = owner.ref("sorts", args[0].read().sort_id)
+                        function_sort = args[0].owner.ref("sorts", args[0].read().sort_id)
                         function_type: pb.Sort = function_sort.read()
                         if (
                             function_type.kind is None
@@ -570,7 +570,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                         ):
                             infer_sort(
                                 function_sort.owner.ref("sorts", expected),
-                                owner.ref("sorts", argument.read().sort_id),
+                                argument.owner.ref("sorts", argument.read().sort_id),
                                 0,
                                 {},
                             )
@@ -927,6 +927,45 @@ def pretty_ref(  # noqa: C901, PLR0912
                     msg = "A constant Set target must be nullary"
                     raise ValueError(msg)
                 pieces.extend([").to(", (owner.ref("nodes", assignment.value), False, False), ")"])
+            elif action.kind.field in {"delete", "subsume"}:
+                from protobuf import Oneof  # noqa: PLC0415
+
+                from ._catalog import builtin_catalog  # noqa: PLC0415
+                from ._program import Builder, _copy_record  # noqa: PLC0415
+
+                target = _copy_record(action.kind.value)
+                declaration = _definition_at(reference, "callable", target.func)
+                declared = declaration.read()
+                if declared.kind is None or not isinstance(
+                    declared.kind.value, pb.Constructor | pb.Function | pb.Relation
+                ):
+                    msg = "Delete and Subsume require a table call"
+                    raise ValueError(msg)
+                builder = Builder()
+                builder.import_ref(declaration)
+                table = declared.kind.value
+                if isinstance(table, pb.Relation):
+                    builder.import_ref(builtin_catalog().definitions["host_sort_family", "Unit"])
+                    result_sort = builder.add(
+                        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Unit")))
+                    )
+                else:
+                    result_sort = builder.import_ref(declaration.owner.ref("sorts", table.output))
+                target.args = [builder.import_ref(owner.ref("nodes", index)) for index in target.args]
+                call_node = builder.add(
+                    "nodes",
+                    pb.Node(
+                        sort_id=result_sort,
+                        kind=Oneof[Literal["call"], pb.Call]("call", target),
+                    ),
+                )
+                pieces = [
+                    f"{action.kind.field}(",
+                    (builder.publish().ref("nodes", call_node), False, False),
+                    ")",
+                ]
+            elif action.kind.field == "panic":
+                pieces = [black.format_str(f"panic({action.kind.value!r})", mode=BLACK_MODE).strip()]
             else:
                 raise NotImplementedError(f"Action presentation is not migrated: {action.kind.field}")
         else:

@@ -191,8 +191,8 @@ class TestNDArray:
             array_api_schedule,
         )
 
-    def test_reshape_after_schedule_decls_access(self):
-        _ = array_api_schedule.__egg_decls__
+    def test_reshape_after_schedule_inspection(self):
+        _ = str(array_api_schedule)
 
         x = NDArray.var("x")
         assume_shape(x, TupleInt((Int(5),)))
