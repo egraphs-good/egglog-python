@@ -8,7 +8,7 @@ import re
 import sys
 from collections.abc import Callable, Generator, Iterable, Sequence
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
 from operator import index as index_integer
@@ -56,7 +56,7 @@ from .conversion import convert_to_same_type, resolve_literal
 from .declarations import *
 from .egraph_state import *
 from .egraph_state import _CostModelObservation
-from .pretty import _format_pyobject, pretty_decl, pretty_ref
+from .pretty import _format_pyobject, pretty_ref
 from .run_report import RunReport
 from .runtime import *
 from .runtime import _ClassContext, _definition_at
@@ -2280,13 +2280,19 @@ class Schedule:
     repeat until the schedule stops changing the e-graph.
     """
 
-    def __init__(self, reference: Ref, bindings: dict[str, Ruleset | UnstableCombinedRuleset]) -> None:
+    def __init__(
+        self,
+        reference: Ref,
+        bindings: dict[str, Ruleset | UnstableCombinedRuleset],
+        schedulers: dict[str, BackOff] | None = None,
+    ) -> None:
         if reference.role != "commands":
             msg = "Schedules require a canonical command reference"
             raise TypeError(msg)
         self._command = reference
         # Resolution/lifetime ownership only; all control topology is in Command.
         self._bindings = bindings.copy()
+        self._schedulers = {} if schedulers is None else schedulers.copy()
 
     def _resolve(self, state: EGraphState | None) -> Ref:  # noqa: C901, PLR0912
         """Materialize live sources, then relocate this one canonical command."""
@@ -2297,21 +2303,19 @@ class Schedule:
         )
         pending = [command]
         leaves: list[pb.Run] = []
+        local_schedulers: dict[str, BackOff] = {}
         while pending:
             current = pending.pop()
             if current.kind is None:
                 msg = "Schedule command has no kind"
                 raise ValueError(msg)
             if current.kind.field == "run":
-                if current.kind.value.scheduler:
-                    msg = "Custom schedulers are not migrated"
-                    raise NotImplementedError(msg)
+                scheduler = self._schedulers.get(current.kind.value.scheduler)
+                if scheduler is not None and not scheduler._persistent:
+                    local_schedulers.setdefault(current.kind.value.scheduler, scheduler)
                 leaves.append(current.kind.value)
             elif current.kind.field in {"repeat", "saturate"}:
                 control = current.kind.value
-                if control.until or (isinstance(control, pb.Repeat) and control.times not in (0, 1)):
-                    msg = "Only ordinary no-until schedules and exact Repeat0/1 are migrated"
-                    raise NotImplementedError(msg)
                 if state is not None:
                     count = (
                         control.times
@@ -2322,6 +2326,8 @@ class Schedule:
                         msg = "can't convert schedule count to unsigned native size"
                         raise OverflowError(msg)
                 pending.extend(reversed(control.body))
+            elif current.kind.field == "bind_scheduler":
+                continue
             else:
                 msg = f"Schedule command is not migrated: {current.kind.field}"
                 raise NotImplementedError(msg)
@@ -2355,6 +2361,19 @@ class Schedule:
                 reference = default.publish().ref("rulesets", index)
                 reference = state.publish_ruleset(reference, {reference: Ident("")})
             leaf.ruleset = pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", builder.import_ref(reference)))
+        if local_schedulers:
+            command = pb.Command(
+                kind=Oneof[Literal["repeat"], pb.Repeat](
+                    "repeat",
+                    pb.Repeat(
+                        times=1,
+                        body=[
+                            *(_copy_record(scheduler.__egg_ref__.read()) for scheduler in local_schedulers.values()),
+                            command,
+                        ],
+                    ),
+                )
+            )
         index = builder.add("commands", command)
         return builder.publish().ref("commands", index)
 
@@ -2381,7 +2400,7 @@ class Schedule:
             else Oneof[Literal["saturate"], pb.Saturate]("saturate", pb.Saturate(max_iterations=length, body=[command]))
         )
         index = builder.add("commands", pb.Command(kind=kind))
-        return Schedule(builder.publish().ref("commands", index), source._bindings)
+        return Schedule(builder.publish().ref("commands", index), source._bindings, source._schedulers)
 
     def saturate(self) -> Schedule:
         """
@@ -2397,7 +2416,7 @@ class Schedule:
             "commands",
             pb.Command(kind=Oneof[Literal["saturate"], pb.Saturate]("saturate", pb.Saturate(body=[command]))),
         )
-        return Schedule(builder.publish().ref("commands", index), source._bindings)
+        return Schedule(builder.publish().ref("commands", index), source._bindings, source._schedulers)
 
     def __add__(self, other: Schedule) -> Schedule:
         """
@@ -3207,31 +3226,50 @@ def run(
     Create a one-step run schedule.
 
     ``run()`` runs the default ruleset once. ``run(ruleset)`` runs one named
-    ruleset once. Additional facts become ``:until`` stop conditions. A custom
-    ``scheduler`` currently supports at most one non-equality stop fact.
+    ruleset once. Additional facts are conjunctive pre-check stop conditions.
+    Scheduler configuration and conditions are authored without an engine;
+    their execution still requires the shared adapter scheduler/loop bridge.
     """
-    if until or scheduler is not None:
-        msg = "Until and custom schedulers require a separate shared execution migration"
-        raise NotImplementedError(msg)
     if ruleset is not None and not isinstance(cast("object", ruleset), Ruleset | UnstableCombinedRuleset):
         msg = "Run target must be a ruleset"
         raise TypeError(msg)
+    if scheduler is not None and not isinstance(cast("object", scheduler), BackOff):
+        msg = "Run scheduler must be a BackOff configuration"
+        raise TypeError(msg)
     name = uuid4().hex if ruleset is not None else ""
     builder = Builder()
-    index = builder.add(
-        "commands",
-        pb.Command(
-            kind=Oneof[Literal["run"], pb.Run](
-                "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", name)))
-            )
-        ),
+    scheduler_name = "" if scheduler is None else scheduler.__egg_ref__.read().kind.value.name
+    command = pb.Command(
+        kind=Oneof[Literal["run"], pb.Run](
+            "run",
+            pb.Run(
+                ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", name)),
+                scheduler=scheduler_name,
+            ),
+        )
     )
-    return Schedule(builder.publish().ref("commands", index), {} if ruleset is None else {name: ruleset})
+    if until:
+        command = pb.Command(
+            kind=Oneof[Literal["repeat"], pb.Repeat](
+                "repeat",
+                pb.Repeat(
+                    times=1,
+                    until=[builder.import_ref(fact.__egg_ref__) for fact in _fact_likes(until)],
+                    body=[command],
+                ),
+            )
+        )
+    index = builder.add("commands", command)
+    return Schedule(
+        builder.publish().ref("commands", index),
+        {} if ruleset is None else {name: ruleset},
+        {} if scheduler is None else {scheduler_name: scheduler},
+    )
 
 
 def back_off(match_limit: None | int = None, ban_length: None | int = None) -> BackOff:
     """
-    Create a backoff scheduler configuration.
+    Author a backoff scheduler configuration without creating an engine.
 
     ```python
     schedule = run(analysis_ruleset).saturate() + run(ruleset, scheduler=back_off(match_limit=1000, ban_length=5)) * 10
@@ -3240,30 +3278,97 @@ def back_off(match_limit: None | int = None, ban_length: None | int = None) -> B
 
     The backend defaults are ``match_limit=1000`` and ``ban_length=5``. Each time
     a rule is banned, both effective values double for that rule.
+    Execution still requires the shared adapter's scheduler/loop bridge.
     """
-    return BackOff(BackOffDecl(id=uuid4(), match_limit=match_limit, ban_length=ban_length))
+    options = pb.BackOff()
+    for name, value in (("match_limit", match_limit), ("ban_length", ban_length)):
+        if value is not None:
+            numeric = index_integer(value)
+            if not 0 <= numeric < 2**64:
+                raise OverflowError(f"Scheduler {name} must fit unsigned uint64")
+            setattr(options, name, numeric)
+    builder = Builder()
+    index = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["bind_scheduler"], pb.BindScheduler](
+                "bind_scheduler",
+                pb.BindScheduler(
+                    name=f"__egglog_python_scheduler_{uuid4().hex}",
+                    scheduler=pb.Scheduler(kind=Oneof[Literal["back_off"], pb.BackOff]("back_off", options)),
+                ),
+            )
+        ),
+    )
+    return BackOff(builder.publish().ref("commands", index))
 
 
 @dataclass(frozen=True)
 class BackOff:
-    scheduler: BackOffDecl
+    """An owned canonical configuration with frontend-only lifetime intent."""
+
+    __egg_ref__: Ref
+    _persistent: bool = False
+
+    def __post_init__(self) -> None:
+        command = self.__egg_ref__.read()
+        if (
+            self.__egg_ref__.role != "commands"
+            or not isinstance(command, pb.Command)
+            or command.kind is None
+            or command.kind.field != "bind_scheduler"
+            or not command.kind.value.name
+            or command.kind.value.scheduler is None
+            or command.kind.value.scheduler.kind is None
+            or command.kind.value.scheduler.kind.field != "back_off"
+        ):
+            msg = "BackOff requires a canonical BindScheduler with back-off configuration"
+            raise TypeError(msg)
 
     def persistent(self) -> BackOff:
         """
-        Reuse this scheduler across repeated runs on the same egraph.
+        Author a distinct persistent identity; deployment is not implemented yet.
         """
-        return BackOff(replace(self.scheduler, id=uuid4(), persistent=True))
+        command = self.__egg_ref__.read()
+        command.kind.value.name = f"__egglog_python_scheduler_{uuid4().hex}"
+        builder = Builder()
+        index = builder.add("commands", command)
+        return BackOff(builder.publish().ref("commands", index), _persistent=True)
 
     def scope(self, schedule: Schedule) -> Schedule:
         """
-        Defines the scheduler to be created directly before the inner schedule, instead of the default which is at the
-        most outer scope.
+        Author a fresh local binding immediately around this schedule.
+
+        Placement inside a loop creates a fresh instance per iteration. Explicit
+        scope overrides persistent intent for these references; no engine is bound.
         """
-        msg = "Custom scheduler scopes are not migrated"
-        raise NotImplementedError(msg)
+        source = run(schedule) if isinstance(schedule, Ruleset | UnstableCombinedRuleset) else schedule
+        builder = Builder()
+        command: pb.Command = _copy_record(
+            source._command.read(),
+            relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),
+        )
+        binding = self.__egg_ref__.read()
+        original = binding.kind.value.name
+        binding.kind.value.name = f"__egglog_python_scheduler_scope_{uuid4().hex}"
+        pending = [command]
+        while pending:
+            current = pending.pop()
+            if current.kind is not None:
+                if current.kind.field == "run" and current.kind.value.scheduler == original:
+                    current.kind.value.scheduler = binding.kind.value.name
+                elif current.kind.field in {"repeat", "saturate"}:
+                    pending.extend(current.kind.value.body)
+        index = builder.add(
+            "commands",
+            pb.Command(kind=Oneof[Literal["repeat"], pb.Repeat]("repeat", pb.Repeat(times=1, body=[binding, command]))),
+        )
+        schedulers = source._schedulers.copy()
+        schedulers.pop(original, None)
+        return Schedule(builder.publish().ref("commands", index), source._bindings, schedulers)
 
     def __str__(self) -> str:
-        return pretty_decl(Declarations(), self.scheduler)
+        return pretty_ref(self.__egg_ref__) + (".persistent()" if self._persistent else "")
 
     def __repr__(self) -> str:
         return str(self)
@@ -3293,6 +3398,7 @@ def seq(*schedules: Schedule) -> Schedule:
     return Schedule(
         builder.publish().ref("commands", index),
         {name: owner for source in sources for name, owner in source._bindings.items()},
+        {name: scheduler for source in sources for name, scheduler in source._schedulers.items()},
     )
 
 

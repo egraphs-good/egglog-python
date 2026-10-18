@@ -620,6 +620,10 @@ step_egraph.check_fail(left(i64(11)), right(i64(10)))
 
 #### Backoff Scheduler
 
+Python can author the scheduler configurations and scope topology below without
+an e-graph. The shared protobuf adapter still rejects their execution; persistent
+deployment and the scheduler-aware loop/report bridge remain unimplemented.
+
 The custom backoff scheduler can delay rules that produce too many matches in a
 single scheduler iteration. Create one with
 `bo = back_off(match_limit=None, ban_length=None)`, then pass it to
@@ -630,7 +634,9 @@ single scheduler iteration. Create one with
 - Exponential backoff: each time a rule is banned, both the threshold and ban length double for that rule. After `times_banned` bans, the effective threshold is `match_limit << times_banned` and the ban duration is `ban_length << times_banned`.
 - Fast-forwarding: when any rule is banned, the scheduler fast-forwards by the minimum remaining ban to unban at least one rule before checking for termination again.
 - Defaults: match_limit defaults to 1000; ban_length defaults to 5.
-- `:until` support: custom scheduler runs can use at most one non-equality fact as the stop condition. Equality stop facts and multiple stop facts raise `ValueError`.
+- `until` authoring: stop facts are conjunctive protocol queries, including equality;
+  a one-step run uses an exact single-iteration loop with that pre-check. The old
+  text-runner single/non-equality restriction is not a protocol restriction.
 
 For example, this egglog code:
 

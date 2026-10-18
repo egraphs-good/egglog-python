@@ -783,8 +783,12 @@ The report retains actual native histories and aggregate maps; totals are not
 reconstructed from the iteration list. `None` plans mean that no plan was recorded,
 which differs from a recorded empty plan.
 
-Ordinary schedules support sequencing, bounded repetition and saturation without
-custom schedulers or `until` conditions. Those other forms remain migration gaps.
+Schedules author sequencing, bounded repetition, saturation, BackOff bindings
+and conjunctive `until` queries as canonical records without an engine.
+Local scheduler scopes retain their explicit placement; persistent configurations
+have distinct identities but are not deployed yet. Actual custom-scheduler and
+`until` execution still fails explicitly at the shared adapter boundary; ordinary
+scheduler-free execution is unchanged.
 Constructing a schedule does not install rules; printing it can materialize deferred
 rule generators, and later appended rules remain visible when it is run.
 

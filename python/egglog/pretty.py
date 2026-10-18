@@ -145,17 +145,58 @@ def pretty_ref(  # noqa: C901, PLR0912
                 msg_0 = "Cannot print a command without a kind"
                 raise ValueError(msg_0)
             if record.kind.field == "run":
-                selected = record.kind.value.ruleset
+                run = record.kind.value
+                selected = run.ruleset
                 if selected is None or selected.kind is None:
                     msg_0 = "Cannot print a Run without a ruleset"
                     raise ValueError(msg_0)
-                if selected.kind.field == "index":
+                if run.scheduler:
+                    pieces = ["run("]
+                    if selected.kind.field == "index":
+                        pieces.extend([(owner.ref("rulesets", selected.kind.value), False, False), ", "])
+                    elif selected.kind.value:
+                        pieces.append(f"{selected.kind.value!r}, ")
+                    pieces.append(f"scheduler={run.scheduler!r})")
+                elif selected.kind.field == "index":
                     pieces = [(owner.ref("rulesets", selected.kind.value), False, False)]
                 else:
                     pieces = [f"run({selected.kind.value})" if selected.kind.value else "run()"]
+            elif record.kind.field == "bind_scheduler":
+                binding = record.kind.value
+                scheduler = binding.scheduler
+                if scheduler is None or scheduler.kind is None:
+                    msg_0 = "Cannot print BindScheduler without a configuration"
+                    raise ValueError(msg_0)
+                if scheduler.kind.field != "back_off":
+                    raise NotImplementedError(f"Scheduler presentation is not migrated: {scheduler.kind.field}")
+                scheduler_options: pb.BackOff = scheduler.kind.value
+                settings = [
+                    f"{name}={getattr(scheduler_options, name)}"
+                    for name in ("match_limit", "ban_length", "node_limit")
+                    if scheduler_options.has_field(name)
+                ]
+                pieces = [f"bind_scheduler({binding.name!r}, back_off({', '.join(settings)}))"]
             elif record.kind.field in {"repeat", "saturate"}:
                 control = record.kind.value
-                if isinstance(control, pb.Repeat) and control.times == 1:
+                if control.until:
+                    if isinstance(control, pb.Repeat):
+                        pieces = [f"repeat(times={control.times}, body=seq("]
+                    else:
+                        limit = (
+                            f"max_iterations={control.max_iterations}, " if control.has_field("max_iterations") else ""
+                        )
+                        pieces = [f"saturate({limit}body=seq("]
+                    for index, child in enumerate(control.body):
+                        if index:
+                            pieces.append(", ")
+                        pieces.append((reference, child))
+                    pieces.append("), until=[")
+                    for index, fact in enumerate(control.until):
+                        if index:
+                            pieces.append(", ")
+                        pieces.append((owner.ref("nodes", fact), False, False))
+                    pieces.append("])")
+                elif isinstance(control, pb.Repeat) and control.times == 1:
                     pieces = ["seq("]
                     for index, child in enumerate(control.body):
                         if index:

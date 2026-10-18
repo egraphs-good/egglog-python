@@ -309,6 +309,181 @@ def test_canonical_schedule_live_repr_and_generator_failure_without_engine(monke
     assert events == ["first", "failure"]
 
 
+def test_canonical_backoff_records_and_persistent_identity_without_engine(monkeypatch):
+    from egglog import BackOff, back_off, run  # noqa: PLC0415
+    from egglog.pretty import pretty_ref  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Scheduler authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    local = back_off()
+    command = local.__egg_ref__.read()
+    assert command.kind.field == "bind_scheduler"
+    options = command.kind.value.scheduler.kind.value
+    assert not options.has_field("match_limit")
+    assert not options.has_field("ban_length")
+    zero = back_off(match_limit=0, ban_length=0)
+    encoded = pack(commands=[zero.__egg_ref__]).program.to_binary()
+    copied = pb.Program.from_binary(encoded)
+    assert copied.to_binary() == encoded
+    limits = copied.commands[0].kind.value.scheduler.kind.value
+    assert limits.has_field("match_limit")
+    assert limits.match_limit == 0
+    assert limits.has_field("ban_length")
+    assert limits.ban_length == 0
+    assert "match_limit=0" in str(zero)
+    assert "ban_length=0" in repr(zero)
+    assert "match_limit=" not in str(local)
+    node_limited = zero.__egg_ref__.read()
+    node_limited.kind.value.scheduler.kind.value.node_limit = 0
+    builder = Builder()
+    index = builder.add("commands", node_limited)
+    assert "node_limit=0" in pretty_ref(builder.publish().ref("commands", index))
+    largest = back_off(match_limit=2**64 - 1)
+    assert largest.__egg_ref__.read().kind.value.scheduler.kind.value.match_limit == 2**64 - 1
+    with pytest.raises(TypeError, match="BindScheduler"):
+        BackOff(i64(0).__egg_ref__)
+    unnamed = local.__egg_ref__.read()
+    unnamed.kind.value.name = ""
+    builder = Builder()
+    index = builder.add("commands", unnamed)
+    with pytest.raises(TypeError, match="BindScheduler"):
+        BackOff(builder.publish().ref("commands", index))
+
+    persistent = local.persistent()
+    binding = persistent.__egg_ref__.read().kind.value
+    assert binding.name != command.kind.value.name
+    assert binding.scheduler == command.kind.value.scheduler
+    assert not local._persistent
+    assert persistent._persistent
+    selected = ruleset(name="persistent-source")
+    schedule = run(selected, scheduler=persistent)
+    root = schedule._resolve(None)
+    assert root.read().kind.field == "run"  # No deployment or local hoist.
+    assert root.read().kind.value.scheduler == binding.name
+    assert schedule._schedulers[binding.name] is persistent
+    program = pack(commands=[persistent.__egg_ref__, root]).program
+    assert [item.kind.field for item in program.commands] == ["bind_scheduler", "run"]
+    assert pb.Program.from_binary(program.to_binary()) == program
+    assert ".persistent()" in repr(persistent)
+    assert f"scheduler={binding.name!r}" in str(schedule)
+
+
+@pytest.mark.parametrize("option", ["match_limit", "ban_length"])
+@pytest.mark.parametrize("value", [-1, 2**64])
+def test_canonical_backoff_unsigned_limits_without_engine(monkeypatch, option, value):
+    from egglog import back_off  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Scheduler validation accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    with pytest.raises(OverflowError, match=option):
+        back_off(**{option: value})
+
+
+def test_canonical_backoff_hoist_and_scope_topology_without_engine(monkeypatch):
+    from egglog import back_off, run, seq  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Scheduler scope authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    scheduler = back_off(match_limit=1)
+    name = scheduler.__egg_ref__.read().kind.value.name
+    leaf = run(ruleset(name="scoped-source"), scheduler=scheduler)
+    implicit = (leaf * 3)._resolve(None).read().kind.value
+    outer = scheduler.scope(leaf * 3)._resolve(None).read().kind.value
+    for block in (implicit, outer):
+        assert block.times == 1
+        binding, loop = block.body
+        assert binding.kind.field == "bind_scheduler"
+        assert loop.kind.field == "saturate"
+        assert loop.kind.value.max_iterations == 3
+        assert loop.kind.value.body[0].kind.value.scheduler == binding.kind.value.name
+    assert implicit.body[0].kind.value.name == name
+    assert outer.body[0].kind.value.name != name
+    inner = (scheduler.scope(leaf) * 3)._resolve(None).read()
+    assert inner.kind.field == "saturate"
+    assert inner.kind.value.max_iterations == 3
+    inner_binding, inner_run = inner.kind.value.body[0].kind.value.body
+    assert inner_run.kind.value.scheduler == inner_binding.kind.value.name
+    assert inner_binding.kind.value.name not in {name, outer.body[0].kind.value.name}
+
+    siblings = seq(scheduler.scope(leaf), leaf)
+    block = siblings._resolve(None).read().kind.value
+    assert block.body[0].kind.value.name == name  # Default hoist for the sibling only.
+    scoped, unbound = block.body[1].kind.value.body
+    scoped_binding, scoped_run = scoped.kind.value.body
+    assert scoped_run.kind.value.scheduler == scoped_binding.kind.value.name != name
+    assert unbound.kind.value.scheduler == name
+    independent = seq(scheduler.scope(leaf), scheduler.scope(leaf))._resolve(None)
+    scoped_names = [child.kind.value.body[0].kind.value.name for child in independent.read().kind.value.body]
+    assert len(set(scoped_names)) == 2
+    assert name not in scoped_names
+    assert "bind_scheduler(" in str(siblings)
+    assert "match_limit=1" in str(siblings)
+    persistent = scheduler.persistent()
+    persistent_name = persistent.__egg_ref__.read().kind.value.name
+    persistent_leaf = run(ruleset(name="persistent-scoped-source"), scheduler=persistent)
+    scoped_persistent = persistent.scope(persistent_leaf)
+    assert not scoped_persistent._schedulers
+    mixed = seq(scoped_persistent, persistent_leaf)
+    assert mixed._schedulers[persistent_name] is persistent
+    explicit, retained = mixed._resolve(None).read().kind.value.body
+    explicit_binding, explicit_run = explicit.kind.value.body
+    assert explicit_run.kind.value.scheduler == explicit_binding.kind.value.name != persistent_name
+    assert retained.kind.value.scheduler == persistent_name
+
+
+def test_canonical_scheduler_until_queries_and_live_rulesets_without_engine(monkeypatch):
+    from egglog import back_off, relation, run  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Scheduler query authoring accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+    events = []
+    selected = ruleset(name="until-live")
+
+    def deferred():
+        events.append("first")
+        yield rule(name="first").then()
+
+    selected.register(deferred)
+    stop = relation("scheduler_stop", i64)
+    scheduler = back_off(match_limit=0)
+    schedule = run(selected, stop(1), eq(i64(1)).to(i64(1)), scheduler=scheduler)
+    assert events == []
+    root = schedule._resolve(None)
+    assert events == ["first"]
+    program = pack(commands=[root]).program
+    assert pb.Program.from_binary(program.to_binary()) == program
+    binding, conditional = program.commands[0].kind.value.body
+    assert binding.kind.field == "bind_scheduler"
+    assert conditional.kind.field == "repeat"
+    assert conditional.kind.value.times == 1
+    assert [program.nodes[index].kind.field for index in conditional.kind.value.until] == ["call", "union"]
+    assert conditional.kind.value.body[0].kind.value.scheduler == binding.kind.value.name
+    assert "until=[" in str(schedule)
+    assert "eq(" in str(schedule)
+    selected.append(rule(name="later").then())
+    assert "later" in repr(schedule)
+
+    def failing():
+        events.append("failure")
+        yield rule(name="not-appended").then()
+        msg = "scheduler source generator"
+        raise ValueError(msg)
+
+    selected.register(failing)
+    with pytest.raises(ValueError, match="scheduler source generator"):
+        str(schedule)
+    assert "not-appended" not in str(schedule)
+    assert events == ["first", "failure"]
+
+
 def test_canonical_report_key_contextual_hash_without_engine(monkeypatch):
     from egglog.run_report import RuleKey  # noqa: PLC0415
 
