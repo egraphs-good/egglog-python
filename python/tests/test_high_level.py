@@ -1028,6 +1028,113 @@ def test_saved_source_engine_failure_preserves_error_and_invalidates_history() -
         _ = graph.as_egglog_string
 
 
+def test_saved_pyobject_payload_stays_inert_during_preflight_and_replay(tmp_path: pathlib.Path) -> None:
+    marker = tmp_path / "unpickle-calls"
+
+    def rebuild() -> int:
+        marker.write_text(marker.read_text() + "u" if marker.exists() else "u")
+        return 7
+
+    class Payload:
+        def __reduce__(self) -> tuple[Callable[[], int], tuple[()]]:
+            return rebuild, ()
+
+    class InertRecordedCost(Expr):
+        def __init__(self, value: PyObject) -> None: ...
+
+        @method(unextractable=True)
+        def opaque(self) -> InertRecordedCost: ...
+
+    payload = PyObject(Payload())
+    assert not marker.exists()
+    graph = EGraph(InertRecordedCost(PyObject(0)), save_egglog_string=True)
+    before = graph.freeze()
+    history = graph.as_egglog_string
+
+    with pytest.raises(ValueError, match="source dynamic-cost helpers do not exist for unextractable constructors"):
+        graph.register(set_cost(InertRecordedCost(payload).opaque(), 7))
+
+    assert not marker.exists()
+    assert graph.freeze() == before
+    assert graph.as_egglog_string == history
+    graph.register(InertRecordedCost(payload))
+    assert graph.function_size(InertRecordedCost) == 2
+    _replay_recorded_source(graph.as_egglog_string)
+    assert not marker.exists()
+    assert graph.extract(payload).value == 7
+    assert marker.read_text() == "u"
+
+
+def test_saved_pyobject_provider_survives_push_pop_and_close(tmp_path: pathlib.Path) -> None:
+    marker = tmp_path / "provider-calls"
+
+    def record_call(value: int) -> int:
+        marker.write_text(marker.read_text() + "x" if marker.exists() else "x")
+        return value
+
+    seen = relation("recorded_provider_scope", PyObject)
+    graph = EGraph(seen(PyObject(record_call)(PyObject(1))), save_egglog_string=True)
+    assert marker.read_text() == "x"
+    outer = graph.freeze()
+    history = graph.as_egglog_string
+    graph.push()
+    try:
+        graph.register(seen(PyObject(record_call)(PyObject(2))))
+        assert graph.function_size(seen) == 2
+        assert marker.read_text() == "xx"
+    finally:
+        graph.pop()
+    assert graph.freeze() == outer
+    assert graph.function_size(seen) == 1
+    assert graph.as_egglog_string.startswith(history)
+    transcript = graph.as_egglog_string
+    assert marker.read_text() == "xx"
+    graph.close()
+    graph.close()
+
+    with pytest.raises(ValueError, match="transcript has been closed"):
+        graph.register(seen(PyObject(record_call)(PyObject(3))))
+
+    assert graph.freeze() == outer
+    assert marker.read_text() == "xx"
+    _replay_recorded_source(transcript)
+    assert marker.read_text() == "xxxx"
+
+
+def test_saved_pyobject_callback_error_preserves_identity_and_invalidates_history(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "provider-errors"
+    original = LookupError("recorded provider failure")
+    error_name = "_recorded_provider_error"
+    monkeypatch.setattr(sys.modules[__name__], error_name, original, raising=False)
+
+    def fail(_value: object) -> None:
+        marker.write_text(marker.read_text() + "x" if marker.exists() else "x")
+        raise getattr(sys.modules[__name__], error_name)
+
+    graph = EGraph(save_egglog_string=True)
+    graph.let("before_provider_failure", i64(1))
+    history = graph.as_egglog_string
+
+    with pytest.raises(LookupError, match="recorded provider failure") as caught:
+        graph.register(PyObject(fail)(PyObject(None)))
+
+    assert caught.value is original
+    assert marker.read_text() == "x"
+    assert original.__traceback__ is not None
+    assert original.__notes__[-1] == "While calling primitive 'py-call'"
+    with pytest.raises(RuntimeError, match="cannot be replayed"):
+        _ = graph.as_egglog_string
+    before = graph.freeze()
+    with pytest.raises(RuntimeError, match="partial effects cannot be replayed"):
+        graph.register(PyObject(fail)(PyObject(None)))
+    assert graph.freeze() == before
+    assert marker.read_text() == "x"
+    _replay_recorded_source(history)
+    assert marker.read_text() == "x"
+
+
 def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() -> None:
     class Num(Expr):
         @classmethod
@@ -3297,18 +3404,43 @@ def test_dynamic_cost_rule_materializes_constructor_without_shadowing(*, save_eg
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
-def test_dynamic_cost_does_not_create_a_missing_function_row(*, save_egglog_string: bool) -> None:
+def test_dynamic_cost_rejects_function_targets_without_effects(*, save_egglog_string: bool) -> None:
     @function
     def missing_target(value: i64Like) -> i64: ...
 
     expression = missing_target(1)
     egraph = EGraph(save_egglog_string=save_egglog_string)
+    assert egraph.function_size(missing_target) == 0
+    before = egraph.freeze()
+    history = egraph.as_egglog_string if save_egglog_string else None
+    expected_error = ValueError if save_egglog_string else EggSmolError
 
-    with pytest.raises(EggSmolError, match=r"lookup .* failed"):
+    with pytest.raises(expected_error, match=r"^invalid action target subtype: ") as caught:
         egraph.register(set_cost(expression, 7))
 
+    assert type(caught.value) is expected_error
+    if not save_egglog_string:
+        error = caught.value.__dict__["_egglog_proto_error"]
+        assert error.code == pb.ErrorCode.INVALID_PROGRAM
+        assert error.location is None
+    assert egraph.freeze() == before
+    if save_egglog_string:
+        assert egraph.as_egglog_string == history
+    with pytest.raises(expected_error, match=r"^GetCost requires a constructor target$") as caught:
+        egraph.check(eq(get_cost(expression)).to(i64(7)))
+    assert type(caught.value) is expected_error
+    if not save_egglog_string:
+        error = caught.value.__dict__["_egglog_proto_error"]
+        assert error.code == pb.ErrorCode.INVALID_PROGRAM
+        assert error.location is None
+    assert egraph.freeze() == before
+    if save_egglog_string:
+        assert egraph.as_egglog_string == history
     assert egraph.function_size(missing_target) == 0
-    assert egraph.lookup_function_value(get_cost(expression)) is None
+    assert egraph.lookup_function_value(expression) is None
+    egraph.register(set_(expression).to(i64(2)))
+    egraph.check(eq(expression).to(i64(2)))
+    assert egraph.function_size(missing_target) == 1
     if save_egglog_string:
         _replay_recorded_source(egraph.as_egglog_string)
 

@@ -42,6 +42,7 @@ pub(crate) fn _export_pyobject_catalog(py: Python<'_>) -> PyResult<Bound<'_, PyB
 #[pyclass(name = "_ProtoEngine")]
 pub struct ProtoEngine {
     engine: Engine,
+    extension: Arc<PyObjectExtension>,
     py_error: PyObjectErrorState,
     recording: Option<Recording>,
 }
@@ -93,10 +94,12 @@ impl ProtoSource {
 impl Default for ProtoEngine {
     fn default() -> Self {
         let py_error = PyObjectErrorState::default();
+        let extension = Arc::new(PyObjectExtension {
+            py_error: py_error.clone(),
+        });
         Self {
-            engine: Engine::with_extension(Arc::new(PyObjectExtension {
-                py_error: py_error.clone(),
-            })),
+            engine: Engine::with_extension(extension.clone()),
+            extension,
             py_error,
             recording: None,
         }
@@ -1254,6 +1257,33 @@ mod tests {
         assert_eq!(lowered.sorts[..original.sorts.len()], original.sorts);
         assert_eq!(lowered.declarations, original.declarations);
         assert_eq!(lowered.nodes.len(), original.nodes.len() + 1);
+        let mut recorder = ProtoEngine::default();
+        recorder.enable_recording().unwrap();
+        recorder
+            .stage_submission(Submission::Program(original.clone()))
+            .unwrap();
+        assert_eq!(recorder.recorded_source().unwrap(), "");
+        assert!(recorder.py_error.lock().unwrap().is_none());
+        recorder.finish_recording(true);
+        let source = recorder.recorded_source().unwrap();
+        let phases = Source::with_extension(None, &source, recorder.extension.clone())
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(!phases.is_empty());
+        let mut extraction_count = 0;
+        for program in phases {
+            let result = run(&mut engine, id, program);
+            assert_eq!(result.error, None);
+            assert!(result.ruleset_publication.is_some());
+            if !result.outputs.is_empty() {
+                assert_eq!(result.outputs.len(), 1);
+                extracted_program(&result, &payload);
+                extraction_count += 1;
+            }
+        }
+        assert_eq!(extraction_count, 1);
+        assert!(recorder.py_error.lock().unwrap().is_none());
         let mut unused = original.clone();
         unused.commands.clear();
         assert_eq!(run(&mut engine, id, unused).error, None);
@@ -1309,6 +1339,43 @@ mod tests {
             &bad_pickle,
         );
         Python::attach(|py| assert!(load(py, &PyPickledValue(bad_pickle)).is_err()));
+    }
+
+    #[test]
+    fn recording_provider_preparation_preserves_the_python_error_latch() {
+        Python::initialize();
+        let mut recorder = ProtoEngine::default();
+        let original = PyValueError::new_err("retained provider error");
+        let value = Python::attach(|py| original.value(py).clone().unbind());
+        *recorder.py_error.lock().unwrap() = Some(original);
+        recorder.enable_recording().unwrap();
+        recorder
+            .stage_submission(Submission::Program(custom_program(
+                b"not a pickle".to_vec(),
+            )))
+            .unwrap();
+        assert_eq!(recorder.recorded_source().unwrap(), "");
+        recorder.finish_recording(true);
+        Source::with_extension(
+            None,
+            &recorder.recorded_source().unwrap(),
+            recorder.extension.clone(),
+        )
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+        Python::attach(|py| {
+            assert!(
+                recorder
+                    .py_error
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .value(py)
+                    .is(value.bind(py))
+            );
+        });
     }
 
     #[test]
@@ -1624,8 +1691,8 @@ impl ProtoEngine {
     /// Typechecking-only source production, never native AST or graph exposure.
     #[staticmethod]
     fn source(py: Python<'_>, text: &str) -> PyResult<Py<ProtoSource>> {
-        let source =
-            Source::new(None, text).map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let source = Source::with_extension(None, text, Arc::new(PyObjectExtension::default()))
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
         Py::new(py, ProtoSource { source })
     }
 
@@ -1635,8 +1702,10 @@ impl ProtoEngine {
                 "Source recording is already configured",
             ));
         }
+        let renderer = Renderer::with_extension(self.extension.clone())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
         self.recording = Some(Recording::Active {
-            renderer: Box::default(),
+            renderer: Box::new(renderer),
             staged: None,
             source: String::new(),
         });
