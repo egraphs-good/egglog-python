@@ -12,7 +12,7 @@ from copy import copy
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
-from typing import ClassVar, TypeAlias, TypeVar, cast
+from typing import ClassVar, TypeAlias, TypeVar, Union, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
@@ -3416,6 +3416,33 @@ def test_type_param_sub():
     """
     V = Vec[T] | int
     assert str(V[Unit]) == str(Vec[Unit] | int)  # type: ignore[misc]
+    assert V.__parameters__ == (T,)
+    assert get_origin(get_args(V)[0]) is Vec
+    assert get_args(get_args(V)[0]) == (T,)
+    assert get_args(V[Unit]) == (Vec[Unit], int)  # type: ignore[misc]
+
+    reverse_alias = int | Vec[T]
+    assert reverse_alias.__parameters__ == (T,)
+    assert get_args(reverse_alias[Unit]) == (int, Vec[Unit])  # type: ignore[misc]
+    typing_alias = Union[Vec[T], int]  # noqa: UP007 -- exercise typing.Union substitution too.
+    assert typing_alias.__parameters__ == (T,)  # type: ignore[attr-defined]
+    assert get_args(typing_alias[Unit]) == (Vec[Unit], int)  # type: ignore[misc]
+
+    partial_alias = Map[i64, T] | int
+    assert get_args(partial_alias[String]) == (Map[i64, String], int)  # type: ignore[misc]
+    repeated_alias = Map[T, T] | int
+    assert repeated_alias.__parameters__ == (T,)
+    assert get_args(repeated_alias[String]) == (Map[String, String], int)  # type: ignore[misc]
+    nested_alias = Vec[Vec[T]] | int
+    assert get_args(nested_alias[Unit]) == (Vec[Vec[Unit]], int)  # type: ignore[misc]
+
+    with pytest.raises(TypeError, match="Too many arguments"):
+        V[Unit, String]  # type: ignore[misc, type-arg]
+
+    value = convert((), get_args(V[Unit])[0])  # type: ignore[misc]
+    graph = EGraph(value, save_egglog_string=True)
+    graph.check(eq(value).to(Vec[Unit].empty()))
+    _replay_recorded_source(graph.as_egglog_string)
 
 
 def test_override_hash():

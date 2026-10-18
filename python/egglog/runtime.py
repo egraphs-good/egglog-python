@@ -7,7 +7,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from inspect import Parameter, Signature
 from threading import RLock
-from types import FunctionType, MethodType
+from types import FunctionType, GenericAlias, MethodType
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, Union, cast, get_args, get_origin
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
@@ -553,6 +553,16 @@ class RuntimeClassDescriptor:
         return RuntimeClass.__getattr__(owner, self.name)
 
 
+class _RuntimeClassAlias(GenericAlias):
+    """Use Python substitution, then materialize a concrete canonical sort."""
+
+    def __getitem__(self, arguments: object) -> RuntimeClass | _RuntimeClassAlias:  # type: ignore[override]
+        # Unlike a plain GenericAlias, a fully substituted language alias must
+        # produce the same canonical class as direct family specialization.
+        substituted = super().__getitem__(arguments)
+        return cast("RuntimeClass", substituted.__origin__)[substituted.__args__]
+
+
 class RuntimeClass(type):
     """A Python type presentation over an owned sort/family declaration."""
 
@@ -768,7 +778,7 @@ class RuntimeClass(type):
             cls.__egg_pending__()
         return cast("RuntimeFunction", RuntimeClass.__getattr__(cls, "__init__"))(*args, **kwargs)
 
-    def __getitem__(cls, arguments: object) -> RuntimeClass:
+    def __getitem__(cls, arguments: object) -> RuntimeClass | _RuntimeClassAlias:
         values = arguments if isinstance(arguments, tuple) else (arguments,)
         declaration: pb.Declaration = cls.__egg_definition__.read()
         assert declaration.kind is not None
@@ -780,8 +790,10 @@ class RuntimeClass(type):
             not structural_function and (not isinstance(kind, pb.HostSortFamily) or len(values) != kind.arity)
         ):
             raise TypeError(f"Wrong number of type arguments for {cls}")
-        if any(isinstance(value, TypeVar) for value in values):
-            return RuntimeClass(cls.__egg_definition__, arguments=values)
+        if any(isinstance(value, TypeVar | _RuntimeClassAlias) for value in values):
+            # Python unions intentionally ignore type-parameter descriptors on
+            # classes, so unresolved applications must be actual generic aliases.
+            return _RuntimeClassAlias(cls, values)
         if not all(isinstance(value, RuntimeClass) and value.__egg_sort__ is not None for value in values):
             msg = "Type arguments must resolve to canonical sorts"
             raise TypeError(msg)
@@ -1515,6 +1527,8 @@ def resolve_type_annotation(tp: object) -> Ref | TypeVar | RuntimeClass:
         )
         return builder.publish().ref("sorts", index)
     if isinstance(origin := get_origin(tp), RuntimeClass):
+        if isinstance(tp, _RuntimeClassAlias) and tp.__parameters__:
+            return RuntimeClass(origin.__egg_definition__, arguments=get_args(tp))
         return resolve_type_annotation(origin[get_args(tp)])
     if isinstance(tp, RuntimeClass):
         return tp.__egg_sort__ if tp.__egg_sort__ is not None else tp
