@@ -48,7 +48,7 @@ _FIELDS = {
     "Action": "term:nodes set delete subsume panic set_cost span",
     "Set": "target value:nodes",
     "SetCost": "target cost:nodes",
-    "Declaration": "constructor function relation primitive host_sort_family host_primitive eq_sort span bindings doc",
+    "Declaration": "constructor function relation primitive host_sort_family host_primitive eq_sort span bindings doc hidden",
     "Arg": "sort:sorts name",
     "EqSort": "name bindings",
     "Constructor": "name inputs output:sorts cost:nodes unextractable",

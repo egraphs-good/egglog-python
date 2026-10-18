@@ -325,7 +325,7 @@ def test_action_equality_ignores_unrelated_records_and_arena_layout(action_progr
     assert first == Action(Builder.from_program(action_program).publish().ref("commands", 0))
 
 
-@pytest.mark.parametrize("change", ["doc", "presentation", "merge", "sort", "rhs", "action"])
+@pytest.mark.parametrize("change", ["doc", "presentation", "hidden", "merge", "sort", "rhs", "action"])
 def test_action_equality_observes_referenced_declaration_closure(action_program, change):
     first = Action(Builder.from_program(action_program).publish().ref("commands", 0))
     assert first == Action(Builder.from_program(action_program).publish().ref("commands", 0))
@@ -338,6 +338,16 @@ def test_action_equality_observes_referenced_declaration_closure(action_program,
         declaration.bindings = pb.CallableBindings(
             python=pb.PythonBindings(views=[pb.PythonCallable(kind=pb.PythonCallKind.FUNCTION, path=["renamed"])])
         )
+    elif change == "hidden":
+        declaration.hidden = True
+        visible = first.__egg_ref__.owner.ref("declarations", 3)
+        hidden = Builder.from_program(action_program).publish().ref("declarations", 3)
+        assert visible.read().hidden is False
+        assert hidden.read().hidden is True
+        assert StructuralView(visible) != StructuralView(hidden)
+        assert len({StructuralView(visible), StructuralView(hidden)}) == 2
+        with pytest.raises(ValueError, match="same-name"):
+            pack([visible, hidden])
     elif change == "merge":
         declaration.kind.value.merge = 1
     elif change == "sort":
