@@ -596,7 +596,7 @@ class RuntimeClass(type):
             return False
         node: pb.Node = instance.__egg_ref__.read()
         actual = _class_for_sort(instance.__egg_ref__.owner.ref("sorts", node.sort_id))
-        return cls.__egg_definition__ == actual.__egg_definition__
+        return cls == actual if cls.__egg_sort__ is not None else cls.__egg_definition__ == actual.__egg_definition__
 
     def __call__(cls, *args: object, **kwargs: object) -> RuntimeExpr | None:  # noqa: C901, PLR0912
         declaration: pb.Declaration = cls.__egg_definition__.read()

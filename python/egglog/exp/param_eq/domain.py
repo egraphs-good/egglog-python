@@ -24,18 +24,12 @@ from typing_extensions import TypeIs
 
 from egglog import *
 
-from ...runtime import RuntimeClass, RuntimeExpr  # noqa: TID252
-
 _T_EXPR = TypeVar("_T_EXPR", bound=BaseExpr)
 
 
 def _is_expr_instance(x: BaseExpr, cls: type[_T_EXPR]) -> TypeIs[_T_EXPR]:
-    """Check an expression's concrete Egglog type, including generic arguments."""
-    if not isinstance(cast("object", x), RuntimeExpr):
-        raise TypeError(f"Expected Expression, got {type(x).__name__}")
-    if not isinstance(cast("object", cls), RuntimeClass):
-        raise TypeError(f"Expected expression class, got {type(cls).__name__}")
-    return cast("RuntimeExpr", x).__egg_typed_expr__.tp == cast("RuntimeClass", cls).__egg_tp__.to_just()
+    """Narrow parameterized expression aliases through public instance checks."""
+    return isinstance(x, cls)
 
 
 class Num(Expr):

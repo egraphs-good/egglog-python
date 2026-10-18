@@ -1952,6 +1952,52 @@ def test_scalar_wave_concrete_defaults_and_nested_containers():
         message(i64(1))
 
 
+def test_runtime_instance_checks_preserve_concrete_sorts_without_engine(monkeypatch):
+    from egglog import MultiSet  # noqa: PLC0415
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Runtime instance checking accessed an engine")
+
+    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
+
+    class Number(Expr):
+        def __init__(self) -> None: ...
+
+    class Other(Expr):
+        def __init__(self) -> None: ...
+
+    monomial = Map[Number, i64]
+    polynomial = Map[monomial, f64]
+
+    @function
+    def choose(values: Map[i64, f64]) -> Number: ...
+
+    checks = [
+        (polynomial.empty(), polynomial, True),
+        (polynomial.empty(), monomial, False),
+        (monomial.empty(), polynomial, False),
+        (polynomial.empty(), Map[Map[Number, f64], f64], False),
+        (polynomial.empty(), Map[Map[Other, i64], f64], False),
+        (Map[i64, f64].empty(), Map[f64, i64], False),
+        (polynomial.empty(), Map, True),
+        (MultiSet[Number](), MultiSet[Number], True),
+        (MultiSet[Number](), MultiSet[Other], False),
+        (MultiSet[Number](), MultiSet, True),
+        (UnstableFn(choose), UnstableFn[Number, Map[i64, f64]], True),
+        (UnstableFn(choose), UnstableFn[Number, Map[f64, i64]], False),
+        (UnstableFn(choose), UnstableFn[Other, Map[i64, f64]], False),
+        (UnstableFn(choose), UnstableFn, True),
+        (Number(), Number, True),
+        (Number(), Other, False),
+        (i64(1), i64, True),
+        (i64(1), f64, False),
+        (None, Map, False),
+        (1, i64, False),
+    ]
+    for value, selected, expected in checks:
+        assert isinstance(value, selected) is expected, (value, selected)
+
+
 def test_map_authoring_symbolic_children_and_local_protocols(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Map authoring/inspection accessed an engine")
