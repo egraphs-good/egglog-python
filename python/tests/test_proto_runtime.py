@@ -3769,15 +3769,36 @@ def test_free_ruleset_body_invalid_destination_precedes_callback():
 
 
 @pytest.mark.parametrize("options", [{"cost": 1}, {"unextractable": True}])
-def test_free_ruleset_body_constructor_options_remain_unmigrated(options):
-    class DeferredRulesetBox(Expr): ...
+def test_free_ruleset_body_preserves_constructor_options(options):
+    class DeferredRulesetBox(Expr):
+        def __init__(self) -> None: ...
 
-    @function(ruleset=ruleset(), **options)
+    destination = ruleset()
+    calls = []
+
+    @function(ruleset=destination, **options)
     def body() -> DeferredRulesetBox:
-        pytest.fail("Unmigrated constructor option executed the body")
+        calls.append(get_current_ruleset())
+        return DeferredRulesetBox()
 
-    with pytest.raises(NotImplementedError, match="cost, unextractable and variadic free functions are not migrated"):
-        resolve_callable(body)
+    reference = resolve_callable(body)
+    record = reference.read()
+    assert record.kind.field == "constructor"
+    assert record.kind.value.unextractable is options.get("unextractable", False)
+    if "cost" in options:
+        assert record.kind.value.has_field("cost")
+        cost = reference.owner.ref("nodes", record.kind.value.cost).read()
+        assert cost.kind.value.value == Oneof[Literal["i64"], int]("i64", options["cost"])
+    else:
+        assert not record.kind.value.has_field("cost")
+    assert calls == [destination]
+    assert len(destination._snapshot({}).read().kind.value.rules) == 1
+    expression = body()
+    graph = EGraph(expression)
+    graph.run(destination)
+    graph.check(eq(expression).to(DeferredRulesetBox()))
+    assert resolve_callable(body) is reference
+    assert calls == [destination]
 
 
 @pytest.mark.parametrize(
@@ -3823,7 +3844,6 @@ def test_named_eager_static_options_precede_callback(equality, options, error, m
         ({"builtin": True, "merge": lambda old, new: old}, ValueError, "Builtin callables cannot use merge"),
         ({"builtin": True, "ruleset": object()}, ValueError, "Builtin callables cannot use an explicit ruleset"),
         ({"builtin": True}, NotImplementedError, "not migrated"),
-        ({"merge": lambda old, new: pytest.fail("merge called")}, NotImplementedError, "not migrated"),
         ({"mutates_first_arg": True}, ValueError, "must be annotated to return None"),
     ],
 )
