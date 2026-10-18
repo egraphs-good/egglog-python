@@ -398,15 +398,19 @@ class TestNormalFns:
         egraph.check(eq(x).to(A()))
         egraph.check(eq(y).to(C()))
 
-    def test_different_parameter_names_get_different_names(self):
+    def test_parameter_names_do_not_change_callback_bindings(self):
         @function
         def apply_f(f: Callable[[A], A], x: A) -> A:
             return f(x)
 
         egraph = EGraph(save_egglog_string=True)
-        egraph.register(apply_f(lambda left: A(), A()))
-        egraph.register(apply_f(lambda right: A(), A()))
+        left_input = constant("left_input", A)
+        right_input = constant("right_input", A)
+        left = apply_f(lambda left: left, left_input)
+        right = apply_f(lambda right: right, right_input)
+        egraph.register(left)
+        egraph.register(right)
 
-        egglog = egraph.as_egglog_string
-        assert "_lambda_0" in egglog
-        assert "_lambda_1" in egglog
+        egraph.check(eq(left).to(left_input), eq(right).to(right_input))
+        egraph.check_fail(eq(left).to(right_input))
+        assert egraph.as_egglog_string

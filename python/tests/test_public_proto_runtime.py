@@ -462,14 +462,13 @@ def test_scalar_wave_functions_and_concrete_defaults_native_bytes() -> None:
     @function
     def flag(value: BoolLike = Bool(False)) -> Bool: ...
 
-    @function
-    def done() -> Unit: ...
+    done = constant("done", Unit)
 
     graph = EGraph()
-    graph.register(set_(message()).to("hello"), set_(flag()).to(True), set_(done()).to(Unit()))
+    graph.register(set_(message()).to("hello"), set_(flag()).to(True), set_(done).to(Unit()))
     assert graph.extract(message()).value == "hello"
     assert graph.extract(flag()).value is True
-    assert str(graph.extract(done())) == "Unit()"
+    assert str(graph.extract(done)) == "Unit()"
 
 
 def test_concrete_class_members_public_bytes() -> None:

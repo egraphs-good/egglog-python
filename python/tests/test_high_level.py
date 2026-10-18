@@ -2334,6 +2334,30 @@ def test_relation():
     egraph.register(test_relation(i64(1), i64(1)))
 
 
+def test_bodyless_unit_callables_are_relations():
+    class Work(Expr):
+        def __init__(self, value: i64Like) -> None: ...
+        def compile(self, next_sym: i64Like = 0) -> Unit: ...
+
+    @function
+    def pending(value: i64) -> Unit: ...
+
+    @function
+    def eager_unit(value: i64) -> Unit:
+        return Unit()
+
+    value = var("value", i64)
+    graph = EGraph(Work(1).compile(), pending(i64(1)))
+    advance = ruleset(
+        rule(pending(value), Work(value).compile()).then(Work(value).compile(value + 1), pending(value + 1))
+    )
+    graph.run(1, ruleset=advance)
+    graph.check(Work(1).compile(2), pending(i64(2)))
+    graph.check_fail(Work(2).compile())
+    graph.check_fail(pending(i64(3)))
+    assert str(graph.extract(eager_unit(i64(3)))) == "Unit()"
+
+
 def test_variable_args():
     egraph = EGraph()
     egraph.check(Set(i64(1), i64(2)).contains(i64(1)))

@@ -356,7 +356,8 @@ def function(*args, **kwargs) -> Any:
     Decorate a function typing stub to create an egglog function for it.
 
     Python automatically infers whether this lowers to a `function`, `constructor`,
-    or eager `primitive` from the return type and whether a body/default exists.
+    `relation`, or eager `primitive` from the return type and whether a body/default exists.
+    Bodyless callables returning `Unit` lower to relations.
 
     Bodies and defaults lower eagerly unless an explicit `ruleset` is provided,
     in which case they are added as rewrite-backed defaults in that ruleset.
@@ -919,6 +920,8 @@ class _FunctionConstructor:
                 "primitive", pb.Primitive(name=name, inputs=inputs, output=output_index)
             )
             if has_body and self.ruleset is None
+            else Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=name, inputs=inputs))
+            if not has_body and output_record.kind.field == "family" and output_record.kind.value.name == "Unit"
             else Oneof[Literal["constructor"], pb.Constructor](
                 "constructor",
                 pb.Constructor(name=name, inputs=inputs, output=output_index, unextractable=self.unextractable),
