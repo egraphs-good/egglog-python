@@ -12,7 +12,7 @@ from copy import copy
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
-from typing import ClassVar, TypeAlias, TypeVar, Union, cast, get_args, get_origin
+from typing import ClassVar, Literal, TypeAlias, TypeVar, Union, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
@@ -23,6 +23,7 @@ import egglog.builtins as egg_builtins
 from egglog import *
 from egglog.conversion import ConvertError
 from egglog.runtime import RuntimeExpr, RuntimeFunction
+from egglog.type_constraint_solver import TypeConstraintError
 
 _BuiltinExprT = TypeVar("_BuiltinExprT", bound=BaseExpr)
 
@@ -1732,6 +1733,175 @@ def test_multiset_map_infers_partial_result_from_closed_callback(monkeypatch, ca
     with pytest.raises(ConvertError) as actual_error:
         wrong.map(partial(multiset_flat_map, get_monomial))
     assert str(actual_error.value) == str(expected_error.value)
+    engine.assert_not_called()
+
+
+@pytest.mark.parametrize("callback_kind", ["plain", "named", "result-context", "different-result"])
+def test_generic_named_callback_uses_known_input_context(monkeypatch, callback_kind: str) -> None:
+    engine = MagicMock(side_effect=AssertionError("Callback authoring must not create an engine"))
+    monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
+    from egglog.exp.array_api import Value  # noqa: PLC0415
+
+    mss = var("mss", MultiSet[MultiSet[Value]])
+    expected = mss.map(UnstableFn[MultiSet[Value], MultiSet[Value]](MultiSet.reset_counts))
+    if callback_kind == "plain":
+        result = mss.map(lambda xs: xs.reset_counts())
+    elif callback_kind == "named":
+        result = mss.map(MultiSet.reset_counts)
+        assert expr_parts(result) == expr_parts(expected)
+    elif callback_kind == "different-result":
+        lengths = mss.map(MultiSet.length)
+        assert convert(lengths, MultiSet[i64]) is lengths
+        engine.assert_not_called()
+        return
+    else:
+        result = expected
+    assert convert(result, MultiSet[MultiSet[Value]]) is result
+    engine.assert_not_called()
+
+
+def test_generic_named_callback_rejects_incompatible_input_context(monkeypatch) -> None:
+    engine = MagicMock(side_effect=AssertionError("Invalid callbacks must not create an engine"))
+    monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
+    with pytest.raises(TypeConstraintError, match="Expected Vec, got MultiSet"):
+        var("mss", MultiSet[MultiSet[i64]]).map(Vec.length)  # type: ignore[arg-type]
+    with pytest.raises(TypeConstraintError, match="Unresolved"):
+        UnstableFn(Vec.empty)
+    assert UnstableFn[Vec[i64]](Vec.empty).value == Vec[i64].empty
+    engine.assert_not_called()
+
+
+def test_generic_callback_context_keeps_binders_closed_and_separate(monkeypatch) -> None:
+    engine = MagicMock(side_effect=AssertionError("Contextual typing must not create an engine"))
+    monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
+    from egglog._program import Ref  # noqa: PLC0415
+    from egglog.runtime import _function_value, resolve_type_annotation  # noqa: PLC0415
+
+    integer = resolve_type_annotation(i64)
+    assert isinstance(integer, Ref)
+    callback = cast("RuntimeFunction", MultiSet.pick)
+    by_result = _function_value(callback, (), None, context=([None], integer))
+    assert expr_parts(cast("BaseExpr", by_result)) == expr_parts(UnstableFn[i64, MultiSet[i64]](MultiSet.pick))
+    with pytest.raises(TypeConstraintError, match="Unresolved"):
+        _function_value(callback, (), None, context=([None], None))
+
+    declaration = callback.__egg_ref__
+    record: pb.Declaration = declaration.read()
+    assert record.kind is not None
+    assert record.kind.field == "host_primitive"
+    assert record.kind.value.typing is not None
+    assert record.kind.value.typing.field == "signature"
+    unbound = declaration.owner.ref("sorts", record.kind.value.typing.value.output)
+    assert unbound.read().kind.field == "var"
+    with pytest.raises(TypeConstraintError, match="Actual argument sorts must be closed"):
+        _function_value(callback, (), None, context=([unbound], integer))
+    engine.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["contextual", "closed", "unresolved", "decode", "error"])
+def test_generic_callback_prefix_conversion_is_not_speculative(monkeypatch, mode: str) -> None:
+    engine = MagicMock(side_effect=AssertionError("Prefix authoring must not create an engine"))
+    monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
+    from protobuf import Oneof  # noqa: PLC0415
+
+    from egglog._program import Builder, Ref, pack  # noqa: PLC0415
+    from egglog.runtime import resolve_type_annotation  # noqa: PLC0415
+
+    class Host:
+        pass
+
+    calls: list[Host] = []
+    supplied, bad = Host(), Host()
+    failure = ValueError("capture converter failed")
+
+    def convert_host(value: Host) -> i64:
+        calls.append(value)
+        if value is bad:
+            raise failure
+        return i64(7)
+
+    converter(Host, i64, convert_host)
+    integer = resolve_type_annotation(i64)
+    assert isinstance(integer, Ref)
+    builder = Builder()
+    scalar = builder.import_ref(integer)
+    variable = builder.add("sorts", pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)))
+    index = builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["host_primitive"], pb.HostPrimitive](
+                "host_primitive",
+                pb.HostPrimitive(
+                    name="test.generic.capture",
+                    typing=Oneof[Literal["signature"], pb.GenericSignature](
+                        "signature",
+                        pb.GenericSignature(
+                            type_params=["T"],
+                            inputs=[pb.Arg(sort=scalar), pb.Arg(sort=variable)],
+                            output=variable,
+                        ),
+                    ),
+                ),
+            )
+        ),
+    )
+    reference = builder.publish().ref("declarations", index)
+    function = cast("Callable[[Host | i64, i64], i64]", RuntimeFunction(reference))
+    before = reference.read().to_binary()
+    xs = var("xs", MultiSet[i64])
+    if mode == "contextual":
+        actual = xs.map(partial(function, supplied))
+        assert calls == [supplied]
+        expected = xs.map(UnstableFn[i64, i64](function, i64(7)))
+        assert expr_parts(actual) == expr_parts(expected)
+    elif mode == "closed":
+        value = UnstableFn[i64, i64](function, supplied)
+        assert calls == [supplied]
+        assert isinstance(value.value, partial)
+        assert calls == [supplied]
+    elif mode == "unresolved":
+        with pytest.raises(TypeConstraintError, match="Unresolved"):
+            UnstableFn(function, supplied)
+        assert calls == []
+    elif mode == "decode":
+        value = cast("RuntimeExpr", UnstableFn[i64, i64](function, i64(7)))
+        packed = pack([value.__egg_ref__])
+        decoded = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+        restored = RuntimeExpr(decoded.ref("nodes", packed.indices[0]))
+        assert isinstance(restored.value, partial)
+        assert calls == []
+    else:
+        with pytest.raises(ValueError, match=r"^capture converter failed$") as caught:
+            xs.map(partial(function, bad))
+        assert caught.value is failure
+        assert calls == [bad]
+    assert reference.read().to_binary() == before
+    engine.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("name", "rule_count"),
+    [("to_polynomial_ruleset", 5), ("factor_ruleset", 1), ("from_polynomial_ruleset", 7)],
+)
+def test_polynomial_theory_authoring_snapshots_without_engine(monkeypatch, name: str, rule_count: int) -> None:
+    engine = MagicMock(side_effect=AssertionError("Theory authoring must not create an engine"))
+    monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
+    from egglog._program import Builder, pack  # noqa: PLC0415
+    from egglog.exp import array_api  # noqa: PLC0415
+
+    # The autouse fixture restores converters between tests, but imports cache
+    # the module that registered them. Recreate its actual authoring context.
+    importlib.reload(array_api)
+    snapshot = getattr(array_api, name)._snapshot({})
+    packed = pack([snapshot])
+    decoded = pb.Program.from_binary(packed.program.to_binary())
+    assert len(decoded.rules) == rule_count
+    assert decoded.nodes
+    assert decoded.declarations
+    restored = Builder.from_program(decoded).publish().ref("rulesets", packed.indices[0]).read()
+    assert restored.kind is not None
+    assert restored.kind.field == "rules"
+    assert len(restored.kind.value.rules) == rule_count
     engine.assert_not_called()
 
 

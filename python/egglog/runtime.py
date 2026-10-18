@@ -385,18 +385,34 @@ def _author_call(  # noqa: C901, PLR0912
         ]
     for position, (pattern, value, node) in enumerate(zip(patterns, ordered_values, existing, strict=True)):
         sort_kind = pattern.read().kind
-        if node is None and sort_kind is not None and sort_kind.field == "func" and isinstance(value, FunctionType):
-            from .egraph import _compile_python_function  # noqa: PLC0415
-
-            parameters = [
-                substitute_sort(pattern.owner.ref("sorts", index), substitutions) for index in sort_kind.value.params
-            ]
+        if node is None and sort_kind is not None and sort_kind.field == "func":
             result = None
             with suppress(TypeConstraintError):
                 result = substitute_sort(pattern.owner.ref("sorts", sort_kind.value.result), substitutions)
-            function, captures = _compile_python_function(value, parameters, result)
-            expression = _BASE_CLASSES["UnstableFn"](function, *captures)
-            assert isinstance(expression, RuntimeExpr)
+            if isinstance(value, FunctionType):
+                from .egraph import _compile_python_function  # noqa: PLC0415
+
+                parameters = [
+                    substitute_sort(pattern.owner.ref("sorts", index), substitutions)
+                    for index in sort_kind.value.params
+                ]
+                function, captures = _compile_python_function(value, parameters, result)
+                expression = _function_value(function, captures, None)
+            else:
+                callback = value
+                prefix = ()
+                if isinstance(callback, partial) and not callback.keywords:
+                    prefix = callback.args
+                    callback = callback.func
+                if not isinstance(callback, RuntimeFunction):
+                    continue
+                context_parameters: list[Ref | None] = []
+                for index in sort_kind.value.params:
+                    parameter = None
+                    with suppress(TypeConstraintError):
+                        parameter = substitute_sort(pattern.owner.ref("sorts", index), substitutions)
+                    context_parameters.append(parameter)
+                expression = _function_value(callback, prefix, None, context=(context_parameters, result))
             callback_node = expression.__egg_ref__
             infer_sort(
                 pattern, callback_node.owner.ref("sorts", callback_node.read().sort_id), binder_size, substitutions
@@ -713,30 +729,7 @@ class RuntimeClass(type):
             if not isinstance(function, RuntimeFunction):
                 msg = "UnstableFn requires a named RuntimeFunction"
                 raise TypeError(msg)
-            sort, children, _ = _partial_function(function, tuple(captures), cls.__egg_sort__)
-            record: pb.Declaration = function.__egg_ref__.read()
-            assert record.kind is not None
-            builder = Builder()
-            builder.import_ref(function.__egg_ref__)
-            node = builder.add(
-                "nodes",
-                pb.Node(
-                    sort_id=builder.import_ref(sort),
-                    kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
-                        "primitive_value",
-                        pb.PrimitiveValue(
-                            value=Oneof[Literal["partial_call"], pb.Call](
-                                "partial_call",
-                                pb.Call(
-                                    func=record.kind.value.name,
-                                    args=[builder.import_ref(child.__egg_ref__) for child in children],
-                                ),
-                            )
-                        ),
-                    ),
-                ),
-            )
-            return RuntimeExpr(builder.publish().ref("nodes", node))
+            return _function_value(function, tuple(captures), cls.__egg_sort__)
         if isinstance(declaration.kind.value, pb.HostSortFamily) and name in LIT_IDENTS:
             if kwargs or len(args) != (0 if name == "Unit" else 1):
                 raise TypeError(f"{cls} expects {'zero' if name == 'Unit' else 'one'} positional literal argument")
@@ -1117,8 +1110,47 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         )
 
 
+def _function_value(
+    function: RuntimeFunction,
+    captures: tuple[object, ...],
+    expected: Ref | None,
+    *,
+    context: tuple[list[Ref | None], Ref | None] | None = None,
+) -> RuntimeExpr:
+    """Materialize one strictly closed named function value and its ordered prefix."""
+    sort, children, _ = _partial_function(function, captures, expected, context=context)
+    record: pb.Declaration = function.__egg_ref__.read()
+    assert record.kind is not None
+    builder = Builder()
+    builder.import_ref(function.__egg_ref__)
+    node = builder.add(
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(sort),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value",
+                pb.PrimitiveValue(
+                    value=Oneof[Literal["partial_call"], pb.Call](
+                        "partial_call",
+                        pb.Call(
+                            func=record.kind.value.name,
+                            args=[builder.import_ref(child.__egg_ref__) for child in children],
+                        ),
+                    )
+                ),
+            ),
+        ),
+    )
+    return RuntimeExpr(builder.publish().ref("nodes", node))
+
+
 def _partial_function(  # noqa: C901, PLR0912
-    function: RuntimeFunction, captures: tuple[object, ...], expected: Ref | None, *, convert_captures: bool = True
+    function: RuntimeFunction,
+    captures: tuple[object, ...],
+    expected: Ref | None,
+    *,
+    convert_captures: bool = True,
+    context: tuple[list[Ref | None], Ref | None] | None = None,
 ) -> tuple[Ref, tuple[RuntimeExpr, ...], Ref | None]:
     """
     Type a named prefix against its complete call and preserve its Python order.
@@ -1127,6 +1159,8 @@ def _partial_function(  # noqa: C901, PLR0912
     must preserve every core position, and mutation is rejected before conversion.
     All inference operates on the actual canonical records, never a dummy call.
     Decoded captures are validated as stored values; only authoring may convert.
+    Context contributes only independently closed components, never variables
+    from another signature's binder. Missing components remain constraints to solve.
     """
     from .conversion import resolve_literal  # noqa: PLC0415
 
@@ -1148,7 +1182,7 @@ def _partial_function(  # noqa: C901, PLR0912
     bound = function.__egg_bound__
     if isinstance(bound, RuntimeExpr):
         captures = (bound, *captures)
-    expected_params: list[Ref] | None = None
+    expected_params: list[Ref | None] | None = None
     expected_result = None
     if expected is not None:
         expected_type: pb.Sort = expected.read()
@@ -1158,6 +1192,12 @@ def _partial_function(  # noqa: C901, PLR0912
         infer_sort(expected, expected, 0, {})
         expected_params = [expected.owner.ref("sorts", index) for index in expected_type.kind.value.params]
         expected_result = expected.owner.ref("sorts", expected_type.kind.value.result)
+    elif context is not None:
+        expected_params, expected_result = context
+        # Only closed components cross into this callable's independent binder.
+        for component in [*expected_params, expected_result]:
+            if component is not None:
+                infer_sort(component, component, 0, {})
     substitutions: dict[int, Ref] = dict(function.__egg_type_bindings__)
     binder_size = 0
     tail: list[Ref] = []
@@ -1180,7 +1220,7 @@ def _partial_function(  # noqa: C901, PLR0912
             if captures and isinstance(captures[0], RuntimeExpr):
                 first = captures[0].__egg_ref__
                 function_sort = first.owner.ref("sorts", first.read().sort_id)
-            elif expected_params:
+            elif expected_params and expected_params[0] is not None:
                 function_sort = expected_params[0]
             else:
                 msg = "Partial application needs its concrete function input sort"
@@ -1274,15 +1314,10 @@ def _partial_function(  # noqa: C901, PLR0912
             raise TypeError(msg)
     if expected_params is not None:
         for pattern, actual_sort in zip(patterns[len(captures) :], expected_params, strict=True):
-            infer_sort(pattern, actual_sort, binder_size, substitutions)
-        assert expected_result is not None
+            if actual_sort is not None:
+                infer_sort(pattern, actual_sort, binder_size, substitutions)
+    if expected_result is not None:
         infer_sort(output, expected_result, binder_size, substitutions)
-    children = tuple(
-        resolve_literal(substitute_sort(pattern, substitutions), value)
-        if convert_captures
-        else cast("RuntimeExpr", value)
-        for pattern, value in zip(patterns, captures, strict=False)
-    )
     result = substitute_sort(output, substitutions)
     remaining = [substitute_sort(pattern, substitutions) for pattern in patterns[len(captures) :]]
     if len(substitutions) != binder_size:
@@ -1297,6 +1332,14 @@ def _partial_function(  # noqa: C901, PLR0912
             if view.owner.kind.field == "sort"
             else patterns[0]
         )
+    # Inference never depends on converting a host capture. A speculative
+    # prefix must be completely typable before any converter can have effects.
+    children = tuple(
+        resolve_literal(substitute_sort(pattern, substitutions), value)
+        if convert_captures
+        else cast("RuntimeExpr", value)
+        for pattern, value in zip(patterns, captures, strict=False)
+    )
     builder = Builder()
     builder.import_ref(declaration)
     index = builder.add(
