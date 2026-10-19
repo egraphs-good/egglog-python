@@ -437,6 +437,7 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
     encoded = snapshot.to_binary()
     graph._state.destroy()
     snapshot = pb.EGraphSnapshot.from_binary(encoded)
+    assert snapshot.program is not None
     owner = Builder.from_program(snapshot.program).publish()
     restored = EGraph()
     restored._state.run_program(
@@ -447,6 +448,7 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
     )
     if probe is not None:
         result, cost = restored.extract(probe, include_cost=True)
+        assert expected is not None
         assert expr_parts(result) == expr_parts(expected[0])
         assert cost == expected[1]
     if state == "union":
@@ -455,9 +457,20 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
         restored.check(member(a))
     roundtrip = restored.freeze()
     assert roundtrip.options == snapshot.options
-    assert Counter(command.kind.value.kind.field for command in roundtrip.program.commands) == Counter(
-        command.kind.value.kind.field for command in snapshot.program.commands
-    )
+    action_counts = []
+    for frozen in (roundtrip, snapshot):
+        frozen_program = frozen.program
+        assert frozen_program is not None
+        action_fields = []
+        for command in frozen_program.commands:
+            command_kind = command.kind
+            assert command_kind is not None
+            assert command_kind.field == "action"
+            action_kind = command_kind.value.kind
+            assert action_kind is not None
+            action_fields.append(action_kind.field)
+        action_counts.append(Counter(action_fields))
+    assert action_counts[0] == action_counts[1]
 
 
 def _observed_pyerr_callback(tag):
@@ -1814,9 +1827,12 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     installed = graph._state.rulesets[first.__egg_ident__]
     assert [ref.read().name for ref in graph._state._ruleset_members(installed)] == ["first"]
     execution = requests[-1]
-    assert execution.program.commands[0].kind is not None
-    assert execution.program.commands[0].kind.field == "repeat"
-    assert len(execution.program.commands[0].kind.value.body) == 3
+    execution_program = execution.program
+    assert execution_program is not None
+    execution_kind = execution_program.commands[0].kind
+    assert execution_kind is not None
+    assert execution_kind.field == "repeat"
+    assert len(execution_kind.value.body) == 3
     assert not any(request.program.commands for request in requests[:-1])
     before = len(requests)
     graph.run(schedule)
@@ -1830,8 +1846,11 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     graph.run(seq(run()))
     assert Ident("") in graph._state.rulesets
     assert graph.stats().can_stop
-    assert requests[-1].program.commands[0].kind is not None
-    assert requests[-1].program.commands[0].kind.field == "stats"
+    stats_program = requests[-1].program
+    assert stats_program is not None
+    stats_kind = stats_program.commands[0].kind
+    assert stats_kind is not None
+    assert stats_kind.field == "stats"
     for length in (-1, 2**64):
         before = len(requests)
         with pytest.raises(OverflowError):
@@ -1855,8 +1874,17 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     ]
     with set_current_ruleset(other):
         graph.run(run())
-    selected = requests[-1].program.commands[0].kind.value.ruleset.kind.value
-    assert requests[-1].program.rulesets[selected].name == graph._state.rulesets[Ident("")].read().name
+    selected_program = requests[-1].program
+    assert selected_program is not None
+    run_kind = selected_program.commands[0].kind
+    assert run_kind is not None
+    assert run_kind.field == "run"
+    assert run_kind.value.ruleset is not None
+    ruleset_kind = run_kind.value.ruleset.kind
+    assert ruleset_kind is not None
+    assert ruleset_kind.field == "index"
+    selected = ruleset_kind.value
+    assert selected_program.rulesets[selected].name == graph._state.rulesets[Ident("")].read().name
     for level in (pb.ReportLevel.TIME_ONLY, pb.ReportLevel.WITH_PLAN, pb.ReportLevel.STAGE_INFO):
         graph.set_report_level(level)
         assert requests[-1].operation.value == level

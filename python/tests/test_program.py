@@ -123,9 +123,18 @@ def test_schedule_composition_relocates_owned_inline_spans_without_engine(monkey
     combined = seq(original, original.saturate() * 2)
     program = pack(commands=[combined._resolve(None)], ambient={("ruleset", "")}).program
     assert [file.name for file in program.files] == ["schedule.py"]
-    first, second = program.commands[0].kind.value.body
+    sequence_kind = program.commands[0].kind
+    assert sequence_kind is not None
+    assert sequence_kind.field == "repeat"
+    first, second = sequence_kind.value.body
     assert first.span == pb.Span(file=0, start=0, end=5)
-    assert second.kind.value.body[0].kind.value.body[0].span == first.span
+    repeated_kind = second.kind
+    assert repeated_kind is not None
+    assert repeated_kind.field == "saturate"
+    saturated_kind = repeated_kind.value.body[0].kind
+    assert saturated_kind is not None
+    assert saturated_kind.field == "saturate"
+    assert saturated_kind.value.body[0].span == first.span
     assert pb.Program.from_binary(program.to_binary()) == program
 
 
@@ -447,7 +456,16 @@ def test_action_equality_has_finite_shared_cycle_proofs(union_action_graph):
     for index in range(2):
         assert actions[index] == Action(source.ref("commands", index)) == copy(actions[index])
     packed = pack(commands=[action.__egg_ref__ for action in actions]).program
-    assert len({command.kind.value.kind.value for command in packed.commands}) == 6
+    terms = []
+    for command in packed.commands:
+        command_kind = command.kind
+        assert command_kind is not None
+        assert command_kind.field == "action"
+        term_kind = command_kind.value.kind
+        assert term_kind is not None
+        assert term_kind.field == "term"
+        terms.append(term_kind.value)
+    assert len(set(terms)) == 6
     assert pb.Program.from_binary(packed.to_binary()) == packed
     independent = Builder.from_program(union_action_graph).publish()
     for index in (0, 3, 5):
@@ -617,6 +635,7 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
             ("callable", "Pair"),
         }
         payload = next(n.kind.value.value.value for n in result.program.nodes if n.kind.field == "primitive_value")
+        assert isinstance(payload, pb.PairValue)
         assert payload.first == payload.second
     assert {_program._definition_key(d) for d in pack([nominal]).program.declarations} == {
         ("eq_sort", "Pair"),
@@ -1333,7 +1352,11 @@ def test_scalar_view_presence_survives_owned_closure_and_relocation(repetitions)
     packet = pack([join("a", "b").__egg_ref__])
     program = packet.program
     declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.string.concat")
-    python_view, rust_view = declaration.bindings.python.views[0], declaration.bindings.rust.views[0]
+    declaration_bindings = declaration.bindings
+    assert declaration_bindings is not None
+    assert declaration_bindings.python is not None
+    assert declaration_bindings.rust is not None
+    python_view, rust_view = declaration_bindings.python.views[0], declaration_bindings.rust.views[0]
     if repetitions is not None:
         python_view.tail_repetitions = rust_view.tail_repetitions = repetitions
         python_view.params = [pb.PythonParameter(core_input=i, name=f"part{i}") for i in range(repetitions)]
@@ -1341,8 +1364,13 @@ def test_scalar_view_presence_survives_owned_closure_and_relocation(repetitions)
     owner = Builder.from_program(program).publish()
     reference = owner.ref("declarations", program.declarations.index(declaration))
     detached = reference.read()
-    detached.bindings.python.views[0].tail_repetitions = 7
-    detached.bindings.rust.views[0].tail_repetitions = 7
+    assert isinstance(detached, pb.Declaration)
+    detached_bindings = detached.bindings
+    assert detached_bindings is not None
+    assert detached_bindings.python is not None
+    assert detached_bindings.rust is not None
+    detached_bindings.python.views[0].tail_repetitions = 7
+    detached_bindings.rust.views[0].tail_repetitions = 7
     builder = Builder()
     for index in reversed(range(len(program.sorts))):
         builder.import_ref(owner.ref("sorts", index))
@@ -1357,13 +1385,26 @@ def test_scalar_view_presence_survives_owned_closure_and_relocation(repetitions)
         reference.read(),
         next(d for d in reencoded.declarations if d.kind.value.name == "egglog.core.string.concat"),
     ):
-        for view in (records.bindings.python.views[0], records.bindings.rust.views[0]):
+        assert isinstance(records, pb.Declaration)
+        record_bindings = records.bindings
+        assert record_bindings is not None
+        assert record_bindings.python is not None
+        assert record_bindings.rust is not None
+        for view in (record_bindings.python.views[0], record_bindings.rust.views[0]):
             assert view.has_field("tail_repetitions") is (repetitions is not None)
             if repetitions is not None:
                 assert view.tail_repetitions == repetitions
-        assert not records.kind.value.typing.value.inputs
-        assert len(records.kind.value.typing.value.varargs) == 1
+        record_kind = records.kind
+        assert record_kind is not None
+        assert record_kind.field == "host_primitive"
+        signature_kind = record_kind.value.typing
+        assert signature_kind is not None
+        assert signature_kind.field == "signature"
+        signature = signature_kind.value
+        assert not signature.inputs
+        assert len(signature.varargs) == 1
     call = next(n.kind.value for n in reencoded.nodes if n.kind.field == "call")
+    assert isinstance(call, pb.Call)
     assert [reencoded.nodes[i].kind.value.value.value for i in call.args] == ["a", "b"]
 
 
@@ -1427,11 +1468,23 @@ def test_proof_command_relocation_and_constructor_closure():
     )
     owner = builder.publish()
     result = pack(commands=[owner.ref("commands", prove), owner.ref("commands", exists)], ambient=AMBIENT).program
-    assert result.commands[0].kind.value.facts == [0, 0]
+    prove_kind = result.commands[0].kind
+    assert prove_kind is not None
+    assert prove_kind.field == "prove"
+    assert prove_kind.value.facts == [0, 0]
     assert unused != fact == 1
     assert len(result.nodes) == 1
-    assert result.nodes[0].kind.value.value.value == 7
-    assert result.commands[1].kind.value.constructor == "box"
+    scalar_kind = result.nodes[0].kind
+    assert scalar_kind is not None
+    assert scalar_kind.field == "primitive_value"
+    scalar_value = scalar_kind.value.value
+    assert scalar_value is not None
+    assert scalar_value.field == "i64"
+    assert scalar_value.value == 7
+    exists_kind = result.commands[1].kind
+    assert exists_kind is not None
+    assert exists_kind.field == "prove_exists"
+    assert exists_kind.value.constructor == "box"
     assert {declaration.kind.value.name for declaration in result.declarations} == {"box", "Box"}
     assert pb.Program.from_binary(result.to_binary()) == result
     with pytest.raises(ValueError, match=r"missing.*missing"):
