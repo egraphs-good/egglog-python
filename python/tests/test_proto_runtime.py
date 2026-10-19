@@ -99,6 +99,12 @@ def _required_callable_args(x: object, fn: object = None) -> tuple[RuntimeExpr, 
     return arguments
 
 
+def _required_runtime_function(value: object) -> RuntimeFunction:
+    """Require the actual callable presentation without invoking or preparing it."""
+    assert isinstance(value, RuntimeFunction)
+    return value
+
+
 def _required_python_bindings(declaration: pb.Declaration) -> pb.PythonBindings:
     """Require authored Python metadata at this positive observation boundary."""
     bindings = declaration.bindings
@@ -1483,7 +1489,8 @@ def test_set_conversion_and_typed_alias(set_runtime):
     converted = convert({1, 2}, Set[integer])
     assert converted.value == {integer(1), integer(2)}
     empty = convert(set(), Set[integer])
-    assert get_callable_fn(empty).__egg_ref__ == Set[integer].empty.__egg_ref__
+    empty_function = _required_runtime_function(get_callable_fn(empty))
+    assert empty_function.__egg_ref__ == Set[integer].empty.__egg_ref__
     assert isinstance(empty, Set[integer])
     with pytest.raises(set_runtime["ExprValueError"]):
         _ = empty.value
@@ -1496,7 +1503,8 @@ def test_set_conversion_and_typed_alias(set_runtime):
     def size(value: SetLike[integer, int]) -> integer: ...
 
     assert _required_callable_args(size({1, 2}))[0].value == converted.value
-    assert get_callable_fn(_required_callable_args(size(set()))[0]).__egg_ref__ == Set[integer].empty.__egg_ref__
+    nested_empty_function = _required_runtime_function(get_callable_fn(_required_callable_args(size(set()))[0]))
+    assert nested_empty_function.__egg_ref__ == Set[integer].empty.__egg_ref__
     pair, string = (set_runtime[name] for name in ("Pair", "String"))
     nested = convert({(1, "a")}, Set[pair[integer, string]])
     assert next(iter(nested)).value == (integer(1), string("a"))
@@ -2190,7 +2198,8 @@ def test_scalar_wave_canonical_calls_and_reverse_operand_order():
 
 @pytest.mark.parametrize("count", [0, 1, 2, 5])
 def test_scalar_wave_canonical_bool_pretty_preserves_every_argument(count):
-    canonical = RuntimeFunction(Bool.__or__.__egg_ref__, None)
+    or_function = _required_runtime_function(Bool.__or__)
+    canonical = RuntimeFunction(or_function.__egg_ref__, None)
     values = [index % 2 == 0 for index in range(count)]
     expression = canonical(*values)
     assert [child.value for child in _required_callable_args(expression)] == values
@@ -3540,11 +3549,12 @@ def test_runtime_function_comparison_calls_identical_bound_expression_hook(raise
                 raise ValueError(msg)
             return False
 
-    token = constant("token", Token)
+    token = to_runtime_expr(constant("token", Token))
     member = i64.__add__
+    runtime_member = _required_runtime_function(member)
     # Comparison only: deliberately do not invoke an i64 member with Token.
-    left = RuntimeFunction(member.__egg_ref__, member.__egg_view__, token)
-    right = RuntimeFunction(member.__egg_ref__, member.__egg_view__, token)
+    left = RuntimeFunction(runtime_member.__egg_ref__, runtime_member.__egg_view__, token)
+    right = RuntimeFunction(runtime_member.__egg_ref__, runtime_member.__egg_view__, token)
     if raises:
         with pytest.raises(ValueError, match="bound equality marker"):
             assert left == right
@@ -3619,7 +3629,8 @@ def test_named_eager_body_is_authored_once_without_engine():
     for _ in range(2):
         assert str(body()) == "body()"
     assert calls == 1
-    assert body.__egg_prepare__ is None
+    runtime_body = _required_runtime_function(body)
+    assert runtime_body.__egg_prepare__ is None
     declaration = resolve_callable(body)
     assert declaration.read().kind.field == "primitive"
     assert declaration.owner.ref("nodes", declaration.read().kind.value.body).read().kind.value.value.value == 1
@@ -5460,8 +5471,9 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
     assert catalog_ref == first
     assert catalog_ref.owner is first.owner
     assert {name for _, name in defaults_context.catalog.members} == {"__init__", "first", "with_default"}
-    assert captured[0].__egg_prepare__ is None
-    assert captured[0].__egg_pending_declaration__ is None
+    captured_function = _required_runtime_function(captured[0])
+    assert captured_function.__egg_prepare__ is None
+    assert captured_function.__egg_pending_declaration__ is None
     expression = Defaults().with_default()
     assert isinstance(expression, i64)
     packet = pack([to_runtime_expr(expression).__egg_ref__, first])
@@ -6514,7 +6526,8 @@ def test_eager_free_mutation_failure_is_terminal_before_rebinding(class_authorin
             assert caught.value is marker
         assert to_runtime_expr(value).__egg_ref__ is root
     assert calls == [1]
-    assert invalid.__egg_declaration__ is None
+    runtime_invalid = _required_runtime_function(invalid)
+    assert runtime_invalid.__egg_declaration__ is None
 
 
 @pytest.mark.parametrize("invalid", ["return", "missing-input"])
@@ -6532,7 +6545,8 @@ def test_free_mutation_signature_rejects_before_body(class_authoring_without_eng
     wrapped = function(mutates_first_arg=True)(body)
     with pytest.raises(ValueError, match="Mutating callables"):
         resolve_callable(wrapped)
-    assert wrapped.__egg_declaration__ is None
+    runtime_wrapped = _required_runtime_function(wrapped)
+    assert runtime_wrapped.__egg_declaration__ is None
 
 
 @pytest.mark.parametrize("corruption", ["index", "output", "initializer", "unmapped"])
