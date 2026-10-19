@@ -1544,9 +1544,13 @@ class RecursiveValue(Expr):
     >>> convert(Value.from_int(42), RecursiveValue)
     RecursiveValue(Value.from_int(Int(42)))
     >>> convert((1, 2, 3), RecursiveValue)
-    RecursiveValue.vec(Vec(RecursiveValue(Value.from_int(Int(1))), RecursiveValue(Value.from_int(Int(2))), RecursiveValue(Value.from_int(Int(3)))))
+    RecursiveValue.vec(Vec[RecursiveValue](RecursiveValue(Value.from_int(Int(1))), RecursiveValue(Value.from_int(Int(2))), RecursiveValue(Value.from_int(Int(3)))))
     >>> convert(((1,), (2,)), RecursiveValue)
-    RecursiveValue.vec(Vec(RecursiveValue.vec(Vec(RecursiveValue(Value.from_int(Int(1))))), RecursiveValue.vec(Vec(RecursiveValue(Value.from_int(Int(2)))))))
+    RecursiveValue.vec(
+        Vec[RecursiveValue](
+            RecursiveValue.vec(Vec[RecursiveValue](RecursiveValue(Value.from_int(Int(1))))), RecursiveValue.vec(Vec[RecursiveValue](RecursiveValue(Value.from_int(Int(2)))))
+        )
+    )
     """
 
     def __init__(self, value: ValueLike) -> None: ...
@@ -2780,7 +2784,7 @@ def set_array_api_egraph(egraph: EGraph) -> Iterator[None]:
 
 
 def _get_current_egraph() -> EGraph:
-    return _CURRENT_EGRAPH or EGraph(save_egglog_string=True)
+    return _CURRENT_EGRAPH or EGraph()
 
 
 T_co = TypeVar("T_co", covariant=True)
