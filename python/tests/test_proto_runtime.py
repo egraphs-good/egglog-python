@@ -79,6 +79,15 @@ from egglog.runtime import (
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
 
 
+def _required_oneof[T](kind: object, field: str, payload_type: type[T]) -> T:
+    """Require one encoded arm and its payload class at a test observation boundary."""
+    assert isinstance(kind, Oneof), (field, kind)
+    assert kind.field == field, (field, kind.field)
+    value = kind.value
+    assert isinstance(value, payload_type), (field, type(value), payload_type)
+    return value
+
+
 def test_pyobject_local_values_and_trusted_display(class_authoring_without_engine, monkeypatch):
     import cloudpickle  # noqa: PLC0415
 
@@ -221,16 +230,19 @@ def test_pyobject_materialization_rejects_malformed_shape(corruption, class_auth
     program = pb.Program.from_binary(packed.program.to_binary())
     node = program.nodes[packed.indices[0]]
     sort = program.sorts[node.sort_id]
+    family = _required_oneof(sort.kind, "family", pb.HostSort)
+    primitive = _required_oneof(node.kind, "primitive_value", pb.PrimitiveValue)
+    custom = _required_oneof(primitive.value, "custom", pb.CustomValue)
     if corruption == "family":
-        sort.kind.value.name = "String"
+        family.name = "String"
     elif corruption == "arity":
-        sort.kind.value.args.append(node.sort_id)
+        family.args.append(node.sort_id)
     elif corruption == "declaration":
         next(d.kind.value for d in program.declarations if d.kind.field == "host_sort_family").arity = 1
     elif corruption == "arm":
-        node.kind.value.value = Oneof("string", "not a pickle")
+        primitive.value = Oneof[Literal["string"], str]("string", "not a pickle")
     else:
-        node.kind.value.value.value.args.append(packed.indices[0])
+        custom.args.append(packed.indices[0])
 
     def forbidden(_payload):
         pytest.fail("Malformed Custom value reached pickle decoding")
@@ -541,12 +553,12 @@ def test_canonical_scheduler_until_queries_and_live_rulesets_without_engine(monk
     assert events == ["first"]
     program = pack(commands=[root]).program
     assert pb.Program.from_binary(program.to_binary()) == program
-    binding, conditional = program.commands[0].kind.value.body
-    assert binding.kind.field == "bind_scheduler"
-    assert conditional.kind.field == "repeat"
-    assert conditional.kind.value.times == 1
-    assert [program.nodes[index].kind.field for index in conditional.kind.value.until] == ["call", "union"]
-    assert conditional.kind.value.body[0].kind.value.scheduler == binding.kind.value.name
+    binding, conditional = _required_oneof(program.commands[0].kind, "repeat", pb.Repeat).body
+    binding_data = _required_oneof(binding.kind, "bind_scheduler", pb.BindScheduler)
+    conditional_data = _required_oneof(conditional.kind, "repeat", pb.Repeat)
+    assert conditional_data.times == 1
+    assert [program.nodes[index].kind.field for index in conditional_data.until] == ["call", "union"]
+    assert _required_oneof(conditional_data.body[0].kind, "run", pb.Run).scheduler == binding_data.name
     assert "until=[" in str(schedule)
     assert "eq(" in str(schedule)
     selected.append(rule(name="later").then())
@@ -1291,13 +1303,14 @@ def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):
     variables = [index for index, node in enumerate(packed.nodes) if node.kind.field == "var"]
     assert len(variables) == 1
     index = variables[0]
-    assert packed.nodes[index].kind.value == "x"
-    rule_record = packed.rules[0].kind.value
-    members = packed.nodes[rule_record.query[0]].kind.value.members
+    assert _required_oneof(packed.nodes[index].kind, "var", str) == "x"
+    rule_record = _required_oneof(packed.rules[0].kind, "rule", pb.Rule)
+    members = _required_oneof(packed.nodes[rule_record.query[0]].kind, "union", pb.Union).members
     assert members[1] == index
-    assert packed.nodes[members[0]].kind.value.args == [index]
-    assert rule_record.head[0].kind.value.target.args == [index]
-    assert rule_record.head[0].kind.value.value == index
+    assert _required_oneof(packed.nodes[members[0]].kind, "call", pb.Call).args == [index]
+    assignment_record = _required_oneof(rule_record.head[0].kind, "set", pb.Set)
+    assert assignment_record.target.args == [index]
+    assert assignment_record.value == index
     assert str(authored) == "rule(eq(row(x)).to(x)).then(set_(row(x)).to(x))"
 
 
@@ -1340,12 +1353,19 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     assert [action.kind.field for action in record.kind.value.head] == ["set", "term", "term", "term"]
     packed = pack([authored.__egg_ref__])
     assert not packed.program.commands
-    body = packed.program.rules[packed.indices[0]].kind.value
+    body = _required_oneof(packed.program.rules[packed.indices[0]].kind, "rule", pb.Rule)
     assert body.query[0] != body.query[1]  # Distinct equal Union occurrences stay distinct.
-    assert body.head[1].kind.value == body.head[2].kind.value == body.query[0]
-    assignment_record = body.head[0].kind.value
+    assert (
+        _required_oneof(body.head[1].kind, "term", int)
+        == _required_oneof(body.head[2].kind, "term", int)
+        == body.query[0]
+    )
+    assignment_record = _required_oneof(body.head[0].kind, "set", pb.Set)
     assert assignment_record.target.args == []
-    assert packed.program.nodes[assignment_record.value].kind.value.value.value == 7
+    scalar_value = _required_oneof(
+        packed.program.nodes[assignment_record.value].kind, "primitive_value", pb.PrimitiveValue
+    )
+    assert _required_oneof(scalar_value.value, "i64", int) == 7
     assert any(
         declaration.kind.field == "function" and declaration.kind.value.name == assignment_record.target.func
         for declaration in packed.program.declarations
@@ -1485,11 +1505,19 @@ def test_set_formed_value_preserves_refs_and_pretty_roundtrip(set_runtime, empty
     packed = pack([expression.__egg_ref__])
     binary = packed.program.to_binary()
     assert pb.Program.from_binary(binary).to_binary() == binary
-    items = packed.program.nodes[packed.indices[0]].kind.value.value.value.items
+    scalar_value = _required_oneof(packed.program.nodes[packed.indices[0]].kind, "primitive_value", pb.PrimitiveValue)
+    items = _required_oneof(scalar_value.value, "set", pb.ValueList).items
     assert len(items) == (0 if empty else 3)
     if not empty:
         assert items[0] == items[2] != items[1]
-        assert [packed.program.nodes[index].kind.value.value.value for index in items] == [2, 1, 2]
+        assert [
+            _required_oneof(
+                _required_oneof(packed.program.nodes[index].kind, "primitive_value", pb.PrimitiveValue).value,
+                "i64",
+                int,
+            )
+            for index in items
+        ] == [2, 1, 2]
     assert expression.__egg_ref__.read().to_binary() == before
 
 
@@ -4146,9 +4174,10 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
     assert first != second
     assert program.nodes[first].kind.field == program.nodes[second].kind.field == "union"
     assert sum(node.kind.field == "union" for node in program.nodes) == 2
-    assert [command.kind.value.kind.field for command in program.commands] == ["term"] * 3
-    assert [command.kind.value.kind.value for command in program.commands] == [first, first, second]
-    canonical = program.rules[rule_index].kind.value
+    action_data = [_required_oneof(command.kind, "action", pb.Action) for command in program.commands]
+    assert [command.kind.field for command in action_data] == ["term"] * 3
+    assert [_required_oneof(command.kind, "term", int) for command in action_data] == [first, first, second]
+    canonical = _required_oneof(program.rules[rule_index].kind, "rule", pb.Rule)
     assert canonical.query == [first]
     assert [action.kind.field for action in canonical.head] == ["term"] * 3
     assert [action.kind.value for action in canonical.head] == [first, first, second]
@@ -4177,10 +4206,11 @@ def test_set_and_term_authoring_own_commands_without_evaluating(monkeypatch):
     rhs.__egg_ref__ = i64(9).__egg_ref__
     target.__egg_ref__ = i64(5).__egg_ref__
     packed = pack(commands=[action.__egg_ref__, term.__egg_ref__]).program
-    assignment = packed.commands[0].kind.value.kind.value
+    assignment = _required_oneof(_required_oneof(packed.commands[0].kind, "action", pb.Action).kind, "set", pb.Set)
     assert assignment.target.func == "slot"
-    assert packed.nodes[assignment.value].kind.value.value.value == 4
-    assert packed.commands[1].kind.value.kind.field == "term"
+    scalar_value = _required_oneof(packed.nodes[assignment.value].kind, "primitive_value", pb.PrimitiveValue)
+    assert _required_oneof(scalar_value.value, "i64", int) == 4
+    _required_oneof(_required_oneof(packed.commands[1].kind, "action", pb.Action).kind, "term", int)
     assert str(action) == "set_(slot()).to(i64(4))"
     assert str(term) == "slot()"
     assert str(set_(i64(4))) == "set_(i64(4))"
