@@ -90,6 +90,13 @@ def _required_oneof[T](kind: object, field: str, payload_type: type[T]) -> T:
     return value
 
 
+def _required_callable_args(x: object, fn: object = None) -> tuple[RuntimeExpr, ...]:
+    """Require the existing deconstructor to match this known-call observation."""
+    arguments = get_callable_args(x, fn)
+    assert arguments is not None
+    return arguments
+
+
 def test_pyobject_local_values_and_trusted_display(class_authoring_without_engine, monkeypatch):
     import cloudpickle  # noqa: PLC0415
 
@@ -158,7 +165,7 @@ def test_object_annotations_share_canonical_pyobject_and_box_once(annotation, cl
         def echo(self, value: annotation) -> annotation: ...
 
     missing = Holder()
-    assert get_callable_args(missing, Holder)[0].value is None
+    assert _required_callable_args(missing, Holder)[0].value is None
     calls = []
 
     class Payload:
@@ -167,15 +174,15 @@ def test_object_annotations_share_canonical_pyobject_and_box_once(annotation, cl
             return dict, ([("value", 7)],)
 
     held = Holder(Payload())
-    argument = get_callable_args(held, Holder)[0]
+    argument = _required_callable_args(held, Holder)[0]
     assert isinstance(argument, PyObject)
     assert argument.value == {"value": 7}
     assert calls == ["serialize"]
     supplied = Holder(argument)
-    assert get_callable_args(supplied, Holder)[0].__egg_ref__ == argument.__egg_ref__
+    assert _required_callable_args(supplied, Holder)[0].__egg_ref__ == argument.__egg_ref__
     echoed = supplied.echo(argument)
     assert isinstance(echoed, PyObject)
-    assert get_callable_args(echoed)[1].__egg_ref__ == argument.__egg_ref__
+    assert _required_callable_args(echoed)[1].__egg_ref__ == argument.__egg_ref__
     assert calls == ["serialize"]
     encoded = pack([held.__egg_ref__, echoed.__egg_ref__])
     decoded = Builder.from_program(pb.Program.from_binary(encoded.program.to_binary())).publish()
@@ -213,7 +220,7 @@ def test_object_annotated_constructor_roundtrips_native_payload():
     graph = EGraph(expression, Holder())
     try:
         restored = graph.extract(expression)
-        value = get_callable_args(restored, Holder)[0]
+        value = _required_callable_args(restored, Holder)[0]
         assert isinstance(value, PyObject)
         assert value.value == {"values": [1]}
         graph.check(eq(expression).to(Holder(PyObject({"values": [1]}))))
@@ -1410,7 +1417,7 @@ def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(set_r
     assert len(expression) == 2
     assert first in expression
     assert integer(3) not in expression
-    assert [arg.__egg_ref__ for arg in get_callable_args(expression)] == [
+    assert [arg.__egg_ref__ for arg in _required_callable_args(expression)] == [
         first.__egg_ref__,
         second.__egg_ref__,
         first.__egg_ref__,
@@ -1466,8 +1473,8 @@ def test_set_conversion_and_typed_alias(set_runtime):
     @function
     def size(value: SetLike[integer, int]) -> integer: ...
 
-    assert get_callable_args(size({1, 2}))[0].value == converted.value
-    assert get_callable_fn(get_callable_args(size(set()))[0]).__egg_ref__ == Set[integer].empty.__egg_ref__
+    assert _required_callable_args(size({1, 2}))[0].value == converted.value
+    assert get_callable_fn(_required_callable_args(size(set()))[0]).__egg_ref__ == Set[integer].empty.__egg_ref__
     pair, string = (set_runtime[name] for name in ("Pair", "String"))
     nested = convert({(1, "a")}, Set[pair[integer, string]])
     assert next(iter(nested)).value == (integer(1), string("a"))
@@ -1634,21 +1641,24 @@ def test_exact_construction_and_conversions_stay_symbolic(rational_runtime):
         assert pb.Program.from_binary(packed.program.to_binary()).to_binary() == packed.program.to_binary()
     assert get_callable_fn(r(1, 2)) == r
     assert get_callable_fn(z.from_string("123")) == z.from_string
-    assert [part.value for part in get_callable_args(Fraction(1, 3) + r(1, 2))] == [Fraction(1, 3), Fraction(1, 2)]
+    assert [part.value for part in _required_callable_args(Fraction(1, 3) + r(1, 2))] == [
+        Fraction(1, 3),
+        Fraction(1, 2),
+    ]
     for target in (r, z, q):
         converted = convert(symbolic, target)
-        child = get_callable_args(converted)[0]
+        child = _required_callable_args(converted)[0]
         if target == q:
-            child = get_callable_args(child)[0]
+            child = _required_callable_args(child)[0]
         assert child.__egg_ref__ == symbolic.__egg_ref__
         with pytest.raises(rational_runtime["ExprValueError"]):
             _ = converted.value
     for target in (r, q):
         converted = convert(Fraction(1, 2), target)
         assert get_callable_fn(converted) == target
-        numerator = get_callable_args(converted)[0]
+        numerator = _required_callable_args(converted)[0]
         if target == q:
-            numerator = get_callable_args(numerator)[0]
+            numerator = _required_callable_args(numerator)[0]
         assert numerator.__egg_ref__.read().kind.value.value.field == "i64"
     for target in (r, z, q):
         with pytest.raises(ConvertError):
@@ -2149,7 +2159,7 @@ def test_scalar_wave_canonical_calls_and_reverse_operand_order():
     for expression, name, values in calls:
         call = expression.__egg_ref__.read().kind.value
         assert call.func == f"egglog.core.{name}"
-        assert tuple(child.value for child in get_callable_args(expression)) == values
+        assert tuple(child.value for child in _required_callable_args(expression)) == values
     assert str(String("a") + "b") == "join('a', 'b')"
     assert str(~Bool(False)) == "~Bool(False)"
     assert str(~(Bool(True) | False)) == "~(Bool(True) | False)"
@@ -2161,7 +2171,7 @@ def test_scalar_wave_canonical_bool_pretty_preserves_every_argument(count):
     canonical = RuntimeFunction(Bool.__or__.__egg_ref__, None)
     values = [index % 2 == 0 for index in range(count)]
     expression = canonical(*values)
-    assert [child.value for child in get_callable_args(expression)] == values
+    assert [child.value for child in _required_callable_args(expression)] == values
     expected = (
         "Bool(True) | False"
         if count == 2
@@ -2198,7 +2208,7 @@ def test_scalar_wave_specialized_view_permutation_and_zero_count():
         owner.ref("declarations", packet.program.declarations.index(declaration)), 1, String("right")
     )
     result = target("left")
-    assert [child.value for child in get_callable_args(result)] == ["left", "right"]
+    assert [child.value for child in _required_callable_args(result)] == ["left", "right"]
     assert str(result) == "join('left', 'right')"
     view = declaration.bindings.python.views[0]
     view.tail_repetitions = 0
@@ -2220,7 +2230,7 @@ def test_scalar_wave_specialized_bool_deconstruction_uses_effective_slots():
     result = method(True)
     call = result.__egg_ref__.read().kind.value
     assert [RuntimeExpr(result.__egg_ref__.owner.ref("nodes", i)).value for i in call.args] == [True, False]
-    assert [argument.value for argument in get_callable_args(result)] == [False, True]
+    assert [argument.value for argument in _required_callable_args(result)] == [False, True]
     assert str(result) == "Bool(False) | True"
     assert expr_parts(get_callable_fn(result)(*get_callable_args(result))) == expr_parts(result)
 
@@ -2273,12 +2283,12 @@ def test_scalar_wave_concrete_defaults_and_nested_containers():
 
     first, second = message(), message()
     assert str(first) == "message()"
-    first_args, second_args = get_callable_args(first), get_callable_args(second)
+    first_args, second_args = _required_callable_args(first), _required_callable_args(second)
     assert first_args[0].__egg_ref__ != second_args[0].__egg_ref__
     assert expr_parts(first_args[0]) == expr_parts(default)
     assert first_args[1].value is False
-    assert get_callable_args(flag())[0].value is False
-    assert [part.value for part in get_callable_args(message("x", True))] == ["x", True]
+    assert _required_callable_args(flag())[0].value is False
+    assert [part.value for part in _required_callable_args(message("x", True))] == ["x", True]
     pair = Pair[String, Bool]("key", False)  # type: ignore[arg-type]
     mapping = Map[String, Bool].empty().insert("key", False)  # type: ignore[arg-type]
     assert tuple(part.value for part in pair.value) == ("key", False)
@@ -2372,7 +2382,7 @@ def test_map_fixed_from_pairs_and_computed_vec_authoring():
     entries = Vec(Pair(i64(1), first), Pair(i64(1), newest))
     expression = Map.from_pairs(entries)
     assert isinstance(expression, Map[i64, f64])
-    assert get_callable_args(expression)[0].__egg_ref__ == entries.__egg_ref__
+    assert _required_callable_args(expression)[0].__egg_ref__ == entries.__egg_ref__
     assert expression.value[i64(1)].__egg_ref__ == newest.__egg_ref__
     assert Map[i64, f64].from_pairs(Vec[Pair[i64, f64]].empty()).value == {}
     with pytest.raises(TypeError):
@@ -2389,7 +2399,7 @@ def test_map_fixed_from_pairs_and_computed_vec_authoring():
 
     symbolic = computed()
     mapping = Map.from_pairs(symbolic)
-    assert get_callable_args(mapping)[0].__egg_ref__ == symbolic.__egg_ref__
+    assert _required_callable_args(mapping)[0].__egg_ref__ == symbolic.__egg_ref__
     assert len(mapping.__egg_ref__.read().kind.value.args) == 1
     assert "computed" in str(mapping)
     with pytest.raises(ExprValueError):
@@ -2455,7 +2465,7 @@ def test_map_like_annotation_nested_conversion_and_order():
     @function
     def size(value: MapLike[i64, f64, int, float]) -> i64: ...
 
-    converted = get_callable_args(size({1: 2.0}))[0]
+    converted = _required_callable_args(size({1: 2.0}))[0]
     assert isinstance(converted, Map[i64, f64])
     assert converted.value[i64(1)].value == 2.0
     with pytest.raises(TypeError):
@@ -2670,7 +2680,7 @@ def test_map_insert_view_parameter_permutation_preserves_core_order(vec_catalog_
         expression = convert({1: 2 if same_sort else 2.0}, target)
         assert expression.value == {i64(1): value}
         assert str(expression) == f"Map[i64, {value_type}].empty().put({value.value!r}, 1)"
-        assert [argument.value for argument in get_callable_args(expression)[1:]] == [value.value, 1]
+        assert [argument.value for argument in _required_callable_args(expression)[1:]] == [value.value, 1]
         args = [
             RuntimeExpr(expression.__egg_ref__.owner.ref("nodes", index))
             for index in expression.__egg_ref__.read().kind.value.args
@@ -2915,10 +2925,10 @@ def test_vec_like_annotation_context_and_element_conversion(vec_runtime):
     def size(value: VecLike[i64, int]) -> i64: ...
 
     expression = size([1, 2])
-    argument = get_callable_args(expression)[0]
+    argument = _required_callable_args(expression)[0]
     assert isinstance(argument, vec_runtime[i64])
     assert tuple(child.value for child in argument.value) == (1, 2)
-    assert get_callable_args(size(()))[0].value == ()
+    assert _required_callable_args(size(()))[0].value == ()
     assert get_type_args() == ()
 
 
@@ -3341,13 +3351,13 @@ def test_function_source_records_defaults_and_metadata(doc, monkeypatch):
     assert str(set_(score(1, 2)).to(7)) == "set_(score(1)).to(i64(7))"  # type: ignore[arg-type]
     assert str(set_(score(1, 3)).to(7)) == "set_(score(1, 3)).to(i64(7))"  # type: ignore[arg-type]
     default.__egg_ref__ = i64(9).__egg_ref__
-    assert [a.value for a in get_callable_args(score(1))] == [1, 2]  # type: ignore[arg-type]
+    assert [a.value for a in _required_callable_args(score(1))] == [1, 2]  # type: ignore[arg-type]
     recovered = get_callable_fn(expression)
     assert recovered.__module__ == __name__
     assert recovered.__doc__ == doc
     assert recovered == score
     assert get_callable_args(expression, score) is not None
-    assert get_callable_args(score(offset=2, x=1))[1].value == 2
+    assert _required_callable_args(score(offset=2, x=1))[1].value == 2
     with pytest.raises(TypeError):
         score()
     with pytest.raises(TypeError):
@@ -3399,7 +3409,7 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
         namespace: original.ref("declarations", index)
         for index, namespace in enumerate(("callable", "host_sort_family", "eq_sort"))
     }
-    requested.declarations[0].kind.value.name = "changed caller input"
+    _required_oneof(requested.declarations[0].kind, "relation", pb.Relation).name = "changed caller input"
     detached = expected["callable"].read()
     detached.kind.value.name = "changed detached record"
     detached.doc = "changed detached documentation"
@@ -3545,7 +3555,7 @@ def test_function_annotation_locals_shadow_globals():
 
     expression = measure(1.5)
     assert isinstance(expression, f64)
-    assert get_callable_args(expression)[0].value == 1.5
+    assert _required_callable_args(expression)[0].value == 1.5
 
 
 def test_bodyless_none_and_docstring_do_not_execute_python():
@@ -4163,7 +4173,10 @@ def test_public_union_reuse_and_separate_constructions_retain_identity(class_aut
     assert action == separate
     assert cloned.__egg_ref__ == wrapped.__egg_ref__ == action.__egg_ref__
     packed = pack(commands=[item.__egg_ref__ for item in (action, action, cloned, separate)]).program
-    roots = [command.kind.value.kind.value for command in packed.commands]
+    roots = [
+        _required_oneof(_required_oneof(command.kind, "action", pb.Action).kind, "term", int)
+        for command in packed.commands
+    ]
     assert roots[0] == roots[1] == roots[2]
     assert roots[0] != roots[3]
     authored = rule().then(action, action, cloned, separate)
@@ -4191,8 +4204,8 @@ def test_public_union_contextual_rule_and_fact_presentation(class_authoring_with
     expected = "rule(eq(x).to(y), name='union-context').then(union(x).with_(y))"
     assert str(authored) == repr(RuleKey(authored.__egg_ref__)) == expected
     packed = pack([authored.__egg_ref__]).program
-    canonical = packed.rules[0].kind.value
-    assert canonical.query == [canonical.head[0].kind.value]
+    canonical = _required_oneof(packed.rules[0].kind, "rule", pb.Rule)
+    assert canonical.query == [_required_oneof(canonical.head[0].kind, "term", int)]
     assert pb.Program.from_binary(packed.to_binary()) == packed
 
 
@@ -4213,7 +4226,8 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
     program = pb.Program.from_binary(packet.program.to_binary())
     first, second, rule_index = packet.indices
     assert first != second
-    assert program.nodes[first].kind.field == program.nodes[second].kind.field == "union"
+    _required_oneof(program.nodes[first].kind, "union", pb.Union)
+    _required_oneof(program.nodes[second].kind, "union", pb.Union)
     assert sum(node.kind.field == "union" for node in program.nodes) == 2
     action_data = [_required_oneof(command.kind, "action", pb.Action) for command in program.commands]
     assert [command.kind.field for command in action_data] == ["term"] * 3
@@ -4221,7 +4235,7 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
     canonical = _required_oneof(program.rules[rule_index].kind, "rule", pb.Rule)
     assert canonical.query == [first]
     assert [action.kind.field for action in canonical.head] == ["term"] * 3
-    assert [action.kind.value for action in canonical.head] == [first, first, second]
+    assert [_required_oneof(action.kind, "term", int) for action in canonical.head] == [first, first, second]
     assert fact.__egg_ref__.read().to_binary() == original
 
 
@@ -4550,16 +4564,16 @@ def test_user_constructor_defaults_keywords_and_names_are_records(monkeypatch):
     assert record.kind.value.name == "exact constructor"
     assert Num.__egg_definition__.read().kind.value.name == "exact sort"
     assert record.bindings.python.views[0].params[0].name == "value"
-    assert get_callable_args(first, Num)[0].value == 5
+    assert _required_callable_args(first, Num)[0].value == 5
     default.__replace_expr__(i64(9))
-    assert get_callable_args(Num(), Num)[0].value == 5
+    assert _required_callable_args(Num(), Num)[0].value == 5
     assert expr_parts(Num(value=3)) == expr_parts(Num(3))  # type: ignore[arg-type]
     assert Num.__egg_context__.prepare is None
     Num.__egg_attr_cache__.clear()
     Num.__egg_context__.catalog.members.clear()
     Num.__egg_context__.catalog.reindex()
     assert resolve_callable(Num) == declaration
-    assert get_callable_args(Num(), Num)[0].value == 5
+    assert _required_callable_args(Num(), Num)[0].value == 5
     with pytest.raises(TypeError):
         Num(1, value=2)  # type: ignore[arg-type, misc]
     with pytest.raises(TypeError):
@@ -4711,7 +4725,7 @@ def test_constructor_scope_publishes_once_across_authoring_threads():
     with ThreadPoolExecutor(max_workers=4) as executor:
         expressions = list(executor.map(Num, range(8)))
     assert calls == [Num]
-    assert [get_callable_args(expression, Num)[0].value for expression in expressions] == list(range(8))
+    assert [_required_callable_args(expression, Num)[0].value for expression in expressions] == list(range(8))
 
 
 @pytest.mark.parametrize(
@@ -4846,7 +4860,7 @@ def test_reverse_args_rewrite_body_receives_python_order(class_authoring_without
         "self",
     ]
     assert reference.owner.ref("nodes", rewrite.rhs) == lhs.owner.ref("nodes", lhs.read().kind.value.args[-1])
-    assert [str(argument) for argument in get_callable_args(RuntimeExpr(lhs))] == ["self", "label", "count"]
+    assert [str(argument) for argument in _required_callable_args(RuntimeExpr(lhs))] == ["self", "label", "count"]
 
 
 @pytest.mark.parametrize("options", [{"cost": 1}, {}])
@@ -4942,13 +4956,13 @@ def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
     assert resolve_callable(Node.ZERO).read().kind.field == "constructor"
     assert resolve_callable(Node.COUNT).read().kind.field == "function"
     default.__replace_expr__(i64(9))
-    assert get_callable_args(expression.score())[1].value == 4
-    assert get_callable_args(Node.make())[0].value == 4
+    assert _required_callable_args(expression.score())[1].value == 4
+    assert _required_callable_args(Node.make())[0].value == 4
     Node.__egg_attr_cache__.clear()
     Node.__egg_context__.catalog.members.clear()
     Node.__egg_context__.catalog.reindex()
     assert resolve_callable(Node.score) == score
-    assert get_callable_args(expression.score())[1].value == 4
+    assert _required_callable_args(expression.score())[1].value == 4
     with pytest.raises(TypeError):
         expression.score(1, x=2)  # type: ignore[arg-type, misc]
     with pytest.raises(TypeError):
@@ -5454,7 +5468,7 @@ def test_member_default_transitive_forward_headers_and_snapshot(class_authoring_
     snapshot = resolve_callable(Forward.snapshot)
     default_index = snapshot.read().bindings.python.views[0].params[0].default_expr
     assert snapshot.owner.ref("nodes", default_index) == supplied_ref
-    assert get_callable_args(Forward().snapshot())[1].value == 3
+    assert _required_callable_args(Forward().snapshot())[1].value == 3
     packet = pack([to_runtime_expr(expression).__egg_ref__, first])
     assert sum(record.kind.value.name == first.read().kind.value.name for record in packet.program.declarations) == 1
     assert pb.Program.from_binary(packet.program.to_binary()) == packet.program
@@ -5580,7 +5594,7 @@ def test_initializer_default_completes_forward_classmethods(class_authoring_with
 
     expression = Initialized()
     assert calls == ["conversion", "first", "later"]
-    assert str(get_callable_args(expression)[0]) == "Initialized.first()"
+    assert str(_required_callable_args(expression)[0]) == "Initialized.first()"
     pack([to_runtime_expr(expression).__egg_ref__])
     assert calls == ["conversion", "first", "later"]
 
@@ -5888,9 +5902,9 @@ def test_member_default_union_freshness_and_snapshot():
         def child(self, value: Child = default) -> Child: ...
 
     expression = Parent()
-    first = get_callable_args(expression.child())[1]
+    first = _required_callable_args(expression.child())[1]
     default.__replace_expr__(Child())
-    second = get_callable_args(expression.child())[1]
+    second = _required_callable_args(expression.child())[1]
     assert first.__egg_ref__ != second.__egg_ref__
     for result in (first, second):
         record = result.__egg_ref__.read()
@@ -6226,7 +6240,7 @@ def test_getattr_inspection_keeps_symbolic_name_inert(class_authoring_without_en
     assert arguments[0].__egg_ref__ == receiver.__egg_ref__
     assert arguments[1].__egg_ref__ == name.__egg_ref__
     assert get_callable_fn(arguments[1]) == join
-    assert [part.value for part in get_callable_args(arguments[1], join)] == ["a", "b"]
+    assert [part.value for part in _required_callable_args(arguments[1], join)] == ["a", "b"]
 
 
 def test_bodyless_mutating_members_use_canonical_calls(class_authoring_without_engine):
@@ -6260,13 +6274,13 @@ def test_bodyless_mutating_members_use_canonical_calls(class_authoring_without_e
     assert to_runtime_expr(snapshot).__egg_ref__ == original
     assert to_runtime_expr(key).__egg_ref__ is key_root
     assert to_runtime_expr(value).__egg_ref__ is value_root
-    assert [expr_parts(argument) for argument in get_callable_args(receiver, A.__delitem__)] == [
+    assert [expr_parts(argument) for argument in _required_callable_args(receiver, A.__delitem__)] == [
         expr_parts(snapshot),
         expr_parts(key),
     ]
     deleted = copy(receiver)
     assert A.__setitem__(receiver, key, value) is None
-    assert [expr_parts(argument) for argument in get_callable_args(receiver, A.__setitem__)] == [
+    assert [expr_parts(argument) for argument in _required_callable_args(receiver, A.__setitem__)] == [
         expr_parts(deleted),
         expr_parts(key),
         expr_parts(value),
@@ -6297,7 +6311,10 @@ def test_bodyless_free_mutation_owns_calls_and_aliases(class_authoring_without_e
     assert update(value) is None
     assert alias is value
     assert get_callable_fn(value) == update
-    assert [expr_parts(argument) for argument in get_callable_args(value)] == [expr_parts(original), expr_parts(i64(4))]
+    assert [expr_parts(argument) for argument in _required_callable_args(value)] == [
+        expr_parts(original),
+        expr_parts(i64(4)),
+    ]
     assert expr_parts(original) == expr_parts(Mutable(1))  # type: ignore[arg-type]
     encoded = pack([to_runtime_expr(value).__egg_ref__]).program.to_binary()
     assert pb.Program.from_binary(encoded).to_binary() == encoded
@@ -6503,12 +6520,12 @@ def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_eng
     default.__replace_expr__(i64(9))
     original = copy(receiver)
     assert receiver.update() is None
-    arguments = get_callable_args(receiver, Accumulator.update)
+    arguments = _required_callable_args(receiver, Accumulator.update)
     assert expr_parts(arguments[0]) == expr_parts(original)
     assert [argument.value for argument in arguments[1:]] == [4, 5]
     prior = copy(receiver)
     assert Accumulator.update(receiver, right=7, left=6) is None  # type: ignore[arg-type]
-    arguments = get_callable_args(receiver, Accumulator.update)
+    arguments = _required_callable_args(receiver, Accumulator.update)
     assert expr_parts(arguments[0]) == expr_parts(prior)
     assert [argument.value for argument in arguments[1:]] == [6, 7]
     Accumulator.__egg_attr_cache__.clear()
@@ -6543,7 +6560,7 @@ def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_eng
         Accumulator.update(wrong_receiver)
     assert to_runtime_expr(wrong_receiver).__egg_ref__ is wrong_root
     assert receiver.reset() is None
-    assert get_callable_args(receiver, Accumulator.reset)[0].__egg_ref__ == root
+    assert _required_callable_args(receiver, Accumulator.reset)[0].__egg_ref__ == root
     assert destination._snapshot({}).read().kind.value.rules == []
 
 
@@ -6571,7 +6588,7 @@ def test_bodyless_mutation_reconstructs_without_result_normalization(class_autho
 
     monkeypatch.setattr("egglog.conversion.resolve_literal", forbidden)
     function = get_callable_fn(rebuilt)
-    arguments = get_callable_args(rebuilt, function)
+    arguments = _required_callable_args(rebuilt, function)
     assert StructuralView(resolve_callable(function)) == StructuralView(resolve_callable(getattr(Mutable, name)))
     assert len(arguments) == (3 if name == "__setitem__" else 2)
     old_receiver = arguments[0].__egg_ref__
@@ -6669,7 +6686,7 @@ def test_class_ruleset_bodyless_callable_headers(class_authoring_without_engine)
             """Docstring-only declarations do not create rewrites."""
 
     expression = Boolean(True)
-    assert get_callable_args(expression, Boolean)[0].value is True
+    assert _required_callable_args(expression, Boolean)[0].value is True
     assert isinstance(Boolean.NEVER, Boolean)
     assert isinstance(~expression, Boolean)
     assert expression.local() == "host hook"
@@ -6891,8 +6908,8 @@ def test_class_default_views_share_canonical_parameter_binding(class_authoring_w
     expression = Defaults(2)
     assert callbacks == [("named", Defaults, destination), ("own", destination), ("wrapped", destination)]
     assert get_current_ruleset() is None
-    assert get_callable_args(Defaults.named())[0].value == 3
-    assert get_callable_args(expression.wrapped())[1].value == 4
+    assert _required_callable_args(Defaults.named())[0].value == 3
+    assert _required_callable_args(expression.wrapped())[1].value == 4
     assert isinstance(expression.own, Defaults)
     snapshot = destination._snapshot({})
     records = [snapshot.owner.ref("rules", index) for index in snapshot.read().kind.value.rules]
@@ -6937,7 +6954,7 @@ def test_class_default_lhs_keeps_original_binders_after_wrapper_replacement(
             return Binders(value)
 
     expression = Binders(1).body(2)
-    assert get_callable_args(expression)[1].value == 2
+    assert _required_callable_args(expression)[1].value == 2
     snapshot = destination._snapshot({})
     assert len(snapshot.read().kind.value.rules) == 1
     reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
@@ -6947,7 +6964,7 @@ def test_class_default_lhs_keeps_original_binders_after_wrapper_replacement(
     assert [argument.read().kind.field for argument in lhs_args] == ["var", "var"]
     assert [argument.read().kind.value for argument in lhs_args] == ["self", "value"]
     rhs = RuntimeExpr(reference.owner.ref("nodes", rewrite_record.rhs))
-    assert get_callable_args(rhs, Binders)[0].value == (9 if replace_receiver else 7)
+    assert _required_callable_args(rhs, Binders)[0].value == (9 if replace_receiver else 7)
     assert len(pack(roots=[snapshot]).program.rules) == 1
 
 
@@ -6998,7 +7015,7 @@ def test_user_sort_cannot_borrow_builtin_codec_or_members_by_name():
 
     expression = Shadow(3)  # type: ignore[arg-type]
     assert expression.__egg_ref__.read().kind.field == "call"
-    assert get_callable_args(expression, Shadow)[0].value == 3
+    assert _required_callable_args(expression, Shadow)[0].value == 3
     with pytest.raises(AttributeError, match="member"):
         _ = Shadow.__add__
 
@@ -7034,8 +7051,8 @@ def test_user_default_expansion_has_fresh_union_identity_and_retains_sharing():
     class Box(Expr):
         def __init__(self, value: Num = default) -> None: ...
 
-    first = get_callable_args(Box(), Box)[0]
-    second = get_callable_args(Box(), Box)[0]
+    first = _required_callable_args(Box(), Box)[0]
+    second = _required_callable_args(Box(), Box)[0]
     assert first.__egg_ref__ != second.__egg_ref__ != default.__egg_ref__
     assert expr_parts(first) != expr_parts(second)
     for expression in (first, second):
@@ -7046,8 +7063,8 @@ def test_user_default_expansion_has_fresh_union_identity_and_retains_sharing():
     @function
     def pair(left: Num = default, right: Num = default) -> Box: ...
 
-    first_pair = get_callable_args(pair())
-    second_pair = get_callable_args(pair())
+    first_pair = _required_callable_args(pair())
+    second_pair = _required_callable_args(pair())
     assert first_pair[0].__egg_ref__ == first_pair[1].__egg_ref__
     assert second_pair[0].__egg_ref__ == second_pair[1].__egg_ref__
     assert first_pair[0].__egg_ref__ != second_pair[0].__egg_ref__
@@ -7068,7 +7085,7 @@ def test_reconstructed_constructor_uses_changed_protobuf_parameter_not_python_si
     owner = Builder.from_program(program).publish()
     function = RuntimeFunction(owner.ref("declarations", index), 0, Num)
     result = function(renamed=8)
-    assert get_callable_args(result)[0].value == 8
+    assert _required_callable_args(result)[0].value == 8
     with pytest.raises(TypeError):
         function(value=8)
 
@@ -7699,14 +7716,14 @@ def test_multiset_local_protocols_preserve_symbolic_occurrences_without_engine(m
     args = _required_oneof(packed.program.nodes[packed.indices[0]].kind, "call", pb.Call).args
     assert args[0] == args[2] != args[1]
     assert packed.program.nodes[args[0]].kind is not None
-    assert packed.program.nodes[args[0]].kind.field == "var"
+    _required_oneof(packed.program.nodes[args[0]].kind, "var", str)
     assert convert((), MultiSet[i64]).__egg_ref__.read().kind.value.func == "egglog.core.multiset.of"
 
     @function
     def size(value: MultiSetLike[i64, int]) -> i64: ...
 
-    assert get_callable_args(size((1, 2, 1)))[0].value == [i64(1), i64(2), i64(1)]
-    assert get_callable_args(size(()))[0].value == []
+    assert _required_callable_args(size((1, 2, 1)))[0].value == [i64(1), i64(2), i64(1)]
+    assert _required_callable_args(size(()))[0].value == []
     for source in ([1], {1}, ("wrong",)):
         with pytest.raises(ConvertError):
             convert(source, MultiSet[i64])
@@ -7854,4 +7871,4 @@ def test_multiset_formed_symbolic_children_outlive_parent_without_authoring(monk
     assert retained[0].__egg_ref__.read().to_binary() == before
     assert str(retained[0]) == str(retained[1]) == expected_text
     assert hash(retained[0]) == hash(retained[1]) == expected_hash
-    assert get_callable_args(retained[0])[0].__egg_ref__.read().kind.field == "var"
+    assert _required_callable_args(retained[0])[0].__egg_ref__.read().kind.field == "var"
