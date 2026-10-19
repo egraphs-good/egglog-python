@@ -548,7 +548,9 @@ def _definition_at(origin: Ref, namespace: str, name: str) -> Ref:
     matches: set[Ref] = set()
     for index in range(len(origin.owner._slots["declarations"])):
         candidate = origin.owner.ref("declarations", index)
-        if _definition_key(candidate.read()) == (namespace, name):
+        # Inspect immutable keys without detaching unrelated bodies/bindings.
+        record = cast("pb.Declaration", candidate.owner._slots[candidate.role][candidate.index])
+        if _definition_key(record) == (namespace, name):
             matches.add(candidate)
     if len(matches) > 1:
         raise ValueError(f"Ambiguous local definition: {namespace} {name!r}")

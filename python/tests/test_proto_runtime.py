@@ -15,6 +15,7 @@ from time import sleep
 from typing import ClassVar, Literal, TypeVar, cast, get_type_hints
 from weakref import ref as weakref
 
+import black
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
@@ -1351,9 +1352,10 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     )
     expected = (
         "rule(eq(RuleBox(1)).to(RuleBox(2)), eq(RuleBox(1)).to(RuleBox(2)), "
-        "name='direct', eval_mode='naive', no_decomp=True).then("
-        "set_(rule_slot()).to(i64(7)), union(RuleBox(1)).with_(RuleBox(2)), "
-        "union(RuleBox(1)).with_(RuleBox(2)), RuleBox(1))"
+        "name='direct', eval_mode='naive', no_decomp=True).then(\n"
+        "    set_(rule_slot()).to(i64(7)), union(RuleBox(1)).with_(RuleBox(2)), "
+        "union(RuleBox(1)).with_(RuleBox(2)), RuleBox(1)\n"
+        ")"
     )
     assert str(authored) == repr(authored) == expected
     record.kind.value.head.clear()
@@ -1955,7 +1957,10 @@ def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runt
         elif access == "value":
             assert expression.value == expected
         elif access == "display":
-            assert str(expression) == display
+            assert (
+                str(expression)
+                == black.format_str(display, mode=black.Mode(line_length=180, string_normalization=False)).strip()
+            )
         elif access == "binary":
             packed = pack([expression.__egg_ref__])
             encoded = packed.program.to_binary()
@@ -3308,6 +3313,73 @@ def test_class_and_initializer_documentation_presence(doc):
     initializer = resolve_callable(Documented)
     assert initializer.read().has_field("doc") == (doc is not None)
     assert RuntimeFunction(initializer, 0, Documented).__doc__ == doc
+
+
+@pytest.mark.parametrize("name", ["", "__egglog_lookup_shared"])
+@pytest.mark.parametrize("later", ["none", "distinct", "conflicting"])
+def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch, name, later):
+    requested = pb.Program(
+        ir_version=1,
+        sorts=[pb.Sort(kind=Oneof("family", pb.HostSort(name="i64")))],
+        declarations=[
+            pb.Declaration(kind=Oneof("relation", pb.Relation(name=name)), doc="retained documentation"),
+            pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name=name))),
+            pb.Declaration(kind=Oneof("eq_sort", pb.EqSort(name=name))),
+        ],
+        nodes=[pb.Node(kind=Oneof("var", "origin"))],
+    )
+    original = Builder.from_program(requested).publish()
+    origin = original.ref("nodes", 0)
+    expected = {
+        namespace: original.ref("declarations", index)
+        for index, namespace in enumerate(("callable", "host_sort_family", "eq_sort"))
+    }
+    requested.declarations[0].kind.value.name = "changed caller input"
+    detached = expected["callable"].read()
+    detached.kind.value.name = "changed detached record"
+    detached.doc = "changed detached documentation"
+    assert expected["callable"].read().doc == "retained documentation"
+    missing = "__egglog_lookup_later"
+    with pytest.raises(LookupError, match="No canonical definition"):
+        runtime._definition_at(origin, "callable", missing)
+
+    extended = Builder()
+    for reference in expected.values():
+        extended.import_ref(reference)
+    # Repeated imported slots still name one canonical definition. The import
+    # cache is disposable, as in test_import_cache_is_not_authoritative.
+    extended._imports.clear()
+    extended.import_ref(expected["callable"])
+    if later != "none":
+        added = extended.add(
+            "declarations",
+            pb.Declaration(kind=Oneof("relation", pb.Relation(name=name if later == "conflicting" else missing))),
+        )
+    scalar = extended.import_ref(original.ref("sorts", 0))
+    query_index = extended.add("nodes", pb.Node(sort_id=scalar, kind=Oneof("var", "new origin")))
+    extended_owner = extended.publish()
+    query = extended_owner.ref("nodes", query_index)
+    fallback = builtin_catalog().definitions["host_sort_family", "i64"]
+
+    def forbidden_read(self):
+        pytest.fail("Definition key lookup detached a full published record")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Ref, "read", forbidden_read)
+        for namespace, reference in expected.items():
+            assert runtime._definition_at(origin, namespace, name) == reference
+            if later == "conflicting" and namespace == "callable":
+                with pytest.raises(ValueError, match="Ambiguous local definition"):
+                    runtime._definition_at(query, namespace, name)
+            else:
+                assert runtime._definition_at(query, namespace, name) == reference
+        assert runtime._definition_at(query, "host_sort_family", "i64") == fallback
+        if later == "distinct":
+            assert runtime._definition_at(query, "callable", missing) == extended_owner.ref("declarations", added)
+        else:
+            with pytest.raises(LookupError, match="No canonical definition"):
+                runtime._definition_at(query, "callable", missing)
+    assert expected["callable"].read().kind.value.name == name
 
 
 def test_free_function_identity_uses_python_name_not_signature_or_owner():
