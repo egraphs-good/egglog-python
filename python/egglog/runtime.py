@@ -1409,7 +1409,13 @@ def _partial_function(  # noqa: C901, PLR0912
     return function_sort, children, owner
 
 
-class RuntimeExpr:
+if TYPE_CHECKING:
+    from .egraph import BaseExpr as _RuntimeExprBase
+else:
+    _RuntimeExprBase = object
+
+
+class RuntimeExpr(_RuntimeExprBase):
     """The sole public symbolic wrapper. Its node Ref is its semantic state."""
 
     __slots__ = ("__egg_ref__",)
