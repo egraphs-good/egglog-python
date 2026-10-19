@@ -269,11 +269,19 @@ def test_maybe_stub_is_derived_from_actual_member_metadata():
     assert "def unwrap(self) -> _Maybe_T_0:" in generated
     assert "def unwrap_or(self, default: _Maybe_T_0) -> _Maybe_T_0:" in generated
     declarations = {d.kind.value.name: d for d in program.declarations}
-    family = declarations["Maybe"].kind.value
+    family_kind = declarations["Maybe"].kind
+    assert family_kind is not None
+    assert family_kind.field == "host_sort_family"
+    family = family_kind.value
+    assert family.bindings is not None
+    assert family.bindings.python is not None
     family.bindings.python.path[-1] = "OptionalValue"
     family.bindings.python.type_params = ["Element"]
-    declarations["egglog.experimental.maybe.some"].bindings.python.views[0].path = ["present"]
-    declarations["egglog.experimental.maybe.some"].bindings.python.views[0].params[0].name = "child"
+    some_bindings = declarations["egglog.experimental.maybe.some"].bindings
+    assert some_bindings is not None
+    assert some_bindings.python is not None
+    some_bindings.python.views[0].path = ["present"]
+    some_bindings.python.views[0].params[0].name = "child"
     renamed = render(program)
     assert "def value(self) -> _OptionalValue_Element_0 | None:" in renamed
     assert "def present(cls, child: _OptionalValue_Element_0) -> OptionalValue[_OptionalValue_Element_0]:" in renamed
@@ -296,8 +304,12 @@ def test_maybe_formed_pretty_uses_owned_renamed_constructor_metadata():
         kind = declaration.kind
         assert kind is not None
         if kind.field == "host_sort_family" and kind.value.name == "Maybe":
+            assert kind.value.bindings is not None
+            assert kind.value.bindings.python is not None
             kind.value.bindings.python.path[-1] = "OptionalValue"
         elif kind.field == "host_primitive" and kind.value.name == "egglog.experimental.maybe.some":
+            assert declaration.bindings is not None
+            assert declaration.bindings.python is not None
             declaration.bindings.python.views[0].path = ["present"]
     value = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packet.indices[0]))
     assert value.value is not None

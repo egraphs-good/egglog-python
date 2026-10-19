@@ -44,12 +44,22 @@ def pair_catalog_program():
     """Proposed presentation only; signatures stay in the real native snapshot."""
     program = pb.Program.from_binary((Path(__file__).parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
     declarations = {d.kind.value.name: d for d in program.declarations}
-    family = declarations["Pair"].kind.value
+    family_kind = declarations["Pair"].kind
+    assert family_kind is not None
+    assert family_kind.field == "host_sort_family"
+    family = family_kind.value
     family.bindings = pb.SortBindings(
         python=pb.TypeBinding(path=["egglog", "builtins", "Pair"], type_params=["L", "R"])
     )
     make = declarations["egglog.core.pair.make"]
-    owner = make.kind.value.typing.value.output
+    make_kind = make.kind
+    assert make_kind is not None
+    assert make_kind.field == "host_primitive"
+    signature_kind = make_kind.value.typing
+    assert signature_kind is not None
+    assert signature_kind.field == "signature"
+    owner = signature_kind.value.output
+    assert make.bindings is not None
     make.bindings.python = pb.PythonBindings(
         views=[
             pb.PythonCallable(

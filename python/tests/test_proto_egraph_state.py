@@ -2655,7 +2655,16 @@ def test_check_fail_authors_one_canonical_nested_command(monkeypatch):
     fact_kind = fact.kind
     assert fact_kind is not None
     assert fact_kind.field == "union"
-    assert [program.nodes[index].kind.value.value.value for index in fact_kind.value.members] == [1, 2]
+    member_values = []
+    for node_index in fact_kind.value.members:
+        member_kind = program.nodes[node_index].kind
+        assert member_kind is not None
+        assert member_kind.field == "primitive_value"
+        member_value = member_kind.value.value
+        assert member_value is not None
+        assert member_value.field == "i64"
+        member_values.append(member_value.value)
+    assert member_values == [1, 2]
     graph.check_fail()
     empty_program = requests[1].program
     assert empty_program is not None
@@ -2904,7 +2913,16 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
     union_kind = union.kind
     assert union_kind is not None
     assert union_kind.field == "union"
-    assert [program.nodes[index].kind.value.value.value for index in union_kind.value.members] == [1, 1]
+    member_values = []
+    for node_index in union_kind.value.members:
+        member_kind = program.nodes[node_index].kind
+        assert member_kind is not None
+        assert member_kind.field == "primitive_value"
+        member_value = member_kind.value.value
+        assert member_value is not None
+        assert member_value.field == "i64"
+        member_values.append(member_value.value)
+    assert member_values == [1, 1]
     assert condition.__egg_ref__.read().to_binary() == original
     graph._state.destroy()
 
@@ -2980,7 +2998,10 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
             assert request.threads == 1
             assert not request.declarations
             assert request.options is not None
-            assert request.sorts[request.options.cost_sort].kind.value.name == "i64"
+            cost_kind = request.sorts[request.options.cost_sort].kind
+            assert cost_kind is not None
+            assert cost_kind.field == "family"
+            assert cost_kind.value.name == "i64"
             return pb.CreateEGraphResponse(egraph_id=1).to_binary()
 
         def run(self, encoded: bytes) -> tuple[bytes, BaseException | None]:
@@ -3038,13 +3059,27 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
     assert call is not None
     assert call.field == "call"
     assert call.value.func == "egglog.core.i64.add"
-    assert [program.nodes[index].kind.value.value.value for index in call.value.args] == [1, 2]
+    argument_values = []
+    for node_index in call.value.args:
+        argument_kind = program.nodes[node_index].kind
+        assert argument_kind is not None
+        assert argument_kind.field == "primitive_value"
+        argument_value = argument_kind.value.value
+        assert argument_value is not None
+        assert argument_value.field == "i64"
+        argument_values.append(argument_value.value)
+    assert argument_values == [1, 2]
     add = next(declaration for declaration in program.declarations if declaration.kind.value.name == call.value.func)
     assert add.bindings is not None
     assert add.bindings.python is not None
     assert add.bindings.python.views[0].path == ["__add__"]
     family = next(declaration for declaration in program.declarations if declaration.kind.value.name == "i64")
-    assert family.kind.value.bindings.python.path == ["egglog", "builtins", "i64"]
+    family_kind = family.kind
+    assert family_kind is not None
+    assert family_kind.field == "host_sort_family"
+    assert family_kind.value.bindings is not None
+    assert family_kind.value.bindings.python is not None
+    assert family_kind.value.bindings.python.path == ["egglog", "builtins", "i64"]
     # Re-authoring from a returned value retains the original catalog refs,
     # not a second declaration copy reconstructed from the response.
     repacked = pack([(result + 4).__egg_ref__])

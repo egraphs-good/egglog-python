@@ -88,7 +88,13 @@ def test_generator_rejects_invalid_equality_binders():
             for d in invalid.declarations
             if d.kind.field == "host_primitive" and d.kind.value.name == "egglog.core.vec.union"
         )
-        signature = declaration.kind.value.typing.value
+        declaration_kind = declaration.kind
+        assert declaration_kind is not None
+        assert declaration_kind.field == "host_primitive"
+        signature_kind = declaration_kind.value.typing
+        assert signature_kind is not None
+        assert signature_kind.field == "signature"
+        signature = signature_kind.value
         signature.type_params = ["T"] * binders
         signature.equality_type_params = restrictions
         with pytest.raises(ValueError, match="Invalid equality type parameter indices"):
@@ -317,9 +323,17 @@ def test_minimal_result_binding_preserves_input_polymorphism(selected_view):
     # Inference-only fixture: no provider/body/engine is installed or invoked.
     program = pb.Program.from_binary(pack(builtin_catalog().roots).program.to_binary())
     declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.pair.make")
-    declaration.kind.value.name = "test.result_pair"
-    declaration.kind.value.typing.value.inputs.pop()
+    declaration_kind = declaration.kind
+    assert declaration_kind is not None
+    assert declaration_kind.field == "host_primitive"
+    declaration_kind.value.name = "test.result_pair"
+    signature_kind = declaration_kind.value.typing
+    assert signature_kind is not None
+    assert signature_kind.field == "signature"
+    signature_kind.value.inputs.pop()
     if selected_view:
+        assert declaration.bindings is not None
+        assert declaration.bindings.python is not None
         declaration.bindings.python.views = [
             pb.PythonCallable(
                 kind=pb.PythonCallKind.FUNCTION,
@@ -354,8 +368,14 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     # Inference-only Vec<T> receiver, V input, Pair<V,U> result. No provider.
     program = pb.Program.from_binary(pack(builtin_catalog().roots).program.to_binary())
     declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.pair.make")
-    declaration.kind.value.name = "test.method_result_pair"
-    signature = declaration.kind.value.typing.value
+    declaration_kind = declaration.kind
+    assert declaration_kind is not None
+    assert declaration_kind.field == "host_primitive"
+    declaration_kind.value.name = "test.method_result_pair"
+    signature_kind = declaration_kind.value.typing
+    assert signature_kind is not None
+    assert signature_kind.field == "signature"
+    signature = signature_kind.value
     first_var, second_var = [arg.sort for arg in signature.inputs]
     third_var = len(program.sorts)
     program.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 2)))
@@ -378,6 +398,8 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
         receiver=0,
         params=[pb.PythonParameter(core_input=1, name="value")],
     )
+    assert declaration.bindings is not None
+    assert declaration.bindings.python is not None
     declaration.bindings.python.views = [view]
     reference = Builder.from_program(program).publish().ref("declarations", program.declarations.index(declaration))
     receiver = Vec[i64](i64(0))
@@ -401,7 +423,8 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     program.sorts.append(
         pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[second_var])))
     )
-    view.owner.kind = Oneof("sort", bad_owner)
+    assert view.owner is not None
+    view.owner.kind = Oneof[Literal["sort"], int]("sort", bad_owner)
     bad_reference = Builder.from_program(program).publish().ref("declarations", program.declarations.index(declaration))
     malformed.append(_stored_call(bad_reference, [receiver, i64(1)], Pair[i64, String]))
 

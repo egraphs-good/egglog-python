@@ -5,6 +5,7 @@ import importlib
 import math
 import os
 import pathlib
+import runpy
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
@@ -1990,10 +1991,10 @@ def test_polynomial_theory_authoring_snapshots_without_engine(monkeypatch, name:
     from egglog._program import Builder, pack  # noqa: PLC0415
     from egglog.exp import array_api  # noqa: PLC0415
 
-    # The autouse fixture restores converters between tests, but imports cache
-    # the module that registered them. Recreate its actual authoring context.
-    importlib.reload(array_api)
-    snapshot = getattr(array_api, name)._snapshot({})
+    # Recreate authoring without replacing globals used by retained expressions.
+    retained = array_api.Boolean(True)
+    namespace = runpy.run_path(array_api.__file__, run_name=array_api.__name__)
+    snapshot = namespace[name]._snapshot({})
     packed = pack([snapshot])
     decoded = pb.Program.from_binary(packed.program.to_binary())
     assert len(decoded.rules) == rule_count
@@ -2003,6 +2004,7 @@ def test_polynomial_theory_authoring_snapshots_without_engine(monkeypatch, name:
     assert restored.kind is not None
     assert restored.kind.field == "rules"
     assert len(restored.kind.value.rules) == rule_count
+    assert retained.value is True
     engine.assert_not_called()
 
 

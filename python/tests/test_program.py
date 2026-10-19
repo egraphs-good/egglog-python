@@ -233,7 +233,13 @@ def test_nested_fail_pack_relocates_child_facts_and_all_spans():
     assert child.kind is not None
     assert child.kind.field == "check"
     assert child.kind.value.facts == [0]
-    assert decoded.nodes[0].kind.value.value.value == 7
+    scalar_kind = decoded.nodes[0].kind
+    assert scalar_kind is not None
+    assert scalar_kind.field == "primitive_value"
+    scalar_value = scalar_kind.value.value
+    assert scalar_value is not None
+    assert scalar_value.field == "i64"
+    assert scalar_value.value == 7
     assert reference.read().kind.value.kind.value.span.file == file
 
 
@@ -1405,14 +1411,30 @@ def test_scalar_view_presence_survives_owned_closure_and_relocation(repetitions)
         assert len(signature.varargs) == 1
     call = next(n.kind.value for n in reencoded.nodes if n.kind.field == "call")
     assert isinstance(call, pb.Call)
-    assert [reencoded.nodes[i].kind.value.value.value for i in call.args] == ["a", "b"]
+    argument_values = []
+    for i in call.args:
+        argument_kind = reencoded.nodes[i].kind
+        assert argument_kind is not None
+        assert argument_kind.field == "primitive_value"
+        argument_value = argument_kind.value.value
+        assert argument_value is not None
+        assert argument_value.field == "string"
+        argument_values.append(argument_value.value)
+    assert argument_values == ["a", "b"]
 
 
 def test_scalar_literals_publish_and_pack_exact_payloads():
     values = [String("a\0b\n☃"), Bool(False), Unit()]
     result = pack([value.__egg_ref__ for value in values])
     decoded = pb.Program.from_binary(result.program.to_binary())
-    payloads = [decoded.nodes[index].kind.value.value for index in result.indices]
+    payloads = []
+    for index in result.indices:
+        literal_kind = decoded.nodes[index].kind
+        assert literal_kind is not None
+        assert literal_kind.field == "primitive_value"
+        payload = literal_kind.value.value
+        assert payload is not None
+        payloads.append(payload)
     assert [value.field for value in payloads] == ["string", "bool", "unit"]
     assert payloads[0].value == "a\0b\n☃"
     assert payloads[1].value is False
