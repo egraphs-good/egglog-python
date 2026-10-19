@@ -72,9 +72,11 @@ from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_
 from egglog.egraph import get_current_ruleset, set_current_ruleset, to_runtime_expr
 from egglog.runtime import (
     _CLASS_CACHE,
+    RuntimeClass,
     RuntimeExpr,
     RuntimeFunction,
     _author_call,
+    _ClassContext,
     resolve_callable,
     resolve_type_annotation,
 )
@@ -104,6 +106,14 @@ def _required_python_bindings(declaration: pb.Declaration) -> pb.PythonBindings:
     python = bindings.python
     assert python is not None
     return python
+
+
+def _required_authored_class(cls: object) -> tuple[RuntimeClass, _ClassContext]:
+    """Require a real authored class and its retained context, without preparation."""
+    assert isinstance(cls, RuntimeClass)
+    context = cls.__egg_context__
+    assert context is not None
+    return cls, context
 
 
 def test_pyobject_local_values_and_trusted_display(class_authoring_without_engine, monkeypatch):
@@ -2240,11 +2250,16 @@ def test_scalar_wave_specialized_bool_deconstruction_uses_effective_slots():
     owner = Builder.from_program(packet.program).publish()
     method = RuntimeFunction(owner.ref("declarations", packet.program.declarations.index(declaration)), 0, Bool(False))
     result = method(True)
+    assert result is not None
     call = result.__egg_ref__.read().kind.value
     assert [RuntimeExpr(result.__egg_ref__.owner.ref("nodes", i)).value for i in call.args] == [True, False]
     assert [argument.value for argument in _required_callable_args(result)] == [False, True]
     assert str(result) == "Bool(False) | True"
-    assert expr_parts(get_callable_fn(result)(*get_callable_args(result))) == expr_parts(result)
+    selected_fn = get_callable_fn(result)
+    assert isinstance(selected_fn, RuntimeFunction)
+    reconstructed = selected_fn(*_required_callable_args(result))
+    assert reconstructed is not None
+    assert expr_parts(reconstructed) == expr_parts(result)
 
 
 @pytest.mark.parametrize(
@@ -2255,7 +2270,7 @@ def test_scalar_wave_authoring_rejects_invalid_specialization(mutation):
     declaration = next(d for d in packet.program.declarations if d.kind.value.name == "egglog.core.bool.or")
     primitive = _required_oneof(declaration.kind, "host_primitive", pb.HostPrimitive)
     signature = _required_oneof(primitive.typing, "signature", pb.GenericSignature)
-    view = declaration.bindings.python.views[0]
+    view = _required_python_bindings(declaration).views[0]
     if mutation == "fixed":
         signature.inputs = signature.varargs * 2
         signature.varargs.clear()
@@ -2273,6 +2288,7 @@ def test_scalar_wave_authoring_rejects_invalid_specialization(mutation):
         packet.program.sorts.append(
             pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="String")))
         )
+        assert view.owner is not None
         view.owner.kind = Oneof[Literal["sort"], int]("sort", len(packet.program.sorts) - 1)
     elif mutation == "property":
         view.kind = pb.PythonCallKind.PROPERTY
@@ -2948,9 +2964,10 @@ def test_vec_annotation_protocol_preserves_lookup_and_pending_classes(vec_runtim
     class Token(Expr):
         def __init__(self, value: i64) -> None: ...
 
-    pending = Token.__egg_context__.prepare
+    _runtime_token, token_context = _required_authored_class(Token)
+    pending = token_context.prepare
     assert Token.__args__ == ()
-    assert Token.__egg_context__.prepare is pending
+    assert token_context.prepare is pending
     assert i64.__args__ == ()
     assert vec_runtime[i64].__args__ == (i64,)
     assert Pair[i64, f64].__args__ == (i64, f64)
@@ -2971,7 +2988,7 @@ def test_vec_annotation_protocol_preserves_lookup_and_pending_classes(vec_runtim
         _ = vec_runtime[i64].missing
     with pytest.raises(AttributeError):
         _ = Token.missing
-    assert Token.__egg_context__.prepare is None  # Ordinary lookup still prepares.
+    assert token_context.prepare is None  # Ordinary lookup still prepares.
 
 
 def test_vec_empty_conversion_uses_supplied_presentation(vec_catalog_program, request):
@@ -3232,7 +3249,11 @@ def test_pair_value_payload_preserves_child_refs_and_union_identity(pair_runtime
     )
     owner = builder.publish()
     expression = RuntimeExpr(owner.ref("nodes", root))
-    left, right = expression.value
+    pair_value = expression.value
+    assert isinstance(pair_value, tuple)
+    left, right = pair_value
+    assert isinstance(left, RuntimeExpr)
+    assert isinstance(right, RuntimeExpr)
     assert left.__egg_ref__ == owner.ref("nodes", first)
     assert right.__egg_ref__ == owner.ref("nodes", second)
     assert (left.__egg_ref__ == right.__egg_ref__) == same
@@ -4265,7 +4286,8 @@ def test_set_and_term_authoring_own_commands_without_evaluating(monkeypatch):
         ),
     )
     target = RuntimeFunction(builder.publish().ref("declarations", index))()
-    rhs = i64(4)
+    assert target is not None
+    rhs = to_runtime_expr(i64(4))
     action = set_(target).to(rhs)
     with pytest.raises(TypeError, match="unhashable type: 'Action'"):
         hash(action)
@@ -4520,8 +4542,12 @@ def test_constants_own_distinct_canonical_presentation_and_declaration_kinds(mon
     assert str(table) == "current"
     assert str(token) == "token"
     assert token.tag() == "retained"
-    assert get_constant_name(table).name == "current"
-    assert get_constant_name(table).module == __name__
+    constant_name = get_constant_name(table)
+    assert constant_name is not None
+    assert constant_name.name == "current"
+    constant_name = get_constant_name(table)
+    assert constant_name is not None
+    assert constant_name.module == __name__
     assert get_constant_name(i64(1)) is None
     assert get_constant_name(i64(1) + 2) is None
     with pytest.raises(TypeError, match="Expected Expression"):
@@ -4571,20 +4597,22 @@ def test_user_constructor_defaults_keywords_and_names_are_records(monkeypatch):
         @method(egg_fn="exact constructor")
         def __init__(self, value: i64 = default) -> None: ...
 
+    runtime_num, num_context = _required_authored_class(Num)
     first = Num()
     declaration = resolve_callable(Num)
     record = declaration.read()
     assert record.kind.value.name == "exact constructor"
-    assert Num.__egg_definition__.read().kind.value.name == "exact sort"
+    assert runtime_num.__egg_definition__.read().kind.value.name == "exact sort"
     assert record.bindings.python.views[0].params[0].name == "value"
     assert _required_callable_args(first, Num)[0].value == 5
     default.__replace_expr__(i64(9))
     assert _required_callable_args(Num(), Num)[0].value == 5
     assert expr_parts(Num(value=3)) == expr_parts(Num(3))  # type: ignore[arg-type]
-    assert Num.__egg_context__.prepare is None
-    Num.__egg_attr_cache__.clear()
-    Num.__egg_context__.catalog.members.clear()
-    Num.__egg_context__.catalog.reindex()
+    assert num_context.prepare is None
+    runtime_num.__egg_attr_cache__.clear()
+    assert num_context.catalog is not None
+    num_context.catalog.members.clear()
+    num_context.catalog.reindex()
     assert resolve_callable(Num) == declaration
     assert _required_callable_args(Num(), Num)[0].value == 5
     with pytest.raises(TypeError):
@@ -4656,8 +4684,9 @@ def test_local_class_hooks_survive_caches_but_not_all_roots():
             def tag(self):
                 return label
 
+        runtime_local, local_context = _required_authored_class(Local)
         expression = Local()
-        return expression, weakref(Local), weakref(Local.__egg_definition__.owner), weakref(Local.__egg_context__)
+        return expression, weakref(Local), weakref(runtime_local.__egg_definition__.owner), weakref(local_context)
 
     left, cls, owner, context = make("left")
     right, other_cls, other_owner, other_context = make("right")
@@ -4726,15 +4755,17 @@ def test_constructor_scope_publishes_once_across_authoring_threads():
     class Num(Expr):
         def __init__(self, value: i64) -> None: ...
 
+    _runtime_num, num_context = _required_authored_class(Num)
     calls = []
-    prepare = Num.__egg_context__.prepare
+    prepare = num_context.prepare
+    assert prepare is not None
 
     def delayed_prepare(cls):
         calls.append(cls)
         sleep(0.02)  # Hold first compilation open while other authors enter.
         return prepare(cls)
 
-    Num.__egg_context__.prepare = delayed_prepare
+    num_context.prepare = delayed_prepare
     with ThreadPoolExecutor(max_workers=4) as executor:
         expressions = list(executor.map(Num, range(8)))
     assert calls == [Num]
@@ -4884,10 +4915,12 @@ def test_wrapped_ignored_name_rejects_but_retains_prior_members(options):
         @method(**options)
         def __radd__(self, other: i64) -> i64: ...
 
+    runtime_num, num_context = _required_authored_class(Num)
     with pytest.raises(NotImplementedError, match="__radd__"):
         Num()
-    assert {name for _, name in Num.__egg_context__.catalog.members} == {"__init__"}
-    assert not Num.__egg_attr_cache__
+    assert num_context.catalog is not None
+    assert {name for _, name in num_context.catalog.members} == {"__init__"}
+    assert not runtime_num.__egg_attr_cache__
     assert isinstance(Num(), Num)
     with pytest.raises(AttributeError):
         _ = Num.__radd__
@@ -4901,9 +4934,11 @@ def test_preserved_wrapped_ignored_name_remains_a_local_hook():
         def __radd__(self, other: int) -> int:
             return other + 1
 
+    _runtime_num, num_context = _required_authored_class(Num)
     expression = Num()
     assert Num.__radd__(expression, 2) == 3
-    assert {name for _, name in Num.__egg_context__.catalog.members} == {"__init__"}
+    assert num_context.catalog is not None
+    assert {name for _, name in num_context.catalog.members} == {"__init__"}
 
 
 def test_unsupported_class_members_and_parameter_kinds_are_not_ignored():
@@ -4916,13 +4951,15 @@ def test_unsupported_class_members_and_parameter_kinds_are_not_ignored():
     class KeywordOnly(Expr):
         def __init__(self, *, value: i64) -> None: ...
 
+    runtime_keyword_only, keyword_only_context = _required_authored_class(KeywordOnly)
     # Eager method bodies are supported; fixed member parameter kinds still apply.
     assert isinstance(HasBody().other(), i64)
     assert resolve_callable(HasBody.other).read().kind.field == "primitive"
     with pytest.raises(NotImplementedError, match="positional-or-keyword"):
         KeywordOnly()
-    assert not KeywordOnly.__egg_context__.catalog.members
-    assert not KeywordOnly.__egg_attr_cache__
+    assert keyword_only_context.catalog is not None
+    assert not keyword_only_context.catalog.members
+    assert not runtime_keyword_only.__egg_attr_cache__
 
 
 def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
@@ -4947,6 +4984,8 @@ def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
         @classmethod
         def make(cls, x: i64 = default) -> "Node": ...
 
+    runtime_node, node_context = _required_authored_class(Node)
+    assert runtime_node.__egg_sort__ is not None
     expression = Node()
     assert expr_parts(Node.score(expression, 2)) == expr_parts(expression.score(x=2))  # type: ignore[arg-type]
     assert expr_parts(Node.weight(expression)) == expr_parts(expression.weight)
@@ -4963,7 +5002,7 @@ def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
     assert view.receiver == 0
     assert [(p.name, p.core_input) for p in view.params] == [("x", 1)]
     assert StructuralView(score.owner.ref("sorts", score_record.kind.value.inputs[0].sort)) == StructuralView(
-        Node.__egg_sort__
+        runtime_node.__egg_sort__
     )
     assert resolve_callable(Node.make).read().kind.field == "constructor"
     assert resolve_callable(Node.ZERO).read().kind.field == "constructor"
@@ -4971,9 +5010,10 @@ def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
     default.__replace_expr__(i64(9))
     assert _required_callable_args(expression.score())[1].value == 4
     assert _required_callable_args(Node.make())[0].value == 4
-    Node.__egg_attr_cache__.clear()
-    Node.__egg_context__.catalog.members.clear()
-    Node.__egg_context__.catalog.reindex()
+    runtime_node.__egg_attr_cache__.clear()
+    assert node_context.catalog is not None
+    node_context.catalog.members.clear()
+    node_context.catalog.reindex()
     assert resolve_callable(Node.score) == score
     assert _required_callable_args(expression.score())[1].value == 4
     with pytest.raises(TypeError):
@@ -5014,10 +5054,12 @@ def test_member_decorator_order_preserves_value_error(descriptor):
         @method(egg_fn="wrong order")
         def member(self) -> i64: ...
 
+    runtime_invalid, invalid_context = _required_authored_class(Invalid)
     with pytest.raises(ValueError, match="above @classmethod or @property"):
         Invalid()
-    assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
-    assert not Invalid.__egg_attr_cache__
+    assert invalid_context.catalog is not None
+    assert {name for _, name in invalid_context.catalog.members} == {"__init__"}
+    assert not runtime_invalid.__egg_attr_cache__
     assert isinstance(Invalid(), Invalid)
     with pytest.raises(AttributeError):
         _ = Invalid.member
@@ -5063,13 +5105,15 @@ def test_member_scope_failure_keeps_prefix_without_executing_body():
         @method(cost=1)
         def invalid(self) -> i64: ...
 
+    runtime_invalid, invalid_context = _required_authored_class(Invalid)
     # The supported eager header is private until complete. A genuinely invalid
     # later header must still fail before callbacks or publication of that body.
     with pytest.raises(ValueError, match="cannot use cost"):
         Invalid.valid
     assert calls == []
-    assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"VALUE", "__init__", "valid"}
-    assert not Invalid.__egg_attr_cache__
+    assert invalid_context.catalog is not None
+    assert {name for _, name in invalid_context.catalog.members} == {"VALUE", "__init__", "valid"}
+    assert not runtime_invalid.__egg_attr_cache__
     assert isinstance(Invalid.VALUE, i64)
     assert isinstance(Invalid().valid(), i64)
     with pytest.raises(AttributeError):
@@ -5202,10 +5246,12 @@ def test_eager_initializer_gets_symbolic_self_and_rejects_retained_recursion(cla
         def __init__(self) -> None:
             return self  # noqa: PLE0101 -- witness a recursive symbolic initializer result
 
+    runtime_recursive, recursive_context = _required_authored_class(Recursive)
     with pytest.raises(ValueError, match="Recursively resolving function declarations"):
         Recursive()
-    assert not Recursive.__egg_context__.catalog.members
-    assert not Recursive.__egg_attr_cache__
+    assert recursive_context.catalog is not None
+    assert not recursive_context.catalog.members
+    assert not runtime_recursive.__egg_attr_cache__
 
     class Replaced(Expr):
         def __init__(self, value: i64) -> None:
@@ -5235,11 +5281,13 @@ def test_eager_member_cycles_fail_without_publishing_pending_headers(class_autho
             calls.append("later")
             return self.first()
 
+    runtime_cyclic, cyclic_context = _required_authored_class(Cyclic)
     with pytest.raises(ValueError, match="Recursively resolving function declarations"):
         Cyclic.first
     assert calls == (["first", "later"] if mutual else ["first"])
-    assert {name for _, name in Cyclic.__egg_context__.catalog.members} == {"__init__"}
-    assert not Cyclic.__egg_attr_cache__
+    assert cyclic_context.catalog is not None
+    assert {name for _, name in cyclic_context.catalog.members} == {"__init__"}
+    assert not runtime_cyclic.__egg_attr_cache__
     with pytest.raises(AttributeError):
         Cyclic.first
 
@@ -5260,11 +5308,13 @@ def test_eager_member_failure_keeps_completed_dependency_prefix(class_authoring_
             calls.append("later")
             return i64(2)
 
+    runtime_partial, partial_context = _required_authored_class(Partial)
     with pytest.raises(ValueError, match="body sentinel"):
         Partial.first
     assert calls == ["first", "later"]
-    assert {name for _, name in Partial.__egg_context__.catalog.members} == {"__init__", "later"}
-    assert set(Partial.__egg_attr_cache__) == {"later"}
+    assert partial_context.catalog is not None
+    assert {name for _, name in partial_context.catalog.members} == {"__init__", "later"}
+    assert set(runtime_partial.__egg_attr_cache__) == {"later"}
     assert isinstance(Partial().later(), i64)
     with pytest.raises(AttributeError):
         Partial.first
@@ -5295,11 +5345,13 @@ def test_eager_member_duplicate_headers_precede_callbacks(class_authoring_withou
             @method(egg_fn="same exact member")
             def second(self) -> i64: ...
 
+    runtime_duplicate, duplicate_context = _required_authored_class(Duplicate)
     with pytest.raises(ValueError, match="Duplicate catalog definition"):
         Duplicate.first
     assert not calls
-    assert {name for _, name in Duplicate.__egg_context__.catalog.members} == {"__init__"}
-    assert not Duplicate.__egg_attr_cache__
+    assert duplicate_context.catalog is not None
+    assert {name for _, name in duplicate_context.catalog.members} == {"__init__"}
+    assert not runtime_duplicate.__egg_attr_cache__
 
 
 def test_eager_member_pending_view_eligibility_precedes_completion(class_authoring_without_engine):
@@ -5381,6 +5433,7 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
             @method(cost=1)
             def invalid(self) -> i64: ...
 
+    runtime_defaults, defaults_context = _required_authored_class(Defaults)
     if late_bad:
         with pytest.raises(ValueError, match="cannot use cost"):
             Defaults()
@@ -5388,8 +5441,9 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
         # converter-before-error expectation was newly authored, not legacy.
         assert calls == []
         assert captured == []
-        assert {name for _, name in Defaults.__egg_context__.catalog.members} == {"__init__"}
-        assert not Defaults.__egg_attr_cache__
+        assert defaults_context.catalog is not None
+        assert {name for _, name in defaults_context.catalog.members} == {"__init__"}
+        assert not runtime_defaults.__egg_attr_cache__
         for name in ("first", "with_default", "invalid"):
             with pytest.raises(AttributeError):
                 getattr(Defaults, name)
@@ -5399,12 +5453,13 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
     first = resolve_callable(Defaults.first)
     assert first is resolve_callable(captured[0])
     assert isinstance(first.read().kind.value, pb.Primitive)
-    catalog_ref = Defaults.__egg_context__.catalog.definitions["callable", first.read().kind.value.name]
+    assert defaults_context.catalog is not None
+    catalog_ref = defaults_context.catalog.definitions["callable", first.read().kind.value.name]
     # Owner.ref reconstructs Ref wrappers; canonical identity is owner/role/index,
     # not Python allocation identity and not a structural-equality substitute.
     assert catalog_ref == first
     assert catalog_ref.owner is first.owner
-    assert {name for _, name in Defaults.__egg_context__.catalog.members} == {"__init__", "first", "with_default"}
+    assert {name for _, name in defaults_context.catalog.members} == {"__init__", "first", "with_default"}
     assert captured[0].__egg_prepare__ is None
     assert captured[0].__egg_pending_declaration__ is None
     expression = Defaults().with_default()
@@ -5431,11 +5486,13 @@ def test_eager_member_invalid_result_is_terminal_before_publication(class_author
             calls.append("body")
             return query if free_query else None
 
+    runtime_invalid_result, invalid_result_context = _required_authored_class(InvalidResult)
     with pytest.raises(ValueError, match="Free variable" if free_query else "must return a value"):
         InvalidResult.value
     assert calls == ["body"]
-    assert {name for _, name in InvalidResult.__egg_context__.catalog.members} == {"__init__"}
-    assert not InvalidResult.__egg_attr_cache__
+    assert invalid_result_context.catalog is not None
+    assert {name for _, name in invalid_result_context.catalog.members} == {"__init__"}
+    assert not runtime_invalid_result.__egg_attr_cache__
     with pytest.raises(AttributeError):
         InvalidResult.value
     assert calls == ["body"]
@@ -5512,10 +5569,12 @@ def test_member_default_failure_keeps_only_completed_prefix(class_authoring_with
         def bad(self, value: i64 = Source()) -> i64: ...
         def unvisited(self) -> i64: ...
 
+    _runtime_partial, partial_context = _required_authored_class(Partial)
     with pytest.raises(ValueError, match="parameter conversion marker"):
         Partial()
     assert calls == ["first", "conversion"]
-    assert {name for _, name in Partial.__egg_context__.catalog.members} == {"__init__", "first"}
+    assert partial_context.catalog is not None
+    assert {name for _, name in partial_context.catalog.members} == {"__init__", "first"}
     assert isinstance(Partial().first(), i64)
     for name in ("bad", "unvisited"):
         with pytest.raises(AttributeError):
@@ -5539,14 +5598,18 @@ def test_member_default_cycle_is_bounded_and_terminal(class_authoring_without_en
         def __init__(self) -> None: ...
         def value(self, argument: i64 = Source()) -> i64: ...
 
+    runtime_cyclic, cyclic_context = _required_authored_class(Cyclic)
     with pytest.raises(ValueError, match="Recursively resolving function declarations"):
         Cyclic()
     assert calls == ["conversion"]
-    assert {name for _, name in Cyclic.__egg_context__.catalog.members} == {"__init__"}
+    assert cyclic_context.catalog is not None
+    assert {name for _, name in cyclic_context.catalog.members} == {"__init__"}
     # The converter actually used this completed prefix; only its cyclic member
     # must disappear, not the valid cached initializer.
-    assert set(Cyclic.__egg_attr_cache__) == {"__init__"}
-    assert Cyclic.__egg_attr_cache__["__init__"].__egg_pending_declaration__ is None
+    assert set(runtime_cyclic.__egg_attr_cache__) == {"__init__"}
+    cached_initializer = runtime_cyclic.__egg_attr_cache__["__init__"]
+    assert isinstance(cached_initializer, RuntimeFunction)
+    assert cached_initializer.__egg_pending_declaration__ is None
     with pytest.raises(AttributeError):
         Cyclic.value
     assert calls == ["conversion"]
@@ -5660,12 +5723,14 @@ def test_member_header_value_callbacks_wait_for_static_barrier(  # noqa: C901
             @method(cost=1)
             def invalid(self) -> i64: ...
 
+    runtime_barrier, barrier_context = _required_authored_class(Barrier)
     if late_bad:
         with pytest.raises(ValueError, match="cannot use cost"):
             Barrier()
         assert calls == []
-        assert {name for _, name in Barrier.__egg_context__.catalog.members} == {"__init__"}
-        assert not Barrier.__egg_attr_cache__
+        assert barrier_context.catalog is not None
+        assert {name for _, name in barrier_context.catalog.members} == {"__init__"}
+        assert not runtime_barrier.__egg_attr_cache__
     else:
         reference = resolve_callable(Barrier.configured)
         assert reference.read().kind.field == ("function" if kind == "merge" else "constructor")
@@ -5717,10 +5782,12 @@ def test_initializer_cost_waits_for_all_static_headers(class_authoring_without_e
         @method(cost=1)
         def invalid(self) -> i64: ...
 
+    _runtime_invalid, invalid_context = _required_authored_class(Invalid)
     with pytest.raises(ValueError, match="Primitive-returning callables cannot use cost"):
         Invalid(1)
     assert calls == []
-    assert not Invalid.__egg_context__.catalog.members
+    assert invalid_context.catalog is not None
+    assert not invalid_context.catalog.members
     assert not destination._snapshot({}).read().kind.value.rules
 
 
@@ -5862,9 +5929,11 @@ def test_classvar_eager_defaults_reject_unbound_query_variables(class_authoring_
     class Invalid(Expr):
         VALUE: ClassVar[i64] = var(spelling, i64)
 
+    _runtime_invalid, invalid_context = _required_authored_class(Invalid)
     with pytest.raises(ValueError, match=r"Free variable.*named eager body"):
         _ = Invalid.VALUE
-    assert not Invalid.__egg_context__.catalog.members
+    assert invalid_context.catalog is not None
+    assert not invalid_context.catalog.members
     with pytest.raises(AttributeError):
         _ = Invalid.VALUE
 
@@ -5880,8 +5949,9 @@ def test_retained_member_context_lifetime_and_local_hooks():
             def tag(self):
                 return "retained member"
 
+        runtime_local, local_context = _required_authored_class(Local)
         expression = Local.ROOT.child()
-        return expression, weakref(Local), weakref(Local.__egg_context__), weakref(Local.__egg_definition__.owner)
+        return expression, weakref(Local), weakref(local_context), weakref(runtime_local.__egg_definition__.owner)
 
     expression, cls, context, owner = make()
     gc.collect()
@@ -5934,9 +6004,11 @@ def test_primitive_member_option_errors_are_not_constructor_restrictions(options
         @method(**options)
         def primitive(self) -> i64: ...
 
+    _runtime_invalid, invalid_context = _required_authored_class(Invalid)
     with pytest.raises(ValueError, match=r"Primitive-returning callables cannot (use|be)"):
         Invalid()
-    assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
+    assert invalid_context.catalog is not None
+    assert {name for _, name in invalid_context.catalog.members} == {"__init__"}
     assert isinstance(Invalid(), Invalid)
     with pytest.raises(AttributeError):
         _ = Invalid.primitive
@@ -5967,6 +6039,7 @@ def test_symbolic_getattr_uses_existing_header(class_authoring_without_engine, s
         def __init__(self) -> None: ...
         def __getattr__(self, name: StringLike) -> "A": ...
 
+    _runtime_a, a_context = _required_authored_class(A)
     receiver = A()
     original = receiver.__egg_ref__
     name = String("a") + "b" if style == "symbolic" else String("foo")
@@ -5995,7 +6068,8 @@ def test_symbolic_getattr_uses_existing_header(class_authoring_without_engine, s
     if style == "symbolic":
         assert arguments[1].__egg_ref__ == name.__egg_ref__
     assert receiver.__egg_ref__ is original
-    assert {member for _, member in A.__egg_context__.catalog.members} == {"__init__", "__getattr__"}
+    assert a_context.catalog is not None
+    assert {member for _, member in a_context.catalog.members} == {"__init__", "__getattr__"}
 
 
 def test_getattr_preserves_real_members_and_none(class_authoring_without_engine):
@@ -6024,6 +6098,7 @@ def test_getattr_preserves_real_members_and_none(class_authoring_without_engine)
             calls.append(name)
             return None if name == "nothing" else ("fallback", name)
 
+    _runtime_a, a_context = _required_authored_class(A)
     receiver = A()
     assert get_callable_fn(receiver.real()) == A.real
     assert get_callable_fn(receiver.symbolic_property) == A.symbolic_property
@@ -6034,7 +6109,8 @@ def test_getattr_preserves_real_members_and_none(class_authoring_without_engine)
     assert receiver.foo == ("fallback", "foo")
     assert receiver.nothing is None
     assert calls == ["foo", "nothing"]
-    assert {member for _, member in A.__egg_context__.catalog.members} == {
+    assert a_context.catalog is not None
+    assert {member for _, member in a_context.catalog.members} == {
         "__init__",
         "real",
         "symbolic_property",
@@ -6115,12 +6191,13 @@ def test_getattr_propagates_original_errors(class_authoring_without_engine, sour
             calls.append(name)
             raise marker
 
+    _runtime_a, a_context = _required_authored_class(A)
     if source == "prepare":
 
         def failed_prepare(cls):
             raise marker
 
-        A.__egg_context__.prepare = failed_prepare
+        a_context.prepare = failed_prepare
         receiver = var("unprepared", A)
         operation = partial(getattr, receiver, "foo")
     elif source == "conversion":
@@ -6195,13 +6272,15 @@ def test_getattr_does_not_swallow_metadata_errors(class_authoring_without_engine
             calls.append(name)
             return name
 
+    runtime_a, a_context = _required_authored_class(A)
     receiver = A()
-    catalog = A.__egg_context__.catalog
+    catalog = a_context.catalog
+    assert catalog is not None
     key = next(key for key in catalog.members if key[1] == "real")
     reference, _ = catalog.members[key]
     catalog.members[key] = reference, 999
     # Exercise uncached resolution rather than a previously prepared callable.
-    A.__egg_attr_cache__.pop("real", None)
+    runtime_a.__egg_attr_cache__.pop("real", None)
     with pytest.raises(IndexError):
         _ = receiver.real
     assert calls == []
@@ -6216,9 +6295,11 @@ def test_getattr_does_not_attach_preserved_hooks_to_detached_records(class_autho
         def __getattr__(self, name) -> object:
             pytest.fail("Detached records recovered a Python-only fallback hook")
 
+    runtime_a, a_context = _required_authored_class(A)
     receiver = A()
-    assert "__getattr__" in A.__egg_hooks__
-    assert {member for _, member in A.__egg_context__.catalog.members} == {"__init__"}
+    assert "__getattr__" in runtime_a.__egg_hooks__
+    assert a_context.catalog is not None
+    assert {member for _, member in a_context.catalog.members} == {"__init__"}
     packed = pack([receiver.__egg_ref__])
     program = pb.Program.from_binary(packed.program.to_binary())
     if strip_metadata:
@@ -6462,7 +6543,7 @@ def test_mutation_metadata_rejects_before_argument_callbacks(class_authoring_wit
     packed = pack([resolve_callable(update)])
     program = packed.program
     declaration = program.declarations[packed.indices[0]]
-    view = declaration.bindings.python.views[0]
+    view = _required_python_bindings(declaration).views[0]
     if corruption == "index":
         view.mutates = 1
     elif corruption == "output":
@@ -6525,6 +6606,7 @@ def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_eng
         def reset(self) -> None:
             return None
 
+    runtime_accumulator, accumulator_context = _required_authored_class(Accumulator)
     receiver = Accumulator()
     declaration = resolve_callable(Accumulator.update)
     assert declaration.read().kind.value.name == "exact mutable member"
@@ -6541,9 +6623,10 @@ def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_eng
     arguments = _required_callable_args(receiver, Accumulator.update)
     assert expr_parts(arguments[0]) == expr_parts(prior)
     assert [argument.value for argument in arguments[1:]] == [6, 7]
-    Accumulator.__egg_attr_cache__.clear()
-    Accumulator.__egg_context__.catalog.members.clear()
-    Accumulator.__egg_context__.catalog.reindex()
+    runtime_accumulator.__egg_attr_cache__.clear()
+    assert accumulator_context.catalog is not None
+    accumulator_context.catalog.members.clear()
+    accumulator_context.catalog.reindex()
     assert resolve_callable(Accumulator.update) == declaration
     root = to_runtime_expr(receiver).__egg_ref__
     for args, kwargs, error in [
@@ -6623,9 +6706,11 @@ def test_mutation_noninstance_views_remain_rejected(class_authoring_without_engi
         @descriptor
         def mutate(self) -> "Invalid": ...
 
+    _runtime_invalid, invalid_context = _required_authored_class(Invalid)
     with pytest.raises(NotImplementedError, match="not migrated"):
         Invalid()
-    assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
+    assert invalid_context.catalog is not None
+    assert {name for _, name in invalid_context.catalog.members} == {"__init__"}
 
 
 def test_eager_mutating_member_bodies_remain_rejected_before_callback(class_authoring_without_engine):
@@ -6636,9 +6721,11 @@ def test_eager_mutating_member_bodies_remain_rejected_before_callback(class_auth
         def mutate(self) -> None:
             pytest.fail("Unsupported mutating member body was executed")
 
+    _runtime_invalid, invalid_context = _required_authored_class(Invalid)
     with pytest.raises(NotImplementedError, match="not migrated"):
         Invalid()
-    assert {name for _, name in Invalid.__egg_context__.catalog.members} == {"__init__"}
+    assert invalid_context.catalog is not None
+    assert {name for _, name in invalid_context.catalog.members} == {"__init__"}
 
 
 @pytest.mark.parametrize("reverse", [False, True])
@@ -6751,6 +6838,7 @@ def test_class_late_header_failure_keeps_prefix(class_authoring_without_engine, 
 
         def later(self) -> HeaderResult: ...
 
+    _runtime_partial, partial_context = _required_authored_class(Partial)
     with pytest.raises(ValueError, match="Primitive-returning callables cannot use cost"):
         Partial()
     expected = [] if formed_default else ["convert"]
@@ -6762,7 +6850,7 @@ def test_class_late_header_failure_keeps_prefix(class_authoring_without_engine, 
         with pytest.raises(AttributeError):
             getattr(Partial, name)
     assert events == expected
-    assert Partial.__egg_context__.prepare is None
+    assert partial_context.prepare is None
 
 
 def test_class_first_header_failure_is_terminal_without_poison(class_authoring_without_engine):
@@ -6772,9 +6860,11 @@ def test_class_first_header_failure_is_terminal_without_poison(class_authoring_w
 
         def later(self) -> i64: ...
 
+    runtime_partial, partial_context = _required_authored_class(Partial)
     with pytest.raises(ValueError, match="Primitive-returning callables cannot use cost"):
         _ = Partial.bad
-    assert Partial.__egg_context__.catalog.roots == (Partial.__egg_definition__,)
+    assert partial_context.catalog is not None
+    assert partial_context.catalog.roots == (runtime_partial.__egg_definition__,)
     for name in ("bad", "later"):
         with pytest.raises(AttributeError):
             getattr(Partial, name)
@@ -7008,9 +7098,11 @@ def test_class_primitive_default_with_ruleset_remains_invalid(class_authoring_wi
     class InvalidDefault(Expr, ruleset=destination):
         FIRST: ClassVar[i64] = default
 
+    _runtime_invalid_default, invalid_default_context = _required_authored_class(InvalidDefault)
     with pytest.raises(ValueError, match="Primitive-returning defaults cannot use an explicit ruleset"):
         _ = InvalidDefault.FIRST
-    assert not InvalidDefault.__egg_context__.catalog.members
+    assert invalid_default_context.catalog is not None
+    assert not invalid_default_context.catalog.members
     assert destination._snapshot({}).read().kind.value.rules == []
     with pytest.raises(AttributeError):
         _ = InvalidDefault.FIRST
@@ -7037,10 +7129,12 @@ def test_unresolved_constructor_annotation_does_not_publish_members():
     class Missing(Expr):
         def __init__(self, value: "NotDefinedHere") -> None: ...  # type: ignore[name-defined]  # noqa: F821
 
+    runtime_missing, missing_context = _required_authored_class(Missing)
     with pytest.raises(NameError, match="NotDefinedHere"):
         Missing(1)
-    assert not Missing.__egg_context__.catalog.members
-    assert not Missing.__egg_attr_cache__
+    assert missing_context.catalog is not None
+    assert not missing_context.catalog.members
+    assert not runtime_missing.__egg_attr_cache__
     with pytest.raises(AttributeError):
         Missing(1)
 
@@ -7880,10 +7974,14 @@ def test_multiset_formed_symbolic_children_outlive_parent_without_authoring(monk
     gc.collect()
     assert parent_owner() is None
     assert child_owner() is not None
+    assert isinstance(retained, list)
     assert len(retained) == 2
-    assert retained[0].__egg_ref__ == retained[1].__egg_ref__
-    assert retained[0].__egg_ref__.read().kind.field == "call"
-    assert retained[0].__egg_ref__.read().to_binary() == before
-    assert str(retained[0]) == str(retained[1]) == expected_text
-    assert hash(retained[0]) == hash(retained[1]) == expected_hash
-    assert _required_callable_args(retained[0])[0].__egg_ref__.read().kind.field == "var"
+    first_child, second_child = retained
+    assert isinstance(first_child, RuntimeExpr)
+    assert isinstance(second_child, RuntimeExpr)
+    assert first_child.__egg_ref__ == second_child.__egg_ref__
+    assert first_child.__egg_ref__.read().kind.field == "call"
+    assert first_child.__egg_ref__.read().to_binary() == before
+    assert str(first_child) == str(second_child) == expected_text
+    assert hash(first_child) == hash(second_child) == expected_hash
+    assert _required_callable_args(first_child)[0].__egg_ref__.read().kind.field == "var"
