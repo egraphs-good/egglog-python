@@ -85,6 +85,11 @@ impl ProtoSource {
                     ),
                     Submission::Push(count) => ("push".into(), None, count),
                     Submission::Pop { count, .. } => ("pop".into(), None, count),
+                    Submission::PrintFunction(_) => {
+                        return Err(PyValueError::new_err(
+                            "source file/CSV presentation requires a host callback",
+                        ));
+                    }
                 })
             })
             .transpose()

@@ -164,6 +164,8 @@ def test_source_producer_returns_only_program_bytes_and_scope_counts():
             assert encoded is None
             assert count == 1
     assert kinds == ["program", "push", "program", "pop"]
+    with pytest.raises(ValueError, match="requires a host callback"):
+        bindings._ProtoEngine.source("(print-function missing :mode csv)").next_submission()
 
 
 def test_source_producer_later_error_preserves_executed_byte_prefix():
