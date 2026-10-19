@@ -331,14 +331,20 @@ def test_maybe_inspection_rejects_malformed_local_values(mutation):
     packet = pack([original])
     program = copy.deepcopy(packet.program)
     node = program.nodes[packet.indices[0]]
+    node_kind = node.kind
+    assert node_kind is not None
+    assert node_kind.field == "call"
+    sort_kind = program.sorts[node.sort_id].kind
+    assert sort_kind is not None
+    assert sort_kind.field == "family"
     if mutation == "wrong_child":
-        program.nodes[node.kind.value.args[0]].sort_id = node.sort_id
+        program.nodes[node_kind.value.args[0]].sort_id = node.sort_id
     elif mutation == "missing_child":
-        node.kind.value.args.clear()
+        node_kind.value.args.clear()
     elif mutation == "wrong_family":
-        program.sorts[node.sort_id].kind.value.name = "Vec"
+        sort_kind.value.name = "Vec"
     elif mutation == "arity":
-        program.sorts[node.sort_id].kind.value.args.clear()
+        sort_kind.value.args.clear()
     else:
         declaration = next(
             d
@@ -346,7 +352,13 @@ def test_maybe_inspection_rejects_malformed_local_values(mutation):
             if d.kind.field == "host_primitive" and d.kind.value.name == "egglog.experimental.maybe.some"
         )
         if mutation == "scheme":
-            signature = declaration.kind.value.typing.value
+            declaration_kind = declaration.kind
+            assert declaration_kind is not None
+            assert declaration_kind.field == "host_primitive"
+            signature_kind = declaration_kind.value.typing
+            assert signature_kind is not None
+            assert signature_kind.field == "signature"
+            signature = signature_kind.value
             signature.output = signature.inputs[0].sort
         else:
             declaration.kind = Oneof[Literal["constructor"], pb.Constructor](

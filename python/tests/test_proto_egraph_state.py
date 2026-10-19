@@ -2170,10 +2170,20 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
     graph.register(first, second)
     assert responses[0].error is None
     graph.check(eq(lhs).to(rhs))
-    assert len(requests[0].program.commands) == 2
-    roots = [command.kind.value.kind.value for command in requests[0].program.commands]
+    submitted_program = requests[0].program
+    assert submitted_program is not None
+    assert len(submitted_program.commands) == 2
+    roots = []
+    for command in submitted_program.commands:
+        command_kind = command.kind
+        assert command_kind is not None
+        assert command_kind.field == "action"
+        action_kind = command_kind.value.kind
+        assert action_kind is not None
+        assert action_kind.field == "term"
+        roots.append(action_kind.value)
     assert (roots[0] == roots[1]) is (reuse != "separate")
-    assert all(requests[0].program.nodes[index].kind.field == "union" for index in roots)
+    assert all(submitted_program.nodes[index].kind.field == "union" for index in roots)
 
 
 def test_ruleset_append_preserves_native_cursor(tmp_path):
@@ -3021,6 +3031,7 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
     assert program.ir_version == 1
     command = program.commands[0].kind
     assert command is not None
+    assert command.field == "extract"
     call = program.nodes[command.value.roots[0]].kind
     assert call is not None
     assert call.field == "call"

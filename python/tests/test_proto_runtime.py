@@ -422,7 +422,10 @@ def test_canonical_backoff_records_and_persistent_identity_without_engine(monkey
     encoded = pack(commands=[zero.__egg_ref__]).program.to_binary()
     copied = pb.Program.from_binary(encoded)
     assert copied.to_binary() == encoded
-    limits = copied.commands[0].kind.value.scheduler.kind.value
+    copied_binding = _required_oneof(copied.commands[0].kind, "bind_scheduler", pb.BindScheduler)
+    copied_scheduler = copied_binding.scheduler
+    assert copied_scheduler is not None
+    limits = _required_oneof(copied_scheduler.kind, "back_off", pb.BackOff)
     assert limits.has_field("match_limit")
     assert limits.match_limit == 0
     assert limits.has_field("ban_length")
@@ -2228,7 +2231,9 @@ def test_scalar_wave_specialized_bool_deconstruction_uses_effective_slots():
 def test_scalar_wave_authoring_rejects_invalid_specialization(mutation):
     packet = pack([(Bool(True) | False).__egg_ref__])
     declaration = next(d for d in packet.program.declarations if d.kind.value.name == "egglog.core.bool.or")
-    signature, view = declaration.kind.value.typing.value, declaration.bindings.python.views[0]
+    primitive = _required_oneof(declaration.kind, "host_primitive", pb.HostPrimitive)
+    signature = _required_oneof(primitive.typing, "signature", pb.GenericSignature)
+    view = declaration.bindings.python.views[0]
     if mutation == "fixed":
         signature.inputs = signature.varargs * 2
         signature.varargs.clear()
@@ -2280,9 +2285,9 @@ def test_scalar_wave_concrete_defaults_and_nested_containers():
     assert mapping.value[String("key")].value is False
     assert isinstance(mapping[String("key")], Bool)
     with pytest.raises(ConvertError):
-        Pair[String, Bool](False, "key")
+        Pair[String, Bool](False, "key")  # type: ignore[arg-type]
     with pytest.raises(ConvertError):
-        message(i64(1))
+        message(i64(1))  # type: ignore[arg-type]
 
 
 def test_runtime_instance_checks_preserve_concrete_sorts_without_engine(monkeypatch):
@@ -2371,13 +2376,13 @@ def test_map_fixed_from_pairs_and_computed_vec_authoring():
     assert expression.value[i64(1)].__egg_ref__ == newest.__egg_ref__
     assert Map[i64, f64].from_pairs(Vec[Pair[i64, f64]].empty()).value == {}
     with pytest.raises(TypeError):
-        Map[i64, f64].from_pairs()
+        Map[i64, f64].from_pairs()  # type: ignore[call-arg]
     with pytest.raises(TypeError):
-        Map[i64, f64].from_pairs(items=entries)
+        Map[i64, f64].from_pairs(items=entries)  # type: ignore[call-arg]
     with pytest.raises(ConvertError):
-        Map[i64, f64].from_pairs(Pair(i64(1), f64(2.0)))
+        Map[i64, f64].from_pairs(Pair(i64(1), f64(2.0)))  # type: ignore[arg-type]
     with pytest.raises(ConvertError):
-        Map[i64, f64].from_pairs(Vec(Pair(f64(1.0), i64(2))))
+        Map[i64, f64].from_pairs(Vec(Pair(f64(1.0), i64(2))))  # type: ignore[arg-type]
 
     @function
     def computed() -> Vec[Pair[i64, f64]]: ...
@@ -4556,13 +4561,13 @@ def test_user_constructor_defaults_keywords_and_names_are_records(monkeypatch):
     assert resolve_callable(Num) == declaration
     assert get_callable_args(Num(), Num)[0].value == 5
     with pytest.raises(TypeError):
-        Num(1, value=2)
+        Num(1, value=2)  # type: ignore[arg-type, misc]
     with pytest.raises(TypeError):
-        Num(unknown=2)
+        Num(unknown=2)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
-        Num(1, 2)
+        Num(1, 2)  # type: ignore[arg-type, call-arg]
     with pytest.raises(ConvertError, match="Cannot convert"):
-        Num("wrong sort")
+        Num("wrong sort")  # type: ignore[arg-type]
 
 
 def test_user_preserved_protocols_and_match_args():
@@ -4775,11 +4780,11 @@ def test_reverse_args_members_map_heterogeneous_inputs_and_mutation(class_author
     assert get_callable_args(expression) == (source, String("tag"), i64(4))
     assert expr_parts(ReversedSource.make(source, count=i64(4), label="tag")) == expr_parts(expression)
     with pytest.raises(ConvertError, match="Cannot convert"):
-        source.make(i64(9))
+        source.make(i64(9))  # type: ignore[arg-type]
     with pytest.raises(ConvertError, match="Cannot convert"):
-        source.make("tag", String("wrong"))
+        source.make("tag", String("wrong"))  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="too many positional"):
-        source.make("tag", i64(4), i64(5))
+        source.make("tag", i64(4), i64(5))  # type: ignore[call-arg]
     packed = pack([expression.__egg_ref__])
     program = pb.Program.from_binary(packed.program.to_binary())
     detached = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
@@ -4945,13 +4950,13 @@ def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
     assert resolve_callable(Node.score) == score
     assert get_callable_args(expression.score())[1].value == 4
     with pytest.raises(TypeError):
-        expression.score(1, x=2)
+        expression.score(1, x=2)  # type: ignore[arg-type, misc]
     with pytest.raises(TypeError):
-        Node.make(unknown=1)
+        Node.make(unknown=1)  # type: ignore[call-arg]
     with pytest.raises(ConvertError):
-        expression.score(f64(1))
+        expression.score(f64(1))  # type: ignore[arg-type]
     with pytest.raises(ConvertError):
-        Node.score(i64(1), i64(2))
+        Node.score(i64(1), i64(2))  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("future", [False, True])
@@ -7653,7 +7658,9 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
         call(i64(0))
     assert reference.read().to_binary() == before
     source = pack([root]).program
-    signature = next(d.kind.value.typing.value for d in source.declarations if d.kind.field == "host_primitive")
+    primitive = next(d.kind.value for d in source.declarations if d.kind.field == "host_primitive")
+    assert isinstance(primitive, pb.HostPrimitive)
+    signature = _required_oneof(primitive.typing, "signature", pb.GenericSignature)
     assert len(signature.varargs) == 2
     signature.type_params.append("Unused")
     adopted = Builder.from_program(source).publish()
@@ -7689,7 +7696,7 @@ def test_multiset_local_protocols_preserve_symbolic_occurrences_without_engine(m
         case _:
             pytest.fail("MultiSet value matching failed")
     packed = pack([expression.__egg_ref__])
-    args = packed.program.nodes[packed.indices[0]].kind.value.args
+    args = _required_oneof(packed.program.nodes[packed.indices[0]].kind, "call", pb.Call).args
     assert args[0] == args[2] != args[1]
     assert packed.program.nodes[args[0]].kind is not None
     assert packed.program.nodes[args[0]].kind.field == "var"
@@ -7766,7 +7773,7 @@ def test_multiset_occurrences_preserve_union_identity(same):
     assert len(expression) == 2
     assert [child.__egg_ref__ for child in expression.value] == [first.__egg_ref__, second.__egg_ref__]
     packed = pack([expression.__egg_ref__])
-    args = packed.program.nodes[packed.indices[0]].kind.value.args
+    args = _required_oneof(packed.program.nodes[packed.indices[0]].kind, "call", pb.Call).args
     assert (args[0] == args[1]) == same
 
 
