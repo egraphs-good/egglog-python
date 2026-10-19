@@ -19,6 +19,21 @@ from egglog.runtime import RuntimeExpr, RuntimeFunction, _class_for_sort
 from egglog.type_constraint_solver import TypeConstraintError
 
 
+def _host_signature(declaration: pb.Declaration) -> tuple[pb.HostPrimitive, pb.GenericSignature]:
+    """Require the concrete host signature before inspecting or corrupting a catalog fixture."""
+    kind = declaration.kind
+    assert isinstance(kind, Oneof)
+    assert kind.field == "host_primitive"
+    primitive = kind.value
+    assert isinstance(primitive, pb.HostPrimitive)
+    typing = primitive.typing
+    assert isinstance(typing, Oneof)
+    assert typing.field == "signature"
+    signature = typing.value
+    assert isinstance(signature, pb.GenericSignature)
+    return primitive, signature
+
+
 def test_pyobject_generated_surface_uses_real_defaults_and_host_policy():
     from egglog._catalog import builtin_catalog  # noqa: PLC0415
     from egglog._program import pack  # noqa: PLC0415
@@ -188,7 +203,7 @@ def test_scalar_generated_surface_uses_actual_variadic_providers():
     declarations = {d.kind.value.name: d for d in program.declarations}
     for name, paths in (("string.concat", ["join", "__add__"]), ("bool.or", ["__or__"])):
         declaration = declarations[f"egglog.core.{name}"]
-        signature = declaration.kind.value.typing.value
+        _, signature = _host_signature(declaration)
         assert not signature.inputs
         assert len(signature.varargs) == 1
         assert [v.path[-1] for v in declaration.bindings.python.views] == paths
@@ -223,7 +238,8 @@ def test_scalar_specialized_stub_rejects_invalid_views(mutation):
     program = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
     declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.bool.or")
-    signature, view = declaration.kind.value.typing.value, declaration.bindings.python.views[0]
+    _, signature = _host_signature(declaration)
+    view = declaration.bindings.python.views[0]
     if mutation == "fixed":
         signature.inputs = signature.varargs * 2
         signature.varargs.clear()
@@ -258,7 +274,8 @@ def test_scalar_free_stub_rejects_unsupported_views(mutation):
     declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.string.concat")
     view = declaration.bindings.python.views[0]
     if mutation == "generic":
-        declaration.kind.value.typing.value.type_params.append("T")
+        _, signature = _host_signature(declaration)
+        signature.type_params.append("T")
     elif mutation == "foreign":
         view.path[0] = "other"
     else:
@@ -324,7 +341,7 @@ def test_vec_map_view_and_static_signature_come_from_actual_catalog():
     root = Path(__file__).resolve().parents[2]
     program = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.vec.map")
-    signature = declaration.kind.value.typing.value
+    _, signature = _host_signature(declaration)
     rust = declaration.bindings.rust.views[0]
     view = declaration.bindings.python.views[0]
     assert view.kind == pb.PythonCallKind.METHOD
@@ -354,7 +371,8 @@ def test_vec_static_tail_rejects_unrepresentable_or_invalid_views(vec_catalog_pr
         "render_stubs"
     ]
     of = next(d for d in vec_catalog_program.declarations if d.kind.value.name == "egglog.core.vec.of")
-    signature, view = of.kind.value.typing.value, of.bindings.python.views[0]
+    _, signature = _host_signature(of)
+    view = of.bindings.python.views[0]
     if mutation == "grouped":
         signature.varargs.append(pb.Arg(sort=signature.varargs[0].sort))
     elif mutation == "default":
@@ -383,7 +401,8 @@ def test_uniform_tail_can_follow_fixed_inputs(vec_catalog_program):
         "render_stubs"
     ]
     of = next(d for d in vec_catalog_program.declarations if d.kind.value.name == "egglog.core.vec.of")
-    signature, view = of.kind.value.typing.value, of.bindings.python.views[0]
+    _, signature = _host_signature(of)
+    view = of.bindings.python.views[0]
     signature.inputs.append(pb.Arg(sort=signature.varargs[0].sort, name="first"))
     view.params[0].core_input = 1
     view.params.insert(0, pb.PythonParameter(core_input=0, name="first"))
@@ -397,7 +416,8 @@ def test_classmethod_pretty_infers_owner_from_uniform_tail(vec_catalog_program, 
     source = next(d for d in vec_catalog_program.declarations if d.kind.value.name == "egglog.core.vec.of")
     count = pb.Declaration.from_binary(source.to_binary())
     count.kind.value.name = "test.vec.count"
-    signature, view = count.kind.value.typing.value, count.bindings.python.views[0]
+    _, signature = _host_signature(count)
+    view = count.bindings.python.views[0]
     signature.output = next(
         i
         for i, sort in enumerate(vec_catalog_program.sorts)
@@ -676,7 +696,7 @@ def test_pair_stub_rejects_invalid_or_unadmitted_generic_views(pair_catalog_prog
     declarations = {d.kind.value.name: d for d in pair_catalog_program.declarations}
     make = declarations["egglog.core.pair.make"]
     first = declarations["egglog.core.pair.first"]
-    signature = make.kind.value.typing.value
+    _, signature = _host_signature(make)
     if mutation == "output":
         signature.output = signature.inputs[0].sort
     elif mutation == "receiver":
@@ -702,7 +722,8 @@ def test_pair_stub_uses_sort_structure_after_relocation(pair_catalog_program):
     ]
     declarations = {d.kind.value.name: d for d in pair_catalog_program.declarations}
     make = declarations["egglog.core.pair.make"]
-    owner_sort = pair_catalog_program.sorts[make.kind.value.typing.value.output]
+    _, signature = _host_signature(make)
+    owner_sort = pair_catalog_program.sorts[signature.output]
     duplicated = pb.Sort.from_binary(owner_sort.to_binary())
     duplicated.kind.value.args = [len(pair_catalog_program.sorts) + 1, len(pair_catalog_program.sorts) + 2]
     make.bindings.python.views[0].owner.kind = Oneof[Literal["sort"], int]("sort", len(pair_catalog_program.sorts))
@@ -720,7 +741,8 @@ def test_pair_stub_uses_sort_structure_after_relocation(pair_catalog_program):
         if "_Pair_" in line or "class Pair(" in line:
             assert line in after
     first = declarations["egglog.core.pair.first"]
-    first.kind.value.typing.value.output = make.kind.value.typing.value.inputs[1].sort
+    _, first_signature = _host_signature(first)
+    first_signature.output = signature.inputs[1].sort
     assert "def left(self) -> _Pair_R_1:" in renderer(pair_catalog_program)
 
 
@@ -732,7 +754,7 @@ def test_pair_stub_rejects_specialized_owner_as_universal_class_view(pair_catalo
     for name in ("first", "second"):
         declarations[f"egglog.core.pair.{name}"].bindings.python = None
     make = declarations["egglog.core.pair.make"]
-    signature = make.kind.value.typing.value
+    _, signature = _host_signature(make)
     signature.type_params.clear()
     i64_sort = next(
         i for i, s in enumerate(pair_catalog_program.sorts) if s.kind.field == "family" and s.kind.value.name == "i64"
@@ -761,7 +783,7 @@ def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message)
     renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
     program = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     addition = next(d for d in program.declarations if d.kind.value.name == "egglog.core.i64.add")
-    signature = addition.kind.value.typing.value
+    primitive, signature = _host_signature(addition)
     view = addition.bindings.python.views[0]
     if mutation == "receiver":
         view.receiver = 1
@@ -784,7 +806,7 @@ def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message)
         )
         view.params[0].default_expr = len(program.nodes) - 1
     else:
-        addition.kind.value.typing = Oneof[Literal["application"], pb.FunctionApplication](
+        primitive.typing = Oneof[Literal["application"], pb.FunctionApplication](
             "application", pb.FunctionApplication()
         )
     with pytest.raises(ValueError, match=message):
@@ -864,7 +886,8 @@ def test_stub_defaults_are_inert_and_presence_controls_arity():
     addition = next(d for d in program.declarations if d.kind.value.name == "egglog.core.i64.add")
     addition.bindings.python.views[0].path = ["plus"]
     parameter = addition.bindings.python.views[0].params[0]
-    scalar_sort = addition.kind.value.typing.value.inputs[parameter.core_input].sort
+    _, signature = _host_signature(addition)
+    scalar_sort = signature.inputs[parameter.core_input].sort
     literal = len(program.nodes)
     program.nodes.extend([
         pb.Node(
@@ -991,7 +1014,8 @@ def test_catalog_indexes_records_without_evaluating_or_retyping(monkeypatch):
     assert declaration.read().kind.value.name == "example.number.add"
     assert view == 0
     source.declarations.clear()
-    assert declaration.read().kind.value.typing.value.inputs[0].sort == 0
+    _, signature = _host_signature(declaration.read())
+    assert signature.inputs[0].sort == 0
     catalog.reindex()
     assert catalog.members[("host_sort_family", "Number"), "__add__"] == (declaration, view)
 
@@ -1019,7 +1043,8 @@ def test_local_scope_indexes_canonical_refs_without_adopting_them_again():
 @pytest.mark.parametrize("generic", [False, True])
 def test_nominal_and_family_member_owners_recover_independently(monkeypatch, generic):
     source = catalog_fixture()
-    source.declarations[1].kind.value.typing.value.inputs = [pb.Arg(sort=0)]
+    _, signature = _host_signature(source.declarations[1])
+    signature.inputs = [pb.Arg(sort=0)]
     host_view = source.declarations[1].bindings.python.views[0]
     host_view.path = ["tag"]
     host_view.params = []
@@ -1052,7 +1077,7 @@ def test_nominal_and_family_member_owners_recover_independently(monkeypatch, gen
     host_sort = 0
     if generic:
         source.declarations[0].kind.value.arity = 1
-        source.declarations[1].kind.value.typing.value.type_params = ["T"]
+        signature.type_params = ["T"]
         source.sorts[0].kind.value.args = [2]
         source.sorts.extend([
             pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)),
@@ -1321,9 +1346,9 @@ def test_constant_presentation_accepts_each_concrete_nullary_callable(kind):
 def test_constant_presentation_rejects_nonconstant_shapes(invalid):
     source = catalog_fixture()
     declaration = source.declarations[1]
-    declaration.kind.value.typing.value.inputs.clear()
+    primitive, signature = _host_signature(declaration)
+    signature.inputs.clear()
     declaration.bindings.python.views = [pb.PythonCallable(kind=pb.PythonCallKind.CONSTANT, path=["constant"])]
-    signature = declaration.kind.value.typing.value
     view = declaration.bindings.python.views[0]
     match invalid:
         case "input":
@@ -1333,7 +1358,7 @@ def test_constant_presentation_rejects_nonconstant_shapes(invalid):
         case "tail":
             signature.varargs.append(pb.Arg(sort=0))
         case "application":
-            declaration.kind.value.typing = Oneof[Literal["application"], pb.FunctionApplication](
+            primitive.typing = Oneof[Literal["application"], pb.FunctionApplication](
                 "application", pb.FunctionApplication()
             )
         case "receiver":
@@ -1362,7 +1387,8 @@ def test_constant_presentation_rejects_nonconstant_shapes(invalid):
 def test_constant_path_allows_only_an_empty_final_name(path, valid):
     source = catalog_fixture()
     declaration = source.declarations[1]
-    declaration.kind.value.typing.value.inputs.clear()
+    _, signature = _host_signature(declaration)
+    signature.inputs.clear()
     declaration.bindings.python.views = [pb.PythonCallable(kind=pb.PythonCallKind.CONSTANT, path=path)]
     if valid:
         assert tuple(path) in Catalog(source).constants
@@ -1444,7 +1470,7 @@ def test_multiset_generic_free_static_guards(corruption, message):
     program = pack(builtin_catalog().roots).program
     declarations = {d.kind.value.name: d for d in program.declarations}
     declaration = declarations["egglog.core.multiset.remove_swapped"]
-    signature = declaration.kind.value.typing.value
+    _, signature = _host_signature(declaration)
     if corruption == "unused":
         signature.type_params.append("Unused")
     elif corruption == "unbound":
@@ -1476,7 +1502,7 @@ def test_multiset_free_signature_labels_are_diagnostic_only(label, monkeypatch):
     monkeypatch.setattr("egglog.runtime._author_call", forbidden)
     program = pack(builtin_catalog().roots).program
     signatures = [
-        declaration.kind.value.typing.value
+        _host_signature(declaration)[1]
         for declaration in program.declarations
         if declaration.kind.value.name
         in {
@@ -1507,7 +1533,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
     source = Path(environ.get("EGGLOG_TEST_HIGHER_ORDER_CATALOG", root / "python/egglog/_builtin_catalog.pb"))
     program = pb.Program.from_binary(source.read_bytes())
     declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.multiset.map")
-    signature = declaration.kind.value.typing.value
+    _, signature = _host_signature(declaration)
     view = declaration.bindings.python.views[0]
     assert len(signature.type_params) == 2
     owner = program.sorts[view.owner.kind.value].kind.value
@@ -1556,7 +1582,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
             result.sorts.append(record)
             return indices[index]
 
-        bound = selected.kind.value.typing.value
+        _, bound = _host_signature(selected)
         for argument in bound.inputs:
             argument.sort = sort(argument.sort)
         bound.output = sort(bound.output)
@@ -1571,7 +1597,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
     )
     nested = relocated((0, 1))
     selected = next(d for d in nested.declarations if d.kind.value.name == "egglog.core.multiset.map")
-    bound = selected.kind.value.typing.value
+    _, bound = _host_signature(selected)
     function = nested.sorts[bound.inputs[0].sort].kind.value
     nested.sorts.append(pb.Sort.from_binary(nested.sorts[bound.inputs[0].sort].to_binary()))
     nested_function = len(nested.sorts) - 1
@@ -1583,10 +1609,11 @@ def test_multiset_method_local_binders_from_actual_catalog():
     )
     malformed = relocated((0, 1))
     selected = next(d for d in malformed.declarations if d.kind.value.name == "egglog.core.multiset.map")
-    selected.kind.value.typing.value.type_params.append("Unused")
+    _, malformed_signature = _host_signature(selected)
+    malformed_signature.type_params.append("Unused")
     with pytest.raises(ValueError, match="Unused static signature parameter"):
         render(malformed)
-    selected.kind.value.typing.value.type_params.pop()
+    malformed_signature.type_params.pop()
     selected.bindings.python.views[0].params[0].default_expr = len(malformed.nodes)
     with pytest.raises(ValueError, match="Default root"):
         render(malformed)
