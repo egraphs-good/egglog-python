@@ -119,13 +119,13 @@ def test_generic_family_composition_keeps_concrete_intermediate_context(generic_
     if not generic_first:
         converter(Source, Vec, to_vector)
     with with_type_args((String,)):
-        assert expr_parts(convert(Derived((1, 2)), IntBox)) == expr_parts(IntBox(Vec[i64](1, 2)))
-        assert expr_parts(convert(Derived((1.5, 2.5)), FloatBox)) == expr_parts(FloatBox(Vec[f64](1.5, 2.5)))
+        assert expr_parts(convert(Derived((1, 2)), IntBox)) == expr_parts(IntBox(Vec[i64](1, 2)))  # type: ignore[arg-type]
+        assert expr_parts(convert(Derived((1.5, 2.5)), FloatBox)) == expr_parts(FloatBox(Vec[f64](1.5, 2.5)))  # type: ignore[arg-type]
         assert get_type_args() == (String,)
     assert calls == [(i64,), (f64,)]
     assert get_type_args() == ()
     converter(IntBox, Vec[i64], lambda _: Vec[i64].empty(), cost=10)
-    assert expr_parts(convert(Derived((1, 2)), IntBox)) == expr_parts(IntBox(Vec[i64](1, 2)))
+    assert expr_parts(convert(Derived((1, 2)), IntBox)) == expr_parts(IntBox(Vec[i64](1, 2)))  # type: ignore[arg-type]
     assert calls == [(i64,), (f64,), (i64,)]
 
 
@@ -201,7 +201,7 @@ def test_generic_family_lookup_uses_cost_then_exact_tie_break(generic_first):
 
     def exact(_):
         calls.append("exact")
-        return Vec[i64](99)
+        return Vec[i64](99)  # type: ignore[arg-type]
 
     def generic(_):
         calls.append("generic")
@@ -212,11 +212,11 @@ def test_generic_family_lookup_uses_cost_then_exact_tie_break(generic_first):
     converter(Source, Vec[i64], exact, cost=10)
     if not generic_first:
         converter(Source, Vec, generic, cost=1)
-    assert expr_parts(convert(Source(), Vec[i64])) == expr_parts(Vec[i64](1))
+    assert expr_parts(convert(Source(), Vec[i64])) == expr_parts(Vec[i64](1))  # type: ignore[arg-type]
     assert calls == ["generic"]
     calls.clear()
     converter(Source, Vec[i64], exact, cost=1)
-    assert expr_parts(convert(Source(), Vec[i64])) == expr_parts(Vec[i64](99))
+    assert expr_parts(convert(Source(), Vec[i64])) == expr_parts(Vec[i64](99))  # type: ignore[arg-type]
     assert calls == ["exact"]
 
 
@@ -230,7 +230,7 @@ def test_generic_family_lookup_keeps_source_mro_preference():
     converter(Source, Vec[i64], lambda _: pytest.fail("More-expensive exact converter ran"), cost=10)
     converter(Source, Vec, lambda _: pytest.fail("Less-specific family converter ran"), cost=0)
     converter(Derived, Vec, lambda _: Vec[get_type_args()[0]](1), cost=2)
-    assert expr_parts(convert(Derived(), Vec[i64])) == expr_parts(Vec[i64](1))
+    assert expr_parts(convert(Derived(), Vec[i64])) == expr_parts(Vec[i64](1))  # type: ignore[arg-type]
 
 
 def test_numeric_winner_error_is_not_retried_and_restores_context():
@@ -410,10 +410,10 @@ def test_numeric_generic_owner_preserves_element_context():
     class Element(Expr):
         def __init__(self, value: i64) -> None: ...
 
-    left = Vec[Element](Element(1))
+    left = Vec[Element](Element(1))  # type: ignore[arg-type]
     with with_type_args((String,)):
-        expression = left | [Element(2)]
-        expected = Vec[Element].__or__(left, Vec[Element](Element(2)))
+        expression = left | [Element(2)]  # type: ignore[arg-type]
+        expected = Vec[Element].__or__(left, Vec[Element](Element(2)))  # type: ignore[arg-type]
         assert expr_parts(expression) == expr_parts(expected)
         assert get_type_args() == (String,)
     with pytest.raises(TypeConstraintError, match="requires an equality sort"):

@@ -1135,7 +1135,7 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectiona
     class RewriteBox(Expr):
         def __init__(self, value: i64) -> None: ...
 
-    lhs, rhs = RewriteBox(1), RewriteBox(2)
+    lhs, rhs = RewriteBox(1), RewriteBox(2)  # type: ignore[arg-type]
     condition = eq(i64(3)).to(i64(3))
     builder = birewrite(lhs) if bidirectional else rewrite(lhs, subsume=True)
     kind = "birewrite" if bidirectional else "rewrite"
@@ -1165,8 +1165,8 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectiona
     assert len(head) == 1
     assert head[0].kind.field == "term"
     assert condition_action.__egg_ref__.owner.ref("nodes", head[0].kind.value) == condition.__egg_ref__
-    lhs.__egg_ref__ = RewriteBox(9).__egg_ref__
-    rhs.__egg_ref__ = RewriteBox(10).__egg_ref__
+    lhs.__egg_ref__ = RewriteBox(9).__egg_ref__  # type: ignore[arg-type]
+    rhs.__egg_ref__ = RewriteBox(10).__egg_ref__  # type: ignore[arg-type]
     body.conditions.clear()
     assert str(authored) == expected
     packed = pack([authored.__egg_ref__])
@@ -1340,7 +1340,7 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     @function
     def rule_slot() -> i64: ...
 
-    left, right = RuleBox(1), RuleBox(2)
+    left, right = RuleBox(1), RuleBox(2)  # type: ignore[arg-type]
     shared, distinct = eq(left).to(right), eq(left).to(right)
     builder = Builder()
     builder.import_ref(i64(99).__egg_ref__)
@@ -1355,7 +1355,7 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
         ),
     )
     shared_action = Action(builder.publish().ref("commands", command))
-    assignment = set_(rule_slot()).to(7)
+    assignment = set_(rule_slot()).to(7)  # type: ignore[arg-type]
     authored = rule(shared, distinct, name="direct", eval_mode="naive", no_decomp=True).then(
         assignment, shared_action, shared_action, left
     )
@@ -1393,7 +1393,7 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     )
     assert str(authored) == repr(authored) == expected
     record.kind.value.head.clear()
-    left.__egg_ref__ = RuleBox(9).__egg_ref__
+    left.__egg_ref__ = RuleBox(9).__egg_ref__  # type: ignore[arg-type]
     assert str(authored) == expected
     decoded = pb.Program.from_binary(packed.program.to_binary())
     owner = Builder.from_program(decoded).publish()
@@ -2279,8 +2279,8 @@ def test_scalar_wave_concrete_defaults_and_nested_containers():
     assert first_args[1].value is False
     assert get_callable_args(flag())[0].value is False
     assert [part.value for part in get_callable_args(message("x", True))] == ["x", True]
-    pair = Pair[String, Bool]("key", False)
-    mapping = Map[String, Bool].empty().insert("key", False)
+    pair = Pair[String, Bool]("key", False)  # type: ignore[arg-type]
+    mapping = Map[String, Bool].empty().insert("key", False)  # type: ignore[arg-type]
     assert tuple(part.value for part in pair.value) == ("key", False)
     assert mapping.value[String("key")].value is False
     assert isinstance(mapping[String("key")], Bool)
@@ -3335,13 +3335,13 @@ def test_function_source_records_defaults_and_metadata(doc, monkeypatch):
     assert record.has_field("doc") == (doc is not None)
     assert record.kind.field == "function"
     assert record.kind.value.name == "exact score"
-    expression = score(1)
+    expression = score(1)  # type: ignore[arg-type]
     assert str(expression) == "score(1)"
-    assert str(score(offset=3, x=1)) == "score(1, 3)"
-    assert str(set_(score(1, 2)).to(7)) == "set_(score(1)).to(i64(7))"
-    assert str(set_(score(1, 3)).to(7)) == "set_(score(1, 3)).to(i64(7))"
+    assert str(score(offset=3, x=1)) == "score(1, 3)"  # type: ignore[arg-type]
+    assert str(set_(score(1, 2)).to(7)) == "set_(score(1)).to(i64(7))"  # type: ignore[arg-type]
+    assert str(set_(score(1, 3)).to(7)) == "set_(score(1, 3)).to(i64(7))"  # type: ignore[arg-type]
     default.__egg_ref__ = i64(9).__egg_ref__
-    assert [a.value for a in get_callable_args(score(1))] == [1, 2]
+    assert [a.value for a in get_callable_args(score(1))] == [1, 2]  # type: ignore[arg-type]
     recovered = get_callable_fn(expression)
     assert recovered.__module__ == __name__
     assert recovered.__doc__ == doc
@@ -4125,8 +4125,8 @@ def test_public_union_action_freezes_canonical_operands_and_conversion(class_aut
         return UnionNode(value)
 
     converter(int, UnionNode, from_int)
-    lhs = UnionNode(1)
-    action = union(lhs).with_(2)
+    lhs = UnionNode(1)  # type: ignore[arg-type]
+    action = union(lhs).with_(2)  # type: ignore[arg-type]
     assert converted == [2]
     command = action.__egg_ref__.read()
     assert command.kind.field == "action"
@@ -4138,7 +4138,7 @@ def test_public_union_action_freezes_canonical_operands_and_conversion(class_aut
     assert StructuralView(root.owner.ref("sorts", node.sort_id)) == StructuralView(UnionNode.__egg_sort__)
     for index in node.kind.value.members:
         assert root.owner.ref("nodes", index).read().sort_id == node.sort_id
-    lhs.__replace_expr__(UnionNode(9))
+    lhs.__replace_expr__(UnionNode(9))  # type: ignore[arg-type]
     assert str(action) == "union(UnionNode(1)).with_(UnionNode(2))"
     assert str(union(lhs)) == "union(UnionNode(9))"
     with pytest.raises(ConvertError):
@@ -4268,12 +4268,12 @@ def test_action_equality_uses_commands_and_independent_declarations(monkeypatch)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     left = constant("score", i64, egg_name="score")
     right = constant("score", i64, egg_name="score")
-    first, second = set_(left).to(1), set_(right).to(1)
+    first, second = set_(left).to(1), set_(right).to(1)  # type: ignore[arg-type]
     assert first == second
     assert (first != second) is False
-    assert first != set_(right).to(2)
+    assert first != set_(right).to(2)  # type: ignore[arg-type]
     assert first != expr_action(right)
-    assert first != set_(constant("other", i64, egg_name="other")).to(1)
+    assert first != set_(constant("other", i64, egg_name="other")).to(1)  # type: ignore[arg-type]
     assert first.__eq__(object()) is NotImplemented
     with pytest.raises(TypeError, match="unhashable type: 'Action'"):
         hash(first)
@@ -4553,7 +4553,7 @@ def test_user_constructor_defaults_keywords_and_names_are_records(monkeypatch):
     assert get_callable_args(first, Num)[0].value == 5
     default.__replace_expr__(i64(9))
     assert get_callable_args(Num(), Num)[0].value == 5
-    assert expr_parts(Num(value=3)) == expr_parts(Num(3))
+    assert expr_parts(Num(value=3)) == expr_parts(Num(3))  # type: ignore[arg-type]
     assert Num.__egg_context__.prepare is None
     Num.__egg_attr_cache__.clear()
     Num.__egg_context__.catalog.members.clear()
@@ -4921,7 +4921,7 @@ def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
         def make(cls, x: i64 = default) -> "Node": ...
 
     expression = Node()
-    assert expr_parts(Node.score(expression, 2)) == expr_parts(expression.score(x=2))
+    assert expr_parts(Node.score(expression, 2)) == expr_parts(expression.score(x=2))  # type: ignore[arg-type]
     assert expr_parts(Node.weight(expression)) == expr_parts(expression.weight)
     assert str(expression.score()) == "Node().score()"
     assert str(expression.weight) == "Node().weight"
@@ -5110,8 +5110,8 @@ def test_eager_member_reverse_args_keep_callback_and_core_order(class_authoring_
     assert view.receiver == 1
     assert [parameter.core_input for parameter in view.params] == [0]
     assert str(RuntimeExpr(reference.owner.ref("nodes", primitive.body))) == "Pair[Reverse, i64](_1, _0)"
-    assert str(Reverse(1).ordered(2)) == "Reverse(1).ordered(2)"
-    pack([to_runtime_expr(Reverse(1).ordered(2)).__egg_ref__])
+    assert str(Reverse(1).ordered(2)) == "Reverse(1).ordered(2)"  # type: ignore[arg-type]
+    pack([to_runtime_expr(Reverse(1).ordered(2)).__egg_ref__])  # type: ignore[arg-type]
 
 
 def test_eager_member_eqsort_views_and_later_bodyless_member(class_authoring_without_engine):
@@ -6292,13 +6292,13 @@ def test_bodyless_free_mutation_owns_calls_and_aliases(class_authoring_without_e
     assert view.has_field("mutates")
     assert view.mutates == 0
     assert not view.has_field("receiver")
-    value = Mutable(1)
+    value = Mutable(1)  # type: ignore[arg-type]
     alias, original = value, copy(value)
     assert update(value) is None
     assert alias is value
     assert get_callable_fn(value) == update
     assert [expr_parts(argument) for argument in get_callable_args(value)] == [expr_parts(original), expr_parts(i64(4))]
-    assert expr_parts(original) == expr_parts(Mutable(1))
+    assert expr_parts(original) == expr_parts(Mutable(1))  # type: ignore[arg-type]
     encoded = pack([to_runtime_expr(value).__egg_ref__]).program.to_binary()
     assert pb.Program.from_binary(encoded).to_binary() == encoded
     root = to_runtime_expr(value).__egg_ref__
@@ -6323,7 +6323,7 @@ def test_canonical_mutation_display_keeps_sharing_and_reverse_slots(class_author
         @method(mutates_self=True, reverse_args=True)
         def update(self, label: String, amount: i64) -> None: ...
 
-    value = Mutable(1)
+    value = Mutable(1)  # type: ignore[arg-type]
     value.update(String("tag"), i64(2))
     expected = "_Mutable_1 = Mutable(1)\n_Mutable_1.update('tag', 2)\n_Mutable_1"
     assert str(value) == expected
@@ -6334,7 +6334,7 @@ def test_canonical_mutation_display_keeps_sharing_and_reverse_slots(class_author
         "_Mutable_1 = Mutable(1)\n_Mutable_1.update('tag', 2)\n"
         "_Mutable_2 = copy(_Mutable_1)\n_Mutable_2[3] = 4\n_Mutable_1 + _Mutable_2"
     )
-    del value[3]
+    del value[3]  # type: ignore[arg-type]
     assert (
         str(value)
         == "_Mutable_1 = Mutable(1)\n_Mutable_1.update('tag', 2)\n_Mutable_1[3] = 4\ndel _Mutable_1[3]\n_Mutable_1"
@@ -6362,12 +6362,12 @@ def test_eager_free_mutation_uses_original_formals_once(class_authoring_without_
     body = reference.owner.ref("nodes", primitive.body)
     assert body.read().kind.field == "var"
     assert body.read().kind.value == "_1"
-    value, other = Mutable(1), Mutable(2)
+    value, other = Mutable(1), Mutable(2)  # type: ignore[arg-type]
     original, other_root = copy(value), to_runtime_expr(other).__egg_ref__
     assert replace(value, other) is None
     assert replace(value, other) is None
     assert calls == [None]
-    assert expr_parts(original) == expr_parts(Mutable(1))
+    assert expr_parts(original) == expr_parts(Mutable(1))  # type: ignore[arg-type]
     assert to_runtime_expr(other).__egg_ref__ is other_root
     assert reference.read().bindings.python.views[0].has_field("mutates")
     encoded = pack([to_runtime_expr(value).__egg_ref__]).program.to_binary()
@@ -6507,7 +6507,7 @@ def test_bodyless_named_mutation_defaults_and_errors(class_authoring_without_eng
     assert expr_parts(arguments[0]) == expr_parts(original)
     assert [argument.value for argument in arguments[1:]] == [4, 5]
     prior = copy(receiver)
-    assert Accumulator.update(receiver, right=7, left=6) is None
+    assert Accumulator.update(receiver, right=7, left=6) is None  # type: ignore[arg-type]
     arguments = get_callable_args(receiver, Accumulator.update)
     assert expr_parts(arguments[0]) == expr_parts(prior)
     assert [argument.value for argument in arguments[1:]] == [6, 7]
@@ -6625,13 +6625,13 @@ def test_mutating_member_rewrite_keeps_original_binders(class_authoring_without_
             self.__replace_expr__(other)
             other.__replace_expr__(Mutable(9))
 
-    value, other = Mutable(1), Mutable(2)
+    value, other = Mutable(1), Mutable(2)  # type: ignore[arg-type]
     original = copy(value)
     other_root = to_runtime_expr(other).__egg_ref__
     assert value.replace(other) is None
     assert calls == [destination]
     assert to_runtime_expr(other).__egg_ref__ is other_root
-    assert expr_parts(original) == expr_parts(Mutable(1))
+    assert expr_parts(original) == expr_parts(Mutable(1))  # type: ignore[arg-type]
     declaration = resolve_callable(Mutable.replace).read()
     view = declaration.bindings.python.views[0]
     assert view.receiver == view.mutates == int(reverse)
@@ -6931,7 +6931,7 @@ def test_class_default_lhs_keeps_original_binders_after_wrapper_replacement(
 
         def body(self, value: i64) -> "Binders":
             if replace_receiver:
-                self.__replace_expr__(Binders(9))
+                self.__replace_expr__(Binders(9))  # type: ignore[arg-type]
                 return self
             value.__replace_expr__(i64(7))
             return Binders(value)
@@ -6996,7 +6996,7 @@ def test_user_sort_cannot_borrow_builtin_codec_or_members_by_name():
     class Shadow(Expr, egg_sort="i64"):
         def __init__(self, value: i64) -> None: ...
 
-    expression = Shadow(3)
+    expression = Shadow(3)  # type: ignore[arg-type]
     assert expression.__egg_ref__.read().kind.field == "call"
     assert get_callable_args(expression, Shadow)[0].value == 3
     with pytest.raises(AttributeError, match="member"):

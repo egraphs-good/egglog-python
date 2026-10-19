@@ -414,7 +414,7 @@ def test_scalar_wave_public_native_bytes() -> None:
                 assert graph.extract(expression).value is expected
     pair = graph.extract(Pair[String, Bool](String("a") + "b", ~Bool(True)))
     assert tuple(part.value for part in pair.value) == ("ab", False)
-    mapping = graph.extract(Map[String, Bool].empty().insert("key", Bool(False) | True))
+    mapping = graph.extract(Map[String, Bool].empty().insert("key", Bool(False) | True))  # type: ignore[arg-type]
     assert mapping.value[String("key")].value is True
 
 
@@ -467,7 +467,7 @@ def test_scalar_wave_functions_and_concrete_defaults_native_bytes() -> None:
     done = constant("done", Unit)
 
     graph = EGraph()
-    graph.register(set_(message()).to("hello"), set_(flag()).to(True), set_(done).to(Unit()))
+    graph.register(set_(message()).to("hello"), set_(flag()).to(True), set_(done).to(Unit()))  # type: ignore[arg-type]
     assert graph.extract(message()).value == "hello"
     assert graph.extract(flag()).value is True
     assert str(graph.extract(done)) == "Unit()"
@@ -958,15 +958,15 @@ def test_bodyless_free_function_public_bytes() -> None:
     @function(egg_fn="score with spaces")
     def score(x: i64, offset: i64 = i64(2)) -> i64: ...
 
-    expression = score(1)
+    expression = score(1)  # type: ignore[arg-type]
     assert str(expression) == "score(1)"
-    assert str(set_(expression).to(7)) == "set_(score(1)).to(i64(7))"
+    assert str(set_(expression).to(7)) == "set_(score(1)).to(i64(7))"  # type: ignore[arg-type]
     graph = EGraph()
     with pytest.raises(EggSmolError):
         graph.extract(expression)
-    graph.register(set_(score(offset=2, x=1)).to(i64(3) + 4))
-    assert graph.extract(score(1)).value == 7
-    graph.check(eq(score(1, 2)).to(i64(7)))
+    graph.register(set_(score(offset=2, x=1)).to(i64(3) + 4))  # type: ignore[arg-type]
+    assert graph.extract(score(1)).value == 7  # type: ignore[arg-type]
+    graph.check(eq(score(1, 2)).to(i64(7)))  # type: ignore[arg-type]
     with pytest.raises(ExprValueError):
         _ = expression.value
     with pytest.raises(EggSmolError, match="Illegal merge"):
@@ -983,10 +983,10 @@ def test_nullary_and_f64_free_functions_public_bytes() -> None:
     assert str(fixed) == "fixed"
     assert str(fixed()) == "fixed()"
     graph = EGraph()
-    graph.register(set_(fixed()).to(3), set_(measure(1.5)).to(f64(2.0) + 3.0))
+    graph.register(set_(fixed()).to(3), set_(measure(1.5)).to(f64(2.0) + 3.0))  # type: ignore[arg-type]
     assert graph.extract(fixed()).value == 3
-    assert graph.extract(measure(1.5)).value == 5.0
-    graph.check(eq(measure(1.5)).to(f64(5.0)))
+    assert graph.extract(measure(1.5)).value == 5.0  # type: ignore[arg-type]
+    graph.check(eq(measure(1.5)).to(f64(5.0)))  # type: ignore[arg-type]
 
 
 def test_free_constructor_function_recovers_local_output_hooks_through_bytes() -> None:
@@ -1091,8 +1091,8 @@ def test_user_constructor_public_bytes() -> None:
     assert get_callable_fn(result) == Num
     assert get_callable_args(result, Num)[0].value == result.value == 3
     assert str(result) == "Num(3)"
-    graph.check(eq(result).to(Num(3)))
-    assert graph.extract(Num(value=3)).value == 3
+    graph.check(eq(result).to(Num(3)))  # type: ignore[arg-type]
+    assert graph.extract(Num(value=3)).value == 3  # type: ignore[arg-type]
 
 
 def test_user_constructor_exact_names_and_retained_local_hooks() -> None:

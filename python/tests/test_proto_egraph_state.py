@@ -2255,7 +2255,7 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
             callbacks.append(1)
             return Result(value)
 
-    expression = Source(1).wrapped(2)
+    expression = Source(1).wrapped(2)  # type: ignore[arg-type]
     assert callbacks == [1]
     graph = EGraph()
     transport = graph._state.transport
@@ -2280,7 +2280,7 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
     matches = _run_ruleset_step(graph, selected)
     assert matches == ({"": 1} if seeded else {})
     if seeded:
-        graph.check(eq(expression).to(Result(2)))
+        graph.check(eq(expression).to(Result(2)))  # type: ignore[arg-type]
     else:
         assert _run_ruleset_step(graph, selected) == {}
     assert callbacks == [1]
@@ -2595,14 +2595,14 @@ def test_native_publication_keeps_independent_compatible_declaration_owners():
     left = constant("publication_owned_target", i64)
     right = constant("publication_owned_target", i64)
     assert left.__egg_ref__.owner is not right.__egg_ref__.owner
-    selected = ruleset(rule(name="first").then(set_(left).to(1)), name="owners")
+    selected = ruleset(rule(name="first").then(set_(left).to(1)), name="owners")  # type: ignore[arg-type]
     graph = EGraph()
     assert _run_ruleset_step(graph, selected) == {"first": 1}
-    selected.append(rule(name="second").then(set_(right).to(1)))
+    selected.append(rule(name="second").then(set_(right).to(1)))  # type: ignore[arg-type]
     assert _run_ruleset_step(graph, selected) == {"second": 1}
-    graph.check(eq(left).to(1), eq(right).to(1))
-    graph.check(eq(left).to(1))
-    graph.check(eq(right).to(1))
+    graph.check(eq(left).to(1), eq(right).to(1))  # type: ignore[arg-type]
+    graph.check(eq(left).to(1))  # type: ignore[arg-type]
+    graph.check(eq(right).to(1))  # type: ignore[arg-type]
 
 
 def test_native_registration_materializes_generator_before_execution(native_rule_program):
