@@ -2601,16 +2601,31 @@ def test_check_fail_authors_one_canonical_nested_command(monkeypatch):
     graph = EGraph()
     graph.check_fail(eq(i64(1)).to(i64(2)))
     program = requests[0].program
+    assert program is not None
     assert len(program.commands) == 1
-    assert program.commands[0].kind.field == "fail"
-    check = program.commands[0].kind.value
-    assert check.kind.field == "check"
-    assert len(check.kind.value.facts) == 1
-    fact = program.nodes[check.kind.value.facts[0]]
-    assert fact.kind.field == "union"
-    assert [program.nodes[index].kind.value.value.value for index in fact.kind.value.members] == [1, 2]
+    fail_kind = program.commands[0].kind
+    assert fail_kind is not None
+    assert fail_kind.field == "fail"
+    check = fail_kind.value
+    check_kind = check.kind
+    assert check_kind is not None
+    assert check_kind.field == "check"
+    assert len(check_kind.value.facts) == 1
+    fact = program.nodes[check_kind.value.facts[0]]
+    fact_kind = fact.kind
+    assert fact_kind is not None
+    assert fact_kind.field == "union"
+    assert [program.nodes[index].kind.value.value.value for index in fact_kind.value.members] == [1, 2]
     graph.check_fail()
-    assert requests[1].program.commands[0].kind.value.kind.value.facts == []
+    empty_program = requests[1].program
+    assert empty_program is not None
+    empty_fail = empty_program.commands[0].kind
+    assert empty_fail is not None
+    assert empty_fail.field == "fail"
+    empty_check = empty_fail.value.kind
+    assert empty_check is not None
+    assert empty_check.field == "check"
+    assert empty_check.value.facts == []
 
 
 @pytest.mark.parametrize("shape", ["empty", "other", "multiple"])
@@ -2782,26 +2797,74 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
     graph.register(set_(current).to(i64(1)), current, set_(later).to(current + 2), later)
     assert len(requests) == 1
     program = requests[0].program
-    assert [command.kind.value.kind.field for command in program.commands] == ["set", "term", "set", "term"]
-    first = program.commands[0].kind.value.kind.value
-    second = program.commands[2].kind.value.kind.value
-    assert program.nodes[program.commands[1].kind.value.kind.value].kind.value.func == first.target.func
-    assert program.nodes[program.commands[3].kind.value.kind.value].kind.value.func == second.target.func
-    definitions = {declaration.kind.value.name: declaration for declaration in program.declarations}
-    assert definitions[first.target.func].kind.field == "function"
-    assert definitions[second.target.func].bindings.python.views[0].kind == pb.PythonCallKind.CONSTANT
-    rhs = program.nodes[second.value].kind.value
+    assert program is not None
+    action_kinds = []
+    for command in program.commands:
+        command_kind = command.kind
+        assert command_kind is not None
+        assert command_kind.field == "action"
+        action_kind = command_kind.value.kind
+        assert action_kind is not None
+        action_kinds.append(action_kind)
+    assert [kind.field for kind in action_kinds] == ["set", "term", "set", "term"]
+    first_kind, first_term, second_kind, second_term = action_kinds
+    assert first_kind.field == "set"
+    assert first_term.field == "term"
+    assert second_kind.field == "set"
+    assert second_term.field == "term"
+    first = first_kind.value
+    second = second_kind.value
+    first_call = program.nodes[first_term.value].kind
+    assert first_call is not None
+    assert first_call.field == "call"
+    assert first_call.value.func == first.target.func
+    second_call = program.nodes[second_term.value].kind
+    assert second_call is not None
+    assert second_call.field == "call"
+    assert second_call.value.func == second.target.func
+    definitions = {}
+    for declaration in program.declarations:
+        declaration_kind = declaration.kind
+        assert declaration_kind is not None
+        definitions[declaration_kind.value.name] = declaration
+    first_definition = definitions[first.target.func].kind
+    assert first_definition is not None
+    assert first_definition.field == "function"
+    second_bindings = definitions[second.target.func].bindings
+    assert second_bindings is not None
+    assert second_bindings.python is not None
+    assert second_bindings.python.views[0].kind == pb.PythonCallKind.CONSTANT
+    rhs_kind = program.nodes[second.value].kind
+    assert rhs_kind is not None
+    assert rhs_kind.field == "call"
+    rhs = rhs_kind.value
     assert rhs.func == "egglog.core.i64.add"
-    assert program.nodes[rhs.args[0]].kind.value.func == first.target.func
+    rhs_argument = program.nodes[rhs.args[0]].kind
+    assert rhs_argument is not None
+    assert rhs_argument.field == "call"
+    assert rhs_argument.value.func == first.target.func
     condition = eq(i64(1)).to(i64(1))
     original = condition.__egg_ref__.read().to_binary()
     graph.register(set_(current).to(i64(1)), condition)
     assert len(requests) == 2
     program = requests[1].program
-    assert [command.kind.value.kind.field for command in program.commands] == ["set", "term"]
-    union = program.nodes[program.commands[1].kind.value.kind.value]
-    assert union.kind.field == "union"
-    assert [program.nodes[index].kind.value.value.value for index in union.kind.value.members] == [1, 1]
+    assert program is not None
+    action_kinds = []
+    for command in program.commands:
+        command_kind = command.kind
+        assert command_kind is not None
+        assert command_kind.field == "action"
+        action_kind = command_kind.value.kind
+        assert action_kind is not None
+        action_kinds.append(action_kind)
+    assert [kind.field for kind in action_kinds] == ["set", "term"]
+    _, term_kind = action_kinds
+    assert term_kind.field == "term"
+    union = program.nodes[term_kind.value]
+    union_kind = union.kind
+    assert union_kind is not None
+    assert union_kind.field == "union"
+    assert [program.nodes[index].kind.value.value.value for index in union_kind.value.members] == [1, 1]
     assert condition.__egg_ref__.read().to_binary() == original
     graph._state.destroy()
 
