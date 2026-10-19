@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Literal
 
 import pytest
 
@@ -172,7 +173,7 @@ def test_proto_report_combined_routes_and_historical_names(mutation):
 
     combined = (ruleset(rule(name="first").then()) | ruleset(rule(name="selected").then()))._snapshot({})
     request = pack([combined])
-    root = pb.RulesetRef(kind=Oneof("index", request.indices[0]))
+    root = pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", request.indices[0]))
     attribution = pb.RuleAttribution(root=root, children=[1], rule=0, name="selected")
     row = pb.RuleCountEntry(rule=0, direction=pb.NativeRuleDirection.SINGLE, native_name="physical", value=7)
     response = pb.RunProgramResponse(rules=[attribution])  # No response nodes/sorts stand in for request arenas.
@@ -181,7 +182,7 @@ def test_proto_report_combined_routes_and_historical_names(mutation):
     state.handle = None
     state.definitions = {("ruleset", "retained-version"): combined}
     if mutation == "root":
-        root.kind = Oneof("index", len(request.rulesets))
+        root.kind = Oneof[Literal["index"], int]("index", len(request.rulesets))
     elif mutation == "route":
         attribution.children = [2]
     elif mutation == "ordinal":
@@ -197,7 +198,7 @@ def test_proto_report_combined_routes_and_historical_names(mutation):
             RunReport._from_proto(native, response, request, state)
         return
     indexed = RunReport._from_proto(native, response, request, state)
-    root.kind = Oneof("name", "retained-version")
+    root.kind = Oneof[Literal["name"], str]("name", "retained-version")
     historical = RunReport._from_proto(native, response, pack([]), state)
     assert indexed.num_matches_per_rule == historical.num_matches_per_rule
     (key,) = indexed.num_matches_per_rule
@@ -383,7 +384,7 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
     created = pb.CreateEGraphResponse.from_binary(
         engine.create(
             pb.CreateEGraphRequest(
-                sorts=[pb.Sort(kind=Oneof("family", pb.HostSort(name="i64")))],
+                sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
                 options=pb.EGraphOptions(cost_sort=0, seminaive=True),
                 threads=1,
             ).to_binary()

@@ -38,18 +38,20 @@ def test_sort_text_alias_metadata_survives_copy_and_pack_without_affecting_ident
     sorts = []
     for symbols in ([], ["A"], ["Z"], ["A", "Z"]):
         builder = Builder()
-        scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
+        scalar = builder.add(
+            "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+        )
         index = builder.add(
             "sorts",
             pb.Sort(
-                kind=Oneof("family", pb.HostSort(name="Vec", args=[scalar])),
+                kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[scalar])),
                 egglog_aliases=[pb.EgglogTypeBinding(symbol=s) for s in symbols],
             ),
         )
         sort = builder.publish().ref("sorts", index)
         sorts.append(StructuralView(sort))
         imported = Builder()
-        imported.add("sorts", pb.Sort(kind=Oneof("eq", "unused")))
+        imported.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "unused")))
         copied = imported.import_ref(sort)
         copied = imported.publish().ref("sorts", copied)
         assert [a.symbol for a in copied.read().egglog_aliases] == symbols
@@ -382,11 +384,11 @@ def test_action_equality_compares_union_syntax_in_declaration_closure(action_pro
 def union_action_graph():
     return pb.Program(
         ir_version=1,
-        sorts=[pb.Sort(kind=Oneof("eq", "E"))],
-        declarations=[pb.Declaration(kind=Oneof("eq_sort", pb.EqSort(name="E")))]
+        sorts=[pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E"))],
+        declarations=[pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="E")))]
         + [
             pb.Declaration(
-                kind=Oneof(
+                kind=Oneof[Literal["constructor"], pb.Constructor](
                     "constructor", pb.Constructor(name=name, inputs=[pb.Arg(sort=0) for _ in range(arity)], output=0)
                 )
             )
@@ -397,22 +399,42 @@ def union_action_graph():
 
 def test_action_equality_has_finite_shared_cycle_proofs(union_action_graph):
     union_action_graph.nodes = [
-        pb.Node(kind=Oneof("union", pb.Union(members=[1]))),
-        pb.Node(kind=Oneof("call", pb.Call(func="F", args=[0]))),
+        pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[1]))),
+        pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="F", args=[0]))),
     ]
     union_action_graph.commands = [
-        pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", index)))) for index in range(2)
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action", pb.Action(kind=Oneof[Literal["term"], int]("term", index))
+            )
+        )
+        for index in range(2)
     ]
     source = Builder.from_program(union_action_graph).publish()
     builder = Builder()
     sort = builder.import_ref(source.ref("sorts", 0))
     u, f = [builder.import_ref(source.ref("nodes", index)) for index in range(2)]
-    g0 = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("call", pb.Call(func="F", args=[u]))))
-    v = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("union", pb.Union(members=[f]))))
-    g = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("call", pb.Call(func="F", args=[v]))))
-    w = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("union", pb.Union(members=[g]))))
+    g0 = builder.add(
+        "nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="F", args=[u])))
+    )
+    v = builder.add(
+        "nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[f])))
+    )
+    g = builder.add(
+        "nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="F", args=[v])))
+    )
+    w = builder.add(
+        "nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[g])))
+    )
     for index in (u, f, g0, v, g, w):
-        builder.add("commands", pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", index)))))
+        builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action", pb.Action(kind=Oneof[Literal["term"], int]("term", index))
+                )
+            ),
+        )
     owner = builder.publish()
     actions = [Action(owner.ref("commands", index)) for index in range(6)]
     for group in ([actions[index] for index in (0, 3, 5)], [actions[index] for index in (1, 2, 4)]):
@@ -438,10 +460,23 @@ def test_action_equality_has_finite_shared_cycle_proofs(union_action_graph):
         merge_index = declaration.import_ref(owner.ref("nodes", merge))
         declaration.add(
             "declarations",
-            pb.Declaration(kind=Oneof("function", pb.Function(name="slot", output=output, merge=merge_index))),
+            pb.Declaration(
+                kind=Oneof[Literal["function"], pb.Function](
+                    "function", pb.Function(name="slot", output=output, merge=merge_index)
+                )
+            ),
         )
-        root = declaration.add("nodes", pb.Node(sort_id=output, kind=Oneof("call", pb.Call(func="slot"))))
-        command = declaration.add("commands", pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", root)))))
+        root = declaration.add(
+            "nodes", pb.Node(sort_id=output, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="slot")))
+        )
+        command = declaration.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action", pb.Action(kind=Oneof[Literal["term"], int]("term", root))
+                )
+            ),
+        )
         return Action(declaration.publish().ref("commands", command))
 
     first, second, third = [merge_action(index) for index in (u, v, w)]
@@ -450,11 +485,16 @@ def test_action_equality_has_finite_shared_cycle_proofs(union_action_graph):
 
 
 def test_action_equality_keeps_empty_anchors_under_structural_parents(union_action_graph):
-    union_action_graph.nodes = [pb.Node(kind=Oneof("union", pb.Union())) for _ in range(2)] + [
-        pb.Node(kind=Oneof("call", pb.Call(func="F", args=[index]))) for index in (0, 1, 0)
-    ]
+    union_action_graph.nodes = [
+        pb.Node(kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())) for _ in range(2)
+    ] + [pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="F", args=[index]))) for index in (0, 1, 0)]
     union_action_graph.commands = [
-        pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", index)))) for index in range(5)
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action", pb.Action(kind=Oneof[Literal["term"], int]("term", index))
+            )
+        )
+        for index in range(5)
     ]
     owner = Builder.from_program(union_action_graph).publish()
     empty, other, first, different, same = [Action(owner.ref("commands", index)) for index in range(5)]
@@ -472,9 +512,14 @@ def test_action_equality_keeps_empty_anchors_under_structural_parents(union_acti
 def test_action_equality_does_not_validate_or_coinductively_merge_cycles(union_action_graph, length):
     # Addressable but native-invalid: comparison is not submission validation.
     union_action_graph.nodes = [
-        pb.Node(kind=Oneof("call", pb.Call(func="F", args=[(index + 1) % length]))) for index in range(length)
+        pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="F", args=[(index + 1) % length])))
+        for index in range(length)
     ]
-    union_action_graph.commands = [pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", 0))))]
+    union_action_graph.commands = [
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action]("action", pb.Action(kind=Oneof[Literal["term"], int]("term", 0)))
+        )
+    ]
     left, right = [Action(Builder.from_program(union_action_graph).publish().ref("commands", 0)) for _ in range(2)]
     assert left == copy(left)
     assert left != right
@@ -488,17 +533,29 @@ def test_action_equality_is_iterative_and_dag_safe(union_action_graph, monkeypat
     node_counts = []
     for width in (1, 2):
         builder = Builder.from_program(union_action_graph)
-        roots = [builder.add("nodes", pb.Node(kind=Oneof("call", pb.Call(func="C"))))]
+        roots = [builder.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="C"))))]
         for _ in range(depth):
             children = [roots[index % len(roots)] for index in range(arity)]
             roots = [
                 builder.add(
-                    "nodes", pb.Node(kind=Oneof("call", pb.Call(func="F" if arity == 1 else "Pair", args=children)))
+                    "nodes",
+                    pb.Node(
+                        kind=Oneof[Literal["call"], pb.Call](
+                            "call", pb.Call(func="F" if arity == 1 else "Pair", args=children)
+                        )
+                    ),
                 )
                 for _ in range(width)
             ]
         node_counts.append(1 + depth * width)
-        command = builder.add("commands", pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", roots[0])))))
+        command = builder.add(
+            "commands",
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action", pb.Action(kind=Oneof[Literal["term"], int]("term", roots[0]))
+                )
+            ),
+        )
         actions.append(Action(builder.publish().ref("commands", command)))
     visits = 0
     original = _program._structural_parts
@@ -626,20 +683,41 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
     for offset in range(2):
         builder = Builder()
         if offset:
-            builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="f64"))))
-        scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
-        builder.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="i64"))))
+            builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="f64"))))
+        scalar = builder.add(
+            "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+        )
+        builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                    "host_sort_family", pb.HostSortFamily(name="i64")
+                )
+            ),
+        )
         definition = builder.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof("function", pb.Function(name="composed", inputs=[pb.Arg(sort=scalar)], output=scalar))
+                kind=Oneof[Literal["function"], pb.Function](
+                    "function", pb.Function(name="composed", inputs=[pb.Arg(sort=scalar)], output=scalar)
+                )
             ),
         )
         value = builder.add(
             "nodes",
-            pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 4 + offset)))),
+            pb.Node(
+                sort_id=scalar,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 4 + offset))
+                ),
+            ),
         )
-        call = builder.add("nodes", pb.Node(sort_id=scalar, kind=Oneof("call", pb.Call(func="composed", args=[value]))))
+        call = builder.add(
+            "nodes",
+            pb.Node(
+                sort_id=scalar, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="composed", args=[value]))
+            ),
+        )
         owner = builder.publish()
         producers.append((owner.ref("sorts", scalar), owner.ref("declarations", definition), owner.ref("nodes", call)))
     left, right = producers
@@ -656,7 +734,7 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
         wrapper = builder.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof(
+                kind=Oneof[Literal["primitive"], pb.Primitive](
                     "primitive",
                     pb.Primitive(
                         name="wrapper",
@@ -688,17 +766,37 @@ def test_compatible_definition_does_not_hide_conflicting_named_dependency(foreig
     roots = []
     for value in (4, 9):
         builder = Builder()
-        scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
-        builder.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="i64"))))
-        literal = builder.add(
-            "nodes",
-            pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", value)))),
+        scalar = builder.add(
+            "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
         )
         builder.add(
             "declarations",
-            pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="dependency", output=scalar, body=literal))),
+            pb.Declaration(
+                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                    "host_sort_family", pb.HostSortFamily(name="i64")
+                )
+            ),
         )
-        call = builder.add("nodes", pb.Node(sort_id=scalar, kind=Oneof("call", pb.Call(func="dependency"))))
+        literal = builder.add(
+            "nodes",
+            pb.Node(
+                sort_id=scalar,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", value))
+                ),
+            ),
+        )
+        builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof[Literal["primitive"], pb.Primitive](
+                    "primitive", pb.Primitive(name="dependency", output=scalar, body=literal)
+                )
+            ),
+        )
+        call = builder.add(
+            "nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="dependency")))
+        )
         if foreign_body_owner:
             foreign = builder.publish()
             builder = Builder()
@@ -706,7 +804,11 @@ def test_compatible_definition_does_not_hide_conflicting_named_dependency(foreig
             call = builder.import_ref(foreign.ref("nodes", call))
         wrapper = builder.add(
             "declarations",
-            pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="wrapper", output=scalar, body=call))),
+            pb.Declaration(
+                kind=Oneof[Literal["primitive"], pb.Primitive](
+                    "primitive", pb.Primitive(name="wrapper", output=scalar, body=call)
+                )
+            ),
         )
         roots.append(builder.publish().ref("declarations", wrapper))
     assert StructuralView(roots[0]) == StructuralView(roots[1])
@@ -721,17 +823,35 @@ def test_definition_reconciliation_preserves_literal_bits_and_union_identity(bod
     for index in range(2):
         builder = Builder()
         if body_kind == "signed_zero":
-            scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="f64"))))
-            builder.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="f64"))))
-            kind = Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("f64_bits", index << 63)))
+            scalar = builder.add(
+                "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="f64")))
+            )
+            builder.add(
+                "declarations",
+                pb.Declaration(
+                    kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                        "host_sort_family", pb.HostSortFamily(name="f64")
+                    )
+                ),
+            )
+            kind = Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["f64_bits"], int]("f64_bits", index << 63))
+            )
         else:
-            scalar = builder.add("sorts", pb.Sort(kind=Oneof("eq", "E")))
-            builder.add("declarations", pb.Declaration(kind=Oneof("eq_sort", pb.EqSort(name="E"))))
-            kind = Oneof("union", pb.Union())
+            scalar = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E")))
+            builder.add(
+                "declarations",
+                pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="E"))),
+            )
+            kind = Oneof[Literal["union"], pb.Union]("union", pb.Union())
         body = builder.add("nodes", pb.Node(sort_id=scalar, kind=kind))
         definition = builder.add(
             "declarations",
-            pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="body", output=scalar, body=body))),
+            pb.Declaration(
+                kind=Oneof[Literal["primitive"], pb.Primitive](
+                    "primitive", pb.Primitive(name="body", output=scalar, body=body)
+                )
+            ),
         )
         roots.append(builder.publish().ref("declarations", definition))
     if body_kind == "signed_zero":
@@ -746,24 +866,46 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
     roots = []
     for value in (4, 9):
         foreign = Builder()
-        scalar = foreign.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
+        scalar = foreign.add(
+            "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+        )
         body = foreign.add(
             "nodes",
-            pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", value)))),
+            pb.Node(
+                sort_id=scalar,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", value))
+                ),
+            ),
         )
         foreign.add(
             "declarations",
-            pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="dependency", output=scalar, body=body))),
+            pb.Declaration(
+                kind=Oneof[Literal["primitive"], pb.Primitive](
+                    "primitive", pb.Primitive(name="dependency", output=scalar, body=body)
+                )
+            ),
         )
-        call = foreign.add("nodes", pb.Node(sort_id=scalar, kind=Oneof("call", pb.Call(func="dependency"))))
+        call = foreign.add(
+            "nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="dependency")))
+        )
         foreign_owner = foreign.publish()
         builder = Builder()
-        scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
-        builder.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="i64"))))
+        scalar = builder.add(
+            "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+        )
         builder.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof(
+                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                    "host_sort_family", pb.HostSortFamily(name="i64")
+                )
+            ),
+        )
+        builder.add(
+            "declarations",
+            pb.Declaration(
+                kind=Oneof[Literal["primitive"], pb.Primitive](
                     "primitive",
                     pb.Primitive(
                         name="unused",
@@ -775,7 +917,12 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
         )
         literal = builder.add(
             "nodes",
-            pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", value)))),
+            pb.Node(
+                sort_id=scalar,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", value))
+                ),
+            ),
         )
         roots.append(builder.publish().ref("nodes", literal))
     packed = pack(roots)
@@ -786,29 +933,71 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
 @pytest.mark.parametrize("mapped_first", [False, True])
 def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypatch, mapped_first):
     foreign = Builder()
-    scalar = foreign.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
-    foreign.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="i64"))))
-    nine = foreign.add(
-        "nodes", pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 9))))
+    scalar = foreign.add(
+        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
     )
     foreign.add(
-        "declarations", pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="f", output=scalar, body=nine)))
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                "host_sort_family", pb.HostSortFamily(name="i64")
+            )
+        ),
     )
-    call = foreign.add("nodes", pb.Node(sort_id=scalar, kind=Oneof("call", pb.Call(func="f"))))
+    nine = foreign.add(
+        "nodes",
+        pb.Node(
+            sort_id=scalar,
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 9))
+            ),
+        ),
+    )
+    foreign.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["primitive"], pb.Primitive](
+                "primitive", pb.Primitive(name="f", output=scalar, body=nine)
+            )
+        ),
+    )
+    call = foreign.add(
+        "nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f")))
+    )
     foreign_owner = foreign.publish()
     builder = Builder()
-    scalar = builder.add("sorts", pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))))
-    builder.add("declarations", pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="i64"))))
+    scalar = builder.add(
+        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+    )
+    builder.add(
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                "host_sort_family", pb.HostSortFamily(name="i64")
+            )
+        ),
+    )
     four = builder.add(
-        "nodes", pb.Node(sort_id=scalar, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 4))))
+        "nodes",
+        pb.Node(
+            sort_id=scalar,
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 4))
+            ),
+        ),
     )
     first = builder.add(
-        "declarations", pb.Declaration(kind=Oneof("primitive", pb.Primitive(name="f", output=scalar, body=four)))
+        "declarations",
+        pb.Declaration(
+            kind=Oneof[Literal["primitive"], pb.Primitive](
+                "primitive", pb.Primitive(name="f", output=scalar, body=four)
+            )
+        ),
     )
     wrapper = builder.add(
         "declarations",
         pb.Declaration(
-            kind=Oneof(
+            kind=Oneof[Literal["primitive"], pb.Primitive](
                 "primitive",
                 pb.Primitive(
                     name="wrapper",

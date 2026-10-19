@@ -70,7 +70,14 @@ def test_source_recording_commits_only_valid_acknowledgements(monkeypatch, outco
     state = EGraphState(save_egglog_string=True)
     builder = Builder()
     root = builder.import_ref(i64(1).__egg_ref__)
-    command = builder.add("commands", pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", root)))))
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["action"], pb.Action](
+                "action", pb.Action(kind=Oneof[Literal["term"], int]("term", root))
+            )
+        ),
+    )
     expected = {
         "preflight": ValueError,
         "transport": ValueError,
@@ -124,8 +131,11 @@ def test_source_recording_does_not_exempt_freeze_with_installation(monkeypatch):
     monkeypatch.setattr(bindings, "_ProtoEngine", ClosedTransport)
     state = EGraphState(save_egglog_string=True)
     builder = Builder()
-    declaration = builder.add("declarations", pb.Declaration(kind=Oneof("eq_sort", pb.EqSort(name="not-installed"))))
-    command = builder.add("commands", pb.Command(kind=Oneof("freeze", pb.Freeze())))
+    declaration = builder.add(
+        "declarations",
+        pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="not-installed"))),
+    )
+    command = builder.add("commands", pb.Command(kind=Oneof[Literal["freeze"], pb.Freeze]("freeze", pb.Freeze())))
     owner = builder.publish()
     with pytest.raises(ValueError, match="has been closed"):
         state.run_program([owner.ref("commands", command)], roots=[owner.ref("declarations", declaration)])
@@ -326,9 +336,9 @@ def test_host_model_contract_rejects_before_callbacks(case):
     sorts = pb.Program(
         ir_version=1,
         sorts=[
-            pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))),
-            pb.Sort(kind=Oneof("family", pb.HostSort(name="PyObject"))),
-            pb.Sort(kind=Oneof("family", pb.HostSort(name="bool"))),
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="PyObject"))),
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="bool"))),
         ],
     )
 
@@ -342,12 +352,18 @@ def test_host_model_contract_rejects_before_callbacks(case):
         builder = Builder()
         sort = builder.add("sorts", sorts.sorts[0])
         root = builder.add(
-            "nodes", pb.Node(sort_id=sort, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 1))))
+            "nodes",
+            pb.Node(
+                sort_id=sort,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
+                ),
+            ),
         )
         command = builder.add(
             "commands",
             pb.Command(
-                kind=Oneof(
+                kind=Oneof[Literal["extract"], pb.Extract](
                     "extract",
                     pb.Extract(
                         roots=[root],
@@ -487,20 +503,30 @@ def _callback_program(tag, callback=_observed_pyerr_callback):
         program.nodes.append(
             pb.Node(
                 sort_id=sort,
-                kind=Oneof(
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                     "primitive_value",
-                    pb.PrimitiveValue(value=Oneof("custom", pb.CustomValue(payload=cloudpickle.dumps(value)))),
+                    pb.PrimitiveValue(
+                        value=Oneof[Literal["custom"], pb.CustomValue](
+                            "custom", pb.CustomValue(payload=cloudpickle.dumps(value))
+                        )
+                    ),
                 ),
             )
         )
     program.nodes.append(
         pb.Node(
             sort_id=sort,
-            kind=Oneof("call", pb.Call(func="egglog.python.pyobject.call", args=[first, first + 1])),
+            kind=Oneof[Literal["call"], pb.Call](
+                "call", pb.Call(func="egglog.python.pyobject.call", args=[first, first + 1])
+            ),
         )
     )
     program.commands.append(
-        pb.Command(kind=Oneof("extract", pb.Extract(roots=[first + 2], variants=1, extractor=pb.Extractor.TREE)))
+        pb.Command(
+            kind=Oneof[Literal["extract"], pb.Extract](
+                "extract", pb.Extract(roots=[first + 2], variants=1, extractor=pb.Extractor.TREE)
+            )
+        )
     )
     return program, first
 
@@ -607,9 +633,16 @@ def test_callback_error_original_identity_and_adoption(table_transport, callback
     program, first = _callback_program(kind)
     # A completed ordinary Custom output must survive the later callback error.
     program.commands.insert(
-        0, pb.Command(kind=Oneof("extract", pb.Extract(roots=[first + 1], variants=1, extractor=pb.Extractor.TREE)))
+        0,
+        pb.Command(
+            kind=Oneof[Literal["extract"], pb.Extract](
+                "extract", pb.Extract(roots=[first + 1], variants=1, extractor=pb.Extractor.TREE)
+            )
+        ),
     )
-    program.rulesets.append(pb.Ruleset(name="host_error_published", kind=Oneof("rules", pb.RuleList())))
+    program.rulesets.append(
+        pb.Ruleset(name="host_error_published", kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList()))
+    )
     source = Builder.from_program(program).publish()
     published = source.ref("rulesets", len(program.rulesets) - 1)
     packed = pack(commands=[source.ref("commands", index) for index in range(2)], roots=[published])
@@ -879,27 +912,48 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
         marks.append((len(program.nodes), len(program.nodes) + 1))
         for number in (key, value):
             program.nodes.append(
-                pb.Node(sort_id=integer, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", number))))
+                pb.Node(
+                    sort_id=integer,
+                    kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                        "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", number))
+                    ),
+                )
             )
     unit_value = len(program.nodes)
     program.nodes.append(
-        pb.Node(sort_id=unit, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("unit", pb.Unit()))))
+        pb.Node(
+            sort_id=unit,
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["unit"], pb.Unit]("unit", pb.Unit()))
+            ),
+        )
     )
     x, y = len(program.nodes), len(program.nodes) + 1
-    program.nodes.extend([pb.Node(sort_id=pyobject, kind=Oneof("var", name)) for name in ("x", "y")])
+    program.nodes.extend([
+        pb.Node(sort_id=pyobject, kind=Oneof[Literal["var"], str]("var", name)) for name in ("x", "y")
+    ])
     seed = len(program.nodes)
-    program.nodes.append(pb.Node(sort_id=unit, kind=Oneof("call", pb.Call(func="handoff_seed", args=[x]))))
+    program.nodes.append(
+        pb.Node(sort_id=unit, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="handoff_seed", args=[x])))
+    )
     query_call = len(program.nodes)
     program.nodes.append(
-        pb.Node(sort_id=pyobject, kind=Oneof("call", pb.Call(func="egglog.python.pyobject.call", args=[first, x])))
+        pb.Node(
+            sort_id=pyobject,
+            kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.python.pyobject.call", args=[first, x])),
+        )
     )
     later_argument = len(program.nodes)
     program.nodes.append(
         pb.Node(
             sort_id=pyobject,
-            kind=Oneof(
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value",
-                pb.PrimitiveValue(value=Oneof("custom", pb.CustomValue(payload=cloudpickle.dumps("later")))),
+                pb.PrimitiveValue(
+                    value=Oneof[Literal["custom"], pb.CustomValue](
+                        "custom", pb.CustomValue(payload=cloudpickle.dumps("later"))
+                    )
+                ),
             ),
         )
     )
@@ -907,32 +961,40 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
     program.nodes.append(
         pb.Node(
             sort_id=pyobject,
-            kind=Oneof("call", pb.Call(func="egglog.python.pyobject.call", args=[first, later_argument])),
+            kind=Oneof[Literal["call"], pb.Call](
+                "call", pb.Call(func="egglog.python.pyobject.call", args=[first, later_argument])
+            ),
         )
     )
     program.declarations.extend([
         pb.Declaration(
-            kind=Oneof("function", pb.Function(name="handoff_mark", inputs=[pb.Arg(sort=integer)], output=integer))
+            kind=Oneof[Literal["function"], pb.Function](
+                "function", pb.Function(name="handoff_mark", inputs=[pb.Arg(sort=integer)], output=integer)
+            )
         ),
         pb.Declaration(
-            kind=Oneof("function", pb.Function(name="handoff_seed", inputs=[pb.Arg(sort=pyobject)], output=unit))
+            kind=Oneof[Literal["function"], pb.Function](
+                "function", pb.Function(name="handoff_seed", inputs=[pb.Arg(sort=pyobject)], output=unit)
+            )
         ),
     ])
     for name, call in (("handoff_first", query_call), ("handoff_later", later_call)):
         query = len(program.nodes)
-        program.nodes.append(pb.Node(sort_id=pyobject, kind=Oneof("union", pb.Union(members=[y, call]))))
+        program.nodes.append(
+            pb.Node(sort_id=pyobject, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[y, call])))
+        )
         rule = len(program.rules)
         program.rules.append(
             pb.RuleDecl(
                 name=name,
                 eval_mode=pb.RuleEvalMode.SEMINAIVE,
-                kind=Oneof(
+                kind=Oneof[Literal["rule"], pb.Rule](
                     "rule",
                     pb.Rule(
                         query=[seed, query],
                         head=[
                             pb.Action(
-                                kind=Oneof(
+                                kind=Oneof[Literal["set"], pb.Set](
                                     "set",
                                     pb.Set(target=pb.Call(func="handoff_mark", args=[marks[2][0]]), value=marks[2][1]),
                                 )
@@ -942,13 +1004,17 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
                 ),
             )
         )
-        program.rulesets.append(pb.Ruleset(name=name, kind=Oneof("rules", pb.RuleList(rules=[rule]))))
+        program.rulesets.append(
+            pb.Ruleset(name=name, kind=Oneof[Literal["rules"], pb.RuleList]("rules", pb.RuleList(rules=[rule])))
+        )
     program.commands = [
         pb.Command(
-            kind=Oneof(
+            kind=Oneof[Literal["action"], pb.Action](
                 "action",
                 pb.Action(
-                    kind=Oneof("set", pb.Set(target=pb.Call(func="handoff_seed", args=[first + 1]), value=unit_value))
+                    kind=Oneof[Literal["set"], pb.Set](
+                        "set", pb.Set(target=pb.Call(func="handoff_seed", args=[first + 1]), value=unit_value)
+                    )
                 ),
             )
         )
@@ -961,9 +1027,13 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
         assert callback_observations["first"]["calls"] == callback_observations["later"]["calls"] == 0
         program.commands = [
             pb.Command(
-                kind=Oneof(
+                kind=Oneof[Literal["action"], pb.Action](
                     "action",
-                    pb.Action(kind=Oneof("set", pb.Set(target=pb.Call(func="handoff_mark", args=[key]), value=value))),
+                    pb.Action(
+                        kind=Oneof[Literal["set"], pb.Set](
+                            "set", pb.Set(target=pb.Call(func="handoff_mark", args=[key]), value=value)
+                        )
+                    ),
                 )
             )
             for key, value in marks[:2]
@@ -972,24 +1042,39 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
             1,
             pb.Command(
                 kind=(
-                    Oneof("extract", pb.Extract(roots=[first + 2], variants=1, extractor=pb.Extractor.TREE))
+                    Oneof[Literal["extract"], pb.Extract](
+                        "extract", pb.Extract(roots=[first + 2], variants=1, extractor=pb.Extractor.TREE)
+                    )
                     if extracting
-                    else Oneof("run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof("name", "handoff_first"))))
+                    else Oneof(
+                        "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", "handoff_first")))
+                    )
                 )
             ),
         )
         program.commands.append(
             pb.Command(
                 kind=(
-                    Oneof("action", pb.Action(kind=Oneof("panic", "native after callback")))
+                    Oneof[Literal["action"], pb.Action](
+                        "action", pb.Action(kind=Oneof[Literal["panic"], str]("panic", "native after callback"))
+                    )
                     if case == "later_native_error"
-                    else Oneof("run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof("name", "handoff_later"))))
+                    else Oneof(
+                        "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", "handoff_later")))
+                    )
                 )
             )
         )
         if expected_failure and not extracting:
             # Observe the first rule's no-match before the later successful callback writes its head.
-            program.commands.insert(3, pb.Command(kind=Oneof("print_function", pb.PrintFunction(table="handoff_mark"))))
+            program.commands.insert(
+                3,
+                pb.Command(
+                    kind=Oneof[Literal["print_function"], pb.PrintFunction](
+                        "print_function", pb.PrintFunction(table="handoff_mark")
+                    )
+                ),
+            )
         response, captured = _callback_exchange(state, program, tmp_path / "execution")
         assert captured is (None if expected_failure else original)
         assert (response.error is not None) == (extracting or case == "later_native_error")
@@ -1014,7 +1099,13 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
         elif extracting:
             assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
             assert response.error.location.path == [1]
-        program.commands = [pb.Command(kind=Oneof("print_function", pb.PrintFunction(table="handoff_mark")))]
+        program.commands = [
+            pb.Command(
+                kind=Oneof[Literal["print_function"], pb.PrintFunction](
+                    "print_function", pb.PrintFunction(table="handoff_mark")
+                )
+            )
+        ]
         observed, error = _callback_exchange(state, program, tmp_path / "markers")
         assert observed.error is None
         assert error is None
@@ -1682,7 +1773,7 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
                         pb.CommandOutput(
                             kind=Oneof("run", pb.RunOutcome(can_stop=True))
                             if command.field == "run"
-                            else Oneof(
+                            else Oneof[Literal["loop"], pb.LoopOutcome](
                                 "loop", pb.LoopOutcome(iterations=1, termination=pb.TerminationReason.COUNT_REACHED)
                             ),
                             run_report=report,
@@ -1775,9 +1866,11 @@ def test_public_reports_require_the_requested_top_level_output(monkeypatch, oper
             report = pb.NativeRunReport(can_stop=True)
             output = pb.CommandOutput(
                 location=pb.CommandLocation(path=[1] if malformed == "location" else [0]),
-                kind=Oneof("statistics", report)
+                kind=Oneof[Literal["statistics"], pb.NativeRunReport]("statistics", report)
                 if operation == "stats"
-                else Oneof("loop", pb.LoopOutcome(termination=pb.TerminationReason.COUNT_REACHED)),
+                else Oneof[Literal["loop"], pb.LoopOutcome](
+                    "loop", pb.LoopOutcome(termination=pb.TerminationReason.COUNT_REACHED)
+                ),
                 run_report=report if operation == "run" else None,
             )
             if malformed == "kind":
@@ -2527,9 +2620,9 @@ def test_failed_check_policy_requires_one_top_level_check(monkeypatch, shape):
     graph = EGraph()
     commands = []
     if shape == "other":
-        commands.append(pb.Command(kind=Oneof("stats", pb.Unit())))
+        commands.append(pb.Command(kind=Oneof[Literal["stats"], pb.Unit]("stats", pb.Unit())))
     elif shape == "multiple":
-        commands.extend(pb.Command(kind=Oneof("check", pb.Check())) for _ in range(2))
+        commands.extend(pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check())) for _ in range(2))
     owner = Builder.from_program(pb.Program(ir_version=1, commands=commands)).publish()
     with pytest.raises(ValueError, match="exactly one top-level Check"):
         graph._state.run_program(

@@ -346,7 +346,7 @@ def test_maybe_inspection_rejects_malformed_local_values(mutation):
             signature = declaration.kind.value.typing.value
             signature.output = signature.inputs[0].sort
         else:
-            declaration.kind = Oneof(
+            declaration.kind = Oneof[Literal["constructor"], pb.Constructor](
                 "constructor", pb.Constructor(name="egglog.experimental.maybe.some", inputs=[], output=node.sort_id)
             )
     with pytest.raises((ValueError, TypeError, TypeConstraintError, ExprValueError)):

@@ -1187,7 +1187,7 @@ def test_runtime_free_function_names_preserve_exact_callee_and_core_order(monkey
     )
     source.declarations.append(
         pb.Declaration(
-            kind=Oneof(
+            kind=Oneof[Literal["function"], pb.Function](
                 "function",
                 pb.Function(
                     name="exact.declared.table",

@@ -1,6 +1,7 @@
 """Inert display projection, not native engine conformance."""
 
 import json
+from typing import Literal
 
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
@@ -14,57 +15,120 @@ def snapshot():
     program = pb.Program(
         ir_version=1,
         sorts=[
-            pb.Sort(kind=Oneof("eq", "A")),
-            pb.Sort(kind=Oneof("family", pb.HostSort(name="i64"))),
-            pb.Sort(kind=Oneof("family", pb.HostSort(name="String"))),
-            pb.Sort(kind=Oneof("family", pb.HostSort(name="Vec", args=[0]))),
-            pb.Sort(kind=Oneof("family", pb.HostSort(name="Unit"))),
+            pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "A")),
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="String"))),
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[0]))),
+            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Unit"))),
         ],
         declarations=[
-            pb.Declaration(kind=Oneof("eq_sort", pb.EqSort(name="A"))),
+            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="A"))),
             *[
-                pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name=name, arity=arity)))
+                pb.Declaration(
+                    kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                        "host_sort_family", pb.HostSortFamily(name=name, arity=arity)
+                    )
+                )
                 for name, arity in [("i64", 0), ("String", 0), ("Vec", 1), ("Unit", 0)]
             ],
-            pb.Declaration(kind=Oneof("constructor", pb.Constructor(name="C", inputs=[pb.Arg(sort=1)], output=0))),
-            pb.Declaration(kind=Oneof("constructor", pb.Constructor(name="Wrap", inputs=[pb.Arg(sort=0)], output=0))),
-            pb.Declaration(kind=Oneof("function", pb.Function(name="cell", inputs=[pb.Arg(sort=0)], output=3))),
-            pb.Declaration(kind=Oneof("function", pb.Function(name="scalar", output=2))),
-            pb.Declaration(kind=Oneof("function", pb.Function(name="unit", output=4))),
-            pb.Declaration(kind=Oneof("relation", pb.Relation(name="member", inputs=[pb.Arg(sort=0)]))),
+            pb.Declaration(
+                kind=Oneof[Literal["constructor"], pb.Constructor](
+                    "constructor", pb.Constructor(name="C", inputs=[pb.Arg(sort=1)], output=0)
+                )
+            ),
+            pb.Declaration(
+                kind=Oneof[Literal["constructor"], pb.Constructor](
+                    "constructor", pb.Constructor(name="Wrap", inputs=[pb.Arg(sort=0)], output=0)
+                )
+            ),
+            pb.Declaration(
+                kind=Oneof[Literal["function"], pb.Function](
+                    "function", pb.Function(name="cell", inputs=[pb.Arg(sort=0)], output=3)
+                )
+            ),
+            pb.Declaration(
+                kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name="scalar", output=2))
+            ),
+            pb.Declaration(
+                kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name="unit", output=4))
+            ),
+            pb.Declaration(
+                kind=Oneof[Literal["relation"], pb.Relation](
+                    "relation", pb.Relation(name="member", inputs=[pb.Arg(sort=0)])
+                )
+            ),
         ],
         nodes=[
-            pb.Node(sort_id=0, kind=Oneof("union", pb.Union(members=[2, 3]))),
-            pb.Node(sort_id=1, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 1)))),
-            pb.Node(sort_id=0, kind=Oneof("call", pb.Call(func="C", args=[1]))),
-            pb.Node(sort_id=0, kind=Oneof("call", pb.Call(func="Wrap", args=[0]))),
-            pb.Node(sort_id=0, kind=Oneof("union", pb.Union())),
-            pb.Node(sort_id=0, kind=Oneof("union", pb.Union())),
+            pb.Node(sort_id=0, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[2, 3]))),
+            pb.Node(
+                sort_id=1,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
+                ),
+            ),
+            pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="C", args=[1]))),
+            pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="Wrap", args=[0]))),
+            pb.Node(sort_id=0, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())),
+            pb.Node(sort_id=0, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())),
             pb.Node(
                 sort_id=3,
-                kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("vec", pb.ValueList(items=[0, 0, 4, 5])))),
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value",
+                    pb.PrimitiveValue(
+                        value=Oneof[Literal["vec"], pb.ValueList]("vec", pb.ValueList(items=[0, 0, 4, 5]))
+                    ),
+                ),
             ),
             pb.Node(
-                sort_id=2, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("string", 'quote"\n</script>')))
+                sort_id=2,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value",
+                    pb.PrimitiveValue(value=Oneof[Literal["string"], str]("string", 'quote"\n</script>')),
+                ),
             ),
-            pb.Node(sort_id=4, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("unit", pb.Unit())))),
-            pb.Node(sort_id=4, kind=Oneof("call", pb.Call(func="member", args=[0]))),
+            pb.Node(
+                sort_id=4,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["unit"], pb.Unit]("unit", pb.Unit()))
+                ),
+            ),
+            pb.Node(sort_id=4, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="member", args=[0]))),
         ],
         commands=[
-            *[pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("term", index)))) for index in (0, 4, 5, 9)],
             *[
                 pb.Command(
-                    kind=Oneof(
+                    kind=Oneof[Literal["action"], pb.Action](
+                        "action", pb.Action(kind=Oneof[Literal["term"], int]("term", index))
+                    )
+                )
+                for index in (0, 4, 5, 9)
+            ],
+            *[
+                pb.Command(
+                    kind=Oneof[Literal["action"], pb.Action](
                         "action",
-                        pb.Action(kind=Oneof("set", pb.Set(target=pb.Call(func=name, args=args), value=value))),
+                        pb.Action(
+                            kind=Oneof[Literal["set"], pb.Set](
+                                "set", pb.Set(target=pb.Call(func=name, args=args), value=value)
+                            )
+                        ),
                     )
                 )
                 for name, args, value in [("cell", [0], 6), ("scalar", [], 7), ("unit", [], 8)]
             ],
-            pb.Command(kind=Oneof("action", pb.Action(kind=Oneof("subsume", pb.Call(func="C", args=[1]))))),
             pb.Command(
-                kind=Oneof(
-                    "action", pb.Action(kind=Oneof("set_cost", pb.SetCost(target=pb.Call(func="C", args=[1]), cost=1)))
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action", pb.Action(kind=Oneof[Literal["subsume"], pb.Call]("subsume", pb.Call(func="C", args=[1])))
+                )
+            ),
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action",
+                    pb.Action(
+                        kind=Oneof[Literal["set_cost"], pb.SetCost](
+                            "set_cost", pb.SetCost(target=pb.Call(func="C", args=[1]), cost=1)
+                        )
+                    ),
                 )
             ),
         ],
@@ -102,7 +166,14 @@ def test_snapshot_costs_preserve_declared_value_and_assigned_override(snapshot, 
     program = snapshot.program
     constructor = next(d.kind.value for d in program.declarations if d.kind.value.name == "C")
     constructor.cost = len(program.nodes)
-    program.nodes.append(pb.Node(sort_id=1, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof("i64", 7)))))
+    program.nodes.append(
+        pb.Node(
+            sort_id=1,
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 7))
+            ),
+        )
+    )
     if not assigned:
         program.commands = [command for command in program.commands if command.kind.value.kind.field != "set_cost"]
     data = _snapshot_to_data(snapshot)
@@ -117,16 +188,26 @@ def test_snapshot_custom_costs_never_invoke_codec_or_debug(snapshot, monkeypatch
     monkeypatch.setattr("cloudpickle.loads", forbidden)
     program = snapshot.program
     cost_sort = len(program.sorts)
-    program.sorts.append(pb.Sort(kind=Oneof("family", pb.HostSort(name="Opaque"))))
-    program.declarations.append(pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name="Opaque"))))
+    program.sorts.append(pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Opaque"))))
+    program.declarations.append(
+        pb.Declaration(
+            kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                "host_sort_family", pb.HostSortFamily(name="Opaque")
+            )
+        )
+    )
     first = len(program.nodes)
     for payload in (b"declared", b"assigned!"):
         program.nodes.append(
             pb.Node(
                 sort_id=cost_sort,
-                kind=Oneof(
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                     "primitive_value",
-                    pb.PrimitiveValue(value=Oneof("custom", pb.CustomValue(payload=payload, args=[4]))),
+                    pb.PrimitiveValue(
+                        value=Oneof[Literal["custom"], pb.CustomValue](
+                            "custom", pb.CustomValue(payload=payload, args=[4])
+                        )
+                    ),
                 ),
             )
         )

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from copy import copy
 from fractions import Fraction
 from functools import partial
-from typing import ClassVar, cast
+from typing import ClassVar, Literal, cast
 
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
@@ -1649,7 +1649,9 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
     for label, expression in (("direct-query", repeated.union_values()), ("body-query", via_union(repeated))):
         builder = _program.Builder()
         fact = builder.import_ref(eq(expression).to(c).__egg_ref__)
-        check = builder.add("commands", pb.Command(kind=Oneof("check", pb.Check(facts=[fact]))))
+        check = builder.add(
+            "commands", pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[fact])))
+        )
         command = builder.publish().ref("commands", check)
         with monkeypatch.context() as patch:
             patch.setattr(fresh._state, "transport", AuditedTransport(fresh._state.transport, label))

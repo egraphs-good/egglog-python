@@ -244,7 +244,7 @@ def _stored_call(declaration, args, result_type):
         "nodes",
         pb.Node(
             sort_id=builder.import_ref(result),
-            kind=Oneof(
+            kind=Oneof[Literal["call"], pb.Call](
                 "call",
                 pb.Call(
                     func=declaration.read().kind.value.name, args=[builder.import_ref(arg.__egg_ref__) for arg in args]
@@ -358,17 +358,23 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     signature = declaration.kind.value.typing.value
     first_var, second_var = [arg.sort for arg in signature.inputs]
     third_var = len(program.sorts)
-    program.sorts.append(pb.Sort(kind=Oneof("var", 2)))
+    program.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 2)))
     receiver_sort = len(program.sorts)
-    program.sorts.append(pb.Sort(kind=Oneof("family", pb.HostSort(name="Vec", args=[first_var]))))
+    program.sorts.append(
+        pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[first_var])))
+    )
     signature.type_params.append("V")
     signature.inputs = [pb.Arg(sort=receiver_sort), pb.Arg(sort=third_var)]
     signature.output = len(program.sorts)
-    program.sorts.append(pb.Sort(kind=Oneof("family", pb.HostSort(name="Pair", args=[third_var, second_var]))))
+    program.sorts.append(
+        pb.Sort(
+            kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Pair", args=[third_var, second_var]))
+        )
+    )
     view = pb.PythonCallable(
         kind=pb.PythonCallKind.METHOD,
         path=["result_pair"],
-        owner=pb.BindingOwner(kind=Oneof("sort", receiver_sort)),
+        owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", receiver_sort)),
         receiver=0,
         params=[pb.PythonParameter(core_input=1, name="value")],
     )
@@ -392,7 +398,9 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     ]
     # The owner must not reinterpret U as the receiver's already-inferred T.
     bad_owner = len(program.sorts)
-    program.sorts.append(pb.Sort(kind=Oneof("family", pb.HostSort(name="Vec", args=[second_var]))))
+    program.sorts.append(
+        pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[second_var])))
+    )
     view.owner.kind = Oneof("sort", bad_owner)
     bad_reference = Builder.from_program(program).publish().ref("declarations", program.declarations.index(declaration))
     malformed.append(_stored_call(bad_reference, [receiver, i64(1)], Pair[i64, String]))
@@ -422,7 +430,7 @@ def test_malformed_stored_calls_and_type_bindings_fail_without_conversion(monkey
             get_callable_fn(call)
     integer = resolve_type_annotation(i64)
     open_builder = Builder()
-    open_index = open_builder.add("sorts", pb.Sort(kind=Oneof("var", 0)))
+    open_index = open_builder.add("sorts", pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)))
     open_sort = open_builder.publish().ref("sorts", open_index)
     for malformed in [
         ((0, integer), (0, integer)),

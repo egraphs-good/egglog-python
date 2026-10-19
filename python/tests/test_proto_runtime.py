@@ -689,7 +689,7 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
 
     builder = Builder()
     sort = builder.import_ref(Value.__egg_sort__)
-    empty = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("union", pb.Union())))
+    empty = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
     default = RuntimeExpr(builder.publish().ref("nodes", empty))
 
     @function
@@ -714,17 +714,20 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
     def lambdas(*, shared_body, captures=False, same_node=False):
         builder = Builder()
         sort = builder.import_ref(Value.__egg_sort__)
-        func = builder.add("sorts", pb.Sort(kind=Oneof("func", pb.FuncSort(result=sort))))
-        bodies = [builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("union", pb.Union()))) for _ in range(2)]
+        func = builder.add("sorts", pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(result=sort))))
+        bodies = [
+            builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
+            for _ in range(2)
+        ]
         functions = [
             builder.add(
                 "nodes",
                 pb.Node(
                     sort_id=func,
-                    kind=Oneof(
+                    kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                         "primitive_value",
                         pb.PrimitiveValue(
-                            value=Oneof(
+                            value=Oneof[Literal["lambda"], pb.Lambda](
                                 "lambda",
                                 pb.Lambda(captures=[bodies[index]] if captures else [], body=bodies[index]),
                             )
@@ -738,7 +741,12 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
             functions[1] = functions[0]
         root = builder.add(
             "rules",
-            pb.RuleDecl(kind=Oneof("rule", pb.Rule(head=[pb.Action(kind=Oneof("term", node)) for node in functions]))),
+            pb.RuleDecl(
+                kind=Oneof[Literal["rule"], pb.Rule](
+                    "rule",
+                    pb.Rule(head=[pb.Action(kind=Oneof[Literal["term"], int]("term", node)) for node in functions]),
+                )
+            ),
         )
         return RuleKey(builder.publish().ref("rules", root))
 
@@ -764,7 +772,7 @@ def test_report_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirect
 
         builder = Builder()
         sort = builder.import_ref(Value.__egg_sort__)
-        empty = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof("union", pb.Union())))
+        empty = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union())))
         left = RuntimeExpr(builder.publish().ref("nodes", empty))
     else:
         left = i64(1)
@@ -1903,7 +1911,13 @@ def test_exact_pretty_uses_retained_classmethod_presentation(rational_runtime, r
             if s.kind.field == "family" and s.kind.value.name == name
         )
         index = builder.add(
-            "nodes", pb.Node(sort_id=sort, kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))))
+            "nodes",
+            pb.Node(
+                sort_id=sort,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))
+                ),
+            ),
         )
         # The ambient generated classes still have the original BigInt name and
         # from_string method. Only this owned record contains the changed view.
@@ -1932,7 +1946,11 @@ def test_exact_inert_values_are_owned_inspectable_and_printable(rational_runtime
     builder = Builder()
     primitive = pb.PrimitiveValue(value=Oneof(arm, payload))
     index = builder.add(
-        "nodes", pb.Node(sort_id=builder.import_ref(cls.__egg_sort__), kind=Oneof("primitive_value", primitive))
+        "nodes",
+        pb.Node(
+            sort_id=builder.import_ref(cls.__egg_sort__),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue]("primitive_value", primitive),
+        ),
     )
     expression = RuntimeExpr(builder.publish().ref("nodes", index))
     if not isinstance(payload, str):
@@ -1975,7 +1993,9 @@ def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runt
         "nodes",
         pb.Node(
             sort_id=builder.import_ref(rational_runtime[family].__egg_sort__),
-            kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))
+            ),
         ),
     )
     expression = RuntimeExpr(builder.publish().ref("nodes", index))
@@ -2048,7 +2068,9 @@ def test_exact_inert_values_reject_malformed_data(rational_runtime, family, arm,
         "nodes",
         pb.Node(
             sort_id=builder.import_ref(rational_runtime[family].__egg_sort__),
-            kind=Oneof("primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))),
+            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                "primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))
+            ),
         ),
     )
     expression = RuntimeExpr(builder.publish().ref("nodes", index))
@@ -3348,13 +3370,20 @@ def test_class_and_initializer_documentation_presence(doc):
 def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch, name, later):
     requested = pb.Program(
         ir_version=1,
-        sorts=[pb.Sort(kind=Oneof("family", pb.HostSort(name="i64")))],
+        sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
         declarations=[
-            pb.Declaration(kind=Oneof("relation", pb.Relation(name=name)), doc="retained documentation"),
-            pb.Declaration(kind=Oneof("host_sort_family", pb.HostSortFamily(name=name))),
-            pb.Declaration(kind=Oneof("eq_sort", pb.EqSort(name=name))),
+            pb.Declaration(
+                kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=name)),
+                doc="retained documentation",
+            ),
+            pb.Declaration(
+                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
+                    "host_sort_family", pb.HostSortFamily(name=name)
+                )
+            ),
+            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name=name))),
         ],
-        nodes=[pb.Node(kind=Oneof("var", "origin"))],
+        nodes=[pb.Node(kind=Oneof[Literal["var"], str]("var", "origin"))],
     )
     original = Builder.from_program(requested).publish()
     origin = original.ref("nodes", 0)
@@ -3381,10 +3410,14 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
     if later != "none":
         added = extended.add(
             "declarations",
-            pb.Declaration(kind=Oneof("relation", pb.Relation(name=name if later == "conflicting" else missing))),
+            pb.Declaration(
+                kind=Oneof[Literal["relation"], pb.Relation](
+                    "relation", pb.Relation(name=name if later == "conflicting" else missing)
+                )
+            ),
         )
     scalar = extended.import_ref(original.ref("sorts", 0))
-    query_index = extended.add("nodes", pb.Node(sort_id=scalar, kind=Oneof("var", "new origin")))
+    query_index = extended.add("nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["var"], str]("var", "new origin")))
     extended_owner = extended.publish()
     query = extended_owner.ref("nodes", query_index)
     fallback = builtin_catalog().definitions["host_sort_family", "i64"]
