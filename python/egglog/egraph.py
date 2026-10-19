@@ -441,6 +441,9 @@ class BaseExpr(metaclass=_ExprMetaclass):
     # these methods are only provided for type checking
     # The real implementations are in the runtime system
 
+    if TYPE_CHECKING:
+        __egg_ref__: Ref
+
     def __ne__(self, other: Self) -> Unit: ...  # type: ignore[override, empty-body]
 
     # not currently dissalowing other types of equality https://github.com/python/typeshed/issues/8217#issuecomment-3140873292
