@@ -67,12 +67,12 @@ class Boolean(Expr, ruleset=array_api_ruleset):
             not _CURRENT_EGRAPH
             and (
                 args := get_callable_args(self, Int.__eq__)
-                or get_callable_args(self, Boolean.__eq__)  # type: ignore[arg-type]
-                or get_callable_args(self, Value.__eq__)  # type: ignore[arg-type]
+                or get_callable_args(self, Boolean.__eq__)
+                or get_callable_args(self, Value.__eq__)
             )
             is not None
         ):
-            return bool(eq(args[0]).to(cast("Int", args[1])))
+            return bool(eq(cast("BaseExpr", args[0])).to(cast("BaseExpr", args[1])))
         return self.eval()
 
     @method(preserve=True)
@@ -383,7 +383,7 @@ class Float(Expr, ruleset=array_api_ruleset):
     def value(self) -> float | Fraction:
         match get_callable_args(self, Float.rational):
             case (r,):
-                return r.value
+                return cast("BigRat", r).value
         match get_callable_args(self, Float):
             case (f,):
                 return cast("f64", f).value
@@ -1782,7 +1782,7 @@ class NDArray(Expr, ruleset=array_api_ruleset):
     def __bool__(self) -> bool:
         # Special case bool so it works when comparing to arrays outside of tracing, like when indexing
         if not _CURRENT_EGRAPH and (args := get_callable_args(self, NDArray.__eq__)) is not None:
-            return bool(eq(args[0]).to(cast("NDArray", args[1])))
+            return bool(eq(cast("NDArray", args[0])).to(cast("NDArray", args[1])))
         return self.index(()).to_bool.eval()
 
     @property

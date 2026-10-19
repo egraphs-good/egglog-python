@@ -269,7 +269,7 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
                 lambda result, mono, coef: catch(lambda: result[mono]).match(
                     lambda old_coef: result.insert(mono, old_coef + coef), result.insert(mono, coef)
                 ),
-                _to_container_poly(_binary_to_containers(lhs)),
+                _to_container_poly(_binary_to_containers(cast("Num", lhs))),
                 _to_container_poly(_binary_to_containers(cast("Num", rhs))),
             )
     match get_callable_args(expr, Num.__sub__):
@@ -278,7 +278,7 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
                 lambda result, mono, coef: catch(lambda: result[mono]).match(
                     lambda old_coef: result.insert(mono, old_coef + coef), result.insert(mono, coef)
                 ),
-                _to_container_poly(_binary_to_containers(lhs)),
+                _to_container_poly(_binary_to_containers(cast("Num", lhs))),
                 map_fold_kv(
                     lambda result, mono, coef: result.insert(mono, -coef),
                     ContainerPolynomial.empty(),
@@ -287,7 +287,7 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
             )
     match get_callable_args(expr, Num.__mul__):
         case (lhs, rhs):
-            lhs_mapped = _binary_to_containers(lhs)
+            lhs_mapped = _binary_to_containers(cast("Num", lhs))
             rhs_mapped = _binary_to_containers(cast("Num", rhs))
             lhs_is_polynomial = _is_expr_instance(lhs_mapped, ContainerPolynomial)
             rhs_is_polynomial = _is_expr_instance(rhs_mapped, ContainerPolynomial)
@@ -314,7 +314,7 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
             )
     match get_callable_args(expr, Num.__truediv__):
         case (lhs, rhs):
-            lhs_mapped = _binary_to_containers(lhs)
+            lhs_mapped = _binary_to_containers(cast("Num", lhs))
             rhs_mapped = _binary_to_containers(cast("Num", rhs))
             lhs_is_polynomial = _is_expr_instance(lhs_mapped, ContainerPolynomial)
             rhs_is_polynomial = _is_expr_instance(rhs_mapped, ContainerPolynomial)
@@ -348,7 +348,7 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
             )
     match get_callable_args(expr, Num.__pow__):
         case (n, Num(f64(f))):
-            n_mapped = _to_num(_binary_to_containers(n))
+            n_mapped = _to_num(_binary_to_containers(cast("Num", n)))
             if f == 1:
                 return n_mapped
             return ContainerMonomial.empty().insert(n_mapped, _float_to_bigrat(f))
@@ -363,7 +363,7 @@ def _binary_to_containers(  # noqa: C901, PLR0911, PLR0912
             return ContainerMonomial.empty().insert(_to_num(_binary_to_containers(cast("Num", inner))), BigRat(1, 2))
     match get_callable_args(expr, Num.__abs__):
         case (inner,):
-            return abs(_to_num(_binary_to_containers(inner)))
+            return abs(_to_num(_binary_to_containers(cast("Num", inner))))
     raise ValueError(f"Cannot decode to container: {expr}")
 
 
@@ -443,19 +443,19 @@ def _render_num(num: Num) -> str:  # noqa: C901, PLR0911, PLR0912
             return s
     match get_callable_args(num, Num.__add__):
         case (lhs, rhs):
-            return f"({_render_num(lhs)} + {_render_num(cast('Num', rhs))})"
+            return f"({_render_num(cast('Num', lhs))} + {_render_num(cast('Num', rhs))})"
     match get_callable_args(num, Num.__sub__):
         case (lhs, rhs):
-            return f"({_render_num(lhs)} - {_render_num(cast('Num', rhs))})"
+            return f"({_render_num(cast('Num', lhs))} - {_render_num(cast('Num', rhs))})"
     match get_callable_args(num, Num.__mul__):
         case (lhs, rhs):
-            return f"({_render_num(lhs)} * {_render_num(cast('Num', rhs))})"
+            return f"({_render_num(cast('Num', lhs))} * {_render_num(cast('Num', rhs))})"
     match get_callable_args(num, Num.__truediv__):
         case (lhs, rhs):
-            return f"({_render_num(lhs)} / {_render_num(cast('Num', rhs))})"
+            return f"({_render_num(cast('Num', lhs))} / {_render_num(cast('Num', rhs))})"
     match get_callable_args(num, Num.__pow__):
         case (lhs, rhs):
-            return f"({_render_num(lhs)} ** {_render_num(cast('Num', rhs))})"
+            return f"({_render_num(cast('Num', lhs))} ** {_render_num(cast('Num', rhs))})"
     match get_callable_args(num, exp):
         case (inner,):
             return f"exp({_render_num(cast('Num', inner))})"
@@ -467,7 +467,7 @@ def _render_num(num: Num) -> str:  # noqa: C901, PLR0911, PLR0912
             return f"sqrt({_render_num(cast('Num', inner))})"
     match get_callable_args(num, Num.__abs__):
         case (inner,):
-            return f"abs({_render_num(inner)})"
+            return f"abs({_render_num(cast('Num', inner))})"
     msg = f"Unsupported Num node for rendering: {num!r}"
     raise TypeError(msg)
 

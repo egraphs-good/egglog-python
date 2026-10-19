@@ -19,7 +19,7 @@ import operator
 from collections.abc import Iterator
 from copy import copy
 from functools import reduce
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, cast
 
 from egglog import *
 from egglog.exp.program_gen import *
@@ -59,7 +59,7 @@ class AnyExpr(Expr):
         >>> AnyExpr(10).egglog_any_expr_value
         A(10)
         """
-        match get_callable_args(self, AnyExpr):
+        match cast("tuple[BaseExpr, ...] | None", get_callable_args(self, AnyExpr)):
             case (A() as any_expr,):
                 return any_expr
         raise ExprValueError(self, "AnyExpr")
@@ -728,18 +728,18 @@ def any_eval(self: A) -> Any:
     # Don't save hasattr asserts
     if get_callable_fn(self) != hasattr_:
         # If we are calling bool_ same as just asserting vlaues
-        match get_callable_args(self, bool_):
+        match cast("tuple[BaseExpr, ...] | None", get_callable_args(self, bool_)):
             case (A() as inner,):
                 self = inner
         if eq(expr).to(A(True)):
             asserted = self
             _LAST_ASSERT = with_assert(self).egglog_any_expr_value
         elif eq(expr).to(A(False)):
-            match get_callable_args(self, A.__eq__):
+            match cast("tuple[BaseExpr, ...] | None", get_callable_args(self, A.__eq__)):
                 case (A() as left, A() as right):
                     asserted = left != right
                 case _:
-                    match get_callable_args(self, A.__ne__):
+                    match cast("tuple[BaseExpr, ...] | None", get_callable_args(self, A.__ne__)):
                         case (A() as left, A() as right):
                             asserted = left == right
                         case _:

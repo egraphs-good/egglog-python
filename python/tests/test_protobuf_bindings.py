@@ -446,16 +446,11 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
 
 
 @pytest.mark.parametrize(
-    ("observation", "max_rows"),
-    [("extract", None), ("print_function", None), ("print_function", 0)],
-    ids=["extract", "print-all-rows", "print-zero-rows"],
-)
-@pytest.mark.parametrize(
     "proof_engine",
     [pb.ExecutionMode.TERM_ENCODING, pb.ExecutionMode.PROOFS, pb.ExecutionMode.PROOF_TESTING],
     indirect=True,
 )
-def test_binary_encoded_observations_stay_explicitly_unsupported(proof_engine, observation, max_rows):
+def test_binary_encoded_extract_stays_explicitly_unsupported(proof_engine):
     engine, handles, _mode = proof_engine
     program = _proof_program()
     program.commands = [
@@ -463,12 +458,6 @@ def test_binary_encoded_observations_stay_explicitly_unsupported(proof_engine, o
         pb.Command(
             kind=Oneof[Literal["extract"], pb.Extract](
                 "extract", pb.Extract(roots=[2], variants=1, extractor=pb.Extractor.TREE)
-            )
-        )
-        if observation == "extract"
-        else pb.Command(
-            kind=Oneof[Literal["print_function"], pb.PrintFunction](
-                "print_function", pb.PrintFunction(table="N", max_rows=max_rows)
             )
         ),
     ]
@@ -492,6 +481,73 @@ def test_binary_encoded_observations_stay_explicitly_unsupported(proof_engine, o
     retry = pb.RunProgramResponse.from_binary(encoded)
     assert retry.error is not None
     assert retry.error.location is not None
+
+
+@pytest.mark.parametrize("max_rows", [None, 0], ids=["print-all-rows", "print-zero-rows"])
+@pytest.mark.parametrize(
+    "proof_engine",
+    [pb.ExecutionMode.TERM_ENCODING, pb.ExecutionMode.PROOFS, pb.ExecutionMode.PROOF_TESTING],
+    indirect=True,
+)
+def test_binary_encoded_print_function_returns_typed_logical_rows(proof_engine, max_rows):
+    engine, handles, _mode = proof_engine
+    program = _proof_program()
+    program.commands = [
+        program.commands[0],
+        pb.Command(
+            kind=Oneof[Literal["print_function"], pb.PrintFunction](
+                "print_function", pb.PrintFunction(table="N", max_rows=max_rows)
+            )
+        ),
+    ]
+    encoded, host_error = engine.run(
+        pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary()
+    )
+    assert host_error is None
+    response = pb.RunProgramResponse.from_binary(encoded)
+    assert response.error is None
+    assert response.profile is not None
+    assert response.profile.complete
+    assert not response.profile.runs
+    (output,) = response.outputs
+    assert output.location == pb.CommandLocation(path=[1])
+    assert output.kind is not None
+    assert output.kind.field == "printed_function"
+    table = output.kind.value
+    assert table.table == "N"
+    if max_rows == 0:
+        assert not table.rows
+        assert not response.nodes
+        assert not response.sorts
+    else:
+        (row,) = table.rows
+        assert not row.subsumed
+        (argument,) = row.args
+        assert argument.kind is not None
+        assert argument.kind.field == "term"
+        assert row.output is not None
+        assert row.output.kind is not None
+        assert row.output.kind.field == "term"
+        argument_id, result_id = argument.kind.value, row.output.kind.value
+        assert argument_id != result_id
+        assert len(response.nodes) == len(response.sorts) == 2
+        argument_node = response.nodes[argument_id]
+        result_node = response.nodes[result_id]
+        assert argument_node.kind == Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+            "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
+        )
+        assert response.sorts[argument_node.sort_id].kind == Oneof[Literal["family"], pb.HostSort](
+            "family", pb.HostSort(name="i64")
+        )
+        assert result_node.kind == Oneof[Literal["call"], pb.Call]("call", pb.Call(func="N", args=[argument_id]))
+        assert response.sorts[result_node.sort_id].kind == Oneof[Literal["eq"], str]("eq", "Num")
+    assert pb.RunProgramResponse.from_binary(response.to_binary()) == response
+    program.commands = [pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[2])))]
+    encoded, host_error = engine.run(
+        pb.RunProgramRequest(egraph_id=handles[0], program=program, profile=True).to_binary()
+    )
+    assert host_error is None
+    assert pb.RunProgramResponse.from_binary(encoded).error is None
 
 
 def test_binary_unknown_mode_and_profile_off_stay_explicit():
