@@ -1,3 +1,5 @@
+# mypy: allow-empty-bodies
+# Ellipsis bodies are DSL declarations or annotation-introspection fixtures.
 import pytest
 
 from egglog import *

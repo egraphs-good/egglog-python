@@ -150,11 +150,13 @@ def test_proto_report_duration_and_plan_controls_without_engine():
     )
     plan = _plan(native)
     assert plan is not None
+    assert plan.stages[0].kind is not None
     assert plan.stages[0].kind.field == "intersect"
     assert plan.stages[0].kind.value.scans[0].columns[0] == pb.ReportColumn(variable="x", column=2)
     assert plan.stages[0].stats.num_candidates == 3
     assert plan.stages[0].stats.num_succeeded == 0
     assert plan.stages[0].next == [1]
+    assert plan.stages[1].kind is not None
     assert plan.stages[1].kind.field == "fused_intersect"
     assert plan.stages[1].stats is None
     native.stages[0].next = [2]
@@ -414,6 +416,7 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
                 if ruleset.has_field("name"):
                     rulesets[ruleset.name] = program, ruleset
             for command in program.commands:
+                assert command.kind is not None
                 if command.kind.field == "check":
                     checks += 1  # The same final-state assertion succeeded in the fresh engine.
             for output in response.outputs:
@@ -421,12 +424,15 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
                 (index,) = output.location.path
                 assert not output.location.iterations
                 command = program.commands[index].kind
+                assert command is not None
                 assert command.field == "saturate"
                 assert command.value.has_field("max_iterations")
                 assert command.value.max_iterations == 1
                 assert not command.value.until
                 (body,) = command.value.body
+                assert body.kind is not None
                 assert body.kind.field == "run"
+                assert output.kind is not None
                 assert output.kind.field == "loop"
                 assert output.kind.value.iterations == 1
                 assert output.kind.value.updated is report.updated
@@ -459,8 +465,10 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
                     else:
                         owner, ruleset = rulesets[target.kind.value]
                     if child is not None:
+                        assert ruleset.kind is not None
                         assert ruleset.kind.field == "combined"
                         target = ruleset.kind.value.rulesets[child]
+                assert ruleset.kind is not None
                 assert ruleset.kind.field == "rules"
                 replayed = owner.rules[ruleset.kind.value.rules[attribution.rule]]
                 assert replayed.kind.field == authored.kind.field

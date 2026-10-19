@@ -1,3 +1,5 @@
+# mypy: allow-empty-bodies
+# Ellipsis bodies are DSL declarations or annotation-introspection fixtures.
 """Ordinary Maybe authoring/inspection and real-byte execution."""
 
 import copy
@@ -292,6 +294,7 @@ def test_maybe_formed_pretty_uses_owned_renamed_constructor_metadata():
     program = packet.program
     for declaration in program.declarations:
         kind = declaration.kind
+        assert kind is not None
         if kind.field == "host_sort_family" and kind.value.name == "Maybe":
             kind.value.bindings.python.path[-1] = "OptionalValue"
         elif kind.field == "host_primitive" and kind.value.name == "egglog.experimental.maybe.some":

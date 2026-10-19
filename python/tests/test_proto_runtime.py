@@ -1,3 +1,5 @@
+# mypy: allow-empty-bodies
+# Ellipsis bodies are DSL declarations or annotation-introspection fixtures.
 """Record-native authoring gates for the single public runtime migration."""
 
 import gc
@@ -1078,6 +1080,7 @@ def test_detached_equality_uses_predicates_without_borrowing_members(class_autho
     if strip_metadata:
         for declaration in program.declarations:
             declaration.bindings = None
+            assert declaration.kind is not None
             if declaration.kind.field == "eq_sort":
                 declaration.kind.value.bindings = None
     detached = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
@@ -6189,6 +6192,7 @@ def test_getattr_does_not_attach_preserved_hooks_to_detached_records(class_autho
     if strip_metadata:
         for declaration in program.declarations:
             declaration.bindings = None
+            assert declaration.kind is not None
             if declaration.kind.field == "eq_sort":
                 declaration.kind.value.bindings = None
     detached = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
@@ -7687,6 +7691,7 @@ def test_multiset_local_protocols_preserve_symbolic_occurrences_without_engine(m
     packed = pack([expression.__egg_ref__])
     args = packed.program.nodes[packed.indices[0]].kind.value.args
     assert args[0] == args[2] != args[1]
+    assert packed.program.nodes[args[0]].kind is not None
     assert packed.program.nodes[args[0]].kind.field == "var"
     assert convert((), MultiSet[i64]).__egg_ref__.read().kind.value.func == "egglog.core.multiset.of"
 

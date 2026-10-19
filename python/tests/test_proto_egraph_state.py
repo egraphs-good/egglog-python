@@ -1,3 +1,5 @@
+# mypy: allow-empty-bodies
+# Ellipsis bodies are DSL declarations or annotation-introspection fixtures.
 """Record/bytes plumbing tests; the inert responder is not engine conformance."""
 
 from operator import index
@@ -116,6 +118,7 @@ def test_source_recording_does_not_exempt_freeze_with_installation(monkeypatch):
 
         def prepare_recording(self, encoded):
             program = pb.Program.from_binary(encoded)
+            assert program.commands[0].kind is not None
             assert program.commands[0].kind.field == "freeze"
             assert len(program.declarations) == 1
             prepared.append(program)
@@ -221,7 +224,9 @@ def scheduler_transport(monkeypatch):  # noqa: C901 -- finite acknowledgement/fa
             pass
 
         def prepare_recording(self, encoded):
-            assert pb.Program.from_binary(encoded).commands[0].kind.field == "bind_scheduler"
+            command_kind = pb.Program.from_binary(encoded).commands[0].kind
+            assert command_kind is not None
+            assert command_kind.field == "bind_scheduler"
             if self.outcome == "preflight":
                 raise self.original
 
@@ -750,6 +755,7 @@ def test_callback_error_prior_native_record_is_not_current_check_failure(monkeyp
 
         def run(self, encoded):
             request = pb.RunProgramRequest.from_binary(encoded)
+            assert request.program.commands[0].kind is not None
             assert request.program.commands[0].kind.field == "check"
             return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication()).to_binary(), original
 
@@ -1192,10 +1198,10 @@ def test_function_sizes_native_bytes_register_and_filter_unmapped(table_transpor
     graph, requests, responses = table_transport
 
     @function(egg_fn="z-known")
-    def known(value: i64) -> i64: ...  # type: ignore[empty-body]
+    def known(value: i64) -> i64: ...
 
     @function(egg_fn="a-unmapped")
-    def unmapped(value: i64) -> i64: ...  # type: ignore[empty-body]
+    def unmapped(value: i64) -> i64: ...
 
     assert graph.function_size(known) == 0
     assert len(requests) == 1
@@ -1326,7 +1332,7 @@ def test_table_constant_projection_does_not_invoke_callable(monkeypatch):
 @pytest.mark.parametrize("corruption", ["outputs", "kind", "location", "run report", "table", "duplicate"])
 def test_function_sizes_reject_malformed_response_without_engine(monkeypatch, selected, corruption):  # noqa: C901
     @function(egg_fn="size-table")
-    def table(value: i64) -> i64: ...  # type: ignore[empty-body]
+    def table(value: i64) -> i64: ...
 
     sizes = pb.TableSizes(sizes=[pb.TableSize(table="size-table", rows=1)])
     output = pb.CommandOutput(
@@ -1374,7 +1380,7 @@ def test_function_values_native_bytes_and_shared_terms(table_transport):
     graph, requests, responses = table_transport
 
     @function
-    def repeated(left: i64, right: i64) -> i64: ...  # type: ignore[empty-body]
+    def repeated(left: i64, right: i64) -> i64: ...
 
     graph.register(set_(repeated(i64(1), i64(1))).to(i64(1)), set_(repeated(i64(2), i64(3))).to(i64(7)))
     rows = graph.function_values(repeated)
@@ -1408,7 +1414,7 @@ def test_function_values_installs_before_index_conversion_native_bytes(table_tra
     graph, requests, responses = table_transport
 
     @function
-    def untouched(value: i64) -> i64: ...  # type: ignore[empty-body]
+    def untouched(value: i64) -> i64: ...
 
     calls = []
 
@@ -1445,7 +1451,7 @@ def test_function_values_bad_length_keeps_installed_table_native_bytes(table_tra
     graph, requests, responses = table_transport
 
     @function
-    def untouched(value: i64) -> i64: ...  # type: ignore[empty-body]
+    def untouched(value: i64) -> i64: ...
 
     with pytest.raises(error, match=message) as caught:
         graph.function_values(untouched, length)
@@ -1554,7 +1560,7 @@ def test_function_values_unavailable_cells_raise_from_native_bytes(table_transpo
 )
 def test_function_values_rejects_malformed_response_without_engine(monkeypatch, corruption):  # noqa: C901
     @function(egg_fn="table")
-    def table(value: i64) -> i64: ...  # type: ignore[empty-body]
+    def table(value: i64) -> i64: ...
 
     available = pb.TableCell(kind=Oneof[Literal["term"], int]("term", 0))
     row = pb.FunctionRow(args=[available], output=available)
@@ -1759,6 +1765,7 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
                 assert len(program.commands) == 1
                 command = program.commands[0].kind
                 report = pb.NativeRunReport(can_stop=True)
+                assert command is not None
                 if command.field == "stats":
                     assert not request.include_run_reports
                     outputs = [
@@ -1807,6 +1814,7 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     installed = graph._state.rulesets[first.__egg_ident__]
     assert [ref.read().name for ref in graph._state._ruleset_members(installed)] == ["first"]
     execution = requests[-1]
+    assert execution.program.commands[0].kind is not None
     assert execution.program.commands[0].kind.field == "repeat"
     assert len(execution.program.commands[0].kind.value.body) == 3
     assert not any(request.program.commands for request in requests[:-1])
@@ -1822,6 +1830,7 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     graph.run(seq(run()))
     assert Ident("") in graph._state.rulesets
     assert graph.stats().can_stop
+    assert requests[-1].program.commands[0].kind is not None
     assert requests[-1].program.commands[0].kind.field == "stats"
     for length in (-1, 2**64):
         before = len(requests)

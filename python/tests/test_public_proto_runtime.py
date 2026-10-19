@@ -1,3 +1,5 @@
+# mypy: allow-empty-bodies
+# Ellipsis bodies are DSL declarations or annotation-introspection fixtures.
 """Normal Python syntax over the generated-record runtime, without an engine."""
 
 import gc
@@ -54,7 +56,7 @@ def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyP
     from egglog import UnstableFn  # noqa: PLC0415 -- exercise the public import under the no-engine guard
 
     @function
-    def combine(left: i64, right: i64) -> i64: ...  # type: ignore[empty-body]
+    def combine(left: i64, right: i64) -> i64: ...
 
     whole = UnstableFn(combine)
     assert whole.value == combine
@@ -83,10 +85,10 @@ def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyP
 
     class Accumulator(Expr):
         def __init__(self) -> None: ...
-        def add(self, value: i64) -> i64: ...  # type: ignore[empty-body]
+        def add(self, value: i64) -> i64: ...
 
         @classmethod
-        def make(cls, value: i64) -> "Accumulator": ...  # type: ignore[empty-body]
+        def make(cls, value: i64) -> "Accumulator": ...
 
     receiver = Accumulator()
     assert expr_parts(UnstableFn(receiver.add)) == expr_parts(UnstableFn(Accumulator.add, receiver))
@@ -102,7 +104,7 @@ def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyP
     assert expr_parts(UnstableFn(i64(10).__add__)) == expr_parts(UnstableFn(i64.__add__, i64(10)))
 
     @function
-    def consume(callback: Callable[[i64], i64]) -> i64: ...  # type: ignore[empty-body]
+    def consume(callback: Callable[[i64], i64]) -> i64: ...
 
     assert expr_parts(consume(partial(combine, i64(10)))) == expr_parts(consume(prefix))
     assert expr_parts(consume(UnstableFn(i64.__invert__))) == expr_parts(consume(i64.__invert__))
@@ -180,19 +182,19 @@ def test_named_eager_function_values_author_without_engine(monkeypatch: pytest.M
 
 def test_function_sizes_public_forms_bytes() -> None:
     @function
-    def f() -> i64: ...  # type: ignore[empty-body]
+    def f() -> i64: ...
 
     class Counted(Expr):
         X: ClassVar[i64]
 
         def __init__(self) -> None: ...
-        def m(self) -> i64: ...  # type: ignore[empty-body]
+        def m(self) -> i64: ...
 
         @property
-        def p(self) -> i64: ...  # type: ignore[empty-body]
+        def p(self) -> i64: ...
 
         @classmethod
-        def cm(cls) -> i64: ...  # type: ignore[empty-body]
+        def cm(cls) -> i64: ...
 
         @method(preserve=True)
         def tag(self) -> str:
@@ -230,10 +232,10 @@ def test_function_sizes_public_forms_bytes() -> None:
 
 def test_function_sizes_empty_order_and_primitive_rejection_bytes() -> None:
     @function(egg_fn='z-count "last"')
-    def last(value: i64) -> i64: ...  # type: ignore[empty-body]
+    def last(value: i64) -> i64: ...
 
     @function(egg_fn="a-count first")
-    def first(value: i64) -> i64: ...  # type: ignore[empty-body]
+    def first(value: i64) -> i64: ...
 
     graph = EGraph()
     assert graph.all_function_sizes() == []
@@ -248,7 +250,7 @@ def test_function_sizes_empty_order_and_primitive_rejection_bytes() -> None:
 
 def test_function_values_public_bytes() -> None:
     @function(egg_fn="table with spaces")
-    def score(value: i64) -> i64: ...  # type: ignore[empty-body]
+    def score(value: i64) -> i64: ...
 
     graph = EGraph()
     assert graph.function_values(score, 0) == {}
@@ -266,7 +268,7 @@ def test_function_values_nullary_and_container_bytes() -> None:
     current = constant("current", i64)
 
     @function
-    def entry(values: Vec[i64]) -> Pair[i64, i64]: ...  # type: ignore[empty-body]
+    def entry(values: Vec[i64]) -> Pair[i64, i64]: ...
 
     graph = EGraph(set_(current).to(i64(7)), set_(entry(Vec(i64(1), i64(2)))).to(Pair(i64(3), i64(3))))
     assert graph.function_values(current) == {current: i64(7)}
@@ -294,7 +296,7 @@ def test_function_values_constructor_key_keeps_selected_table_bytes() -> None:
             return "local Number"
 
     @function
-    def wrap(value: Number) -> Number: ...  # type: ignore[empty-body]
+    def wrap(value: Number) -> Number: ...
 
     value = Number(i64(1))
     graph = EGraph(union(wrap(value)).with_(value))

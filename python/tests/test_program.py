@@ -218,8 +218,10 @@ def test_nested_fail_pack_relocates_child_facts_and_all_spans():
     child = decoded.commands[0]
     for start, end in [(0, 23), (6, 22), (12, 21)]:
         assert child.span == pb.Span(file=0, start=start, end=end)
+        assert child.kind is not None
         if child.kind.field == "fail":
             child = child.kind.value
+    assert child.kind is not None
     assert child.kind.field == "check"
     assert child.kind.value.facts == [0]
     assert decoded.nodes[0].kind.value.value.value == 7

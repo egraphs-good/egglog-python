@@ -4776,6 +4776,7 @@ class TestScheduler:
             assert kind == "program"
             assert count == 0
             for command in pb.Program.from_binary(encoded).commands:
+                assert command.kind is not None
                 if command.kind.field == "bind_scheduler":
                     bindings.append(command.kind.value)
                 elif command.kind.field == "action":
@@ -4810,6 +4811,7 @@ class TestScheduler:
         while pending:
             command, depth = pending.pop()
             kind = command.kind
+            assert kind is not None
             if kind.field == "bind_scheduler":
                 bindings.append((kind.value, depth))
             elif kind.field == "run":
@@ -4822,6 +4824,7 @@ class TestScheduler:
         assert outer.name != inner.name
         assert outer_depth < inner_depth
         for binding in (outer, inner):
+            assert binding.scheduler.kind is not None
             assert binding.scheduler.kind.field == "back_off"
             assert binding.scheduler.kind.value.match_limit == 2
             assert binding.scheduler.kind.value.ban_length == 2

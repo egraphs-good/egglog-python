@@ -334,6 +334,7 @@ def test_vec_map_view_and_static_signature_come_from_actual_catalog():
     assert [(p.core_input, p.name) for p in view.params] == [(0, signature.inputs[0].name)]
     assert not view.has_field("mutates")
     assert not view.params[0].has_field("default_expr")
+    assert program.sorts[signature.inputs[0].sort].kind is not None
     assert program.sorts[signature.inputs[0].sort].kind.field == "func"
     assert signature.inputs[1].sort == view.owner.kind.value
     render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
@@ -1513,6 +1514,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
     assert owner.name == "MultiSet"
     assert [program.sorts[index].kind.value for index in owner.args] == [0]
     callback = program.sorts[signature.inputs[view.params[0].core_input].sort]
+    assert callback.kind is not None
     assert callback.kind.field == "func"
     assert [program.sorts[index].kind.value for index in callback.kind.value.params] == [0]
     assert program.sorts[callback.kind.value.result].kind.value == 1
@@ -1540,6 +1542,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
                 return indices[index]
             record = pb.Sort.from_binary(program.sorts[index].to_binary())
             kind = record.kind
+            assert kind is not None
             if kind.field == "var":
                 record.kind = Oneof[Literal["var"], int]("var", order[kind.value])
             elif kind.field == "family":

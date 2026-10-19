@@ -65,6 +65,7 @@ def test_invalid_saved_transcript_inside_context_restores_scope() -> None:
         ]
         assert len(marker_calls) == 1
         value = snapshot.program.nodes[marker_calls[0].args[0]].kind.value.value
+        assert value is not None
         assert value.field == "i64"
         assert value.value == 1
         with pytest.raises(RuntimeError, match="cannot be replayed"):
