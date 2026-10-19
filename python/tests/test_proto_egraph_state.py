@@ -1918,7 +1918,10 @@ def test_public_reports_require_the_requested_top_level_output(monkeypatch, oper
                 output.kind = None
             elif malformed == "flags":
                 if operation == "run":
-                    output.kind.value.updated = True
+                    output_kind = output.kind
+                    assert output_kind is not None
+                    assert output_kind.field == "loop"
+                    output_kind.value.updated = True
                 else:
                     output.run_report = report
             return pb.RunProgramResponse(
@@ -2863,6 +2866,8 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
     assert second_term.field == "term"
     first = first_kind.value
     second = second_kind.value
+    assert first.target is not None
+    assert second.target is not None
     first_call = program.nodes[first_term.value].kind
     assert first_call is not None
     assert first_call.field == "call"

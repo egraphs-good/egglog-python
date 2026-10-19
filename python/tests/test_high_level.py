@@ -325,8 +325,17 @@ def test_saved_transcript_preserves_string_newlines(value: str, normalized: str)
     assert egraph.extract(String(value)).value == value
     responses = _replay_recorded_source(egraph.as_egglog_string)
     replayed = responses[-1]
-    term = replayed.outputs[0].kind.value.roots[0].variants[0].term
-    assert replayed.nodes[term].kind.value.value.value == value
+    extraction_kind = replayed.outputs[0].kind
+    assert extraction_kind is not None
+    assert extraction_kind.field == "extraction"
+    term = extraction_kind.value.roots[0].variants[0].term
+    literal_kind = replayed.nodes[term].kind
+    assert literal_kind is not None
+    assert literal_kind.field == "primitive_value"
+    string_literal = literal_kind.value.value
+    assert string_literal is not None
+    assert string_literal.field == "string"
+    assert string_literal.value == value
 
     with pytest.raises(EggSmolError):
         egraph.check(marker(String(normalized)))
@@ -1527,7 +1536,10 @@ def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() 
     view = declaration.bindings.python.views[0]
     assert view.kind == pb.PythonCallKind.CLASS_METHOD
     assert view.path == ["var"]
-    constructor = declaration.kind.value
+    constructor_kind = declaration.kind
+    assert constructor_kind is not None
+    assert constructor_kind.field == "constructor"
+    constructor = constructor_kind.value
     assert view.owner is not None
     assert view.owner.kind is not None
     assert view.owner.kind.field == "sort"
@@ -4826,6 +4838,7 @@ class TestScheduler:
         assert outer.name != inner.name
         assert outer_depth < inner_depth
         for binding in (outer, inner):
+            assert binding.scheduler is not None
             assert binding.scheduler.kind is not None
             assert binding.scheduler.kind.field == "back_off"
             assert binding.scheduler.kind.value.match_limit == 2

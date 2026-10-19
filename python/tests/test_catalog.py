@@ -267,6 +267,7 @@ def test_scalar_specialized_stub_rejects_invalid_views(mutation):
     elif mutation == "duplicate":
         view.params[0].core_input = view.receiver
     elif mutation == "owner":
+        assert view.owner is not None
         view.owner.kind = Oneof[Literal["sort"], int](
             "sort",
             next(i for i, s in enumerate(program.sorts) if s.kind.field == "family" and s.kind.value.name == "String"),
@@ -361,17 +362,24 @@ def test_vec_map_view_and_static_signature_come_from_actual_catalog():
     program = pb.Program.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.vec.map")
     _, signature = _host_signature(declaration)
+    assert declaration.bindings is not None
+    assert declaration.bindings.rust is not None
     rust = declaration.bindings.rust.views[0]
     view = _python_bindings(declaration).views[0]
     assert view.kind == pb.PythonCallKind.METHOD
     assert view.path == ["map"]
     assert view.owner == rust.owner
+    assert rust.receiver is not None
     assert view.receiver == rust.receiver.core_input == 1
     assert [(p.core_input, p.name) for p in view.params] == [(0, signature.inputs[0].name)]
     assert not view.has_field("mutates")
     assert not view.params[0].has_field("default_expr")
-    assert program.sorts[signature.inputs[0].sort].kind is not None
-    assert program.sorts[signature.inputs[0].sort].kind.field == "func"
+    callback_kind = program.sorts[signature.inputs[0].sort].kind
+    assert callback_kind is not None
+    assert callback_kind.field == "func"
+    assert view.owner is not None
+    assert view.owner.kind is not None
+    assert view.owner.kind.field == "sort"
     assert signature.inputs[1].sort == view.owner.kind.value
     render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
     stub = render(program)
@@ -434,6 +442,7 @@ def test_classmethod_pretty_infers_owner_from_uniform_tail(vec_catalog_program, 
     """Test-only combined view shape, not a claim about native Vec primitives."""
     source = next(d for d in vec_catalog_program.declarations if d.kind.value.name == "egglog.core.vec.of")
     count = pb.Declaration.from_binary(source.to_binary())
+    assert count.kind is not None
     count.kind.value.name = "test.vec.count"
     _, signature = _host_signature(count)
     view = _python_bindings(count).views[0]
@@ -1271,6 +1280,7 @@ def test_runtime_free_function_names_preserve_exact_callee_and_core_order(monkey
     restored.reindex()
     assert restored.functions["example", name] == (restored_reference, restored_view)
     duplicate = pb.Declaration.from_binary(source.declarations[-1].to_binary())
+    assert duplicate.kind is not None
     duplicate.kind.value.name = "different.declared.table"
     source.declarations.append(duplicate)
     with pytest.raises(ValueError, match="binding collision"):
@@ -1352,6 +1362,7 @@ def test_constant_presentation_accepts_each_concrete_nullary_callable(kind):
     assert catalog.constants["example", "c"] == (reference, view)
     assert not catalog.functions
     duplicate = pb.Declaration.from_binary(source.declarations[-1].to_binary())
+    assert duplicate.kind is not None
     duplicate.kind.value.name = "different_core_name"
     _python_bindings(duplicate).views[0].kind = pb.PythonCallKind.FUNCTION
     source.declarations.append(duplicate)
