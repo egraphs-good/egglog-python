@@ -1555,7 +1555,13 @@ def test_multiset_method_local_binders_from_actual_catalog():
     _, signature = _host_signature(declaration)
     view = _python_bindings(declaration).views[0]
     assert len(signature.type_params) == 2
-    owner = program.sorts[view.owner.kind.value].kind.value
+    assert view.owner is not None
+    assert view.owner.kind is not None
+    assert view.owner.kind.field == "sort"
+    owner_kind = program.sorts[view.owner.kind.value].kind
+    assert owner_kind is not None
+    assert owner_kind.field == "family"
+    owner = owner_kind.value
     assert owner.name == "MultiSet"
     assert [program.sorts[index].kind.value for index in owner.args] == [0]
     callback = program.sorts[signature.inputs[view.params[0].core_input].sort]

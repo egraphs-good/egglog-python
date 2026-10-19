@@ -97,6 +97,15 @@ def _required_callable_args(x: object, fn: object = None) -> tuple[RuntimeExpr, 
     return arguments
 
 
+def _required_python_bindings(declaration: pb.Declaration) -> pb.PythonBindings:
+    """Require authored Python metadata at this positive observation boundary."""
+    bindings = declaration.bindings
+    assert bindings is not None
+    python = bindings.python
+    assert python is not None
+    return python
+
+
 def test_pyobject_local_values_and_trusted_display(class_authoring_without_engine, monkeypatch):
     import cloudpickle  # noqa: PLC0415
 
@@ -196,7 +205,8 @@ def test_object_callable_annotations_keep_concrete_sorts(class_authoring_without
     from egglog import PyObject  # noqa: PLC0415
 
     function_sort = resolve_type_annotation(Callable[[object], object])
-    signature = function_sort.read().kind.value
+    assert isinstance(function_sort, Ref)
+    signature = _required_oneof(function_sort.read().kind, "func", pb.FuncSort)
     assert StructuralView(function_sort.owner.ref("sorts", signature.params[0])) == StructuralView(
         resolve_type_annotation(PyObject)
     )
@@ -714,7 +724,7 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
     assert key == equal
     assert hash(key) == hash(equal)
     declaration = next(d for d in packed.program.declarations if d.bindings and d.bindings.python.views[0].params)
-    view = declaration.bindings.python.views[0]
+    view = _required_python_bindings(declaration).views[0]
     original = view.params[0].default_expr
     assert view.params[1].default_expr == original
     view.params[1].default_expr = len(packed.program.nodes)
@@ -1330,6 +1340,7 @@ def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):
     assert members[1] == index
     assert _required_oneof(packed.nodes[members[0]].kind, "call", pb.Call).args == [index]
     assignment_record = _required_oneof(rule_record.head[0].kind, "set", pb.Set)
+    assert assignment_record.target is not None
     assert assignment_record.target.args == [index]
     assert assignment_record.value == index
     assert str(authored) == "rule(eq(row(x)).to(x)).then(set_(row(x)).to(x))"
@@ -1382,6 +1393,7 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
         == body.query[0]
     )
     assignment_record = _required_oneof(body.head[0].kind, "set", pb.Set)
+    assert assignment_record.target is not None
     assert assignment_record.target.args == []
     scalar_value = _required_oneof(
         packed.program.nodes[assignment_record.value].kind, "primitive_value", pb.PrimitiveValue
@@ -2201,7 +2213,7 @@ def test_scalar_wave_binary_view_rejects_wrong_arity_and_sort(target, member):
 def test_scalar_wave_specialized_view_permutation_and_zero_count():
     packet = pack([(String("left") + "right").__egg_ref__])
     declaration = next(d for d in packet.program.declarations if d.kind.value.name == "egglog.core.string.concat")
-    view = declaration.bindings.python.views[1]
+    view = _required_python_bindings(declaration).views[1]
     view.receiver, view.params[0].core_input = 1, 0
     owner = Builder.from_program(packet.program).publish()
     target = RuntimeFunction(
@@ -2210,7 +2222,7 @@ def test_scalar_wave_specialized_view_permutation_and_zero_count():
     result = target("left")
     assert [child.value for child in _required_callable_args(result)] == ["left", "right"]
     assert str(result) == "join('left', 'right')"
-    view = declaration.bindings.python.views[0]
+    view = _required_python_bindings(declaration).views[0]
     view.tail_repetitions = 0
     view.params.clear()
     owner = Builder.from_program(packet.program).publish()
@@ -2223,7 +2235,7 @@ def test_scalar_wave_specialized_view_permutation_and_zero_count():
 def test_scalar_wave_specialized_bool_deconstruction_uses_effective_slots():
     packet = pack([(Bool(True) | False).__egg_ref__])
     declaration = next(d for d in packet.program.declarations if d.kind.value.name == "egglog.core.bool.or")
-    view = declaration.bindings.python.views[0]
+    view = _required_python_bindings(declaration).views[0]
     view.receiver, view.params[0].core_input = 1, 0
     owner = Builder.from_program(packet.program).publish()
     method = RuntimeFunction(owner.ref("declarations", packet.program.declarations.index(declaration)), 0, Bool(False))
@@ -4067,9 +4079,9 @@ def test_free_function_invalid_parameter_kinds_and_unknown_options():
     with pytest.raises(NotImplementedError, match="variadic"):
         variadic(1)
     with pytest.raises(TypeError, match="unexpected keyword"):
-        function(unknown_option=True)
+        function(unknown_option=True)  # type: ignore[call-overload]
     with pytest.raises(TypeError, match="either a function or keyword options"):
-        function(positional, unknown_option=True)
+        function(positional, unknown_option=True)  # type: ignore[call-overload]
 
 
 def test_function_source_recursion_and_terminal_failure_release_callback():
@@ -4262,6 +4274,7 @@ def test_set_and_term_authoring_own_commands_without_evaluating(monkeypatch):
     target.__egg_ref__ = i64(5).__egg_ref__
     packed = pack(commands=[action.__egg_ref__, term.__egg_ref__]).program
     assignment = _required_oneof(_required_oneof(packed.commands[0].kind, "action", pb.Action).kind, "set", pb.Set)
+    assert assignment.target is not None
     assert assignment.target.func == "slot"
     scalar_value = _required_oneof(packed.nodes[assignment.value].kind, "primitive_value", pb.PrimitiveValue)
     assert _required_oneof(scalar_value.value, "i64", int) == 4
@@ -4518,7 +4531,7 @@ def test_constants_own_distinct_canonical_presentation_and_declaration_kinds(mon
     packed = pack([table.__egg_ref__])
     program = pb.Program.from_binary(packed.program.to_binary())
     declaration = next(d for d in program.declarations if d.kind.field == "function")
-    declaration.bindings.python.views[0].kind = pb.PythonCallKind.FUNCTION
+    _required_python_bindings(declaration).views[0].kind = pb.PythonCallKind.FUNCTION
     reconstructed = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
     assert str(reconstructed) == "current()"
     assert get_constant_name(reconstructed) is None
@@ -6160,11 +6173,11 @@ def test_getattr_does_not_synthesize_protocols_or_captures(class_authoring_witho
     assert expr_parts(UnstableFn(receiver.__getattr__)) == expr_parts(UnstableFn(A.__getattr__, receiver))
     original = receiver.__egg_ref__
     with pytest.raises(TypeError):
-        A.__getattr__(receiver)
+        A.__getattr__(receiver)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
-        A.__getattr__(receiver, "foo", "bar")
+        A.__getattr__(receiver, "foo", "bar")  # type: ignore[call-arg]
     with pytest.raises(ConvertError):
-        receiver.__getattr__(i64(1))
+        receiver.__getattr__(i64(1))  # type: ignore[arg-type]
     assert receiver.__egg_ref__ is original
     with pytest.raises(AttributeError):
         _ = i64(1).absent
@@ -7022,7 +7035,7 @@ def test_user_sort_cannot_borrow_builtin_codec_or_members_by_name():
 
 def test_unresolved_constructor_annotation_does_not_publish_members():
     class Missing(Expr):
-        def __init__(self, value: "NotDefinedHere") -> None: ...  # noqa: F821 -- intentional unresolved annotation
+        def __init__(self, value: "NotDefinedHere") -> None: ...  # type: ignore[name-defined]  # noqa: F821
 
     with pytest.raises(NameError, match="NotDefinedHere"):
         Missing(1)
@@ -7081,7 +7094,7 @@ def test_reconstructed_constructor_uses_changed_protobuf_parameter_not_python_si
         for index, declaration in enumerate(program.declarations)
         if declaration.kind.field == "constructor"
     )
-    constructor.bindings.python.views[0].params[0].name = "renamed"
+    _required_python_bindings(constructor).views[0].params[0].name = "renamed"
     owner = Builder.from_program(program).publish()
     function = RuntimeFunction(owner.ref("declarations", index), 0, Num)
     result = function(renamed=8)
@@ -7219,6 +7232,7 @@ def test_call_authoring_binds_keywords_defaults_and_core_input_order():
         owner.ref("declarations", declaration), 0, (), {"right": 9}, node_of=lambda _: None, convert=convert
     )
     assert mutated is None
+    assert isinstance(root, Ref)
     node = root.read()
     assert node.kind.value.func == "sample.subtract"
     args = [root.owner.ref("nodes", index) for index in node.kind.value.args]
@@ -7619,6 +7633,7 @@ def test_generic_empty_call_requires_result_owner_and_keeps_signature_unchanged(
         ref, 0, (), {}, node_of=forbidden, convert=forbidden, owner=owner.ref("sorts", concrete)
     )
     assert mutated is None
+    assert isinstance(root, Ref)
     assert list(root.read().kind.value.args) == []
     assert StructuralView(root.owner.ref("sorts", root.read().sort_id)) == StructuralView(owner.ref("sorts", concrete))
     assert ref.read().to_binary() == before

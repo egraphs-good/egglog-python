@@ -7,6 +7,7 @@ from typing import Literal
 import pytest
 
 from egglog import *
+from egglog import bindings
 from egglog.run_report import RuleKey
 
 
@@ -106,6 +107,7 @@ def test_proto_report_projection_preserves_grouping_rounding_and_ownership(monke
     assert iteration.rule_set_report.search_and_apply_time == timedelta(microseconds=2)
     assert [report.num_matches for report in iteration.rule_set_report.rule_reports[key]] == [2, 3]
     assert iteration.rule_set_report.rule_reports[key][0].plan is None
+    assert iteration.rule_set_report.rule_reports[key][1].plan is not None
     assert iteration.rule_set_report.rule_reports[key][1].plan.stages == []
     assert "rule(name='same').then()" in repr(result)
     state._ruleset_identifiers.clear()
@@ -153,6 +155,7 @@ def test_proto_report_duration_and_plan_controls_without_engine():
     assert plan.stages[0].kind is not None
     assert plan.stages[0].kind.field == "intersect"
     assert plan.stages[0].kind.value.scans[0].columns[0] == pb.ReportColumn(variable="x", column=2)
+    assert plan.stages[0].stats is not None
     assert plan.stages[0].stats.num_candidates == 3
     assert plan.stages[0].stats.num_succeeded == 0
     assert plan.stages[0].next == [1]
@@ -471,6 +474,7 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
                 assert ruleset.kind is not None
                 assert ruleset.kind.field == "rules"
                 replayed = owner.rules[ruleset.kind.value.rules[attribution.rule]]
+                assert replayed.kind is not None
                 assert replayed.kind.field == authored.kind.field
                 assert replayed.has_field("name") == attribution.has_field("name")
                 assert replayed.name == attribution.name
@@ -482,15 +486,21 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
                         original_ref = key.__egg_ref__.owner.ref("nodes", getattr(authored.kind.value, operand))
                         original = original_ref.read()
                         replay = owner.nodes[getattr(replayed.kind.value, operand)]
+                        assert replay.kind is not None
                         assert original.kind.field == replay.kind.field == "call"
+                        assert isinstance(replay.kind.value, pb.Call)
                         assert replay.kind.value.func == original.kind.value.func
                         (original_arg,) = original.kind.value.args
                         (replay_arg,) = replay.kind.value.args
                         original_value = original_ref.owner.ref("nodes", original_arg).read()
                         replay_value = owner.nodes[replay_arg]
+                        assert replay_value.kind is not None
                         assert original_value.kind.field == replay_value.kind.field == "primitive_value"
                         assert replay_value.kind.value == original_value.kind.value
-                rows = [*native.search_and_apply_time_per_rule, *native.num_matches_per_rule]
+                rows: list[pb.RuleDurationEntry | pb.RuleCountEntry | pb.NativeRuleReportsEntry] = [
+                    *native.search_and_apply_time_per_rule,
+                    *native.num_matches_per_rule,
+                ]
                 for iteration in native.iterations:
                     assert iteration.rule_set_report is not None
                     rows.extend(iteration.rule_set_report.rule_reports)
