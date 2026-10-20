@@ -1693,10 +1693,15 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
                 fresh._state.run_program([before.__egg_ref__, command, after.__egg_ref__])
         program = requests[label].program
         assert program is not None
-        assert [item.kind.field for item in program.commands] == ["action", "check", "action"]
+        assert [
+            item.kind.field if item.kind is not None else pytest.fail("Missing command kind")
+            for item in program.commands
+        ] == ["action", "check", "action"]
         if label == "body-query":
             assert any(
-                item.kind.field == "primitive" and item.kind.value.name == primitive.value.name
+                (item.kind.field == "primitive" and item.kind.value.name == primitive.value.name)
+                if item.kind is not None
+                else pytest.fail("Missing declaration kind")
                 for item in program.declarations
             )
         error = responses[label].error
@@ -1721,7 +1726,10 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
             fresh.register(before, MultiSet[Atom]().union_values(), after)
     prefix_program = requests["empty-prefix"].program
     assert prefix_program is not None
-    assert [item.kind.field for item in prefix_program.commands] == ["action"] * 3
+    assert [
+        item.kind.field if item.kind is not None else pytest.fail("Missing command kind")
+        for item in prefix_program.commands
+    ] == ["action"] * 3
     error = responses["empty-prefix"].error
     assert error is not None
     assert error.code == pb.ErrorCode.EVALUATION_FAILED

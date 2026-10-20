@@ -158,7 +158,7 @@ def test_pyobject_local_values_and_trusted_display(class_authoring_without_engin
     assert '{"x": 1}' in str(expression)
     action = expr_action(value)
     assert str(action) == str(value)
-    rewrite_value = rewrite(value).to(PyObject({"x": [2]}))
+    rewrite_value = rewrite(value).to(PyObject({"x": [2]}))  # type: ignore[type-var]
     assert str(value) in str(rewrite_value)
     assert str(value) in repr(RuleKey(rewrite_value.__egg_ref__))
 
@@ -277,7 +277,11 @@ def test_pyobject_materialization_rejects_malformed_shape(corruption, class_auth
     elif corruption == "arity":
         family.args.append(node.sort_id)
     elif corruption == "declaration":
-        next(d.kind.value for d in program.declarations if d.kind.field == "host_sort_family").arity = 1
+        next(
+            _required_oneof(d.kind, "host_sort_family", pb.HostSortFamily)
+            for d in program.declarations
+            if (d.kind.field == "host_sort_family" if d.kind is not None else pytest.fail("Missing declaration kind"))
+        ).arity = 1
     elif corruption == "arm":
         primitive.value = Oneof[Literal["string"], str]("string", "not a pickle")
     else:
@@ -742,7 +746,7 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
     default = RuntimeExpr(builder.publish().ref("nodes", empty))
 
     @function
-    def choose(left: Value = default, right: Value = default) -> Value: ...
+    def choose(left: Value = default, right: Value = default) -> Value: ...  # type: ignore[assignment]
 
     template = rule().then(choose(Value(), Value()))
     packed = pack([template.__egg_ref__])
@@ -831,11 +835,11 @@ def test_report_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirect
     else:
         left = i64(1)
     for _ in range(depth):
-        left = Value(left, left) if allocating else left + left
+        left = Value(left, left) if allocating else left + left  # type: ignore[arg-type, operator]
     if allocating:
-        parent = Value(left, left)
+        parent = Value(left, left)  # type: ignore[arg-type]
         shared = RuleKey(rule().then(parent, parent).__egg_ref__)
-        duplicated = RuleKey(rule().then(Value(left, left), Value(left, left)).__egg_ref__)
+        duplicated = RuleKey(rule().then(Value(left, left), Value(left, left)).__egg_ref__)  # type: ignore[arg-type]
         assert shared == duplicated
         assert hash(shared) == hash(duplicated)
     first = RuleKey(rule().then(left).__egg_ref__)
@@ -939,9 +943,19 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
     packed = pack(roots=[second.__egg_ref__])
     program = packed.program
     target = next(
-        declaration.kind.value for declaration in program.declarations if declaration.kind.field == "function"
+        _required_oneof(declaration.kind, "function", pb.Function)
+        for declaration in program.declarations
+        if (
+            declaration.kind.field == "function"
+            if declaration.kind is not None
+            else pytest.fail("Missing declaration kind")
+        )
     )
-    value = next(index for index, node in enumerate(program.nodes) if node.kind.field == "primitive_value")
+    value = next(
+        index
+        for index, node in enumerate(program.nodes)
+        if (node.kind.field == "primitive_value" if node.kind is not None else pytest.fail("Missing node kind"))
+    )
     target.merge = value
     modified = RewriteOrRule(Builder.from_program(program).publish().ref("rules", packed.indices[0]))
     assert first != modified  # The command shape alone is identical.
@@ -1027,7 +1041,7 @@ def test_direct_variables_are_canonical_without_an_engine(monkeypatch, name, egg
             record = expression.__egg_ref__.read()
             assert record.kind == Oneof[Literal["var"], str]("var", expected)
             assert StructuralView(expression.__egg_ref__.owner.ref("sorts", record.sort_id)) == StructuralView(
-                sort.__egg_sort__
+                sort.__egg_sort__  # type: ignore[union-attr]
             )
         packed = pack([first.__egg_ref__, second.__egg_ref__])
         decoded = pb.Program.from_binary(packed.program.to_binary())
@@ -1131,7 +1145,7 @@ def test_detached_equality_uses_predicates_without_borrowing_members(class_autho
         def __ne__(self, other) -> object:  # type: ignore[override]
             pytest.fail("Detached inequality recovered a Python-only hook")
 
-    packed = pack([Shadow(3).__egg_ref__])
+    packed = pack([Shadow(3).__egg_ref__])  # type: ignore[arg-type]
     program = pb.Program.from_binary(packed.program.to_binary())
     if strip_metadata:
         for declaration in program.declarations:
@@ -1367,7 +1381,11 @@ def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):
     query = eq(row(variable)).to(variable)
     authored = rule(query).then(set_(row(variable)).to(variable))
     packed = pack([authored.__egg_ref__]).program
-    variables = [index for index, node in enumerate(packed.nodes) if node.kind.field == "var"]
+    variables = [
+        index
+        for index, node in enumerate(packed.nodes)
+        if (node.kind.field == "var" if node.kind is not None else pytest.fail("Missing node kind"))
+    ]
     assert len(variables) == 1
     index = variables[0]
     assert _required_oneof(packed.nodes[index].kind, "var", str) == "x"
@@ -1436,7 +1454,9 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     )
     assert _required_oneof(scalar_value.value, "i64", int) == 7
     assert any(
-        declaration.kind.field == "function" and declaration.kind.value.name == assignment_record.target.func
+        (declaration.kind.field == "function" and declaration.kind.value.name == assignment_record.target.func)
+        if declaration.kind is not None
+        else pytest.fail("Missing declaration kind")
         for declaration in packed.program.declarations
     )
     expected = (
@@ -1553,7 +1573,7 @@ def test_set_formed_value_preserves_refs_and_pretty_roundtrip(set_runtime, empty
     owner = builder.publish()
     expression = RuntimeExpr(owner.ref("nodes", root))
     before = expression.__egg_ref__.read().to_binary()
-    assert [item.__egg_ref__ for item in expression] == (
+    assert [item.__egg_ref__ for item in expression] == (  # type: ignore[attr-defined]
         [] if empty else [owner.ref("nodes", first), owner.ref("nodes", second)]
     )
     assert expression.value == (set() if empty else {integer(2), integer(1)})
@@ -1569,7 +1589,7 @@ def test_set_formed_value_preserves_refs_and_pretty_roundtrip(set_runtime, empty
     # Trusted display of our constructed values, not evaluation by an engine.
     authored = eval(expected, set_runtime)
     assert authored.__egg_ref__.read().kind.field == "call"
-    assert list(authored) == list(expression)
+    assert list(authored) == list(expression)  # type: ignore[call-overload]
     assert get_callable_args(expression) is None
     copied = copy(expression)
     assert copied.__egg_ref__ == expression.__egg_ref__
@@ -1982,7 +2002,8 @@ def test_exact_pretty_uses_retained_classmethod_presentation(rational_runtime, r
             pb.Node(
                 sort_id=sort,
                 kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
-                    "primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))
+                    "primitive_value",
+                    pb.PrimitiveValue(value=Oneof(arm, payload)),  # type: ignore[arg-type]
                 ),
             ),
         )
@@ -2061,7 +2082,8 @@ def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runt
         pb.Node(
             sort_id=builder.import_ref(rational_runtime[family].__egg_sort__),
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
-                "primitive_value", pb.PrimitiveValue(value=Oneof(arm, payload))
+                "primitive_value",
+                pb.PrimitiveValue(value=Oneof(arm, payload)),  # type: ignore[arg-type]
             ),
         ),
     )
@@ -2252,7 +2274,15 @@ def test_scalar_wave_binary_view_rejects_wrong_arity_and_sort(target, member):
 
 def test_scalar_wave_specialized_view_permutation_and_zero_count():
     packet = pack([(String("left") + "right").__egg_ref__])
-    declaration = next(d for d in packet.program.declarations if d.kind.value.name == "egglog.core.string.concat")
+    declaration = next(
+        d
+        for d in packet.program.declarations
+        if (
+            d.kind.value.name == "egglog.core.string.concat"
+            if d.kind is not None
+            else pytest.fail("Missing declaration kind")
+        )
+    )
     view = _required_python_bindings(declaration).views[1]
     view.receiver, view.params[0].core_input = 1, 0
     owner = Builder.from_program(packet.program).publish()
@@ -2274,7 +2304,15 @@ def test_scalar_wave_specialized_view_permutation_and_zero_count():
 
 def test_scalar_wave_specialized_bool_deconstruction_uses_effective_slots():
     packet = pack([(Bool(True) | False).__egg_ref__])
-    declaration = next(d for d in packet.program.declarations if d.kind.value.name == "egglog.core.bool.or")
+    declaration = next(
+        d
+        for d in packet.program.declarations
+        if (
+            d.kind.value.name == "egglog.core.bool.or"
+            if d.kind is not None
+            else pytest.fail("Missing declaration kind")
+        )
+    )
     view = _required_python_bindings(declaration).views[0]
     view.receiver, view.params[0].core_input = 1, 0
     owner = Builder.from_program(packet.program).publish()
@@ -2299,7 +2337,15 @@ def test_scalar_wave_specialized_bool_deconstruction_uses_effective_slots():
 )
 def test_scalar_wave_authoring_rejects_invalid_specialization(mutation):
     packet = pack([(Bool(True) | False).__egg_ref__])
-    declaration = next(d for d in packet.program.declarations if d.kind.value.name == "egglog.core.bool.or")
+    declaration = next(
+        d
+        for d in packet.program.declarations
+        if (
+            d.kind.value.name == "egglog.core.bool.or"
+            if d.kind is not None
+            else pytest.fail("Missing declaration kind")
+        )
+    )
     primitive = _required_oneof(declaration.kind, "host_primitive", pb.HostPrimitive)
     signature = _required_oneof(primitive.typing, "signature", pb.GenericSignature)
     view = _required_python_bindings(declaration).views[0]
@@ -2443,7 +2489,7 @@ def test_map_fixed_from_pairs_and_computed_vec_authoring():
     first, newest = f64(2.0), f64(3.0)
     entries = Vec(Pair(i64(1), first), Pair(i64(1), newest))
     expression = Map.from_pairs(entries)
-    assert isinstance(expression, Map[i64, f64])
+    assert isinstance(expression, Map[i64, f64])  # type: ignore[misc]
     assert _required_callable_args(expression)[0].__egg_ref__ == entries.__egg_ref__
     assert expression.value[i64(1)].__egg_ref__ == newest.__egg_ref__
     assert Map[i64, f64].from_pairs(Vec[Pair[i64, f64]].empty()).value == {}
@@ -2467,7 +2513,10 @@ def test_map_fixed_from_pairs_and_computed_vec_authoring():
     with pytest.raises(ExprValueError):
         _ = mapping.value
     assert isinstance(mapping[i64(1)], f64)
-    assert "Map" in {d.kind.value.name for d in pack([mapping.__egg_ref__]).program.declarations}
+    assert "Map" in {
+        d.kind.value.name if d.kind is not None else pytest.fail("Missing declaration kind")
+        for d in pack([mapping.__egg_ref__]).program.declarations
+    }
 
 
 @pytest.mark.parametrize("empty", [False, True])
@@ -2480,7 +2529,7 @@ def test_map_value_payload_order_ref_zero_and_pretty(empty):
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(Map[i64, f64].__egg_sort__),
+            sort_id=builder.import_ref(Map[i64, f64].__egg_sort__),  # type: ignore[attr-defined]
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value",
                 pb.PrimitiveValue(
@@ -2503,8 +2552,14 @@ def test_map_value_payload_order_ref_zero_and_pretty(empty):
         assert expression.value == {}
         assert str(expression) == "Map[i64, f64].empty()"
     else:
-        assert next(iter(expression.value)).__egg_ref__ == owner.ref("nodes", key)
-        assert expression.value[i64(2)].__egg_ref__ == owner.ref("nodes", later)
+        mapping = expression.value
+        assert isinstance(mapping, dict)
+        first_key = next(iter(mapping))
+        assert isinstance(first_key, RuntimeExpr)
+        selected = mapping[i64(2)]
+        assert isinstance(selected, RuntimeExpr)
+        assert first_key.__egg_ref__ == owner.ref("nodes", key)
+        assert selected.__egg_ref__ == owner.ref("nodes", later)
         assert str(expression) == "Map[i64, f64].empty().insert(i64(2), f64(1.0)).insert(i64(2), f64(3.0))"
 
 
@@ -2528,7 +2583,7 @@ def test_map_like_annotation_nested_conversion_and_order():
     def size(value: MapLike[i64, f64, int, float]) -> i64: ...
 
     converted = _required_callable_args(size({1: 2.0}))[0]
-    assert isinstance(converted, Map[i64, f64])
+    assert isinstance(converted, Map[i64, f64])  # type: ignore[misc]
     assert converted.value[i64(1)].value == 2.0
     with pytest.raises(TypeError):
         _ = MapLike[i64, f64, int]  # type: ignore[type-arg]
@@ -2612,10 +2667,10 @@ def test_map_invalid_records_are_explicit_local_inspection_errors(invalid):
     builder = Builder()
     key = builder.import_ref((f64(1.0) if invalid == "key_sort" else i64(1)).__egg_ref__)
     value = builder.import_ref((i64(2) if invalid == "value_sort" else f64(2.0)).__egg_ref__)
-    sort = builder.import_ref((Vec[i64] if invalid == "wrong_family" else Map[i64, f64]).__egg_sort__)
+    sort = builder.import_ref((Vec[i64] if invalid == "wrong_family" else Map[i64, f64]).__egg_sort__)  # type: ignore[attr-defined]
     if invalid == "arity":
-        record = Map[i64, f64].__egg_sort__.read()
-        record.kind.value.args = [builder.import_ref(i64.__egg_sort__)]
+        record = Map[i64, f64].__egg_sort__.read()  # type: ignore[attr-defined]
+        record.kind.value.args = [builder.import_ref(i64.__egg_sort__)]  # type: ignore[attr-defined]
         sort = builder.add("sorts", record)
     root = builder.reserve("nodes")
     if invalid == "oob":
@@ -2628,7 +2683,7 @@ def test_map_invalid_records_are_explicit_local_inspection_errors(invalid):
             "nodes",
             value,
             pb.Node(
-                sort_id=builder.import_ref(f64.__egg_sort__),
+                sort_id=builder.import_ref(f64.__egg_sort__),  # type: ignore[attr-defined]
                 kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.f64.add", args=[value, value])),
             ),
         )
@@ -2638,7 +2693,7 @@ def test_map_invalid_records_are_explicit_local_inspection_errors(invalid):
             "nodes",
             value,
             pb.Node(
-                sort_id=builder.import_ref(f64.__egg_sort__),
+                sort_id=builder.import_ref(f64.__egg_sort__),  # type: ignore[attr-defined]
                 kind=Oneof[Literal["union"], pb.Union](
                     "union", pb.Union(members=[999 if invalid == "union_oob" else value])
                 ),
@@ -2673,7 +2728,7 @@ def test_map_from_pairs_rejects_invalid_nested_provenance(invalid):
     builder = Builder()
     key = builder.import_ref(i64(1).__egg_ref__)
     value = builder.import_ref(f64(2.0).__egg_ref__)
-    pair_sort = builder.import_ref(Pair[i64, f64].__egg_sort__)
+    pair_sort = builder.import_ref(Pair[i64, f64].__egg_sort__)  # type: ignore[attr-defined]
     pair_kind = Oneof[Literal["primitive_value"], pb.PrimitiveValue](
         "primitive_value",
         pb.PrimitiveValue(
@@ -2691,8 +2746,8 @@ def test_map_from_pairs_rejects_invalid_nested_provenance(invalid):
                     pb.Function(
                         name="egglog.core.pair.make",
                         inputs=[
-                            pb.Arg(sort=builder.import_ref(i64.__egg_sort__)),
-                            pb.Arg(sort=builder.import_ref(f64.__egg_sort__)),
+                            pb.Arg(sort=builder.import_ref(i64.__egg_sort__)),  # type: ignore[attr-defined]
+                            pb.Arg(sort=builder.import_ref(f64.__egg_sort__)),  # type: ignore[attr-defined]
                         ],
                         output=pair_sort,
                     ),
@@ -2704,7 +2759,7 @@ def test_map_from_pairs_rejects_invalid_nested_provenance(invalid):
     vector = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(Vec[Pair[i64, f64]].__egg_sort__),
+            sort_id=builder.import_ref(Vec[Pair[i64, f64]].__egg_sort__),  # type: ignore[attr-defined]
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value",
                 pb.PrimitiveValue(
@@ -2718,7 +2773,7 @@ def test_map_from_pairs_rejects_invalid_nested_provenance(invalid):
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(Map[i64, f64].__egg_sort__),
+            sort_id=builder.import_ref(Map[i64, f64].__egg_sort__),  # type: ignore[attr-defined]
             kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="egglog.core.map.of", args=[vector])),
         ),
     )
@@ -2740,7 +2795,7 @@ def test_map_insert_view_parameter_permutation_preserves_core_order(vec_catalog_
     target = runtime._BASE_CLASSES["Map"][i64, value_type]
     assert target.__egg_sort__ is not None
     if source == "dict":
-        expression = convert({1: 2 if same_sort else 2.0}, target)
+        expression: RuntimeExpr = convert({1: 2 if same_sort else 2.0}, target)  # type: ignore[arg-type]
         assert expression.value == {i64(1): value}
         assert str(expression) == f"Map[i64, {value_type}].empty().put({value.value!r}, 1)"
         assert [argument.value for argument in _required_callable_args(expression)[1:]] == [value.value, 1]
@@ -2784,13 +2839,22 @@ def test_map_converter_and_value_pretty_follow_renamed_views(vec_catalog_program
     # This scoped catalog is not the module-global actual catalog.
     target = runtime._BASE_CLASSES["Map"][i64, f64]
     assert target.__egg_sort__ is not None
-    expression = convert({1: 2.0}, target)
+    expression: RuntimeExpr = convert({1: 2.0}, target)  # type: ignore[arg-type]
     assert str(expression) == "Mapping[i64, f64].vacant().put(1, 2.0)"
-    assert expression.value[i64(1)].value == 2.0
-    from_entries = target.from_entries(Vec(Pair(i64(1), f64(2.0))))
-    assert from_entries.value[i64(1)].value == 2.0
-    assert ".from_entries(" in str(from_entries.lookup(i64(1)))
-    assert str(from_entries.lookup(i64(1))).endswith(".lookup(1)")
+    mapping = expression.value
+    assert isinstance(mapping, dict)
+    value = mapping[i64(1)]
+    assert isinstance(value, RuntimeExpr)
+    assert value.value == 2.0
+    from_entries = _required_runtime_function(target.from_entries)(Vec(Pair(i64(1), f64(2.0))))
+    assert from_entries is not None
+    formed_mapping = from_entries.value
+    assert isinstance(formed_mapping, dict)
+    formed_value = formed_mapping[i64(1)]
+    assert isinstance(formed_value, RuntimeExpr)
+    assert formed_value.value == 2.0
+    assert ".from_entries(" in str(_required_runtime_function(from_entries.lookup)(i64(1)))
+    assert str(_required_runtime_function(from_entries.lookup)(i64(1))).endswith(".lookup(1)")
     with pytest.raises(AttributeError):
         _ = target.from_pairs
     key, value = next(iter(_map_entries(expression)))
@@ -3006,17 +3070,18 @@ def test_vec_annotation_protocol_preserves_lookup_and_pending_classes(vec_runtim
     pending = token_context.prepare
     assert _runtime_token.__args__ == ()
     assert token_context.prepare is pending
-    assert i64.__args__ == ()
+    assert i64.__args__ == ()  # type: ignore[attr-defined]
     assert vec_runtime[i64].__args__ == (i64,)
-    assert Pair[i64, f64].__args__ == (i64, f64)
+    assert Pair[i64, f64].__args__ == (i64, f64)  # type: ignore[attr-defined]
     assert len(vec_runtime.__args__) == 1
 
     def annotated(value: Pair[i64, f64]) -> VecLike[i64, int]: ...
 
     hints = get_type_hints(annotated)
     assert hints["value"] == Pair[i64, f64]
+    _: object
     with pytest.raises(TypeError):
-        _ = VecLike[i64, int, float]  # type: ignore[type-arg]
+        _ = VecLike[i64, int, float]  # type: ignore[misc, type-arg]
 
     def wrong(value: VecLike[int, int]) -> i64: ...  # type: ignore[type-var]
 
@@ -3112,9 +3177,12 @@ def test_vec_computed_value_is_not_locally_evaluated(vec_runtime):
     def computed_pair() -> Pair[i64, f64]: ...
 
     pair = computed_pair()
-    assert isinstance(pair, Pair[i64, f64])
+    assert isinstance(pair, Pair[i64, f64])  # type: ignore[misc]
     assert resolve_callable(computed_pair).read().kind.field == "function"
-    assert {d.kind.value.name for d in pack([pair.__egg_ref__]).program.declarations} >= {"Pair", "i64", "f64"}
+    assert {
+        d.kind.value.name if d.kind is not None else pytest.fail("Missing declaration kind")
+        for d in pack([pair.__egg_ref__]).program.declarations
+    } >= {"Pair", "i64", "f64"}
     with pytest.raises(ExprValueError):
         pair.value
 
@@ -3141,9 +3209,13 @@ def test_vec_value_payload_direct_children_and_pretty(vec_runtime, empty):
     )
     owner = builder.publish()
     value = RuntimeExpr(owner.ref("nodes", root))
-    assert [child.__egg_ref__ for child in value.value] == (
-        [] if empty else [owner.ref("nodes", i) for i in [first, second, first]]
-    )
+    children = value.value
+    assert isinstance(children, tuple)
+    references = []
+    for child in children:
+        assert isinstance(child, RuntimeExpr)
+        references.append(child.__egg_ref__)
+    assert references == ([] if empty else [owner.ref("nodes", i) for i in [first, second, first]])
     assert str(value) == ("Vec[i64].empty()" if empty else "Vec[i64](i64(1), i64(2), i64(1))")
     assert get_callable_args(value) is None
 
@@ -3194,7 +3266,7 @@ def test_pair_tuple_conversion_context_exact_override_and_wrong_families(pair_ru
 
     converter(tuple, pair[i64, f64], exact, cost=0)
     assert convert((1, 2), pair[i64, f64]) is marker
-    assert contexts == [(i64, f64)]
+    assert contexts == [(i64, f64)]  # type: ignore[comparison-overlap]
     assert get_type_args() == ()
     # Unrelated families and nominal same-spelled sorts must not reuse Pair's
     # host conversion registration.
@@ -3223,7 +3295,7 @@ def test_pair_exact_target_precedes_generic_fallback_across_source_mro(pair_runt
     converter(object, target, exact)
     value = TupleSubclass((1, 2.0)) if subclass else (1, 2.0)
     assert convert(value, target) is sentinel
-    assert calls == [(value, (i64, f64))]
+    assert calls == [(value, (i64, f64))]  # type: ignore[comparison-overlap]
     assert get_type_args() == ()
 
 
@@ -3260,7 +3332,7 @@ def test_pair_nested_matching_and_retained_children(pair_runtime):
 @pytest.mark.parametrize("same", [False, True])
 def test_pair_value_payload_preserves_child_refs_and_union_identity(pair_runtime, same):
     builder = Builder()
-    scalar = builder.import_ref(i64.__egg_sort__)
+    scalar = builder.import_ref(i64.__egg_sort__)  # type: ignore[attr-defined]
     literal = builder.import_ref(i64(1).__egg_ref__)
     first = builder.add(
         "nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[literal])))
@@ -3300,7 +3372,19 @@ def test_pair_value_payload_preserves_child_refs_and_union_identity(pair_runtime
     assert authored.value[0].__egg_ref__ == left.__egg_ref__
     assert authored.value[1].__egg_ref__ == right.__egg_ref__
     encoded = pack([expression.__egg_ref__]).program
-    assert any(n.kind.field == "primitive_value" and n.kind.value.value.field == "pair" for n in encoded.nodes)
+    assert any(
+        (
+            n.kind.field == "primitive_value"
+            and (
+                n.kind.value.value.field == "pair"
+                if n.kind.value.value is not None
+                else pytest.fail("Missing primitive value arm")
+            )
+        )
+        if n.kind is not None
+        else pytest.fail("Missing node kind")
+        for n in encoded.nodes
+    )
 
 
 def test_pair_value_ref_zero_and_pretty_uses_direct_payload(pair_runtime):
@@ -3321,7 +3405,13 @@ def test_pair_value_ref_zero_and_pretty_uses_direct_payload(pair_runtime):
         ),
     )
     expression = RuntimeExpr(builder.publish().ref("nodes", root))
-    assert [child.value for child in expression.value] == [0, 2.0]
+    children = expression.value
+    assert isinstance(children, tuple)
+    values = []
+    for child in children:
+        assert isinstance(child, RuntimeExpr)
+        values.append(child.value)
+    assert values == [0, 2.0]
     assert str(expression) == "Pair[i64, f64](i64(0), f64(2.0))"
     assert expression.__egg_ref__.read().kind.value.value.field == "pair"
     assert get_callable_args(expression) is None  # No fabricated make Call.
@@ -3385,12 +3475,12 @@ def test_pair_contextual_tuple_conversion_uses_generic_registration():
     builder = Builder()
     node = builder.add(
         "nodes",
-        pb.Node(sort_id=builder.import_ref(target.__egg_sort__), kind=Oneof[Literal["var"], str]("var", "pair")),
+        pb.Node(sort_id=builder.import_ref(target.__egg_sort__), kind=Oneof[Literal["var"], str]("var", "pair")),  # type: ignore[attr-defined]
     )
     sentinel = RuntimeExpr(builder.publish().ref("nodes", node))
     converter(tuple, Pair, lambda _: sentinel, cost=0)
     result = convert((i64(1), f64(2.0)), Pair[i64, f64])
-    assert result is sentinel
+    assert to_runtime_expr(result) is sentinel
 
 
 @pytest.mark.parametrize("doc", [None, "", "function documentation"])
@@ -3542,15 +3632,16 @@ def test_free_function_identity_uses_python_name_not_signature_or_owner():
 
     second.__name__ = first.__name__
     left, right = function(first), function(egg_fn="different native name")(second)
-    assert left == right
-    assert hash(left) == hash(right)
-    assert {left: "same callable"}[right] == "same callable"
-    assert get_callable_args(left(), right)[0].value == 1
+    runtime_left, runtime_right = _required_runtime_function(left), _required_runtime_function(right)
+    assert runtime_left == runtime_right
+    assert hash(runtime_left) == hash(runtime_right)
+    assert {runtime_left: "same callable"}[runtime_right] == "same callable"
+    assert _required_callable_args(left(), right)[0].value == 1
     second.__module__ = "different_module"
     other_module = function(second)
-    assert left != other_module
+    assert runtime_left != _required_runtime_function(other_module)
     first.__name__ = "different_name"
-    assert left != function(first)
+    assert runtime_left != _required_runtime_function(function(first))
 
 
 def test_member_deconstruction_filter_ignores_receiver_binding():
@@ -4307,7 +4398,13 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
     assert first != second
     _required_oneof(program.nodes[first].kind, "union", pb.Union)
     _required_oneof(program.nodes[second].kind, "union", pb.Union)
-    assert sum(node.kind.field == "union" for node in program.nodes) == 2
+    assert (
+        sum(
+            node.kind.field == "union" if node.kind is not None else pytest.fail("Missing node kind")
+            for node in program.nodes
+        )
+        == 2
+    )
     action_data = [_required_oneof(command.kind, "action", pb.Action) for command in program.commands]
     assert [_required_oneof(command.kind, "term", int) for command in action_data] == [first, first, second]
     canonical = _required_oneof(program.rules[rule_index].kind, "rule", pb.Rule)
@@ -4322,7 +4419,7 @@ def test_set_and_term_authoring_own_commands_without_evaluating(monkeypatch):
 
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
     builder = Builder()
-    output = builder.import_ref(i64.__egg_sort__)
+    output = builder.import_ref(i64.__egg_sort__)  # type: ignore[attr-defined]
     index = builder.add(
         "declarations",
         pb.Declaration(
@@ -4601,7 +4698,11 @@ def test_constants_own_distinct_canonical_presentation_and_declaration_kinds(mon
         set_(token).to(token)
     packed = pack([table.__egg_ref__])
     program = pb.Program.from_binary(packed.program.to_binary())
-    declaration = next(d for d in program.declarations if d.kind.field == "function")
+    declaration = next(
+        d
+        for d in program.declarations
+        if (d.kind.field == "function" if d.kind is not None else pytest.fail("Missing declaration kind"))
+    )
     _required_python_bindings(declaration).views[0].kind = pb.PythonCallKind.FUNCTION
     reconstructed = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
     assert str(reconstructed) == "current()"
@@ -4776,25 +4877,27 @@ def test_type_factory_retains_canonical_sort_and_formals(class_authoring_without
     namespace = {"__module__": __name__, "__init__": init, "choose": choose}
     dynamic = type("Factory", (Expr,), namespace)
     expression = dynamic(3)
-    assert isinstance(dynamic, runtime.RuntimeClass)
+    runtime_dynamic, _dynamic_context = _required_authored_class(dynamic)
+    dynamic_sort = runtime_dynamic.__egg_sort__
+    assert dynamic_sort is not None
     assert isinstance(expression, dynamic)
-    assert runtime._class_for_sort(dynamic.__egg_sort__) is dynamic
+    assert runtime._class_for_sort(dynamic_sort) is dynamic
     assert namespace == {"__module__": __name__, "__init__": init, "choose": choose}
-    reference = resolve_callable(dynamic.choose)
+    reference = resolve_callable(runtime_dynamic.choose)
     declaration = reference.read()
     assert declaration.kind.field == "primitive"
     assert [argument.name for argument in declaration.kind.value.inputs] == ["self", "value"]
     body = reference.owner.ref("nodes", declaration.kind.value.body)
     assert body.read().kind == Oneof[Literal["var"], str]("var", "_1")
     assert StructuralView(reference.owner.ref("sorts", declaration.kind.value.inputs[0].sort)) == StructuralView(
-        dynamic.__egg_sort__
+        dynamic_sort
     )
     with pytest.raises(TypeError):
-        runtime.RuntimeClass("Spoof", (Expr,), {})
+        runtime.RuntimeClass("Spoof", (Expr,), {})  # type: ignore[arg-type, call-arg]
     with pytest.raises(TypeError):
-        runtime.RuntimeClass(dynamic.__egg_definition__, object())
+        runtime.RuntimeClass(dynamic.__egg_definition__, object())  # type: ignore[arg-type, call-arg]
     with pytest.raises(TypeError):
-        runtime.RuntimeClass(dynamic.__egg_definition__, unsupported=True)
+        runtime.RuntimeClass(dynamic.__egg_definition__, unsupported=True)  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="requires a canonical sort declaration"):
         runtime.RuntimeClass(resolve_callable(dynamic))
 
@@ -5094,10 +5197,19 @@ def test_classvar_annotations_are_late_and_owner_scoped(future):
         namespace,
     )
     first, later = namespace["First"], namespace["Later"]
-    assert isinstance(first.VALUE, later)
-    assert isinstance(later.ROOT, first)
-    assert isinstance(later.ROOT.choose(first.VALUE), later)
-    assert later.__egg_context__.catalog is not None
+    runtime_first, _first_context = _required_authored_class(first)
+    runtime_later, later_context = _required_authored_class(later)
+    first_matches: bool = isinstance(runtime_first.VALUE, runtime_later)
+    assert first_matches
+    root_matches: bool = isinstance(runtime_later.ROOT, runtime_first)
+    assert root_matches
+    later_root = runtime_later.ROOT
+    assert isinstance(later_root, RuntimeExpr)
+    choose = _required_runtime_function(later_root.choose)
+    first_value = runtime_first.VALUE
+    chosen_matches: bool = isinstance(choose(first_value), runtime_later)
+    assert chosen_matches
+    assert later_context.catalog is not None
 
 
 @pytest.mark.parametrize("descriptor", [property, classmethod])
@@ -5423,7 +5535,7 @@ def test_eager_member_pending_view_eligibility_precedes_completion(class_authori
         def first(self) -> i64:
             calls.append("first")
             with pytest.raises(AttributeError, match="not an instance method"):
-                runtime.RuntimeClass.__getattr__(Eligible, "number", False, True)
+                runtime.RuntimeClass.__getattr__(Eligible, "number", False, True)  # type: ignore[arg-type]
             assert calls == ["first"]
             return i64(1)
 
@@ -5453,7 +5565,7 @@ def test_eager_member_conversion_is_once_without_ambient_ruleset(class_authoring
 
         def value(self) -> i64:
             calls.append(("body", get_current_ruleset()))
-            return Source()
+            return Source()  # type: ignore[return-value]
 
     ambient = ruleset()
     with set_current_ruleset(ambient):
@@ -5486,7 +5598,7 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
             calls.append("body")
             return i64(2)
 
-        def with_default(self, value: i64 = Source()) -> i64: ...
+        def with_default(self, value: i64 = Source()) -> i64: ...  # type: ignore[assignment]
 
         if late_bad:
 
@@ -5526,7 +5638,15 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
     expression = Defaults().with_default()
     assert isinstance(expression, i64)
     packet = pack([to_runtime_expr(expression).__egg_ref__, first])
-    assert sum(record.kind.value.name == first.read().kind.value.name for record in packet.program.declarations) == 1
+    assert (
+        sum(
+            record.kind.value.name == first.read().kind.value.name
+            if record.kind is not None
+            else pytest.fail("Missing declaration kind")
+            for record in packet.program.declarations
+        )
+        == 1
+    )
     default = resolve_callable(Defaults.with_default)
     view = default.read().bindings.python.views[0]
     assert (
@@ -5583,7 +5703,7 @@ def test_member_default_transitive_forward_headers_and_snapshot(class_authoring_
             supplied.__replace_expr__(i64(9))
             return self.later()
 
-        def with_default(self, value: i64 = Source()) -> i64: ...
+        def with_default(self, value: i64 = Source()) -> i64: ...  # type: ignore[assignment]
         def snapshot(self, value: i64 = supplied) -> i64: ...
 
         def later(self) -> i64:
@@ -5601,7 +5721,15 @@ def test_member_default_transitive_forward_headers_and_snapshot(class_authoring_
     assert snapshot.owner.ref("nodes", default_index) == supplied_ref
     assert _required_callable_args(Forward().snapshot())[1].value == 3
     packet = pack([to_runtime_expr(expression).__egg_ref__, first])
-    assert sum(record.kind.value.name == first.read().kind.value.name for record in packet.program.declarations) == 1
+    assert (
+        sum(
+            record.kind.value.name == first.read().kind.value.name
+            if record.kind is not None
+            else pytest.fail("Missing declaration kind")
+            for record in packet.program.declarations
+        )
+        == 1
+    )
     assert pb.Program.from_binary(packet.program.to_binary()) == packet.program
     assert calls == ["first", "later", "conversion"]
 
@@ -5687,7 +5815,7 @@ def test_member_default_pending_eligibility_does_not_convert(class_authoring_wit
         calls.append(value.name)
         if value.name == "first":
             with pytest.raises(AttributeError, match="not an instance method"):
-                runtime.RuntimeClass.__getattr__(Eligible, "named", False, True)
+                runtime.RuntimeClass.__getattr__(Eligible, "named", False, True)  # type: ignore[arg-type]
             assert calls == ["first"]
         return i64(1)
 
@@ -5695,10 +5823,10 @@ def test_member_default_pending_eligibility_does_not_convert(class_authoring_wit
 
     class Eligible(Expr):
         def __init__(self) -> None: ...
-        def first(self, value: i64 = Source("first")) -> i64: ...
+        def first(self, value: i64 = Source("first")) -> i64: ...  # type: ignore[assignment]
 
         @classmethod
-        def named(cls, value: i64 = Source("named")) -> "Eligible": ...
+        def named(cls, value: i64 = Source("named")) -> "Eligible": ...  # type: ignore[assignment]
 
     assert isinstance(Eligible().first(), i64)
     assert calls == ["first", "named"]
@@ -5717,7 +5845,7 @@ def test_initializer_default_completes_forward_classmethods(class_authoring_with
     converter(Source, i64, convert_source)
 
     class Initialized(Expr):
-        def __init__(self, value: i64 = Source()) -> None: ...
+        def __init__(self, value: i64 = Source()) -> None: ...  # type: ignore[assignment]
 
         @classmethod
         def first(cls) -> i64:
@@ -5876,7 +6004,7 @@ def test_member_default_barrier_preserves_explicit_rulesets(class_authoring_with
             calls.append("first")
             return self.later()
 
-        def defaulted(self, value: Result = Source()) -> Result: ...
+        def defaulted(self, value: Result = Source()) -> Result: ...  # type: ignore[assignment]
 
         def later(self) -> Result:
             calls.append("later")
@@ -5969,8 +6097,8 @@ def test_classvar_eager_default_conversion_keeps_completed_prefix(class_authorin
     converter(Source, i64, convert_source)
 
     class Partial(Expr):
-        FIRST: ClassVar[i64] = Source(True)
-        BAD: ClassVar[i64] = Source(False)
+        FIRST: ClassVar[i64] = Source(True)  # type: ignore[assignment]
+        BAD: ClassVar[i64] = Source(False)  # type: ignore[assignment]
         LATER: ClassVar[i64] = i64(3)
 
     ambient = ruleset()
@@ -6038,7 +6166,7 @@ def test_member_default_union_freshness_and_snapshot():
     index = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(Child.__egg_sort__),
+            sort_id=builder.import_ref(Child.__egg_sort__),  # type: ignore[attr-defined]
             kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[child, child])),
         ),
     )
@@ -6046,11 +6174,11 @@ def test_member_default_union_freshness_and_snapshot():
 
     class Parent(Expr):
         def __init__(self) -> None: ...
-        def child(self, value: Child = default) -> Child: ...
+        def child(self, value: Child = default) -> Child: ...  # type: ignore[assignment]
 
     expression = Parent()
     first = _required_callable_args(expression.child())[1]
-    default.__replace_expr__(Child())
+    default.__replace_expr__(to_runtime_expr(Child()))
     second = _required_callable_args(expression.child())[1]
     assert first.__egg_ref__ != second.__egg_ref__
     for result in (first, second):
@@ -6223,9 +6351,10 @@ def test_getattr_ineligible_symbolic_views_are_inert(class_authoring_without_eng
 
     receiver = Invalid()
     if kind == "class_variable":
-        cached = Invalid.__getattr__
+        runtime_invalid, _invalid_context = _required_authored_class(Invalid)
+        cached = to_runtime_expr(Invalid.__getattr__)  # type: ignore[arg-type]
         assert isinstance(cached, RuntimeExpr)
-        assert Invalid.__egg_attr_cache__["__getattr__"] is cached
+        assert runtime_invalid.__egg_attr_cache__["__getattr__"] is cached
 
     def forbidden(*args, **kwargs):
         pytest.fail("Ineligible fallback view was invoked")
@@ -6376,7 +6505,7 @@ def test_getattr_does_not_attach_preserved_hooks_to_detached_records(class_autho
     with pytest.raises(AttributeError):
         _ = detached.foo
     with pytest.raises(AttributeError):
-        detached.__getattr__(String("foo"))
+        detached.__getattr__(String("foo"))  # type: ignore[arg-type]
 
 
 def test_getattr_inspection_keeps_symbolic_name_inert(class_authoring_without_engine, monkeypatch):
@@ -6426,7 +6555,7 @@ def test_bodyless_mutating_members_use_canonical_calls(class_authoring_without_e
         assert [(parameter.name, parameter.core_input) for parameter in view.params] == [
             (name, index) for index, name in enumerate(parameters, start=1)
         ]
-    assert receiver.__delitem__(key) is None
+    assert receiver.__delitem__(key) is None  # type: ignore[func-returns-value]
     assert alias is receiver
     assert to_runtime_expr(receiver).__egg_ref__ is not original
     assert to_runtime_expr(snapshot).__egg_ref__ == original
@@ -6437,7 +6566,7 @@ def test_bodyless_mutating_members_use_canonical_calls(class_authoring_without_e
         expr_parts(key),
     ]
     deleted = copy(receiver)
-    assert A.__setitem__(receiver, key, value) is None
+    assert A.__setitem__(receiver, key, value) is None  # type: ignore[func-returns-value]
     assert [expr_parts(argument) for argument in _required_callable_args(receiver, A.__setitem__)] == [
         expr_parts(deleted),
         expr_parts(key),
@@ -6452,7 +6581,7 @@ def test_bodyless_free_mutation_owns_calls_and_aliases(class_authoring_without_e
         def __init__(self, value: i64) -> None: ...
 
     @function(mutates_first_arg=True)
-    def update(value: Mutable, amount: i64 = 4) -> None: ...
+    def update(value: Mutable, amount: i64 = 4) -> None: ...  # type: ignore[assignment]
 
     reference = resolve_callable(update)
     declaration = reference.read()
@@ -6504,7 +6633,7 @@ def test_canonical_mutation_display_keeps_sharing_and_reverse_slots(class_author
     assert str(value) == expected
     assert str(value + value) == expected + " + _Mutable_1"
     saved = copy(value)
-    value[3] = 4
+    value[3] = 4  # type: ignore[assignment, index]
     assert str(saved + value) == (
         "_Mutable_1 = Mutable(1)\n_Mutable_1.update('tag', 2)\n"
         "_Mutable_2 = copy(_Mutable_1)\n_Mutable_2[3] = 4\n_Mutable_1 + _Mutable_2"
@@ -6896,7 +7025,7 @@ def test_class_late_header_failure_keeps_prefix(class_authoring_without_engine, 
     converter(Source, HeaderResult, convert_source)
 
     class Partial(Expr, ruleset=destination):
-        FIRST: ClassVar[HeaderResult] = HeaderResult(1) if formed_default else Source()
+        FIRST: ClassVar[HeaderResult] = HeaderResult(1) if formed_default else Source()  # type: ignore[arg-type, assignment]
 
         def __init__(self) -> None: ...
 
@@ -6981,7 +7110,7 @@ def test_class_default_bodies_see_all_headers_and_keep_failure_prefix(class_auth
     events = []
 
     class Partial(Expr, ruleset=destination):
-        FIRST: ClassVar[BodyResult] = BodyResult(1)
+        FIRST: ClassVar[BodyResult] = BodyResult(1)  # type: ignore[arg-type]
 
         def __init__(self) -> None: ...
 
@@ -7065,7 +7194,7 @@ def test_class_default_views_share_canonical_parameter_binding(class_authoring_w
         def __init__(self, value: i64) -> None: ...
 
         @classmethod
-        def named(cls, value: i64 = 3) -> "Defaults":
+        def named(cls, value: i64 = 3) -> "Defaults":  # type: ignore[assignment]
             callbacks.append(("named", cls, get_current_ruleset()))
             return cls(value)
 
@@ -7075,7 +7204,7 @@ def test_class_default_views_share_canonical_parameter_binding(class_authoring_w
             return self
 
         @method(subsume=True)
-        def wrapped(self, value: i64 = 4) -> "Defaults":
+        def wrapped(self, value: i64 = 4) -> "Defaults":  # type: ignore[assignment]
             callbacks.append(("wrapped", get_current_ruleset()))
             return Defaults(value)
 
@@ -7220,14 +7349,14 @@ def test_user_default_expansion_has_fresh_union_identity_and_retains_sharing():
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(Num.__egg_sort__),
+            sort_id=builder.import_ref(Num.__egg_sort__),  # type: ignore[attr-defined]
             kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[member, member])),
         ),
     )
     default = RuntimeExpr(builder.publish().ref("nodes", root))
 
     class Box(Expr):
-        def __init__(self, value: Num = default) -> None: ...
+        def __init__(self, value: Num = default) -> None: ...  # type: ignore[assignment]
 
     first = _required_callable_args(Box(), Box)[0]
     second = _required_callable_args(Box(), Box)[0]
@@ -7239,7 +7368,7 @@ def test_user_default_expansion_has_fresh_union_identity_and_retains_sharing():
         assert members[0] == members[1]
 
     @function
-    def pair(left: Num = default, right: Num = default) -> Box: ...
+    def pair(left: Num = default, right: Num = default) -> Box: ...  # type: ignore[assignment]
 
     first_pair = _required_callable_args(pair())
     second_pair = _required_callable_args(pair())
@@ -7257,7 +7386,11 @@ def test_reconstructed_constructor_uses_changed_protobuf_parameter_not_python_si
     index, constructor = next(
         (index, declaration)
         for index, declaration in enumerate(program.declarations)
-        if declaration.kind.field == "constructor"
+        if (
+            declaration.kind.field == "constructor"
+            if declaration.kind is not None
+            else pytest.fail("Missing declaration kind")
+        )
     )
     _required_python_bindings(constructor).views[0].params[0].name = "renamed"
     owner = Builder.from_program(program).publish()
@@ -7839,12 +7972,19 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
         raise TypeConstraintError(msg)
 
     def call(*values):
-        return _author_call(reference, None, values, {}, node_of=lambda x: x.__egg_ref__, convert=forbidden)[0]
+        return _author_call(
+            reference,
+            None,
+            values,
+            {},
+            node_of=lambda x: x.__egg_ref__ if isinstance(x, RuntimeExpr) else None,
+            convert=forbidden,
+        )[0]
 
     arguments = (i64(0), i64(1), f64(2.0), i64(3), f64(4.0))
     root = call(*arguments)
     node = root.read()
-    assert StructuralView(root.owner.ref("sorts", node.sort_id)) == StructuralView(f64.__egg_sort__)
+    assert StructuralView(root.owner.ref("sorts", node.sort_id)) == StructuralView(f64.__egg_sort__)  # type: ignore[attr-defined]
     assert [root.owner.ref("nodes", i) for i in node.kind.value.args] == [x.__egg_ref__ for x in arguments]
     with pytest.raises(TypeError, match="complete groups of 2"):
         call(i64(0), i64(1))
@@ -7856,7 +7996,11 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
         call(i64(0))
     assert reference.read().to_binary() == before
     source = pack([root]).program
-    primitive = next(d.kind.value for d in source.declarations if d.kind.field == "host_primitive")
+    primitive = next(
+        _required_oneof(d.kind, "host_primitive", pb.HostPrimitive)
+        for d in source.declarations
+        if (d.kind.field == "host_primitive" if d.kind is not None else pytest.fail("Missing declaration kind"))
+    )
     assert isinstance(primitive, pb.HostPrimitive)
     signature = _required_oneof(primitive.typing, "signature", pb.GenericSignature)
     assert len(signature.varargs) == 2
@@ -7865,10 +8009,21 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
     incomplete = next(
         adopted.ref("declarations", index)
         for index, declaration in enumerate(source.declarations)
-        if declaration.kind.field == "host_primitive"
+        if (
+            declaration.kind.field == "host_primitive"
+            if declaration.kind is not None
+            else pytest.fail("Missing declaration kind")
+        )
     )
     with pytest.raises(TypeConstraintError, match="Not every generic parameter"):
-        _author_call(incomplete, None, arguments, {}, node_of=lambda x: x.__egg_ref__, convert=forbidden)
+        _author_call(
+            incomplete,
+            None,
+            arguments,
+            {},
+            node_of=lambda x: x.__egg_ref__ if isinstance(x, RuntimeExpr) else None,
+            convert=forbidden,
+        )
 
 
 def test_multiset_local_protocols_preserve_symbolic_occurrences_without_engine(monkeypatch):
@@ -7924,7 +8079,7 @@ def test_multiset_formed_values_keep_refs_and_inert_pretty(empty, monkeypatch):
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(MultiSet[i64].__egg_sort__),
+            sort_id=builder.import_ref(MultiSet[i64].__egg_sort__),  # type: ignore[attr-defined]
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value",
                 pb.PrimitiveValue(
@@ -7947,8 +8102,14 @@ def test_multiset_formed_values_keep_refs_and_inert_pretty(empty, monkeypatch):
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     del builder, owner
     gc.collect()
-    assert [child.__egg_ref__ for child in expression.value] == children
-    assert list(expression) == expression.value
+    values = expression.value
+    assert isinstance(values, list)
+    references = []
+    for child in values:
+        assert isinstance(child, RuntimeExpr)
+        references.append(child.__egg_ref__)
+    assert references == children
+    assert list(expression) == expression.value  # type: ignore[call-overload]
     assert str(expression) == ("MultiSet[i64]()" if empty else "MultiSet[i64](i64(2), i64(1), i64(2))")
     assert get_callable_args(expression) is None
     assert get_literal_value(expression) is None
@@ -7981,7 +8142,7 @@ def test_multiset_formed_values_reject_malformed_children(malformed):
 
     builder = Builder()
     child = builder.import_ref((f64(1.0) if malformed == "wrong_sort" else i64(1)).__egg_ref__)
-    sort_ref = MultiSet[i64].__egg_sort__
+    sort_ref = MultiSet[i64].__egg_sort__  # type: ignore[attr-defined]
     if malformed == "arity":
         record = sort_ref.read()
         record.kind.value.args.clear()
@@ -8024,7 +8185,7 @@ def test_multiset_formed_symbolic_children_outlive_parent_without_authoring(monk
     root = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(MultiSet[i64].__egg_sort__),
+            sort_id=builder.import_ref(MultiSet[i64].__egg_sort__),  # type: ignore[attr-defined]
             kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value",
                 pb.PrimitiveValue(
