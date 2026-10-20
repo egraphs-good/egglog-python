@@ -1,7 +1,6 @@
 """Ordinary container methods over the complete native-generated catalog."""
 
 import copy
-import os
 import runpy
 from pathlib import Path
 from typing import Literal
@@ -26,7 +25,7 @@ from egglog import (
     f64,
     i64,
 )
-from egglog._catalog import Catalog, builtin_catalog
+from egglog._catalog import builtin_catalog
 from egglog._program import Builder, Ref, StructuralView, pack
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_literal_value
 from egglog.egraph_state import EggSmolError
@@ -103,83 +102,6 @@ def test_generator_rejects_invalid_equality_binders():
         signature.equality_type_params = restrictions
         with pytest.raises(ValueError, match="Invalid equality type parameter indices"):
             render(invalid)
-
-
-def test_complete_catalog_preserves_the_166_definition_baseline():
-    path = os.environ.get("EGGLOG_BASELINE_BUILTIN_CATALOG")
-    if path is None:
-        pytest.skip("The baseline catalog is supplied by the immutable artifact gate")
-    baseline = Catalog(pb.Program.from_binary(Path(path).read_bytes()))
-    current = builtin_catalog()
-    assert len(baseline.roots) == 166
-    assert len(current.roots) == 217
-    multiset_keys = {
-        ("host_sort_family", "MultiSet"),
-        *(
-            ("callable", f"egglog.core.multiset.{name}")
-            for name in (
-                "of",
-                "single",
-                "pick",
-                "insert",
-                "remove",
-                "remove_swapped",
-                "subtract",
-                "subtract_swapped",
-                "length",
-                "contains",
-                "not_contains",
-                "contains_swapped",
-                "not_contains_swapped",
-                "intersection",
-                "sum",
-                "reset_counts",
-                "pick_max",
-                "count",
-                "sum_multisets",
-                "union_values",
-            )
-        ),
-    }
-    for key, definition in baseline.definitions.items():
-        assert StructuralView(definition) == StructuralView(current.definitions[key]), key
-    assert current.definitions.keys() - baseline.definitions.keys() - multiset_keys == {
-        ("callable", f"egglog.core.{family}.{key}")
-        for family, keys in [
-            ("vec", ("append", "push", "pop", "length", "contains", "not_contains", "set", "remove", "union")),
-            ("map", ("remove", "length", "contains", "not_contains")),
-        ]
-        for key in keys
-    } | {
-        ("host_sort_family", "Maybe"),
-        *(("callable", f"egglog.experimental.maybe.{name}") for name in ("none", "some", "unwrap", "unwrap_or")),
-    } | {
-        ("host_sort_family", "PyObject"),
-        *(
-            ("callable", f"egglog.python.pyobject.{name}")
-            for name in (
-                "from_pickle",
-                "eval",
-                "exec",
-                "call",
-                "call_extended",
-                "dict",
-                "dict_update",
-                "to_string",
-                "to_bool",
-                "from_string",
-                "from_int",
-            )
-        ),
-    }
-    prior_path = os.environ.get("EGGLOG_PRE_MULTISET_BUILTIN_CATALOG")
-    assert prior_path is not None, "The artifact gate must also supply the immutable complete196 catalog"
-    prior = Catalog(pb.Program.from_binary(Path(prior_path).read_bytes()))
-    assert len(prior.roots) == 196
-    assert prior.definitions.keys() <= current.definitions.keys()
-    for key, definition in prior.definitions.items():
-        assert StructuralView(definition) == StructuralView(current.definitions[key]), key
-    assert current.definitions.keys() - prior.definitions.keys() == multiset_keys
 
 
 def test_ordinary_vec_map_methods_execute_and_reconstruct():

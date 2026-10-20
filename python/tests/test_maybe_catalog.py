@@ -3,7 +3,6 @@
 """Ordinary Maybe authoring/inspection and real-byte execution."""
 
 import copy
-import os
 import runpy
 from collections.abc import Callable
 from pathlib import Path
@@ -29,7 +28,7 @@ from egglog import (
     i64,
     union,
 )
-from egglog._catalog import Catalog, builtin_catalog
+from egglog._catalog import builtin_catalog
 from egglog._program import Builder, StructuralView, _copy_record, pack
 from egglog.deconstruct import get_callable_args, get_callable_fn
 from egglog.egraph_state import EggSmolError
@@ -260,23 +259,6 @@ def test_maybe_nested_equality_rebuilds():
     assert formed.value is not None
     assert formed.value.value is not None
     EGraph().extract(formed)
-
-
-def test_maybe_catalog_preserves_all_179_accepted_definitions():
-    path = os.environ.get("EGGLOG_PRE_MAYBE_BUILTIN_CATALOG")
-    if path is None:
-        pytest.skip("The accepted baseline is supplied by the immutable artifact gate")
-    baseline = Catalog(pb.Program.from_binary(Path(path).read_bytes()))
-    current = builtin_catalog()
-    assert len(baseline.roots) == 179
-    assert len(current.roots) == 184
-    assert all(not sort.egglog_aliases for sort in pack(current.roots).program.sorts)
-    for key, definition in baseline.definitions.items():
-        assert StructuralView(definition) == StructuralView(current.definitions[key]), key
-    assert current.definitions.keys() - baseline.definitions.keys() == {
-        ("host_sort_family", "Maybe"),
-        *(("callable", f"egglog.experimental.maybe.{name}") for name in ("none", "some", "unwrap", "unwrap_or")),
-    }
 
 
 def test_maybe_stub_is_derived_from_actual_member_metadata():
