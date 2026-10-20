@@ -453,7 +453,6 @@ def test_lda_symbolic_build_cold_schedule():
         pytest.param(
             lambda x, y: x[(x.shape + TupleInt((1, 2)))[100]],
             id="tuple",
-            marks=pytest.mark.xfail(reason="functions aren't applied yet in to string"),
         ),
         pytest.param(lda, id="lda"),
     ],
