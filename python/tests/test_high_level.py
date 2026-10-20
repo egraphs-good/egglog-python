@@ -2593,10 +2593,10 @@ def test_heterogeneous_non_boolean_equality_executes_and_replays() -> None:
     class Symbolic(Expr):
         def __init__(self, value: i64) -> None: ...
 
-        def __eq__(self, other: String) -> i64:
+        def __eq__(self, other: String) -> i64:  # type: ignore[override]  # Deliberate runtime DSL signature, not nominal LSP.
             return i64(7)
 
-        def __ne__(self, other: String) -> String:
+        def __ne__(self, other: String) -> String:  # type: ignore[override]  # Deliberate runtime DSL signature, not nominal LSP.
             return String("different")
 
     value, other = Symbolic(i64(1)), String("other")
@@ -2755,12 +2755,12 @@ def test_numeric_cost_preserves_operand_order_and_only_runs_winner(reverse_args)
     converter(Small, Large, promote, cost=1)
     converter(Large, Small, lambda _: pytest.fail("Losing converter ran"), cost=100)
     left, right = Small("left"), Large("right")
-    expression = left - right
+    expression = left - right  # type: ignore[operator]  # Conversion dispatch promotes the authored Small receiver.
     expected = Large.__sub__(Large.from_small(left), right)
     assert expr_parts(expression) == expr_parts(expected)
     assert calls == ["promote"]
     egraph = EGraph(expression, save_egglog_string=True)
-    egraph.check(eq(expression).to(expected))
+    egraph.check(eq(expression).to(expected))  # type: ignore[arg-type]  # Runtime promotion returns Large, not Small.
     egraph.check(eq(i64(10) - 3).to(i64(7)), eq(10 - i64(3)).to(i64(7)))
     assert egraph.function_size(Large.__sub__) == 1
     _replay_recorded_source(egraph.as_egglog_string)
@@ -4814,7 +4814,10 @@ class TestScheduler:
         assert len(bindings) == 1
         assert len(runs) == 2
         assert len(actions) == 2
-        assert all(action.kind.field == "term" for action in actions)
+        for action in actions:
+            action_kind = action.kind
+            assert action_kind is not None
+            assert action_kind.field == "term"
         assert {item.scheduler for item in runs} == {bindings[0].name}
         _replay_recorded_source(transcript)
 

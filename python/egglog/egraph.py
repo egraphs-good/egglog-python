@@ -22,6 +22,7 @@ from typing import (
     Never,
     Protocol,
     Self,
+    SupportsIndex,
     TypeAlias,
     TypedDict,
     TypeVar,
@@ -1450,7 +1451,7 @@ class EGraph:
         *actions: ActionLike,
         seminaive: bool = True,
         save_egglog_string: bool = False,
-        num_threads: int = 1,
+        num_threads: SupportsIndex = 1,
         no_decomp: bool = False,
     ) -> None:
         with _TRACER.start_as_current_span("create"):
@@ -1488,7 +1489,7 @@ class EGraph:
         """Return the number of worker threads configured for this e-graph."""
         return self._state.configure_resources().threads
 
-    def set_num_threads(self, num_threads: int) -> None:
+    def set_num_threads(self, num_threads: SupportsIndex) -> None:
         """
         Set the number of worker threads used by this e-graph.
 

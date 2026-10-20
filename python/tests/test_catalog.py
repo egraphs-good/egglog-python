@@ -14,6 +14,7 @@ from protobuf import Oneof
 from egglog import f64, i64
 from egglog._catalog import Catalog
 from egglog._program import Builder, StructuralView, pack
+from egglog.egraph import to_runtime_expr
 from egglog.pretty import pretty_ref
 from egglog.runtime import RuntimeExpr, RuntimeFunction, _class_for_sort
 from egglog.type_constraint_solver import TypeConstraintError
@@ -288,10 +289,14 @@ def test_scalar_specialized_stub_rejects_invalid_views(mutation):
         view.params[0].core_input = view.receiver
     elif mutation == "owner":
         assert view.owner is not None
-        view.owner.kind = Oneof[Literal["sort"], int](
-            "sort",
-            next(i for i, s in enumerate(program.sorts) if s.kind.field == "family" and s.kind.value.name == "String"),
-        )
+        for index, sort in enumerate(program.sorts):
+            kind = sort.kind
+            assert kind is not None
+            if kind.field == "family" and kind.value.name == "String":
+                view.owner.kind = Oneof[Literal["sort"], int]("sort", index)
+                break
+        else:
+            raise StopIteration
     elif mutation == "default":
         view.params[0].default_expr = 0
     elif mutation == "mutation":
@@ -715,7 +720,9 @@ def test_stub_generation_uses_canonical_ordinary_method_view():
     view.params[0].name = "rhs"
     assert "def plus(self, rhs: i64Like) -> i64:" in renderer(program)
     owner = Builder.from_program(program).publish()
-    method = RuntimeFunction(owner.ref("declarations", program.declarations.index(addition)), 0, i64(1))
+    method = RuntimeFunction(
+        owner.ref("declarations", program.declarations.index(addition)), 0, to_runtime_expr(i64(1))
+    )
     result = method(rhs=i64(2))
     assert result is not None
     argument = result.__egg_ref__.read().kind.value.args[1]
@@ -958,7 +965,9 @@ def test_stub_defaults_are_inert_and_presence_controls_arity():
     parameter.default_expr = literal + 1
     assert "def plus(self, other: i64Like = ...) -> i64:" in renderer(program)
     owner = Builder.from_program(program).publish()
-    method = RuntimeFunction(owner.ref("declarations", program.declarations.index(addition)), 0, i64(1))
+    method = RuntimeFunction(
+        owner.ref("declarations", program.declarations.index(addition)), 0, to_runtime_expr(i64(1))
+    )
     result = method()
     assert result is not None
     argument = result.__egg_ref__.read().kind.value.args[1]

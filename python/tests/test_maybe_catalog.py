@@ -135,6 +135,7 @@ def test_maybe_none_conversion_and_constructor_deconstruction():
     assert isinstance(converted, RuntimeExpr)
     assert converted.value is None
     for call in [Maybe[i64].none(), Maybe[i64].some(i64(4)), Maybe[Maybe[i64]].some(Maybe[i64].none())]:
+        assert isinstance(call, RuntimeExpr)
         args, fn = get_callable_args(call), get_callable_fn(call)
         assert args is not None
         assert fn is not None

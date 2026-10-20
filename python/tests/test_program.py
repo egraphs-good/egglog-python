@@ -31,6 +31,16 @@ def literal(value: int):
     return builder.publish().ref("nodes", index)
 
 
+def _required_named_declaration(program: pb.Program, name: str) -> pb.Declaration:
+    """Require populated declaration arms while retaining first-match lookup semantics."""
+    for declaration in program.declarations:
+        kind = declaration.kind
+        assert isinstance(kind, Oneof)
+        if kind.value.name == name:
+            return declaration
+    raise StopIteration
+
+
 AMBIENT = frozenset({("host_sort_family", "i64"), ("callable", "f"), ("callable", "g")})
 
 
@@ -1376,7 +1386,7 @@ def test_tail_repetitions_must_be_classified_in_inventory(monkeypatch, message):
 def test_scalar_view_presence_survives_owned_closure_and_relocation(repetitions):
     packet = pack([join("a", "b").__egg_ref__])
     program = packet.program
-    declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.string.concat")
+    declaration = _required_named_declaration(program, "egglog.core.string.concat")
     declaration_bindings = declaration.bindings
     assert declaration_bindings is not None
     assert declaration_bindings.python is not None
@@ -1408,7 +1418,7 @@ def test_scalar_view_presence_survives_owned_closure_and_relocation(repetitions)
     assert reencoded == packed
     for records in (
         reference.read(),
-        next(d for d in reencoded.declarations if d.kind.value.name == "egglog.core.string.concat"),
+        _required_named_declaration(reencoded, "egglog.core.string.concat"),
     ):
         assert isinstance(records, pb.Declaration)
         record_bindings = records.bindings

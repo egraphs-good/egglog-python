@@ -52,7 +52,7 @@ class EGraphState:
     def __init__(
         self,
         *,
-        num_threads: int = 1,
+        num_threads: SupportsIndex = 1,
         save_egglog_string: bool = False,
         seminaive: object = True,
         no_decomp: object = False,

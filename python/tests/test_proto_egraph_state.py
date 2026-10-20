@@ -5,7 +5,7 @@
 from collections.abc import Callable
 from operator import index
 from threading import Barrier, Event
-from typing import Literal, Never, NotRequired, Self, TypedDict
+from typing import Literal, Never, NotRequired, Self, SupportsIndex, TypedDict
 
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
@@ -2215,7 +2215,7 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
         def __init__(self, value: i64) -> None: ...
 
     graph = EGraph()
-    lhs, rhs = UnionNode(1), UnionNode(2)
+    lhs, rhs = UnionNode(1), UnionNode(2)  # type: ignore[arg-type]  # Retain runtime integer-to-i64 coercion.
     graph.register(lhs, rhs)
     first = union(lhs).with_(rhs)
     second = union(lhs).with_(rhs) if reuse == "separate" else first if reuse == "same" else copy(first)
@@ -2296,15 +2296,15 @@ def test_ruleset_append_preserves_native_cursor(tmp_path):
             return transport.destroy(encoded)
 
     graph._state.transport = AuditedTransport()  # type: ignore[assignment]  # Native-transport audit proxy.
-    graph.register(Input(1))
+    graph.register(Input(1))  # type: ignore[arg-type]  # Retain runtime integer-to-i64 coercion.
     x = var("x", i64)
     selected = ruleset(rule(Input(x), name="old").then(Old(x)), name="append_cursor")
 
     assert _run_ruleset_step(graph, selected) == {"old": 1}
-    graph.check(Old(1))
+    graph.check(Old(1))  # type: ignore[arg-type]  # Retain runtime integer-to-i64 coercion.
     selected.append(rule(Input(x), name="new").then(New(x)))
     assert _run_ruleset_step(graph, selected) == {"new": 1}
-    graph.check(Old(1), New(1))
+    graph.check(Old(1), New(1))  # type: ignore[arg-type]  # Retain runtime integer-to-i64 coercion.
     assert _run_ruleset_step(graph, selected) == {}
     publications = []
     for response in responses:
@@ -3461,12 +3461,14 @@ class IntOnlyThreadCount:
 @pytest.mark.parametrize("value", [IndexedThreadCount(), True, False, (1 << 32) - 1])
 @pytest.mark.parametrize("use_setter", [False, True], ids=["constructor", "setter"])
 def test_thread_count_accepts_index_protocol(
-    resource_transport: ResourceTransport, value: object, *, use_setter: bool
+    resource_transport: ResourceTransport, value: SupportsIndex, *, use_setter: bool
 ) -> None:
     graph = EGraph(num_threads=1 if use_setter else value)
     if use_setter:
         graph.set_num_threads(value)
-        assert resource_transport.requests[0].operation.value == index(value)
+        operation = resource_transport.requests[0].operation
+        assert operation is not None
+        assert operation.value == index(value)
     else:
         assert resource_transport.creations[0].threads == index(value)
     assert graph.num_threads() == (index(value) or 7)

@@ -107,7 +107,7 @@ def test_generic_family_composition_keeps_concrete_intermediate_context(generic_
     def to_vector(source):
         calls.append(get_type_args())
         (element,) = get_type_args()
-        return convert(source.values, Vec[element])
+        return convert(source.values, Vec[element])  # type: ignore[valid-type]  # RuntimeClass argument, not a static alias.
 
     def to_int_box(value):
         assert get_type_args() == ()
@@ -119,7 +119,7 @@ def test_generic_family_composition_keeps_concrete_intermediate_context(generic_
     converter(Vec[f64], FloatBox, FloatBox)
     if not generic_first:
         converter(Source, Vec, to_vector)
-    with with_type_args((String,)):
+    with with_type_args((String,)):  # type: ignore[arg-type]  # Authored Expr classes have RuntimeClass presentations.
         assert expr_parts(convert(Derived((1, 2)), IntBox)) == expr_parts(IntBox(Vec[i64](1, 2)))  # type: ignore[arg-type]
         assert expr_parts(convert(Derived((1.5, 2.5)), FloatBox)) == expr_parts(FloatBox(Vec[f64](1.5, 2.5)))  # type: ignore[arg-type]
         assert get_type_args() == (String,)  # type: ignore[comparison-overlap]
@@ -142,9 +142,9 @@ def test_generic_family_composition_preserves_cheaper_direct_conversion(direct_f
 
     def indirect(_):
         calls.append("indirect")
-        return Vec[get_type_args()[0]].empty()
+        return Vec[get_type_args()[0]].empty()  # type: ignore[misc]  # The conversion context computes the runtime type.
 
-    direct = Box(Vec[i64](9))
+    direct = Box(Vec[i64](9))  # type: ignore[arg-type]  # Retain runtime integer-to-i64 coercion.
     if direct_first:
         converter(Source, Box, lambda _: direct, cost=0)
     converter(Source, Vec, indirect)
@@ -171,7 +171,7 @@ def test_generic_family_composition_restores_context_after_original_error():
 
     converter(Source, Vec, fail)
     converter(Vec[i64], Box, Box)
-    with with_type_args((String,)):
+    with with_type_args((String,)):  # type: ignore[arg-type]  # Authored Expr classes have RuntimeClass presentations.
         with pytest.raises(ValueError, match="intermediate converter failed") as caught:
             convert(Source(), Box)
         assert caught.value is marker
@@ -206,7 +206,7 @@ def test_generic_family_lookup_uses_cost_then_exact_tie_break(generic_first):
 
     def generic(_):
         calls.append("generic")
-        return Vec[get_type_args()[0]](1)
+        return Vec[get_type_args()[0]](1)  # type: ignore[misc, operator]  # Call the context-computed RuntimeClass.
 
     if generic_first:
         converter(Source, Vec, generic, cost=1)
@@ -230,7 +230,7 @@ def test_generic_family_lookup_keeps_source_mro_preference():
 
     converter(Source, Vec[i64], lambda _: pytest.fail("More-expensive exact converter ran"), cost=10)
     converter(Source, Vec, lambda _: pytest.fail("Less-specific family converter ran"), cost=0)
-    converter(Derived, Vec, lambda _: Vec[get_type_args()[0]](1), cost=2)
+    converter(Derived, Vec, lambda _: Vec[get_type_args()[0]](1), cost=2)  # type: ignore[misc, operator]  # RuntimeClass target.
     assert expr_parts(convert(Derived(), Vec[i64])) == expr_parts(Vec[i64](1))  # type: ignore[arg-type]
 
 
@@ -253,7 +253,7 @@ def test_numeric_winner_error_is_not_retried_and_restores_context():
     converter(Left, Right, fail, cost=1)
     converter(Right, Left, lambda _: pytest.fail("Fallback converter ran"), cost=100)
     left, right = Left(), Right()
-    with with_type_args((String,)):
+    with with_type_args((String,)):  # type: ignore[arg-type]  # Authored Expr classes have RuntimeClass presentations.
         with pytest.raises(ValueError, match="winning converter failed") as caught:
             left - right  # type: ignore[operator]
         assert caught.value is marker
@@ -296,13 +296,13 @@ def test_numeric_positive_original_winner_preserves_ties_and_context(monkeypatch
     converter(Left, Alternative, lambda _: pytest.fail("Losing receiver converter ran"), cost=0)
     converter(Source, Alternative, lambda _: pytest.fail("Losing RHS converter ran"))
     left = Left()
-    with with_type_args((String,)):
+    with with_type_args((String,)):  # type: ignore[arg-type]  # Authored Expr classes have RuntimeClass presentations.
         if raises:
             with pytest.raises(ValueError, match="original winning converter failed") as caught:
                 left - Source()  # type: ignore[operator]
             assert caught.value is marker
         else:
-            expression = left - Source()
+            expression = left - Source()  # type: ignore[operator]  # Registered conversion supplies the authored operand.
             assert expr_parts(expression) == expr_parts(Left.__sub__(left, Operand()))
         assert get_type_args() == (String,)  # type: ignore[comparison-overlap]
     assert calls == [()]
@@ -361,7 +361,7 @@ def test_numeric_cutoff_preserves_negative_left_costs(monkeypatch, reentrant):
 
     converter(Trigger, Operand, lambda _: pytest.fail("Unrelated converter ran"))
     armed = reentrant
-    expression = Left() - Source()
+    expression = Left() - Source()  # type: ignore[operator]  # Conversion dispatch selects an Alternative receiver.
     assert expr_parts(expression) == expr_parts(Alternative.__sub__(Alternative(), Alternative()))
     assert calls == ["left", "right"]
     assert updates == (["lowered"] if reentrant else [])
@@ -402,7 +402,7 @@ def test_numeric_cutoff_opts_out_of_custom_integer_costs(monkeypatch, custom_rhs
         Unrelated, Alternative, lambda _: pytest.fail("Unrelated converter ran"), cost=1 if custom_rhs else Cost(1)
     )
     left = Left()
-    expression = left - Source()
+    expression = left - Source()  # type: ignore[operator]  # Registered conversion supplies the authored operand.
     assert expr_parts(expression) == expr_parts(Left.__sub__(left, Operand()))
     assert calls == ["original"]
 
@@ -412,8 +412,8 @@ def test_numeric_generic_owner_preserves_element_context():
         def __init__(self, value: i64) -> None: ...
 
     left = Vec[Element](Element(1))  # type: ignore[arg-type]
-    with with_type_args((String,)):
-        expression = left | [Element(2)]  # type: ignore[arg-type]
+    with with_type_args((String,)):  # type: ignore[arg-type]  # Authored Expr classes have RuntimeClass presentations.
+        expression = left | [Element(2)]  # type: ignore[arg-type, operator]  # Convert the list into the generic Vec operand.
         expected = Vec[Element].__or__(left, Vec[Element](Element(2)))  # type: ignore[arg-type]
         assert expr_parts(expression) == expr_parts(expected)
         assert get_type_args() == (String,)  # type: ignore[comparison-overlap]
@@ -448,7 +448,7 @@ def test_numeric_conversion_can_select_a_third_closed_receiver():
     converter(Right, Left, lambda _: pytest.fail("Expensive right conversion ran"), cost=100)
     converter(Left, Common, from_left)
     converter(Right, Common, from_right)
-    expression = Left() - Right()
+    expression = Left() - Right()  # type: ignore[operator]  # Conversion dispatch selects the third Common receiver.
     assert expr_parts(expression) == expr_parts(Common.__sub__(Common("left"), Common("right")))
     assert calls == ["left", "right"]
 
