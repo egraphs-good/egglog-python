@@ -8,6 +8,7 @@ from egglog.conversion import with_type_args
 from egglog.type_constraint_solver import TypeConstraintError
 
 # TODO: Revert global conversion state after each test w/ fixture
+# Exact comparison expectations below observe RuntimeClass presentations of authored Expr types.
 
 
 @pytest.mark.skip(reason="We dont support looking up by metaclass anymore")
@@ -121,12 +122,12 @@ def test_generic_family_composition_keeps_concrete_intermediate_context(generic_
     with with_type_args((String,)):
         assert expr_parts(convert(Derived((1, 2)), IntBox)) == expr_parts(IntBox(Vec[i64](1, 2)))  # type: ignore[arg-type]
         assert expr_parts(convert(Derived((1.5, 2.5)), FloatBox)) == expr_parts(FloatBox(Vec[f64](1.5, 2.5)))  # type: ignore[arg-type]
-        assert get_type_args() == (String,)
-    assert calls == [(i64,), (f64,)]
+        assert get_type_args() == (String,)  # type: ignore[comparison-overlap]
+    assert calls == [(i64,), (f64,)]  # type: ignore[comparison-overlap]
     assert get_type_args() == ()
     converter(IntBox, Vec[i64], lambda _: Vec[i64].empty(), cost=10)
     assert expr_parts(convert(Derived((1, 2)), IntBox)) == expr_parts(IntBox(Vec[i64](1, 2)))  # type: ignore[arg-type]
-    assert calls == [(i64,), (f64,), (i64,)]
+    assert calls == [(i64,), (f64,), (i64,)]  # type: ignore[comparison-overlap]
 
 
 @pytest.mark.parametrize("direct_first", [False, True])
@@ -174,9 +175,9 @@ def test_generic_family_composition_restores_context_after_original_error():
         with pytest.raises(ValueError, match="intermediate converter failed") as caught:
             convert(Source(), Box)
         assert caught.value is marker
-        assert get_type_args() == (String,)
+        assert get_type_args() == (String,)  # type: ignore[comparison-overlap]
     assert get_type_args() == ()
-    assert calls == [(i64,)]
+    assert calls == [(i64,)]  # type: ignore[comparison-overlap]
 
 
 def test_generic_family_composition_does_not_match_another_family():
@@ -254,9 +255,9 @@ def test_numeric_winner_error_is_not_retried_and_restores_context():
     left, right = Left(), Right()
     with with_type_args((String,)):
         with pytest.raises(ValueError, match="winning converter failed") as caught:
-            left - right
+            left - right  # type: ignore[operator]
         assert caught.value is marker
-        assert get_type_args() == (String,)
+        assert get_type_args() == (String,)  # type: ignore[comparison-overlap]
     assert calls == [()]
     assert get_type_args() == ()
 
@@ -298,16 +299,16 @@ def test_numeric_positive_original_winner_preserves_ties_and_context(monkeypatch
     with with_type_args((String,)):
         if raises:
             with pytest.raises(ValueError, match="original winning converter failed") as caught:
-                left - Source()
+                left - Source()  # type: ignore[operator]
             assert caught.value is marker
         else:
             expression = left - Source()
             assert expr_parts(expression) == expr_parts(Left.__sub__(left, Operand()))
-        assert get_type_args() == (String,)
+        assert get_type_args() == (String,)  # type: ignore[comparison-overlap]
     assert calls == [()]
     assert get_type_args() == ()
     assert prepared == []
-    assert Alternative.__egg_pending__ is not None
+    assert Alternative.__egg_pending__ is not None  # type: ignore[attr-defined]  # Authored RuntimeClass metadata.
 
 
 @pytest.mark.parametrize("reentrant", [False, True])
@@ -415,9 +416,9 @@ def test_numeric_generic_owner_preserves_element_context():
         expression = left | [Element(2)]  # type: ignore[arg-type]
         expected = Vec[Element].__or__(left, Vec[Element](Element(2)))  # type: ignore[arg-type]
         assert expr_parts(expression) == expr_parts(expected)
-        assert get_type_args() == (String,)
+        assert get_type_args() == (String,)  # type: ignore[comparison-overlap]
     with pytest.raises(TypeConstraintError, match="requires an equality sort"):
-        Vec[i64](1) | Vec[i64](2)
+        Vec[i64](1) | Vec[i64](2)  # type: ignore[arg-type]
 
 
 def test_numeric_conversion_can_select_a_third_closed_receiver():

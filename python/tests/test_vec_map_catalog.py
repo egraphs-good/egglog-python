@@ -27,7 +27,7 @@ from egglog import (
     i64,
 )
 from egglog._catalog import Catalog, builtin_catalog
-from egglog._program import Builder, StructuralView, pack
+from egglog._program import Builder, Ref, StructuralView, pack
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_literal_value
 from egglog.egraph_state import EggSmolError
 from egglog.runtime import RuntimeExpr, RuntimeFunction, resolve_type_annotation
@@ -47,7 +47,9 @@ def test_append_consuming_receiver_and_free_call_reconstruction():
         assert ".append(" in str(call)
     declaration = builtin_catalog().definitions[("callable", "egglog.core.vec.append")]
     free = RuntimeFunction(declaration)
-    assert StructuralView(free(xs, ys).__egg_ref__) == StructuralView(xs.append(ys).__egg_ref__)
+    rebuilt = free(xs, ys)
+    assert rebuilt is not None
+    assert StructuralView(rebuilt.__egg_ref__) == StructuralView(xs.append(ys).__egg_ref__)
     builder = Builder()
     builder.import_ref(declaration)
     index = builder.add(
@@ -73,7 +75,7 @@ def test_vec_union_exact_equality_substitution():
     assert (left | right).__egg_ref__.read().kind.value.func == "egglog.core.vec.union"
     for value in [Vec[i64](i64(1)), Vec[Vec[Atom]](left)]:
         with pytest.raises(TypeConstraintError, match="requires an equality sort"):
-            value | value
+            value | value  # type: ignore[operator]  # Deliberately invalid equality-sort operands.
 
 
 def test_generator_rejects_invalid_equality_binders():
@@ -83,11 +85,13 @@ def test_generator_rejects_invalid_equality_binders():
     original = pb.Program.from_binary((Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
     for binders, restrictions in [(1, [1]), (1, [0, 0]), (2, [1, 0])]:
         invalid = copy.deepcopy(original)
-        declaration = next(
-            d
-            for d in invalid.declarations
-            if d.kind.field == "host_primitive" and d.kind.value.name == "egglog.core.vec.union"
-        )
+        for declaration in invalid.declarations:
+            declaration_kind = declaration.kind
+            assert declaration_kind is not None
+            if declaration_kind.field == "host_primitive" and declaration_kind.value.name == "egglog.core.vec.union":
+                break
+        else:
+            raise StopIteration
         declaration_kind = declaration.kind
         assert declaration_kind is not None
         assert declaration_kind.field == "host_primitive"
@@ -190,9 +194,10 @@ def test_ordinary_vec_map_methods_execute_and_reconstruct():
         (xs.set(1, i64(9)), (7, 9, 7)),
         (xs.remove(1), (7, 7)),
     ]:
-        assert StructuralView(get_callable_fn(call)(*get_callable_args(call)).__egg_ref__) == StructuralView(
-            call.__egg_ref__
-        )
+        fn, args = get_callable_fn(call), get_callable_args(call)
+        assert fn is not None
+        assert args is not None
+        assert StructuralView(fn(*args).__egg_ref__) == StructuralView(call.__egg_ref__)
         with pytest.raises(ExprValueError):
             _ = call.value
         assert tuple(value.value for value in graph.extract(call).value) == expected
@@ -213,9 +218,10 @@ def test_ordinary_vec_map_methods_execute_and_reconstruct():
     mapping = Map[i64, i64].empty().insert(i64(1), i64(7)).insert(i64(2), i64(9))
     assert graph.extract(mapping.length()).value == 2
     removed = mapping.remove(i64(1))
-    assert StructuralView(get_callable_fn(removed)(*get_callable_args(removed)).__egg_ref__) == StructuralView(
-        removed.__egg_ref__
-    )
+    fn, args = get_callable_fn(removed), get_callable_args(removed)
+    assert fn is not None
+    assert args is not None
+    assert StructuralView(fn(*args).__egg_ref__) == StructuralView(removed.__egg_ref__)
     assert {k.value: v.value for k, v in graph.extract(removed).value.items()} == {2: 9}
     graph.check(eq(mapping.remove(i64(42))).to(mapping))
     assert graph.check_bool(mapping.contains(i64(1)))
@@ -246,6 +252,7 @@ def _stored_call(declaration, args, result_type):
     builder = Builder()
     builder.import_ref(declaration)
     result = resolve_type_annotation(result_type)
+    assert isinstance(result, Ref)
     index = builder.add(
         "nodes",
         pb.Node(
@@ -270,10 +277,14 @@ def test_zero_append_specialization_is_stable_and_structural(monkeypatch):
     declaration = builtin_catalog().definitions["callable", "egglog.core.vec.append"]
     recovered = []
     for typ in [i64, String]:
-        original = _stored_call(declaration, [], Vec[typ])
+        # This fixture specializes real runtime sort presentations, not a static type alias.
+        original = _stored_call(declaration, [], Vec[typ])  # type: ignore[valid-type]
         fn = get_callable_fn(original)
+        assert fn is not None
+        runtime_fn = fn
+        assert isinstance(runtime_fn, RuntimeFunction)
         assert fn != RuntimeFunction(declaration)
-        assert [index for index, _ in fn.__egg_type_bindings__] == [0]
+        assert [index for index, _ in runtime_fn.__egg_type_bindings__] == [0]
         assert StructuralView(fn().__egg_ref__) == StructuralView(original.__egg_ref__)
         packet = pack([original.__egg_ref__])
         imported = RuntimeExpr(
@@ -283,6 +294,7 @@ def test_zero_append_specialization_is_stable_and_structural(monkeypatch):
             .ref("nodes", packet.indices[0])
         )
         other = get_callable_fn(imported)
+        assert other is not None
         assert other == fn
         assert hash(other) == hash(fn)
         assert {fn: True}[other]
@@ -295,11 +307,15 @@ def test_zero_append_specialization_is_stable_and_structural(monkeypatch):
 def test_zero_append_conflicts_and_named_partial_roundtrip():
     declaration = builtin_catalog().definitions["callable", "egglog.core.vec.append"]
     fn = get_callable_fn(_stored_call(declaration, [], Vec[i64]))
-    before = fn.__egg_type_bindings__
+    assert fn is not None
+    runtime_fn = fn
+    assert isinstance(runtime_fn, RuntimeFunction)
+    before = runtime_fn.__egg_type_bindings__
     with pytest.raises((TypeConstraintError, TypeError, ConvertError)):
         fn(Vec[f64](f64(1.0)))
-    assert fn.__egg_type_bindings__ == before
-    assert isinstance(fn(), Vec[i64])
+    assert runtime_fn.__egg_type_bindings__ == before
+    # RuntimeClass supports parameterized checks; MyPy rejects their Python syntax intrinsically.
+    assert isinstance(fn(), Vec[i64])  # type: ignore[misc]
     with pytest.raises(TypeConstraintError):
         UnstableFn[Vec[String]](fn)
     for named in [UnstableFn(fn), UnstableFn[Vec[i64]](fn)]:
@@ -311,9 +327,13 @@ def test_zero_append_conflicts_and_named_partial_roundtrip():
             .ref("nodes", packet.indices[0])
         )
         restored = get_literal_value(decoded)
+        assert isinstance(restored, RuntimeFunction)
         assert restored == fn
         assert hash(restored) == hash(fn)
-        assert StructuralView(restored().__egg_ref__) == StructuralView(fn().__egg_ref__)
+        restored_call, original_call = restored(), fn()
+        assert restored_call is not None
+        assert original_call is not None
+        assert StructuralView(restored_call.__egg_ref__) == StructuralView(original_call.__egg_ref__)
     with pytest.raises(TypeConstraintError, match="Unresolved"):
         RuntimeFunction(declaration)()
 
@@ -322,7 +342,13 @@ def test_zero_append_conflicts_and_named_partial_roundtrip():
 def test_minimal_result_binding_preserves_input_polymorphism(selected_view):
     # Inference-only fixture: no provider/body/engine is installed or invoked.
     program = pb.Program.from_binary(pack(builtin_catalog().roots).program.to_binary())
-    declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.pair.make")
+    for declaration in program.declarations:
+        declaration_kind = declaration.kind
+        assert declaration_kind is not None
+        if declaration_kind.value.name == "egglog.core.pair.make":
+            break
+    else:
+        raise StopIteration
     declaration_kind = declaration.kind
     assert declaration_kind is not None
     assert declaration_kind.field == "host_primitive"
@@ -347,10 +373,13 @@ def test_minimal_result_binding_preserves_input_polymorphism(selected_view):
     reference = owner.ref("declarations", program.declarations.index(declaration))
     first = get_callable_fn(_stored_call(reference, [i64(1)], Pair[i64, String]))
     second = get_callable_fn(_stored_call(reference, [f64(1.0)], Pair[f64, String]))
-    assert [index for index, _ in first.__egg_type_bindings__] == [1]
+    assert first is not None
+    runtime_first = first
+    assert isinstance(runtime_first, RuntimeFunction)
+    assert [index for index, _ in runtime_first.__egg_type_bindings__] == [1]
     assert first == second
     assert hash(first) == hash(second)
-    assert isinstance(first(f64(2.0)), Pair[f64, String])
+    assert isinstance(first(f64(2.0)), Pair[f64, String])  # type: ignore[misc]  # RuntimeClass parameterized check.
     different = get_callable_fn(_stored_call(reference, [i64(1)], Pair[i64, i64]))
     assert different != first
     with pytest.raises(TypeConstraintError):
@@ -358,8 +387,9 @@ def test_minimal_result_binding_preserves_input_polymorphism(selected_view):
     # A concrete named Func intentionally also fixes its remaining input type.
     concrete = UnstableFn[Pair[i64, String], i64](first)
     decoded = get_literal_value(concrete)
+    assert isinstance(decoded, RuntimeFunction)
     assert [index for index, _ in decoded.__egg_type_bindings__] == [0, 1]
-    assert isinstance(decoded(i64(3)), Pair[i64, String])
+    assert isinstance(decoded(i64(3)), Pair[i64, String])  # type: ignore[misc]  # RuntimeClass parameterized check.
     with pytest.raises((TypeConstraintError, TypeError, ConvertError)):
         decoded(f64(3.0))
 
@@ -367,7 +397,13 @@ def test_minimal_result_binding_preserves_input_polymorphism(selected_view):
 def test_method_result_binding_preserves_independent_input_polymorphism(monkeypatch):
     # Inference-only Vec<T> receiver, V input, Pair<V,U> result. No provider.
     program = pb.Program.from_binary(pack(builtin_catalog().roots).program.to_binary())
-    declaration = next(d for d in program.declarations if d.kind.value.name == "egglog.core.pair.make")
+    for declaration in program.declarations:
+        declaration_kind = declaration.kind
+        assert declaration_kind is not None
+        if declaration_kind.value.name == "egglog.core.pair.make":
+            break
+    else:
+        raise StopIteration
     declaration_kind = declaration.kind
     assert declaration_kind is not None
     assert declaration_kind.field == "host_primitive"
@@ -406,11 +442,16 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     original = _stored_call(reference, [receiver, i64(1)], Pair[i64, String])
     first = get_callable_fn(original)
     second = get_callable_fn(_stored_call(reference, [receiver, f64(1.0)], Pair[f64, String]))
-    assert [index for index, _ in first.__egg_type_bindings__] == [1]
+    assert first is not None
+    runtime_first = first
+    assert isinstance(runtime_first, RuntimeFunction)
+    assert [index for index, _ in runtime_first.__egg_type_bindings__] == [1]
     assert first == second
     assert hash(first) == hash(second)
-    assert StructuralView(first(*get_callable_args(original)).__egg_ref__) == StructuralView(original.__egg_ref__)
-    assert isinstance(first(receiver, f64(2.0)), Pair[f64, String])
+    args = get_callable_args(original)
+    assert args is not None
+    assert StructuralView(first(*args).__egg_ref__) == StructuralView(original.__egg_ref__)
+    assert isinstance(first(receiver, f64(2.0)), Pair[f64, String])  # type: ignore[misc]  # RuntimeClass parameterized check.
     assert get_callable_fn(_stored_call(reference, [receiver, i64(1)], Pair[i64, i64])) != first
     with pytest.raises((TypeConstraintError, TypeError, ConvertError)):
         first(Vec[f64](f64(0.0)), i64(1))
@@ -452,6 +493,7 @@ def test_malformed_stored_calls_and_type_bindings_fail_without_conversion(monkey
         with pytest.raises(TypeConstraintError):
             get_callable_fn(call)
     integer = resolve_type_annotation(i64)
+    assert isinstance(integer, Ref)
     open_builder = Builder()
     open_index = open_builder.add("sorts", pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)))
     open_sort = open_builder.publish().ref("sorts", open_index)

@@ -2,29 +2,57 @@
 # Ellipsis bodies are DSL declarations or annotation-introspection fixtures.
 """Record/bytes plumbing tests; the inert responder is not engine conformance."""
 
+from collections.abc import Callable
 from operator import index
-from typing import Literal, Never, Self
+from threading import Barrier, Event
+from typing import Literal, Never, NotRequired, Self, TypedDict
 
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
-from egglog import BaseExpr, EGraph, Expr, PrimitiveFailure, bindings, constant, eq, function, i64, method, set_
+from egglog import (
+    Action,
+    BaseExpr,
+    EGraph,
+    Expr,
+    Fact,
+    PrimitiveFailure,
+    bindings,
+    constant,
+    eq,
+    function,
+    i64,
+    method,
+    set_,
+)
 from egglog._catalog import builtin_catalog
-from egglog._program import Builder, pack
+from egglog._program import Builder, Ref, pack
+from egglog.declarations import Ident
 from egglog.egraph_state import EggSmolError
 from egglog.runtime import RuntimeFunction, create_callable, resolve_callable
 
+
+class CallbackObservation(TypedDict):
+    calls: int
+    error: BaseException | None
+    result: NotRequired[object]
+    caught: NotRequired[BaseException]
+    started: NotRequired[Event]
+    release: NotRequired[Event]
+    barrier: NotRequired[Barrier]
+
+
 # Test-only observation of the exception actually raised inside Python. Functions
 # pickle by module reference; this is not an engine error slot or value registry.
-_callback_observations = {}
+_callback_observations: dict[str, CallbackObservation | bool] = {}
 
 
 @pytest.mark.parametrize("outcome", ["success", "preflight", "transport", "decode", "receipt", "engine", "host"])
 def test_source_recording_commits_only_valid_acknowledgements(monkeypatch, outcome):  # noqa: C901
     from egglog.egraph_state import EGraphState  # noqa: PLC0415
 
-    events = []
+    events: list[str | tuple[str, bool]] = []
     original = ValueError("original recording boundary")
     success = pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication()).to_binary()
     responses = {
@@ -174,8 +202,11 @@ def test_source_producer_later_error_preserves_executed_byte_prefix():
         "(function source_prefix () i64 :merge new) (set (source_prefix) 7) (missing_source_command)"
     )
     try:
+        assert graph._state.handle is not None
         for _ in range(2):
-            kind, encoded, count = source.next_submission()
+            submission = source.next_submission()
+            assert submission is not None
+            kind, encoded, count = submission
             assert (kind, count) == ("program", 0)
             assert type(encoded) is bytes
             response, host_error = graph._state.transport.run(
@@ -196,6 +227,7 @@ def test_source_producer_later_error_preserves_executed_byte_prefix():
         while (submission := verification.next_submission()) is not None:
             kind, encoded, count = submission
             assert (kind, count) == ("program", 0)
+            assert encoded is not None
             response, host_error = graph._state.transport.run(
                 pb.RunProgramRequest(
                     egraph_id=graph._state.handle, program=pb.Program.from_binary(encoded), profile=True
@@ -216,7 +248,7 @@ def scheduler_transport(monkeypatch):  # noqa: C901 -- finite acknowledgement/fa
         original = ValueError("original scheduler deployment failure")
 
         def __init__(self) -> None:
-            self.requests = []
+            self.requests: list[pb.RunProgramRequest] = []
             self.next_handle = 1
 
         def create(self, encoded):
@@ -352,6 +384,7 @@ def test_host_model_contract_rejects_before_callbacks(case):
     def unused(_observation: bytes) -> object:
         pytest.fail("Rejected model contract must not invoke callbacks")
 
+    assert state.handle is not None
     name = state.transport.register_cost_model(
         state.handle, sorts.to_binary(), 2 if case == "annotation" else 0, 1, False, unused
     )
@@ -417,7 +450,7 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
     marker = constant("snapshot-marker", Atom)
     scalar = constant("snapshot-scalar", i64)
     member = relation("snapshot_member", Atom)
-    cases = {
+    cases: dict[str, Callable[[], tuple[tuple[Action | BaseExpr | Fact, ...], BaseExpr | None]]] = {
         "term": lambda: ((a,), a),
         "constant": lambda: ((marker,), marker),
         "set": lambda: ((set_(cell()).to(i64(7)),), cell()),
@@ -477,6 +510,7 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
 
 def _observed_pyerr_callback(tag):
     observation = _callback_observations[tag]
+    assert isinstance(observation, dict)
     observation["calls"] += 1
     if "started" in observation:
         observation["started"].set()
@@ -502,7 +536,7 @@ class _UnprintableCallback:
 def callback_observations(monkeypatch):
     import sys  # noqa: PLC0415
 
-    observations = {}
+    observations: dict[str, CallbackObservation | bool] = {}
     monkeypatch.setattr(sys.modules[__name__], "_callback_observations", observations)
     return observations
 
@@ -513,11 +547,14 @@ def _callback_program(tag, callback=_observed_pyerr_callback):
 
     # The generation-only exporter is intentionally absent from the public stub.
     program = pb.Program.from_binary(getattr(bindings, "_export_pyobject_catalog")())  # noqa: B009
-    sort = next(
-        index
-        for index, record in enumerate(program.sorts)
-        if record.kind.field == "family" and record.kind.value == pb.HostSort(name="PyObject")
-    )
+    for sort_index, record in enumerate(program.sorts):
+        record_kind = record.kind
+        assert record_kind is not None
+        if record_kind.field == "family" and record_kind.value == pb.HostSort(name="PyObject"):
+            sort = sort_index
+            break
+    else:
+        raise StopIteration
     first = len(program.nodes)
     for value in (callback, tag):
         program.nodes.append(
@@ -580,15 +617,16 @@ def test_primitive_failure_public_exception_constructor():
             return super().__new__(cls, *args)
 
     marker = object()
+    argument_sets: tuple[tuple[object, ...], ...] = ((), (marker,), (marker, "message", 17))
     for constructor in (PrimitiveFailure, NoInit, SuperNew):
-        for args in ((), (marker,), (marker, "message", 17)):
+        for args in argument_sets:
             error = constructor(*args)
             assert type(error) is constructor
             assert error.args == args
             if args:
                 assert error.args[0] is marker
         with pytest.raises(TypeError):
-            constructor(message="not a positional argument")
+            constructor(message="not a positional argument")  # type: ignore[call-arg]
 
 
 def test_callback_python_none_is_a_value(callback_observations, tmp_path):
@@ -638,7 +676,7 @@ def test_callback_error_original_identity_and_adoption(table_transport, callback
         if kind == "hostile_notes"
         else CustomError(argument)
     )
-    error.detail = {"owned": [1, 2]}
+    error.detail = {"owned": [1, 2]}  # type: ignore[union-attr]  # Fixture-owned dynamic exception metadata.
     BaseException.add_note(error, "original note")
     if kind == "malformed_notes":
         malformed_notes = {"preserve": "original note state"}
@@ -666,7 +704,8 @@ def test_callback_error_original_identity_and_adoption(table_transport, callback
     source = Builder.from_program(program).publish()
     published = source.ref("rulesets", len(program.rulesets) - 1)
     packed = pack(commands=[source.ref("commands", index) for index in range(2)], roots=[published])
-    original_adopt = Builder.from_program.__func__
+    # Python exposes the bound classmethod descriptor; MyPy represents only its callable signature.
+    original_adopt = Builder.from_program.__func__  # type: ignore[attr-defined]
     adopted = []
 
     def adopt(cls, returned):
@@ -770,6 +809,7 @@ def test_callback_error_prior_native_record_is_not_current_check_failure(monkeyp
 
         def run(self, encoded):
             request = pb.RunProgramRequest.from_binary(encoded)
+            assert request.program is not None
             assert request.program.commands[0].kind is not None
             assert request.program.commands[0].kind.field == "check"
             return pb.RunProgramResponse(ruleset_publication=pb.RulesetPublication()).to_binary(), original
@@ -901,6 +941,8 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
     from egglog.egraph_state import EGraphState  # noqa: PLC0415
 
     class ExpectedSubclass(PrimitiveFailure):
+        annotation_calls: int
+
         def add_note(self, note) -> None:
             self.annotation_calls += 1
             pytest.fail("Expected primitive failures must not be annotated")
@@ -917,7 +959,8 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
         else ValueError("prefix error")
     )
     if expected_failure:
-        original.annotation_calls = 0
+        # The case matrix installs this test counter only on expected-failure instances.
+        original.annotation_calls = 0  # type: ignore[union-attr]
     callback_observations["first"] = {"error": original, "calls": 0}
     callback_observations["later"] = {"error": None, "calls": 0}
     program, first = _callback_program(
@@ -1067,7 +1110,7 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
                         "extract", pb.Extract(roots=[first + 2], variants=1, extractor=pb.Extractor.TREE)
                     )
                     if extracting
-                    else Oneof(
+                    else Oneof[Literal["run"], pb.Run](
                         "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", "handoff_first")))
                     )
                 )
@@ -1080,7 +1123,7 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
                         "action", pb.Action(kind=Oneof[Literal["panic"], str]("panic", "native after callback"))
                     )
                     if case == "later_native_error"
-                    else Oneof(
+                    else Oneof[Literal["run"], pb.Run](
                         "run", pb.Run(ruleset=pb.RulesetRef(kind=Oneof[Literal["name"], str]("name", "handoff_later")))
                     )
                 )
@@ -1702,19 +1745,21 @@ def test_scope_return_consumption_and_rejection_without_engine():
 
     active, saved = object.__new__(EGraphState), object.__new__(EGraphState)
     active.handle, saved.handle = 2, 1
-    active.transport = saved.transport = InertTransport()
+    # Deliberate native-transport substitution in this engine-free lifecycle fixture.
+    active.transport = saved.transport = InertTransport()  # type: ignore[assignment]
     with pytest.raises(ValueError, match="Return rejection"):
         active.return_to(saved)
     assert (active.handle, saved.handle) == (2, 1)
-    active.transport.reject = False
+    active.transport.reject = False  # type: ignore[attr-defined]  # InertTransport fixture control.
     active.return_to(saved)
-    assert (active.handle, saved.handle) == (None, 1)
+    # return_to consumes the active handle; MyPy retains its earlier integer narrowing.
+    assert (active.handle, saved.handle) == (None, 1)  # type: ignore[comparison-overlap]
     with pytest.raises(RuntimeError, match="live"):
         active.return_to(saved)
     assert calls == [(2, 1), (2, 1)]
     active.handle = 2
     original = active.transport
-    active.transport = InertTransport()
+    active.transport = InertTransport()  # type: ignore[assignment]  # Deliberate different-transport control.
     with pytest.raises(ValueError, match="same transport"):
         active.return_to(saved)
     active.transport = original
@@ -1764,7 +1809,8 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     from egglog.declarations import Ident  # noqa: PLC0415
     from egglog.egraph import set_current_ruleset  # noqa: PLC0415
 
-    requests = []
+    requests: list[pb.RunProgramRequest | pb.ConfigureEGraphResourcesRequest] = []
+    programs: list[pb.Program] = []
 
     class InertTransport:
         def create(self, encoded):
@@ -1775,6 +1821,7 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
             requests.append(request)
             program = request.program
             assert program is not None
+            programs.append(program)
             outputs = []
             if program.commands:
                 assert len(program.commands) == 1
@@ -1793,7 +1840,7 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
                     assert request.include_run_reports
                     outputs = [
                         pb.CommandOutput(
-                            kind=Oneof("run", pb.RunOutcome(can_stop=True))
+                            kind=Oneof[Literal["run"], pb.RunOutcome]("run", pb.RunOutcome(can_stop=True))
                             if command.field == "run"
                             else Oneof[Literal["loop"], pb.LoopOutcome](
                                 "loop", pb.LoopOutcome(iterations=1, termination=pb.TerminationReason.COUNT_REACHED)
@@ -1829,13 +1876,15 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     installed = graph._state.rulesets[first.__egg_ident__]
     assert [ref.read().name for ref in graph._state._ruleset_members(installed)] == ["first"]
     execution = requests[-1]
+    assert isinstance(execution, pb.RunProgramRequest)
     execution_program = execution.program
     assert execution_program is not None
     execution_kind = execution_program.commands[0].kind
     assert execution_kind is not None
     assert execution_kind.field == "repeat"
     assert len(execution_kind.value.body) == 3
-    assert not any(request.program.commands for request in requests[:-1])
+    assert len(programs) == len(requests)
+    assert not any(program.commands for program in programs[:-1])
     before = len(requests)
     graph.run(schedule)
     assert len(requests) == before + 1  # Same members/cursors, no fresh publication.
@@ -1848,7 +1897,9 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     graph.run(seq(run()))
     assert Ident("") in graph._state.rulesets
     assert graph.stats().can_stop
-    stats_program = requests[-1].program
+    stats_request = requests[-1]
+    assert isinstance(stats_request, pb.RunProgramRequest)
+    stats_program = stats_request.program
     assert stats_program is not None
     stats_kind = stats_program.commands[0].kind
     assert stats_kind is not None
@@ -1876,7 +1927,9 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     ]
     with set_current_ruleset(other):
         graph.run(run())
-    selected_program = requests[-1].program
+    selected_request = requests[-1]
+    assert isinstance(selected_request, pb.RunProgramRequest)
+    selected_program = selected_request.program
     assert selected_program is not None
     run_kind = selected_program.commands[0].kind
     assert run_kind is not None
@@ -1889,7 +1942,11 @@ def test_schedule_publication_and_report_requests_are_pure_and_ordered(monkeypat
     assert selected_program.rulesets[selected].name == graph._state.rulesets[Ident("")].read().name
     for level in (pb.ReportLevel.TIME_ONLY, pb.ReportLevel.WITH_PLAN, pb.ReportLevel.STAGE_INFO):
         graph.set_report_level(level)
-        assert requests[-1].operation.value == level
+        configured = requests[-1]
+        assert isinstance(configured, pb.ConfigureEGraphResourcesRequest)
+        operation = configured.operation
+        assert operation is not None
+        assert operation.value == level
 
 
 @pytest.mark.parametrize("operation", ["run", "stats"])
@@ -1913,7 +1970,7 @@ def test_public_reports_require_the_requested_top_level_output(monkeypatch, oper
                 run_report=report if operation == "run" else None,
             )
             if malformed == "kind":
-                output.kind = Oneof("run", pb.RunOutcome(can_stop=True))
+                output.kind = Oneof[Literal["run"], pb.RunOutcome]("run", pb.RunOutcome(can_stop=True))
             elif malformed == "missing":
                 output.kind = None
             elif malformed == "flags":
@@ -1947,7 +2004,7 @@ def test_publication_derives_each_rule_key_once_per_call(monkeypatch):
     selected = ruleset(*(rule(eq(x).to(i64(i)), name=f"memo_{i}").then() for i in range(4)), name="memo")
     graph = EGraph()
     original = program._rule_key
-    calls = Counter()
+    calls: Counter[Ref] = Counter()
 
     def counted(reference):
         calls[reference] += 1
@@ -1957,7 +2014,7 @@ def test_publication_derives_each_rule_key_once_per_call(monkeypatch):
     versions = []
     for _ in range(2):
         calls.clear()
-        identifiers = {}
+        identifiers: dict[Ref, Ident] = {}
         snapshot = selected._snapshot(identifiers)
         versions.append(graph._state.publish_ruleset(snapshot, identifiers))
         assert calls
@@ -1975,7 +2032,7 @@ def _run_ruleset_step(graph, selected=None):
     if selected is None:
         published = graph._state.rulesets[Ident("")]
     else:
-        identifiers = {}
+        identifiers: dict[Ref, Ident] = {}
         snapshot = selected._snapshot(identifiers)
         published = graph._state.publish_ruleset(snapshot, identifiers)
     builder = Builder()
@@ -1993,7 +2050,7 @@ def _run_ruleset_step(graph, selected=None):
     assert response.profile is not None
     assert len(response.profile.runs) == 1
     labels = {index: attribution.name for index, attribution in enumerate(response.rules)}
-    matches = {}
+    matches: dict[str, int] = {}
     for summary in response.profile.runs[0].rules:
         assert summary.matches is not None
         label = labels[summary.rule]
@@ -2005,7 +2062,7 @@ def _run_ruleset_step(graph, selected=None):
 def test_publication_adopts_exact_receipt_before_install_error(monkeypatch, completed):
     from egglog import rule, ruleset  # noqa: PLC0415
 
-    requests = []
+    requests: list[pb.RunProgramRequest] = []
     fail = True
 
     class InertTransport:
@@ -2015,6 +2072,7 @@ def test_publication_adopts_exact_receipt_before_install_error(monkeypatch, comp
         def run(self, encoded):
             request = pb.RunProgramRequest.from_binary(encoded)
             requests.append(request)
+            assert request.program is not None
             names = [record.name for record in request.program.rulesets if record.has_field("name")]
             return pb.RunProgramResponse(
                 ruleset_publication=pb.RulesetPublication(names=names if completed or not fail else []),
@@ -2032,11 +2090,13 @@ def test_publication_adopts_exact_receipt_before_install_error(monkeypatch, comp
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
     graph = EGraph()
     selected = ruleset(rule(name="first").then(), name="receipt")
-    identifiers = {}
+    identifiers: dict[Ref, Ident] = {}
     snapshot = selected._snapshot(identifiers)
     with pytest.raises(EggSmolError, match="injected install boundary"):
         graph._state.publish_ruleset(snapshot, identifiers)
-    first_name = requests[0].program.rulesets[0].name
+    first_program = requests[0].program
+    assert first_program is not None
+    first_name = first_program.rulesets[0].name
     assert (("ruleset", first_name) in graph._state.definitions) is completed
     assert (selected.__egg_ident__ in graph._state.rulesets) is completed
     if completed:
@@ -2086,7 +2146,7 @@ def test_mixed_registration_cut_distinguishes_query_from_action_identity(monkeyp
     from egglog import Action, Fact, expr_action, rule  # noqa: PLC0415
     from egglog._program import Builder  # noqa: PLC0415
 
-    requests = []
+    requests: list[pb.RunProgramRequest] = []
 
     class InertTransport:
         def create(self, encoded):
@@ -2095,6 +2155,7 @@ def test_mixed_registration_cut_distinguishes_query_from_action_identity(monkeyp
         def run(self, encoded):
             request = pb.RunProgramRequest.from_binary(encoded)
             requests.append(request)
+            assert request.program is not None
             return pb.RunProgramResponse(
                 ruleset_publication=pb.RulesetPublication(
                     names=[root.name for root in request.program.rulesets if root.has_field("name")]
@@ -2113,7 +2174,7 @@ def test_mixed_registration_cut_distinguishes_query_from_action_identity(monkeyp
     union = builder.add(
         "nodes",
         pb.Node(
-            sort_id=builder.import_ref(Box.__egg_sort__),
+            sort_id=builder.import_ref(Box.__egg_sort__),  # type: ignore[attr-defined]  # RuntimeClass metadata.
             kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[builder.import_ref(Box().__egg_ref__)])),
         ),
     )
@@ -2136,8 +2197,12 @@ def test_mixed_registration_cut_distinguishes_query_from_action_identity(monkeyp
         assert not graph._state.rulesets
     else:
         graph.register(action, rule(query).then(), expr_action(i64(1)))
-        assert [len(request.program.commands) for request in requests] == [1, 0, 1]
-        assert len(requests[1].program.rules) == 1
+        programs = []
+        for request in requests:
+            assert request.program is not None
+            programs.append(request.program)
+        assert [len(program.commands) for program in programs] == [1, 0, 1]
+        assert len(programs[1].rules) == 1
 
 
 @pytest.mark.parametrize("reuse", ["separate", "same", "copy"])
@@ -2155,8 +2220,8 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
     first = union(lhs).with_(rhs)
     second = union(lhs).with_(rhs) if reuse == "separate" else first if reuse == "same" else copy(first)
     transport = graph._state.transport
-    requests = []
-    responses = []
+    requests: list[pb.RunProgramRequest] = []
+    responses: list[pb.RunProgramResponse] = []
 
     class AuditedTransport:
         def run(self, encoded):
@@ -2171,7 +2236,8 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
         def destroy(self, encoded):
             return transport.destroy(encoded)
 
-    graph._state.transport = AuditedTransport()
+    # The audit proxy intentionally substitutes for the concrete native transport.
+    graph._state.transport = AuditedTransport()  # type: ignore[assignment]
     graph.register(first, second)
     assert responses[0].error is None
     graph.check(eq(lhs).to(rhs))
@@ -2188,7 +2254,12 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
         assert action_kind.field == "term"
         roots.append(action_kind.value)
     assert (roots[0] == roots[1]) is (reuse != "separate")
-    assert all(submitted_program.nodes[index].kind.field == "union" for index in roots)
+    root_kinds = []
+    for root_index in roots:
+        root_kind = submitted_program.nodes[root_index].kind
+        assert root_kind is not None
+        root_kinds.append(root_kind)
+    assert all(kind.field == "union" for kind in root_kinds)
 
 
 def test_ruleset_append_preserves_native_cursor(tmp_path):
@@ -2206,7 +2277,7 @@ def test_ruleset_append_preserves_native_cursor(tmp_path):
 
     graph = EGraph()
     transport = graph._state.transport
-    responses = []
+    responses: list[pb.RunProgramResponse] = []
 
     class AuditedTransport:
         def run(self, encoded):
@@ -2224,7 +2295,7 @@ def test_ruleset_append_preserves_native_cursor(tmp_path):
         def destroy(self, encoded):
             return transport.destroy(encoded)
 
-    graph._state.transport = AuditedTransport()
+    graph._state.transport = AuditedTransport()  # type: ignore[assignment]  # Native-transport audit proxy.
     graph.register(Input(1))
     x = var("x", i64)
     selected = ruleset(rule(Input(x), name="old").then(Old(x)), name="append_cursor")
@@ -2235,7 +2306,12 @@ def test_ruleset_append_preserves_native_cursor(tmp_path):
     assert _run_ruleset_step(graph, selected) == {"new": 1}
     graph.check(Old(1), New(1))
     assert _run_ruleset_step(graph, selected) == {}
-    assert any(response.ruleset_publication.names for response in responses)
+    publications = []
+    for response in responses:
+        publication = response.ruleset_publication
+        assert publication is not None
+        publications.append(publication)
+    assert any(publication.names for publication in publications)
 
 
 @pytest.mark.parametrize("seeded", [False, True])
@@ -2262,7 +2338,8 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
     assert callbacks == [1]
     graph = EGraph()
     transport = graph._state.transport
-    requests, responses = [], []
+    requests: list[pb.RunProgramRequest] = []
+    responses: list[pb.RunProgramResponse] = []
 
     def audited_run(encoded):
         index = len(requests)
@@ -2277,7 +2354,7 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
         responses.append(response)
         return returned, host_error
 
-    graph._state.transport = SimpleNamespace(run=audited_run, destroy=transport.destroy)
+    graph._state.transport = SimpleNamespace(run=audited_run, destroy=transport.destroy)  # type: ignore[assignment]
     if seeded:
         graph.register(expression)
     matches = _run_ruleset_step(graph, selected)
@@ -2287,8 +2364,19 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
     else:
         assert _run_ruleset_step(graph, selected) == {}
     assert callbacks == [1]
-    assert any(response.ruleset_publication.names for response in responses)
-    declared = {declaration.kind.value.name for request in requests for declaration in request.program.declarations}
+    publications = []
+    for response in responses:
+        publication = response.ruleset_publication
+        assert publication is not None
+        publications.append(publication)
+    assert any(publication.names for publication in publications)
+    declared = set()
+    for request in requests:
+        assert request.program is not None
+        for declaration in request.program.declarations:
+            declaration_kind = declaration.kind
+            assert declaration_kind is not None
+            declared.add(declaration_kind.value.name)
     assert resolve_callable(Source.wrapped).read().kind.value.name in declared
     assert resolve_callable(Result).read().kind.value.name in declared
 
@@ -2941,7 +3029,13 @@ def test_response_owner_keeps_nominal_and_ambient_family_contexts(monkeypatch):
 
         def run(self, encoded):
             request = pb.RunProgramRequest.from_binary(encoded)
-            assert any(d.kind.field == "eq_sort" and d.kind.value.name == "Pair" for d in request.program.declarations)
+            assert request.program is not None
+            declaration_kinds = []
+            for declaration in request.program.declarations:
+                kind = declaration.kind
+                assert kind is not None
+                declaration_kinds.append(kind)
+            assert any(kind.field == "eq_sort" and kind.value.name == "Pair" for kind in declaration_kinds)
             return pb.RunProgramResponse(
                 ruleset_publication=pb.RulesetPublication(),
                 sorts=[
@@ -2984,7 +3078,8 @@ def test_response_owner_keeps_nominal_and_ambient_family_contexts(monkeypatch):
     graph = EGraph()
     result = graph.extract(NominalPair())
     assert graph._state.definitions["host_sort_family", "Pair"] == family
-    assert graph._state.definitions["eq_sort", "Pair"] == NominalPair.__egg_definition__
+    # The authored class is a RuntimeClass presentation with canonical declaration metadata.
+    assert graph._state.definitions["eq_sort", "Pair"] == NominalPair.__egg_definition__  # type: ignore[attr-defined]
     assert result.tag() == "nominal hook"
     assert str(result) == "NominalPair()"
     graph._state.destroy()
@@ -3074,11 +3169,16 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
         assert argument_value.field == "i64"
         argument_values.append(argument_value.value)
     assert argument_values == [1, 2]
-    add = next(declaration for declaration in program.declarations if declaration.kind.value.name == call.value.func)
+    declarations: dict[str, pb.Declaration] = {}
+    for declaration in program.declarations:
+        declaration_kind = declaration.kind
+        assert declaration_kind is not None
+        declarations.setdefault(declaration_kind.value.name, declaration)
+    add = next(declaration for name, declaration in declarations.items() if name == call.value.func)
     assert add.bindings is not None
     assert add.bindings.python is not None
     assert add.bindings.python.views[0].path == ["__add__"]
-    family = next(declaration for declaration in program.declarations if declaration.kind.value.name == "i64")
+    family = next(declaration for name, declaration in declarations.items() if name == "i64")
     family_kind = family.kind
     assert family_kind is not None
     assert family_kind.field == "host_sort_family"
@@ -3259,7 +3359,8 @@ def test_no_decomp_queries_are_uncached_and_updates_are_handle_local(resource_tr
     assert graph.no_decomp()
     with graph:
         assert graph.no_decomp()
-        assert graph.set_no_decomp(False) is None
+        # MyPy disallows observing None-returning calls; this assertion checks the setter's return contract.
+        assert graph.set_no_decomp(False) is None  # type: ignore[func-returns-value]
         disabled = resource_transport.requests[-1]
         assert disabled.egraph_id == 2
         assert disabled.operation == Oneof("no_decomp", False)
@@ -3315,7 +3416,7 @@ def test_zero_threads_bytes_keep_presence_and_read_actual_count(
 ) -> None:
     graph = EGraph(num_threads=1 if use_setter else 0)
     if use_setter:
-        assert graph.set_num_threads(0) is None
+        assert graph.set_num_threads(0) is None  # type: ignore[func-returns-value]  # Observe the None return contract.
         assert resource_transport.requests[0].operation == Oneof[Literal["threads"], int]("threads", 0)
     else:
         assert resource_transport.creations[0].has_field("threads")
@@ -3331,7 +3432,7 @@ def test_resource_queries_are_uncached_uint64_and_updates_are_handle_local(
     assert graph.num_threads() == 2
     with graph:
         assert graph.num_threads() == 2
-        assert graph.set_num_threads(1) is None
+        assert graph.set_num_threads(1) is None  # type: ignore[func-returns-value]  # Observe the None return contract.
         assert graph.num_threads() == 1
         assert resource_transport.requests[-1].egraph_id == 2
     assert graph.num_threads() == 2
@@ -3391,10 +3492,10 @@ def test_invalid_thread_count_has_no_transport_effect(
     creations = len(resource_transport.creations)
     if graph is None:
         with pytest.raises(error):
-            EGraph(num_threads=value)
+            EGraph(num_threads=value)  # type: ignore[arg-type]
     else:
         with pytest.raises(error):
-            graph.set_num_threads(value)
+            graph.set_num_threads(value)  # type: ignore[arg-type]
     assert len(resource_transport.creations) == creations
     assert not resource_transport.requests
     if graph is not None:

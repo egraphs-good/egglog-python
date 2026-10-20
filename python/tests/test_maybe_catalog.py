@@ -5,6 +5,7 @@
 import copy
 import os
 import runpy
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -50,7 +51,9 @@ def test_maybe_local_value_inspection_is_inert(monkeypatch):
     monkeypatch.setattr(EGraph, "__init__", unexpected)
     monkeypatch.setattr(RuntimeFunction, "__call__", unexpected)
     assert none.value is None
-    assert StructuralView(some.value.__egg_ref__) == StructuralView(symbolic.__egg_ref__)
+    some_child = some.value
+    assert some_child is not None
+    assert StructuralView(some_child.__egg_ref__) == StructuralView(symbolic.__egg_ref__)
     assert nested.value is not None
     assert nested.value.value is None
     with pytest.raises(ExprValueError):
@@ -77,7 +80,9 @@ def test_maybe_ordinary_surface_executes_as_bytes():
     with pytest.raises(EggSmolError, match=r"evaluation|Evaluation|failed"):
         graph.extract(Maybe[i64].some(i64(7)).unwrap_or(i64(1) / i64(0)))
     assert str(some) == "Maybe[f64].some(f64(1.0))"
-    assert EGraph().extract(some).value.value == 1.0
+    roundtripped_child = EGraph().extract(some).value
+    assert roundtripped_child is not None
+    assert roundtripped_child.value == 1.0
 
 
 def test_higher_order_map_fold_and_maybe_callbacks_execute_as_bytes(monkeypatch):
@@ -102,7 +107,8 @@ def test_higher_order_map_fold_and_maybe_callbacks_execute_as_bytes(monkeypatch)
         assert get_callable_fn(expression) == map_fold_kv
         args = get_callable_args(expression)
         assert args is not None
-        assert args[1:] == (initial, mapping)
+        # Deconstruction returns runtime presentations of the authored container classes.
+        assert args[1:] == (initial, mapping)  # type: ignore[comparison-overlap]
         packed = pack([expression.__egg_ref__])
         detached = RuntimeExpr(
             Builder
@@ -125,12 +131,17 @@ def test_maybe_none_conversion_and_constructor_deconstruction():
     def identity(value: Maybe[i64]) -> Maybe[i64]: ...
 
     assert StructuralView(identity(None).__egg_ref__) == StructuralView(identity(Maybe[i64].none()).__egg_ref__)  # type: ignore[arg-type]
-    assert conversion.convert(None, Maybe[i64]).value is None
+    converted = conversion.convert(None, Maybe[i64])
+    assert isinstance(converted, RuntimeExpr)
+    assert converted.value is None
     for call in [Maybe[i64].none(), Maybe[i64].some(i64(4)), Maybe[Maybe[i64]].some(Maybe[i64].none())]:
         args, fn = get_callable_args(call), get_callable_fn(call)
         assert args is not None
         assert fn is not None
-        assert StructuralView(fn(*args).__egg_ref__) == StructuralView(call.__egg_ref__)
+        assert isinstance(fn, RuntimeFunction)
+        rebuilt_call = fn(*args)
+        assert rebuilt_call is not None
+        assert StructuralView(rebuilt_call.__egg_ref__) == StructuralView(call.__egg_ref__)
     declaration = builtin_catalog().definitions["callable", "egglog.experimental.maybe.none"]
     builder = Builder()
     record = declaration.read()
@@ -149,11 +160,14 @@ def test_maybe_none_conversion_and_constructor_deconstruction():
     args, fn = get_callable_args(rebuilt), get_callable_fn(rebuilt)
     assert args == ()
     assert fn is not None
-    assert StructuralView(fn().__egg_ref__) == StructuralView(rebuilt.__egg_ref__)
+    assert isinstance(fn, RuntimeFunction)
+    rebuilt_call = fn()
+    assert rebuilt_call is not None
+    assert StructuralView(rebuilt_call.__egg_ref__) == StructuralView(rebuilt.__egg_ref__)
 
 
 def test_generic_classmethod_reconstruction_preserves_bound_callable_identity(monkeypatch):
-    cases = [
+    cases: list[tuple[Callable[..., object], tuple[object, ...]]] = [
         (Vec[i64].empty, ()),
         (Map[i64, String].empty, ()),
         (Maybe[i64].none, ()),
@@ -161,7 +175,11 @@ def test_generic_classmethod_reconstruction_preserves_bound_callable_identity(mo
         (Maybe[i64].some, (i64(4),)),
         (Maybe[Maybe[i64]].some, (Maybe[i64].none(),)),
     ]
-    calls = [fn(*args) for fn, args in cases]
+    calls = []
+    for fn, args in cases:
+        call = fn(*args)
+        assert isinstance(call, RuntimeExpr)
+        calls.append(call)
     for (fn, _), call in zip(cases, calls, strict=True):
         packet = pack([call.__egg_ref__])
         imported = RuntimeExpr(
@@ -172,12 +190,15 @@ def test_generic_classmethod_reconstruction_preserves_bound_callable_identity(mo
         )
         for original in [call, imported]:
             recovered = get_callable_fn(original)
+            assert isinstance(recovered, RuntimeFunction)
             assert recovered == fn
             assert hash(recovered) == hash(fn)
             assert recovered.__egg_type_bindings__ == ()
-            assert StructuralView(recovered(*get_callable_args(original)).__egg_ref__) == StructuralView(
-                call.__egg_ref__
-            )
+            args = get_callable_args(original)
+            assert args is not None
+            rebuilt = recovered(*args)
+            assert rebuilt is not None
+            assert StructuralView(rebuilt.__egg_ref__) == StructuralView(call.__egg_ref__)
     assert get_callable_fn(calls[2]) != get_callable_fn(calls[3])
 
     def forbidden(*args, **kwargs):
@@ -209,8 +230,10 @@ def test_maybe_formed_child_zero_nested_presence_import_and_hash():
     )
     assert child == 0
     formed = RuntimeExpr(builder.publish().ref("nodes", index))
-    assert formed.value is not None
-    assert formed.value.value == 0
+    formed_value = formed.value
+    assert formed_value is not None
+    assert isinstance(formed_value, RuntimeExpr)
+    assert formed_value.value == 0
     packed = pack([formed.__egg_ref__])
     imported = RuntimeExpr(Builder.from_program(packed.program).publish().ref("nodes", packed.indices[0]))
     assert StructuralView(imported.__egg_ref__) == StructuralView(formed.__egg_ref__)
@@ -268,7 +291,11 @@ def test_maybe_stub_is_derived_from_actual_member_metadata():
     assert "def some(cls, value: _Maybe_T_0) -> Maybe[_Maybe_T_0]:" in generated
     assert "def unwrap(self) -> _Maybe_T_0:" in generated
     assert "def unwrap_or(self, default: _Maybe_T_0) -> _Maybe_T_0:" in generated
-    declarations = {d.kind.value.name: d for d in program.declarations}
+    declarations: dict[str, pb.Declaration] = {}
+    for declaration in program.declarations:
+        declaration_kind = declaration.kind
+        assert declaration_kind is not None
+        declarations[declaration_kind.value.name] = declaration
     family_kind = declarations["Maybe"].kind
     assert family_kind is not None
     assert family_kind.field == "host_sort_family"
@@ -312,8 +339,10 @@ def test_maybe_formed_pretty_uses_owned_renamed_constructor_metadata():
             assert declaration.bindings.python is not None
             declaration.bindings.python.views[0].path = ["present"]
     value = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packet.indices[0]))
-    assert value.value is not None
-    assert value.value.value == 0
+    child_value = value.value
+    assert child_value is not None
+    assert isinstance(child_value, RuntimeExpr)
+    assert child_value.value == 0
     assert "OptionalValue[i64].present(" in str(value)
 
 
@@ -358,11 +387,16 @@ def test_maybe_inspection_rejects_malformed_local_values(mutation):
     elif mutation == "arity":
         sort_kind.value.args.clear()
     else:
-        declaration = next(
-            d
-            for d in program.declarations
-            if d.kind.field == "host_primitive" and d.kind.value.name == "egglog.experimental.maybe.some"
-        )
+        for declaration in program.declarations:
+            declaration_kind = declaration.kind
+            assert declaration_kind is not None
+            if (
+                declaration_kind.field == "host_primitive"
+                and declaration_kind.value.name == "egglog.experimental.maybe.some"
+            ):
+                break
+        else:
+            raise StopIteration
         if mutation == "scheme":
             declaration_kind = declaration.kind
             assert declaration_kind is not None

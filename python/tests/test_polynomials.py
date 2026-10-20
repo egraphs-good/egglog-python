@@ -14,7 +14,7 @@ def _evaluate_scalar(value, variables):
         Value.__truediv__: operator.truediv,
         Value.__pow__: operator.pow,
     }
-    memo = {}
+    memo: dict[tuple[int, int], tuple[Fraction, int]] = {}
 
     def visit(expression):
         reference = expression.__egg_ref__

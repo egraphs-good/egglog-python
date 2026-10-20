@@ -24,7 +24,7 @@ def _reset_conversions():
 def _reset_current_egraph():
     yield
     if (array_api := sys.modules.get("egglog.exp.array_api")) is not None:
-        array_api._CURRENT_EGRAPH = None
+        array_api._CURRENT_EGRAPH = None  # type: ignore[attr-defined]  # Reset the loaded module's dynamic context slot.
 
 
 class PythonSnapshotExtension(SingleFileSnapshotExtension):
@@ -43,7 +43,11 @@ def snapshot_py(snapshot):
 def pair_catalog_program():
     """Proposed presentation only; signatures stay in the real native snapshot."""
     program = pb.Program.from_binary((Path(__file__).parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
-    declarations = {d.kind.value.name: d for d in program.declarations}
+    declarations: dict[str, pb.Declaration] = {}
+    for declaration in program.declarations:
+        declaration_kind = declaration.kind
+        assert declaration_kind is not None
+        declarations[declaration_kind.value.name] = declaration
     family_kind = declarations["Pair"].kind
     assert family_kind is not None
     assert family_kind.field == "host_sort_family"
@@ -70,7 +74,9 @@ def pair_catalog_program():
         ]
     )
     for core, public in [("first", "left"), ("second", "right")]:
-        declarations[f"egglog.core.pair.{core}"].bindings.python = pb.PythonBindings(
+        member_bindings = declarations[f"egglog.core.pair.{core}"].bindings
+        assert member_bindings is not None
+        member_bindings.python = pb.PythonBindings(
             views=[
                 pb.PythonCallable(
                     kind=pb.PythonCallKind.PROPERTY,
@@ -151,7 +157,12 @@ def rational_catalog_program():
     """Actual native export, optionally supplied before package regeneration."""
     path = Path(os.environ.get("EGGLOG_TEST_BUILTIN_CATALOG", Path(__file__).parents[1] / "egglog/_builtin_catalog.pb"))
     program = pb.Program.from_binary(path.read_bytes())
-    if not any(d.kind.value.name == "egglog.experimental.rational.make" for d in program.declarations):
+    kinds = []
+    for declaration in program.declarations:
+        kind = declaration.kind
+        assert kind is not None
+        kinds.append(kind)
+    if not any(kind.value.name == "egglog.experimental.rational.make" for kind in kinds):
         pytest.skip("Rational native export not packaged or supplied via EGGLOG_TEST_BUILTIN_CATALOG")
     return program
 
@@ -161,7 +172,12 @@ def set_catalog_program():
     """Actual native export; no synthetic Set signatures or views."""
     path = Path(os.environ.get("EGGLOG_TEST_BUILTIN_CATALOG", Path(__file__).parents[1] / "egglog/_builtin_catalog.pb"))
     program = pb.Program.from_binary(path.read_bytes())
-    assert any(d.kind.value.name == "egglog.core.set.of" for d in program.declarations)
+    kinds = []
+    for declaration in program.declarations:
+        kind = declaration.kind
+        assert kind is not None
+        kinds.append(kind)
+    assert any(kind.value.name == "egglog.core.set.of" for kind in kinds)
     return program
 
 

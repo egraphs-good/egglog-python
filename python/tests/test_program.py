@@ -168,13 +168,13 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
     with pytest.raises(TypeError, match="canonical rule reference"):
         RewriteOrRule(literal(1))
     with pytest.raises(ValueError, match="evaluation mode"):
-        rule(eval_mode="unknown").then()
+        rule(eval_mode="unknown").then()  # type: ignore[arg-type]
     assert not rule(name="").then().__egg_ref__.read().has_field("name")
     assert str(rule(name="").then()) == "rule().then()"
     with pytest.raises(TypeError, match="strings"):
-        rule(name=42).then()
+        rule(name=42).then()  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="destinations must be Rulesets"):
-        rule(ruleset=object()).then()
+        rule(ruleset=object()).then()  # type: ignore[arg-type]
     assert authored == authored  # noqa: PLR0124 -- reflexivity is part of the wrapper contract
     assert authored.__eq__(object()) is NotImplemented
     with pytest.raises(TypeError, match="unhashable"):
@@ -640,7 +640,16 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
             ("host_sort_family", "Pair"),
             ("callable", "Pair"),
         }
-        payload = next(n.kind.value.value.value for n in result.program.nodes if n.kind.field == "primitive_value")
+        for node in result.program.nodes:
+            node_kind = node.kind
+            assert node_kind is not None
+            if node_kind.field == "primitive_value":
+                value = node_kind.value.value
+                assert value is not None
+                payload = value.value
+                break
+        else:
+            raise StopIteration
         assert isinstance(payload, pb.PairValue)
         assert payload.first == payload.second
     assert {_program._definition_key(d) for d in pack([nominal]).program.declarations} == {
@@ -773,8 +782,13 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
         )
         roots = [builder.publish().ref("declarations", wrapper), left[1]]
     packed = pack(roots)
-    assert sum(declaration.kind.value.name == "composed" for declaration in packed.program.declarations) == 1
-    assert sum(declaration.kind.field == "host_sort_family" for declaration in packed.program.declarations) == 1
+    declaration_kinds = []
+    for declaration in packed.program.declarations:
+        declaration_kind = declaration.kind
+        assert declaration_kind is not None
+        declaration_kinds.append(declaration_kind)
+    assert sum(kind.value.name == "composed" for kind in declaration_kinds) == 1
+    assert sum(kind.field == "host_sort_family" for kind in declaration_kinds) == 1
     assert [reference.read().to_binary() for _, reference, _ in producers] == before
     if root_kind == "definitions":
         assert packed.indices[0] == packed.indices[1]
@@ -953,7 +967,12 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
         )
         roots.append(builder.publish().ref("nodes", literal))
     packed = pack(roots)
-    assert [declaration.kind.value.name for declaration in packed.program.declarations] == ["i64"]
+    names = []
+    for declaration in packed.program.declarations:
+        kind = declaration.kind
+        assert kind is not None
+        names.append(kind.value.name)
+    assert names == ["i64"]
     assert len(packed.program.nodes) == 2
 
 
@@ -1409,7 +1428,14 @@ def test_scalar_view_presence_survives_owned_closure_and_relocation(repetitions)
         signature = signature_kind.value
         assert not signature.inputs
         assert len(signature.varargs) == 1
-    call = next(n.kind.value for n in reencoded.nodes if n.kind.field == "call")
+    for node in reencoded.nodes:
+        call_kind = node.kind
+        assert call_kind is not None
+        if call_kind.field == "call":
+            call = call_kind.value
+            break
+    else:
+        raise StopIteration
     assert isinstance(call, pb.Call)
     argument_values = []
     for i in call.args:
@@ -1507,7 +1533,12 @@ def test_proof_command_relocation_and_constructor_closure():
     assert exists_kind is not None
     assert exists_kind.field == "prove_exists"
     assert exists_kind.value.constructor == "box"
-    assert {declaration.kind.value.name for declaration in result.declarations} == {"box", "Box"}
+    names = set()
+    for declaration in result.declarations:
+        kind = declaration.kind
+        assert kind is not None
+        names.add(kind.value.name)
+    assert names == {"box", "Box"}
     assert pb.Program.from_binary(result.to_binary()) == result
     with pytest.raises(ValueError, match=r"missing.*missing"):
         pack(commands=[owner.ref("commands", missing)])

@@ -61,10 +61,14 @@ def test_invalid_saved_transcript_inside_context_restores_scope() -> None:
             for node in snapshot.program.nodes
             if node.kind is not None
             and node.kind.field == "call"
-            and node.kind.value.func == marker.__egg_ref__.read().kind.value.name
+            # A relation's authored Callable is its RuntimeFunction presentation at runtime.
+            and node.kind.value.func == marker.__egg_ref__.read().kind.value.name  # type: ignore[attr-defined]
         ]
         assert len(marker_calls) == 1
-        value = snapshot.program.nodes[marker_calls[0].args[0]].kind.value.value
+        value_kind = snapshot.program.nodes[marker_calls[0].args[0]].kind
+        assert value_kind is not None
+        assert value_kind.field == "primitive_value"
+        value = value_kind.value.value
         assert value is not None
         assert value.field == "i64"
         assert value.value == 1

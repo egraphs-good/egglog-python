@@ -107,7 +107,8 @@ def test_callable(expr, fn, args):
 
 
 def test_callable_generic_applied():
-    assert get_callable_args(Vec(i64(1)), Vec[i64]) == (i64(1),)
+    # Authored i64 instances are RuntimeExpr presentations at this reflection boundary.
+    assert get_callable_args(Vec(i64(1)), Vec[i64]) == (i64(1),)  # type: ignore[comparison-overlap]
 
 
 def test_callable_generic_applied_method():

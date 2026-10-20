@@ -107,8 +107,9 @@ def test_proto_report_projection_preserves_grouping_rounding_and_ownership(monke
     assert iteration.rule_set_report.search_and_apply_time == timedelta(microseconds=2)
     assert [report.num_matches for report in iteration.rule_set_report.rule_reports[key]] == [2, 3]
     assert iteration.rule_set_report.rule_reports[key][0].plan is None
-    assert iteration.rule_set_report.rule_reports[key][1].plan is not None
-    assert iteration.rule_set_report.rule_reports[key][1].plan.stages == []
+    planned = iteration.rule_set_report.rule_reports[key][1]
+    assert planned.plan is not None
+    assert planned.plan.stages == []
     assert "rule(name='same').then()" in repr(result)
     state._ruleset_identifiers.clear()
     with pytest.raises(KeyError):
@@ -396,6 +397,7 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
         )
     )
     rulesets = {}
+    constructors: dict[str, tuple[pb.Program, pb.Declaration]] = {}
     loops = checks = 0
     try:
         while (submission := source.next_submission()) is not None:
@@ -418,6 +420,9 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
             for ruleset in program.rulesets:
                 if ruleset.has_field("name"):
                     rulesets[ruleset.name] = program, ruleset
+            for declaration in program.declarations:
+                if declaration.kind is not None and isinstance(declaration.kind.value, pb.Constructor):
+                    constructors[declaration.kind.value.name] = program, declaration
             for command in program.commands:
                 assert command.kind is not None
                 if command.kind.field == "check":
@@ -488,12 +493,44 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
                         replay = owner.nodes[getattr(replayed.kind.value, operand)]
                         assert replay.kind is not None
                         assert original.kind.field == replay.kind.field == "call"
+                        assert isinstance(original.kind.value, pb.Call)
                         assert isinstance(replay.kind.value, pb.Call)
-                        assert replay.kind.value.func == original.kind.value.func
+                        original_definition = egraph._state.definitions["callable", original.kind.value.func]
+                        original_declaration: pb.Declaration = original_definition.read()
+                        assert original_declaration.kind is not None
+                        assert isinstance(original_declaration.kind.value, pb.Constructor)
+                        declaration_owner, declaration = constructors[replay.kind.value.func]
+                        assert declaration.kind is not None
+                        assert isinstance(declaration.kind.value, pb.Constructor)
+                        # Recording retains the original selector separately from its private callable key.
+                        assert original_declaration.table_name is None
+                        assert declaration.table_name == Oneof("default_name", original_declaration.kind.value.name)
+                        original_constructor = original_declaration.kind.value
+                        replay_constructor = declaration.kind.value
+                        assert declaration.hidden == original_declaration.hidden
+                        assert replay_constructor.unextractable == original_constructor.unextractable
+                        assert not original_constructor.has_field("cost")
+                        assert not replay_constructor.has_field("cost")
+                        original_output = original_definition.owner.ref("sorts", original_constructor.output).read()
+                        replay_output = declaration_owner.sorts[replay_constructor.output]
+                        assert original_output.kind is not None
+                        assert replay_output.kind is not None
+                        assert original_output.kind.field == replay_output.kind.field == "eq"
+                        assert original_ref.owner.ref("sorts", original.sort_id).read().kind == original_output.kind
+                        assert owner.sorts[replay.sort_id].kind == replay_output.kind
+                        (original_input,) = original_constructor.inputs
+                        (replay_input,) = replay_constructor.inputs
+                        original_input_sort = original_definition.owner.ref("sorts", original_input.sort).read()
+                        replay_input_sort = declaration_owner.sorts[replay_input.sort]
+                        assert original_input_sort.kind == replay_input_sort.kind
                         (original_arg,) = original.kind.value.args
                         (replay_arg,) = replay.kind.value.args
-                        original_value = original_ref.owner.ref("nodes", original_arg).read()
+                        original_value_ref = original_ref.owner.ref("nodes", original_arg)
+                        original_value = original_value_ref.read()
                         replay_value = owner.nodes[replay_arg]
+                        original_value_sort = original_value_ref.owner.ref("sorts", original_value.sort_id).read()
+                        assert original_value_sort.kind == original_input_sort.kind
+                        assert owner.sorts[replay_value.sort_id].kind == replay_input_sort.kind
                         assert replay_value.kind is not None
                         assert original_value.kind.field == replay_value.kind.field == "primitive_value"
                         assert replay_value.kind.value == original_value.kind.value

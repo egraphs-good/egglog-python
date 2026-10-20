@@ -1679,9 +1679,10 @@ class EGraph:
 
     def check_fail(self, *facts: FactLike) -> None:
         """
-        Expect the native check to fail, retaining completed effects.
+        Expect the requested check to fail, retaining completed effects.
 
-        Invalid facts and prerequisite or trailing helper failures propagate.
+        Invalid facts and preparation errors propagate. Internal maintenance
+        and invariant checks retain their native failure boundaries.
         """
         builder = Builder()
         indices = [builder.import_ref(fact.__egg_ref__) for fact in _fact_likes(facts)]
@@ -3807,7 +3808,7 @@ class TreeCostModel(Protocol, Generic[COST]):
     However, the user needs to be careful to guarantee acyclicity in the extracted terms.
     """
 
-    def __call__(self, egraph: EGraph, expr: BaseExpr, children_costs: list[COST]) -> COST:
+    def __call__(self, egraph: EGraph, expr: BaseExpr, children_costs: list[COST], /) -> COST:
         """
         The total cost of a term given the cost of the root e-node and its immediate children's total costs.
         """

@@ -3,7 +3,7 @@
 """Normal Python syntax over the generated-record runtime, without an engine."""
 
 import gc
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from copy import copy
 from fractions import Fraction
 from functools import partial
@@ -44,8 +44,22 @@ from egglog import (
     var,
 )
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
+from egglog.egraph import to_runtime_expr
 from egglog.egraph_state import EggSmolError
-from egglog.runtime import RuntimeExpr, RuntimeFunction
+from egglog.runtime import RuntimeExpr, RuntimeFunction, resolve_callable
+
+
+def _recorded_calls(requests: Iterable[pb.RunProgramRequest]) -> Iterator[pb.Call]:
+    """Inspect recorded calls lazily, retaining other node arms and query short-circuiting."""
+    for request in requests:
+        program = request.program
+        assert program is not None
+        for node in program.nodes:
+            kind = node.kind
+            assert kind is not None
+            if kind.field == "call":
+                assert isinstance(kind.value, pb.Call)
+                yield kind.value
 
 
 def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -343,7 +357,10 @@ def test_set_public_native_bytes() -> None:
         else:
             # Nested children become formed values rather than constructor Calls.
             assert len(extracted) == 1
-            assert next(iter(extracted)).value == graph.extract(next(iter(expression))).value
+            assert (
+                to_runtime_expr(next(iter(extracted))).value
+                == to_runtime_expr(graph.extract(next(iter(expression)))).value
+            )
         assert EGraph().extract(extracted).value == extracted.value
         record = extracted.__egg_ref__.read()
         refs = [extracted.__egg_ref__.owner.ref("nodes", item) for item in record.kind.value.value.value.items]
@@ -453,7 +470,8 @@ def test_closed_scalar_bool_comparisons_and_conversion_native_bytes() -> None:
 @pytest.mark.parametrize("values", [(), (False,), (True,), (False, False), (False, True, False, False, True)])
 def test_scalar_wave_variadic_bool_native_bytes(values) -> None:
     # Canonical bytes deliberately support arities without a public Python view.
-    expression = RuntimeFunction(Bool.__or__.__egg_ref__, None)(*values)
+    expression = RuntimeFunction(resolve_callable(Bool.__or__), None)(*values)
+    assert expression is not None
     assert EGraph().extract(expression).value is any(values)
 
 
@@ -524,7 +542,8 @@ def test_symbolic_getattr_public_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     graph = EGraph()
     transport = graph._state.transport
-    requests, responses = [], []
+    requests: list[pb.RunProgramRequest] = []
+    responses: list[pb.RunProgramResponse] = []
 
     class AuditedTransport:
         def run(self, encoded):
@@ -542,7 +561,9 @@ def test_symbolic_getattr_public_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path
     receiver = A(i64(7))
     name = String("a") + "b"
     computed = receiver.__getattr__(name)
-    assert get_callable_args(computed, A.__getattr__)[1].__egg_ref__ == name.__egg_ref__
+    arguments = get_callable_args(computed, A.__getattr__)
+    assert arguments is not None
+    assert arguments[1].__egg_ref__ == name.__egg_ref__
     for expression, expected in ((receiver.foo, "foo"), (computed, "ab")):
         graph.register(expression)
         result = graph.extract(expression)
@@ -551,16 +572,14 @@ def test_symbolic_getattr_public_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path
         arguments = get_callable_args(result, A.__getattr__)
         assert arguments is not None
         assert expr_parts(arguments[0]) == expr_parts(receiver)
-        assert get_callable_args(arguments[0], A)[0].value == 7
+        receiver_arguments = get_callable_args(arguments[0], A)
+        assert receiver_arguments is not None
+        assert receiver_arguments[0].value == 7
         assert arguments[1].value == expected
     assert requests
     assert len(requests) == len(responses)
     assert all(response.error is None for response in responses)
-    assert any(
-        node.kind.field == "call" and node.kind.value.func == "egglog.core.string.concat"
-        for request in requests
-        for node in request.program.nodes
-    )
+    assert any(call.func == "egglog.core.string.concat" for call in _recorded_calls(requests))
 
 
 def test_preserved_getattr_survives_public_result_adoption() -> None:
@@ -576,7 +595,9 @@ def test_preserved_getattr_survives_public_result_adoption() -> None:
     graph.register(receiver)
     result = graph.extract(receiver)
     assert get_callable_fn(result) == Local
-    assert get_callable_args(result, Local)[0].value == 9
+    arguments = get_callable_args(result, Local)
+    assert arguments is not None
+    assert arguments[0].value == 9
     assert result.foo == ("local", "foo")
     assert result.nothing is None
 
@@ -591,7 +612,9 @@ def test_symbolic_getattr_corrupt_bytes_reject_before_execution(monkeypatch: pyt
     graph.register(A())
     # Install the callable without inserting any of its rows.
     assert graph.function_size(A.__getattr__) == 0
-    callee = A.__getattr__.__egg_ref__.read().kind.value.name
+    callee_record: pb.Declaration = resolve_callable(A.__getattr__).read()
+    assert callee_record.kind is not None
+    callee = callee_record.kind.value.name
     transport = graph._state.transport
     rejected = []
 
@@ -599,11 +622,7 @@ def test_symbolic_getattr_corrupt_bytes_reject_before_execution(monkeypatch: pyt
         def run(self, encoded):
             (tmp_path / "request-original.pb").write_bytes(encoded)
             request = pb.RunProgramRequest.from_binary(encoded)
-            calls = [
-                node.kind.value
-                for node in request.program.nodes
-                if node.kind.field == "call" and node.kind.value.func == callee
-            ]
+            calls = [call for call in _recorded_calls((request,)) if call.func == callee]
             assert len(calls) == 1
             assert len(calls[0].args) == 2
             calls[0].args.pop()
@@ -671,9 +690,15 @@ def test_bodyless_mutating_members_public_bytes() -> None:
         assert expr_parts(arguments[0]) == expr_parts(assigned)
         assert arguments[1].value == 4
     assert get_callable_fn(graph.extract(original)) == Mutable
-    assert get_callable_args(graph.extract(original))[0].value == 1
-    assert get_callable_args(graph.extract(key))[0].value == 2
-    assert get_callable_args(graph.extract(value))[0].value == 3
+    original_arguments = get_callable_args(graph.extract(original))
+    assert original_arguments is not None
+    assert original_arguments[0].value == 1
+    key_arguments = get_callable_args(graph.extract(key))
+    assert key_arguments is not None
+    assert key_arguments[0].value == 2
+    value_arguments = get_callable_args(graph.extract(value))
+    assert value_arguments is not None
+    assert value_arguments[0].value == 3
 
 
 def test_scalar_local_value_and_presentation() -> None:
@@ -693,7 +718,8 @@ def test_public_pyobject_defaults_and_results_cross_bytes(monkeypatch, tmp_path)
 
     graph = EGraph()
     transport = graph._state.transport
-    requests, responses = [], []
+    requests: list[pb.RunProgramRequest] = []
+    responses: list[pb.RunProgramResponse] = []
 
     class AuditedTransport:
         def run(self, encoded):
@@ -732,11 +758,7 @@ def test_public_pyobject_defaults_and_results_cross_bytes(monkeypatch, tmp_path)
     assert requests
     assert len(requests) == len(responses)
     assert all(response.error is None for response in responses)
-    assert any(
-        node.kind.field == "call" and node.kind.value.func == "egglog.python.pyobject.dict"
-        for request in requests
-        for node in request.program.nodes
-    )
+    assert any(call.func == "egglog.python.pyobject.dict" for call in _recorded_calls(requests))
     monkeypatch.setattr(graph._state, "transport", transport)
     graph._state.destroy()
     assert result.value == 30
@@ -776,9 +798,9 @@ def test_scalar_call_children_are_retained_records() -> None:
     assert children[0].__egg_ref__ == leaf.__egg_ref__
     assert tuple(child.value for child in children) == (1, 2)
     assert get_callable_fn(expression) == i64.__add__
-    assert tuple(child.__egg_ref__ for child in get_callable_args(expression, i64.__add__)) == tuple(
-        child.__egg_ref__ for child in children
-    )
+    selected_children = get_callable_args(expression, i64.__add__)
+    assert selected_children is not None
+    assert tuple(child.__egg_ref__ for child in selected_children) == tuple(child.__egg_ref__ for child in children)
     assert str(i64) == "i64"
 
 
@@ -914,7 +936,9 @@ def test_map_public_computed_vec_table_and_reingested_value_bytes() -> None:
     pairs = Vec(Pair(i64(1), f64(2.0)), Pair(i64(1), f64(3.0)), Pair(i64(2), f64(4.0)))
     graph.register(set_(entries()).to(pairs))
     expression = Map.from_pairs(entries())
-    assert len(get_callable_args(expression)) == 1
+    arguments = get_callable_args(expression)
+    assert arguments is not None
+    assert len(arguments) == 1
     with pytest.raises(ExprValueError):
         _ = expression.value
     graph.register(set_(mapping()).to(expression))
@@ -970,7 +994,7 @@ def test_bodyless_free_function_public_bytes() -> None:
     with pytest.raises(ExprValueError):
         _ = expression.value
     with pytest.raises(EggSmolError, match="Illegal merge"):
-        graph.register(set_(score(1)).to(i64(8)))
+        graph.register(set_(score(1)).to(i64(8)))  # type: ignore[arg-type]
 
 
 def test_nullary_and_f64_free_functions_public_bytes() -> None:
@@ -1007,7 +1031,9 @@ def test_free_constructor_function_recovers_local_output_hooks_through_bytes() -
     graph = EGraph()
     result = graph.extract(expression)
     assert get_callable_fn(result) == leaf
-    assert get_callable_args(result, leaf)[0].value == 3
+    arguments = get_callable_args(result, leaf)
+    assert arguments is not None
+    assert arguments[0].value == 3
     assert str(result) == "leaf(3)"
     graph.check(eq(result).to(leaf(3)))
     with pytest.raises(TypeError, match="table-backed"):
@@ -1044,7 +1070,9 @@ def test_constant_set_and_extract_public_bytes() -> None:
 def test_constant_string_names_through_bytes(name, egg_name):
     value = constant(name, i64, egg_name=egg_name)
     assert str(value) == name
-    assert get_constant_name(value).name == name
+    constant_name = get_constant_name(value)
+    assert constant_name is not None
+    assert constant_name.name == name
     graph = EGraph()
     graph.register(set_(value).to(i64(1)))
     assert graph.extract(value).value == 1
@@ -1066,7 +1094,9 @@ def test_equality_constant_retains_name_and_local_hooks_through_bytes() -> None:
     graph.check(eq(result).to(token))
     graph._state.destroy()
     assert str(result) == "token"
-    assert get_constant_name(result).name == "token"
+    constant_name = get_constant_name(result)
+    assert constant_name is not None
+    assert constant_name.name == "token"
     assert result.tag() == token.tag() == "local token"
 
 
@@ -1074,12 +1104,14 @@ def test_user_constructor_public_bytes() -> None:
     class Num(Expr):
         def __init__(self, value: i64) -> None: ...
 
-        @method(preserve=True)
+        @method(preserve=True)  # type: ignore[prop-decorator]
         @property
         def value(self) -> int:
             args = get_callable_args(self, Num)
             assert args is not None
-            return args[0].value
+            value = args[0].value
+            assert isinstance(value, int)
+            return value
 
     expression = Num(i64(1) + 2)
     assert str(expression) == "Num(i64(1) + 2)"
@@ -1089,7 +1121,9 @@ def test_user_constructor_public_bytes() -> None:
     result = graph.extract(expression)
     assert isinstance(result, Num)
     assert get_callable_fn(result) == Num
-    assert get_callable_args(result, Num)[0].value == result.value == 3
+    arguments = get_callable_args(result, Num)
+    assert arguments is not None
+    assert arguments[0].value == result.value == 3
     assert str(result) == "Num(3)"
     graph.check(eq(result).to(Num(3)))  # type: ignore[arg-type]
     assert graph.extract(Num(value=3)).value == 3  # type: ignore[arg-type]
@@ -1113,12 +1147,14 @@ def test_user_constructor_exact_names_and_retained_local_hooks() -> None:
     graph.check(eq(result).to(expression))
     graph._state.destroy()
     assert result.tag() == expression.tag() == "retained local method"
-    assert get_callable_args(result)[0].value == 7
+    arguments = get_callable_args(result)
+    assert arguments is not None
+    assert arguments[0].value == 7
 
 
 def test_scalar_equality_dispatch_respects_operand_sorts() -> None:
-    assert (i64(1) == f64(1.0)) is False
-    assert (f64(1.0) == i64(1)) is False
+    assert (i64(1) == f64(1.0)) is False  # type: ignore[operator]
+    assert (f64(1.0) == i64(1)) is False  # type: ignore[operator]
     equal = i64(1) == i64(1)
     different = f64(1.0) == f64(2.0)
     assert isinstance(equal, Fact)
@@ -1312,12 +1348,8 @@ def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: p
         result.__egg_ref__.owner.ref("nodes", index) for index in value.value.items
     ]
     assert any(
-        node.kind.field == "call"
-        and node.kind.value.func == "egglog.core.multiset.of"
-        and len(node.kind.value.args) == 3
-        and node.kind.value.args[0] == node.kind.value.args[2]
-        for request in requests
-        for node in request.program.nodes
+        call.func == "egglog.core.multiset.of" and len(call.args) == 3 and call.args[0] == call.args[2]
+        for call in _recorded_calls(requests)
     )
     original_handle = graph._state.handle
     graph._state.destroy()
@@ -1458,7 +1490,7 @@ def test_python_callbacks_capture_symbolic_values_without_engine(monkeypatch: py
     assert callback.__egg_ref__.read().kind.value.value.field == "partial_call"
     assert str(callback) == "lambda value: value + (i64(4) + 5)"
     with pytest.raises(ConvertError):
-        UnstableFn[i64, i64](lambda value: String("wrong result"))
+        UnstableFn[i64, i64](lambda value: String("wrong result"))  # type: ignore[arg-type, return-value]
 
 
 def test_python_callbacks_execute_captures_and_infer_multiset_output() -> None:
@@ -1659,11 +1691,13 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
             patch.setattr(fresh._state, "transport", AuditedTransport(fresh._state.transport, label))
             with pytest.raises(EggSmolError):
                 fresh._state.run_program([before.__egg_ref__, command, after.__egg_ref__])
-        assert [item.kind.field for item in requests[label].program.commands] == ["action", "check", "action"]
+        program = requests[label].program
+        assert program is not None
+        assert [item.kind.field for item in program.commands] == ["action", "check", "action"]
         if label == "body-query":
             assert any(
                 item.kind.field == "primitive" and item.kind.value.name == primitive.value.name
-                for item in requests[label].program.declarations
+                for item in program.declarations
             )
         error = responses[label].error
         assert error is not None
@@ -1685,7 +1719,9 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
         patch.setattr(fresh._state, "transport", AuditedTransport(fresh._state.transport, "empty-prefix"))
         with pytest.raises(EggSmolError):
             fresh.register(before, MultiSet[Atom]().union_values(), after)
-    assert [item.kind.field for item in requests["empty-prefix"].program.commands] == ["action"] * 3
+    prefix_program = requests["empty-prefix"].program
+    assert prefix_program is not None
+    assert [item.kind.field for item in prefix_program.commands] == ["action"] * 3
     error = responses["empty-prefix"].error
     assert error is not None
     assert error.code == pb.ErrorCode.EVALUATION_FAILED

@@ -35,6 +35,7 @@ def _replay_recorded_source(text: str) -> list[pb.RunProgramResponse]:
     graph = EGraph()
     responses = []
     try:
+        assert graph._state.handle is not None
         while (submission := source.next_submission()) is not None:
             kind, program, count = submission
             if kind == "program":
@@ -1584,7 +1585,13 @@ def test_parameterized_sort_names_use_allocated_argument_names() -> None:
     assert sort.kind.field == "family"
     assert sort.kind.value.name == "Map"
     arguments = [packed.program.sorts[index] for index in sort.kind.value.args]
-    assert [argument.kind.value.name for argument in arguments] == ["i64", "BigRat"]
+    argument_names = []
+    for argument in arguments:
+        argument_kind = argument.kind
+        assert argument_kind is not None
+        assert argument_kind.field == "family"
+        argument_names.append(argument_kind.value.name)
+    assert argument_names == ["i64", "BigRat"]
 
     egraph.register(value)
     egraph.check(eq(value.length()).to(i64(0)))
@@ -1673,7 +1680,10 @@ def test_top_level_action_factors_duplicate_sibling_edges() -> None:
         left, right = node.kind.value.args
         assert left == right
         index = left
-    assert packed.program.nodes[index].kind.value.func == leaf_name
+    leaf_kind = packed.program.nodes[index].kind
+    assert leaf_kind is not None
+    assert leaf_kind.field == "call"
+    assert leaf_kind.value.func == leaf_name
     calls = [node.kind.value for node in packed.program.nodes if node.kind is not None and node.kind.field == "call"]
     assert sum(call.func == leaf_name for call in calls) == 1
     assert sum(call.func == pair_name for call in calls) == 3
@@ -2633,7 +2643,9 @@ class TestMutate:
         incr(x)
         assert expr_parts(x_copied) == expr_parts(Math(i64(10)))
         assert get_callable_fn(x) == incr
-        assert [expr_parts(argument) for argument in get_callable_args(x)] == [expr_parts(x_copied)]
+        arguments = get_callable_args(x)
+        assert arguments is not None
+        assert [expr_parts(argument) for argument in arguments] == [expr_parts(x_copied)]
         assert str(x) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1"
         assert str(x + Math(10)) == "_Math_1 = Math(10)\nincr(_Math_1)\n_Math_1 + Math(10)"
 
@@ -4789,6 +4801,7 @@ class TestScheduler:
             kind, encoded, count = submission
             assert kind == "program"
             assert count == 0
+            assert encoded is not None
             for command in pb.Program.from_binary(encoded).commands:
                 assert command.kind is not None
                 if command.kind.field == "bind_scheduler":
@@ -4819,6 +4832,7 @@ class TestScheduler:
             kind, encoded, count = submission
             assert kind == "program"
             assert count == 0
+            assert encoded is not None
             commands.extend(pb.Program.from_binary(encoded).commands)
         pending = [(command, 0) for command in reversed(commands)]
         bindings, runs = [], []
@@ -4856,13 +4870,13 @@ class TestScheduler:
         x = var("x", i64)
         copy = ruleset(rule(source(x)).then(copied(x)), name="child-scheduler-copy")
         scheduler = back_off(match_limit=2, ban_length=2).persistent()
-        egraph = EGraph(source(1))
+        egraph = EGraph(source(1))  # type: ignore[arg-type]
         with egraph:
             egraph.run(run(copy, scheduler=scheduler))
-            egraph.check(copied(1))
-        egraph.check_fail(copied(1))
+            egraph.check(copied(1))  # type: ignore[arg-type]
+        egraph.check_fail(copied(1))  # type: ignore[arg-type]
         egraph.run(run(copy, scheduler=scheduler))
-        egraph.check(copied(1))
+        egraph.check(copied(1))  # type: ignore[arg-type]
 
     def test_custom_scheduler_until_accepts_equality_and_conjunctions(self):
         """Canonical loop queries have no legacy single/non-equality limit."""
@@ -4871,17 +4885,17 @@ class TestScheduler:
         x = var("x", i64)
         r = ruleset(rule(source(x)).then(copied(x)), name="scheduler-until-copy")
         bo = back_off(match_limit=1)
-        egraph = EGraph(source(1))
+        egraph = EGraph(source(1))  # type: ignore[arg-type]
         egraph.run(run(r, eq(i64(1)).to(i64(1)), scheduler=bo))
-        egraph.check_fail(copied(1))
+        egraph.check_fail(copied(1))  # type: ignore[arg-type]
         # A conjunction with only one present fact does not stop the body.
-        egraph.run(run(r, source(1), source(2), scheduler=bo))
-        egraph.check(copied(1))
+        egraph.run(run(r, source(1), source(2), scheduler=bo))  # type: ignore[arg-type]
+        egraph.check(copied(1))  # type: ignore[arg-type]
         # When every conjunct holds, including equality, no body executes.
-        egraph = EGraph(source(1), source(2))
-        egraph.run(run(r, source(1), source(2), eq(i64(1)).to(i64(1)), scheduler=bo))
-        egraph.check_fail(copied(1))
-        egraph.check_fail(copied(2))
+        egraph = EGraph(source(1), source(2))  # type: ignore[arg-type]
+        egraph.run(run(r, source(1), source(2), eq(i64(1)).to(i64(1)), scheduler=bo))  # type: ignore[arg-type]
+        egraph.check_fail(copied(1))  # type: ignore[arg-type]
+        egraph.check_fail(copied(2))  # type: ignore[arg-type]
 
 
 @function
