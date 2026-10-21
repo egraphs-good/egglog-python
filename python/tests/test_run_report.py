@@ -35,7 +35,7 @@ def test_proto_report_projection_preserves_grouping_rounding_and_ownership(monke
     response = pb.RunProgramResponse(
         rules=[
             pb.RuleAttribution(
-                root=pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", index)), rule=0, name="same"
+                root=pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", index)), position=0, name="same"
             )
             for index in range(2)
         ]
@@ -180,7 +180,7 @@ def test_proto_report_combined_routes_and_historical_names(mutation):
     combined = (ruleset(rule(name="first").then()) | ruleset(rule(name="selected").then()))._snapshot({})
     request = pack([combined])
     root = pb.RulesetRef(kind=Oneof[Literal["index"], int]("index", request.indices[0]))
-    attribution = pb.RuleAttribution(root=root, children=[1], rule=0, name="selected")
+    attribution = pb.RuleAttribution(root=root, children=[1], position=0, name="selected")
     row = pb.RuleCountEntry(rule=0, direction=pb.NativeRuleDirection.SINGLE, native_name="physical", value=7)
     response = pb.RunProgramResponse(rules=[attribution])  # No response nodes/sorts stand in for request arenas.
     native = pb.NativeRunReport(num_matches_per_rule=[row])
@@ -192,7 +192,7 @@ def test_proto_report_combined_routes_and_historical_names(mutation):
     elif mutation == "route":
         attribution.children = [2]
     elif mutation == "ordinal":
-        attribution.rule = 1
+        attribution.position = 1
     elif mutation == "label":
         attribution.name = "wrong"
     elif mutation == "direction":
@@ -478,7 +478,7 @@ def _assert_saved_report_replay(egraph: EGraph, report: RunReport) -> None:  # n
                         target = ruleset.kind.value.rulesets[child]
                 assert ruleset.kind is not None
                 assert ruleset.kind.field == "rules"
-                replayed = owner.rules[ruleset.kind.value.rules[attribution.rule]]
+                replayed = owner.rules[ruleset.kind.value.rules[attribution.position]]
                 assert replayed.kind is not None
                 assert replayed.kind.field == authored.kind.field
                 assert replayed.has_field("name") == attribution.has_field("name")

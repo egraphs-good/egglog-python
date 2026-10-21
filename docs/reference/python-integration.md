@@ -886,6 +886,27 @@ type(frozen.program).__name__
 `frozen.to_binary()` serializes the snapshot without materializing host values.
 It records logical state rather than request history or scheduler progress.
 
+### `history`
+
+Create an {class}`egglog.egraph.EGraph` with `record_history=True` to retain
+structured protocol requests and their outcomes, then retrieve an owned
+`GetHistoryResponse` with {meth}`egglog.egraph.EGraph.history`. Recording is off
+by default; requesting disabled history raises `ValueError`. Retrieval itself
+does not append an entry.
+
+History preserves each request's own references, configuration, completed
+outputs and failures. It includes observations such as `freeze`, and retains
+scoped operations after `pop` restores logical state. An interrupted operation
+without a protocol reply is identified explicitly. This audit does not promise
+deterministic replay or an engine checkpoint.
+
+`save_egglog_string=True` separately enables the existing `as_egglog_string`
+successful-source view, with rendering preflight and acknowledgement checks.
+The two flags are independent: saving source does not retain structured replies.
+When both are enabled, a failure can invalidate the replayable source view while
+structured history remains available. Structured recording supports
+`seminaive=False` without imposing the source view's replay restriction.
+
 ### `display`
 
 {meth}`egglog.egraph.EGraph.display` projects the current protobuf snapshot into

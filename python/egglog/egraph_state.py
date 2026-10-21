@@ -54,12 +54,16 @@ class EGraphState:
         *,
         num_threads: SupportsIndex = 1,
         save_egglog_string: bool = False,
+        record_history: object = False,
         seminaive: object = True,
         no_decomp: object = False,
     ) -> None:
         num_threads = _thread_count(num_threads)
         if not isinstance(seminaive, bool) or not isinstance(no_decomp, bool):
             msg = "Compilation flags must be booleans"
+            raise TypeError(msg)
+        if not isinstance(record_history, bool):
+            msg = "History recording must be a boolean"
             raise TypeError(msg)
         if save_egglog_string and not seminaive:
             msg = "Recording cannot replay initial seminaive=False without a Source creation context"
@@ -72,6 +76,7 @@ class EGraphState:
             options=pb.EGraphOptions(cost_sort=0, seminaive=seminaive),
             threads=num_threads,
             no_decomp=no_decomp,
+            record_history=record_history,
         )
         response = pb.CreateEGraphResponse.from_binary(self.transport.create(request.to_binary()))
         self.handle: int | None = response.egraph_id

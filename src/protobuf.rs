@@ -51,6 +51,9 @@ enum Recording {
     Active {
         renderer: Box<Renderer>,
         staged: Option<(Box<Renderer>, String)>,
+        // Successful-source view with rendering preflight and Python
+        // acknowledgement checks. Structured Engine history is requested
+        // separately; this text does not retain protocol requests or replies.
         source: String,
     },
     Invalid,
@@ -637,6 +640,106 @@ mod tests {
                 assert!(unwind.unwrap_err().is::<NativePanic>());
                 assert!(instance.py_error.lock().unwrap().is_none());
             }
+        });
+    }
+
+    #[test]
+    fn recorded_host_interruption_preserves_original_exception_without_a_protocol_reply() {
+        struct InterruptedValue {
+            extension: PyObjectExtension,
+            errors: PyObjectErrorState,
+            original: std::sync::Mutex<Option<PyErr>>,
+        }
+
+        impl NativeExtension for InterruptedValue {
+            fn initialize(&self, graph: &mut egglog::EGraph) -> Result<(), String> {
+                self.extension.initialize(graph)
+            }
+
+            fn lower_custom_value(
+                &self,
+                _: &egglog::EGraph,
+                _: &egglog::ArcSort,
+                _: &pb::CustomValue,
+                _: Option<pb::Span>,
+                _: &mut pb::Program,
+            ) -> Result<pb::Call, String> {
+                *self.errors.lock().unwrap() = self.original.lock().unwrap().take();
+                resume_unwind(Box::new(PythonCostError))
+            }
+
+            fn encode_custom_value(
+                &self,
+                sort: &egglog::ArcSort,
+                terms: &egglog::TermDag,
+                term: egglog::TermId,
+            ) -> Result<Option<pb::CustomValue>, String> {
+                self.extension.encode_custom_value(sort, terms, term)
+            }
+        }
+
+        Python::initialize();
+        Python::attach(|py| {
+            let mut instance = ProtoEngine::default();
+            let original = PyValueError::new_err("original interrupted provider");
+            let value = original.value(py).clone().unbind();
+            instance.engine = Engine::with_extension(Arc::new(InterruptedValue {
+                extension: PyObjectExtension::default(),
+                errors: instance.py_error.clone(),
+                original: std::sync::Mutex::new(Some(original)),
+            }));
+            let created = instance
+                .engine
+                .create(
+                    &pb::CreateEGraphRequest {
+                        sorts: vec![pb::Sort {
+                            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                                name: "i64".into(),
+                                args: vec![],
+                            })),
+                            ..Default::default()
+                        }],
+                        options: Some(pb::EGraphOptions {
+                            cost_sort: Some(0),
+                            ..Default::default()
+                        }),
+                        record_history: true,
+                        ..Default::default()
+                    }
+                    .encode_to_vec(),
+                )
+                .unwrap();
+            let id = pb::CreateEGraphResponse::decode(created.as_slice())
+                .unwrap()
+                .egraph_id;
+            let request = pb::RunProgramRequest {
+                egraph_id: id,
+                program: Some(custom_program(b"inert provider payload".to_vec())),
+                profile: true,
+                ..Default::default()
+            };
+            let error = instance
+                .run_request(py, &PyBytes::new(py, &request.encode_to_vec()), Engine::run)
+                .unwrap_err();
+            assert!(error.value(py).is(value.bind(py)));
+            assert!(instance.py_error.lock().unwrap().is_none());
+            let history = pb::GetHistoryResponse::decode(
+                instance
+                    .engine
+                    .get_history(&pb::GetHistoryRequest { egraph_id: id }.encode_to_vec())
+                    .unwrap()
+                    .as_slice(),
+            )
+            .unwrap();
+            assert_eq!(history.entries.len(), 2);
+            assert_eq!(
+                history.entries[1].request,
+                Some(pb::history_entry::Request::RunProgram(request))
+            );
+            assert!(matches!(
+                history.entries[1].outcome,
+                Some(pb::history_entry::Outcome::Interrupted(_))
+            ));
         });
     }
 
@@ -1932,5 +2035,13 @@ impl ProtoEngine {
         request: &Bound<'py, PyBytes>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         self.request(py, request, Engine::return_to)
+    }
+
+    fn get_history<'py>(
+        &mut self,
+        py: Python<'py>,
+        request: &Bound<'py, PyBytes>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.request(py, request, |engine, bytes| engine.get_history(bytes))
     }
 }

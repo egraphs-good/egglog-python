@@ -165,11 +165,11 @@ class RunReport:
             if (
                 record.kind is None
                 or record.kind.field != "rules"
-                or not 0 <= attribution.rule < len(record.kind.value.rules)
+                or not 0 <= attribution.position < len(record.kind.value.rules)
             ):
                 msg = "Report rule route does not end at a rule membership"
                 raise ValueError(msg)
-            result = reference.owner.ref("rules", record.kind.value.rules[attribution.rule])
+            result = reference.owner.ref("rules", record.kind.value.rules[attribution.position])
             canonical: pb.Rule = result.read()
             if attribution.has_field("name") != canonical.has_field("name") or attribution.name != canonical.name:
                 msg = "Report rule label disagrees with its canonical occurrence"

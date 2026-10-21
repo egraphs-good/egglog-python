@@ -1451,6 +1451,7 @@ class EGraph:
         *actions: ActionLike,
         seminaive: bool = True,
         save_egglog_string: bool = False,
+        record_history: bool = False,
         num_threads: SupportsIndex = 1,
         no_decomp: bool = False,
     ) -> None:
@@ -1459,6 +1460,7 @@ class EGraph:
                 self._state = EGraphState(
                     num_threads=num_threads,
                     save_egglog_string=save_egglog_string,
+                    record_history=record_history,
                     seminaive=seminaive,
                     no_decomp=no_decomp,
                 )
@@ -1520,6 +1522,27 @@ class EGraph:
         this property raises ``RuntimeError``.
         """
         return self._state.transport.recorded_source()
+
+    def history(self) -> pb.GetHistoryResponse:
+        """
+        Return owned structured requests and outcomes recorded since creation.
+
+        Create the graph with ``record_history=True``.
+        Failures and observations remain in this audit history; retrieving it does
+        not add an entry. It is distinct from logical state and replayable source.
+        """
+        if self._cost_model_frames or self._state._cost_model_active or self._state._native_running:
+            msg = "Cannot execute engine operations during a cost-model callback"
+            raise RuntimeError(msg)
+        if self._state.handle is None:
+            msg = "EGraph handle has been destroyed"
+            raise RuntimeError(msg)
+        request = pb.GetHistoryRequest(egraph_id=self._state.handle)
+        response = pb.GetHistoryResponse.from_binary(self._state.transport.get_history(request.to_binary()))
+        if response.initial_resources is None:
+            msg = "Shared adapter omitted initial history resources"
+            raise ValueError(msg)
+        return response
 
     def close(self) -> None:
         """
