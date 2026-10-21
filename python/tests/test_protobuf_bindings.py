@@ -98,7 +98,6 @@ def test_binary_engine_lifecycle_and_scalar_extract():
         engine.create(pb.CreateEGraphRequest(sorts=[sort], options=pb.EGraphOptions(cost_sort=0)).to_binary()),
     )
     program = pb.Program(
-        ir_version=1,
         sorts=[sort],
         nodes=[
             pb.Node(
@@ -211,7 +210,6 @@ def _proof_program() -> pb.Program:
             pb.Node(sort_id=1, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="N", args=[literal]))),
         ])
     return pb.Program(
-        ir_version=1,
         sorts=[
             pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Num")),
@@ -229,11 +227,11 @@ def _proof_program() -> pb.Program:
         ],
         nodes=nodes,
         rules=[
-            pb.RuleDecl(
+            pb.Rule(
                 name="derive",
                 eval_mode=pb.RuleEvalMode.SEMINAIVE,
-                kind=Oneof[Literal["rule"], pb.Rule](
-                    "rule", pb.Rule(query=[3], head=[pb.Action(kind=Oneof[Literal["term"], int]("term", 4))])
+                kind=Oneof[Literal["rule"], pb.RuleBody](
+                    "rule", pb.RuleBody(query=[3], head=[pb.Action(kind=Oneof[Literal["term"], int]("term", 4))])
                 ),
             )
         ],
@@ -565,7 +563,7 @@ def test_binary_unknown_mode_and_profile_off_stay_explicit():
     try:
         encoded, host_error = engine.run(
             pb.RunProgramRequest(
-                egraph_id=created.egraph_id, program=pb.Program(ir_version=1), profile=False
+                egraph_id=created.egraph_id, program=pb.Program(), profile=False
             ).to_binary()
         )
         assert host_error is None

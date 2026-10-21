@@ -100,7 +100,6 @@ class EGraphState:
             msg = "Cannot register a model on a destroyed or actively extracting EGraph"
             raise RuntimeError(msg)
         sorts = pb.Program(
-            ir_version=1,
             sorts=[
                 pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
                 pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="PyObject"))),
@@ -260,7 +259,6 @@ class EGraphState:
                         self.definitions[key] = reference
             owner = self._adopt_value_records(
                 pb.Program(
-                    ir_version=1,
                     nodes=response.nodes,
                     sorts=response.sorts,
                     files=response.files,
@@ -334,7 +332,6 @@ class EGraphState:
                 definitions[key] = reference
         builder = Builder.from_program(
             pb.Program(
-                ir_version=program.ir_version,
                 nodes=program.nodes,
                 sorts=program.sorts,
                 files=program.files,

@@ -23,7 +23,7 @@ class RuleKey:
         if self.__egg_ref__.role != "rules":
             msg = "Report keys require a canonical rule reference"
             raise TypeError(msg)
-        record: pb.RuleDecl = self.__egg_ref__.read()
+        record: pb.Rule = self.__egg_ref__.read()
         if record.kind is None:
             msg = "Report rule has no body"
             raise ValueError(msg)
@@ -170,7 +170,7 @@ class RunReport:
                 msg = "Report rule route does not end at a rule membership"
                 raise ValueError(msg)
             result = reference.owner.ref("rules", record.kind.value.rules[attribution.rule])
-            canonical: pb.RuleDecl = result.read()
+            canonical: pb.Rule = result.read()
             if attribution.has_field("name") != canonical.has_field("name") or attribution.name != canonical.name:
                 msg = "Report rule label disagrees with its canonical occurrence"
                 raise ValueError(msg)

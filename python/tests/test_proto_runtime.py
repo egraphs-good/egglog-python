@@ -796,10 +796,10 @@ def test_report_key_default_and_lambda_use_domains_without_engine():
             functions[1] = functions[0]
         root = builder.add(
             "rules",
-            pb.RuleDecl(
-                kind=Oneof[Literal["rule"], pb.Rule](
+            pb.Rule(
+                kind=Oneof[Literal["rule"], pb.RuleBody](
                     "rule",
-                    pb.Rule(head=[pb.Action(kind=Oneof[Literal["term"], int]("term", node)) for node in functions]),
+                    pb.RuleBody(head=[pb.Action(kind=Oneof[Literal["term"], int]("term", node)) for node in functions]),
                 )
             ),
         )
@@ -896,10 +896,10 @@ def test_rule_template_union_contexts_and_occurrence_identity(monkeypatch):
         head = [nodes[int(swap)], nodes[int(swap)] if shared else nodes[not swap]]
         index = builder.add(
             "rules",
-            pb.RuleDecl(
-                kind=Oneof[Literal["rule"], pb.Rule](
+            pb.Rule(
+                kind=Oneof[Literal["rule"], pb.RuleBody](
                     "rule",
-                    pb.Rule(
+                    pb.RuleBody(
                         query=[] if empty else nodes,
                         head=[pb.Action(kind=Oneof[Literal["term"], int]("term", node)) for node in head],
                     ),
@@ -1389,7 +1389,7 @@ def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):
     assert len(variables) == 1
     index = variables[0]
     assert _required_oneof(packed.nodes[index].kind, "var", str) == "x"
-    rule_record = _required_oneof(packed.rules[0].kind, "rule", pb.Rule)
+    rule_record = _required_oneof(packed.rules[0].kind, "rule", pb.RuleBody)
     members = _required_oneof(packed.nodes[rule_record.query[0]].kind, "union", pb.Union).members
     assert members[1] == index
     assert _required_oneof(packed.nodes[members[0]].kind, "call", pb.Call).args == [index]
@@ -1439,7 +1439,7 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     assert [action.kind.field for action in record.kind.value.head] == ["set", "term", "term", "term"]
     packed = pack([authored.__egg_ref__])
     assert not packed.program.commands
-    body = _required_oneof(packed.program.rules[packed.indices[0]].kind, "rule", pb.Rule)
+    body = _required_oneof(packed.program.rules[packed.indices[0]].kind, "rule", pb.RuleBody)
     assert body.query[0] != body.query[1]  # Distinct equal Union occurrences stay distinct.
     assert (
         _required_oneof(body.head[1].kind, "term", int)
@@ -3549,7 +3549,6 @@ def test_class_and_initializer_documentation_presence(doc):
 @pytest.mark.parametrize("later", ["none", "distinct", "conflicting"])
 def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch, name, later):
     requested = pb.Program(
-        ir_version=1,
         sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
         declarations=[
             pb.Declaration(
@@ -4374,7 +4373,7 @@ def test_public_union_contextual_rule_and_fact_presentation(class_authoring_with
     expected = "rule(eq(x).to(y), name='union-context').then(union(x).with_(y))"
     assert str(authored) == repr(RuleKey(authored.__egg_ref__)) == expected
     packed = pack([authored.__egg_ref__]).program
-    canonical = _required_oneof(packed.rules[0].kind, "rule", pb.Rule)
+    canonical = _required_oneof(packed.rules[0].kind, "rule", pb.RuleBody)
     assert canonical.query == [_required_oneof(canonical.head[0].kind, "term", int)]
     assert pb.Program.from_binary(packed.to_binary()) == packed
 
@@ -4407,7 +4406,7 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
     )
     action_data = [_required_oneof(command.kind, "action", pb.Action) for command in program.commands]
     assert [_required_oneof(command.kind, "term", int) for command in action_data] == [first, first, second]
-    canonical = _required_oneof(program.rules[rule_index].kind, "rule", pb.Rule)
+    canonical = _required_oneof(program.rules[rule_index].kind, "rule", pb.RuleBody)
     assert canonical.query == [first]
     assert [_required_oneof(action.kind, "term", int) for action in canonical.head] == [first, first, second]
     assert fact.__egg_ref__.read().to_binary() == original

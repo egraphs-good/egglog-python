@@ -13,7 +13,6 @@ from egglog.visualizer_widget import _snapshot_to_data
 @pytest.fixture
 def snapshot():
     program = pb.Program(
-        ir_version=1,
         sorts=[
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "A")),
             pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),

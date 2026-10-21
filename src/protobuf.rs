@@ -384,7 +384,6 @@ mod tests {
         );
         let history = engine.recorded_source().unwrap();
         let unsupported = pb::Program {
-            ir_version: 1,
             commands: vec![pb::Command {
                 kind: Some(pb::command::Kind::Freeze(pb::Freeze::default())),
                 ..Default::default()
@@ -434,7 +433,6 @@ mod tests {
             engine.enable_recording().unwrap();
             engine
                 .stage_submission(Submission::Program(pb::Program {
-                    ir_version: 1,
                     commands: vec![pb::Command {
                         kind: Some(pb::command::Kind::Action(pb::Action {
                             kind: Some(pb::action::Kind::Panic(message.into())),
@@ -1573,7 +1571,6 @@ mod tests {
             };
             assert_eq!(value.payload, payload);
             program = pb::Program {
-                ir_version: 1,
                 nodes: result.nodes.clone(),
                 sorts: result.sorts.clone(),
                 commands: vec![pb::Command {
@@ -1623,7 +1620,6 @@ mod tests {
             matches!(&result.nodes[extracted.cost.unwrap() as usize].kind, Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue { value: Some(pb::primitive_value::Value::I64(cost)) })) if *cost > 0)
         );
         pb::Program {
-            ir_version: 1,
             nodes: result.nodes.clone(),
             sorts: result.sorts.clone(),
             commands: vec![pb::Command {
@@ -1674,7 +1670,6 @@ mod tests {
 
     fn custom_program(payload: Vec<u8>) -> pb::Program {
         pb::Program {
-            ir_version: 1,
             sorts: vec![pb::Sort {
                 kind: Some(pb::sort::Kind::Family(pb::HostSort {
                     name: "PyObject".into(),
@@ -1840,8 +1835,7 @@ impl ProtoEngine {
     ) -> PyResult<String> {
         let program = pb::Program::decode(sorts.as_bytes())
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        if program.ir_version != 1
-            || !program.nodes.is_empty()
+        if !program.nodes.is_empty()
             || !program.declarations.is_empty()
             || !program.rulesets.is_empty()
             || !program.rules.is_empty()

@@ -752,8 +752,8 @@ def main() -> None:
     args = parser.parse_args()
     encoded = args.export.read_bytes()
     program = pb.Program.from_binary(encoded)
-    if program.ir_version != 1 or program.commands or program.rules or program.rulesets:
-        parser.error("Expected a version-1 declaration-only native catalog")
+    if program.commands or program.rules or program.rulesets:
+        parser.error("Expected a declaration-only native catalog")
     names: set[tuple[str, str]] = set()
     for declaration in program.declarations:
         kind = declaration.kind

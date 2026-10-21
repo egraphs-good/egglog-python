@@ -184,7 +184,6 @@ def test_source_producer_returns_only_program_bytes_and_scope_counts():
         if kind == "program":
             assert type(encoded) is bytes
             program = pb.Program.from_binary(encoded)
-            assert program.ir_version == 1
             assert program.to_binary() == encoded
             assert count == 0
         else:
@@ -373,7 +372,6 @@ def test_host_model_contract_rejects_before_callbacks(case):
 
     state = EGraphState()
     sorts = pb.Program(
-        ir_version=1,
         sorts=[
             pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
             pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="PyObject"))),
@@ -1049,12 +1047,12 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
         )
         rule = len(program.rules)
         program.rules.append(
-            pb.RuleDecl(
+            pb.Rule(
                 name=name,
                 eval_mode=pb.RuleEvalMode.SEMINAIVE,
-                kind=Oneof[Literal["rule"], pb.Rule](
+                kind=Oneof[Literal["rule"], pb.RuleBody](
                     "rule",
-                    pb.Rule(
+                    pb.RuleBody(
                         query=[seed, query],
                         head=[
                             pb.Action(
@@ -1280,7 +1278,6 @@ def test_function_sizes_native_bytes_register_and_filter_unmapped(table_transpor
 def test_function_sizes_include_unavailable_and_subsumed_native_bytes(table_transport):
     graph, _, _ = table_transport
     program = pb.Program(
-        ir_version=1,
         sorts=[
             pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "CountedHidden")),
@@ -1338,7 +1335,6 @@ def test_function_sizes_include_unavailable_and_subsumed_native_bytes(table_tran
 def test_table_callable_projection_keeps_first_view_without_invocation(monkeypatch):
     owner = Builder.from_program(
         pb.Program(
-            ir_version=1,
             sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
             declarations=[
                 pb.Declaration(
@@ -1543,7 +1539,6 @@ def test_function_values_unavailable_cells_raise_from_native_bytes(table_transpo
     ])
     inputs = [pb.Arg(sort=0), pb.Arg(sort=1)] if unavailable == "argument 1" else [pb.Arg(sort=0)]
     program = pb.Program(
-        ir_version=1,
         sorts=sorts,
         nodes=nodes,
         declarations=[
@@ -1700,7 +1695,6 @@ def test_function_values_rejects_primitives_without_table_request(table_transpor
     graph, requests, _ = table_transport
     owner = Builder.from_program(
         pb.Program(
-            ir_version=1,
             sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
             nodes=[
                 pb.Node(
@@ -2787,7 +2781,7 @@ def test_failed_check_policy_requires_one_top_level_check(monkeypatch, shape):
         commands.append(pb.Command(kind=Oneof[Literal["stats"], pb.Unit]("stats", pb.Unit())))
     elif shape == "multiple":
         commands.extend(pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check())) for _ in range(2))
-    owner = Builder.from_program(pb.Program(ir_version=1, commands=commands)).publish()
+    owner = Builder.from_program(pb.Program(commands=commands)).publish()
     with pytest.raises(ValueError, match="exactly one top-level Check"):
         graph._state.run_program(
             [owner.ref("commands", index) for index in range(len(commands))], allow_failed_check=True
@@ -3151,7 +3145,6 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
     request = requests[0]
     assert request.program is not None
     program = request.program
-    assert program.ir_version == 1
     command = program.commands[0].kind
     assert command is not None
     assert command.field == "extract"

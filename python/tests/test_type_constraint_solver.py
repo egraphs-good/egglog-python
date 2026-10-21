@@ -14,7 +14,6 @@ from egglog.type_constraint_solver import TypeConstraintError, infer_sort, subst
 def sorts() -> dict[str, Ref]:
     builder = Builder.from_program(
         pb.Program(
-            ir_version=1,
             sorts=[
                 pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)),
                 pb.Sort(kind=Oneof[Literal["var"], int]("var", 1)),

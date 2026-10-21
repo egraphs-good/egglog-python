@@ -334,7 +334,6 @@ fn py_code_context(
         }],
     });
     let mut complete = pb::Program {
-        ir_version: 1,
         ..Default::default()
     };
     types.export_builtin_definition("egglog.python.pyobject.dict", &mut complete)?;

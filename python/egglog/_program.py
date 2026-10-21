@@ -25,7 +25,7 @@ from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Mes
 # address; '@' means a named definition dependency. Other fields are copied,
 # recursively for inline messages. Binder positions are deliberately NOT indices.
 _FIELDS = {
-    "Program": "ir_version nodes sorts declarations commands files rulesets rules",
+    "Program": "nodes sorts declarations commands files rulesets rules",
     "Node": "sort_id:sorts var primitive_value call union get_cost span",
     "Sort": "eq@eq_sort family func var span egglog_aliases",
     "HostSort": "name@host_sort_family args:sorts",
@@ -79,8 +79,8 @@ _FIELDS = {
     "Ruleset": "name rules combined span doc",
     "RuleList": "rules:rules",
     "RulesetRef": "index:rulesets name@ruleset",
-    "RuleDecl": "rule rewrite birewrite name eval_mode no_decomp include_subsumed span doc",
-    "Rule": "query:nodes head",
+    "Rule": "rule rewrite birewrite name eval_mode no_decomp include_subsumed span doc",
+    "RuleBody": "query:nodes head",
     "Rewrite": "lhs:nodes rhs:nodes conditions:nodes subsume",
     "BiRewrite": "lhs:nodes rhs:nodes conditions:nodes",
     "CombinedRuleset": "rulesets",
@@ -105,7 +105,7 @@ _ROLES: dict[str, type[Message]] = {
     "nodes": pb.Node,
     "sorts": pb.Sort,
     "declarations": pb.Declaration,
-    "rules": pb.RuleDecl,
+    "rules": pb.Rule,
     "rulesets": pb.Ruleset,
     "files": pb.SourceFile,
     "commands": pb.Command,
@@ -585,8 +585,6 @@ class Builder:
     @classmethod
     def from_program(cls, program: pb.Program) -> Builder:
         """Adopt a decoded Program as a fresh owner, preserving its local indices."""
-        if program.ir_version != 1:
-            raise NotImplementedError(f"Unsupported IR version {program.ir_version}")
         if program._unknown_fields:
             msg = "Cannot adopt unknown Program fields"
             raise NotImplementedError(msg)
@@ -690,7 +688,7 @@ def pack(  # noqa: C901
     still requires adapter-aware reconciliation. Literal bits and identity-bearing
     Union/rule/ruleset references are never guessed equivalent.
     """
-    program = pb.Program(ir_version=1)
+    program = pb.Program()
     mapped: dict[Ref, int] = {}
     pending: list[Ref] = []
     indexed: set[Owner] = set()

@@ -291,7 +291,6 @@ def test_structural_float_equality_hashes_and_exact_bits(left_bits, right_bits, 
 def action_program():
     """A Set whose declaration closure contains a recursive named dependency."""
     return pb.Program(
-        ir_version=1,
         sorts=[
             pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name=name)))
             for name in ("i64", "f64")
@@ -410,7 +409,6 @@ def test_action_equality_compares_union_syntax_in_declaration_closure(action_pro
 @pytest.fixture
 def union_action_graph():
     return pb.Program(
-        ir_version=1,
         sorts=[pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E"))],
         declarations=[pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="E")))]
         + [
@@ -622,7 +620,6 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
     ]
     owner = Builder.from_program(
         pb.Program(
-            ir_version=1,
             sorts=[
                 pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Pair")),
                 pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Pair", args=[0, 0]))),
@@ -1238,9 +1235,9 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
     builder.add("files", pb.SourceFile(name="source", contents="x"))
     builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
     builder.add("nodes", pb.Node(kind=Oneof[Literal["var"], str]("var", "x"), span=pb.Span(file=0, end=1)))
-    rule = pb.RuleDecl(
-        kind=Oneof[Literal["rule"], pb.Rule](
-            "rule", pb.Rule(query=[0], head=[pb.Action(kind=Oneof[Literal["term"], int]("term", 0))])
+    rule = pb.Rule(
+        kind=Oneof[Literal["rule"], pb.RuleBody](
+            "rule", pb.RuleBody(query=[0], head=[pb.Action(kind=Oneof[Literal["term"], int]("term", 0))])
         ),
         eval_mode=pb.RuleEvalMode.NAIVE,
     )

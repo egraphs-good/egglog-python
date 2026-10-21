@@ -3234,7 +3234,7 @@ class _RewriteBuilder(Generic[EXPR]):
         builder = Builder()
         index = builder.add(
             "rules",
-            pb.RuleDecl(
+            pb.Rule(
                 kind=Oneof[Literal["rewrite"], pb.Rewrite](
                     "rewrite",
                     pb.Rewrite(
@@ -3272,7 +3272,7 @@ class _BirewriteBuilder(Generic[EXPR]):
         builder = Builder()
         index = builder.add(
             "rules",
-            pb.RuleDecl(
+            pb.Rule(
                 kind=Oneof[Literal["birewrite"], pb.BiRewrite](
                     "birewrite",
                     pb.BiRewrite(
@@ -3468,8 +3468,8 @@ class _RuleBuilder:
             for namespace, name in dependencies:
                 builder.import_ref(_definition_at(reference, namespace, name))
             dependencies.clear()
-        record = pb.RuleDecl(
-            kind=Oneof[Literal["rule"], pb.Rule]("rule", pb.Rule(query=query, head=head)),
+        record = pb.Rule(
+            kind=Oneof[Literal["rule"], pb.RuleBody]("rule", pb.RuleBody(query=query, head=head)),
             eval_mode=modes[self.eval_mode],
             no_decomp=self.no_decomp,
         )

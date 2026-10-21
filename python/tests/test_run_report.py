@@ -575,7 +575,7 @@ def test_saved_named_rule_round_trips_escaped_name(name: str) -> None:
     _assert_saved_report_replay(egraph, report)
 
 
-def test_unnamed_rule_decl():
+def test_unnamed_rule():
     egraph = EGraph()
 
     class Num(Expr):
@@ -588,7 +588,7 @@ def test_unnamed_rule_decl():
     report = egraph.run(10)
 
     output = str(report)
-    assert "__main__" not in output, f"Unnamed RuleDecl key not translated:\n{output}"
+    assert "__main__" not in output, f"Unnamed Rule key not translated:\n{output}"
     assert "rule(" in output, f"Expected 'rule(' in:\n{output}"
     rule_keys = list(report.search_and_apply_time_per_rule.keys())
     assert len(rule_keys) > 0

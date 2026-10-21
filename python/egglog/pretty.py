@@ -843,7 +843,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                     pieces.append(")")
                 case _:
                     raise NotImplementedError(f"Node presentation is not migrated: {record.kind.field}")
-        elif isinstance(record, pb.RuleDecl):
+        elif isinstance(record, pb.Rule):
             if record.kind is None or record.eval_mode == pb.RuleEvalMode.UNSPECIFIED:
                 msg = "Cannot print a rule without kind and evaluation mode"
                 raise ValueError(msg)

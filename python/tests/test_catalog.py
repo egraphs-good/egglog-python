@@ -1026,7 +1026,6 @@ runpy.run_path(sys.argv[0], run_name='__main__')
 
 def catalog_fixture() -> pb.Program:
     return pb.Program(
-        ir_version=1,
         sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Number")))],
         declarations=[
             pb.Declaration(
@@ -1197,7 +1196,6 @@ def test_nominal_and_family_member_owners_recover_independently(monkeypatch, gen
 @pytest.mark.parametrize("nominal", [False, True])
 def test_class_and_pretty_recovery_never_use_other_sort_kind(monkeypatch, nominal):
     source = pb.Program(
-        ir_version=1,
         sorts=[
             pb.Sort(
                 kind=Oneof[Literal["eq"], str]("eq", "Number")
@@ -1396,7 +1394,6 @@ def test_constant_presentation_accepts_each_concrete_nullary_callable(kind):
         ),
     }
     source = pb.Program(
-        ir_version=1,
         sorts=[
             pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "E")),

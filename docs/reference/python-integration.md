@@ -880,7 +880,7 @@ generated protobuf `EGraphSnapshot`. The snapshot owns its reconstruction
 
 ```{code-cell} python
 frozen = egraph.freeze()
-frozen.program.ir_version
+type(frozen.program).__name__
 ```
 
 `frozen.to_binary()` serializes the snapshot without materializing host values.
