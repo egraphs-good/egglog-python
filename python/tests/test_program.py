@@ -90,12 +90,12 @@ def test_print_function_limit_presence_survives_copy_and_pack_without_engine(mon
     views = []
     encodings = []
     for limit in (None, 0, 1):
-        requested = pb.PrintFunction(table="f")
+        requested = pb.GetTableRows(table="f")
         if limit is not None:
             requested.max_rows = limit
         builder = Builder()
         index = builder.add(
-            "commands", pb.Command(kind=Oneof[Literal["print_function"], pb.PrintFunction]("print_function", requested))
+            "commands", pb.Command(kind=Oneof[Literal["table_rows"], pb.GetTableRows]("table_rows", requested))
         )
         reference = builder.publish().ref("commands", index)
         requested.max_rows = 99
@@ -109,9 +109,9 @@ def test_print_function_limit_presence_survives_copy_and_pack_without_engine(mon
         for command in (reference.read(), imported_reference.read(), program.commands[0], decoded.commands[0]):
             kind = command.kind
             assert kind is not None
-            assert kind.field == "print_function"
+            assert kind.field == "table_rows"
             request = kind.value
-            assert isinstance(request, pb.PrintFunction)
+            assert isinstance(request, pb.GetTableRows)
             assert request.table == "f"
             assert request.has_field("max_rows") == (limit is not None)
             assert request.max_rows == (0 if limit is None else limit)
@@ -178,10 +178,24 @@ def test_direct_rule_option_presence_and_empty_head(monkeypatch, mode, expected)
     assert record.kind.value.query == record.kind.value.head == []
     expected_str = "rule().then()" if mode == "seminaive" else f"rule(eval_mode={mode!r}).then()"
     assert str(authored) == expected_str
-    program = pack([authored.__egg_ref__]).program
+    with pytest.raises(TypeError, match="Rules must be embedded in AddRules commands"):
+        pack([authored.__egg_ref__])
+    builder = Builder()
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["add_rules"], pb.AddRules](
+                "add_rules", pb.AddRules(rules=[builder.import_rule(authored.__egg_ref__)])
+            )
+        ),
+    )
+    program = pack(commands=[builder.publish().ref("commands", command)]).program
     assert not program.nodes
-    assert not program.commands
-    assert pb.Program.from_binary(program.to_binary()).rules == [record]
+    assert len(program.commands) == 1
+    addition = pb.Program.from_binary(program.to_binary()).commands[0].kind
+    assert addition is not None
+    assert addition.field == "add_rules"
+    assert addition.value.rules == [record]
     with pytest.raises(TypeError, match="canonical rule reference"):
         RewriteOrRule(literal(1))
     with pytest.raises(ValueError, match="evaluation mode"):
@@ -1264,8 +1278,14 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
         ),
         eval_mode=pb.RuleEvalMode.NAIVE,
     )
-    builder.add("rules", rule)
-    builder.add("rules", rule)
+    first_rule = builder.add("rules", rule)
+    second_rule = builder.add("rules", rule)
+    owned = builder.publish()
+    first_reference, second_reference = (owned.ref("rules", index) for index in (first_rule, second_rule))
+    assert first_reference != second_reference
+    assert StructuralView(first_reference) != StructuralView(second_reference)
+    builder = Builder()
+    condition = builder.import_ref(owned.ref("nodes", 0))
     command = builder.add(
         "commands",
         pb.Command(
@@ -1273,11 +1293,19 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
                 "loop",
                 pb.Loop(
                     max_iterations=2,
-                    until=[0],
+                    until=[condition],
                     body=[
                         pb.Command(
                             kind=Oneof[Literal["add_rules"], pb.AddRules](
-                                "add_rules", pb.AddRules(group="r", rules=[0, 0, 1])
+                                "add_rules",
+                                pb.AddRules(
+                                    group="r",
+                                    rules=[
+                                        builder.import_rule(first_reference),
+                                        builder.import_rule(first_reference),
+                                        builder.import_rule(second_reference),
+                                    ],
+                                ),
                             )
                         ),
                         pb.Command(kind=Oneof[Literal["run"], pb.Run]("run", pb.Run(groups=["r"]))),
@@ -1290,7 +1318,6 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
     reference = owner.ref("commands", command)
     result = pack(commands=[reference, reference], ambient=AMBIENT)
     assert len(result.program.commands) == 2
-    assert len(result.program.rules) == 2
     control = result.program.commands[0].kind
     assert control is not None
     assert control.field == "loop"
@@ -1298,10 +1325,65 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
     assert addition is not None
     assert addition.field == "add_rules"
     rules = addition.value.rules
-    assert rules[0] == rules[1] != rules[2]
+    assert len(rules) == 3
+    assert rules[0] == rules[1] == rules[2]
     assert result.program.files[0].name == "source"
     assert result.program.nodes[0].span is not None
     assert result.program.nodes[0].span.file == 0
+
+
+def test_inline_rules_import_shared_context_once_and_pack_only_demanded_definitions(monkeypatch):
+    available, repetitions = 32, 64
+    source = Builder(environment=(builtin_catalog().owner,))
+    unit = source.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Unit"))),
+    )
+    for index in range(available):
+        source.add(
+            "declarations",
+            pb.Declaration(kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=f"r{index}"))),
+        )
+    query = source.add("nodes", pb.Node(sort_id=unit, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="r0"))))
+    rule_index = source.add(
+        "rules", pb.Rule(kind=Oneof[Literal["rule"], pb.RuleBody]("rule", pb.RuleBody(query=[query])))
+    )
+    reference = source.publish().ref("rules", rule_index)
+    visits: list[str] = []
+    import_ref = Builder.import_ref
+
+    def counted_import_ref(builder: Builder, reference: _program.Ref) -> int:
+        visits.append(reference.role)
+        return import_ref(builder, reference)
+
+    monkeypatch.setattr(Builder, "import_ref", counted_import_ref)
+    destination = Builder()
+    command = destination.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["add_rules"], pb.AddRules](
+                "add_rules",
+                pb.AddRules(group="g", rules=[destination.import_rule(reference) for _ in range(repetitions)]),
+            )
+        ),
+    )
+    assert visits.count("declarations") == available
+    assert len(visits) <= available + 2 * repetitions
+    program = pack(commands=[destination.publish().ref("commands", command)]).program
+    assert len(program.commands) == 1
+    addition = program.commands[0].kind
+    assert addition is not None
+    assert addition.field == "add_rules"
+    assert len(addition.value.rules) == repetitions
+    assert all(
+        rule.kind is not None and rule.kind.field == "rule" and rule.kind.value.query == [0]
+        for rule in addition.value.rules
+    )
+    assert len(program.nodes) == 1
+    assert program.sorts == [
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Unit")))
+    ]
+    assert [d.kind.value.name for d in program.declarations if d.kind is not None] == ["r0"]
 
 
 def test_binders_defaults_and_payloads_are_not_reinterpreted():
@@ -1429,10 +1511,9 @@ def test_scalar_view_presence_stays_local_through_owned_closure_and_relocation(r
         _definition_at(detached_owner.ref("nodes", 0), "callable", "egglog.core.string.concat")
     primitive = reference.read()
     assert primitive.doc != "changed detached copy"
-    assert primitive.typing is not None
-    assert primitive.typing.field == "signature"
-    assert not primitive.typing.value.inputs
-    assert len(primitive.typing.value.varargs) == 1
+    assert primitive.signature is not None
+    assert not primitive.signature.inputs
+    assert len(primitive.signature.varargs) == 1
     call = reencoded.nodes[0].kind
     assert call is not None
     assert call.field == "call"

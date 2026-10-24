@@ -15,11 +15,11 @@ from math import isnan
 from struct import unpack
 from threading import RLock
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from weakref import WeakKeyDictionary
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
-from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Message, ScalarType
+from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Message, Oneof, ScalarType
 
 if TYPE_CHECKING:
     from ._catalog import Catalog
@@ -29,8 +29,8 @@ if TYPE_CHECKING:
 # address; '@' means a named definition dependency. Other fields are copied,
 # recursively for inline messages. Binder positions are deliberately NOT indices.
 _FIELDS = {
-    "Program": "nodes sorts declarations commands files rules",
-    "Node": "sort_id:sorts var primitive_value call union get_cost span",
+    "Program": "nodes sorts declarations commands files",
+    "Node": "sort_id:sorts var primitive_value call apply union get_cost span",
     "BuiltinCatalog": "sorts primitive_sorts primitives files",
     "Sort": "eq@eq_sort application func var span",
     "SortApplication": "name@primitive_sort args:sorts",
@@ -39,6 +39,7 @@ _FIELDS = {
     "SourceFile": "name contents",
     "Union": "members:nodes",
     "Call": "func@callable args:nodes",
+    "Apply": "function:nodes args:nodes",
     "Lambda": "captures:nodes body:nodes",
     "PrimitiveValue": "i64 f64_bits string bool unit big_int big_rat rational vec set multiset map pair maybe lambda partial_call custom",
     "BigRat": "numerator denominator",
@@ -55,35 +56,33 @@ _FIELDS = {
     "SetCost": "target cost:nodes",
     "Declaration": "constructor function relation user_defined_primitive eq_sort span doc public_alias default_name",
     "Arg": "sort:sorts name",
-    "EqSort": "name uf_parent",
+    "EqSort": "name",
     "Constructor": "name inputs output:sorts cost:nodes unextractable hidden",
     "Function": "name inputs output:sorts merge:nodes hidden",
     "Relation": "name inputs",
     "UserDefinedPrimitive": "name inputs output:sorts body:nodes",
     "PrimitiveSort": "name arity span doc",
-    "Primitive": "name signature application span doc",
-    "GenericSignature": "type_params inputs output:sorts varargs equality_type_params",
-    "FunctionApplication": "",
+    "Primitive": "name signature span doc",
+    "GenericSignature": "type_param_count inputs output:sorts varargs",
     "Rule": "rule rewrite birewrite name eval_mode no_decomp include_subsumed span doc",
     "RuleBody": "query:nodes head",
     "Rewrite": "lhs:nodes rhs:nodes conditions:nodes subsume",
     "BiRewrite": "lhs:nodes rhs:nodes conditions:nodes",
-    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze print_size print_function print_table_stats loop fail stats add_rules explain span",
+    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze table_sizes table_rows table_stats loop fail stats add_rules explain span",
     "Check": "facts:nodes",
     "Prove": "facts:nodes",
     "ProveExists": "constructor@callable",
     "Run": "groups scheduler",
-    "AddRules": "group rules:rules",
+    "AddRules": "group rules",
     "Explain": "groups",
-    "BindScheduler": "name scheduler",
-    "Scheduler": "back_off",
+    "BindScheduler": "name back_off",
     "BackOff": "match_limit ban_length node_limit",
     "KeepBest": "tables@callable extractor cost_model",
     "Extract": "roots:nodes variants extractor cost_model",
     "Freeze": "",
-    "PrintSize": "tables@callable",
-    "PrintFunction": "table@callable max_rows",
-    "PrintTableStats": "tables@callable",
+    "GetTableSizes": "tables@callable",
+    "GetTableRows": "table@callable max_rows",
+    "GetTableStats": "tables@callable",
     "Loop": "body until:nodes max_iterations",
 }
 _ROLES: dict[str, type[Message]] = {
@@ -96,7 +95,7 @@ _ROLES: dict[str, type[Message]] = {
     "primitive_sorts": pb.PrimitiveSort,
     "primitives": pb.Primitive,
 }
-_PROGRAM_ROLES = ("nodes", "sorts", "declarations", "rules", "files", "commands")
+_PROGRAM_ROLES = ("nodes", "sorts", "declarations", "files", "commands")
 _BUILTIN_ROLES = ("sorts", "primitive_sorts", "primitives", "files")
 _FIELD_ROLES = {
     name: dict(token.replace("@", ":@").partition(":")[::2] for token in fields.split())
@@ -405,7 +404,17 @@ def _rule_key(root: Ref) -> tuple[object, ...]:  # noqa: C901
     if root.role != "rules":
         msg = "Rule comparison requires rule references"
         raise TypeError(msg)
-    closure = {_definition_key(ref.read()): ref for ref in pack(roots=[root]).definitions}
+    builder = Builder()
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["add_rules"], pb.AddRules]("add_rules", pb.AddRules(rules=[builder.import_rule(root)]))
+        ),
+    )
+    closure = {
+        _definition_key(ref.read()): ref
+        for ref in pack(commands=[builder.publish().ref("commands", command)]).definitions
+    }
     ordered = sorted(closure, key=repr)
     roots: list[tuple[Ref, object, bool]] = [(closure[key], key, False) for key in ordered] + [(root, "rule", False)]
     roots = [(ref.owner.ref(ref.role, ref.index), domain, query) for ref, domain, query in roots]
@@ -533,6 +542,7 @@ class Builder:
     def __init__(self, *, environment: Iterable[Owner] = ()) -> None:
         self._slots: dict[str, list[Message | Ref | None]] | None = {role: [] for role in _ROLES}
         self._imports: dict[Ref, int] = {}
+        self._contexts: set[Owner] = set()
         self.presentations: dict[tuple[str, str], Presentation] = {}
         self._environment = dict.fromkeys(
             provider for owner in environment for provider in (*owner._environment, owner)
@@ -585,6 +595,28 @@ class Builder:
         self._imports[canonical] = index
         return index
 
+    def import_context(self, owner: Owner) -> None:
+        """Retain named references when embedding code without an arena-owner edge."""
+        if owner in self._contexts:
+            return
+        self._contexts.add(owner)
+        self._environment.update(dict.fromkeys(owner._environment))
+        if owner._builtin_indices:
+            self._environment[owner] = None
+        for index in range(len(owner._slots["declarations"])):
+            self.import_ref(owner.ref("declarations", index))
+
+    def import_rule(self, reference: Ref) -> pb.Rule:
+        """Embed an owned reusable rule, relocating its closure into this fragment."""
+        canonical = reference.owner.ref(reference.role, reference.index)
+        if canonical.role != "rules":
+            msg = "Inline rules require an owned Rule reference"
+            raise TypeError(msg)
+        self.import_context(canonical.owner)
+        record = canonical.read()
+        assert isinstance(record, pb.Rule)
+        return _copy_record(record, relocate=lambda role, index: self.import_ref(canonical.owner.ref(role, index)))
+
     def publish(
         self,
         *,
@@ -600,6 +632,7 @@ class Builder:
         slots = {role: tuple(cast("list[Message | Ref]", records)) for role, records in self._slots.items()}
         self._slots = None
         self._imports.clear()
+        self._contexts.clear()
         owner = Owner(slots, keepalive, self.presentations, tuple(self._environment))
         # Combining provider contexts must not substitute a different signature
         # for the same canonical key. Keep the original generated records owned.
@@ -785,6 +818,9 @@ def pack(  # noqa: C901, PLR0912
 
     def allocate(reference: Ref) -> int:
         ref = reference.owner.ref(reference.role, reference.index)
+        if ref.role == "rules":
+            msg = "Rules must be embedded in AddRules commands"
+            raise TypeError(msg)
         if ref.role in {"primitive_sorts", "primitives"}:
             msg = "Builtin descriptors are ambient references, not Program roots"
             raise TypeError(msg)

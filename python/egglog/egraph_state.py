@@ -199,7 +199,6 @@ class EGraphState:
                     program.nodes,
                     program.sorts,
                     program.declarations,
-                    program.rules,
                     program.files,
                 ))
             )
@@ -335,7 +334,6 @@ class EGraphState:
                 nodes=program.nodes,
                 sorts=program.sorts,
                 files=program.files,
-                rules=program.rules,
             )
         )
         for declaration in program.declarations:

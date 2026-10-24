@@ -60,7 +60,8 @@ def test_get_literal_value(expr, value):
 
 
 def test_get_let_name():
-    from egglog._program import Builder, pack  # noqa: PLC0415
+    from egglog._presentation import presentation  # noqa: PLC0415
+    from egglog._program import Builder, _definition_key, pack  # noqa: PLC0415
     from egglog.runtime import RuntimeExpr  # noqa: PLC0415
 
     assert get_let_name(l) == "l"
@@ -77,7 +78,13 @@ def test_get_let_name():
     assert node.kind is not None
     assert node.kind.field == "call"
     node.kind.value.args.append(packed.indices[0])
-    owner = Builder.from_program(packed.program).publish()
+    builder = Builder.from_program(packed.program, environment=expr_parts(l).ref.owner._environment)
+    builder.presentations.update({
+        key: presentation(reference)
+        for reference in packed.definitions
+        if (key := _definition_key(reference.read())) is not None
+    })
+    owner = builder.publish()
     with pytest.raises(ValueError, match="constant call must be nullary"):
         get_let_name(RuntimeExpr(owner.ref("nodes", packed.indices[0])))
 

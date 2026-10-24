@@ -75,7 +75,7 @@ from egglog._presentation import (
     builtin_owner,
     presentation,
 )
-from egglog._program import Builder, Ref, StructuralView, _definition_key, pack
+from egglog._program import Builder, Packed, Ref, StructuralView, _copy_record, _definition_key, pack, rule_equal
 from egglog.builtins import ExprValueError, _container_items, _map_entries, _pair_value
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.egraph import get_current_ruleset, set_current_ruleset, to_runtime_expr
@@ -90,6 +90,38 @@ from egglog.runtime import (
     resolve_type_annotation,
 )
 from egglog.type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
+
+
+def _pack_rule(reference: Ref) -> Packed:
+    """Observe the real wire form of an owned reusable rule and its closure."""
+    builder = Builder()
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["add_rules"], pb.AddRules](
+                "add_rules", pb.AddRules(rules=[builder.import_rule(reference)])
+            )
+        ),
+    )
+    return pack(commands=[builder.publish().ref("commands", command)])
+
+
+def _inline_rule(command: Ref, index: int = 0) -> Ref:
+    """Own one inline rule with all its surrounding Program arena references."""
+    record = command.read()
+    assert isinstance(record, pb.Command)
+    assert record.kind is not None
+    assert record.kind.field == "add_rules"
+    builder = Builder()
+    builder.import_context(command.owner)
+    slot = builder.add(
+        "rules",
+        _copy_record(
+            record.kind.value.rules[index],
+            relocate=lambda role, index: builder.import_ref(command.owner.ref(role, index)),
+        ),
+    )
+    return builder.publish().ref("rules", slot)
 
 
 def _required_oneof[T](kind: object, field: str, payload_type: type[T]) -> T:
@@ -371,11 +403,9 @@ def test_ne_uses_actual_generic_catalog_and_ordered_canonical_calls(monkeypatch)
     declaration = builtin_catalog().definitions["callable", "egglog.core.ne"]
     record = declaration.read()
     assert isinstance(record, pb.Primitive)
-    typing = record.typing
-    assert typing is not None
-    assert isinstance(typing.value, pb.GenericSignature)
-    signature = typing.value
-    assert len(signature.type_params) == 1
+    signature = record.signature
+    assert signature is not None
+    assert signature.type_param_count == 1
     assert len(signature.inputs) == 2
     assert signature.inputs[0].sort == signature.inputs[1].sort
     assert declaration.owner.ref("sorts", signature.inputs[0].sort).read().kind == Oneof("var", 0)
@@ -468,7 +498,7 @@ def test_canonical_backoff_records_and_persistent_identity_without_engine(monkey
     local = back_off()
     command = local.__egg_ref__.read()
     assert command.kind.field == "bind_scheduler"
-    options = command.kind.value.scheduler.kind.value
+    options = command.kind.value.back_off
     assert not options.has_field("match_limit")
     assert not options.has_field("ban_length")
     zero = back_off(match_limit=0, ban_length=0)
@@ -476,9 +506,8 @@ def test_canonical_backoff_records_and_persistent_identity_without_engine(monkey
     copied = pb.Program.from_binary(encoded)
     assert copied.to_binary() == encoded
     copied_binding = _required_oneof(copied.commands[0].kind, "bind_scheduler", pb.BindScheduler)
-    copied_scheduler = copied_binding.scheduler
-    assert copied_scheduler is not None
-    limits = _required_oneof(copied_scheduler.kind, "back_off", pb.BackOff)
+    limits = copied_binding.back_off
+    assert limits is not None
     assert limits.has_field("match_limit")
     assert limits.match_limit == 0
     assert limits.has_field("ban_length")
@@ -487,12 +516,12 @@ def test_canonical_backoff_records_and_persistent_identity_without_engine(monkey
     assert "ban_length=0" in repr(zero)
     assert "match_limit=" not in str(local)
     node_limited = zero.__egg_ref__.read()
-    node_limited.kind.value.scheduler.kind.value.node_limit = 0
+    node_limited.kind.value.back_off.node_limit = 0
     builder = Builder()
     index = builder.add("commands", node_limited)
     assert "node_limit=0" in pretty_ref(builder.publish().ref("commands", index))
     largest = back_off(match_limit=2**64 - 1)
-    assert largest.__egg_ref__.read().kind.value.scheduler.kind.value.match_limit == 2**64 - 1
+    assert largest.__egg_ref__.read().kind.value.back_off.match_limit == 2**64 - 1
     with pytest.raises(TypeError, match="BindScheduler"):
         BackOff(i64(0).__egg_ref__)
     unnamed = local.__egg_ref__.read()
@@ -505,7 +534,7 @@ def test_canonical_backoff_records_and_persistent_identity_without_engine(monkey
     persistent = local.persistent()
     binding = persistent.__egg_ref__.read().kind.value
     assert binding.name != command.kind.value.name
-    assert binding.scheduler == command.kind.value.scheduler
+    assert binding.back_off == command.kind.value.back_off
     assert not local._persistent
     assert persistent._persistent
     selected = ruleset(name="persistent-source")
@@ -624,7 +653,9 @@ def test_canonical_scheduler_until_queries_and_live_rulesets_without_engine(monk
     program = pack(commands=[root]).program
     assert pb.Program.from_binary(program.to_binary()) == program
     addition, binding, conditional = _required_oneof(program.commands[0].kind, "loop", pb.Loop).body
-    assert _required_oneof(addition.kind, "add_rules", pb.AddRules).rules == [0]
+    additions = _required_oneof(addition.kind, "add_rules", pb.AddRules).rules
+    assert len(additions) == 1
+    assert additions[0].name == "first"
     binding_data = _required_oneof(binding.kind, "bind_scheduler", pb.BindScheduler)
     conditional_data = _required_oneof(conditional.kind, "loop", pb.Loop)
     assert conditional_data.max_iterations == 1
@@ -774,8 +805,8 @@ def test_rule_key_default_and_lambda_use_domains_without_engine():
     def choose(left: Value = default, right: Value = default) -> Value: ...  # type: ignore[assignment]
 
     template = rule().then(choose(Value(), Value()))
-    packed = pack([template.__egg_ref__])
-    equal = _rule_key(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
+    packed = _pack_rule(template.__egg_ref__)
+    equal = _rule_key(_inline_rule(Builder.from_program(packed.program).publish().ref("commands", 0)))
     key = _rule_key(template.__egg_ref__)
     assert key == equal
     assert hash(key) == hash(equal)
@@ -865,13 +896,9 @@ def test_rule_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirectio
     if bidirectional:
         expression = cast("Expr", left)
         first = birewrite(expression).to(expression).__egg_ref__
-    packed = pack([first])
-    second = (
-        Builder
-        .from_program(packed.program, environment=first.owner._environment)
-        .publish()
-        .ref("rules", packed.indices[0])
-    )
+    packed = _pack_rule(first)
+    second = Builder.from_program(packed.program, environment=first.owner._environment).publish().ref("commands", 0)
+    second = _inline_rule(second)
     original = _program._structural_parts
     visits = 0
 
@@ -964,7 +991,7 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
     second = rule().then(set_(constant("independent_target", i64)).to(1))  # type: ignore[arg-type]
     assert first == second
     assert hash(_rule_key(first.__egg_ref__)) == hash(_rule_key(second.__egg_ref__))
-    packed = pack(roots=[second.__egg_ref__])
+    packed = _pack_rule(second.__egg_ref__)
     program = packed.program
     target = next(
         _required_oneof(declaration.kind, "function", pb.Function)
@@ -982,10 +1009,12 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
     )
     target.merge = value
     modified = RewriteOrRule(
-        Builder
-        .from_program(program, environment=second.__egg_ref__.owner._environment)
-        .publish()
-        .ref("rules", packed.indices[0])
+        _inline_rule(
+            Builder
+            .from_program(program, environment=second.__egg_ref__.owner._environment)
+            .publish()
+            .ref("commands", 0)
+        )
     )
     assert first != modified  # The command shape alone is identical.
     assert not _program.rule_equal(first.__egg_ref__, modified.__egg_ref__, keys={})
@@ -1030,7 +1059,7 @@ def test_deferred_rulesets_keep_live_scope_order_and_failure_prefix(monkeypatch)
     assert get_current_ruleset() is None
     snapshot = selected._snapshot()
     assert events == [("failing", selected), ("older", selected)]
-    assert [snapshot.owner.ref("rules", i).read().name for i in snapshot.read().kind.value.rules] == [
+    assert [rule.name for rule in snapshot.read().kind.value.rules] == [
         "side-effect",
         "older",
     ]
@@ -1258,9 +1287,9 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectiona
     rhs.__egg_ref__ = RewriteBox(10).__egg_ref__  # type: ignore[arg-type]
     body.conditions.clear()
     assert str(authored) == expected
-    packed = pack([authored.__egg_ref__])
-    assert len(packed.program.rules) == 1
-    assert not packed.program.commands
+    packed = _pack_rule(authored.__egg_ref__)
+    assert len(_required_oneof(packed.program.commands[0].kind, "add_rules", pb.AddRules).rules) == 1
+    assert len(packed.program.commands) == 1
     decoded = pb.Program.from_binary(packed.program.to_binary())
     builder = Builder.from_program(decoded, environment=authored.__egg_ref__.owner._environment)
     builder.presentations.update({
@@ -1269,10 +1298,10 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectiona
         if (key := _definition_key(definition.read())) is not None
     })
     owner = builder.publish()
-    restored = RewriteOrRule(owner.ref("rules", packed.indices[0]))
+    restored = RewriteOrRule(_inline_rule(owner.ref("commands", 0)))
     assert str(restored) == expected
     assert restored == authored
-    assert pack([restored.__egg_ref__]).program.to_binary() == decoded.to_binary()
+    assert _pack_rule(restored.__egg_ref__).program.to_binary() == decoded.to_binary()
 
 
 def test_direct_birewrite_preserves_conversion_order_and_destination_on_failure():
@@ -1318,9 +1347,8 @@ def test_direct_birewrite_preserves_conversion_order_and_destination_on_failure(
     assert isinstance(record, pb.Command)
     assert record.kind is not None
     assert isinstance(record.kind.value, pb.AddRules)
-    assert [destination.__egg_ref__.owner.ref("rules", index) for index in record.kind.value.rules] == [
-        authored.__egg_ref__
-    ]
+    assert len(record.kind.value.rules) == 1
+    assert rule_equal(_inline_rule(destination.__egg_ref__), authored.__egg_ref__)
     assert unattached == authored
     with pytest.raises(TypeError, match="destinations must be Rulesets"):
         birewrite(lhs, cast("Ruleset", object())).to(rhs)
@@ -1351,8 +1379,7 @@ def test_direct_birewrite_keeps_occurrences_but_compares_structural_keys():
     assert isinstance(record.kind.value, pb.AddRules)
     occurrences = record.kind.value.rules
     assert len(occurrences) == 3
-    assert occurrences[0] == occurrences[1] != occurrences[2]
-    assert len(packed.program.rules) == 2
+    assert occurrences[0] == occurrences[1] == occurrences[2]
 
 
 def test_birewrite_comparison_isolates_directional_union_allocations():
@@ -1408,7 +1435,7 @@ def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):
     variable = var("x", i64)
     query = eq(row(variable)).to(variable)
     authored = rule(query).then(set_(row(variable)).to(variable))
-    packed = pack([authored.__egg_ref__]).program
+    packed = _pack_rule(authored.__egg_ref__).program
     variables = [
         index
         for index, node in enumerate(packed.nodes)
@@ -1417,7 +1444,9 @@ def test_direct_rule_reuses_query_variable_in_inline_set(monkeypatch):
     assert len(variables) == 1
     index = variables[0]
     assert _required_oneof(packed.nodes[index].kind, "var", str) == "x"
-    rule_record = _required_oneof(packed.rules[0].kind, "rule", pb.RuleBody)
+    rule_record = _required_oneof(
+        _required_oneof(packed.commands[0].kind, "add_rules", pb.AddRules).rules[0].kind, "rule", pb.RuleBody
+    )
     members = _required_oneof(packed.nodes[rule_record.query[0]].kind, "union", pb.Union).members
     assert members[1] == index
     assert _required_oneof(packed.nodes[members[0]].kind, "call", pb.Call).args == [index]
@@ -1465,9 +1494,11 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     assert record.eval_mode == pb.RuleEvalMode.NAIVE
     assert record.no_decomp
     assert [action.kind.field for action in record.kind.value.head] == ["set", "term", "term", "term"]
-    packed = pack([authored.__egg_ref__])
-    assert not packed.program.commands
-    body = _required_oneof(packed.program.rules[packed.indices[0]].kind, "rule", pb.RuleBody)
+    packed = _pack_rule(authored.__egg_ref__)
+    assert len(packed.program.commands) == 1
+    body = _required_oneof(
+        _required_oneof(packed.program.commands[0].kind, "add_rules", pb.AddRules).rules[0].kind, "rule", pb.RuleBody
+    )
     assert body.query[0] != body.query[1]  # Distinct equal Union occurrences stay distinct.
     assert (
         _required_oneof(body.head[1].kind, "term", int)
@@ -1500,7 +1531,7 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     assert str(authored) == expected
     decoded = pb.Program.from_binary(packed.program.to_binary())
     owner = Builder.from_program(decoded, environment=authored.__egg_ref__.owner._environment).publish()
-    assert pack([owner.ref("rules", packed.indices[0])]).program.to_binary() == decoded.to_binary()
+    assert _pack_rule(_inline_rule(owner.ref("commands", 0))).program.to_binary() == decoded.to_binary()
 
 
 def test_set_local_protocols_preserve_symbolic_order_and_empty_distinction(set_runtime):
@@ -1712,7 +1743,7 @@ def test_set_empty_converter_and_formed_pretty_use_retained_presentation(
 
 def test_map_from_pairs_rejects_set_even_with_forged_input_metadata(set_catalog_program, request):
     declaration = next(d for d in set_catalog_program.primitives if d.name == "egglog.core.map.of")
-    input_sort = set_catalog_program.sorts[declaration.typing.value.inputs[0].sort]
+    input_sort = set_catalog_program.sorts[declaration.signature.inputs[0].sort]
     assert input_sort.kind.field == "application"
     assert input_sort.kind.value.name == "Vec"
     input_sort.kind.value.name = "Set"
@@ -2359,7 +2390,8 @@ def test_scalar_wave_specialized_bool_deconstruction_uses_effective_slots(native
 )
 def test_scalar_wave_authoring_rejects_invalid_specialization(mutation, native_catalog_program):
     declaration = next(d for d in native_catalog_program.primitives if d.name == "egglog.core.bool.or")
-    signature = _required_oneof(declaration.typing, "signature", pb.GenericSignature)
+    signature = declaration.signature
+    assert signature is not None
     view = presentation(resolve_callable(Bool.__or__)).views[0]
     if mutation == "fixed":
         signature.inputs = signature.varargs * 2
@@ -3562,7 +3594,9 @@ def test_class_and_initializer_documentation_presence(doc):
 
     assert Documented.__doc__ == doc
     runtime_documented, _documented_context = _required_authored_class(Documented)
-    definition = runtime_documented.__egg_definition__.read()
+    sort_definition = runtime_documented.__egg_definition__
+    assert isinstance(sort_definition, Ref)
+    definition = sort_definition.read()
     assert definition.has_field("doc") == (doc is not None)
     initializer = resolve_callable(Documented)
     assert initializer.read().has_field("doc") == (doc is not None)
@@ -3982,7 +4016,7 @@ def test_free_ruleset_body_is_a_deferred_constructor_rewrite(subsume_body):
     snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
     assert not ambient._snapshot().read().kind.value.rules
-    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    reference = _inline_rule(snapshot, 0)
     record = reference.read().kind.value
     assert record.subsume is subsume_body
     lhs = reference.owner.ref("nodes", record.lhs)
@@ -4022,7 +4056,7 @@ def test_free_ruleset_body_preserves_original_positional_variable_relation(name,
 
     body(i64(2))
     snapshot = destination._snapshot()
-    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    reference = _inline_rule(snapshot, 0)
     record = reference.read().kind.value
     rhs = RuntimeExpr(reference.owner.ref("nodes", record.rhs))
     rhs_arguments = get_callable_args(rhs, ExternalRewriteBox)
@@ -4060,7 +4094,7 @@ def test_free_ruleset_body_lhs_keeps_original_wrapper_binders():
 
     body(i64(2))
     snapshot = destination._snapshot()
-    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    reference = _inline_rule(snapshot, 0)
     record = reference.read().kind.value
     lhs = RuntimeExpr(reference.owner.ref("nodes", record.lhs))
     lhs_arguments = get_callable_args(lhs, body)
@@ -4394,8 +4428,10 @@ def test_public_union_contextual_rule_and_fact_presentation(class_authoring_with
     authored = rule(query, name="union-context").then(action)
     expected = "rule(eq(x).to(y), name='union-context').then(union(x).with_(y))"
     assert str(authored) == expected
-    packed = pack([authored.__egg_ref__]).program
-    canonical = _required_oneof(packed.rules[0].kind, "rule", pb.RuleBody)
+    packed = _pack_rule(authored.__egg_ref__).program
+    canonical = _required_oneof(
+        _required_oneof(packed.commands[0].kind, "add_rules", pb.AddRules).rules[0].kind, "rule", pb.RuleBody
+    )
     assert canonical.query == [_required_oneof(canonical.head[0].kind, "term", int)]
     assert pb.Program.from_binary(packed.to_binary()) == packed
 
@@ -4410,12 +4446,22 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
     original = fact.__egg_ref__.read().to_binary()
     authored = rule(fact).then(fact, fact, separate)
     actions = [expr_action(item) for item in (fact, fact, separate)]
+    builder = Builder()
+    command = builder.add(
+        "commands",
+        pb.Command(
+            kind=Oneof[Literal["add_rules"], pb.AddRules](
+                "add_rules", pb.AddRules(rules=[builder.import_rule(authored.__egg_ref__)])
+            )
+        ),
+    )
+    rule_command = builder.publish().ref("commands", command)
     packet = pack(
-        [fact.__egg_ref__, separate.__egg_ref__, authored.__egg_ref__],
-        commands=[action.__egg_ref__ for action in actions],
+        [fact.__egg_ref__, separate.__egg_ref__],
+        commands=[*(action.__egg_ref__ for action in actions), rule_command],
     )
     program = pb.Program.from_binary(packet.program.to_binary())
-    first, second, rule_index = packet.indices
+    first, second = packet.indices
     assert first != second
     _required_oneof(program.nodes[first].kind, "union", pb.Union)
     _required_oneof(program.nodes[second].kind, "union", pb.Union)
@@ -4426,9 +4472,10 @@ def test_fact_action_reuses_authored_union_nodes_without_engine(class_authoring_
         )
         == 2
     )
-    action_data = [_required_oneof(command.kind, "action", pb.Action) for command in program.commands]
+    action_data = [_required_oneof(command.kind, "action", pb.Action) for command in program.commands[:-1]]
     assert [_required_oneof(command.kind, "term", int) for command in action_data] == [first, first, second]
-    canonical = _required_oneof(program.rules[rule_index].kind, "rule", pb.RuleBody)
+    addition = _required_oneof(program.commands[-1].kind, "add_rules", pb.AddRules)
+    canonical = _required_oneof(addition.rules[0].kind, "rule", pb.RuleBody)
     assert canonical.query == [first]
     assert [_required_oneof(action.kind, "term", int) for action in canonical.head] == [first, first, second]
     assert fact.__egg_ref__.read().to_binary() == original
@@ -4653,7 +4700,7 @@ def test_constant_ruleset_default_is_a_destination_constructor_rewrite(monkeypat
     assert not ambient._snapshot().read().kind.value.rules
     snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
-    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    reference = _inline_rule(snapshot, 0)
     record = reference.read().kind.value
     assert isinstance(record, pb.Rewrite)
     assert not record.conditions
@@ -4743,7 +4790,9 @@ def test_constant_keeps_local_sort_hooks_alive_without_a_global_registry():
 
         token = constant("token", Token)
         runtime_token, _token_context = _required_authored_class(Token)
-        return token, weakref(Token), weakref(runtime_token.__egg_definition__.owner)
+        sort_definition = runtime_token.__egg_definition__
+        assert isinstance(sort_definition, Ref)
+        return token, weakref(Token), weakref(sort_definition.owner)
 
     token, class_ref, owner_ref = make()
     _CLASS_CACHE.clear()
@@ -4774,7 +4823,9 @@ def test_user_constructor_defaults_keywords_and_names_are_records(monkeypatch):
     declaration = resolve_callable(Num)
     record = declaration.read()
     assert record.kind.value.name == "exact constructor"
-    assert runtime_num.__egg_definition__.read().kind.value.name == "exact sort"
+    sort_definition = runtime_num.__egg_definition__
+    assert isinstance(sort_definition, Ref)
+    assert sort_definition.read().kind.value.name == "exact sort"
     assert presentation(declaration).views[0].params[0].name == "value"
     assert _required_callable_args(first, Num)[0].value == 5
     default.__replace_expr__(i64(9))
@@ -4858,7 +4909,9 @@ def test_local_class_hooks_survive_caches_but_not_all_roots():
 
         runtime_local, local_context = _required_authored_class(Local)
         expression = Local()
-        return expression, weakref(Local), weakref(runtime_local.__egg_definition__.owner), weakref(local_context)
+        sort_definition = runtime_local.__egg_definition__
+        assert isinstance(sort_definition, Ref)
+        return expression, weakref(Local), weakref(sort_definition.owner), weakref(local_context)
 
     left, cls, owner, context = make("left")
     right, other_cls, other_owner, other_context = make("right")
@@ -5093,7 +5146,7 @@ def test_reverse_args_rewrite_body_receives_python_order(class_authoring_without
     assert calls == [("self", "label", "count")]
     snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
-    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    reference = _inline_rule(snapshot, 0)
     rewrite = reference.read().kind.value
     lhs = reference.owner.ref("nodes", rewrite.lhs)
     assert [lhs.owner.ref("nodes", index).read().kind.value for index in lhs.read().kind.value.args] == [
@@ -6187,7 +6240,9 @@ def test_retained_member_context_lifetime_and_local_hooks():
 
         runtime_local, local_context = _required_authored_class(Local)
         expression = Local.ROOT.child()
-        return expression, weakref(Local), weakref(local_context), weakref(runtime_local.__egg_definition__.owner)
+        sort_definition = runtime_local.__egg_definition__
+        assert isinstance(sort_definition, Ref)
+        return expression, weakref(Local), weakref(local_context), weakref(sort_definition.owner)
 
     expression, cls, context, owner = make()
     gc.collect()
@@ -7002,7 +7057,7 @@ def test_mutating_member_rewrite_keeps_original_binders(class_authoring_without_
     assert view.receiver == view.mutates == int(reverse)
     snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
-    record = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    record = _inline_rule(snapshot, 0)
     rewrite_record = record.read().kind.value
     assert isinstance(rewrite_record, pb.Rewrite)
     lhs = record.owner.ref("nodes", rewrite_record.lhs)
@@ -7266,7 +7321,7 @@ def test_class_default_views_share_canonical_parameter_binding(class_authoring_w
     assert _required_callable_args(expression.wrapped())[1].value == 4
     assert isinstance(expression.own, Defaults)
     snapshot = destination._snapshot()
-    records = [snapshot.owner.ref("rules", index) for index in snapshot.read().kind.value.rules]
+    records = [_inline_rule(snapshot, index) for index in range(len(snapshot.read().kind.value.rules))]
     assert [record.read().kind.value.subsume for record in records] == [False, False, True]
     for record in records:
         rewrite_record = record.read().kind.value
@@ -7288,7 +7343,7 @@ def test_class_default_views_share_canonical_parameter_binding(class_authoring_w
             assert [StructuralView(rhs_ref.owner.ref("nodes", arg)) for arg in rhs.kind.value.args] == [
                 StructuralView(lhs_ref.owner.ref("nodes", lhs.args[1]))
             ]
-    assert len(pack(commands=[snapshot]).program.rules) == 3
+    assert len(_required_oneof(pack(commands=[snapshot]).program.commands[0].kind, "add_rules", pb.AddRules).rules) == 3
 
 
 @pytest.mark.parametrize("replace_receiver", [False, True])
@@ -7311,7 +7366,7 @@ def test_class_default_lhs_keeps_original_binders_after_wrapper_replacement(
     assert _required_callable_args(expression)[1].value == 2
     snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
-    reference = snapshot.owner.ref("rules", snapshot.read().kind.value.rules[0])
+    reference = _inline_rule(snapshot, 0)
     rewrite_record = reference.read().kind.value
     lhs = reference.owner.ref("nodes", rewrite_record.lhs)
     lhs_args = [lhs.owner.ref("nodes", index) for index in lhs.read().kind.value.args]
@@ -7319,7 +7374,7 @@ def test_class_default_lhs_keeps_original_binders_after_wrapper_replacement(
     assert [argument.read().kind.value for argument in lhs_args] == ["self", "value"]
     rhs = RuntimeExpr(reference.owner.ref("nodes", rewrite_record.rhs))
     assert _required_callable_args(rhs, Binders)[0].value == (9 if replace_receiver else 7)
-    assert len(pack(commands=[snapshot]).program.rules) == 1
+    assert len(_required_oneof(pack(commands=[snapshot]).program.commands[0].kind, "add_rules", pb.AddRules).rules) == 1
 
 
 @pytest.mark.parametrize("result", [None, i64(2)])
@@ -7496,17 +7551,17 @@ def test_generic_inference_uses_binder_positions_and_is_transactional():
     )
     owner = builder.publish()
     bindings: dict[int, Ref] = {}
-    # GenericSignature labels may repeat: indices, not labels, identify binders.
-    signature = pb.GenericSignature(type_params=["T", "T"], inputs=[pb.Arg(sort=2)], output=0)
-    infer_sort(owner.ref("sorts", 2), owner.ref("sorts", 5), len(signature.type_params), bindings)
+    # Binder indices remain independent under substitution.
+    signature = pb.GenericSignature(type_param_count=2, inputs=[pb.Arg(sort=2)], output=0)
+    infer_sort(owner.ref("sorts", 2), owner.ref("sorts", 5), signature.type_param_count, bindings)
     assert bindings == {0: owner.ref("sorts", 3), 1: owner.ref("sorts", 4)}
     assert StructuralView(substitute_sort(owner.ref("sorts", 2), bindings)) == StructuralView(owner.ref("sorts", 5))
     before = bindings.copy()
     with pytest.raises(TypeConstraintError):
-        infer_sort(owner.ref("sorts", 2), owner.ref("sorts", 6), len(signature.type_params), bindings)
+        infer_sort(owner.ref("sorts", 2), owner.ref("sorts", 6), signature.type_param_count, bindings)
     assert bindings == before
     independent: dict[int, Ref] = {}
-    infer_sort(owner.ref("sorts", 2), owner.ref("sorts", 6), len(signature.type_params), independent)
+    infer_sort(owner.ref("sorts", 2), owner.ref("sorts", 6), signature.type_param_count, independent)
     assert independent == {0: owner.ref("sorts", 4), 1: owner.ref("sorts", 3)}
 
 
@@ -7575,9 +7630,7 @@ def test_call_authoring_binds_keywords_defaults_and_core_input_order():
         "primitives",
         pb.Primitive(
             name="sample.subtract",
-            typing=Oneof[Literal["signature"], pb.GenericSignature](
-                "signature", pb.GenericSignature(inputs=[pb.Arg(sort=sort), pb.Arg(sort=sort)], output=sort)
-            ),
+            signature=pb.GenericSignature(inputs=[pb.Arg(sort=sort), pb.Arg(sort=sort)], output=sort),
         ),
     )
     owner = builder.publish(
@@ -7849,9 +7902,9 @@ def test_decoded_builtin_callable_identity_uses_definition_and_selected_view(nat
         if change == "name":
             record.name = "test.distinct.provider.add"
         elif change == "signature":
-            assert record.typing is not None
-            assert record.typing.field == "signature"
-            record.typing.value.inputs.append(pb.Arg(sort=record.typing.value.output))
+            assert record.signature is not None
+
+            record.signature.inputs.append(pb.Arg(sort=record.signature.output))
             changed_views = (
                 dataclasses.replace(views[0], params=(*views[0].params, Parameter(core_input=2, name="extra"))),
                 *views[1:],
@@ -7957,11 +8010,13 @@ def test_named_function_capture_keeps_local_context_without_engine(class_authori
 
         expression = UnstableFn(Local.keep, Local())
         runtime_class = cast("runtime.RuntimeClass", Local)
+        sort_definition = runtime_class.__egg_definition__
+        assert isinstance(sort_definition, Ref)
         return (
             expression,
             weakref(Local),
             weakref(runtime_class.__egg_context__),
-            weakref(runtime_class.__egg_definition__.owner),
+            weakref(sort_definition.owner),
         )
 
     expression, cls, context, owner = make()
@@ -8007,10 +8062,7 @@ def test_generic_empty_call_requires_result_owner_and_keeps_signature_unchanged(
         "primitives",
         pb.Primitive(
             name="sample.vec.of",
-            typing=Oneof[Literal["signature"], pb.GenericSignature](
-                "signature",
-                pb.GenericSignature(type_params=["T"], output=pattern, varargs=[pb.Arg(sort=variable)]),
-            ),
+            signature=pb.GenericSignature(type_param_count=1, output=pattern, varargs=[pb.Arg(sort=variable)]),
         ),
     )
     owner = builder.publish(
@@ -8052,14 +8104,11 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
         "primitives",
         pb.Primitive(
             name="test.grouped.tail",
-            typing=Oneof[Literal["signature"], pb.GenericSignature](
-                "signature",
-                pb.GenericSignature(
-                    type_params=["K", "V"],
-                    inputs=[pb.Arg(sort=key, name="seed")],
-                    varargs=[pb.Arg(sort=key), pb.Arg(sort=value)],
-                    output=value,
-                ),
+            signature=pb.GenericSignature(
+                type_param_count=2,
+                inputs=[pb.Arg(sort=key, name="seed")],
+                varargs=[pb.Arg(sort=key), pb.Arg(sort=value)],
+                output=value,
             ),
         ),
     )
@@ -8097,9 +8146,10 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
     assert not pack([root]).program.declarations
     descriptor = reference.read()
     assert isinstance(descriptor, pb.Primitive)
-    signature = _required_oneof(descriptor.typing, "signature", pb.GenericSignature)
+    signature = descriptor.signature
+    assert signature is not None
     assert len(signature.varargs) == 2
-    signature.type_params.append("Unused")
+    signature.type_param_count += 1
     catalog = pb.BuiltinCatalog(
         sorts=[reference.owner.ref("sorts", index).read() for index in range(len(reference.owner._slots["sorts"]))],
         primitives=[descriptor],

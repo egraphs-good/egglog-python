@@ -15,7 +15,7 @@ import black
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
 from ._presentation import CallKind, presentation
-from ._program import Ref, StructuralView, _structural_parts
+from ._program import Builder, Ref, StructuralView, _copy_record, _structural_parts
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -248,22 +248,32 @@ def pretty_ref(  # noqa: C901, PLR0912
             elif record.kind.field == "add_rules":
                 addition = record.kind.value
                 pieces = ["ruleset("]
-                for index, rule_index in enumerate(addition.rules):
+                builder = Builder()
+                builder.import_context(owner)
+                rule_indices = [
+                    builder.add(
+                        "rules",
+                        _copy_record(
+                            rule,
+                            relocate=lambda role, index: builder.import_ref(owner.ref(role, index)),  # noqa: B023 -- relocation consumes this callback synchronously
+                        ),
+                    )
+                    for rule in addition.rules
+                ]
+                rule_owner = builder.publish()
+                for index, rule_index in enumerate(rule_indices):
                     if index:
                         pieces.append(", ")
-                    pieces.append((owner.ref("rules", rule_index), False, False))
+                    pieces.append((rule_owner.ref("rules", rule_index), False, False))
                 if addition.group:
                     pieces.append((", " if addition.rules else "") + f"name={addition.group!r}")
                 pieces.append(")")
             elif record.kind.field == "bind_scheduler":
                 binding = record.kind.value
-                scheduler = binding.scheduler
-                if scheduler is None or scheduler.kind is None:
+                scheduler_options = binding.back_off
+                if scheduler_options is None:
                     msg_0 = "Cannot print BindScheduler without a configuration"
                     raise ValueError(msg_0)
-                if scheduler.kind.field != "back_off":
-                    raise NotImplementedError(f"Scheduler presentation is not migrated: {scheduler.kind.field}")
-                scheduler_options: pb.BackOff = scheduler.kind.value
                 settings = [
                     f"{name}={getattr(scheduler_options, name)}"
                     for name in ("match_limit", "ban_length", "node_limit")
@@ -462,7 +472,7 @@ def pretty_ref(  # noqa: C901, PLR0912
 
                         value = get_literal_value(RuntimeExpr(reference))
                         function = value.func if isinstance(value, partial) else value
-                        if isinstance(function, RuntimeFunction):
+                        if isinstance(function, RuntimeFunction) and function.__egg_intrinsic__ is None:
                             declaration = function.__egg_ref__
                             declared: pb.Declaration | pb.Primitive = declaration.read()
                             if isinstance(declared, pb.Declaration):
@@ -559,6 +569,43 @@ def pretty_ref(  # noqa: C901, PLR0912
                     else:
                         raise NotImplementedError(f"Value presentation is not migrated: {primitive.field}")
                     pieces = [value] if bare else [(sort, False, False), "(", value, ")"]
+                case "apply":
+                    application = record.kind.value
+                    if not application.has_field("function"):
+                        msg = "Function application has no function input"
+                        raise ValueError(msg)
+                    args = [owner.ref("nodes", index) for index in [application.function, *application.args]]
+                    from .type_constraint_solver import infer_sort  # noqa: PLC0415
+
+                    if not args:
+                        msg = "Function application has no function input"
+                        raise ValueError(msg)
+                    function_sort = args[0].owner.ref("sorts", args[0].read().sort_id)
+                    function_type: pb.Sort = function_sort.read()
+                    if (
+                        function_type.kind is None
+                        or function_type.kind.field != "func"
+                        or len(args) != len(function_type.kind.value.params) + 1
+                    ):
+                        msg = "Function application has invalid argument sorts or arity"
+                        raise ValueError(msg)
+                    infer_sort(function_sort.owner.ref("sorts", function_type.kind.value.result), sort, 0, {})
+                    pieces = [(args[0], False, False), "("]
+                    for index, (argument, expected) in enumerate(
+                        zip(args[1:], function_type.kind.value.params, strict=True)
+                    ):
+                        infer_sort(
+                            function_sort.owner.ref("sorts", expected),
+                            argument.owner.ref("sorts", argument.read().sort_id),
+                            0,
+                            {},
+                        )
+                        if index:
+                            pieces.append(", ")
+                        pieces.append((argument, True, False))
+                    pieces.append(")")
+                    frames.extend(reversed(pieces))
+                    continue
                 case "call":
                     call = record.kind.value
                     declaration = _definition_at(reference, "callable", call.func)
@@ -577,48 +624,8 @@ def pretty_ref(  # noqa: C901, PLR0912
                         kind = declared.kind.value
                     else:
                         kind = declared
-                    if (
-                        isinstance(kind, pb.Primitive)
-                        and kind.typing is not None
-                        and kind.typing.field == "application"
-                    ):
-                        from .type_constraint_solver import infer_sort  # noqa: PLC0415
-
-                        if not args:
-                            msg = "Function application has no function input"
-                            raise ValueError(msg)
-                        function_sort = args[0].owner.ref("sorts", args[0].read().sort_id)
-                        function_type: pb.Sort = function_sort.read()
-                        if (
-                            function_type.kind is None
-                            or function_type.kind.field != "func"
-                            or len(args) != len(function_type.kind.value.params) + 1
-                        ):
-                            msg = "Function application has invalid argument sorts or arity"
-                            raise ValueError(msg)
-                        infer_sort(function_sort.owner.ref("sorts", function_type.kind.value.result), sort, 0, {})
-                        pieces = [(args[0], False, False), "("]
-                        for index, (argument, expected) in enumerate(
-                            zip(args[1:], function_type.kind.value.params, strict=True)
-                        ):
-                            infer_sort(
-                                function_sort.owner.ref("sorts", expected),
-                                argument.owner.ref("sorts", argument.read().sort_id),
-                                0,
-                                {},
-                            )
-                            if index:
-                                pieces.append(", ")
-                            pieces.append((argument, True, False))
-                        pieces.append(")")
-                        frames.extend(reversed(pieces))
-                        continue
                     signature = (
-                        kind.typing.value
-                        if isinstance(kind, pb.Primitive)
-                        and kind.typing is not None
-                        and kind.typing.field == "signature"
-                        else None
+                        kind.signature if isinstance(kind, pb.Primitive) and kind.signature is not None else None
                     )
                     fixed = len(signature.inputs) if signature is not None else len(args)
                     tail_width = len(signature.varargs) if signature is not None else 0
@@ -743,19 +750,15 @@ def pretty_ref(  # noqa: C901, PLR0912
                         elif view.kind in {CallKind.CLASS_METHOD, CallKind.CLASS_VARIABLE}:
                             assert view.owner is not None
                             owner_sort = view.owner
-                            if (
-                                isinstance(kind, pb.Primitive)
-                                and kind.typing is not None
-                                and kind.typing.field == "signature"
-                            ):
+                            if isinstance(kind, pb.Primitive) and kind.signature is not None:
                                 from .type_constraint_solver import infer_sort, substitute_sort  # noqa: PLC0415
 
-                                signature = kind.typing.value
+                                signature = kind.signature
                                 substitutions: dict[int, Ref] = {}
                                 infer_sort(
                                     declaration.owner.ref("sorts", signature.output),
                                     sort,
-                                    len(signature.type_params),
+                                    signature.type_param_count,
                                     substitutions,
                                 )
                                 patterns = list(signature.inputs)
@@ -770,7 +773,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                                     infer_sort(
                                         declaration.owner.ref("sorts", parameter.sort),
                                         argument.owner.ref("sorts", payload.sort_id),
-                                        len(signature.type_params),
+                                        signature.type_param_count,
                                         substitutions,
                                     )
                                 owner_sort = substitute_sort(owner_sort, substitutions)
@@ -926,7 +929,6 @@ def pretty_ref(  # noqa: C901, PLR0912
                 from protobuf import Oneof  # noqa: PLC0415
 
                 from ._catalog import builtin_catalog  # noqa: PLC0415
-                from ._program import Builder, _copy_record  # noqa: PLC0415
 
                 target = _copy_record(action.kind.value)
                 declaration = _definition_at(reference, "callable", target.func)

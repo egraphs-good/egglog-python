@@ -368,10 +368,9 @@ def test_maybe_inspection_rejects_malformed_local_values(mutation, native_catalo
     else:
         primitive = next(p for p in native_catalog_program.primitives if p.name == "egglog.experimental.maybe.some")
         if mutation == "scheme":
-            typing = primitive.typing
-            assert typing is not None
-            assert typing.field == "signature"
-            typing.value.output = typing.value.inputs[0].sort
+            signature = primitive.signature
+            assert signature is not None
+            signature.output = signature.inputs[0].sort
         else:
             native_catalog_program.primitives.remove(primitive)
             program.declarations.append(

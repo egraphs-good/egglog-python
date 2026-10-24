@@ -8,23 +8,11 @@ from egglog_proto.egglog.v1 import egglog_pb as pb
 
 from ._program import Builder, Ref, StructuralView, _copy_record
 
-__all__ = ["TypeConstraintError", "check_type_restrictions", "infer_sort", "substitute_sort"]
+__all__ = ["TypeConstraintError", "infer_sort", "substitute_sort"]
 
 
 class TypeConstraintError(RuntimeError):
     """Typing error when trying to infer the return type."""
-
-
-def check_type_restrictions(signature: pb.GenericSignature, bindings: dict[int, Ref]) -> None:
-    """Validate binder-index metadata and its exact, fully inferred Eq substitution."""
-    indices = signature.equality_type_params
-    if list(indices) != sorted(set(indices)) or any(i >= len(signature.type_params) for i in indices):
-        msg = "Invalid equality type parameter indices"
-        raise TypeConstraintError(msg)
-    for index in indices:
-        sort: pb.Sort | None = bindings[index].read() if index in bindings else None
-        if sort is None or sort.kind is None or sort.kind.field != "eq":
-            raise TypeConstraintError(f"Type parameter {index} requires an equality sort")
 
 
 def infer_call_bindings(
@@ -42,12 +30,12 @@ def infer_call_bindings(
         kind = record.kind.value
     else:
         kind = record
-    if isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "signature":
-        signature = kind.typing.value
+    if isinstance(kind, pb.Primitive) and kind.signature is not None:
+        signature = kind.signature
         if not signature.has_field("output"):
             msg = "Stored call signature has no output"
             raise TypeConstraintError(msg)
-        inputs, tail, output, size = signature.inputs, signature.varargs, signature.output, len(signature.type_params)
+        inputs, tail, output, size = signature.inputs, signature.varargs, signature.output, signature.type_param_count
     elif isinstance(kind, pb.Function | pb.Constructor | pb.UserDefinedPrimitive):
         signature = None
         inputs, tail, output, size = kind.inputs, [], kind.output, 0
@@ -67,8 +55,6 @@ def infer_call_bindings(
     if len(bindings) != size:
         msg = "Not every generic parameter was determined by the stored call"
         raise TypeConstraintError(msg)
-    if signature is not None:
-        check_type_restrictions(signature, bindings)
     return determined, tuple(sorted(bindings.items()))
 
 

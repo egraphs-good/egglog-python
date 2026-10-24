@@ -5,7 +5,10 @@ from __future__ import annotations
 import struct
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import dataclass
+from enum import Enum
 from functools import partial
+from hashlib import sha256
 from inspect import Parameter, Signature
 from threading import RLock
 from types import FunctionType, GenericAlias, MethodType
@@ -20,8 +23,8 @@ from ._builtin_protocols import NUMERIC_BINARY_METHODS, SCALAR_PROTOCOLS
 from ._catalog import Catalog
 from ._presentation import CallKind, CallPresentation, Presentation, presentation
 from ._presentation import Parameter as PresentationParameter
-from ._program import Builder, Owner, Ref, StructuralView, _definition_key, clone_nodes
-from .type_constraint_solver import TypeConstraintError, check_type_restrictions, infer_sort, substitute_sort
+from ._program import Builder, Owner, Ref, StructuralView, _definition_key, _structural_parts, clone_nodes
+from .type_constraint_solver import TypeConstraintError, infer_sort, substitute_sort
 
 __all__ = [
     "ALWAYS_MUTATES_SELF",
@@ -96,8 +99,19 @@ CLASS_DESCRIPTOR_METHODS = {
 _OMITTED = object()
 
 
+class _Intrinsic(Enum):
+    APPLY = "apply"
+
+
+@dataclass(frozen=True)
+class _ApplyAdapter:
+    """Keep the frontend callable identity of a compiled intrinsic adapter."""
+
+    function: RuntimeFunction
+
+
 def _author_call(  # noqa: C901, PLR0912
-    declaration: Ref,
+    declaration: Ref | _Intrinsic,
     view_index: int | None,
     args: tuple[object, ...],
     kwargs: dict[str, object],
@@ -119,6 +133,55 @@ def _author_call(  # noqa: C901, PLR0912
     Planning returns only expected input sorts and supplied values, before
     callbacks/converters; an empty plan cannot infer all signature binders.
     """
+    if declaration is _Intrinsic.APPLY:
+        if receiver is _OMITTED:
+            if not args:
+                msg = "Missing receiver for unbound method"
+                raise TypeError(msg)
+            receiver, *remaining = args
+            args = tuple(remaining)
+        first = receiver if isinstance(receiver, Ref) else node_of(receiver)
+        if first is None:
+            msg = "Function application requires a function expression"
+            raise TypeError(msg)
+        function_node: pb.Node = first.read()
+        function_sort = first.owner.ref("sorts", function_node.sort_id)
+        function_type: pb.Sort = function_sort.read()
+        if function_type.kind is None or function_type.kind.field != "func":
+            msg = "Function application requires a Func sort"
+            raise TypeError(msg)
+        infer_sort(function_sort, function_sort, 0, {})
+        bound = Signature([Parameter("args", Parameter.VAR_POSITIONAL)]).bind(*args, **kwargs)
+        supplied = bound.arguments.get("args", ())
+        assert isinstance(supplied, tuple)
+        if len(supplied) != len(function_type.kind.value.params):
+            raise TypeError(f"Function application expects {len(function_type.kind.value.params)} arguments")
+        converted = [first]
+        for index, value in zip(function_type.kind.value.params, supplied, strict=True):
+            expected = function_sort.owner.ref("sorts", index)
+            child = value if isinstance(value, Ref) else node_of(value)
+            if child is None or StructuralView(child.owner.ref("sorts", child.read().sort_id)) != StructuralView(
+                expected
+            ):
+                child = convert(expected, value)
+            infer_sort(expected, child.owner.ref("sorts", child.read().sort_id), 0, {})
+            converted.append(child)
+        builder = Builder()
+        node_index = builder.add(
+            "nodes",
+            pb.Node(
+                sort_id=builder.import_ref(function_sort.owner.ref("sorts", function_type.kind.value.result)),
+                kind=Oneof[Literal["apply"], pb.Apply](
+                    "apply",
+                    pb.Apply(
+                        function=builder.import_ref(converted[0]),
+                        args=[builder.import_ref(node) for node in converted[1:]],
+                    ),
+                ),
+            ),
+        )
+        return builder.publish().ref("nodes", node_index), None
+    assert isinstance(declaration, Ref)
     if declaration.role not in {"declarations", "primitives"}:
         msg = "Call authoring requires a declaration reference"
         raise TypeError(msg)
@@ -136,74 +199,15 @@ def _author_call(  # noqa: C901, PLR0912
     output: int | None
     match kind:
         case pb.Primitive():
-            if kind.typing is not None and kind.typing.field == "application":
-                if plan_only:
-                    msg = "Call planning requires a concrete signature"
-                    raise ValueError(msg)
-                if view_index is None or not presentation(declaration).views:
-                    msg = "Function application requires its canonical Python view"
-                    raise ValueError(msg)
-                # Check the admitted structural owner, including mutation/tail
-                # exclusions, through the same presentation index as imports.
-                Catalog.from_refs((declaration,))
-                application_view = presentation(declaration).views[view_index]
-                if application_view.owner is not None:
-                    msg = "Function application requires its structural function owner"
-                    raise ValueError(msg)
-                if receiver is _OMITTED:
-                    if not args:
-                        msg = "Missing receiver for unbound method"
-                        raise TypeError(msg)
-                    receiver, *remaining = args
-                    args = tuple(remaining)
-                first = receiver if isinstance(receiver, Ref) else node_of(receiver)
-                if first is None:
-                    msg = "Function application requires a function expression"
-                    raise TypeError(msg)
-                function_node: pb.Node = first.read()
-                function_sort = first.owner.ref("sorts", function_node.sort_id)
-                function_type: pb.Sort = function_sort.read()
-                if function_type.kind is None or function_type.kind.field != "func":
-                    msg = "Function application requires a Func sort"
-                    raise TypeError(msg)
-                infer_sort(function_sort, function_sort, 0, {})
-                parameter = application_view.params[0]
-                bound = Signature([Parameter(parameter.name, Parameter.VAR_POSITIONAL)]).bind(*args, **kwargs)
-                supplied = bound.arguments.get(parameter.name, ())
-                assert isinstance(supplied, tuple)
-                if len(supplied) != len(function_type.kind.value.params):
-                    raise TypeError(f"Function application expects {len(function_type.kind.value.params)} arguments")
-                converted = [first]
-                for index, value in zip(function_type.kind.value.params, supplied, strict=True):
-                    expected = function_sort.owner.ref("sorts", index)
-                    child = value if isinstance(value, Ref) else node_of(value)
-                    if child is None or StructuralView(
-                        child.owner.ref("sorts", child.read().sort_id)
-                    ) != StructuralView(expected):
-                        child = convert(expected, value)
-                    infer_sort(expected, child.owner.ref("sorts", child.read().sort_id), 0, {})
-                    converted.append(child)
-                builder = Builder()
-                builder.import_ref(declaration)
-                node_index = builder.add(
-                    "nodes",
-                    pb.Node(
-                        sort_id=builder.import_ref(function_sort.owner.ref("sorts", function_type.kind.value.result)),
-                        kind=Oneof[Literal["call"], pb.Call](
-                            "call", pb.Call(func=kind.name, args=[builder.import_ref(node) for node in converted])
-                        ),
-                    ),
-                )
-                return builder.publish().ref("nodes", node_index), None
-            if kind.typing is None or kind.typing.field != "signature":
-                msg = "Host primitive has no typing form"
+            if kind.signature is None:
+                msg = "Host primitive has no signature"
                 raise ValueError(msg)
-            signature = kind.typing.value
+            signature = kind.signature
             if not signature.has_field("output"):
                 msg = "Host signature has no output"
                 raise ValueError(msg)
             inputs, output = signature.inputs, signature.output
-            binder_size = len(signature.type_params)
+            binder_size = signature.type_param_count
             varargs = signature.varargs
         case pb.Constructor() | pb.Function() | pb.UserDefinedPrimitive():
             inputs, output = kind.inputs, kind.output
@@ -378,8 +382,6 @@ def _author_call(  # noqa: C901, PLR0912
             return []
         if output is not None:
             substitute_sort(declaration.owner.ref("sorts", output), substitutions)
-        if isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "signature":
-            check_type_restrictions(kind.typing.value, substitutions)
         return [
             (substitute_sort(pattern, substitutions), value)
             for pattern, value in zip(patterns, ordered_values, strict=True)
@@ -442,8 +444,6 @@ def _author_call(  # noqa: C901, PLR0912
     if len(substitutions) != binder_size:
         msg = "Not every generic parameter was determined by the call"
         raise TypeConstraintError(msg)
-    if isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "signature":
-        check_type_restrictions(kind.typing.value, substitutions)
     builder = Builder()
     builder.import_ref(declaration)
     node_index = builder.add(
@@ -514,6 +514,7 @@ class _ClassContext:
 
     def _publish_callables(self, catalog: Catalog) -> None:
         """Stage canonical callables, preserving Python attributes and class variables."""
+        assert isinstance(self.runtime_class.__egg_definition__, Ref)
         definition = _definition_key(self.runtime_class.__egg_definition__.read())
         # Bypass the public __dict__ trigger while staging publication.
         namespaces = [
@@ -554,18 +555,30 @@ def _definition_at(origin: Ref, namespace: str, name: str) -> Ref:
         raise ValueError(f"Ambiguous local definition: {namespace} {name!r}")
     if matches:
         return next(iter(matches))
+    role = "primitives" if namespace == "callable" else "primitive_sorts"
+    candidates = (origin.owner.ref(role, index) for index in range(len(origin.owner._slots[role])))
+    selected = tuple(
+        candidate
+        for candidate in candidates
+        if _definition_key(
+            cast("pb.Primitive | pb.PrimitiveSort", candidate.owner._slots[candidate.role][candidate.index])
+        )
+        == (namespace, name)
+    )
+    matches.update(selected)
     for environment in (*origin.owner._environment, origin.owner):
         if (slot := environment._builtin_indices.get((namespace, name))) is not None:
             matches.add(environment.ref(*slot))
     if matches:
-        first, *rest = matches
+        first = selected[0] if selected else next(iter(matches))
+        rest = matches - {first}
         if any(StructuralView(first) != StructuralView(other) for other in rest):
             raise ValueError(f"Conflicting builtin environments: {namespace} {name!r}")
         return first
     raise LookupError(f"No owned canonical definition for {namespace} {name!r}")
 
 
-def _class_for_sort(sort: Ref) -> RuntimeClass:  # noqa: C901, PLR0912
+def _class_for_sort(sort: Ref) -> RuntimeClass:
     """Recover a Python wrapper from its canonical concrete sort record."""
     sort = sort.owner.ref("sorts", sort.index)
     cache = _CLASS_CACHE.setdefault(sort.owner, WeakValueDictionary())
@@ -584,21 +597,7 @@ def _class_for_sort(sort: Ref) -> RuntimeClass:  # noqa: C901, PLR0912
             namespace = "eq_sort"
         case "func":
             infer_sort(sort, sort, 0, {})
-            candidates = []
-            for environment in (*sort.owner._environment, sort.owner):
-                for index in range(len(environment._slots["primitives"])):
-                    primitive_ref = environment.ref("primitives", index)
-                    primitive: pb.Primitive = primitive_ref.read()
-                    if primitive.typing is not None and primitive.typing.field == "application":
-                        candidates.append(primitive_ref)
-            if not candidates:
-                msg = "Function sort has no owned application primitive"
-                raise LookupError(msg)
-            definition = candidates[0]
-            if any(StructuralView(definition) != StructuralView(other) for other in candidates[1:]):
-                msg = "Function sort has conflicting application primitives"
-                raise ValueError(msg)
-            result = RuntimeClass(definition, sort=sort)
+            result = RuntimeClass(_Intrinsic.APPLY, sort=sort)
             cache[sort.index] = result
             return result
         case _:
@@ -638,24 +637,21 @@ class _RuntimeClassAlias(GenericAlias):
 class RuntimeClass(type):
     """A Python type presentation over an owned sort/family declaration."""
 
-    def __new__(cls, definition: Ref, *, sort: Ref | None = None, arguments: tuple[object, ...] = ()) -> RuntimeClass:  # noqa: C901, PLR0912
-        declaration: pb.Declaration | pb.Primitive | pb.PrimitiveSort = definition.read()
-        if isinstance(declaration, pb.Declaration):
-            assert declaration.kind is not None
-            kind = declaration.kind.value
-        else:
-            kind = declaration
-        structural_function = (
-            isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "application"
+    def __new__(  # noqa: C901, PLR0912
+        cls, definition: Ref | _Intrinsic, *, sort: Ref | None = None, arguments: tuple[object, ...] = ()
+    ) -> RuntimeClass:
+        structural_function = definition is _Intrinsic.APPLY
+        declaration = definition.read() if isinstance(definition, Ref) else None
+        kind = (
+            declaration.kind.value
+            if isinstance(declaration, pb.Declaration) and declaration.kind is not None
+            else declaration
         )
         if structural_function:
-            catalog = Catalog.from_refs((definition,))
-            if (("function", ""), "__call__") not in catalog.members:
-                msg = "Function class requires a canonical Python application view"
-                raise ValueError(msg)
             binding = None
             path = ("egglog", "builtins", "UnstableFn")
         elif isinstance(kind, pb.PrimitiveSort | pb.EqSort):
+            assert isinstance(definition, Ref)
             binding = presentation(definition).type_view
             path = tuple(binding.path) if binding is not None else ("egglog", "builtins", kind.name)
         else:
@@ -666,7 +662,7 @@ class RuntimeClass(type):
             raise ValueError(msg)
         namespace = {
             "__module__": ".".join(path[:-1]),
-            "__doc__": declaration.doc if declaration.has_field("doc") else None,
+            "__doc__": declaration.doc if declaration is not None and declaration.has_field("doc") else None,
             **{name: RuntimeClassDescriptor(name) for name in CLASS_DESCRIPTOR_METHODS},
         }
         result = type.__new__(cls, path[-1], (), namespace)
@@ -676,8 +672,10 @@ class RuntimeClass(type):
         result.__egg_attr_cache__ = {}
         result.__egg_hooks__ = {}
         result.__egg_pending__ = None
-        result.__egg_context__ = next(
-            (context for context in definition.owner._keepalive if isinstance(context, _ClassContext)), None
+        result.__egg_context__ = (
+            next((context for context in definition.owner._keepalive if isinstance(context, _ClassContext)), None)
+            if isinstance(definition, Ref)
+            else None
         )
         if result.__egg_context__ is not None:
             result.__egg_context__.runtime_class = result
@@ -689,6 +687,8 @@ class RuntimeClass(type):
             elif "UnstableFn" in _BASE_CLASSES:
                 result.__egg_hooks__ = _BASE_CLASSES["UnstableFn"].__egg_hooks__
         elif sort is None and not arguments:
+            assert isinstance(definition, Ref)
+            assert isinstance(kind, pb.PrimitiveSort | pb.EqSort)
             arity = kind.arity if isinstance(kind, pb.PrimitiveSort) else 0
             if arity:
                 labels = binding.type_params if binding is not None else ()
@@ -717,7 +717,9 @@ class RuntimeClass(type):
 
     if TYPE_CHECKING:
 
-        def __init__(cls, definition: Ref, *, sort: Ref | None = None, arguments: tuple[object, ...] = ()) -> None: ...
+        def __init__(
+            cls, definition: Ref | _Intrinsic, *, sort: Ref | None = None, arguments: tuple[object, ...] = ()
+        ) -> None: ...
 
     else:
 
@@ -726,7 +728,7 @@ class RuntimeClass(type):
             # its original (name, bases, namespace) arguments here instead.
             pass
 
-    __egg_definition__: Ref
+    __egg_definition__: Ref | _Intrinsic
     __egg_sort__: Ref | None
     __egg_arguments__: tuple[object, ...]
     __egg_attr_cache__: dict[str, object]
@@ -751,14 +753,7 @@ class RuntimeClass(type):
         return cls == actual if cls.__egg_sort__ is not None else cls.__egg_definition__ == actual.__egg_definition__
 
     def __call__(cls, *args: object, **kwargs: object) -> RuntimeExpr | None:  # noqa: C901, PLR0912
-        declaration: pb.Declaration | pb.Primitive | pb.PrimitiveSort = cls.__egg_definition__.read()
-        if isinstance(declaration, pb.Declaration):
-            assert declaration.kind is not None
-            kind = declaration.kind.value
-        else:
-            kind = declaration
-        name = kind.name
-        if isinstance(kind, pb.Primitive):
+        if cls.__egg_definition__ is _Intrinsic.APPLY:
             if kwargs or not args:
                 msg = "UnstableFn requires a callable and positional prefix arguments"
                 raise TypeError(msg)
@@ -788,9 +783,15 @@ class RuntimeClass(type):
             if not isinstance(function, RuntimeFunction):
                 msg = "UnstableFn requires a named RuntimeFunction"
                 raise TypeError(msg)
-            return _function_value(
-                function, tuple(captures), cls.__egg_sort__, environment=(cls.__egg_definition__.owner,)
-            )
+            return _function_value(function, tuple(captures), cls.__egg_sort__, environment=())
+        assert isinstance(cls.__egg_definition__, Ref)
+        declaration: pb.Declaration | pb.Primitive | pb.PrimitiveSort = cls.__egg_definition__.read()
+        if isinstance(declaration, pb.Declaration):
+            assert declaration.kind is not None
+            kind = declaration.kind.value
+        else:
+            kind = declaration
+        name = kind.name
         if isinstance(kind, pb.PrimitiveSort) and name in LIT_IDENTS:
             if kwargs or len(args) != (0 if name == "Unit" else 1):
                 raise TypeError(f"{cls} expects {'zero' if name == 'Unit' else 'one'} positional literal argument")
@@ -840,14 +841,12 @@ class RuntimeClass(type):
 
     def __getitem__(cls, arguments: object) -> RuntimeClass | _RuntimeClassAlias:
         values = arguments if isinstance(arguments, tuple) else (arguments,)
-        declaration: pb.Declaration | pb.Primitive | pb.PrimitiveSort = cls.__egg_definition__.read()
-        if isinstance(declaration, pb.Declaration):
-            assert declaration.kind is not None
-            kind = declaration.kind.value
-        else:
-            kind = declaration
-        structural_function = (
-            isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "application"
+        structural_function = cls.__egg_definition__ is _Intrinsic.APPLY
+        declaration = cls.__egg_definition__.read() if isinstance(cls.__egg_definition__, Ref) else None
+        kind = (
+            declaration.kind.value
+            if isinstance(declaration, pb.Declaration) and declaration.kind is not None
+            else declaration
         )
         if (structural_function and not values) or (
             not structural_function and (not isinstance(kind, pb.PrimitiveSort) or len(values) != kind.arity)
@@ -861,20 +860,21 @@ class RuntimeClass(type):
             msg = "Type arguments must resolve to canonical sorts"
             raise TypeError(msg)
         builder = Builder()
-        builder.import_ref(cls.__egg_definition__)
+        if isinstance(cls.__egg_definition__, Ref):
+            builder.import_ref(cls.__egg_definition__)
         indices = [builder.import_ref(cast("Ref", cast("RuntimeClass", value).__egg_sort__)) for value in values]
-        index = builder.add(
-            "sorts",
-            pb.Sort(
+        if structural_function:
+            sort_record = pb.Sort(
                 kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=indices[1:], result=indices[0]))
             )
-            if structural_function
-            else pb.Sort(
+        else:
+            assert isinstance(kind, pb.PrimitiveSort)
+            sort_record = pb.Sort(
                 kind=Oneof[Literal["application"], pb.SortApplication](
                     "application", pb.SortApplication(name=kind.name, args=indices)
                 )
-            ),
-        )
+            )
+        index = builder.add("sorts", sort_record)
         return _class_for_sort(builder.publish().ref("sorts", index))
 
     def __getattr__(  # noqa: C901, PLR0911, PLR0912
@@ -898,7 +898,12 @@ class RuntimeClass(type):
                 else ()
             )
         if name == "__origin__":
+            if cls.__egg_definition__ is _Intrinsic.APPLY:
+                if cls.__egg_arguments__:
+                    return _BASE_CLASSES["UnstableFn"]
+                raise AttributeError(name)
             if cls.__egg_arguments__:
+                assert isinstance(cls.__egg_definition__, Ref)
                 declaration: pb.Declaration | pb.Primitive | pb.PrimitiveSort = cls.__egg_definition__.read()
                 if isinstance(declaration, pb.Declaration):
                     assert declaration.kind is not None
@@ -911,6 +916,15 @@ class RuntimeClass(type):
             raise AttributeError(name)
         if name in cls.__egg_hooks__:
             return cls.__egg_hooks__[name]
+        if cls.__egg_definition__ is _Intrinsic.APPLY:
+            if name == "__call__":
+                if name not in cls.__egg_attr_cache__:
+                    cls.__egg_attr_cache__[name] = RuntimeFunction(_Intrinsic.APPLY, bound=cls)
+                return cls.__egg_attr_cache__[name]
+            if _missing_ok:
+                return _OMITTED
+            raise AttributeError(f"{cls} has no intrinsic Python member {name!r}")
+        assert isinstance(cls.__egg_definition__, Ref)
         # Even a cached prefix member must wait for another thread's active
         # attempt. Same-thread reentry uses the already-published declarations.
         if cls.__egg_pending__ is not None:
@@ -1015,7 +1029,7 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
 
     def __init__(
         self,
-        declaration: Ref | Callable[[], Ref],
+        declaration: Ref | Callable[[], Ref] | _Intrinsic,
         view_index: int | None = None,
         bound: RuntimeClass | RuntimeExpr | None = None,
         *,
@@ -1024,6 +1038,7 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         pending_presentation: Presentation | None = None,
         pending_values: bool = False,
     ) -> None:
+        self.__egg_intrinsic__ = declaration if isinstance(declaration, _Intrinsic) else None
         self.__egg_declaration__ = declaration if isinstance(declaration, Ref) else None
         self.__egg_prepare__ = declaration if callable(declaration) else None
         self.__egg_pending_declaration__ = pending_declaration
@@ -1042,20 +1057,18 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
                 kind = record.kind.value
             else:
                 kind = record
-            if not isinstance(kind, pb.Primitive) or kind.typing is None or kind.typing.field != "signature":
+            if not isinstance(kind, pb.Primitive) or kind.signature is None:
                 msg = "Type bindings require a generic callable signature"
                 raise TypeConstraintError(msg)
-            signature = kind.typing.value
+            signature = kind.signature
             indices = [index for index, _ in type_bindings]
             if indices != sorted(set(indices)) or any(
-                index < 0 or index >= len(signature.type_params) for index in indices
+                index < 0 or index >= signature.type_param_count for index in indices
             ):
                 msg = "Invalid callable type binding indices"
                 raise TypeConstraintError(msg)
-            for index, sort in type_bindings:
+            for _index, sort in type_bindings:
                 infer_sort(sort, sort, 0, {})
-                if index in signature.equality_type_params and sort.read().kind.field != "eq":
-                    raise TypeConstraintError(f"Type parameter {index} requires an equality sort")
         self.__egg_type_bindings__ = tuple(
             (index, sort.owner.ref("sorts", sort.index)) for index, sort in type_bindings
         )
@@ -1072,6 +1085,9 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
     def __egg_ref__(self) -> Ref:
         """Materialize raw Python source once, publishing only a complete record."""
         with self.__egg_lock__:
+            if self.__egg_intrinsic__ is not None:
+                msg = "Intrinsic function application has no canonical declaration"
+                raise TypeError(msg)
             if self.__egg_declaration__ is not None:
                 return self.__egg_declaration__
             if self.__egg_error__ is not None:
@@ -1107,6 +1123,8 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
 
     @property
     def __module__(self) -> str | None:  # type: ignore[override]
+        if self.__egg_intrinsic__ is not None:
+            return "egglog.builtins"
         if self.__egg_view__ is None or not presentation(self.__egg_ref__).views:
             return None
         view = presentation(self.__egg_ref__).views[self.__egg_view__]
@@ -1116,6 +1134,8 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
 
     @property
     def __doc__(self) -> str | None:  # type: ignore[override]
+        if self.__egg_intrinsic__ is not None:
+            return None
         record: pb.Declaration | pb.Primitive = self.__egg_ref__.read()
         return record.doc if record.has_field("doc") else None
 
@@ -1126,7 +1146,7 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         owner = bound.__egg_sort__ if isinstance(bound, RuntimeClass) else None
         receiver = bound if isinstance(bound, RuntimeExpr) else _OMITTED
         result = _author_call(
-            self.__egg_ref__,
+            self.__egg_intrinsic__ or self.__egg_ref__,
             self.__egg_view__,
             args,
             kwargs,
@@ -1145,6 +1165,8 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         return RuntimeExpr(root)
 
     def __str__(self) -> str:
+        if self.__egg_intrinsic__ is not None:
+            return f"{self.__egg_bound__ if self.__egg_bound__ is not None else 'UnstableFn'}.__call__"
         record: pb.Declaration | pb.Primitive = self.__egg_ref__.read()
         if isinstance(record, pb.Declaration):
             assert record.kind is not None
@@ -1164,6 +1186,8 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
 
     def _identity(self) -> tuple[object, ...]:
         """Compare callable records or named user functions, without binding."""
+        if self.__egg_intrinsic__ is not None:
+            return (self.__egg_intrinsic__,)
         reference = self.__egg_ref__
         record: pb.Declaration | pb.Primitive = reference.read()
         if (
@@ -1216,6 +1240,32 @@ class RuntimeFunction(metaclass=RuntimeFunctionMeta):
         )
 
 
+def _apply_adapter_name(function_sort: Ref) -> str:
+    """Identify a concrete adapter by type structure, independent of arena layout."""
+    function_sort = function_sort.owner.ref(function_sort.role, function_sort.index)
+    digests: dict[Ref, bytes] = {}
+    active: set[Ref] = set()
+    pending = [(function_sort, False)]
+    while pending:
+        current, leaving = pending.pop()
+        current = current.owner.ref(current.role, current.index)
+        if current in digests:
+            continue
+        shape, children = _structural_parts(current)
+        if leaving:
+            active.remove(current)
+            token = shape, tuple(digests[child] for child, _ in children)
+            digests[current] = sha256(repr(token).encode()).digest()
+            continue
+        if current in active:
+            msg = "Function adapter types cannot contain cycles"
+            raise TypeConstraintError(msg)
+        active.add(current)
+        pending.append((current, True))
+        pending.extend((child, False) for child, _ in reversed(children))
+    return "__egglog_python_apply_" + digests[function_sort].hex()
+
+
 def _function_value(
     function: RuntimeFunction,
     captures: tuple[object, ...],
@@ -1225,7 +1275,34 @@ def _function_value(
     environment: tuple[Owner, ...] = (),
 ) -> RuntimeExpr:
     """Materialize one strictly closed named function value and its ordered prefix."""
-    sort, children, _ = _partial_function(function, captures, expected, context=context, environment=environment)
+    sort, children, application_sort = _partial_function(
+        function, captures, expected, context=context, environment=environment
+    )
+    if function.__egg_intrinsic__ is _Intrinsic.APPLY:
+        from .egraph import _compile_python_function  # noqa: PLC0415
+
+        assert application_sort is not None
+        application_type: pb.Sort = application_sort.read()
+        assert application_type.kind is not None
+        assert application_type.kind.field == "func"
+
+        def apply(receiver, *args):
+            return RuntimeFunction(_Intrinsic.APPLY)(receiver, *args)
+
+        assert isinstance(apply, FunctionType)
+        origin = RuntimeFunction(_Intrinsic.APPLY, bound=_class_for_sort(application_sort))
+        adapter, closed = _compile_python_function(
+            apply,
+            [
+                application_sort,
+                *(application_sort.owner.ref("sorts", index) for index in application_type.kind.value.params),
+            ],
+            application_sort.owner.ref("sorts", application_type.kind.value.result),
+            keepalive=(_ApplyAdapter(origin),),
+            name=_apply_adapter_name(application_sort),
+        )
+        assert not closed
+        return _function_value(adapter, children, sort, environment=environment)
     record: pb.Declaration | pb.Primitive = function.__egg_ref__.read()
     if isinstance(record, pb.Declaration):
         assert record.kind is not None
@@ -1276,18 +1353,15 @@ def _partial_function(  # noqa: C901, PLR0912
     """
     from .conversion import resolve_literal  # noqa: PLC0415
 
-    declaration = function.__egg_ref__
-    record: pb.Declaration | pb.Primitive = declaration.read()
+    declaration = function.__egg_intrinsic__ or function.__egg_ref__
+    record = declaration.read() if isinstance(declaration, Ref) else None
     if isinstance(record, pb.Declaration) and record.kind is None:
         msg = "Function value callable has no kind"
         raise ValueError(msg)
-    if isinstance(record, pb.Declaration):
-        assert record.kind is not None
-        kind = record.kind.value
-    else:
-        kind = record
+    kind = record.kind.value if isinstance(record, pb.Declaration) and record.kind is not None else record
     view = None
     if function.__egg_view__ is not None:
+        assert isinstance(declaration, Ref)
         if not presentation(declaration).views:
             msg = "Function value Python view is absent"
             raise ValueError(msg)
@@ -1317,39 +1391,38 @@ def _partial_function(  # noqa: C901, PLR0912
     substitutions: dict[int, Ref] = dict(function.__egg_type_bindings__)
     binder_size = 0
     tail: list[Ref] = []
-    application = False
-    if isinstance(kind, pb.Primitive):
-        if kind.typing is None:
-            msg = "Function value callable has no typing form"
-            raise ValueError(msg)
-        if kind.typing.field == "signature":
-            signature = kind.typing.value
-            if not signature.has_field("output"):
-                msg = "Function value signature has no output"
-                raise ValueError(msg)
-            binder_size = len(signature.type_params)
-            patterns = [declaration.owner.ref("sorts", argument.sort) for argument in signature.inputs]
-            tail = [declaration.owner.ref("sorts", argument.sort) for argument in signature.varargs]
-            output = declaration.owner.ref("sorts", signature.output)
+    application = declaration is _Intrinsic.APPLY
+    if application:
+        if captures and isinstance(captures[0], RuntimeExpr):
+            first = captures[0].__egg_ref__
+            function_sort = first.owner.ref("sorts", first.read().sort_id)
+        elif isinstance(bound, RuntimeClass) and bound.__egg_sort__ is not None:
+            function_sort = bound.__egg_sort__
+        elif expected_params and expected_params[0] is not None:
+            function_sort = expected_params[0]
         else:
-            application = True
-            if captures and isinstance(captures[0], RuntimeExpr):
-                first = captures[0].__egg_ref__
-                function_sort = first.owner.ref("sorts", first.read().sort_id)
-            elif expected_params and expected_params[0] is not None:
-                function_sort = expected_params[0]
-            else:
-                msg = "Partial application needs its concrete function input sort"
-                raise TypeConstraintError(msg)
-            actual: pb.Sort = function_sort.read()
-            if actual.kind is None or actual.kind.field != "func":
-                msg = "Partial application input must have a Func sort"
-                raise TypeConstraintError(msg)
-            infer_sort(function_sort, function_sort, 0, {})
-            patterns = [function_sort]
-            tail = [function_sort.owner.ref("sorts", index) for index in actual.kind.value.params]
-            output = function_sort.owner.ref("sorts", actual.kind.value.result)
+            msg = "Partial application needs its concrete function input sort"
+            raise TypeConstraintError(msg)
+        actual: pb.Sort = function_sort.read()
+        if actual.kind is None or actual.kind.field != "func":
+            msg = "Partial application input must have a Func sort"
+            raise TypeConstraintError(msg)
+        infer_sort(function_sort, function_sort, 0, {})
+        patterns = [function_sort]
+        tail = [function_sort.owner.ref("sorts", index) for index in actual.kind.value.params]
+        output = function_sort.owner.ref("sorts", actual.kind.value.result)
+    elif isinstance(kind, pb.Primitive):
+        assert isinstance(declaration, Ref)
+        signature = kind.signature
+        if signature is None or not signature.has_field("output"):
+            msg = "Function value signature has no output"
+            raise ValueError(msg)
+        binder_size = signature.type_param_count
+        patterns = [declaration.owner.ref("sorts", argument.sort) for argument in signature.inputs]
+        tail = [declaration.owner.ref("sorts", argument.sort) for argument in signature.varargs]
+        output = declaration.owner.ref("sorts", signature.output)
     elif isinstance(kind, pb.Constructor | pb.Function | pb.UserDefinedPrimitive):
+        assert isinstance(declaration, Ref)
         patterns = [declaration.owner.ref("sorts", argument.sort) for argument in kind.inputs]
         output = declaration.owner.ref("sorts", kind.output)
     else:
@@ -1433,14 +1506,9 @@ def _partial_function(  # noqa: C901, PLR0912
     if len(substitutions) != binder_size:
         msg = "Not every generic parameter was determined by the function value"
         raise TypeConstraintError(msg)
-    if isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "signature":
-        check_type_restrictions(kind.typing.value, substitutions)
-    owner = None
-    if view is not None:
-        if view.owner is not None:
-            owner = substitute_sort(view.owner, substitutions)
-        elif application:
-            owner = patterns[0]
+    owner = patterns[0] if application else None
+    if view is not None and view.owner is not None:
+        owner = substitute_sort(view.owner, substitutions)
     # Inference never depends on converting a host capture. A speculative
     # prefix must be completely typable before any converter can have effects.
     children = tuple(
@@ -1450,7 +1518,8 @@ def _partial_function(  # noqa: C901, PLR0912
         for pattern, value in zip(patterns, captures, strict=False)
     )
     builder = Builder(environment=environment)
-    builder.import_ref(declaration)
+    if isinstance(declaration, Ref):
+        builder.import_ref(declaration)
     index = builder.add(
         "sorts",
         pb.Sort(
@@ -1566,7 +1635,7 @@ def _get_expr_member(
     function = RuntimeClass.__getattr__(cls, name, missing_ok, method_only)
     if not isinstance(function, RuntimeFunction):
         return function
-    result = RuntimeFunction(function.__egg_ref__, function.__egg_view__, expression)
+    result = RuntimeFunction(function.__egg_intrinsic__ or function.__egg_ref__, function.__egg_view__, expression)
     if (
         function.__egg_view__ is not None
         and presentation(function.__egg_ref__).views[function.__egg_view__].kind == CallKind.PROPERTY
@@ -1579,15 +1648,7 @@ def _numeric_method_cost(function: RuntimeFunction, owner: Ref, left: object, ri
     """Price the actual mapped signature without materializing converted operands."""
     from .conversion import _conversion_cost, resolve_literal  # noqa: PLC0415
 
-    record: pb.Declaration | pb.Primitive = function.__egg_ref__.read()
-    if isinstance(record, pb.Declaration):
-        assert record.kind is not None
-        kind = record.kind.value
-    else:
-        kind = record
-    if function.__egg_view__ is None or (
-        isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "application"
-    ):
+    if function.__egg_intrinsic__ is not None or function.__egg_view__ is None:
         return None
     if presentation(function.__egg_ref__).views[function.__egg_view__].mutates is not None:
         return None
@@ -1696,7 +1757,6 @@ def resolve_type_annotation(tp: object) -> Ref | TypeVar | RuntimeClass:
             msg = "Callable annotations require concrete parameter and result sorts"
             raise NotImplementedError(msg)
         builder = Builder()
-        builder.import_ref(_BASE_CLASSES["UnstableFn"].__egg_definition__)
         indices = [builder.import_ref(cast("Ref", sort)) for sort in sorts]
         index = builder.add(
             "sorts",
@@ -1743,13 +1803,6 @@ def create_callable(
     owner = None
     if view.owner is not None:
         owner = _class_for_sort(owner_sort) if owner_sort is not None else _class_for_sort(view.owner)
-    elif (
-        owner_sort is not None
-        and isinstance(record, pb.Primitive)
-        and record.typing is not None
-        and record.typing.field == "application"
-    ):
-        owner = _class_for_sort(owner_sort)
     if view.kind == CallKind.INITIALIZER:
         if owner is None:
             msg = "An initializer view requires a Python owner"

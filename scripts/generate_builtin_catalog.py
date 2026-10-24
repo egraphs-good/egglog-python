@@ -143,33 +143,8 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
         reserved_names.update({"Callable", "Protocol", "PyObjectFunction", "py_eval_fn"})
         exported.add("py_eval_fn")
 
-    function_protocol = False
-    for declaration in program.primitives:
-        key = "callable", declaration.name
-        kind = declaration
-        if kind.typing is None or kind.typing.field != "application" or key not in surface:
-            continue
-        for view in surface[key].views:
-            if (
-                view.kind != CallKind.METHOD
-                or view.path != ("__call__",)
-                or (view.owner is not None)
-                or not (view.receiver is not None)
-                or view.receiver != 0
-                or len(view.params) != 1
-                or type(view.params[0].core_input) is not int
-                or view.params[0].core_input != 1
-                or view.params[0].name != "args"
-                or (view.params[0].default is not None)
-                or (view.mutates is not None)
-                or (view.tail_repetitions is not None)
-            ):
-                msg = "Unsupported structural function Python static view"
-                raise ValueError(msg)
-            if function_protocol:
-                msg = "Python structural function member collision"
-                raise ValueError(msg)
-            function_protocol = True
+    # Structural function application is a frontend protocol, not a builtin descriptor.
+    function_protocol = True
     if function_protocol:
         # Python presentation policy for the structural owner, not a host family.
         exported.add("UnstableFn")
@@ -317,22 +292,36 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
             # These native definitions have no admitted Python callable surface
             # yet. Conservative free-wrapper generation is a separate runtime gap.
             continue
-        if primitive.typing is not None and primitive.typing.field == "application":
-            # Its exact heterogeneous signature comes from the receiver's FuncSort.
-            # The structural-owner view was validated before rendering any sorts.
-            continue
-        if primitive.typing is None or primitive.typing.field != "signature":
-            msg = "Function application static generation is not supported"
-            raise ValueError(msg)
-        signature = primitive.typing.value
-        restrictions = signature.equality_type_params
-        if list(restrictions) != sorted(set(restrictions)) or any(
-            i >= len(signature.type_params) for i in restrictions
-        ):
-            msg = "Invalid equality type parameter indices"
+        signature = primitive.signature
+        if signature is None:
+            msg = "Builtin primitive requires its semantic signature"
             raise ValueError(msg)
         if len(signature.varargs) > 1 or not signature.has_field("output"):
             msg = "Static callable generation requires a fixed concrete signature"
+            raise ValueError(msg)
+        # Bound scalar counts by the actual referenced sort closure before
+        # creating parameter names; a small malformed packet cannot request
+        # range-sized frontend allocations.
+        pending_sorts = [signature.output, *(argument.sort for argument in [*signature.inputs, *signature.varargs])]
+        seen_sorts = set()
+        referenced_parameters = set()
+        while pending_sorts:
+            index = pending_sorts.pop()
+            if index in seen_sorts:
+                continue
+            seen_sorts.add(index)
+            kind = program.sorts[index].kind
+            assert kind is not None
+            if kind.field == "var":
+                referenced_parameters.add(kind.value)
+            elif kind.field == "application":
+                pending_sorts.extend(kind.value.args)
+            elif kind.field == "func":
+                pending_sorts.extend([kind.value.result, *kind.value.params])
+        if len(referenced_parameters) != signature.type_param_count or any(
+            index >= signature.type_param_count for index in referenced_parameters
+        ):
+            msg = "Static signature requires all generic parameters in its sort closure"
             raise ValueError(msg)
         for view in surface[key].views:
             free = view.kind == CallKind.FUNCTION
@@ -361,11 +350,11 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 if (view.owner is not None) or tuple(view.path[:-1]) != module:
                     msg = "Static free functions require an ownerless builtin view"
                     raise ValueError(msg)
-                if signature.type_params and (signature.varargs or (view.tail_repetitions is not None)):
+                if signature.type_param_count and (signature.varargs or (view.tail_repetitions is not None)):
                     msg = "Generic static free functions require fixed signatures"
                     raise ValueError(msg)
                 function_name = identifier(view.path[-1])
-                parameters = tuple(f"_{function_name}_T{index}" for index in range(len(signature.type_params)))
+                parameters = tuple(f"_{function_name}_T{index}" for index in range(signature.type_param_count))
                 for variable in parameters:
                     if variable in used_names:
                         raise ValueError(f"Python static name collision with a generated TypeVar: {variable}")
@@ -389,7 +378,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                         or (argument := view.owner.owner.ref("sorts", index).read().kind) is None
                         or argument.field != "var"
                         or argument.value < 0
-                        or argument.value >= len(signature.type_params)
+                        or argument.value >= signature.type_param_count
                         or argument.value in owner_parameters
                     ):
                         msg = "Generic static owner requires distinct in-range family parameters"
@@ -397,7 +386,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                     owner_parameters[argument.value] = variables[family_name][position]
                 parameters = tuple(
                     owner_parameters.get(index, f"_{names[family_name]}_{name}_T{index}")
-                    for index in range(len(signature.type_params))
+                    for index in range(signature.type_param_count)
                 )
                 for index, variable in enumerate(parameters):
                     if index not in owner_parameters:
@@ -480,7 +469,7 @@ def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | 
                 default = ""
                 if parameter.default is not None:
                     if (
-                        signature.type_params
+                        signature.type_param_count
                         or (specialized and parameter.core_input >= len(signature.inputs))
                         or sort_type(parameter.default.owner.ref("sorts", parameter.default.read().sort_id))
                         != sort_type(expected_sort)

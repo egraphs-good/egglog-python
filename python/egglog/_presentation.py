@@ -173,16 +173,14 @@ def validate_view(reference: Ref, view: CallPresentation) -> None:  # noqa: C901
     else:
         kind = record
     if isinstance(kind, pb.Primitive):
-        if kind.typing is None:
-            msg = "Python callable primitive has no typing"
+        signature = kind.signature
+        if signature is None:
+            msg = "Python callable primitive has no signature"
             raise ValueError(msg)
-        if kind.typing.field == "application":
-            return  # Catalog checks the dedicated structural application form.
-        signature = kind.typing.value
         if not signature.has_field("output"):
             msg = "Python callable signature has no output"
             raise ValueError(msg)
-        inputs, tail, output, binder = signature.inputs, signature.varargs, signature.output, len(signature.type_params)
+        inputs, tail, output, binder = signature.inputs, signature.varargs, signature.output, signature.type_param_count
     elif isinstance(kind, pb.Constructor | pb.Function | pb.UserDefinedPrimitive):
         inputs, tail, output, binder = kind.inputs, [], kind.output, 0
     elif isinstance(kind, pb.Relation):

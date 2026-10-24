@@ -129,7 +129,7 @@ def get_literal_value(x: object) -> object:  # noqa: C901, PLR0911, PLR0912 -- e
         case "f64_bits":
             return struct.unpack("!d", struct.pack("!Q", value.value))[0]
         case "partial_call":
-            from .runtime import _partial_function, create_callable  # noqa: PLC0415
+            from .runtime import _ApplyAdapter, _partial_function, create_callable  # noqa: PLC0415
 
             reference = x.__egg_ref__
             function_sort = reference.owner.ref("sorts", node.sort_id)
@@ -144,11 +144,7 @@ def get_literal_value(x: object) -> object:  # noqa: C901, PLR0911, PLR0912 -- e
                 kind = record.kind.value
             else:
                 kind = record
-            signature = (
-                kind.typing.value
-                if isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "signature"
-                else None
-            )
+            signature = kind.signature if isinstance(kind, pb.Primitive) and kind.signature is not None else None
             fixed = (
                 len(signature.inputs)
                 if signature is not None
@@ -200,7 +196,7 @@ def get_literal_value(x: object) -> object:  # noqa: C901, PLR0911, PLR0912 -- e
                         infer_sort(
                             view.owner,
                             owner_sort,
-                            len(signature.type_params),
+                            signature.type_param_count,
                             owner_bindings,
                         )
                 type_bindings = tuple((index, bound) for index, bound in type_bindings if index not in owner_bindings)
@@ -210,6 +206,9 @@ def get_literal_value(x: object) -> object:  # noqa: C901, PLR0911, PLR0912 -- e
             if not isinstance(function, RuntimeFunction | RuntimeClass):
                 msg = "Function value has no callable Python presentation"
                 raise TypeError(msg)
+            origin = next((value for value in declaration.owner._keepalive if isinstance(value, _ApplyAdapter)), None)
+            if origin is not None:
+                function = origin.function
             return partial(function, *children) if children else function
         case _:
             # Containers have their own .value protocols, retaining symbolic
@@ -264,6 +263,39 @@ def get_var_name(x: object) -> str | None:
 def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, tuple[RuntimeExpr, ...]] | None:  # noqa: C901, PLR0912
     """Select a declaration's Python view and restore its argument ordering."""
     node: pb.Node = x.__egg_ref__.read()
+    if node.kind is not None and node.kind.field == "apply":
+        from .runtime import _Intrinsic  # noqa: PLC0415
+
+        application = node.kind.value
+        if not application.has_field("function"):
+            msg = "Function application has no function input"
+            raise ValueError(msg)
+        receiver = x.__egg_ref__.owner.ref("nodes", application.function)
+        function_sort = receiver.owner.ref("sorts", receiver.read().sort_id)
+        function_type: pb.Sort = function_sort.read()
+        if (
+            function_type.kind is None
+            or function_type.kind.field != "func"
+            or len(application.args) != len(function_type.kind.value.params)
+        ):
+            msg = "Function application has invalid argument sorts or arity"
+            raise ValueError(msg)
+        infer_sort(
+            function_sort.owner.ref("sorts", function_type.kind.value.result),
+            x.__egg_ref__.owner.ref("sorts", node.sort_id),
+            0,
+            {},
+        )
+        arguments = tuple(RuntimeExpr(x.__egg_ref__.owner.ref("nodes", index)) for index in application.args)
+        for argument, expected in zip(arguments, function_type.kind.value.params, strict=True):
+            child = argument.__egg_ref__
+            infer_sort(
+                function_sort.owner.ref("sorts", expected), child.owner.ref("sorts", child.read().sort_id), 0, {}
+            )
+        return RuntimeFunction(_Intrinsic.APPLY, bound=_class_for_sort(function_sort)), (
+            RuntimeExpr(receiver),
+            *arguments,
+        )
     if node.kind is None or node.kind.field != "call":
         return None
     call = node.kind.value
@@ -275,11 +307,7 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
         kind = record.kind.value
     else:
         kind = record
-    signature = (
-        kind.typing.value
-        if isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "signature"
-        else None
-    )
+    signature = kind.signature if isinstance(kind, pb.Primitive) and kind.signature is not None else None
     bindings: tuple[tuple[int, Ref], ...] = ()
     type_bindings = ()
     if signature is not None or isinstance(kind, pb.Function | pb.Constructor | pb.UserDefinedPrimitive):
@@ -299,33 +327,6 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
         raise ValueError(msg)
     fixed = len(signature.inputs) if signature is not None else len(arguments)
     tail_width = len(signature.varargs) if signature is not None else 0
-    application = isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "application"
-    if application:
-        if not arguments:
-            msg = "Function application has no function input"
-            raise ValueError(msg)
-        function = arguments[0].__egg_ref__
-        function_sort = function.owner.ref("sorts", function.read().sort_id)
-        function_type: pb.Sort = function_sort.read()
-        if (
-            function_type.kind is None
-            or function_type.kind.field != "func"
-            or len(arguments) != len(function_type.kind.value.params) + 1
-        ):
-            msg = "Function application has invalid argument sorts or arity"
-            raise ValueError(msg)
-        infer_sort(
-            function_sort.owner.ref("sorts", function_type.kind.value.result),
-            x.__egg_ref__.owner.ref("sorts", node.sort_id),
-            0,
-            {},
-        )
-        for argument, expected in zip(arguments[1:], function_type.kind.value.params, strict=True):
-            child = argument.__egg_ref__
-            infer_sort(
-                function_sort.owner.ref("sorts", expected), child.owner.ref("sorts", child.read().sort_id), 0, {}
-            )
-        fixed, tail_width = 1, 1
     if (
         len(arguments) < fixed
         or (len(arguments) - fixed) % (tail_width or 1)
@@ -365,24 +366,22 @@ def _deconstruct_call(x: RuntimeExpr) -> tuple[RuntimeClass | RuntimeFunction, t
     if view.kind == CallKind.INITIALIZER:
         return _class_for_sort(x.__egg_ref__.owner.ref("sorts", node.sort_id)), tuple(ordered)
     owner = None
-    if (view.owner is not None) or application:
+    if view.owner is not None:
         owner_sort = None
         if view.receiver is not None:
             receiver = arguments[view.receiver].__egg_ref__
             owner_sort = receiver.owner.ref("sorts", receiver.read().sort_id)
-        elif view.owner is not None:
+        else:
             owner_sort = substitute_sort(view.owner, dict(bindings))
-        if owner_sort is not None:
-            if view.owner is not None:
-                pattern = view.owner
-                size = len(signature.type_params) if signature is not None else 0
-                infer_sort(pattern, owner_sort, size, dict(bindings))
-                # A concrete owner already carries its own specialization.
-                # Keep only result bindings absent from that owner.
-                owner_bindings: dict[int, Ref] = {}
-                infer_sort(pattern, owner_sort, size, owner_bindings)
-                type_bindings = tuple((index, sort) for index, sort in type_bindings if index not in owner_bindings)
-            owner = _class_for_sort(owner_sort)
+        pattern = view.owner
+        size = signature.type_param_count if signature is not None else 0
+        infer_sort(pattern, owner_sort, size, dict(bindings))
+        # A concrete owner already carries its own specialization.
+        # Keep only result bindings absent from that owner.
+        owner_bindings: dict[int, Ref] = {}
+        infer_sort(pattern, owner_sort, size, owner_bindings)
+        type_bindings = tuple((index, sort) for index, sort in type_bindings if index not in owner_bindings)
+        owner = _class_for_sort(owner_sort)
     return RuntimeFunction(declaration, view_index, owner, type_bindings=type_bindings), tuple(ordered)
 
 
@@ -407,5 +406,7 @@ def get_callable_args(x: object, fn: object = None) -> tuple[RuntimeExpr, ...] |
     if isinstance(actual, RuntimeClass) and isinstance(fn, RuntimeClass):
         return arguments if actual.__egg_definition__ == fn.__egg_definition__ else None
     if isinstance(actual, RuntimeFunction) and isinstance(fn, RuntimeFunction):
+        if actual.__egg_intrinsic__ is not None or fn.__egg_intrinsic__ is not None:
+            return arguments if actual.__egg_intrinsic__ == fn.__egg_intrinsic__ else None
         return arguments if actual.__egg_ref__ == fn.__egg_ref__ or actual._identity() == fn._identity() else None
     return None

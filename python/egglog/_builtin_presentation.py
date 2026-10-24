@@ -1062,21 +1062,6 @@ DATA = json.loads(r"""{
         "receiver": 0
       }
     ],
-    "egglog.core.fn.apply": [
-      {
-        "form": "METHOD",
-        "params": [
-          {
-            "coreInput": 1,
-            "name": "args"
-          }
-        ],
-        "path": [
-          "__call__"
-        ],
-        "receiver": 0
-      }
-    ],
     "egglog.core.i64.abs": [
       {
         "form": "METHOD",

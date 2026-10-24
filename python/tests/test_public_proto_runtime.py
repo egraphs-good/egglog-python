@@ -4,6 +4,7 @@
 
 import gc
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from fractions import Fraction
 from functools import partial
@@ -131,6 +132,15 @@ def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyP
     assert expr_parts(consume(partial(combine, i64(10)))) == expr_parts(consume(prefix))
     assert expr_parts(consume(UnstableFn(i64.__invert__))) == expr_parts(consume(i64.__invert__))
     nested = UnstableFn(UnstableFn[i64, i64].__call__, prefix)
+    repeated = UnstableFn(UnstableFn[i64, i64].__call__, copy(prefix))
+    assert expr_parts(nested) == expr_parts(repeated)
+    assert hash(expr_parts(nested)) == hash(expr_parts(repeated))
+    other_prefix = UnstableFn(combine, i64(11))
+    assert expr_parts(nested) != expr_parts(UnstableFn(UnstableFn[i64, i64].__call__, other_prefix))
+    assert expr_parts(nested) != expr_parts(UnstableFn(UnstableFn[f64, f64].__call__, UnstableFn(f64.__neg__)))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(UnstableFn, UnstableFn[i64, i64].__call__, prefix) for _ in range(4)]
+        assert all(expr_parts(future.result()) == expr_parts(nested) for future in futures)
     assert isinstance(nested(i64(2)), i64)
     assert isinstance(nested.value, partial)
     assert nested.value.args == (prefix,)
@@ -141,6 +151,11 @@ def test_named_function_values_author_without_engine(monkeypatch: pytest.MonkeyP
         _ = symbolic.value
     apply = cast("RuntimeExpr", prefix).__getattr__("__call__")
     assert isinstance(apply, RuntimeFunction)
+    assert get_callable_fn(apply(i64(2))) == UnstableFn[i64, i64].__call__
+    assert get_callable_args(apply(i64(2)), UnstableFn[i64, i64].__call__) == (
+        to_runtime_expr(prefix),
+        to_runtime_expr(i64(2)),
+    )
     with pytest.raises(TypeError, match="expects 1 arguments"):
         apply()
     with pytest.raises(TypeError, match="expects 1 arguments"):
@@ -1634,17 +1649,32 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     from egglog import MultiSet  # noqa: PLC0415
-    from egglog.type_constraint_solver import TypeConstraintError  # noqa: PLC0415
 
     class Atom(Expr):
         def __init__(self, value: i64) -> None: ...
 
+    @function
+    def applicability_marker(key: i64) -> i64: ...
+
     a, b = Atom(i64(1)), Atom(i64(2))
     xs = MultiSet(a, b, a)
-    for invalid in (MultiSet(i64(1)), MultiSet(Vec(a)), MultiSet(MultiSet(a))):
-        with pytest.raises(TypeConstraintError, match="requires an equality sort"):
-            invalid.union_values()
     graph = EGraph(xs)
+    invalid_multisets: tuple[MultiSet[i64] | MultiSet[Vec[Atom]] | MultiSet[MultiSet[Atom]], ...] = (
+        MultiSet(i64(1)),
+        MultiSet(Vec(a)),
+        MultiSet(MultiSet(a)),
+    )
+    for index, invalid in enumerate(invalid_multisets):
+        with pytest.raises(EggSmolError) as rejected:
+            graph.register(
+                set_(applicability_marker(i64(index))).to(i64(1)),
+                invalid.union_values(),
+                set_(applicability_marker(i64(index + 10))).to(i64(2)),
+            )
+        error = rejected.value.__dict__["_egglog_proto_error"]
+        assert isinstance(error, pb.Error)
+        assert error.code == pb.ErrorCode.INVALID_PROGRAM
+        assert graph.function_values(applicability_marker) == {}
     graph.check_fail(eq(a).to(b))
     with pytest.raises(EggSmolError):
         graph.check(eq(xs.union_values()).to(a))

@@ -99,19 +99,8 @@ class Catalog:
                     types[path] = ref
                 continue
             views = presentation(ref).views
-            application = (
-                isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "application"
-            )
             for view_index, view in enumerate(views):
                 validate_view(ref, view)
-                if (
-                    isinstance(kind, pb.Primitive)
-                    and kind.typing is not None
-                    and kind.typing.field == "application"
-                    and (view.owner is not None or view.kind != CallKind.METHOD)
-                ):
-                    msg = "Python member has an invalid structural function application owner"
-                    raise ValueError(msg)
                 if view.kind == CallKind.FUNCTION:
                     # Returned callables may have dynamic names that cannot be
                     # spelled as Python identifiers. Qualifiers remain strict;
@@ -137,11 +126,11 @@ class Catalog:
                         msg = "A Python constant must be ownerless and nullary"
                         raise ValueError(msg)
                     if isinstance(kind, pb.Primitive):
-                        if kind.typing is None or kind.typing.field != "signature":
+                        if kind.signature is None:
                             msg = "A Python constant requires a concrete signature"
                             raise ValueError(msg)
-                        signature = kind.typing.value
-                        if signature.inputs or signature.type_params or signature.varargs:
+                        signature = kind.signature
+                        if signature.inputs or signature.type_param_count or signature.varargs:
                             msg = "A Python constant requires a concrete nullary signature"
                             raise ValueError(msg)
                     elif (
@@ -154,7 +143,7 @@ class Catalog:
                         raise ValueError(f"Python binding collision: {path}")
                     constants[path] = ref, view_index
                     continue
-                if not application and view.owner is None:
+                if view.owner is None:
                     msg = "Python member requires an owner"
                     raise ValueError(msg)
                 if view.kind not in {
@@ -167,39 +156,18 @@ class Catalog:
                     msg = "Python member has an invalid presentation kind"
                     raise ValueError(msg)
                 owner_key = None
-                if application:
-                    if (
-                        not isinstance(kind, pb.Primitive)
-                        or kind.typing is None
-                        or kind.typing.field != "application"
-                        or view.kind != CallKind.METHOD
-                        or list(view.path) != ["__call__"]
-                        or view.receiver is None
-                        or view.receiver != 0
-                        or view.mutates is not None
-                        or view.tail_repetitions is not None
-                        or len(view.params) != 1
-                        or view.params[0].core_input != 1
-                        or view.params[0].name != "args"
-                        or view.params[0].default is not None
-                    ):
-                        msg = "Invalid Python structural function application view"
+                owner_sort: pb.Sort = view.owner.read()
+                if owner_sort.kind is None:
+                    msg = "Python member owner has no sort kind"
+                    raise ValueError(msg)
+                match owner_sort.kind.field:
+                    case "eq":
+                        owner_key = "eq_sort", owner_sort.kind.value
+                    case "application":
+                        owner_key = "primitive_sort", owner_sort.kind.value.name
+                    case _:
+                        msg = "Python member requires an equality or host family owner"
                         raise ValueError(msg)
-                    owner_key = "function", ""
-                else:
-                    assert view.owner is not None
-                    owner_sort: pb.Sort = view.owner.read()
-                    if owner_sort.kind is None:
-                        msg = "Python member owner has no sort kind"
-                        raise ValueError(msg)
-                    match owner_sort.kind.field:
-                        case "eq":
-                            owner_key = "eq_sort", owner_sort.kind.value
-                        case "application":
-                            owner_key = "primitive_sort", owner_sort.kind.value.name
-                        case _:
-                            msg = "Python member requires an equality or host family owner"
-                            raise ValueError(msg)
                 if view.kind == CallKind.INITIALIZER:
                     if view.path:
                         msg = "Python initializer derives its name and cannot supply a path"

@@ -52,9 +52,9 @@ def test_table_cell_reader_preserves_availability_and_ownership_without_engine(m
         ],
         outputs=[
             pb.CommandOutput(
-                kind=Oneof[Literal["printed_function"], pb.PrintedFunction](
-                    "printed_function",
-                    pb.PrintedFunction(
+                kind=Oneof[Literal["table_rows"], pb.TableRows](
+                    "table_rows",
+                    pb.TableRows(
                         table="table",
                         rows=[
                             pb.FunctionRow(args=[available, unavailable, available], output=unavailable, subsumed=True),
@@ -77,7 +77,7 @@ def test_table_cell_reader_preserves_availability_and_ownership_without_engine(m
     output = decoded.outputs[0]
     assert output.location == pb.CommandLocation(path=[0])
     assert output.kind is not None
-    assert output.kind.field == "printed_function"
+    assert output.kind.field == "table_rows"
     assert output.kind.value.table == "table"
     first, second = output.kind.value.rows
     assert first.subsumed
@@ -203,19 +203,25 @@ def _proof_program() -> pb.Program:
             ),
         ],
         nodes=nodes,
-        rules=[
-            pb.Rule(
-                name="derive",
-                eval_mode=pb.RuleEvalMode.SEMINAIVE,
-                kind=Oneof[Literal["rule"], pb.RuleBody](
-                    "rule", pb.RuleBody(query=[3], head=[pb.Action(kind=Oneof[Literal["term"], int]("term", 4))])
-                ),
-            )
-        ],
         commands=[
             pb.Command(
                 kind=Oneof[Literal["add_rules"], pb.AddRules](
-                    "add_rules", pb.AddRules(group="rebuilding_ruleset", rules=[0])
+                    "add_rules",
+                    pb.AddRules(
+                        group="rebuilding_ruleset",
+                        rules=[
+                            pb.Rule(
+                                name="derive",
+                                eval_mode=pb.RuleEvalMode.SEMINAIVE,
+                                kind=Oneof[Literal["rule"], pb.RuleBody](
+                                    "rule",
+                                    pb.RuleBody(
+                                        query=[3], head=[pb.Action(kind=Oneof[Literal["term"], int]("term", 4))]
+                                    ),
+                                ),
+                            )
+                        ],
+                    ),
                 )
             ),
             pb.Command(
@@ -325,7 +331,6 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     proofs_enabled = mode in (pb.ExecutionMode.PROOFS, pb.ExecutionMode.PROOF_TESTING)
     program = _proof_program()
     program.declarations.clear()
-    program.rules.clear()
     program.commands = [
         pb.Command(
             kind=Oneof[Literal["prove_exists"], pb.ProveExists]("prove_exists", pb.ProveExists(constructor="Goal"))
@@ -443,8 +448,8 @@ def test_binary_encoded_print_function_returns_typed_logical_rows(proof_engine, 
     program.commands = [
         program.commands[1],
         pb.Command(
-            kind=Oneof[Literal["print_function"], pb.PrintFunction](
-                "print_function", pb.PrintFunction(table="N", max_rows=max_rows)
+            kind=Oneof[Literal["table_rows"], pb.GetTableRows](
+                "table_rows", pb.GetTableRows(table="N", max_rows=max_rows)
             )
         ),
     ]
@@ -454,7 +459,7 @@ def test_binary_encoded_print_function_returns_typed_logical_rows(proof_engine, 
     (output,) = response.outputs
     assert output.location == pb.CommandLocation(path=[1])
     assert output.kind is not None
-    assert output.kind.field == "printed_function"
+    assert output.kind.field == "table_rows"
     table = output.kind.value
     assert table.table == "N"
     if max_rows == 0:

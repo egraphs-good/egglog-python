@@ -1,6 +1,5 @@
 """Ordinary container methods over the complete native-generated catalog."""
 
-import copy
 import runpy
 from dataclasses import replace
 from pathlib import Path
@@ -11,6 +10,7 @@ from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
 from egglog import (
+    BaseExpr,
     ConvertError,
     EGraph,
     Expr,
@@ -68,39 +68,38 @@ def test_append_consuming_receiver_and_free_call_reconstruction():
     assert StructuralView(fn().__egg_ref__) == StructuralView(zero.__egg_ref__)
 
 
-def test_vec_union_exact_equality_substitution():
+def test_vec_union_checks_native_equality_applicability_before_mutation():
     class Atom(Expr):
         def __init__(self, value: i64) -> None: ...
 
-    left, right = Vec[Atom](Atom(i64(1))), Vec[Atom](Atom(i64(2)))
+    a, b = Atom(i64(1)), Atom(i64(2))
+    left, right = Vec[Atom](a), Vec[Atom](b)
     assert (left | right).__egg_ref__.read().kind.value.func == "egglog.core.vec.union"
-    for value in [Vec[i64](i64(1)), Vec[Vec[Atom]](left)]:
-        with pytest.raises(TypeConstraintError, match="requires an equality sort"):
-            value | value  # type: ignore[operator]  # Deliberately invalid equality-sort operands.
+    graph = EGraph(left, right)
+
+    def rejected[T: BaseExpr](value: Vec[T]) -> None:
+        authored = value | value
+        assert authored.__egg_ref__.read().kind.value.func == "egglog.core.vec.union"
+        with pytest.raises(EggSmolError) as caught:
+            graph.register(left | right, authored)
+        assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.INVALID_PROGRAM
+        assert not graph.check_bool(eq(a).to(b))
+
+    rejected(Vec[i64](i64(1)))
+    rejected(Vec[Vec[Atom]](left))
 
 
-def test_generator_rejects_invalid_equality_binders():
+def test_generator_rejects_mismatched_signature_binder_counts(native_catalog_program):
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
         "render_stubs"
     ]
-    original = pb.BuiltinCatalog.from_binary(
-        (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()
-    )
-    for binders, restrictions in [(1, [1]), (1, [0, 0]), (2, [1, 0])]:
-        invalid = copy.deepcopy(original)
-        for declaration in invalid.primitives:
-            if declaration.name == "egglog.core.vec.union":
-                break
-        else:
-            raise StopIteration
-        signature_kind = declaration.typing
-        assert signature_kind is not None
-        assert signature_kind.field == "signature"
-        signature = signature_kind.value
-        signature.type_params = ["T"] * binders
-        signature.equality_type_params = restrictions
-        with pytest.raises(ValueError, match="Invalid equality type parameter indices"):
-            render(invalid)
+    primitive = next(p for p in native_catalog_program.primitives if p.name == "egglog.core.i64.add")
+    signature = primitive.signature
+    assert signature is not None
+    for count in (1, 2**32 - 1):
+        signature.type_param_count = count
+        with pytest.raises(ValueError, match="Static signature requires all generic parameters in its sort closure"):
+            render(native_catalog_program)
 
 
 def test_ordinary_vec_map_methods_execute_and_reconstruct():
@@ -273,10 +272,9 @@ def test_minimal_result_binding_preserves_input_polymorphism(selected_view, nati
     else:
         raise StopIteration
     declaration.name = "test.result_pair"
-    signature_kind = declaration.typing
-    assert signature_kind is not None
-    assert signature_kind.field == "signature"
-    signature_kind.value.inputs.pop()
+    signature = declaration.signature
+    assert signature is not None
+    signature.inputs.pop()
     builder = Builder.from_builtins(program)
     if selected_view:
         builder.presentations["callable", declaration.name] = Presentation(
@@ -322,10 +320,8 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     else:
         raise StopIteration
     declaration.name = "test.method_result_pair"
-    signature_kind = declaration.typing
-    assert signature_kind is not None
-    assert signature_kind.field == "signature"
-    signature = signature_kind.value
+    signature = declaration.signature
+    assert signature is not None
     first_var, second_var = [arg.sort for arg in signature.inputs]
     third_var = len(program.sorts)
     program.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 2)))
@@ -337,7 +333,7 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
             )
         )
     )
-    signature.type_params.append("V")
+    signature.type_param_count += 1
     signature.inputs = [pb.Arg(sort=receiver_sort), pb.Arg(sort=third_var)]
     signature.output = len(program.sorts)
     program.sorts.append(

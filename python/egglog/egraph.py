@@ -488,6 +488,7 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         raise NotImplementedError(msg)
     context = runtime_cls.__egg_context__
     assert context is not None
+    assert isinstance(runtime_cls.__egg_definition__, Ref)
     definitions = [runtime_cls.__egg_definition__]
     context.catalog = Catalog.from_refs(definitions)
     runtime_cls.__egg_attr_cache__.clear()
@@ -909,12 +910,12 @@ class _FunctionConstructor:
         if self.builtin:
             builtin_reference = _definition_at(output, "callable", name)
             actual: pb.Primitive = builtin_reference.read()
-            if not isinstance(actual, pb.Primitive) or actual.typing is None or actual.typing.field != "signature":
+            if not isinstance(actual, pb.Primitive) or actual.signature is None:
                 msg = "Builtin annotations require an owned concrete primitive signature"
                 raise ValueError(msg)
-            actual_signature = actual.typing.value
+            actual_signature = actual.signature
             if (
-                actual_signature.type_params
+                actual_signature.type_param_count
                 or actual_signature.varargs
                 or len(actual_signature.inputs) != len(input_sorts)
                 or not actual_signature.has_field("output")
@@ -1138,7 +1139,12 @@ def _lower_function_body(  # noqa: C901
 
 
 def _compile_python_function(
-    function: FunctionType, parameters: list[Ref], output: Ref | None
+    function: FunctionType,
+    parameters: list[Ref],
+    output: Ref | None,
+    *,
+    keepalive: tuple[object, ...] = (),
+    name: str | None = None,
 ) -> tuple[RuntimeFunction, tuple[RuntimeExpr, ...]]:
     """Lift lexical symbolic values into a named primitive's positional prefix."""
     closure_values = [cell.cell_contents for cell in function.__closure__ or ()]
@@ -1189,7 +1195,8 @@ def _compile_python_function(
     body_node: pb.Node = body.__egg_ref__.read()
     builder = Builder()
     body_index = _lower_function_body(builder, body.__egg_ref__, references)
-    name = f"__egglog_python_lambda_{uuid4().hex}"
+    if name is None:
+        name = f"__egglog_python_lambda_{uuid4().hex}"
     argument_names = list(signature(function).parameters)
     if len(argument_names) != len(parameters):
         argument_names = [f"arg{index}" for index in range(len(parameters))]
@@ -1224,7 +1231,7 @@ def _compile_python_function(
             ),
         )
     )
-    return RuntimeFunction(builder.publish().ref("declarations", declaration), 0), captures
+    return RuntimeFunction(builder.publish(keepalive=keepalive).ref("declarations", declaration), 0), captures
 
 
 # Overload to support aritys 0-4 until variadic generic support map, so we can map from type to value
@@ -2351,7 +2358,7 @@ class EGraph:
                     "commands",
                     pb.Command(
                         kind=Oneof[Literal["add_rules"], pb.AddRules](
-                            "add_rules", pb.AddRules(group="", rules=[builder.import_ref(command.__egg_ref__)])
+                            "add_rules", pb.AddRules(group="", rules=[builder.import_rule(command.__egg_ref__)])
                         )
                     ),
                 )
@@ -2382,7 +2389,9 @@ class EGraph:
         builder.import_ref(reference)
         command = builder.add(
             "commands",
-            pb.Command(kind=Oneof[Literal["print_size"], pb.PrintSize]("print_size", pb.PrintSize(tables=[table]))),
+            pb.Command(
+                kind=Oneof[Literal["table_sizes"], pb.GetTableSizes]("table_sizes", pb.GetTableSizes(tables=[table]))
+            ),
         )
         response, _ = _single_observation(self._state.run_program([builder.publish().ref("commands", command)]))
         if (
@@ -2402,7 +2411,8 @@ class EGraph:
         """
         builder = Builder()
         command = builder.add(
-            "commands", pb.Command(kind=Oneof[Literal["print_size"], pb.PrintSize]("print_size", pb.PrintSize()))
+            "commands",
+            pb.Command(kind=Oneof[Literal["table_sizes"], pb.GetTableSizes]("table_sizes", pb.GetTableSizes())),
         )
         response, _ = _single_observation(self._state.run_program([builder.publish().ref("commands", command)]))
         if (
@@ -2471,8 +2481,8 @@ class EGraph:
         command = builder.add(
             "commands",
             pb.Command(
-                kind=Oneof[Literal["print_function"], pb.PrintFunction](
-                    "print_function", pb.PrintFunction(table=signature.name, max_rows=length)
+                kind=Oneof[Literal["table_rows"], pb.GetTableRows](
+                    "table_rows", pb.GetTableRows(table=signature.name, max_rows=length)
                 )
             ),
         )
@@ -2480,7 +2490,7 @@ class EGraph:
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
-            or response.outputs[0].kind.field != "printed_function"
+            or response.outputs[0].kind.field != "table_rows"
             or response.outputs[0].location != pb.CommandLocation(path=[0])
             or response.outputs[0].kind.value.table != signature.name
         ):
@@ -2693,6 +2703,7 @@ class Schedule:
     def _resolve(self, state: EGraphState | None) -> Ref:  # noqa: C901, PLR0912
         """Resolve live authoring to ordered additions and group selections."""
         builder = Builder()
+        builder.import_context(self._command.owner)
         command: pb.Command = _copy_record(
             self._command.read(),
             relocate=lambda role, index: builder.import_ref(self._command.owner.ref(role, index)),
@@ -2734,6 +2745,7 @@ class Schedule:
                     groups.append(token)
                     continue
                 reference = source._snapshot()
+                builder.import_context(reference.owner)
                 addition: pb.Command = _copy_record(
                     reference.read(),
                     # The visitor is synchronous and does not retain this callback.
@@ -2786,6 +2798,7 @@ class Schedule:
         """
         source = run(self) if isinstance(self, Ruleset | UnstableCombinedRuleset) else self
         builder = Builder()
+        builder.import_context(source._command.owner)
         command: pb.Command = _copy_record(
             source._command.read(),
             relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),
@@ -2811,6 +2824,7 @@ class Schedule:
         source = run(self) if isinstance(self, Ruleset | UnstableCombinedRuleset) else self
         length = index_integer(length)
         builder = Builder()
+        builder.import_context(source._command.owner)
         command: pb.Command = _copy_record(
             source._command.read(),
             relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),
@@ -2825,6 +2839,7 @@ class Schedule:
         """
         source = run(self) if isinstance(self, Ruleset | UnstableCombinedRuleset) else self
         builder = Builder()
+        builder.import_context(source._command.owner)
         command: pb.Command = _copy_record(
             source._command.read(),
             relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),
@@ -2884,10 +2899,13 @@ class Ruleset(Schedule):
         assert record.kind is not None
         assert record.kind.field == "add_rules"
         builder = Builder()
-        record.kind.value.rules = [
-            builder.import_ref(self.__egg_ref__.owner.ref("rules", index)) for index in record.kind.value.rules
-        ]
-        record.kind.value.rules.append(builder.import_ref(rule.__egg_ref__))
+        builder.import_context(self.__egg_ref__.owner)
+        record = _copy_record(
+            record, relocate=lambda role, index: builder.import_ref(self.__egg_ref__.owner.ref(role, index))
+        )
+        assert record.kind is not None
+        assert record.kind.field == "add_rules"
+        record.kind.value.rules.append(builder.import_rule(rule.__egg_ref__))
         index = builder.add("commands", record)
         self.__egg_ref__ = builder.publish().ref("commands", index)
 
@@ -2959,6 +2977,7 @@ class UnstableCombinedRuleset(Schedule):
         commands = []
         for source in self.rulesets:
             reference = source._snapshot()
+            builder.import_context(reference.owner)
             commands.append(
                 _copy_record(
                     reference.read(),
@@ -3699,7 +3718,7 @@ def back_off(match_limit: None | int = None, ban_length: None | int = None) -> B
                 "bind_scheduler",
                 pb.BindScheduler(
                     name=f"__egglog_python_scheduler_{uuid4().hex}",
-                    scheduler=pb.Scheduler(kind=Oneof[Literal["back_off"], pb.BackOff]("back_off", options)),
+                    back_off=options,
                 ),
             )
         ),
@@ -3722,9 +3741,7 @@ class BackOff:
             or command.kind is None
             or command.kind.field != "bind_scheduler"
             or not command.kind.value.name
-            or command.kind.value.scheduler is None
-            or command.kind.value.scheduler.kind is None
-            or command.kind.value.scheduler.kind.field != "back_off"
+            or command.kind.value.back_off is None
         ):
             msg = "BackOff requires a canonical BindScheduler with back-off configuration"
             raise TypeError(msg)
@@ -3751,6 +3768,7 @@ class BackOff:
         """
         source = run(schedule) if isinstance(schedule, Ruleset | UnstableCombinedRuleset) else schedule
         builder = Builder()
+        builder.import_context(source._command.owner)
         command: pb.Command = _copy_record(
             source._command.read(),
             relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),
@@ -3793,6 +3811,8 @@ def seq(*schedules: Schedule) -> Schedule:
         run(schedule) if isinstance(schedule, Ruleset | UnstableCombinedRuleset) else schedule for schedule in schedules
     ]
     builder = Builder()
+    for source in sources:
+        builder.import_context(source._command.owner)
     body: list[pb.Command] = [
         _copy_record(
             source._command.read(),

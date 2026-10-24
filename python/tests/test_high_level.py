@@ -24,7 +24,7 @@ import egglog.builtins as egg_builtins
 from egglog import *
 from egglog._catalog import builtin_catalog
 from egglog._presentation import CallKind, presentation
-from egglog._program import Owner
+from egglog._program import Owner, Ref
 from egglog.conversion import ConvertError
 from egglog.egraph_state import _decode_run_frames
 from egglog.runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, resolve_callable
@@ -420,7 +420,9 @@ def test_saved_transcript_preserves_literal_explicit_sort_name() -> None:
         and declaration.kind.value.name == "true"
     )
     assert sort.name == "true"
-    view = presentation(cast("RuntimeClass", LiteralNamed).__egg_definition__).type_view
+    sort_definition = cast("RuntimeClass", LiteralNamed).__egg_definition__
+    assert isinstance(sort_definition, Ref)
+    view = presentation(sort_definition).type_view
     assert view is not None
     assert view.path == (*__name__.split("."), "LiteralNamed")
     _replay_recorded_source(egraph.as_egglog_string)
@@ -444,7 +446,9 @@ def test_saved_transcript_preserves_unparseable_explicit_sort_name() -> None:
         and declaration.kind.value.name == "has space"
     )
     assert sort.name == "has space"
-    view = presentation(cast("RuntimeClass", UnparseableNamed).__egg_definition__).type_view
+    sort_definition = cast("RuntimeClass", UnparseableNamed).__egg_definition__
+    assert isinstance(sort_definition, Ref)
+    view = presentation(sort_definition).type_view
     assert view is not None
     assert view.path == (*__name__.split("."), "UnparseableNamed")
     _replay_recorded_source(egraph.as_egglog_string)
@@ -469,7 +473,9 @@ def test_saved_transcript_preserves_context_sensitive_explicit_sort_name(egg_nam
         and declaration.kind.value.name == egg_name
     )
     assert sort.name == egg_name
-    view = presentation(cast("RuntimeClass", ContextSensitiveNamed).__egg_definition__).type_view
+    sort_definition = cast("RuntimeClass", ContextSensitiveNamed).__egg_definition__
+    assert isinstance(sort_definition, Ref)
+    view = presentation(sort_definition).type_view
     assert view is not None
     assert view.path == (*__name__.split("."), "ContextSensitiveNamed")
     _replay_recorded_source(egraph.as_egglog_string)
@@ -1437,7 +1443,9 @@ def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() 
         for declaration in snapshot.program.declarations
         if declaration.kind is not None and declaration.kind.field == "eq_sort"
     )
-    type_view = presentation(cast("RuntimeClass", Num).__egg_definition__).type_view
+    sort_definition = cast("RuntimeClass", Num).__egg_definition__
+    assert isinstance(sort_definition, Ref)
+    type_view = presentation(sort_definition).type_view
     assert type_view is not None
     assert type_view.path == (*__name__.split("."), "Num")
     declaration = next(
@@ -1820,9 +1828,9 @@ def test_generic_callback_context_keeps_binders_closed_and_separate(monkeypatch)
 
     declaration = callback.__egg_ref__
     record: pb.Primitive = declaration.read()
-    assert record.typing is not None
-    assert record.typing.field == "signature"
-    unbound = declaration.owner.ref("sorts", record.typing.value.output)
+    assert record.signature is not None
+
+    unbound = declaration.owner.ref("sorts", record.signature.output)
     assert unbound.read().kind.field == "var"
     with pytest.raises(TypeConstraintError, match="Actual argument sorts must be closed"):
         _function_value(callback, (), None, context=([unbound], integer))
@@ -1861,13 +1869,10 @@ def test_generic_callback_prefix_conversion_is_not_speculative(monkeypatch, mode
         "primitives",
         pb.Primitive(
             name="test.generic.capture",
-            typing=Oneof[Literal["signature"], pb.GenericSignature](
-                "signature",
-                pb.GenericSignature(
-                    type_params=["T"],
-                    inputs=[pb.Arg(sort=scalar), pb.Arg(sort=variable)],
-                    output=variable,
-                ),
+            signature=pb.GenericSignature(
+                type_param_count=1,
+                inputs=[pb.Arg(sort=scalar), pb.Arg(sort=variable)],
+                output=variable,
             ),
         ),
     )
@@ -1923,7 +1928,10 @@ def test_polynomial_theory_authoring_snapshots_without_engine(monkeypatch, name:
     snapshot = namespace[name]._snapshot()
     packed = pack(commands=[snapshot])
     decoded = pb.Program.from_binary(packed.program.to_binary())
-    assert len(decoded.rules) == rule_count
+    addition = decoded.commands[0].kind
+    assert addition is not None
+    assert addition.field == "add_rules"
+    assert len(addition.value.rules) == rule_count
     assert decoded.nodes
     assert decoded.declarations
     restored = Builder.from_program(decoded).publish().ref("commands", 0).read()
@@ -2931,12 +2939,12 @@ class TestDefaultReplacements:
         assert isinstance(record, pb.Primitive)
         primitive = record
         assert primitive.name == "egglog.core.i64.add"
-        assert primitive.typing is not None
-        assert primitive.typing.field == "signature"
-        signature = primitive.typing.value
-        assert signature.type_params == []
+        assert primitive.signature is not None
+
+        signature = primitive.signature
+        assert signature.type_param_count == 0
         assert signature.varargs == []
-        assert signature.equality_type_params == []
+
         assert signature.has_field("output")
         assert len(signature.inputs) == 2
         assert all(argument.sort == signature.output for argument in signature.inputs)
@@ -4785,11 +4793,9 @@ class TestScheduler:
         assert outer.name != inner.name
         assert outer_depth < inner_depth
         for binding in (outer, inner):
-            assert binding.scheduler is not None
-            assert binding.scheduler.kind is not None
-            assert binding.scheduler.kind.field == "back_off"
-            assert binding.scheduler.kind.value.match_limit == 2
-            assert binding.scheduler.kind.value.ban_length == 2
+            assert binding.back_off is not None
+            assert binding.back_off.match_limit == 2
+            assert binding.back_off.ban_length == 2
         assert runs[0][0].scheduler == inner.name
         assert runs[0][1] >= inner_depth
         assert runs[1][0].scheduler == outer.name

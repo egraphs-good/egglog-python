@@ -118,7 +118,7 @@ def test_history_keeps_accepted_failure_inputs_and_live_prefix_after_source_view
     row = history_row(i64(0)).__egg_ref__.read().kind.value.func
     observe = builder.add(
         "commands",
-        pb.Command(kind=Oneof[Literal["print_size"], pb.PrintSize]("print_size", pb.PrintSize(tables=[row]))),
+        pb.Command(kind=Oneof[Literal["table_sizes"], pb.GetTableSizes]("table_sizes", pb.GetTableSizes(tables=[row]))),
     )
     commands = [
         set_(history_row(i64(1))).to(i64(11)).__egg_ref__,

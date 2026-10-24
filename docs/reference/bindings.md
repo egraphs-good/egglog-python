@@ -21,6 +21,10 @@ The Python generator joins that semantic catalog to its local presentation map;
 the map does not repeat native signatures.
 Programs, snapshots and history contain user definitions and refer to configured
 builtins by canonical keys. They do not contain builtin descriptor snapshots.
+`AddRules` carries rule records directly. Function invocation uses `Apply` over
+the function's structural type; Python retains its `UnstableFn` callable facade
+and partial-value introspection. The engine checks native primitive applicability
+when the program is submitted.
 
 The extension has no public native EGraph, AST/command classes, raw values,
 extractor, snapshot, plan wrappers or tracing configuration functions. Extraction,

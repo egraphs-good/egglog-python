@@ -851,10 +851,10 @@ mod tests {
                 .iter()
                 .find(|primitive| primitive.name == key)
                 .unwrap();
-            let Some(pb::primitive::Typing::Signature(signature)) = &primitive.typing else {
+            let Some(signature) = &primitive.signature else {
                 panic!("not a real closed signature")
             };
-            assert!(signature.type_params.is_empty());
+            assert_eq!(signature.type_param_count, 0);
             let sort_name = |index: u32| {
                 let Some(pb::sort::Kind::Application(family)) =
                     &catalog.definitions.sorts[index as usize].kind
@@ -1003,7 +1003,7 @@ mod tests {
                 .type_info()
                 .check_portable_builtin_signature(&context, primitive)
                 .unwrap();
-            let Some(pb::primitive::Typing::Signature(signature)) = &primitive.typing else {
+            let Some(signature) = &primitive.signature else {
                 panic!("missing actual signature")
             };
             let string_sort = signature.inputs[0].sort;
@@ -1014,8 +1014,7 @@ mod tests {
                 .iter_mut()
                 .find(|primitive| primitive.name == key)
                 .unwrap();
-            let Some(pb::primitive::Typing::Signature(signature)) = &mut forged_primitive.typing
-            else {
+            let Some(signature) = &mut forged_primitive.signature else {
                 panic!("missing actual signature")
             };
             signature.inputs[0].sort = signature.output.unwrap();
@@ -1099,12 +1098,9 @@ mod tests {
         let sort = context
             .primitives
             .iter()
-            .find_map(|primitive| match &primitive.typing {
-                Some(pb::primitive::Typing::Signature(signature)) if primitive.name == key => {
-                    signature.output
-                }
-                _ => None,
-            })
+            .find(|primitive| primitive.name == key)
+            .and_then(|primitive| primitive.signature.as_ref())
+            .and_then(|signature| signature.output)
             .unwrap();
         let mut odd = pb::Program {
             sorts: context.sorts,
@@ -1457,7 +1453,6 @@ mod tests {
                         program.declarations.push(pb::Declaration {
                             kind: Some(pb::declaration::Kind::EqSort(pb::EqSort {
                                 name: "PyObject".into(),
-                                ..Default::default()
                             })),
                             ..Default::default()
                         });
@@ -1840,7 +1835,6 @@ impl ProtoEngine {
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         if !program.nodes.is_empty()
             || !program.declarations.is_empty()
-            || !program.rules.is_empty()
             || !program.commands.is_empty()
             || !program.files.is_empty()
         {

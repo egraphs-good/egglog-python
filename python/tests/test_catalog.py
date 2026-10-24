@@ -12,7 +12,7 @@ import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
-from egglog import f64, i64
+from egglog import UnstableFn, f64, i64
 from egglog._builtin_presentation import DATA
 from egglog._catalog import Catalog
 from egglog._presentation import (
@@ -33,10 +33,9 @@ from egglog.type_constraint_solver import TypeConstraintError
 
 def _primitive_signature(primitive: pb.Primitive) -> pb.GenericSignature:
     """Narrow a real builtin descriptor before inspecting or corrupting its signature."""
-    typing = primitive.typing
-    assert isinstance(typing, Oneof)
-    assert typing.field == "signature"
-    return typing.value
+    signature = primitive.signature
+    assert signature is not None
+    return signature
 
 
 def _relocate_builtins(source: pb.BuiltinCatalog) -> pb.BuiltinCatalog:
@@ -53,13 +52,12 @@ def _relocate_builtins(source: pb.BuiltinCatalog) -> pb.BuiltinCatalog:
             kind.value.params = [remap[index] for index in kind.value.params]
             kind.value.result = remap[kind.value.result]
     for primitive in result.primitives:
-        typing = primitive.typing
-        assert typing is not None
-        if typing.field == "signature":
-            for argument in [*typing.value.inputs, *typing.value.varargs]:
-                argument.sort = remap[argument.sort]
-            assert typing.value.has_field("output")
-            typing.value.output = remap[typing.value.output]
+        signature = primitive.signature
+        assert signature is not None
+        for argument in [*signature.inputs, *signature.varargs]:
+            argument.sort = remap[argument.sort]
+        assert signature.has_field("output")
+        signature.output = remap[signature.output]
     result.primitives.reverse()
     result.primitive_sorts.reverse()
     return result
@@ -349,12 +347,17 @@ def test_scalar_free_stub_rejects_unsupported_views(mutation):
     view = mapping["callables"][declaration.name][0]
     if mutation == "generic":
         signature = _primitive_signature(declaration)
-        signature.type_params.append("T")
+        signature.type_param_count += 1
     elif mutation == "foreign":
         view["path"][0] = "other"
     else:
         view["path"][-1] = "String"
-    with pytest.raises(ValueError, match=r"free functions|collision"):
+    expected = (
+        "Static signature requires all generic parameters in its sort closure"
+        if mutation == "generic"
+        else r"free functions|collision"
+    )
+    with pytest.raises(ValueError, match=expected):
         render(program, mapping=mapping)
 
 
@@ -591,16 +594,13 @@ def test_generated_stub_matches_catalog_without_frontend_imports(monkeypatch):
     assert program.to_binary() == encoded
 
 
-def test_function_generated_surface_uses_actual_application_metadata():
+def test_function_generated_surface_uses_intrinsic_application_without_a_descriptor():
     mapping = copy.deepcopy(DATA)
     root = Path(__file__).resolve().parents[2]
     render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
-    application = next(d for d in program.primitives if d.name == "egglog.core.fn.apply")
-    assert application.typing is not None
-    assert application.typing.field == "application"
-    (view,) = mapping["callables"][application.name]
-    assert "owner" not in view
+    assert all(primitive.name != "egglog.core.fn.apply" for primitive in program.primitives)
+    assert "egglog.core.fn.apply" not in mapping["callables"]
     stub = render(program, mapping=mapping)
     for signature in (
         "class UnstableFn(BuiltinExpr, Generic[_UnstableFn_T, *_UnstableFn_TS]):",
@@ -616,80 +616,14 @@ def test_function_generated_surface_uses_actual_application_metadata():
         assert signature in stub
     assert stub.count("    @overload\n") == 3
     assert "Any" not in stub
-    application.name = "renamed.structural.application"
-    mapping["callables"][application.name] = mapping["callables"].pop("egglog.core.fn.apply")
-    assert render(program, mapping=mapping) == stub
     indexed = Catalog(builtin_owner(program, mapping=mapping))
-    reference, _ = indexed.members[("function", ""), "__call__"]
-    assert reference.read().name == "renamed.structural.application"
-    mapping["callables"][application.name] = []
-    with pytest.raises(ValueError, match="Function sort requires an admitted structural function view"):
-        render(program, mapping=mapping)
-
-
-@pytest.mark.parametrize(
-    ("target", "field", "value"),
-    [
-        ("view", "form", "PROPERTY"),
-        ("view", "path", ["apply"]),
-        ("view", "owner", 0),
-        ("view", "receiver", 1),
-        ("view", "receiver", None),
-        ("parameter", "coreInput", 0),
-        ("view", "params", []),
-        (
-            "view",
-            "params",
-            [{"coreInput": 1, "name": "args"}, {"coreInput": 2, "name": "extra"}],
-        ),
-        ("parameter", "name", "values"),
-        ("parameter", "default", 0),
-        ("view", "mutates", 0),
-        ("view", "tailRepetitions", 0),
-        ("conflict", "", None),
-        ("collision", "", None),
-        ("signature", "", None),
-    ],
-)
-def test_function_generated_views_reject_invalid_metadata(target, field, value):
-    mapping = copy.deepcopy(DATA)
-    root = Path(__file__).resolve().parents[2]
-    render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
-    program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
-    application = next(d for d in program.primitives if d.name == "egglog.core.fn.apply")
-    (view,) = mapping["callables"][application.name]
-    if target == "view":
-        view[field] = value
-    elif target == "parameter":
-        view["params"][0][field] = value
-    elif target == "conflict":
-        other = pb.Primitive.from_binary(application.to_binary())
-        other.name = "test.other_application"
-        program.primitives.append(other)
-        mapping["callables"][other.name] = copy.deepcopy([view])
-    elif target == "collision":
-        family = next(d for d in program.primitive_sorts if d.name == "Vec")
-        assert isinstance(family, pb.PrimitiveSort)
-        mapping["types"][family.name]["path"][-1] = "UnstableFn"
-    else:
-        application.typing = Oneof[Literal["signature"], pb.GenericSignature](
-            "signature", pb.GenericSignature(output=0)
-        )
-    expected = (
-        "Tail receiver requires a homogeneous variadic method"
-        if target == "signature"
-        else r"function|Function|collision|static view"
-    )
-    with pytest.raises(ValueError, match=expected):
-        render(program, mapping=mapping)
-    if target != "collision":
-        with pytest.raises(
-            ValueError,
-            match="Tail receiver requires a homogeneous variadic method"
-            if target == "signature"
-            else r"function|collision",
-        ):
-            Catalog(builtin_owner(program, mapping=mapping))
+    assert (("function", ""), "__call__") not in indexed.members
+    function_value = UnstableFn[i64, i64](i64.__add__, i64(1))
+    applied = function_value(i64(2))
+    kind = applied.__egg_ref__.read().kind
+    assert kind is not None
+    assert kind.field == "apply"
+    assert len(kind.value.args) == 1
 
 
 def test_function_sort_annotations_recurse_through_canonical_records():
@@ -698,9 +632,7 @@ def test_function_sort_annotations_recurse_through_canonical_records():
     render = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     declarations = {d.name: d for d in program.primitives}
-    signatures = {
-        d.name: d.typing.value for d in program.primitives if d.typing is not None and d.typing.field == "signature"
-    }
+    signatures = {d.name: d.signature for d in program.primitives if d.signature is not None}
     signature = signatures["egglog.core.pair.first"]
     left, right = (arg.sort for arg in signatures["egglog.core.pair.make"].inputs)
     index = len(program.sorts)
@@ -793,13 +725,14 @@ def test_pair_stub_rejects_invalid_or_unadmitted_generic_views(pair_catalog_prog
         owner_args = mapping["fragment"]["sorts"][view["owner"]]["application"]["args"]
         owner_args[1] = owner_args[0]
     elif mutation == "unknown_binder":
-        signature.type_params.append("Unused")
+        signature.type_param_count += 1
     else:
         mapping["callables"][make.name][0]["params"][0]["default"] = 0
     expected = {
         "receiver": "Python view must map every core input exactly once",
         "params": "Python view must map every core input exactly once",
         "owner_duplicate": "Python receiver input must match its owner",
+        "unknown_binder": "Static signature requires all generic parameters in its sort closure",
         "default": "Required parameter follows a default",
     }.get(mutation, r"initializer output|static owner|Default root")
     with pytest.raises(ValueError, match=expected):
@@ -844,7 +777,7 @@ def test_pair_stub_rejects_specialized_owner_as_universal_class_view(pair_catalo
         mapping["callables"][f"egglog.core.pair.{name}"] = []
     make = declarations["egglog.core.pair.make"]
     signature = _primitive_signature(make)
-    signature.type_params.clear()
+    signature.type_param_count = 0
     i64_sort = next(
         i
         for i, s in enumerate(pair_catalog_program.sorts)
@@ -869,7 +802,6 @@ def test_pair_stub_rejects_specialized_owner_as_universal_class_view(pair_catalo
         ("tail", "fixed concrete signature"),
         ("collision", "Python member collision"),
         ("missing_output", "Python callable signature has no output"),
-        ("application", "Unsupported structural function Python static view"),
         ("numeric_keyword", "Numeric forwarding requires one required 'other' parameter"),
         ("numeric_default", "Numeric forwarding requires one required 'other' parameter"),
     ],
@@ -901,10 +833,6 @@ def test_stub_generation_rejects_invalid_or_unmigrated_shapes(mutation, message)
         )
         view["params"][0]["default"] = len(fragment["nodes"])
         fragment["nodes"].append({"sortId": integer, "primitiveValue": {"i64": "2"}})
-    else:
-        primitive.typing = Oneof[Literal["application"], pb.FunctionApplication](
-            "application", pb.FunctionApplication()
-        )
     with pytest.raises(ValueError, match=message):
         renderer(program, mapping=mapping)
 
@@ -920,10 +848,8 @@ def test_numeric_forward_signature_does_not_imply_reflection(method, argument, o
     renderer = runpy.run_path(str(root / "scripts/generate_builtin_catalog.py"))["render_stubs"]
     program = pb.BuiltinCatalog.from_binary((root / "python/egglog/_builtin_catalog.pb").read_bytes())
     addition = next(d for d in program.primitives if d.name == "egglog.core.i64.add")
-    typing = addition.typing
-    assert typing is not None
-    assert isinstance(typing.value, pb.GenericSignature)
-    signature = typing.value
+    signature = addition.signature
+    assert signature is not None
     sorts = {
         s.kind.value.name: i
         for i, s in enumerate(program.sorts)
@@ -1057,9 +983,7 @@ def catalog_fixture():
         primitives=[
             pb.Primitive(
                 name="example.number.add",
-                typing=Oneof[Literal["signature"], pb.GenericSignature](
-                    "signature", pb.GenericSignature(inputs=[pb.Arg(sort=0), pb.Arg(sort=0)], output=0)
-                ),
+                signature=pb.GenericSignature(inputs=[pb.Arg(sort=0), pb.Arg(sort=0)], output=0),
             )
         ],
     )
@@ -1137,7 +1061,7 @@ def test_nominal_and_primitive_sort_member_owners_recover_independently(generic)
     mapping["callables"]["example.number.add"][0].update(path=["tag"], params=[])
     if generic:
         descriptors.primitive_sorts[0].arity = 1
-        signature.type_params = ["T"]
+        signature.type_param_count = 1
         descriptors.sorts[0].kind.value.args = [1]
         descriptors.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)))
         mapping["fragment"]["sorts"][0]["application"]["args"] = [1]
@@ -1393,7 +1317,7 @@ def test_constant_presentation_accepts_each_concrete_nullary_callable(kind):
             primitives=[
                 pb.Primitive(
                     name="c",
-                    typing=Oneof[Literal["signature"], pb.GenericSignature]("signature", pb.GenericSignature(output=0)),
+                    signature=pb.GenericSignature(output=0),
                 )
             ],
         )
@@ -1454,9 +1378,7 @@ def test_constant_presentation_accepts_each_concrete_nullary_callable(kind):
     assert not catalog.functions
 
 
-@pytest.mark.parametrize(
-    "invalid", ["input", "generic", "tail", "application", "receiver", "owner", "params", "mutates"]
-)
+@pytest.mark.parametrize("invalid", ["input", "generic", "tail", "receiver", "owner", "params", "mutates"])
 def test_constant_presentation_rejects_nonconstant_shapes(invalid):
     source, mapping = catalog_fixture()
     primitive = source.primitives[0]
@@ -1468,13 +1390,9 @@ def test_constant_presentation_rejects_nonconstant_shapes(invalid):
         case "input":
             signature.inputs.append(pb.Arg(sort=0))
         case "generic":
-            signature.type_params.append("T")
+            signature.type_param_count += 1
         case "tail":
             signature.varargs.append(pb.Arg(sort=0))
-        case "application":
-            primitive.typing = Oneof[Literal["application"], pb.FunctionApplication](
-                "application", pb.FunctionApplication()
-            )
         case "receiver":
             view["receiver"] = 0
         case "owner":
@@ -1579,8 +1497,8 @@ def test_multiset_generated_surface_from_actual_catalog():
 @pytest.mark.parametrize(
     ("corruption", "message"),
     [
-        ("unused", "Unused static signature parameter"),
-        ("unbound", "Unbound static signature parameter"),
+        ("unused", "Static signature requires all generic parameters in its sort closure"),
+        ("unbound", "Static signature requires all generic parameters in its sort closure"),
         ("default", "Default root"),
         ("tail", "Generic static free functions require fixed signatures"),
         ("collision", "collision"),
@@ -1598,7 +1516,7 @@ def test_multiset_generic_free_static_guards(corruption, message):
     declaration = declarations["egglog.core.multiset.remove_swapped"]
     signature = _primitive_signature(declaration)
     if corruption == "unused":
-        signature.type_params.append("Unused")
+        signature.type_param_count += 1
     elif corruption == "unbound":
         signature.inputs[0].sort = len(program.sorts)
         program.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 1)))
@@ -1619,40 +1537,6 @@ def test_multiset_generic_free_static_guards(corruption, message):
         render(program, mapping=mapping)
 
 
-@pytest.mark.parametrize("label", ["", "Element type", "class", "duplicate"])
-def test_multiset_free_signature_labels_are_diagnostic_only(label, monkeypatch):
-    mapping = copy.deepcopy(DATA)
-    from egglog import bindings  # noqa: PLC0415
-
-    def forbidden(*args, **kwargs):
-        pytest.fail("Signature label rendering authored or executed a Call")
-
-    monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
-    monkeypatch.setattr("egglog.runtime._author_call", forbidden)
-    program = pb.BuiltinCatalog.from_binary(
-        (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()
-    )
-    names = {
-        f"egglog.core.multiset.{suffix}"
-        for suffix in ("remove_swapped", "subtract_swapped", "contains_swapped", "not_contains_swapped")
-    }
-    signatures = [_primitive_signature(primitive) for primitive in program.primitives if primitive.name in names]
-    assert len(signatures) == 4
-    if label == "duplicate":
-        # Use a second positional binder in a real fixed free signature so the
-        # duplicate-label control is within one signature, not across functions.
-        signatures[0].type_params.append("Other")
-        signatures[0].inputs[0].sort = len(program.sorts)
-        program.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 1)))
-    render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
-        "render_stubs"
-    ]
-    before = render(program, mapping=mapping)
-    for signature in signatures:
-        signature.type_params = [label] * len(signature.type_params)
-    assert render(program, mapping=mapping) == before
-
-
 def test_multiset_method_local_binders_from_actual_catalog():
     mapping = copy.deepcopy(DATA)
     from os import environ  # noqa: PLC0415
@@ -1663,7 +1547,7 @@ def test_multiset_method_local_binders_from_actual_catalog():
     declaration = next(primitive for primitive in program.primitives if primitive.name == "egglog.core.multiset.map")
     signature = _primitive_signature(declaration)
     view = mapping["callables"][declaration.name][0]
-    assert len(signature.type_params) == 2
+    assert signature.type_param_count == 2
     assert "owner" in view
     owner = mapping["fragment"]["sorts"][view["owner"]]["application"]
     assert owner["name"] == "MultiSet"
@@ -1687,9 +1571,6 @@ def test_multiset_method_local_binders_from_actual_catalog():
     assert "class MultiSet(BuiltinExpr, Generic[_MultiSet_T_0]):" in stub
     assert "Any" not in stub
     assert "Callable[...," not in stub
-    for labels in (["", ""], ["class", "Element type"], ["duplicate", "duplicate"]):
-        signature.type_params = labels
-        assert render(program, mapping=mapping) == stub
 
     def relocated(order):
         # Alpha-permute only this real signature's owned sort closure. Other
@@ -1744,10 +1625,10 @@ def test_multiset_method_local_binders_from_actual_catalog():
     malformed, malformed_mapping = relocated((0, 1))
     selected = next(d for d in malformed.primitives if d.name == "egglog.core.multiset.map")
     malformed_signature = _primitive_signature(selected)
-    malformed_signature.type_params.append("Unused")
-    with pytest.raises(ValueError, match="Unused static signature parameter"):
+    malformed_signature.type_param_count += 1
+    with pytest.raises(ValueError, match="Static signature requires all generic parameters in its sort closure"):
         render(malformed, mapping=malformed_mapping)
-    malformed_signature.type_params.pop()
+    malformed_signature.type_param_count -= 1
     malformed_mapping["callables"][selected.name][0]["params"][0]["default"] = len(
         malformed_mapping["fragment"]["nodes"]
     )

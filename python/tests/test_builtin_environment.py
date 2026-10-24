@@ -25,9 +25,7 @@ def _provider_catalog(*, inputs: int = 1) -> pb.BuiltinCatalog:
         primitives=[
             pb.Primitive(
                 name="provider.identity",
-                typing=Oneof[Literal["signature"], pb.GenericSignature](
-                    "signature", pb.GenericSignature(inputs=[pb.Arg(sort=0) for _ in range(inputs)], output=0)
-                ),
+                signature=pb.GenericSignature(inputs=[pb.Arg(sort=0) for _ in range(inputs)], output=0),
             )
         ],
     )

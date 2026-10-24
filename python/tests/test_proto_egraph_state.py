@@ -84,6 +84,22 @@ def _required_data(frames: list[pb.RunProgramResponse], field: str) -> pb.RunPro
     return matches[0]
 
 
+def _program_rules(program: pb.Program) -> list[pb.Rule]:
+    """Inspect inline registrations in authored command order, including nested controls."""
+    rules = []
+    pending = list(reversed(program.commands))
+    while pending:
+        kind = pending.pop().kind
+        assert kind is not None
+        if kind.field == "add_rules":
+            rules.extend(kind.value.rules)
+        elif kind.field == "loop":
+            pending.extend(reversed(kind.value.body))
+        elif kind.field == "fail":
+            pending.append(kind.value)
+    return rules
+
+
 def _required_oneof[T](kind: object, field: str, value_type: type[T]) -> T:
     """Require a populated observation arm and its exact generated payload type."""
     assert isinstance(kind, Oneof)
@@ -377,7 +393,7 @@ def test_persistent_scheduler_deployment_requires_acknowledgement(scheduler_tran
         assert state._scheduler_bindings[name] == reference.read().kind.value
         for options in (pb.BackOff(match_limit=1, ban_length=0), pb.BackOff(ban_length=0)):
             conflicting = reference.read()
-            conflicting.kind.value.scheduler = pb.Scheduler(kind=Oneof("back_off", options))
+            conflicting.kind.value.back_off = options
             builder = Builder()
             index = builder.add("commands", conflicting)
             with pytest.raises(ValueError, match="different configuration"):
@@ -1110,12 +1126,13 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
             )
         ),
     ])
+    authored_rules = []
     for name, call in (("handoff_first", query_call), ("handoff_later", later_call)):
         query = len(program.nodes)
         program.nodes.append(
             pb.Node(sort_id=pyobject, kind=Oneof[Literal["union"], pb.Union]("union", pb.Union(members=[y, call])))
         )
-        program.rules.append(
+        authored_rules.append(
             pb.Rule(
                 name=name,
                 eval_mode=pb.RuleEvalMode.SEMINAIVE,
@@ -1138,7 +1155,9 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
     program.commands = [
         *(
             pb.Command(
-                kind=Oneof[Literal["add_rules"], pb.AddRules]("add_rules", pb.AddRules(group=name, rules=[index]))
+                kind=Oneof[Literal["add_rules"], pb.AddRules](
+                    "add_rules", pb.AddRules(group=name, rules=[authored_rules[index]])
+                )
             )
             for index, name in enumerate(("handoff_first", "handoff_later"))
         ),
@@ -1200,8 +1219,8 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
             program.commands.insert(
                 3,
                 pb.Command(
-                    kind=Oneof[Literal["print_function"], pb.PrintFunction](
-                        "print_function", pb.PrintFunction(table="handoff_mark")
+                    kind=Oneof[Literal["table_rows"], pb.GetTableRows](
+                        "table_rows", pb.GetTableRows(table="handoff_mark")
                     )
                 ),
             )
@@ -1218,10 +1237,10 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
                 assert callback_observations["later"]["calls"] == 0
             else:
                 assert callback_observations["later"]["calls"] > 0
-                (printed,) = _required_data(response, "printed_function").outputs
+                (printed,) = _required_data(response, "table_rows").outputs
                 assert printed.location is not None
                 assert printed.location.path == [3]
-                assert len(_required_oneof(printed.kind, "printed_function", pb.PrintedFunction).rows) == 2
+                assert len(_required_oneof(printed.kind, "table_rows", pb.TableRows).rows) == 2
         elif original is not None:
             assert captured is callback_observations["first"]["caught"]
             assert callback_observations["later"]["calls"] == 0
@@ -1237,17 +1256,15 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
             assert failure.location.path == [1]
         program.commands = [
             pb.Command(
-                kind=Oneof[Literal["print_function"], pb.PrintFunction](
-                    "print_function", pb.PrintFunction(table="handoff_mark")
-                )
+                kind=Oneof[Literal["table_rows"], pb.GetTableRows]("table_rows", pb.GetTableRows(table="handoff_mark"))
             )
         ]
         observed, error = _callback_exchange(state, program, tmp_path / "markers")
         assert all(frame.result is not None and frame.result.field == "output" for frame in observed)
-        observed = _required_data(observed, "printed_function")
+        observed = _required_data(observed, "table_rows")
         assert error is None
         rows = {}
-        table = _required_oneof(observed.outputs[0].kind, "printed_function", pb.PrintedFunction)
+        table = _required_oneof(observed.outputs[0].kind, "table_rows", pb.TableRows)
         for row in table.rows:
             values = []
             assert row.output is not None
@@ -1338,7 +1355,7 @@ def test_function_sizes_native_bytes_register_and_filter_unmapped(table_transpor
     assert graph.function_size(known) == 0
     assert len(requests) == 1
     assert any(decl.kind.value.name == "z-known" for decl in requests[0].program.declarations)
-    assert requests[0].program.commands[0].kind == Oneof("print_size", pb.PrintSize(tables=["z-known"]))
+    assert requests[0].program.commands[0].kind == Oneof("table_sizes", pb.GetTableSizes(tables=["z-known"]))
     observed = _required_data(responses[0], "sizes")
     assert observed.outputs[0].location == pb.CommandLocation(path=[0])
     assert observed.outputs[0].kind == Oneof("sizes", pb.TableSizes(sizes=[pb.TableSize(table="z-known", rows=0)]))
@@ -1348,7 +1365,7 @@ def test_function_sizes_native_bytes_register_and_filter_unmapped(table_transpor
     del graph._state.definitions["callable", "a-unmapped"]
     assert graph.all_function_sizes() == [(known, 1)]
     assert requests[-1].program.declarations == []
-    assert requests[-1].program.commands[0].kind == Oneof("print_size", pb.PrintSize())
+    assert requests[-1].program.commands[0].kind == Oneof("table_sizes", pb.GetTableSizes())
     observed = _required_data(responses[-1], "sizes")
     table_sizes = _required_oneof(observed.outputs[0].kind, "sizes", pb.TableSizes)
     assert [entry.table for entry in table_sizes.sizes] == ["a-unmapped", "z-known"]
@@ -1482,9 +1499,7 @@ def test_function_sizes_reject_malformed_response_without_engine(monkeypatch, se
         case "outputs":
             response.outputs.clear()
         case "kind":
-            output.kind = Oneof[Literal["printed_function"], pb.PrintedFunction](
-                "printed_function", pb.PrintedFunction()
-            )
+            output.kind = Oneof[Literal["table_rows"], pb.TableRows]("table_rows", pb.TableRows())
         case "location":
             output.location = pb.CommandLocation(path=[1])
         case "table":
@@ -1500,7 +1515,7 @@ def test_function_sizes_reject_malformed_response_without_engine(monkeypatch, se
             request = pb.RunProgramRequest.from_binary(encoded)
             assert request.program is not None
             assert request.program.commands[0].kind is not None
-            assert request.program.commands[0].kind.field == "print_size"
+            assert request.program.commands[0].kind.field == "table_sizes"
             return output_frames(response), None
 
         def destroy(self, encoded):
@@ -1523,13 +1538,13 @@ def test_function_values_native_bytes_and_shared_terms(table_transport):
     rows = graph.function_values(repeated)
     assert len(requests) == 2
     command = requests[-1].program.commands[0].kind
-    assert command.field == "print_function"
+    assert command.field == "table_rows"
     assert command.value.table == resolve_callable(repeated).read().kind.value.name
     assert not command.value.has_field("max_rows")
-    observed = _required_data(responses[-1], "printed_function")
+    observed = _required_data(responses[-1], "table_rows")
     output = observed.outputs[0]
     assert output.location == pb.CommandLocation(path=[0])
-    table = _required_oneof(output.kind, "printed_function", pb.PrintedFunction)
+    table = _required_oneof(output.kind, "table_rows", pb.TableRows)
     row = table.rows[0]
     assert row.args[0] == row.args[1] == row.output == pb.TableCell(kind=Oneof[Literal["term"], int]("term", 0))
     assert _required_oneof(observed.nodes[0].kind, "primitive_value", pb.PrimitiveValue).value == Oneof("i64", 1)
@@ -1669,15 +1684,15 @@ def test_function_values_unavailable_cells_raise_from_native_bytes(table_transpo
     target = RuntimeFunction(owner.ref("declarations", 3))
     with pytest.raises(ValueError, match=f"Table 'inspected' row 1 {unavailable} has no extractable representative"):
         graph.function_values(target)
-    observed = _required_data(responses[-1], "printed_function")
-    table = _required_oneof(observed.outputs[0].kind, "printed_function", pb.PrintedFunction)
+    observed = _required_data(responses[-1], "table_rows")
+    table = _required_oneof(observed.outputs[0].kind, "table_rows", pb.TableRows)
     assert all(frame.result is not None and frame.result.field == "output" for frame in responses[-1])
     assert len(table.rows) == 2
     cell = table.rows[1].args[1] if unavailable == "argument 1" else table.rows[1].output
     assert cell is not None
     unavailable_sort = _required_oneof(cell.kind, "unavailable_sort", int)
     assert observed.sorts[unavailable_sort].kind == Oneof("eq", "Hidden")
-    assert requests[-1].program.commands[0].kind.field == "print_function"
+    assert requests[-1].program.commands[0].kind.field == "table_rows"
     assert graph.function_values(target, 0) == {}
 
 
@@ -1704,9 +1719,7 @@ def test_function_values_rejects_malformed_response_without_engine(monkeypatch, 
     available = pb.TableCell(kind=Oneof[Literal["term"], int]("term", 0))
     row = pb.FunctionRow(args=[available], output=available)
     output = pb.CommandOutput(
-        kind=Oneof[Literal["printed_function"], pb.PrintedFunction](
-            "printed_function", pb.PrintedFunction(table="table", rows=[row])
-        ),
+        kind=Oneof[Literal["table_rows"], pb.TableRows]("table_rows", pb.TableRows(table="table", rows=[row])),
         location=pb.CommandLocation(path=[0]),
     )
     response = pb.RunProgramOutput(
@@ -1742,7 +1755,7 @@ def test_function_values_rejects_malformed_response_without_engine(monkeypatch, 
             output.location = pb.CommandLocation(path=[1])
         case "table":
             assert output.kind is not None
-            assert output.kind.field == "printed_function"
+            assert output.kind.field == "table_rows"
             output.kind.value.table = "wrong"
         case "arity":
             row.args.clear()
@@ -1767,7 +1780,7 @@ def test_function_values_rejects_malformed_response_without_engine(monkeypatch, 
             request = pb.RunProgramRequest.from_binary(encoded)
             assert request.program is not None
             assert request.program.commands[0].kind is not None
-            assert request.program.commands[0].kind.field == "print_function"
+            assert request.program.commands[0].kind.field == "table_rows"
             return output_frames(response), None
 
         def destroy(self, encoded):
@@ -1931,8 +1944,7 @@ def test_schedule_additions_are_ordered_once_before_control_loops(monkeypatch, c
             operations.append(("run", command.kind.value.groups))
     group = str(first.__egg_ident__)
     assert operations == [("add", group)] * 3 + [("run", [group])] * 3
-    assert len(resolved.rules) == 2
-    assert [rule.name for rule in resolved.rules] == ["first", "last"]
+    assert [rule.name for rule in _program_rules(resolved)] == ["first", "last", "first"]
 
 
 @pytest.mark.parametrize(
@@ -2216,8 +2228,8 @@ def test_native_free_ruleset_body_is_deferred_with_complete_closure(table_transp
     else:
         assert not graph.run(destination).updated
     assert len(graph.function_values(delayed)) == int(seeded)
-    output = _required_data(responses[-1], "printed_function").outputs[0]
-    table = _required_oneof(output.kind, "printed_function", pb.PrintedFunction)
+    output = _required_data(responses[-1], "table_rows").outputs[0]
+    table = _required_oneof(output.kind, "table_rows", pb.TableRows)
     assert [row.subsumed for row in table.rows] == ([subsume_body] if seeded else [])
     declarations = {
         declaration.kind.value.name: declaration for request in requests for declaration in request.program.declarations
@@ -2225,9 +2237,13 @@ def test_native_free_ruleset_body_is_deferred_with_complete_closure(table_transp
     name = resolve_callable(delayed).read().kind.value.name
     assert declarations[name].kind.field == "constructor"
     assert resolve_callable(FreeDefaultBox).read().kind.value.name in declarations
-    authored = [rule for request in requests for rule in request.program.rules]
+    authored = [rule for request in requests for rule in _program_rules(request.program)]
     assert authored
-    assert all(rule.kind.field == "rewrite" and rule.kind.value.subsume is subsume_body for rule in authored)
+    for rule in authored:
+        kind = rule.kind
+        assert kind is not None
+        assert kind.field == "rewrite"
+        assert kind.value.subsume is subsume_body
     assert callbacks == [1]
 
 
@@ -2256,10 +2272,10 @@ def test_native_birewrite_runs_each_guarded_direction(table_transport, reverse, 
         graph.check(eq(seed).to(target))
     else:
         graph.check_fail(eq(seed).to(target))
-    encoded_rules = [rule for request in requests for rule in request.program.rules]
+    encoded_rules = [rule for request in requests for rule in _program_rules(request.program)]
     assert encoded_rules
-    assert all(rule.kind.field == "birewrite" for rule in encoded_rules)
-    assert all(len(request.program.rules) <= 1 for request in requests)
+    assert all(rule.kind is not None and rule.kind.field == "birewrite" for rule in encoded_rules)
+    assert all(len(_program_rules(request.program)) <= 1 for request in requests)
 
 
 @pytest.fixture
@@ -2861,7 +2877,6 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
             request = pb.CreateEGraphRequest.from_binary(encoded)
             assert request.has_field("threads")
             assert request.threads == 1
-            assert not request.declarations
             assert request.options is not None
             cost_kind = request.sorts[request.options.cost_sort].kind
             assert cost_kind is not None

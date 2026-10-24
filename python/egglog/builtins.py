@@ -19,7 +19,7 @@ from ._catalog import builtin_catalog
 from ._presentation import CallKind, presentation
 from ._program import Ref, StructuralView, _copy_record
 from .conversion import converter, get_type_args, resolve_literal
-from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
+from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, _Intrinsic
 
 
 @dataclass
@@ -75,10 +75,10 @@ def _exact_value(expr: RuntimeExpr) -> int | Fraction:  # noqa: C901
     if not isinstance(record, pb.Primitive):
         raise ExprValueError(expr, allowed)
     primitive = record
-    if primitive.typing is None or primitive.typing.field != "signature":
+    if primitive.signature is None:
         raise ExprValueError(expr, allowed)
-    signature = primitive.typing.value
-    if signature.type_params or signature.varargs or not signature.has_field("output"):
+    signature = primitive.signature
+    if signature.type_param_count or signature.varargs or not signature.has_field("output"):
         msg = "Exact constructor inspection requires a closed fixed signature"
         raise ValueError(msg)
     infer_sort(declaration.owner.ref("sorts", signature.output), sort, 0, {})
@@ -133,9 +133,9 @@ def _pair_call_children(reference: Ref, sort: Ref) -> tuple[Ref, Ref]:
     if not isinstance(callable_record, pb.Primitive):
         raise ExprValueError(RuntimeExpr(reference), "Pair(left, right)")
     primitive = callable_record
-    if primitive.typing is None or primitive.typing.field != "signature":
+    if primitive.signature is None:
         raise ExprValueError(RuntimeExpr(reference), "Pair(left, right)")
-    signature = primitive.typing.value
+    signature = primitive.signature
     if signature.varargs or len(signature.inputs) != 2 or not signature.has_field("output"):
         msg = "Invalid canonical Pair constructor signature"
         raise ValueError(msg)
@@ -143,17 +143,17 @@ def _pair_call_children(reference: Ref, sort: Ref) -> tuple[Ref, Ref]:
         msg = "Pair inspection requires two children"
         raise ValueError(msg)
     substitutions: dict[int, Ref] = {}
-    infer_sort(declaration.owner.ref("sorts", signature.output), sort, len(signature.type_params), substitutions)
+    infer_sort(declaration.owner.ref("sorts", signature.output), sort, signature.type_param_count, substitutions)
     children = tuple(reference.owner.ref("nodes", index) for index in node.kind.value.args)
     for child, parameter in zip(children, signature.inputs, strict=True):
         payload: pb.Node = child.read()
         infer_sort(
             declaration.owner.ref("sorts", parameter.sort),
             child.owner.ref("sorts", payload.sort_id),
-            len(signature.type_params),
+            signature.type_param_count,
             substitutions,
         )
-    if len(substitutions) != len(signature.type_params):
+    if len(substitutions) != signature.type_param_count:
         msg = "Pair inspection has unresolved signature parameters"
         raise ValueError(msg)
     return children[0], children[1]
@@ -233,15 +233,17 @@ def _maybe_value(expr: RuntimeExpr) -> RuntimeExpr | None:
         call = node.kind.value
         declaration = _definition_at(reference, "callable", call.func)
         declared: pb.Declaration | pb.Primitive = declaration.read()
-        if not isinstance(declared, pb.Primitive) or declared.typing is None or declared.typing.field != "signature":
+        if not isinstance(declared, pb.Primitive) or declared.signature is None:
             msg = "Maybe inspection requires native callable provenance"
             raise ValueError(msg)
-        signature = declared.typing.value
+        signature = declared.signature
         expected_ref = builtin_catalog().definitions["callable", call.func]
-        expected = expected_ref.read().typing.value
+        expected_record = expected_ref.read()
+        assert isinstance(expected_record, pb.Primitive)
+        expected = expected_record.signature
+        assert expected is not None
         if (
-            len(signature.type_params) != len(expected.type_params)
-            or signature.equality_type_params != expected.equality_type_params
+            signature.type_param_count != expected.type_param_count
             or len(signature.inputs) != len(expected.inputs)
             or signature.varargs
             or not signature.has_field("output")
@@ -327,9 +329,9 @@ def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C90
         if not isinstance(callable_record, pb.Primitive):
             raise ExprValueError(expr, allowed)
         primitive = callable_record
-        if primitive.typing is None or primitive.typing.field != "signature":
+        if primitive.signature is None:
             raise ExprValueError(expr, allowed)
-        signature = primitive.typing.value
+        signature = primitive.signature
         variadic = call.func == constructor
         if (
             signature.inputs
@@ -340,17 +342,17 @@ def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C90
             msg = f"Invalid canonical {family} constructor signature or arguments"
             raise ValueError(msg)
         substitutions: dict[int, Ref] = {}
-        infer_sort(declaration.owner.ref("sorts", signature.output), sort, len(signature.type_params), substitutions)
+        infer_sort(declaration.owner.ref("sorts", signature.output), sort, signature.type_param_count, substitutions)
         children = tuple(reference.owner.ref("nodes", index) for index in call.args)
         for child in children:
             payload: pb.Node = child.read()
             infer_sort(
                 declaration.owner.ref("sorts", signature.varargs[0].sort),
                 child.owner.ref("sorts", payload.sort_id),
-                len(signature.type_params),
+                signature.type_param_count,
                 substitutions,
             )
-        if len(substitutions) != len(signature.type_params):
+        if len(substitutions) != signature.type_param_count:
             msg = f"{family} inspection has unresolved signature parameters"
             raise ValueError(msg)
     elif (
@@ -473,20 +475,16 @@ def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:  # noqa: C90
             call = node.kind.value
             declaration = _definition_at(reference, "callable", call.func)
             declared: pb.Declaration | pb.Primitive = declaration.read()
-            if (
-                not isinstance(declared, pb.Primitive)
-                or declared.typing is None
-                or declared.typing.field != "signature"
-            ):
+            if not isinstance(declared, pb.Primitive) or declared.signature is None:
                 msg = "Map inspection requires native callable provenance"
                 raise ExprValueError(expr, msg)
-            signature = declared.typing.value
+            signature = declared.signature
             if signature.varargs or not signature.has_field("output") or len(call.args) != len(signature.inputs):
                 msg = "Invalid canonical Map signature or call arity"
                 raise ExprValueError(expr, msg)
             substitutions: dict[int, Ref] = {}
             infer_sort(
-                declaration.owner.ref("sorts", signature.output), sort, len(signature.type_params), substitutions
+                declaration.owner.ref("sorts", signature.output), sort, signature.type_param_count, substitutions
             )
             children = [reference.owner.ref("nodes", index) for index in call.args]
             for child, parameter in zip(children, signature.inputs, strict=True):
@@ -494,10 +492,10 @@ def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:  # noqa: C90
                 infer_sort(
                     declaration.owner.ref("sorts", parameter.sort),
                     child.owner.ref("sorts", payload.sort_id),
-                    len(signature.type_params),
+                    signature.type_param_count,
                     substitutions,
                 )
-            if len(substitutions) != len(signature.type_params):
+            if len(substitutions) != signature.type_param_count:
                 msg = "Map inspection has unresolved signature parameters"
                 raise ExprValueError(expr, msg)
             if call.func == "egglog.core.map.empty":
@@ -565,14 +563,13 @@ def _function_value(expr: RuntimeExpr) -> object:
 
 __all__ = ["ExprValueError"]
 _catalog = builtin_catalog()
-if (_function_binding := _catalog.members.get((("function", ""), "__call__"))) is not None:
-    UnstableFn = RuntimeClass(_function_binding[0])
-    UnstableFn.__egg_hooks__.update(value=property(_function_value), eval=_eval)
-    __all__ += ["UnstableFn"]
-    converter(RuntimeFunction, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
-    converter(FunctionType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
-    converter(MethodType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
-    converter(partial, UnstableFn, lambda value: UnstableFn[get_type_args()](value.func, *value.args))
+UnstableFn = RuntimeClass(_Intrinsic.APPLY)
+UnstableFn.__egg_hooks__.update(value=property(_function_value), eval=_eval)
+__all__ += ["UnstableFn"]
+converter(RuntimeFunction, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
+converter(FunctionType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
+converter(MethodType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
+converter(partial, UnstableFn, lambda value: UnstableFn[get_type_args()](value.func, *value.args))
 for _definition in _catalog.definitions.values():
     _declaration: pb.Declaration | pb.Primitive | pb.PrimitiveSort = _definition.read()
     if isinstance(_declaration, pb.Declaration):
