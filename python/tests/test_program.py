@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import struct
 from copy import copy
+from dataclasses import replace
 from typing import Literal
 from weakref import ref as weakref
 
@@ -13,13 +14,18 @@ from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import DescFieldValueList, Oneof
 
 from egglog import Bool, String, Unit, _program, bindings, join, rule, ruleset
+from egglog._catalog import builtin_catalog
+from egglog._presentation import Parameter, Presentation, TypePresentation, presentation
 from egglog._program import Builder, StructuralView, clone_nodes, pack
 from egglog.egraph import Action, RewriteOrRule
 
 
 def literal(value: int):
     builder = Builder()
-    builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+    builder.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+    )
     index = builder.add(
         "nodes",
         pb.Node(
@@ -41,35 +47,39 @@ def _required_named_declaration(program: pb.Program, name: str) -> pb.Declaratio
     raise StopIteration
 
 
-AMBIENT = frozenset({("host_sort_family", "i64"), ("callable", "f"), ("callable", "g")})
+AMBIENT = frozenset({("primitive_sort", "i64"), ("callable", "f"), ("callable", "g")})
 
 
-def test_sort_text_alias_metadata_survives_copy_and_pack_without_affecting_identity():
+def test_frontend_type_names_follow_owned_refs_but_never_enter_programs():
     sorts = []
-    for symbols in ([], ["A"], ["Z"], ["A", "Z"]):
+    encodings = []
+    for label in ("A", "Z"):
         builder = Builder()
-        scalar = builder.add(
-            "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+        definition = builder.add(
+            "declarations", pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="User")))
         )
-        index = builder.add(
-            "sorts",
-            pb.Sort(
-                kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[scalar])),
-                egglog_aliases=[pb.EgglogTypeBinding(symbol=s) for s in symbols],
-            ),
-        )
-        sort = builder.publish().ref("sorts", index)
+        builder.presentations["eq_sort", "User"] = Presentation(type_view=TypePresentation(("example", label)))
+        index = builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "User")))
+        owner = builder.publish()
+        sort = owner.ref("sorts", index)
         sorts.append(StructuralView(sort))
         imported = Builder()
-        imported.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "unused")))
+        imported.import_ref(owner.ref("declarations", definition))
         copied = imported.import_ref(sort)
-        copied = imported.publish().ref("sorts", copied)
-        assert [a.symbol for a in copied.read().egglog_aliases] == symbols
-        packed = pack([copied], ambient={("host_sort_family", "i64"), ("host_sort_family", "Vec")}).program
-        decoded = pb.Program.from_binary(packed.to_binary())
-        assert [a.symbol for a in decoded.sorts[0].egglog_aliases] == symbols
+        owner = imported.publish()
+        copied = owner.ref("sorts", copied)
+        local = presentation(owner.ref("declarations", 0)).type_view
+        assert local is not None
+        assert local.path[-1] == label
+        packed = pack([copied]).program
+        encodings.append(packed.to_binary())
+        decoded = Builder.from_program(pb.Program.from_binary(encodings[-1])).publish()
+        detached = presentation(decoded.ref("declarations", 0)).type_view
+        assert detached is not None
+        assert detached.path[-1] == "User"
         assert StructuralView(copied) == StructuralView(sort)
     assert len(set(sorts)) == 1
+    assert encodings[0] == encodings[1]
 
 
 def test_print_function_limit_presence_survives_copy_and_pack_without_engine(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,15 +143,15 @@ def test_schedule_composition_relocates_owned_inline_spans_without_engine(monkey
     assert [file.name for file in program.files] == ["schedule.py"]
     sequence_kind = program.commands[0].kind
     assert sequence_kind is not None
-    assert sequence_kind.field == "repeat"
+    assert sequence_kind.field == "loop"
     first, second = sequence_kind.value.body
     assert first.span == pb.Span(file=0, start=0, end=5)
     repeated_kind = second.kind
     assert repeated_kind is not None
-    assert repeated_kind.field == "saturate"
+    assert repeated_kind.field == "loop"
     saturated_kind = repeated_kind.value.body[0].kind
     assert saturated_kind is not None
-    assert saturated_kind.field == "saturate"
+    assert saturated_kind.field == "loop"
     assert saturated_kind.value.body[0].span == first.span
     assert pb.Program.from_binary(program.to_binary()) == program
 
@@ -266,7 +276,12 @@ def test_structural_float_equality_hashes_and_exact_bits(left_bits, right_bits, 
     views = []
     for bits in (left_bits, right_bits):
         builder = Builder()
-        builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="f64"))))
+        builder.add(
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="f64"))
+            ),
+        )
         index = builder.add(
             "nodes",
             pb.Node(
@@ -289,7 +304,9 @@ def action_program():
     """A Set whose declaration closure contains a recursive named dependency."""
     return pb.Program(
         sorts=[
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name=name)))
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name=name))
+            )
             for name in ("i64", "f64")
         ],
         nodes=[
@@ -303,14 +320,6 @@ def action_program():
         ]
         + [pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func=name))) for name in ("g", "f")],
         declarations=[
-            pb.Declaration(
-                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                    "host_sort_family", pb.HostSortFamily(name=name)
-                )
-            )
-            for name in ("i64", "f64")
-        ]
-        + [
             pb.Declaration(
                 kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name=name, output=0, merge=merge))
             )
@@ -328,12 +337,16 @@ def action_program():
 
 
 def test_action_equality_ignores_unrelated_records_and_arena_layout(action_program):
-    first = Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    first = Action(
+        Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish().ref("commands", 0)
+    )
     action_program.declarations += [
         pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="unused")))
     ]
     action_program.nodes.append(pb.Node(sort_id=1, kind=Oneof[Literal["var"], str]("var", "unused")))
-    assert first == Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    assert first == Action(
+        Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish().ref("commands", 0)
+    )
     mappings = {
         role: {
             index: len(getattr(action_program, role)) - index - 1 for index in range(len(getattr(action_program, role)))
@@ -347,28 +360,35 @@ def test_action_equality_ignores_unrelated_records_and_arena_layout(action_progr
             for record in reversed(original)
         ]
         getattr(action_program, role)[:] = relocated
-    assert first == Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    assert first == Action(
+        Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish().ref("commands", 0)
+    )
 
 
-@pytest.mark.parametrize("change", ["doc", "presentation", "hidden", "merge", "sort", "rhs", "action"])
+@pytest.mark.parametrize("change", ["doc", "hidden", "merge", "sort", "rhs", "action"])
 def test_action_equality_observes_referenced_declaration_closure(action_program, change):
-    first = Action(Builder.from_program(action_program).publish().ref("commands", 0))
-    assert first == Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    first = Action(
+        Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish().ref("commands", 0)
+    )
+    assert first == Action(
+        Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish().ref("commands", 0)
+    )
     # g is reached only through f's merge; checking the action root or f alone
     # would miss these changes to the recursive referenced declaration closure.
-    declaration = action_program.declarations[3]
+    declaration = action_program.declarations[1]
     if change == "doc":
         declaration.doc = "different"
-    elif change == "presentation":
-        declaration.bindings = pb.CallableBindings(
-            python=pb.PythonBindings(views=[pb.PythonCallable(kind=pb.PythonCallKind.FUNCTION, path=["renamed"])])
-        )
     elif change == "hidden":
-        declaration.hidden = True
-        visible = first.__egg_ref__.owner.ref("declarations", 3)
-        hidden = Builder.from_program(action_program).publish().ref("declarations", 3)
-        assert visible.read().hidden is False
-        assert hidden.read().hidden is True
+        declaration.kind.value.hidden = True
+        visible = first.__egg_ref__.owner.ref("declarations", 1)
+        hidden = (
+            Builder
+            .from_program(action_program, environment=(builtin_catalog().owner,))
+            .publish()
+            .ref("declarations", 1)
+        )
+        assert visible.read().kind.value.hidden is False
+        assert hidden.read().kind.value.hidden is True
         assert StructuralView(visible) != StructuralView(hidden)
         assert len({StructuralView(visible), StructuralView(hidden)}) == 2
         with pytest.raises(ValueError, match="same-name"):
@@ -376,12 +396,16 @@ def test_action_equality_observes_referenced_declaration_closure(action_program,
     elif change == "merge":
         declaration.kind.value.merge = 1
     elif change == "sort":
-        action_program.declarations[0].kind.value.bindings = pb.SortBindings(python=pb.TypeBinding(path=["renamed"]))
+        action_program.sorts[0].kind = Oneof[Literal["application"], pb.SortApplication](
+            "application", pb.SortApplication(name="f64")
+        )
     elif change == "rhs":
         action_program.commands[0].kind.value.kind.value.value = 1
     else:
         action_program.commands[0].kind.value.kind = Oneof[Literal["term"], int]("term", 0)
-    assert first != Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    assert first != Action(
+        Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish().ref("commands", 0)
+    )
 
 
 @pytest.mark.parametrize("kind", ["ordinary", "empty", "cycle"])
@@ -394,11 +418,13 @@ def test_action_equality_compares_union_syntax_in_declaration_closure(action_pro
             ),
         )
     )
-    action_program.declarations[2].kind.value.merge = 4
-    owner = Builder.from_program(action_program).publish()
+    action_program.declarations[0].kind.value.merge = 4
+    owner = Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish()
     first = Action(owner.ref("commands", 0))
     assert first == Action(owner.ref("commands", 0))
-    second = Action(Builder.from_program(action_program).publish().ref("commands", 0))
+    second = Action(
+        Builder.from_program(action_program, environment=(builtin_catalog().owner,)).publish().ref("commands", 0)
+    )
     assert (first == second) is (kind == "ordinary")
     assert (second == first) is (kind == "ordinary")
 
@@ -607,11 +633,6 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
     declarations = [
         pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair"))),
         pb.Declaration(
-            kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                "host_sort_family", pb.HostSortFamily(name="Pair", arity=2)
-            )
-        ),
-        pb.Declaration(
             kind=Oneof[Literal["constructor"], pb.Constructor]("constructor", pb.Constructor(name="Pair", output=0))
         ),
     ]
@@ -619,7 +640,11 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
         pb.Program(
             sorts=[
                 pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Pair")),
-                pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Pair", args=[0, 0]))),
+                pb.Sort(
+                    kind=Oneof[Literal["application"], pb.SortApplication](
+                        "application", pb.SortApplication(name="Pair", args=[0, 0])
+                    )
+                ),
             ],
             declarations=declarations[::-1] if reverse else declarations,
             nodes=[
@@ -634,14 +659,18 @@ def test_nominal_family_callable_names_keep_independent_closure(reverse):
                     ),
                 ),
             ],
-        )
+        ),
+        environment=(
+            Builder.from_builtins(
+                pb.BuiltinCatalog(primitive_sorts=[pb.PrimitiveSort(name="Pair", arity=2)])
+            ).publish(),
+        ),
     ).publish()
     nominal, family = owner.ref("nodes", 0), owner.ref("nodes", 1)
     for roots in ([nominal, family], [family, nominal], clone_nodes([family]), [nominal, *clone_nodes([family])]):
         result = pack(roots)
         assert {_program._definition_key(d) for d in result.program.declarations} == {
             ("eq_sort", "Pair"),
-            ("host_sort_family", "Pair"),
             ("callable", "Pair"),
         }
         for node in result.program.nodes:
@@ -671,41 +700,44 @@ def test_sort_dependency_never_falls_back_to_other_kind(nominal, local):
         pb.Sort(
             kind=Oneof[Literal["eq"], str]("eq", "Pair")
             if nominal
-            else Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Pair"))
+            else Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Pair"))
         ),
     )
-    wrong_kind = "host_sort_family" if nominal else "eq_sort"
+    wrong_kind = "primitive_sort" if nominal else "eq_sort"
     if local:
-        builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                    "host_sort_family", pb.HostSortFamily(name="Pair")
-                )
-                if nominal
-                else Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair"))
-            ),
-        )
+        if nominal:
+            builder.add("primitive_sorts", pb.PrimitiveSort(name="Pair"))
+        else:
+            builder.add(
+                "declarations",
+                pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair"))),
+            )
     reference = builder.publish().ref("sorts", sort)
     with pytest.raises(ValueError, match="missing definitions"):
         pack([reference], ambient=() if local else {(wrong_kind, "Pair")})
-    correct_kind = "eq_sort" if nominal else "host_sort_family"
+    correct_kind = "eq_sort" if nominal else "primitive_sort"
     assert not pack([reference], ambient={(correct_kind, "Pair")}).program.declarations
 
 
 @pytest.mark.parametrize("nominal", [False, True])
 def test_same_kind_sort_definition_conflicts_remain_errors(nominal):
+    if not nominal:
+        owners = [
+            Builder.from_builtins(
+                pb.BuiltinCatalog(primitive_sorts=[pb.PrimitiveSort(name="Pair", arity=arity)])
+            ).publish()
+            for arity in range(2)
+        ]
+        with pytest.raises(ValueError, match="Conflicting builtin environments"):
+            Builder(environment=owners).publish()
+        return
     builder = Builder()
     for index in range(2):
         builder.add(
             "declarations",
             pb.Declaration(
                 doc=str(index),
-                kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair"))
-                if nominal
-                else Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                    "host_sort_family", pb.HostSortFamily(name="Pair", arity=index)
-                ),
+                kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="Pair")),
             ),
         )
     owner = builder.publish()
@@ -723,18 +755,21 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
     for offset in range(2):
         builder = Builder()
         if offset:
-            builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="f64"))))
+            builder.add(
+                "sorts",
+                pb.Sort(
+                    kind=Oneof[Literal["application"], pb.SortApplication](
+                        "application", pb.SortApplication(name="f64")
+                    )
+                ),
+            )
         scalar = builder.add(
-            "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
-        )
-        builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                    "host_sort_family", pb.HostSortFamily(name="i64")
-                )
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
             ),
         )
+        builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
         definition = builder.add(
             "declarations",
             pb.Declaration(
@@ -774,9 +809,9 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
         wrapper = builder.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof[Literal["primitive"], pb.Primitive](
-                    "primitive",
-                    pb.Primitive(
+                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                    "user_defined_primitive",
+                    pb.UserDefinedPrimitive(
                         name="wrapper",
                         output=builder.import_ref(left[0]),
                         body=builder.import_ref(right[2]),
@@ -792,14 +827,16 @@ def test_pack_reconciles_independent_compatible_definitions(monkeypatch, root_ki
         assert declaration_kind is not None
         declaration_kinds.append(declaration_kind)
     assert sum(kind.value.name == "composed" for kind in declaration_kinds) == 1
-    assert sum(kind.field == "host_sort_family" for kind in declaration_kinds) == 1
+    assert all(kind.field != "eq_sort" for kind in declaration_kinds)
     assert [reference.read().to_binary() for _, reference, _ in producers] == before
     if root_kind == "definitions":
         assert packed.indices[0] == packed.indices[1]
     elif root_kind == "calls":
         assert packed.indices[0] != packed.indices[1]
         assert len(packed.program.nodes) == 4
-    restored = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+    restored = Builder.from_program(
+        pb.Program.from_binary(packed.program.to_binary()), environment=(builtin_catalog().owner,)
+    ).publish()
     role = "nodes" if root_kind == "calls" else "declarations"
     assert (
         pack([restored.ref(role, index) for index in packed.indices]).program.to_binary() == packed.program.to_binary()
@@ -812,16 +849,12 @@ def test_compatible_definition_does_not_hide_conflicting_named_dependency(foreig
     for value in (4, 9):
         builder = Builder()
         scalar = builder.add(
-            "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
-        )
-        builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                    "host_sort_family", pb.HostSortFamily(name="i64")
-                )
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
             ),
         )
+        builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
         literal = builder.add(
             "nodes",
             pb.Node(
@@ -834,8 +867,8 @@ def test_compatible_definition_does_not_hide_conflicting_named_dependency(foreig
         builder.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof[Literal["primitive"], pb.Primitive](
-                    "primitive", pb.Primitive(name="dependency", output=scalar, body=literal)
+                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                    "user_defined_primitive", pb.UserDefinedPrimitive(name="dependency", output=scalar, body=literal)
                 )
             ),
         )
@@ -850,8 +883,8 @@ def test_compatible_definition_does_not_hide_conflicting_named_dependency(foreig
         wrapper = builder.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof[Literal["primitive"], pb.Primitive](
-                    "primitive", pb.Primitive(name="wrapper", output=scalar, body=call)
+                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                    "user_defined_primitive", pb.UserDefinedPrimitive(name="wrapper", output=scalar, body=call)
                 )
             ),
         )
@@ -869,16 +902,14 @@ def test_definition_reconciliation_preserves_literal_bits_and_union_identity(bod
         builder = Builder()
         if body_kind == "signed_zero":
             scalar = builder.add(
-                "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="f64")))
-            )
-            builder.add(
-                "declarations",
-                pb.Declaration(
-                    kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                        "host_sort_family", pb.HostSortFamily(name="f64")
+                "sorts",
+                pb.Sort(
+                    kind=Oneof[Literal["application"], pb.SortApplication](
+                        "application", pb.SortApplication(name="f64")
                     )
                 ),
             )
+            builder.add("primitive_sorts", pb.PrimitiveSort(name="f64"))
             kind = Oneof[Literal["primitive_value"], pb.PrimitiveValue](
                 "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["f64_bits"], int]("f64_bits", index << 63))
             )
@@ -893,8 +924,8 @@ def test_definition_reconciliation_preserves_literal_bits_and_union_identity(bod
         definition = builder.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof[Literal["primitive"], pb.Primitive](
-                    "primitive", pb.Primitive(name="body", output=scalar, body=body)
+                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                    "user_defined_primitive", pb.UserDefinedPrimitive(name="body", output=scalar, body=body)
                 )
             ),
         )
@@ -912,7 +943,10 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
     for value in (4, 9):
         foreign = Builder()
         scalar = foreign.add(
-            "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            ),
         )
         body = foreign.add(
             "nodes",
@@ -926,8 +960,8 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
         foreign.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof[Literal["primitive"], pb.Primitive](
-                    "primitive", pb.Primitive(name="dependency", output=scalar, body=body)
+                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                    "user_defined_primitive", pb.UserDefinedPrimitive(name="dependency", output=scalar, body=body)
                 )
             ),
         )
@@ -937,22 +971,18 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
         foreign_owner = foreign.publish()
         builder = Builder()
         scalar = builder.add(
-            "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
-        )
-        builder.add(
-            "declarations",
-            pb.Declaration(
-                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                    "host_sort_family", pb.HostSortFamily(name="i64")
-                )
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
             ),
         )
+        builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
         builder.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof[Literal["primitive"], pb.Primitive](
-                    "primitive",
-                    pb.Primitive(
+                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                    "user_defined_primitive",
+                    pb.UserDefinedPrimitive(
                         name="unused",
                         output=scalar,
                         body=builder.import_ref(foreign_owner.ref("nodes", call)),
@@ -976,7 +1006,7 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
         kind = declaration.kind
         assert kind is not None
         names.append(kind.value.name)
-    assert names == ["i64"]
+    assert names == []
     assert len(packed.program.nodes) == 2
 
 
@@ -984,16 +1014,10 @@ def test_reconciliation_does_not_discover_unreachable_foreign_bodies():
 def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypatch, mapped_first):
     foreign = Builder()
     scalar = foreign.add(
-        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
     )
-    foreign.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                "host_sort_family", pb.HostSortFamily(name="i64")
-            )
-        ),
-    )
+    foreign.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
     nine = foreign.add(
         "nodes",
         pb.Node(
@@ -1006,8 +1030,8 @@ def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypa
     foreign.add(
         "declarations",
         pb.Declaration(
-            kind=Oneof[Literal["primitive"], pb.Primitive](
-                "primitive", pb.Primitive(name="f", output=scalar, body=nine)
+            kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                "user_defined_primitive", pb.UserDefinedPrimitive(name="f", output=scalar, body=nine)
             )
         ),
     )
@@ -1017,16 +1041,10 @@ def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypa
     foreign_owner = foreign.publish()
     builder = Builder()
     scalar = builder.add(
-        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
     )
-    builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                "host_sort_family", pb.HostSortFamily(name="i64")
-            )
-        ),
-    )
+    builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
     four = builder.add(
         "nodes",
         pb.Node(
@@ -1039,17 +1057,17 @@ def test_late_definition_conflict_is_checked_before_dirty_demand_clears(monkeypa
     first = builder.add(
         "declarations",
         pb.Declaration(
-            kind=Oneof[Literal["primitive"], pb.Primitive](
-                "primitive", pb.Primitive(name="f", output=scalar, body=four)
+            kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                "user_defined_primitive", pb.UserDefinedPrimitive(name="f", output=scalar, body=four)
             )
         ),
     )
     wrapper = builder.add(
         "declarations",
         pb.Declaration(
-            kind=Oneof[Literal["primitive"], pb.Primitive](
-                "primitive",
-                pb.Primitive(
+            kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                "user_defined_primitive",
+                pb.UserDefinedPrimitive(
                     name="wrapper",
                     output=scalar,
                     body=builder.import_ref(foreign_owner.ref("nodes", call)),
@@ -1112,7 +1130,12 @@ def test_slot_permutation_and_protobuf_fields_are_authoritative():
 
     def authored(imports, args, *, func="f", kind=None):
         builder = Builder()
-        builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+        builder.add(
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            ),
+        )
         for imported in imports:
             builder.import_ref(imported)
         root = builder.add(
@@ -1136,7 +1159,10 @@ def test_slot_permutation_and_protobuf_fields_are_authoritative():
 
 def test_adoption_publication_and_inspection_are_isolated():
     builder = Builder()
-    builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+    builder.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+    )
     supplied = pb.Node(
         kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
             "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 7))
@@ -1197,31 +1223,28 @@ def test_diamonds_distinct_equal_unions_and_cycles():
 
 def test_named_recursive_definition_closure_and_missing_names():
     builder = Builder()
-    builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+    builder.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+    )
     builder.add("nodes", pb.Node(kind=Oneof[Literal["var"], str]("var", "_0")))
     builder.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f", args=[0]))))
     builder.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="g", args=[0]))))
-    builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                "host_sort_family", pb.HostSortFamily(name="i64")
-            )
-        ),
-    )
+    builder.add("primitive_sorts", pb.PrimitiveSort(name="i64"))
     for name, body in [("f", 2), ("g", 1), ("unreachable", 0)]:
         builder.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof[Literal["primitive"], pb.Primitive](
-                    "primitive", pb.Primitive(name=name, inputs=[pb.Arg(sort=0)], output=0, body=body)
+                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                    "user_defined_primitive",
+                    pb.UserDefinedPrimitive(name=name, inputs=[pb.Arg(sort=0)], output=0, body=body),
                 )
             ),
         )
     owner = builder.publish()
     result = pack([owner.ref("nodes", 1)])
     assert all(d.kind is not None for d in result.program.declarations)
-    assert {d.kind.value.name for d in result.program.declarations if d.kind is not None} == {"f", "g", "i64"}
+    assert {d.kind.value.name for d in result.program.declarations if d.kind is not None} == {"f", "g"}
     assert len(result.program.nodes) == 3
     with pytest.raises(ValueError, match=r"missing.*i64"):
         pack([literal(1)])
@@ -1230,7 +1253,10 @@ def test_named_recursive_definition_closure_and_missing_names():
 def test_rules_rulesets_commands_files_and_command_multiplicity():
     builder = Builder()
     builder.add("files", pb.SourceFile(name="source", contents="x"))
-    builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+    builder.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+    )
     builder.add("nodes", pb.Node(kind=Oneof[Literal["var"], str]("var", "x"), span=pb.Span(file=0, end=1)))
     rule = pb.Rule(
         kind=Oneof[Literal["rule"], pb.RuleBody](
@@ -1243,10 +1269,10 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
     command = builder.add(
         "commands",
         pb.Command(
-            kind=Oneof[Literal["repeat"], pb.Repeat](
-                "repeat",
-                pb.Repeat(
-                    times=2,
+            kind=Oneof[Literal["loop"], pb.Loop](
+                "loop",
+                pb.Loop(
+                    max_iterations=2,
                     until=[0],
                     body=[
                         pb.Command(
@@ -1267,7 +1293,7 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
     assert len(result.program.rules) == 2
     control = result.program.commands[0].kind
     assert control is not None
-    assert control.field == "repeat"
+    assert control.field == "loop"
     addition = control.value.body[0].kind
     assert addition is not None
     assert addition.field == "add_rules"
@@ -1279,53 +1305,38 @@ def test_rules_rulesets_commands_files_and_command_multiplicity():
 
 
 def test_binders_defaults_and_payloads_are_not_reinterpreted():
-    builder = Builder()
-    builder.add("sorts", pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)))
-    builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
-    builder.add("nodes", pb.Node(sort_id=1, kind=Oneof[Literal["var"], str]("var", "_0")))
+    builder = Builder(environment=(builtin_catalog().owner,))
+    builder.add("sorts", pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "unused")))
+    scalar = builder.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+    )
+    body = builder.add("nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["var"], str]("var", "_0")))
     for name in ("left", "right"):
         builder.add(
             "declarations",
             pb.Declaration(
-                kind=Oneof[Literal["host_primitive"], pb.HostPrimitive](
-                    "host_primitive",
-                    pb.HostPrimitive(
-                        name=name,
-                        typing=Oneof[Literal["signature"], pb.GenericSignature](
-                            "signature", pb.GenericSignature(type_params=["T"], inputs=[pb.Arg(sort=0)], output=0)
-                        ),
+                kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                    "user_defined_primitive",
+                    pb.UserDefinedPrimitive(
+                        name=name, inputs=[pb.Arg(sort=scalar, name="label")], output=scalar, body=body
                     ),
-                ),
-                bindings=pb.CallableBindings(
-                    python=pb.PythonBindings(
-                        views=[
-                            pb.PythonCallable(
-                                kind=pb.PythonCallKind.FUNCTION,
-                                path=[name],
-                                params=[pb.PythonParameter(core_input=0, name="x", default_expr=0)],
-                            )
-                        ]
-                    )
-                ),
+                )
             ),
         )
     owner = builder.publish()
-    result = pack([owner.ref("declarations", 1), owner.ref("declarations", 0)], ambient=AMBIENT)
-    assert result.program.sorts[0].kind == Oneof[Literal["var"], int]("var", 0)
+    result = pack([owner.ref("declarations", 1), owner.ref("declarations", 0)])
+    assert result.program.sorts[0].kind == Oneof("application", pb.SortApplication(name="i64"))
     assert result.program.nodes[0].kind == Oneof[Literal["var"], str]("var", "_0")
     assert len(result.program.declarations) == 2
     for declaration in result.program.declarations:
         assert declaration.kind is not None
-        assert declaration.kind.field == "host_primitive"
-        typing = declaration.kind.value.typing
-        assert typing is not None
-        assert typing.field == "signature"
-        assert typing.value.type_params == ["T"]
-        assert declaration.bindings is not None
-        assert declaration.bindings.python is not None
-        assert declaration.bindings.python.views[0].params[0].core_input == 0
-    # Storage does not claim this free-variable default is semantically valid;
-    # shared adapter binding checks must reject it if submitted for execution.
+        assert declaration.kind.field == "user_defined_primitive"
+        assert declaration.kind.value.inputs == [pb.Arg(sort=0, name="label")]
+        assert declaration.kind.value.output == 0
+        assert declaration.kind.value.body == 0
+    with pytest.raises(ValueError, match="free variable"):
+        Parameter(core_input=0, name="x", default=owner.ref("nodes", body))
 
 
 def test_linear_authoring_and_pack(monkeypatch):
@@ -1344,7 +1355,12 @@ def test_linear_authoring_and_pack(monkeypatch):
     owners = []
     for _ in range(10_000):
         builder = Builder()
-        builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+        builder.add(
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            ),
+        )
         left = builder.import_ref(current)
         right = builder.import_ref(source)
         index = builder.add(
@@ -1369,87 +1385,65 @@ def test_inventory_covers_all_program_message_fields():
     _program._check_inventory()
 
 
-@pytest.mark.parametrize("message", ["PythonCallable", "RustCallable"])
-def test_tail_repetitions_must_be_classified_in_inventory(monkeypatch, message):
-    monkeypatch.delitem(_program._FIELD_ROLES[message], "tail_repetitions")
+def test_inventory_rejects_an_unclassified_semantic_field(monkeypatch):
+    monkeypatch.delitem(_program._FIELD_ROLES["GenericSignature"], "varargs")
     with pytest.raises(NotImplementedError, match="Unclassified protobuf fields"):
         _program._check_inventory()
 
 
 @pytest.mark.parametrize("repetitions", [None, 0, 2])
-def test_scalar_view_presence_survives_owned_closure_and_relocation(repetitions):
-    packet = pack([join("a", "b").__egg_ref__])
-    program = packet.program
-    declaration = _required_named_declaration(program, "egglog.core.string.concat")
-    declaration_bindings = declaration.bindings
-    assert declaration_bindings is not None
-    assert declaration_bindings.python is not None
-    assert declaration_bindings.rust is not None
-    python_view, rust_view = declaration_bindings.python.views[0], declaration_bindings.rust.views[0]
+def test_scalar_view_presence_stays_local_through_owned_closure_and_relocation(repetitions, native_catalog_program):
+    from egglog.runtime import _definition_at, resolve_callable  # noqa: PLC0415
+
+    views = presentation(resolve_callable(join)).views
+    python_view = views[0]
     if repetitions is not None:
-        python_view.tail_repetitions = rust_view.tail_repetitions = repetitions
-        python_view.params = [pb.PythonParameter(core_input=i, name=f"part{i}") for i in range(repetitions)]
-        rust_view.params = [pb.RustParameter(core_input=i, name=f"part{i}") for i in range(repetitions)]
-    owner = Builder.from_program(program).publish()
-    reference = owner.ref("declarations", program.declarations.index(declaration))
+        python_view = replace(
+            python_view,
+            tail_repetitions=repetitions,
+            params=tuple(Parameter(core_input=i, name=f"part{i}") for i in range(repetitions)),
+        )
+    builder = Builder.from_builtins(native_catalog_program)
+    builder.presentations.update(builtin_catalog().owner._presentations)
+    builder.presentations["callable", "egglog.core.string.concat"] = Presentation(views=(python_view, *views[1:]))
+    native = builder.publish()
+    reference = next(
+        native.ref("primitives", index)
+        for index, primitive in enumerate(native_catalog_program.primitives)
+        if primitive.name == "egglog.core.string.concat"
+    )
     detached = reference.read()
-    assert isinstance(detached, pb.Declaration)
-    detached_bindings = detached.bindings
-    assert detached_bindings is not None
-    assert detached_bindings.python is not None
-    assert detached_bindings.rust is not None
-    detached_bindings.python.views[0].tail_repetitions = 7
-    detached_bindings.rust.views[0].tail_repetitions = 7
-    builder = Builder()
-    for index in reversed(range(len(program.sorts))):
-        builder.import_ref(owner.ref("sorts", index))
-    for index in reversed(range(len(program.declarations))):
-        builder.import_ref(owner.ref("declarations", index))
+    assert isinstance(detached, pb.Primitive)
+    detached.doc = "changed detached copy"
+    packet = pack([join("a", "b").__egg_ref__])
+    owner = Builder.from_program(packet.program, environment=(native,)).publish()
     cloned = clone_nodes([owner.ref("nodes", packet.indices[0])])[0]
-    index = builder.import_ref(cloned)
-    packed = pack([builder.publish().ref("nodes", index)]).program
+    assert _definition_at(cloned, "callable", "egglog.core.string.concat") == reference
+    assert presentation(reference).views[0].tail_repetitions == repetitions
+    packed = pack([cloned]).program
     reencoded = pb.Program.from_binary(packed.to_binary())
     assert reencoded == packed
-    for records in (
-        reference.read(),
-        _required_named_declaration(reencoded, "egglog.core.string.concat"),
-    ):
-        assert isinstance(records, pb.Declaration)
-        record_bindings = records.bindings
-        assert record_bindings is not None
-        assert record_bindings.python is not None
-        assert record_bindings.rust is not None
-        for view in (record_bindings.python.views[0], record_bindings.rust.views[0]):
-            assert view.has_field("tail_repetitions") is (repetitions is not None)
-            if repetitions is not None:
-                assert view.tail_repetitions == repetitions
-        record_kind = records.kind
-        assert record_kind is not None
-        assert record_kind.field == "host_primitive"
-        signature_kind = record_kind.value.typing
-        assert signature_kind is not None
-        assert signature_kind.field == "signature"
-        signature = signature_kind.value
-        assert not signature.inputs
-        assert len(signature.varargs) == 1
-    for node in reencoded.nodes:
-        call_kind = node.kind
-        assert call_kind is not None
-        if call_kind.field == "call":
-            call = call_kind.value
-            break
-    else:
-        raise StopIteration
-    assert isinstance(call, pb.Call)
+    assert not reencoded.declarations
+    detached_owner = Builder.from_program(reencoded).publish()
+    with pytest.raises(LookupError, match="owned canonical definition"):
+        _definition_at(detached_owner.ref("nodes", 0), "callable", "egglog.core.string.concat")
+    primitive = reference.read()
+    assert primitive.doc != "changed detached copy"
+    assert primitive.typing is not None
+    assert primitive.typing.field == "signature"
+    assert not primitive.typing.value.inputs
+    assert len(primitive.typing.value.varargs) == 1
+    call = reencoded.nodes[0].kind
+    assert call is not None
+    assert call.field == "call"
     argument_values = []
-    for i in call.args:
-        argument_kind = reencoded.nodes[i].kind
-        assert argument_kind is not None
-        assert argument_kind.field == "primitive_value"
-        argument_value = argument_kind.value.value
-        assert argument_value is not None
-        assert argument_value.field == "string"
-        argument_values.append(argument_value.value)
+    for index in call.value.args:
+        value = reencoded.nodes[index].kind
+        assert value is not None
+        assert value.field == "primitive_value"
+        assert value.value.value is not None
+        assert value.value.value.field == "string"
+        argument_values.append(value.value.value.value)
     assert argument_values == ["a", "b"]
 
 
@@ -1578,9 +1572,9 @@ def test_rejects_invalid_records_slots_and_inline_cycles():
     root = malformed.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f", args=[9]))))
     with pytest.raises(IndexError):
         pack([malformed.publish().ref("nodes", root)], ambient=AMBIENT)
-    command = pb.Command(kind=Oneof[Literal["repeat"], pb.Repeat]("repeat", pb.Repeat(times=1)))
+    command = pb.Command(kind=Oneof[Literal["loop"], pb.Loop]("loop", pb.Loop(max_iterations=1)))
     assert command.kind is not None
-    assert command.kind.field == "repeat"
+    assert command.kind.field == "loop"
     command.kind.value.body.append(command)
     with pytest.raises(ValueError, match=r"inline.*cycle"):
         Builder().add("commands", command)
@@ -1613,7 +1607,10 @@ def test_detached_default_expansions_preserve_internal_identity():
 def test_import_cache_is_not_authoritative():
     value = literal(1)
     builder = Builder()
-    builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+    builder.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+    )
     first = builder.import_ref(value)
     builder._imports.clear()
     second = builder.import_ref(value)
@@ -1645,7 +1642,10 @@ def test_rejects_mutable_scalar_payload_instead_of_aliasing():
 
 def test_late_discovered_definition_conflict_is_not_hidden():
     foreign = Builder()
-    foreign.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+    foreign.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+    )
     foreign.add("nodes", pb.Node(kind=Oneof[Literal["var"], str]("var", "_0")))
     foreign.add(
         "declarations",
@@ -1653,13 +1653,18 @@ def test_late_discovered_definition_conflict_is_not_hidden():
     )
     foreign_owner = foreign.publish()
     local = Builder()
-    local.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+    local.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+    )
     body = local.import_ref(foreign_owner.ref("nodes", 0))
     root = local.add("nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f"))))
     local.add(
         "declarations",
         pb.Declaration(
-            kind=Oneof[Literal["primitive"], pb.Primitive]("primitive", pb.Primitive(name="f", output=0, body=body))
+            kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                "user_defined_primitive", pb.UserDefinedPrimitive(name="f", output=0, body=body)
+            )
         ),
     )
     with pytest.raises(ValueError, match="same-name"):
@@ -1690,7 +1695,10 @@ def test_rejects_invalid_index_scalars(index):
 
 def test_rejects_non_string_dependency_names():
     with pytest.raises(TypeError, match="definition name"):
-        Builder().add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name=5))))  # type: ignore[arg-type]
+        Builder().add(
+            "sorts",
+            pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name=5))),  # type: ignore[arg-type]
+        )
 
 
 def test_additions_to_the_same_group_remain_ordered_commands():
@@ -1728,7 +1736,12 @@ def test_structural_view_zero_hash_and_origin_are_distinct_from_wire_bits():
     refs = []
     for bits in (0, 1 << 63):
         builder = Builder()
-        builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="f64"))))
+        builder.add(
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="f64"))
+            ),
+        )
         root = builder.add(
             "nodes",
             pb.Node(
@@ -1758,7 +1771,12 @@ def test_structural_view_deep_hash_cache_is_erasable_and_does_not_retain_owners(
     owners = []
     for _ in range(10_000):
         builder = Builder()
-        builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+        builder.add(
+            "sorts",
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            ),
+        )
         child = builder.import_ref(root)
         index = builder.add(
             "nodes", pb.Node(kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="f", args=[child, child])))

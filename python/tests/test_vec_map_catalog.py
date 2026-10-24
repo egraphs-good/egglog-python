@@ -2,6 +2,7 @@
 
 import copy
 import runpy
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -26,6 +27,7 @@ from egglog import (
     i64,
 )
 from egglog._catalog import builtin_catalog
+from egglog._presentation import CallKind, CallPresentation, Parameter, Presentation
 from egglog._program import Builder, Ref, StructuralView, pack
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_literal_value
 from egglog.egraph_state import EggSmolError
@@ -81,20 +83,17 @@ def test_generator_rejects_invalid_equality_binders():
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
         "render_stubs"
     ]
-    original = pb.Program.from_binary((Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
+    original = pb.BuiltinCatalog.from_binary(
+        (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()
+    )
     for binders, restrictions in [(1, [1]), (1, [0, 0]), (2, [1, 0])]:
         invalid = copy.deepcopy(original)
-        for declaration in invalid.declarations:
-            declaration_kind = declaration.kind
-            assert declaration_kind is not None
-            if declaration_kind.field == "host_primitive" and declaration_kind.value.name == "egglog.core.vec.union":
+        for declaration in invalid.primitives:
+            if declaration.name == "egglog.core.vec.union":
                 break
         else:
             raise StopIteration
-        declaration_kind = declaration.kind
-        assert declaration_kind is not None
-        assert declaration_kind.field == "host_primitive"
-        signature_kind = declaration_kind.value.typing
+        signature_kind = declaration.typing
         assert signature_kind is not None
         assert signature_kind.field == "signature"
         signature = signature_kind.value
@@ -173,6 +172,8 @@ def _stored_call(declaration, args, result_type):
     """Import actual canonical references into an unevaluated call fixture."""
     builder = Builder()
     builder.import_ref(declaration)
+    record = declaration.read()
+    assert isinstance(record, pb.Primitive)
     result = resolve_type_annotation(result_type)
     assert isinstance(result, Ref)
     index = builder.add(
@@ -181,9 +182,7 @@ def _stored_call(declaration, args, result_type):
             sort_id=builder.import_ref(result),
             kind=Oneof[Literal["call"], pb.Call](
                 "call",
-                pb.Call(
-                    func=declaration.read().kind.value.name, args=[builder.import_ref(arg.__egg_ref__) for arg in args]
-                ),
+                pb.Call(func=record.name, args=[builder.import_ref(arg.__egg_ref__) for arg in args]),
             ),
         ),
     )
@@ -211,7 +210,9 @@ def test_zero_append_specialization_is_stable_and_structural(monkeypatch):
         packet = pack([original.__egg_ref__])
         imported = RuntimeExpr(
             Builder
-            .from_program(pb.Program.from_binary(packet.program.to_binary()))
+            .from_program(
+                pb.Program.from_binary(packet.program.to_binary()), environment=original.__egg_ref__.owner._environment
+            )
             .publish()
             .ref("nodes", packet.indices[0])
         )
@@ -244,7 +245,9 @@ def test_zero_append_conflicts_and_named_partial_roundtrip():
         packet = pack([named.__egg_ref__])
         decoded = RuntimeExpr(
             Builder
-            .from_program(pb.Program.from_binary(packet.program.to_binary()))
+            .from_program(
+                pb.Program.from_binary(packet.program.to_binary()), environment=named.__egg_ref__.owner._environment
+            )
             .publish()
             .ref("nodes", packet.indices[0])
         )
@@ -261,38 +264,32 @@ def test_zero_append_conflicts_and_named_partial_roundtrip():
 
 
 @pytest.mark.parametrize("selected_view", [False, True])
-def test_minimal_result_binding_preserves_input_polymorphism(selected_view):
+def test_minimal_result_binding_preserves_input_polymorphism(selected_view, native_catalog_program):
     # Inference-only fixture: no provider/body/engine is installed or invoked.
-    program = pb.Program.from_binary(pack(builtin_catalog().roots).program.to_binary())
-    for declaration in program.declarations:
-        declaration_kind = declaration.kind
-        assert declaration_kind is not None
-        if declaration_kind.value.name == "egglog.core.pair.make":
+    program = native_catalog_program
+    for declaration in program.primitives:
+        if declaration.name == "egglog.core.pair.make":
             break
     else:
         raise StopIteration
-    declaration_kind = declaration.kind
-    assert declaration_kind is not None
-    assert declaration_kind.field == "host_primitive"
-    declaration_kind.value.name = "test.result_pair"
-    signature_kind = declaration_kind.value.typing
+    declaration.name = "test.result_pair"
+    signature_kind = declaration.typing
     assert signature_kind is not None
     assert signature_kind.field == "signature"
     signature_kind.value.inputs.pop()
+    builder = Builder.from_builtins(program)
     if selected_view:
-        assert declaration.bindings is not None
-        assert declaration.bindings.python is not None
-        declaration.bindings.python.views = [
-            pb.PythonCallable(
-                kind=pb.PythonCallKind.FUNCTION,
-                path=["result_pair"],
-                params=[pb.PythonParameter(core_input=0, name="value")],
+        builder.presentations["callable", declaration.name] = Presentation(
+            views=(
+                CallPresentation(
+                    kind=CallKind.FUNCTION,
+                    path=("result_pair",),
+                    params=(Parameter(core_input=0, name="value"),),
+                ),
             )
-        ]
-    else:
-        declaration.bindings = None
-    owner = Builder.from_program(program).publish()
-    reference = owner.ref("declarations", program.declarations.index(declaration))
+        )
+    owner = builder.publish()
+    reference = owner.ref("primitives", program.primitives.index(declaration))
     first = get_callable_fn(_stored_call(reference, [i64(1)], Pair[i64, String]))
     second = get_callable_fn(_stored_call(reference, [f64(1.0)], Pair[f64, String]))
     assert first is not None
@@ -316,21 +313,16 @@ def test_minimal_result_binding_preserves_input_polymorphism(selected_view):
         decoded(f64(3.0))
 
 
-def test_method_result_binding_preserves_independent_input_polymorphism(monkeypatch):
+def test_method_result_binding_preserves_independent_input_polymorphism(monkeypatch, native_catalog_program):
     # Inference-only Vec<T> receiver, V input, Pair<V,U> result. No provider.
-    program = pb.Program.from_binary(pack(builtin_catalog().roots).program.to_binary())
-    for declaration in program.declarations:
-        declaration_kind = declaration.kind
-        assert declaration_kind is not None
-        if declaration_kind.value.name == "egglog.core.pair.make":
+    program = native_catalog_program
+    for declaration in program.primitives:
+        if declaration.name == "egglog.core.pair.make":
             break
     else:
         raise StopIteration
-    declaration_kind = declaration.kind
-    assert declaration_kind is not None
-    assert declaration_kind.field == "host_primitive"
-    declaration_kind.value.name = "test.method_result_pair"
-    signature_kind = declaration_kind.value.typing
+    declaration.name = "test.method_result_pair"
+    signature_kind = declaration.typing
     assert signature_kind is not None
     assert signature_kind.field == "signature"
     signature = signature_kind.value
@@ -339,27 +331,37 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     program.sorts.append(pb.Sort(kind=Oneof[Literal["var"], int]("var", 2)))
     receiver_sort = len(program.sorts)
     program.sorts.append(
-        pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[first_var])))
+        pb.Sort(
+            kind=Oneof[Literal["application"], pb.SortApplication](
+                "application", pb.SortApplication(name="Vec", args=[first_var])
+            )
+        )
     )
     signature.type_params.append("V")
     signature.inputs = [pb.Arg(sort=receiver_sort), pb.Arg(sort=third_var)]
     signature.output = len(program.sorts)
     program.sorts.append(
         pb.Sort(
-            kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Pair", args=[third_var, second_var]))
+            kind=Oneof[Literal["application"], pb.SortApplication](
+                "application", pb.SortApplication(name="Pair", args=[third_var, second_var])
+            )
         )
     )
-    view = pb.PythonCallable(
-        kind=pb.PythonCallKind.METHOD,
-        path=["result_pair"],
-        owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", receiver_sort)),
+    builder = Builder.from_builtins(program)
+    view = CallPresentation(
+        kind=CallKind.METHOD,
+        path=("result_pair",),
         receiver=0,
-        params=[pb.PythonParameter(core_input=1, name="value")],
+        params=(Parameter(core_input=1, name="value"),),
     )
-    assert declaration.bindings is not None
-    assert declaration.bindings.python is not None
-    declaration.bindings.python.views = [view]
-    reference = Builder.from_program(program).publish().ref("declarations", program.declarations.index(declaration))
+    owner = builder.publish(
+        presentation_factory=lambda owned: {
+            ("callable", declaration.name): Presentation(
+                views=(replace(view, owner=owned.ref("sorts", receiver_sort)),)
+            )
+        }
+    )
+    reference = owner.ref("primitives", program.primitives.index(declaration))
     receiver = Vec[i64](i64(0))
     original = _stored_call(reference, [receiver, i64(1)], Pair[i64, String])
     first = get_callable_fn(original)
@@ -384,11 +386,19 @@ def test_method_result_binding_preserves_independent_input_polymorphism(monkeypa
     # The owner must not reinterpret U as the receiver's already-inferred T.
     bad_owner = len(program.sorts)
     program.sorts.append(
-        pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[second_var])))
+        pb.Sort(
+            kind=Oneof[Literal["application"], pb.SortApplication](
+                "application", pb.SortApplication(name="Vec", args=[second_var])
+            )
+        )
     )
-    assert view.owner is not None
-    view.owner.kind = Oneof[Literal["sort"], int]("sort", bad_owner)
-    bad_reference = Builder.from_program(program).publish().ref("declarations", program.declarations.index(declaration))
+    builder = Builder.from_builtins(program)
+    owner = builder.publish(
+        presentation_factory=lambda owned: {
+            ("callable", declaration.name): Presentation(views=(replace(view, owner=owned.ref("sorts", bad_owner)),))
+        }
+    )
+    bad_reference = owner.ref("primitives", program.primitives.index(declaration))
     malformed.append(_stored_call(bad_reference, [receiver, i64(1)], Pair[i64, String]))
 
     def forbidden(*args, **kwargs):

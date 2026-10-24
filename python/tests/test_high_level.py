@@ -22,14 +22,18 @@ from egglog_proto.egglog.v1 import egglog_pb as pb
 import egglog.bindings as egg_bindings
 import egglog.builtins as egg_builtins
 from egglog import *
+from egglog._catalog import builtin_catalog
+from egglog._presentation import CallKind, presentation
+from egglog._program import Owner
 from egglog.conversion import ConvertError
-from egglog.runtime import RuntimeExpr, RuntimeFunction
+from egglog.egraph_state import _decode_run_frames
+from egglog.runtime import RuntimeClass, RuntimeExpr, RuntimeFunction, resolve_callable
 from egglog.type_constraint_solver import TypeConstraintError
 
 _BuiltinExprT = TypeVar("_BuiltinExprT", bound=BaseExpr)
 
 
-def _replay_recorded_source(text: str) -> list[pb.RunProgramResponse]:
+def _replay_recorded_source(text: str) -> list[pb.RunProgramOutput]:
     """Replay sequential Source phases exclusively through encoded engine operations."""
     source = egg_bindings._ProtoEngine.source(text)
     graph = EGraph()
@@ -45,22 +49,21 @@ def _replay_recorded_source(text: str) -> list[pb.RunProgramResponse]:
                         egraph_id=graph._state.handle, program=pb.Program.from_binary(program)
                     ).to_binary()
                 )
-                response = pb.RunProgramResponse.from_binary(encoded)
                 if host_error is not None:
                     raise host_error
-                if response.error is not None:
-                    error = EggSmolError(response.error.message)
-                    error.__dict__["_egglog_proto_error"] = response.error
-                    raise error
-                responses.append(response)
-            elif kind == "push":
+                for frame in _decode_run_frames(encoded):
+                    assert frame.result is not None
+                    if frame.result.field == "error":
+                        error = EggSmolError(frame.result.value.message)
+                        error.__dict__["_egglog_proto_error"] = frame.result.value
+                        error.__dict__["_egglog_proto_frame"] = frame
+                        raise error
+                    if frame.result.value.outputs:
+                        responses.append(frame.result.value)
+            elif kind in {"push", "pop"}:
                 assert program is None
                 for _ in range(count):
-                    graph.push()
-            elif kind == "pop":
-                assert program is None
-                for _ in range(count):
-                    graph.pop()
+                    {"push": graph.push, "pop": graph.pop}[kind]()
             else:
                 raise AssertionError(f"Unknown Source submission: {kind}")
     finally:
@@ -69,13 +72,13 @@ def _replay_recorded_source(text: str) -> list[pb.RunProgramResponse]:
     return responses
 
 
-def _restore_snapshot(snapshot: pb.EGraphSnapshot) -> EGraph:
+def _restore_snapshot(snapshot: pb.EGraphSnapshot, *, environment: tuple[Owner, ...]) -> EGraph:
     """Restore the actual serialized logical program through the encoded adapter."""
     from egglog._program import Builder, pack  # noqa: PLC0415
 
     snapshot = pb.EGraphSnapshot.from_binary(snapshot.to_binary())
     assert snapshot.program is not None
-    owner = Builder.from_program(snapshot.program).publish()
+    owner = Builder.from_program(snapshot.program, environment=environment).publish()
     restored = EGraph()
     restored._state.run_program(
         pack(
@@ -383,9 +386,9 @@ def test_saved_transcript_preserves_equality_head_name_in_rule_fact() -> None:
         for declaration in snapshot.program.declarations
         if declaration.kind is not None and declaration.kind.field == "relation" and declaration.kind.value.name == "="
     )
-    assert declaration.bindings is not None
-    assert declaration.bindings.python is not None
-    assert declaration.bindings.python.views[0].path == [*__name__.split("."), "equality_head_claimed"]
+    assert declaration.kind is not None
+    assert declaration.kind.value.name == resolve_callable(claimed).read().kind.value.name
+    assert presentation(resolve_callable(claimed)).views[0].path == (*__name__.split("."), "equality_head_claimed")
     _replay_recorded_source(recorded.as_egglog_string)
 
 
@@ -416,9 +419,10 @@ def test_saved_transcript_preserves_literal_explicit_sort_name() -> None:
         and declaration.kind.field == "eq_sort"
         and declaration.kind.value.name == "true"
     )
-    assert sort.bindings is not None
-    assert sort.bindings.python is not None
-    assert sort.bindings.python.path == [*__name__.split("."), "LiteralNamed"]
+    assert sort.name == "true"
+    view = presentation(cast("RuntimeClass", LiteralNamed).__egg_definition__).type_view
+    assert view is not None
+    assert view.path == (*__name__.split("."), "LiteralNamed")
     _replay_recorded_source(egraph.as_egglog_string)
 
 
@@ -439,9 +443,10 @@ def test_saved_transcript_preserves_unparseable_explicit_sort_name() -> None:
         and declaration.kind.field == "eq_sort"
         and declaration.kind.value.name == "has space"
     )
-    assert sort.bindings is not None
-    assert sort.bindings.python is not None
-    assert sort.bindings.python.path == [*__name__.split("."), "UnparseableNamed"]
+    assert sort.name == "has space"
+    view = presentation(cast("RuntimeClass", UnparseableNamed).__egg_definition__).type_view
+    assert view is not None
+    assert view.path == (*__name__.split("."), "UnparseableNamed")
     _replay_recorded_source(egraph.as_egglog_string)
 
 
@@ -463,9 +468,10 @@ def test_saved_transcript_preserves_context_sensitive_explicit_sort_name(egg_nam
         and declaration.kind.field == "eq_sort"
         and declaration.kind.value.name == egg_name
     )
-    assert sort.bindings is not None
-    assert sort.bindings.python is not None
-    assert sort.bindings.python.path == [*__name__.split("."), "ContextSensitiveNamed"]
+    assert sort.name == egg_name
+    view = presentation(cast("RuntimeClass", ContextSensitiveNamed).__egg_definition__).type_view
+    assert view is not None
+    assert view.path == (*__name__.split("."), "ContextSensitiveNamed")
     _replay_recorded_source(egraph.as_egglog_string)
 
 
@@ -487,11 +493,8 @@ def test_saved_transcript_preserves_unparseable_let_name(name: str) -> None:
     snapshot = pb.EGraphSnapshot.from_binary(egraph.freeze().to_binary())
     assert snapshot.program is not None
     bindings = {
-        view.path[-1]: declaration.kind.value.name
-        for declaration in snapshot.program.declarations
-        if declaration.kind is not None and declaration.bindings is not None and declaration.bindings.python is not None
-        for view in declaration.bindings.python.views
-        if view.kind == pb.PythonCallKind.CONSTANT and view.path[-1] in (name, safe_name)
+        presentation(reference).views[0].path[-1]: reference.read().kind.value.name
+        for reference in (resolve_callable(first), resolve_callable(second))
     }
     assert bindings.keys() == {name, safe_name}
     assert bindings[name] != bindings[safe_name]
@@ -729,12 +732,7 @@ def test_let_auto_prefixes_global_names(capfd: pytest.CaptureFixture[str]):
     declaration = next(
         declaration
         for declaration in snapshot.program.declarations
-        if declaration.bindings is not None
-        and declaration.bindings.python is not None
-        and any(
-            view.kind == pb.PythonCallKind.CONSTANT and view.path[-1] == "x"
-            for view in declaration.bindings.python.views
-        )
+        if declaration.kind is not None and declaration.kind.value.name == resolve_callable(x).read().kind.value.name
     )
     assert declaration.kind is not None
     assert declaration.kind.field == "function"
@@ -782,8 +780,10 @@ def test_named_let_actions_reconcile_across_independent_owners() -> None:
 def test_named_lets_preserve_exact_names_without_sanitization_collisions() -> None:
     names = ["", "x", "$x", "has space", "has_space", "caf\u00e9", "cafe\u0301", "x;y", "x_y"]
     graph = EGraph(save_egglog_string=True)
+    named = {}
     for index, name in enumerate(names):
         saved = graph.let(name, i64(index))
+        named[name] = resolve_callable(saved)
         node = expr_parts(saved).ref.read()
         assert node.kind is not None
         assert node.kind.field == "call"
@@ -792,11 +792,7 @@ def test_named_lets_preserve_exact_names_without_sanitization_collisions() -> No
     snapshot = pb.EGraphSnapshot.from_binary(graph.freeze().to_binary())
     assert snapshot.program is not None
     bindings = {
-        view.path[-1]: declaration.kind.value.name
-        for declaration in snapshot.program.declarations
-        if declaration.kind is not None and declaration.bindings is not None and declaration.bindings.python is not None
-        for view in declaration.bindings.python.views
-        if view.kind == pb.PythonCallKind.CONSTANT and view.path[-1] in names
+        presentation(reference).views[0].path[-1]: reference.read().kind.value.name for reference in named.values()
     }
     assert bindings.keys() == set(names)
     assert len(set(bindings.values())) == len(names)
@@ -811,7 +807,7 @@ def test_named_let_unequal_initializers_use_native_no_merge() -> None:
         graph.let("same", i64(2))
 
     error = exc_info.value.__dict__["_egglog_proto_error"]
-    assert error.code == pb.ErrorCode.EVALUATION_FAILED
+    assert error.code == pb.ErrorCode.RUNTIME_FAILURE
     assert error.location is not None
     assert error.location.path == [0]
     graph.check(eq(saved).to(i64(1)))
@@ -1017,7 +1013,7 @@ def test_save_egglog_string_defaults_to_disabled() -> None:
         "multi-extract",
         "keep-best",
         "print-table-stats",
-        "primitive",
+        "user_defined_primitive",
     ],
 )
 def test_generated_relation_names_avoid_egglog_parser_tokens(name: str) -> None:
@@ -1030,7 +1026,7 @@ def test_generated_relation_names_avoid_egglog_parser_tokens(name: str) -> None:
 
 
 @pytest.mark.parametrize("generated_first", [True, False], ids=["generated-first", "explicit-first"])
-def test_generated_relation_names_reserve_explicit_backend_names(generated_first: bool) -> None:
+def test_compatible_relation_aliases_share_one_backend_name(generated_first: bool) -> None:
     generated = relation("batch_generated_backend_name", i64)
     generated_candidate = f"{__name__.replace('.', '_')}_batch_generated_backend_name"
     explicit = relation("explicit_relation", i64, egg_fn=generated_candidate)
@@ -1039,15 +1035,14 @@ def test_generated_relation_names_reserve_explicit_backend_names(generated_first
     actions = (generated_action, explicit_action) if generated_first else (explicit_action, generated_action)
     marker = relation("batch_collision_marker", i64)
     egraph = EGraph(marker(i64(0)), save_egglog_string=True)
-    before, history = egraph.freeze(), egraph.as_egglog_string
+    egraph.register(marker(i64(9)), *actions)
+    egraph.check(marker(i64(9)), generated(i64(1)), explicit(i64(2)))
+    assert egraph.function_size(generated) == egraph.function_size(explicit) == 2
+    assert str(generated_action) == "batch_generated_backend_name(1)"
+    assert str(explicit_action) == "explicit_relation(2)"
+    _replay_recorded_source(egraph.as_egglog_string)
 
-    with pytest.raises(ValueError, match=r"^Ambiguous same-name definitions require reconciliation:"):
-        egraph.register(marker(i64(9)), *actions)
-
-    assert egraph.freeze() == before
-    assert egraph.as_egglog_string == history
-    egraph.check_fail(marker(i64(9)))
-
+    egraph = EGraph(save_egglog_string=True)
     distinct = relation("distinct_explicit_relation", i64, egg_fn=f"{generated_candidate}_distinct")
     distinct_actions = (generated_action, distinct(i64(2)))
     egraph.register(*(distinct_actions if generated_first else distinct_actions[::-1]))
@@ -1120,44 +1115,27 @@ def test_synthetic_lets_do_not_capture_unbound_variables(*, save_egglog_string: 
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
-def test_late_explicit_backend_name_cannot_replace_registered_generated_relation(*, save_egglog_string: bool) -> None:
+def test_compatible_relation_aliases_share_semantics_and_keep_local_paths(*, save_egglog_string: bool) -> None:
     generated = relation("late_explicit_backend_name", i64)
     marker = relation("late_relation_collision_marker", i64)
     egraph = EGraph(generated(i64(1)), marker(i64(0)), save_egglog_string=save_egglog_string)
-    before = egraph.freeze()
-    transcript = egraph.as_egglog_string if save_egglog_string else None
-
     generated_name = f"{__name__.replace('.', '_')}_late_explicit_backend_name"
     explicit = relation("late_explicit_relation", i64, egg_fn=generated_name)
-    expected_error = ValueError if save_egglog_string else EggSmolError
-    with pytest.raises(expected_error, match=r"^conflicting Python binding$") as caught:
-        egraph.register(marker(i64(9)), explicit(i64(2)))
-
-    assert type(caught.value) is expected_error
-    if not save_egglog_string:
-        error = caught.value.__dict__["_egglog_proto_error"]
-        assert error.code == pb.ErrorCode.INVALID_PROGRAM
-        assert error.location is None
-    assert egraph.freeze() == before
-    if transcript is not None:
-        assert egraph.as_egglog_string == transcript
+    egraph.register(marker(i64(9)), explicit(i64(2)))
     egraph.check(generated(i64(1)))
-    egraph.check_fail(generated(i64(2)))
-    egraph.check_fail(marker(i64(9)))
-    assert egraph.function_size(generated) == 1
-    assert before.program is not None
-    assert not any(
-        view.path and view.path[-1] == "late_explicit_relation"
-        for declaration in before.program.declarations
-        if declaration.bindings is not None and declaration.bindings.python is not None
-        for view in declaration.bindings.python.views
-    )
-    if transcript is not None:
+    egraph.check(generated(i64(2)), marker(i64(9)))
+    assert egraph.function_size(generated) == egraph.function_size(explicit) == 2
+    assert str(generated(i64(1))) == "late_explicit_backend_name(1)"
+    assert str(explicit(i64(1))) == "late_explicit_relation(1)"
+    snapshot = egraph.freeze()
+    assert snapshot.program is not None
+    assert sum(d.kind is not None and d.kind.value.name == generated_name for d in snapshot.program.declarations) == 1
+    if save_egglog_string:
         _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
-def test_duplicate_explicit_backend_name_does_not_publish_a_failed_alias(*, save_egglog_string: bool) -> None:
+def test_compatible_function_aliases_keep_frontend_names_out_of_semantic_identity(*, save_egglog_string: bool) -> None:
     @function(egg_fn="duplicate_explicit_backend")
     def first(value: i64Like) -> i64: ...
 
@@ -1166,79 +1144,38 @@ def test_duplicate_explicit_backend_name_does_not_publish_a_failed_alias(*, save
 
     marker = relation("late_function_collision_marker", i64)
     egraph = EGraph(set_(first(1)).to(i64(10)), marker(i64(0)), save_egglog_string=save_egglog_string)
-    before = egraph.freeze()
-    transcript = egraph.as_egglog_string if save_egglog_string else None
-
-    expected_error = ValueError if save_egglog_string else EggSmolError
-    with pytest.raises(expected_error, match=r"^conflicting Python binding$") as caught:
-        egraph.register(marker(i64(9)), set_(second(2)).to(i64(20)))
-
-    assert type(caught.value) is expected_error
-    if not save_egglog_string:
-        error = caught.value.__dict__["_egglog_proto_error"]
-        assert error.code == pb.ErrorCode.INVALID_PROGRAM
-        assert error.location is None
-    assert egraph.freeze() == before
-    if transcript is not None:
-        assert egraph.as_egglog_string == transcript
+    egraph.register(marker(i64(9)), set_(second(2)).to(i64(20)))
     assert egraph.lookup_function_value(first(1)) == i64(10)
-    assert egraph.lookup_function_value(first(2)) is None
-    egraph.check_fail(marker(i64(9)))
-    assert egraph.function_size(first) == 1
-    assert before.program is not None
-    paths = [
-        view.path[-1]
-        for declaration in before.program.declarations
-        if declaration.bindings is not None and declaration.bindings.python is not None
-        for view in declaration.bindings.python.views
-        if view.path
-    ]
-    assert "first" in paths
-    assert "second" not in paths
-    if transcript is not None:
+    assert egraph.lookup_function_value(first(2)) == i64(20)
+    egraph.check(marker(i64(9)))
+    assert egraph.function_size(first) == egraph.function_size(second) == 2
+    assert str(first(1)) == "first(1)"
+    assert str(second(1)) == "second(1)"
+    if save_egglog_string:
         _replay_recorded_source(egraph.as_egglog_string)
 
 
 @pytest.mark.parametrize("save_egglog_string", [False, True], ids=["direct", "saved"])
-def test_late_explicit_backend_name_cannot_replace_registered_generated_sort(*, save_egglog_string: bool) -> None:
+def test_compatible_sort_aliases_keep_local_classes_and_shared_semantic_sort(*, save_egglog_string: bool) -> None:
     class GeneratedLateSort(Expr):
         def __init__(self) -> None: ...
 
     marker = relation("late_sort_collision_marker", i64)
     egraph = EGraph(GeneratedLateSort(), marker(i64(0)), save_egglog_string=save_egglog_string)
-    before = egraph.freeze()
-    transcript = egraph.as_egglog_string if save_egglog_string else None
 
     class ExplicitLateSort(Expr, egg_sort=f"{__name__}.GeneratedLateSort"):
         def __init__(self) -> None: ...
 
-    expected_error = ValueError if save_egglog_string else EggSmolError
-    with pytest.raises(expected_error, match=r"^conflicting language binding$") as caught:
-        egraph.register(marker(i64(9)), ExplicitLateSort())
-
-    assert type(caught.value) is expected_error
-    if not save_egglog_string:
-        error = caught.value.__dict__["_egglog_proto_error"]
-        assert error.code == pb.ErrorCode.INVALID_PROGRAM
-        assert error.location is None
-    assert egraph.freeze() == before
-    if transcript is not None:
-        assert egraph.as_egglog_string == transcript
-    egraph.check(GeneratedLateSort())
-    egraph.check_fail(marker(i64(9)))
+    egraph.register(marker(i64(9)), ExplicitLateSort())
+    egraph.check(GeneratedLateSort(), ExplicitLateSort(), marker(i64(9)))
     assert egraph.function_size(GeneratedLateSort) == 1
-    assert before.program is not None
-    sort_paths = [
-        declaration.kind.value.bindings.python.path[-1]
-        for declaration in before.program.declarations
-        if declaration.kind is not None
-        and declaration.kind.field == "eq_sort"
-        and declaration.kind.value.bindings is not None
-        and declaration.kind.value.bindings.python is not None
-    ]
-    assert "GeneratedLateSort" in sort_paths
-    assert "ExplicitLateSort" not in sort_paths
-    if transcript is not None:
+    assert egraph.function_size(ExplicitLateSort) == 1
+    assert str(GeneratedLateSort()) == "GeneratedLateSort()"
+    assert str(ExplicitLateSort()) == "ExplicitLateSort()"
+    snapshot = egraph.freeze()
+    assert snapshot.program is not None
+    assert sum(d.kind is not None and d.kind.field == "eq_sort" for d in snapshot.program.declarations) == 1
+    if save_egglog_string:
         _replay_recorded_source(egraph.as_egglog_string)
 
 
@@ -1365,7 +1302,7 @@ def test_saved_source_engine_failure_preserves_error_and_invalidates_history() -
     graph.let("before_failure", i64(1))
     with pytest.raises(EggSmolError, match="recorded failure") as caught:
         graph.register(panic("recorded failure"))
-    assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.PANIC
+    assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.RUNTIME_FAILURE
     with pytest.raises(RuntimeError, match="cannot be replayed"):
         _ = graph.as_egglog_string
     before = graph.freeze()
@@ -1500,34 +1437,30 @@ def test_saved_egglog_string_uses_qualified_generated_sort_and_function_names() 
         for declaration in snapshot.program.declarations
         if declaration.kind is not None and declaration.kind.field == "eq_sort"
     )
-    assert sort.bindings is not None
-    assert sort.bindings.python is not None
-    assert sort.bindings.python.path == [*__name__.split("."), "Num"]
+    type_view = presentation(cast("RuntimeClass", Num).__egg_definition__).type_view
+    assert type_view is not None
+    assert type_view.path == (*__name__.split("."), "Num")
     declaration = next(
         declaration
         for declaration in snapshot.program.declarations
         if declaration.kind is not None and declaration.kind.field == "constructor"
     )
-    assert declaration.bindings is not None
-    assert declaration.bindings.python is not None
-    view = declaration.bindings.python.views[0]
-    assert view.kind == pb.PythonCallKind.CLASS_METHOD
-    assert view.path == ["var"]
+    view = presentation(resolve_callable(Num.var)).views[0]
+    assert view.kind == CallKind.CLASS_METHOD
+    assert view.path == ("var",)
     constructor_kind = declaration.kind
     assert constructor_kind is not None
     assert constructor_kind.field == "constructor"
     constructor = constructor_kind.value
     assert view.owner is not None
-    assert view.owner.kind is not None
-    assert view.owner.kind.field == "sort"
-    assert view.owner.kind.value == constructor.output
+    assert view.owner.read().kind.value == sort.name
     output = snapshot.program.sorts[constructor.output]
     assert output.kind is not None
     assert output.kind.field == "eq"
     assert output.kind.value == sort.name
     argument = snapshot.program.sorts[constructor.inputs[0].sort]
     assert argument.kind is not None
-    assert argument.kind.field == "family"
+    assert argument.kind.field == "application"
     assert argument.kind.value.name == "String"
     assert cast("RuntimeExpr", value).__egg_ref__.read().kind.value.func == constructor.name
     assert egraph.function_size(Num.var) == 1
@@ -1558,14 +1491,14 @@ def test_parameterized_sort_names_use_allocated_argument_names() -> None:
     root = packed.program.nodes[packed.indices[0]]
     sort = packed.program.sorts[root.sort_id]
     assert sort.kind is not None
-    assert sort.kind.field == "family"
+    assert sort.kind.field == "application"
     assert sort.kind.value.name == "Map"
     arguments = [packed.program.sorts[index] for index in sort.kind.value.args]
     argument_names = []
     for argument in arguments:
         argument_kind = argument.kind
         assert argument_kind is not None
-        assert argument_kind.field == "family"
+        assert argument_kind.field == "application"
         argument_names.append(argument_kind.value.name)
     assert argument_names == ["i64", "BigRat"]
 
@@ -1765,7 +1698,7 @@ def test_freeze_omits_synthetic_let_bindings() -> None:
     ]
     assert len(pairs) == 1
     assert pairs[0].args[0] == pairs[0].args[1]
-    restored = _restore_snapshot(snapshot)
+    restored = _restore_snapshot(snapshot, environment=(builtin_catalog().owner,))
     assert restored.function_size(FreezeLetNum.var) == 1
     assert restored.function_size(FreezeLetNum.pair) == 1
     restored.check(root)
@@ -1886,12 +1819,10 @@ def test_generic_callback_context_keeps_binders_closed_and_separate(monkeypatch)
         _function_value(callback, (), None, context=([None], None))
 
     declaration = callback.__egg_ref__
-    record: pb.Declaration = declaration.read()
-    assert record.kind is not None
-    assert record.kind.field == "host_primitive"
-    assert record.kind.value.typing is not None
-    assert record.kind.value.typing.field == "signature"
-    unbound = declaration.owner.ref("sorts", record.kind.value.typing.value.output)
+    record: pb.Primitive = declaration.read()
+    assert record.typing is not None
+    assert record.typing.field == "signature"
+    unbound = declaration.owner.ref("sorts", record.typing.value.output)
     assert unbound.read().kind.field == "var"
     with pytest.raises(TypeConstraintError, match="Actual argument sorts must be closed"):
         _function_value(callback, (), None, context=([unbound], integer))
@@ -1927,25 +1858,20 @@ def test_generic_callback_prefix_conversion_is_not_speculative(monkeypatch, mode
     scalar = builder.import_ref(integer)
     variable = builder.add("sorts", pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)))
     index = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["host_primitive"], pb.HostPrimitive](
-                "host_primitive",
-                pb.HostPrimitive(
-                    name="test.generic.capture",
-                    typing=Oneof[Literal["signature"], pb.GenericSignature](
-                        "signature",
-                        pb.GenericSignature(
-                            type_params=["T"],
-                            inputs=[pb.Arg(sort=scalar), pb.Arg(sort=variable)],
-                            output=variable,
-                        ),
-                    ),
+        "primitives",
+        pb.Primitive(
+            name="test.generic.capture",
+            typing=Oneof[Literal["signature"], pb.GenericSignature](
+                "signature",
+                pb.GenericSignature(
+                    type_params=["T"],
+                    inputs=[pb.Arg(sort=scalar), pb.Arg(sort=variable)],
+                    output=variable,
                 ),
-            )
+            ),
         ),
     )
-    reference = builder.publish().ref("declarations", index)
+    reference = builder.publish().ref("primitives", index)
     function = cast("Callable[[Host | i64, i64], i64]", RuntimeFunction(reference))
     before = reference.read().to_binary()
     xs = var("xs", MultiSet[i64])
@@ -1966,7 +1892,9 @@ def test_generic_callback_prefix_conversion_is_not_speculative(monkeypatch, mode
     elif mode == "decode":
         value = cast("RuntimeExpr", UnstableFn[i64, i64](function, i64(7)))
         packed = pack([value.__egg_ref__])
-        decoded = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+        decoded = Builder.from_program(
+            pb.Program.from_binary(packed.program.to_binary()), environment=(reference.owner,)
+        ).publish()
         restored = RuntimeExpr(decoded.ref("nodes", packed.indices[0]))
         assert isinstance(restored.value, partial)
         assert calls == []
@@ -2994,15 +2922,15 @@ class TestDefaultReplacements:
         monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
         from egglog._program import Builder, pack  # noqa: PLC0415
 
-        @function(builtin=True)
-        def f(x: i64Like) -> i64: ...
+        @function(builtin=True, egg_fn="egglog.core.i64.add")
+        def f(x: i64Like, y: i64Like) -> i64: ...
 
-        assert expr_parts(f(1)) == expr_parts(f(i64(1)))
+        assert expr_parts(f(1, 2)) == expr_parts(f(i64(1), i64(2)))
         reference = cast("RuntimeFunction", f).__egg_ref__
-        record: pb.Declaration = reference.read()
-        assert record.kind is not None
-        assert isinstance(record.kind.value, pb.HostPrimitive)
-        primitive = record.kind.value
+        record: pb.Primitive = reference.read()
+        assert isinstance(record, pb.Primitive)
+        primitive = record
+        assert primitive.name == "egglog.core.i64.add"
         assert primitive.typing is not None
         assert primitive.typing.field == "signature"
         signature = primitive.typing.value
@@ -3010,42 +2938,43 @@ class TestDefaultReplacements:
         assert signature.varargs == []
         assert signature.equality_type_params == []
         assert signature.has_field("output")
-        assert len(signature.inputs) == 1
-        assert signature.inputs[0].name == "x"
-        assert signature.inputs[0].sort == signature.output
+        assert len(signature.inputs) == 2
+        assert all(argument.sort == signature.output for argument in signature.inputs)
         sort: pb.Sort = reference.owner.ref("sorts", signature.output).read()
         assert sort.kind is not None
-        assert sort.kind.field == "family"
+        assert sort.kind.field == "application"
         assert sort.kind.value.name == "i64"
         assert sort.kind.value.args == []
-        assert record.bindings is not None
-        assert record.bindings.python is not None
-        assert record.bindings.rust is None
-        assert record.bindings.egglog is None
-        assert len(record.bindings.python.views) == 1
-        view = record.bindings.python.views[0]
-        assert view.kind == pb.PythonCallKind.FUNCTION
-        assert view.path == [*__name__.split("."), "f"]
+        assert len(presentation(reference).views) == 1
+        view = presentation(reference).views[0]
+        assert view.kind == CallKind.FUNCTION
+        assert view.path == (*__name__.split("."), "f")
         assert view.owner is None
-        assert not view.has_field("receiver")
-        assert not view.has_field("mutates")
-        assert len(view.params) == 1
+        assert view.receiver is None
+        assert view.mutates is None
+        assert len(view.params) == 2
         assert view.params[0].name == "x"
-        assert view.params[0].has_field("core_input")
         assert view.params[0].core_input == 0
-        assert not view.params[0].has_field("default_expr")
+        assert view.params[0].default is None
 
         before = record.to_binary()
-        value = cast("RuntimeExpr", f(1))
+        value = cast("RuntimeExpr", f(1, 2))
         assert value.__egg_ref__.read().kind.value.func == primitive.name
-        assert get_literal_value(f(1)) is None
+        assert get_literal_value(f(1, 2)) is None
         packed = pack([value.__egg_ref__])
+        assert not packed.program.declarations
         decoded = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
         restored = RuntimeExpr(decoded.ref("nodes", packed.indices[0]))
-        assert expr_parts(cast("BaseExpr", restored)) == expr_parts(f(1))
+        assert expr_parts(cast("BaseExpr", restored)) == expr_parts(f(1, 2))
         assert cast("RuntimeFunction", f).__egg_ref__ is reference
         assert reference.read().to_binary() == before
         engine.assert_not_called()
+
+        @function(builtin=True, egg_fn="missing.provider")
+        def missing(x: i64Like) -> i64: ...
+
+        with pytest.raises(LookupError, match="owned canonical definition"):
+            missing(1)
 
     def test_eqsort_merge_function_without_body(self):
         @function(merge=lambda old, new: old)
@@ -4103,6 +4032,32 @@ def test_table_inspection_rejects_eager_primitives() -> None:
         egraph.input(eager_text, "unused.csv")
 
 
+def test_builtin_callable_table_capabilities_reject_without_execution(monkeypatch, tmp_path) -> None:
+    from egglog.egraph import get_callable_cost  # noqa: PLC0415
+
+    egraph = EGraph()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Builtin table capability inspection attempted engine execution")
+
+    monkeypatch.setattr(egraph._state, "run_program", forbidden)
+    expression = i64(1) + 2
+    with pytest.raises(ValueError, match="table-backed"):
+        egraph.function_size(i64.__add__)
+    with pytest.raises(ValueError, match="table-backed"):
+        egraph.function_values(i64.__add__)
+    with pytest.raises(ValueError, match="table-backed"):
+        egraph.lookup_function_value(expression)
+    with pytest.raises(ValueError, match="table-backed"):
+        egraph.keep_best(i64.__add__)
+    with pytest.raises(ValueError, match="table-backed"):
+        egraph.input(i64.__add__, str(tmp_path / "absent.tsv"))
+    with pytest.raises(TypeError, match="table-backed Function"):
+        set_(expression).to(i64(3))
+    assert not egraph.has_custom_cost(i64.__add__)
+    assert get_callable_cost(i64.__add__) == 1
+
+
 @pytest.mark.parametrize(
     "filename",
     ['input\r"\\.csv', "input\u0300.csv"],
@@ -4451,7 +4406,7 @@ def test_dynamic_cost_rejects_primitive_targets_without_effects(cost_first: bool
         assert type(caught.value) is expected_error
         if not saved:
             error = caught.value.__dict__["_egglog_proto_error"]
-            assert error.code == pb.ErrorCode.UNKNOWN_NAME
+            assert error.code == pb.ErrorCode.RUNTIME_FAILURE
             assert error.location is None
         assert egraph.freeze() == before
         if saved:
@@ -4477,7 +4432,7 @@ def test_freeze_preserves_assigned_costs_and_independent_user_rows() -> None:
         set_cost(Costed(1), 7),
     )
 
-    replayed = _restore_snapshot(egraph.freeze())
+    replayed = _restore_snapshot(egraph.freeze(), environment=(builtin_catalog().owner,))
     assert replayed.lookup_function_value(raw_cost(1)) is None
     assert replayed.lookup_function_value(raw_cost(2)) == i64(5)
     assert replayed.lookup_function_value(get_cost(Costed(1))) == i64(7)
@@ -4492,23 +4447,23 @@ def test_freeze_preserves_costs_through_ordinary_constructor_aliases() -> None:
 
     alias = Costed
     egraph = EGraph(set_cost(Costed(1), 5), set_cost(alias(2), 6))
-    replayed = _restore_snapshot(egraph.freeze())
+    replayed = _restore_snapshot(egraph.freeze(), environment=(builtin_catalog().owner,))
     assert replayed.has_custom_cost(Costed)
     assert replayed.has_custom_cost(alias)
     assert replayed.lookup_function_value(get_cost(alias(1))) == i64(5)
     assert replayed.lookup_function_value(get_cost(Costed(2))) == i64(6)
 
 
-def test_builtin_free_callable_alias_authoring_remains_explicitly_unsupported() -> None:
-    # This separate authoring frontier is not made valid by constructor-cost support.
-    @function(egg_fn="+", builtin=True)
+def test_builtin_free_callable_alias_resolves_actual_canonical_provider() -> None:
+    @function(egg_fn="egglog.core.i64.add", builtin=True)
     def plus_alias(left: i64Like, right: i64Like) -> i64: ...
 
-    with pytest.raises(NotImplementedError, match="Builtin, mutation and variadic free functions are not migrated"):
-        plus_alias(1, 2)
+    value = cast("RuntimeExpr", plus_alias(1, 2))
+    assert value.__egg_ref__.read().kind.value.func == "egglog.core.i64.add"
+    EGraph().check(eq(cast("BaseExpr", value)).to(i64(3)))
 
 
-@pytest.mark.parametrize("frontier", ["mutation", "variadic", "generic", "explicit-empty"])
+@pytest.mark.parametrize("frontier", ["mutation", "variadic", "generic"])
 def test_bodyless_builtin_rejects_unmigrated_frontiers_before_conversion(monkeypatch, frontier: str) -> None:
     engine = MagicMock(side_effect=AssertionError("Invalid builtin headers must not create an engine"))
     monkeypatch.setattr(egg_bindings, "_ProtoEngine", engine)
@@ -4541,12 +4496,6 @@ def test_bodyless_builtin_rejects_unmigrated_frontiers_before_conversion(monkeyp
         def generic(value: Vec[_BuiltinExprT]) -> i64: ...
 
         candidate = cast("Callable[[object], object]", generic)
-    else:
-
-        @function(builtin=True, egg_fn="")
-        def explicit(value: i64Like) -> i64: ...
-
-        candidate = cast("Callable[[object], object]", explicit)
     with pytest.raises(NotImplementedError):
         candidate(Host())
     assert calls == []
@@ -4566,7 +4515,7 @@ def test_freeze_preserves_reverse_function_rows_and_constructor_costs() -> None:
     expression = ReverseFreeze(1).label("key")
     constructor = ReverseFreeze(1).make("other")
     egraph = EGraph(set_(expression).to(i64(3)), set_cost(constructor, 7))
-    replayed = _restore_snapshot(egraph.freeze())
+    replayed = _restore_snapshot(egraph.freeze(), environment=(builtin_catalog().owner,))
     assert replayed.lookup_function_value(expression) == i64(3)
     assert replayed.function_values(ReverseFreeze.label) == {expression: i64(3)}
     assert expr_parts(replayed.extract(constructor)) == expr_parts(constructor)
@@ -4614,7 +4563,7 @@ def test_signed_assigned_costs_fail_only_in_the_affected_default_extraction_doma
         with pytest.raises(EggSmolError, match="negative assigned costs") as caught:
             egraph.extract(Costed(1), extractor=extractor)
         error = caught.value.__dict__["_egglog_proto_error"]
-        assert error.code == pb.ErrorCode.EXTRACTION_FAILED
+        assert error.code == pb.ErrorCode.RUNTIME_FAILURE
         assert error.location == pb.CommandLocation(path=[0])
         assert egraph.freeze() == before
         assert egraph.lookup_function_value(get_cost(Costed(1))) == i64(-1)
@@ -4788,7 +4737,7 @@ class TestScheduler:
                     actions.append(command.kind.value)
                 elif command.kind.field == "run":
                     runs.append(command.kind.value)
-                elif command.kind.field in {"repeat", "saturate"}:
+                elif command.kind.field == "loop":
                     pending.extend(reversed(command.kind.value.body))
                 else:
                     assert command.kind.field == "add_rules"
@@ -4829,7 +4778,7 @@ class TestScheduler:
             elif kind.field == "run":
                 runs.append((kind.value, depth))
             elif kind.field != "add_rules":
-                assert kind.field in {"repeat", "saturate"}
+                assert kind.field == "loop"
                 pending.extend((child, depth + 1) for child in reversed(kind.value.body))
         assert len(bindings) == len(runs) == 2
         (outer, outer_depth), (inner, inner_depth) = bindings

@@ -24,7 +24,8 @@ def test_ordinary_run_has_only_semantic_flags_and_no_diagnostics(growing_graph):
     kinds: list[str] = []
 
     def observe(chunk: pb.RunProgramResponse) -> None:
-        kinds.extend(output.kind.field for output in chunk.outputs if output.kind is not None)
+        if chunk.result is not None and chunk.result.field == "output":
+            kinds.extend(output.kind.field for output in chunk.result.value.outputs if output.kind is not None)
 
     result = graph.run(selected, on_output=observe)
     assert isinstance(result, RunResult)
@@ -80,7 +81,9 @@ def test_loop_snapshots_arrive_before_completion_and_own_their_arenas(growing_gr
     snapshots: list[pb.EGraphSnapshot] = []
 
     def observe(chunk: pb.RunProgramResponse) -> None:
-        for output in chunk.outputs:
+        if chunk.result is None or chunk.result.field != "output":
+            return
+        for output in chunk.result.value.outputs:
             assert output.kind is not None
             if output.kind.field == "snapshot":
                 events.append("snapshot")
@@ -110,7 +113,9 @@ def test_closed_consumer_cancels_without_losing_live_graph_ownership(growing_gra
     snapshots: list[pb.EGraphSnapshot] = []
 
     def observe(chunk: pb.RunProgramResponse) -> bool:
-        for output in chunk.outputs:
+        if chunk.result is None or chunk.result.field != "output":
+            return True
+        for output in chunk.result.value.outputs:
             if output.kind is not None and output.kind.field == "snapshot":
                 snapshots.append(output.kind.value)
                 return False
@@ -131,7 +136,13 @@ def test_output_callback_preserves_original_exception(growing_graph):
     original = ValueError("original stream consumer failure")
 
     def observe(chunk: pb.RunProgramResponse) -> None:
-        if any(output.kind is not None and output.kind.field == "snapshot" for output in chunk.outputs):
+        if (
+            chunk.result is not None
+            and chunk.result.field == "output"
+            and any(
+                output.kind is not None and output.kind.field == "snapshot" for output in chunk.result.value.outputs
+            )
+        ):
             raise original
 
     with pytest.raises(ValueError, match="original stream consumer failure") as caught:
@@ -150,15 +161,23 @@ def test_runtime_error_keeps_observation_prefix_when_terminal_callback_returns_f
 
     def observe(chunk: pb.RunProgramResponse) -> bool:
         chunks.append(chunk)
-        return chunk.error is None
+        return chunk.result is not None and chunk.result.field != "error"
 
     with pytest.raises(EggSmolError, match="streamed runtime marker") as caught:
         graph._state.run_program([snapshot, panic("streamed runtime marker").__egg_ref__, snapshot], on_output=observe)
-    outputs = [output for chunk in chunks for output in chunk.outputs]
+    outputs = [
+        output
+        for chunk in chunks
+        if chunk.result is not None and chunk.result.field == "output"
+        for output in chunk.result.value.outputs
+    ]
     assert len(outputs) == 1
     assert outputs[0].kind is not None
     assert outputs[0].kind.field == "snapshot"
-    assert chunks[-1].error is not None
-    assert chunks[-1].error.location == pb.CommandLocation(path=[1])
-    assert caught.value.__dict__["_egglog_proto_error"] == chunks[-1].error
+    terminal = chunks[-1]
+    assert terminal.result is not None
+    assert terminal.result.field == "error"
+    assert terminal.result.value.location == pb.CommandLocation(path=[1])
+    assert caught.value.__dict__["_egglog_proto_error"] == terminal.result.value
+    assert caught.value.__dict__["_egglog_proto_frame"] == terminal
     assert len(graph.history().commands) == 3

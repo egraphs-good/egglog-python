@@ -16,6 +16,7 @@ from typing_extensions import deprecated
 
 from ._builtin_protocols import SCALAR_PROTOCOLS
 from ._catalog import builtin_catalog
+from ._presentation import CallKind, presentation
 from ._program import Ref, StructuralView, _copy_record
 from .conversion import converter, get_type_args, resolve_literal
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
@@ -60,7 +61,7 @@ def _exact_value(expr: RuntimeExpr) -> int | Fraction:  # noqa: C901
     family: pb.Sort = sort.read()
     assert family.kind is not None
     allowed = "a literal value or a locally inspectable exact constructor"
-    if node.kind is None or node.kind.field != "call" or family.kind.field != "family":
+    if node.kind is None or node.kind.field != "call" or family.kind.field != "application":
         raise ExprValueError(expr, allowed)
     call = node.kind.value
     if (family.kind.value.name, call.func) not in {
@@ -70,10 +71,10 @@ def _exact_value(expr: RuntimeExpr) -> int | Fraction:  # noqa: C901
     }:
         raise ExprValueError(expr, allowed)
     declaration = _definition_at(reference, "callable", call.func)
-    record: pb.Declaration = declaration.read()
-    if record.kind is None or record.kind.field != "host_primitive":
+    record: pb.Declaration | pb.Primitive = declaration.read()
+    if not isinstance(record, pb.Primitive):
         raise ExprValueError(expr, allowed)
-    primitive = record.kind.value
+    primitive = record
     if primitive.typing is None or primitive.typing.field != "signature":
         raise ExprValueError(expr, allowed)
     signature = primitive.typing.value
@@ -128,10 +129,10 @@ def _pair_call_children(reference: Ref, sort: Ref) -> tuple[Ref, Ref]:
     assert node.kind is not None
     assert node.kind.field == "call"
     declaration = _definition_at(reference, "callable", node.kind.value.func)
-    callable_record: pb.Declaration = declaration.read()
-    if callable_record.kind is None or callable_record.kind.field != "host_primitive":
+    callable_record: pb.Declaration | pb.Primitive = declaration.read()
+    if not isinstance(callable_record, pb.Primitive):
         raise ExprValueError(RuntimeExpr(reference), "Pair(left, right)")
-    primitive = callable_record.kind.value
+    primitive = callable_record
     if primitive.typing is None or primitive.typing.field != "signature":
         raise ExprValueError(RuntimeExpr(reference), "Pair(left, right)")
     signature = primitive.typing.value
@@ -164,7 +165,7 @@ def _pair_value(expr: RuntimeExpr) -> tuple[RuntimeExpr, RuntimeExpr]:
     node: pb.Node = reference.read()
     sort = reference.owner.ref("sorts", node.sort_id)
     record: pb.Sort = sort.read()
-    if record.kind is None or record.kind.field != "family" or record.kind.value.name != "Pair":
+    if record.kind is None or record.kind.field != "application" or record.kind.value.name != "Pair":
         raise ExprValueError(expr, "Pair(left, right)")
     arguments = record.kind.value.args
     if len(arguments) != 2:
@@ -206,13 +207,13 @@ def _maybe_value(expr: RuntimeExpr) -> RuntimeExpr | None:
     record: pb.Sort = sort.read()
     if (
         record.kind is None
-        or record.kind.field != "family"
+        or record.kind.field != "application"
         or record.kind.value.name != "Maybe"
         or len(record.kind.value.args) != 1
     ):
         raise ExprValueError(expr, "Maybe.none() or Maybe.some(value)")
-    family: pb.Declaration = _definition_at(reference, "host_sort_family", "Maybe").read()
-    if family.kind is None or family.kind.field != "host_sort_family" or family.kind.value.arity != 1:
+    family: pb.PrimitiveSort = _definition_at(reference, "primitive_sort", "Maybe").read()
+    if not isinstance(family, pb.PrimitiveSort) or family.arity != 1:
         msg = "Maybe inspection requires the canonical family"
         raise ValueError(msg)
     child: Ref | None
@@ -231,18 +232,13 @@ def _maybe_value(expr: RuntimeExpr) -> RuntimeExpr | None:
     ):
         call = node.kind.value
         declaration = _definition_at(reference, "callable", call.func)
-        declared: pb.Declaration = declaration.read()
-        if (
-            declared.kind is None
-            or declared.kind.field != "host_primitive"
-            or declared.kind.value.typing is None
-            or declared.kind.value.typing.field != "signature"
-        ):
+        declared: pb.Declaration | pb.Primitive = declaration.read()
+        if not isinstance(declared, pb.Primitive) or declared.typing is None or declared.typing.field != "signature":
             msg = "Maybe inspection requires native callable provenance"
             raise ValueError(msg)
-        signature = declared.kind.value.typing.value
+        signature = declared.typing.value
         expected_ref = builtin_catalog().definitions["callable", call.func]
-        expected = expected_ref.read().kind.value.typing.value
+        expected = expected_ref.read().typing.value
         if (
             len(signature.type_params) != len(expected.type_params)
             or signature.equality_type_params != expected.equality_type_params
@@ -306,7 +302,11 @@ def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C90
     node: pb.Node = reference.read()
     sort = reference.owner.ref("sorts", node.sort_id)
     record: pb.Sort = sort.read()
-    if record.kind is None or record.kind.field != "family" or record.kind.value.name not in {"Vec", "Set", "MultiSet"}:
+    if (
+        record.kind is None
+        or record.kind.field != "application"
+        or record.kind.value.name not in {"Vec", "Set", "MultiSet"}
+    ):
         raise ExprValueError(expr, "a Vec, Set or MultiSet value")
     family = record.kind.value.name
     allowed = "Vec(*args) or Vec.empty()" if family == "Vec" else f"{family}(*args)"
@@ -323,10 +323,10 @@ def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C90
     ):
         call = node.kind.value
         declaration = _definition_at(reference, "callable", call.func)
-        callable_record: pb.Declaration = declaration.read()
-        if callable_record.kind is None or callable_record.kind.field != "host_primitive":
+        callable_record: pb.Declaration | pb.Primitive = declaration.read()
+        if not isinstance(callable_record, pb.Primitive):
             raise ExprValueError(expr, allowed)
-        primitive = callable_record.kind.value
+        primitive = callable_record
         if primitive.typing is None or primitive.typing.field != "signature":
             raise ExprValueError(expr, allowed)
         signature = primitive.typing.value
@@ -372,18 +372,13 @@ def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:  # noqa: C90
     return tuple(RuntimeExpr(child) for child in children)
 
 
-def _container_member(target: RuntimeClass | RuntimeExpr, name: str, kind: pb.PythonCallKind) -> RuntimeFunction:
+def _container_member(target: RuntimeClass | RuntimeExpr, name: str, kind: CallKind) -> RuntimeFunction:
     """Select and bind a supplied codec member without authoring a Call."""
     from .runtime import _definition_at  # noqa: PLC0415
 
     origin = target.__egg_definition__ if isinstance(target, RuntimeClass) else target.__egg_ref__
     reference = _definition_at(origin, "callable", name)
-    declaration: pb.Declaration = reference.read()
-    views = (
-        declaration.bindings.python.views
-        if declaration.bindings is not None and declaration.bindings.python is not None
-        else []
-    )
+    views = presentation(reference).views
     view = next((index for index, candidate in enumerate(views) if candidate.kind == kind), None)
     if view is None:
         raise NotImplementedError(f"{name} has no supplied Python {kind.name} view")
@@ -399,7 +394,7 @@ def _collection_to_expr(value: list[object] | tuple[object, ...] | set[object], 
     result = (
         target(*(resolve_literal(element.__egg_sort__, item) for item in value))
         if value or family == "MultiSet"
-        else _container_member(target, f"egglog.core.{family.lower()}.empty", pb.PythonCallKind.CLASS_METHOD)()
+        else _container_member(target, f"egglog.core.{family.lower()}.empty", CallKind.CLASS_METHOD)()
     )
     assert isinstance(result, RuntimeExpr)
     return result
@@ -443,7 +438,7 @@ def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:  # noqa: C90
         record: pb.Sort = sort.read()
         if (
             record.kind is None
-            or record.kind.field != "family"
+            or record.kind.field != "application"
             or record.kind.value.name != "Map"
             or len(record.kind.value.args) != 2
         ):
@@ -477,16 +472,15 @@ def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:  # noqa: C90
                 raise ExprValueError(expr, "Map.empty(), Map.insert() or Map.from_pairs(finite entries)")
             call = node.kind.value
             declaration = _definition_at(reference, "callable", call.func)
-            declared: pb.Declaration = declaration.read()
+            declared: pb.Declaration | pb.Primitive = declaration.read()
             if (
-                declared.kind is None
-                or declared.kind.field != "host_primitive"
-                or declared.kind.value.typing is None
-                or declared.kind.value.typing.field != "signature"
+                not isinstance(declared, pb.Primitive)
+                or declared.typing is None
+                or declared.typing.field != "signature"
             ):
                 msg = "Map inspection requires native callable provenance"
                 raise ExprValueError(expr, msg)
-            signature = declared.kind.value.typing.value
+            signature = declared.typing.value
             if signature.varargs or not signature.has_field("output") or len(call.args) != len(signature.inputs):
                 msg = "Invalid canonical Map signature or call arity"
                 raise ExprValueError(expr, msg)
@@ -516,7 +510,7 @@ def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:  # noqa: C90
                 vector_sort: pb.Sort = vector.owner.ref("sorts", vector.read().sort_id).read()
                 if (
                     vector_sort.kind is None
-                    or vector_sort.kind.field != "family"
+                    or vector_sort.kind.field != "application"
                     or vector_sort.kind.value.name != "Vec"
                 ):
                     raise ExprValueError(expr, "Map.from_pairs(Vec(*pairs))")
@@ -545,15 +539,12 @@ def _dict_to_map(value: dict[object, object]) -> RuntimeExpr:
     assert key.__egg_sort__ is not None
     assert item.__egg_sort__ is not None
     target = _BASE_CLASSES["Map"][key, item]
-    result = _container_member(target, "egglog.core.map.empty", pb.PythonCallKind.CLASS_METHOD)()
+    result = _container_member(target, "egglog.core.map.empty", CallKind.CLASS_METHOD)()
     assert isinstance(result, RuntimeExpr)
     for source_key, source_value in value.items():
-        insert = _container_member(result, "egglog.core.map.insert", pb.PythonCallKind.METHOD)
-        metadata: pb.Declaration = insert.__egg_ref__.read()
-        assert metadata.bindings is not None
-        assert metadata.bindings.python is not None
+        insert = _container_member(result, "egglog.core.map.insert", CallKind.METHOD)
         assert insert.__egg_view__ is not None
-        view = metadata.bindings.python.views[insert.__egg_view__]
+        view = presentation(insert.__egg_ref__).views[insert.__egg_view__]
         arguments = {
             1: resolve_literal(key.__egg_sort__, source_key),
             2: resolve_literal(item.__egg_sort__, source_value),
@@ -583,16 +574,16 @@ if (_function_binding := _catalog.members.get((("function", ""), "__call__"))) i
     converter(MethodType, UnstableFn, lambda value: UnstableFn[get_type_args()](value))
     converter(partial, UnstableFn, lambda value: UnstableFn[get_type_args()](value.func, *value.args))
 for _definition in _catalog.definitions.values():
-    _declaration: pb.Declaration = _definition.read()
-    _kind = _declaration.kind
-    if _kind is None or not isinstance(_kind.value, pb.HostSortFamily | pb.EqSort):
+    _declaration: pb.Declaration | pb.Primitive | pb.PrimitiveSort = _definition.read()
+    if isinstance(_declaration, pb.Declaration):
+        assert _declaration.kind is not None
+        _kind = _declaration.kind.value
+    else:
+        _kind = _declaration
+    if not isinstance(_kind, pb.PrimitiveSort | pb.EqSort):
         continue
-    _binding = _kind.value.bindings
-    _path = (
-        tuple(_binding.python.path)
-        if _binding is not None and _binding.python is not None
-        else (*__name__.split("."), _kind.value.name)
-    )
+    _binding = presentation(_definition).type_view
+    _path = tuple(_binding.path) if _binding is not None else (*__name__.split("."), _kind.name)
     if _path[:-1] != tuple(__name__.split(".")):
         continue
     _name = _path[-1]
@@ -601,20 +592,20 @@ for _definition in _catalog.definitions.values():
     _class = RuntimeClass(_definition)
     globals()[_name] = _class
     __all__ += [_name]  # noqa: PLE0604 -- names come from the generated catalog
-    _protocol = SCALAR_PROTOCOLS.get(_kind.value.name)
-    if _kind.value.name == "Pair" and isinstance(_kind.value, pb.HostSortFamily):
+    _protocol = SCALAR_PROTOCOLS.get(_kind.name)
+    if _kind.name == "Pair" and isinstance(_kind, pb.PrimitiveSort):
         _class.__egg_hooks__["value"] = property(_pair_value)
         converter(tuple, _class, _tuple_to_pair)
-    if _kind.value.name == "Maybe" and isinstance(_kind.value, pb.HostSortFamily):
+    if _kind.name == "Maybe" and isinstance(_kind, pb.PrimitiveSort):
         _class.__egg_hooks__["value"] = property(_maybe_value)
         converter(
             type(None),
             _class,
             lambda _value, cls=_class: _container_member(
-                cls[get_type_args()[0]], "egglog.experimental.maybe.none", pb.PythonCallKind.CLASS_METHOD
+                cls[get_type_args()[0]], "egglog.experimental.maybe.none", CallKind.CLASS_METHOD
             )(),
         )
-    if _kind.value.name == "Vec" and isinstance(_kind.value, pb.HostSortFamily):
+    if _kind.name == "Vec" and isinstance(_kind, pb.PrimitiveSort):
         _class.__egg_hooks__.update(
             value=property(_container_items),
             __iter__=lambda expr: iter(expr.value),
@@ -631,7 +622,7 @@ for _definition in _catalog.definitions.values():
             | GenericAlias(list, _host_element)
         )
         __all__ += [f"{_name}Like"]  # noqa: PLE0604
-    if _kind.value.name == "Set" and isinstance(_kind.value, pb.HostSortFamily):
+    if _kind.name == "Set" and isinstance(_kind, pb.PrimitiveSort):
         _class.__egg_hooks__.update(
             value=property(lambda expr: set(_container_items(expr))),
             __iter__=lambda expr: iter(dict.fromkeys(_container_items(expr))),
@@ -645,7 +636,7 @@ for _definition in _catalog.definitions.values():
             set, _host_set_element
         )
         __all__ += [f"{_name}Like"]  # noqa: PLE0604
-    if _kind.value.name == "MultiSet" and isinstance(_kind.value, pb.HostSortFamily):
+    if _kind.name == "MultiSet" and isinstance(_kind, pb.PrimitiveSort):
         _class.__egg_hooks__.update(
             value=property(lambda expr: list(_container_items(expr))),
             __iter__=lambda expr: iter(expr.value),
@@ -659,7 +650,7 @@ for _definition in _catalog.definitions.values():
             tuple, (_host_multiset_element, ...)
         )
         __all__ += [f"{_name}Like"]  # noqa: PLE0604
-    if _kind.value.name == "Map" and isinstance(_kind.value, pb.HostSortFamily):
+    if _kind.name == "Map" and isinstance(_kind, pb.PrimitiveSort):
         _class.__egg_hooks__.update(
             value=property(lambda expr: {RuntimeExpr(key): RuntimeExpr(value) for key, value in _map_entries(expr)}),
             __iter__=lambda expr: iter(expr.value),
@@ -696,7 +687,7 @@ for _definition in _catalog.definitions.values():
         __all__ += [f"{_name}Like"]  # noqa: PLE0604
         for _hook, _result in _protocol.hooks:
             _class.__egg_hooks__[_hook] = {int: _integer, float: _float, bool: lambda expr: bool(expr.value)}[_result]
-    elif _kind.value.name == "Unit":
+    elif _kind.name == "Unit":
         from .egraph import expr_fact
 
         _class.__egg_hooks__["__bool__"] = lambda expr: bool(expr_fact(expr))
@@ -704,7 +695,7 @@ for _definition in _catalog.definitions.values():
 # Expression conversion policy is separate from formed-value decoding. In
 # particular, Python ints/Fractions still pass through bounded i64 Calls.
 for _family, _protocol in SCALAR_PROTOCOLS.items():
-    if _protocol.conversion_sort is None or ("host_sort_family", _family) not in _catalog.definitions:
+    if _protocol.conversion_sort is None or ("primitive_sort", _family) not in _catalog.definitions:
         continue
     from .runtime import _BASE_CLASSES
 
@@ -727,7 +718,7 @@ for _path, (_definition, _view) in _catalog.functions.items():
         __all__ += [_path[-1]]  # noqa: PLE0604
 
 
-if ("host_sort_family", "PyObject") in _catalog.definitions:
+if ("primitive_sort", "PyObject") in _catalog.definitions:
 
     class PyObjectFunction(Protocol):
         def __call__(self, *__args: PyObject) -> PyObject: ...  # noqa: F821 -- native-catalog class

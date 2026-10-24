@@ -8,7 +8,7 @@ import re
 import sys
 from collections.abc import Callable, Generator, Iterable, Sequence
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from inspect import Parameter, currentframe, getmodule, signature
 from operator import index as index_integer
@@ -43,8 +43,11 @@ from protobuf import Oneof
 from typing_extensions import ParamSpec, TypeForm
 
 from ._catalog import Catalog, builtin_catalog
+from ._presentation import CallKind, CallPresentation, Presentation, TypePresentation, presentation
+from ._presentation import Parameter as PresentationParameter
 from ._program import (
     Builder,
+    Owner,
     Packed,
     Ref,
     StructuralView,
@@ -62,6 +65,7 @@ from .pretty import _format_pyobject, pretty_ref
 from .runtime import *
 from .runtime import _ClassContext, _definition_at
 from .thunk import *
+from .type_constraint_solver import infer_sort
 
 if TYPE_CHECKING:
     import graphviz
@@ -420,12 +424,13 @@ class _ExprMetaclass(type):
             pb.Declaration(
                 kind=Oneof[Literal["eq_sort"], pb.EqSort](
                     "eq_sort",
-                    pb.EqSort(
-                        name=egg_sort or ".".join(path), bindings=pb.SortBindings(python=pb.TypeBinding(path=path))
-                    ),
+                    pb.EqSort(name=egg_sort or ".".join(path)),
                 ),
                 doc=namespace.get("__doc__"),
             ),
+        )
+        builder.presentations["eq_sort", egg_sort or ".".join(path)] = Presentation(
+            type_view=TypePresentation(tuple(path))
         )
         return RuntimeClass(builder.publish(keepalive=(context,)).ref("declarations", definition))
 
@@ -519,8 +524,8 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
                 default = resolve_literal(sort, namespace[name])
             body = _lower_function_body(builder, default.__egg_ref__, [])
         kind = (
-            Oneof[Literal["primitive"], pb.Primitive](
-                "primitive", pb.Primitive(name=egg_name, output=output, body=body)
+            Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                "user_defined_primitive", pb.UserDefinedPrimitive(name=egg_name, output=output, body=body)
             )
             if body is not None
             else Oneof[Literal["constructor"], pb.Constructor](
@@ -533,22 +538,16 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             "declarations",
             pb.Declaration(
                 kind=kind,
-                bindings=pb.CallableBindings(
-                    python=pb.PythonBindings(
-                        views=[
-                            pb.PythonCallable(
-                                kind=pb.PythonCallKind.CLASS_VARIABLE,
-                                path=[name],
-                                owner=pb.BindingOwner(
-                                    kind=Oneof[Literal["sort"], int](
-                                        "sort", builder.import_ref(runtime_cls.__egg_sort__)
-                                    )
-                                ),
-                            )
-                        ]
-                    )
-                ),
             ),
+        )
+        builder.presentations["callable", egg_name] = Presentation(
+            views=(
+                CallPresentation(
+                    kind=CallKind.CLASS_VARIABLE,
+                    path=(name,),
+                    owner=runtime_cls.__egg_sort__,
+                ),
+            )
         )
         definitions.append(builder.publish().ref("declarations", index))
         context.catalog = Catalog.from_refs(definitions)
@@ -597,11 +596,11 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
             continue
         if name in IGNORED_ATTRIBUTES:
             raise NotImplementedError(f"Symbolic reflected member {runtime_cls}.{name} is not migrated")
-        view_kind = pb.PythonCallKind.INITIALIZER if name == "__init__" else pb.PythonCallKind.METHOD
+        view_kind = CallKind.INITIALIZER if name == "__init__" else CallKind.METHOD
         if isinstance(fn, classmethod):
-            fn, view_kind = fn.__func__, pb.PythonCallKind.CLASS_METHOD
+            fn, view_kind = fn.__func__, CallKind.CLASS_METHOD
         elif isinstance(fn, property):
-            fn, view_kind = fn.fget, pb.PythonCallKind.PROPERTY
+            fn, view_kind = fn.fget, CallKind.PROPERTY
         if isinstance(fn, _WrappedMethod):
             msg = f"{runtime_cls}.{name} Add the @method(...) decorator above @classmethod or @property"
             raise ValueError(msg)  # noqa: TRY004 -- preserve the public decorator-order error
@@ -629,7 +628,7 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         # Keep the source prefix of complete headers, but never materialize a
         # later header across a pending conversion before the static barrier.
         values_pending |= function.__egg_pending_values__
-        if values_pending or header.kind.field == "primitive":
+        if values_pending or header.kind.field == "user_defined_primitive":
             runtime_cls.__egg_attr_cache__[name] = function
             pending.append(function)
         else:
@@ -642,9 +641,7 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         declaration: pb.Declaration = reference.read()
         assert declaration.kind is not None
         assert isinstance(declaration.kind.value, pb.Constructor)
-        assert declaration.bindings is not None
-        assert declaration.bindings.python is not None
-        view = declaration.bindings.python.views[0]
+        view = presentation(reference).views[0]
         builder = Builder()
         arguments: list[int] = []
         for argument in declaration.kind.value.inputs:
@@ -660,13 +657,13 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         owner = builder.publish()
         values = [RuntimeExpr(owner.ref("nodes", index)) for index in arguments]
         callback_args: list[RuntimeExpr | RuntimeClass] = [values[parameter.core_input] for parameter in view.params]
-        if view.has_field("receiver"):
+        if view.receiver is not None:
             callback_args.insert(0, values[view.receiver])
-        elif view.kind == pb.PythonCallKind.CLASS_METHOD:
+        elif view.kind == CallKind.CLASS_METHOD:
             callback_args.insert(0, runtime_cls)
         with set_current_ruleset(ruleset):
             result = fn(*callback_args)
-        if view.has_field("mutates"):
+        if view.mutates is not None:
             if result is not None:
                 msg = "Mutating callable bodies must return None"
                 raise ValueError(msg)
@@ -681,10 +678,10 @@ def _prepare_expr_class(  # noqa: C901, PLR0912
         values = [RuntimeExpr(owner.ref("nodes", index)) for index in arguments]
         # Calling the selected view reuses its canonical receiver/slot ordering.
         lhs = RuntimeFunction(reference, 0)(
-            *([values[view.receiver]] if view.has_field("receiver") else []),
+            *([values[view.receiver]] if view.receiver is not None else []),
             *(values[parameter.core_input] for parameter in view.params),
         )
-        if view.has_field("mutates"):
+        if view.mutates is not None:
             lhs = values[view.mutates]
         rewrite(cast("Expr", lhs), ruleset=ruleset, subsume=subsume_body).to(cast("Expr", rhs))
     return context.catalog
@@ -711,7 +708,7 @@ class _FunctionConstructor:
         fn: object,
         *,
         owner: None = None,
-        view_kind: pb.PythonCallKind = pb.PythonCallKind.FUNCTION,
+        view_kind: CallKind = CallKind.FUNCTION,
         member_name: str | None = None,
         reverse_args: bool = False,
     ) -> Ref: ...
@@ -722,7 +719,7 @@ class _FunctionConstructor:
         fn: object,
         *,
         owner: RuntimeClass,
-        view_kind: pb.PythonCallKind = pb.PythonCallKind.FUNCTION,
+        view_kind: CallKind = CallKind.FUNCTION,
         member_name: str | None = None,
         reverse_args: bool = False,
     ) -> RuntimeFunction: ...
@@ -732,7 +729,7 @@ class _FunctionConstructor:
         fn: object,
         *,
         owner: RuntimeClass | None = None,
-        view_kind: pb.PythonCallKind = pb.PythonCallKind.FUNCTION,
+        view_kind: CallKind = CallKind.FUNCTION,
         member_name: str | None = None,
         reverse_args: bool = False,
     ) -> Ref | RuntimeFunction:
@@ -750,14 +747,14 @@ class _FunctionConstructor:
             if not parameters or any(parameter.kind != Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters):
                 msg = "Member parameters must be fixed positional-or-keyword parameters including self or cls"
                 raise NotImplementedError(msg)
-            if view_kind in {pb.PythonCallKind.INITIALIZER, pb.PythonCallKind.CLASS_METHOD}:
+            if view_kind in {CallKind.INITIALIZER, CallKind.CLASS_METHOD}:
                 parameters = parameters[1:]
-            elif view_kind == pb.PythonCallKind.PROPERTY and len(parameters) != 1:
+            elif view_kind == CallKind.PROPERTY and len(parameters) != 1:
                 msg = "A symbolic property must have only its receiver"
                 raise NotImplementedError(msg)
         variable = _last_param_variable(parameters)
         if self.mutates_first_arg:
-            if owner is not None and view_kind != pb.PythonCallKind.METHOD:
+            if owner is not None and view_kind != CallKind.METHOD:
                 msg = "Mutating non-instance views are not migrated"
                 raise NotImplementedError(msg)
             if not parameters:
@@ -766,7 +763,7 @@ class _FunctionConstructor:
             if hints.get("return") is not type(None):
                 msg = "Mutating callables must be annotated to return None"
                 raise ValueError(msg)
-        receiver = owner is not None and view_kind in {pb.PythonCallKind.METHOD, pb.PythonCallKind.PROPERTY}
+        receiver = owner is not None and view_kind in {CallKind.METHOD, CallKind.PROPERTY}
         input_sorts = [
             owner.__egg_sort__
             if owner is not None and index == 0 and receiver
@@ -775,7 +772,7 @@ class _FunctionConstructor:
         ]
         output = (
             owner.__egg_sort__
-            if owner is not None and view_kind == pb.PythonCallKind.INITIALIZER
+            if owner is not None and view_kind == CallKind.INITIALIZER
             else input_sorts[0]
             if self.mutates_first_arg and input_sorts
             else resolve_type_annotation(hints["return"])
@@ -784,7 +781,7 @@ class _FunctionConstructor:
             msg = "Free functions require a concrete output sort"
             raise NotImplementedError(msg)
         output_record: pb.Sort = output.read()
-        if output_record.kind is None or output_record.kind.field not in {"eq", "family", "func"}:
+        if output_record.kind is None or output_record.kind.field not in {"eq", "application", "func"}:
             msg = "Free functions require an equality, host-family or function output sort"
             raise NotImplementedError(msg)
         equality = output_record.kind.field == "eq"
@@ -810,7 +807,7 @@ class _FunctionConstructor:
             if self.unextractable:
                 msg = "Primitive-returning callables cannot be unextractable"
                 raise ValueError(msg)
-            if output_record.kind.field == "family" and output_record.kind.value.name == "Unit" and has_merge:
+            if output_record.kind.field == "application" and output_record.kind.value.name == "Unit" and has_merge:
                 msg = "Functions that return Unit cannot use merge"
                 raise ValueError(msg)
         elif has_merge:
@@ -846,7 +843,7 @@ class _FunctionConstructor:
                     raise ValueError(msg)
             if owner is not None and (
                 (self.ruleset is None and self.mutates_first_arg)
-                or (self.ruleset is not None and view_kind == pb.PythonCallKind.INITIALIZER)
+                or (self.ruleset is not None and view_kind == CallKind.INITIALIZER)
             ):
                 msg = "Eager member and initializer bodies are not migrated"
                 raise NotImplementedError(msg)
@@ -860,7 +857,7 @@ class _FunctionConstructor:
         if self.subsume and not has_body:
             msg = "subsume requires a body"
             raise ValueError(msg)
-        if variable or (self.builtin and (owner is not None or self.mutates_first_arg or self.egg_fn is not None)):
+        if variable or (self.builtin and (owner is not None or self.mutates_first_arg)):
             msg = "Builtin, mutation and variadic free functions are not migrated"
             raise NotImplementedError(msg)
         if any(not isinstance(sort, Ref) or sort.role != "sorts" for sort in input_sorts):
@@ -875,7 +872,7 @@ class _FunctionConstructor:
             inputs.append(pb.Arg(sort=builder.import_ref(sort), name=parameter.name))
             if receiver and index == 0:
                 continue
-            parameter_record = pb.PythonParameter(
+            parameter_record = PresentationParameter(
                 core_input=len(parameters) - index - 1 if reverse_args else index, name=parameter.name
             )
             if parameter.default is not Parameter.empty:
@@ -895,36 +892,49 @@ class _FunctionConstructor:
             assert member_name is not None
             path = [*owner.__module__.split("."), owner.__name__, member_name]
         name = self.egg_fn or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", ".".join(path))
-        view = pb.PythonCallable(kind=view_kind, path=path, params=surface)
         python_first_input = len(parameters) - 1 if reverse_args else 0
-        if self.mutates_first_arg:
-            view.mutates = python_first_input
         if owner is not None:
             assert member_name is not None
             assert owner.__egg_sort__ is not None
-            view.owner = pb.BindingOwner(
-                kind=Oneof[Literal["sort"], int]("sort", builder.import_ref(owner.__egg_sort__))
-            )
-            view.path = [] if view_kind == pb.PythonCallKind.INITIALIZER else [member_name]
-            if receiver:
-                view.receiver = python_first_input
+            path = [] if view_kind == CallKind.INITIALIZER else [member_name]
+        view = CallPresentation(
+            kind=view_kind,
+            path=tuple(path),
+            params=tuple(surface),
+            mutates=python_first_input if self.mutates_first_arg else None,
+            owner=None if owner is None else owner.__egg_sort__,
+            receiver=python_first_input if receiver else None,
+        )
+        builtin_reference = None
+        if self.builtin:
+            builtin_reference = _definition_at(output, "callable", name)
+            actual: pb.Primitive = builtin_reference.read()
+            if not isinstance(actual, pb.Primitive) or actual.typing is None or actual.typing.field != "signature":
+                msg = "Builtin annotations require an owned concrete primitive signature"
+                raise ValueError(msg)
+            actual_signature = actual.typing.value
+            if (
+                actual_signature.type_params
+                or actual_signature.varargs
+                or len(actual_signature.inputs) != len(input_sorts)
+                or not actual_signature.has_field("output")
+            ):
+                msg = "Builtin annotations must match the configured fixed signature"
+                raise ValueError(msg)
+            for supplied, expected in zip(
+                (*input_sorts, output),
+                (*(argument.sort for argument in actual_signature.inputs), actual_signature.output),
+                strict=True,
+            ):
+                assert isinstance(supplied, Ref)
+                infer_sort(builtin_reference.owner.ref("sorts", expected), supplied, 0, {})
         kind = (
-            Oneof[Literal["host_primitive"], pb.HostPrimitive](
-                "host_primitive",
-                pb.HostPrimitive(
-                    name=name,
-                    typing=Oneof[Literal["signature"], pb.GenericSignature](
-                        "signature", pb.GenericSignature(inputs=inputs, output=output_index)
-                    ),
-                ),
-            )
-            if self.builtin
-            else Oneof[Literal["primitive"], pb.Primitive](
-                "primitive", pb.Primitive(name=name, inputs=inputs, output=output_index)
+            Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                "user_defined_primitive", pb.UserDefinedPrimitive(name=name, inputs=inputs, output=output_index)
             )
             if has_body and self.ruleset is None
             else Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=name, inputs=inputs))
-            if not has_body and output_record.kind.field == "family" and output_record.kind.value.name == "Unit"
+            if not has_body and output_record.kind.field == "application" and output_record.kind.value.name == "Unit"
             else Oneof[Literal["constructor"], pb.Constructor](
                 "constructor",
                 pb.Constructor(name=name, inputs=inputs, output=output_index, unextractable=self.unextractable),
@@ -941,11 +951,11 @@ class _FunctionConstructor:
         )
         declaration = pb.Declaration(
             kind=kind,
-            bindings=pb.CallableBindings(python=pb.PythonBindings(views=[view])),
             doc=fn.__doc__,
         )
 
         def finish() -> Ref:  # noqa: C901, PLR0912
+            completed_parameters = []
             for parameter, parameter_record in zip(
                 parameters[1:] if receiver else parameters, view.params, strict=True
             ):
@@ -953,7 +963,9 @@ class _FunctionConstructor:
                     sort = input_sorts[parameter_record.core_input]
                     assert isinstance(sort, Ref)
                     default = resolve_literal(sort, parameter.default)
-                    parameter_record.default_expr = builder.import_ref(default.__egg_ref__)
+                    completed_parameters.append(replace(parameter_record, default=default.__egg_ref__))
+                else:
+                    completed_parameters.append(parameter_record)
             merge = _resolve_merge(output, self.merge)
             if merge is not None:
                 assert isinstance(kind.value, pb.Function)
@@ -986,11 +998,11 @@ class _FunctionConstructor:
                 callback_args: list[RuntimeExpr | RuntimeClass] = [
                     values[parameter.core_input] for parameter in view.params
                 ]
-                if view.has_field("receiver"):
+                if view.receiver is not None:
                     callback_args.insert(0, values[view.receiver])
-                elif owner is not None and view.kind == pb.PythonCallKind.CLASS_METHOD:
+                elif owner is not None and view.kind == CallKind.CLASS_METHOD:
                     callback_args.insert(0, owner)
-                elif owner is not None and view.kind == pb.PythonCallKind.INITIALIZER:
+                elif owner is not None and view.kind == CallKind.INITIALIZER:
                     # A source-only self template, never a placeholder declaration.
                     # Retaining this call in the final result is eager recursion.
                     initial = Builder()
@@ -1010,6 +1022,7 @@ class _FunctionConstructor:
                         if result is not None:
                             msg = "Mutating callable bodies must return None"
                             raise ValueError(msg)
+                        assert view.mutates is not None
                         result = values[view.mutates]
                     if result is None:
                         msg = "Callable bodies must return a value"
@@ -1023,12 +1036,24 @@ class _FunctionConstructor:
                     resolved.__egg_ref__,
                     formal_refs,
                     rewrite_body=self.ruleset is not None,
-                    recursive_name=name if owner is not None and view.kind == pb.PythonCallKind.INITIALIZER else None,
+                    recursive_name=name if owner is not None and view.kind == CallKind.INITIALIZER else None,
                 )
-                if isinstance(kind.value, pb.Primitive):
+                if isinstance(kind.value, pb.UserDefinedPrimitive):
                     kind.value.body = body
-            index = builder.add("declarations", declaration)
-            reference = builder.publish().ref("declarations", index)
+            if builtin_reference is None:
+                index = builder.add("declarations", declaration)
+                role = "declarations"
+            else:
+                actual = _copy_record(
+                    builtin_reference.read(),
+                    relocate=lambda arena, index: builder.import_ref(builtin_reference.owner.ref(arena, index)),
+                )
+                index = builder.add("primitives", actual)
+                role = "primitives"
+            builder.presentations["callable", name] = Presentation(
+                views=(replace(view, params=tuple(completed_parameters)),)
+            )
+            reference = builder.publish().ref(role, index)
             Catalog.from_refs([reference])
             if body is not None and self.ruleset is not None:
                 values = [RuntimeExpr(formal) for formal in formal_refs]
@@ -1047,7 +1072,14 @@ class _FunctionConstructor:
 
         if owner is None:
             return finish()
-        return RuntimeFunction(finish, 0, owner, pending_declaration=declaration, pending_values=pending_values)
+        return RuntimeFunction(
+            finish,
+            0,
+            owner,
+            pending_declaration=declaration,
+            pending_presentation=Presentation(views=(view,)),
+            pending_values=pending_values,
+        )
 
 
 def _lower_function_body(  # noqa: C901
@@ -1167,9 +1199,9 @@ def _compile_python_function(
     declaration = builder.add(
         "declarations",
         pb.Declaration(
-            kind=Oneof[Literal["primitive"], pb.Primitive](
-                "primitive",
-                pb.Primitive(
+            kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                "user_defined_primitive",
+                pb.UserDefinedPrimitive(
                     name=name,
                     inputs=[
                         pb.Arg(sort=builder.import_ref(sort), name=f"_{index}") for index, sort in enumerate(sorts)
@@ -1178,21 +1210,19 @@ def _compile_python_function(
                     body=body_index,
                 ),
             ),
-            bindings=pb.CallableBindings(
-                python=pb.PythonBindings(
-                    views=[
-                        pb.PythonCallable(
-                            kind=pb.PythonCallKind.FUNCTION,
-                            path=["egglog", "egraph", name],
-                            params=[
-                                pb.PythonParameter(name=parameter, core_input=index)
-                                for index, parameter in enumerate(parameter_names)
-                            ],
-                        )
-                    ]
-                )
-            ),
         ),
+    )
+    builder.presentations["callable", name] = Presentation(
+        views=(
+            CallPresentation(
+                kind=CallKind.FUNCTION,
+                path=("egglog", "egraph", name),
+                params=tuple(
+                    PresentationParameter(name=parameter, core_input=index)
+                    for index, parameter in enumerate(parameter_names)
+                ),
+            ),
+        )
     )
     return RuntimeFunction(builder.publish().ref("declarations", declaration), 0), captures
 
@@ -1236,18 +1266,22 @@ def relation(name: str, /, *tps: type, egg_fn: str | None = None) -> Callable[..
             raise TypeError(msg)
         label = f"arg{index}"
         inputs.append(pb.Arg(sort=builder.import_ref(sort), name=label))
-        params.append(pb.PythonParameter(core_input=index, name=label))
+        params.append(PresentationParameter(core_input=index, name=label))
     logical_name = egg_fn or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", ".".join(path))
     declaration = builder.add(
         "declarations",
         pb.Declaration(
             kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=logical_name, inputs=inputs)),
-            bindings=pb.CallableBindings(
-                python=pb.PythonBindings(
-                    views=[pb.PythonCallable(kind=pb.PythonCallKind.FUNCTION, path=path, params=params)]
-                )
-            ),
         ),
+    )
+    builder.presentations["callable", logical_name] = Presentation(
+        views=(
+            CallPresentation(
+                kind=CallKind.FUNCTION,
+                path=tuple(path),
+                params=tuple(params),
+            ),
+        )
     )
     reference = builder.publish().ref("declarations", declaration)
     Catalog.from_refs([reference])
@@ -1331,7 +1365,7 @@ def constant(
         msg = "Constants require a concrete sort"
         raise NotImplementedError(msg)
     record: pb.Sort = sort.read()
-    if record.kind is None or record.kind.field not in {"eq", "family"}:
+    if record.kind is None or record.kind.field not in {"eq", "application"}:
         msg = "Constants require an equality or host-family sort"
         raise NotImplementedError(msg)
     has_default = default_replacement is not _MISSING
@@ -1343,7 +1377,7 @@ def constant(
         msg = "Primitive-returning defaults cannot use an explicit ruleset"
         raise ValueError(msg)
     has_merge = merge is not None
-    if record.kind.field == "family" and record.kind.value.name == "Unit" and has_merge:
+    if record.kind.field == "application" and record.kind.value.name == "Unit" and has_merge:
         msg = "Functions that return Unit cannot use merge"
         raise ValueError(msg)
     if has_default and has_merge:
@@ -1368,8 +1402,8 @@ def constant(
     merge_expression = _resolve_merge(sort, cast("Callable[[object, object], object] | None", merge))
     logical_name = egg_name or re.sub(r"[^\w\-+*/?!=<>&|^/%]", "_", "%" + ".".join(path))
     kind = (
-        Oneof[Literal["primitive"], pb.Primitive](
-            "primitive", pb.Primitive(name=logical_name, output=output, body=body)
+        Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+            "user_defined_primitive", pb.UserDefinedPrimitive(name=logical_name, output=output, body=body)
         )
         if body is not None and ruleset is None
         else Oneof[Literal["constructor"], pb.Constructor](
@@ -1389,10 +1423,10 @@ def constant(
         "declarations",
         pb.Declaration(
             kind=kind,
-            bindings=pb.CallableBindings(
-                python=pb.PythonBindings(views=[pb.PythonCallable(kind=pb.PythonCallKind.CONSTANT, path=path)])
-            ),
         ),
+    )
+    builder.presentations["callable", logical_name] = Presentation(
+        views=(CallPresentation(kind=CallKind.CONSTANT, path=tuple(path)),)
     )
     reference = builder.publish().ref("declarations", index)
     Catalog.from_refs([reference])  # Validate the persisted Python view before exposing the expression.
@@ -1428,6 +1462,15 @@ class GraphvizKwargs(TypedDict, total=False):
     split_primitive_outputs: bool
     split_functions: list[ExprCallable]
     include_temporary_functions: bool
+
+
+def _single_observation(frames: list[tuple[pb.RunProgramOutput, Owner]]) -> tuple[pb.RunProgramOutput, Owner]:
+    """Require one query observation without merging independently owned arenas."""
+    observed = [(output, owner) for output, owner in frames if output.outputs]
+    if len(observed) != 1 or len(observed[0][0].outputs) != 1:
+        msg = "Shared adapter did not return exactly one requested observation"
+        raise ValueError(msg)
+    return observed[0]
 
 
 @dataclass
@@ -1528,9 +1571,11 @@ class EGraph:
     def input(self, fn: Callable[..., BASE_EXPR], path: str) -> None:
         """Load tab-separated data; saved transcripts replay without the input file."""
         reference = resolve_callable(fn)
-        declaration: pb.Declaration = reference.read()
-        if declaration.kind is None or not isinstance(
-            declaration.kind.value, pb.Function | pb.Constructor | pb.Relation
+        declaration: pb.Declaration | pb.Primitive = reference.read()
+        if (
+            not isinstance(declaration, pb.Declaration)
+            or declaration.kind is None
+            or not isinstance(declaration.kind.value, pb.Function | pb.Constructor | pb.Relation)
         ):
             msg = "CSV input requires a table-backed relation, constructor, or bodyless function"
             raise ValueError(msg)
@@ -1640,7 +1685,7 @@ class EGraph:
         result: RunResult | None = None
         diagnostic: pb.Diagnostic | None = None
 
-        def consume(chunk: pb.RunProgramResponse) -> bool | None:
+        def collect_outputs(chunk: pb.RunProgramOutput) -> None:
             nonlocal result, diagnostic
             for output in chunk.outputs:
                 if output.location != pb.CommandLocation(path=[0]):
@@ -1661,11 +1706,15 @@ class EGraph:
                 if result.updated and result.can_stop:
                     msg = "An updated run cannot also permit stopping"
                     raise ValueError(msg)
+
+        def consume(chunk: pb.RunProgramResponse) -> bool | None:
+            if chunk.result is not None and chunk.result.field == "output":
+                collect_outputs(chunk.result.value)
             return None if on_output is None else on_output(chunk)
 
         if on_output is None:
-            response, _ = self._state.run_program(packed, diagnostics=diagnostics)
-            consume(response)
+            for output, _ in self._state.run_program(packed, diagnostics=diagnostics):
+                collect_outputs(output)
         else:
             self._state.run_program(packed, diagnostics=diagnostics, on_output=consume)
         if result is None:
@@ -1678,7 +1727,7 @@ class EGraph:
         builder = Builder()
         command = builder.add("commands", pb.Command(kind=Oneof[Literal["stats"], pb.Unit]("stats", pb.Unit())))
         packed = pack(commands=[builder.publish().ref("commands", command)])
-        response, _ = self._state.run_program(packed)
+        response, _ = _single_observation(self._state.run_program(packed))
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
@@ -1696,7 +1745,7 @@ class EGraph:
             "commands",
             pb.Command(kind=Oneof[Literal["explain"], pb.Explain]("explain", pb.Explain(groups=list(groups) or [""]))),
         )
-        response, _ = self._state.run_program([builder.publish().ref("commands", command)])
+        response, _ = _single_observation(self._state.run_program([builder.publish().ref("commands", command)]))
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
@@ -1727,10 +1776,10 @@ class EGraph:
         command = builder.add(
             "commands", pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=indices)))
         )
-        response, _ = self._state.run_program(
+        response = self._state.run_program(
             [builder.publish().ref("commands", command)], allow_failed_check=allow_failed_check
         )
-        return response.error is None
+        return bool(response)
 
     def check_fail(self, *facts: FactLike) -> None:
         """
@@ -1839,7 +1888,7 @@ class EGraph:
                     )
                 ),
             )
-            response, owner = self._state.run_program([builder.publish().ref("commands", index)])
+            response, owner = _single_observation(self._state.run_program([builder.publish().ref("commands", index)]))
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
@@ -2010,7 +2059,7 @@ class EGraph:
                     )
                 ),
             )
-            response, owner = self._state.run_program([builder.publish().ref("commands", command)])
+            response, owner = _single_observation(self._state.run_program([builder.publish().ref("commands", command)]))
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
@@ -2060,9 +2109,11 @@ class EGraph:
         builder = Builder()
         tables = []
         for reference in references:
-            declaration: pb.Declaration = reference.read()
-            if declaration.kind is None or not isinstance(
-                declaration.kind.value, pb.Function | pb.Constructor | pb.Relation
+            declaration: pb.Declaration | pb.Primitive = reference.read()
+            if (
+                not isinstance(declaration, pb.Declaration)
+                or declaration.kind is None
+                or not isinstance(declaration.kind.value, pb.Function | pb.Constructor | pb.Relation)
             ):
                 msg = "This operation requires a table-backed relation, constructor, or bodyless function"
                 raise ValueError(msg)
@@ -2115,8 +2166,21 @@ class EGraph:
         if not self._state_stack:
             msg = "Cannot pop an EGraph without a pushed state"
             raise IndexError(msg)
-        self._state.return_to(self._state_stack[-1])
-        self._state = self._state_stack.pop()
+        active = self._state
+        if active._recording:
+            active.transport.prepare_recording_scope(False)
+        try:
+            active.destroy()
+        except BaseException:
+            if active._recording:
+                active.transport.finish_recording(False)
+            raise
+        else:
+            if active._recording:
+                active.transport.finish_recording(True)
+        finally:
+            if active.handle is None:
+                self._state = self._state_stack.pop()
 
     def __enter__(self) -> Self:
         """
@@ -2139,9 +2203,13 @@ class EGraph:
         from .visualizer_widget import _snapshot_to_data  # noqa: PLC0415
 
         split = {resolve_callable(fn).read().kind.value.name for fn in kwargs.get("split_functions", [])}
+        snapshot = self.freeze() if snapshot is None else snapshot
+        assert snapshot.program is not None
+        owner = self._state._adopt_value_records(snapshot.program, pending=self._state._active_definitions)
         # Backend temporaries are not part of the logical snapshot inventory.
         return _snapshot_to_data(
-            self.freeze() if snapshot is None else snapshot,
+            snapshot,
+            owner=owner,
             split_functions=split,
             max_functions=kwargs.get("max_functions"),
             max_calls_per_function=kwargs.get("max_calls_per_function"),
@@ -2209,7 +2277,8 @@ class EGraph:
         round_number = 0
 
         def observe(chunk: pb.RunProgramResponse) -> None:
-            for output in chunk.outputs:
+            outputs = chunk.result.value.outputs if chunk.result is not None and chunk.result.field == "output" else ()
+            for output in outputs:
                 if output.kind is not None and output.kind.field == "snapshot":
                     if visualize:
                         history.append(json.dumps(self._serialize(snapshot=output.kind.value, **kwargs)))
@@ -2297,9 +2366,11 @@ class EGraph:
         builtin primitives do not.
         """
         reference = resolve_callable(fn)
-        declaration: pb.Declaration = reference.read()
-        if declaration.kind is None or not isinstance(
-            declaration.kind.value, pb.Function | pb.Constructor | pb.Relation
+        declaration: pb.Declaration | pb.Primitive = reference.read()
+        if (
+            not isinstance(declaration, pb.Declaration)
+            or declaration.kind is None
+            or not isinstance(declaration.kind.value, pb.Function | pb.Constructor | pb.Relation)
         ):
             msg = (
                 "This operation requires a table-backed relation, constructor, or bodyless function; "
@@ -2313,7 +2384,7 @@ class EGraph:
             "commands",
             pb.Command(kind=Oneof[Literal["print_size"], pb.PrintSize]("print_size", pb.PrintSize(tables=[table]))),
         )
-        response, _ = self._state.run_program([builder.publish().ref("commands", command)])
+        response, _ = _single_observation(self._state.run_program([builder.publish().ref("commands", command)]))
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
@@ -2333,7 +2404,7 @@ class EGraph:
         command = builder.add(
             "commands", pb.Command(kind=Oneof[Literal["print_size"], pb.PrintSize]("print_size", pb.PrintSize()))
         )
-        response, _ = self._state.run_program([builder.publish().ref("commands", command)])
+        response, _ = _single_observation(self._state.run_program([builder.publish().ref("commands", command)]))
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
@@ -2370,9 +2441,11 @@ class EGraph:
         argument index or output. No partial dictionary or placeholder is returned.
         """
         reference = resolve_callable(fn)
-        declaration: pb.Declaration = reference.read()
-        if declaration.kind is None or not isinstance(
-            declaration.kind.value, pb.Function | pb.Constructor | pb.Relation
+        declaration: pb.Declaration | pb.Primitive = reference.read()
+        if (
+            not isinstance(declaration, pb.Declaration)
+            or declaration.kind is None
+            or not isinstance(declaration.kind.value, pb.Function | pb.Constructor | pb.Relation)
         ):
             msg = (
                 "This operation requires a table-backed relation, constructor, or bodyless function; "
@@ -2403,7 +2476,7 @@ class EGraph:
                 )
             ),
         )
-        response, owner = self._state.run_program([builder.publish().ref("commands", command)])
+        response, owner = _single_observation(self._state.run_program([builder.publish().ref("commands", command)]))
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
@@ -2445,7 +2518,7 @@ class EGraph:
                     else None
                 )
                 valid_sort = (
-                    actual_sort.read().kind == Oneof("family", pb.HostSort(name="Unit"))
+                    actual_sort.read().kind == Oneof("application", pb.SortApplication(name="Unit"))
                     if expected is None
                     else StructuralView(actual_sort) == StructuralView(reference.owner.ref("sorts", expected))
                 )
@@ -2489,11 +2562,13 @@ class EGraph:
         runtime_expr = to_runtime_expr(expr)
         node: pb.Node = runtime_expr.__egg_ref__.read()
         if node.kind is not None and node.kind.field == "call":
-            declaration: pb.Declaration = _definition_at(
+            declaration: pb.Declaration | pb.Primitive = _definition_at(
                 runtime_expr.__egg_ref__, "callable", node.kind.value.func
             ).read()
-            if declaration.kind is None or not isinstance(
-                declaration.kind.value, pb.Function | pb.Constructor | pb.Relation
+            if (
+                not isinstance(declaration, pb.Declaration)
+                or declaration.kind is None
+                or not isinstance(declaration.kind.value, pb.Function | pb.Constructor | pb.Relation)
             ):
                 msg = "Lookup requires a table-backed callable; eager and builtin primitives do not have tables"
                 raise ValueError(msg)
@@ -2509,7 +2584,9 @@ class EGraph:
     def has_custom_cost(self, fn: ExprCallable) -> bool:
         """Inspect assigned row costs from a complete shared snapshot."""
         reference = resolve_callable(fn)
-        declaration: pb.Declaration = reference.read()
+        declaration: pb.Declaration | pb.Primitive = reference.read()
+        if isinstance(declaration, pb.Primitive):
+            return False
         assert declaration.kind is not None
         name = declaration.kind.value.name
         if self._cost_model_frames:
@@ -2530,7 +2607,7 @@ class EGraph:
         """Export the complete logical state as an owned protobuf snapshot."""
         builder = Builder()
         command = builder.add("commands", pb.Command(kind=Oneof[Literal["freeze"], pb.Freeze]("freeze", pb.Freeze())))
-        response, _ = self._state.run_program([builder.publish().ref("commands", command)])
+        response, _ = _single_observation(self._state.run_program([builder.publish().ref("commands", command)]))
         if (
             len(response.outputs) != 1
             or response.outputs[0].kind is None
@@ -2636,13 +2713,9 @@ class Schedule:
                     selected = persistent_schedulers if scheduler._persistent else local_schedulers
                     selected.setdefault(current.kind.value.scheduler, scheduler)
                 leaves.append(current)
-            elif current.kind.field in {"repeat", "saturate"}:
+            elif current.kind.field == "loop":
                 control = current.kind.value
-                count = (
-                    control.times
-                    if isinstance(control, pb.Repeat)
-                    else (control.max_iterations if control.has_field("max_iterations") else None)
-                )
+                count = control.max_iterations if control.has_field("max_iterations") else None
                 if state is not None and count is not None and not 0 <= count < 2**64:
                     msg = "can't convert schedule count to unsigned native size"
                     raise OverflowError(msg)
@@ -2672,7 +2745,7 @@ class Schedule:
                     item = todo.pop()
                     if item.kind is not None and item.kind.field == "add_rules":
                         groups.append(item.kind.value.group)
-                    elif item.kind is not None and item.kind.field == "repeat":
+                    elif item.kind is not None and item.kind.field == "loop":
                         todo.extend(reversed(item.kind.value.body))
             run_command.groups = groups
         if state is not None:
@@ -2682,10 +2755,10 @@ class Schedule:
         # Keep their authored leaf order and the schedule's lexical scopes.
         if additions or local_schedulers:
             command = pb.Command(
-                kind=Oneof[Literal["repeat"], pb.Repeat](
-                    "repeat",
-                    pb.Repeat(
-                        times=1,
+                kind=Oneof[Literal["loop"], pb.Loop](
+                    "loop",
+                    pb.Loop(
+                        max_iterations=1,
                         body=[
                             *additions,
                             *(_copy_record(scheduler.__egg_ref__.read()) for scheduler in local_schedulers.values()),
@@ -2720,10 +2793,10 @@ class Schedule:
         index = builder.add(
             "commands",
             pb.Command(
-                kind=Oneof[Literal["repeat"], pb.Repeat](
-                    "repeat",
-                    pb.Repeat(
-                        times=1,
+                kind=Oneof[Literal["loop"], pb.Loop](
+                    "loop",
+                    pb.Loop(
+                        max_iterations=1,
                         body=[command, pb.Command(kind=Oneof[Literal["freeze"], pb.Freeze]("freeze", pb.Freeze()))],
                     ),
                 )
@@ -2742,11 +2815,7 @@ class Schedule:
             source._command.read(),
             relocate=lambda role, index: builder.import_ref(source._command.owner.ref(role, index)),
         )
-        kind = (
-            Oneof[Literal["repeat"], pb.Repeat]("repeat", pb.Repeat(times=0, body=[command]))
-            if length == 0
-            else Oneof[Literal["saturate"], pb.Saturate]("saturate", pb.Saturate(max_iterations=length, body=[command]))
-        )
+        kind = Oneof[Literal["loop"], pb.Loop]("loop", pb.Loop(max_iterations=length, body=[command]))
         index = builder.add("commands", pb.Command(kind=kind))
         return Schedule(builder.publish().ref("commands", index), source._bindings, source._schedulers)
 
@@ -2762,7 +2831,7 @@ class Schedule:
         )
         index = builder.add(
             "commands",
-            pb.Command(kind=Oneof[Literal["saturate"], pb.Saturate]("saturate", pb.Saturate(body=[command]))),
+            pb.Command(kind=Oneof[Literal["loop"], pb.Loop]("loop", pb.Loop(body=[command]))),
         )
         return Schedule(builder.publish().ref("commands", index), source._bindings, source._schedulers)
 
@@ -2899,7 +2968,7 @@ class UnstableCombinedRuleset(Schedule):
             )
         index = builder.add(
             "commands",
-            pb.Command(kind=Oneof[Literal["repeat"], pb.Repeat]("repeat", pb.Repeat(times=1, body=commands))),
+            pb.Command(kind=Oneof[Literal["loop"], pb.Loop]("loop", pb.Loop(max_iterations=1, body=commands))),
         )
         return builder.publish().ref("commands", index)
 
@@ -3059,6 +3128,8 @@ def panic(message: str) -> Action:
 
 def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
     """Set the cost of the given expression."""
+    from .builtins import i64 as integer  # noqa: PLC0415
+
     runtime_expr = to_runtime_expr(expr)
     reference = runtime_expr.__egg_ref__
     node: pb.Node = reference.read()
@@ -3070,11 +3141,9 @@ def set_cost(expr: BaseExpr, cost: i64Like) -> Action:
     target = _copy_record(
         node.kind.value, relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index))
     )
-    cost_sort = Builder()
-    sort = cost_sort.add(
-        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
-    )
-    value = builder.import_ref(resolve_literal(cost_sort.publish().ref("sorts", sort), cost).__egg_ref__)
+    cost_sort = cast("RuntimeClass", integer).__egg_sort__
+    assert cost_sort is not None
+    value = builder.import_ref(resolve_literal(cost_sort, cost).__egg_ref__)
     command = builder.add(
         "commands",
         pb.Command(
@@ -3111,17 +3180,15 @@ def let(name: str, expr: BaseExpr) -> Action:
                     output=builder.import_ref(runtime_expr.__egg_ref__.owner.ref("sorts", node.sort_id)),
                 ),
             ),
-            bindings=pb.CallableBindings(
-                python=pb.PythonBindings(
-                    views=[
-                        pb.PythonCallable(
-                            kind=pb.PythonCallKind.CONSTANT,
-                            path=["egglog", "egraph", logical_name, name],
-                        )
-                    ]
-                )
-            ),
         ),
+    )
+    builder.presentations["callable", logical_name] = Presentation(
+        views=(
+            CallPresentation(
+                kind=CallKind.CONSTANT,
+                path=("egglog", "egraph", logical_name, name),
+            ),
+        )
     )
     index = builder.add(
         "commands",
@@ -3398,8 +3465,8 @@ class _SetBuilder(Generic[BASE_EXPR]):
             raise TypeError(msg)
         call = node.kind.value
         declaration = _definition_at(lhs.__egg_ref__, "callable", call.func)
-        declared: pb.Declaration = declaration.read()
-        if declared.kind is None or declared.kind.field != "function":
+        declared: pb.Declaration | pb.Primitive = declaration.read()
+        if not isinstance(declared, pb.Declaration) or declared.kind is None or declared.kind.field != "function":
             msg = "Can only set table-backed Function calls"
             raise TypeError(msg)
         rhs_expr = resolve_literal(declaration.owner.ref("sorts", declared.kind.value.output), rhs)
@@ -3587,10 +3654,10 @@ def run(
     )
     if until:
         command = pb.Command(
-            kind=Oneof[Literal["repeat"], pb.Repeat](
-                "repeat",
-                pb.Repeat(
-                    times=1,
+            kind=Oneof[Literal["loop"], pb.Loop](
+                "loop",
+                pb.Loop(
+                    max_iterations=1,
                     until=[builder.import_ref(fact.__egg_ref__) for fact in _fact_likes(until)],
                     body=[command],
                 ),
@@ -3697,11 +3764,13 @@ class BackOff:
             if current.kind is not None:
                 if current.kind.field == "run" and current.kind.value.scheduler == original:
                     current.kind.value.scheduler = binding.kind.value.name
-                elif current.kind.field in {"repeat", "saturate"}:
+                elif current.kind.field == "loop":
                     pending.extend(current.kind.value.body)
         index = builder.add(
             "commands",
-            pb.Command(kind=Oneof[Literal["repeat"], pb.Repeat]("repeat", pb.Repeat(times=1, body=[binding, command]))),
+            pb.Command(
+                kind=Oneof[Literal["loop"], pb.Loop]("loop", pb.Loop(max_iterations=1, body=[binding, command]))
+            ),
         )
         schedulers = source._schedulers.copy()
         schedulers.pop(original, None)
@@ -3733,7 +3802,7 @@ def seq(*schedules: Schedule) -> Schedule:
     ]
     index = builder.add(
         "commands",
-        pb.Command(kind=Oneof[Literal["repeat"], pb.Repeat]("repeat", pb.Repeat(times=1, body=body))),
+        pb.Command(kind=Oneof[Literal["loop"], pb.Loop]("loop", pb.Loop(max_iterations=1, body=body))),
     )
     return Schedule(
         builder.publish().ref("commands", index),
@@ -3815,6 +3884,8 @@ def get_cost(expr: BaseExpr) -> i64:
     """
     Return a lookup of the cost of an expression. If not set, won't match.
     """
+    from .builtins import i64 as integer  # noqa: PLC0415
+
     runtime_expr = to_runtime_expr(expr)
     builder = Builder()
     reference = runtime_expr.__egg_ref__
@@ -3826,7 +3897,9 @@ def get_cost(expr: BaseExpr) -> i64:
     target = _copy_record(
         node.kind.value, relocate=lambda role, index: builder.import_ref(reference.owner.ref(role, index))
     )
-    sort = builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+    cost_sort = cast("RuntimeClass", integer).__egg_sort__
+    assert cost_sort is not None
+    sort = builder.import_ref(cost_sort)
     index = builder.add("nodes", pb.Node(sort_id=sort, kind=Oneof[Literal["get_cost"], pb.Call]("get_cost", target)))
     return cast("i64", RuntimeExpr(builder.publish().ref("nodes", index)))
 
@@ -3955,8 +4028,12 @@ def get_callable_cost(fn: ExprCallable) -> int | None:
     Returns the cost of a callable, if it has one set. Otherwise returns None.
     """
     reference = resolve_callable(fn)
-    declaration: pb.Declaration = reference.read()
-    if declaration.kind is None or declaration.kind.field != "constructor":
+    declaration: pb.Declaration | pb.Primitive = reference.read()
+    if (
+        not isinstance(declaration, pb.Declaration)
+        or declaration.kind is None
+        or declaration.kind.field != "constructor"
+    ):
         return 1
     if not declaration.kind.value.has_field("cost"):
         return None

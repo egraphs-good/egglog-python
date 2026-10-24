@@ -2,6 +2,7 @@
 # Ellipsis bodies are DSL declarations or annotation-introspection fixtures.
 """Record-native authoring gates for the single public runtime migration."""
 
+import dataclasses
 import gc
 import math
 import operator
@@ -66,7 +67,15 @@ from egglog import (
     vars_,
 )
 from egglog._catalog import builtin_catalog
-from egglog._program import Builder, Ref, StructuralView, pack
+from egglog._presentation import (
+    CallKind,
+    CallPresentation,
+    Parameter,
+    Presentation,
+    builtin_owner,
+    presentation,
+)
+from egglog._program import Builder, Ref, StructuralView, _definition_key, pack
 from egglog.builtins import ExprValueError, _container_items, _map_entries, _pair_value
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.egraph import get_current_ruleset, set_current_ruleset, to_runtime_expr
@@ -103,15 +112,6 @@ def _required_runtime_function(value: object) -> RuntimeFunction:
     """Require the actual callable presentation without invoking or preparing it."""
     assert isinstance(value, RuntimeFunction)
     return value
-
-
-def _required_python_bindings(declaration: pb.Declaration) -> pb.PythonBindings:
-    """Require authored Python metadata at this positive observation boundary."""
-    bindings = declaration.bindings
-    assert bindings is not None
-    python = bindings.python
-    assert python is not None
-    return python
 
 
 def _required_authored_class(cls: object) -> tuple[RuntimeClass, _ClassContext]:
@@ -166,7 +166,12 @@ def test_pyobject_local_values_and_trusted_display(class_authoring_without_engin
 
     monkeypatch.setattr(cloudpickle, "loads", forbidden)
     decoded = pb.Program.from_binary(packed.program.to_binary())
-    detached = RuntimeExpr(Builder.from_program(decoded).publish().ref("nodes", packed.indices[0]))
+    detached = RuntimeExpr(
+        Builder
+        .from_program(decoded, environment=value.__egg_ref__.owner._environment)
+        .publish()
+        .ref("nodes", packed.indices[0])
+    )
     assert StructuralView(detached.__egg_ref__) == StructuralView(value.__egg_ref__)
     assert hash(detached) == hash(value)
     assert pack([detached.__egg_ref__]).program.to_binary() == packed.program.to_binary()
@@ -256,29 +261,31 @@ def test_object_annotated_constructor_roundtrips_native_payload():
         graph._state.destroy()
 
 
-@pytest.mark.parametrize("corruption", ["family", "arity", "declaration", "arm", "children"])
-def test_pyobject_materialization_rejects_malformed_shape(corruption, class_authoring_without_engine, monkeypatch):
+@pytest.mark.parametrize("corruption", ["application", "arity", "declaration", "arm", "children"])
+def test_pyobject_materialization_rejects_malformed_shape(
+    corruption, class_authoring_without_engine, monkeypatch, native_catalog_program
+):
     import cloudpickle  # noqa: PLC0415
 
     from egglog import PyObject  # noqa: PLC0415
 
-    packed = pack([PyObject(None).__egg_ref__])
+    value = PyObject(None)
+    environment = value.__egg_ref__.owner._environment
+    packed = pack([value.__egg_ref__])
     program = pb.Program.from_binary(packed.program.to_binary())
     node = program.nodes[packed.indices[0]]
     sort = program.sorts[node.sort_id]
-    family = _required_oneof(sort.kind, "family", pb.HostSort)
+    family = _required_oneof(sort.kind, "application", pb.SortApplication)
     primitive = _required_oneof(node.kind, "primitive_value", pb.PrimitiveValue)
     custom = _required_oneof(primitive.value, "custom", pb.CustomValue)
-    if corruption == "family":
+    if corruption == "application":
         family.name = "String"
     elif corruption == "arity":
         family.args.append(node.sort_id)
     elif corruption == "declaration":
-        next(
-            _required_oneof(d.kind, "host_sort_family", pb.HostSortFamily)
-            for d in program.declarations
-            if (d.kind.field == "host_sort_family" if d.kind is not None else pytest.fail("Missing declaration kind"))
-        ).arity = 1
+        native = native_catalog_program
+        next(sort for sort in native.primitive_sorts if sort.name == "PyObject").arity = 1
+        environment = (Builder.from_builtins(native).publish(),)
     elif corruption == "arm":
         primitive.value = Oneof[Literal["string"], str]("string", "not a pickle")
     else:
@@ -288,7 +295,9 @@ def test_pyobject_materialization_rejects_malformed_shape(corruption, class_auth
         pytest.fail("Malformed Custom value reached pickle decoding")
 
     monkeypatch.setattr(cloudpickle, "loads", forbidden)
-    expression = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
+    expression = RuntimeExpr(
+        Builder.from_program(program, environment=environment).publish().ref("nodes", packed.indices[0])
+    )
     with pytest.raises(ValueError, match="PyObject value"):
         get_literal_value(expression)
 
@@ -361,9 +370,8 @@ def test_ne_uses_actual_generic_catalog_and_ordered_canonical_calls(monkeypatch)
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     declaration = builtin_catalog().definitions["callable", "egglog.core.ne"]
     record = declaration.read()
-    assert record.kind is not None
-    assert isinstance(record.kind.value, pb.HostPrimitive)
-    typing = record.kind.value.typing
+    assert isinstance(record, pb.Primitive)
+    typing = record.typing
     assert typing is not None
     assert isinstance(typing.value, pb.GenericSignature)
     signature = typing.value
@@ -371,7 +379,9 @@ def test_ne_uses_actual_generic_catalog_and_ordered_canonical_calls(monkeypatch)
     assert len(signature.inputs) == 2
     assert signature.inputs[0].sort == signature.inputs[1].sort
     assert declaration.owner.ref("sorts", signature.inputs[0].sort).read().kind == Oneof("var", 0)
-    assert declaration.owner.ref("sorts", signature.output).read().kind == Oneof("family", pb.HostSort(name="Unit"))
+    assert declaration.owner.ref("sorts", signature.output).read().kind == Oneof(
+        "application", pb.SortApplication(name="Unit")
+    )
     function = RuntimeFunction(declaration)
     first, second = i64(1), i64(2)
     expression = ne(first).to(second)
@@ -389,7 +399,12 @@ def test_ne_uses_actual_generic_catalog_and_ordered_canonical_calls(monkeypatch)
     ]
     packed = pack([authored.__egg_ref__])
     decoded = pb.Program.from_binary(packed.program.to_binary())
-    copied = Builder.from_program(decoded).publish().ref("nodes", packed.indices[0])
+    copied = (
+        Builder
+        .from_program(decoded, environment=authored.__egg_ref__.owner._environment)
+        .publish()
+        .ref("nodes", packed.indices[0])
+    )
     assert StructuralView(copied) == StructuralView(authored.__egg_ref__)
     assert str(RuntimeExpr(copied)) == "ne(i64(1)).to(i64(2))"
     with pytest.raises(TypeError):
@@ -425,7 +440,7 @@ def test_canonical_schedule_live_repr_and_generator_failure_without_engine(monke
     assert "later" in str(schedule)
     assert str(seq()) == "seq()"
     assert "* 0" in str(run() * 0)
-    assert schedule._command.read().kind.field == "saturate"
+    assert schedule._command.read().kind.field == "loop"
     assert schedule._command.read().kind.value.max_iterations == 3
     assert ".saturate()" in str(schedule)
 
@@ -496,14 +511,14 @@ def test_canonical_backoff_records_and_persistent_identity_without_engine(monkey
     selected = ruleset(name="persistent-source")
     schedule = run(selected, scheduler=persistent)
     root = schedule._resolve(None)
-    addition, execution = _required_oneof(root.read().kind, "repeat", pb.Repeat).body
+    addition, execution = _required_oneof(root.read().kind, "loop", pb.Loop).body
     assert _required_oneof(addition.kind, "add_rules", pb.AddRules).rules == []
     assert _required_oneof(execution.kind, "run", pb.Run).scheduler == binding.name
     assert schedule._schedulers[binding.name] is persistent
     program = pack(commands=[persistent.__egg_ref__, root]).program
     deployment, execution = program.commands
     _required_oneof(deployment.kind, "bind_scheduler", pb.BindScheduler)
-    _required_oneof(execution.kind, "repeat", pb.Repeat)
+    _required_oneof(execution.kind, "loop", pb.Loop)
     assert pb.Program.from_binary(program.to_binary()) == program
     assert ".persistent()" in repr(persistent)
     assert f"scheduler={binding.name!r}" in str(schedule)
@@ -537,10 +552,10 @@ def test_canonical_backoff_hoist_and_scope_topology_without_engine(monkeypatch):
     assert implicit.body[0].kind.field == outer.body[0].kind.field == "add_rules"
     outer_scope = outer.body[1].kind.value
     for block, body in ((implicit, implicit.body[1:]), (outer_scope, outer_scope.body)):
-        assert block.times == 1
+        assert block.max_iterations == 1
         binding, loop = body
         assert binding.kind.field == "bind_scheduler"
-        assert loop.kind.field == "saturate"
+        assert loop.kind.field == "loop"
         assert loop.kind.value.max_iterations == 3
         assert loop.kind.value.body[0].kind.value.scheduler == binding.kind.value.name
     assert implicit.body[1].kind.value.name == name
@@ -548,7 +563,7 @@ def test_canonical_backoff_hoist_and_scope_topology_without_engine(monkeypatch):
     inner_prelude = (scheduler.scope(leaf) * 3)._resolve(None).read().kind.value
     assert inner_prelude.body[0].kind.field == "add_rules"
     inner = inner_prelude.body[1]
-    assert inner.kind.field == "saturate"
+    assert inner.kind.field == "loop"
     assert inner.kind.value.max_iterations == 3
     inner_binding, inner_run = inner.kind.value.body[0].kind.value.body
     assert inner_run.kind.value.scheduler == inner_binding.kind.value.name
@@ -608,11 +623,11 @@ def test_canonical_scheduler_until_queries_and_live_rulesets_without_engine(monk
     assert events == ["first"]
     program = pack(commands=[root]).program
     assert pb.Program.from_binary(program.to_binary()) == program
-    addition, binding, conditional = _required_oneof(program.commands[0].kind, "repeat", pb.Repeat).body
+    addition, binding, conditional = _required_oneof(program.commands[0].kind, "loop", pb.Loop).body
     assert _required_oneof(addition.kind, "add_rules", pb.AddRules).rules == [0]
     binding_data = _required_oneof(binding.kind, "bind_scheduler", pb.BindScheduler)
-    conditional_data = _required_oneof(conditional.kind, "repeat", pb.Repeat)
-    assert conditional_data.times == 1
+    conditional_data = _required_oneof(conditional.kind, "loop", pb.Loop)
+    assert conditional_data.max_iterations == 1
     stop_call, stop_equality = (program.nodes[index] for index in conditional_data.until)
     _required_oneof(stop_call.kind, "call", pb.Call)
     _required_oneof(stop_equality.kind, "union", pb.Union)
@@ -695,7 +710,7 @@ def test_rule_template_comparison_and_live_rulesets_without_engine(monkeypatch):
     combined = selected | ruleset(name="empty")
     combined_command = combined._snapshot().read()
     assert combined_command.kind is not None
-    assert combined_command.kind.field == "repeat"
+    assert combined_command.kind.field == "loop"
     assert [command.kind.field for command in combined_command.kind.value.body] == ["add_rules", "add_rules"]
     assert "rule(" in str(selected)
 
@@ -764,17 +779,11 @@ def test_rule_key_default_and_lambda_use_domains_without_engine():
     key = _rule_key(template.__egg_ref__)
     assert key == equal
     assert hash(key) == hash(equal)
-    declaration = next(
-        d for d in packed.program.declarations if d.bindings and _required_python_bindings(d).views[0].params
-    )
-    view = _required_python_bindings(declaration).views[0]
-    original = view.params[0].default_expr
-    assert view.params[1].default_expr == original
-    view.params[1].default_expr = len(packed.program.nodes)
-    packed.program.nodes.append(packed.program.nodes[original])
-    independent = _rule_key(Builder.from_program(packed.program).publish().ref("rules", packed.indices[0]))
-    assert key != independent  # Defaults of one presentation are one allocation domain.
-    assert len({key, equal, independent}) == 2
+    view = presentation(resolve_callable(choose)).views[0]
+    assert view.params[0].default == view.params[1].default
+    assert all(node.kind is not None and node.kind.field != "union" for node in packed.program.nodes)
+    # Unused frontend defaults do not participate in semantic rule identity.
+    assert "default" not in packed.program.to_json()
 
     def lambdas(*, shared_body, captures=False, same_node=False):
         builder = Builder()
@@ -857,7 +866,12 @@ def test_rule_key_shared_dag_work_is_bounded(monkeypatch, allocating, bidirectio
         expression = cast("Expr", left)
         first = birewrite(expression).to(expression).__egg_ref__
     packed = pack([first])
-    second = Builder.from_program(packed.program).publish().ref("rules", packed.indices[0])
+    second = (
+        Builder
+        .from_program(packed.program, environment=first.owner._environment)
+        .publish()
+        .ref("rules", packed.indices[0])
+    )
     original = _program._structural_parts
     visits = 0
 
@@ -967,7 +981,12 @@ def test_rule_template_comparison_uses_only_referenced_declarations(monkeypatch)
         if (node.kind.field == "primitive_value" if node.kind is not None else pytest.fail("Missing node kind"))
     )
     target.merge = value
-    modified = RewriteOrRule(Builder.from_program(program).publish().ref("rules", packed.indices[0]))
+    modified = RewriteOrRule(
+        Builder
+        .from_program(program, environment=second.__egg_ref__.owner._environment)
+        .publish()
+        .ref("rules", packed.indices[0])
+    )
     assert first != modified  # The command shape alone is identical.
     assert not _program.rule_equal(first.__egg_ref__, modified.__egg_ref__, keys={})
     assert len({_rule_key(first.__egg_ref__), _rule_key(modified.__egg_ref__)}) == 2
@@ -1055,7 +1074,7 @@ def test_direct_variables_are_canonical_without_an_engine(monkeypatch, name, egg
             )
         packed = pack([first.__egg_ref__, second.__egg_ref__])
         decoded = pb.Program.from_binary(packed.program.to_binary())
-        owner = Builder.from_program(decoded).publish()
+        owner = Builder.from_program(decoded, environment=first.__egg_ref__.owner._environment).publish()
         assert pack([owner.ref("nodes", index) for index in packed.indices]).program.to_binary() == decoded.to_binary()
         for index in packed.indices:
             restored = RuntimeExpr(owner.ref("nodes", index))
@@ -1142,8 +1161,7 @@ def test_numeric_mutating_member_keeps_its_receiver_and_aliases(class_authoring_
     assert get_callable_args(left, Mutable.__add__) == (to_runtime_expr(before), to_runtime_expr(right))
 
 
-@pytest.mark.parametrize("strip_metadata", [False, True])
-def test_detached_equality_uses_predicates_without_borrowing_members(class_authoring_without_engine, strip_metadata):
+def test_detached_equality_uses_predicates_without_borrowing_members(class_authoring_without_engine):
     class Shadow(Expr, egg_sort="i64"):
         def __init__(self, value: i64) -> None: ...
 
@@ -1157,12 +1175,6 @@ def test_detached_equality_uses_predicates_without_borrowing_members(class_autho
 
     packed = pack([Shadow(3).__egg_ref__])  # type: ignore[arg-type]
     program = pb.Program.from_binary(packed.program.to_binary())
-    if strip_metadata:
-        for declaration in program.declarations:
-            declaration.bindings = None
-            assert declaration.kind is not None
-            if declaration.kind.field == "eq_sort":
-                declaration.kind.value.bindings = None
     detached = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
     other = RuntimeExpr(detached.__egg_ref__)
     equality, inequality = detached == other, detached != other
@@ -1173,7 +1185,7 @@ def test_detached_equality_uses_predicates_without_borrowing_members(class_autho
     assert equality.__egg_ref__.read().kind.field == "union"
     assert inequality.__egg_ref__.read().kind.value.func == "egglog.core.ne"
     for name in ("__eq__", "__ne__", "__add__"):
-        with pytest.raises(AttributeError, match="canonical Python member"):
+        with pytest.raises(AttributeError, match="has no generated Python member"):
             runtime._get_expr_member(detached, name, method_only=True)
 
 
@@ -1250,7 +1262,13 @@ def test_direct_rewrite_owns_records_without_an_engine(monkeypatch, bidirectiona
     assert len(packed.program.rules) == 1
     assert not packed.program.commands
     decoded = pb.Program.from_binary(packed.program.to_binary())
-    owner = Builder.from_program(decoded).publish()
+    builder = Builder.from_program(decoded, environment=authored.__egg_ref__.owner._environment)
+    builder.presentations.update({
+        key: presentation(definition)
+        for definition in packed.definitions
+        if (key := _definition_key(definition.read())) is not None
+    })
+    owner = builder.publish()
     restored = RewriteOrRule(owner.ref("rules", packed.indices[0]))
     assert str(restored) == expected
     assert restored == authored
@@ -1481,7 +1499,7 @@ def test_direct_rule_relocates_inline_actions_without_an_engine(monkeypatch):
     left.__egg_ref__ = RuleBox(9).__egg_ref__  # type: ignore[arg-type]
     assert str(authored) == expected
     decoded = pb.Program.from_binary(packed.program.to_binary())
-    owner = Builder.from_program(decoded).publish()
+    owner = Builder.from_program(decoded, environment=authored.__egg_ref__.owner._environment).publish()
     assert pack([owner.ref("rules", packed.indices[0])]).program.to_binary() == decoded.to_binary()
 
 
@@ -1671,10 +1689,11 @@ def test_set_formed_value_rejects_malformed_children(set_runtime, malformed):
         _ = expression.value
 
 
-def test_set_empty_converter_and_formed_pretty_use_retained_presentation(set_catalog_program, request):
-    declarations = {d.kind.value.name: d for d in set_catalog_program.declarations}
-    declarations["Set"].kind.value.bindings.python.path[-1] = "FiniteSet"
-    declarations["egglog.core.set.empty"].bindings.python.views[0].path[-1] = "vacant"
+def test_set_empty_converter_and_formed_pretty_use_retained_presentation(
+    set_catalog_program, python_presentation_mapping, request
+):
+    python_presentation_mapping["types"]["Set"]["path"][-1] = "FiniteSet"
+    python_presentation_mapping["callables"]["egglog.core.set.empty"][0]["path"][-1] = "vacant"
     generated = request.getfixturevalue("set_runtime")
     Set, integer = generated["FiniteSet"], generated["i64"]
     assert str(convert(set(), Set[integer])) == "FiniteSet[i64].vacant()"
@@ -1692,9 +1711,9 @@ def test_set_empty_converter_and_formed_pretty_use_retained_presentation(set_cat
 
 
 def test_map_from_pairs_rejects_set_even_with_forged_input_metadata(set_catalog_program, request):
-    declaration = next(d for d in set_catalog_program.declarations if d.kind.value.name == "egglog.core.map.of")
-    input_sort = set_catalog_program.sorts[declaration.kind.value.typing.value.inputs[0].sort]
-    assert input_sort.kind.field == "family"
+    declaration = next(d for d in set_catalog_program.primitives if d.name == "egglog.core.map.of")
+    input_sort = set_catalog_program.sorts[declaration.typing.value.inputs[0].sort]
+    assert input_sort.kind.field == "application"
     assert input_sort.kind.value.name == "Vec"
     input_sort.kind.value.name = "Set"
     generated = request.getfixturevalue("set_runtime")
@@ -1897,7 +1916,9 @@ def test_closed_scalar_family_authors_exact_calls_without_engine(rational_runtim
         assert root.owner.ref("sorts", node.sort_id).read().kind.value.name == family
         packed = pack([root])
         decoded = pb.Program.from_binary(packed.program.to_binary())
-        restored = Builder.from_program(decoded).publish().ref("nodes", packed.indices[0])
+        restored = (
+            Builder.from_program(decoded, environment=root.owner._environment).publish().ref("nodes", packed.indices[0])
+        )
         assert StructuralView(restored) == StructuralView(root)
         assert str(RuntimeExpr(restored)) == str(expression)
         if family != "Unit":
@@ -1979,19 +2000,16 @@ def test_exact_legacy_local_inspection_and_protocols(rational_runtime):
         _ = z.from_string("invalid").value
 
 
-def test_exact_pretty_uses_retained_classmethod_presentation(rational_runtime, rational_catalog_program):
+def test_exact_pretty_uses_retained_classmethod_presentation(
+    rational_runtime, rational_catalog_program, python_presentation_mapping
+):
     from egglog.pretty import pretty_ref  # noqa: PLC0415
 
-    declaration = next(
-        d for d in rational_catalog_program.declarations if d.kind.value.name == "egglog.core.bigint.from_string"
-    )
-    declaration.bindings.python.views[0].path[0] = "decimal"
-    family = next(d.kind.value for d in rational_catalog_program.declarations if d.kind.value.name == "BigInt")
-    family.bindings.python.path[-1] = "Integer"
+    python_presentation_mapping["callables"]["egglog.core.bigint.from_string"][0]["path"][0] = "decimal"
+    python_presentation_mapping["types"]["BigInt"]["path"][-1] = "Integer"
     for name in ("egglog.core.bigrat.make", "egglog.experimental.rational.make"):
-        declaration = next(d for d in rational_catalog_program.declarations if d.kind.value.name == name)
-        declaration.bindings.python.views[0].params.reverse()
-    builder = Builder.from_program(rational_catalog_program)
+        python_presentation_mapping["callables"][name][0]["params"].reverse()
+    catalog_owner = builtin_owner(rational_catalog_program, mapping=python_presentation_mapping)
     for name, arm, payload, expected in (
         ("BigInt", "big_int", "123", "Integer.decimal('123')"),
         (
@@ -2005,8 +2023,10 @@ def test_exact_pretty_uses_retained_classmethod_presentation(rational_runtime, r
         sort = next(
             i
             for i, s in enumerate(rational_catalog_program.sorts)
-            if s.kind.field == "family" and s.kind.value.name == name
+            if s.kind.field == "application" and s.kind.value.name == name
         )
+        builder = Builder(environment=(catalog_owner,))
+        sort = builder.import_ref(catalog_owner.ref("sorts", sort))
         index = builder.add(
             "nodes",
             pb.Node(
@@ -2018,9 +2038,8 @@ def test_exact_pretty_uses_retained_classmethod_presentation(rational_runtime, r
             ),
         )
         # The ambient generated classes still have the original BigInt name and
-        # from_string method. Only this owned record contains the changed view.
+        # from_string method. Only this owned frontend mapping contains the changed view.
         assert pretty_ref(builder.publish().ref("nodes", index)) == expected
-        builder = Builder.from_program(rational_catalog_program)
 
 
 @pytest.mark.parametrize(
@@ -2062,7 +2081,9 @@ def test_exact_inert_values_are_owned_inspectable_and_printable(rational_runtime
     assert displayed.value == expected
     assert displayed.__egg_ref__.read().kind.field == "call"
     packed = pack([expression.__egg_ref__])
-    detached = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+    detached = Builder.from_program(
+        pb.Program.from_binary(packed.program.to_binary()), environment=expression.__egg_ref__.owner._environment
+    ).publish()
     assert RuntimeExpr(detached.ref("nodes", packed.indices[0])).value == expected
 
 
@@ -2113,7 +2134,7 @@ def test_exact_inert_decimal_magnitude_ignores_process_digit_limit(rational_runt
             encoded = packed.program.to_binary()
             decoded = pb.Program.from_binary(encoded)
             assert decoded.to_binary() == encoded
-            detached = Builder.from_program(decoded).publish()
+            detached = Builder.from_program(decoded, environment=expression.__egg_ref__.owner._environment).publish()
             assert RuntimeExpr(detached.ref("nodes", packed.indices[0])).value == expected
         else:
             # Independent of inert decoding: the existing display contract
@@ -2282,52 +2303,43 @@ def test_scalar_wave_binary_view_rejects_wrong_arity_and_sort(target, member):
         target(other=True, name="implies")
 
 
-def test_scalar_wave_specialized_view_permutation_and_zero_count():
-    packet = pack([(String("left") + "right").__egg_ref__])
-    declaration = next(
-        d
-        for d in packet.program.declarations
-        if (
-            d.kind.value.name == "egglog.core.string.concat"
-            if d.kind is not None
-            else pytest.fail("Missing declaration kind")
-        )
-    )
-    view = _required_python_bindings(declaration).views[1]
-    view.receiver, view.params[0].core_input = 1, 0
-    owner = Builder.from_program(packet.program).publish()
+def test_scalar_wave_specialized_view_permutation_and_zero_count(native_catalog_program):
+    declaration = next(d for d in native_catalog_program.primitives if d.name == "egglog.core.string.concat")
+    views = presentation(resolve_callable(join)).views
+    view = dataclasses.replace(views[1], receiver=1, params=(dataclasses.replace(views[1].params[0], core_input=0),))
+    builder = Builder.from_builtins(native_catalog_program)
+    builder.presentations.update(builtin_catalog().owner._presentations)
+    builder.presentations["callable", declaration.name] = Presentation(views=(views[0], view))
+    owner = builder.publish()
     target = RuntimeFunction(
-        owner.ref("declarations", packet.program.declarations.index(declaration)), 1, to_runtime_expr(String("right"))
+        owner.ref("primitives", native_catalog_program.primitives.index(declaration)),
+        1,
+        to_runtime_expr(String("right")),
     )
     result = target("left")
     assert [child.value for child in _required_callable_args(result)] == ["left", "right"]
     assert str(result) == "join('left', 'right')"
-    view = _required_python_bindings(declaration).views[0]
-    view.tail_repetitions = 0
-    view.params.clear()
-    owner = Builder.from_program(packet.program).publish()
-    empty = RuntimeFunction(owner.ref("declarations", packet.program.declarations.index(declaration)), 0)
+    view = dataclasses.replace(views[0], tail_repetitions=0, params=())
+    builder = Builder.from_builtins(native_catalog_program)
+    builder.presentations.update(builtin_catalog().owner._presentations)
+    builder.presentations["callable", declaration.name] = Presentation(views=(view, views[1]))
+    owner = builder.publish()
+    empty = RuntimeFunction(owner.ref("primitives", native_catalog_program.primitives.index(declaration)), 0)
     assert get_callable_args(empty()) == ()
     with pytest.raises(TypeError):
         empty("extra")
 
 
-def test_scalar_wave_specialized_bool_deconstruction_uses_effective_slots():
-    packet = pack([(Bool(True) | False).__egg_ref__])
-    declaration = next(
-        d
-        for d in packet.program.declarations
-        if (
-            d.kind.value.name == "egglog.core.bool.or"
-            if d.kind is not None
-            else pytest.fail("Missing declaration kind")
-        )
-    )
-    view = _required_python_bindings(declaration).views[0]
-    view.receiver, view.params[0].core_input = 1, 0
-    owner = Builder.from_program(packet.program).publish()
+def test_scalar_wave_specialized_bool_deconstruction_uses_effective_slots(native_catalog_program):
+    declaration = next(d for d in native_catalog_program.primitives if d.name == "egglog.core.bool.or")
+    original = presentation(resolve_callable(Bool.__or__)).views[0]
+    view = dataclasses.replace(original, receiver=1, params=(dataclasses.replace(original.params[0], core_input=0),))
+    builder = Builder.from_builtins(native_catalog_program)
+    builder.presentations.update(builtin_catalog().owner._presentations)
+    builder.presentations["callable", declaration.name] = Presentation(views=(view,))
+    owner = builder.publish()
     method = RuntimeFunction(
-        owner.ref("declarations", packet.program.declarations.index(declaration)), 0, to_runtime_expr(Bool(False))
+        owner.ref("primitives", native_catalog_program.primitives.index(declaration)), 0, to_runtime_expr(Bool(False))
     )
     result = method(True)
     assert result is not None
@@ -2343,48 +2355,37 @@ def test_scalar_wave_specialized_bool_deconstruction_uses_effective_slots():
 
 
 @pytest.mark.parametrize(
-    "mutation", ["fixed", "missing", "missing_input", "duplicate", "default", "mutation", "huge", "owner", "property"]
+    "mutation", ["fixed", "missing", "duplicate", "default", "mutation", "huge", "owner", "property"]
 )
-def test_scalar_wave_authoring_rejects_invalid_specialization(mutation):
-    packet = pack([(Bool(True) | False).__egg_ref__])
-    declaration = next(
-        d
-        for d in packet.program.declarations
-        if (
-            d.kind.value.name == "egglog.core.bool.or"
-            if d.kind is not None
-            else pytest.fail("Missing declaration kind")
-        )
-    )
-    primitive = _required_oneof(declaration.kind, "host_primitive", pb.HostPrimitive)
-    signature = _required_oneof(primitive.typing, "signature", pb.GenericSignature)
-    view = _required_python_bindings(declaration).views[0]
+def test_scalar_wave_authoring_rejects_invalid_specialization(mutation, native_catalog_program):
+    declaration = next(d for d in native_catalog_program.primitives if d.name == "egglog.core.bool.or")
+    signature = _required_oneof(declaration.typing, "signature", pb.GenericSignature)
+    view = presentation(resolve_callable(Bool.__or__)).views[0]
     if mutation == "fixed":
         signature.inputs = signature.varargs * 2
         signature.varargs.clear()
     elif mutation == "missing":
-        view.params.clear()
-    elif mutation == "missing_input":
-        view.params[0].clear_field("core_input")
+        view = dataclasses.replace(view, params=())
     elif mutation == "duplicate":
-        view.params[0].core_input = 0
+        view = dataclasses.replace(view, params=(dataclasses.replace(view.params[0], core_input=0),))
     elif mutation == "default":
-        view.params[0].default_expr = packet.indices[0]
+        view = dataclasses.replace(view, params=(dataclasses.replace(view.params[0], default=Bool(True).__egg_ref__),))
     elif mutation == "mutation":
-        view.mutates = 0
+        view = dataclasses.replace(view, mutates=0)
     elif mutation == "owner":
-        packet.program.sorts.append(
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="String")))
-        )
-        assert view.owner is not None
-        view.owner.kind = Oneof[Literal["sort"], int]("sort", len(packet.program.sorts) - 1)
+        string_sort = resolve_type_annotation(String)
+        assert isinstance(string_sort, Ref)
+        view = dataclasses.replace(view, owner=string_sort)
     elif mutation == "property":
-        view.kind = pb.PythonCallKind.PROPERTY
+        view = dataclasses.replace(view, kind=CallKind.PROPERTY)
     else:
-        view.tail_repetitions = 2**32 - 1
-    owner = Builder.from_program(packet.program).publish()
+        view = dataclasses.replace(view, tail_repetitions=2**32 - 1)
+    builder = Builder.from_builtins(native_catalog_program)
+    builder.presentations.update(builtin_catalog().owner._presentations)
+    builder.presentations["callable", declaration.name] = Presentation(views=(view,))
+    owner = builder.publish()
     method = RuntimeFunction(
-        owner.ref("declarations", packet.program.declarations.index(declaration)), 0, to_runtime_expr(Bool(True))
+        owner.ref("primitives", native_catalog_program.primitives.index(declaration)), 0, to_runtime_expr(Bool(True))
     )
     with pytest.raises((TypeError, ValueError), match=r"signature|input|owner|maps|Sort mismatch|views"):
         method(False)
@@ -2524,8 +2525,9 @@ def test_map_fixed_from_pairs_and_computed_vec_authoring():
         _ = mapping.value
     assert isinstance(mapping[i64(1)], f64)
     assert "Map" in {
-        d.kind.value.name if d.kind is not None else pytest.fail("Missing declaration kind")
-        for d in pack([mapping.__egg_ref__]).program.declarations
+        sort.kind.value.name
+        for sort in pack([mapping.__egg_ref__]).program.sorts
+        if sort.kind is not None and sort.kind.field == "application"
     }
 
 
@@ -2793,12 +2795,13 @@ def test_map_from_pairs_rejects_invalid_nested_provenance(invalid):
 
 @pytest.mark.parametrize("source", ["dict", "value"])
 @pytest.mark.parametrize("same_sort", [False, True])
-def test_map_insert_view_parameter_permutation_preserves_core_order(vec_catalog_program, request, source, same_sort):
-    insert = next(d for d in vec_catalog_program.declarations if d.kind.value.name == "egglog.core.map.insert")
-    view = insert.bindings.python.views[0]
-    view.path = ["put"]
-    view.params.reverse()
-    view.params[0].name, view.params[1].name = "item", "at"
+def test_map_insert_view_parameter_permutation_preserves_core_order(
+    vec_catalog_program, python_presentation_mapping, request, source, same_sort
+):
+    view = python_presentation_mapping["callables"]["egglog.core.map.insert"][0]
+    view["path"] = ["put"]
+    view["params"].reverse()
+    view["params"][0]["name"], view["params"][1]["name"] = "item", "at"
     request.getfixturevalue("vec_runtime")
     value_type = i64 if same_sort else f64
     value = i64(2) if same_sort else f64(2.0)
@@ -2838,13 +2841,10 @@ def test_map_insert_view_parameter_permutation_preserves_core_order(vec_catalog_
         assert expression.value == {i64(1): value}
 
 
-def test_map_converter_and_value_pretty_follow_renamed_views(vec_catalog_program, request):
-    declarations = {d.kind.value.name: d for d in vec_catalog_program.declarations}
-    declarations["Map"].kind.value.bindings.python.path[-1] = "Mapping"
-    declarations["egglog.core.map.empty"].bindings.python.views[0].path = ["vacant"]
-    declarations["egglog.core.map.insert"].bindings.python.views[0].path = ["put"]
-    declarations["egglog.core.map.of"].bindings.python.views[0].path = ["from_entries"]
-    declarations["egglog.core.map.get"].bindings.python.views[0].path = ["lookup"]
+def test_map_converter_and_value_pretty_follow_renamed_views(vec_catalog_program, python_presentation_mapping, request):
+    python_presentation_mapping["types"]["Map"]["path"][-1] = "Mapping"
+    for core, public in (("empty", "vacant"), ("insert", "put"), ("of", "from_entries"), ("get", "lookup")):
+        python_presentation_mapping["callables"][f"egglog.core.map.{core}"][0]["path"] = [public]
     request.getfixturevalue("vec_runtime")
     # This scoped catalog is not the module-global actual catalog.
     target = runtime._BASE_CLASSES["Map"][i64, f64]
@@ -2919,7 +2919,15 @@ def test_vec_map_callback_capture_core_order_and_binary_roundtrip(equality_outpu
     assert StructuralView(reference.owner.ref("nodes", call.args[1])) == StructuralView(source.__egg_ref__)
     assert calls == [1]
     encoded = pack([reference])
-    decoded = Builder.from_program(pb.Program.from_binary(encoded.program.to_binary())).publish()
+    builder = Builder.from_program(
+        pb.Program.from_binary(encoded.program.to_binary()), environment=reference.owner._environment
+    )
+    builder.presentations.update({
+        key: presentation(definition)
+        for definition in encoded.definitions
+        if (key := _definition_key(definition.read())) is not None
+    })
+    decoded = builder.publish()
     restored = RuntimeExpr(decoded.ref("nodes", encoded.indices[0]))
     assert StructuralView(restored.__egg_ref__) == StructuralView(reference)
     assert str(restored) == str(result)
@@ -2962,7 +2970,11 @@ def test_vec_map_executes_captured_callback_and_replays_source(equality_output):
                 ).to_binary()
             )
             assert error is None
-            assert pb.RunProgramResponse.from_binary(response).error is None
+            assert response
+            for frame_bytes in response:
+                frame = pb.RunProgramResponse.from_binary(frame_bytes)
+                assert frame.result is not None
+                assert frame.result.field == "output"
             submissions += 1
         assert submissions > 0
         assert calls == [1]
@@ -3021,11 +3033,11 @@ def test_vec_generic_authoring_local_protocols_and_pretty(vec_runtime, monkeypat
     assert StructuralView(argument) == StructuralView(to_runtime_expr(i64(5)).__egg_ref__)
     assert StructuralView(reference.owner.ref("sorts", node.sort_id)) == StructuralView(vector[i64].__egg_sort__)
     packed = pack([reference])
-    assert (
-        sum(d.kind is not None and d.kind.value.name == "egglog.core.vec.range" for d in packed.program.declarations)
-        == 1
-    )
-    decoded = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+    assert not packed.program.declarations
+    assert runtime._definition_at(reference, "callable", "egglog.core.vec.range").role == "primitives"
+    decoded = Builder.from_program(
+        pb.Program.from_binary(packed.program.to_binary()), environment=reference.owner._environment
+    ).publish()
     assert StructuralView(decoded.ref("nodes", packed.indices[0])) == StructuralView(reference)
     range_method = to_runtime_expr(i64(5)).range
     assert isinstance(range_method, RuntimeFunction)
@@ -3104,9 +3116,8 @@ def test_vec_annotation_protocol_preserves_lookup_and_pending_classes(vec_runtim
     assert token_context.prepare is None  # Ordinary lookup still prepares.
 
 
-def test_vec_empty_conversion_uses_supplied_presentation(vec_catalog_program, request):
-    empty = next(d for d in vec_catalog_program.declarations if d.kind.value.name == "egglog.core.vec.empty")
-    empty.bindings.python.views[0].path = ["vacant"]
+def test_vec_empty_conversion_uses_supplied_presentation(vec_catalog_program, python_presentation_mapping, request):
+    python_presentation_mapping["callables"]["egglog.core.vec.empty"][0]["path"] = ["vacant"]
     Vec = request.getfixturevalue("vec_runtime")
     expression = convert([], Vec[i64])
     assert expression.value == ()
@@ -3189,9 +3200,12 @@ def test_vec_computed_value_is_not_locally_evaluated(vec_runtime):
     pair = computed_pair()
     assert isinstance(pair, Pair[i64, f64])  # type: ignore[misc]
     assert resolve_callable(computed_pair).read().kind.field == "function"
+    program = pack([pair.__egg_ref__]).program
+    assert [declaration.kind.value.name for declaration in program.declarations if declaration.kind is not None] == [
+        resolve_callable(computed_pair).read().kind.value.name
+    ]
     assert {
-        d.kind.value.name if d.kind is not None else pytest.fail("Missing declaration kind")
-        for d in pack([pair.__egg_ref__]).program.declarations
+        sort.kind.value.name for sort in program.sorts if sort.kind is not None and sort.kind.field == "application"
     } >= {"Pair", "i64", "f64"}
     with pytest.raises(ExprValueError):
         pair.value
@@ -3559,26 +3573,28 @@ def test_class_and_initializer_documentation_presence(doc):
 @pytest.mark.parametrize("later", ["none", "distinct", "conflicting"])
 def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch, name, later):
     requested = pb.Program(
-        sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
+        sorts=[
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            )
+        ],
         declarations=[
             pb.Declaration(
                 kind=Oneof[Literal["relation"], pb.Relation]("relation", pb.Relation(name=name)),
                 doc="retained documentation",
             ),
-            pb.Declaration(
-                kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                    "host_sort_family", pb.HostSortFamily(name=name)
-                )
-            ),
             pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name=name))),
         ],
         nodes=[pb.Node(kind=Oneof[Literal["var"], str]("var", "origin"))],
     )
-    original = Builder.from_program(requested).publish()
+    native = Builder.from_builtins(pb.BuiltinCatalog(primitive_sorts=[pb.PrimitiveSort(name=name)])).publish()
+    fallback = builtin_catalog().definitions["primitive_sort", "i64"]
+    original = Builder.from_program(requested, environment=(native, fallback.owner)).publish()
     origin = original.ref("nodes", 0)
     expected = {
-        namespace: original.ref("declarations", index)
-        for index, namespace in enumerate(("callable", "host_sort_family", "eq_sort"))
+        "callable": original.ref("declarations", 0),
+        "primitive_sort": native.ref("primitive_sorts", 0),
+        "eq_sort": original.ref("declarations", 1),
     }
     _required_oneof(requested.declarations[0].kind, "relation", pb.Relation).name = "changed caller input"
     detached = expected["callable"].read()
@@ -3586,10 +3602,10 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
     detached.doc = "changed detached documentation"
     assert expected["callable"].read().doc == "retained documentation"
     missing = "__egglog_lookup_later"
-    with pytest.raises(LookupError, match="No canonical definition"):
+    with pytest.raises(LookupError, match="No owned canonical definition"):
         runtime._definition_at(origin, "callable", missing)
 
-    extended = Builder()
+    extended = Builder(environment=original._environment)
     for reference in expected.values():
         extended.import_ref(reference)
     # Repeated imported slots still name one canonical definition. The import
@@ -3609,7 +3625,7 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
     query_index = extended.add("nodes", pb.Node(sort_id=scalar, kind=Oneof[Literal["var"], str]("var", "new origin")))
     extended_owner = extended.publish()
     query = extended_owner.ref("nodes", query_index)
-    fallback = builtin_catalog().definitions["host_sort_family", "i64"]
+    fallback = builtin_catalog().definitions["primitive_sort", "i64"]
 
     def forbidden_read(self):
         pytest.fail("Definition key lookup detached a full published record")
@@ -3623,11 +3639,11 @@ def test_owned_definition_lookup_keeps_exact_refs_without_detaching(monkeypatch,
                     runtime._definition_at(query, namespace, name)
             else:
                 assert runtime._definition_at(query, namespace, name) == reference
-        assert runtime._definition_at(query, "host_sort_family", "i64") == fallback
+        assert runtime._definition_at(query, "primitive_sort", "i64") == fallback
         if later == "distinct":
             assert runtime._definition_at(query, "callable", missing) == extended_owner.ref("declarations", added)
         else:
-            with pytest.raises(LookupError, match="No canonical definition"):
+            with pytest.raises(LookupError, match="No owned canonical definition"):
                 runtime._definition_at(query, "callable", missing)
     assert expected["callable"].read().kind.value.name == name
 
@@ -3764,7 +3780,7 @@ def test_named_eager_body_is_authored_once_without_engine():
     runtime_body = _required_runtime_function(body)
     assert runtime_body.__egg_prepare__ is None
     declaration = resolve_callable(body)
-    assert declaration.read().kind.field == "primitive"
+    assert declaration.read().kind.field == "user_defined_primitive"
     assert declaration.owner.ref("nodes", declaration.read().kind.value.body).read().kind.value.value.value == 1
 
     @function(cost=1)  # type: ignore[type-var]
@@ -3789,7 +3805,7 @@ def test_named_eager_binders_keep_slots_and_callee_closure():
 
     reference = resolve_callable(outer)
     primitive = reference.read().kind.value
-    assert isinstance(primitive, pb.Primitive)
+    assert isinstance(primitive, pb.UserDefinedPrimitive)
     assert [argument.name for argument in primitive.inputs] == ["unused", "second", "first"]
     body = RuntimeExpr(reference.owner.ref("nodes", primitive.body))
     assert str(body) == "inner(_2, _1) + inner(_1)"
@@ -3802,15 +3818,13 @@ def test_named_eager_binders_keep_slots_and_callee_closure():
         if declaration.kind is not None and declaration.kind.value.name == inner_reference.read().kind.value.name
     )
     assert inner_copy.kind is not None
-    assert isinstance(inner_copy.kind.value, pb.Primitive)
+    assert isinstance(inner_copy.kind.value, pb.UserDefinedPrimitive)
     assert pack([inner_reference]).program.to_binary() == before
     inner_body = RuntimeExpr(inner_reference.owner.ref("nodes", inner_reference.read().kind.value.body))
     assert str(inner_body) == "_0 + _1"
-    assert inner_copy.bindings is not None
-    assert inner_copy.bindings.python is not None
-    default = inner_copy.bindings.python.views[0].params[1]
-    assert default.has_field("default_expr")
-    default_kind = program.nodes[default.default_expr].kind
+    default = presentation(inner_reference).views[0].params[1].default
+    assert default is not None
+    default_kind = default.read().kind
     assert default_kind is not None
     assert isinstance(default_kind.value, pb.Call)
     assert default_kind.value.func == resolve_callable(seed).read().kind.value.name
@@ -3902,7 +3916,7 @@ def test_named_eager_eqsort_result_and_ambient_ruleset_isolation():
         assert get_current_ruleset() is ambient
     assert calls == [None]
     assert isinstance(result, Box)
-    assert resolve_callable(body).read().kind.field == "primitive"
+    assert resolve_callable(body).read().kind.field == "user_defined_primitive"
     assert not ambient._snapshot().read().kind.value.rules
 
     def empty(value: i64): ...
@@ -4024,7 +4038,7 @@ def test_free_ruleset_body_preserves_original_positional_variable_relation(name,
     declaration = next(
         item.kind.value
         for item in program.declarations
-        if item.kind is not None and isinstance(item.kind.value, pb.Primitive)
+        if item.kind is not None and isinstance(item.kind.value, pb.UserDefinedPrimitive)
     )
     inner_body = program.nodes[declaration.body]
     assert inner_body.kind is not None
@@ -4578,7 +4592,7 @@ def test_constant_eager_defaults_are_closed_nullary_primitives(monkeypatch):
     ]:
         declaration = resolve_callable(value)
         primitive = declaration.read().kind.value
-        assert isinstance(primitive, pb.Primitive)
+        assert isinstance(primitive, pb.UserDefinedPrimitive)
         assert not primitive.inputs
         assert expr_parts(RuntimeExpr(declaration.owner.ref("nodes", primitive.body))) == expr_parts(expected)
         with pytest.raises(TypeError, match="table-backed Function"):
@@ -4705,13 +4719,16 @@ def test_constants_own_distinct_canonical_presentation_and_declaration_kinds(mon
         set_(token).to(token)
     packed = pack([table.__egg_ref__])
     program = pb.Program.from_binary(packed.program.to_binary())
-    declaration = next(
+    next(
         d
         for d in program.declarations
         if (d.kind.field == "function" if d.kind is not None else pytest.fail("Missing declaration kind"))
     )
-    _required_python_bindings(declaration).views[0].kind = pb.PythonCallKind.FUNCTION
-    reconstructed = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
+    builder = Builder.from_program(program, environment=table.__egg_ref__.owner._environment)
+    builder.presentations["callable", resolve_callable(table).read().kind.value.name] = Presentation(
+        views=(dataclasses.replace(presentation(resolve_callable(table)).views[0], kind=CallKind.FUNCTION),)
+    )
+    reconstructed = RuntimeExpr(builder.publish().ref("nodes", packed.indices[0]))
     assert str(reconstructed) == "current()"
     assert get_constant_name(reconstructed) is None
     assert str(table) == "current"
@@ -4758,7 +4775,7 @@ def test_user_constructor_defaults_keywords_and_names_are_records(monkeypatch):
     record = declaration.read()
     assert record.kind.value.name == "exact constructor"
     assert runtime_num.__egg_definition__.read().kind.value.name == "exact sort"
-    assert record.bindings.python.views[0].params[0].name == "value"
+    assert presentation(declaration).views[0].params[0].name == "value"
     assert _required_callable_args(first, Num)[0].value == 5
     default.__replace_expr__(i64(9))
     assert _required_callable_args(Num(), Num)[0].value == 5
@@ -4892,7 +4909,7 @@ def test_type_factory_retains_canonical_sort_and_formals(class_authoring_without
     assert namespace == {"__module__": __name__, "__init__": init, "choose": choose}
     reference = resolve_callable(runtime_dynamic.choose)
     declaration = reference.read()
-    assert declaration.kind.field == "primitive"
+    assert declaration.kind.field == "user_defined_primitive"
     assert [argument.name for argument in declaration.kind.value.inputs] == ["self", "value"]
     body = reference.owner.ref("nodes", declaration.kind.value.body)
     assert body.read().kind == Oneof[Literal["var"], str]("var", "_1")
@@ -4951,7 +4968,7 @@ def test_unmigrated_constructor_options_never_publish_members(options):
         reference = resolve_callable(Invalid)
         record = reference.read()
         assert record.kind.field == "constructor"
-        assert record.bindings.python.views[0].kind == pb.PythonCallKind.INITIALIZER
+        assert presentation(reference).views[0].kind == CallKind.INITIALIZER
         cost = reference.owner.ref("nodes", record.kind.value.cost).read()
         assert cost.kind.value.value == Oneof[Literal["i64"], int]("i64", 1)
         assert get_callable_fn(expression) == Invalid
@@ -4985,10 +5002,10 @@ def test_reverse_args_members_map_heterogeneous_inputs_and_mutation(class_author
     declaration = resolve_callable(ReversedSource.make)
     record = declaration.read()
     assert [argument.name for argument in record.kind.value.inputs] == ["count", "label", "self"]
-    view = record.bindings.python.views[0]
+    view = presentation(declaration).views[0]
     assert view.receiver == 2
     assert [(parameter.name, parameter.core_input) for parameter in view.params] == [("label", 1), ("count", 0)]
-    assert view.params[1].has_field("default_expr")
+    assert view.params[1].default is not None
     call = expression.__egg_ref__.read().kind.value
     arguments = [expression.__egg_ref__.owner.ref("nodes", index) for index in call.args]
     assert [RuntimeExpr(argument) for argument in arguments] == [i64(4), String("tag"), source]
@@ -5007,21 +5024,36 @@ def test_reverse_args_members_map_heterogeneous_inputs_and_mutation(class_author
         source.make("tag", i64(4), i64(5))  # type: ignore[call-arg]
     packed = pack([expression.__egg_ref__])
     program = pb.Program.from_binary(packed.program.to_binary())
-    detached = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
+    detached = RuntimeExpr(
+        Builder
+        .from_program(program, environment=expression.__egg_ref__.owner._environment)
+        .publish()
+        .ref("nodes", packed.indices[0])
+    )
     assert expr_parts(detached) == expr_parts(expression)
-    assert str(detached) == str(expression)
-    assert get_callable_args(detached) == get_callable_args(expression)
+    assert get_callable_args(detached) is not None
+    assert str(detached).startswith(record.kind.value.name + "(")
+    retained = Builder.from_program(program, environment=expression.__egg_ref__.owner._environment)
+    retained.presentations.update({
+        key: presentation(definition)
+        for definition in packed.definitions
+        if (key := _definition_key(definition.read())) is not None
+    })
+    reconstructed = RuntimeExpr(retained.publish().ref("nodes", packed.indices[0]))
+    assert str(reconstructed) == str(expression)
+    assert get_callable_args(reconstructed) == get_callable_args(expression)
 
     created = ReversedSource.create("tag", i64(4))
-    create = resolve_callable(ReversedSource.create).read()
+    create_ref = resolve_callable(ReversedSource.create)
+    create = create_ref.read()
     assert [argument.name for argument in create.kind.value.inputs] == ["count", "label"]
-    assert not create.bindings.python.views[0].has_field("receiver")
+    assert presentation(create_ref).views[0].receiver is None
     assert get_callable_args(created) == (to_runtime_expr(String("tag")), to_runtime_expr(i64(4)))
 
     snapshot = copy(source)
     assert source.replace("next") is None
-    replace = resolve_callable(ReversedSource.replace).read()
-    assert replace.bindings.python.views[0].receiver == replace.bindings.python.views[0].mutates == 1
+    replacement = presentation(resolve_callable(ReversedSource.replace)).views[0]
+    assert replacement.receiver == replacement.mutates == 1
     assert get_callable_args(source, ReversedSource.replace) == (
         to_runtime_expr(snapshot),
         to_runtime_expr(String("next")),
@@ -5034,10 +5066,11 @@ def test_reverse_args_initializer_retains_python_parameter_order(class_authoring
         def __init__(self, label: StringLike, count: i64) -> None: ...
 
     expression = ReversedInitializer("tag", i64(4))
-    declaration = resolve_callable(ReversedInitializer).read()
+    declaration_ref = resolve_callable(ReversedInitializer)
+    declaration = declaration_ref.read()
     assert [argument.name for argument in declaration.kind.value.inputs] == ["count", "label"]
-    view = declaration.bindings.python.views[0]
-    assert not view.has_field("receiver")
+    view = presentation(declaration_ref).views[0]
+    assert view.receiver is None
     assert [(parameter.name, parameter.core_input) for parameter in view.params] == [("label", 1), ("count", 0)]
     assert get_callable_fn(expression) == ReversedInitializer
     assert get_callable_args(expression) == (to_runtime_expr(String("tag")), to_runtime_expr(i64(4)))
@@ -5119,7 +5152,7 @@ def test_unsupported_class_members_and_parameter_kinds_are_not_ignored():
     runtime_keyword_only, keyword_only_context = _required_authored_class(KeywordOnly)
     # Eager method bodies are supported; fixed member parameter kinds still apply.
     assert isinstance(HasBody().other(), i64)
-    assert resolve_callable(HasBody.other).read().kind.field == "primitive"
+    assert resolve_callable(HasBody.other).read().kind.field == "user_defined_primitive"
     with pytest.raises(NotImplementedError, match="positional-or-keyword"):
         KeywordOnly()  # type: ignore[call-arg]
     assert keyword_only_context.catalog is not None
@@ -5163,7 +5196,7 @@ def test_concrete_member_records_defaults_and_unbound_views(monkeypatch):
     score_record = score.read()
     assert score_record.kind.field == "function"
     assert score_record.kind.value.name == "exact member"
-    view = score_record.bindings.python.views[0]
+    view = presentation(score).views[0]
     assert view.receiver == 0
     assert [(p.name, p.core_input) for p in view.params] == [("x", 1)]
     assert StructuralView(score.owner.ref("sorts", score_record.kind.value.inputs[0].sort)) == StructuralView(
@@ -5326,7 +5359,7 @@ def test_eager_member_forward_completion_owns_only_final_definitions(class_autho
     assert captured == [Eager.later]
     assert resolve_callable(captured[0]) is later
     assert calls == ["first", "later", "number", "make"]
-    assert first.read().kind.field == later.read().kind.field == "primitive"
+    assert first.read().kind.field == later.read().kind.field == "user_defined_primitive"
     body = RuntimeExpr(first.owner.ref("nodes", first.read().kind.value.body))
     assert str(body) == "_0.later(_1) + 1"
     assert isinstance(expression.first(), i64)
@@ -5353,8 +5386,8 @@ def test_eager_member_reverse_args_keep_callback_and_core_order(class_authoring_
 
     reference = resolve_callable(Reverse.ordered)
     primitive = reference.read().kind.value
-    view = reference.read().bindings.python.views[0]
-    assert isinstance(primitive, pb.Primitive)
+    view = presentation(reference).views[0]
+    assert isinstance(primitive, pb.UserDefinedPrimitive)
     assert [argument.name for argument in primitive.inputs] == ["other", "self"]
     assert view.receiver == 1
     assert [parameter.core_input for parameter in view.params] == [0]
@@ -5394,7 +5427,7 @@ def test_eager_member_eqsort_views_and_later_bodyless_member(class_authoring_wit
         (Views.early, value.early()),
     ):
         reference = resolve_callable(member)
-        assert isinstance(reference.read().kind.value, pb.Primitive)
+        assert isinstance(reference.read().kind.value, pb.UserDefinedPrimitive)
         assert isinstance(expression, Result)
         pack([to_runtime_expr(expression).__egg_ref__])
     assert resolve_callable(Views.later).read().kind.field == "constructor"
@@ -5415,7 +5448,7 @@ def test_eager_initializer_gets_symbolic_self_and_rejects_retained_recursion(cla
     value = Initialized(2)  # type: ignore[arg-type]
     reference = resolve_callable(Initialized)
     primitive = reference.read().kind.value
-    assert isinstance(primitive, pb.Primitive)
+    assert isinstance(primitive, pb.UserDefinedPrimitive)
     runtime_initialized, _initialized_context = _required_authored_class(Initialized)
     assert seen == [(primitive.name, "value", runtime_initialized.__egg_sort__)]
     assert str(RuntimeExpr(reference.owner.ref("nodes", primitive.body))) == "Initialized.wrap(_0)"
@@ -5631,7 +5664,7 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
     assert calls == ["body", "conversion"]
     first = resolve_callable(Defaults.first)
     assert first is resolve_callable(captured[0])
-    assert isinstance(first.read().kind.value, pb.Primitive)
+    assert isinstance(first.read().kind.value, pb.UserDefinedPrimitive)
     assert defaults_context.catalog is not None
     catalog_ref = defaults_context.catalog.definitions["callable", first.read().kind.value.name]
     # Owner.ref reconstructs Ref wrappers; canonical identity is owner/role/index,
@@ -5655,10 +5688,9 @@ def test_eager_member_default_reentry_retains_completed_refs_and_prefix(class_au
         == 1
     )
     default = resolve_callable(Defaults.with_default)
-    view = default.read().bindings.python.views[0]
-    assert (
-        default.owner.ref("nodes", view.params[0].default_expr).read().kind.value.func == first.read().kind.value.name
-    )
+    template = presentation(default).views[0].params[0].default
+    assert template is not None
+    assert template.read().kind.value.func == first.read().kind.value.name
     assert calls == ["body", "conversion"]
 
 
@@ -5724,8 +5756,7 @@ def test_member_default_transitive_forward_headers_and_snapshot(class_authoring_
     first = resolve_callable(Forward.first)
     assert first is resolve_callable(captured[0])
     snapshot = resolve_callable(Forward.snapshot)
-    default_index = snapshot.read().bindings.python.views[0].params[0].default_expr
-    assert snapshot.owner.ref("nodes", default_index) == supplied_ref
+    assert presentation(snapshot).views[0].params[0].default == supplied_ref
     assert _required_callable_args(Forward().snapshot())[1].value == 3
     packet = pack([to_runtime_expr(expression).__egg_ref__, first])
     assert (
@@ -6066,22 +6097,28 @@ def test_classvar_eager_defaults_are_closed_nullary_primitives(class_authoring_w
         declaration = resolve_callable(value)
         record = declaration.read()
         primitive = record.kind.value
-        assert isinstance(primitive, pb.Primitive)
+        assert isinstance(primitive, pb.UserDefinedPrimitive)
         assert not primitive.inputs
         assert expr_parts(RuntimeExpr(declaration.owner.ref("nodes", primitive.body))) == expr_parts(expected)
-        view = record.bindings.python.views[0]
-        assert view.kind == pb.PythonCallKind.CLASS_VARIABLE
+        view = presentation(declaration).views[0]
+        assert view.kind == CallKind.CLASS_VARIABLE
         assert not view.params
-        assert StructuralView(declaration.owner.ref("sorts", view.owner.kind.value)) == StructuralView(defaults_sort)
+        assert view.owner is not None
+        assert StructuralView(view.owner) == StructuralView(defaults_sort)
         assert str(value) == f"Defaults.{view.path[0]}"
         with pytest.raises(TypeError, match="table-backed Function"):
             set_(value).to(expected)
         packed = pack([to_runtime_expr(value).__egg_ref__])
         encoded = packed.program.to_binary()
         decoded = pb.Program.from_binary(encoded)
-        restored = RuntimeExpr(Builder.from_program(decoded).publish().ref("nodes", packed.indices[0]))
+        restored = RuntimeExpr(
+            Builder
+            .from_program(decoded, environment=to_runtime_expr(value).__egg_ref__.owner._environment)
+            .publish()
+            .ref("nodes", packed.indices[0])
+        )
         assert expr_parts(restored) == expr_parts(value)
-        assert str(restored) == str(value)
+        assert str(restored) == primitive.name + "()"
         assert decoded.to_binary() == encoded
     assert pack([scalar.__egg_ref__, to_runtime_expr(box).__egg_ref__]).program.to_binary() == before
 
@@ -6251,14 +6288,14 @@ def test_symbolic_getattr_uses_existing_header(class_authoring_without_engine, s
     )
     declaration = resolve_callable(A.__getattr__)
     record = declaration.read()
-    view = record.bindings.python.views[0]
+    view = presentation(declaration).views[0]
     assert record.kind.field == "constructor"
     assert record.kind.value.output == record.kind.value.inputs[0].sort
     assert [argument.name for argument in record.kind.value.inputs] == ["self", "name"]
-    assert view.kind == pb.PythonCallKind.METHOD
+    assert view.kind == CallKind.METHOD
     assert view.receiver == 0
     assert [(parameter.name, parameter.core_input) for parameter in view.params] == [("name", 1)]
-    assert not view.has_field("mutates")
+    assert view.mutates is None
     assert get_callable_fn(result) == A.__getattr__
     arguments = get_callable_args(result, A.__getattr__)
     assert arguments is not None
@@ -6486,8 +6523,7 @@ def test_getattr_does_not_swallow_metadata_errors(class_authoring_without_engine
     assert calls == []
 
 
-@pytest.mark.parametrize("strip_metadata", [False, True])
-def test_getattr_does_not_attach_preserved_hooks_to_detached_records(class_authoring_without_engine, strip_metadata):
+def test_getattr_does_not_attach_preserved_hooks_to_detached_records(class_authoring_without_engine):
     class A(Expr):
         def __init__(self) -> None: ...
 
@@ -6502,12 +6538,6 @@ def test_getattr_does_not_attach_preserved_hooks_to_detached_records(class_autho
     assert {member for _, member in a_context.catalog.members} == {"__init__"}
     packed = pack([receiver.__egg_ref__])
     program = pb.Program.from_binary(packed.program.to_binary())
-    if strip_metadata:
-        for declaration in program.declarations:
-            declaration.bindings = None
-            assert declaration.kind is not None
-            if declaration.kind.field == "eq_sort":
-                declaration.kind.value.bindings = None
     detached = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packed.indices[0]))
     with pytest.raises(AttributeError):
         _ = detached.foo
@@ -6552,13 +6582,11 @@ def test_bodyless_mutating_members_use_canonical_calls(class_authoring_without_e
         record = declaration.read()
         assert record.kind.field == "constructor"
         signature = record.kind.value
-        view = record.bindings.python.views[0]
+        view = presentation(declaration).views[0]
         assert signature.output == signature.inputs[0].sort
         assert [argument.name for argument in signature.inputs] == ["self", *parameters]
-        assert view.kind == pb.PythonCallKind.METHOD
+        assert view.kind == CallKind.METHOD
         assert view.receiver == view.mutates == 0
-        assert view.has_field("receiver")
-        assert view.has_field("mutates")
         assert [(parameter.name, parameter.core_input) for parameter in view.params] == [
             (name, index) for index, name in enumerate(parameters, start=1)
         ]
@@ -6594,12 +6622,12 @@ def test_bodyless_free_mutation_owns_calls_and_aliases(class_authoring_without_e
     declaration = reference.read()
     assert declaration.kind.field == "constructor"
     signature = declaration.kind.value
-    view = declaration.bindings.python.views[0]
+    view = presentation(reference).views[0]
     assert signature.output == signature.inputs[0].sort
-    assert view.kind == pb.PythonCallKind.FUNCTION
-    assert view.has_field("mutates")
+    assert view.kind == CallKind.FUNCTION
+    assert view.mutates is not None
     assert view.mutates == 0
-    assert not view.has_field("receiver")
+    assert view.receiver is None
     value = Mutable(1)  # type: ignore[arg-type]
     alias, original = value, copy(value)
     assert update(value) is None
@@ -6651,7 +6679,16 @@ def test_canonical_mutation_display_keeps_sharing_and_reverse_slots(class_author
         == "_Mutable_1 = Mutable(1)\n_Mutable_1.update('tag', 2)\n_Mutable_1[3] = 4\ndel _Mutable_1[3]\n_Mutable_1"
     )
     packed = pack([to_runtime_expr(value).__egg_ref__])
-    owner = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+    builder = Builder.from_program(
+        pb.Program.from_binary(packed.program.to_binary()),
+        environment=to_runtime_expr(value).__egg_ref__.owner._environment,
+    )
+    builder.presentations.update({
+        key: presentation(definition)
+        for definition in packed.definitions
+        if (key := _definition_key(definition.read())) is not None
+    })
+    owner = builder.publish()
     assert str(RuntimeExpr(owner.ref("nodes", packed.indices[0]))) == str(value)
 
 
@@ -6669,7 +6706,7 @@ def test_eager_free_mutation_uses_original_formals_once(class_authoring_without_
 
     reference = resolve_callable(replace)
     primitive = reference.read().kind.value
-    assert isinstance(primitive, pb.Primitive)
+    assert isinstance(primitive, pb.UserDefinedPrimitive)
     body = reference.owner.ref("nodes", primitive.body)
     assert body.read().kind.field == "var"
     assert body.read().kind.value == "_1"
@@ -6680,7 +6717,7 @@ def test_eager_free_mutation_uses_original_formals_once(class_authoring_without_
     assert calls == [None]
     assert expr_parts(original) == expr_parts(Mutable(1))  # type: ignore[arg-type]
     assert to_runtime_expr(other).__egg_ref__ is other_root
-    assert reference.read().bindings.python.views[0].has_field("mutates")
+    assert presentation(reference).views[0].mutates is not None
     encoded = pack([to_runtime_expr(value).__egg_ref__]).program.to_binary()
     assert pb.Program.from_binary(encoded).to_binary() == encoded
 
@@ -6745,18 +6782,20 @@ def test_mutation_metadata_rejects_before_argument_callbacks(class_authoring_wit
     packed = pack([resolve_callable(update)])
     program = packed.program
     declaration = program.declarations[packed.indices[0]]
-    view = _required_python_bindings(declaration).views[0]
+    view = presentation(resolve_callable(update)).views[0]
     if corruption == "index":
-        view.mutates = 1
+        view = dataclasses.replace(view, mutates=1)
     elif corruption == "output":
         function_record = _required_oneof(declaration.kind, "function", pb.Function)
         function_record.output = len(program.sorts)
         program.sorts.append(pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "wrong-output")))
     elif corruption == "initializer":
-        view.kind = pb.PythonCallKind.INITIALIZER
+        view = dataclasses.replace(view, kind=CallKind.INITIALIZER)
     else:
-        view.params.clear()
-    owner = Builder.from_program(program).publish()
+        view = dataclasses.replace(view, params=())
+    builder = Builder.from_program(program)
+    builder.presentations["callable", resolve_callable(update).read().kind.value.name] = Presentation(views=(view,))
+    owner = builder.publish()
 
     def forbidden(*args):
         pytest.fail("Malformed mutation metadata reached an argument callback")
@@ -6879,7 +6918,13 @@ def test_bodyless_mutation_reconstructs_without_result_normalization(class_autho
     packed = pack([to_runtime_expr(receiver).__egg_ref__])
     encoded = packed.program.to_binary()
     decoded = pb.Program.from_binary(encoded)
-    root = Builder.from_program(decoded).publish().ref("nodes", packed.indices[0])
+    builder = Builder.from_program(decoded, environment=to_runtime_expr(receiver).__egg_ref__.owner._environment)
+    builder.presentations.update({
+        key: presentation(definition)
+        for definition in packed.definitions
+        if (key := _definition_key(definition.read())) is not None
+    })
+    root = builder.publish().ref("nodes", packed.indices[0])
     rebuilt = RuntimeExpr(root)
 
     def forbidden(*args, **kwargs):
@@ -6953,8 +6998,7 @@ def test_mutating_member_rewrite_keeps_original_binders(class_authoring_without_
     assert calls == [destination]
     assert to_runtime_expr(other).__egg_ref__ is other_root
     assert expr_parts(original) == expr_parts(Mutable(1))  # type: ignore[arg-type]
-    declaration = resolve_callable(Mutable.replace).read()
-    view = declaration.bindings.python.views[0]
+    view = presentation(resolve_callable(Mutable.replace)).views[0]
     assert view.receiver == view.mutates == int(reverse)
     snapshot = destination._snapshot()
     assert len(snapshot.read().kind.value.rules) == 1
@@ -7385,12 +7429,12 @@ def test_user_default_expansion_has_fresh_union_identity_and_retains_sharing():
     assert first_pair[0].__egg_ref__ != default.__egg_ref__
 
 
-def test_reconstructed_constructor_uses_changed_protobuf_parameter_not_python_signature():
+def test_reconstructed_constructor_uses_local_parameter_not_python_signature():
     class Num(Expr):
         def __init__(self, value: i64) -> None: ...
 
     program = pack([Num(1).__egg_ref__]).program  # type: ignore[arg-type]
-    index, constructor = next(
+    index, _constructor = next(
         (index, declaration)
         for index, declaration in enumerate(program.declarations)
         if (
@@ -7399,8 +7443,11 @@ def test_reconstructed_constructor_uses_changed_protobuf_parameter_not_python_si
             else pytest.fail("Missing declaration kind")
         )
     )
-    _required_python_bindings(constructor).views[0].params[0].name = "renamed"
-    owner = Builder.from_program(program).publish()
+    view = presentation(resolve_callable(Num)).views[0]
+    view = dataclasses.replace(view, params=(dataclasses.replace(view.params[0], name="renamed"),))
+    builder = Builder.from_program(program, environment=resolve_callable(Num).owner._environment)
+    builder.presentations["callable", resolve_callable(Num).read().kind.value.name] = Presentation(views=(view,))
+    owner = builder.publish()
     runtime_num, _num_context = _required_authored_class(Num)
     function = RuntimeFunction(owner.ref("declarations", index), 0, runtime_num)
     result = function(renamed=8)
@@ -7414,15 +7461,38 @@ def test_generic_inference_uses_binder_positions_and_is_transactional():
     builder.add("sorts", pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)))
     builder.add("sorts", pb.Sort(kind=Oneof[Literal["var"], int]("var", 1)))
     builder.add(
-        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Pair", args=[0, 1])))
+        "sorts",
+        pb.Sort(
+            kind=Oneof[Literal["application"], pb.SortApplication](
+                "application", pb.SortApplication(name="Pair", args=[0, 1])
+            )
+        ),
     )
-    builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
-    builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="String"))))
     builder.add(
-        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Pair", args=[3, 4])))
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
     )
     builder.add(
-        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Pair", args=[4, 3])))
+        "sorts",
+        pb.Sort(
+            kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="String"))
+        ),
+    )
+    builder.add(
+        "sorts",
+        pb.Sort(
+            kind=Oneof[Literal["application"], pb.SortApplication](
+                "application", pb.SortApplication(name="Pair", args=[3, 4])
+            )
+        ),
+    )
+    builder.add(
+        "sorts",
+        pb.Sort(
+            kind=Oneof[Literal["application"], pb.SortApplication](
+                "application", pb.SortApplication(name="Pair", args=[4, 3])
+            )
+        ),
     )
     owner = builder.publish()
     bindings: dict[int, Ref] = {}
@@ -7465,11 +7535,19 @@ def test_sort_inference_and_substitution_are_iterative():
     for _ in range(10_000):
         pattern = builder.add(
             "sorts",
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[pattern]))),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication](
+                    "application", pb.SortApplication(name="Vec", args=[pattern])
+                )
+            ),
         )
         concrete = builder.add(
             "sorts",
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[concrete]))),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication](
+                    "application", pb.SortApplication(name="Vec", args=[concrete])
+                )
+            ),
         )
     owner = builder.publish()
     bindings: dict[int, Ref] = {}
@@ -7480,7 +7558,10 @@ def test_sort_inference_and_substitution_are_iterative():
 
 def test_call_authoring_binds_keywords_defaults_and_core_input_order():
     builder = Builder()
-    sort = builder.add("sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))))
+    sort = builder.add(
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
+    )
     default = builder.add(
         "nodes",
         pb.Node(
@@ -7491,34 +7572,30 @@ def test_call_authoring_binds_keywords_defaults_and_core_input_order():
         ),
     )
     declaration = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["host_primitive"], pb.HostPrimitive](
-                "host_primitive",
-                pb.HostPrimitive(
-                    name="sample.subtract",
-                    typing=Oneof[Literal["signature"], pb.GenericSignature](
-                        "signature", pb.GenericSignature(inputs=[pb.Arg(sort=sort), pb.Arg(sort=sort)], output=sort)
-                    ),
-                ),
-            ),
-            bindings=pb.CallableBindings(
-                python=pb.PythonBindings(
-                    views=[
-                        pb.PythonCallable(
-                            kind=pb.PythonCallKind.FUNCTION,
-                            path=["sample", "subtract_reversed"],
-                            params=[
-                                pb.PythonParameter(core_input=1, name="right"),
-                                pb.PythonParameter(core_input=0, name="left", default_expr=default),
-                            ],
-                        )
-                    ]
-                )
+        "primitives",
+        pb.Primitive(
+            name="sample.subtract",
+            typing=Oneof[Literal["signature"], pb.GenericSignature](
+                "signature", pb.GenericSignature(inputs=[pb.Arg(sort=sort), pb.Arg(sort=sort)], output=sort)
             ),
         ),
     )
-    owner = builder.publish()
+    owner = builder.publish(
+        presentation_factory=lambda owned: {
+            ("callable", "sample.subtract"): Presentation(
+                views=(
+                    CallPresentation(
+                        kind=CallKind.FUNCTION,
+                        path=("sample", "subtract_reversed"),
+                        params=(
+                            Parameter(core_input=1, name="right"),
+                            Parameter(core_input=0, name="left", default=owned.ref("nodes", default)),
+                        ),
+                    ),
+                )
+            )
+        }
+    )
 
     def convert(expected: Ref, value: object) -> Ref:
         assert isinstance(value, int)
@@ -7535,7 +7612,7 @@ def test_call_authoring_binds_keywords_defaults_and_core_input_order():
         return literal.publish().ref("nodes", 0)
 
     root, mutated = _author_call(
-        owner.ref("declarations", declaration), 0, (), {"right": 9}, node_of=lambda _: None, convert=convert
+        owner.ref("primitives", declaration), 0, (), {"right": 9}, node_of=lambda _: None, convert=convert
     )
     assert mutated is None
     assert isinstance(root, Ref)
@@ -7546,7 +7623,7 @@ def test_call_authoring_binds_keywords_defaults_and_core_input_order():
     assert args[0] != owner.ref("nodes", default)
     with pytest.raises(TypeError, match="unexpected keyword"):
         _author_call(
-            owner.ref("declarations", declaration),
+            owner.ref("primitives", declaration),
             0,
             (),
             {"right": 9, "bogus": 9},
@@ -7569,21 +7646,16 @@ def test_function_value_rejects_reordered_remaining_arguments(order, captures, d
                 "function",
                 pb.Function(name="sample.subtract_reversed", inputs=[pb.Arg(sort=sort) for _ in order], output=sort),
             ),
-            bindings=pb.CallableBindings(
-                python=pb.PythonBindings(
-                    views=[
-                        pb.PythonCallable(
-                            kind=pb.PythonCallKind.FUNCTION,
-                            path=["sample", "subtract_reversed"],
-                            params=[
-                                pb.PythonParameter(core_input=core, name=f"arg{position}")
-                                for position, core in enumerate(order)
-                            ],
-                        )
-                    ]
-                )
-            ),
         ),
+    )
+    builder.presentations["callable", "sample.subtract_reversed"] = Presentation(
+        views=(
+            CallPresentation(
+                kind=CallKind.FUNCTION,
+                path=("sample", "subtract_reversed"),
+                params=tuple(Parameter(core_input=core, name=f"arg{position}") for position, core in enumerate(order)),
+            ),
+        )
     )
     if decoded:
         function_sort = builder.add(
@@ -7632,20 +7704,18 @@ def test_function_value_rejects_mutation_before_replacing_receiver(class_authori
             kind=Oneof[Literal["function"], pb.Function](
                 "function", pb.Function(name="sample.mutable", inputs=[pb.Arg(sort=sort)], output=sort)
             ),
-            bindings=pb.CallableBindings(
-                python=pb.PythonBindings(
-                    views=[
-                        pb.PythonCallable(
-                            kind=pb.PythonCallKind.METHOD,
-                            path=["mutable"],
-                            owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", sort)),
-                            receiver=0,
-                            mutates=0,
-                        )
-                    ]
-                )
-            ),
         ),
+    )
+    builder.presentations["callable", "sample.mutable"] = Presentation(
+        views=(
+            CallPresentation(
+                kind=CallKind.METHOD,
+                path=("mutable",),
+                owner=reference.owner.ref("sorts", reference.read().sort_id),
+                receiver=0,
+                mutates=0,
+            ),
+        )
     )
     function = RuntimeFunction(builder.publish().ref("declarations", declaration), 0, original)
     with pytest.raises(AssertionError, match="Mutable partial functions not supported"):
@@ -7670,7 +7740,12 @@ def test_named_function_values_roundtrip_actual_canonical_records(
     authored = to_runtime_expr(wrapper(target, *captures))
     packed = pack([authored.__egg_ref__])
     decoded = pb.Program.from_binary(packed.program.to_binary())
-    restored = RuntimeExpr(Builder.from_program(decoded).publish().ref("nodes", packed.indices[0]))
+    restored = RuntimeExpr(
+        Builder
+        .from_program(decoded, environment=authored.__egg_ref__.owner._environment)
+        .publish()
+        .ref("nodes", packed.indices[0])
+    )
     assert StructuralView(restored.__egg_ref__) == StructuralView(authored.__egg_ref__)
     assert str(restored) == str(authored)
     assert get_literal_value(restored) is not None
@@ -7726,7 +7801,10 @@ def test_function_value_zero_indices_and_malformed_records(corruption, class_aut
         packed = pack([expression.__egg_ref__])
         restored = RuntimeExpr(
             Builder
-            .from_program(pb.Program.from_binary(packed.program.to_binary()))
+            .from_program(
+                pb.Program.from_binary(packed.program.to_binary()),
+                environment=expression.__egg_ref__.owner._environment,
+            )
             .publish()
             .ref("nodes", packed.indices[0])
         )
@@ -7740,14 +7818,22 @@ def test_function_value_zero_indices_and_malformed_records(corruption, class_aut
         assert isinstance(restored(i64(2)), RuntimeExpr)
 
 
-def test_decoded_builtin_callable_identity_uses_definition_and_selected_view():
+def test_decoded_builtin_callable_identity_uses_definition_and_selected_view(native_catalog_program):
     original = i64.__add__
-    packed = pack([resolve_callable(original)])
-    encoded = packed.program.to_binary()
-    left_owner = Builder.from_program(pb.Program.from_binary(encoded)).publish()
-    right_owner = Builder.from_program(pb.Program.from_binary(encoded)).publish()
-    left_ref = left_owner.ref("declarations", packed.indices[0])
-    right_ref = right_owner.ref("declarations", packed.indices[0])
+    index = next(
+        index
+        for index, primitive in enumerate(native_catalog_program.primitives)
+        if primitive.name == "egglog.core.i64.add"
+    )
+    encoded = native_catalog_program.to_binary()
+    views = presentation(resolve_callable(original)).views
+    left_builder = Builder.from_builtins(pb.BuiltinCatalog.from_binary(encoded))
+    right_builder = Builder.from_builtins(pb.BuiltinCatalog.from_binary(encoded))
+    left_builder.presentations["callable", "egglog.core.i64.add"] = Presentation(views=views)
+    right_builder.presentations["callable", "egglog.core.i64.add"] = Presentation(views=views)
+    left_owner, right_owner = left_builder.publish(), right_builder.publish()
+    left_ref = left_owner.ref("primitives", index)
+    right_ref = right_owner.ref("primitives", index)
     assert left_ref != right_ref
     left = RuntimeFunction(left_ref, 0, cast("runtime.RuntimeClass", i64))
     right = RuntimeFunction(right_ref, 0, cast("runtime.RuntimeClass", i64))
@@ -7756,29 +7842,33 @@ def test_decoded_builtin_callable_identity_uses_definition_and_selected_view():
     assert hash(left) == hash(right) == hash(original)
     assert {left: "same callable"}[right] == "same callable"
 
-    for change in ("name", "signature", "view"):
-        program = pb.Program.from_binary(encoded)
-        record = program.declarations[packed.indices[0]]
-        assert record.kind is not None
-        assert record.kind.field == "host_primitive"
-        assert record.bindings is not None
-        assert record.bindings.python is not None
+    for change in ("name", "signature", "selected_view", "unselected_view"):
+        program = pb.BuiltinCatalog.from_binary(encoded)
+        record = program.primitives[index]
+        changed_views = views
         if change == "name":
-            record.kind.value.name = "test.distinct.provider.add"
+            record.name = "test.distinct.provider.add"
         elif change == "signature":
-            assert record.kind.value.typing is not None
-            assert record.kind.value.typing.field == "signature"
-            record.kind.value.typing.value.inputs.append(pb.Arg(sort=record.kind.value.typing.value.output))
-            record.bindings.python.views[0].params.append(pb.PythonParameter(core_input=2, name="extra"))
+            assert record.typing is not None
+            assert record.typing.field == "signature"
+            record.typing.value.inputs.append(pb.Arg(sort=record.typing.value.output))
+            changed_views = (
+                dataclasses.replace(views[0], params=(*views[0].params, Parameter(core_input=2, name="extra"))),
+                *views[1:],
+            )
+        elif change == "selected_view":
+            changed_views = (dataclasses.replace(views[0], path=("other_add",)), *views[1:])
         else:
-            view = pb.PythonCallable.from_binary(record.bindings.python.views[0].to_binary())
-            view.path = ["other_add"]
-            record.bindings.python.views.append(view)
-        ref = Builder.from_program(program).publish().ref("declarations", packed.indices[0])
+            changed_views = (*views, dataclasses.replace(views[0], path=("other_add",)))
+        builder = Builder.from_builtins(program)
+        builder.presentations["callable", record.name] = Presentation(views=changed_views)
+        ref = builder.publish().ref("primitives", index)
         candidate = RuntimeFunction(ref, 0, cast("runtime.RuntimeClass", i64))
-        assert candidate != original
-        if change == "view":
-            assert candidate != RuntimeFunction(ref, 1, cast("runtime.RuntimeClass", i64))
+        if change == "unselected_view":
+            assert candidate == original
+            assert candidate != RuntimeFunction(ref, len(changed_views) - 1, cast("runtime.RuntimeClass", i64))
+        else:
+            assert candidate != original
 
 
 def test_function_value_decoding_never_converts_canonical_captures(monkeypatch, class_authoring_without_engine):
@@ -7894,42 +7984,49 @@ def test_generic_empty_call_requires_result_owner_and_keeps_signature_unchanged(
     builder = Builder()
     variable = builder.add("sorts", pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)))
     pattern = builder.add(
-        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[variable])))
+        "sorts",
+        pb.Sort(
+            kind=Oneof[Literal["application"], pb.SortApplication](
+                "application", pb.SortApplication(name="Vec", args=[variable])
+            )
+        ),
     )
     scalar = builder.add(
-        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+        "sorts",
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
     )
     concrete = builder.add(
-        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[scalar])))
+        "sorts",
+        pb.Sort(
+            kind=Oneof[Literal["application"], pb.SortApplication](
+                "application", pb.SortApplication(name="Vec", args=[scalar])
+            )
+        ),
     )
     declaration = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["host_primitive"], pb.HostPrimitive](
-                "host_primitive",
-                pb.HostPrimitive(
-                    name="sample.vec.of",
-                    typing=Oneof[Literal["signature"], pb.GenericSignature](
-                        "signature",
-                        pb.GenericSignature(type_params=["T"], output=pattern, varargs=[pb.Arg(sort=variable)]),
-                    ),
-                ),
-            ),
-            bindings=pb.CallableBindings(
-                python=pb.PythonBindings(
-                    views=[
-                        pb.PythonCallable(
-                            kind=pb.PythonCallKind.INITIALIZER,
-                            owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", pattern)),
-                            params=[pb.PythonParameter(core_input=0, name="args")],
-                        )
-                    ]
-                )
+        "primitives",
+        pb.Primitive(
+            name="sample.vec.of",
+            typing=Oneof[Literal["signature"], pb.GenericSignature](
+                "signature",
+                pb.GenericSignature(type_params=["T"], output=pattern, varargs=[pb.Arg(sort=variable)]),
             ),
         ),
     )
-    owner = builder.publish()
-    ref = owner.ref("declarations", declaration)
+    owner = builder.publish(
+        presentation_factory=lambda owned: {
+            ("callable", "sample.vec.of"): Presentation(
+                views=(
+                    CallPresentation(
+                        kind=CallKind.INITIALIZER,
+                        owner=owned.ref("sorts", pattern),
+                        params=(Parameter(core_input=0, name="args"),),
+                    ),
+                )
+            )
+        }
+    )
+    ref = owner.ref("primitives", declaration)
     before = ref.read().to_binary()
 
     def forbidden(*args):
@@ -7952,26 +8049,21 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
     key = builder.add("sorts", pb.Sort(kind=Oneof[Literal["var"], int]("var", 0)))
     value = builder.add("sorts", pb.Sort(kind=Oneof[Literal["var"], int]("var", 1)))
     declaration = builder.add(
-        "declarations",
-        pb.Declaration(
-            kind=Oneof[Literal["host_primitive"], pb.HostPrimitive](
-                "host_primitive",
-                pb.HostPrimitive(
-                    name="test.grouped.tail",
-                    typing=Oneof[Literal["signature"], pb.GenericSignature](
-                        "signature",
-                        pb.GenericSignature(
-                            type_params=["K", "V"],
-                            inputs=[pb.Arg(sort=key, name="seed")],
-                            varargs=[pb.Arg(sort=key), pb.Arg(sort=value)],
-                            output=value,
-                        ),
-                    ),
+        "primitives",
+        pb.Primitive(
+            name="test.grouped.tail",
+            typing=Oneof[Literal["signature"], pb.GenericSignature](
+                "signature",
+                pb.GenericSignature(
+                    type_params=["K", "V"],
+                    inputs=[pb.Arg(sort=key, name="seed")],
+                    varargs=[pb.Arg(sort=key), pb.Arg(sort=value)],
+                    output=value,
                 ),
-            )
+            ),
         ),
     )
-    reference = builder.publish().ref("declarations", declaration)
+    reference = builder.publish().ref("primitives", declaration)
     before = reference.read().to_binary()
 
     def forbidden(sort, value):
@@ -8002,26 +8094,17 @@ def test_grouped_tail_checks_every_element_and_complete_substitution():
     with pytest.raises(TypeConstraintError, match="Unresolved"):
         call(i64(0))
     assert reference.read().to_binary() == before
-    source = pack([root]).program
-    primitive = next(
-        _required_oneof(d.kind, "host_primitive", pb.HostPrimitive)
-        for d in source.declarations
-        if (d.kind.field == "host_primitive" if d.kind is not None else pytest.fail("Missing declaration kind"))
-    )
-    assert isinstance(primitive, pb.HostPrimitive)
-    signature = _required_oneof(primitive.typing, "signature", pb.GenericSignature)
+    assert not pack([root]).program.declarations
+    descriptor = reference.read()
+    assert isinstance(descriptor, pb.Primitive)
+    signature = _required_oneof(descriptor.typing, "signature", pb.GenericSignature)
     assert len(signature.varargs) == 2
     signature.type_params.append("Unused")
-    adopted = Builder.from_program(source).publish()
-    incomplete = next(
-        adopted.ref("declarations", index)
-        for index, declaration in enumerate(source.declarations)
-        if (
-            declaration.kind.field == "host_primitive"
-            if declaration.kind is not None
-            else pytest.fail("Missing declaration kind")
-        )
+    catalog = pb.BuiltinCatalog(
+        sorts=[reference.owner.ref("sorts", index).read() for index in range(len(reference.owner._slots["sorts"]))],
+        primitives=[descriptor],
     )
+    incomplete = Builder.from_builtins(catalog).publish().ref("primitives", 0)
     with pytest.raises(TypeConstraintError, match="Not every generic parameter"):
         _author_call(
             incomplete,
@@ -8122,7 +8205,9 @@ def test_multiset_formed_values_keep_refs_and_inert_pretty(empty, monkeypatch):
     assert get_literal_value(expression) is None
     assert hash(copy(expression)) == hash(expression)
     packed = pack([expression.__egg_ref__])
-    adopted = Builder.from_program(pb.Program.from_binary(packed.program.to_binary())).publish()
+    adopted = Builder.from_program(
+        pb.Program.from_binary(packed.program.to_binary()), environment=expression.__egg_ref__.owner._environment
+    ).publish()
     relocated = RuntimeExpr(adopted.ref("nodes", packed.indices[0]))
     assert relocated.value == expression.value
     assert str(relocated) == str(expression)

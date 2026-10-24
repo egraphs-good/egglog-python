@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 import black
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
+from ._presentation import CallKind, presentation
 from ._program import Ref, StructuralView, _structural_parts
 
 if TYPE_CHECKING:
@@ -123,6 +124,7 @@ def pretty_ref(  # noqa: C901, PLR0912
     *,
     custom_literal: Callable[[Ref, bool], str] | None = None,
     variables: Mapping[str, str] | None = None,
+    sort_names: Mapping[tuple[str, str], str] | None = None,
 ) -> str:
     """Print records inertly unless the caller supplies a trusted Custom formatter."""
     from .runtime import _definition_at  # noqa: PLC0415
@@ -160,7 +162,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                     if sort_record.kind is not None:
                         if sort_record.kind.field == "eq":
                             type_name = sort_record.kind.value.rsplit(".", 1)[-1]
-                        elif sort_record.kind.field == "family":
+                        elif sort_record.kind.field == "application":
                             type_name = sort_record.kind.value.name
                     name = _name_expr(
                         type_name if type_name.isidentifier() else "expr",
@@ -268,16 +270,11 @@ def pretty_ref(  # noqa: C901, PLR0912
                     if scheduler_options.has_field(name)
                 ]
                 pieces = [f"bind_scheduler({binding.name!r}, back_off({', '.join(settings)}))"]
-            elif record.kind.field in {"repeat", "saturate"}:
+            elif record.kind.field == "loop":
                 control = record.kind.value
                 if control.until:
-                    if isinstance(control, pb.Repeat):
-                        pieces = [f"repeat(times={control.times}, body=seq("]
-                    else:
-                        limit = (
-                            f"max_iterations={control.max_iterations}, " if control.has_field("max_iterations") else ""
-                        )
-                        pieces = [f"saturate({limit}body=seq("]
+                    limit = f"max_iterations={control.max_iterations}, " if control.has_field("max_iterations") else ""
+                    pieces = [f"loop({limit}body=seq("]
                     for index, child in enumerate(control.body):
                         if index:
                             pieces.append(", ")
@@ -288,7 +285,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                             pieces.append(", ")
                         pieces.append((owner.ref("nodes", fact), False, False))
                     pieces.append("])")
-                elif isinstance(control, pb.Repeat) and control.times == 1:
+                elif control.max_iterations == 1:
                     pieces = ["seq("]
                     for index, child in enumerate(control.body):
                         if index:
@@ -307,11 +304,10 @@ def pretty_ref(  # noqa: C901, PLR0912
                             pieces.append((reference, child))
                         pieces.append(")")
                     pieces.append(")")
-                    if isinstance(control, pb.Saturate) and not control.has_field("max_iterations"):
+                    if not control.has_field("max_iterations"):
                         pieces.append(".saturate()")
                     else:
-                        count = control.times if isinstance(control, pb.Repeat) else control.max_iterations
-                        pieces.append(f" * {count}")
+                        pieces.append(f" * {control.max_iterations}")
             elif record.kind.field == "stats":
                 pieces = ["stats()"]
             elif record.kind.field == "explain":
@@ -332,17 +328,25 @@ def pretty_ref(  # noqa: C901, PLR0912
                 pieces.append("]")
                 frames.extend(reversed(pieces))
                 continue
-            if record.kind.field not in {"eq", "family"}:
+            if record.kind.field not in {"eq", "application"}:
                 raise NotImplementedError(f"Sort presentation is not migrated: {record.kind.field}")
             name = record.kind.value if record.kind.field == "eq" else record.kind.value.name
-            namespace = "eq_sort" if record.kind.field == "eq" else "host_sort_family"
-            sort_declaration: pb.Declaration = _definition_at(reference, namespace, name).read()
-            assert sort_declaration.kind is not None
-            assert isinstance(sort_declaration.kind.value, pb.EqSort | pb.HostSortFamily)
-            bindings = sort_declaration.kind.value.bindings
-            path = bindings.python.path if bindings is not None and bindings.python is not None else [name]
-            pieces = [path[-1]]
-            if record.kind.field == "family" and record.kind.value.args:
+            namespace = "eq_sort" if record.kind.field == "eq" else "primitive_sort"
+            if sort_names is not None:
+                pieces = [sort_names.get((namespace, name), name)]
+            else:
+                sort_reference = _definition_at(reference, namespace, name)
+                sort_declaration: pb.Declaration | pb.PrimitiveSort = sort_reference.read()
+                if isinstance(sort_declaration, pb.Declaration):
+                    assert sort_declaration.kind is not None
+                    sort_kind = sort_declaration.kind.value
+                else:
+                    sort_kind = sort_declaration
+                assert isinstance(sort_kind, pb.EqSort | pb.PrimitiveSort)
+                bindings = presentation(sort_reference).type_view
+                path = bindings.path if bindings is not None else (name,)
+                pieces = [path[-1]]
+            if record.kind.field == "application" and record.kind.value.args:
                 pieces.append("[")
                 for index, argument in enumerate(record.kind.value.args):
                     if index:
@@ -382,24 +386,12 @@ def pretty_ref(  # noqa: C901, PLR0912
                             arguments = [str(exact.numerator), str(exact.denominator)]
                         else:
                             string_constructor = _definition_at(reference, "callable", "egglog.core.bigint.from_string")
-                            integer_metadata: pb.Declaration = string_constructor.read()
-                            integer_views = (
-                                integer_metadata.bindings.python.views
-                                if integer_metadata.bindings and integer_metadata.bindings.python
-                                else []
-                            )
-                            class_view = next(
-                                (v for v in integer_views if v.kind == pb.PythonCallKind.CLASS_METHOD), None
-                            )
-                            if (
-                                class_view is None
-                                or class_view.owner is None
-                                or class_view.owner.kind is None
-                                or class_view.owner.kind.field != "sort"
-                            ):
+                            integer_views = presentation(string_constructor).views
+                            class_view = next((v for v in integer_views if v.kind == CallKind.CLASS_METHOD), None)
+                            if class_view is None or class_view.owner is None:
                                 msg = "BigInt value presentation requires a supplied from-string classmethod"
                                 raise ValueError(msg)
-                            integer_sort = string_constructor.owner.ref("sorts", class_view.owner.kind.value)
+                            integer_sort = class_view.owner
                             constructor = f"{pretty_ref(integer_sort)}.{class_view.path[-1]}"
                             if primitive.field == "big_int":
                                 frames.append(f"{constructor}({primitive.value!r})")
@@ -418,16 +410,9 @@ def pretty_ref(  # noqa: C901, PLR0912
                             if primitive.field == "rational"
                             else "egglog.core.bigrat.make",
                         )
-                        ratio_metadata: pb.Declaration = ratio_constructor.read()
-                        ratio_views = (
-                            ratio_metadata.bindings.python.views
-                            if ratio_metadata.bindings and ratio_metadata.bindings.python
-                            else []
-                        )
-                        init_view = next((v for v in ratio_views if v.kind == pb.PythonCallKind.INITIALIZER), None)
-                        if init_view is None or sorted(
-                            p.core_input for p in init_view.params if p.has_field("core_input")
-                        ) != [0, 1]:
+                        ratio_views = presentation(ratio_constructor).views
+                        init_view = next((v for v in ratio_views if v.kind == CallKind.INITIALIZER), None)
+                        if init_view is None or sorted(p.core_input for p in init_view.params) != [0, 1]:
                             msg = "Ratio value presentation requires a supplied two-input initializer"
                             raise ValueError(msg)
                         pieces = [
@@ -446,7 +431,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                         constructor = _container_member(
                             _class_for_sort(sort),
                             "egglog.experimental.maybe.none" if child is None else "egglog.experimental.maybe.some",
-                            pb.PythonCallKind.CLASS_METHOD,
+                            CallKind.CLASS_METHOD,
                         )
                         pieces = [str(constructor), "("]
                         if child is not None:
@@ -479,16 +464,18 @@ def pretty_ref(  # noqa: C901, PLR0912
                         function = value.func if isinstance(value, partial) else value
                         if isinstance(function, RuntimeFunction):
                             declaration = function.__egg_ref__
-                            declared: pb.Declaration = declaration.read()
-                            computed = declared.kind.value if declared.kind is not None else None
+                            declared: pb.Declaration | pb.Primitive = declaration.read()
+                            if isinstance(declared, pb.Declaration):
+                                assert declared.kind is not None
+                                computed = declared.kind.value
+                            else:
+                                computed = declared
                             if (
-                                isinstance(computed, pb.Primitive)
+                                isinstance(computed, pb.UserDefinedPrimitive)
                                 and computed.name.startswith("__egglog_python_lambda_")
-                                and declared.bindings is not None
-                                and declared.bindings.python is not None
-                                and len(declared.bindings.python.views) == 1
+                                and len(presentation(declaration).views) == 1
                             ):
-                                view = declared.bindings.python.views[0]
+                                view = presentation(declaration).views[0]
                                 names = [parameter.name for parameter in view.params]
                                 captures = value.args if isinstance(value, partial) else ()
                                 bindings = {
@@ -533,7 +520,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                             frames.append(
                                 str(
                                     _container_member(
-                                        _class_for_sort(sort), "egglog.core.vec.empty", pb.PythonCallKind.CLASS_METHOD
+                                        _class_for_sort(sort), "egglog.core.vec.empty", CallKind.CLASS_METHOD
                                     )
                                 )
                                 + "()"
@@ -553,15 +540,12 @@ def pretty_ref(  # noqa: C901, PLR0912
 
                         entries = _map_entries(RuntimeExpr(reference))
                         target = _class_for_sort(sort)
-                        empty = _container_member(target, "egglog.core.map.empty", pb.PythonCallKind.CLASS_METHOD)
+                        empty = _container_member(target, "egglog.core.map.empty", CallKind.CLASS_METHOD)
                         pieces = [str(empty), "()"]
                         if entries:
-                            insert = _container_member(target, "egglog.core.map.insert", pb.PythonCallKind.METHOD)
-                            metadata: pb.Declaration = insert.__egg_ref__.read()
-                            assert metadata.bindings is not None
-                            assert metadata.bindings.python is not None
+                            insert = _container_member(target, "egglog.core.map.insert", CallKind.METHOD)
                             assert insert.__egg_view__ is not None
-                            insert_view = metadata.bindings.python.views[insert.__egg_view__]
+                            insert_view = presentation(insert.__egg_ref__).views[insert.__egg_view__]
                             for key, value_ref in entries:
                                 arguments = {1: key, 2: value_ref}
                                 pieces.extend([".", insert_view.path[-1], "("])
@@ -579,25 +563,22 @@ def pretty_ref(  # noqa: C901, PLR0912
                     call = record.kind.value
                     declaration = _definition_at(reference, "callable", call.func)
                     declared = declaration.read()
-                    views = (
-                        declared.bindings.python.views
-                        if declared.bindings is not None
-                        and declared.bindings.python is not None
-                        and declared.bindings.python.views
-                        else []
-                    )
+                    views = presentation(declaration).views
                     args = [owner.ref("nodes", index) for index in call.args]
                     if any(
-                        candidate.has_field("tail_repetitions")
-                        and candidate.kind not in {pb.PythonCallKind.FUNCTION, pb.PythonCallKind.METHOD}
+                        (candidate.tail_repetitions is not None)
+                        and candidate.kind not in {CallKind.FUNCTION, CallKind.METHOD}
                         for candidate in views
                     ):
                         msg = "Tail specialization supports only function and method views"
                         raise ValueError(msg)
-                    assert declared.kind is not None
-                    kind = declared.kind.value
+                    if isinstance(declared, pb.Declaration):
+                        assert declared.kind is not None
+                        kind = declared.kind.value
+                    else:
+                        kind = declared
                     if (
-                        isinstance(kind, pb.HostPrimitive)
+                        isinstance(kind, pb.Primitive)
                         and kind.typing is not None
                         and kind.typing.field == "application"
                     ):
@@ -634,7 +615,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                         continue
                     signature = (
                         kind.typing.value
-                        if isinstance(kind, pb.HostPrimitive)
+                        if isinstance(kind, pb.Primitive)
                         and kind.typing is not None
                         and kind.typing.field == "signature"
                         else None
@@ -657,11 +638,11 @@ def pretty_ref(  # noqa: C901, PLR0912
                             candidate
                             for candidate in views
                             if (
-                                not candidate.has_field("tail_repetitions")
-                                and (not candidate.has_field("receiver") or candidate.receiver < len(args))
+                                not (candidate.tail_repetitions is not None)
+                                and (not (candidate.receiver is not None) or candidate.receiver < len(args))
                             )
                             or (
-                                candidate.has_field("tail_repetitions")
+                                (candidate.tail_repetitions is not None)
                                 and tail_width
                                 and len(args) == fixed + tail_width * candidate.tail_repetitions
                             )
@@ -673,53 +654,51 @@ def pretty_ref(  # noqa: C901, PLR0912
                         selected = [(argument, False, False) for argument in args]
                     else:
                         selected = []
-                        tail_slot = fixed + (view.has_field("receiver") and view.receiver == fixed)
+                        tail_slot = fixed + ((view.receiver is not None) and view.receiver == fixed)
                         defaults: list[Ref | None] = []
                         for parameter in view.params:
                             for argument in (
                                 args[parameter.core_input :]
                                 if tail_width
-                                and not view.has_field("tail_repetitions")
+                                and not (view.tail_repetitions is not None)
                                 and parameter.core_input == tail_slot
                                 else [args[parameter.core_input]]
                             ):
                                 selected.append((argument, True, False))
-                                defaults.append(
-                                    declaration.owner.ref("nodes", parameter.default_expr)
-                                    if parameter.has_field("default_expr")
-                                    else None
-                                )
+                                defaults.append(parameter.default if (parameter.default is not None) else None)
                         while (
                             selected
                             and defaults[-1] is not None
                             and not (
-                                view.has_field("mutates") and view.params[len(selected) - 1].core_input == view.mutates
+                                (view.mutates is not None) and view.params[len(selected) - 1].core_input == view.mutates
                             )
                             and StructuralView(selected[-1][0]) == StructuralView(defaults[-1])
                         ):
                             selected.pop()
                             defaults.pop()
                         name = view.path[-1] if view.path else "__init__"
-                        receiver_piece = (args[view.receiver], False, True) if view.has_field("receiver") else None
+                        receiver_piece = (args[view.receiver], False, True) if (view.receiver is not None) else None
                         if (
-                            view.kind == pb.PythonCallKind.METHOD
+                            view.kind == CallKind.METHOD
                             and name in UNARY_METHODS
                             and not selected
-                            and not view.has_field("mutates")
+                            and not (view.mutates is not None)
                         ):
-                            pieces = [UNARY_METHODS[name], (args[view.receiver], False, True)]
+                            assert receiver_piece is not None
+                            pieces = [UNARY_METHODS[name], receiver_piece]
                             if parentheses:
                                 pieces = ["(", *pieces, ")"]
                             frames.extend(reversed(pieces))
                             continue
                         if (
-                            view.kind == pb.PythonCallKind.METHOD
+                            view.kind == CallKind.METHOD
                             and name in BINARY_METHODS
                             and len(selected) == 1
-                            and not view.has_field("mutates")
+                            and not (view.mutates is not None)
                         ):
+                            assert receiver_piece is not None
                             pieces = [
-                                (args[view.receiver], False, True),
+                                receiver_piece,
                                 f" {BINARY_METHODS[name]} ",
                                 (selected[0][0], True, True),
                             ]
@@ -728,19 +707,20 @@ def pretty_ref(  # noqa: C901, PLR0912
                             frames.extend(reversed(pieces))
                             continue
                         if (
-                            view.kind == pb.PythonCallKind.METHOD
+                            view.kind == CallKind.METHOD
                             and name == "__getitem__"
                             and len(selected) == 1
-                            and not view.has_field("mutates")
+                            and not (view.mutates is not None)
                         ):
-                            pieces = [(args[view.receiver], False, True), "[", (selected[0][0], True, False), "]"]
+                            assert receiver_piece is not None
+                            pieces = [receiver_piece, "[", (selected[0][0], True, False), "]"]
                             frames.extend(reversed(pieces))
                             continue
                         close_call = True
                         if (
-                            view.kind == pb.PythonCallKind.METHOD
+                            view.kind == CallKind.METHOD
                             and name in {"__setitem__", "__delitem__"}
-                            and view.has_field("mutates")
+                            and (view.mutates is not None)
                             and view.mutates == view.receiver
                         ):
                             assert receiver_piece is not None
@@ -751,24 +731,20 @@ def pretty_ref(  # noqa: C901, PLR0912
                                 pieces.extend([" = ", selected[1]])
                             selected = []
                             close_call = False
-                        elif view.kind == pb.PythonCallKind.INITIALIZER:
+                        elif view.kind == CallKind.INITIALIZER:
                             pieces = [(sort, False, False), "("]
-                        elif view.kind in {pb.PythonCallKind.METHOD, pb.PythonCallKind.PROPERTY}:
+                        elif view.kind in {CallKind.METHOD, CallKind.PROPERTY}:
                             assert receiver_piece is not None
                             pieces = [receiver_piece, ".", name]
-                            if view.kind == pb.PythonCallKind.PROPERTY:
+                            if view.kind == CallKind.PROPERTY:
                                 frames.extend(reversed(pieces))
                                 continue
                             pieces.append("(")
-                        elif view.kind in {pb.PythonCallKind.CLASS_METHOD, pb.PythonCallKind.CLASS_VARIABLE}:
+                        elif view.kind in {CallKind.CLASS_METHOD, CallKind.CLASS_VARIABLE}:
                             assert view.owner is not None
-                            assert view.owner.kind is not None
-                            if view.owner.kind.field != "sort":
-                                msg = "Function-type class member presentation is not migrated"
-                                raise NotImplementedError(msg)
-                            owner_sort = declaration.owner.ref("sorts", view.owner.kind.value)
+                            owner_sort = view.owner
                             if (
-                                isinstance(kind, pb.HostPrimitive)
+                                isinstance(kind, pb.Primitive)
                                 and kind.typing is not None
                                 and kind.typing.field == "signature"
                             ):
@@ -799,14 +775,14 @@ def pretty_ref(  # noqa: C901, PLR0912
                                     )
                                 owner_sort = substitute_sort(owner_sort, substitutions)
                             pieces = [(owner_sort, False, False), ".", name]
-                            if view.kind == pb.PythonCallKind.CLASS_VARIABLE:
+                            if view.kind == CallKind.CLASS_VARIABLE:
                                 frames.extend(reversed(pieces))
                                 continue
                             pieces.append("(")
-                        elif view.kind == pb.PythonCallKind.FUNCTION:
+                        elif view.kind == CallKind.FUNCTION:
                             pieces = [name, "("]
-                        elif view.kind == pb.PythonCallKind.CONSTANT:
-                            if args or view.params or view.owner is not None or view.has_field("receiver"):
+                        elif view.kind == CallKind.CONSTANT:
+                            if args or view.params or (view.owner is not None) or (view.receiver is not None):
                                 msg = "A constant view must be ownerless and nullary"
                                 raise ValueError(msg)
                             frames.append(name)
@@ -819,8 +795,8 @@ def pretty_ref(  # noqa: C901, PLR0912
                         pieces.append(argument_frame)
                     if view is None or close_call:
                         pieces.append(")")
-                    if view is not None and view.has_field("mutates"):
-                        if view.has_field("receiver") and view.mutates == view.receiver:
+                    if view is not None and (view.mutates is not None):
+                        if (view.receiver is not None) and view.mutates == view.receiver:
                             assert receiver_piece is not None
                             target_piece = receiver_piece
                         else:
@@ -919,25 +895,19 @@ def pretty_ref(  # noqa: C901, PLR0912
                     raise ValueError(msg)
                 target = assignment.target
                 declaration = _definition_at(reference, "callable", target.func)
-                declared = declaration.read()
-                view = (
-                    declared.bindings.python.views[0]
-                    if declared.bindings is not None
-                    and declared.bindings.python is not None
-                    and declared.bindings.python.views
-                    else None
-                )
+                views = presentation(declaration).views
+                view = views[0] if views else None
                 name = view.path[-1] if view is not None else target.func
                 pieces = ["set_(", name]
-                if view is None or view.kind == pb.PythonCallKind.FUNCTION:
+                if view is None or view.kind == CallKind.FUNCTION:
                     pieces.append("(")
                     indices = target.args if view is None else [target.args[p.core_input] for p in view.params]
                     if view is not None:
                         while indices:
                             parameter = view.params[len(indices) - 1]
-                            if not parameter.has_field("default_expr") or StructuralView(
+                            if not (parameter.default is not None) or StructuralView(
                                 owner.ref("nodes", indices[-1])
-                            ) != StructuralView(declaration.owner.ref("nodes", parameter.default_expr)):
+                            ) != StructuralView(parameter.default):
                                 break
                             indices.pop()
                     for index, argument in enumerate(indices):
@@ -945,7 +915,7 @@ def pretty_ref(  # noqa: C901, PLR0912
                             pieces.append(", ")
                         pieces.append((owner.ref("nodes", argument), view is not None, False))
                     pieces.append(")")
-                elif view.kind != pb.PythonCallKind.CONSTANT:
+                elif view.kind != CallKind.CONSTANT:
                     msg = "Set presentation for symbolic members is not migrated"
                     raise NotImplementedError(msg)
                 elif target.args:
@@ -961,8 +931,10 @@ def pretty_ref(  # noqa: C901, PLR0912
                 target = _copy_record(action.kind.value)
                 declaration = _definition_at(reference, "callable", target.func)
                 declared = declaration.read()
-                if declared.kind is None or not isinstance(
-                    declared.kind.value, pb.Constructor | pb.Function | pb.Relation
+                if (
+                    not isinstance(declared, pb.Declaration)
+                    or declared.kind is None
+                    or not isinstance(declared.kind.value, pb.Constructor | pb.Function | pb.Relation)
                 ):
                     msg = "Delete and Subsume require a table call"
                     raise ValueError(msg)
@@ -970,9 +942,14 @@ def pretty_ref(  # noqa: C901, PLR0912
                 builder.import_ref(declaration)
                 table = declared.kind.value
                 if isinstance(table, pb.Relation):
-                    builder.import_ref(builtin_catalog().definitions["host_sort_family", "Unit"])
+                    builder.import_ref(builtin_catalog().definitions["primitive_sort", "Unit"])
                     result_sort = builder.add(
-                        "sorts", pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Unit")))
+                        "sorts",
+                        pb.Sort(
+                            kind=Oneof[Literal["application"], pb.SortApplication](
+                                "application", pb.SortApplication(name="Unit")
+                            )
+                        ),
                     )
                 else:
                     result_sort = builder.import_ref(declaration.owner.ref("sorts", table.output))

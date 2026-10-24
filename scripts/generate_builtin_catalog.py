@@ -13,26 +13,76 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib
 import json
 import keyword
 import runpy
+import sys
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING, cast
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
 
 if TYPE_CHECKING:
     from egglog._builtin_protocols import ScalarProtocol
+    from egglog._presentation import CallKind as CallKindType
+    from egglog._presentation import CallPresentation, Presentation, TypePresentation
+    from egglog._program import Builder as SemanticBuilder
+    from egglog._program import Owner, Ref
 
 
 _PACKAGE = Path(__file__).resolve().parents[1] / "python/egglog"
 _POLICY = runpy.run_path(str(_PACKAGE / "_builtin_protocols.py"))
+_CODEGEN_PACKAGE = "_egglog_presentation_codegen"
+if _CODEGEN_PACKAGE not in sys.modules:
+    _namespace = ModuleType(_CODEGEN_PACKAGE)
+    _namespace.__path__ = [str(_PACKAGE)]
+    sys.modules[_CODEGEN_PACKAGE] = _namespace
+_RECORDS = vars(importlib.import_module(f"{_CODEGEN_PACKAGE}._presentation"))
+_GRAPH = vars(importlib.import_module(f"{_CODEGEN_PACKAGE}._program"))
+_DATA = runpy.run_path(str(_PACKAGE / "_builtin_presentation.py"))["DATA"]
+CallKind = cast("type[CallKindType]", _RECORDS["CallKind"])
+Builder = cast("type[SemanticBuilder]", _GRAPH["Builder"])
+_mapping_views = cast(
+    "Callable[[pb.BuiltinCatalog, Owner, Mapping[str, object]], dict[tuple[str, str], Presentation]]",
+    _RECORDS["mapping_views"],
+)
+_validate_view = cast("Callable[[Ref, CallPresentation], None]", _RECORDS["validate_view"])
 _SCALARS = cast("dict[str, ScalarProtocol]", _POLICY["SCALAR_PROTOCOLS"])
 _REFLECTED = cast("set[str]", _POLICY["NUMERIC_BINARY_METHODS"])
 
 
-def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
+def render_stubs(program: pb.BuiltinCatalog, *, mapping: Mapping[str, object] | None = None) -> str:  # noqa: C901, PLR0912
     """Derive catalog views and private helper types without executing frontend code."""
+    # Reject dangling sort addresses before owned references are traversed.
+    for sort in program.sorts:
+        kind = sort.kind
+        if kind is None:
+            msg = "Invalid or cyclic signature sort"
+            raise ValueError(msg)
+        children = (
+            kind.value.args
+            if kind.field == "application"
+            else [*kind.value.params, kind.value.result]
+            if kind.field == "func"
+            else ()
+        )
+        if any(type(index) is not int or not 0 <= index < len(program.sorts) for index in children):
+            msg = "Invalid or cyclic signature sort"
+            raise ValueError(msg)
+    semantic_owner = Builder.from_builtins(program).publish()
+    mapping = _DATA if mapping is None else mapping
+    templates = Builder.from_program(
+        pb.Program.from_json(json.dumps(mapping["fragment"])), environment=(semantic_owner,)
+    ).publish()
+    surface = _mapping_views(program, templates, mapping)
+    for key, supplied in surface.items():
+        reference = semantic_owner.ref(*semantic_owner._builtin_indices[key])
+        for view in supplied.views:
+            _validate_view(reference, view)
+    family_views: dict[str, TypePresentation | None] = {}
     private_names = {"_container_member", "_maybe_value", "_pair_value", "_container_items", "_map_entries"}
     private_helpers = {
         node.name: node
@@ -54,13 +104,14 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             raise ValueError(f"Private builtin helper {node.name} requires a fully annotated fixed signature")
         node.body = [ast.Expr(value=ast.Constant(value=Ellipsis))]
     module = ("egglog", "builtins")
-    families: dict[str, pb.HostSortFamily] = {}
+    families: dict[str, pb.PrimitiveSort] = {}
     names: dict[str, str] = {}
     exported = {"ExprValueError"}
     reserved_names = {
         "AttributeError",
         "BaseExpr",
         "BuiltinExpr",
+        "CallKind",
         "Generic",
         "Iterator",
         "Never",
@@ -87,44 +138,31 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         reserved_names.update(t.__name__ for t in (protocol.value_type, *protocol.literal_types))
         reserved_names.update(result.__name__ for _, result in protocol.hooks)
 
-    pyobject_protocol = any(
-        declaration.kind is not None
-        and declaration.kind.field == "host_sort_family"
-        and declaration.kind.value.name == "PyObject"
-        for declaration in program.declarations
-    )
+    pyobject_protocol = any(declaration.name == "PyObject" for declaration in program.primitive_sorts)
     if pyobject_protocol:
         reserved_names.update({"Callable", "Protocol", "PyObjectFunction", "py_eval_fn"})
         exported.add("py_eval_fn")
 
     function_protocol = False
-    for declaration in program.declarations:
-        kind = declaration.kind
-        if (
-            kind is None
-            or kind.field != "host_primitive"
-            or kind.value.typing is None
-            or kind.value.typing.field != "application"
-            or declaration.bindings is None
-            or declaration.bindings.python is None
-        ):
+    for declaration in program.primitives:
+        key = "callable", declaration.name
+        kind = declaration
+        if kind.typing is None or kind.typing.field != "application" or key not in surface:
             continue
-        for view in declaration.bindings.python.views:
+        for view in surface[key].views:
             if (
-                view.kind != pb.PythonCallKind.METHOD
-                or view.path != ["__call__"]
-                or view.owner is None
-                or view.owner.kind is None
-                or view.owner.kind.field != "function"
-                or not view.has_field("receiver")
+                view.kind != CallKind.METHOD
+                or view.path != ("__call__",)
+                or (view.owner is not None)
+                or not (view.receiver is not None)
                 or view.receiver != 0
                 or len(view.params) != 1
-                or not view.params[0].has_field("core_input")
+                or type(view.params[0].core_input) is not int
                 or view.params[0].core_input != 1
                 or view.params[0].name != "args"
-                or view.params[0].has_field("default_expr")
-                or view.has_field("mutates")
-                or view.has_field("tail_repetitions")
+                or (view.params[0].default is not None)
+                or (view.mutates is not None)
+                or (view.tail_repetitions is not None)
             ):
                 msg = "Unsupported structural function Python static view"
                 raise ValueError(msg)
@@ -151,12 +189,12 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             raise ValueError(f"Invalid Python identifier: {name!r}")
         return name
 
-    for declaration in program.declarations:
-        kind = declaration.kind
-        if kind is None or kind.field != "host_sort_family":
-            continue
-        family = kind.value
-        binding = family.bindings.python if family.bindings is not None else None
+    type_order = mapping.get("typeOrder", _DATA["typeOrder"])
+    assert isinstance(type_order, list)
+    order = {name: index for index, name in enumerate(type_order)}
+    for family in sorted(program.primitive_sorts, key=lambda family: (order.get(family.name, len(order)), family.name)):
+        binding = surface.get(("primitive_sort", family.name))
+        binding = binding.type_view if binding is not None else None
         path = tuple(binding.path) if binding is not None else (*module, family.name)
         if path[:-1] != module:
             raise ValueError(f"Cannot emit a foreign Python type path in builtins.pyi: {path}")
@@ -168,6 +206,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         if binding is not None and binding.type_params and len(binding.type_params) != family.arity:
             msg = "Family type parameter arity mismatch"
             raise ValueError(msg)
+        family_views[family.name] = binding
         families[family.name] = family
         names[family.name] = name
         exported.add(name)
@@ -184,7 +223,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
     variables: dict[str, list[str]] = {}
     used_names = exported | reserved_names
     for family_name, family in families.items():
-        binding = family.bindings.python if family.bindings is not None else None
+        binding = family_views[family_name]
         labels = (
             list(binding.type_params)
             if binding is not None and binding.type_params
@@ -197,18 +236,19 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             used_names.add(variable)
 
     def sort_type(
-        index: int,
+        index: int | Ref,
         *,
         input_type: bool = False,
         parameters: tuple[str, ...] = (),
         used_parameters: set[int] | None = None,
-        active: frozenset[int] = frozenset(),
+        active: frozenset[Ref] = frozenset(),
     ) -> str:
         used_parameters = set() if used_parameters is None else used_parameters
-        if index < 0 or index >= len(program.sorts) or index in active:
+        reference = semantic_owner.ref("sorts", index) if isinstance(index, int) else index
+        if reference in active:
             msg = "Invalid or cyclic signature sort"
             raise ValueError(msg)
-        kind = program.sorts[index].kind
+        kind = reference.read().kind
         if kind is not None and kind.field == "var":
             if kind.value < 0 or kind.value >= len(parameters):
                 msg = "Unbound static signature parameter"
@@ -221,16 +261,24 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 msg = "Function sort requires an admitted structural function view"
                 raise ValueError(msg)
             result = sort_type(
-                function.result, parameters=parameters, used_parameters=used_parameters, active=active | {index}
+                reference.owner.ref("sorts", function.result),
+                parameters=parameters,
+                used_parameters=used_parameters,
+                active=active | {reference},
             )
             args = [
-                sort_type(i, parameters=parameters, used_parameters=used_parameters, active=active | {index})
+                sort_type(
+                    reference.owner.ref("sorts", i),
+                    parameters=parameters,
+                    used_parameters=used_parameters,
+                    active=active | {reference},
+                )
                 for i in function.params
             ]
             if input_type:
                 return f"Callable[[{', '.join(args)}], {result}]"
             return f"UnstableFn[{', '.join([result, *args])}]"
-        if kind is None or kind.field != "family" or kind.value.name not in families:
+        if kind is None or kind.field != "application" or kind.value.name not in families:
             msg = "Static callable generation requires catalog family or function sorts"
             raise ValueError(msg)
         family = kind.value
@@ -243,7 +291,12 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 name
                 + "["
                 + ", ".join(
-                    sort_type(i, parameters=parameters, used_parameters=used_parameters, active=active | {index})
+                    sort_type(
+                        reference.owner.ref("sorts", i),
+                        parameters=parameters,
+                        used_parameters=used_parameters,
+                        active=active | {reference},
+                    )
                     for i in family.args
                 )
                 + "]"
@@ -258,15 +311,12 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
     methods: dict[str, dict[str, str]] = {name: {} for name in families}
     method_variables: dict[str, list[str]] = {name: [] for name in families}
     functions: dict[str, str] = {}
-    for declaration in program.declarations:
-        if declaration.bindings is None or declaration.bindings.python is None:
+    for primitive in program.primitives:
+        key = "callable", primitive.name
+        if key not in surface or not surface[key].views:
             # These native definitions have no admitted Python callable surface
             # yet. Conservative free-wrapper generation is a separate runtime gap.
             continue
-        if declaration.kind is None or declaration.kind.field != "host_primitive":
-            msg = "Unsupported builtin static declaration"
-            raise ValueError(msg)
-        primitive = declaration.kind.value
         if primitive.typing is not None and primitive.typing.field == "application":
             # Its exact heterogeneous signature comes from the receiver's FuncSort.
             # The structural-owner view was validated before rendering any sorts.
@@ -284,22 +334,21 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         if len(signature.varargs) > 1 or not signature.has_field("output"):
             msg = "Static callable generation requires a fixed concrete signature"
             raise ValueError(msg)
-        for view in declaration.bindings.python.views:
-            free = view.kind == pb.PythonCallKind.FUNCTION
+        for view in surface[key].views:
+            free = view.kind == CallKind.FUNCTION
             if (
                 view.kind
                 not in {
-                    pb.PythonCallKind.FUNCTION,
-                    pb.PythonCallKind.METHOD,
-                    pb.PythonCallKind.INITIALIZER,
-                    pb.PythonCallKind.PROPERTY,
-                    pb.PythonCallKind.CLASS_METHOD,
+                    CallKind.FUNCTION,
+                    CallKind.METHOD,
+                    CallKind.INITIALIZER,
+                    CallKind.PROPERTY,
+                    CallKind.CLASS_METHOD,
                 }
-                or view.has_field("mutates")
-                or len(view.path)
-                != (len(module) + 1 if free else 0 if view.kind == pb.PythonCallKind.INITIALIZER else 1)
-                or view.has_field("receiver") != (view.kind in {pb.PythonCallKind.METHOD, pb.PythonCallKind.PROPERTY})
-                or (view.kind == pb.PythonCallKind.PROPERTY and view.params)
+                or (view.mutates is not None)
+                or len(view.path) != (len(module) + 1 if free else 0 if view.kind == CallKind.INITIALIZER else 1)
+                or (view.receiver is not None) != (view.kind in {CallKind.METHOD, CallKind.PROPERTY})
+                or (view.kind == CallKind.PROPERTY and view.params)
             ):
                 msg = "Unsupported builtin Python static view"
                 raise ValueError(msg)
@@ -307,12 +356,12 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
             used_parameters: set[int] = set()
             family_name = ""
             owner = ""
-            name = "__init__" if view.kind == pb.PythonCallKind.INITIALIZER else identifier(view.path[-1])
+            name = "__init__" if view.kind == CallKind.INITIALIZER else identifier(view.path[-1])
             if free:
-                if view.owner is not None or tuple(view.path[:-1]) != module:
+                if (view.owner is not None) or tuple(view.path[:-1]) != module:
                     msg = "Static free functions require an ownerless builtin view"
                     raise ValueError(msg)
-                if signature.type_params and (signature.varargs or view.has_field("tail_repetitions")):
+                if signature.type_params and (signature.varargs or (view.tail_repetitions is not None)):
                     msg = "Generic static free functions require fixed signatures"
                     raise ValueError(msg)
                 function_name = identifier(view.path[-1])
@@ -322,14 +371,11 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                         raise ValueError(f"Python static name collision with a generated TypeVar: {variable}")
                     used_names.add(variable)
             else:
-                if view.owner is None or view.owner.kind is None or view.owner.kind.field != "sort":
+                if not (view.owner is not None):
                     msg = "Unsupported builtin Python static view"
                     raise ValueError(msg)
-                if view.owner.kind.value >= len(program.sorts):
-                    msg = "Invalid static owner sort"
-                    raise ValueError(msg)
-                owner_kind = program.sorts[view.owner.kind.value].kind
-                if owner_kind is None or owner_kind.field != "family" or owner_kind.value.name not in families:
+                owner_kind = view.owner.read().kind
+                if owner_kind is None or owner_kind.field != "application" or owner_kind.value.name not in families:
                     msg = "Static owner must be a catalog family"
                     raise ValueError(msg)
                 family_name = owner_kind.value.name
@@ -340,8 +386,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 for position, index in enumerate(owner_kind.value.args):
                     if (
                         index < 0
-                        or index >= len(program.sorts)
-                        or (argument := program.sorts[index].kind) is None
+                        or (argument := view.owner.owner.ref("sorts", index).read().kind) is None
                         or argument.field != "var"
                         or argument.value < 0
                         or argument.value >= len(signature.type_params)
@@ -360,24 +405,25 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                             raise ValueError(f"Python static name collision with a generated TypeVar: {variable}")
                         used_names.add(variable)
                         method_variables[family_name].append(variable)
-                owner = sort_type(view.owner.kind.value, parameters=parameters, used_parameters=used_parameters)
+                owner = sort_type(view.owner, parameters=parameters, used_parameters=used_parameters)
             output = sort_type(signature.output, parameters=parameters, used_parameters=used_parameters)
-            receiver_slots = [view.receiver] if view.has_field("receiver") else []
-            slots = [*receiver_slots, *(p.core_input for p in view.params if p.has_field("core_input"))]
-            specialized = view.has_field("tail_repetitions")
-            consumes_tail = not specialized and view.has_field("receiver") and view.receiver == len(signature.inputs)
-            if consumes_tail and (len(signature.varargs) != 1 or view.kind != pb.PythonCallKind.METHOD):
+            receiver_slots = [view.receiver] if (view.receiver is not None) else []
+            slots = [*receiver_slots, *(p.core_input for p in view.params)]
+            specialized = view.tail_repetitions is not None
+            consumes_tail = not specialized and (view.receiver is not None) and view.receiver == len(signature.inputs)
+            if consumes_tail and (len(signature.varargs) != 1 or view.kind != CallKind.METHOD):
                 msg = "Tail receiver requires a homogeneous variadic method"
                 raise ValueError(msg)
             tail_slot = len(signature.inputs) + consumes_tail
             slot_count = tail_slot + bool(signature.varargs)
             if specialized:
-                if view.kind not in {pb.PythonCallKind.FUNCTION, pb.PythonCallKind.METHOD}:
+                if view.kind not in {CallKind.FUNCTION, CallKind.METHOD}:
                     msg = "Tail specialization supports only function and method views"
                     raise ValueError(msg)
                 if not signature.varargs:
                     msg = "Tail specialization requires a variadic host signature"
                     raise ValueError(msg)
+                assert view.tail_repetitions is not None
                 slot_count = len(signature.inputs) + len(signature.varargs) * view.tail_repetitions
             if (
                 slot_count > 2**32 - 1
@@ -389,20 +435,21 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 raise ValueError(msg)
             effective_inputs = list(signature.inputs)
             if specialized:
+                assert view.tail_repetitions is not None
                 effective_inputs.extend(signature.varargs * view.tail_repetitions)
             elif consumes_tail:
                 effective_inputs.extend(signature.varargs)
-            if view.has_field("receiver") and (
+            if (view.receiver is not None) and (
                 view.receiver >= len(effective_inputs)
                 or sort_type(effective_inputs[view.receiver].sort, parameters=parameters) != owner
             ):
                 msg = "Python receiver must select a fixed input matching owner"
                 raise ValueError(msg)
-            if view.kind == pb.PythonCallKind.INITIALIZER and output != owner:
+            if view.kind == CallKind.INITIALIZER and output != owner:
                 msg = "Python initializer output differs from owner"
                 raise ValueError(msg)
             rendered_parameters = []
-            bound_name = "" if free else "cls" if view.kind == pb.PythonCallKind.CLASS_METHOD else "self"
+            bound_name = "" if free else "cls" if view.kind == CallKind.CLASS_METHOD else "self"
             parameter_names = {bound_name} if bound_name else set()
             has_default = False
             for parameter in view.params:
@@ -412,7 +459,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                     raise ValueError(msg)
                 parameter_names.add(parameter_name)
                 tail = bool(signature.varargs) and not specialized and parameter.core_input == tail_slot
-                if tail and (parameter is not view.params[-1] or parameter.has_field("default_expr")):
+                if tail and (parameter is not view.params[-1] or (parameter.default is not None)):
                     msg = "A uniform tail must be the final parameter without a default"
                     raise ValueError(msg)
                 expected_sort = signature.varargs[0].sort if tail else effective_inputs[parameter.core_input].sort
@@ -425,18 +472,18 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                 if (
                     tail
                     and expected_kind is not None
-                    and expected_kind.field == "family"
+                    and expected_kind.field == "application"
                     and expected_kind.value.name == "Vec"
                 ):
                     element = sort_type(expected_kind.value.args[0], parameters=parameters)
                     annotation = f"{names['Vec']}Like[{element}, {element}]"
                 default = ""
-                if parameter.has_field("default_expr"):
+                if parameter.default is not None:
                     if (
                         signature.type_params
                         or (specialized and parameter.core_input >= len(signature.inputs))
-                        or parameter.default_expr >= len(program.nodes)
-                        or sort_type(program.nodes[parameter.default_expr].sort_id) != sort_type(expected_sort)
+                        or sort_type(parameter.default.owner.ref("sorts", parameter.default.read().sort_id))
+                        != sort_type(expected_sort)
                     ):
                         msg = "Default root has an invalid sort or index"
                         raise ValueError(msg)
@@ -446,10 +493,10 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                     msg = "Required parameter follows a default"
                     raise ValueError(msg)
                 rendered_parameters.append(f"{'*' if tail else ''}{parameter_name}: {annotation}{default}")
-            prefix = "    @property\n" if view.kind == pb.PythonCallKind.PROPERTY else ""
-            if view.kind == pb.PythonCallKind.CLASS_METHOD:
+            prefix = "    @property\n" if view.kind == CallKind.PROPERTY else ""
+            if view.kind == CallKind.CLASS_METHOD:
                 prefix = "    @classmethod\n"
-            result_type = "None" if view.kind == pb.PythonCallKind.INITIALIZER else output
+            result_type = "None" if view.kind == CallKind.INITIALIZER else output
             if used_parameters != set(range(len(parameters))):
                 msg = "Unused static signature parameter" + (" in static owner view" if not free else "")
                 raise ValueError(msg)
@@ -473,7 +520,7 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
                     (signature.varargs and not specialized)
                     or len(rendered_parameters) != 1
                     or view.params[0].name != "other"
-                    or view.params[0].has_field("default_expr")
+                    or (view.params[0].default is not None)
                 ):
                     msg = "Numeric forwarding requires one required 'other' parameter"
                     raise ValueError(msg)
@@ -551,9 +598,9 @@ def render_stubs(program: pb.Program) -> str:  # noqa: C901, PLR0912
         + ", TypeAlias, TypeVar"
         + (", TypeVarTuple, Unpack, overload" if function_protocol else ""),
         "",
-        "from egglog_proto.egglog.v1 import egglog_pb as pb",
         "from typing_extensions import deprecated",
         "",
+        "from ._presentation import CallKind",
         "from ._program import Ref",
         "from .egraph import BaseExpr, BuiltinExpr",
         "from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction",
@@ -751,16 +798,12 @@ def main() -> None:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     encoded = args.export.read_bytes()
-    program = pb.Program.from_binary(encoded)
-    if program.commands or program.rules:
-        parser.error("Expected a declaration-only native catalog")
+    program = pb.BuiltinCatalog.from_binary(encoded)
     names: set[tuple[str, str]] = set()
-    for declaration in program.declarations:
-        kind = declaration.kind
-        if kind is None or kind.field not in {"host_sort_family", "host_primitive"}:
-            parser.error("Native catalog may contain only host family/primitive declarations")
-        namespace = "sort" if kind.field == "host_sort_family" else "callable"
-        key = namespace, kind.value.name
+    declarations: list[pb.PrimitiveSort | pb.Primitive] = [*program.primitive_sorts, *program.primitives]
+    for declaration in declarations:
+        namespace = "sort" if isinstance(declaration, pb.PrimitiveSort) else "callable"
+        key = namespace, declaration.name
         if not key[1] or key in names:
             parser.error(f"Duplicate or empty native definition: {key}")
         names.add(key)

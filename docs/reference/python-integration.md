@@ -808,10 +808,12 @@ text or JSON. Its backend fields are diagnostic data rather than a portable
 report API. `egraph.explain(*groups)` inspects plans for already installed group
 names without executing rules; omitting groups selects the default group.
 
-Schedules author sequencing, bounded repetition, saturation, BackOff bindings
+Schedules author sequencing, capped repetition, saturation, BackOff bindings
 and conjunctive `until` queries as canonical records without an engine.
 Local scheduler scopes retain their explicit placement. Persistent BackOff
 bindings and scheduler progress follow graph push/pop.
+Repetition stops early when its body permits stopping; a count is a cap rather
+than a promise to execute every iteration. Zero runs no body or stopping check.
 Constructing a schedule does not install rules; printing it can materialize deferred
 rule generators, and later appended rules remain visible when it is run.
 
@@ -844,7 +846,8 @@ Python's display printer. Custom objectives, assigned costs and some composite
 controls remain outside that source subset.
 
 Push/pop share one chronological transcript and restore the renderer's type
-scope after acknowledged Clone/Return operations. `close()` is idempotent and
+scope after acknowledged clone and active-branch destruction. Pop resumes the
+retained saved graph and its history. `close()` is idempotent and
 rejects later mutations before execution. A definition-free, arena-free single
 Freeze snapshot is unrecorded read-only introspection, including after close;
 this does not exempt any declaration installation or authored evaluation.
@@ -900,6 +903,11 @@ type(frozen.program).__name__
 
 `frozen.to_binary()` serializes the snapshot without materializing host values.
 It records logical state rather than request history or scheduler progress.
+The shared snapshot contains semantic definitions, types and values. Python
+names and call conventions remain in the frontend context; a detached snapshot
+does not carry enough information to reconstruct an identical Python API.
+Builtin signatures are also separate: the snapshot refers to the configured
+backend's canonical keys and needs that builtin environment for frontend typing.
 
 ### `history`
 
@@ -919,6 +927,8 @@ preparation rejects are omitted. `pop` restores the saved history prefix,
 discarding inputs from the consumed branch. History contains inputs rather than
 outputs or outcomes and does not promise deterministic replay or an engine
 checkpoint.
+Like snapshots, history contains no Python presentation map or unused default
+templates. Defaults enter an input program when a call actually omits them.
 
 `save_egglog_string=True` separately enables the existing `as_egglog_string`
 successful-source view, with rendering preflight and acknowledgement checks.

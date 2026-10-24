@@ -5,8 +5,9 @@
 import json
 from collections.abc import Callable
 from operator import index
+from pathlib import Path
 from threading import Barrier, Event
-from typing import Literal, Never, NotRequired, Self, SupportsIndex, TypedDict
+from typing import Literal, Never, NotRequired, Self, SupportsIndex, TypedDict, cast
 
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
@@ -28,9 +29,67 @@ from egglog import (
     set_,
 )
 from egglog._catalog import builtin_catalog
+from egglog._presentation import CallKind, CallPresentation, Parameter, Presentation, presentation
 from egglog._program import Builder, pack
-from egglog.egraph_state import EggSmolError
+from egglog.egraph_state import EggSmolError, _decode_run_frames
 from egglog.runtime import RuntimeFunction, create_callable, resolve_callable
+
+
+def output_frames(
+    output: pb.RunProgramOutput | None = None, *, files: list[pb.SourceFile] | None = None
+) -> list[bytes]:
+    """Encode owned success data followed by the required terminal acknowledgement."""
+    frames = []
+    if output is not None:
+        frames.append(
+            pb.RunProgramResponse(
+                result=Oneof[Literal["output"], pb.RunProgramOutput]("output", output), files=files or []
+            ).to_binary()
+        )
+    frames.append(
+        pb.RunProgramResponse(
+            result=Oneof[Literal["output"], pb.RunProgramOutput]("output", pb.RunProgramOutput())
+        ).to_binary()
+    )
+    return frames
+
+
+def _record_frames(encoded: list[bytes], prefix: Path) -> list[pb.RunProgramResponse]:
+    """Preserve each native frame's bytes and validate the observed completion."""
+    for position, frame in enumerate(encoded):
+        (prefix.parent / f"{prefix.name}-{position}.pb").write_bytes(frame)
+    return _decode_run_frames(encoded)
+
+
+def _required_error(frames: list[pb.RunProgramResponse]) -> pb.Error:
+    """Require a terminal error while retaining any earlier independent outputs."""
+    assert frames
+    terminal = frames[-1].result
+    assert terminal is not None
+    assert terminal.field == "error"
+    assert all(frame.result is not None and frame.result.field == "output" for frame in frames[:-1])
+    return terminal.value
+
+
+def _required_data(frames: list[pb.RunProgramResponse], field: str) -> pb.RunProgramOutput:
+    """Select one observation with its own arenas, never concatenate frame indices."""
+    matches = [
+        frame.result.value
+        for frame in frames
+        if frame.result is not None
+        and frame.result.field == "output"
+        and any(output.kind is not None and output.kind.field == field for output in frame.result.value.outputs)
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _required_oneof[T](kind: object, field: str, value_type: type[T]) -> T:
+    """Require a populated observation arm and its exact generated payload type."""
+    assert isinstance(kind, Oneof)
+    assert kind.field == field
+    assert isinstance(kind.value, value_type)
+    return kind.value
 
 
 class CallbackObservation(TypedDict):
@@ -54,13 +113,17 @@ def test_source_recording_commits_only_valid_acknowledgements(monkeypatch, outco
 
     events: list[str | tuple[str, bool]] = []
     original = ValueError("original recording boundary")
-    success = pb.RunProgramResponse().to_binary()
+    success = output_frames()
     responses = {
-        "decode": (b"\x80", None),
+        "decode": ([b"\x80"], None),
         "engine": (
-            pb.RunProgramResponse(
-                error=pb.Error(code=pb.ErrorCode.EVALUATION_FAILED, message="native recording failure"),
-            ).to_binary(),
+            [
+                pb.RunProgramResponse(
+                    result=Oneof[Literal["error"], pb.Error](
+                        "error", pb.Error(code=pb.ErrorCode.RUNTIME_FAILURE, message="native recording failure")
+                    )
+                ).to_binary()
+            ],
             None,
         ),
         "host": (success, original),
@@ -121,7 +184,7 @@ def test_source_recording_commits_only_valid_acknowledgements(monkeypatch, outco
         if outcome in {"preflight", "transport", "host"}:
             assert caught.value is original
         if outcome == "engine":
-            assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.EVALUATION_FAILED
+            assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.RUNTIME_FAILURE
     assert events == (
         ["enable", "prepare"]
         if outcome == "preflight"
@@ -208,9 +271,9 @@ def test_source_producer_later_error_preserves_executed_byte_prefix():
             response, host_error = graph._state.transport.run(
                 pb.RunProgramRequest(egraph_id=graph._state.handle, program=pb.Program.from_binary(encoded)).to_binary()
             )
-            decoded = pb.RunProgramResponse.from_binary(response)
+            decoded = _decode_run_frames(response)
             assert host_error is None
-            assert decoded.error is None
+            assert all(frame.result is not None and frame.result.field == "output" for frame in decoded)
         with pytest.raises(ValueError, match="missing_source_command"):
             source.next_submission()
 
@@ -225,7 +288,9 @@ def test_source_producer_later_error_preserves_executed_byte_prefix():
                 pb.RunProgramRequest(egraph_id=graph._state.handle, program=pb.Program.from_binary(encoded)).to_binary()
             )
             assert host_error is None
-            assert pb.RunProgramResponse.from_binary(response).error is None
+            assert all(
+                frame.result is not None and frame.result.field == "output" for frame in _decode_run_frames(response)
+            )
     finally:
         graph._state.destroy()
 
@@ -266,18 +331,20 @@ def scheduler_transport(monkeypatch):  # noqa: C901 -- finite acknowledgement/fa
             if self.outcome == "transport":
                 raise self.original
             if self.outcome == "decode":
-                return b"\x80", None
-            response = pb.RunProgramResponse()
+                return [b"\x80"], None
             if self.outcome == "engine":
-                response.error = pb.Error(code=pb.ErrorCode.EVALUATION_FAILED, message="scheduler native failure")
-            return response.to_binary(), self.original if self.outcome == "host" else None
+                return [
+                    pb.RunProgramResponse(
+                        result=Oneof[Literal["error"], pb.Error](
+                            "error", pb.Error(code=pb.ErrorCode.RUNTIME_FAILURE, message="scheduler native failure")
+                        )
+                    ).to_binary()
+                ], None
+            return output_frames(), self.original if self.outcome == "host" else None
 
         def clone_graph(self, encoded):
             self.next_handle += 1
             return pb.CloneEGraphResponse(egraph_id=self.next_handle).to_binary()
-
-        def return_to(self, encoded):
-            return pb.ReturnToEGraphResponse().to_binary()
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -323,7 +390,7 @@ def test_persistent_scheduler_deployment_requires_acknowledgement(scheduler_tran
     if outcome in {"preflight", "transport", "host"}:
         assert caught.value is transport.original
     if outcome == "engine":
-        assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.EVALUATION_FAILED
+        assert caught.value.__dict__["_egglog_proto_error"].code == pb.ErrorCode.RUNTIME_FAILURE
     transport.outcome = "success"
     if outcome == "preflight":
         assert name not in state._scheduler_bindings
@@ -337,7 +404,7 @@ def test_persistent_scheduler_deployment_requires_acknowledgement(scheduler_tran
         assert len(transport.requests) == 1
 
 
-def test_persistent_scheduler_deployment_follows_clone_and_return(scheduler_transport):
+def test_persistent_scheduler_deployment_follows_clone_and_saved_context(scheduler_transport):
     from egglog import back_off  # noqa: PLC0415
 
     saved, transport = scheduler_transport
@@ -348,7 +415,7 @@ def test_persistent_scheduler_deployment_follows_clone_and_return(scheduler_tran
     assert len(transport.requests) == 1
     child_binding = back_off(ban_length=0).persistent().__egg_ref__
     active.bind_scheduler(child_binding)
-    active.return_to(saved)
+    active.destroy()
     assert active.handle is None
     saved.bind_scheduler(parent_binding)
     saved.bind_scheduler(child_binding)
@@ -363,9 +430,17 @@ def test_host_model_contract_rejects_before_callbacks(case):
     state = EGraphState()
     sorts = pb.Program(
         sorts=[
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="PyObject"))),
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="bool"))),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            ),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication](
+                    "application", pb.SortApplication(name="PyObject")
+                )
+            ),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="bool"))
+            ),
         ],
     )
 
@@ -410,7 +485,7 @@ def test_host_model_contract_rejects_before_callbacks(case):
         with pytest.raises(EggSmolError, match=message) as caught:
             state.run_program([builder.publish().ref("commands", command)])
         error = caught.value.__dict__["_egglog_proto_error"]
-        assert error.code == (pb.ErrorCode.UNKNOWN_NAME if case == "unknown" else pb.ErrorCode.INVALID_PROGRAM)
+        assert error.code == (pb.ErrorCode.RUNTIME_FAILURE if case == "unknown" else pb.ErrorCode.INVALID_PROGRAM)
     finally:
         state.transport.release_cost_model(state.handle, name)
         state.destroy()
@@ -461,7 +536,7 @@ def test_shared_snapshot_restores_logical_state_over_bytes(state):
     graph._state.destroy()
     snapshot = pb.EGraphSnapshot.from_binary(encoded)
     assert snapshot.program is not None
-    owner = Builder.from_program(snapshot.program).publish()
+    owner = Builder.from_program(snapshot.program, environment=(builtin_catalog().owner,)).publish()
     restored = EGraph()
     restored._state.run_program(
         pack(
@@ -534,15 +609,17 @@ def _callback_program(tag, callback=_observed_pyerr_callback):
     import cloudpickle  # noqa: PLC0415
 
     # The generation-only exporter is intentionally absent from the public stub.
-    program = pb.Program.from_binary(getattr(bindings, "_export_pyobject_catalog")())  # noqa: B009
-    for sort_index, record in enumerate(program.sorts):
-        record_kind = record.kind
-        assert record_kind is not None
-        if record_kind.field == "family" and record_kind.value == pb.HostSort(name="PyObject"):
-            sort = sort_index
-            break
-    else:
-        raise StopIteration
+    catalog = pb.BuiltinCatalog.from_binary(getattr(bindings, "_export_pyobject_catalog")())  # noqa: B009
+    program = pb.Program(
+        sorts=[
+            next(
+                record for record in catalog.sorts if record.kind == Oneof("application", pb.SortApplication(name=name))
+            )
+            for name in ("PyObject", "i64", "Unit")
+        ],
+        files=catalog.files,
+    )
+    sort = 0
     first = len(program.nodes)
     for value in (callback, tag):
         program.nodes.append(
@@ -582,10 +659,9 @@ def _callback_exchange(state, program, path):
     assert pb.RunProgramRequest.from_binary(encoded).to_binary() == encoded
     path.with_suffix(".request.pb").write_bytes(encoded)
     response, error = state.transport.run(encoded)
-    assert isinstance(response, bytes)
-    path.with_suffix(".response.pb").write_bytes(response)
-    decoded = pb.RunProgramResponse.from_binary(response)
-    assert pb.RunProgramResponse.from_binary(decoded.to_binary()) == decoded
+    assert isinstance(response, list)
+    decoded = _record_frames(response, path.with_suffix(".response"))
+    assert [pb.RunProgramResponse.from_binary(frame.to_binary()) for frame in decoded] == decoded
     return decoded, error
 
 
@@ -626,13 +702,15 @@ def test_callback_python_none_is_a_value(callback_observations, tmp_path):
     try:
         response, error = _callback_exchange(state, _callback_program("none")[0], tmp_path / "none")
         assert error is None
-        assert response.error is None
+        assert all(frame.result is not None and frame.result.field == "output" for frame in response)
+        response = _required_data(response, "extraction")
         assert callback_observations["none"]["calls"] > 0
-        term = response.outputs[0].kind.value.roots[0].variants[0].term
-        value = response.nodes[term].kind.value.value
-        assert value.field == "custom"
-        assert value.value.args == []
-        assert cloudpickle.loads(value.value.payload) is None
+        extraction = _required_oneof(response.outputs[0].kind, "extraction", pb.ExtractResult)
+        term = extraction.roots[0].variants[0].term
+        primitive = _required_oneof(response.nodes[term].kind, "primitive_value", pb.PrimitiveValue)
+        value = _required_oneof(primitive.value, "custom", pb.CustomValue)
+        assert value.args == []
+        assert cloudpickle.loads(value.payload) is None
     finally:
         state.destroy()
 
@@ -685,7 +763,7 @@ def test_callback_error_original_identity_and_adoption(table_transport, callback
             )
         ),
     )
-    source = Builder.from_program(program).publish()
+    source = Builder.from_program(program, environment=(builtin_catalog().owner,)).publish()
     packed = pack(commands=[source.ref("commands", index) for index in range(2)])
     # Python exposes the bound classmethod descriptor; MyPy represents only its callable signature.
     original_adopt = Builder.from_program.__func__  # type: ignore[attr-defined]
@@ -722,18 +800,24 @@ def test_callback_error_original_identity_and_adoption(table_transport, callback
         traceback = traceback.tb_next
     assert _observed_pyerr_callback.__code__ in frames
     assert len(requests) == len(responses) == len(adopted) == 1
-    response = responses[0]
-    assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
-    assert response.error.location.path == [1]
+    failure = _required_error(responses[0])
+    assert failure.code == pb.ErrorCode.RUNTIME_FAILURE
+    assert failure.location is not None
+    assert failure.location.path == [1]
+    response = _required_data(responses[0], "extraction")
     assert len(response.outputs) == 1
+    assert response.outputs[0].location is not None
     assert response.outputs[0].location.path == [0]
     assert adopted[0].nodes == response.nodes
     assert adopted[0].sorts == response.sorts
-    term = response.outputs[0].kind.value.roots[0].variants[0].term
-    custom = response.nodes[term].kind.value.value
-    assert custom.field == "custom"
-    assert custom.value.payload == program.nodes[first + 1].kind.value.value.value.payload
-    assert custom.value.args == []
+    extraction = _required_oneof(response.outputs[0].kind, "extraction", pb.ExtractResult)
+    term = extraction.roots[0].variants[0].term
+    primitive = _required_oneof(response.nodes[term].kind, "primitive_value", pb.PrimitiveValue)
+    custom = _required_oneof(primitive.value, "custom", pb.CustomValue)
+    original_primitive = _required_oneof(program.nodes[first + 1].kind, "primitive_value", pb.PrimitiveValue)
+    original_custom = _required_oneof(original_primitive.value, "custom", pb.CustomValue)
+    assert custom.payload == original_custom.payload
+    assert custom.args == []
 
 
 @pytest.mark.parametrize("failure", ["binary", "arena"])
@@ -742,7 +826,7 @@ def test_callback_error_protocol_failure_keeps_original_chain(monkeypatch, failu
     cause, context = KeyError("cause"), LookupError("context")
     error.__cause__, error.__context__, error.__suppress_context__ = cause, context, True
     cause.__context__, context.__cause__ = context, error
-    response = pb.RunProgramResponse().to_binary()
+    response = output_frames()
 
     class InertTransport:
         def create(self, encoded):
@@ -750,7 +834,7 @@ def test_callback_error_protocol_failure_keeps_original_chain(monkeypatch, failu
 
         def run(self, encoded):
             pb.RunProgramRequest.from_binary(encoded)
-            return (b"\xff" if failure == "binary" else response), error
+            return ([b"\xff"] if failure == "binary" else response), error
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -792,7 +876,7 @@ def test_callback_error_prior_native_record_is_not_current_check_failure(monkeyp
             assert request.program is not None
             assert request.program.commands[0].kind is not None
             assert request.program.commands[0].kind.field == "check"
-            return pb.RunProgramResponse().to_binary(), original
+            return output_frames(), original
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -823,7 +907,7 @@ def test_callback_error_atomic_pairs_outlive_handles(callback_observations, tmp_
         callback_observations["recovery"] = {"error": None, "calls": 0}
         program, _ = _callback_program("recovery")
         recovered, no_error = _callback_exchange(first, program, tmp_path / "recovery")
-        assert recovered.error is None
+        assert all(frame.result is not None and frame.result.field == "output" for frame in recovered)
         assert no_error is None
     finally:
         if second is not first:
@@ -831,7 +915,7 @@ def test_callback_error_atomic_pairs_outlive_handles(callback_observations, tmp_
         first.destroy()
     for index in (1, 0):
         response, error = pairs[index]
-        assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
+        assert _required_error(response).code == pb.ErrorCode.RUNTIME_FAILURE
         assert error is errors[index] is callback_observations[str(index)]["caught"]
         with pytest.raises(type(error)) as caught:
             raise error
@@ -859,7 +943,7 @@ def test_callback_error_independent_engines_do_not_swap_concurrent_errors(callba
             ]
             for ordinal, future in enumerate(pending):
                 response, error = future.result(timeout=20)
-                assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
+                assert _required_error(response).code == pb.ErrorCode.RUNTIME_FAILURE
                 assert error is errors[ordinal] is callback_observations[str(ordinal)]["caught"]
     finally:
         for state in states:
@@ -891,7 +975,7 @@ def test_callback_error_shared_transport_rejects_overlapping_borrow(callback_obs
             finally:
                 release.set()
             response, error = pending.result(timeout=20)
-            assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
+            assert _required_error(response).code == pb.ErrorCode.RUNTIME_FAILURE
             assert error is original
     finally:
         clone.destroy()
@@ -948,7 +1032,11 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
     )
     pyobject = program.nodes[first].sort_id
     integer, unit = (
-        next(index for index, sort in enumerate(program.sorts) if sort.kind == Oneof("family", pb.HostSort(name=name)))
+        next(
+            index
+            for index, sort in enumerate(program.sorts)
+            if sort.kind == Oneof("application", pb.SortApplication(name=name))
+        )
         for name in ("i64", "Unit")
     )
     marks = []
@@ -1068,7 +1156,7 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
     state = EGraphState(num_threads=threads)
     try:
         setup, error = _callback_exchange(state, program, tmp_path / "setup")
-        assert setup.error is None
+        assert all(frame.result is not None and frame.result.field == "output" for frame in setup)
         assert error is None
         assert callback_observations["first"]["calls"] == callback_observations["later"]["calls"] == 0
         program.commands = [
@@ -1119,7 +1207,8 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
             )
         response, captured = _callback_exchange(state, program, tmp_path / "execution")
         assert captured is (None if expected_failure else original)
-        assert (response.error is not None) == (extracting or case == "later_native_error")
+        assert response[-1].result is not None
+        assert (response[-1].result.field == "error") == (extracting or case == "later_native_error")
         if expected_failure:
             assert callback_observations["first"]["caught"] is original
             assert original.annotation_calls == 0
@@ -1129,18 +1218,23 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
                 assert callback_observations["later"]["calls"] == 0
             else:
                 assert callback_observations["later"]["calls"] > 0
-                (printed,) = [output for output in response.outputs if output.kind.field == "printed_function"]
+                (printed,) = _required_data(response, "printed_function").outputs
+                assert printed.location is not None
                 assert printed.location.path == [3]
-                assert len(printed.kind.value.rows) == 2
+                assert len(_required_oneof(printed.kind, "printed_function", pb.PrintedFunction).rows) == 2
         elif original is not None:
             assert captured is callback_observations["first"]["caught"]
             assert callback_observations["later"]["calls"] == 0
         if case == "later_native_error":
-            assert response.error.location.path == [3]
-            assert "native after callback" in response.error.message
+            failure = _required_error(response)
+            assert failure.location is not None
+            assert failure.location.path == [3]
+            assert "native after callback" in failure.message
         elif extracting:
-            assert response.error.code == pb.ErrorCode.EVALUATION_FAILED
-            assert response.error.location.path == [1]
+            failure = _required_error(response)
+            assert failure.code == pb.ErrorCode.RUNTIME_FAILURE
+            assert failure.location is not None
+            assert failure.location.path == [1]
         program.commands = [
             pb.Command(
                 kind=Oneof[Literal["print_function"], pb.PrintFunction](
@@ -1149,16 +1243,18 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
             )
         ]
         observed, error = _callback_exchange(state, program, tmp_path / "markers")
-        assert observed.error is None
+        assert all(frame.result is not None and frame.result.field == "output" for frame in observed)
+        observed = _required_data(observed, "printed_function")
         assert error is None
         rows = {}
-        for row in observed.outputs[0].kind.value.rows:
+        table = _required_oneof(observed.outputs[0].kind, "printed_function", pb.PrintedFunction)
+        for row in table.rows:
             values = []
+            assert row.output is not None
             for cell in (*row.args, row.output):
-                assert cell.kind.field == "term"
-                node = observed.nodes[cell.kind.value]
-                assert node.kind.value.value.field == "i64"
-                values.append(node.kind.value.value.value)
+                term = _required_oneof(cell.kind, "term", int)
+                primitive = _required_oneof(observed.nodes[term].kind, "primitive_value", pb.PrimitiveValue)
+                values.append(_required_oneof(primitive.value, "i64", int))
             assert len(values) == 2
             rows[values[0]] = values[1]
         expected = {10: 1010}
@@ -1169,13 +1265,15 @@ def test_callback_error_native_prefix_suppression_and_recovery(  # noqa: C901, P
         assert rows == expected
         callback_observations["recovery"] = {"error": None, "calls": 0}
         recovered, error = _callback_exchange(state, _callback_program("recovery")[0], tmp_path / "recovery")
-        assert recovered.error is None
+        assert all(frame.result is not None and frame.result.field == "output" for frame in recovered)
+        recovered = _required_data(recovered, "extraction")
         assert error is None
-        term = recovered.outputs[0].kind.value.roots[0].variants[0].term
-        payload = recovered.nodes[term].kind.value.value
-        assert payload.field == "custom"
-        assert payload.value.args == []
-        assert cloudpickle.loads(payload.value.payload) == 8
+        extraction = _required_oneof(recovered.outputs[0].kind, "extraction", pb.ExtractResult)
+        term = extraction.roots[0].variants[0].term
+        primitive = _required_oneof(recovered.nodes[term].kind, "primitive_value", pb.PrimitiveValue)
+        payload = _required_oneof(primitive.value, "custom", pb.CustomValue)
+        assert payload.args == []
+        assert cloudpickle.loads(payload.payload) == 8
     finally:
         state.destroy()
 
@@ -1188,7 +1286,7 @@ def table_transport(monkeypatch, tmp_path):
     graph = EGraph()
     transport = graph._state.transport
     requests: list[pb.RunProgramRequest] = []
-    responses: list[pb.RunProgramResponse] = []
+    responses: list[list[pb.RunProgramResponse]] = []
 
     class AuditedTransport:
         destroy = transport.destroy
@@ -1201,9 +1299,8 @@ def table_transport(monkeypatch, tmp_path):
             (tmp_path / f"request-{position}.pb").write_bytes(encoded)
             requests.append(pb.RunProgramRequest.from_binary(encoded))
             returned, host_error = transport.run(encoded)
-            assert isinstance(returned, bytes)
-            (tmp_path / f"response-{position}.pb").write_bytes(returned)
-            responses.append(pb.RunProgramResponse.from_binary(returned))
+            assert isinstance(returned, list)
+            responses.append(_record_frames(returned, tmp_path / f"response-{position}"))
             return returned, host_error
 
     monkeypatch.setattr(graph._state, "transport", AuditedTransport())
@@ -1224,9 +1321,8 @@ def test_tree_cost_callback_failure_does_not_publish_term_records(table_transpor
         graph.extract(i64(1), cost_model=fail)
     assert caught.value is original
     assert len(requests) == len(responses) == 1
-    assert responses[0].outputs == []
-    assert responses[0].nodes == []
-    assert responses[0].error is not None
+    assert len(responses[0]) == 1
+    assert _required_error(responses[0]).code == pb.ErrorCode.RUNTIME_FAILURE
     assert graph.extract(i64(2)) == i64(2)
 
 
@@ -1243,8 +1339,9 @@ def test_function_sizes_native_bytes_register_and_filter_unmapped(table_transpor
     assert len(requests) == 1
     assert any(decl.kind.value.name == "z-known" for decl in requests[0].program.declarations)
     assert requests[0].program.commands[0].kind == Oneof("print_size", pb.PrintSize(tables=["z-known"]))
-    assert responses[0].outputs[0].location == pb.CommandLocation(path=[0])
-    assert responses[0].outputs[0].kind == Oneof("sizes", pb.TableSizes(sizes=[pb.TableSize(table="z-known", rows=0)]))
+    observed = _required_data(responses[0], "sizes")
+    assert observed.outputs[0].location == pb.CommandLocation(path=[0])
+    assert observed.outputs[0].kind == Oneof("sizes", pb.TableSizes(sizes=[pb.TableSize(table="z-known", rows=0)]))
     graph.register(set_(known(i64(1))).to(i64(2)), set_(unmapped(i64(1))).to(i64(3)))
     # The legacy public API filtered native tables lacking a Python mapping.
     # Keep the native row, but remove only its canonical language lookup entry.
@@ -1252,14 +1349,18 @@ def test_function_sizes_native_bytes_register_and_filter_unmapped(table_transpor
     assert graph.all_function_sizes() == [(known, 1)]
     assert requests[-1].program.declarations == []
     assert requests[-1].program.commands[0].kind == Oneof("print_size", pb.PrintSize())
-    assert [entry.table for entry in responses[-1].outputs[0].kind.value.sizes] == ["a-unmapped", "z-known"]
+    observed = _required_data(responses[-1], "sizes")
+    table_sizes = _required_oneof(observed.outputs[0].kind, "sizes", pb.TableSizes)
+    assert [entry.table for entry in table_sizes.sizes] == ["a-unmapped", "z-known"]
 
 
 def test_function_sizes_include_unavailable_and_subsumed_native_bytes(table_transport):
     graph, _, _ = table_transport
     program = pb.Program(
         sorts=[
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            ),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "CountedHidden")),
         ],
         declarations=[
@@ -1313,30 +1414,31 @@ def test_function_sizes_include_unavailable_and_subsumed_native_bytes(table_tran
 
 
 def test_table_callable_projection_keeps_first_view_without_invocation(monkeypatch):
-    owner = Builder.from_program(
+    builder = Builder.from_program(
         pb.Program(
-            sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
+            sorts=[
+                pb.Sort(
+                    kind=Oneof[Literal["application"], pb.SortApplication](
+                        "application", pb.SortApplication(name="i64")
+                    )
+                )
+            ],
             declarations=[
                 pb.Declaration(
                     kind=Oneof[Literal["function"], pb.Function](
                         "function", pb.Function(name="two-views", inputs=[pb.Arg(sort=0)], output=0)
                     ),
-                    bindings=pb.CallableBindings(
-                        python=pb.PythonBindings(
-                            views=[
-                                pb.PythonCallable(
-                                    kind=pb.PythonCallKind.FUNCTION,
-                                    path=[name],
-                                    params=[pb.PythonParameter(name="value", core_input=0)],
-                                )
-                                for name in ("first", "second")
-                            ]
-                        )
-                    ),
                 )
             ],
         )
-    ).publish()
+    )
+    builder.presentations["callable", "two-views"] = Presentation(
+        views=tuple(
+            CallPresentation(kind=CallKind.FUNCTION, path=(name,), params=(Parameter(name="value", core_input=0),))
+            for name in ("first", "second")
+        )
+    )
+    owner = builder.publish()
 
     def forbidden(*args, **kwargs):
         pytest.fail("Callable projection invoked a Python callable")
@@ -1373,7 +1475,7 @@ def test_function_sizes_reject_malformed_response_without_engine(monkeypatch, se
         kind=Oneof[Literal["sizes"], pb.TableSizes]("sizes", sizes),
         location=pb.CommandLocation(path=[0]),
     )
-    response = pb.RunProgramResponse(
+    response = pb.RunProgramOutput(
         outputs=[output],
     )
     match corruption:
@@ -1399,14 +1501,15 @@ def test_function_sizes_reject_malformed_response_without_engine(monkeypatch, se
             assert request.program is not None
             assert request.program.commands[0].kind is not None
             assert request.program.commands[0].kind.field == "print_size"
-            return response.to_binary(), None
+            return output_frames(response), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
 
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
     graph = EGraph()
-    with pytest.raises(ValueError, match="table size"):
+    message = "exactly one requested observation" if corruption == "outputs" else "table size"
+    with pytest.raises(ValueError, match=message):
         graph.function_size(table) if selected else graph.all_function_sizes()
 
 
@@ -1423,12 +1526,13 @@ def test_function_values_native_bytes_and_shared_terms(table_transport):
     assert command.field == "print_function"
     assert command.value.table == resolve_callable(repeated).read().kind.value.name
     assert not command.value.has_field("max_rows")
-    output = responses[-1].outputs[0]
+    observed = _required_data(responses[-1], "printed_function")
+    output = observed.outputs[0]
     assert output.location == pb.CommandLocation(path=[0])
-    assert output.kind.field == "printed_function"
-    row = output.kind.value.rows[0]
+    table = _required_oneof(output.kind, "printed_function", pb.PrintedFunction)
+    row = table.rows[0]
     assert row.args[0] == row.args[1] == row.output == pb.TableCell(kind=Oneof[Literal["term"], int]("term", 0))
-    assert responses[-1].nodes[0].kind.value.value == Oneof("i64", 1)
+    assert _required_oneof(observed.nodes[0].kind, "primitive_value", pb.PrimitiveValue).value == Oneof("i64", 1)
     key, result = next(iter(rows.items()))
     args = key.__egg_ref__.read().kind.value.args
     assert key.__egg_ref__.owner.ref("nodes", args[0]) == key.__egg_ref__.owner.ref("nodes", args[1])
@@ -1458,7 +1562,7 @@ def test_function_values_installs_before_index_conversion_native_bytes(table_tra
             assert len(requests) == 1
             assert requests[0].program.commands == []
             assert any(decl.kind.field == "function" for decl in requests[0].program.declarations)
-            assert responses[0].error is None
+            assert all(frame.result is not None and frame.result.field == "output" for frame in responses[0])
             return value
 
     if value < 0:
@@ -1492,7 +1596,7 @@ def test_function_values_bad_length_keeps_installed_table_native_bytes(table_tra
     assert caught.value.__notes__ == ["while processing 'length'"]
     assert len(requests) == 1
     assert requests[0].program.commands == []
-    assert responses[0].error is None
+    assert all(frame.result is not None and frame.result.field == "output" for frame in responses[0])
     assert graph.function_values(untouched) == {}
 
 
@@ -1501,7 +1605,7 @@ def test_function_values_unavailable_cells_raise_from_native_bytes(table_transpo
     graph, requests, responses = table_transport
     # Canonical backend fixture: public unextractable authoring stays guarded.
     sorts = [
-        pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+        pb.Sort(kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))),
         pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Hidden")),
     ]
     nodes = [
@@ -1565,12 +1669,14 @@ def test_function_values_unavailable_cells_raise_from_native_bytes(table_transpo
     target = RuntimeFunction(owner.ref("declarations", 3))
     with pytest.raises(ValueError, match=f"Table 'inspected' row 1 {unavailable} has no extractable representative"):
         graph.function_values(target)
-    table = responses[-1].outputs[0].kind.value
-    assert responses[-1].error is None
+    observed = _required_data(responses[-1], "printed_function")
+    table = _required_oneof(observed.outputs[0].kind, "printed_function", pb.PrintedFunction)
+    assert all(frame.result is not None and frame.result.field == "output" for frame in responses[-1])
     assert len(table.rows) == 2
     cell = table.rows[1].args[1] if unavailable == "argument 1" else table.rows[1].output
-    assert cell.kind.field == "unavailable_sort"
-    assert responses[-1].sorts[cell.kind.value].kind == Oneof("eq", "Hidden")
+    assert cell is not None
+    unavailable_sort = _required_oneof(cell.kind, "unavailable_sort", int)
+    assert observed.sorts[unavailable_sort].kind == Oneof("eq", "Hidden")
     assert requests[-1].program.commands[0].kind.field == "print_function"
     assert graph.function_values(target, 0) == {}
 
@@ -1603,9 +1709,11 @@ def test_function_values_rejects_malformed_response_without_engine(monkeypatch, 
         ),
         location=pb.CommandLocation(path=[0]),
     )
-    response = pb.RunProgramResponse(
+    response = pb.RunProgramOutput(
         sorts=[
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name=name)))
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name=name))
+            )
             for name in ("i64", "Bool")
         ],
         nodes=[
@@ -1660,13 +1768,14 @@ def test_function_values_rejects_malformed_response_without_engine(monkeypatch, 
             assert request.program is not None
             assert request.program.commands[0].kind is not None
             assert request.program.commands[0].kind.field == "print_function"
-            return response.to_binary(), None
+            return output_frames(response), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
 
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
-    with pytest.raises(ValueError, match=r"table|Table"):
+    message = "exactly one requested observation" if corruption == "outputs" else r"table|Table"
+    with pytest.raises(ValueError, match=message):
         EGraph().function_values(table)
 
 
@@ -1674,7 +1783,13 @@ def test_function_values_rejects_primitives_without_table_request(table_transpor
     graph, requests, _ = table_transport
     owner = Builder.from_program(
         pb.Program(
-            sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
+            sorts=[
+                pb.Sort(
+                    kind=Oneof[Literal["application"], pb.SortApplication](
+                        "application", pb.SortApplication(name="i64")
+                    )
+                )
+            ],
             nodes=[
                 pb.Node(
                     sort_id=0,
@@ -1685,8 +1800,8 @@ def test_function_values_rejects_primitives_without_table_request(table_transpor
             ],
             declarations=[
                 pb.Declaration(
-                    kind=Oneof[Literal["primitive"], pb.Primitive](
-                        "primitive", pb.Primitive(name="eager", output=0, body=0)
+                    kind=Oneof[Literal["user_defined_primitive"], pb.UserDefinedPrimitive](
+                        "user_defined_primitive", pb.UserDefinedPrimitive(name="eager", output=0, body=0)
                     )
                 )
             ],
@@ -1700,50 +1815,52 @@ def test_function_values_rejects_primitives_without_table_request(table_transpor
     assert requests == []
 
 
-def test_scope_return_consumption_and_rejection_without_engine():
-    from egglog.egraph_state import EGraphState  # noqa: PLC0415
-
+def test_scope_destroy_rejection_preserves_ownership_until_success(monkeypatch):
     calls = []
 
     class InertTransport:
         reject = True
 
-        def return_to(self, encoded):
-            request = pb.ReturnToEGraphRequest.from_binary(encoded)
-            calls.append((request.active_id, request.saved_id))
-            if self.reject:
-                msg = "Return rejection"
+        def create(self, encoded):
+            return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
+
+        def clone_graph(self, encoded):
+            return pb.CloneEGraphResponse(egraph_id=2).to_binary()
+
+        def destroy(self, encoded):
+            request = pb.DestroyEGraphRequest.from_binary(encoded)
+            calls.append(request.egraph_id)
+            if self.reject and request.egraph_id == 2:
+                msg = "Destroy rejection"
                 raise ValueError(msg)
-            return pb.ReturnToEGraphResponse().to_binary()
+            return pb.DestroyEGraphResponse().to_binary()
 
-    active, saved = object.__new__(EGraphState), object.__new__(EGraphState)
-    active.handle, saved.handle = 2, 1
-    # Deliberate native-transport substitution in this engine-free lifecycle fixture.
-    active.transport = saved.transport = InertTransport()  # type: ignore[assignment]
-    with pytest.raises(ValueError, match="Return rejection"):
-        active.return_to(saved)
-    assert (active.handle, saved.handle) == (2, 1)
-    active.transport.reject = False  # type: ignore[attr-defined]  # InertTransport fixture control.
-    active.return_to(saved)
-    # return_to consumes the active handle; MyPy retains its earlier integer narrowing.
-    assert (active.handle, saved.handle) == (None, 1)  # type: ignore[comparison-overlap]
-    with pytest.raises(RuntimeError, match="live"):
-        active.return_to(saved)
-    assert calls == [(2, 1), (2, 1)]
-    active.handle = 2
-    original = active.transport
-    active.transport = InertTransport()  # type: ignore[assignment]  # Deliberate different-transport control.
-    with pytest.raises(ValueError, match="same transport"):
-        active.return_to(saved)
-    active.transport = original
-    active.handle = 1
-    with pytest.raises(ValueError, match="distinct"):
-        active.return_to(saved)
-    active.handle = None
-    saved.handle = None
+    transport = InertTransport()
+    monkeypatch.setattr(bindings, "_ProtoEngine", lambda: transport)
+    graph = EGraph()
+    saved = graph._state
+    graph.push()
+    active = graph._state
+    with pytest.raises(ValueError, match="Destroy rejection"):
+        graph.pop()
+    assert graph._state is active
+    assert graph._state_stack == [saved]
+    assert active.handle == 2
+    assert saved.handle == 1
+    transport.reject = False
+    graph.pop()
+    assert graph._state is saved
+    assert not graph._state_stack
+    assert cast("object", active.handle) is None
+    active.destroy()
+    assert calls == [2, 2]
+    with pytest.raises(IndexError, match="without a pushed state"):
+        graph.pop()
+    saved.destroy()
+    assert calls == [2, 2, 1]
 
 
-def test_scope_return_corrupt_success_consumes_active_without_selecting_saved(monkeypatch):
+def test_scope_destroy_corrupt_success_resumes_saved_without_double_disposal(monkeypatch):
     destroyed = []
 
     class InertTransport:
@@ -1753,14 +1870,10 @@ def test_scope_return_corrupt_success_consumes_active_without_selecting_saved(mo
         def clone_graph(self, encoded):
             return pb.CloneEGraphResponse(egraph_id=2).to_binary()
 
-        def return_to(self, encoded):
-            request = pb.ReturnToEGraphRequest.from_binary(encoded)
-            assert (request.active_id, request.saved_id) == (2, 1)
-            return b"\x80"  # Successful transport, then a truncated acknowledgement.
-
         def destroy(self, encoded):
-            destroyed.append(pb.DestroyEGraphRequest.from_binary(encoded).egraph_id)
-            return pb.DestroyEGraphResponse().to_binary()
+            handle = pb.DestroyEGraphRequest.from_binary(encoded).egraph_id
+            destroyed.append(handle)
+            return b"\x80" if handle == 2 else pb.DestroyEGraphResponse().to_binary()
 
     monkeypatch.setattr(bindings, "_ProtoEngine", InertTransport)
     graph = EGraph()
@@ -1769,15 +1882,17 @@ def test_scope_return_corrupt_success_consumes_active_without_selecting_saved(mo
     active = graph._state
     with pytest.raises(ValueError, match="invalid varint"):
         graph.pop()
-    assert graph._state is active
-    assert graph._state_stack == [saved]
+    assert graph._state is saved
+    assert not graph._state_stack
     assert active.handle is None
     assert saved.handle == 1
     active.destroy()
-    assert destroyed == []  # Never Destroy a handle already consumed by Return.
+    assert destroyed == [2]
+    saved.destroy()
+    assert destroyed == [2, 1]
 
 
-@pytest.mark.parametrize("control", ["sequence", "repeat", "saturate"])
+@pytest.mark.parametrize("control", ["sequence", "bounded", "unbounded"])
 def test_schedule_additions_are_ordered_once_before_control_loops(monkeypatch, control):
     from egglog import rule, ruleset, run, seq  # noqa: PLC0415
 
@@ -1788,27 +1903,27 @@ def test_schedule_additions_are_ordered_once_before_control_loops(monkeypatch, c
     first = ruleset(rule(name="first").then(), name="same")
     last = ruleset(rule(name="last").then(), name="same")
     schedule = seq(run(first), run(last), run(first))
-    if control == "repeat":
+    if control == "bounded":
         schedule = schedule * 3
-    elif control == "saturate":
+    elif control == "unbounded":
         schedule = schedule.saturate()
     resolved = pack(commands=[schedule._resolve(None)]).program
     prelude = resolved.commands[0].kind
     assert prelude is not None
-    assert prelude.field == "repeat"
-    assert prelude.value.times == 1
+    assert prelude.field == "loop"
+    assert prelude.value.max_iterations == 1
     assert [command.kind.field for command in prelude.value.body if command.kind is not None] == [
         "add_rules",
         "add_rules",
         "add_rules",
-        "repeat" if control == "sequence" else "saturate",
+        "loop",
     ]
     pending = list(reversed(resolved.commands))
     operations: list[tuple[str, str | list[str]]] = []
     while pending:
         command = pending.pop()
         assert command.kind is not None
-        if command.kind.field in {"repeat", "saturate"}:
+        if command.kind.field == "loop":
             pending.extend(reversed(command.kind.value.body))
         elif command.kind.field == "add_rules":
             operations.append(("add", command.kind.value.group))
@@ -1836,7 +1951,7 @@ def test_public_run_and_stats_require_the_requested_top_level_output(monkeypatch
             output = pb.CommandOutput(
                 location=pb.CommandLocation(path=[1] if malformed == "location" else [0]),
                 kind=Oneof[Literal["diagnostic"], pb.Diagnostic](
-                    "diagnostic", pb.Diagnostic(format="application/json", content="{}")
+                    "diagnostic", pb.Diagnostic(format="application/json", content=b"{}")
                 )
                 if operation == "stats"
                 else Oneof[Literal["run"], pb.RunResult]("run", pb.RunResult(can_stop=True)),
@@ -1851,7 +1966,7 @@ def test_public_run_and_stats_require_the_requested_top_level_output(monkeypatch
                 output.kind = None
             elif malformed == "flags":
                 output.kind = Oneof[Literal["run"], pb.RunResult]("run", pb.RunResult(updated=True, can_stop=True))
-            return pb.RunProgramResponse(outputs=[output]).to_binary(), None
+            return output_frames(pb.RunProgramOutput(outputs=[output])), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -1890,7 +2005,7 @@ def test_mixed_registration_is_one_ordered_input_program(monkeypatch):
 
         def run(self, encoded):
             requests.append(pb.RunProgramRequest.from_binary(encoded))
-            return pb.RunProgramResponse().to_binary(), None
+            return output_frames(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -1928,7 +2043,7 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
     second = union(lhs).with_(rhs) if reuse == "separate" else first if reuse == "same" else copy(first)
     transport = graph._state.transport
     requests: list[pb.RunProgramRequest] = []
-    responses: list[pb.RunProgramResponse] = []
+    responses: list[list[pb.RunProgramResponse]] = []
 
     class AuditedTransport:
         def run(self, encoded):
@@ -1936,8 +2051,7 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
             (tmp_path / f"request-{index}.pb").write_bytes(encoded)
             requests.append(pb.RunProgramRequest.from_binary(encoded))
             returned, host_error = transport.run(encoded)
-            (tmp_path / f"response-{index}.pb").write_bytes(returned)
-            responses.append(pb.RunProgramResponse.from_binary(returned))
+            responses.append(_record_frames(returned, tmp_path / f"response-{index}"))
             return returned, host_error
 
         def destroy(self, encoded):
@@ -1946,7 +2060,7 @@ def test_native_public_union_occurrence_boundary(tmp_path, reuse):
     # The audit proxy intentionally substitutes for the concrete native transport.
     graph._state.transport = AuditedTransport()  # type: ignore[assignment]
     graph.register(first, second)
-    assert responses[0].error is None
+    assert all(frame.result is not None and frame.result.field == "output" for frame in responses[0])
     graph.check(eq(lhs).to(rhs))
     submitted_program = requests[0].program
     assert submitted_program is not None
@@ -1984,7 +2098,7 @@ def test_ruleset_append_preserves_native_cursor(tmp_path):
 
     graph = EGraph()
     transport = graph._state.transport
-    responses: list[pb.RunProgramResponse] = []
+    responses: list[list[pb.RunProgramResponse]] = []
 
     class AuditedTransport:
         def run(self, encoded):
@@ -1993,8 +2107,7 @@ def test_ruleset_append_preserves_native_cursor(tmp_path):
             decoded = pb.RunProgramRequest.from_binary(encoded)
             assert pb.RunProgramRequest.from_binary(decoded.to_binary()) == decoded
             returned, host_error = transport.run(encoded)
-            (tmp_path / f"response-{index}.pb").write_bytes(returned)
-            response = pb.RunProgramResponse.from_binary(returned)
+            response = _record_frames(returned, tmp_path / f"response-{index}")
             responses.append(response)
             return returned, host_error
 
@@ -2039,7 +2152,7 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
     graph = EGraph()
     transport = graph._state.transport
     requests: list[pb.RunProgramRequest] = []
-    responses: list[pb.RunProgramResponse] = []
+    responses: list[list[pb.RunProgramResponse]] = []
 
     def audited_run(encoded):
         index = len(requests)
@@ -2048,8 +2161,7 @@ def test_native_class_default_rewrite_and_unregistered_closure(tmp_path, seeded)
         requests.append(request)
         (tmp_path / f"request-{index}.pb").write_bytes(encoded)
         returned, host_error = transport.run(encoded)
-        (tmp_path / f"response-{index}.pb").write_bytes(returned)
-        response = pb.RunProgramResponse.from_binary(returned)
+        response = _record_frames(returned, tmp_path / f"response-{index}")
         responses.append(response)
         return returned, host_error
 
@@ -2104,9 +2216,9 @@ def test_native_free_ruleset_body_is_deferred_with_complete_closure(table_transp
     else:
         assert not graph.run(destination).updated
     assert len(graph.function_values(delayed)) == int(seeded)
-    output = responses[-1].outputs[0]
-    assert output.kind.field == "printed_function"
-    assert [row.subsumed for row in output.kind.value.rows] == ([subsume_body] if seeded else [])
+    output = _required_data(responses[-1], "printed_function").outputs[0]
+    table = _required_oneof(output.kind, "printed_function", pb.PrintedFunction)
+    assert [row.subsumed for row in table.rows] == ([subsume_body] if seeded else [])
     declarations = {
         declaration.kind.value.name: declaration for request in requests for declaration in request.program.declarations
     }
@@ -2370,7 +2482,7 @@ def test_check_fail_authors_one_canonical_nested_command(monkeypatch):
 
         def run(self, encoded):
             requests.append(pb.RunProgramRequest.from_binary(encoded))
-            return pb.RunProgramResponse().to_binary(), None
+            return output_frames(), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -2449,24 +2561,19 @@ def test_failed_check_policy_requires_one_top_level_check(monkeypatch, shape):
         (pb.ErrorCode.CHECK_FAILED, None),
         (pb.ErrorCode.CHECK_FAILED, pb.CommandLocation(path=[1])),
         (pb.ErrorCode.CHECK_FAILED, pb.CommandLocation(path=[0], iterations=[0])),
-        (pb.ErrorCode.EVALUATION_FAILED, pb.CommandLocation(path=[0])),
-        (pb.ErrorCode.PROOF_FAILED, pb.CommandLocation(path=[0])),
+        (pb.ErrorCode.RUNTIME_FAILURE, pb.CommandLocation(path=[0])),
         (pb.ErrorCode.INVALID_PROGRAM, None),
     ],
 )
 def test_check_errors_use_codes_and_locations_not_messages(monkeypatch, operation, code, location):
     record = pb.Error(code=code, message="Check failed: same diagnostic", location=location)
-    if code == pb.ErrorCode.PROOF_FAILED:
-        record.proof_failure = pb.ProofFailure(reason=pb.ProofFailureReason.PROOFS_NOT_ENABLED)
 
     class InertTransport:
         def create(self, encoded):
             return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
 
         def run(self, encoded):
-            return pb.RunProgramResponse(
-                error=record,
-            ).to_binary(), None
+            return [pb.RunProgramResponse(result=Oneof[Literal["error"], pb.Error]("error", record)).to_binary()], None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -2506,13 +2613,18 @@ def test_execution_error_retains_only_confirmed_declaration_refs(monkeypatch, lo
             return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
 
         def run(self, encoded):
-            return pb.RunProgramResponse(
-                error=pb.Error(
-                    code=pb.ErrorCode.EVALUATION_FAILED,
-                    message="installation or command failed",
-                    location=pb.CommandLocation(path=[0]) if located else None,
-                ),
-            ).to_binary(), None
+            return [
+                pb.RunProgramResponse(
+                    result=Oneof[Literal["error"], pb.Error](
+                        "error",
+                        pb.Error(
+                            code=pb.ErrorCode.RUNTIME_FAILURE,
+                            message="installation or command failed",
+                            location=pb.CommandLocation(path=[0]) if located else None,
+                        ),
+                    ),
+                ).to_binary()
+            ], None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -2572,7 +2684,7 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
 
         def run(self, encoded):
             requests.append(pb.RunProgramRequest.from_binary(encoded))
-            return pb.RunProgramResponse().to_binary(), None
+            return output_frames(), None
 
         def destroy(self, encoded):
             assert pb.DestroyEGraphRequest.from_binary(encoded).egraph_id == 1
@@ -2620,10 +2732,10 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
     first_definition = definitions[first.target.func].kind
     assert first_definition is not None
     assert first_definition.field == "function"
-    second_bindings = definitions[second.target.func].bindings
-    assert second_bindings is not None
-    assert second_bindings.python is not None
-    assert second_bindings.python.views[0].kind == pb.PythonCallKind.CONSTANT
+    assert presentation(resolve_callable(later)).views[0].kind == CallKind.CONSTANT
+    second_definition = definitions[second.target.func].kind
+    assert second_definition is not None
+    assert second_definition.value.name == resolve_callable(later).read().kind.value.name
     rhs_kind = program.nodes[second.value].kind
     assert rhs_kind is not None
     assert rhs_kind.field == "call"
@@ -2669,7 +2781,7 @@ def test_constant_actions_submit_one_ordered_binary_program(monkeypatch):
 
 
 def test_response_owner_keeps_nominal_and_ambient_family_contexts(monkeypatch):
-    family = builtin_catalog().definitions["host_sort_family", "Pair"]
+    family = builtin_catalog().definitions["primitive_sort", "Pair"]
 
     class InertTransport:
         def create(self, encoded):
@@ -2684,30 +2796,36 @@ def test_response_owner_keeps_nominal_and_ambient_family_contexts(monkeypatch):
                 assert kind is not None
                 declaration_kinds.append(kind)
             assert any(kind.field == "eq_sort" and kind.value.name == "Pair" for kind in declaration_kinds)
-            return pb.RunProgramResponse(
-                sorts=[
-                    pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Pair")),
-                    pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
-                ],
-                nodes=[
-                    pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="P"))),
-                    pb.Node(
-                        sort_id=1,
-                        kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
-                            "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
+            return output_frames(
+                pb.RunProgramOutput(
+                    sorts=[
+                        pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Pair")),
+                        pb.Sort(
+                            kind=Oneof[Literal["application"], pb.SortApplication](
+                                "application", pb.SortApplication(name="i64")
+                            )
                         ),
-                    ),
-                ],
-                outputs=[
-                    pb.CommandOutput(
-                        kind=Oneof[Literal["extraction"], pb.ExtractResult](
-                            "extraction",
-                            pb.ExtractResult(roots=[pb.ExtractedRoot(variants=[pb.ExtractedTerm(term=0, cost=1)])]),
+                    ],
+                    nodes=[
+                        pb.Node(sort_id=0, kind=Oneof[Literal["call"], pb.Call]("call", pb.Call(func="P"))),
+                        pb.Node(
+                            sort_id=1,
+                            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                                "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
+                            ),
                         ),
-                        location=pb.CommandLocation(path=[0]),
-                    )
-                ],
-            ).to_binary(), None
+                    ],
+                    outputs=[
+                        pb.CommandOutput(
+                            kind=Oneof[Literal["extraction"], pb.ExtractResult](
+                                "extraction",
+                                pb.ExtractResult(roots=[pb.ExtractedRoot(variants=[pb.ExtractedTerm(term=0, cost=1)])]),
+                            ),
+                            location=pb.CommandLocation(path=[0]),
+                        )
+                    ],
+                )
+            ), None
 
         def destroy(self, encoded):
             return pb.DestroyEGraphResponse().to_binary()
@@ -2724,7 +2842,7 @@ def test_response_owner_keeps_nominal_and_ambient_family_contexts(monkeypatch):
 
     graph = EGraph()
     result = graph.extract(NominalPair())
-    assert graph._state.definitions["host_sort_family", "Pair"] == family
+    assert graph._state.definitions["primitive_sort", "Pair"] == family
     # The authored class is a RuntimeClass presentation with canonical declaration metadata.
     assert graph._state.definitions["eq_sort", "Pair"] == NominalPair.__egg_definition__  # type: ignore[attr-defined]
     assert result.tag() == "nominal hook"
@@ -2747,44 +2865,47 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
             assert request.options is not None
             cost_kind = request.sorts[request.options.cost_sort].kind
             assert cost_kind is not None
-            assert cost_kind.field == "family"
+            assert cost_kind.field == "application"
             assert cost_kind.value.name == "i64"
             return pb.CreateEGraphResponse(egraph_id=1, threads=1).to_binary()
 
-        def run(self, encoded: bytes) -> tuple[bytes, BaseException | None]:
+        def run(self, encoded: bytes) -> tuple[list[bytes], BaseException | None]:
             assert isinstance(encoded, bytes)
             request = pb.RunProgramRequest.from_binary(encoded)
             requests.append(request)
             # Fixed inert reply: no interpretation or computation of the request.
-            return pb.RunProgramResponse(
-                sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
-                nodes=[
-                    pb.Node(
-                        kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
-                            "primitive_value",
-                            pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 31)),
+            return output_frames(
+                pb.RunProgramOutput(
+                    sorts=[
+                        pb.Sort(
+                            kind=Oneof[Literal["application"], pb.SortApplication](
+                                "application", pb.SortApplication(name="i64")
+                            )
                         )
-                    )
-                ],
-                outputs=[
-                    pb.CommandOutput(
-                        kind=Oneof[Literal["extraction"], pb.ExtractResult](
-                            "extraction",
-                            pb.ExtractResult(roots=[pb.ExtractedRoot(variants=[pb.ExtractedTerm(term=0, cost=0)])]),
-                        ),
-                        location=pb.CommandLocation(path=[0]),
-                    )
-                ],
-            ).to_binary(), None
+                    ],
+                    nodes=[
+                        pb.Node(
+                            kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                                "primitive_value",
+                                pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 31)),
+                            )
+                        )
+                    ],
+                    outputs=[
+                        pb.CommandOutput(
+                            kind=Oneof[Literal["extraction"], pb.ExtractResult](
+                                "extraction",
+                                pb.ExtractResult(roots=[pb.ExtractedRoot(variants=[pb.ExtractedTerm(term=0, cost=0)])]),
+                            ),
+                            location=pb.CommandLocation(path=[0]),
+                        )
+                    ],
+                )
+            ), None
 
         def clone_graph(self, encoded: bytes) -> bytes:
             assert pb.CloneEGraphRequest.from_binary(encoded).egraph_id == 1
             return pb.CloneEGraphResponse(egraph_id=2).to_binary()
-
-        def return_to(self, encoded: bytes) -> bytes:
-            request = pb.ReturnToEGraphRequest.from_binary(encoded)
-            assert (request.active_id, request.saved_id) == (2, 1)
-            return pb.ReturnToEGraphResponse().to_binary()
 
         def destroy(self, encoded: bytes) -> bytes:
             destroyed.append(pb.DestroyEGraphRequest.from_binary(encoded).egraph_id)
@@ -2819,36 +2940,31 @@ def test_public_bytes_requests_and_response_ownership(monkeypatch: pytest.Monkey
         declaration_kind = declaration.kind
         assert declaration_kind is not None
         declarations.setdefault(declaration_kind.value.name, declaration)
-    add = next(declaration for name, declaration in declarations.items() if name == call.value.func)
-    assert add.bindings is not None
-    assert add.bindings.python is not None
-    assert add.bindings.python.views[0].path == ["__add__"]
-    family = next(declaration for name, declaration in declarations.items() if name == "i64")
-    family_kind = family.kind
-    assert family_kind is not None
-    assert family_kind.field == "host_sort_family"
-    assert family_kind.value.bindings is not None
-    assert family_kind.value.bindings.python is not None
-    assert family_kind.value.bindings.python.path == ["egglog", "builtins", "i64"]
+    assert not declarations
+    assert presentation(builtin_catalog().definitions["callable", "egglog.core.i64.add"]).views[0].path == ("__add__",)
+    local_type = presentation(builtin_catalog().definitions["primitive_sort", "i64"]).type_view
+    assert local_type is not None
+    assert local_type.path == ("egglog", "builtins", "i64")
     # Re-authoring from a returned value retains the original catalog refs,
     # not a second declaration copy reconstructed from the response.
     repacked = pack([(result + 4).__egg_ref__])
-    assert builtin_catalog().definitions["callable", "egglog.core.i64.add"] in repacked.definitions
+    assert not repacked.definitions
+    assert builtin_catalog().owner in result.__egg_ref__.owner._environment
     with graph:
         assert graph._state.handle == 2
     assert graph._state.handle == 1
-    assert destroyed == []
+    assert destroyed == [2]
     graph.close()
     assert graph._state.handle == 1
     graph._state.destroy()
     graph._state.destroy()
-    assert destroyed == [1]
+    assert destroyed == [2, 1]
 
 
 @pytest.mark.parametrize(
     "body_error_type", [None, ValueError, BaseException], ids=["no-body-error", "exception", "base-exception"]
 )
-def test_context_keeps_active_and_saved_state_when_return_rejected(
+def test_context_keeps_active_and_saved_state_when_destroy_rejected(
     monkeypatch: pytest.MonkeyPatch, body_error_type: type[BaseException] | None
 ) -> None:
     class BodyError(BaseException):
@@ -2864,14 +2980,10 @@ def test_context_keeps_active_and_saved_state_when_return_rejected(
         def clone_graph(self, encoded: bytes) -> bytes:
             return pb.CloneEGraphResponse(egraph_id=2).to_binary()
 
-        def return_to(self, encoded: bytes) -> bytes:
-            request = pb.ReturnToEGraphRequest.from_binary(encoded)
-            assert (request.active_id, request.saved_id) == (2, 1)
+        def destroy(self, encoded: bytes) -> bytes:
+            assert pb.DestroyEGraphRequest.from_binary(encoded).egraph_id == 2
             msg = "cleanup sentinel"
             raise RuntimeError(msg)
-
-        def destroy(self, encoded: bytes) -> bytes:
-            return pb.DestroyEGraphResponse().to_binary()
 
     monkeypatch.setattr(bindings, "_ProtoEngine", FaultTransport, raising=False)
     graph = EGraph()
@@ -2907,9 +3019,6 @@ class ResourceTransport:
 
     def clone_graph(self, encoded: bytes) -> bytes:
         return pb.CloneEGraphResponse(egraph_id=2).to_binary()
-
-    def return_to(self, encoded: bytes) -> bytes:
-        return pb.ReturnToEGraphResponse().to_binary()
 
     def destroy(self, encoded: bytes) -> bytes:
         return pb.DestroyEGraphResponse().to_binary()

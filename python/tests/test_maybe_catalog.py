@@ -29,6 +29,7 @@ from egglog import (
     union,
 )
 from egglog._catalog import builtin_catalog
+from egglog._presentation import builtin_owner
 from egglog._program import Builder, StructuralView, _copy_record, pack
 from egglog.deconstruct import get_callable_args, get_callable_fn
 from egglog.egraph_state import EggSmolError
@@ -125,7 +126,7 @@ def test_higher_order_map_fold_and_maybe_callbacks_execute_as_bytes(monkeypatch)
     assert graph.extract(Maybe[i64].some(i64(3)).match(lambda item: item.to_string(), String("none"))).value == "3"
 
 
-def test_maybe_none_conversion_and_constructor_deconstruction():
+def test_maybe_none_conversion_and_constructor_deconstruction(native_catalog_program):
     @function
     def identity(value: Maybe[i64]) -> Maybe[i64]: ...
 
@@ -143,19 +144,18 @@ def test_maybe_none_conversion_and_constructor_deconstruction():
         assert rebuilt_call is not None
         assert StructuralView(rebuilt_call.__egg_ref__) == StructuralView(call.__egg_ref__)
     declaration = builtin_catalog().definitions["callable", "egglog.experimental.maybe.none"]
-    builder = Builder()
+    builder = Builder.from_builtins(native_catalog_program)
+    builder.presentations.update(builtin_catalog().owner._presentations)
+    # Drop only this local view; the actual backend signature stays unchanged.
     record = declaration.read()
-    record.bindings = None
-    # Retain the signature's owned sort edges while dropping only presentation.
-    builder.add(
-        "declarations",
-        _copy_record(record, relocate=lambda role, index: builder.import_ref(declaration.owner.ref(role, index))),
-    )
+    assert isinstance(record, pb.Primitive)
+    builder.presentations.pop(("callable", record.name))
+    native = builder.publish()
     none = Maybe[i64].none().__egg_ref__
-    index = builder.add(
-        "nodes", _copy_record(none.read(), relocate=lambda role, index: builder.import_ref(none.owner.ref(role, index)))
+    packet = pack([none])
+    rebuilt = RuntimeExpr(
+        Builder.from_program(packet.program, environment=(native,)).publish().ref("nodes", packet.indices[0])
     )
-    rebuilt = RuntimeExpr(builder.publish().ref("nodes", index))
     assert rebuilt.value is None
     args, fn = get_callable_args(rebuilt), get_callable_fn(rebuilt)
     assert args == ()
@@ -184,7 +184,9 @@ def test_generic_classmethod_reconstruction_preserves_bound_callable_identity(mo
         packet = pack([call.__egg_ref__])
         imported = RuntimeExpr(
             Builder
-            .from_program(pb.Program.from_binary(packet.program.to_binary()))
+            .from_program(
+                pb.Program.from_binary(packet.program.to_binary()), environment=call.__egg_ref__.owner._environment
+            )
             .publish()
             .ref("nodes", packet.indices[0])
         )
@@ -217,7 +219,7 @@ def test_maybe_formed_child_zero_nested_presence_import_and_hash():
     child = builder.import_ref(i64_sort)
     maybe = Maybe[i64].none().__egg_ref__
     sort = builder.import_ref(maybe.owner.ref("sorts", maybe.read().sort_id))
-    builder.import_ref(builtin_catalog().definitions["host_sort_family", "Maybe"])
+    builder.import_ref(builtin_catalog().definitions["primitive_sort", "Maybe"])
     index = builder.add(
         "nodes",
         pb.Node(
@@ -261,11 +263,13 @@ def test_maybe_nested_equality_rebuilds():
     EGraph().extract(formed)
 
 
-def test_maybe_stub_is_derived_from_actual_member_metadata():
+def test_maybe_stub_joins_actual_signatures_and_local_presentation(python_presentation_mapping):
     render = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/generate_builtin_catalog.py"))[
         "render_stubs"
     ]
-    program = pb.Program.from_binary((Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
+    program = pb.BuiltinCatalog.from_binary(
+        (Path(__file__).resolve().parents[1] / "egglog/_builtin_catalog.pb").read_bytes()
+    )
     before = program.to_binary()
     generated = render(program)
     assert program.to_binary() == before
@@ -274,54 +278,45 @@ def test_maybe_stub_is_derived_from_actual_member_metadata():
     assert "def some(cls, value: _Maybe_T_0) -> Maybe[_Maybe_T_0]:" in generated
     assert "def unwrap(self) -> _Maybe_T_0:" in generated
     assert "def unwrap_or(self, default: _Maybe_T_0) -> _Maybe_T_0:" in generated
-    declarations: dict[str, pb.Declaration] = {}
-    for declaration in program.declarations:
-        declaration_kind = declaration.kind
-        assert declaration_kind is not None
-        declarations[declaration_kind.value.name] = declaration
-    family_kind = declarations["Maybe"].kind
-    assert family_kind is not None
-    assert family_kind.field == "host_sort_family"
-    family = family_kind.value
-    assert family.bindings is not None
-    assert family.bindings.python is not None
-    family.bindings.python.path[-1] = "OptionalValue"
-    family.bindings.python.type_params = ["Element"]
-    some_bindings = declarations["egglog.experimental.maybe.some"].bindings
-    assert some_bindings is not None
-    assert some_bindings.python is not None
-    some_bindings.python.views[0].path = ["present"]
-    some_bindings.python.views[0].params[0].name = "child"
-    renamed = render(program)
+    assert next(sort for sort in program.primitive_sorts if sort.name == "Maybe").arity == 1
+    python_presentation_mapping["types"]["Maybe"]["path"][-1] = "OptionalValue"
+    python_presentation_mapping["types"]["Maybe"]["typeParams"] = ["Element"]
+    python_presentation_mapping["callables"]["egglog.experimental.maybe.some"][0]["path"] = ["present"]
+    python_presentation_mapping["callables"]["egglog.experimental.maybe.some"][0]["params"][0]["name"] = "child"
+    renamed = render(program, mapping=python_presentation_mapping)
+    assert program.to_binary() == before
     assert "def value(self) -> _OptionalValue_Element_0 | None:" in renamed
     assert "def present(cls, child: _OptionalValue_Element_0) -> OptionalValue[_OptionalValue_Element_0]:" in renamed
-    owner = Builder.from_program(program).publish()
-    relocated = pack([owner.ref("declarations", i) for i in reversed(range(len(program.declarations)))]).program
-    reordered = render(relocated)
+    remap = {index: len(program.sorts) - index - 1 for index in range(len(program.sorts))}
+    relocated = pb.BuiltinCatalog(
+        sorts=[
+            _copy_record(sort, relocate=lambda role, index: remap[index] if role == "sorts" else index)
+            for sort in reversed(program.sorts)
+        ],
+        primitive_sorts=list(reversed(program.primitive_sorts)),
+        primitives=[
+            _copy_record(primitive, relocate=lambda role, index: remap[index] if role == "sorts" else index)
+            for primitive in reversed(program.primitives)
+        ],
+        files=program.files,
+    )
+    reordered = render(relocated, mapping=python_presentation_mapping)
     for line in renamed.splitlines():
         if "_OptionalValue_" in line or "class OptionalValue(" in line:
             assert line in reordered
 
 
-def test_maybe_formed_pretty_uses_owned_renamed_constructor_metadata():
+def test_maybe_formed_pretty_uses_owned_renamed_constructor_metadata(
+    native_catalog_program, python_presentation_mapping
+):
     formed = EGraph().extract(Maybe[i64].some(i64(0)))
-    packet = pack([
-        formed.__egg_ref__,
-        builtin_catalog().definitions["callable", "egglog.experimental.maybe.some"],
-    ])
+    packet = pack([formed.__egg_ref__])
     program = packet.program
-    for declaration in program.declarations:
-        kind = declaration.kind
-        assert kind is not None
-        if kind.field == "host_sort_family" and kind.value.name == "Maybe":
-            assert kind.value.bindings is not None
-            assert kind.value.bindings.python is not None
-            kind.value.bindings.python.path[-1] = "OptionalValue"
-        elif kind.field == "host_primitive" and kind.value.name == "egglog.experimental.maybe.some":
-            assert declaration.bindings is not None
-            assert declaration.bindings.python is not None
-            declaration.bindings.python.views[0].path = ["present"]
-    value = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packet.indices[0]))
+    python_presentation_mapping["types"]["Maybe"]["path"][-1] = "OptionalValue"
+    python_presentation_mapping["callables"]["egglog.experimental.maybe.some"][0]["path"] = ["present"]
+    native = builtin_owner(native_catalog_program, mapping=python_presentation_mapping)
+    builder = Builder.from_program(program, environment=(native,))
+    value = RuntimeExpr(builder.publish().ref("nodes", packet.indices[0]))
     child_value = value.value
     assert child_value is not None
     assert isinstance(child_value, RuntimeExpr)
@@ -350,9 +345,10 @@ def test_maybe_formed_and_call_defaults_execute_without_changing_representation(
 
 
 @pytest.mark.parametrize("mutation", ["wrong_child", "missing_child", "wrong_family", "arity", "scheme", "provenance"])
-def test_maybe_inspection_rejects_malformed_local_values(mutation):
+def test_maybe_inspection_rejects_malformed_local_values(mutation, native_catalog_program):
     original = Maybe[i64].some(i64(0)).__egg_ref__
     packet = pack([original])
+    environment = original.owner._environment
     program = copy.deepcopy(packet.program)
     node = program.nodes[packet.indices[0]]
     node_kind = node.kind
@@ -360,7 +356,7 @@ def test_maybe_inspection_rejects_malformed_local_values(mutation):
     assert node_kind.field == "call"
     sort_kind = program.sorts[node.sort_id].kind
     assert sort_kind is not None
-    assert sort_kind.field == "family"
+    assert sort_kind.field == "application"
     if mutation == "wrong_child":
         program.nodes[node_kind.value.args[0]].sort_id = node.sort_id
     elif mutation == "missing_child":
@@ -370,28 +366,23 @@ def test_maybe_inspection_rejects_malformed_local_values(mutation):
     elif mutation == "arity":
         sort_kind.value.args.clear()
     else:
-        for declaration in program.declarations:
-            declaration_kind = declaration.kind
-            assert declaration_kind is not None
-            if (
-                declaration_kind.field == "host_primitive"
-                and declaration_kind.value.name == "egglog.experimental.maybe.some"
-            ):
-                break
-        else:
-            raise StopIteration
+        primitive = next(p for p in native_catalog_program.primitives if p.name == "egglog.experimental.maybe.some")
         if mutation == "scheme":
-            declaration_kind = declaration.kind
-            assert declaration_kind is not None
-            assert declaration_kind.field == "host_primitive"
-            signature_kind = declaration_kind.value.typing
-            assert signature_kind is not None
-            assert signature_kind.field == "signature"
-            signature = signature_kind.value
-            signature.output = signature.inputs[0].sort
+            typing = primitive.typing
+            assert typing is not None
+            assert typing.field == "signature"
+            typing.value.output = typing.value.inputs[0].sort
         else:
-            declaration.kind = Oneof[Literal["constructor"], pb.Constructor](
-                "constructor", pb.Constructor(name="egglog.experimental.maybe.some", inputs=[], output=node.sort_id)
+            native_catalog_program.primitives.remove(primitive)
+            program.declarations.append(
+                pb.Declaration(
+                    kind=Oneof[Literal["constructor"], pb.Constructor](
+                        "constructor", pb.Constructor(name=primitive.name, inputs=[], output=node.sort_id)
+                    )
+                )
             )
+        environment = (Builder.from_builtins(native_catalog_program).publish(),)
     with pytest.raises((ValueError, TypeError, TypeConstraintError, ExprValueError)):
-        _ = RuntimeExpr(Builder.from_program(program).publish().ref("nodes", packet.indices[0])).value
+        _ = RuntimeExpr(
+            Builder.from_program(program, environment=environment).publish().ref("nodes", packet.indices[0])
+        ).value

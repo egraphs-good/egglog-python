@@ -36,15 +36,19 @@ def infer_call_bindings(
     No values or converters participate. Ordinary deconstruction retains only
     result-inferred bindings; a concrete named Func also retains its input sorts.
     """
-    record: pb.Declaration = declaration.read()
-    kind = record.kind.value if record.kind is not None else None
-    if isinstance(kind, pb.HostPrimitive) and kind.typing is not None and kind.typing.field == "signature":
+    record: pb.Declaration | pb.Primitive = declaration.read()
+    if isinstance(record, pb.Declaration):
+        assert record.kind is not None
+        kind = record.kind.value
+    else:
+        kind = record
+    if isinstance(kind, pb.Primitive) and kind.typing is not None and kind.typing.field == "signature":
         signature = kind.typing.value
         if not signature.has_field("output"):
             msg = "Stored call signature has no output"
             raise TypeConstraintError(msg)
         inputs, tail, output, size = signature.inputs, signature.varargs, signature.output, len(signature.type_params)
-    elif isinstance(kind, pb.Function | pb.Constructor | pb.Primitive):
+    elif isinstance(kind, pb.Function | pb.Constructor | pb.UserDefinedPrimitive):
         signature = None
         inputs, tail, output, size = kind.inputs, [], kind.output, 0
     else:
@@ -112,7 +116,7 @@ def infer_sort(pattern: Ref, actual: Ref, binder_size: int, bindings: dict[int, 
                         msg = "Actual argument sorts must be closed"
                         raise TypeConstraintError(msg)
                     match record.kind.field:
-                        case "family":
+                        case "application":
                             indices = record.kind.value.args
                         case "func":
                             indices = [*record.kind.value.params, record.kind.value.result]
@@ -128,8 +132,8 @@ def infer_sort(pattern: Ref, actual: Ref, binder_size: int, bindings: dict[int, 
                 if lhs.kind.value != rhs.kind.value:
                     raise TypeConstraintError(f"Expected {lhs.kind.value}, got {rhs.kind.value}")
                 continue
-            case "family":
-                assert rhs.kind.field == "family"
+            case "application":
+                assert rhs.kind.field == "application"
                 if lhs.kind.value.name != rhs.kind.value.name:
                     raise TypeConstraintError(f"Expected {lhs.kind.value.name}, got {rhs.kind.value.name}")
                 expected_children = lhs.kind.value.args
@@ -151,7 +155,11 @@ def infer_sort(pattern: Ref, actual: Ref, binder_size: int, bindings: dict[int, 
 
 def substitute_sort(pattern: Ref, bindings: dict[int, Ref]) -> Ref:  # noqa: C901
     """Instantiate sort records iteratively, preserving closed imported records."""
-    builder = Builder()
+    builder = Builder(
+        environment=(*pattern.owner._environment, pattern.owner)
+        if pattern.owner._builtin_indices
+        else pattern.owner._environment
+    )
     resolved: dict[Ref, int] = {}
     active: set[Ref] = set()
     pending = [(pattern, False)]
@@ -175,7 +183,7 @@ def substitute_sort(pattern: Ref, bindings: dict[int, Ref]) -> Ref:  # noqa: C90
             resolved[current] = builder.import_ref(replacement)
             continue
         match record.kind.field:
-            case "family":
+            case "application":
                 children = record.kind.value.args
             case "func":
                 children = [*record.kind.value.params, record.kind.value.result]

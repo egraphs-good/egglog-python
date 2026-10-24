@@ -160,12 +160,12 @@ impl ProtoEngine {
 
     // Drain while this request still exclusively owns the engine. The returned
     // exception belongs to its response, not to a later mutable take_error slot.
-    fn run_request<'py>(
+    fn run_request<T: Send>(
         &mut self,
-        py: Python<'py>,
-        request: &Bound<'py, PyBytes>,
-        operation: impl FnOnce(&mut Engine, &[u8]) -> Result<Vec<u8>, TransportError> + Send,
-    ) -> PyResult<(Bound<'py, PyBytes>, Option<Py<PyBaseException>>)> {
+        py: Python<'_>,
+        request: &Bound<'_, PyBytes>,
+        operation: impl FnOnce(&mut Engine, &[u8]) -> Result<T, TransportError> + Send,
+    ) -> PyResult<(T, Option<Py<PyBaseException>>)> {
         let bytes = request.as_bytes().to_vec();
         self.py_error.lock().unwrap().take();
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -186,10 +186,7 @@ impl ProtoEngine {
                 resume_unwind(error);
             }
         };
-        Ok((
-            PyBytes::new(py, &response),
-            captured.map(|error| error.into_value(py)),
-        ))
+        Ok((response, captured.map(|error| error.into_value(py))))
     }
 }
 
@@ -352,8 +349,8 @@ impl CostModelRuntime for PythonModelRuntime {
 mod tests {
     use super::*;
     use crate::py_object_sort::{PyObjectExtension, PyPickledValue, dump, load};
+    use egglog_experimental::proto as pb;
     use egglog_experimental::protobuf::NativeExtension;
-    use egglog_experimental::{builtin::import_rooted_definition, proto as pb};
     use prost::Message;
     use pyo3::types::PyDict;
     use std::sync::Arc;
@@ -529,20 +526,24 @@ mod tests {
             }
             .encode_to_vec();
             let instance = Py::new(py, instance).unwrap();
-            // Dynamic invocation keeps the pre-fix witness compilable. Accept
-            // its old bytes shape only to expose the lost actual callback error.
             let returned = instance
                 .bind(py)
                 .call_method1("run", (PyBytes::new(py, &request),))
                 .unwrap();
             let (bytes, captured) = returned
-                .extract::<(Vec<u8>, Option<Py<pyo3::exceptions::PyBaseException>>)>()
-                .unwrap_or_else(|_| (returned.extract::<Vec<u8>>().unwrap(), None));
-            let response = pb::RunProgramResponse::decode(bytes.as_slice()).unwrap();
-            assert_eq!(response.encode_to_vec(), bytes);
+                .extract::<(Vec<Vec<u8>>, Option<Py<pyo3::exceptions::PyBaseException>>)>()
+                .unwrap();
+            let frames = bytes
+                .iter()
+                .map(|bytes| {
+                    let frame = pb::RunProgramResponse::decode(bytes.as_slice()).unwrap();
+                    assert_eq!(frame.encode_to_vec(), *bytes);
+                    frame
+                })
+                .collect::<Vec<_>>();
             assert_eq!(
-                response.error.unwrap().code,
-                pb::ErrorCode::EvaluationFailed as i32
+                only_error(&frames).code,
+                pb::ErrorCode::RuntimeFailure as i32
             );
             let original = module.getattr("caught").unwrap();
             assert!(original.is_instance_of::<PyValueError>());
@@ -586,22 +587,26 @@ mod tests {
                         .join()
                         .unwrap();
                         match boundary {
-                            "response" => Ok(pb::RunProgramResponse {
-                                ..Default::default()
-                            }
-                            .encode_to_vec()),
+                            "response" => Ok(vec![
+                                pb::RunProgramResponse {
+                                    result: Some(pb::run_program_response::Result::Output(
+                                        pb::RunProgramOutput::default(),
+                                    )),
+                                    ..Default::default()
+                                }
+                                .encode_to_vec(),
+                            ]),
                             "transport" => engine.run(&[0xff]),
                             _ => resume_unwind(Box::new(PythonCostError)),
                         }
                     });
                 if boundary == "response" {
                     let (bytes, captured) = result.unwrap();
-                    assert!(
-                        pb::RunProgramResponse::decode(bytes.as_bytes())
-                            .unwrap()
-                            .error
-                            .is_none()
-                    );
+                    let frames = bytes
+                        .iter()
+                        .map(|bytes| pb::RunProgramResponse::decode(bytes.as_slice()).unwrap())
+                        .collect::<Vec<_>>();
+                    assert_success(&frames);
                     assert!(captured.unwrap().bind(py).is(value.bind(py)));
                 } else {
                     assert!(result.unwrap_err().value(py).is(value.bind(py)));
@@ -615,7 +620,7 @@ mod tests {
                         |_, bytes| Ok(bytes.to_vec()),
                     )
                     .unwrap();
-                assert_eq!(bytes.as_bytes(), b"next");
+                assert_eq!(bytes.as_slice(), b"next");
                 assert!(captured.is_none());
             }
             let failure = instance
@@ -627,13 +632,14 @@ mod tests {
             for latched in [false, true] {
                 let errors = instance.py_error.clone();
                 let unwind = catch_unwind(AssertUnwindSafe(|| {
-                    let _ = instance.run_request(py, &PyBytes::new(py, b"panic"), |_, _| {
-                        if latched {
-                            *errors.lock().unwrap() =
-                                Some(PyValueError::new_err("prior host error"));
-                        }
-                        resume_unwind(Box::new(NativePanic))
-                    });
+                    let _: PyResult<((), Option<Py<PyBaseException>>)> =
+                        instance.run_request(py, &PyBytes::new(py, b"panic"), |_, _| {
+                            if latched {
+                                *errors.lock().unwrap() =
+                                    Some(PyValueError::new_err("prior host error"));
+                            }
+                            resume_unwind(Box::new(NativePanic))
+                        });
                 }));
                 assert!(unwind.unwrap_err().is::<NativePanic>());
                 assert!(instance.py_error.lock().unwrap().is_none());
@@ -691,7 +697,7 @@ mod tests {
                 .create(
                     &pb::CreateEGraphRequest {
                         sorts: vec![pb::Sort {
-                            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                            kind: Some(pb::sort::Kind::Application(pb::SortApplication {
                                 name: "i64".into(),
                                 args: vec![],
                             })),
@@ -753,16 +759,10 @@ mod tests {
         );
         let mut keys = catalog
             .definitions
-            .declarations
+            .primitives
             .iter()
-            .filter_map(|d| match &d.kind {
-                Some(pb::declaration::Kind::HostPrimitive(p))
-                    if p.name.starts_with("egglog.python.pyobject.") =>
-                {
-                    Some(p.name.as_str())
-                }
-                _ => None,
-            })
+            .filter(|primitive| primitive.name.starts_with("egglog.python.pyobject."))
+            .map(|primitive| primitive.name.as_str())
             .collect::<Vec<_>>();
         keys.sort();
         assert_eq!(
@@ -784,30 +784,11 @@ mod tests {
         );
         let family = catalog
             .definitions
-            .declarations
+            .primitive_sorts
             .iter()
-            .find_map(|declaration| match &declaration.kind {
-                Some(pb::declaration::Kind::HostSortFamily(family))
-                    if family.name == "PyObject" =>
-                {
-                    Some(family)
-                }
-                _ => None,
-            })
+            .find(|family| family.name == "PyObject")
             .unwrap();
         assert_eq!(family.arity, 0);
-        assert_eq!(
-            family
-                .bindings
-                .as_ref()
-                .unwrap()
-                .python
-                .as_ref()
-                .unwrap()
-                .path,
-            ["egglog", "builtins", "PyObject"]
-        );
-        assert!(family.bindings.as_ref().unwrap().rust.is_none());
         for (key, alias, inputs, tail, output) in [
             (
                 "from_pickle",
@@ -864,19 +845,21 @@ mod tests {
             ("from_int", "py-from-int", vec!["i64"], vec![], "PyObject"),
         ] {
             let key = format!("egglog.python.pyobject.{key}");
-            let declaration = catalog.definitions.declarations.iter().find(|d| matches!(&d.kind, Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == key)).unwrap();
-            let Some(pb::declaration::Kind::HostPrimitive(primitive)) = &declaration.kind else {
-                unreachable!()
-            };
-            let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
+            let primitive = catalog
+                .definitions
+                .primitives
+                .iter()
+                .find(|primitive| primitive.name == key)
+                .unwrap();
+            let Some(pb::primitive::Typing::Signature(signature)) = &primitive.typing else {
                 panic!("not a real closed signature")
             };
             assert!(signature.type_params.is_empty());
             let sort_name = |index: u32| {
-                let Some(pb::sort::Kind::Family(family)) =
+                let Some(pb::sort::Kind::Application(family)) =
                     &catalog.definitions.sorts[index as usize].kind
                 else {
-                    panic!("not a host sort")
+                    panic!("not a primitive sort application")
                 };
                 assert!(family.args.is_empty());
                 family.name.as_str()
@@ -898,63 +881,6 @@ mod tests {
                 tail
             );
             assert_eq!(sort_name(signature.output.unwrap()), output);
-            let bindings = declaration.bindings.as_ref().unwrap();
-            assert_eq!(bindings.egglog.as_ref().unwrap().views[0].symbol, alias);
-            if alias == "py-object" {
-                assert!(bindings.python.is_none());
-            } else {
-                let views = &bindings
-                    .python
-                    .as_ref()
-                    .expect("missing public PyObject view")
-                    .views;
-                assert_eq!(views.len(), 1);
-                let view = &views[0];
-                if matches!(alias, "py-eval" | "py-exec") {
-                    assert_eq!(view.kind, pb::PythonCallKind::Function as i32);
-                    assert_eq!(view.path, ["egglog", "builtins", &alias.replace('-', "_")]);
-                    assert!(view.owner.is_none());
-                    assert_eq!(view.receiver, None);
-                    assert_eq!(view.params.len(), 3);
-                    for (index, name) in ["code", "globals_", "locals_"].iter().enumerate() {
-                        let parameter = &view.params[index];
-                        assert_eq!(parameter.name, *name);
-                        assert_eq!(parameter.core_input, Some(index as u32));
-                        if index == 0 {
-                            assert_eq!(parameter.default_expr, None);
-                            continue;
-                        }
-                        let default = &catalog.definitions.nodes
-                            [parameter.default_expr.expect("missing real dict default") as usize];
-                        assert_eq!(sort_name(default.sort_id), "PyObject");
-                        assert_eq!(
-                            default.kind,
-                            Some(pb::node::Kind::Call(pb::Call {
-                                func: "egglog.python.pyobject.dict".into(),
-                                args: vec![],
-                            }))
-                        );
-                    }
-                } else if matches!(alias, "py-call" | "py-dict-update") {
-                    assert_eq!(view.kind, pb::PythonCallKind::Method as i32);
-                    assert_eq!(view.receiver, Some(0));
-                    assert_eq!(
-                        view.owner.as_ref().unwrap().kind,
-                        Some(pb::binding_owner::Kind::Sort(signature.varargs[0].sort))
-                    );
-                    assert_eq!(view.params.len(), 1);
-                    assert_eq!(view.params[0].core_input, Some(1));
-                    assert_eq!(view.params[0].default_expr, None);
-                    assert_eq!(
-                        view.path,
-                        [if alias == "py-call" {
-                            "__call__"
-                        } else {
-                            "dict_update"
-                        }]
-                    );
-                }
-            }
             // The alias and key refer to the same actual registration in every
             // native context. This resolves signatures; no callback is executed.
             let sorts = inputs
@@ -994,7 +920,7 @@ mod tests {
             Python::attach(|py| _export_pyobject_catalog(py).unwrap().as_bytes().to_vec());
         assert_eq!(exported, catalog.definitions.encode_to_vec());
         assert_eq!(
-            pb::Program::decode(exported.as_slice())
+            pb::BuiltinCatalog::decode(exported.as_slice())
                 .unwrap()
                 .encode_to_vec(),
             exported
@@ -1009,19 +935,25 @@ mod tests {
         );
         let payload = Python::attach(|py| dump("hello".into_pyobject(py).unwrap()).unwrap().0);
         let mut engine = Engine::with_extension(extension);
+        let configured = pb::BuiltinCatalog::decode(
+            engine
+                .get_builtins(&pb::GetBuiltinsRequest::default().encode_to_vec())
+                .unwrap()
+                .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(configured, catalog.definitions);
         let id = create(&mut engine);
-        let catalog_result = run(&mut engine, id, catalog.definitions.clone());
-        assert_eq!(catalog_result.error, None);
         let program = custom_program(payload.clone());
-        let result = run(&mut engine, id, program);
-        assert_eq!(result.error, None);
+        let frames = run(&mut engine, id, program);
+        let result = single_output(&frames);
         let Some(pb::command_output::Kind::Extraction(extract)) = &result.outputs[0].kind else {
             panic!("not an extract")
         };
         let output = extract.roots[0].variants[0].term;
         let node = &result.nodes[output as usize];
         assert!(
-            matches!(&result.sorts[node.sort_id as usize].kind, Some(pb::sort::Kind::Family(f)) if f.name == "PyObject" && f.args.is_empty())
+            matches!(&result.sorts[node.sort_id as usize].kind, Some(pb::sort::Kind::Application(f)) if f.name == "PyObject" && f.args.is_empty())
         );
         assert_eq!(
             node.kind,
@@ -1044,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn pyobject_default_context_validation_and_installed_authority() {
+    fn pyobject_semantic_signatures_keep_native_authority_and_odd_dict_tail() {
         Python::initialize();
         let extension = Arc::new(PyObjectExtension::default());
         let mut graph = egglog_experimental::new_experimental_egraph();
@@ -1057,211 +989,169 @@ mod tests {
         let mut engine = Engine::with_extension(extension);
         for operation in ["eval", "exec"] {
             let key = format!("egglog.python.pyobject.{operation}");
-            let helper = "egglog.python.pyobject.dict";
-            // Export the actual callback-built context, not a second signature.
-            let mut context = pb::Program::default();
+            let mut context = pb::BuiltinCatalog::default();
             graph
                 .type_info()
                 .export_builtin_definition(&key, &mut context)
                 .unwrap();
-            let root = context
-                .declarations
+            let primitive = context
+                .primitives
                 .iter()
-                .position(|d| {
-                    matches!(&d.kind,
-                Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == key)
-                })
+                .find(|primitive| primitive.name == key)
                 .unwrap();
-            let default = context.declarations[root]
-                .bindings
-                .as_ref()
-                .unwrap()
-                .python
-                .as_ref()
-                .unwrap()
-                .views[0]
-                .params[1]
-                .default_expr
-                .unwrap() as usize;
-            let Some(pb::declaration::Kind::HostPrimitive(primitive)) =
-                &context.declarations[root].kind
-            else {
-                unreachable!()
-            };
-            let Some(pb::host_primitive::Typing::Signature(signature)) = &primitive.typing else {
-                unreachable!()
+            graph
+                .type_info()
+                .check_portable_builtin_signature(&context, primitive)
+                .unwrap();
+            let Some(pb::primitive::Typing::Signature(signature)) = &primitive.typing else {
+                panic!("missing actual signature")
             };
             let string_sort = signature.inputs[0].sort;
-            let mut imported = pb::Program::default();
-            import_rooted_definition(&key, &context, &mut imported).unwrap();
-            let before = imported.clone();
-            import_rooted_definition(&key, &context, &mut imported).unwrap();
-            assert_eq!(imported, before);
-
-            // Standalone closure needs its helper; an installed P session
-            // already owns that genuine declaration, so omission is allowed.
-            let mut missing = context.clone();
-            missing.declarations.retain(|d| {
-                !matches!(&d.kind,
-                Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == helper)
-            });
-            let mut destination = pb::Program::default();
-            assert_eq!(
-                import_rooted_definition(&key, &missing, &mut destination).unwrap_err(),
-                "unknown default callee"
+            let pyobject_sort = signature.output.unwrap();
+            let mut forged = context.clone();
+            let forged_primitive = forged
+                .primitives
+                .iter_mut()
+                .find(|primitive| primitive.name == key)
+                .unwrap();
+            let Some(pb::primitive::Typing::Signature(signature)) = &mut forged_primitive.typing
+            else {
+                panic!("missing actual signature")
+            };
+            signature.inputs[0].sort = signature.output.unwrap();
+            let forged_primitive = forged
+                .primitives
+                .iter()
+                .find(|primitive| primitive.name == key)
+                .unwrap();
+            assert!(
+                graph
+                    .type_info()
+                    .check_portable_builtin_signature(&forged, forged_primitive)
+                    .is_err()
             );
-            assert_eq!(destination, pb::Program::default());
-            let id = create(&mut engine);
-            assert_eq!(run(&mut engine, id, missing).error, None);
-            assert_eq!(run(&mut engine, id, context.clone()).error, None);
-
-            for (case, standalone_error) in [
-                ("forged_helper", None),
-                ("forged_family", None),
-                ("unknown_callee", Some("unknown default callee")),
-                ("fixed_helper_arity", Some("default call arity mismatch")),
-                ("default_sort", Some("default sort differs from parameter")),
-                ("family_arity", Some("presentation family arity mismatch")),
-            ] {
-                let mut invalid = context.clone();
-                match case {
-                    "forged_helper" => {
-                        let declaration = invalid
-                            .declarations
-                            .iter_mut()
-                            .find(|d| {
-                                matches!(&d.kind,
-                            Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == helper)
-                            })
-                            .unwrap();
-                        declaration
-                            .bindings
-                            .as_mut()
-                            .unwrap()
-                            .python
-                            .as_mut()
-                            .unwrap()
-                            .views[0]
-                            .path = vec!["forged_dict".into()];
-                    }
-                    "forged_family" | "family_arity" => {
-                        let family = invalid
-                            .declarations
-                            .iter_mut()
-                            .find_map(|d| match &mut d.kind {
-                                Some(pb::declaration::Kind::HostSortFamily(f))
-                                    if f.name == "PyObject" =>
-                                {
-                                    Some(f)
-                                }
-                                _ => None,
-                            })
-                            .unwrap();
-                        if case == "family_arity" {
-                            family.arity = 1;
-                        } else {
-                            family
-                                .bindings
-                                .as_mut()
-                                .unwrap()
-                                .python
-                                .as_mut()
-                                .unwrap()
-                                .path = vec!["forged".into(), "PyObject".into()];
-                        }
-                    }
-                    "default_sort" => invalid.nodes[default].sort_id = string_sort,
-                    _ => {
-                        let callee = if case == "fixed_helper_arity" {
-                            let callee = "egglog.python.pyobject.from_string";
-                            graph
-                                .type_info()
-                                .export_builtin_definition(callee, &mut invalid)
-                                .unwrap();
-                            invalid.declarations.retain(|d| {
-                                !matches!(&d.kind,
-                                Some(pb::declaration::Kind::HostPrimitive(p)) if p.name == helper)
-                            });
-                            callee
-                        } else {
-                            "egglog.python.pyobject.missing_helper"
-                        };
-                        let Some(pb::node::Kind::Call(call)) = &mut invalid.nodes[default].kind
-                        else {
-                            unreachable!()
-                        };
-                        call.func = callee.into();
-                    }
-                }
-                let mut destination = pb::Program::default();
-                let result = import_rooted_definition(&key, &invalid, &mut destination);
-                if let Some(expected) = standalone_error {
-                    assert_eq!(result.unwrap_err(), expected, "{operation}/{case}");
-                    assert_eq!(destination, pb::Program::default());
-                } else {
-                    // Rooted import assumes registered evidence; it does not
-                    // confer native authority on self-consistent forged views.
-                    result.unwrap();
-                }
-                let id = create(&mut engine);
-                let response = run(&mut engine, id, invalid);
-                assert_eq!(
-                    response.error.unwrap().code,
-                    pb::ErrorCode::InvalidProgram as i32,
-                    "{operation}/{case}"
-                );
-                assert!(response.outputs.is_empty());
-                assert_eq!(
-                    run(&mut engine, id, context.clone()).error,
-                    None,
-                    "failed admission must not poison the genuine context: {operation}/{case}"
-                );
-            }
-
-            // Dict has a homogeneous tail, not pair-width arity. A single
-            // well-sorted argument is valid and the unchanged body ignores it.
-            let mut odd = context.clone();
-            let argument = odd.nodes.len() as u32;
-            odd.nodes.push(odd.nodes[default].clone());
-            let Some(pb::node::Kind::Call(call)) = &mut odd.nodes[default].kind else {
+            let program = pb::Program {
+                sorts: context.sorts.clone(),
+                files: context.files.clone(),
+                nodes: vec![
+                    pb::Node {
+                        sort_id: pyobject_sort,
+                        kind: Some(pb::node::Kind::Call(pb::Call {
+                            func: "egglog.python.pyobject.dict".into(),
+                            args: vec![],
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Node {
+                        sort_id: string_sort,
+                        kind: Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+                            value: Some(pb::primitive_value::Value::String(
+                                if operation == "eval" { "None" } else { "pass" }.into(),
+                            )),
+                        })),
+                        ..Default::default()
+                    },
+                    pb::Node {
+                        sort_id: pyobject_sort,
+                        kind: Some(pb::node::Kind::Call(pb::Call {
+                            func: key,
+                            args: vec![1, 0, 0],
+                        })),
+                        ..Default::default()
+                    },
+                ],
+                commands: vec![pb::Command {
+                    kind: Some(pb::command::Kind::Extract(pb::Extract {
+                        roots: vec![2],
+                        variants: 1,
+                        extractor: pb::Extractor::Tree.into(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let mut invalid_call = program.clone();
+            let Some(pb::node::Kind::Call(call)) = &mut invalid_call.nodes[2].kind else {
                 unreachable!()
             };
-            call.args.push(argument);
-            import_rooted_definition(&key, &odd, &mut pb::Program::default()).unwrap();
-            // Execute only the call, not a conflicting resupply of changed
-            // eval/exec defaults. The installed catalog supplies its callee.
-            odd.declarations.clear();
-            odd.commands.push(pb::Command {
-                kind: Some(pb::command::Kind::Extract(pb::Extract {
-                    roots: vec![default as u32],
-                    variants: 1,
-                    extractor: pb::Extractor::Tree.into(),
-                    ..Default::default()
+            call.args[0] = 0;
+            let id = create(&mut engine);
+            let response = run(&mut engine, id, invalid_call);
+            assert_eq!(
+                only_error(&response).code,
+                pb::ErrorCode::InvalidProgram as i32
+            );
+            let response = run(&mut engine, id, program);
+            assert!(matches!(
+                &single_output(&response).outputs[0].kind,
+                Some(pb::command_output::Kind::Extraction(_))
+            ));
+        }
+
+        // Dict's native homogeneous tail still admits an odd operand count.
+        let key = "egglog.python.pyobject.dict";
+        let mut context = pb::BuiltinCatalog::default();
+        graph
+            .type_info()
+            .export_builtin_definition(key, &mut context)
+            .unwrap();
+        let sort = context
+            .primitives
+            .iter()
+            .find_map(|primitive| match &primitive.typing {
+                Some(pb::primitive::Typing::Signature(signature)) if primitive.name == key => {
+                    signature.output
+                }
+                _ => None,
+            })
+            .unwrap();
+        let mut odd = pb::Program {
+            sorts: context.sorts,
+            files: context.files,
+            ..Default::default()
+        };
+        for args in [vec![], vec![0]] {
+            odd.nodes.push(pb::Node {
+                sort_id: sort,
+                kind: Some(pb::node::Kind::Call(pb::Call {
+                    func: key.into(),
+                    args,
                 })),
                 ..Default::default()
             });
-            let response = run(&mut engine, id, odd);
-            assert_eq!(response.error, None);
-            let Some(pb::command_output::Kind::Extraction(extraction)) = &response.outputs[0].kind
-            else {
-                unreachable!()
-            };
-            let Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
-                value: Some(pb::primitive_value::Value::Custom(value)),
-            })) = &response.nodes[extraction.roots[0].variants[0].term as usize].kind
-            else {
-                panic!("expected an owned PyObject dict")
-            };
-            Python::attach(|py| {
-                assert!(
-                    load(py, &PyPickledValue(value.payload.clone()))
-                        .unwrap()
-                        .cast::<PyDict>()
-                        .unwrap()
-                        .is_empty()
-                );
-            });
         }
+        odd.commands.push(pb::Command {
+            kind: Some(pb::command::Kind::Extract(pb::Extract {
+                roots: vec![1],
+                variants: 1,
+                extractor: pb::Extractor::Tree.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        let id = create(&mut engine);
+        let frames = run(&mut engine, id, odd);
+        let response = single_output(&frames);
+        let Some(pb::command_output::Kind::Extraction(extraction)) = &response.outputs[0].kind
+        else {
+            panic!("expected extraction")
+        };
+        let Some(pb::node::Kind::PrimitiveValue(pb::PrimitiveValue {
+            value: Some(pb::primitive_value::Value::Custom(value)),
+        })) = &response.nodes[extraction.roots[0].variants[0].term as usize].kind
+        else {
+            panic!("expected an owned PyObject dict")
+        };
+        Python::attach(|py| {
+            assert!(
+                load(py, &PyPickledValue(value.payload.clone()))
+                    .unwrap()
+                    .cast::<PyDict>()
+                    .unwrap()
+                    .is_empty()
+            )
+        });
         assert_eq!(
             graph
                 .type_info()
@@ -1384,9 +1274,8 @@ mod tests {
         let mut extraction_count = 0;
         for program in phases {
             let result = run(&mut engine, id, program);
-            assert_eq!(result.error, None);
-            if !result.outputs.is_empty() {
-                assert_eq!(result.outputs.len(), 1);
+            assert_success(&result);
+            if result.len() > 1 {
                 extracted_program(&result, &payload);
                 extraction_count += 1;
             }
@@ -1395,7 +1284,9 @@ mod tests {
         assert!(recorder.py_error.lock().unwrap().is_none());
         let mut unused = original.clone();
         unused.commands.clear();
-        assert_eq!(run(&mut engine, id, unused).error, None);
+        let unused = run(&mut engine, id, unused);
+        assert_success(&unused);
+        assert_eq!(unused.len(), 1);
         let mut invalid_later = original.clone();
         invalid_later.commands.push(pb::Command {
             kind: Some(pb::command::Kind::Extract(pb::Extract {
@@ -1408,10 +1299,9 @@ mod tests {
         });
         let rejected = run(&mut engine, id, invalid_later);
         assert_eq!(
-            rejected.error.unwrap().code,
+            only_error(&rejected).code,
             pb::ErrorCode::InvalidProgram as i32
         );
-        assert!(rejected.outputs.is_empty());
         let result = run(&mut engine, id, original);
         let replay = extracted_program(&result, &payload);
         extracted_program(&run(&mut engine, id, replay), &payload);
@@ -1504,12 +1394,12 @@ mod tests {
             };
             let id = create(&mut engine);
             for phase in &phases[..2] {
-                assert_eq!(run(&mut engine, id, phase.clone()).error, None);
+                assert_success(&run(&mut engine, id, phase.clone()));
             }
             for invalid in 0..6 {
                 let mut program = custom_program(b"inert invalid pickle".to_vec());
                 program.sorts.push(pb::Sort {
-                    kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                    kind: Some(pb::sort::Kind::Application(pb::SortApplication {
                         name: "i64".into(),
                         args: vec![],
                     })),
@@ -1547,7 +1437,7 @@ mod tests {
                     }
                     1 => program.nodes[0].sort_id = 1,
                     2 => {
-                        let Some(pb::sort::Kind::Family(family)) = &mut program.sorts[0].kind
+                        let Some(pb::sort::Kind::Application(family)) = &mut program.sorts[0].kind
                         else {
                             unreachable!()
                         };
@@ -1572,27 +1462,21 @@ mod tests {
                             ..Default::default()
                         });
                     }
-                    _ => program.declarations.push(pb::Declaration {
-                        kind: Some(pb::declaration::Kind::HostSortFamily(pb::HostSortFamily {
-                            name: "PyObject".into(),
-                            arity: 1,
-                            bindings: None,
-                        })),
-                        ..Default::default()
-                    }),
+                    _ => {
+                        program.sorts[0].kind =
+                            Some(pb::sort::Kind::Application(pb::SortApplication {
+                                name: "unregistered.PyObject".into(),
+                                args: vec![],
+                            }))
+                    }
                 }
                 let response = run(&mut engine, id, program);
                 assert_eq!(
-                    response.error.unwrap().code,
+                    only_error(&response).code,
                     pb::ErrorCode::InvalidProgram as i32,
                     "configured={configured}, invalid={invalid}"
                 );
-                assert!(response.outputs.is_empty());
-                assert_eq!(
-                    run(&mut engine, id, phases[2].clone()).error,
-                    None,
-                    "no preceding Set may run"
-                );
+                assert_success(&run(&mut engine, id, phases[2].clone()));
             }
         }
     }
@@ -1602,7 +1486,7 @@ mod tests {
         let payload = b"inert nested bytes".to_vec();
         let mut program = custom_program(payload.clone());
         program.sorts.push(pb::Sort {
-            kind: Some(pb::sort::Kind::Family(pb::HostSort {
+            kind: Some(pb::sort::Kind::Application(pb::SortApplication {
                 name: "Vec".into(),
                 args: vec![0],
             })),
@@ -1624,8 +1508,8 @@ mod tests {
         let mut engine = Engine::with_extension(Arc::new(PyObjectExtension::default()));
         let id = create(&mut engine);
         for _ in 0..2 {
-            let result = run(&mut engine, id, program);
-            assert_eq!(result.error, None);
+            let frames = run(&mut engine, id, program);
+            let result = single_output(&frames);
             let Some(pb::command_output::Kind::Extraction(extract)) = &result.outputs[0].kind
             else {
                 unreachable!()
@@ -1649,6 +1533,7 @@ mod tests {
             program = pb::Program {
                 nodes: result.nodes.clone(),
                 sorts: result.sorts.clone(),
+                files: frames[0].files.clone(),
                 commands: vec![pb::Command {
                     kind: Some(pb::command::Kind::Extract(pb::Extract {
                         roots: vec![root],
@@ -1663,17 +1548,63 @@ mod tests {
         }
     }
 
+    fn assert_success(frames: &[pb::RunProgramResponse]) {
+        assert_eq!(
+            frames.last(),
+            Some(&pb::RunProgramResponse {
+                result: Some(pb::run_program_response::Result::Output(
+                    pb::RunProgramOutput::default(),
+                )),
+                ..Default::default()
+            }),
+            "execution must finish with an empty success frame"
+        );
+        assert!(frames.iter().all(|frame| matches!(
+            &frame.result,
+            Some(pb::run_program_response::Result::Output(_))
+        )));
+    }
+
+    fn only_error(frames: &[pb::RunProgramResponse]) -> &pb::Error {
+        let [
+            pb::RunProgramResponse {
+                result: Some(pb::run_program_response::Result::Error(error)),
+                ..
+            },
+        ] = frames
+        else {
+            panic!("expected one error frame without preceding observations: {frames:?}")
+        };
+        error
+    }
+
+    fn single_output(frames: &[pb::RunProgramResponse]) -> &pb::RunProgramOutput {
+        assert_success(frames);
+        let [
+            pb::RunProgramResponse {
+                result: Some(pb::run_program_response::Result::Output(output)),
+                ..
+            },
+            _,
+        ] = frames
+        else {
+            panic!("expected one owned observation and one terminal frame: {frames:?}")
+        };
+        assert_eq!(output.outputs.len(), 1);
+        output
+    }
+
     // Validates the whole observation boundary and returns an independently
     // owned, re-ingestible arena. This is not an out-of-band result channel.
-    fn extracted_program(result: &pb::RunProgramResponse, payload: &[u8]) -> pb::Program {
-        assert_eq!(result.error, None);
+    fn extracted_program(frames: &[pb::RunProgramResponse], payload: &[u8]) -> pb::Program {
+        let result = single_output(frames);
         let Some(pb::command_output::Kind::Extraction(extract)) = &result.outputs[0].kind else {
             panic!("not extraction")
         };
         let extracted = &extract.roots[0].variants[0];
         let node = &result.nodes[extracted.term as usize];
         assert!(
-            matches!(&result.sorts[node.sort_id as usize].kind, Some(pb::sort::Kind::Family(family)) if family.name == "PyObject" && family.args.is_empty())
+            matches!(&result.sorts[node.sort_id as usize].kind, Some(pb::sort::Kind::Application(family)) if family.name == "PyObject" && family.args.is_empty())
         );
         assert_eq!(
             node.kind,
@@ -1690,6 +1621,7 @@ mod tests {
         pb::Program {
             nodes: result.nodes.clone(),
             sorts: result.sorts.clone(),
+            files: frames[0].files.clone(),
             commands: vec![pb::Command {
                 kind: Some(pb::command::Kind::Extract(pb::Extract {
                     roots: vec![extracted.term],
@@ -1706,7 +1638,7 @@ mod tests {
     fn create(engine: &mut Engine) -> u64 {
         let request = pb::CreateEGraphRequest {
             sorts: vec![pb::Sort {
-                kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                kind: Some(pb::sort::Kind::Application(pb::SortApplication {
                     name: "i64".into(),
                     args: vec![],
                 })),
@@ -1725,20 +1657,24 @@ mod tests {
         .egraph_id
     }
 
-    fn run(engine: &mut Engine, id: u64, program: pb::Program) -> pb::RunProgramResponse {
+    fn run(engine: &mut Engine, id: u64, program: pb::Program) -> Vec<pb::RunProgramResponse> {
         let request = pb::RunProgramRequest {
             egraph_id: id,
             program: Some(program),
             ..Default::default()
         };
-        pb::RunProgramResponse::decode(engine.run(&request.encode_to_vec()).unwrap().as_slice())
+        engine
+            .run(&request.encode_to_vec())
             .unwrap()
+            .iter()
+            .map(|bytes| pb::RunProgramResponse::decode(bytes.as_slice()).unwrap())
+            .collect()
     }
 
     fn custom_program(payload: Vec<u8>) -> pb::Program {
         pb::Program {
             sorts: vec![pb::Sort {
-                kind: Some(pb::sort::Kind::Family(pb::HostSort {
+                kind: Some(pb::sort::Kind::Application(pb::SortApplication {
                     name: "PyObject".into(),
                     args: vec![],
                 })),
@@ -1919,7 +1855,7 @@ impl ProtoEngine {
             egglog_experimental::builtin::import_sort(&program.sorts, objective, &mut canonical)
                 .map_err(PyValueError::new_err)?;
         if !matches!(&canonical[result as usize].kind,
-            Some(pb::sort::Kind::Family(family)) if family.name == "PyObject" && family.args.is_empty())
+            Some(pb::sort::Kind::Application(family)) if family.name == "PyObject" && family.args.is_empty())
         {
             return Err(PyValueError::new_err(
                 "Python model objective requires the explicit PyObject leaf codec",
@@ -1964,8 +1900,12 @@ impl ProtoEngine {
         &mut self,
         py: Python<'py>,
         request: &Bound<'py, PyBytes>,
-    ) -> PyResult<(Bound<'py, PyBytes>, Option<Py<PyBaseException>>)> {
-        self.run_request(py, request, Engine::run)
+    ) -> PyResult<(Vec<Bound<'py, PyBytes>>, Option<Py<PyBaseException>>)> {
+        let (frames, error) = self.run_request(py, request, Engine::run)?;
+        Ok((
+            frames.iter().map(|bytes| PyBytes::new(py, bytes)).collect(),
+            error,
+        ))
     }
 
     fn run_stream<'py>(
@@ -1975,7 +1915,7 @@ impl ProtoEngine {
         on_output: Py<PyAny>,
     ) -> PyResult<(Bound<'py, PyBytes>, Option<Py<PyBaseException>>)> {
         let errors = self.py_error.clone();
-        self.run_request(py, request, move |engine, bytes| {
+        let (response, error) = self.run_request(py, request, move |engine, bytes| {
             let mut latest = Vec::new();
             engine.run_stream(bytes, &mut |chunk| {
                 latest = chunk.encode_to_vec();
@@ -1998,7 +1938,8 @@ impl ProtoEngine {
                 })
             })?;
             Ok(latest)
-        })
+        })?;
+        Ok((PyBytes::new(py, &response), error))
     }
 
     fn clone_graph<'py>(
@@ -2017,19 +1958,19 @@ impl ProtoEngine {
         self.request(py, request, Engine::destroy)
     }
 
-    fn return_to<'py>(
-        &mut self,
-        py: Python<'py>,
-        request: &Bound<'py, PyBytes>,
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        self.request(py, request, Engine::return_to)
-    }
-
     fn get_history<'py>(
         &mut self,
         py: Python<'py>,
         request: &Bound<'py, PyBytes>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         self.request(py, request, |engine, bytes| engine.get_history(bytes))
+    }
+
+    fn get_builtins<'py>(
+        &mut self,
+        py: Python<'py>,
+        request: &Bound<'py, PyBytes>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.request(py, request, |engine, bytes| engine.get_builtins(bytes))
     }
 }

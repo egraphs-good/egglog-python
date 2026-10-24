@@ -14,7 +14,8 @@ import traitlets
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from IPython.display import display
 
-from ._program import Builder, _copy_record
+from ._presentation import CallKind, presentation
+from ._program import Builder, Owner, _copy_record, _definition_key
 from .ipython_magic import IN_IPYTHON
 from .pretty import pretty_ref
 
@@ -89,6 +90,7 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
     n_inline_leaves: int = 0,
     split_primitive_outputs: bool = True,
     split_functions: set[str] | None = None,
+    owner: Owner | None = None,
 ) -> _Graph:
     """
     Project the snapshot's stored row inventory, never evaluating its values.
@@ -105,40 +107,52 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
             msg = "Visualization limits must be nonnegative"
             raise ValueError(msg)
     program = snapshot.program
-    owner = Builder.from_program(program).publish()
+    owner = Builder.from_program(program).publish() if owner is None else owner
+    definitions = {
+        _definition_key(reference.read()): reference
+        for source in (*owner._environment, owner)
+        for role in ("declarations", "primitive_sorts", "primitives")
+        for index in range(len(source._slots[role]))
+        for reference in (source.ref(role, index),)
+    }
     sort_labels = {}
     labels = {}
     declared_costs = {}
     type_names = {}
-    for declaration in program.declarations:
-        if declaration.kind is not None and isinstance(declaration.kind.value, pb.EqSort | pb.HostSortFamily):
+    for key, reference in definitions.items():
+        assert key is not None
+        declaration = reference.read()
+        if isinstance(declaration, pb.Declaration):
+            assert declaration.kind is not None
             kind = declaration.kind.value
-            bindings = kind.bindings
-            type_names[declaration.kind.field, kind.name] = (
-                bindings.python.path[-1] if bindings is not None and bindings.python is not None else kind.name
-            )
+        else:
+            kind = declaration
+        if isinstance(kind, pb.EqSort | pb.PrimitiveSort):
+            bindings = presentation(reference).type_view
+            type_names[key] = bindings.path[-1] if bindings is not None else kind.name
     for declaration in program.declarations:
         if declaration.kind is None:
             continue
         kind = declaration.kind.value
-        if not isinstance(kind, pb.Constructor | pb.Function | pb.Relation | pb.Primitive | pb.HostPrimitive):
+        if not isinstance(kind, pb.Constructor | pb.Function | pb.Relation | pb.UserDefinedPrimitive | pb.Primitive):
             continue
         label = kind.name
-        if declaration.bindings is not None and declaration.bindings.python is not None:
-            for view in declaration.bindings.python.views[:1]:
+        views = presentation(definitions["callable", kind.name]).views
+        if views:
+            for view in views[:1]:
                 if view.path:
                     label = ".".join(view.path[-2:] if view.owner is not None else view.path[-1:])
-                if view.owner is not None and view.owner.kind is not None and view.owner.kind.field == "sort":
-                    sort = program.sorts[view.owner.kind.value].kind
+                if view.owner is not None:
+                    sort = view.owner.read().kind
                     assert sort is not None
                     if sort.field == "eq":
                         typ = type_names["eq_sort", sort.value]
-                    elif sort.field == "family":
-                        typ = type_names["host_sort_family", sort.value.name]
+                    elif sort.field == "application":
+                        typ = type_names["primitive_sort", sort.value.name]
                     else:
                         msg = "A nominal Python callable owner requires an equality or family sort"
                         raise ValueError(msg)
-                    label = typ if view.kind == pb.PythonCallKind.INITIALIZER else f"{typ}.{view.path[-1]}"
+                    label = typ if view.kind == CallKind.INITIALIZER else f"{typ}.{view.path[-1]}"
         labels[kind.name] = label
         if isinstance(kind, pb.Constructor) and kind.has_field("cost"):
             declared_costs[kind.name] = kind.cost
@@ -205,7 +219,7 @@ def _snapshot_to_data(  # noqa: C901, PLR0912
             raise ValueError(msg)
         cid = class_ids[index]
         if node.sort_id not in sort_labels:
-            sort_labels[node.sort_id] = pretty_ref(owner.ref("sorts", node.sort_id))
+            sort_labels[node.sort_id] = pretty_ref(owner.ref("sorts", node.sort_id), sort_names=type_names)
         class_data[cid] = {"type": sort_labels[node.sort_id]}
         if node.kind.field == "union" and cid in inventory:
             pending.extend(node.kind.value.members)

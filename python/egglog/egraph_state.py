@@ -28,6 +28,25 @@ class EggSmolError(Exception):
     """An engine error returned by the encoded protocol."""
 
 
+def _decode_run_frames(encoded: Iterable[bytes]) -> list[pb.RunProgramResponse]:
+    """Require an exclusive frame sequence with a terminal acknowledgement."""
+    frames = [pb.RunProgramResponse.from_binary(frame) for frame in encoded]
+    if not frames or any(frame.result is None for frame in frames):
+        msg = "Execution omitted its terminal acknowledgement"
+        raise ValueError(msg)
+    for position, frame in enumerate(frames):
+        assert frame.result is not None
+        if frame.result.field == "error" and position != len(frames) - 1:
+            msg = "Execution emitted data after its terminal error"
+            raise ValueError(msg)
+    final = frames[-1].result
+    assert final is not None
+    if final.field == "output" and final.value.outputs:
+        msg = "Execution omitted its empty terminal acknowledgement"
+        raise ValueError(msg)
+    return frames
+
+
 def _thread_count(value: object) -> int:
     """Keep Python's integer-index acceptance within the protocol's uint32 domain."""
     count = index(cast("SupportsIndex", value))
@@ -66,9 +85,15 @@ class EGraphState:
             raise NotImplementedError(msg)
         self.transport = bindings._ProtoEngine()
         # The public default cost sort is an ambient engine builtin. Creation
-        # references it directly; authored Programs still send full declarations.
+        # references it directly; authored Programs send only user declarations.
         request = pb.CreateEGraphRequest(
-            sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
+            sorts=[
+                pb.Sort(
+                    kind=Oneof[Literal["application"], pb.SortApplication](
+                        "application", pb.SortApplication(name="i64")
+                    )
+                )
+            ],
             options=pb.EGraphOptions(cost_sort=0, seminaive=seminaive),
             threads=num_threads,
             no_decomp=no_decomp,
@@ -100,8 +125,16 @@ class EGraphState:
             raise RuntimeError(msg)
         sorts = pb.Program(
             sorts=[
-                pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
-                pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="PyObject"))),
+                pb.Sort(
+                    kind=Oneof[Literal["application"], pb.SortApplication](
+                        "application", pb.SortApplication(name="i64")
+                    )
+                ),
+                pb.Sort(
+                    kind=Oneof[Literal["application"], pb.SortApplication](
+                        "application", pb.SortApplication(name="PyObject")
+                    )
+                ),
             ],
         )
         name = self.transport.register_cost_model(self.handle, sorts.to_binary(), 0, 1, additive, factory)
@@ -119,11 +152,11 @@ class EGraphState:
         diagnostics: bool = False,
         on_output: Callable[[pb.RunProgramResponse], bool | None] | None = None,
         allow_failed_check: bool = False,
-    ) -> tuple[pb.RunProgramResponse, Owner]:
+    ) -> list[tuple[pb.RunProgramOutput, Owner]]:
         """
         Pack canonical command closure once and adopt the returned records.
 
-        With an output callback, the returned response is the terminal chunk;
+        With an output callback, the returned list contains only the terminal chunk;
         preceding owned observations are delivered only through the callback.
         """
         if self._cost_model_active or self._native_running:
@@ -180,6 +213,14 @@ class EGraphState:
         def consume(encoded: bytes) -> bool:
             assert on_output is not None
             chunk = pb.RunProgramResponse.from_binary(encoded)
+            if chunk.result is None:
+                msg = "Execution frame has no result"
+                raise ValueError(msg)
+            if chunk.result.field == "output" or chunk.result.value.location is not None:
+                for reference in packed.definitions:
+                    key = _definition_key(reference.read())
+                    if key is not None:
+                        self.definitions[key] = reference
             result = cast("object", on_output(chunk))
             if result is not None and type(result) is not bool:
                 msg = "Output callbacks must return bool or None"
@@ -190,9 +231,10 @@ class EGraphState:
         self._active_definitions = packed.definitions
         try:
             if on_output is None:
-                encoded, host_error = self.transport.run(encoded_request)
+                encoded_frames, host_error = self.transport.run(encoded_request)
             else:
                 encoded, host_error = self.transport.run_stream(encoded_request, consume)
+                encoded_frames = [encoded]
         except BaseException:
             if self._recording:
                 self.transport.finish_recording(False)
@@ -202,23 +244,25 @@ class EGraphState:
             self._native_running = False
         # Keep response validation inside this boundary to preserve the host cause.
         try:
-            response = pb.RunProgramResponse.from_binary(encoded)
-            # Successful preparation or a command location confirms that the
-            # complete declaration installation preceded authored execution.
-            # Failed installation can be retried with the original definitions.
-            if response.error is None or response.error.location is not None:
-                for reference in packed.definitions:
-                    key = _definition_key(reference.read())
-                    if key is not None:
-                        self.definitions[key] = reference
-            owner = self._adopt_value_records(
-                pb.Program(
-                    nodes=response.nodes,
-                    sorts=response.sorts,
-                    files=response.files,
-                    rules=response.rules,
-                )
-            )
+            frames = _decode_run_frames(encoded_frames)
+            results = []
+            failure: pb.Error | None = None
+            for frame in frames:
+                assert frame.result is not None
+                if frame.result.field == "error":
+                    failure = frame.result.value
+                # An output or command location acknowledges installation.
+                if frame.result.field == "output" or frame.result.value.location is not None:
+                    for reference in packed.definitions:
+                        key = _definition_key(reference.read())
+                        if key is not None:
+                            self.definitions[key] = reference
+                if frame.result.field == "output":
+                    output = frame.result.value
+                    owner = self._adopt_value_records(
+                        pb.Program(nodes=output.nodes, sorts=output.sorts, files=frame.files)
+                    )
+                    results.append((output, owner))
         except BaseException as error:
             if self._recording:
                 self.transport.finish_recording(False)
@@ -228,27 +272,28 @@ class EGraphState:
         # The actual response and arenas have been consumed. Preserve
         # first-host precedence without rewriting its chain or the native Error.
         if self._recording:
-            self.transport.finish_recording(host_error is None and response.error is None)
-        if host_error is None and response.error is None:
+            self.transport.finish_recording(host_error is None and failure is None)
+        if host_error is None and failure is None:
             for binding in scheduler_bindings:
                 self._scheduler_bindings[binding.name] = binding
         if host_error is not None:
             raise host_error
         if (
             allow_failed_check
-            and response.error is not None
-            and response.error.code == pb.ErrorCode.CHECK_FAILED
-            and response.error.location is not None
-            and response.error.location.path == [0]
-            and not response.error.location.iterations
+            and failure is not None
+            and failure.code == pb.ErrorCode.CHECK_FAILED
+            and failure.location is not None
+            and failure.location.path == [0]
+            and not failure.location.iterations
         ):
-            return response, owner
-        if response.error is not None:
-            error = EggSmolError(response.error.message)
+            return []
+        if failure is not None:
+            error = EggSmolError(failure.message)
             # Keep the actual generated record with this Python exception.
-            error.__dict__["_egglog_proto_error"] = response.error
+            error.__dict__["_egglog_proto_error"] = failure
+            error.__dict__["_egglog_proto_frame"] = frames[-1]
             raise error
-        return response, owner
+        return results
 
     def bind_scheduler(self, reference: Ref) -> None:
         """Deploy once per acknowledged config; preserve uncertain live state."""
@@ -332,38 +377,13 @@ class EGraphState:
         result._active_definitions = ()
         return result
 
-    def return_to(self, saved: EGraphState) -> None:
-        """Restore a direct saved owner; successful Return consumes this handle."""
-        if self.handle is None or saved.handle is None:
-            msg = "Return requires two live EGraph handles"
-            raise RuntimeError(msg)
-        if self.transport is not saved.transport or self.handle == saved.handle:
-            msg = "Return requires distinct handles on the same transport"
-            raise ValueError(msg)
-        if self._recording:
-            self.transport.prepare_recording_scope(False)
-        try:
-            encoded = self.transport.return_to(
-                pb.ReturnToEGraphRequest(active_id=self.handle, saved_id=saved.handle).to_binary()
-            )
-            # Successful transport consumes the active handle, even if decoding
-            # fails. Public pop selects the saved state only after acknowledgement.
-            self.handle = None
-            pb.ReturnToEGraphResponse.from_binary(encoded)
-        except BaseException:
-            if self._recording:
-                self.transport.finish_recording(False)
-            raise
-        if self._recording:
-            self.transport.finish_recording(True)
-
     def destroy(self) -> None:
         """Release this handle once without affecting cloned graph handles."""
         if self.handle is not None:
-            pb.DestroyEGraphResponse.from_binary(
-                self.transport.destroy(pb.DestroyEGraphRequest(egraph_id=self.handle).to_binary())
-            )
+            encoded = self.transport.destroy(pb.DestroyEGraphRequest(egraph_id=self.handle).to_binary())
+            # Transport success consumes the handle even if its reply is corrupt.
             self.handle = None
+            pb.DestroyEGraphResponse.from_binary(encoded)
 
     def __del__(self) -> None:
         # A failed constructor may have no handle. Never let native cleanup
@@ -473,7 +493,13 @@ class _CostModelObservation:
                 return None
         if not callback and record.kind is not None and record.kind.field == "call":
             target = record.kind.value
-            if ("callable", target.func) in self.registered and target.func not in self.table_backed:
+            if target.func not in self.table_backed and (
+                ("callable", target.func) in self.registered
+                or any(
+                    ("callable", target.func) in provider._builtin_indices
+                    for provider in (*value.owner._environment, value.owner)
+                )
+            ):
                 msg = "Lookup cannot evaluate primitive keys; register or bind the expression explicitly"
                 raise ValueError(msg)
             resolved_args = [

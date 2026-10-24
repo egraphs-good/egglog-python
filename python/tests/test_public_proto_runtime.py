@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Iterator
 from copy import copy
 from fractions import Fraction
 from functools import partial
+from pathlib import Path
 from typing import ClassVar, Literal, cast
 
 import pytest
@@ -45,8 +46,15 @@ from egglog import (
 )
 from egglog.deconstruct import get_callable_args, get_callable_fn, get_constant_name, get_literal_value
 from egglog.egraph import to_runtime_expr
-from egglog.egraph_state import EggSmolError
+from egglog.egraph_state import EggSmolError, _decode_run_frames
 from egglog.runtime import RuntimeExpr, RuntimeFunction, resolve_callable
+
+
+def _record_frames(encoded: list[bytes], prefix: Path) -> list[pb.RunProgramResponse]:
+    """Retain each owned wire frame and validate the terminal acknowledgement."""
+    for position, frame in enumerate(encoded):
+        (prefix.parent / f"{prefix.name}-{position}.pb").write_bytes(frame)
+    return _decode_run_frames(encoded)
 
 
 def _recorded_calls(requests: Iterable[pb.RunProgramRequest]) -> Iterator[pb.Call]:
@@ -543,7 +551,7 @@ def test_symbolic_getattr_public_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path
     graph = EGraph()
     transport = graph._state.transport
     requests: list[pb.RunProgramRequest] = []
-    responses: list[pb.RunProgramResponse] = []
+    responses: list[list[pb.RunProgramResponse]] = []
 
     class AuditedTransport:
         def run(self, encoded):
@@ -552,9 +560,7 @@ def test_symbolic_getattr_public_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path
             (tmp_path / f"request-{index}.pb").write_bytes(encoded)
             requests.append(pb.RunProgramRequest.from_binary(encoded))
             returned, host_error = transport.run(encoded)
-            assert isinstance(returned, bytes)
-            (tmp_path / f"response-{index}.pb").write_bytes(returned)
-            responses.append(pb.RunProgramResponse.from_binary(returned))
+            responses.append(_record_frames(returned, tmp_path / f"response-{index}"))
             return returned, host_error
 
     monkeypatch.setattr(graph._state, "transport", AuditedTransport())
@@ -578,7 +584,7 @@ def test_symbolic_getattr_public_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path
         assert arguments[1].value == expected
     assert requests
     assert len(requests) == len(responses)
-    assert all(response.error is None for response in responses)
+    assert all(frame.result is not None and frame.result.field == "output" for frames in responses for frame in frames)
     assert any(call.func == "egglog.core.string.concat" for call in _recorded_calls(requests))
 
 
@@ -630,8 +636,7 @@ def test_symbolic_getattr_corrupt_bytes_reject_before_execution(monkeypatch: pyt
             assert corrupted != encoded
             (tmp_path / "request-corrupted.pb").write_bytes(corrupted)
             returned, host_error = transport.run(corrupted)
-            (tmp_path / "response.pb").write_bytes(returned)
-            rejected.append(pb.RunProgramResponse.from_binary(returned))
+            rejected.append(_record_frames(returned, tmp_path / "response"))
             return returned, host_error
 
     with monkeypatch.context() as patch:
@@ -639,8 +644,10 @@ def test_symbolic_getattr_corrupt_bytes_reject_before_execution(monkeypatch: pyt
         with pytest.raises(EggSmolError):
             graph.register(expression)
     assert len(rejected) == 1
-    assert rejected[0].error is not None
-    assert rejected[0].error.location is None
+    result = rejected[0][-1].result
+    assert result is not None
+    assert result.field == "error"
+    assert result.value.location is None
     assert graph.function_size(A.__getattr__) == 0
     graph.register(expression)
     assert graph.function_size(A.__getattr__) == 1
@@ -719,7 +726,7 @@ def test_public_pyobject_defaults_and_results_cross_bytes(monkeypatch, tmp_path)
     graph = EGraph()
     transport = graph._state.transport
     requests: list[pb.RunProgramRequest] = []
-    responses: list[pb.RunProgramResponse] = []
+    responses: list[list[pb.RunProgramResponse]] = []
 
     class AuditedTransport:
         def run(self, encoded):
@@ -728,9 +735,7 @@ def test_public_pyobject_defaults_and_results_cross_bytes(monkeypatch, tmp_path)
             (tmp_path / f"request-{index}.pb").write_bytes(encoded)
             requests.append(pb.RunProgramRequest.from_binary(encoded))
             returned, host_error = transport.run(encoded)
-            assert isinstance(returned, bytes)
-            (tmp_path / f"response-{index}.pb").write_bytes(returned)
-            responses.append(pb.RunProgramResponse.from_binary(returned))
+            responses.append(_record_frames(returned, tmp_path / f"response-{index}"))
             return returned, host_error
 
     monkeypatch.setattr(graph._state, "transport", AuditedTransport())
@@ -757,7 +762,7 @@ def test_public_pyobject_defaults_and_results_cross_bytes(monkeypatch, tmp_path)
     assert graph.extract(PyObject(True).to_bool()).value is True
     assert requests
     assert len(requests) == len(responses)
-    assert all(response.error is None for response in responses)
+    assert all(frame.result is not None and frame.result.field == "output" for frames in responses for frame in frames)
     assert any(call.func == "egglog.python.pyobject.dict" for call in _recorded_calls(requests))
     monkeypatch.setattr(graph._state, "transport", transport)
     graph._state.destroy()
@@ -965,7 +970,7 @@ def test_nominal_pair_coexists_with_ambient_family_through_bytes() -> None:
 
     expression = NominalPair()
     graph = EGraph()
-    assert ("host_sort_family", "Pair") in graph._state.definitions
+    assert ("primitive_sort", "Pair") in graph._state.definitions
     graph.register(expression)
     result = graph.extract(expression)
     graph.check(eq(expression).to(result))
@@ -975,7 +980,7 @@ def test_nominal_pair_coexists_with_ambient_family_through_bytes() -> None:
     assert result_sort.kind.field == "eq"
     assert result_sort.kind.value == "Pair"
     assert ("eq_sort", "Pair") in graph._state.definitions
-    assert ("host_sort_family", "Pair") in graph._state.definitions
+    assert ("primitive_sort", "Pair") in graph._state.definitions
 
 
 def test_bodyless_free_function_public_bytes() -> None:
@@ -1183,6 +1188,26 @@ def test_context_retains_actual_creation_thread_count() -> None:
     assert graph.num_threads() == 2
 
 
+def test_ordinary_calls_reuse_validated_owned_presentation_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    from egglog._catalog import Catalog  # noqa: PLC0415
+
+    expression = i64(0) + 1
+    hash(expression)
+    reindexed = 0
+    original = Catalog.reindex
+
+    def counted(catalog: Catalog) -> None:
+        nonlocal reindexed
+        reindexed += 1
+        original(catalog)
+
+    monkeypatch.setattr(Catalog, "reindex", counted)
+    for _ in range(20):
+        expression = expression + 1
+        hash(expression)
+    assert reindexed == 0
+
+
 def test_ten_thousand_ordinary_calls_are_incremental(monkeypatch: pytest.MonkeyPatch) -> None:
     copied = 0
     visited = 0
@@ -1237,7 +1262,7 @@ def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: p
     from egglog._catalog import builtin_catalog  # noqa: PLC0415
 
     definitions = builtin_catalog().definitions
-    assert ("host_sort_family", "MultiSet") in definitions, (
+    assert ("primitive_sort", "MultiSet") in definitions, (
         f"Packaged catalog is missing the MultiSet family ({len(definitions)} definitions); "
         "this is not a public-import or native-build failure"
     )
@@ -1304,22 +1329,20 @@ def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: p
         assert nested.value == [explicit, explicit, empty]
 
     requests: list[pb.RunProgramRequest] = []
-    responses: list[pb.RunProgramResponse] = []
+    responses: list[list[pb.RunProgramResponse]] = []
     destroyed: list[pb.DestroyEGraphRequest] = []
 
     class AuditedTransport:
         def __init__(self, transport: bindings._ProtoEngine) -> None:
             self.transport = transport
 
-        def run(self, encoded: bytes) -> tuple[bytes, BaseException | None]:
+        def run(self, encoded: bytes) -> tuple[list[bytes], BaseException | None]:
             assert isinstance(encoded, bytes)
             index = len(requests)
             (tmp_path / f"request-{index}.pb").write_bytes(encoded)
             requests.append(pb.RunProgramRequest.from_binary(encoded))
             returned, host_error = self.transport.run(encoded)
-            assert isinstance(returned, bytes)
-            (tmp_path / f"response-{index}.pb").write_bytes(returned)
-            responses.append(pb.RunProgramResponse.from_binary(returned))
+            responses.append(_record_frames(returned, tmp_path / f"response-{index}"))
             assert host_error is None
             return returned, host_error
 
@@ -1381,7 +1404,7 @@ def test_multiset_packaged_catalog_public_values_and_replay_bytes(monkeypatch: p
     assert destroyed[-1].egraph_id == fresh_handle
     assert len(requests) > run_count
     assert len(requests) == len(responses)
-    assert all(response.error is None for response in responses)
+    assert all(frame.result is not None and frame.result.field == "output" for frames in responses for frame in frames)
 
 
 def test_multiset_all_ordinary_views_and_partial_failures_public_bytes() -> None:
@@ -1482,7 +1505,7 @@ def test_python_callbacks_capture_symbolic_values_without_engine(monkeypatch: py
     assert len(restored.args) == 1
     assert expr_parts(restored.args[0]) == expr_parts(captured)
     primitive = cast("RuntimeFunction", restored.func).__egg_ref__.read()
-    assert primitive.kind.field == "primitive"
+    assert primitive.kind.field == "user_defined_primitive"
     assert len(primitive.kind.value.inputs) == 2
     assert callback.__egg_ref__.read().kind.value.value.field == "partial_call"
     assert str(callback) == "lambda value: value + (i64(4) + 5)"
@@ -1644,7 +1667,7 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
     declaration = cast("RuntimeFunction", via_union).__egg_ref__
     primitive = declaration.read().kind
     assert primitive is not None
-    assert primitive.field == "primitive"
+    assert primitive.field == "user_defined_primitive"
     body = declaration.owner.ref("nodes", primitive.value.body).read()
     assert body.kind is not None
     assert body.kind.field == "call"
@@ -1660,21 +1683,20 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
     before = set_(marker(i64(10))).to(i64(1))
     after = set_(marker(i64(20))).to(i64(2))
     requests: dict[str, pb.RunProgramRequest] = {}
-    responses: dict[str, pb.RunProgramResponse] = {}
+    responses: dict[str, list[pb.RunProgramResponse]] = {}
 
     class AuditedTransport:
         def __init__(self, transport: bindings._ProtoEngine, label: str) -> None:
             self.transport = transport
             self.label = label
 
-        def run(self, encoded: bytes) -> tuple[bytes, BaseException | None]:
+        def run(self, encoded: bytes) -> tuple[list[bytes], BaseException | None]:
             assert self.label not in requests
             (tmp_path / f"{self.label}-request.pb").write_bytes(encoded)
             requests[self.label] = pb.RunProgramRequest.from_binary(encoded)
             returned, host_error = self.transport.run(encoded)
             assert host_error is None
-            (tmp_path / f"{self.label}-response.pb").write_bytes(returned)
-            responses[self.label] = pb.RunProgramResponse.from_binary(returned)
+            responses[self.label] = _record_frames(returned, tmp_path / f"{self.label}-response")
             return returned, host_error
 
     for label, expression in (("direct-query", repeated.union_values()), ("body-query", via_union(repeated))):
@@ -1696,13 +1718,15 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
         ] == ["action", "check", "action"]
         if label == "body-query":
             assert any(
-                (item.kind.field == "primitive" and item.kind.value.name == primitive.value.name)
+                (item.kind.field == "user_defined_primitive" and item.kind.value.name == primitive.value.name)
                 if item.kind is not None
                 else pytest.fail("Missing declaration kind")
                 for item in program.declarations
             )
-        error = responses[label].error
-        assert error is not None
+        result = responses[label][-1].result
+        assert result is not None
+        assert result.field == "error"
+        error = result.value
         assert error.code == pb.ErrorCode.INVALID_PROGRAM
         assert error.location is None
         assert fresh.function_values(marker) == {}
@@ -1711,7 +1735,9 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
     with monkeypatch.context() as patch:
         patch.setattr(fresh._state, "transport", AuditedTransport(fresh._state.transport, "body-action"))
         fresh.register(via_union(repeated))
-    assert responses["body-action"].error is None
+    result = responses["body-action"][-1].result
+    assert result is not None
+    assert result.field == "output"
     fresh.check(eq(c).to(d))
     assert fresh.extract(repeated.count(c)).value == 3
     assert fresh.extract(repeated.length()).value == 3
@@ -1727,9 +1753,11 @@ def test_multiset_union_values_requires_exact_eq_action_and_keeps_multiplicity(
         item.kind.field if item.kind is not None else pytest.fail("Missing command kind")
         for item in prefix_program.commands
     ] == ["action"] * 3
-    error = responses["empty-prefix"].error
-    assert error is not None
-    assert error.code == pb.ErrorCode.EVALUATION_FAILED
+    result = responses["empty-prefix"][-1].result
+    assert result is not None
+    assert result.field == "error"
+    error = result.value
+    assert error.code == pb.ErrorCode.RUNTIME_FAILURE
     assert error.location is not None
     assert error.location.path == [1]
     assert fresh.function_values(marker) == {marker(i64(10)): i64(1)}

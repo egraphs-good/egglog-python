@@ -15,11 +15,15 @@ from math import isnan
 from struct import unpack
 from threading import RLock
 from types import MappingProxyType
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
 from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Message, ScalarType
+
+if TYPE_CHECKING:
+    from ._catalog import Catalog
+    from ._presentation import Presentation
 
 # Every Program-reachable field is deliberately listed. ':' means an arena
 # address; '@' means a named definition dependency. Other fields are copied,
@@ -27,8 +31,9 @@ from protobuf import DescFieldValueList, DescFieldValueMessage, DescMessage, Mes
 _FIELDS = {
     "Program": "nodes sorts declarations commands files rules",
     "Node": "sort_id:sorts var primitive_value call union get_cost span",
-    "Sort": "eq@eq_sort family func var span egglog_aliases",
-    "HostSort": "name@host_sort_family args:sorts",
+    "BuiltinCatalog": "sorts primitive_sorts primitives files",
+    "Sort": "eq@eq_sort application func var span",
+    "SortApplication": "name@primitive_sort args:sorts",
     "FuncSort": "params:sorts result:sorts",
     "Span": "file:files start end",
     "SourceFile": "name contents",
@@ -48,39 +53,22 @@ _FIELDS = {
     "Action": "term:nodes set delete subsume panic set_cost span",
     "Set": "target value:nodes",
     "SetCost": "target cost:nodes",
-    "Declaration": "constructor function relation primitive host_sort_family host_primitive eq_sort span bindings doc hidden public_alias default_name",
+    "Declaration": "constructor function relation user_defined_primitive eq_sort span doc public_alias default_name",
     "Arg": "sort:sorts name",
-    "EqSort": "name bindings uf_parent",
-    "Constructor": "name inputs output:sorts cost:nodes unextractable",
-    "Function": "name inputs output:sorts merge:nodes",
+    "EqSort": "name uf_parent",
+    "Constructor": "name inputs output:sorts cost:nodes unextractable hidden",
+    "Function": "name inputs output:sorts merge:nodes hidden",
     "Relation": "name inputs",
-    "Primitive": "name inputs output:sorts body:nodes",
-    "HostSortFamily": "name arity bindings",
-    "HostPrimitive": "name signature application",
+    "UserDefinedPrimitive": "name inputs output:sorts body:nodes",
+    "PrimitiveSort": "name arity span doc",
+    "Primitive": "name signature application span doc",
     "GenericSignature": "type_params inputs output:sorts varargs equality_type_params",
     "FunctionApplication": "",
-    "SortBindings": "python rust egglog",
-    "TypeBinding": "path type_params",
-    "EgglogTypeBinding": "symbol",
-    "CallableBindings": "python rust egglog",
-    "BindingOwner": "sort:sorts function",
-    "FunctionTypeOwner": "",
-    "PythonBindings": "views",
-    "PythonCallable": "kind path owner receiver params mutates tail_repetitions",
-    "PythonParameter": "core_input name default_expr:nodes",
-    "RustBindings": "views",
-    "RustCallable": "path owner borrowed_self receiver params trait_impl tail_repetitions",
-    "RustReceiver": "core_input borrowed",
-    "RustParameter": "core_input name borrowed",
-    "RustTrait": "path args output_associated_type",
-    "RustType": "sort:sorts borrowed",
-    "EgglogBindings": "views",
-    "EgglogCallable": "symbol datatype_member",
     "Rule": "rule rewrite birewrite name eval_mode no_decomp include_subsumed span doc",
     "RuleBody": "query:nodes head",
     "Rewrite": "lhs:nodes rhs:nodes conditions:nodes subsume",
     "BiRewrite": "lhs:nodes rhs:nodes conditions:nodes",
-    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze print_size print_function print_table_stats repeat saturate fail stats add_rules explain span",
+    "Command": "action check prove prove_exists run bind_scheduler keep_best extract freeze print_size print_function print_table_stats loop fail stats add_rules explain span",
     "Check": "facts:nodes",
     "Prove": "facts:nodes",
     "ProveExists": "constructor@callable",
@@ -96,8 +84,7 @@ _FIELDS = {
     "PrintSize": "tables@callable",
     "PrintFunction": "table@callable max_rows",
     "PrintTableStats": "tables@callable",
-    "Repeat": "body until:nodes times",
-    "Saturate": "body until:nodes max_iterations",
+    "Loop": "body until:nodes max_iterations",
 }
 _ROLES: dict[str, type[Message]] = {
     "nodes": pb.Node,
@@ -106,7 +93,11 @@ _ROLES: dict[str, type[Message]] = {
     "rules": pb.Rule,
     "files": pb.SourceFile,
     "commands": pb.Command,
+    "primitive_sorts": pb.PrimitiveSort,
+    "primitives": pb.Primitive,
 }
+_PROGRAM_ROLES = ("nodes", "sorts", "declarations", "rules", "files", "commands")
+_BUILTIN_ROLES = ("sorts", "primitive_sorts", "primitives", "files")
 _FIELD_ROLES = {
     name: dict(token.replace("@", ":@").partition(":")[::2] for token in fields.split())
     for name, fields in _FIELDS.items()
@@ -115,7 +106,7 @@ _FIELD_ROLES = {
 
 def _check_inventory() -> None:
     """Fail on schema drift instead of guessing which new integers are addresses."""
-    pending = [pb.Program.desc()]
+    pending = [pb.Program.desc(), pb.BuiltinCatalog.desc()]
     seen: set[str] = set()
     while pending:
         descriptor = pending.pop()
@@ -258,11 +249,7 @@ def _structural_parts(
         shape.extend((path, message.desc().type_name))
         inline = []
         for field in message.desc().fields:
-            if (
-                field.name == "span"
-                or (isinstance(message, pb.Sort) and field.name == "egglog_aliases")
-                or (field.presence.name != "IMPLICIT" and field not in message)
-            ):
+            if field.name == "span" or (field.presence.name != "IMPLICIT" and field not in message):
                 continue
             value = message[field]
             if value is None:
@@ -467,9 +454,8 @@ def _rule_key(root: Ref) -> tuple[object, ...]:  # noqa: C901
                 child_query = path.startswith(("/rule/0/query/", "/rewrite/0/lhs/", "/rewrite/0/conditions/"))
                 child_domain = "query" if child_query else "head"
             elif reference.role == "declarations":
-                # All defaults of one presentation expand together. Other body
-                # roots (primitive, merge, cost) have independent binders/units.
-                child_domain = (reference, path.partition("/params/")[0] if "/default_expr/" in path else path)
+                # User primitive, merge and cost roots have independent binders.
+                child_domain = (reference, path)
                 child_query = False
             elif "/lambda/0/body/" in path:
                 child_domain, child_query = object(), False
@@ -495,14 +481,39 @@ def rule_equal(left: Ref, right: Ref, *, keys: dict[Ref, tuple[object, ...]] | N
 class Owner:
     """Published protobuf records; imported slots resolve directly to their owner."""
 
-    __slots__ = ("__weakref__", "_keepalive", "_slots")
+    __slots__ = (
+        "__weakref__",
+        "_builtin_indices",
+        "_environment",
+        "_keepalive",
+        "_presentation_catalog",
+        "_presentations",
+        "_slots",
+    )
 
-    def __init__(self, slots: Mapping[str, tuple[Message | Ref, ...]], keepalive: tuple[object, ...] = ()) -> None:
+    def __init__(
+        self,
+        slots: Mapping[str, tuple[Message | Ref, ...]],
+        keepalive: tuple[object, ...] = (),
+        presentations: Mapping[tuple[str, str], Presentation] | None = None,
+        environment: tuple[Owner, ...] = (),
+    ) -> None:
         # Internal transfer from Builder.publish; caller-owned messages must
         # enter through Builder.add/fill/from_program so they are detached.
         self._slots = MappingProxyType(dict(slots))
         # Language-local callbacks/lifetimes are never semantic edges or wire data.
         self._keepalive = tuple(keepalive)
+        self._presentations = MappingProxyType(dict(presentations or {}))
+        # The frontend index is derived once from this immutable owned context.
+        # Keeping it here avoids both global retention and repeated catalog scans.
+        self._presentation_catalog: Catalog | None = None
+        self._environment = environment
+        self._builtin_indices = MappingProxyType({
+            _definition_key(record): (role, index)
+            for role in ("primitive_sorts", "primitives")
+            for index, record in enumerate(self._slots[role])
+            if isinstance(record, Message)
+        })
 
     def ref(self, role: str, index: int) -> Ref:
         if (
@@ -519,9 +530,13 @@ class Owner:
 class Builder:
     """Thread-confined construction; publication transfers its private records once."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, environment: Iterable[Owner] = ()) -> None:
         self._slots: dict[str, list[Message | Ref | None]] | None = {role: [] for role in _ROLES}
         self._imports: dict[Ref, int] = {}
+        self.presentations: dict[tuple[str, str], Presentation] = {}
+        self._environment = dict.fromkeys(
+            provider for owner in environment for provider in (*owner._environment, owner)
+        )
 
     def add(self, role: str, record: Message) -> int:
         if self._slots is None:
@@ -560,6 +575,9 @@ class Builder:
             msg = "Builder already published"
             raise RuntimeError(msg)
         canonical = reference.owner.ref(reference.role, reference.index)
+        self._environment.update(dict.fromkeys(canonical.owner._environment))
+        if canonical.owner._builtin_indices:
+            self._environment[canonical.owner] = None
         if canonical in self._imports:
             return self._imports[canonical]
         index = len(self._slots[canonical.role])
@@ -567,7 +585,12 @@ class Builder:
         self._imports[canonical] = index
         return index
 
-    def publish(self, *, keepalive: tuple[object, ...] = ()) -> Owner:
+    def publish(
+        self,
+        *,
+        keepalive: tuple[object, ...] = (),
+        presentation_factory: Callable[[Owner], Mapping[tuple[str, str], Presentation]] | None = None,
+    ) -> Owner:
         if self._slots is None:
             msg = "Builder already published"
             raise RuntimeError(msg)
@@ -577,17 +600,44 @@ class Builder:
         slots = {role: tuple(cast("list[Message | Ref]", records)) for role, records in self._slots.items()}
         self._slots = None
         self._imports.clear()
-        return Owner(slots, keepalive)
+        owner = Owner(slots, keepalive, self.presentations, tuple(self._environment))
+        # Combining provider contexts must not substitute a different signature
+        # for the same canonical key. Keep the original generated records owned.
+        definitions: dict[tuple[str, str], Ref] = {}
+        for provider in owner._environment:
+            for key, (role, index) in provider._builtin_indices.items():
+                assert key is not None
+                reference = provider.ref(role, index)
+                if key in definitions and not _structural_equal(definitions[key], reference, exact_literals=True):
+                    raise ValueError(f"Conflicting builtin environments: {key}")
+                definitions[key] = reference
+        if presentation_factory is not None:
+            # Resolve circular local default/context references before the new
+            # owner is exposed. Semantic records are already immutable.
+            owner._presentations = MappingProxyType(dict(presentation_factory(owner)))
+        return owner
 
     @classmethod
-    def from_program(cls, program: pb.Program) -> Builder:
+    def from_program(cls, program: pb.Program, *, environment: Iterable[Owner] = ()) -> Builder:
         """Adopt a decoded Program as a fresh owner, preserving its local indices."""
         if program._unknown_fields:
             msg = "Cannot adopt unknown Program fields"
             raise NotImplementedError(msg)
-        builder = cls()
-        for role in _ROLES:
+        builder = cls(environment=environment)
+        for role in _PROGRAM_ROLES:
             for record in getattr(program, role):
+                builder.add(role, record)
+        return builder
+
+    @classmethod
+    def from_builtins(cls, catalog: pb.BuiltinCatalog) -> Builder:
+        """Own backend descriptors separately from executable Program records."""
+        if catalog._unknown_fields:
+            msg = "Cannot adopt unknown BuiltinCatalog fields"
+            raise NotImplementedError(msg)
+        builder = cls()
+        for role in _BUILTIN_ROLES:
+            for record in getattr(catalog, role):
                 builder.add(role, record)
         return builder
 
@@ -639,6 +689,10 @@ def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
                     key = _definition_key(ref.read())
                     if key is not None:
                         table.setdefault(key, set()).add(ref)
+                for environment in (*origin._environment, origin):
+                    for key, slot in environment._builtin_indices.items():
+                        assert key is not None
+                        table.setdefault(key, set()).add(environment.ref(*slot))
                 definitions[origin] = table
             matches = definitions[origin].get((namespace, name), set())
             if len(matches) != 1:
@@ -655,17 +709,21 @@ def clone_nodes(roots: Iterable[Ref]) -> tuple[Ref, ...]:  # noqa: C901
 
 
 def _definition_key(record: Message) -> tuple[str, str] | None:
+    if isinstance(record, pb.PrimitiveSort):
+        return "primitive_sort", record.name
+    if isinstance(record, pb.Primitive):
+        return "callable", record.name
     """Classify definition namespaces without conflating absent and empty names."""
     if isinstance(record, pb.Declaration):
         if record.kind is None:
             msg = "Declaration has no kind"
             raise ValueError(msg)
-        namespace = record.kind.field if record.kind.field in {"eq_sort", "host_sort_family"} else "callable"
+        namespace = "eq_sort" if record.kind.field == "eq_sort" else "callable"
         return namespace, record.kind.value.name
     return None
 
 
-def pack(  # noqa: C901
+def pack(  # noqa: C901, PLR0912
     roots: Iterable[Ref] = (),
     *,
     commands: Iterable[Ref] = (),
@@ -677,7 +735,7 @@ def pack(  # noqa: C901
 
     Definitions supplied here are available by name, not automatic emission
     roots. Missing names require an explicit ambient declaration/provider set.
-    Exact relocated definitions share one emission; differing code or metadata
+    Exact relocated definitions share one emission; differing semantic code
     still requires adapter-aware reconciliation. Literal bits and identity-bearing
     Union/rule references are never guessed equivalent.
     """
@@ -688,11 +746,14 @@ def pack(  # noqa: C901
     candidates: dict[tuple[str, str], set[Ref]] = {}
     demands: set[tuple[str, str]] = set()
     emitted: dict[tuple[str, str], Ref] = {}
+    builtin_keys: set[tuple[str, str]] = set()
 
     def index_owner(owner: Owner) -> None:
         if owner in indexed:
             return
         indexed.add(owner)
+        for provider in (*owner._environment, owner):
+            builtin_keys.update(key for key in provider._builtin_indices if key is not None)
         for role in ("declarations",):
             for index in range(len(owner._slots[role])):
                 ref = owner.ref(role, index)
@@ -724,6 +785,9 @@ def pack(  # noqa: C901
 
     def allocate(reference: Ref) -> int:
         ref = reference.owner.ref(reference.role, reference.index)
+        if ref.role in {"primitive_sorts", "primitives"}:
+            msg = "Builtin descriptors are ambient references, not Program roots"
+            raise TypeError(msg)
         if ref.role == "commands":
             msg = "Commands must be passed as ordered command roots"
             raise ValueError(msg)
@@ -751,6 +815,9 @@ def pack(  # noqa: C901
 
     for reference in definitions:
         ref = reference.owner.ref(reference.role, reference.index)
+        if ref.role in {"primitive_sorts", "primitives"}:
+            index_owner(ref.owner)
+            continue
         if ref.role != "declarations":
             msg = "Definitions must refer to declarations"
             raise TypeError(msg)
@@ -781,7 +848,7 @@ def pack(  # noqa: C901
         if not pending:
             if any(candidates.get(key) for key in demands):
                 continue
-            missing = demands - set(ambient)
+            missing = demands - set(ambient) - builtin_keys
             if missing:
                 raise ValueError(f"missing definitions: {sorted(missing)}")
             break

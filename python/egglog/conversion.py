@@ -29,7 +29,7 @@ def _sort_type_args(sort: Ref) -> tuple[RuntimeClass, ...]:
     assert record.kind is not None
     indices = (
         record.kind.value.args
-        if record.kind.field == "family"
+        if record.kind.field == "application"
         else [record.kind.value.result, *record.kind.value.params]
         if record.kind.field == "func"
         else ()
@@ -99,7 +99,7 @@ def _lookup_conversion(
         conversion = CONVERSIONS.get((candidate, target))
         if conversion is not None:
             break
-    if target_sort.kind.field in {"family", "func"}:
+    if target_sort.kind.field in {"application", "func"}:
         generic = next(
             (
                 registered

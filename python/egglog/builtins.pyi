@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Generic, Never, Protocol, TypeAlias, TypeVar, TypeVarTuple, Unpack, overload
 
-from egglog_proto.egglog.v1 import egglog_pb as pb
 from typing_extensions import deprecated
 
+from ._presentation import CallKind
 from ._program import Ref
 from .egraph import BaseExpr, BuiltinExpr
 from .runtime import RuntimeClass, RuntimeExpr, RuntimeFunction
@@ -517,7 +517,7 @@ def py_eval_fn(fn: Callable) -> PyObjectFunction: ...
 
 def _container_items(expr: RuntimeExpr) -> tuple[RuntimeExpr, ...]:
     ...
-def _container_member(target: RuntimeClass | RuntimeExpr, name: str, kind: pb.PythonCallKind) -> RuntimeFunction:
+def _container_member(target: RuntimeClass | RuntimeExpr, name: str, kind: CallKind) -> RuntimeFunction:
     ...
 def _map_entries(expr: RuntimeExpr) -> tuple[tuple[Ref, Ref], ...]:
     ...

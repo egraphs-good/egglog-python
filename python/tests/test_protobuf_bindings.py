@@ -7,6 +7,19 @@ from egglog_proto.egglog.v1 import egglog_pb as pb
 from protobuf import Oneof
 
 from egglog import bindings
+from egglog.egraph_state import _decode_run_frames
+
+
+def _one_observation(encoded: list[bytes]) -> pb.RunProgramOutput:
+    """Require one success observation plus its exclusive completion frame."""
+    outputs = []
+    for frame in _decode_run_frames(encoded):
+        assert frame.result is not None
+        assert frame.result.field == "output", frame.result.value
+        if frame.result.value.outputs:
+            outputs.append(frame.result.value)
+    assert len(outputs) == 1
+    return outputs[0]
 
 
 def test_native_surface_contains_only_encoded_transport_and_host_provider():
@@ -22,9 +35,11 @@ def test_table_cell_reader_preserves_availability_and_ownership_without_engine(m
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden)
     available = pb.TableCell(kind=Oneof[Literal["term"], int]("term", 0))
     unavailable = pb.TableCell(kind=Oneof[Literal["unavailable_sort"], int]("unavailable_sort", 1))
-    response = pb.RunProgramResponse(
+    response = pb.RunProgramOutput(
         sorts=[
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            ),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Hidden")),
         ],
         nodes=[
@@ -52,7 +67,7 @@ def test_table_cell_reader_preserves_availability_and_ownership_without_engine(m
         ],
     )
     encoded = response.to_binary()
-    decoded = pb.RunProgramResponse.from_binary(encoded)
+    decoded = pb.RunProgramOutput.from_binary(encoded)
     assert decoded == response
     assert decoded.to_binary() == encoded
     # Returned data own their values. Mutating the constructed input cannot
@@ -82,17 +97,19 @@ def test_table_cell_reader_preserves_availability_and_ownership_without_engine(m
     assert decoded.nodes[term.value].kind == Oneof(
         "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 7))
     )
-    assert decoded.sorts[decoded.nodes[term.value].sort_id].kind == Oneof("family", pb.HostSort(name="i64"))
+    assert decoded.sorts[decoded.nodes[term.value].sort_id].kind == Oneof("application", pb.SortApplication(name="i64"))
     assert decoded.sorts[missing.value].kind == Oneof("eq", "Hidden")
     assert len(decoded.nodes) == 1
     assert pb.TableCell().kind is None  # absence is neither term zero nor unavailable
     assert pb.FunctionRow().output is None
-    assert pb.RunProgramResponse.from_binary(decoded.to_binary()) == decoded
+    assert pb.RunProgramOutput.from_binary(decoded.to_binary()) == decoded
 
 
 def test_binary_engine_lifecycle_and_scalar_extract():
     engine = bindings._ProtoEngine()
-    sort = pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))
+    sort = pb.Sort(
+        kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+    )
     created = pb.CreateEGraphResponse.from_binary(
         engine.create(pb.CreateEGraphRequest(sorts=[sort], options=pb.EGraphOptions(cost_sort=0)).to_binary()),
     )
@@ -116,8 +133,7 @@ def test_binary_engine_lifecycle_and_scalar_extract():
     )
     encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=created.egraph_id, program=program).to_binary())
     assert host_error is None
-    response = pb.RunProgramResponse.from_binary(encoded)
-    assert response.error is None
+    response = _one_observation(encoded)
     output = response.outputs[0].kind
     assert output is not None
     assert output.field == "extraction"
@@ -170,7 +186,9 @@ def _proof_program() -> pb.Program:
         ])
     return pb.Program(
         sorts=[
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            ),
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "Num")),
         ],
         declarations=[
@@ -229,7 +247,13 @@ def proof_engine(request):
     created = pb.CreateEGraphResponse.from_binary(
         engine.create(
             pb.CreateEGraphRequest(
-                sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
+                sorts=[
+                    pb.Sort(
+                        kind=Oneof[Literal["application"], pb.SortApplication](
+                            "application", pb.SortApplication(name="i64")
+                        )
+                    )
+                ],
                 options=pb.EGraphOptions(cost_sort=0, execution_mode=request.param),
                 threads=1,
             ).to_binary()
@@ -247,26 +271,32 @@ def test_binary_proof_modes_requested_outputs_and_control(proof_engine):
     engine, handles, mode = proof_engine
     encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=_proof_program()).to_binary())
     assert host_error is None
-    response = pb.RunProgramResponse.from_binary(encoded)
-    assert pb.RunProgramResponse.from_binary(response.to_binary()) == response
-    requested_run = response.outputs[0].kind
+    frames = _decode_run_frames(encoded)
+    assert [pb.RunProgramResponse.from_binary(frame.to_binary()) for frame in frames] == frames
+    outputs = [
+        output
+        for frame in frames
+        if frame.result is not None and frame.result.field == "output"
+        for output in frame.result.value.outputs
+    ]
+    requested_run = outputs[0].kind
     assert requested_run is not None
     assert requested_run.field == "run"
     assert requested_run.value.updated
     assert not requested_run.value.can_stop
-    paths = [output.location.path for output in response.outputs if output.location is not None]
+    paths = [output.location.path for output in outputs if output.location is not None]
+    terminal = frames[-1].result
+    assert terminal is not None
     if mode in (pb.ExecutionMode.NORMAL, pb.ExecutionMode.TERM_ENCODING):
         assert paths == [[2]]
-        assert response.error is not None
-        assert response.error.code == pb.ErrorCode.PROOF_FAILED
-        assert response.error.proof_failure is not None
-        assert response.error.proof_failure.reason == pb.ProofFailureReason.PROOFS_NOT_ENABLED
-        assert response.error.location is not None
-        assert response.error.location.path == [4]
+        assert terminal.field == "error"
+        assert terminal.value.code == pb.ErrorCode.RUNTIME_FAILURE
+        assert terminal.value.location is not None
+        assert terminal.value.location.path == [4]
     else:
-        assert response.error is None
+        assert terminal.field == "output"
         assert paths == ([[2], [3], [4], [5]] if mode == pb.ExecutionMode.PROOF_TESTING else [[2], [4], [5]])
-        for output in response.outputs[1:]:
+        for output in outputs[1:]:
             assert output.kind is not None
             assert output.kind.field == "proof"
             proof = output.kind.value
@@ -287,8 +317,7 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     del setup.commands[3:]
     setup_bytes, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=setup).to_binary())
     assert host_error is None
-    response = pb.RunProgramResponse.from_binary(setup_bytes)
-    assert response.error is None
+    assert all(frame.result is not None and frame.result.field == "output" for frame in _decode_run_frames(setup_bytes))
     cloned = pb.CloneEGraphResponse.from_binary(
         engine.clone_graph(pb.CloneEGraphRequest(egraph_id=handles[0]).to_binary())
     )
@@ -315,23 +344,27 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
         del program.commands[0]
     encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program).to_binary())
     assert host_error is None
-    response = pb.RunProgramResponse.from_binary(encoded)
-    assert response.error is not None
-    assert response.error.code == pb.ErrorCode.PROOF_FAILED
-    failure = response.error.proof_failure
-    assert failure is not None
-    assert failure.reason == pb.ProofFailureReason.QUERY_DID_NOT_MATCH
-    assert failure.has_field("constructor")
-    assert failure.constructor == "Absent"
-    assert response.error.location is not None
-    assert response.error.location.path == ([2] if proofs_enabled else [1])
-    assert len(response.outputs) == int(proofs_enabled)
+    frames = _decode_run_frames(encoded)
+    terminal = frames[-1].result
+    assert terminal is not None
+    assert terminal.field == "error"
+    assert terminal.value.code == pb.ErrorCode.RUNTIME_FAILURE
+    assert terminal.value.location is not None
+    assert terminal.value.location.path == ([2] if proofs_enabled else [1])
+    outputs = [
+        output
+        for frame in frames
+        if frame.result is not None and frame.result.field == "output"
+        for output in frame.result.value.outputs
+    ]
+    assert len(outputs) == int(proofs_enabled)
     for handle, node, succeeds in [(handles[0], 7, True), (handles[0], 9, False), (handles[1], 7, False)]:
         program.commands = [pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[node])))]
         checked_bytes, host_error = engine.run(pb.RunProgramRequest(egraph_id=handle, program=program).to_binary())
         assert host_error is None
-        checked = pb.RunProgramResponse.from_binary(checked_bytes)
-        assert (checked.error is None) == succeeds
+        checked = _decode_run_frames(checked_bytes)[-1].result
+        assert checked is not None
+        assert (checked.field == "output") == succeeds
     program.commands = [
         pb.Command(
             kind=Oneof[Literal["prove_exists"], pb.ProveExists]("prove_exists", pb.ProveExists(constructor="Goal"))
@@ -339,19 +372,22 @@ def test_binary_proof_prefix_clone_and_native_error_order(proof_engine):
     ]
     copied_bytes, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[1], program=program).to_binary())
     assert host_error is None
-    copied = pb.RunProgramResponse.from_binary(copied_bytes)
-    assert (copied.error is None) == proofs_enabled
+    copied = _decode_run_frames(copied_bytes)[-1].result
+    assert copied is not None
+    assert (copied.field == "output") == proofs_enabled
     if not proofs_enabled:
-        assert copied.error is not None
-        assert copied.error.proof_failure is not None
-        assert copied.error.proof_failure.reason == pb.ProofFailureReason.PROOFS_NOT_ENABLED
+        assert copied.field == "error"
+        assert copied.value.code == pb.ErrorCode.RUNTIME_FAILURE
     for handle in handles:
         engine.destroy(pb.DestroyEGraphRequest(egraph_id=handle).to_binary())
     handles.clear()
-    retained = pb.RunProgramResponse.from_binary(response.to_binary())
-    assert retained == pb.RunProgramResponse.from_binary(encoded)
+    retained = [pb.RunProgramResponse.from_binary(frame.to_binary()) for frame in frames]
+    assert retained == _decode_run_frames(encoded)
     if proofs_enabled:
-        output = retained.outputs[0].kind
+        first = retained[0].result
+        assert first is not None
+        assert first.field == "output"
+        output = first.value.outputs[0].kind
         assert output is not None
         assert output.field == "proof"
         proof = output.value
@@ -380,16 +416,19 @@ def test_binary_encoded_extract_stays_explicitly_unsupported(proof_engine):
     ]
     encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program).to_binary())
     assert host_error is None
-    failed = pb.RunProgramResponse.from_binary(encoded)
-    assert failed.error is not None
-    assert failed.error.code == pb.ErrorCode.INVALID_PROGRAM
-    assert not failed.outputs
+    failed = _decode_run_frames(encoded)
+    assert len(failed) == 1
+    terminal = failed[0].result
+    assert terminal is not None
+    assert terminal.field == "error"
+    assert terminal.value.code == pb.ErrorCode.INVALID_PROGRAM
     program.commands = [pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[2])))]
     encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program).to_binary())
     assert host_error is None
-    retry = pb.RunProgramResponse.from_binary(encoded)
-    assert retry.error is not None
-    assert retry.error.location is not None
+    retry = _decode_run_frames(encoded)[-1].result
+    assert retry is not None
+    assert retry.field == "error"
+    assert retry.value.location is not None
 
 
 @pytest.mark.parametrize("max_rows", [None, 0], ids=["print-all-rows", "print-zero-rows"])
@@ -411,8 +450,7 @@ def test_binary_encoded_print_function_returns_typed_logical_rows(proof_engine, 
     ]
     encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program).to_binary())
     assert host_error is None
-    response = pb.RunProgramResponse.from_binary(encoded)
-    assert response.error is None
+    response = _one_observation(encoded)
     (output,) = response.outputs
     assert output.location == pb.CommandLocation(path=[1])
     assert output.kind is not None
@@ -440,22 +478,26 @@ def test_binary_encoded_print_function_returns_typed_logical_rows(proof_engine, 
         assert argument_node.kind == Oneof[Literal["primitive_value"], pb.PrimitiveValue](
             "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["i64"], int]("i64", 1))
         )
-        assert response.sorts[argument_node.sort_id].kind == Oneof[Literal["family"], pb.HostSort](
-            "family", pb.HostSort(name="i64")
+        assert response.sorts[argument_node.sort_id].kind == Oneof[Literal["application"], pb.SortApplication](
+            "application", pb.SortApplication(name="i64")
         )
         assert result_node.kind == Oneof[Literal["call"], pb.Call]("call", pb.Call(func="N", args=[argument_id]))
         assert response.sorts[result_node.sort_id].kind == Oneof[Literal["eq"], str]("eq", "Num")
-    assert pb.RunProgramResponse.from_binary(response.to_binary()) == response
+    assert pb.RunProgramOutput.from_binary(response.to_binary()) == response
     program.commands = [pb.Command(kind=Oneof[Literal["check"], pb.Check]("check", pb.Check(facts=[2])))]
     encoded, host_error = engine.run(pb.RunProgramRequest(egraph_id=handles[0], program=program).to_binary())
     assert host_error is None
-    assert pb.RunProgramResponse.from_binary(encoded).error is None
+    assert all(frame.result is not None and frame.result.field == "output" for frame in _decode_run_frames(encoded))
 
 
 def test_binary_unknown_mode_rejected_and_diagnostics_off_works():
     engine = bindings._ProtoEngine()
     request = pb.CreateEGraphRequest(
-        sorts=[pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64")))],
+        sorts=[
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            )
+        ],
         options=pb.EGraphOptions(cost_sort=0, execution_mode=pb.ExecutionMode(999)),
         threads=1,
     )
@@ -469,8 +511,8 @@ def test_binary_unknown_mode_rejected_and_diagnostics_off_works():
             pb.RunProgramRequest(egraph_id=created.egraph_id, program=pb.Program()).to_binary()
         )
         assert host_error is None
-        response = pb.RunProgramResponse.from_binary(encoded)
-        assert response.error is None
-        assert not response.outputs
+        frames = _decode_run_frames(encoded)
+        assert len(frames) == 1
+        assert frames[0].result == Oneof[Literal["output"], pb.RunProgramOutput]("output", pb.RunProgramOutput())
     finally:
         engine.destroy(pb.DestroyEGraphRequest(egraph_id=created.egraph_id).to_binary())

@@ -3,11 +3,9 @@ import os
 import runpy
 import sys
 from pathlib import Path
-from typing import Literal
 
 import pytest
 from egglog_proto.egglog.v1 import egglog_pb as pb
-from protobuf import Oneof
 from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
 
@@ -35,69 +33,39 @@ class PythonSnapshotExtension(SingleFileSnapshotExtension):
 
 
 @pytest.fixture
+def native_catalog_program():
+    """Fresh actual backend descriptors, independent of executable Programs."""
+    return pb.BuiltinCatalog.from_binary((Path(__file__).parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
+
+
+@pytest.fixture
 def snapshot_py(snapshot):
     return snapshot.with_defaults(extension_class=PythonSnapshotExtension)
 
 
 @pytest.fixture
-def pair_catalog_program():
-    """Proposed presentation only; signatures stay in the real native snapshot."""
-    program = pb.Program.from_binary((Path(__file__).parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
-    declarations: dict[str, pb.Declaration] = {}
-    for declaration in program.declarations:
-        declaration_kind = declaration.kind
-        assert declaration_kind is not None
-        declarations[declaration_kind.value.name] = declaration
-    family_kind = declarations["Pair"].kind
-    assert family_kind is not None
-    assert family_kind.field == "host_sort_family"
-    family = family_kind.value
-    family.bindings = pb.SortBindings(
-        python=pb.TypeBinding(path=["egglog", "builtins", "Pair"], type_params=["L", "R"])
-    )
-    make = declarations["egglog.core.pair.make"]
-    make_kind = make.kind
-    assert make_kind is not None
-    assert make_kind.field == "host_primitive"
-    signature_kind = make_kind.value.typing
-    assert signature_kind is not None
-    assert signature_kind.field == "signature"
-    owner = signature_kind.value.output
-    assert make.bindings is not None
-    make.bindings.python = pb.PythonBindings(
-        views=[
-            pb.PythonCallable(
-                kind=pb.PythonCallKind.INITIALIZER,
-                owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", owner)),
-                params=[pb.PythonParameter(name="left", core_input=0), pb.PythonParameter(name="right", core_input=1)],
-            )
-        ]
-    )
-    for core, public in [("first", "left"), ("second", "right")]:
-        member_bindings = declarations[f"egglog.core.pair.{core}"].bindings
-        assert member_bindings is not None
-        member_bindings.python = pb.PythonBindings(
-            views=[
-                pb.PythonCallable(
-                    kind=pb.PythonCallKind.PROPERTY,
-                    path=[public],
-                    owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", owner)),
-                    receiver=0,
-                )
-            ]
-        )
-    return program
+def python_presentation_mapping():
+    """Give each authoring test its own frontend map, never native signatures."""
+    from egglog._builtin_presentation import DATA  # noqa: PLC0415
+
+    return copy.deepcopy(DATA)
 
 
 @pytest.fixture
-def pair_runtime(pair_catalog_program, monkeypatch, request):
+def pair_catalog_program():
+    """Signatures stay in the actual native snapshot; Python views are separate."""
+    return pb.BuiltinCatalog.from_binary((Path(__file__).parents[1] / "egglog/_builtin_catalog.pb").read_bytes())
+
+
+@pytest.fixture
+def pair_runtime(pair_catalog_program, python_presentation_mapping, monkeypatch, request):
     """Run real wrapper generation over one coherent fixture-owned catalog."""
     from egglog import _catalog, conversion, runtime  # noqa: PLC0415
     from egglog._catalog import Catalog  # noqa: PLC0415
+    from egglog._presentation import builtin_owner  # noqa: PLC0415
 
-    catalog = Catalog(pair_catalog_program)
+    catalog = Catalog(builtin_owner(pair_catalog_program, mapping=python_presentation_mapping))
     monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(runtime, "builtin_catalog", lambda: catalog)
     monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
     monkeypatch.setattr(conversion, "CONVERSIONS", {})
     generated = runpy.run_path(str(Path(__file__).parents[1] / "egglog/builtins.py"), run_name="egglog.builtins")
@@ -109,40 +77,19 @@ def pair_runtime(pair_catalog_program, monkeypatch, request):
 
 @pytest.fixture
 def vec_catalog_program(pair_catalog_program):
-    """Proposed Vec views over copied actual signatures; never a package export."""
-    declarations = {d.kind.value.name: d for d in pair_catalog_program.declarations}
-    declarations["Vec"].kind.value.bindings.python = pb.TypeBinding(
-        path=["egglog", "builtins", "Vec"], type_params=["T"]
-    )
-    owner = declarations["egglog.core.vec.of"].kind.value.typing.value.output
-    for core, kind, path, receiver, params in [
-        ("of", pb.PythonCallKind.INITIALIZER, [], None, [pb.PythonParameter(core_input=0, name="args")]),
-        ("empty", pb.PythonCallKind.CLASS_METHOD, ["empty"], None, []),
-        ("get", pb.PythonCallKind.METHOD, ["__getitem__"], 0, [pb.PythonParameter(core_input=1, name="index")]),
-    ]:
-        declarations[f"egglog.core.vec.{core}"].bindings.python = pb.PythonBindings(
-            views=[
-                pb.PythonCallable(
-                    kind=kind,
-                    path=path,
-                    owner=pb.BindingOwner(kind=Oneof[Literal["sort"], int]("sort", owner)),
-                    receiver=receiver,
-                    params=params,
-                )
-            ]
-        )
+    """Real Vec signatures; fixture-local names live in python_presentation_mapping."""
     return pair_catalog_program
 
 
 @pytest.fixture
-def vec_runtime(vec_catalog_program, monkeypatch, request):
+def vec_runtime(vec_catalog_program, python_presentation_mapping, monkeypatch, request):
     """Run ordinary wrapper generation with the proposed fixture-only Vec views."""
     from egglog import _catalog, conversion, runtime  # noqa: PLC0415
     from egglog._catalog import Catalog  # noqa: PLC0415
+    from egglog._presentation import builtin_owner  # noqa: PLC0415
 
-    catalog = Catalog(vec_catalog_program)
+    catalog = Catalog(builtin_owner(vec_catalog_program, mapping=python_presentation_mapping))
     monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(runtime, "builtin_catalog", lambda: catalog)
     monkeypatch.setattr(runtime, "_BASE_CLASSES", dict(runtime._BASE_CLASSES))
     monkeypatch.setattr(conversion, "CONVERSIONS", {})
     generated = runpy.run_path(str(Path(__file__).parents[1] / "egglog/builtins.py"), run_name="egglog.builtins")
@@ -156,13 +103,8 @@ def vec_runtime(vec_catalog_program, monkeypatch, request):
 def rational_catalog_program():
     """Actual native export, optionally supplied before package regeneration."""
     path = Path(os.environ.get("EGGLOG_TEST_BUILTIN_CATALOG", Path(__file__).parents[1] / "egglog/_builtin_catalog.pb"))
-    program = pb.Program.from_binary(path.read_bytes())
-    kinds = []
-    for declaration in program.declarations:
-        kind = declaration.kind
-        assert kind is not None
-        kinds.append(kind)
-    if not any(kind.value.name == "egglog.experimental.rational.make" for kind in kinds):
+    program = pb.BuiltinCatalog.from_binary(path.read_bytes())
+    if not any(primitive.name == "egglog.experimental.rational.make" for primitive in program.primitives):
         pytest.skip("Rational native export not packaged or supplied via EGGLOG_TEST_BUILTIN_CATALOG")
     return program
 
@@ -171,29 +113,24 @@ def rational_catalog_program():
 def set_catalog_program():
     """Actual native export; no synthetic Set signatures or views."""
     path = Path(os.environ.get("EGGLOG_TEST_BUILTIN_CATALOG", Path(__file__).parents[1] / "egglog/_builtin_catalog.pb"))
-    program = pb.Program.from_binary(path.read_bytes())
-    kinds = []
-    for declaration in program.declarations:
-        kind = declaration.kind
-        assert kind is not None
-        kinds.append(kind)
-    assert any(kind.value.name == "egglog.core.set.of" for kind in kinds)
+    program = pb.BuiltinCatalog.from_binary(path.read_bytes())
+    assert any(primitive.name == "egglog.core.set.of" for primitive in program.primitives)
     return program
 
 
 @pytest.fixture
-def set_runtime(set_catalog_program, monkeypatch):
+def set_runtime(set_catalog_program, python_presentation_mapping, monkeypatch):
     """Exercise catalog-derived Set authoring while forbidding native execution."""
     from egglog import _catalog, bindings, conversion, runtime  # noqa: PLC0415
     from egglog._catalog import Catalog  # noqa: PLC0415
+    from egglog._presentation import builtin_owner  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
         pytest.fail("Set source authoring accessed a native engine")
 
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
-    catalog = Catalog(set_catalog_program)
+    catalog = Catalog(builtin_owner(set_catalog_program, mapping=python_presentation_mapping))
     monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(runtime, "builtin_catalog", lambda: catalog)
     monkeypatch.setattr(runtime, "_BASE_CLASSES", {})
     monkeypatch.setattr(runtime, "_CLASS_CACHE", runtime.WeakKeyDictionary())
     monkeypatch.setattr(conversion, "CONVERSIONS", {})
@@ -201,18 +138,18 @@ def set_runtime(set_catalog_program, monkeypatch):
 
 
 @pytest.fixture
-def rational_runtime(rational_catalog_program, monkeypatch):
+def rational_runtime(rational_catalog_program, python_presentation_mapping, monkeypatch):
     """Use real catalog records without replacing package data or a native engine."""
     from egglog import _catalog, bindings, conversion, runtime  # noqa: PLC0415
     from egglog._catalog import Catalog  # noqa: PLC0415
+    from egglog._presentation import builtin_owner  # noqa: PLC0415
 
     def forbidden(*args, **kwargs):
         pytest.fail("Rational source authoring accessed a native engine")
 
     monkeypatch.setattr(bindings, "_ProtoEngine", forbidden, raising=False)
-    catalog = Catalog(rational_catalog_program)
+    catalog = Catalog(builtin_owner(rational_catalog_program, mapping=python_presentation_mapping))
     monkeypatch.setattr(_catalog, "builtin_catalog", lambda: catalog)
-    monkeypatch.setattr(runtime, "builtin_catalog", lambda: catalog)
     monkeypatch.setattr(runtime, "_BASE_CLASSES", {})
     monkeypatch.setattr(runtime, "_CLASS_CACHE", runtime.WeakKeyDictionary())
     monkeypatch.setattr(conversion, "CONVERSIONS", {})

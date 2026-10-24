@@ -15,21 +15,23 @@ def snapshot():
     program = pb.Program(
         sorts=[
             pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "A")),
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="i64"))),
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="String"))),
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Vec", args=[0]))),
-            pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Unit"))),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="i64"))
+            ),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="String"))
+            ),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication](
+                    "application", pb.SortApplication(name="Vec", args=[0])
+                )
+            ),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Unit"))
+            ),
         ],
         declarations=[
             pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="A"))),
-            *[
-                pb.Declaration(
-                    kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                        "host_sort_family", pb.HostSortFamily(name=name, arity=arity)
-                    )
-                )
-                for name, arity in [("i64", 0), ("String", 0), ("Vec", 1), ("Unit", 0)]
-            ],
             pb.Declaration(
                 kind=Oneof[Literal["constructor"], pb.Constructor](
                     "constructor", pb.Constructor(name="C", inputs=[pb.Arg(sort=1)], output=0)
@@ -160,6 +162,63 @@ def test_snapshot_projection_preserves_classes_rows_cycles_and_subsumption(snaps
     assert snapshot.to_binary() == before
 
 
+def test_snapshot_function_type_labels_use_only_owned_records(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Detached snapshot display attempted provider lookup")
+
+    monkeypatch.setattr("egglog.runtime._definition_at", forbidden)
+    program = pb.Program(
+        sorts=[
+            pb.Sort(kind=Oneof[Literal["eq"], str]("eq", "A")),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="String"))
+            ),
+            pb.Sort(
+                kind=Oneof[Literal["application"], pb.SortApplication](
+                    "application", pb.SortApplication(name="Vec", args=[0])
+                )
+            ),
+            pb.Sort(kind=Oneof[Literal["func"], pb.FuncSort]("func", pb.FuncSort(params=[2], result=1))),
+        ],
+        declarations=[
+            pb.Declaration(kind=Oneof[Literal["eq_sort"], pb.EqSort]("eq_sort", pb.EqSort(name="A"))),
+            pb.Declaration(
+                kind=Oneof[Literal["function"], pb.Function]("function", pb.Function(name="callback", output=3))
+            ),
+        ],
+        nodes=[
+            pb.Node(
+                sort_id=1,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value", pb.PrimitiveValue(value=Oneof[Literal["string"], str]("string", "result"))
+                ),
+            ),
+            pb.Node(
+                sort_id=3,
+                kind=Oneof[Literal["primitive_value"], pb.PrimitiveValue](
+                    "primitive_value",
+                    pb.PrimitiveValue(value=Oneof[Literal["lambda"], pb.Lambda]("lambda", pb.Lambda(body=0))),
+                ),
+            ),
+        ],
+        commands=[
+            pb.Command(
+                kind=Oneof[Literal["action"], pb.Action](
+                    "action",
+                    pb.Action(
+                        kind=Oneof[Literal["set"], pb.Set]("set", pb.Set(target=pb.Call(func="callback"), value=1))
+                    ),
+                )
+            )
+        ],
+    )
+    snapshot = pb.EGraphSnapshot(program=program)
+    before = snapshot.to_binary()
+    data = _snapshot_to_data(snapshot)
+    assert data["class_data"]["value-1"]["type"] == "UnstableFn[String, Vec[A]]"
+    assert snapshot.to_binary() == before
+
+
 @pytest.mark.parametrize("assigned", [False, True])
 def test_snapshot_costs_preserve_declared_value_and_assigned_override(snapshot, assigned):
     program = snapshot.program
@@ -187,12 +246,9 @@ def test_snapshot_custom_costs_never_invoke_codec_or_debug(snapshot, monkeypatch
     monkeypatch.setattr("cloudpickle.loads", forbidden)
     program = snapshot.program
     cost_sort = len(program.sorts)
-    program.sorts.append(pb.Sort(kind=Oneof[Literal["family"], pb.HostSort]("family", pb.HostSort(name="Opaque"))))
-    program.declarations.append(
-        pb.Declaration(
-            kind=Oneof[Literal["host_sort_family"], pb.HostSortFamily](
-                "host_sort_family", pb.HostSortFamily(name="Opaque")
-            )
+    program.sorts.append(
+        pb.Sort(
+            kind=Oneof[Literal["application"], pb.SortApplication]("application", pb.SortApplication(name="Opaque"))
         )
     )
     first = len(program.nodes)
@@ -246,8 +302,6 @@ def test_snapshot_container_edges_are_inert_and_ordered(snapshot, monkeypatch, k
     }
     name, args, value = variants[kind]
     program.sorts[3].kind.value.name, program.sorts[3].kind.value.args = name, args
-    family = next(d.kind.value for d in program.declarations if d.kind.value.name == "Vec")
-    family.name, family.arity = name, len(args)
     program.nodes[6].kind.value.value = Oneof("maybe" if kind == "none" else kind, value)
     before = snapshot.to_binary()
     data = _snapshot_to_data(snapshot, split_primitive_outputs=False)
